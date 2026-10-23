@@ -308,6 +308,9 @@ function spatialIndexPrebuild() {
     const dp = D ? [slotsN, SPATIAL_IXD_UJ, nChunks, _sxListed, ep, _sxEpoch, TILE, GRID_W, GRID_H, SPATIAL_IXD_BANDS, Math.ceil(nChunks / SPATIAL_IXD_BANDS), DJ,
         masks ? 1 : 0, SPATIAL_IXD_CPER, CHUNK_SIZE, CHUNKS_W, D.room] : null;
     const delta = !!D && D.ok && D.masks === masks && D.slots >= slotsN;
+    // (Slots made since the listing was recorded (a new slab: 64 at once) were never listed: absent, not tile 0 as zeroed memory says,
+    // else their first unit's insert looked for an old entry in tile 0 and the whole index was built.)
+    if (delta && slotsN > D.hw) { D.k.fill(-1, D.hw, slotsN); D.id.fill(0, D.hw, slotsN); D.own.fill(0, D.hw, slotsN); D.hw = slotsN; }
     let stages;
     if (delta) {
         stages = [[SIM_KERNEL_IXD_SCAN, DJ, dp], [SIM_KERNEL_IXD_APPLY, 1, dp], [SIM_KERNEL_IXD_MERGE, SPATIAL_IXD_BANDS, dp],
@@ -317,6 +320,7 @@ function spatialIndexPrebuild() {
     // (A full build's listing of the slots, for the next build by changes.)
     const init = !delta && !!D;
     if (init) {
+        D.hw = slotsN;
         const p0 = dp.slice(), p1 = dp.slice(); p0[12] = 0; p1[12] = 1;
         stages.push([SIM_KERNEL_IXD_INIT, DJ, p0], [SIM_KERNEL_IXD_INIT, Math.ceil(Math.max(n, 1) / SPATIAL_IXD_UJ), p1]);
     }
@@ -373,22 +377,23 @@ const SPATIAL_IDSORT_PER = 65536;
 const SPATIAL_IXD_BANDS = 64, SPATIAL_IXD_UJ = 8192, SPATIAL_IXD_CPER = 65536;
 // Its arrays: per slot (slots, whole scan blocks) the listing (key, id,
 // owner) and the scan's lists; per entry the new entries and the struck
-// ones; room for inserts (a quarter of the slots: more changes than that
+// ones; room for inserts (half of the slots: more changes than that
 // build whole) and the chunks touched; the plan. (Bound once: a binding
 // made anew each tick stalls helpers.)
 function _spatialDeltaArrays(X, slots, entries) {
     let D = X.ixd;
-    if (!D) D = X.ixd = { ok: false, masks: false, slots: 0, entries: 0, room: 0, plan: null };
+    if (!D) D = X.ixd = { ok: false, masks: false, slots: 0, entries: 0, room: 0, hw: 0, plan: null };
     // (Arrays the heap had no room for are outside it, where the kernels cannot read them: the index is built whole until
     // they are made again, tried again after IXD_RETRY ticks.)
     if (D.retryAt > gameTime) return null;
     if (D.slots < slots) {
-        const cap = Math.ceil(slots / SPATIAL_IXD_UJ) * SPATIAL_IXD_UJ, room = Math.max(4096, Math.ceil(cap / 4));
+        // (Half the slots: at millions of moving units a quarter crossing a tile in a tick is common, and then the whole index was built, 4 radix passes.)
+        const cap = Math.ceil(slots / SPATIAL_IXD_UJ) * SPATIAL_IXD_UJ, room = Math.max(4096, Math.ceil(cap / 2));
         for (const [k, T, len] of [['k', Int32Array, cap], ['id', Int32Array, cap], ['own', Int8Array, cap], ['dirty', Int32Array, cap],
             ['ik', Float64Array, room], ['is', Int32Array, room], ['touch', Int32Array, 2 * room], ['ik2', Float64Array, room], ['is2', Int32Array, room]]) {
             simHeapFree(D[k]); D[k] = simHeapArray(T, len); simParallelBind('ixd.' + k, D[k]);
         }
-        D.slots = cap; D.room = room; D.ok = false;
+        D.slots = cap; D.room = room; D.ok = false; D.hw = 0;
     }
     if (D.entries < entries) {
         for (const k of ['gone', 'es2', 'ek2', 'eid2']) { simHeapFree(D[k]); D[k] = simHeapArray(Int32Array, entries); simParallelBind('ixd.' + k, D[k]); }
@@ -540,7 +545,7 @@ function _spatialIndexRebuildParallel() {
         P[12] = 1;
         simParallelRun(SIM_KERNEL_IXD_INIT, Math.ceil(Math.max(n, 1) / SPATIAL_IXD_UJ));
         const OM = typeof _combatScanOwnerMask !== 'undefined' ? _combatScanOwnerMask : null;
-        D.ok = true; D.masks = false;
+        D.ok = true; D.masks = false; D.hw = slotsN;
         // (No owners per tile from this build: the next one builds whole
         // when they are wanted.)
         if (OM && OM.length === nChunks && _sxOwnerMaskEpoch === ep) D.masks = true;

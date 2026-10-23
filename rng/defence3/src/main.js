@@ -3408,9 +3408,7 @@ let _ordK = null;
 function _ordKeys() {
     if (_ordK) return _ordK;
     const k = _simHKey;
-    _ordK = { tu: k('targetUnit'), tb: k('targetBuilding'), fat: k('forcedAttackTarget'), amx: k('_attackMoveGx'), amy: k('_attackMoveGy'), tp: k('targetPos'),
-        rk: k('_routeKey'), ppt: k('_pendingPathTarget'), pfa: k('pathIsFallbackAstar') };
-    _ordK.tuNull = _simHTerm(_ordK.tu, null); _ordK.tbNull = _simHTerm(_ordK.tb, null); _ordK.fatFalse = _simHTerm(_ordK.fat, false);
+    _ordK = { ppt: k('_pendingPathTarget'), pfa: k('pathIsFallbackAstar') };
     _ordK.pptNull = _simHTerm(_ordK.ppt, null); _ordK.pfaFalse = _simHTerm(_ordK.pfa, false);
     return _ordK;
 }
@@ -3422,14 +3420,11 @@ function _ordSet(a, s, key, v, tv) { const o = a.set(s, v); if (o === v) return 
 // its route (_issueFlowOrder).
 function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
     let h = c.hObj[s];
-    h += _ordSet(c.oc_targetUnit, s, K.tu, null, K.tuNull);
-    h += _ordSet(c.jr__tb, s, K.tb, null, K.tbNull); c.acqB[s] = 0;
-    h += _ordSet(c.oc_forcedAttackTarget, s, K.fat, false, K.fatFalse);
+    c.tuS[s] = -1; c.tuId[s] = 0; c.tbT[s] = -1; c.acqB[s] = 0; c.fatF[s] = 0;
     c.fLsX[s] = NaN; c.fLsY[s] = NaN;
     if (c.commandState[s] !== cmd) { c.mvOn[s] = 0; c.commandState[s] = cmd; }
-    h += _ordSet(c.oc__attackMoveGx, s, K.amx, amGx, tAmx);
-    h += _ordSet(c.oc__attackMoveGy, s, K.amy, amGy, tAmy);
-    h += _ordSet(c.oc_targetPos, s, K.tp, targetPos, tTp);
+    c.amGx[s] = amGx === null ? -1 : amGx; c.amGy[s] = amGy === null ? -1 : amGy;
+    c.mvTgX[s] = targetPos.x; c.mvTgY[s] = targetPos.y;
     c.j__awaitGroupPath.clear(s);
     h += _ordSet(c.jr__ppt, s, K.ppt, null, K.pptNull);
     h += _ordSet(c.jr__pfa, s, K.pfa, false, K.pfaFalse);
@@ -3465,15 +3460,14 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
         const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
-        const K = _ordFastOn ? _ordKeys() : null, tRk = K ? _simHTerm(K.rk, NAV_ROUTE_KEY) : 0, pk = ((profile * 16777216 + destKey) * 2) + (group ? 1 : 0);
+        const K = _ordFastOn ? _ordKeys() : null, pk = ((profile * 16777216 + destKey) * 2) + (group ? 1 : 0);
         const flying = profile === NAV_PROFILE_AIR;
         for (let u of reachable) {
             const c = u._us, s = u._si;
             // (A unit of the columns, no worker: the setters' writes below, as
             // they make them, straight to its columns.)
             if (K && c && !c.jr__ws.get(s)) {
-                const o = c.oc__routeKey.get(s);
-                if (o !== NAV_ROUTE_KEY) { c.oc__routeKey.set(s, NAV_ROUTE_KEY); c.hObj[s] = (c.hObj[s] + tRk - _simHTerm(K.rk, o)) | 0; }
+                c.rkF[s] = 1;
                 c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady.set(s, ready);
                 if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
@@ -3537,7 +3531,7 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
     };
     let flowDest = [null, null], flowMembers = [null, null];
     const K = _ordFastOn ? _ordKeys() : null, amGx = cmd === CMD_ATTACK_MOVING ? targetGx : null, amGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
-    const tAmx = K ? _simHTerm(K.amx, amGx) : 0, tAmy = K ? _simHTerm(K.amy, amGy) : 0, tTp = K ? _simHTerm(K.tp, targetPos) : 0;
+    const tAmx = 0, tAmy = 0, tTp = 0;
     for (let u of list) {
         const c = u._us, s = u._si;
         // A unit of the columns, no worker, not held, indexed (the common

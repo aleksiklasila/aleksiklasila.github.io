@@ -162,7 +162,7 @@ const SIM_KERNEL_VISIBILITY = 0, SIM_KERNEL_SEPARATION = 1, SIM_KERNEL_UNIT_FRAM
 const SIM_KERNEL_SPATIAL_HISTOGRAM = 4, SIM_KERNEL_SPATIAL_SCATTER = 5, SIM_KERNEL_SEPARATION_PREPARE = 6;
 const SIM_KERNEL_SEPARATION_FINISH = 7, SIM_KERNEL_MOVE = 8, SIM_KERNEL_SEPARATION_YIELD = 9;
 const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX_SCATTER = 12, SIM_KERNEL_INDEX_ORDER = 13;
-const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
+const SIM_KERNEL_EFF_AREA_HIST = 100, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
 const SIM_KERNEL_VIS_SNAP = 30, SIM_KERNEL_VIS_SPREAD = 31;
 const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT = 34, SIM_KERNEL_LASER_HITS = 35;
 const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
@@ -1194,8 +1194,13 @@ const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.ne
     '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG',
     // (Word 292: each slot's worker record, the wk* arrays' index; 293, 294
     // the attack carry and shots, mv.rs fire.)
-    'unit.wkIx', '?unit.atkL', '?unit.atkN'];
+    'unit.wkIx', '?unit.atkL', '?unit.atkN',
+    // (Words 295, 296: its route's navigation profile and an attack-mover's aggro reach, mv.rs resume_order.)
+    '?unit.nvProf', '?unit.mvReachA'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
+// (Off: the unit controller does not run, every unarmed unit is Unit.update's as before; for comparisons.)
+let _simUnitCtlOn = true;
+const _SIM_MOVE_CTLX = ['unit.holdF', 'unit.isWk', 'unit.rkF', 'unit.amGx', 'unit.amGy', 'unit.tuS', 'unit.tuId', 'unit.fatF', 'unit.tbT', 'unit.nvPK', 'mv.scoutT', 'unit.acqB'];
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
     return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
@@ -1234,6 +1239,8 @@ function _simMoveWasm(R, P) {
     // (Word 458: unit.rtEnd, the occupancy swap's crowd test, mv.rs traffic_swap.)
     const rte=R['unit.rtEnd'];
     _simWasmArgI[458]=rte&&simHeapHas(rte)?_simWEnc(rte.byteOffset):0;
+    // (Words 463..: the unit controller's columns, mv.rs W_CTLX; the scout's type index: one word.)
+    for(let i=0;i<_SIM_MOVE_CTLX.length;i++){const a=R[_SIM_MOVE_CTLX[i]];_simWasmArgI[463+i]=_simUnitCtlOn&&a&&simHeapHas(a)?_simWEnc(a.byteOffset):0;}
     // (Words 459-460: the occupancy's footprint records, whose byte 3 holds the marks for its second stage, and
     // their positions, mv.rs mark_need; 0 without the occupancy.)
     const occRec=R['occ.rec'];
@@ -1580,13 +1587,16 @@ const SIM_PAR_SPIN_MS = 0.25;
 // upkeep bins' players (0: no bins), [13] their levels + 1: a unit whose
 // levels it wrote moves bins (unit.upB, upk.h; main.js _upkUnitBin).
 const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad', 'unit.esType', 'unit.esTaken', 'unit.stackCount', 'unit.unitLevel', 'unit.baseLevel',
-    'unit.effectiveStacks', 'unit.effectiveLevel', 'unit._lastAppliedEffectiveLevel', 'unit.x', 'unit.y', 'unit.owner', 'spatial.types', 'eff.flag', '?unit.upT', '?unit.upB',
+    'unit.effectiveStacks', 'unit.effectiveLevel', 'unit._lastAppliedEffectiveLevel', 'unit.spArea', 'area.off', 'unit.owner', 'eff.areaHist', 'eff.flag', '?unit.upT', '?unit.upB',
     '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
     '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', '?-' , '?-' , '?-' ,
     'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', '?-' , '?-' , '?-' , 'unit.spArea', 'unit.energy',
     'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2',
     // (Base entries: units behind their stat tables, P[23].)
-    '?eff.bVer', '?eff.bRad', '?eff.bMaxE']);
+    '?eff.bVer', '?eff.bRad', '?eff.bMaxE', '?area.nb', '?eff.bcnt']);
+// The effective levels' counts: the units of each lane (owner, type) in each area, a snapshot (things_utils.js _effAreaHistEnsure).
+const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist']);
+SIM_KERNELS[SIM_KERNEL_EFF_AREA_HIST] = function (R, P, chunk) { _simRust(_simEffAreaHistW, P, chunk, 'k_eff_area_hist', 'EFF_AREA_HIST'); };
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUnitsW, P, chunk, 'k_eff_units', 'EFF_UNITS'); };
 
 // The units' visibility snapshot (renderer.js _visCoverUnits, a tier's
@@ -1636,7 +1646,7 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // [5]/[6] grid, [7] players, [8] areas.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout']);
+    '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.
@@ -1775,8 +1785,6 @@ const _simVisSpreadW = _simWK(['vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.aok', '
 SIM_KERNELS[SIM_KERNEL_VIS_SPREAD] = function (R, P, chunk) { _simRust(_simVisSpreadW, P, chunk, 'k_vis_spread', 'VIS_SPREAD'); };
 
 
-const _simEffCountW = _simWK(['eff.win', 'eff.out', 'spatial.types']);
-SIM_KERNELS[SIM_KERNEL_EFF_COUNT] = function (R, P, chunk) { _simRust(_simEffCountW, P, chunk, 'k_eff_count', 'EFF_COUNT'); };
 
 // The state hash's units (utils_snapshot.js snapTickHash): one slice of the
 // units list, every hashed field from the columns (the object fields
@@ -1794,7 +1802,7 @@ const SIM_KERNEL_SNAP_MERGE = 65;
 const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
     'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.poisoned', 'unit.burning', 'unit.frozen', 'unit.wet', 'unit.sandy', 'unit.watched',
     'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
-    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam']);
+    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
 const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
 SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };
@@ -1841,7 +1849,7 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) { _simRust(_simComb
 // [2] SIM_SEP_ABSENT.
 const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', '?-' , 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
     'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
-    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot']);
+    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of

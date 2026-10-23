@@ -323,6 +323,8 @@ function _unitUpdateEnd(u, cols, driveBy) {
 }
 function _unitArmAgain(u, cols) {
     const cmd = u.commandState;
+    // (Not a worker: the flow columns a structure instruction took are its own again, mv.rs resume_order.)
+    if (!u.workerState) cols.mvWk[u._si] = 0;
     // (A worker at its task standing out its cooldown, whatever its command.)
     if (u.workerState && u.workerState !== 'MANUAL_MOVE' && u.workerTransferCooldown > 0) { simMoveTryParkWork(u); if (cols.mvOn[u._si] !== 0) return; }
     if ((cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) && !u.holdPosition && simMoveTryParkRoute(u, cmd)) return;
@@ -471,6 +473,22 @@ function _unitTickY(t) { const c = t._us; return c && _unitPassOn ? c.y0[t._si] 
 // recoil, a mine): its hits are dropped after the pass anyway.
 let _simDead0Tick = -1;
 function _unitTickDead(t) { const c = t._us; return c && _unitPassOn && _simDead0Tick === gameTime ? c.dead0[t._si] === 1 : !!t.dead; }
+// Units whose target was set before the target had a slot (a restore): the slots are found before the state hash (its kernel reads
+// them: a target counts there by its slot).
+let _tuPending = [];
+function simUnitTargetsResolve() {
+    if (!_tuPending.length) return;
+    const list = _tuPending;
+    _tuPending = [];
+    for (let i = 0; i < list.length; i++) {
+        const u = list[i], c = u._us;
+        if (!c) continue;
+        const s = u._si, id = c.tuId[s];
+        if (id === 0 || c.tuS[s] >= 0) continue;
+        const t = getUnitById(id);
+        if (t && t._us === c && t._si >= 0) c.tuS[s] = t._si;
+    }
+}
 function _thingTickX(t) { return t instanceof Unit ? _unitTickX(t) : t.x; }
 function _thingTickY(t) { return t instanceof Unit ? _unitTickY(t) : t.y; }
 // Whether `player` sees the tile unit t stood on at the pass's start (a
@@ -545,7 +563,7 @@ function _maxUnitCollisionRadius() {
 const SCOUT_TARGET_CELLS = 32;
 class Unit {
     constructor(unitType, owner, x, y) {
-        simUnitStateAllocate(this);
+        simUnitStateAllocate(this, x, y);
         this.id = nextUnitId++;
         this.unitType = unitType;
         this.owner = owner;
@@ -778,13 +796,103 @@ class Unit {
     // A structure target (its value in _tb), mirrored into the acqB column:
     // the acquisition tier looks for units only for units that may use the
     // answer (idle, attack-moving, or attacking a structure).
-    get targetBuilding() { return this._tb; }
+    // Its order's targets and attack-move tile: columns (SIM_MOVE_COLUMNS tuS / tuId, fatF, amGx / amGy, tbT) the movement kernels
+    // work on and write too (a target gone, an order done); these are views of them. (Before its slot, or detached: plain values.)
+    get targetBuilding() {
+        const c = this._us;
+        if (c) { const t = c.tbT[this._si]; if (t < 0) return null; const gx = t % GRID_W; return getTileEntityRef(gx, (t - gx) / GRID_W) || null; }
+        return this._det ? this._det.targetBuilding : this._tbv === undefined ? null : this._tbv;
+    }
     set targetBuilding(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_tb', { value: v, writable: true, configurable: true }); return; }
-        if (c && this._tb !== v) _unitHD(c, this._si, _UH_TB, this._tb, v);
-        this._tb = v;
-        if (c) c.acqB[this._si] = v ? 1 : 0;
+        if (c === undefined) { Object.defineProperty(this, '_tbv', { value: v, writable: true, configurable: true }); return; }
+        if (c) { const s = this._si; c.tbT[s] = v && Number.isInteger(v.gx) && Number.isInteger(v.gy) ? v.gy * GRID_W + v.gx : -1; c.acqB[s] = v ? 1 : 0; }
+        else if (this._det) this._det.targetBuilding = v;
+    }
+    // Its issued target position (mvTgX / mvTgY, NaN none: the movement kernels' arrival tolerance reads them) and its route key (rkF).
+    get targetPos() {
+        const c = this._us;
+        if (c) { const x = c.mvTgX[this._si]; return x === x ? { x, y: c.mvTgY[this._si] } : null; }
+        return this._det ? this._det.targetPos : this._tpv === undefined ? null : this._tpv;
+    }
+    set targetPos(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_tpv', { value: v, writable: true, configurable: true }); return; }
+        if (c) { const s = this._si; if (v) { c.mvTgX[s] = Number(v.x); c.mvTgY[s] = Number(v.y); } else { c.mvTgX[s] = NaN; c.mvTgY[s] = NaN; } }
+        else if (this._det) this._det.targetPos = v;
+    }
+    get _routeKey() {
+        const c = this._us;
+        if (c) return c.rkF[this._si] === 1 ? NAV_ROUTE_KEY : null;
+        return this._det ? this._det._routeKey : this._rkv === undefined ? null : this._rkv;
+    }
+    set _routeKey(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_rkv', { value: v, writable: true, configurable: true }); return; }
+        if (c) c.rkF[this._si] = v ? 1 : 0;
+        else if (this._det) this._det._routeKey = v;
+    }
+    // Its target unit: its id (tuId) and the slot it held (tuS, a hint: slots are each peer's own). A target that is dead is none
+    // (when its slot is freed is each peer's own, so it must not show), and one not in a slot yet (a restore sets a unit's target
+    // before the target's slot is there) is found by its id.
+    get targetUnit() {
+        const c = this._us;
+        if (c) {
+            const s = this._si, id = c.tuId[s];
+            if (id === 0) return null;
+            const q = c.tuS[s];
+            let o = q >= 0 ? _simUnitState.owners[q] : null;
+            if (!(o && (o.id | 0) === id)) {
+                o = getUnitById(id);
+                if (!o) return null;
+                if (o._us === c && o._si >= 0) c.tuS[s] = o._si;
+            }
+            return _unitTickDead(o) ? null : o;
+        }
+        return this._det ? this._det.targetUnit : this._tuv === undefined ? null : this._tuv;
+    }
+    set targetUnit(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_tuv', { value: v, writable: true, configurable: true }); return; }
+        if (c) {
+            const s = this._si;
+            if (v) { const q = v._us === c && v._si >= 0 ? v._si : -1; c.tuS[s] = q; c.tuId[s] = v.id | 0; if (q < 0) _tuPending.push(this); }
+            else { c.tuS[s] = -1; c.tuId[s] = 0; }
+        }
+        else if (this._det) this._det.targetUnit = v;
+    }
+    get forcedAttackTarget() {
+        const c = this._us;
+        if (c) return c.fatF[this._si] === 1;
+        return this._det ? this._det.forcedAttackTarget : this._fatv === true;
+    }
+    set forcedAttackTarget(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_fatv', { value: !!v, writable: true, configurable: true }); return; }
+        if (c) c.fatF[this._si] = v ? 1 : 0;
+        else if (this._det) this._det.forcedAttackTarget = !!v;
+    }
+    get _attackMoveGx() {
+        const c = this._us;
+        if (c) { const v = c.amGx[this._si]; return v < 0 ? null : v; }
+        return this._det ? this._det._attackMoveGx : this._amgx === undefined ? null : this._amgx;
+    }
+    set _attackMoveGx(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_amgx', { value: v, writable: true, configurable: true }); return; }
+        if (c) c.amGx[this._si] = typeof v === 'number' && v >= 0 ? v : -1;
+        else if (this._det) this._det._attackMoveGx = v;
+    }
+    get _attackMoveGy() {
+        const c = this._us;
+        if (c) { const v = c.amGy[this._si]; return v < 0 ? null : v; }
+        return this._det ? this._det._attackMoveGy : this._amgy === undefined ? null : this._amgy;
+    }
+    set _attackMoveGy(v) {
+        const c = this._us;
+        if (c === undefined) { Object.defineProperty(this, '_amgy', { value: v, writable: true, configurable: true }); return; }
+        if (c) c.amGy[this._si] = typeof v === 'number' && v >= 0 ? v : -1;
+        else if (this._det) this._det._attackMoveGy = v;
     }
     // A fallback path with a target still pending (the separation's commit
     // retries it now and then: _tryUpgradeAstarFallbackPath): mirrored into
@@ -848,7 +956,20 @@ class Unit {
         else if (this._det) this._det._routeEnd = v;
         else Object.defineProperty(this, '_ree', { value: v, writable: true, configurable: true });
     }
-    get path() { return this._path; }
+    // Its path: one navigation node, the columns' (nvPK: profile, destination, wide) when a kernel made or ended it;
+    // else the array it was given.
+    get path() {
+        const c = this._us;
+        if (!c) return this._path;
+        const p = this._path, k = c.nvPK[this._si], last = p && p.length ? p[p.length - 1] : null;
+        const lk = last && last.nav ? ((last.nav - 1) * 16777216 + last.y * GRID_W + last.x) * 2 + (last.w ? 1 : 0) : -1;
+        if (lk === k) return p;
+        if (k < 0) return null;
+        const key = k >> 1, prof = Math.floor(key / 16777216), dest = key - prof * 16777216, gx = dest % GRID_W, gy = (dest - gx) / GRID_W;
+        const np = [(k & 1) ? { x: gx, y: gy, nav: prof + 1, w: 1, ready: 0 } : { x: gx, y: gy, nav: prof + 1, ready: 0 }];
+        this._path = np;
+        return np;
+    }
     set path(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_path', { value: v, writable: true, configurable: true }); return; }
@@ -911,7 +1032,6 @@ class Unit {
         // (Status effects and attack timers: counted down for every unit at
         // once before the pass, statusPrepassRun.)
         if (this.energy <= 0) { this.dead = true; return; }
-        if (cols && (cols.cmMode[this._si] & 8)) _brainStructureEngage(this);
 
         // Floor item interaction: on entering a tile, then refreshed once a
         // second, staggered by unit (trap effects last seconds).
@@ -1040,14 +1160,7 @@ class Unit {
             _makeFallbackPathForUnit(this, Math.floor(this.x / TILE), Math.floor(this.y / TILE), gx, gy, CMD_ATTACK_MOVING, 'ai_combat');
             return;
         }
-        // Structures do not move; a staggered quarter of the ticks suffices.
-        if (!simStepCrosses(this.id, 4)) return;
-        let structure = _acqStructureHit(this, aggroRange);
-        if (structure) {
-            this.targetBuilding = structure;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-        }
+        // (Structures: the combat brain's, a structure instruction, cmMode 16.)
     }
 
     // Within arrival tolerance of the issued move target.
@@ -1166,18 +1279,7 @@ class Unit {
             this.commandState = CMD_ATTACKING;
             return;
         }
-        // Structures do not move: scan for them on a staggered quarter of the
-        // ticks (by unit id), which is plenty to react to buildings entering
-        // aggro range. Enemy units above are still checked every tick.
-        if (simStepCrosses(this.id, 4)) {
-            let structure = _acqStructureHit(this, aggroRange);
-            if (structure) {
-                this.targetBuilding = structure;
-                this.forcedAttackTarget = false;
-                this.commandState = CMD_ATTACKING;
-                return;
-            }
-        }
+        // (Structures: the combat brain's, a structure instruction, cmMode 16.)
         if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
             if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
             if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING && this._isNearIssuedTarget(spd)) {
@@ -1386,6 +1488,7 @@ class Unit {
                 this.attackTarget = null;
                 this.doHolding();
             } else {
+                this.attackTarget = null;
                 if (this.path && this.pathIndex < this.path.length) {
                     this.followPath(spd);
                 } else if (d < 2 * TILE || this.isFlying) {
@@ -1412,6 +1515,7 @@ class Unit {
         this.attackTarget = null;
         this.forcedAttackTarget = false;
         this.commandState = CMD_IDLE;
+        this._resumeAttackMove();
     }
 
     // An engagement on the way of an attack-move ended (its target died, went
@@ -2101,10 +2205,43 @@ function _hitArrays(n, total) {
     if (!K.shr || K.shr.length < 64 * NO) { K.shr = simSharedArray(Float64Array, 64 * NO * 2); simParallelBind('hit.shr', K.shr); }
     return K;
 }
+// The movement kernel's attacks on structures (listed with a target of
+// -(tile + 2), mv.rs move_struct; k_hits passes them over), applied here: in
+// the order of their attackers' ids (a slot is a place on this peer, an id is
+// the same everywhere), the first looks with their sounds.
+const SIM_STRUCT_HIT_LOOKS = 256;
+let _shKeys = new Float64Array(1024);
+function _structHitsApply(KC, HC, HA, HT, CH) {
+    const S = _simUnitState, C = S.columns, owners = S.owners, ids = C.id;
+    let m = 0;
+    for (let k = 0; k < KC; k++) {
+        const cnt = HC[k];
+        if (cnt <= 0) continue;
+        for (let j = k * CH, e = j + cnt; j < e; j++) {
+            if (HT[j] > -2) continue;
+            if (m === _shKeys.length) { const a = new Float64Array(m * 2); a.set(_shKeys); _shKeys = a; }
+            _shKeys[m++] = ids[HA[j]] * 33554432 + j;
+        }
+    }
+    if (m === 0) return;
+    const keys = _shKeys.subarray(0, m);
+    keys.sort();
+    for (let i = 0; i < m; i++) {
+        const key = keys[i], j = key - Math.floor(key / 33554432) * 33554432;
+        const s = HA[j], a = owners[s], t = -HT[j] - 2;
+        if (!a) continue;
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W, tb = getTileEntityRef(gx, gy);
+        if (!tb) continue;
+        const shots = C.atkN ? Math.max(1, C.atkN[s]) : 1, dmg = shots > 1 ? simUnitStatValue(C, s, 5) * shots : simUnitStatValue(C, s, 5);
+        if (i < SIM_STRUCT_HIT_LOOKS) { recordUnitAttackFx(a, tb); playSound(C.atkSty[s] >= 1 && C.atkSty[s] <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', a.x, a.y, a.unitType); }
+        _unitHitBuilding(a, tb, dmg);
+    }
+}
 function unitHitsResolve() {
     const Q = _hitQ, n = Q.n, S = _simUnitState;
     const KC = _simMoveHitChunks, HC = _simMoveHitC, HA = _simMoveHitA, HT = _simMoveHitT, CH = SIM_MOVE_CHUNK;
     _simMoveHitChunks = 0;
+    if (KC > 0 && S && HT) _structHitsApply(KC, HC, HA, HT, CH);
     let nk = 0;
     for (let k = 0; k < KC; k++) nk += HC[k];
     const total = n + nk;
@@ -2243,7 +2380,7 @@ for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELD
 // (The accessors' plain values in the digest: their keys.)
 // (Guarded as the loops above: tests load unit.js without sim_unit_state.js.)
 const _uhKey = typeof _simHKey === 'function' ? _simHKey : () => 0;
-const _UH_WS = _uhKey('workerState'), _UH_WNR = _uhKey('_workerNextIdleRetargetTick'), _UH_TB = _uhKey('targetBuilding'), _UH_PFA = _uhKey('pathIsFallbackAstar'),
+const _UH_WS = _uhKey('workerState'), _UH_WNR = _uhKey('_workerNextIdleRetargetTick'), _UH_PFA = _uhKey('pathIsFallbackAstar'),
     _UH_PPT = _uhKey('_pendingPathTarget');
 function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) - _simHTerm(key, o)) | 0; }
 
@@ -3103,6 +3240,33 @@ function simMoveTryArm(u) {
     c.mvOn[s] = 1;
 }
 
+// Structure chase (mvOn 7): a unit attacking a structure it is not in range
+// of, with no path left: a flyer, or one within two tiles of it, goes straight
+// at it (doAttacking's building branch: simChaseStep), by the kernel, which
+// hands it back when it is in range, the structure is gone or out of sight, or
+// the step is not open. Checked again at the unit's turn (simChaseStillValid).
+let SIM_BLD_CHASE = true;
+function _simMoveTryChaseBuilding(u) {
+    const c = u._us, tb = u.targetBuilding;
+    if (!SIM_BLD_CHASE || !c || u.dead || u.holdPosition || u.workerState || u.targetUnit || !tb || u.attackTarget === tb || !(tb.energy > 0)) return;
+    const path = u.path;
+    if (path && u.pathIndex < path.length) return;
+    const s = u._si, owner = u.owner, gx = tb.gx, gy = tb.gy;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
+    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
+        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
+    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
+    if (!(k <= 2)) return;
+    const pc = u.preComputed;
+    if (!(pc && pc.speed * _getUnitAstarSpeedMultiplier(u) >= 0)) return;
+    // (A ground unit goes straight only within two tiles: the kernel checks each tick.)
+    if (!u.isFlying && !(detHypot(tb.x - u.x, tb.y - u.y) < 2 * TILE)) return;
+    c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
+    c.mvReach[s] = k; c.mvFlags[s] = u.isFlying ? 32 : 0;
+    c.mvOn[s] = 7;
+}
+
 // Approach (mvOn 6): a unit attacking a structure it is not in range of,
 // following its path there (doAttacking's building branch: followPath).
 // The kernel walks the path window, or the flow field of a nav node, as for
@@ -3116,7 +3280,7 @@ function _simMoveTryApproachBuilding(u) {
     const c = u._us, tb = u.targetBuilding;
     if (!c || u.dead || u.holdPosition || u.workerState || u.targetUnit || !tb || u.attackTarget === tb || !(tb.energy > 0)) return;
     const path = u.path, idx = u.pathIndex;
-    if (!path || !(idx < path.length)) return;
+    if (!path || !(idx < path.length)) { _simMoveTryChaseBuilding(u); return; }
     const s = u._si, owner = u.owner, gx = tb.gx, gy = tb.gy;
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
     if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
@@ -3308,11 +3472,21 @@ function simMoveTryChase(u) {
 // walls as they were). Otherwise the move is undone and Unit.update runs.
 // (on: 3 for a hold's chase step or a chase come in range, outputs 11-13.)
 function simChaseStillValid(c, s, on = 4) {
+    if (on === 4 && c.mvOn[s] === 7) return _simBldChaseStillValid(c, s);
     if (c.mvOn[s] !== on || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
     const q = c.mvHT[s];
     if (!(q >= 0) || c.dead0[q] || (c.id[q] | 0) !== c.mvHTId[s]) return false;
     const u = _simUnitState.owners[s], tu = u && u.targetUnit;
     return !!tu && tu._si === q && u.commandState === CMD_ATTACKING && !!u.forcedAttackTarget === ((c.mvFlags[s] & 8) !== 0) && !u.targetBuilding && !u.holdPosition;
+}
+// A structure chase (mvOn 7, outputs 7 and 9) at its turn: the structure still
+// standing and still the unit's target, the unit not yet in range, the walls
+// as they were.
+function _simBldChaseStillValid(c, s) {
+    if (c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
+    const u = _simUnitState.owners[s], tb = u && u.targetBuilding;
+    return !!tb && tb.energy > 0 && !u.targetUnit && u.attackTarget !== tb && u.commandState === CMD_ATTACKING && !u.holdPosition && !u.workerState
+        && tb.gy * GRID_W + tb.gx === c.mvHT[s] && !!u.forcedAttackTarget === (c.mvHTId[s] === 1) && !(u.path && u.pathIndex < u.path.length);
 }
 function simChaseUndo(c, s) {
     c.mvOn[s] = 0; c.mvOut[s] = 0;
@@ -3498,11 +3672,12 @@ function simMoveTryParkHeldAttacker(u) {
 }
 function simMoveTryParkIdle(u) {
     const c = u._us;
-    if (!c || u.dead || u.holdPosition || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;
+    if (!c || u.dead || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;
     const s = u._si, reach = c.mvReachA[s];
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT || reach === 255) return;
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 16; c.mvReach[s] = reach;
+    // (128: its periodic check is the kernel's, which keeps it parked: mv.rs move_pre.)
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 16 | 128; c.mvReach[s] = reach; c.mvWk[s] = 0;
     c.mvOn[s] = 2;
 }
 // A unit waiting for its way (a pending target, no path: the helpers'
@@ -3529,6 +3704,7 @@ function simMoveTryParkWait(u, cmd) {
         flags = 1;
     }
     c.mvWake[s] = wake; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    if (!u.workerState) c.mvWk[s] = 0;
     c.mvOn[s] = 2;
 }
 // A unit with orders to move waiting for its way (no path, a pending target
@@ -3556,7 +3732,7 @@ function simMoveTryParkRoute(u, cmd) {
     if (u.sandy > 0) spd *= 0.5;
     c.mvTgX[s] = Number(t.x); c.mvTgY[s] = Number(t.y); c.mvTgTol[s] = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
     c.mvOn[s] = 2;
     return true;
 }
@@ -3589,7 +3765,7 @@ function simMoveTryParkHeld(u, cmd) {
         flags = 1;
     }
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
     c.mvOn[s] = 2;
 }
 // A worker at its work (its path done, nothing pending) whose transfer
@@ -4148,7 +4324,7 @@ function _simAreaCsr() {
 // Runs the armed units' tick (before the update pass), then charges their
 // node steps to their owners and updates the spatial index and visibility
 // of those that moved into another tile or window.
-let _simMoveSpendTypes = null, _simMovePost = null, _simMovePostC = null;
+let _simMoveSpendTypes = null, _simMovePost = null, _simMovePostC = null, _simScoutT = null;
 // The kernel's attacks (unit holds, mvFlags 4): attacker and target slots per
 // chunk of SIM_MOVE_CHUNK, how many per chunk; chunks this tick (0: none).
 let _simMoveHitA = null, _simMoveHitT = null, _simMoveHitC = null, _simMoveHitChunks = 0;
@@ -4213,6 +4389,9 @@ function simMoveRun() {
     const stepChunks = Math.ceil(n / CH), hitChunks = occupancy ? stepChunks : chunks;
     // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
     if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
+    // (The scout's type index, for the unit controller: scouts are Unit.update's.)
+    if (!_simScoutT) { _simScoutT = simHeapArray(Int32Array, 4); simParallelBind('mv.scoutT', _simScoutT); }
+    _simScoutT[0] = simUnitTypeIndex('scout');
     if (!_simMovePost || _simMovePost.length < outputSlots) { _simMovePost = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); simParallelBind('mv.post', _simMovePost); }
     if (occupancy && (!_simMoveWork || _simMoveWork.length < outputSlots)) { _simMoveWork = simHeapArrayAuto(Int32Array, simReserveCap(outputSlots, 8192)); simParallelBind('occ.work', _simMoveWork); }
     if (!_simMovePostC || _simMovePostC.length < chunks) { _simMovePostC = simHeapArrayAuto(Int32Array, Math.max(64, chunks * 2)); simParallelBind('mv.postc', _simMovePostC); }
@@ -4431,25 +4610,6 @@ function _acqStructureHit(u, range) {
     if (owner === u.owner || (isItem && e.underConstruction)) return null;
     if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return null;
     return e;
-}
-// The combat brain's structure for an idle or attack-moving unit (cmMode
-// 8: the acquisition tier's hostile structure at tile cmT; the movement
-// kernel hands such a unit back): taken as a turret is (its target
-// building, attacking), in O(1). Traps and other floor items included.
-function _brainStructureEngage(u) {
-    const c = u._us, s = u._si, t = c.cmT[s];
-    c.cmMode[s] = 0; c.cmT[s] = -1; c.cmTId[s] = 0;
-    const cmd = u.commandState;
-    if (!(t >= 0) || (cmd !== CMD_IDLE && cmd !== CMD_ATTACK_MOVING) || u.holdPosition || u.workerState) return;
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
-    if (!e || !(e.energy > 0)) return;
-    const cell = grid[gy] && grid[gy][gx], isItem = !!cell && cell.item === e;
-    const owner = isItem ? cell.owner : e.owner;
-    if (owner === u.owner || !(owner >= 0) || (isItem && e.underConstruction)) return;
-    if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return;
-    u.targetBuilding = e;
-    u.forcedAttackTarget = false;
-    u.commandState = CMD_ATTACKING;
 }
 // (The acquisition tier's result, no search here: _combatScanHit.)
 function _combatScanTarget(u, range) { return _combatScanHit(u, range); }
@@ -4901,6 +5061,9 @@ function applyUnitSeparation(unit, dx, dy, maxOverlap = unit.getCollisionRadius(
 function pushUnitOutOfBlockedTile(unit) {
     if (!unit || unit.dead || unit.isFlying) return;
     let gx = Math.floor(unit.x / TILE), gy = Math.floor(unit.y / TILE);
+    // (Any tile not a wall, from the walls' byte a tile (the kernels' own,
+    // current while no wall changed): no pointer to a cell object a unit.)
+    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && !_simMoveWallDirty && _simMoveWallGrid === grid && _simMoveWall !== null && _simMoveWall.length === GRID_W * GRID_H && _simMoveWall[gy * GRID_W + gx] === 0) return;
     // (Any tile not a wall: canUnitOccupyTile's first answer, read before the
     // unit's cache fields, which miss whenever any tile changed anywhere.)
     const row = gx >= 0 && gx < GRID_W ? grid[gy] : null, cell = row ? row[gx] : null;

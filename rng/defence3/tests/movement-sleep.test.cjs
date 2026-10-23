@@ -9,6 +9,8 @@ const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'64'}
 const inst=world.spawn('sleep-replay',{simWorker:false});
 inst.scratch.bytes=Buffer.from(fixture.bin,'base64');
 inst.eval(`_simWasm64Bytes=()=>null;startSoloGame();gameTick();currentTick++;
+    // (The oracle has no unit controller: this compares the movement paths only.)
+    _simUnitCtlOn=false;
     for(let j=0;j<32;j++){const u=new Unit('norm',0,(25+j%8)*TILE+8,(25+(j>>3))*TILE+8);units.push(u);updateUnitSpatial(u);}
     spatialIndexRebuild();
     const originalMove=new WebAssembly.Instance(new WebAssembly.Module(__scratch.bytes),{env:{memory:_simWasmMem}}).exports;

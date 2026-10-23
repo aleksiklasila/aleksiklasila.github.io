@@ -961,13 +961,13 @@ function _navFieldsSweepSlice(k, step, mark) {
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     const slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
     if (S && slots) {
-        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.oc__routeKey, n = units.length;
+        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.rkF, n = units.length;
         const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
         for (let i = k; i < n; i += step) {
             const s = slots[i];
             if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
             const e = RE[s];
-            if (e >= 0 && RK.get(s) === NAV_ROUTE_KEY) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
+            if (e >= 0 && RK[s] === 1) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
             const pk = PK[s];
             if (pk >= 0) { const F = (pk & 1) ? Fw : Fn, sl = F.byKey.get(pk >> 1); if (sl !== undefined) F.seen[sl] = mark; }
         }

@@ -731,125 +731,45 @@ function resetNewUnitsForStats() {
     if (typeof _effBaseClear === 'function') _effBaseClear();
 }
 
-function _effectiveStatsRadiusPx(u) {
-    return Math.max(0.5, Number((u.basePreComputed && u.basePreComputed.visionRange) || (u.preComputed && u.preComputed.visionRange) || 0.5)) * TILE;
+// A unit's effective-stats range in area steps: its base vision range in areas, in whole steps (0a: its own area, 1a: its own and
+// the areas next to it, and so on; a range of 0.6 is 0a, 1.35 is 1a).
+const EFF_AREA_STEPS_MAX = 6;
+function _effAreaStepsOf(b) {
+    const v = b ? Number(b.visionRangeArea) : NaN;
+    return v > 0 ? Math.min(EFF_AREA_STEPS_MAX, Math.floor(v)) : 0;
 }
 
-// Scratch for _countNearbySameTypeUnits, reused across ticks (no garbage).
-let _effCountPrefix = new Int32Array(0);
-let _effCountWin = new Int32Array(0); // per due unit: x1, y1, x2, y2, pair key
-
-// Nearby same-owner same-type unit counts for the due units, from the
-// spatial chunk counts over the square of chunks around each unit (clamped
-// to the map). Units are grouped by owner and type; each group either sums
-// its windows directly or, when the windows overlap a lot, builds a
-// summed-area table over just the box they cover and answers each in O(1).
-// Whichever is cheaper is used; both give the same exact integer counts.
-let _effCountOut = new Int32Array(0);
-function _countNearbySameTypeUnits(dueUnits, n, similarOut, chunkPx) {
-    if (_effCountWin.length < n * 5) _effCountWin = simSharedArray(Int32Array, Math.max(n * 5, _effCountWin.length * 2));
-    let win = _effCountWin;
-    let typeCount = Math.max(1, spatialUnitsComplexUnitTypeCount | 0);
-    let groups = new Map(); // pair key -> [indices]
-    for (let i = 0; i < n; i++) {
-        let u = dueUnits[i];
-        win[i * 5 + 4] = -1;
-        let owner = Math.floor(Number(u.owner));
-        let typeIdx = spatialUnitTypeToIndex[u.unitType];
-        if (!Number.isFinite(typeIdx) || typeIdx < 0) continue;
-        if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) continue;
-        let cx = Math.floor(u.x / chunkPx);
-        let cy = Math.floor(u.y / chunkPx);
-        let chunkRadius = Math.max(0, Math.ceil(_effectiveStatsRadiusPx(u) / chunkPx));
-        let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius));
-        let y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius));
-        let x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius));
-        let y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
-        if (!(x1 <= x2 && y1 <= y2)) continue; // NaN positions
-        let key = owner * typeCount + typeIdx;
-        let o = i * 5;
-        // (In type blocks: the counts are kept by blocks of chunks.)
-        win[o] = Math.floor(x1 / SPATIAL_TYPE_BLOCK); win[o + 1] = Math.floor(y1 / SPATIAL_TYPE_BLOCK);
-        win[o + 2] = Math.floor(x2 / SPATIAL_TYPE_BLOCK); win[o + 3] = Math.floor(y2 / SPATIAL_TYPE_BLOCK); win[o + 4] = key;
-        let list = groups.get(key);
-        if (!list) { list = []; groups.set(key, list); }
-        list.push(i);
+// The effective levels' counts: the units each lane (owner * unit types + type) has in each area, a snapshot taken by the kernels
+// at the start of each period (the same tick on every peer; at a restore every peer takes a new one on the same tick) and read by
+// the evaluations of the period. A unit's stacks go with the units of its type in the areas within its range, so they follow
+// the crowd a few ticks behind.
+const _effAreaHist = { arr: null, tick: -1, areas: 0, lanes: 0 };
+function effAreaHistReset() { _effAreaHist.tick = -1; }
+function _effAreaHistEnsure(tick, step) {
+    const H = _effAreaHist, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    const A = Array.isArray(areaNeighborIds) ? areaNeighborIds.length : 0, L = Math.max(1, spatialUnitsComplexPlayerCount * spatialUnitsComplexUnitTypeCount);
+    if (H.arr && H.areas === A && H.lanes === L && H.tick >= 0 && tick - H.tick < step && tick >= H.tick) return H;
+    if (!S || !(A > 0) || typeof SIM_KERNEL_EFF_AREA_HIST !== 'number') { H.tick = -1; return null; }
+    const n = A * L;
+    if (!H.arr || H.arr.length !== n) {
+        if (H.arr) simHeapFree(H.arr);
+        H.arr = simHeapArray(Int32Array, n); simParallelBind('eff.areaHist', H.arr);
     }
-
-    let strideChunk = spatialTypeStridePerBlock, rowW = spatialTypeBlocksW;
-    let data = spatialTypeCounts;
-    // Many due units (large worlds): every window summed by the kernels.
-    if (n >= 2048 && typeof SIM_KERNEL_EFF_COUNT === 'number') {
-        for (let i = 0; i < n; i++) {
-            let o = i * 5, key = win[o + 4];
-            if (key < 0) continue;
-            // (The lane: key = owner * types + type.)
-        }
-        if (_effCountOut.length < n) { _effCountOut = simSharedArray(Int32Array, win.length / 5); }
-        simParallelBind('eff.win', win); simParallelBind('eff.out', _effCountOut); simParallelBind('spatial.types', data);
-        const P = _simParams;
-        P[0] = n; P[1] = 512; P[2] = rowW; P[3] = strideChunk;
-        simParallelRun(SIM_KERNEL_EFF_COUNT, Math.ceil(n / 512));
-        for (let i = 0; i < n; i++) if (win[i * 5 + 4] >= 0) similarOut[i] = _effCountOut[i];
-        return;
-    }
-    for (let [key, list] of groups) {
-        let lane = key;
-        let bx1 = spatialTypeBlocksW, by1 = spatialTypeBlocksH, bx2 = -1, by2 = -1, directCost = 0;
-        for (let i of list) {
-            let o = i * 5;
-            let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
-            if (x1 < bx1) bx1 = x1;
-            if (y1 < by1) by1 = y1;
-            if (x2 > bx2) bx2 = x2;
-            if (y2 > by2) by2 = y2;
-            directCost += (x2 - x1 + 1) * (y2 - y1 + 1);
-        }
-        let bw = bx2 - bx1 + 1, bh = by2 - by1 + 1;
-        // A table cell costs about two window reads (read, add, store).
-        if (directCost <= bw * bh * 2) {
-            for (let i of list) {
-                let o = i * 5;
-                let x1 = win[o], y1 = win[o + 1], x2 = win[o + 2], y2 = win[o + 3];
-                let sum = 0;
-                for (let y = y1; y <= y2; y++) {
-                    let idx = (y * rowW + x1) * strideChunk + lane;
-                    for (let x = x1; x <= x2; x++, idx += strideChunk) sum += data[idx];
-                }
-                similarOut[i] = sum | 0;
-            }
-            continue;
-        }
-        // Summed-area table of the box, with a zero row and column in front.
-        let pStride = bw + 1;
-        let cells = pStride * (bh + 1);
-        if (_effCountPrefix.length < cells) _effCountPrefix = new Int32Array(Math.max(cells, _effCountPrefix.length * 2));
-        let prefix = _effCountPrefix;
-        prefix.fill(0, 0, pStride);
-        for (let ry = 1; ry <= bh; ry++) {
-            let out = ry * pStride, prev = out - pStride;
-            prefix[out] = 0;
-            let rowAccum = 0;
-            let idx = ((by1 + ry - 1) * rowW + bx1) * strideChunk + lane;
-            for (let rx = 1; rx <= bw; rx++, idx += strideChunk) {
-                rowAccum += data[idx];
-                prefix[out + rx] = prefix[prev + rx] + rowAccum;
-            }
-        }
-        for (let i of list) {
-            let o = i * 5;
-            let xa = win[o] - bx1, ya = win[o + 1] - by1, xb = win[o + 2] - bx1 + 1, yb = win[o + 3] - by1 + 1;
-            similarOut[i] = (prefix[yb * pStride + xb] - prefix[ya * pStride + xb]
-                - prefix[yb * pStride + xa] + prefix[ya * pStride + xa]) | 0;
-        }
-    }
+    H.areas = A; H.lanes = L; H.tick = tick;
+    const P = _simParams;
+    P[0] = n; P[1] = 65536; P[2] = L; P[3] = A; P[4] = spatialUnitsComplexUnitTypeCount; P[5] = spatialUnitsComplexPlayerCount; P[6] = 0;
+    simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(n / 65536));
+    const slots = S.owners.length;
+    P[0] = slots; P[1] = 16384; P[6] = 1;
+    simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(slots / 16384));
+    return H;
 }
 
 let _effectiveStatsStamp = 0;
 
 // A unit's base tables were (re)applied (applyUnitLevelScaling): the
 // effective-stats kernel can take it from the columns (esOk) while its
-// window does not depend on its effective tables (_effectiveStatsRadiusPx).
+// range does not depend on its effective tables (_effAreaStepsOf: its base ones).
 function effStatsUnitBaseChanged(u) {
     const c = u && u._us;
     if (!c) return;
@@ -858,8 +778,7 @@ function effStatsUnitBaseChanged(u) {
         && Number.isFinite(typeIdx) && typeIdx >= 0 && Number.isFinite(u.baseLevel));
     c.esOk[s] = ok ? 1 : 0;
     if (!ok) return;
-    const chunkPx = Math.max(1, CHUNK_SIZE * TILE);
-    c.esRad[s] = Math.max(0, Math.ceil(Math.max(0.5, Number(b.visionRange)) * TILE / chunkPx));
+    c.esRad[s] = _effAreaStepsOf(b);
     c.esType[s] = typeIdx;
 }
 // Every unit takes the full path once more (a restore replaced tables in
@@ -894,25 +813,34 @@ function _unitStatsBehind(u, ver) {
 }
 let _effStatsVersion = -1;
 
-// The nearby same-owner same-type count of one unit (the full path): the
-// spatial chunk counts over its window, as the kernel sums them.
-function _effWindowCount(u, chunkPx) {
-    let owner = Math.floor(Number(u.owner));
-    let typeIdx = spatialUnitTypeToIndex[u.unitType];
+// The nearby same-owner same-type count of one unit (the full path): the snapshot's counts of its area and, for a range of r
+// area steps, of the areas within r of it (breadth first over the area graph), as the kernel sums them.
+let _effAreaSeen = new Int32Array(0), _effAreaQueue = new Int32Array(0), _effAreaEpoch = 0;
+function _effAreaCount(u, hist) {
+    const H = hist || _effAreaHist, c = u._us;
+    if (!c || !H.arr) return 0;
+    const owner = Math.floor(Number(u.owner)), typeIdx = spatialUnitTypeToIndex[u.unitType];
     if (!Number.isFinite(typeIdx) || typeIdx < 0 || !(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return 0;
-    let cx = Math.floor(u.x / chunkPx), cy = Math.floor(u.y / chunkPx);
-    let chunkRadius = Math.max(0, Math.ceil(_effectiveStatsRadiusPx(u) / chunkPx));
-    let x1 = Math.max(0, Math.min(CHUNKS_W - 1, cx - chunkRadius)), y1 = Math.max(0, Math.min(CHUNKS_H - 1, cy - chunkRadius));
-    let x2 = Math.max(0, Math.min(CHUNKS_W - 1, cx + chunkRadius)), y2 = Math.max(0, Math.min(CHUNKS_H - 1, cy + chunkRadius));
-    if (!(x1 <= x2 && y1 <= y2)) return 0;
-    // The window's type blocks (the counts are kept by blocks of
-    // SPATIAL_TYPE_BLOCK chunks: the blocks it touches count whole).
-    const TB = SPATIAL_TYPE_BLOCK, strideB = spatialTypeStridePerBlock, data = spatialTypeCounts, TW = spatialTypeBlocksW;
-    let lane = owner * spatialUnitsComplexUnitTypeCount + typeIdx, sum = 0;
-    const bx1 = Math.floor(x1 / TB), bx2 = Math.floor(x2 / TB), by2 = Math.floor(y2 / TB);
-    for (let by = Math.floor(y1 / TB); by <= by2; by++) {
-        let idx = (by * TW + bx1) * strideB + lane;
-        for (let bx = bx1; bx <= bx2; bx++, idx += strideB) sum += data[idx];
+    const ar = c.spArea[u._si];
+    if (!(ar >= 0 && ar < H.areas)) return 0;
+    const lane = owner * spatialUnitsComplexUnitTypeCount + typeIdx, L = H.lanes, arr = H.arr, r = c.esRad[u._si];
+    let sum = arr[ar * L + lane];
+    if (r >= 1) {
+        const nbs = areaNeighborIds;
+        if (r === 1) { const l = nbs[ar]; if (l) for (let i = 0; i < l.length; i++) sum += arr[l[i] * L + lane]; }
+        else {
+            if (_effAreaSeen.length < H.areas) { _effAreaSeen = new Int32Array(H.areas); _effAreaQueue = new Int32Array(H.areas); _effAreaEpoch = 0; }
+            const ep = ++_effAreaEpoch, seen = _effAreaSeen, q = _effAreaQueue;
+            seen[ar] = ep; q[0] = ar;
+            let qh = 0, qt = 1;
+            for (let d = 1; d <= r && qh < qt; d++) {
+                const end = qt;
+                while (qh < end) {
+                    const l = nbs[q[qh++]];
+                    if (l) for (let i = 0; i < l.length; i++) { const nb = l[i]; if (nb >= 0 && nb < H.areas && seen[nb] !== ep) { seen[nb] = ep; q[qt++] = nb; sum += arr[nb * L + lane]; } }
+                }
+            }
+        }
     }
     return sum | 0;
 }
@@ -1147,7 +1075,7 @@ function _effSticky(el, effS, last) {
     if (el === last + 1) return effS * 4 < 5 * detPow(2, last) ? last : el;
     return el;
 }
-function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
+function _effStatsFullUnit(u) {
     let baseStacks = getUnitStackCount(u);
     let baseLevel = stackCountToLevel(baseStacks);
     const previousRow=u._us ? u._us.statRow[u._si] : -1;
@@ -1172,11 +1100,9 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
         u.stackCount = baseStacks;
         _effBaseNote(u);
     } else if (u._us && !u._us.esOk[u._si]) effStatsUnitBaseChanged(u);
-    let similarCount = canUseSpatialCounts ? _effWindowCount(u, chunkPx) : 0;
-    if (similarCount <= 0) {
-        let radiusPx = _effectiveStatsRadiusPx(u);
-        forEachUnitInRange(u.x, u.y, radiusPx, () => { similarCount++; }, { player: u.owner, unitType: u.unitType });
-    }
+    // (Its range's count from the period's snapshot.)
+    _effAreaHistEnsure(Math.max(0, Math.floor(Number(gameTime) || 0)), getUnitEffectiveStatsRecalcTicks());
+    let similarCount = _effAreaCount(u);
     if (similarCount < 1) similarCount = 1;
     let effStacks = Math.max(1, Math.floor(similarCount * baseStacks));
     u.effectiveStacks = effStacks;
@@ -1194,7 +1120,7 @@ function _effStatsFullUnit(u, canUseSpatialCounts, chunkPx) {
 // (SIM_KERNEL_EFF_UNITS: stacks, levels, nearby counts); only units whose
 // effective level changed (their effective tables), and units the columns
 // cannot answer for, are touched as objects, in the share's order.
-let _effFlags = null;
+let _effFlags = null, _effBCnt = null;
 function recalculateUnitEffectiveLevel() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
     let selectedSet = null;
@@ -1203,11 +1129,6 @@ function recalculateUnitEffectiveLevel() {
     let stamp = ++_effectiveStatsStamp;
     // (Changed stat tables: each unit behind takes them at its refresh, see
     // _unitStatsVerOf; not every unit at once.)
-    let canUseSpatialCounts = spatialTypeStridePerBlock > 0
-        && spatialTypeCounts.length > 0
-        && CHUNKS_W > 0
-        && CHUNKS_H > 0;
-    let chunkPx = Math.max(1, CHUNK_SIZE * TILE);
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     const taken = u => {
         if (!u || u.dead) return true;
@@ -1226,16 +1147,16 @@ function recalculateUnitEffectiveLevel() {
     const takenNow = u => { const c = u._us; return c ? c.esTaken[u._si] === stamp : u._effectiveStatsStamp === stamp; };
     let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
     let m = phase < n ? Math.ceil((n - phase) / step) : 0;
-    if (m > 0 && S && canUseSpatialCounts && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS) {
+    const hist = m > 0 && S && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS ? _effAreaHistEnsure(tick, step) : null;
+    if (hist) {
         const slots = _unitSlotMapEnsure(), c = S.columns;
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
-        simParallelBind('ix.slots', slots); simParallelBind('spatial.types', spatialTypeCounts);
+        simParallelBind('ix.slots', slots); _simAreaCsr();
         const P = _simParams;
-        // (64 a job: a unit's window counts are costly, ~2.5 us; 1024 left
+        // (64 a job: a unit's counts are a few reads, but its row is costly; 1024 left
         // a few long jobs and most helpers idle, 256 a ~0.15 ms tail.)
-        P[0] = m; P[1] = 64; P[2] = step; P[3] = phase; P[4] = chunkPx; P[5] = CHUNKS_W; P[6] = CHUNKS_H;
-        P[7] = spatialTypeStridePerBlock; P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialUnitsComplexPlayerCount;
-        P[15] = spatialTypeBlocksW; P[16] = SPATIAL_TYPE_BLOCK;
+        P[0] = m; P[1] = 64; P[2] = step; P[3] = phase; P[5] = hist.areas; P[6] = hist.lanes;
+        P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialUnitsComplexPlayerCount;
         P[10] = MAX_THING_LEVEL; P[11] = stamp;
         // (Stat rows: the kernel gives a unit of a new level its row.)
         _effRowLookup(); _effRowGrow(1);
@@ -1250,17 +1171,32 @@ function recalculateUnitEffectiveLevel() {
         // share's fit the tick's cap: then which path takes one decides
         // nothing, peer to peer (base entries and rows are this peer's own,
         // made as it goes). Counted over: no entries yet, or another owner.)
-        P[23] = 0;
-        if (EFF_BEHIND_IN_KERNEL) {
-            _effBaseLookup();
-            const OK = c.esOk, EV = c.esVer, OW = c.owner, ET = c.esType, TV = _unitStatsVer, NV = UNIT_STATS_VER_TYPES;
-            let behindN = 0;
-            for (let j = 0; j < m && behindN <= behindLeft; j++) {
-                const s = slots[phase + j * step];
-                if (s >= 0 && (!OK[s] || EV[s] !== TV[OW[s] * NV + ET[s]])) behindN++;
+        // The first EFF_BEHIND_PER_TICK units behind their tables, in the share's order, are taken this tick: those before
+        // behindLimit (a position in the share, the same on every peer). The kernel takes those it has the base entry
+        // and row for, the rest are done as objects below; which path takes one decides nothing. The others wait for their next turn.
+        let behindLimit = m;
+        {
+            if (EFF_BEHIND_IN_KERNEL) _effBaseLookup();
+            // (Counted in the kernel, a job at a time (P[24] 1); only the job the cap falls in is walked here.)
+            const jobs = Math.ceil(m / 64);
+            if (!_effBCnt || _effBCnt.length < jobs) { _effBCnt = simSharedArray(Int32Array, Math.max(1024, jobs * 2)); simParallelBind('eff.bcnt', _effBCnt); }
+            P[24] = 1;
+            simParallelRun(SIM_KERNEL_EFF_UNITS, jobs);
+            P[24] = 0;
+            const BC = _effBCnt;
+            let acc = 0;
+            for (let jb = 0; jb < jobs; jb++) {
+                const cn = BC[jb];
+                if (acc + cn <= behindLeft) { acc += cn; continue; }
+                const OK = c.esOk, EV = c.esVer, OW = c.owner, ET = c.esType, TV = _unitStatsVer, NV = UNIT_STATS_VER_TYPES;
+                for (let j = jb * 64, e = Math.min(m, j + 64); j < e; j++) {
+                    const s = slots[phase + j * step];
+                    if (s >= 0 && (!OK[s] || EV[s] !== TV[OW[s] * NV + ET[s]]) && ++acc > behindLeft) { behindLimit = j; break; }
+                }
+                break;
             }
-            if (behindN <= behindLeft) P[23] = 1;
         }
+        P[23] = EFF_BEHIND_IN_KERNEL ? behindLimit : 0;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0; P[17] = UK && _simParReg['upk.h'] ? _simParReg['upk.h'].length : 0;
@@ -1290,8 +1226,8 @@ function recalculateUnitEffectiveLevel() {
                 applyUnitEffectiveScaling(u, lvl);
                 c._lastAppliedEffectiveLevel[s] = lvl;
             } else if (u && !u.dead && !takenNow(u)) {
-                if (behindNow(u)) { if (behindLeft <= 0) continue; behindLeft--; }
-                if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+                if (j >= behindLimit && behindNow(u)) continue;
+                if (!taken(u)) _effStatsFullUnit(u);
             }
         }
     } else {
@@ -1299,11 +1235,11 @@ function recalculateUnitEffectiveLevel() {
             const u = units[i];
             if (!u || u.dead || takenNow(u)) continue;
             if (behindNow(u)) { if (behindLeft <= 0) continue; behindLeft--; }
-            if (!taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+            if (!taken(u)) _effStatsFullUnit(u);
         }
     }
     // The selection (single player only: never local timing in multiplayer).
-    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size) && !taken(u)) _effStatsFullUnit(u, canUseSpatialCounts, chunkPx);
+    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size) && !taken(u)) _effStatsFullUnit(u);
 }
 // From this many units the strided share runs in the kernels (tests lower
 // it; both ways give the same state).

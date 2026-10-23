@@ -1061,6 +1061,30 @@ function _tileOrderedReplace(list, t, e) {
     return out;
 }
 
+// The same for several tiles (distinct, ascending): one new list, the
+// stretches between the changes copied as they are (a copy of the whole list
+// for each of the tiles took ~1 ms each at 300k items); `itemAt(t)` gives
+// the entry at tile t, null for none. The list itself when nothing changed.
+function _tileOrderedReplaceMany(list, tiles, itemAt) {
+    if (tiles.length === 1) return _tileOrderedReplace(list, tiles[0], itemAt(tiles[0]));
+    const parts = [];
+    let pos = 0, changed = false;
+    for (let k = 0; k < tiles.length; k++) {
+        const t = tiles[k], i = _tileOrderedIndexOf(list, t), e = itemAt(t);
+        const has = i < list.length && list[i].gy * GRID_W + list[i].gx === t;
+        if (!has && !e) continue;
+        if (has && e === list[i]) continue;
+        if (i > pos) parts.push(list.slice(pos, i));
+        pos = i;
+        if (e) parts.push([e]);
+        if (has) pos = i + 1;
+        changed = true;
+    }
+    if (!changed) return list;
+    if (pos < list.length) parts.push(pos ? list.slice(pos) : list);
+    return [].concat(...parts);
+}
+
 // Cell items (floor items, barracks, spawners...) in row-major tile order,
 // rebuilt when the tile entity index changes. Iterating it visits items in
 // the same order as a full grid scan. Callers still check
@@ -1082,8 +1106,7 @@ function getCellItemsRowMajor() {
     const changes = journal && _cellItemsRowMajorSet === _activeTileEntities ? tileEntityChangesSince(_cellItemsCursor) : null;
     if (changes !== null) {
         // (A new list when anything changed: a pass over the old one keeps it.)
-        let list = _cellItemsRowMajor;
-        for (let i = 0; i < changes.length; i++) list = _tileOrderedReplace(list, changes[i], _cellItemAtTile(changes[i]));
+        const list = _tileOrderedReplaceMany(_cellItemsRowMajor, changes, _cellItemAtTile);
         _cellItemsRowMajor = list;
         _cellItemsRowMajorVersion = _tileEntityVersion;
         return list;

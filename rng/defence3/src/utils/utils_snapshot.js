@@ -124,7 +124,16 @@ const SNAP_FORMAT = 7;
 // 31: a unit has its stats from creation (stat row, current version); no
 // first-tick refresh, and its effective level comes at its turn of the
 // strided share like every unit's (recalculateUnitEffectiveLevel).
-const SIM_RULES_REVISION = 31;
+// 32: a unit's effective stacks count the units of its type in its area and the
+// areas within its range (floor of its vision range in areas: 0a its own area,
+// 1a and those next to it...), from a snapshot of each period; not the 4x4-tile
+// blocks of a tile-radius window.
+// 33: idle and attack-moving units take hostile structures by the combat brain's
+// structure instruction (cmMode 16: stand and fire in range, else walk to it, the
+// order kept underneath), not by Unit.update; units holding position get no chase
+// from the brain; the kernel's structure attacks land in the order of their
+// attackers' ids.
+const SIM_RULES_REVISION = 33;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -961,6 +970,7 @@ function snapTickHash(tick, allSlices = false) {
     const u0 = allSlices ? 0 : Math.floor(slice * units.length / SNAP_HASH_SLICES), u1 = allSlices ? units.length : Math.floor((slice + 1) * units.length / SNAP_HASH_SLICES);
     let jobs = 0;
     if (slots) {
+        if (typeof simUnitTargetsResolve === 'function') simUnitTargetsResolve();
         jobs = Math.max(1, Math.ceil((u1 - u0) / per));
         _snapUnitLists(jobs * per, jobs);
         simParallelBind('ix.slots', slots);
@@ -2164,6 +2174,18 @@ function snapDecodeState(S, options = null) {
             // start into a fresh state is compact already and keeps these
             // columns instead of making a second set, 1.3 GB at 2M units.)
             if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, Math.ceil(rows.length * 1.125)));
+            // (Their slots planned by block from the rows' positions, units of a block in neighbouring slots: sim_unit_state.js.)
+            let unitSlots = null;
+            if (list === 'u' && !partial && rows.length > 0 && typeof simUnitStatePlanSlots === 'function') {
+                const n = rows.length, xs = new Float64Array(n), ys = new Float64Array(n);
+                for (let r = 0; r < n; r++) {
+                    const row = rows[r], tpl = tpls[row[1]], shape = shapes[tpl[0]], cx = shape.colIndex.get('x'), cy = shape.colIndex.get('y');
+                    let x = cx === undefined ? NaN : tpl[1][cx], y = cy === undefined ? NaN : tpl[1][cy];
+                    for (let j = 2; j < row.length; j += 2) { if (row[j] === cx) x = row[j + 1]; else if (row[j] === cy) y = row[j + 1]; }
+                    xs[r] = typeof x === 'number' ? x : NaN; ys[r] = typeof y === 'number' ? y : NaN;
+                }
+                unitSlots = simUnitStatePlanSlots(xs, ys, n); simUnitStatePlanBegin();
+            }
             for (let r = 0; r < rows.length; r++) {
                 let row = rows[r];
                 let key = row[0];
@@ -2178,6 +2200,7 @@ function snapDecodeState(S, options = null) {
                     let own = simUnitStateKeys(old);
                     if (!_snapKeysEqual(own, keys)) { let want = new Set(keys); for (let k of own) if (!want.has(k)) { if (Object.prototype.hasOwnProperty.call(old, k)) delete old[k]; else if ((_SNAP_ROLE_FIELDS || (_SNAP_ROLE_FIELDS = new Set(typeof UNIT_ROLE_FIELDS !== "undefined" ? UNIT_ROLE_FIELDS : []))).has(k)) old[k] = undefined; } }
                 } else {
+                    if (unitSlots !== null) simUnitStateWantSlot(unitSlots[r]);
                     e = _snapNewShell(list, type);
                     fresh++;
                     if (list === 'u') (freshUnits ||= []).push([e, +key]);
@@ -2186,6 +2209,7 @@ function snapDecodeState(S, options = null) {
                 byKey.set(key, e);
                 ctx.byRef.set('~' + list + key, e);
             }
+            if (unitSlots !== null) simUnitStatePlanEnd();
             shells[list] = made;
             let result;
             if (whole) {
@@ -2491,8 +2515,7 @@ function snapDecodeState(S, options = null) {
         // a patch each, six for one research counted wrongly.)
         if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof _effStatsFullUnit === 'function') {
             const staleOwners = new Set(ctx.statMapsStale), carried = new Set(shells.u);
-            const counts = spatialTypeStridePerBlock > 0 && spatialTypeCounts.length > 0 && CHUNKS_W > 0 && CHUNKS_H > 0, chunkPx = Math.max(1, CHUNK_SIZE * TILE);
-            for (let u of units) if (u && !u.dead && staleOwners.has(u.owner) && !carried.has(u)) _effStatsFullUnit(u, counts, chunkPx);
+            for (let u of units) if (u && !u.dead && staleOwners.has(u.owner) && !carried.has(u)) _effStatsFullUnit(u);
         }
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
         resetPendingPathUnits();
@@ -2569,6 +2592,8 @@ function _snapSameValue(a, b, depth) {
 // starts without them, so at a resync every peer drops them on the same tick.
 function snapFlushHistoryCaches() {
     if(typeof trafficReset==='function')trafficReset();
+    // (The effective levels' area counts: made anew from the state of this tick on every peer.)
+    if (typeof effAreaHistReset === 'function') effAreaHistReset();
     _bumpPathTopologyVersion();
     // The movement kernel's world tables are rebuilt on every peer alike.
     if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();

@@ -304,7 +304,7 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
             if (!fresh) {const ex=VX[s]-vx, ey=VY[s]-vy;if (ex*ex+ey*ey<1e-6) {vx=VX[s];vy=VY[s];} else settle=true;}
             FVX[s]=vx;FVY[s]=vy;
             let want=NaN;
-            if (CM && (CM[s]&4)) {const q=CT[s];if (q>=0 && q<n) {const dx=TX[q]*TK-SX[s], dy=TY[q]*TK-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
+            if (CM && (CM[s]&20)===4) {const q=CT[s];if (q>=0 && q<n) {const dx=TX[q]*TK-SX[s], dy=TY[q]*TK-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
             if (want!==want && vx*vx+vy*vy>min2) want=fastAtan2(vx,vy);
             let f=fresh ? (want===want ? want : 0) : FA[s], turning=false;
             if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;if (Math.abs(d)>FACE_DEAD) {f+=d*kt;turning=true;}}

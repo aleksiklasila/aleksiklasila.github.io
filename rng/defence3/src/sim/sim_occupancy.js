@@ -161,18 +161,28 @@ function occupancyTeleport(u,x,y) {
     if(ok){O.registered++;O.expectedBits+=O.sizes[r];x=O.rec[s*4];y=O.rec[s*4+1];}
     c.x[s]=x;c.y[s]=y;c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;
 }
+// (The five arrays' encoded addresses for the move below, worked out again
+// only when a binding changed: five calls and a registry lookup each, a move.)
+let _occMoveEnc=null,_occMoveEncVer=-1,_occMoveEncO=null;
 function occupancyMovePosition(u,x,y) {
-    const O=_occ,s=u._si,c=u._us;
-    if(x===O.rec[s*4] && y===O.rec[s*4+1])return;
+    const O=_occ,s=u._si,c=u._us,rec=O.rec;
+    if(x===rec[s*4] && y===rec[s*4+1])return;
     // (Farther than any step goes: a jump.)
-    if(Math.max(Math.abs(x-O.rec[s*4]),Math.abs(y-O.rec[s*4+1]))>3*TILE*8){occupancyTeleport(u,x,y);return;}
+    if(Math.max(Math.abs(x-rec[s*4]),Math.abs(y-rec[s*4+1]))>3*TILE*8){occupancyTeleport(u,x,y);return;}
     // Same bitmap operation for JS-only movement; called at the coordinate
     // write, with helpers idle. It never scans another unit.
-    for(let i=0;i<_occNames.length;i++)_simWasmArgI[512+i]=_simWEnc(_simParReg[_occNames[i]].byteOffset);
-    _simWasmArgI[512+28]=_simWEnc(O.stats.byteOffset);_simWasmArgI[512+33]=_simWEnc(O.config.byteOffset);
-    const pos=_simWasmX.occ_move_one(_simWasmArgsW,s,x,y);
-    c.x[s]=Number(BigInt.asIntN(32,pos));c.y[s]=Number(BigInt.asIntN(32,pos>>32n));
-    if(c.x[s]!==x || c.y[s]!==y){c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;}
+    let E=_occMoveEnc;
+    if(E===null||_occMoveEncVer!==_simParRegVer||_occMoveEncO!==O){
+        E=_occMoveEnc=[];for(let i=0;i<_occNames.length;i++)E.push(_simWEnc(_simParReg[_occNames[i]].byteOffset));
+        E.push(_simWEnc(O.stats.byteOffset),_simWEnc(O.config.byteOffset));_occMoveEncVer=_simParRegVer;_occMoveEncO=O;
+    }
+    const I=_simWasmArgI;
+    I[512]=E[0];I[513]=E[1];I[514]=E[2];I[512+28]=E[3];I[512+33]=E[4];
+    _simWasmX.occ_move_one(_simWasmArgsW,s,x,y);
+    // (Where the footprint ended is its record: the position it returned.)
+    const nx=rec[s*4],ny=rec[s*4+1];
+    c.x[s]=nx;c.y[s]=ny;
+    if(nx!==x || ny!==y){c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;}
 }
 function occupancyAudit() {
     const O=_occ;if(!O)return null;

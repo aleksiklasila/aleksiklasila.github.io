@@ -26,12 +26,15 @@ const army = {
     'unit:fire_resistant': { 4: 3000 }, 'unit:water_resistant': { 4: 3000 }, 'unit:ice_resistant': { 4: 2500 },
     'unit:laser_resistant': { 4: 2500 }, 'unit:flying': { 4: 2000 },
 };
-function make(file, counts, extra = {}, mapSize = '600') {
+function make(file, counts, extra = {}, mapSize = '600', syncConfig = false) {
     const d = JSON.parse(JSON.stringify(base));
     d.createdAt = new Date(0).toISOString();
     Object.assign(d.lobby.numbers, { 'cfg-max-pop': 200000, 'cfg-gold-count': 2500, 'cfg-astar-mine-count': 2500 }, extra);
     d.lobby.selects['cfg-mapsize'] = mapSize;
     d.lobby.selects['cfg-map-type'] = 'arena';
+    // (The editable config overrides the lobby at a bench's start: the same values there.)
+    if (syncConfig && d.editableConfig && d.editableConfig.config) Object.assign(d.editableConfig.config, { CONFIG_MAX_POP: d.lobby.numbers['cfg-max-pop'], GRID_W: Number(mapSize), GRID_H: Number(mapSize),
+        GOLD_MINE_COUNT: d.lobby.numbers['cfg-gold-count'], ASTAR_MINE_COUNT: d.lobby.numbers['cfg-astar-mine-count'] });
     d.startingResources = { researchLevels: {}, spawnCounts: counts };
     fs.writeFileSync(path.join(__dirname, file), JSON.stringify(d, null, 1));
     let n = 0;
@@ -49,7 +52,9 @@ make('chaos-mega-1000.json', { ...big(workers, 1.5), 'building:house': { 10: 250
 // MEGA_SCALE=k (env): the mega lobby with every count k times (k=2: ~340k
 // units at the start; k=0.5 for two peers in one process), as
 // tests/chaos-mega<k>x-1000.json.
-for (const k of (process.env.MEGA_SCALE || '').split(',').map(Number).filter(v => v > 0 && v !== 1)) {
-    make('chaos-mega' + k + 'x-1000.json', { ...big(workers, 1.5 * k), 'building:house': { 10: Math.round(2500 * k) }, ...big(army, 2.3 * k), ...big(armyRest, k) },
-        { 'cfg-gold-count': 5000, 'cfg-astar-mine-count': 5000, 'cfg-max-pop': Math.round(250000 * k) }, '1000');
+// MEGA_MAP=n (env, default 1000): the map's side, as tests/chaos-mega<k>x-<n>.json.
+const megaMap = String(Number(process.env.MEGA_MAP) || 1000);
+for (const k of (process.env.MEGA_SCALE || '').split(',').map(Number).filter(v => v > 0 && (v !== 1 || megaMap !== '1000'))) {
+    make('chaos-mega' + k + 'x-' + megaMap + '.json', { ...big(workers, 1.5 * k), 'building:house': { 10: Math.round(2500 * k) }, ...big(army, 2.3 * k), ...big(armyRest, k) },
+        { 'cfg-gold-count': Math.round(5000 * k * (megaMap / 1000) ** 2 / Math.max(1, k)), 'cfg-astar-mine-count': Math.round(5000 * k * (megaMap / 1000) ** 2 / Math.max(1, k)), 'cfg-max-pop': Math.min(10000000, Math.round(250000 * k)) }, megaMap, true);
 }

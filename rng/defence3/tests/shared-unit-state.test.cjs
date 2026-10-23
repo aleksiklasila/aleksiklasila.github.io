@@ -31,7 +31,10 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
     // (Freed slots are reused from the next unit index rebuild on.)
     simUnitStateReleaseFreed();
-    const replacement = new Unit('norm', 0, 300, 300); units.push(replacement);
+    // (Slots go by place; this one is asked for by number, as a plan does: simUnitStateWantSlot.)
+    const rx = 300;
+    simUnitStateWantSlot(slot);
+    const replacement = new Unit('norm', 0, rx, 300); units.push(replacement);
     if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
     for(const [name,value]of cacheValues){
         if(retired[name]!==value)fail('sparse cache detach '+name);
@@ -42,7 +45,7 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         first[name]=def;
     }
     retired.x = -100;
-    if (replacement.x !== 300) fail('stale reference wrote reused slot');
+    if (replacement.x !== rx) fail('stale reference wrote reused slot');
     let compared = 0;
     for (let t = 0; t < 20; t++) {
         gameTick();

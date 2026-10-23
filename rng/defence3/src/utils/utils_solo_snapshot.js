@@ -336,8 +336,20 @@ function applySoloScene(scene) {
         // (And their worker records at once: each growth of the pool made a new set of its columns.)
         if (workers > 0 && typeof simUnitWkReserve === 'function') simUnitWkReserve(workers);
     }
+    // (Their slots planned by block before any is made: units of a block in
+    // neighbouring slots, see sim_unit_state.js. Ids and the list stay in the file's order.)
+    let slotPlan = null, planAt = 0;
+    if (typeof simUnitStatePlanSlots === 'function') {
+        let n = 0;
+        for (const r of scene.records) if (r.units) n += r.units.length;
+        const xs = new Float64Array(n), ys = new Float64Array(n);
+        let i = 0;
+        for (const r of rows('units')) { xs[i] = r[2]*TILE; ys[i] = r[3]*TILE; i++; }
+        slotPlan = simUnitStatePlanSlots(xs, ys, n); simUnitStatePlanBegin();
+    }
     const groups = new Map();
     for (const r of rows('units')) {
+        if (slotPlan !== null) simUnitStateWantSlot(slotPlan[planAt++]);
         const u = new Unit(r[0],r[1],r[2]*TILE,r[3]*TILE);
         configureWorkerUnitFromType(u); u.baseLevel = r[5]; u.stackCount = r[6]; applyUnitLevelScaling(u,r[5]);
         u.energy = r[4]; u.holdPosition = !!r[8];
@@ -348,6 +360,7 @@ function applySoloScene(scene) {
             else groups.set(key, { owner: u.owner, action: r[7][0], targetX: (r[7][1]+.5)*TILE, targetY: (r[7][2]+.5)*TILE, unitIds: [u.id], distinct: true });
         }
     }
+    if (slotPlan !== null) simUnitStatePlanEnd();
     recomputePlayerPopCaps(); recalculateAdjacency(true);
     clearGameplayVisibilityCache(); updateVisibility(localPlayerId);
     // The world is complete before any saved destination becomes a new order.

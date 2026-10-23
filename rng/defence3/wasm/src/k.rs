@@ -1712,7 +1712,8 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
 /// SIM_KERNEL_ACQ_SNAP: the acquisition tier's snapshot per slot (positions
 /// at the pass's start, owner, command, aggro range, id; flags 1 dead, 2
 /// absent from the index, 4 attacking a unit (no structure target), 8 a
-/// worker or no damage, 16 the brain's command P[5] with damage (P[4] 1);
+/// worker or no damage, 16 the brain's command P[5] with damage (P[4] 1), 32
+/// holding position (unit.holdF);
 /// the brain's instruction and range steps), the results cleared (-2: not
 /// looked for; live units -1 / 0 / -1). Arrays: unit.x0, unit.y0,
 /// unit.owner, unit.dead, unit.sepKey, unit.commandState, unit.cbRange,
@@ -1731,6 +1732,7 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     let (ucm, uct, uctid, uwk, admg, rangek) = (k.p::<u8>(19), k.p::<i32>(20), k.p::<i32>(21), k.p::<u8>(22), k.p::<f32>(23), k.p::<u8>(24));
     let (scm, sct, sctid, srk) = (k.p::<u8>(25), k.p::<i32>(26), k.p::<i32>(27), k.p::<u8>(28));
     let rows=k.p::<i16>(29);let hot=k.p::<f32>(30);
+    let holdf = k.p::<u8>(31);
     let absent = k.f(2) as u32;
     let cmd_atk = k.i(3) as u8;
     let brain = k.i(4) == 1;
@@ -1769,6 +1771,8 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         f = v128_or(f, v128_and(ab, i32x4_splat(2)));
         f = v128_or(f, v128_and(v128_and(i32x4_eq(c, ca), ac), i32x4_splat(4)));
         f = v128_or(f, v128_and(v128_or(wk, v128_not(dmg)), i32x4_splat(8)));
+        let hd = i32x4_ne(u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(holdf.add(q) as *const u32))), zero);
+        f = v128_or(f, v128_and(hd, i32x4_splat(32)));
         if brain {
             f = v128_or(f, v128_and(v128_andnot(v128_and(i32x4_eq(c, cb), dmg), wk), i32x4_splat(16)));
         }
@@ -1792,7 +1796,7 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         let wk = g(uwk, q) != 0;
         let dmg = flat_stat(rows,hot,q,5) > 0.0;
         let f = (if d != 0 { 1 } else { 0 }) | (if g(sep, q) == absent { 2 } else { 0 }) | (if c == cmd_atk && g(acqb, q) == 0 { 4 } else { 0 })
-            | (if wk || !dmg { 8 } else { 0 }) | (if brain && c == brain_cmd && !wk && dmg { 16 } else { 0 });
+            | (if wk || !dmg { 8 } else { 0 }) | (if brain && c == brain_cmd && !wk && dmg { 16 } else { 0 }) | (if g(holdf, q) != 0 { 32 } else { 0 });
         s(sf, q, f);
         if d == 0 {
             s(outa, q, -1);
@@ -1817,6 +1821,38 @@ fn stack_level(st: f32, maxl: i32) -> i32 {
     (k + 1).max(1).min(maxl.max(1))
 }
 
+/// SIM_KERNEL_EFF_AREA_HIST: the effective levels' counts, a snapshot of the
+/// units a lane (owner * unit types + type) has in each area: mode 0 clears
+/// the P[1] entries of its job (eff.areaHist, areas * lanes), mode 1 counts
+/// the live, indexed units of its job's slots (atomic adds: areas are shared
+/// between slots). The unit's area is the index's (unit.spArea, less than 0:
+/// none), its owner and type the index's too (unit.spOwner, unit.spType).
+/// Arrays: unit.live, unit.dead, unit.spOwner, unit.spType, unit.spArea,
+/// eff.areaHist. P: [0] slots (mode 1) or entries (mode 0), [1] per job, [2]
+/// lanes, [3] areas, [4] unit types, [5] players, [6] mode.
+#[no_mangle]
+pub unsafe extern "C" fn k_eff_area_hist(a: u32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let k = K::new(a);
+    let (live, dead, own, ty, area, hist) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i8>(2), k.p::<i16>(3), k.p::<i32>(4), k.p::<i32>(5));
+    let (n, per, lanes, na, nt, np, mode) = (k.i(0), k.i(1), k.i(2), k.i(3), k.i(4), k.i(5), k.i(6));
+    let (s0, s1) = job(chunk, per, n);
+    if mode == 0 {
+        core::ptr::write_bytes(hist.add(s0), 0, s1 - s0);
+        return;
+    }
+    for q in s0..s1 {
+        if g(live, q) == 0 || g(dead, q) != 0 {
+            continue;
+        }
+        let (o, t, ar) = (g(own, q) as i32, g(ty, q) as i32, g(area, q));
+        if o < 0 || o >= np || t < 0 || t >= nt || ar < 0 || ar >= na {
+            continue;
+        }
+        atomic_add(hist, (ar as i64 * lanes as i64 + (o * nt + t) as i64) as usize, 1);
+    }
+}
+
 /// SIM_KERNEL_EFF_UNITS (things_utils.js recalculateUnitEffectiveStats): for
 /// the strided share (entry j: units index P[3] + j * P[2]) from the
 /// columns: base stacks and level, the same-owner same-type count over its
@@ -1827,8 +1863,9 @@ fn stack_level(st: f32, maxl: i32) -> i32 {
 /// nothing (dead, taken), 5 done behind its stat tables (6: with another
 /// vision range): the caller gives it the base tables and maxEnergy.
 /// A unit behind its stat tables (unit.esVer not its (owner, type)'s
-/// version) is taken here when P[23] is 1 (the caller's: the share's behind
-/// units fit its cap, so which path takes one decides nothing) and both its
+/// version) is taken here when its place in the share is before P[23] (the
+/// caller's: the units behind that its cap takes, in the share's order, so
+/// which path takes one decides nothing) and both its
 /// base entry (eff.bVer: its (owner, type, base level)'s base tables of this
 /// version, their window radius eff.bRad and maxEnergy eff.bMaxE, which the
 /// JavaScript's full path notes) and its new level's row are of this
@@ -1843,20 +1880,52 @@ fn stack_level(st: f32, maxl: i32) -> i32 {
 /// P: [0] entries, [1] per job, [2] step, [3] phase, [4] chunk px, [5]/[6]
 /// chunks wide/high, [7] stride per block, [8] types, [9] players, [10] max
 /// level, [11] stamp, [12]/[13] upkeep, [14] types per version row, [15]/[16]
-/// type blocks wide / their size, [17] upk.h length, [23] behind units here.
+/// type blocks wide / their size, [17] upk.h length, [23] the share place before which behind units are taken here.
 #[no_mangle]
 pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (sl, dead, ok, rad, typ, taken) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (stk, ulv, blv, esk, elv, last) = (k.p::<f32>(6), k.p::<f32>(7), k.p::<f32>(8), k.p::<f32>(9), k.p::<f32>(10), k.p::<f32>(11));
-    let (xs, ys, own, data, fl) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i8>(14), k.p::<i32>(15), k.p::<u8>(16));
+    let (spa, aoff, own, data, fl) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i8>(14), k.p::<i32>(15), k.p::<u8>(16));
+    let anb = k.p::<i32>(66);
     let (ut, ub, uh, tv, ev) = (k.p::<i16>(17), k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20), k.p::<i32>(21));
     let (step, phase) = (k.i(2).max(0) as usize, k.i(3).max(0) as usize);
-    let ichunk = (1.0 / (k.f(4) * 8.0)) as f32;
-    let (cw, ch, strideb, nt, players, maxl, stamp) = (k.i(5), k.i(6), k.i(7), k.i(8), k.i(9), k.i(10), k.i(11));
-    let (unp, ul1, ntv, tw, tb, uhn) = (k.i(12), k.i(13), k.i(14), k.i(15), k.i(16), k.i(17));
+    let (na, lanes, nt, players, maxl, stamp) = (k.i(5), k.i(6), k.i(8), k.i(9), k.i(10), k.i(11));
+    let (unp, ul1, ntv, uhn) = (k.i(12), k.i(13), k.i(14), k.i(17));
+    // (The breadth first search of a range past one area step: stamps by epoch in the thread's scratch, queue after.)
+    let (bsc, bsw) = scratch(a);
+    let nau = na.max(0) as usize;
+    let have_bfs = !aoff.is_null() && !anb.is_null() && !bsc.is_null() && 4 + 2 * nau <= bsw;
+    let (bst, bqq) = (bsc.add(4), bsc.add(4 + nau));
+    if have_bfs && (*bsc != TAG_EFF || *bsc.add(2) != na) {
+        for i in 0..nau {
+            s(bst, i, 0);
+        }
+        *bsc = TAG_EFF;
+        *bsc.add(1) = 0;
+        *bsc.add(2) = na;
+    }
     let (j0, j1) = job(chunk, k.i(1), k.i(0));
+    // Mode 1 (P[24]): only the units of the job behind their stat tables counted (eff.bcnt[chunk]): the caller finds the share
+    // place its cap falls at from the sums, in the job it falls in.
+    if k.i(24) == 1 {
+        let bc = k.p::<i32>(67);
+        let mut cnt = 0i32;
+        for j in j0..j1 {
+            let sv = g(sl, phase + j * step);
+            if sv < 0 {
+                continue;
+            }
+            let q = sv as usize;
+            let o = g(own, q) as i32;
+            if g(ok, q) == 0 || tv.is_null() || ntv == 0 || !(o >= 0 && o < players) || g(ev, q) != g(tv, (o * ntv + g(typ, q)) as usize) {
+                cnt += 1;
+            }
+        }
+        s(bc, chunk as usize, cnt);
+        return;
+    }
     for j in j0..j1 {
         let sv = g(sl, phase + j * step);
         if sv < 0 {
@@ -1894,7 +1963,7 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
             let cur = g(tv, (o * ntv + ty) as usize);
             if g(ev, q) != cur {
                 let bv = k.p::<i32>(63);
-                if k.i(23) != 1 || bv.is_null() || !(ty >= 0 && ty < nt && bl <= maxl) {
+                if (j as i32) >= k.i(23) || bv.is_null() || !(ty >= 0 && ty < nt && bl <= maxl) {
                     s(fl, j, 2);
                     continue;
                 }
@@ -1907,29 +1976,48 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
                 r = g(k.p::<i32>(64), bi);
             }
         }
-        let cx = floorf(g(xs, q) as f32 * ichunk) as i32;
-        let cy = floorf(g(ys, q) as f32 * ichunk) as i32;
-        let x1 = (cx - r).min(cw - 1).max(0);
-        let y1 = (cy - r).min(ch - 1).max(0);
-        let x2 = (cx + r).min(cw - 1).max(0);
-        let y2 = (cy + r).min(ch - 1).max(0);
-        if !(x1 <= x2 && y1 <= y2) {
+        // (Its area's count, and for a range of r area steps the areas within r of it: 0a its own, 1a and the next to it...)
+        let ar = g(spa, q);
+        if ar < 0 || ar >= na || aoff.is_null() || (r >= 2 && !have_bfs) || (r >= 1 && anb.is_null()) {
             s(fl, j, 2);
             continue;
         }
         let lane = o * nt + ty;
-        let (bx1, bx2, by1, by2) = (idiv(x1, tb), idiv(x2, tb), idiv(y1, tb), idiv(y2, tb));
-        let mut sum = 0i32;
-        for by in by1..=by2 {
-            let mut idx = (by * tw + bx1) * strideb + lane;
-            for _ in bx1..=bx2 {
-                sum = sum.wrapping_add(g(data, idx as usize));
-                idx += strideb;
+        let mut sum = g(data, (ar as i64 * lanes as i64 + lane as i64) as usize);
+        if r == 1 {
+            for i in g(aoff, ar as usize)..g(aoff, ar as usize + 1) {
+                sum = sum.wrapping_add(g(data, (g(anb, i as usize) as i64 * lanes as i64 + lane as i64) as usize));
             }
-        }
-        if sum <= 0 {
-            s(fl, j, 2);
-            continue;
+        } else if r >= 2 {
+            let mut ep = *bsc.add(1) + 1;
+            if ep >= 0x7fff_ffff {
+                for i in 0..nau {
+                    s(bst, i, 0);
+                }
+                ep = 1;
+            }
+            *bsc.add(1) = ep;
+            s(bst, ar as usize, ep);
+            s(bqq, 0, ar);
+            let (mut qh, mut qt) = (0usize, 1usize);
+            let mut d = 1;
+            while d <= r && qh < qt {
+                let end = qt;
+                while qh < end {
+                    let cur = g(bqq, qh) as usize;
+                    qh += 1;
+                    for i in g(aoff, cur)..g(aoff, cur + 1) {
+                        let nb = g(anb, i as usize);
+                        if nb >= 0 && nb < na && g(bst, nb as usize) != ep {
+                            s(bst, nb as usize, ep);
+                            s(bqq, qt, nb);
+                            qt += 1;
+                            sum = sum.wrapping_add(g(data, (nb as i64 * lanes as i64 + lane as i64) as usize));
+                        }
+                    }
+                }
+                d += 1;
+            }
         }
         let effs = floorf((sum as f32 * base).max(1.0));
         let el0 = stack_level(effs, maxl);
@@ -2448,6 +2536,7 @@ unsafe fn scratch(a: *const i32) -> (*mut i32, usize) {
     (waddr(*a.add(1000) as u32) as *mut i32, (*a.add(1001)).max(0) as usize)
 }
 const TAG_BRAIN: i32 = 0x4252_4149;
+const TAG_EFF: i32 = 0x4546_4641;
 
 /// Whether area b is within k steps of any of src[..ns] (breadth first over
 /// the CSR area graph; stamps by epoch in the scratch).
@@ -2514,6 +2603,8 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let (outa, cm, ct, ctid, rk, ag, covf) = (k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<i32>(11), k.p::<u8>(12));
     let (off, nb, bm, bt, btid) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<u8>(15), k.p::<i32>(16), k.p::<i32>(17));
     let sout = k.p::<i32>(18);
+    // (The structures' owners per tile, a copy: -1 none, the owner, -2 mixed.)
+    let sown = k.p::<i8>(19);
     let (cmd_idle, cmd_am) = (k.i(2) as u8, k.i(3) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
@@ -2552,9 +2643,11 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         if !(owner >= 0 && owner < players) {
             continue;
         }
+        let held = fl & 32 != 0;
         let mut tq = -1i32;
         let cur = g(ct, q);
-        if !mover && g(cm, q) != 0 && cur >= 0 {
+        let had_struct = g(cm, q) & 16 != 0;
+        if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 {
             let cu = cur as usize;
             if g(flg, cu) & 1 == 0 && g(id, cu) == g(ctid, q) && g(own, cu) as i32 != owner {
                 let ar = area_of(g(xs, cu), g(ys, cu));
@@ -2566,19 +2659,33 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         if tq < 0 && g(outa, q) >= 0 {
             tq = g(outa, q);
         }
-        if tq < 0 {
-            let st = if !mover && !sout.is_null() { g(sout, q) } else { -1 };
-            if st >= 0 {
-                s(bm, q, 8);
-                s(bt, q, st);
-                s(btid, q, 0);
-            } else {
-                s(bm, q, 0);
+        // No unit to fight: a hostile structure, the one it has while that
+        // stands hostile and in sight, else the scan's (16: the structure's
+        // tile in bt, the motor works the rest out; mv.rs move_struct).
+        let mut sg = -1i32;
+        if tq < 0 && !mover {
+            if had_struct && cur >= 0 && !sown.is_null() && cur < gw * gh {
+                let code = g(sown, cur as usize) as i32;
+                if code != -1 && code != owner {
+                    let ar = g(ag, cur as usize);
+                    if ar >= 0 && g(covf, (owner * na + ar) as usize) > 0 {
+                        sg = cur;
+                    }
+                }
             }
+            if sg < 0 && !sout.is_null() {
+                sg = g(sout, q);
+            }
+            if sg < 0 {
+                s(bm, q, 0);
+                continue;
+            }
+        } else if tq < 0 {
+            s(bm, q, 0);
             continue;
         }
-        let tu = tq as usize;
-        let ta = area_of(g(xs, tu), g(ys, tu));
+        let tu = if sg >= 0 { 0usize } else { tq as usize };
+        let ta = if sg >= 0 { g(ag, sg as usize) } else { area_of(g(xs, tu), g(ys, tu)) };
         let mut in_range = false;
         if ta >= 0 && have_bfs {
             let fx = g(xs, q) * itile;
@@ -2622,6 +2729,17 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                 s(bt, q, tq);
                 s(btid, q, g(id, tu));
             }
+            continue;
+        }
+        // (A unit holding position never chases: it stands and fires in range, else its order's own, still.)
+        if held && !in_range {
+            s(bm, q, 0);
+            continue;
+        }
+        if sg >= 0 {
+            s(bm, q, 16 | if in_range { 5 } else { 2 });
+            s(bt, q, sg);
+            s(btid, q, 0);
             continue;
         }
         s(bm, q, if in_range { 5 } else { 2 });
@@ -3902,36 +4020,6 @@ pub unsafe extern "C" fn k_laser_hits(a: u32, chunk: i32) {
     s(cnt, chunk as usize, n);
 }
 
-/// SIM_KERNEL_EFF_COUNT (things_utils.js _countNearbySameTypeUnits): per
-/// window (eff.win: x1, y1, x2, y2 in type blocks, lane; lane < 0 none) the
-/// sum of spatial.types over it at its lane: eff.out. Arrays: eff.win,
-/// eff.out, spatial.types. P: [0] windows, [1] per job, [2] blocks wide,
-/// [3] stride per block.
-#[no_mangle]
-pub unsafe extern "C" fn k_eff_count(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let (win, out, data) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
-    let (cw, stride) = (k.i(2) as isize, k.i(3) as isize);
-    let (i0, i1) = job(chunk, k.i(1), k.i(0));
-    for i in i0..i1 {
-        let o = i * 5;
-        let lane = g(win, o + 4);
-        if lane < 0 {
-            continue;
-        }
-        let (x1, y1, x2, y2) = (g(win, o) as isize, g(win, o + 1) as isize, g(win, o + 2) as isize, g(win, o + 3) as isize);
-        let mut sum = 0i32;
-        for y in y1..=y2 {
-            let mut idx = (y * cw + x1) * stride + lane as isize;
-            for _ in x1..=x2 {
-                sum = sum.wrapping_add(*data.offset(idx));
-                idx += stride;
-            }
-        }
-        s(out, i, sum);
-    }
-}
 
 /// SIM_KERNEL_ADJ_FLOOD (one job; things_utils.js adjacencyLaneStep): from
 /// the signature grid (adj.sig, -1 none), the 4-connected equal-signature
@@ -4924,6 +5012,11 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
     let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24), k.p::<i32>(25), k.p::<i32>(26));
     let (pr, ph, nl, nlh, nu, cc, ords) = (k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<i32>(33));
     let wtm = k.p::<i8>(34);
+    // (The order columns: its target unit's id, forced, the attack-move tile, its target structure's tile.)
+    let (otu, ofa, oax, oay, otb) = (k.p::<i32>(35), k.p::<u8>(36), k.p::<i16>(37), k.p::<i16>(38), k.p::<i32>(39));
+    let (ork, otx, oty) = (k.p::<u8>(40), k.p::<f32>(41), k.p::<f32>(42));
+    // (Its target unit's slot: the id counts while the target is there and not dead; a dead target's slot is freed at a time of each peer's own.)
+    let otus = k.p::<i32>(43);
     let n = k.i(0).max(0) as usize;
     let per = k.i(1).max(0) as usize;
     let its = (1.0 / (k.f(2) * 8.0)) as f32;
@@ -4998,6 +5091,15 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
                 }
             };
         }
+        macro_rules! gi16 {
+            ($p:expr) => {
+                if run {
+                    i32x4_load_extend_i16x4($p.add(q0) as *const i16)
+                } else {
+                    i32x4(g($p, q0) as i32, g($p, q1) as i32, g($p, q2) as i32, g($p, q3) as i32)
+                }
+            };
+        }
         macro_rules! gi8 {
             ($p:expr) => {
                 if run {
@@ -5048,6 +5150,26 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
         mix!(20, gf!(el));
         mix!(21, g32!(pi));
         mix!(22, gi8!(wtm));
+        let tu_eff = {
+            let lane = |q: usize| -> i32 {
+                let t = g(otus, q);
+                if t < 0 {
+                    return 0;
+                }
+                let t = t as usize;
+                let want = g(otu, q);
+                if g(live, t) != 0 && g(dead, t) == 0 && g(uid, t) == want { want } else { 0 }
+            };
+            i32x4(lane(q0), lane(q1), lane(q2), lane(q3))
+        };
+        mix!(23, tu_eff);
+        mix!(24, gu8!(ofa));
+        mix!(25, gi16!(oax));
+        mix!(26, gi16!(oay));
+        mix!(27, g32!(otb));
+        mix!(28, gu8!(ork));
+        mix!(29, gf!(otx));
+        mix!(30, gf!(oty));
         // (Seeded by id, then finished; the regions from the positions.)
         let ids = g32!(uid);
         let mut hh = i32x4_add(v128_xor(i32x4_mul(ids, i32x4_splat(7919)), i32x4_splat(0x11)), h);

@@ -172,6 +172,8 @@ const W_OM: usize = 135;
 const W_SCLS: usize = 136;
 const W_HSS: usize = 137;
 const W_FIRE: usize = 139;
+/// unit.js SIM_IDLE_PARK_TICKS.
+const IDLE_PARK_TICKS: i32 = 1000;
 const W_ACD: usize = 140;
 const W_FLASH: usize = 141;
 const W_HITA: usize = 142;
@@ -224,6 +226,11 @@ const W_WKIX: usize = 292;
 // (The step's attack carry and shots: unit.atkL, unit.atkN; see fire.)
 const W_ATL: usize = 293;
 const W_ATN: usize = 294;
+// (A route's profile and an attack-mover's aggro reach: what a structure instruction gives back, resume_order.)
+const W_NVP: usize = 295;
+const W_RDA: usize = 296;
+// (Words 463..: the unit controller's columns, sim_parallel.js _simMoveWasm.)
+const W_CTLX: usize = 463;
 /// Per navigation profile p: its routing atlas's header (nav.<p>.atl,
 /// atlas.rs Atl) at word W_ATLAS + p; 0 none.
 const W_ATLAS: usize = 430;
@@ -308,6 +315,23 @@ struct Mv {
     atlh: [*const i32; NAV_PROFILES],
     atl: *mut u8,
     atn: *mut u8,
+    /// unit.nvProf (the profile of its route) and unit.mvReachA.
+    nvp: *const I8I32,
+    rda: *const u8,
+    /// The unit controller's columns (words 463..): holding position, worker, route key, attack-move tile x / y (i16, -1 none), target
+    /// unit slot and id, forced, target structure's tile, path key (unit.nvPK), the scout's type index (one word), acquisition flag.
+    holdf: *const u8,
+    iswk: *const u8,
+    rkf: *mut u8,
+    amgx: *mut i16,
+    amgy: *mut i16,
+    tus: *mut i32,
+    tuid: *mut i32,
+    fatf: *mut u8,
+    tbt: *mut i32,
+    nvpk: *mut i32,
+    scoutt: *const i32,
+    acqb: *mut u8,
     on: *mut u8,
     out: *mut u8,
     fl: *mut u8,
@@ -621,6 +645,20 @@ impl Mv {
             },
             atl: p!(W_ATL),
             atn: p!(W_ATN),
+            nvp: p!(W_NVP),
+            rda: p!(W_RDA),
+            holdf: p!(W_CTLX),
+            iswk: p!(W_CTLX + 1),
+            rkf: p!(W_CTLX + 2),
+            amgx: p!(W_CTLX + 3),
+            amgy: p!(W_CTLX + 4),
+            tus: p!(W_CTLX + 5),
+            tuid: p!(W_CTLX + 6),
+            fatf: p!(W_CTLX + 7),
+            tbt: p!(W_CTLX + 8),
+            nvpk: p!(W_CTLX + 9),
+            scoutt: p!(W_CTLX + 10),
+            acqb: p!(W_CTLX + 11),
             on: p!(W_ON),
             out: p!(W_OUT),
             fl: p!(W_FL),
@@ -1108,15 +1146,6 @@ unsafe fn covered(m: &Mv, owner: i32, a: i32) -> bool {
 #[inline(always)]
 unsafe fn cover_row(m: &Mv, owner: i32) -> bool {
     !m.covf.is_null() && owner >= 0 && owner < m.covp
-}
-/// _simAcqHit.
-#[inline(always)]
-unsafe fn acq_hit(m: &Mv, s: usize, stamp: i32) -> bool {
-    if rd(m.cbtk, s) != stamp || rd(m.crs, s) != mv_stat(m, s, 3, m.rng) {
-        return false;
-    }
-    let q = rd(m.cbt, s);
-    q >= 0 && rd(m.dead, q as usize) == 0 && rd(m.id, q as usize) == rd(m.cti, s)
 }
 /// simWindowKey.
 #[inline(always)]
@@ -2182,6 +2211,10 @@ unsafe fn idle4(m: &Mv, s: usize, done: i32) -> i32 {
     if BRAIN {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
+    // (A live unit that is not a worker goes to the controller, one by one.)
+    if !m.holdf.is_null() {
+        ok = v128_and(ok, v128_or(i32x4_ne(ld_u8x4(m.dead.add(s)), zero), i32x4_ne(ld_u8x4(m.iswk.add(s)), zero)));
+    }
     let bits = i32x4_bitmask(ok) as i32;
     if bits == 0 {
         return 0;
@@ -2385,6 +2418,26 @@ struct MoveP {
     chunk: usize,
 }
 
+/// The block's flow direction: the desired velocities of the first unit of
+/// each tile that walks the flow (summed), which sets the sweep's direction.
+#[cfg_attr(feature="prof",inline(never))]
+unsafe fn leader_dir(m:&Mv,a:*const i32,x0:i32,x1:i32,y0:i32,y1:i32,cw:i32,epoch:i32)->(f64,f64) {
+    let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *const i32;
+    let mut dx=0.0;let mut dy=0.0;
+    for cy in y0..y1 {for cx in x0..x1 {
+        let key=(cy*cw+cx) as usize;
+        if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
+        let slot=*ptr(24).add(*ptr(25).add(key) as usize);
+        if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
+            let s=slot as usize;
+            rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!BRAIN||rd(m.cmode,s)&3==0)
+                && rd(m.cd,s)==rd(m.dest,s) && rd(m.ctl,s)==key as i32
+        }) {
+            dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
+        }
+    }}
+    (dx,dy)
+}
 /// SIM_KERNEL_MOVE over slots s0..end (chunk: the epilogue's lists), four
 /// slots at a time, each unit once: a flow unit's steady step (step4) and a
 /// combat brain instruction (combat4) four a lane; the other lanes one by
@@ -2466,19 +2519,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         // Leaders vacate space before followers claim it. Sample cached
         // desired velocities (actual velocity is zero in a jam), bounded
         // to one unit per tile; no sorting or per-unit allocation.
-        let mut dx=0.0;let mut dy=0.0;
-        for cy in y0..y1 {for cx in x0..x1 {
-            let key=(cy*cw+cx) as usize;
-            if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
-            let slot=*ptr(24).add(*ptr(25).add(key) as usize);
-            if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
-                let s=slot as usize;
-                rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!BRAIN||rd(m.cmode,s)&3==0)
-                    && rd(m.cd,s)==rd(m.dest,s) && rd(m.ctl,s)==key as i32
-            }) {
-                dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
-            }
-        }}
+        let (dx,dy)=leader_dir(&m,a,x0,x1,y0,y1,cw,epoch);
         for yi in 0..y1-y0 {let cy=if dy>0.0{y1-1-yi}else{y0+yi};
         for xi in 0..x1-x0 {let cx=if dx>0.0{x1-1-xi}else{x0+xi};
             let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch {continue;}
@@ -2656,18 +2697,10 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         // Idle groups need no flow, wake, energy or navigation cache reads.
         // Their JS update already ran; copy only the dead/output bytes and
         // leave separation to derive movement from the positions as before.
-        // A unit the combat brain sent at a hostile structure (cmMode 8):
-        // back to Unit.update, which takes it (unit.js _brainStructureEngage).
-        let mut handed = 0i32;
-        if BRAIN {
-            for l in 0..n {
-                let u = s + l;
-                if *m.cmode.add(u) & 8 != 0 { wr(m.on, u, 0); wr(m.out, u, 0); handed |= 1 << l; }
-            }
-            done |= handed;
-        }
+        let handed = 0i32;
         let idle = handed == 0 && n == 4 && (m.on.add(s) as *const u32).read_unaligned() == 0
-            && (!BRAIN || (m.cmode.add(s) as *const u32).read_unaligned() == 0);
+            && (!BRAIN || (m.cmode.add(s) as *const u32).read_unaligned() == 0)
+            && (m.holdf.is_null() || (0..4).all(|l| *m.dead.add(s + l) != 0 || *m.iswk.add(s + l) != 0));
         if idle {
             let dead = (m.dead.add(s) as *const u32).read_unaligned();
             let d0 = m.d0.add(s) as *mut u32;
@@ -2744,7 +2777,14 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
                 if rd(m.stept, u - m.stepbase) == 1 { dbgc!(m, 13); }
             }
             match move_pre(m, p, u) {
-                1 => { dbgc!(m, 14); move_flow(m, p, u) }
+                1 => {
+                    dbgc!(m, 14);
+                    move_flow(m, p, u);
+                    // (The flow handed the unit back: its arrival or what else, the controller's.)
+                    if !m.holdf.is_null() && rd(m.out, u) == 0 && rd(m.on, u) == 0 && rd(m.dead, u) == 0 && rd(m.iswk, u) == 0 && ctl(m, p, u) == 1 {
+                        move_flow(m, p, u);
+                    }
+                }
                 2 => { dbgc!(m, 15); move_path(m, p, u) }
                 _ => {}
             }
@@ -2881,7 +2921,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     if BRAIN&&rd(m.cmode,s)&8!=0{return;}
     dbgc!(m,75);
     let on=rd(m.on,s);
-    let walker=on==1||on==4||on==6||(BRAIN&&rd(m.cmode,s)&3==2);
+    let walker=on==1||on==4||on==6||on==7||(BRAIN&&rd(m.cmode,s)&3==2);
     // (A walker other than a flow unit has no cached heading: nothing more.)
     if walker&&(on!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0)){return;}
     dbgc!(m,76);
@@ -2957,7 +2997,7 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let pair_holds=m.pair_holds;
     if pair_holds && m.span_n==2 && !m.occ.is_null() && done&3==0 {
         let cm=(m.cmode.add(s) as *const u16).read_unaligned();
-        if cm&0x0303==0x0101 && combat_hold2(m,p,s,cm) {return 3;}
+        if cm&0x1313==0x0101 && combat_hold2(m,p,s,cm) {return 3;}
     }
     let zero = i32x4_splat(0);
     let fz = f32x4_splat(0.0);
@@ -2966,7 +3006,13 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let hold = i32x4_eq(mk, i32x4_splat(1));
     let chase = i32x4_eq(mk, i32x4_splat(2));
     let free = i32x4_eq(v128_and(i32x4_splat(done), i32x4(1, 2, 4, 8)), zero);
-    let mut ok = v128_and(free, v128_or(hold, chase));
+    // (A structure instruction, bit 16: its holds stand here, but on a unit's recheck tick (one in four, every one of a longer
+    // step), when move_struct looks at the structure; its approaches are move_struct's, one by one.)
+    let is_st = i32x4_ne(v128_and(cm, i32x4_splat(16)), zero);
+    let tw = i32x4_add(i32x4_splat(m.t), v128_load(m.id.add(s) as *const v128));
+    let recheck = i32x4_lt(v128_and(tw, i32x4_splat(3)), i32x4_splat(m.dk));
+    let st_hold = v128_andnot(v128_and(is_st, hold), recheck);
+    let mut ok = v128_and(free, v128_or(v128_andnot(v128_or(hold, chase), is_st), st_hold));
     if !v128_any_true(ok) {
         return 0;
     }
@@ -3007,6 +3053,10 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
         if bits & (1 << l) == 0 {
             continue;
         }
+        // (A structure's hold has no target unit to look at.)
+        if rd(m.cmode, s + l) & 16 != 0 {
+            continue;
+        }
         let q = rd(m.cmt, s + l) as usize;
         if rd(m.dead, q) != 0 || rd(m.id, q) != rd(m.ctid, s + l) {
             bits &= !(1 << l);
@@ -3035,7 +3085,8 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
             let fire_bits=i32x4_bitmask(firing);
             for l in 0..m.span_n {if fire_bits&(1<<l)!=0 {
                 let u=s+l;fire(m,u);let c=rd(m.hitc,p.chunk);
-                wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,rd(m.cmt,u));wr(m.hitc,p.chunk,c+1);
+                let ct=rd(m.cmt,u);
+                wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,if rd(m.cmode,u)&16!=0 {-(ct+2)}else{ct});wr(m.hitc,p.chunk,c+1);
                 dbgc!(m,34);
             }}
         }
@@ -3210,8 +3261,499 @@ unsafe fn step_params(f: *const f64) -> StepP {
     }
 }
 
+/// Writes through a pointer the loader holds as read-only (the columns the
+/// arming functions also write).
+#[inline(always)]
+unsafe fn wc<T: Scalar>(p: *const T, i: usize, v: T::Value) {
+    wr(p as *mut T, i, v)
+}
+
+/// flownav.js navApproachTile: tile t when open, else the open tile nearest
+/// it within six rings (in steps, then the scan's order); -1 none.
+unsafe fn approach_tile(wl: *const u8, w: i32, h: i32, t: i32) -> i32 {
+    if !(t >= 0 && (t as i64) < (w as i64) * (h as i64)) {
+        return -1;
+    }
+    if rd(wl, t as usize) == 0 {
+        return t;
+    }
+    let (tx, ty) = (irem_f(t, w), idiv(t - irem_f(t, w), w));
+    let mut r = -1i32;
+    let mut d = 1i32;
+    while d <= 6 && r < 0 {
+        let mut best = i32::MAX;
+        let mut dy = -d;
+        while dy <= d {
+            let mut dx = -d;
+            while dx <= d {
+                if dx.abs().max(dy.abs()) == d {
+                    let (x, y) = (tx + dx, ty + dy);
+                    if x >= 0 && y >= 0 && x < w && y < h && rd(wl, (y * w + x) as usize) == 0 {
+                        let dd = dx.abs() + dy.abs();
+                        if dd < best {
+                            best = dd;
+                            r = y * w + x;
+                        }
+                    }
+                }
+                dx += 1;
+            }
+            dy += 1;
+        }
+        d += 1;
+    }
+    r
+}
+
+/// A structure instruction of the combat brain (cmMode bit 16, cmT the
+/// structure's tile; bits 0-1 hold (1) or approach (2), bit 4 fire): the
+/// unit's order (idle, attack-move) stays what it is underneath; it stands and
+/// fires at the structure in its attack range (the areas' reach: worked out
+/// here up to two steps, else the brain's word), else walks to it: straight
+/// when it flies or is within two tiles, else by the atlas to the open tile
+/// beside it (the flow columns taken for it: mvWk 4). The attack is listed
+/// with a target of -(tile + 2) (k_hits passes it over; unit.js
+/// unitHitsResolve applies it to the structure). The instruction ends (cmMode
+/// 0) when the structure is gone, no longer hostile or out of sight; the
+/// order's movement is given back by resume_order. True: the unit's step is
+/// done.
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
+    let (w, h, tile, itile) = (m.w, m.h, m.tile, m.itile);
+    let t = rd(m.cmt, s);
+    let owner = rd(m.own, s);
+    let valid = t >= 0 && (t as i64) < (w as i64) * (h as i64) && !m.ag.is_null() && !m.sc.is_null() && {
+        let code = rd(m.sc, t as usize) as i32;
+        code != -1 && code != owner && covered(m, owner, rd(m.ag, t as usize))
+    };
+    if !valid {
+        wr(m.cmode, s, 0);
+        return false;
+    }
+    let x = rd(m.x, s);
+    let y = rd(m.y, s);
+    let tx0 = irem_f(t, w);
+    let tx = tx0 as f64 * tile + tile / 2.0;
+    let ty = idiv(t - tx0, w) as f64 * tile + tile / 2.0;
+    let k = rd(m.rk, s) as i32;
+    let mut inr = (cm & 3) == 1;
+    if k <= 2 {
+        let r = in_area_range(m, x, y, tx, ty, k);
+        if r == 1 {
+            inr = true;
+        } else if r == 0 {
+            inr = false;
+        }
+    }
+    macro_rules! stand {
+        () => {{
+            wr(m.px, s, x);
+            wr(m.py, s, y);
+            wr(m.vx, s, 0.0);
+            wr(m.vy, s, 0.0);
+            wr(m.out, s, 1);
+            return true;
+        }};
+    }
+    if inr {
+        if (k <= 2 || (cm & 4) != 0) && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
+            fire(m, s);
+            let c = rd(m.hitc, p.chunk);
+            wr(m.hita, p.s0 + c as usize, s as i32);
+            wr(m.hitt, p.s0 + c as usize, -(t + 2));
+            wr(m.hitc, p.chunk, c + 1);
+        }
+        stand!();
+    }
+    if (cm & 3) == 0 {
+        // (Fire only: the unit's own move.)
+        return false;
+    }
+    let fly = rd(m.slayer, s) == 1;
+    let dx = tx - x;
+    let dy = ty - y;
+    let d = sqrt(dx * dx + dy * dy);
+    let mut spd = mv_stat(m, s, 0, m.spd);
+    if rd(m.frz, s) > 0 {
+        spd *= 0.5;
+    }
+    if rd(m.snd, s) > 0 {
+        spd *= 0.5;
+    }
+    if !(d > 0.0) || !(spd > 0.0) {
+        stand!();
+    }
+    if fly || d < 2.0 * tile {
+        // Straight at it (doAttacking's building branch: simChaseStep).
+        let mut st = spd;
+        if m.dk > 1 {
+            let kk = js_min(spd * m.dkf, js_max(spd, d - spd));
+            if fly || seg_open(m.wall, w, h, x, y, x + dx / d * kk, y + dy / d * kk, itile, tile) {
+                st = kk;
+            }
+        }
+        let nx = (x + (dx / d) * st) as f32 as f64;
+        let ny = (y + (dy / d) * st) as f32 as f64;
+        let ngx = floor(nx * itile);
+        let ngy = floor(ny * itile);
+        if !fly && (ngx < 0.0 || ngy < 0.0 || ngx >= w as f64 || ngy >= h as f64 || (inb(ngx, w) && inb(ngy, h) && rd(m.wall, (ngy as i32 * w + ngx as i32) as usize) != 0)) {
+            stand!();
+        }
+        let qx = quant_div(nx, p.q);
+        let qy = quant_div(ny, p.q);
+        let (qx, qy) = checked_position(m, s, qx, qy);
+        let gx = floor(x * itile);
+        let gy = floor(y * itile);
+        wr(m.px, s, x);
+        wr(m.py, s, y);
+        wr(m.vx, s, dx / d * st);
+        wr(m.vy, s, dy / d * st);
+        wr(m.x, s, qx);
+        wr(m.y, s, qy);
+        wr(m.out, s, if floor(qx * itile) != gx || floor(qy * itile) != gy { 3 } else { 1 });
+        return true;
+    }
+    // By the atlas to the open tile beside it.
+    if rd(m.on, s) != 6 || rd(m.wk, s) != 4 || rd(m.ht, s) != t {
+        let nv = m.nav.get_unchecked(0);
+        let wl = if nv.walls.is_null() { m.wall } else { nv.walls };
+        let dest = approach_tile(wl, w, h, t);
+        if dest < 0 || m.atlh[0].is_null() {
+            stand!();
+        }
+        wc(m.flow, s, NAV_ATLAS_FID);
+        wr(m.fgen, s, 0);
+        wc(m.dest, s, dest);
+        wc(m.npr, s, 0);
+        wc(m.rdy, s, 0);
+        wr(m.fl, s, 64 | 128);
+        wc(m.reach, s, k.min(255) as u8);
+        wc(m.ht, s, t);
+        wc(m.htid, s, 0);
+        wc(m.wk, s, 4);
+        wr(m.spent, s, 0);
+        wr(m.cd, s, -1);
+        if !m.steady.is_null() {
+            wr(m.steady, s, 0);
+        }
+        wr(m.on, s, 6);
+    }
+    move_flow(m, p, s);
+    if rd(m.on, s) == 0 || rd(m.out, s) == 0 {
+        // (Arrived, or no way on: it stands, and takes the way again next tick.)
+        wr(m.on, s, 0);
+        stand!();
+    }
+    true
+}
+
+/// A unit whose structure instruction ended (mvWk 4: the flow columns were
+/// taken for the approach): its order's movement again, from its columns. An
+/// attack-mover goes on by the atlas to its route's end (unit.rtEnd, profile
+/// unit.nvProf); an idle combat unit parks as simMoveTryParkIdle does; else
+/// it is left to Unit.update.
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn resume_order(m: &Mv, s: usize) {
+    wc(m.wk, s, 0);
+    wr(m.on, s, 0);
+    let cmd = rd(m.cmd, s);
+    let ra = rd(m.rda, s);
+    if ra == 255 {
+        return;
+    }
+    if cmd == 2 {
+        let dest = if m.rte.is_null() { -1 } else { rd(m.rte, s) };
+        let np = rd(m.nvp, s);
+        let (w, itile) = (m.w, m.itile);
+        let tl = floor(rd(m.y, s) * itile) as i32 * w + floor(rd(m.x, s) * itile) as i32;
+        if dest >= 0 && np >= 0 && (np as usize) < NAV_PROFILES && !m.atlh[np as usize].is_null() && tl != dest {
+            wc(m.flow, s, NAV_ATLAS_FID);
+            wr(m.fgen, s, 0);
+            wc(m.dest, s, dest);
+            wc(m.npr, s, np as u8);
+            wc(m.rdy, s, 0);
+            wr(m.fl, s, 64 | 16 | if rd(m.slayer, s) == 1 { 32 } else { 0 });
+            wc(m.reach, s, ra);
+            wr(m.spent, s, 0);
+            wr(m.cd, s, -1);
+            if !m.steady.is_null() {
+                wr(m.steady, s, 0);
+            }
+            wr(m.on, s, 1);
+        }
+    } else if cmd == 0 {
+        let ph = irem_f(m.t.wrapping_add(rd(m.id, s)), IDLE_PARK_TICKS);
+        wr(m.wake, s, m.t + IDLE_PARK_TICKS - ph);
+        wr(m.fl, s, 16 | 128);
+        wc(m.reach, s, ra);
+        wr(m.on, s, 2);
+    }
+}
+
+// =====================================================================
+// THE UNIT CONTROLLER
+// =====================================================================
+// What Unit.update decided for a unit the kernel does not move (unarmed, or
+// handed back), for the units that are not workers (BRAIN_OFF_MAIN_THREAD_PLAN.md):
+// its order from its columns (commandState, the path's key unit.nvPK, the
+// attack-move tile, hold, the issued target position mvTgX / mvTgY), armed
+// for the kernel, parked, or ended. The rest (workers, scouts, forced
+// attacks, a hostile mine under it, a way that is not there) stays with
+// Unit.update: out 0 and unarmed, as before.
+
+/// The unit stands where it is this tick.
+#[inline(always)]
+unsafe fn stand_here(m: &Mv, s: usize) {
+    wr(m.px, s, rd(m.x, s));
+    wr(m.py, s, rd(m.y, s));
+    wr(m.vx, s, 0.0);
+    wr(m.vy, s, 0.0);
+    wr(m.out, s, 1);
+}
+
+/// Parked, waking at its phase of IDLE_PARK_TICKS (flags: aggro look 16 and the
+/// kernel's own periodic check 128, as simMoveTryParkIdle).
+#[inline(always)]
+unsafe fn park_with(m: &Mv, s: usize, flags: u8) {
+    let ph = irem_f(m.t.wrapping_add(rd(m.id, s)), IDLE_PARK_TICKS);
+    wr(m.wake, s, m.t + IDLE_PARK_TICKS - ph);
+    wr(m.fl, s, flags);
+    wc(m.reach, s, rd(m.rda, s).min(254));
+    wc(m.wk, s, 0);
+    wr(m.on, s, 2);
+}
+
+/// The path (its key, its index) gone.
+#[inline(always)]
+unsafe fn clear_path(m: &Mv, s: usize) {
+    wr(m.nvpk, s, -1);
+    wr(m.pidx, s, 0.0);
+    wr(m.rkf, s, 0);
+    wr(m.cd, s, -1);
+}
+
+/// An order done (simFlowArrive's end): idle, nothing issued, parked.
+unsafe fn end_order(m: &Mv, s: usize) {
+    clear_path(m, s);
+    wc(m.cmd, s, 0);
+    wc(m.tgx, s, f64::NAN);
+    wc(m.tgy, s, f64::NAN);
+    wr(m.amgx, s, -1);
+    wr(m.amgy, s, -1);
+    park_with(m, s, 16 | 128);
+}
+
+/// Armed in flow mode toward tile `dest` of navigation profile `profile` (the atlas: no field).
+unsafe fn arm_common(m: &Mv, s: usize, profile: usize, dest: i32, cmd: i32, wide: bool) -> bool {
+    if profile >= NAV_PROFILES || m.atlh[profile].is_null() {
+        return false;
+    }
+    let ra = rd(m.rda, s);
+    if cmd == 2 && ra == 255 {
+        return false;
+    }
+    let fly = rd(m.slayer, s) == 1;
+    wc(m.flow, s, NAV_ATLAS_FID);
+    wr(m.fgen, s, 0);
+    wc(m.dest, s, dest);
+    wc(m.npr, s, profile as u8);
+    wc(m.rdy, s, 0);
+    wr(m.fl, s, 64 | if fly { 32 } else { 0 } | if cmd == 2 { 16 } else { 0 } | if wide { 0 } else { 128 });
+    wc(m.reach, s, if cmd == 2 { ra } else { 0 });
+    wc(m.wk, s, 0);
+    wr(m.spent, s, 0);
+    wr(m.cd, s, -1);
+    if !m.steady.is_null() {
+        wr(m.steady, s, 0);
+    }
+    wr(m.on, s, 1);
+    true
+}
+
+/// A new way to tile `dest` under command cmd (1 move, 2 attack-move): the navigation's node written
+/// as the path's columns (flownav.js navPathReach's single node; not checked reachable here: a way that is
+/// not there is found by the flow, Unit.update's) and the unit armed on it.
+unsafe fn issue_flow(m: &Mv, s: usize, dest: i32, cmd: i32, wide: bool) -> bool {
+    let profile = if rd(m.slayer, s) == 1 { 1usize } else { 0usize };
+    if !arm_common(m, s, profile, dest, cmd, wide) {
+        return false;
+    }
+    let w = m.w;
+    wr(m.nvpk, s, (profile as i32 * 16777216 + dest) * 2 + wide as i32);
+    wr(m.pidx, s, 0.0);
+    wc(m.rte, s, dest);
+    wc(m.nvp, s, profile as i32);
+    wc(m.cmd, s, cmd);
+    wc(m.tgx, s, (irem_f(dest, w) as f64) * m.tile + 16.0);
+    wc(m.tgy, s, (idiv(dest - irem_f(dest, w), w) as f64) * m.tile + 16.0);
+    true
+}
+
+/// Parked holding a way it keeps (hold keeps the route and its progress).
+unsafe fn park_held(m: &Mv, s: usize, cmd: i32) {
+    park_with(m, s, if cmd == 2 { 16 } else { 0 });
+    stand_here(m, s);
+}
+
+/// Whether the unit stands within arrival tolerance of its issued target (Unit._isNearIssuedTarget).
+unsafe fn near_issued(m: &Mv, s: usize) -> bool {
+    let tx = rd(m.tgx, s);
+    let ty = rd(m.tgy, s);
+    if !(tx == tx && ty == ty) {
+        return false;
+    }
+    let mut spd = mv_stat(m, s, 0, m.spd);
+    if rd(m.frz, s) > 0 {
+        spd *= 0.5;
+    }
+    if rd(m.snd, s) > 0 {
+        spd *= 0.5;
+    }
+    let tol = js_max(8.0, js_min(m.tile, floor(spd * 2.0)));
+    let dx = tx - rd(m.x, s);
+    let dy = ty - rd(m.y, s);
+    sqrt(dx * dx + dy * dy) <= tol
+}
+
+/// Waiting for a way (a pending target: the helpers' answer, the pending
+/// resolver's): parked with the arrival check on its issued target (flags 8,
+/// mvTgX / mvTgY and the tolerance); near it, back to this controller.
+unsafe fn park_route(m: &Mv, s: usize, cmd: i32) {
+    let mut spd = mv_stat(m, s, 0, m.spd);
+    if rd(m.frz, s) > 0 {
+        spd *= 0.5;
+    }
+    if rd(m.snd, s) > 0 {
+        spd *= 0.5;
+    }
+    wc(m.tgtol, s, js_max(8.0, js_min(m.tile, floor(spd * 2.0))));
+    park_with(m, s, 8 | if cmd == 2 { 16 } else { 0 });
+    stand_here(m, s);
+}
+
+/// simFlowArrive: the move is done (a flow's end or its crowd's edge). An
+/// attack-mover short of its tile goes on as an individual; a unit with a
+/// pending target keeps waiting for the navigation. 1: armed, step on.
+unsafe fn arrive(m: &Mv, s: usize) -> i32 {
+    let cmd = rd(m.cmd, s);
+    clear_path(m, s);
+    if rd(m.pf, s) != 0 {
+        // (Near its issued target the order ends: Unit.update's, which clears the pending target.)
+        if !near_issued(m, s) {
+            park_route(m, s, cmd);
+        }
+        return 0;
+    }
+    let (w, itile) = (m.w, m.itile);
+    let tl = floor(rd(m.y, s) * itile) as i32 * w + floor(rd(m.x, s) * itile) as i32;
+    if cmd == 2 && rd(m.amgx, s) >= 0 && rd(m.holdf, s) == 0 {
+        let am = rd(m.amgy, s) as i32 * w + rd(m.amgx, s) as i32;
+        let rt = rd(m.rte, s);
+        if tl != am && !(rt >= 0 && tl == rt) && issue_flow(m, s, am, 2, false) {
+            return 1;
+        }
+    }
+    end_order(m, s);
+    stand_here(m, s);
+    0
+}
+
+/// The controller for slot s (see above). 1: armed, the flow step follows this tick; 0: done (out written)
+/// or left to Unit.update (out 0).
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn ctl(m: &Mv, p: &MoveP, s: usize) -> i32 {
+    let (w, h, itile) = (m.w, m.h, m.itile);
+    let owner = rd(m.own, s);
+    if !(rd(m.en, s) > 0.0) {
+        return 0;
+    }
+    // (A scout: its destinations are Unit.update's.)
+    if !m.scoutt.is_null() && rd(m.upt, s) as i32 == rd(m.scoutt, 0) {
+        return 0;
+    }
+    let x = rd(m.x, s);
+    let y = rd(m.y, s);
+    let gxf = floor(x * itile);
+    let gyf = floor(y * itile);
+    if !(owner >= 0 && owner < p.players) || !(inb(gxf, w) && inb(gyf, h)) || rd(m.sep, s) as f64 == p.absent {
+        return 0;
+    }
+    let tl = gyf as i32 * w + gxf as i32;
+    let cmd = rd(m.cmd, s);
+    // (A hostile mine under it, or a floor this cannot tell: Unit.update's.)
+    if rd(m.floor, s) != tl || irem_f(m.t.wrapping_add(rd(m.id, s)), p.tr) < m.dk {
+        let code = rd(m.sc, tl as usize) as i32;
+        if code != -1 && code != owner && floor_hit(m, s, tl) {
+            return 0;
+        }
+        wr(m.floor, s, tl);
+    }
+    // (Arrived in a crowd at its destination: marked by the flow.)
+    if rd(m.wk, s) == 5 {
+        wc(m.wk, s, 0);
+        return arrive(m, s);
+    }
+    let hold = rd(m.holdf, s) != 0;
+    match cmd {
+        0 => {
+            if rd(m.amgx, s) >= 0 && !hold {
+                let am = rd(m.amgy, s) as i32 * w + rd(m.amgx, s) as i32;
+                if tl != am && issue_flow(m, s, am, 2, false) {
+                    return 1;
+                }
+            }
+            park_with(m, s, 16 | 128);
+            stand_here(m, s);
+            0
+        }
+        1 | 2 => {
+            let pk = rd(m.nvpk, s);
+            let pending = rd(m.pf, s) != 0;
+            if pk >= 0 && rd(m.pidx, s) < 1.0 {
+                let key = pk >> 1;
+                let profile = (key / 16777216) as usize;
+                let dest = key - (profile as i32) * 16777216;
+                if hold {
+                    park_held(m, s, cmd);
+                    return 0;
+                }
+                if tl == dest {
+                    return arrive(m, s);
+                }
+                if arm_common(m, s, profile, dest, cmd, (pk & 1) != 0) {
+                    return 1;
+                }
+                return 0;
+            }
+            // (Its path used up, its route not: on toward the route's end, as a group.)
+            let rt = rd(m.rte, s);
+            if rd(m.rkf, s) == 1 && rt >= 0 && tl != rt && !pending && !hold {
+                let profile = if rd(m.slayer, s) == 1 { 1usize } else { 0usize };
+                if arm_common(m, s, profile, rt, cmd, true) {
+                    wr(m.nvpk, s, (profile as i32 * 16777216 + rt) * 2 + 1);
+                    wr(m.pidx, s, 0.0);
+                    return 1;
+                }
+                return 0;
+            }
+            if pending {
+                if !near_issued(m, s) {
+                    park_route(m, s, cmd);
+                }
+                return 0;
+            }
+            // (Nothing to follow: the order ends where it stands.)
+            end_order(m, s);
+            stand_here(m, s);
+            0
+        }
+        _ => 0,
+    }
+}
+
 /// _simMoveCombat: the combat brain's instruction for slot s (cmMode bits
-/// 0-1 the move: 0 own, 1 stand, 2 toward the target; bit 4 fire). False:
+/// 0-1 the move: 0 own, 1 stand, 2 toward the target; bit 4 fire; bit 16 the
+/// target is a structure, move_struct). False:
 /// the unit's own move this tick (ended, or fire only).
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
@@ -3220,12 +3762,15 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
         wr(m.on, s, 0);
         return false;
     }
+    let cm = rd(m.cmode, s);
+    if (cm & 16) != 0 {
+        return move_struct(m, p, s, cm);
+    }
     let q = rd(m.cmt, s);
     if q < 0 || rd(m.dead, q as usize) != 0 || rd(m.id, q as usize) != rd(m.ctid, s) {
         wr(m.cmode, s, 0);
         return false;
     }
-    let cm = rd(m.cmode, s);
     if (cm & 4) != 0 && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
         fire(m, s);
         let c = rd(m.hitc, p.chunk);
@@ -3300,9 +3845,19 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     wr(m.out, s, if floor(qx * itile) as i32 != gx || floor(qy * itile) as i32 != gy { 3 } else { 1 });
     true
 }
-/// _simMovePre for slot s: 0 done, 1 on to the flow, 2 on to the path.
+/// _simMovePre for slot s: 0 done, 1 on to the flow, 2 on to the path. A unit
+/// that came out of it unarmed with nothing written for it (handed back: Unit.update's
+/// in the JavaScript) goes to the unit controller (ctl) first.
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
+    let r = move_pre0(m, p, s);
+    if r == 0 && !m.holdf.is_null() && rd(m.out, s) == 0 && rd(m.on, s) == 0 && rd(m.dead, s) == 0 && rd(m.iswk, s) == 0 {
+        return ctl(m, p, s);
+    }
+    r
+}
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn move_pre0(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let (t, w, h, tile, itile) = (m.t, m.w, m.h, m.tile, m.itile);
     // (Stores only where the value changes: most slots keep 0 / their copy.)
     if rd(m.fire, s) != 0 { wr(m.fire, s, 0); }
@@ -3318,6 +3873,10 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     // JavaScript twin, _simMoveCombat.)
     if BRAIN && rd(m.cmode, s) != 0 && move_combat(m, p, s) {
         return 0;
+    }
+    // (A structure instruction that ended: its order again.)
+    if BRAIN && rd(m.cmode, s) == 0 && rd(m.wk, s) == 4 {
+        resume_order(m, s);
     }
     let on = rd(m.on, s);
     if on == 0 {
@@ -3351,6 +3910,14 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
                     wr(m.wake, s, to_i32(js_min((t + p.wkper) as f64, rd(m.wksc, wki(m, s)))));
                 }
             }
+        }
+        // A combat unit's periodic check (mvFlags 128 on its aggro park, simMoveTryParkIdle):
+        // its update would do nothing the kernel does not (the brain's units are
+        // engaged by instruction, cmode; the floor is looked at every tick below),
+        // so it stays parked until its next phase of IDLE_PARK_TICKS.
+        if !stay && BRAIN && (rd(m.fl, s) & 144) == 144 && rd(m.cmode, s) == 0 {
+            wr(m.wake, s, t + IDLE_PARK_TICKS - irem_f(t.wrapping_add(id0), IDLE_PARK_TICKS));
+            stay = true;
         }
         if !stay {
             back!();
@@ -3461,9 +4028,9 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if (rd(m.fl, s) & 1) == 0 && rem64_f(ts, 8) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
-            back!();
-        }
+        // (No hand-back on the automatic target's look tick: the brain's units
+        // attacking a structure keep it until it falls, Unit.doAttacking's look
+        // for enemy units finds nothing for them, _combatScanHit.)
         let a = rd(m.ag, bt as usize);
         if !covered(m, owner, a) {
             back!();
@@ -3476,6 +4043,70 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         wr(m.px, s, x);
         wr(m.py, s, y);
         wr(m.out, s, if rd(m.at, s) > 0.0 { 6 } else { 10 });
+        return 0;
+    }
+    if on == 7 {
+        // A structure chase (mvOn 7): a flyer, or a unit within two tiles of the
+        // structure, with no path, straight at it (doAttacking's building
+        // branch: simChaseStep). The structure's tile is mvHT. Handed back
+        // when it is no longer a hostile structure in sight, in range or
+        // unsure, and when the straight step is not open or leaves the map.
+        let bt = rd(m.ht, s);
+        if !(bt >= 0 && (bt as i64) < (w as i64) * (h as i64)) || m.aoff.is_null() || m.ag.is_null() {
+            back!();
+        }
+        let code = rd(m.sc, bt as usize) as i32;
+        if code == -1 || code == owner {
+            back!();
+        }
+        let a = rd(m.ag, bt as usize);
+        if !covered(m, owner, a) {
+            back!();
+        }
+        let bgx = irem_f(bt, w);
+        let bgy = idiv(bt - bgx, w);
+        let tx = bgx as f64 * tile + tile / 2.0;
+        let ty = bgy as f64 * tile + tile / 2.0;
+        if in_area_range(m, x, y, tx, ty, rd(m.reach, s) as i32) != 0 {
+            back!();
+        }
+        let dx = tx - x;
+        let dy = ty - y;
+        let d = sqrt(dx * dx + dy * dy);
+        let fly = (f & 32) != 0;
+        if !(d > 0.0) || !(fly || d < 2.0 * tile) || (!fly && rd(m.wall, tl as usize) != 0) {
+            back!();
+        }
+        let mut spd = mv_stat(m, s, 0, m.spd);
+        if rd(m.frz, s) > 0 {
+            spd *= 0.5;
+        }
+        if rd(m.snd, s) > 0 {
+            spd *= 0.5;
+        }
+        let mut st = spd;
+        if m.dk > 1 {
+            let k = js_min(spd * m.dkf, js_max(spd, d - spd));
+            if fly || seg_open(m.wall, w, h, x, y, x + dx / d * k, y + dy / d * k, itile, tile) {
+                st = k;
+            }
+        }
+        let nx = (x + (dx / d) * st) as f32 as f64;
+        let ny = (y + (dy / d) * st) as f32 as f64;
+        let ngx = floor(nx * itile);
+        let ngy = floor(ny * itile);
+        if !fly && (ngx < 0.0 || ngy < 0.0 || ngx >= w as f64 || ngy >= h as f64 || (inb(ngx, w) && inb(ngy, h) && rd(m.wall, (ngy as i32 * w + ngx as i32) as usize) != 0)) {
+            back!();
+        }
+        let qx = quant_div(nx, p.q);
+        let qy = quant_div(ny, p.q);
+        wr(m.px, s, x);
+        wr(m.py, s, y);
+        let (qx, qy) = checked_position(m, s, qx, qy);
+        wr(m.x, s, qx);
+        wr(m.y, s, qy);
+        let moved = floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64;
+        wr(m.out, s, if moved { 9 } else { 7 });
         return 0;
     }
     if on == 4 || hchase {
@@ -3598,9 +4229,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         if code == -1 || code == owner {
             back!();
         }
-        if rd(m.htid, s) == 0 && rem64_f(ts, 8) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
-            back!();
-        }
+        // (No look tick hand-back here either, see the building hold.)
         let a = rd(m.ag, bt as usize);
         if !covered(m, owner, a) {
             back!();
@@ -3851,6 +4480,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         // At a full destination crowd's edge: arrived before pressing into
         // it (unit.js _unitCrowdFull).
         if near && rd(m.cwt, s) == t && rd(m.cwn, s) != 0 && rd(m.cwd, s) >= SIM_CROWD_FULL {
+            wc(m.wk, s, 5);
             back!();
         }
         // (The progress expected since the last look: its base ticks, at
@@ -3859,6 +4489,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             // (Held at a full crowd's edge: arrived, however far its middle
             // is: a big crowd is wider than `near`.)
             if (near || (rd(m.cwd, s) >= SIM_CROWD_FULL && rd(m.cwn, s) == 2)) && rd(m.cwt, s) == t && rd(m.cwn, s) != 0 {
+                wc(m.wk, s, 5);
                 back!();
             }
             if rd(m.cwt, s) == t && rd(m.cwn, s) != 0 {
