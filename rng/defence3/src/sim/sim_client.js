@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261021-range-areas2';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261023-looks';
 
 function _simClientCreate() {
     let c = {
@@ -862,7 +862,10 @@ function _simClientApplyTick(msg) {
     let shown = c.arrivedAt > 0 ? (c.drawnAlpha >= 0 ? c.drawnAlpha : 0) : 1;
     c.presentation = !!msg.presentation;
     if (!c.presentation) c.drawnAlpha = -1;
+    const gt0 = gameTime;
     try { _simClientApplyWorld(msg.world, shown); } catch (err) { reportRuntimeError('sim frame', err); }
+    // (The step's game time, for the effects' clock: simClientDrawnGameTime.)
+    if (gameTime > gt0) { c.gtPrev = gt0; c.gtNow = gameTime; c.gtOff = gameTime - msg.tick; }
     currentTick = pageTick;
     c.appliedTick = msg.tick;
     c.appliedAt = dispatchedAt !== undefined ? dispatchedAt : t0;
@@ -882,7 +885,9 @@ function _simClientApplyTick(msg) {
         c.stats.latencyMs.push(latency);
     }
     c.lastSight = msg.sight ? { data: msg.sight, player: msg.sightPlayer, id: msg.sightId || 0 } : null;
-    _simClientReplayEvents(msg.events || []);
+    // (Its attacks spread over the step they came in: recordCombatFx.)
+    combatFxSpan = c.gtNow === gameTime && c.gtNow > c.gtPrev ? [c.gtPrev, c.gtNow] : null;
+    try { _simClientReplayEvents(msg.events || []); } finally { combatFxSpan = null; }
     _simClientPageTickWork(msg.tick);
     // The tick's record (the peers compare them).
     if (msg.hash) {
@@ -1142,6 +1147,18 @@ function _simClientApplyDetails(details) {
         if (v) { v._det = d; _simClientDetailed.push(v); }
     }
 }
+// The tiles the page draws (each frame's view): the worker shows the looks
+// of hits there first (unit.js simLookView); sent when it moved a few tiles.
+function simClientNoteView(minGx, minGy, maxGx, maxGy) {
+    const c = _simClient;
+    if (!c || !c.active || !c.worker) return;
+    const v = c.view || (c.view = [1, 0, 0, 0]), pad = 4;
+    const r = [Math.floor(minGx) - pad, Math.floor(minGy) - pad, Math.ceil(maxGx) + pad, Math.ceil(maxGy) + pad];
+    if (Math.abs(r[0] - v[0]) < 2 && Math.abs(r[1] - v[1]) < 2 && Math.abs(r[2] - v[2]) < 2 && Math.abs(r[3] - v[3]) < 2) return;
+    c.view = r;
+    const e = TILE * 8;
+    c.worker.postMessage({ type: 'view', r: [r[0] * e, r[1] * e, (r[2] + 1) * e, (r[3] + 1) * e] });
+}
 // What the page watches: the selected units and structures (up to caps).
 function _simClientWatch() {
     let c = _simClient, list = [], structures = [], key = '';
@@ -1189,7 +1206,7 @@ function _simClientReplayEvents(events) {
             case 'h': { let t = _simClientResolve(e[1]); if (t) pushHostileDamageAlert(t, e[2], e[3]); break; }
             case 'x': createExplosion(e[1], e[2], e[3], e[4]); break;
             case 'p': createDirectedParticles(e[1], e[2], e[3], e[4], e[5], e[6]); break;
-            case 'f': recordCombatFx(e[1], e[2], e[3], e[4], e[5], e[6] === null ? undefined : e[6]); break;
+            case 'f': recordCombatFx(e[1], e[2], e[3], e[4], e[5], e[6] === null ? undefined : e[6], e[7] | 0, e[8] | 0); break;
             // (A tick's energy and star gains and costs by source: the HUD's rates.)
             case 'E': recordEnergyDelta(e[1], e[2], e[3]); break;
             case 'A': recordAstarDelta(e[1], e[4], { unitType: e[2] }, e[3]); break;
@@ -1358,6 +1375,18 @@ function simClientTickAlpha(frameTime) {
     // Called once per drawn frame: remembered for the next result's start.
     c.drawnAlpha = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
     return alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+}
+
+// The game time the drawn units stand at (in ticks, fractional): the
+// presentation frames' play position, else the last result's interpolation
+// (alpha). Effects play on it, so an attack shows where and when its units
+// are drawn: a slow simulation's step of many ticks plays as the ticks it
+// covers, not frozen at its start and gone at the next. NaN: no worker.
+function simClientDrawnGameTime(alpha) {
+    const c = _simClient;
+    if (!c || !c.active || !(c.gtNow > c.gtPrev)) return NaN;
+    if (c.presentation && c.play && c.play.started && Number.isFinite(c.gtOff)) return Math.min(c.gtNow, c.play.p + c.gtOff);
+    return c.gtPrev + (c.gtNow - c.gtPrev) * (alpha < 0 ? 0 : alpha > 1 ? 1 : alpha);
 }
 
 window.simClientStats = function () {

@@ -53,7 +53,7 @@ function world(resource, localPlayerId = 0) {
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
         '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', '_processActions', 'processAction',
-        '_actionCost', '_processRawAction', '_actionBacklogDrain', '_actionSplit', 'actionIdsCount']) {
+        '_actionCost', '_actionMarked', '_actionJumps', '_processRawAction', '_actionBacklogDrain', '_actionSplit', 'actionIdsCount']) {
         vm.runInContext(mainFunction(name), c);
     }
     // (The tick's action budget (main.js processActions): none here.)

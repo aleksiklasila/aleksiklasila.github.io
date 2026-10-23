@@ -12,292 +12,10 @@ if (typeof simDk === 'undefined') {
 const CMD_IDLE = 0, CMD_MOVING = 1, CMD_ATTACK_MOVING = 2, CMD_ATTACKING = 3, CMD_HOLDING = 4;
 const UNIT_POSITION_QUANTIZATION = 8;
 
-function _isHostileThingVisibleToUnit(unit, target) {
-    if (!unit || !target) return false;
-    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
-    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
-    return isGameplayTargetVisibleToPlayer(unit.owner, gx, gy);
-}
-
-const hostileStructureIndexes = new WeakMap();
-
-// Structures do not move, and liveness and owner are checked at query time:
-// the buckets only change with the tile entity index (not every tick).
-function _getHostileStructureIndex(list) {
-    const tick = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : (typeof gameTime === 'number' ? gameTime : 0);
-    const revision = typeof pathTopologyVersion === 'number' ? pathTopologyVersion : 0;
-    let index = hostileStructureIndexes.get(list);
-    if (index && index.tick === tick && index.revision === revision && index.length === list.length) return index;
-    const size = TILE * 4;
-    index = { tick, revision, length: list.length, size, buckets: new Map(), witnesses: new Map(), owners: new Map() };
-    for (let order = 0; order < list.length; order++) {
-        const target = list[order];
-        const gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / TILE);
-        const gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / TILE);
-        if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
-        const entry = { target, order, gx, gy };
-        let owned = index.owners.get(target.owner);
-        if (!owned) index.owners.set(target.owner, owned = []);
-        owned.push(target);
-        const key = Math.floor(target.y / size) * (Math.ceil(GRID_W / 4) + 1) + Math.floor(target.x / size);
-        let bucket = index.buckets.get(key);
-        if (!bucket) index.buckets.set(key, bucket = []);
-        bucket.push(entry);
-    }
-    hostileStructureIndexes.set(list, index);
-    return index;
-}
-
-// Conservative beam rectangle; Tower.update retains the exact hit/owner/health
-// tests. Sort by the original ID comparator and original array order for ties,
-// since bucket traversal order must never affect damage or destruction order.
-function getLaserStructureCandidates(list, sx, sy, ex, ey) {
-    let index = _getHostileStructureIndex(list);
-    let stride = Math.ceil(GRID_W / 4) + 1;
-    let minX = Math.max(0, Math.floor((Math.min(sx, ex) - 18) / index.size));
-    let maxX = Math.min(Math.ceil(GRID_W / 4), Math.floor((Math.max(sx, ex) + 18) / index.size));
-    let minY = Math.max(0, Math.floor((Math.min(sy, ey) - 18) / index.size));
-    let maxY = Math.min(Math.ceil(GRID_H / 4), Math.floor((Math.max(sy, ey) + 18) / index.size));
-    let entries = [];
-    for (let by = minY; by <= maxY; by++) for (let bx = minX; bx <= maxX; bx++) {
-        let bucket = index.buckets.get(by * stride + bx);
-        if (bucket) for (let entry of bucket) entries.push(entry);
-    }
-    entries.sort((a, b) => ((a.target.id || 0) - (b.target.id || 0)) || a.order - b.order);
-    return entries.map(entry => entry.target);
-}
-
-// Preserve list order, strict distance ties and lazy visibility snapshot timing.
-// The raw grid is immutable for this tick; resolve it once per scan rather than
-// repeating player normalization and cache lookups for every building.
-function _findClosestHostileStructure(unit, firstList, range, secondList = null, acceptsTarget = null) {
-    let closest = null;
-    let bestDistance = range;
-    let vis = null;
-    for (let pass = 0; pass < (secondList ? 2 : 1); pass++) {
-        let list = pass === 0 ? firstList : secondList;
-        let index = _getHostileStructureIndex(list);
-        // Materialize the lazy grid at the same point as the original scan,
-        // even when every hostile building is outside the search radius.
-        let witness = index.witnesses.get(unit.owner);
-        if (!witness || witness.owner === unit.owner || witness.energy <= 0) {
-            witness = null;
-            for (let [owner, owned] of index.owners) {
-                if (owner === unit.owner) continue;
-                for (let target of owned) {
-                    if (target.owner !== unit.owner && target.energy > 0) { witness = target; break; }
-                }
-                if (witness) break;
-            }
-            if (witness) index.witnesses.set(unit.owner, witness);
-        }
-        if (!vis && witness) {
-            let owner = Math.floor(Number(unit.owner));
-            if (!Number.isFinite(owner) || owner < 0) owner = localPlayerId;
-            vis = getRawVisibilityGridForPlayer(owner);
-        }
-        if (!vis || vis.length !== GRID_H || !(bestDistance > 0)) continue;
-        let bestOrder = Infinity;
-        const stride = Math.ceil(GRID_W / 4) + 1;
-        const minX = Math.max(0, Math.floor((unit.x - bestDistance) / index.size));
-        const maxX = Math.min(Math.ceil(GRID_W / 4), Math.floor((unit.x + bestDistance) / index.size));
-        const minY = Math.max(0, Math.floor((unit.y - bestDistance) / index.size));
-        const maxY = Math.min(Math.ceil(GRID_H / 4), Math.floor((unit.y + bestDistance) / index.size));
-        for (let by = minY; by <= maxY; by++) for (let bx = minX; bx <= maxX; bx++) {
-          let bucket = index.buckets.get(by * stride + bx);
-          if (!bucket) continue;
-          for (let entry of bucket) {
-            let { target, gx, gy, order } = entry;
-            if (target.owner === unit.owner || target.energy <= 0) continue;
-            if (acceptsTarget && !acceptsTarget(target)) continue;
-            let dx = target.x - unit.x, dy = target.y - unit.y;
-            if (Math.abs(dx) > bestDistance || Math.abs(dy) > bestDistance) continue;
-            if (!vis[gy] || !(vis[gy][gx] > 0)) continue;
-            let distance = detHypot(dx, dy);
-            if (distance < bestDistance || (distance === bestDistance && bestOrder !== Infinity && order < bestOrder)) {
-                bestDistance = distance; closest = target; bestOrder = order;
-            }
-          }
-        }
-    }
-    return closest;
-}
-
-function _tryConsumeAstarMoveCostForTransition(u, fromNode = null, toNode = null) {
-    if (!u) return false;
-    if (!fromNode || !toNode || !Number.isFinite(fromNode.x) || !Number.isFinite(fromNode.y) || !Number.isFinite(toNode.x) || !Number.isFinite(toNode.y)) {
-        return _tryConsumeAstarMoveCost(u, 1);
-    }
-    let fromKey = (Math.floor(fromNode.y) * GRID_W) + Math.floor(fromNode.x);
-    let toKey = (Math.floor(toNode.y) * GRID_W) + Math.floor(toNode.x);
-    if (
-        Number(u._astarLastChargedTick) === gameTime &&
-        Number(u._astarLastChargedFromKey) === fromKey &&
-        Number(u._astarLastChargedToKey) === toKey
-    ) {
-        return true;
-    }
-    if (!_tryConsumeAstarMoveCost(u, 1)) return false;
-    u._astarLastChargedTick = gameTime;
-    u._astarLastChargedFromKey = fromKey;
-    u._astarLastChargedToKey = toKey;
-    return true;
-}
-
-// A route node is roomy when its whole 3x3 block is open terrain. Structures,
-// portals and map edges count as blocked, so corridors, gates and portals keep
-// exact waypoints. The final node and portal entrances are never roomy.
-function _isPathNodeRoomy(path, i) {
-    let node = path[i], next = path[i + 1];
-    if (!next || Math.abs(next.x - node.x) + Math.abs(next.y - node.y) !== 1) return false;
-    return _isTileBlockOpen(node.x, node.y);
-}
-
-// Whether a tile's whole 3x3 block is open terrain, cached per tile until
-// the topology changes (0 unknown, 1 open, 2 not): moving units ask every
-// tick.
-let _tileBlockOpen = null, _tileBlockOpenVer = -1;
-function _isTileBlockOpen(x, y) {
-    if (x < 1 || y < 1 || x >= GRID_W - 1 || y >= GRID_H - 1) return false;
-    if (_tileBlockOpenVer !== pathTopologyVersion || !_tileBlockOpen || _tileBlockOpen.length !== GRID_W * GRID_H) {
-        if (!_tileBlockOpen || _tileBlockOpen.length !== GRID_W * GRID_H) _tileBlockOpen = new Uint8Array(GRID_W * GRID_H);
-        else _tileBlockOpen.fill(0);
-        _tileBlockOpenVer = pathTopologyVersion;
-    }
-    let k = y * GRID_W + x, v = _tileBlockOpen[k];
-    if (v) return v === 1;
-    let open = true;
-    for (let gy = y - 1; gy <= y + 1 && open; gy++) {
-        let row = grid[gy];
-        if (row[x - 1].type === TYPE_WALL || row[x].type === TYPE_WALL || row[x + 1].type === TYPE_WALL) open = false;
-    }
-    _tileBlockOpen[k] = open ? 1 : 2;
-    return open;
-}
-
-const _unitCollisionCandidates = [];
-
 // Floor structures that harm units standing on them.
 const TRAP_ITEM_TYPES = new Set(['lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand', 'mine']);
 function isTrapItem(item) { return !!(item && TRAP_ITEM_TYPES.has(item.type)); }
 
-// Whether a tile is on the next stretch of the unit's route.
-const UNIT_ROUTE_LOOKAHEAD = 12;
-function _isTileOnUnitRoute(unit, gx, gy) {
-    let path = unit.path;
-    if (!path) return false;
-    let end = Math.min(path.length, (unit.pathIndex || 0) + UNIT_ROUTE_LOOKAHEAD);
-    for (let i = Math.max(0, (unit.pathIndex || 0) - 1); i < end; i++) {
-        if (path[i].x === gx && path[i].y === gy) return true;
-    }
-    return false;
-}
-
-// Hostile structure the unit can hit from where it stands (area attack
-// range, from the same +-0.3 tile window as its drawn range), by threat:
-// turrets, traps on its route, other traps, then any other building. Nearest
-// wins within a class, then the lower tile index. Visible targets only.
-function _findHostileStructureInAttackRange(unit) {
-    let sources = getSourceAreaIdsAtWorld(unit.x, unit.y);
-    if (sources.length === 0) return null;
-    let best = null, bestRank = 4, bestD2 = Infinity, bestKey = Infinity;
-    let range = Math.floor(_getUnitAttackRangeArea(unit));
-    // Nothing hostile anywhere in the areas in reach: done (O(1)).
-    let box = getAreaRangeTileBox(sources, range);
-    if (!hasHostileStructureInTileRect(unit.owner, box[0], box[1], box[2], box[3])) return null;
-    let structuresByArea = getStructuresByArea();
-    for (let areaId of getAreaIdsWithinDistanceOfSources(sources, range)) {
-        let structures = structuresByArea[areaId];
-        if (!structures) continue;
-        for (let target of structures) {
-            let gx = target.gx, gy = target.gy, cell = grid[gy][gx];
-            if (!(target.energy > 0) || target.underConstruction) continue;
-            let owner = target.owner !== undefined ? target.owner : cell.owner;
-            if (owner === unit.owner || owner < 0) continue;
-            // Towers are tile entities, never cell items; portals are not turrets.
-            let turret = cell.item !== target && !String(target.type || '').startsWith('cloud');
-            let rank = turret ? 0 : isTrapItem(target) ? 2 : 3;
-            if (rank > bestRank) continue;
-            let dx = target.x - unit.x, dy = target.y - unit.y, d2 = dx * dx + dy * dy, key = gy * GRID_W + gx;
-            if (rank === bestRank && (d2 > bestD2 || (d2 === bestD2 && key > bestKey))) continue;
-            if (!isGameplayTargetVisibleToPlayer(unit.owner, gx, gy)) continue;
-            best = target; bestRank = rank; bestD2 = d2; bestKey = key;
-        }
-    }
-    return best;
-}
-
-// Closest visible hostile cell item within range of the unit's tile window.
-// Visits the same tiles in the same row-major order as a scan of every tile
-// in the window (strictly nearer wins, so ties keep the earlier tile), but
-// only tiles that hold an item. `kind` limits it to traps (those on the
-// unit's route first) or to everything else.
-function _findClosestHostileCellItem(unit, range, kind = null) {
-    let rTiles = Math.ceil(range / TILE) + 1;
-    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
-    let minGx = Math.max(0, ugx - rTiles), maxGx = Math.min(GRID_W - 1, ugx + rTiles);
-    let minGy = Math.max(0, ugy - rTiles), maxGy = Math.min(GRID_H - 1, ugy + rTiles);
-    let closest = null, closestD = range, closestOnRoute = false;
-    let items = getCellItemsRowMajor();
-    for (let i = findCellItemRowStart(items, minGy); i < items.length; i++) {
-        let item = items[i], gx = item.gx, gy = item.gy;
-        if (gy > maxGy) break;
-        if (gx < minGx || gx > maxGx) continue;
-        if (kind && (kind === 'trap') !== isTrapItem(item)) continue;
-        let cell = grid[gy][gx];
-        if (!cell || cell.item !== item || cell.owner === unit.owner) continue;
-        if (!isGameplayTargetVisibleToPlayer(unit.owner, gx, gy)) continue;
-        if (item.energy <= 0 || item.underConstruction) continue;
-        let d = detHypot(item.x - unit.x, item.y - unit.y);
-        if (d >= range) continue;
-        let onRoute = kind === 'trap' && _isTileOnUnitRoute(unit, gx, gy);
-        if (closestOnRoute && !onRoute) continue;
-        if ((onRoute && !closestOnRoute) || d < closestD) { closestD = d; closest = item; closestOnRoute = onRoute; }
-    }
-    return closest;
-}
-
-// Structure an idle or attack-moving unit engages on its own, by threat:
-// turrets, traps (those on its route first), barracks and spawners, then any
-// other building. Within a class the nearest visible one in range.
-function _findAutoStructureTarget(unit, range) {
-    if(areaSearchEnabled())return _findHostileStructureInAttackRange(unit);
-    // Every scan below stays within this tile window of the unit.
-    let reach = Math.ceil(range / TILE) + 1;
-    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
-    if (!hasHostileStructureInTileRect(unit.owner, ugx - reach, ugy - reach, ugx + reach, ugy + reach)) return null;
-    return _findClosestHostileStructure(unit, towers, range)
-        || _findClosestHostileCellItem(unit, range, 'trap')
-        || _findClosestHostileStructure(unit, barracks, range, collectorSpawners)
-        || _findClosestHostileCellItem(unit, range, 'other');
-}
-
-function _findNearbyCombatEnemy(unit, range) {
-    let closest = null, best = areaSearchEnabled()?Infinity:range * range;
-    // This refresh is already staggered by the caller. Do not use the older
-    // once-per-second chunk query, whose stagger can miss this cadence forever.
-    // (Enemies where they were at the pass's start: _unitTickX.)
-    const visit=(enemy,d2)=>{
-        if (enemy.dead || enemy.owner === unit.owner || !_isUnitVisibleAtTickStart(unit.owner, enemy)) return;
-        if (d2 < best || (d2 === best && (!closest || enemy.id < closest.id))) {
-            closest = enemy; best = d2;
-        }
-    };
-    const opts={enemyOfPlayer:unit.owner,tickStart:true};
-    if(areaSearchEnabled())forEachUnitInAreaRange(unit.x,unit.y,range/(TILE*AREA_UNIT_TILE_EQUIVALENT),enemy=>{
-        const dx=_unitTickX(enemy)-unit.x,dy=_unitTickY(enemy)-unit.y;return visit(enemy,dx*dx+dy*dy);
-    },opts);
-    else forEachUnitInRange(unit.x,unit.y,range,visit,opts);
-    return closest;
-}
-
-// Whether any enemy unit or hostile structure may be within `steps` area
-// steps of `area` (conservative: whole blocks and area boxes), for `owner`.
-// Cached for the tick: units of a crowd share their areas. A unit's +-0.3
-// tile window reaches at most one area further than its own, which callers
-// add to `steps`.
-let _hostileNearCache = new Map(), _hostileNearCacheTick = -1, _hostileNearCacheFor = null;
-const _hostileNearSource = [0];
 // A worker's command from its state: the moving states move it (the
 // movement state machine runs for them this tick), the working and idle
 // ones stand.
@@ -308,52 +26,18 @@ function _workerSyncCommand(u) {
     if (_WORKER_MOVING_CMD_STATES.has(ws)) u.commandState = CMD_MOVING;
     else if (_WORKER_STANDING_CMD_STATES.has(ws)) u.commandState = CMD_IDLE;
 }
-// The end of Unit.update (and of the kernel outputs' commits that stand for
-// one): pushed out of a blocked tile, quantized, indexed, the drive-by shot
-// of a unit that was on the move, armed again for the kernels.
-// (Unit separation runs for all units at once after the updates,
-// runUnitSeparationPass.)
-function _unitUpdateEnd(u, cols, driveBy) {
-    pushUnitOutOfBlockedTile(u);
-    u.x = _quantizeUnitWorldCoord(u.x);
-    u.y = _quantizeUnitWorldCoord(u.y);
-    updateUnitSpatial(u);
-    if (driveBy) u.tryDriveByAttack();
-    if (cols) _unitArmAgain(u, cols);
-}
+// A worker after its event, unarmed (its AI changed what it does): armed or
+// parked for the movement kernel again. (Every other unit is the kernel's
+// controller's, mv.rs ctl.)
 function _unitArmAgain(u, cols) {
+    if (!u.workerState) return;
     const cmd = u.commandState;
-    // (Not a worker: the flow columns a structure instruction took are its own again, mv.rs resume_order.)
-    if (!u.workerState) cols.mvWk[u._si] = 0;
     // (A worker at its task standing out its cooldown, whatever its command.)
-    if (u.workerState && u.workerState !== 'MANUAL_MOVE' && u.workerTransferCooldown > 0) { simMoveTryParkWork(u); if (cols.mvOn[u._si] !== 0) return; }
-    if ((cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) && !u.holdPosition && simMoveTryParkRoute(u, cmd)) return;
-    if (cmd === CMD_MOVING || cmd === CMD_ATTACK_MOVING) { if (u.holdPosition) simMoveTryParkHeld(u, cmd); else simMoveTryArm(u); }
-    else if (cmd === CMD_IDLE && u.workerState && u.workerTransferCooldown > 0) simMoveTryParkWork(u);
+    if (u.workerState !== 'MANUAL_MOVE' && u.workerTransferCooldown > 0) { simMoveTryParkWork(u); if (cols.mvOn[u._si] !== 0) return; }
+    if (cmd === CMD_MOVING && !u.holdPosition && simMoveTryParkRoute(u, cmd)) return;
+    if (cmd === CMD_MOVING) { if (u.holdPosition) simMoveTryParkHeld(u, cmd); else simMoveTryArm(u); }
+    else if (cmd === CMD_IDLE && u.workerTransferCooldown > 0) simMoveTryParkWork(u);
     else if (cmd === CMD_IDLE && u.workerState === 'IDLE') simMoveTryPark(u);
-    else if (cmd === CMD_IDLE && !u.workerState) simMoveTryParkIdle(u);
-    else if (cmd === CMD_ATTACKING) {
-        if (u.holdPosition) { simMoveTryParkHeldAttacker(u); return; }
-        simMoveTryHold(u);
-        const on = cols.mvOn[u._si];
-        if (on !== 3 && on !== 5) { simMoveTryChase(u); if (cols.mvOn[u._si] !== 4) _simMoveTryApproachBuilding(u); }
-    }
-}
-function _hostilesPossibleNearArea(owner, area, steps) {
-    if (!(area >= 0)) return true;
-    if (_hostileNearCacheTick !== gameTime || _hostileNearCacheFor !== areaIdsWithinDistance) {
-        _hostileNearCache.clear(); _hostileNearCacheTick = gameTime; _hostileNearCacheFor = areaIdsWithinDistance;
-    }
-    if (steps > 63) steps = 63;
-    let key = (area * 64 + steps) * 64 + (owner & 63);
-    let hit = _hostileNearCache.get(key);
-    if (hit !== undefined) return hit;
-    _hostileNearSource[0] = area;
-    let box = getAreaRangeTileBox(_hostileNearSource, steps), cs = CHUNK_SIZE;
-    let possible = box[2] >= 0 && (_regionMayHaveEnemyUnits(owner, Math.floor(box[0] / cs), Math.floor(box[1] / cs), Math.floor(box[2] / cs), Math.floor(box[3] / cs))
-        || hasHostileStructureInTileRect(owner, box[0], box[1], box[2], box[3]));
-    _hostileNearCache.set(key, possible);
-    return possible;
 }
 
 function _quantizeUnitWorldCoord(value) {
@@ -370,92 +54,233 @@ function _getUnitAttackRangeArea(unit) {
 // Extra reach, beyond the collision distance, at which bodies count as touching.
 const UNIT_CONTACT_ATTACK_MARGIN = TILE * 0.25;
 
-// (The target at (tx, ty): by default where it is.)
-// Arriving in a crowd (Unit._followNavNode and the movement kernel's flow
-// mode): within this many tiles of a group's destination, a unit held back
-// beside an idle unit of its own owner has arrived.
-const NAV_CROWD_TILES = 64;
-function _unitCrowdIdleNear(u) {
-    const c = u._us;
-    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] !== 0;
-}
-// Beside its idle (arrived) units (cwNear 2; 1: only waiting ones) of its
-// destination and NAV_CROWD_FULL or more units listed in its 3x3
-// tiles (about packed: ~2.5 a tile): a full crowd (mv.rs SIM_CROWD_FULL).
-const NAV_CROWD_FULL = 18;
-function _unitCrowdFull(u) {
-    const c = u._us;
-    return !!c && c.cwTick[u._si] === gameTime && c.cwNear[u._si] === 2 && c.cwDense[u._si] >= NAV_CROWD_FULL;
-}
-// Fewer than 9 units listed in its 3x3 tiles at the tick's start: a waiting
-// unit goes on.
-function _unitCrowdThin(u) {
-    const c = u._us;
-    return !!c && c.cwTick[u._si] === gameTime && c.cwDense[u._si] < 9;
-}
-
-function _isTargetWithinUnitAttackAreaRange(unit, target, tx = target && target.x, ty = target && target.y) {
-    if (!unit || !target) return false;
-    let rangeArea = Math.max(0, Number(_getUnitAttackRangeArea(unit)) || 0);
-    if(areaSearchEnabled())return isWorldTargetWithinAreaRange(unit.x,unit.y,tx,ty,rangeArea);
-    if (isWorldTargetWithinAreaRange(unit.x, unit.y, tx, ty, Math.floor(rangeArea))) return true;
-    return _isUnitTargetInContactAt(unit, target, tx, ty, Math.floor(rangeArea) + 1);
-}
-
-// Where another unit is during the unit pass: its position at the pass's
-// start (x0, y0), whatever it has done since. Every unit's decisions read
-// others there, so they do not depend on who went first; and the kernels
-// (which run before the pass) decide exactly as Unit.update would.
-// (Outside the pass, where it is.)
+// Where another unit is during the movement kernel and the unit events: its
+// position at the tick's start (x0, y0), whatever it has done since: what
+// is decided does not depend on who went first. (Outside, where it is.)
 let _unitPassOn = false;
-// One unit of the pass: its update, then (one the movement kernel left to
-// it) whether it moved by itself, for the next separation (unit.sepMov; the
-// kernel's epilogue sets the others').
-function _unitPassUpdate(u) {
-    const c = u._us, s = u._si;
-    const deferred = c && c.mvOut[s] === 0;
-    const startX = u.x, startY = u.y;
-    u.update();
-    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) return;
-    if (deferred) {
-        const mx = u.x - startX, my = u.y - startY;
-        // Its step's part into the overlap pressure braked under compression,
-        // as the kernel brakes its own units' (mv.rs push4, SEP_BRAKE0/1;
-        // the sums are this update's, the kernel's epilogue read them).
-        // Not carried by its neighbourhood's flow: the whole step braked so.
-        // (Sampled this update: from its sums; else the brake it carries,
-        // sepMov bits 5-7, which the kernel's epilogue kept.)
-        const S = _sep, hits = S.hit ? S.hit[s] : 0;
-        if (mx || my) {
-            const ml = Math.sqrt(mx * mx + my * my);
-            let bb = ((c.sepMov[s] >> 5) & 7) / 7, b = 0, dx = 0, dy = 0;
-            if (hits > 0) {
-                const depth = S.ov[s], px = S.px[s], py = S.py[s];
-                b = depth > 0 ? Math.min(1, Math.max(0, (depth / Math.max(1, u.collisionR || u.r || 1) - 0.6) / 0.6)) : 0;
-                const ih = 1 / (UNIT_SEPARATION_Q * hits), fx = (S.fx ? S.fx[s] : 0) * ih, fy = (S.fy ? S.fy[s] : 0) * ih;
-                const fl = Math.sqrt(fx * fx + fy * fy) * simDk;
-                const a = Math.max(0, (mx * fx + my * fy) * simDk / Math.max(1e-6, ml * fl)) * Math.min(1, fl / Math.max(1e-6, ml * 0.3));
-                // (Near its destination travel converges: not carried there.)
-                const tp = u.targetPos, nld = c.mvNavLD[s];
-                const converging = (nld >= 0 && nld < SEP_GOAL_TILES * TILE) || (tp && Math.abs(tp.x - u.x) < SEP_GOAL_TILES * TILE && Math.abs(tp.y - u.y) < SEP_GOAL_TILES * TILE);
-                bb = b * (1 - (converging ? 0 : a));
-                c.sepMov[s] = (c.sepMov[s] & 31) | (Math.round(bb * 7) << 5);
-                const pl = Math.sqrt(px * px + py * py);
-                if (pl > 0 && b > 0) { const ux = px / pl, uy = py / pl, into = -(mx * ux + my * uy); if (into > 0) { dx += ux * into * b * (1 - bb); dy += uy * into * b * (1 - bb); } }
-            }
-            else c.sepMov[s] &= 31;
-            dx -= mx * bb; dy -= my * bb;
-            if (dx || dy) { u.x += dx; u.y += dy; updateUnitSpatial(u); }
-            // (Its movement as committed, for the next sample, as the
-            // kernel's: its step less the brakes.)
-            const k = 256 / Math.max(1, simDk), q = v => Math.max(-32767, Math.min(32767, Math.round(v * k) || 0));
-            c.sepIv[s] = (q(mx + dx) << 16) | (q(my + dy) & 0xFFFF);
+// The unit events (mv.rs EV_*, unit.mvEv): what the movement kernel leaves to
+// this thread, listed after it by SIM_KERNEL_UNIT_EVENTS and handled here in
+// O(events) (unitEventsRun): a floor item it cannot apply (a mine), no way on
+// (a pending target), a wait for a way that ended near its target, a unit not
+// in the unit index, a worker's AI look on its way; and every worker the
+// kernel does not move (no output: its way's end, a wake, idle): its AI.
+const UNIT_EV_FLOOR = 1, UNIT_EV_NOWAY = 2, UNIT_EV_WAITED = 3, UNIT_EV_SPATIAL = 4, UNIT_EV_CHECK = 5;
+const UNIT_EVENTS_PER_JOB = 8192, UNIT_DEAD_PER_JOB = 4096;
+// Worker events a tick (a worker with its way done, or idle: an arrival, a
+// payment, a delivery, a new way: 15-30 us of AI each): at most this many,
+// in the events' order (by a hash of the tick and the unit's id: who waits
+// changes every tick); the others stand a tick and come again. Workers on
+// their way are never held back (no stutter). The brains may lag; the tick
+// may not: a chaos scenario's 13k workers a team made 300-500 events a tick
+// (7-12 ms).
+const WORKER_EVENTS_PER_TICK = 240;
+// (A step of several base ticks: their budget, the events a second as at one
+// a step. The events left: a worker arriving within its event takes one too.)
+let _workerEventsLeft = Infinity;
+function _isWorkerEvent(u) {
+    const ws = u.workerState;
+    if (!ws) return false;
+    if (ws === 'IDLE') return true;
+    const p = u.path;
+    return !p || u.pathIndex >= p.length;
+}
+// A worker event past the tick's budget (the q-th): parked (the movement
+// kernel stands it) until the tick its turn comes.
+function _simParkEventWait(u, q) {
+    const c = u._us;
+    if (!c || u.holdPosition) return;
+    const s = u._si;
+    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
+    c.mvWake[s] = gameTime + 1 + Math.floor(q / WORKER_EVENTS_PER_TICK); c.mvFlags[s] = 0; c.mvReach[s] = 0;
+    c.mvOn[s] = 2;
+}
+// The events' order: a hash of the tick and the id (21 bits), then the id:
+// the same on every peer (slots are each peer's own).
+function _unitEvOrderKey(t, id) {
+    let h = Math.imul((t | 0) ^ 0x2545f491, 0x9e3779b1) ^ Math.imul((id | 0) + 0x632be5ab, 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 15), 0xc2b2ae35);
+    h ^= h >>> 13;
+    return (h >>> 11) * 2147483648 + ((id | 0) & 0x7fffffff);
+}
+let _unitEvList = null, _unitEvCnt = null, _unitEvKey = new Float64Array(1024), _unitEvEnt = new Int32Array(1024), _unitEvOrd = new Uint32Array(1024);
+// (Events of no kind for a unit that is not a worker: none expected; counted.)
+let unitEventsStray = 0;
+function unitEventsRun() {
+    const S = _simUnitState;
+    if (!S) return;
+    const ns = S.owners.length;
+    if (!ns) return;
+    const c = S.columns, owners = S.owners, per = UNIT_EVENTS_PER_JOB, chunks = Math.ceil(ns / per);
+    if (!_unitEvList || _unitEvList.length < chunks * per) { _unitEvList = simSharedArray(Int32Array, simReserveCap(chunks * per, 8192)); simParallelBind('ev.list', _unitEvList); }
+    if (!_unitEvCnt || _unitEvCnt.length < chunks) { _unitEvCnt = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('ev.cnt', _unitEvCnt); }
+    const P = _simParams;
+    P[0] = ns; P[1] = per;
+    simParallelRun(SIM_KERNEL_UNIT_EVENTS, chunks);
+    const L = _unitEvList, CNT = _unitEvCnt;
+    let n = 0;
+    for (let k = 0; k < chunks; k++) n += CNT[k];
+    if (n > 0) {
+        if (_unitEvKey.length < n) { const m = simReserveCap(n, 1024); _unitEvKey = new Float64Array(m); _unitEvEnt = new Int32Array(m); _unitEvOrd = new Uint32Array(m); }
+        const K = _unitEvKey, E = _unitEvEnt;
+        let j = 0;
+        for (let k = 0; k < chunks; k++) for (let i = k * per, e = i + CNT[k]; i < e; i++) {
+            const ent = L[i], u = owners[ent >> 3];
+            if (!u || u._si !== ent >> 3) continue;
+            K[j] = _unitEvOrderKey(gameTime, u.id); E[j] = ent; j++;
         }
-        c.sepMov[s] = (c.sepMov[s] & 254) | (mx !== 0 || my !== 0 ? 1 : 0);
-        // Include the separation already applied by the kernel in this tick's
-        // interpolation, instead of overwriting its origin in Unit.update.
-        u.prevX = c.x0[s] * 0.125; u.prevY = c.y0[s] * 0.125;
+        const ord = _unitEvOrd.subarray(0, j);
+        for (let i = 0; i < j; i++) ord[i] = i;
+        ord.sort((a, b) => K[a] - K[b]);
+        _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
+        let over = 0;
+        try {
+            for (let i = 0; i < j; i++) {
+                const ent = E[ord[i]], s = ent >> 3, u = owners[s];
+                if (!u || u.dead) continue;
+                // (Where it stood, for its interpolation, unless the kernel moved it.)
+                if (c.mvOut[s] === 0) { c.prevX[s] = c.x[s]; c.prevY[s] = c.y[s]; }
+                if (u.workerState && c.mvOut[s] === 0 && _isWorkerEvent(u)) {
+                    if (_workerEventsLeft <= 0) { _simParkEventWait(u, over++); continue; }
+                    _workerEventsLeft--;
+                }
+                _unitEvent(u, c, s, ent & 7);
+            }
+        } finally { _workerEventsLeft = Infinity; }
     }
+    // (Those whose energy ran out: dead now.)
+    P[0] = ns; P[1] = UNIT_DEAD_PER_JOB;
+    simParallelRun(SIM_KERNEL_DEAD_MARK, Math.ceil(ns / UNIT_DEAD_PER_JOB));
+    // (And those on a tile that became a wall this tick.)
+    simPassWallFixups(S);
+}
+// One unit's event (code: mv.rs EV_*; 0 a worker the kernel left).
+function _unitEvent(u, c, s, code) {
+    if (code === UNIT_EV_FLOOR && _unitFloorEvent(u)) return;
+    if (u.workerState) { _unitWorkerEvent(u, c, s, code); return; }
+    if (code === UNIT_EV_NOWAY) _unitNoWay(u);
+    else if (code === UNIT_EV_WAITED) _unitWaitEnded(u);
+    else if (code === UNIT_EV_SPATIAL) {
+        pushUnitOutOfBlockedTile(u);
+        u.x = _quantizeUnitWorldCoord(u.x); u.y = _quantizeUnitWorldCoord(u.y);
+        updateUnitSpatial(u);
+    } else if (code === 0) unitEventsStray++;
+}
+// A hostile floor item under the unit that the kernel cannot apply (a mine,
+// or a trap it has no table for): applied (on entering its tile, then once a
+// second). True: a mine went off (nothing else for the unit this tick).
+function _unitFloorEvent(u) {
+    const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+    if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return false;
+    u._floorTile = gy * GRID_W + gx;
+    const cell = grid[gy][gx], item = cell.item;
+    if (!item || cell.owner === u.owner || item.underConstruction) return false;
+    const itemLevel = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
+    switch (item.type) {
+        case 'sand': applyStatusEffect(u, 'sand', itemLevel, 0, item.owner, item.type); break;
+        case 'lava': applyStatusEffect(u, 'fire', itemLevel, item.damage || 1, item.owner, item.type); break;
+        case 'poison_puddle': applyStatusEffect(u, 'poison', itemLevel, item.damage || 1, item.owner, item.type); break;
+        case 'ice_patch': applyStatusEffect(u, 'ice', itemLevel, item.damage || 1, item.owner, item.type); break;
+        case 'water_puddle': applyStatusEffect(u, 'water', itemLevel, 0, item.owner, item.type); break;
+        case 'mine': u._explodeMine(cell, item, itemLevel); return true;
+    }
+    return false;
+}
+// The unit's speed this tick (Unit.update's: frozen, sandy half).
+function _unitSpeedNow(u) {
+    let spd = Math.fround(u.preComputed.speed * _getUnitAstarSpeedMultiplier(u));
+    if (u.frozen > 0) spd *= 0.5;
+    if (u.sandy > 0) spd *= 0.5;
+    return spd;
+}
+// No way on to its path's node (the flow found none): it has not arrived. It
+// keeps its target (a pending one) and heads for the closest tile it can
+// reach (the helpers' answer, see _tryUpgradeAstarFallbackPath); walled in,
+// it stands (the controller parks it waiting: mv.rs park_route).
+function _unitNoWay(u) {
+    const p = u.path, nd = p && u.pathIndex < p.length ? p[u.pathIndex] : null;
+    if (!nd) return;
+    let pt = u._pendingPathTarget;
+    if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
+    else pt = u._pendingPathTarget = { gx: nd.x, gy: nd.y, cmd: u.commandState, src: 'nav_unreachable' };
+    u.path = null; u.pathIndex = 0; u._routeKey = null; u.pathIsFallbackAstar = true;
+    navPathSubstitute(u, Math.floor(u.x / TILE), Math.floor(u.y / TILE), pt);
+    notePendingPathUnit(u);
+}
+// A unit waiting for its way (a pending target) near its issued target (the
+// controller's look): its way once more, else the order ends where it stands.
+function _unitWaitEnded(u) {
+    if (u.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(u);
+    if ((u.path && u.pathIndex < u.path.length) || !u._pendingPathTarget) return;
+    u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u.targetPos = null; u.path = null;
+    if (u.commandState === CMD_ATTACK_MOVING) u._attackMoveGx = u._attackMoveGy = null;
+    u.commandState = CMD_IDLE;
+}
+// A worker the kernel left to this thread (its way's end, a wake, idle, no
+// way on; or its AI's look on its way, moved by the kernel): its AI, as
+// Unit.update ran it, without a step of its own (the kernel moves it, armed
+// again here when its AI changed what it does).
+function _unitWorkerEvent(u, c, s, code) {
+    const moved = c.mvOut[s] !== 0;
+    updateWorkerAI(u);
+    _workerSyncCommand(u);
+    // (A worker whose way ends here: its arrival is its AI's at once, below.)
+    const wkLeft = u.workerState && u.path ? u.path.length - u.pathIndex : 0;
+    if (!moved && u.commandState === CMD_MOVING) _unitWorkerWayEnd(u, code);
+    if (wkLeft > 0 && u.workerState && !u.dead && !(u.path && u.pathIndex < u.path.length) && _workerEventsLeft > 0) {
+        _workerEventsLeft--;
+        updateWorkerAI(u);
+        _workerSyncCommand(u);
+    }
+    if (!u.dead && c.mvOn[s] === 0) _unitArmAgain(u, c);
+}
+// A moving worker the kernel handed back (Unit.doMoving without its step):
+// at its way's node, the node passed; no way on, at its task (a tile from it)
+// done there, else (sent by the player) a pending target; its way done, the
+// move ends (a pending target near its issued target too).
+function _unitWorkerWayEnd(u, code) {
+    const pt0 = u._pendingPathTarget;
+    if ((!u.path || u.pathIndex >= u.path.length) && pt0 && pt0.cmd === CMD_MOVING) {
+        if (u.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(u);
+        const pt = u._pendingPathTarget;
+        if ((!u.path || u.pathIndex >= u.path.length) && pt && pt.cmd === CMD_MOVING && u._isNearIssuedTarget(_unitSpeedNow(u))) {
+            u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u.targetPos = null; u.commandState = CMD_IDLE;
+        }
+        return;
+    }
+    // (Held: it keeps its way and its progress.)
+    if (u.holdPosition) return;
+    const p = u.path;
+    if (p && u.pathIndex < p.length) {
+        const nd = p[u.pathIndex];
+        if (!nd.nav) return;
+        const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        if (gx === nd.x && gy === nd.y) { u.pathIndex++; u._navLastD = -1; }
+        else if (code === UNIT_EV_NOWAY) {
+            if (u.workerState === 'MANUAL_MOVE') { _unitNoWay(u); return; }
+            if (Math.abs(nd.x - gx) > 1 || Math.abs(nd.y - gy) > 1) return;
+            u.pathIndex = p.length;
+        } else return;
+        if (u.pathIndex < p.length) return;
+    }
+    const pt = u._pendingPathTarget;
+    if (pt && pt.cmd === CMD_MOVING) {
+        u.path = null;
+        if (u._isNearIssuedTarget(_unitSpeedNow(u))) { u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u.targetPos = null; u.commandState = CMD_IDLE; }
+        return;
+    }
+    u.commandState = CMD_IDLE; u.path = null; u.targetPos = null;
+}
+// A unit given an attack order (main.js processAction 'attack' and
+// 'attackBuilding', its target set after): attacking, no way of its own, no
+// wait, no attack-move; the movement kernel follows the order from its target
+// columns (mv.rs forced).
+function unitAttackOrder(u) {
+    u.commandState = CMD_ATTACKING;
+    u._attackMoveGx = u._attackMoveGy = null;
+    u.path = null; u.pathIndex = 0; u._routeKey = null;
+    u._pendingPathTarget = null; u.pathIsFallbackAstar = false;
+    const c = u._us;
+    if (c) { const s = u._si; c.cmMode[s] = 0; c.mvOn[s] = 0; c.mvWk[s] = 0; }
 }
 function unitPassBegin() { _unitPassOn = true; spatialCountsDeferBegin(); astarPassStart(); }
 function unitPassEnd() {
@@ -476,6 +301,41 @@ function _unitTickDead(t) { const c = t._us; return c && _unitPassOn && _simDead
 // Units whose target was set before the target had a slot (a restore): the slots are found before the state hash (its kernel reads
 // them: a target counts there by its slot).
 let _tuPending = [];
+// Targets set during a decode (unit, target pairs): a new unit's shell has its
+// id only once its row is filled, so each is taken again at the decode's end.
+let _tuDecoded = [], _tbDecoded = [];
+function simUnitTargetsDecoded() {
+    // (A structure's shell has its tile once its row is filled too.)
+    const bl = _tbDecoded;
+    _tbDecoded = [];
+    for (let i = 0; i < bl.length; i += 2) { const u = bl[i], c = u._us; if (c && c.acqB[u._si] && c.tbT[u._si] < 0) u.targetBuilding = bl[i + 1]; }
+    const list = _tuDecoded;
+    _tuDecoded = [];
+    for (let i = 0; i < list.length; i += 2) {
+        const u = list[i], t = list[i + 1], c = u._us;
+        if (!c) continue;
+        const s = u._si;
+        // (Only while it is still the unit's target: a later row may have set another.)
+        if (c.tuId[s] === 0 || (c.tuS[s] >= 0 ? _simUnitState.owners[c.tuS[s]] !== t : false)) continue;
+        u.targetUnit = t;
+    }
+    // Every unit's target slot from its id: a patch makes some units anew (in
+    // other slots), and the units it does not carry still name their old
+    // slots (the state hash reads a target by its slot).
+    const S = _simUnitState;
+    if (!S) return;
+    const c = S.columns, owners = S.owners;
+    for (const u of units) {
+        if (!u || u._us !== c) continue;
+        const s = u._si, id = c.tuId[s];
+        if (id === 0) continue;
+        const q = c.tuS[s];
+        if (q >= 0 && owners[q] && (owners[q].id | 0) === id) continue;
+        const t = getUnitById(id);
+        c.tuS[s] = t && t._us === c && t._si >= 0 ? t._si : -1;
+        if (c.tuS[s] < 0) _tuPending.push(u);
+    }
+}
 function simUnitTargetsResolve() {
     if (!_tuPending.length) return;
     const list = _tuPending;
@@ -491,34 +351,7 @@ function simUnitTargetsResolve() {
 }
 function _thingTickX(t) { return t instanceof Unit ? _unitTickX(t) : t.x; }
 function _thingTickY(t) { return t instanceof Unit ? _unitTickY(t) : t.y; }
-// Whether `player` sees the tile unit t stood on at the pass's start (a
-// thing with a tile of its own, gx/gy: that tile, as _isHostileThingVisibleToUnit).
-function _isUnitVisibleAtTickStart(player, t) {
-    const gx = Number.isFinite(t.gx) ? Math.floor(t.gx) : Math.floor(_unitTickX(t) / TILE);
-    const gy = Number.isFinite(t.gy) ? Math.floor(t.gy) : Math.floor(_unitTickY(t) / TILE);
-    return isGameplayTargetVisibleToPlayer(player, gx, gy);
-}
 
-function _isUnitTargetInContactAt(unit, target, tx, ty, maxAreaDistance) {
-    if (!(target instanceof Unit) || _unitTickDead(target) || !(unit.preComputed.attackDamage > 0)) return false;
-    if(areaSearchEnabled())return isWorldTargetWithinAreaRange(unit.x,unit.y,tx,ty,maxAreaDistance);
-    let dx = tx - unit.x, dy = ty - unit.y;
-    let reach = unit.getCollisionRadius() + target.getCollisionRadius()
-        + Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
-    if (dx * dx + dy * dy > reach * reach) return false;
-    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
-    let tgx = Math.floor(tx / TILE), tgy = Math.floor(ty / TILE);
-    let sx = tgx - ugx, sy = tgy - ugy;
-    if (Math.abs(sx) > 1 || Math.abs(sy) > 1) return false;
-    if (sx !== 0 && sy !== 0) {
-        // (The walls as the movement kernel has them: during the unit pass,
-        // as at its start, see simMoveWallGrid.)
-        const wall = simMoveWallGrid();
-        const in1 = tgx >= 0 && tgx < GRID_W && ugy >= 0 && ugy < GRID_H, in2 = ugx >= 0 && ugx < GRID_W && tgy >= 0 && tgy < GRID_H;
-        if ((!in1 || wall[ugy * GRID_W + tgx]) && (!in2 || wall[tgy * GRID_W + ugx])) return false;
-    }
-    return isWorldTargetWithinAreaRange(unit.x, unit.y, tx, ty, maxAreaDistance);
-}
 
 // V8 marks a field that no object of a shape has rewritten as constant;
 // the first rewrite (say, the first move order setting _pendingPathTarget)
@@ -558,9 +391,6 @@ function _maxUnitCollisionRadius() {
     return _maxUnitCollisionRadiusCache;
 }
 
-// Scouts explore toward the centres of a grid of at most this many cells a
-// side (Unit.pickScoutDestination): a flow field a destination.
-const SCOUT_TARGET_CELLS = 32;
 class Unit {
     constructor(unitType, owner, x, y) {
         simUnitStateAllocate(this, x, y);
@@ -806,7 +636,7 @@ class Unit {
     set targetBuilding(v) {
         const c = this._us;
         if (c === undefined) { Object.defineProperty(this, '_tbv', { value: v, writable: true, configurable: true }); return; }
-        if (c) { const s = this._si; c.tbT[s] = v && Number.isInteger(v.gx) && Number.isInteger(v.gy) ? v.gy * GRID_W + v.gx : -1; c.acqB[s] = v ? 1 : 0; }
+        if (c) { const s = this._si; c.tbT[s] = v && Number.isInteger(v.gx) && Number.isInteger(v.gy) ? v.gy * GRID_W + v.gx : -1; c.acqB[s] = v ? 1 : 0; if (v && typeof _snapDec !== 'undefined' && _snapDec !== null) _tbDecoded.push(this, v); }
         else if (this._det) this._det.targetBuilding = v;
     }
     // Its issued target position (mvTgX / mvTgY, NaN none: the movement kernels' arrival tolerance reads them) and its route key (rkF).
@@ -856,7 +686,7 @@ class Unit {
         if (c === undefined) { Object.defineProperty(this, '_tuv', { value: v, writable: true, configurable: true }); return; }
         if (c) {
             const s = this._si;
-            if (v) { const q = v._us === c && v._si >= 0 ? v._si : -1; c.tuS[s] = q; c.tuId[s] = v.id | 0; if (q < 0) _tuPending.push(this); }
+            if (v) { const q = v._us === c && v._si >= 0 ? v._si : -1; c.tuS[s] = q; c.tuId[s] = v.id | 0; if (q < 0) _tuPending.push(this); if (typeof _snapDec !== 'undefined' && _snapDec !== null) _tuDecoded.push(this, v); }
             else { c.tuS[s] = -1; c.tuId[s] = 0; }
         }
         else if (this._det) this._det.targetUnit = v;
@@ -993,123 +823,6 @@ class Unit {
         return Math.max(0.1, Number(this.collisionR) || Number(this.r) || 0.1);
     }
 
-    pickScoutDestination() {
-        if (Number.isFinite(this._nextScoutRetargetTick) && gameTime < this._nextScoutRetargetTick) return;
-        let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-        // (Its own draws, by tick and id: no shared sequence.)
-        // (The centre of a cell of a grid of at most SCOUT_TARGET_CELLS a side:
-        // every destination is a flow field, and 100k scouts each heading
-        // for a tile of their own asked for 100k fields (~400 MB) at once.)
-        const step = Math.max(1, Math.ceil(Math.max(GRID_W, GRID_H) / SCOUT_TARGET_CELLS));
-        let rgx = Math.floor(simHashRand(gameTime, this.id, 1) * Math.ceil(GRID_W / step)) * step + (step >> 1);
-        let rgy = Math.floor(simHashRand(gameTime, this.id, 2) * Math.ceil(GRID_H / step)) * step + (step >> 1);
-        rgx = Math.max(0, Math.min(GRID_W - 1, rgx));
-        rgy = Math.max(0, Math.min(GRID_H - 1, rgy));
-        this._scoutTarget = { gx: rgx, gy: rgy };
-        if (_canUsePathfindRequestBudget(this.owner, this)) {
-            _consumePathfindRequestBudget(this.owner, this);
-            this.path = _findPathForUnitTagged('scout_ai', this, ugx, ugy, rgx, rgy, true, null, this.owner);
-            this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-        } else {
-            this.path = _makeFallbackPathForUnit(this, ugx, ugy, rgx, rgy, CMD_MOVING, 'scout_ai');
-            this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-        }
-        this._nextScoutRetargetTick = gameTime + Math.max(8, Math.floor(TICK_RATE * 0.5));
-        this.commandState = CMD_MOVING;
-    }
-
-    update() {
-        // Moved by the movement kernel this tick (simMoveRun).
-        let cols = this._us;
-        if (cols && cols.mvOut[this._si] !== 0) return;
-        // (A forced target's last seen position the kernel wrote this tick
-        // before handing the unit back: as it was, doAttacking decides.)
-        if (cols && cols.fLsT[this._si] === gameTime) simForcedSeenUndo(cols, this._si);
-        // Previous position for interpolation and the collision pass.
-        this.prevX = this.x; this.prevY = this.y;
-        if (this.dead) return;
-
-        // (Status effects and attack timers: counted down for every unit at
-        // once before the pass, statusPrepassRun.)
-        if (this.energy <= 0) { this.dead = true; return; }
-
-        // Floor item interaction: on entering a tile, then refreshed once a
-        // second, staggered by unit (trap effects last seconds).
-        let gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE);
-        let floorTile = gy * GRID_W + gx;
-        if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && (floorTile !== this._floorTile || simStepCrosses(this.id, TICK_RATE))) {
-            this._floorTile = floorTile;
-            let cell = grid[gy][gx];
-            if (cell.item && cell.owner !== this.owner && !cell.item.underConstruction) {
-                let item = cell.item;
-                let itemLevel = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
-                if (item.type === 'sand') {
-                    applyStatusEffect(this, 'sand', itemLevel, 0, item.owner, item.type);
-                }
-                else if (item.type === 'lava') {
-                    applyStatusEffect(this, 'fire', itemLevel, item.damage || 1, item.owner, item.type);
-                }
-                else if (item.type === 'poison_puddle') {
-                    applyStatusEffect(this, 'poison', itemLevel, item.damage || 1, item.owner, item.type);
-                }
-                else if (item.type === 'ice_patch') {
-                    applyStatusEffect(this, 'ice', itemLevel, item.damage || 1, item.owner, item.type);
-                }
-                else if (item.type === 'water_puddle') {
-                    applyStatusEffect(this, 'water', itemLevel, 0, item.owner, item.type);
-                }
-                else if (item.type === 'mine') {
-                    this._explodeMine(cell, item, itemLevel);
-                    return;
-                }
-            }
-        }
-
-        // Speed modifier
-        let spd = Math.fround(this.preComputed.speed * _getUnitAstarSpeedMultiplier(this));
-        if (this.frozen > 0) spd *= 0.5;
-        if (this.sandy > 0) spd *= 0.5;
-
-
-        // Worker AI (collector/salvager units)
-        if (this.workerState) {
-            updateWorkerAI(this);
-            _workerSyncCommand(this);
-            // Workers still follow paths via the normal system
-        }
-        // (A worker whose path runs out in this step: its arrival is its AI's
-        // at once, below, not a whole update of the next tick; ~60 a tick of
-        // the mega scenario's healers.)
-        const wkLeft = this.workerState && this.path ? this.path.length - this.pathIndex : 0;
-
-        // State machine
-        // (A unit on the move shoots after its step, from where it stands
-        // then, with the drive-by look the helpers made this tick: the
-        // movement kernel moves it, and its turn only takes the shot,
-        // simDriveByFire.)
-        let driveBy = false;
-        switch (this.commandState) {
-            case CMD_IDLE: if (!this.workerState) this.doIdle(spd); break;
-            case CMD_MOVING:
-                driveBy = true;
-                this.doMoving(spd);
-                break;
-            case CMD_ATTACK_MOVING: this.doAttackMoving(spd); break;
-            case CMD_ATTACKING: this.doAttacking(spd); break;
-            case CMD_HOLDING:
-                // Legacy state from older snapshots: hold is now a flag.
-                this.holdPosition = true;
-                this.commandState = CMD_IDLE;
-                break;
-        }
-        if (wkLeft > 0 && this.workerState && !this.dead && !(this.path && this.pathIndex < this.path.length) && _workerEventsLeft > 0) {
-            _workerEventsLeft--;
-            updateWorkerAI(this);
-            _workerSyncCommand(this);
-        }
-        _unitUpdateEnd(this, cols, driveBy);
-    }
-
     // A hostile mine under the unit goes off (separate from update: its
     // closure's context would otherwise be allocated on every update).
     _explodeMine(cell, item, itemLevel) {
@@ -1135,33 +848,6 @@ class Unit {
         if (this.energy <= 0) this.dead = true;
     }
 
-    doIdle(spd) {
-        if (this.unitType === 'scout') {
-            this.pickScoutDestination();
-            return;
-        }
-        // Auto-aggro nearby enemies (the query staggers and caches itself;
-        // an outer stagger here could alias with it and never meet).
-        let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
-        // (On its acquisition ticks: _unitAcquireTick.)
-        let closest = _unitAcquireTick(this) ? _combatScanTarget(this, aggroRange) : null;
-        if (closest) {
-            this.targetUnit = closest;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-        // An engagement during attack-move ended: continue the attack-move
-        // (which also engages structures on the way). Routed by the budgeted
-        // tick-start resolver, together with units resuming to the same tile.
-        if (this._attackMoveGx != null && !this.holdPosition && !this.workerState) {
-            let gx = this._attackMoveGx, gy = this._attackMoveGy;
-            this.targetPos = { x: gx * TILE + 16, y: gy * TILE + 16 };
-            _makeFallbackPathForUnit(this, Math.floor(this.x / TILE), Math.floor(this.y / TILE), gx, gy, CMD_ATTACK_MOVING, 'ai_combat');
-            return;
-        }
-        // (Structures: the combat brain's, a structure instruction, cmMode 16.)
-    }
 
     // Within arrival tolerance of the issued move target.
     _isNearIssuedTarget(spd) {
@@ -1169,724 +855,6 @@ class Unit {
         if (!(t && Number.isFinite(t.x) && Number.isFinite(t.y))) return false;
         let tol = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
         return detHypot(Number(t.x) - Number(this.x), Number(t.y) - Number(this.y)) <= tol;
-    }
-
-    doMoving(spd) {
-        if (this.unitType === 'scout') {
-            if (this.path && this.pathIndex < this.path.length) {
-                if (this.followPath(spd)) {
-                    this.path = null;
-                    this.commandState = CMD_IDLE;
-                }
-            } else if (this._scoutTarget) {
-                let tx = this._scoutTarget.gx * TILE + 16;
-                let ty = this._scoutTarget.gy * TILE + 16;
-                let dx = tx - this.x, dy = ty - this.y;
-                let dist = detHypot(dx, dy) || 1;
-                if (this.holdPosition) {
-                    // Keep the destination until released.
-                } else if (dist <= Math.max(4, spd)) {
-                    this.commandState = CMD_IDLE;
-                } else {
-                    const st = simStepLen(spd, dist);
-                    this.x += (dx / dist) * st;
-                    this.y += (dy / dist) * st;
-                }
-            } else {
-                this.commandState = CMD_IDLE;
-            }
-            return;
-        }
-        if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
-            if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
-            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING && this._isNearIssuedTarget(spd)) {
-                this._pendingPathTarget = null;
-                this.pathIsFallbackAstar = false;
-                this.targetPos = null;
-                this.commandState = CMD_IDLE;
-            }
-            // Keep move command active while waiting for deferred pathfinding.
-            return;
-        }
-        if (this.followPath(spd)) {
-            // (The route's next stretch, walked from this tick as the kernel
-            // walks it.)
-            if (continueUnitRoute(this, CMD_MOVING)) { this._followRouteNode(spd); return; }
-            if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_MOVING) {
-                this.path = null;
-                if (this._isNearIssuedTarget(spd)) {
-                    this._pendingPathTarget = null;
-                    this.pathIsFallbackAstar = false;
-                    this.targetPos = null;
-                    this.commandState = CMD_IDLE;
-                }
-                return;
-            }
-            this.commandState = CMD_IDLE;
-            this.path = null;
-            this.targetPos = null;
-        }
-    }
-
-    tryDriveByAttack() {
-        // (The combat brain fires on the move: cmMode 3.)
-        if (SIM_COMBAT_BRAIN && !this.workerState) return;
-        if (this.workerState || this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
-        // Scanning on the move is staggered to every other tick (by unit id):
-        // a ready shot waits at most one tick.
-        if (!simStepCrosses(this.id, 2)) return;
-        // Marching through quiet ground (the common case): nothing hostile
-        // anywhere near the unit's area, answered once per tick per area.
-        if (!_hostilesPossibleNearArea(this.owner, this._spatialAreaId, Math.ceil(_getUnitAttackRangeArea(this)) + 1)) return;
-        this._driveByScan();
-    }
-
-    // The scan itself (a separate method: its closure's context would
-    // otherwise be allocated on every call of tryDriveByAttack).
-    _driveByScan() {
-        let closest = null;
-        let bestD2 = Infinity;
-        // Attack ranges are whole area steps. A unit's bucket area is its
-        // tile's area, so the coverage answers visibility per area.
-        let rangeArea = _getUnitAttackRangeArea(this);
-        let cover = _visCoverReady() && this.owner >= 0 && this.owner < _visCover.players ? _visCover.cover[this.owner] : null;
-        // Use only simulation state. Pick by distance, then unit id, independent of
-        // spatial bucket insertion order on different lockstep peers.
-        forEachUnitInAreaRange(this.x, this.y, rangeArea, (enemy, areaId) => {
-            if (cover ? !(cover[areaId] > 0) : !_isHostileThingVisibleToUnit(this, enemy)) return;
-            let dx = _unitTickX(enemy) - this.x, dy = _unitTickY(enemy) - this.y;
-            let d2 = dx * dx + dy * dy;
-            if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {
-                closest = enemy;
-                bestD2 = d2;
-            }
-        }, { enemyOfPlayer: this.owner, areaOnly: true });
-        if (closest) { this._performAttackOnUnit(closest); return; }
-        // Nothing hostile to hit on the way: shoot structures in reach,
-        // turrets and traps on the route first (same staggered ticks).
-        let structure = _findHostileStructureInAttackRange(this);
-        if (structure) this._performAttackOnBuilding(structure);
-    }
-
-    doAttackMoving(spd) {
-        // Check for nearby enemies first
-        let aggroRange = Math.max(TILE, this.preComputed.visionRange * TILE);
-        // (On its acquisition ticks: _unitAcquireTick.)
-        let closest = _unitAcquireTick(this) ? _combatScanTarget(this, aggroRange) : null;
-        if (closest) {
-            this.targetUnit = closest;
-            this.forcedAttackTarget = false;
-            this.commandState = CMD_ATTACKING;
-            return;
-        }
-        // (Structures: the combat brain's, a structure instruction, cmMode 16.)
-        if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
-            if (this.pathIsFallbackAstar) _tryUpgradeAstarFallbackPath(this);
-            if ((!this.path || this.pathIndex >= this.path.length) && this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING && this._isNearIssuedTarget(spd)) {
-                this._pendingPathTarget = null;
-                this.pathIsFallbackAstar = false;
-                this.targetPos = null;
-                this._attackMoveGx = this._attackMoveGy = null;
-                this.commandState = CMD_IDLE;
-            }
-            // Keep attack-move active while waiting for deferred pathfinding.
-            return;
-        }
-        if (this.followPath(spd)) {
-            if (continueUnitRoute(this, CMD_ATTACK_MOVING)) { this._followRouteNode(spd); return; }
-            if (this._pendingPathTarget && this._pendingPathTarget.cmd === CMD_ATTACK_MOVING) {
-                this.path = null;
-                if (this._isNearIssuedTarget(spd)) {
-                    this._pendingPathTarget = null;
-                    this.pathIsFallbackAstar = false;
-                    this.targetPos = null;
-                    this._attackMoveGx = this._attackMoveGy = null;
-                    this.commandState = CMD_IDLE;
-                }
-                return;
-            }
-            if (_continueShortAttackMove(this)) return;
-            this._attackMoveGx = this._attackMoveGy = null;
-            this.commandState = CMD_IDLE;
-            this.path = null;
-            this.targetPos = null;
-        }
-    }
-
-    // An attack: the attacker's side now (its cooldown, a ram's recoil),
-    // the hit itself after the unit pass (unitHitsResolve), with every other
-    // attack of the tick in the pass's order. No unit dies of another's
-    // attack during the pass, so nothing in it depends on who went first.
-    // False: the target never falls at once.
-    _performAttackOnUnit(target) {
-        this._attackerSide(target);
-        _unitHitQueue(this, target, 0);
-        return false;
-    }
-
-    _performAttackOnBuilding(tb) {
-        this._attackerSide(tb);
-        _unitHitQueue(this, tb, 1);
-        return false;
-    }
-
-    _attackerSide(target) {
-        let attackCue = ['fire', 'water', 'ice', 'poison', 'laser'].includes(this.attackStyle) ? 'attack_cast' : 'attack_swing';
-        playSound(attackCue, this.x, this.y, this.unitType);
-        // (Its shots at a step of several base ticks: the base ticks it stood
-        // ready, its carry (k_status); as mv.rs fire.)
-        const cd = this.preComputed.attackCooldown, c = this._us;
-        let at = cd;
-        _attackShots = 1;
-        if (c) {
-            const l = c.atkL[this._si];
-            if (l) { if (cd > 0) _attackShots = 1 + Math.floor(l / cd); at = cd * _attackShots - l; c.atkL[this._si] = 0; }
-        }
-        this.attackTimer = at;
-        this.attackTarget = target;
-        this.attackFlash = 8;
-        recordUnitAttackFx(this, target);
-        if (this.attackStyle === 'ram') {
-            let recoil = this.preComputed.maxEnergy * 0.03;
-            this.energy -= recoil;
-            shrineDamageTaken(this, recoil);
-            if (this.energy <= 0) { this.dead = true; }
-        }
-    }
-
-    doAttacking(spd) {
-        // Automatic structure attacks yield to nearby units. Explicit player
-        // targets remain locked, and the scan is staggered by simulation tick.
-        // (The tick's combat scan covers it: see SIM_KERNEL_COMBAT_SCAN.)
-        if (this.targetBuilding && !this.forcedAttackTarget && simStepCrosses(this.id, 8)) {
-            const range = Math.max(TILE, this.preComputed.visionRange * TILE);
-            let enemy = _combatScanHit(this, range);
-            if (enemy) {
-                this.targetBuilding = null;
-                this.targetUnit = enemy;
-                this.attackTarget = null;
-                this.path = null;
-                this.pathIndex = 0;
-                this._pendingPathTarget = null;
-            }
-        }
-        // Attack unit target
-        if (this.targetUnit) {
-            if (_unitTickDead(this.targetUnit)) { this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; this._resumeAttackMove(); return; }
-            // (The target where it was at the pass's start: _unitTickX.)
-            let tpx = _unitTickX(this.targetUnit), tpy = _unitTickY(this.targetUnit);
-            let tgx = Math.floor(tpx / TILE), tgy = Math.floor(tpy / TILE);
-            // A forced target (an order, or retaliation against an attacker)
-            // pressed against this unit stays engaged even when its area is
-            // out of sight; units still acquire targets only by vision.
-            let targetVisible = isGameplayTargetVisibleToPlayer(this.owner, tgx, tgy)
-                || (this.forcedAttackTarget && _isUnitTargetInContactAt(this, this.targetUnit, tpx, tpy, Math.floor(_getUnitAttackRangeArea(this)) + 1));
-            if (!targetVisible) {
-                if (this.forcedAttackTarget) {
-                    let lockX = Number.isFinite(this._forcedTargetLastSeenX) ? this._forcedTargetLastSeenX : tpx;
-                    let lockY = Number.isFinite(this._forcedTargetLastSeenY) ? this._forcedTargetLastSeenY : tpy;
-                    this.targetUnit = null;
-                    this.attackTarget = null;
-                    this.forcedAttackTarget = false;
-                    this.path = null;
-                    this.pathIndex = 0;
-                    this._pendingPathTarget = null;
-                    if (Number.isFinite(lockX) && Number.isFinite(lockY)) {
-                        let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-                        let lgx = Math.floor(lockX / TILE), lgy = Math.floor(lockY / TILE);
-                        let dest = findNearestWalkable(lgx, lgy, ugx, ugy, this);
-                        if (_canUsePathfindRequestBudget(this.owner, this)) {
-                            _consumePathfindRequestBudget(this.owner, this);
-                            this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
-                            this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                        } else {
-                            this.path = _makeFallbackPathForUnit(this, ugx, ugy, dest.x, dest.y, CMD_MOVING, 'ai_combat');
-                            this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                        }
-                        this.commandState = CMD_MOVING;
-                    } else {
-                        this.commandState = CMD_IDLE;
-                    }
-                    return;
-                } else {
-                    this.targetUnit = null;
-                    this.attackTarget = null;
-                    this.path = null;
-                    this.pathIndex = 0;
-                    this._pendingPathTarget = null;
-                    this.forcedAttackTarget = false;
-                    this.commandState = CMD_IDLE;
-                    this._resumeAttackMove();
-                    return;
-                }
-            }
-            if (this.forcedAttackTarget) {
-                this._forcedTargetLastSeenX = tpx;
-                this._forcedTargetLastSeenY = tpy;
-            }
-            let d = detHypot(tpx - this.x, tpy - this.y);
-            if (_isTargetWithinUnitAttackAreaRange(this, this.targetUnit, tpx, tpy)) {
-                this.attackTarget = this.targetUnit;
-                this.path = null;
-                // In range - attack
-                if (this.attackTimer <= 0) {
-                    if (this._performAttackOnUnit(this.targetUnit)) {
-                        this.targetUnit = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
-                    }
-                }
-            } else if (!this.forcedAttackTarget && d > 8 * TILE) {
-                // Leash
-                this.targetUnit = null; this.attackTarget = null; this.path = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
-                this._resumeAttackMove();
-            } else if (this.holdPosition) {
-                // Held: keep the chosen target (attacked as soon as it is in
-                // range) but never chase it; fight whatever is in range.
-                this.attackTarget = null;
-                this.doHolding();
-            } else {
-                // Move toward target using path if available, direct if close
-                // (or near with open ground on the way: no route to ask for
-                // each time the target moves on).
-                if (this.path && this.pathIndex < this.path.length && d >= 2 * TILE && !_isChaseStepOpen(this, this.targetUnit, d, tpx, tpy)) {
-                    this.followPath(spd);
-                } else if (d < 2 * TILE || this.isFlying || _isChaseStepOpen(this, this.targetUnit, d, tpx, tpy)) {
-                    // Close enough or flying - direct move
-                    let dx = tpx - this.x, dy = tpy - this.y;
-                    let dist = detHypot(dx, dy);
-                    simChaseStep(this, spd, dx, dy, dist);
-                } else {
-                    // Need a new path toward target
-                    let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-                    if (_canUsePathfindRequestBudget(this.owner, this)) {
-                        _consumePathfindRequestBudget(this.owner, this);
-                        let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                        this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
-                        this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                    } else {
-                        let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                        this.path = _makeFallbackPathForUnit(this, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'ai_combat');
-                        this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                    }
-                }
-            }
-            return;
-        }
-        // Attack building target
-        if (this.targetBuilding) {
-            let tb = this.targetBuilding;
-            if (tb.energy <= 0 || !_isHostileThingVisibleToUnit(this, tb)) { this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE; this._resumeAttackMove(); return; }
-            let d = detHypot(tb.x - this.x, tb.y - this.y);
-            if (_isTargetWithinUnitAttackAreaRange(this, tb)) {
-                this.attackTarget = tb;
-                this.path = null;
-                if (this.attackTimer <= 0) {
-                    if (this._performAttackOnBuilding(tb)) {
-                        this.targetBuilding = null; this.attackTarget = null; this.forcedAttackTarget = false; this.commandState = CMD_IDLE;
-                    }
-                }
-            } else if (this.holdPosition) {
-                this.attackTarget = null;
-                this.doHolding();
-            } else {
-                this.attackTarget = null;
-                if (this.path && this.pathIndex < this.path.length) {
-                    this.followPath(spd);
-                } else if (d < 2 * TILE || this.isFlying) {
-                    let dx = tb.x - this.x, dy = tb.y - this.y;
-                    let dist = detHypot(dx, dy);
-                    simChaseStep(this, spd, dx, dy, dist);
-                } else {
-                    let tgx = Math.floor(tb.x / TILE), tgy = Math.floor(tb.y / TILE);
-                    let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-                    if (_canUsePathfindRequestBudget(this.owner, this)) {
-                        _consumePathfindRequestBudget(this.owner, this);
-                        let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                        this.path = _findPathForUnitTagged('ai_combat', this, ugx, ugy, dest.x, dest.y, this.isFlying, null, this.owner);
-                        this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                    } else {
-                        let dest = findNearestWalkable(tgx, tgy, ugx, ugy, this);
-                        this.path = _makeFallbackPathForUnit(this, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'ai_combat');
-                        this.pathIndex = (this.path && this.path.length > 1 && this.path[0].x === ugx && this.path[0].y === ugy) ? 1 : 0;
-                    }
-                }
-            }
-            return;
-        }
-        this.attackTarget = null;
-        this.forcedAttackTarget = false;
-        this.commandState = CMD_IDLE;
-        this._resumeAttackMove();
-    }
-
-    // An engagement on the way of an attack-move ended (its target died, went
-    // out of sight or out of leash, its structure fell): on toward the
-    // attack-move's tile at once, as doIdle does on the next tick (a new
-    // target is the attack-move's own look, on its acquisition ticks: the
-    // same cadence as doIdle's). In a big battle every kill sent each of
-    // its attackers through a whole idle update first.
-    _resumeAttackMove() {
-        if (this._attackMoveGx == null || this.holdPosition || this.workerState || this.unitType === 'scout' || this.dead) return;
-        let gx = this._attackMoveGx, gy = this._attackMoveGy;
-        this.targetPos = { x: gx * TILE + 16, y: gy * TILE + 16 };
-        _makeFallbackPathForUnit(this, Math.floor(this.x / TILE), Math.floor(this.y / TILE), gx, gy, CMD_ATTACK_MOVING, 'ai_combat');
-    }
-
-    doHolding() {
-        if (this.attackTimer > 0 || this.preComputed.attackDamage <= 0) return;
-        let closest = null, bestD2 = Infinity;
-        // (Enemies where they were at the pass's start: _unitTickX.)
-        forEachUnitInAreaRange(this.x, this.y, _getUnitAttackRangeArea(this), (enemy) => {
-            const ex = _unitTickX(enemy), ey = _unitTickY(enemy);
-            if (!_isUnitVisibleAtTickStart(this.owner, enemy) || !_isTargetWithinUnitAttackAreaRange(this, enemy, ex, ey)) return;
-            let dx = ex - this.x, dy = ey - this.y, d2 = dx * dx + dy * dy;
-            if (d2 < bestD2 || (d2 === bestD2 && (!closest || enemy.id < closest.id))) {
-                closest = enemy; bestD2 = d2;
-            }
-        }, { enemyOfPlayer: this.owner, areaOnly: true, tickStart: true });
-        if (closest) { this._performAttackOnUnit(closest); return; }
-
-        // Hold uses the same attack area as combat, but never enters the
-        // chasing state. Structures by the same threat order as attack move.
-        let structure = _findHostileStructureInAttackRange(this);
-        if (structure) this._performAttackOnBuilding(structure);
-    }
-
-    _followRouteNode(spd) {
-        const nd = this.path && this.pathIndex < this.path.length ? this.path[this.pathIndex] : null;
-        if (nd && nd.nav && !this.holdPosition) this._followNavNode(nd, spd);
-    }
-
-    followPath(spd) {
-        if (!this.path || this.pathIndex >= this.path.length) return true;
-        // Held units keep their route (and its progress) until released.
-        if (this.holdPosition) return false;
-        if (this.path[this.pathIndex].nav) return this._followNavNode(this.path[this.pathIndex], spd);
-
-        // Treat the shared route as a corridor. A roomy node is reached from
-        // anywhere in its open 3x3 block, so crowds may flow beside the exact
-        // tiles; tight nodes still need their own tile. The window is short
-        // and also rejoins units that separation pushed past a waypoint.
-        let tileX = Math.floor(this.x / TILE), tileY = Math.floor(this.y / TILE);
-        // The node scans below depend only on the tile, the path, the index
-        // and the topology: when those match the last completed scan, it
-        // would find nothing new (units cross a tile in many ticks).
-        let fpTile = tileY * GRID_W + tileX;
-        if (this._fpPath === this.path && this._fpTile === fpTile && this._fpIdx === this.pathIndex && this._fpVer === pathTopologyVersion) return this._followPathStep(spd);
-        let first = Math.max(0, this.pathIndex - 1);
-        let limit = Math.min(this.path.length - 1, this.pathIndex + 6);
-        let reached = -1;
-        for (let i = first; i <= limit; i++) {
-            let node = this.path[i], next = this.path[i + 1];
-            let dx = node.x - tileX, dy = node.y - tileY;
-            // Portal entrances are consumed on their exact tile below.
-            if (next && Math.abs(next.x - node.x) + Math.abs(next.y - node.y) !== 1) {
-                if (dx === 0 && dy === 0) reached = i - 1;
-                break;
-            }
-            if ((dx === 0 && dy === 0) ||
-                (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && _isPathNodeRoomy(this.path, i))) reached = i;
-        }
-        while (this.pathIndex <= reached) {
-            if (this.pathIndex > 0 && !_tryConsumeAstarMoveCostForTransition(
-                this, this.path[this.pathIndex - 1], this.path[this.pathIndex])) return false;
-            this.pathIndex++;
-        }
-        if (this.pathIndex >= this.path.length) return true;
-
-        // Consume stale nodes first so we never steer back toward an already-reached tile center.
-        while (this.path && this.pathIndex < this.path.length) {
-            let curNode = this.path[this.pathIndex];
-            let ugx = Math.floor(this.x / TILE), ugy = Math.floor(this.y / TILE);
-            if (curNode.x !== ugx || curNode.y !== ugy) break;
-
-            let nextNodeInTile = this.path[this.pathIndex + 1];
-            if (nextNodeInTile && isCloudPortalLink(curNode.x, curNode.y, nextNodeInTile.x, nextNodeInTile.y, this.owner)) {
-                if (!_tryConsumeAstarMoveCostForTransition(this, curNode, nextNodeInTile)) return false;
-                let laneOffsetNow = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6)));
-                let nTx = nextNodeInTile.x * TILE + 16;
-                let nTy = nextNodeInTile.y * TILE + 16;
-                let postNodeNow = this.path[this.pathIndex + 2] || null;
-                let linkDxNow = postNodeNow ? (postNodeNow.x - nextNodeInTile.x) : (nextNodeInTile.x - curNode.x);
-                let linkDyNow = postNodeNow ? (postNodeNow.y - nextNodeInTile.y) : (nextNodeInTile.y - curNode.y);
-                if (Math.abs(linkDxNow) >= Math.abs(linkDyNow)) {
-                    nTy += (linkDxNow < 0 ? laneOffsetNow : -laneOffsetNow);
-                } else {
-                    nTx += (linkDyNow < 0 ? -laneOffsetNow : laneOffsetNow);
-                }
-                this.teleportTo(nTx, nTy);
-                this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
-                this.pathIndex += 2;
-            } else {
-                if (this.pathIndex > 0) {
-                    let prevNodeForCost = this.path[this.pathIndex - 1] || null;
-                    if (!_tryConsumeAstarMoveCostForTransition(this, prevNodeForCost, curNode)) return false;
-                }
-                this.pathIndex++;
-            }
-
-            if (this.pathIndex >= this.path.length) return true;
-        }
-        if (!this.path || this.pathIndex >= this.path.length) return true;
-        this._fpPath = this.path; this._fpIdx = this.pathIndex; this._fpVer = pathTopologyVersion;
-        this._fpTile = Math.floor(this.y / TILE) * GRID_W + Math.floor(this.x / TILE);
-        return this._followPathStep(spd);
-    }
-
-    // A nav node (see navNode): one tile toward it by the navigation, O(1).
-    // True when the path is done (at the node's tile and no more nodes, or
-    // no way on from here).
-    _followNavNode(nd, spd) {
-        // (NAV_CROWD_TILES: see the arrival below.)
-        if (gameTime < (nd.ready | 0)) return false;
-        const W = GRID_W, gx = Math.floor(this.x / TILE), gy = Math.floor(this.y / TILE), t = gy * W + gx, dest = nd.y * W + nd.x;
-        if (t === dest) { this.pathIndex++; this._navLastD = -1; return this.pathIndex >= this.path.length; }
-        // Between its steers: on along its committed step (see
-        // SIM_STEER_TICKS in sim_parallel.js), as the movement kernel.
-        const c = this._us, s = this._si, steer = c && typeof SIM_STEER_NEAR_TICKS === 'number' ? SIM_STEER_NEAR_TICKS : 1;
-        if (c) {
-            if (c.mvCD[s] === dest && c.mvCTl[s] === t && gameTime - c.mvCT[s] < c.mvCN[s]
-                && (simDk === 1 || (Math.floor((this.x + c.mvCVx[s] * simDk) / TILE) === gx && Math.floor((this.y + c.mvCVy[s] * simDk) / TILE) === gy))) {
-                // (Per base tick: the step's of them; several leaving the
-                // tile are steered again below, as in the kernel.)
-                let vx = c.mvCVx[s] * simDk, vy = c.mvCVy[s] * simDk;
-                const sgx = Math.floor((this.x + vx) / TILE), sgy = Math.floor((this.y + vy) / TILE);
-                if (nd.nav - 1 !== NAV_PROFILE_AIR && (sgx !== gx || sgy !== gy)) {
-                    const sl = simFlowSlide(navWallTable(nd.nav - 1), W, GRID_H, gx, gy, sgx, sgy);
-                    if (sl) { if (sl & 1) vx = 0; if (sl & 2) vy = 0; c.mvCD[s] = -1; }
-                }
-                this.x += vx; this.y += vy; this.vx = vx; this.vy = vy;
-                const ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-                if (ngx !== gx || ngy !== gy) _tryConsumeAstarMoveCostForTransition(this, { x: gx, y: gy }, { x: ngx, y: ngy });
-                return false;
-            }
-            // (A steer: commits again below, if it moves.)
-            c.mvCD[s] = -1;
-        }
-        // Near it and held back by a crowd (under a third of its speed made
-        // good toward it since last tick): arrived where it is, as in the
-        // movement kernel (not every unit of a big group fits on its tile).
-        // Workers and lone units go all the way (a worker's task is at the
-        // tile; only a group's destination is too small for all of it).
-        // Waiting in a crowd (_navLastD -2 - dest): still, but for a look
-        // every 16 ticks (by id: on when the crowd around has thinned out)
-        // and a try every 64 (so a jam in a corridor clears).
-        if (this._navLastD === -2 - dest) {
-            if (((gameTime + this.id) & 15) >= simDk || (((gameTime + this.id) & 63) >= simDk && !_unitCrowdThin(this))) return false;
-            this._navLastD = -1;
-        }
-        // Further out (up to NAV_CROWD_TILES), held back beside an idle or
-        // waiting unit of its own (the combat scan's crowd flag): it waits,
-        // so a big crowd settles from its middle outward instead of pressing.
-        if (nd.w && !this.workerState && this.pathIndex === this.path.length - 1 && Math.abs(nd.x - gx) <= NAV_CROWD_TILES && Math.abs(nd.y - gy) <= NAV_CROWD_TILES) {
-            const d = detHypot(nd.x * TILE + 16 - this.x, nd.y * TILE + 16 - this.y), last = this._navLastD;
-            this._navLastD = d;
-            const near = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8;
-            // At a full destination crowd's edge (beside its idle units, the
-            // 3x3 tiles about packed): arrived, before pressing into it
-            // (mv.rs move_flow alike).
-            if (near && _unitCrowdIdleNear(this) && this._us.cwDense[this._si] >= NAV_CROWD_FULL) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
-            if (last >= 0 && last - d < spd * 0.3 * Math.max(steer, simDk)) {
-                // A detour or wall can also reduce progress. Only settle
-                // short of the destination when a friendly crowd is there.
-                // (Held at a full crowd's edge: arrived however far its middle
-                // is, a big crowd being wider than `near`; mv.rs alike.)
-                if ((near || _unitCrowdFull(this)) && _unitCrowdIdleNear(this)) { this.pathIndex = this.path.length; this._navLastD = -1; return true; }
-                if (_unitCrowdIdleNear(this)) { this._navLastD = -2 - dest; return false; }
-            }
-        } else this._navLastD = -1;
-        const profile = nd.nav - 1, slot = navFieldRequest(profile, dest, !!nd.w);
-        let tx, ty;
-        // Exactly as the movement kernel steers (flow mode): the look-ahead
-        // (simFlowLook: the next tile, the one after, on open ground up to 6
-        // tiles ahead), then straight there with the unit's own side offset
-        // from the line, or the next tile's centre on its lane.
-        const wall = navWallTable(profile);
-        const lk = _navFlowLook(this, profile, slot, t, gx, gy, dest, wall);
-        // No way there on the navigation: it has not arrived. A worker at
-        // its task (a tile from it: at its work) stands and waits, its task
-        // looking again on its check ticks; anything else (a worker the
-        // player sent too) keeps its target (a pending one) and heads for
-        // the closest tile it can reach (the helpers' answer, see
-        // _tryUpgradeAstarFallbackPath). Walled in: it stands.
-        if (lk === 0) {
-            if (this.workerState && this.workerState !== 'MANUAL_MOVE') {
-                if (Math.abs(nd.x - gx) > 1 || Math.abs(nd.y - gy) > 1) return false;
-                this.pathIndex = this.path.length; return true;
-            }
-            let pt = this._pendingPathTarget;
-            if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
-            else pt = this._pendingPathTarget = { gx: nd.x, gy: nd.y, cmd: this.commandState, src: 'nav_unreachable' };
-            this.path = null; this.pathIndex = 0; this._routeKey = null; this.pathIsFallbackAstar = true;
-            navPathSubstitute(this, gx, gy, pt);
-            notePendingPathUnit(this);
-            return false;
-        }
-        if (lk === -1) return false;
-        const L = _navLookOut, n = L[0], n2 = L[1], far = L[2], open = L[3] === 1;
-        const kx = far % W, ky = (far - kx) / W;
-        if (open) {
-            const rdx = kx - gx, rdy = ky - gy, rl = Math.sqrt(rdx * rdx + rdy * rdy), sx = -rdy / rl, sy = rdx / rl, maxSide = TILE * 0.8;
-            let side = (this.x - (gx * TILE + 16)) * sx + (this.y - (gy * TILE + 16)) * sy;
-            side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
-            tx = kx * TILE + 16 + sx * side; ty = ky * TILE + 16 + sy * side;
-        } else {
-            const lane = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6))), sdx = kx - gx, sdy = ky - gy;
-            let lx = 0, ly = 0;
-            if (Math.abs(sdx) >= Math.abs(sdy)) ly = (sdx < 0 ? lane : -lane); else lx = (sdy < 0 ? -lane : lane);
-            tx = kx * TILE + 16 + lx; ty = ky * TILE + 16 + ly;
-        }
-        let dx = tx - this.x, dy = ty - this.y, dist = Math.sqrt(dx * dx + dy * dy);
-        // Never turn back for a point it has passed: the one after.
-        if (n2 >= 0 && far === n && this.vx * dx + this.vy * dy < 0) {
-            const n2x = n2 % W;
-            tx = n2x * TILE + 16; ty = ((n2 - n2x) / W) * TILE + 16;
-            dx = tx - this.x; dy = ty - this.y; dist = Math.sqrt(dx * dx + dy * dy);
-        }
-        if (dist < 4) {
-            if (n2 < 0) return false;
-            const n2x = n2 % W;
-            tx = n2x * TILE + 16; ty = ((n2 - n2x) / W) * TILE + 16;
-            dx = tx - this.x; dy = ty - this.y; dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 4) return false;
-        }
-        let vx = (dx / dist) * spd, vy = (dy / dist) * spd;
-        // (Committed per base tick; this step's for its base ticks, to the
-        // target at most, a base tick's with walls on the way: mv.rs.)
-        let cvx = vx, cvy = vy;
-        if (simDk > 1) {
-            const st = simStepLen(spd, dist), ax = (dx / dist) * st, ay = (dy / dist) * st;
-            if (profile === NAV_PROFILE_AIR || simSegOpen(wall, this.x, this.y, this.x + ax, this.y + ay)) { vx = ax; vy = ay; }
-        }
-        // Into a wall (on the ground): along it, one axis, else it stands.
-        // (The walls of its walk class: a builder's own buildings are none.)
-        if (profile !== NAV_PROFILE_AIR) {
-            const sl = simFlowSlide(wall, W, GRID_H, gx, gy, Math.floor((this.x + vx) / TILE), Math.floor((this.y + vy) / TILE));
-            if (sl & 1) { vx = 0; cvx = 0; }
-            if (sl & 2) { vy = 0; cvy = 0; }
-        }
-        this.x += vx; this.y += vy; this.vx = vx; this.vy = vy;
-        if (c) {
-            c.mvCD[s] = dest; c.mvCT[s] = gameTime; c.mvCVx[s] = cvx; c.mvCVy[s] = cvy; c.mvCTl[s] = t;
-            c.mvCN[s] = Math.abs(nd.x - gx) <= 8 && Math.abs(nd.y - gy) <= 8 ? SIM_STEER_NEAR_TICKS : SIM_STEER_TICKS;
-        }
-        // Entering another tile is a step (charged like a path node; a step
-        // the owner cannot cover still happens, as in the kernel).
-        const ngx = Math.floor(this.x / TILE), ngy = Math.floor(this.y / TILE);
-        if (ngx !== gx || ngy !== gy) _tryConsumeAstarMoveCostForTransition(this, { x: gx, y: gy }, { x: ngx, y: ngy });
-        return false;
-    }
-
-    // followPath after its node bookkeeping: steer toward the current node.
-    _followPathStep(spd) {
-        let node = this.path[this.pathIndex];
-        if (!this.pathIsFallbackAstar && !this.isFlying && !canUnitOccupyTileCached(this, node.x, node.y, 1)) {
-            this.path = null;
-            this.pathIndex = 0;
-            if (this.pathIsFallbackAstar && this._pendingPathTarget) {
-                _tryUpgradeAstarFallbackPath(this);
-            }
-            if (this._pendingPathTarget) {
-                this.commandState = this._pendingPathTarget.cmd;
-            }
-            return true;
-        }
-        let laneOffset = Math.fround(Math.max(1.5, Math.min(4, this.r * 0.6)));
-        let baseTx = node.x * TILE + 16;
-        let baseTy = node.y * TILE + 16;
-        let tx = baseTx;
-        let ty = baseTy;
-
-        // Use path-segment direction (stable) instead of live position delta (can flip/jitter).
-        let segDx = 0, segDy = 0;
-        if (this.pathIndex > 0) {
-            let prevNode = this.path[this.pathIndex - 1];
-            segDx = node.x - prevNode.x;
-            segDy = node.y - prevNode.y;
-        } else if (this.pathIndex + 1 < this.path.length) {
-            let nextNodeForDir = this.path[this.pathIndex + 1];
-            segDx = nextNodeForDir.x - node.x;
-            segDy = nextNodeForDir.y - node.y;
-        }
-        if (segDx === 0 && segDy === 0) {
-            let ugx = Math.floor(this.x / TILE);
-            let ugy = Math.floor(this.y / TILE);
-            if (node.x !== ugx) segDx = node.x - ugx;
-            else if (node.y !== ugy) segDy = node.y - ugy;
-            else if (this.pathIndex + 1 < this.path.length) {
-                let nextNodeForFallback = this.path[this.pathIndex + 1];
-                segDx = nextNodeForFallback.x - node.x;
-                segDy = nextNodeForFallback.y - node.y;
-            } else {
-                segDx = 1;
-            }
-        }
-
-        // The target: the node's centre plus a lane offset (lx, ly), or in a
-        // corridor the unit's own side offset along (lx, ly) (as in
-        // SIM_KERNEL_MOVE, which repeats this step for armed units).
-        let prevNode = this.pathIndex > 0 ? this.path[this.pathIndex - 1] : null;
-        let lx = 0, ly = 0;
-        if (prevNode && Math.abs(prevNode.x - Math.floor(this.x / TILE)) <= 1 &&
-            Math.abs(prevNode.y - Math.floor(this.y / TILE)) <= 1 &&
-            _isPathNodeRoomy(this.path, this.pathIndex - 1) && _isPathNodeRoomy(this.path, this.pathIndex)) {
-            // Inside the corridor: keep the unit's current side offset from
-            // the route instead of converging every unit onto one point. Both
-            // adjacent 3x3 blocks are open, and the clamped target stays in
-            // them, so this straight segment cannot cut through a wall.
-            let ahead = this.path[this.pathIndex + 1], far = this.path[this.pathIndex + 2];
-            if (far && Math.abs(far.x - ahead.x) + Math.abs(far.y - ahead.y) === 1) ahead = far;
-            let routeDx = ahead.x - prevNode.x, routeDy = ahead.y - prevNode.y;
-            let routeLen = Math.sqrt(routeDx * routeDx + routeDy * routeDy);
-            lx = -routeDy / routeLen; ly = routeDx / routeLen;
-            // Drift gently back towards the exact route while there is no push.
-            let side = ((this.x - baseTx) * lx + (this.y - baseTy) * ly) * 0.875;
-            let maxSide = TILE * 0.8;
-            side = side > maxSide ? maxSide : (side < -maxSide ? -maxSide : side);
-            tx = baseTx + lx * side;
-            ty = baseTy + ly * side;
-        } else {
-            // Directional lane rule:
-            // horizontal: left -> below center, right -> above center
-            // vertical: up -> left of center, down -> right of center
-            if (Math.abs(segDx) >= Math.abs(segDy)) ly = (segDx < 0 ? laneOffset : -laneOffset);
-            else lx = (segDy < 0 ? -laneOffset : laneOffset);
-            tx = baseTx + lx; ty = baseTy + ly;
-        }
-        let dx = tx - this.x, dy = ty - this.y;
-        let dist = detHypot(dx, dy);
-        if (dist < 4) {
-            let nextNode = this.path[this.pathIndex + 1];
-            if (nextNode && isCloudPortalLink(node.x, node.y, nextNode.x, nextNode.y, this.owner)) {
-                if (!_tryConsumeAstarMoveCostForTransition(this, node, nextNode)) return false;
-                let nTx = nextNode.x * TILE + 16;
-                let nTy = nextNode.y * TILE + 16;
-                let postNode = this.path[this.pathIndex + 2] || null;
-                let linkDx = postNode ? (postNode.x - nextNode.x) : (nextNode.x - node.x);
-                let linkDy = postNode ? (postNode.y - nextNode.y) : (nextNode.y - node.y);
-                if (Math.abs(linkDx) >= Math.abs(linkDy)) {
-                    nTy += (linkDx < 0 ? laneOffset : -laneOffset);
-                } else {
-                    nTx += (linkDy < 0 ? -laneOffset : laneOffset);
-                }
-                this.teleportTo(nTx, nTy);
-                this.teleportHideTicks = Math.max(this.teleportHideTicks, 2);
-                this.pathIndex += 2;
-                if (this.pathIndex >= this.path.length) return true;
-                return false;
-            }
-            if (this.pathIndex > 0) {
-                let prevNodeForCost = this.path[this.pathIndex - 1] || null;
-                if (!_tryConsumeAstarMoveCostForTransition(this, prevNodeForCost, node)) return false;
-            }
-            this.pathIndex++;
-            if (this.pathIndex >= this.path.length) return true;
-            return false;
-        }
-        const st = simStepLen(spd, dist);
-        let vx = (dx / dist) * st, vy = (dy / dist) * st;
-        this.vx = vx; this.vy = vy;
-        this.x += vx; this.y += vy;
-        return false;
     }
 
     draw(ctx) {
@@ -2164,10 +1132,15 @@ function _isHitBuildingStanding(tb) {
 // SIM_KERNEL_HITS_APPLY then takes the sums off the units hit (energy,
 // statuses, watch, fallen). Here: hits on structures and on units without
 // columns (in queue order), the newly watched units' vision cover, and the
-// looks of up to SIM_HITS_PRESENT hits (whichever the helpers listed). (The
+// looks of up to SIM_HITS_PRESENT hits a tick (whichever the helpers listed:
+// within the page's view first, simLookView, a step of many ticks that many
+// times as many, up to SIM_HITS_PRESENT_MAX; SIM_HITS_OUT of the rest). (The
 // combat brain engages: no retaliation, see tryAutoRetaliateOnHostileDamage.)
 const _hitK = { cap: 0, q: null, dmg: null, sty: null, wk: null, tcap: 0, tlist: null, wlist: null, plist: null, cnt: null, shr: null };
-const SIM_HITS_PRESENT = 512, SIM_HITS_PER_JOB = 2048, SIM_HITS_CHUNKS_JOB = 16;
+const SIM_HITS_PRESENT = 512, SIM_HITS_PRESENT_MAX = 4096, SIM_HITS_OUT = 128, SIM_HITS_PER_JOB = 2048, SIM_HITS_CHUNKS_JOB = 16;
+// The page's view (unit.x, unit.y: eighths of a pixel; x0 > x1: none), its
+// looks first (sim_worker.js: the page sends it as its camera moves).
+let simLookView = [1, 0, 0, 0];
 function _hitStyleCode(a) {
     const st = a.attackStyle;
     return st === 'fire' ? 1 : st === 'water' ? 2 : st === 'ice' ? 3 : st === 'poison' ? 4 : (st === 'swoop' && a.unitType === 'scout') ? 5 : 0;
@@ -2198,7 +1171,7 @@ function _hitArrays(n, total) {
         simParallelBind('hit.tlist', K.tlist); simParallelBind('hit.wlist', K.wlist);
     }
     if (!K.cnt) {
-        K.cnt = simSharedArray(Int32Array, 4); K.plist = simSharedArray(Int32Array, SIM_HITS_PRESENT);
+        K.cnt = simSharedArray(Int32Array, 4); K.plist = simSharedArray(Int32Array, SIM_HITS_PRESENT_MAX + SIM_HITS_OUT);
         simParallelBind('hit.cnt', K.cnt); simParallelBind('hit.plist', K.plist);
     }
     const NO = Math.max(16, players.length);
@@ -2271,7 +1244,9 @@ function unitHitsResolve() {
         const P = _simParams;
         const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
         const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
-        P[0] = n; P[1] = per; P[2] = SIM_HITS_PRESENT; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
+        const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
+        P[0] = n; P[1] = per; P[2] = looks; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
+        P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0;
         simParallelRun(SIM_KERNEL_HITS, jj + kj);
         const nt = CNT[0];
         if (nt > 0) {
@@ -2291,15 +1266,15 @@ function unitHitsResolve() {
             if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners[WL[i]]; if (u) visCoverOnEntityChanged(u); }
         }
         // The looks (presentation only: which hits differs between peers).
-        const PL = K.plist, np = Math.min(CNT[1], SIM_HITS_PRESENT);
-        for (let p = 0; p < np; p++) {
-            const e = PL[p];
+        const PL = K.plist, np = Math.min(CNT[1], looks), no = V[0] <= V[2] ? Math.min(CNT[3], SIM_HITS_OUT) : 0;
+        for (let p = 0; p < np + no; p++) {
+            const e = PL[p < np ? p : looks + p - np];
             let a, t, ax, ay, dmg, sty;
             if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
             else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
-            if (e >= n) { recordUnitAttackFx(a, t); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
+            if (e >= n) { recordUnitAttackFx(a, t, true); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
             pushHostileDamageAlert(t, dmg, a.owner);
             recordDamageVisual(t, dmg, a.owner);
             if (dmg > 0) playSound('melee_hit', t.x, t.y, a.unitType);
@@ -2323,7 +1298,6 @@ function _unitHitUnit(a, target, dmg, ax, ay) {
     pushHostileDamageAlert(target, before - target.energy, a.owner);
     recordDamageVisual(target, before - target.energy, a.owner); shrineDamageTaken(target, before - target.energy);
     if (before > target.energy) playSound('melee_hit', target.x, target.y, a.unitType);
-    tryAutoRetaliateOnHostileDamage(target, a, ax, ay);
     let style = a.attackStyle;
     if (style === 'fire') {
         target.burning = Math.max(target.burning, 45);
@@ -2457,109 +1431,6 @@ function statusPrepassRun() {
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
-}
-
-// A move's length this step (simDk base ticks; the movement kernel's,
-// mv.rs): a base tick's `spd`, or with several their sum, stopping at the
-// point aimed at (`dist` away) but going at least a base tick's.
-function simStepLen(spd, dist) { return simDk > 1 ? Math.min(spd * simDk, Math.max(dist, spd)) : spd; }
-// Whether the segment (x0, y0)-(x1, y1) stays on open tiles of the flat
-// wall grid `wall` (mv.rs seg_open: points a quarter tile apart).
-function simSegOpen(wall, x0, y0, x1, y1) {
-    if (!wall) return true;
-    const dx = x1 - x0, dy = y1 - y0, n = Math.min(256, Math.floor(Math.sqrt(dx * dx + dy * dy) / (TILE * 0.25)) + 1);
-    for (let i = 1; i <= n; i++) {
-        const k = i / n, gx = Math.floor((x0 + dx * k) / TILE), gy = Math.floor((y0 + dy * k) / TILE);
-        if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || wall[gy * GRID_W + gx]) return false;
-    }
-    return true;
-}
-// A direct chase step toward (tx, ty) `dist` away: several base ticks' when
-// the way is open (flyers: always), else a base tick's.
-function simChaseStep(u, spd, dx, dy, dist) {
-    let st = spd;
-    if (simDk > 1) {
-        const k = simStepLen(spd, dist);
-        if (u.isFlying || simSegOpen(typeof simMoveWallGrid === 'function' ? simMoveWallGrid() : null, u.x, u.y, u.x + dx / dist * k, u.y + dy / dist * k)) st = k;
-    }
-    u.x += (dx / dist) * st; u.y += (dy / dist) * st;
-}
-
-function canUnitAutoRetaliate(unit) {
-    return !!(
-        unit &&
-        !unit.dead &&
-        !unit.workerState &&
-        !unit.holdPosition &&
-        unit.commandState === CMD_IDLE &&
-        Number(unit.preComputed && unit.preComputed.attackDamage) > 0 &&
-        Number(unit.preComputed && unit.preComputed.attackRangeArea) > 0
-    );
-}
-
-function _issueRetaliationPath(unit, targetGx, targetGy, forcedAttackTarget) {
-    let ugx = Math.floor(unit.x / TILE), ugy = Math.floor(unit.y / TILE);
-    let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, unit);
-    let canWalk = (typeof getPathCanWalkForUnit === 'function') ? getPathCanWalkForUnit(unit) : null;
-    unit.path = null;
-    unit.pathIndex = 0;
-    unit._pendingPathTarget = null;
-    if (_canUsePathfindRequestBudget(unit.owner, unit)) {
-        _consumePathfindRequestBudget(unit.owner, unit);
-        unit.path = _findPathForUnitTagged('ai_combat', unit, ugx, ugy, dest.x, dest.y, unit.isFlying, canWalk, unit.owner);
-        if (unit.path && unit.path.length > 0) {
-            unit.pathIndex = (unit.path.length > 1 && unit.path[0].x === ugx && unit.path[0].y === ugy) ? 1 : 0;
-            return;
-        }
-    } else {
-        unit.path = _makeFallbackPathForUnit(unit, ugx, ugy, dest.x, dest.y, CMD_ATTACKING, 'ai_combat');
-        unit.pathIndex = (unit.path && unit.path.length > 1 && unit.path[0].x === ugx && unit.path[0].y === ugy) ? 1 : 0;
-        return;
-    }
-    unit.path = null;
-    unit.pathIndex = 0;
-    unit._pendingPathTarget = { gx: dest.x, gy: dest.y, cmd: CMD_ATTACKING, src: forcedAttackTarget ? 'retaliate_unit' : 'retaliate_building' };
-    notePendingPathUnit(unit);
-}
-
-function tryAutoRetaliateOnHostileDamage(unit, attacker, lastKnownX = null, lastKnownY = null) {
-    // (The combat brain engages: no object retaliation.)
-    if (SIM_COMBAT_BRAIN) return false;
-    if (!canUnitAutoRetaliate(unit)) return false;
-    if (!attacker) return false;
-    if (attacker === unit) return false;
-    if (Number.isFinite(attacker.owner) && attacker.owner === unit.owner) return false;
-
-    let attackerIsUnit = attacker instanceof Unit;
-    if (attackerIsUnit) {
-        if (attacker.dead) return false;
-        unit.targetUnit = attacker;
-        unit.targetBuilding = null;
-        unit.targetPos = null;
-        unit.attackTarget = null;
-        unit.forcedAttackTarget = true;
-        unit._forcedTargetLastSeenX = Number.isFinite(attacker.x) ? attacker.x : lastKnownX;
-        unit._forcedTargetLastSeenY = Number.isFinite(attacker.y) ? attacker.y : lastKnownY;
-        unit.commandState = CMD_ATTACKING;
-        _issueRetaliationPath(unit, Math.floor((unit._forcedTargetLastSeenX || attacker.x) / TILE), Math.floor((unit._forcedTargetLastSeenY || attacker.y) / TILE), true);
-        return true;
-    }
-
-    if ('energy' in attacker && Number(attacker.energy) <= 0) return false;
-    if (!Number.isFinite(attacker.x) || !Number.isFinite(attacker.y)) return false;
-
-    unit.targetUnit = null;
-    unit.targetBuilding = attacker;
-    unit.targetPos = null;
-    unit.attackTarget = null;
-    unit.forcedAttackTarget = false;
-    unit._forcedTargetLastSeenX = null;
-    unit._forcedTargetLastSeenY = null;
-    unit.commandState = CMD_ATTACKING;
-    let targetGx = Number.isFinite(attacker.gx) ? attacker.gx : Math.floor(attacker.x / TILE);
-    let targetGy = Number.isFinite(attacker.gy) ? attacker.gy : Math.floor(attacker.y / TILE);
-    _issueRetaliationPath(unit, targetGx, targetGy, false);
-    return true;
 }
 
 
@@ -3013,48 +1884,6 @@ function simMoveStatsChanged(u, previousRow) {
     c.mvReach[s] = reach; 
 }
 
-// Unit._followNavNode's flow look-ahead (simFlowLook): with its destination
-// field made (the only case the movement kernel steers) on the unit's own
-// cache columns, exactly as the kernel; without it (asked for, made at the
-// next flush) it waits (-1: the way is the field's row). The result in
-// _navLookOut: next tile, the one after, the farthest, open (1).
-const _navLookOut = new Int32Array(4);
-const _navLookScratch = { mvNav: new Int32Array(typeof SIM_NAV_STRIDE === 'number' ? SIM_NAV_STRIDE : 8) };
-function _navFlowLook(u, profile, slot, t, gx, gy, dest, wall) {
-    const nav = _nav[profile];
-    if (!nav) return 0;
-    let LC = u._us, s = u._si;
-    if (!LC) { LC = _navLookScratch; s = 0; LC.mvNav[0] = -1; }
-    // (On the atlas: no field; the look over its steps, simNavStepXY.)
-    if (slot === NAV_ATLAS_FID) {
-        if (!nav.atlas || !nav.atlas.header) return -1;
-        _simFlowAtlas = nav;
-        let lk;
-        try {
-            lk = simFlowLook(LC, s, simStepCrosses(u.id, SIM_FLOW_REFRESH_TICKS), t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
-                _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), 3,
-                nav.C, nav.cw, nav.partL, nav.partBase, null, 0, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair, null, 0, 0, 0, 0, 0);
-        } finally { _simFlowAtlas = null; }
-        if (lk === -2) { const n = navStep(profile, t, dest, slot); _navLookOut[0] = n; _navLookOut[1] = -1; _navLookOut[2] = n; _navLookOut[3] = 0; return 1; }
-        if (lk === 1) { const r = s * SIM_NAV_STRIDE, fo = LC.mvNav[r + 7]; _navLookOut[0] = LC.mvNav[r + 5]; _navLookOut[1] = LC.mvNav[r + 6]; _navLookOut[2] = fo >> 1; _navLookOut[3] = fo & 1; }
-        return lk;
-    }
-    const Fp = slot >= 0 ? _navFieldPool(slot) : null, i = slot >= 0 ? _navFieldIndex(slot) : 0, m = i * NAV_FIELD_META;
-    const has = !!(Fp && Fp.meta && Fp.rows && Fp.meta[m] === profile && Fp.meta[m + 1] === dest && Fp.meta[m + 7] === 1);
-    if (!has) return -1;
-    const lk = simFlowLook(LC, s, simStepCrosses(u.id, SIM_FLOW_REFRESH_TICKS), t, gx, gy, dest, GRID_W, GRID_H, wall, nav.version | 0,
-        _simMoveWallBlk9 ? simWallKey9(_simMoveWallBlk9, _simMoveWallBlkW, gx, gy, _simMoveWallVer) : simWallKey(_simMoveWallBlk, _simMoveWallBlkW, (GRID_H + 7) >> 3, gx, gy, _simMoveWallVer), slot >= NAV_WIDE_BASE ? 2 : 1,
-        nav.C, nav.cw, nav.partL, nav.partBase, Fp.rows, i * Fp.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
-        Fp.pool, i * Fp.span * Fp.span, Fp.meta[m + 2], Fp.meta[m + 3], Fp.meta[m + 4], Fp.meta[m + 5]);
-    if (lk === -2) {
-        // (A bad build's step to a tile that is not a neighbour: toward it.)
-        const n = navStep(profile, t, dest, slot);
-        _navLookOut[0] = n; _navLookOut[1] = -1; _navLookOut[2] = n; _navLookOut[3] = 0;
-        return 1;
-    }
-    if (lk === 1) { const r = s * SIM_NAV_STRIDE, fo = LC.mvNav[r + 7]; _navLookOut[0] = LC.mvNav[r + 5]; _navLookOut[1] = LC.mvNav[r + 6]; _navLookOut[2] = fo >> 1; _navLookOut[3] = fo & 1; }
-    return lk;
-}
 
 // Flow mode: a unit following the flow navigation (destination field slot
 // `fid`, its generation `gen`; the air navigation for a flying unit) to tile
@@ -3101,488 +1930,54 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
     return true;
 }
 
-// A group's movement can settle short of its tile. That must not cancel an
-// attack-move: opposing groups can otherwise stop outside acquisition range.
-// Finish its remaining approach as an individual route, as a renewed order
-// does, while retaining the normal targeting and navigation rules.
-function _continueShortAttackMove(u) {
-    if (u.commandState !== CMD_ATTACK_MOVING || u._attackMoveGx == null || u.holdPosition || u.workerState || u.unitType === 'scout') return false;
-    const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-    if (gx === u._attackMoveGx && gy === u._attackMoveGy) return false;
-    if (u._routeEnd >= 0 && gy * GRID_W + gx === u._routeEnd) return false;
-    u._routeKey = null; u.path = null; u.pathIndex = 0; u._navLastD = -1;
-    if (u._us) u._us.mvOn[u._si] = 0;
-    u._resumeAttackMove();
-    return true;
-}
-
-// A normal move may finish with its formation; attack-move keeps its intent
-// until its remaining approach has completed.
+// A group's move done where the unit stands (an order given at its
+// destination, main.js): idle, nothing issued. An attack-mover short of its
+// attack-move tile keeps it: the controller (mv.rs ctl, its idle rule) goes
+// on there as an individual.
 function simFlowArrive(u) {
-    if (_continueShortAttackMove(u)) return;
-    u._routeKey = null; u.path = null; u.pathIndex = 0;
+    let keep = false;
+    if (u.commandState === CMD_ATTACK_MOVING && u._attackMoveGx != null && !u.holdPosition && !u.workerState) {
+        const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
+        keep = !(gx === u._attackMoveGx && gy === u._attackMoveGy) && !(u._routeEnd >= 0 && gy * GRID_W + gx === u._routeEnd);
+    }
+    u._routeKey = null; u.path = null; u.pathIndex = 0; u._navLastD = -1;
     u._pendingPathTarget = null; u.pathIsFallbackAstar = false; u.targetPos = null;
-    if (u.commandState === CMD_ATTACK_MOVING) { u._attackMoveGx = u._attackMoveGy = null; }
+    if (u.commandState === CMD_ATTACK_MOVING && !keep) { u._attackMoveGx = u._attackMoveGy = null; }
     u.commandState = CMD_IDLE;
 }
 
-// A unit on a route (u._routeKey) away from its end, its path used up (so
-// Unit.update would go on along the route: continueUnitRoute): armed in
-// flow mode. (A path of its own first, as Unit.update follows it.)
-function _simMoveTryFlowArm(u, c, s, cmd) {
-    if (u._routeKey !== NAV_ROUTE_KEY || (u.path && u.pathIndex < u.path.length)) return false;
-    const x = c.x[s] * 0.125, y = c.y[s] * 0.125, gx = Math.floor(x / TILE), gy = Math.floor(y / TILE), t = gy * GRID_W + gx;
-    const dest = u._routeEnd, profile = navProfileOf(u);
-    if (!(dest >= 0) || t === dest) return false;
-    // (Its path's last node the route's end: the route is done, as
-    // continueUnitRoute decides.)
-    const last = u.path && u.path.length ? u.path[u.path.length - 1] : null;
-    if (last && last.y * GRID_W + last.x === dest) return false;
-    navEnsure(profile);
-    const did = navFieldRequest(profile, dest, true);
-    return did >= 0 && simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, u._navReady | 0, !!u.workerState, _simWorkerKind(u), profile);
-}
-
-// A unit ends its Unit.update marching along its path with nothing to react
-// to: arms it (the columns SIM_KERNEL_MOVE works from) when every input of
-// its next ticks is in the columns or the kernel's world tables.
+// A worker after its event on its way (a nav node next): armed in flow mode
+// toward the node's tile (the columns SIM_KERNEL_MOVE works from); waiting for
+// its way (a pending target): parked till its look. (Every other unit is the
+// controller's, mv.rs ctl.)
 function simMoveTryArm(u) {
     const c = u._us;
     if (!c || u.dead || u.holdPosition) return;
     const cmd = u.commandState;
     if (cmd !== CMD_MOVING && cmd !== CMD_ATTACK_MOVING) return;
-    // Waiting for its way (a pending target, no path): asleep till its look.
     if ((!u.path || u.pathIndex >= u.path.length) && u._pendingPathTarget) { simMoveTryParkWait(u, cmd); return; }
-    // A nav node next (workers too): flow mode toward its tile.
     const nd = u.path && u.pathIndex < u.path.length ? u.path[u.pathIndex] : null;
-    if (nd && nd.nav) {
-        if (u._spatialEpoch !== spatialEpoch) return;
-        const s = u._si, profile = nd.nav - 1, dest = nd.y * GRID_W + nd.x;
-        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
-        const did = navFieldRequest(profile, dest, !!nd.w);
-        // (Arriving in a crowd short of the tile: groups only.)
-        if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
-        return;
-    }
-    // (Workers walk their own paths: no group routes.)
-    const worker = !!u.workerState;
-    if (!worker && !u.holdPosition && u._spatialEpoch === spatialEpoch && _simMoveTryFlowArm(u, c, u._si, cmd)) return;
-    const path = u.path, idx = u.pathIndex;
-    // Waiting for its group's route (see routeGroupMembers): parked until
-    // the route gives it a path (the path setter wakes it) or its wait ends.
-    const waiting = !path || !(idx < path.length);
-    if (waiting && worker) return;
-    if (waiting && !(u.pathIsFallbackAstar && u._pendingPathTarget && u._pendingPathTarget.cmd === cmd && u._awaitGroupPath > gameTime + 1)) return;
-    const s = u._si;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    const owner = u.owner;
-    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
-    const pc = u.preComputed;
-    const spd = pc ? pc.speed * _getUnitAstarSpeedMultiplier(u) : NaN;
-    if (!(spd >= 0)) return;
-    let flags = 0, reach = 0;
-    if (cmd === CMD_MOVING) {
-        // Drive-by shots (tryDriveByAttack): the tiles of the areas in reach
-        // of its area (a table filled here and as it enters new areas).
-        if (pc.attackDamage > 0) {
-            reach = Math.ceil(_getUnitAttackRangeArea(u)) + 1;
-            if (!(reach >= 0 && reach < SIM_MOVE_BOX_STEPS)) return;
-            flags |= 1;
-        }
-    } else {
-        // Attack-move aggro (doAttackMoving): the chunks and tiles its unit
-        // and structure scans visit from anywhere in its tile.
-        reach = Math.ceil(Math.max(TILE, pc.visionRange * TILE) / TILE) + 1;
-        if (!(reach >= 0 && reach < 256)) return;
-        flags |= 16;
-    }
-    if (u.pathIsFallbackAstar) flags |= 8;
-    if (u.pathIsFallbackAstar && u._pendingPathTarget) flags |= 4;
-    if (u.isFlying) flags |= 32;
-    if (waiting) {
-        if (u._isNearIssuedTarget(spd)) return;
-        if (flags & 1) {
-            const area = u._spatialAreaId;
-            if (!(area >= 0)) return;
-            _simMoveEnsureAreaBox(area, reach);
-        }
-        c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvWake[s] = u._awaitGroupPath;
-        c.mvOn[s] = 2;
-        return;
-    }
-    // The path window: nodes from pathIndex - 1, up to a portal link (the
-    // kernel leaves those to Unit.update).
-    const base = idx > 0 ? idx - 1 : 0, nb = simUnitPathWindow(c, s), nodes = c.mvNodes;
-    // (Adjacent portal pairs only exist with cloud towers.)
-    const clouds = _cloudTileCache && _cloudTileCache.size > 0;
-    let wl = 0, px = 0, py = 0;
-    for (; wl < SIM_MOVE_WINDOW && base + wl < path.length; wl++) {
-        const n = path[base + wl], nx = n.x, ny = n.y;
-        if (wl > 0 && (Math.abs(nx - px) + Math.abs(ny - py) !== 1 || (clouds && isCloudPortalLink(px, py, nx, ny, owner)))) break;
-        // (A worker's path ends on its target's tile, where it may not
-        // stand: Unit.update walks it from there on.)
-        if (worker && wl > 0 && !canUnitOccupyTile(u, nx, ny)) break;
-        nodes[nb + wl] = ny * GRID_W + nx;
-        px = nx; py = ny;
-    }
-    if (wl < 2 && base + wl < path.length) return;
-    // Its area's box now; the next areas' as it enters them (simMoveRun).
-    if (flags & 1) {
-        const area = u._spatialAreaId;
-        if (!(area >= 0)) return;
-        _simMoveEnsureAreaBox(area, reach);
-    }
-    c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
-    c.mvFlags[s] = flags; c.mvReach[s] = reach;  c.mvSteady[s] = 0;
-    c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
-    
-    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = worker ? (_simWorkerKind(u) === 3 ? 3 : 1) : 0;
-    c.mvOn[s] = 1;
+    if (!(nd && nd.nav) || u._spatialEpoch !== spatialEpoch) return;
+    const s = u._si, profile = nd.nav - 1, dest = nd.y * GRID_W + nd.x;
+    if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
+    const did = navFieldRequest(profile, dest, !!nd.w);
+    // (Arriving in a crowd short of the tile: groups only.)
+    if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
 }
 
-// Structure chase (mvOn 7): a unit attacking a structure it is not in range
-// of, with no path left: a flyer, or one within two tiles of it, goes straight
-// at it (doAttacking's building branch: simChaseStep), by the kernel, which
-// hands it back when it is in range, the structure is gone or out of sight, or
-// the step is not open. Checked again at the unit's turn (simChaseStillValid).
-let SIM_BLD_CHASE = true;
-function _simMoveTryChaseBuilding(u) {
-    const c = u._us, tb = u.targetBuilding;
-    if (!SIM_BLD_CHASE || !c || u.dead || u.holdPosition || u.workerState || u.targetUnit || !tb || u.attackTarget === tb || !(tb.energy > 0)) return;
-    const path = u.path;
-    if (path && u.pathIndex < path.length) return;
-    const s = u._si, owner = u.owner, gx = tb.gx, gy = tb.gy;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
-    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
-        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
-    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-    if (!(k <= 2)) return;
-    const pc = u.preComputed;
-    if (!(pc && pc.speed * _getUnitAstarSpeedMultiplier(u) >= 0)) return;
-    // (A ground unit goes straight only within two tiles: the kernel checks each tick.)
-    if (!u.isFlying && !(detHypot(tb.x - u.x, tb.y - u.y) < 2 * TILE)) return;
-    c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
-    c.mvReach[s] = k; c.mvFlags[s] = u.isFlying ? 32 : 0;
-    c.mvOn[s] = 7;
-}
-
-// Approach (mvOn 6): a unit attacking a structure it is not in range of,
-// following its path there (doAttacking's building branch: followPath).
-// The kernel walks the path window, or the flow field of a nav node, as for
-// a move (no scans) while the structure's tile (mvHT) still holds a hostile structure, its area is in
-// sight and the unit is not in range (_simInAreaRange 0); it hands the unit
-// back when in range or unsure, at the window's or path's end, and on an
-// automatic target's look for enemy units ((t + id) % 8). Nothing during the
-// pass can fail doAttacking's checks on the structure (hits land after it,
-// destroyBuilding leaves its energy, sight is held), so no turn check.
-function _simMoveTryApproachBuilding(u) {
-    const c = u._us, tb = u.targetBuilding;
-    if (!c || u.dead || u.holdPosition || u.workerState || u.targetUnit || !tb || u.attackTarget === tb || !(tb.energy > 0)) return;
-    const path = u.path, idx = u.pathIndex;
-    if (!path || !(idx < path.length)) { _simMoveTryChaseBuilding(u); return; }
-    const s = u._si, owner = u.owner, gx = tb.gx, gy = tb.gy;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount) || !spatialBlockCols) return;
-    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
-        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
-    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-    if (!(k <= 2)) return;
-    const pc = u.preComputed;
-    const spd = pc ? pc.speed * _getUnitAstarSpeedMultiplier(u) : NaN;
-    if (!(spd >= 0)) return;
-    // A flow navigation node next (_followNavNode): flow mode toward its
-    // tile, without scans. Arriving short of it in a crowd only for a group
-    // node (nd.w) that ends the path, as _followNavNode (the kernel hands
-    // that arrival back to Unit.update); bit 128 otherwise.
-    const nd = path[idx];
-    if (nd.nav) {
-        const dest = nd.y * GRID_W + nd.x, profile = nd.nav - 1;
-        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
-        const did = navFieldRequest(profile, dest, !!nd.w);
-        if (!(did >= 0)) return;
-        const crowd = !!nd.w && idx === path.length - 1;
-        c.mvFlags[s] = 64 | (crowd ? 0 : 128) | (profile === NAV_PROFILE_AIR ? 32 : 0); c.mvReach[s] = k;  c.mvNP[s] = profile;
-        c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0;
-        c.mvWk[s] = 0; c.mvSpent[s] = 0;
-        c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
-        c.mvOn[s] = 6;
-        return;
-    }
-    // The path window, as simMoveTryArm's (and ending before a nav node).
-    const base = idx > 0 ? idx - 1 : 0, nb = simUnitPathWindow(c, s), nodes = c.mvNodes;
-    const clouds = _cloudTileCache && _cloudTileCache.size > 0;
-    let wl = 0, px = 0, py = 0;
-    for (; wl < SIM_MOVE_WINDOW && base + wl < path.length; wl++) {
-        const n = path[base + wl], nx = n.x, ny = n.y;
-        if (wl > 0 && (n.nav || Math.abs(nx - px) + Math.abs(ny - py) !== 1 || (clouds && isCloudPortalLink(px, py, nx, ny, owner)))) break;
-        nodes[nb + wl] = ny * GRID_W + nx;
-        px = nx; py = ny;
-    }
-    if (wl < 2 && base + wl < path.length) return;
-    c.mvBase[s] = base; c.mvWlen[s] = wl; c.mvPlen[s] = path.length;
-    c.mvFlags[s] = (u.pathIsFallbackAstar ? 8 : 0) | (u.isFlying ? 32 : 0);
-    c.mvReach[s] = k; 
-    c.mvLane[s] = Math.max(1.5, Math.min(4, u.r * 0.6));
-    
-    c.mvScan[s] = -1; c.mvSpent[s] = 0; c.mvWk[s] = 0;
-    c.mvHT[s] = gy * GRID_W + gx; c.mvHTId[s] = u.forcedAttackTarget ? 1 : 0;
-    c.mvOn[s] = 6;
-}
-
-// An idle worker whose search found nothing does nothing until its next
-// search tick (see shouldRunWorkerIdleRetarget) or, for a builder, its next
-// recheck: parked (mvOn 2) until then, its ticks cost the kernel a floor
-// check. Anything that could give it work sooner (its state, a forced
-// search, orders, status, stats) wakes it through the setters and hooks.
-// A chase within CHASE_DIRECT_TILES of the target goes straight at it while
-// the tile its next step enters (and the target's) is open ground.
-const CHASE_DIRECT_TILES = 6;
-function _isChaseStepOpen(u, t, d, px = t.x, py = t.y) {
-    if (!(d < CHASE_DIRECT_TILES * TILE) || !(d > 0)) return false;
-    const wall = simMoveWallGrid(), step = Math.max(TILE * 0.6, Number(u.preComputed && u.preComputed.speed) || 1);
-    const nx = u.x + (px - u.x) / d * step, ny = u.y + (py - u.y) / d * step;
-    const gx = Math.floor(nx / TILE), gy = Math.floor(ny / TILE), tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
-    if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H || tx < 0 || ty < 0 || tx >= GRID_W || ty >= GRID_H) return false;
-    return !wall[gy * GRID_W + gx] && !wall[ty * GRID_W + tx];
-}
-
-// Attack hold: a unit attacking a unit in range, waiting for its cooldown,
-// needs nothing of Unit.update while nothing changes (the status pre-pass
-// counts its timers down). The kernel hands the unit back on the tick of
-// its attack, or at once when the target dies or leaves its tile, the unit
-// leaves its tile (the range is a matter of that), or the target's area
-// leaves its owner's sight. A forced target (an order, retaliation:
-// mvFlags 8): the kernel keeps its last seen position as doAttacking does
-// (fLsX/fLsY, while its area is in sight; out of sight Unit.update decides,
-// contact counts there). Held units and structures stay in Unit.update.
-function simMoveTryHold(u) {
-    const c = u._us, tu = u.targetUnit;
-    if (c && !tu && u.targetBuilding) { _simMoveTryHoldBuilding(u, c); return; }
-    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding || u.attackTarget !== tu || u.path) return;
-    // (A timer of one tick: held too, its attack next tick made by the
-    // kernel's hand-back, simHoldFire, not a whole Unit.update.)
-    if (!(u.attackTimer > 0) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
-    const q = tu._si, tc = tu._us;
-    if (tc !== c || !(q >= 0) || u._spatialEpoch !== spatialEpoch || c.sepKey[u._si] === SIM_SEP_ABSENT) return;
-    // (Range in area steps; the kernel works out up to 1, touching included.
-    // Longer: held while it stands in the window and its target on the tile
-    // it is in range by areas from: the result is a pure function of those.)
-    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-    const s = u._si;
-    if (!(k <= 1)) {
-        const tx = _unitTickX(tu), ty = _unitTickY(tu), tgx = Math.floor(tx / TILE), tgy = Math.floor(ty / TILE);
-        if (!(tgx >= 0 && tgy >= 0 && tgx < GRID_W && tgy < GRID_H) || !isWorldTargetWithinAreaRange(u.x, u.y, tx, ty, k)) return;
-        c.mvHWin[s] = simWindowKey(u.x, u.y, TILE); c.mvHTT[s] = tgy * GRID_W + tgx; c.mvHVer[s] = _simAreaLayoutVer;
-    }
-    // (A short hold: the kernel keeps its last in-range-by-areas look in
-    // mvHWin / mvHTT / mvHVer; none yet.)
-    else c.mvHVer[s] = -1;
-    c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
-    // (Its target stepping out of range: the kernel takes the chase's step,
-    // see simMoveTryChase.)
-    
-    // (Bit 4: its attacks made by the kernel, simHoldFire's work at the
-    // pass's start; not a ram's, whose recoil is the object's.)
-    const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) {   c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
-    c.mvFlags[s] = (u.isFlying ? 32 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
-    c.mvOn[s] = 3;
-}
-
-// Building hold (mvOn 5): a unit attacking a structure in range, waiting for
-// its cooldown (doAttacking's building branch: alive, visible, in area
-// range, attackTimer above 0). The kernel keeps it while the structure's
-// tile still holds a hostile structure (mv.struct), its area is in sight,
-// it is in range and the timer runs, and hands it back on its attack tick,
-// on an automatic target's reconsideration tick ((t + id) % 8: a look for
-// enemy units) and on the usual floor/wall checks. The structure's own
-// state is checked again at the unit's turn (simHoldStillValid).
-function _simMoveTryHoldBuilding(u, c) {
-    const tb = u.targetBuilding;
-    if (u.dead || u.holdPosition || u.workerState || u.path || u.attackTarget !== tb || !(tb.energy > 0)) return;
-    if (!(u.attackTimer > 0) || !(u.preComputed && u.preComputed.attackDamage > 0)) return;
-    const s = u._si, gx = tb.gx, gy = tb.gy;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    // (The kernel knows the tile; a structure stands at its centre.)
-    if (!(Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)
-        || tb.x !== gx * TILE + TILE / 2 || tb.y !== gy * TILE + TILE / 2) return;
-    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-    if (!(k <= 2)) return;
-    c.mvDest[s] = gy * GRID_W + gx; c.mvReach[s] = k;
-    c.mvFlags[s] = u.forcedAttackTarget ? 1 : 0;
-    c.mvOn[s] = 5;
-}
-
-// Chase: a unit after an enemy unit it is not in range of, with no path of
-// its own, steps straight at it while _isChaseStepOpen (or it is close, or
-// flies) in doAttacking. The kernel does those ticks: it hands the unit back
-// when the target dies, leaves its owner's sight, comes in range or out of
-// leash (a forced target has none: mvFlags 8, its last seen position kept
-// as for a hold), when the straight step is not open or would enter a wall
-// or a structure's tile, and on a hostile floor. Structures, held units and
-// workers stay in Unit.update.
-// Checked again at the unit's turn in the pass (simChaseStillValid).
-function simMoveTryChase(u) {
-    const c = u._us, tu = u.targetUnit;
-    // (attackTarget may still name its target from a tick it was in range:
-    // doAttacking's chase leaves it, nothing on the way reads it. A unit in
-    // range the hold did not take (its attack tick, a path left) comes out
-    // of the kernel as come in range: simHoldChaseCommit, the same.)
-    if (!c || u.dead || u.holdPosition || u.workerState || !tu || tu.dead || u.targetBuilding) return;
-    // (With a path of its own, doAttacking steps straight only when close or
-    // the step is open, flying or not; otherwise it follows the path:
-    // Unit.update. Bit 1 tells the kernel.)
-    const hasPath = !!(u.path && u.pathIndex < u.path.length);
-    const pc = u.preComputed;
-    if (!(pc && pc.attackDamage > 0)) return;
-    const q = tu._si, s = u._si;
-    if (tu._us !== c || !(q >= 0) || u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    // (Range in area steps; the kernel works out up to 2, touching included.)
-    const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
-    if (!(k <= 1)) return;
-    // (Bit 4: come in range, its attack made by the kernel, as a hold's.)
-    const kf = SIM_KERNEL_FIRE && u.attackStyle !== 'ram';
-    if (kf) {   c.atkSty[s] = _hitStyleCode(u); c.atkWatch[s] = _unitWatchTicks(u); }
-    let flags = (u.isFlying ? 32 : 0) | (hasPath ? 2 : 0) | (u.forcedAttackTarget ? 8 : 0) | (kf ? 4 : 0);
-    // Its path's next node a nav node (navPathTo): the kernel follows its
-    // flow field when the straight step is not open (followPath ->
-    // _followNavNode), as _simMoveTryApproachBuilding arms it.
-    const nd = hasPath ? u.path[u.pathIndex] : null;
-    if (nd && nd.nav && ((nd.nav - 1) === NAV_PROFILE_AIR) === !!u.isFlying) {
-        const dest = nd.y * GRID_W + nd.x, profile = nd.nav - 1;
-        const spd = pc.speed * _getUnitAstarSpeedMultiplier(u);
-        if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) !== dest && spd >= 0) {
-            const did = navFieldRequest(profile, dest, !!nd.w);
-            if (did >= 0) {
-                const crowd = !!nd.w && u.pathIndex === u.path.length - 1;
-                flags |= 64 | (crowd ? 0 : 128);
-                 c.mvFlow[s] = did; c.mvFGen[s] = navFieldGen(did); c.mvDest[s] = dest; c.mvReady[s] = nd.ready | 0; c.mvNP[s] = profile;
-                c.mvWk[s] = 0; c.mvSpent[s] = 0;
-            }
-        }
-    }
-    c.mvHT[s] = q; c.mvHTId[s] = tu.id; c.mvReach[s] = k;
-    
-    c.mvFlags[s] = flags;
-    c.mvOn[s] = 4;
-}
-// A chasing unit the kernel moved (output 7-9), at its turn: whether that
-// move still stands (its target and itself alive, its orders the same, the
-// walls as they were). Otherwise the move is undone and Unit.update runs.
-// (on: 3 for a hold's chase step or a chase come in range, outputs 11-13.)
-function simChaseStillValid(c, s, on = 4) {
-    if (on === 4 && c.mvOn[s] === 7) return _simBldChaseStillValid(c, s);
-    if (c.mvOn[s] !== on || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
-    const q = c.mvHT[s];
-    if (!(q >= 0) || c.dead0[q] || (c.id[q] | 0) !== c.mvHTId[s]) return false;
-    const u = _simUnitState.owners[s], tu = u && u.targetUnit;
-    return !!tu && tu._si === q && u.commandState === CMD_ATTACKING && !!u.forcedAttackTarget === ((c.mvFlags[s] & 8) !== 0) && !u.targetBuilding && !u.holdPosition;
-}
-// A structure chase (mvOn 7, outputs 7 and 9) at its turn: the structure still
-// standing and still the unit's target, the unit not yet in range, the walls
-// as they were.
-function _simBldChaseStillValid(c, s) {
-    if (c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
-    const u = _simUnitState.owners[s], tb = u && u.targetBuilding;
-    return !!tb && tb.energy > 0 && !u.targetUnit && u.attackTarget !== tb && u.commandState === CMD_ATTACKING && !u.holdPosition && !u.workerState
-        && tb.gy * GRID_W + tb.gx === c.mvHT[s] && !!u.forcedAttackTarget === (c.mvHTId[s] === 1) && !(u.path && u.pathIndex < u.path.length);
-}
-function simChaseUndo(c, s) {
-    c.mvOn[s] = 0; c.mvOut[s] = 0;
-    if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED) return;
-    c.x[s] = c.prevX[s]; c.y[s] = c.prevY[s];
-}
-// The last seen position of a forced target as before the kernel's write
-// this tick (fLsT): the unit runs Unit.update after all (handed back, or its
-// hold or chase no longer standing at its turn).
-function simForcedSeenUndo(c, s) {
-    c.fLsX[s] = c.fLsPX[s]; c.fLsY[s] = c.fLsPY[s]; c.fLsT[s] = -1;
-}
-
-// A held unit at its turn in the update pass (kernel output 6): whether the
-// hold still stands now, after the units before it in the pass (a target
-// they killed or moved, sight they took away...). Otherwise it runs
-// Unit.update after all: what it would have done at this point.
-function simHoldStillValid(c, s) {
-    // (Targets are seen where they were at the pass's start, hits land
-    // after it: only a death during the pass, or walls changed, matter.)
-    const on = c.mvOn[s];
-    if ((on !== 3 && on !== 5) || c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer || (_simMoveWallQ.length && _simMoveWallQNear(c, s))) return false;
-    if (on === 5) {
-        // A structure: still standing, still the unit's target.
-        const u = _simUnitState.owners[s], tb = u && u.targetBuilding;
-        return !!tb && tb.energy > 0 && !u.targetUnit && u.attackTarget === tb && u.commandState === CMD_ATTACKING && !u.holdPosition
-            && tb.gy * GRID_W + tb.gx === c.mvDest[s];
-    }
-    const q = c.mvHT[s];
-    return q >= 0 && !c.dead0[q] && (c.id[q] | 0) === c.mvHTId[s];
-}
-// A held unit's attack tick (kernel output 10), its hold still standing at
-// its turn: what Unit.update does then (doAttacking in range with the timer
-// run out: the attack on its target, unit or structure), and, as at its end,
-// armed again (the timer restarted).
-function simHoldFire(c, s) {
-    const u = _simUnitState.owners[s];
-    if (c.mvOn[s] === 5) { const tb = u.targetBuilding; u.attackTarget = tb; u._performAttackOnBuilding(tb); }
-    else { const tu = u.targetUnit; u.attackTarget = tu; u._performAttackOnUnit(tu); }
-    c.mvOn[s] = 0;
-    if (u.dead || u.commandState !== CMD_ATTACKING) return;
-    simMoveTryHold(u);
-    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
-}
-// A hold whose target stepped out of range, after its step (kernel output
-// 11, 12), or a chase come in range (13), at its turn (simChaseStillValid):
-// the rest of what Unit.update does then (doAttacking in range: its target
-// the attack target, its path dropped, the attack on its attack tick) and,
-// as at its end, armed again.
-function simHoldChaseCommit(c, s, o) {
-    const u = _simUnitState.owners[s];
-    c.mvOn[s] = 0;
-    if (o === 13) {
-        const tu = u.targetUnit;
-        u.attackTarget = tu; u.path = null;
-        if (u.attackTimer <= 0) u._performAttackOnUnit(tu);
-        if (u.dead || u.commandState !== CMD_ATTACKING) return;
-    }
-    simMoveTryHold(u);
-    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
-}
-// A chase come in range (output 13), at its turn: doAttacking in range (its
-// target the attack target, its path dropped, its attack on its attack tick
-// unless the kernel made it) and held again: as simMoveTryHold arms it from
-// the chase's columns (the same target, range and step) when its timer
-// runs; else the whole arming.
-function simChaseInRangeCommit(c, s) {
-    const u = _simUnitState.owners[s], tu = u.targetUnit;
-    u.attackTarget = tu; u.path = null;
-    c.mvOn[s] = 0;
-    if (u.attackTimer <= 0) u._performAttackOnUnit(tu);
-    if (u.dead || u.commandState !== CMD_ATTACKING) return;
-    if (u.attackTimer > 0 && tu && !tu.dead && !u.holdPosition && !u.targetBuilding) {
-        c.mvHVer[s] = -1;
-        c.mvFlags[s] = (c.mvFlags[s] & 40) | (SIM_KERNEL_FIRE && u.attackStyle !== 'ram' ? 4 : 0);
-        c.mvOn[s] = 3;
-        return;
-    }
-    simMoveTryHold(u);
-    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
-}
-// The units the kernel moved or held, not visited in the pass, on a tile
-// that became a wall during it: pushed out as the end of their Unit.update
-// would have, in id order.
+// The units on a tile that became a wall this tick (a building placed, a
+// wall grown): pushed out, in id order.
 function simPassWallFixups(S) {
     const q = _simMoveWallQ;
     if (!q.length) return;
-    const c = S.columns, OUT = c.mvOut, list = [], seen = new Set();
+    const c = S.columns, list = [], seen = new Set();
     for (let i = 0; i < q.length; i += 2) {
         const gx = q[i], gy = q[i + 1], row = grid[gy], cell = row ? row[gx] : null;
         if (!cell || cell.type !== TYPE_WALL) continue;
         forEachUnitInRange(gx * TILE + TILE / 2, gy * TILE + TILE / 2, TILE * 1.5, u => {
             const s = u._si;
             if (!(s >= 0) || u._us !== c || seen.has(u)) return;
-            const o = OUT[s];
-            if (o === 0 || o === 10 || o >= 13 || o === 4 || o === 5 || u.dead || u.isFlying) return;
+            if (u.dead || u.isFlying) return;
             if (Math.floor(c.x[s] * 0.125 / TILE) !== gx || Math.floor(c.y[s] * 0.125 / TILE) !== gy) return;
             seen.add(u); list.push(u);
         });
@@ -3594,57 +1989,6 @@ function simPassWallFixups(S) {
         updateUnitSpatial(u);
     }
 }
-function simHoldUndo(c, s) {
-    c.mvOn[s] = 0; c.mvOut[s] = 0;
-}
-// A drive-by shooter the kernel moved whose look (SIM_KERNEL_DRIVEBY) found
-// something (mvFire): at its turn, its shot, as at the end of Unit.update
-// (after its step, from where it stands then).
-function simDriveByFire(c, s, u) {
-    if (u.dead || !(c.energy[s] > 0) || u.commandState !== CMD_MOVING) return;
-    u.tryDriveByAttack();
-}
-// A held or chasing unit whose target died (kernel output 15, as at the
-// pass's start): at its turn, what Unit.update does then (doAttacking: its
-// target dropped, idle, an attack-move resumed; then its end). False: not
-// as the kernel saw it, Unit.update runs.
-function simTargetDiedCommit(c, s, u) {
-    if (c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer) return false;
-    if (!u || u.dead || u.workerState || u.commandState !== CMD_ATTACKING || u.targetBuilding || !u.targetUnit || !_unitTickDead(u.targetUnit)) return false;
-    if (c.fLsT[s] === gameTime) simForcedSeenUndo(c, s);
-    u.prevX = u.x; u.prevY = u.y;
-    u.targetUnit = null; u.attackTarget = null; u.forcedAttackTarget = false; u.commandState = CMD_IDLE;
-    u._resumeAttackMove();
-    _unitUpdateEnd(u, c, false);
-    return true;
-}
-// An attack-mover or idle combat unit whose aggro look (the acquisition
-// tier's target, on its acquisition tick) found a unit: kernel output 14 (it
-// stood: no move). At its turn, what Unit.update would do there: the
-// preamble (the floor was the kernel's check), doAttackMoving's / doIdle's
-// first branch (that target, unforced, attacking), the end (push out of a
-// blocked tile, the index, re-armed as an attacker). False: the unit runs
-// Unit.update after all (not as the kernel saw it, or a wall changed by it).
-function simEngageCommit(c, s) {
-    // (Walls changed by the pass's units: its tile looked at after the pass,
-    // _simPassWallFixups.)
-    if (c.dead[s] || !(c.energy[s] > 0) || _simMoveWallDirty || _simMoveWallVer !== _simMoveRunWallVer) return false;
-    const u = _simUnitState.owners[s];
-    if (!u || u.dead || u.workerState || u.holdPosition) return false;
-    const cmd = u.commandState;
-    if (cmd !== CMD_ATTACK_MOVING && !(cmd === CMD_IDLE && u.unitType !== 'scout')) return false;
-    if (c.fLsT[s] === gameTime || !_unitAcquireTick(u)) return false;
-    const e = _combatScanTarget(u, Math.max(TILE, u.preComputed.visionRange * TILE));
-    if (!e) return false;
-    // (It stood: prevX/prevY are the kernel's, its position quantized and
-    // indexed already; its tile was open at the pass's start.)
-    u.targetUnit = e;
-    u.forcedAttackTarget = false;
-    u.commandState = CMD_ATTACKING;
-    simMoveTryHold(u);
-    if (c.mvOn[s] !== 3 && c.mvOn[s] !== 5) { simMoveTryChase(u); if (c.mvOn[s] !== 4) _simMoveTryApproachBuilding(u); }
-    return true;
-}
 
 // An idle combat unit with nothing in reach parks too: the kernel checks its
 // floor and its aggro box (hostile units or structures there: back to
@@ -3655,31 +1999,6 @@ function simEngageCommit(c, s) {
 // kernel hands a parked unit back for anything its update would act on;
 // every 100 ticks cost ~1500 updates a tick with 150k idle units.)
 const SIM_IDLE_PARK_TICKS = 1000;
-// A held unit with an order to attack (a unit or a structure out of its
-// range: a hold never chases) whose look found nothing to shoot, its timer
-// ready: Unit.update looked again every tick (doHolding: ~13 us; ~160 a
-// tick of the mega scenario's held raiders). Parked till its next
-// acquisition tick, the ticks idle units look on; its order kept (any new
-// one, a stop or a hold disarms it), the order's target checked then.
-function simMoveTryParkHeldAttacker(u) {
-    const c = u._us;
-    if (!c || u.dead || !u.holdPosition || u.workerState || u.commandState !== CMD_ATTACKING || u.attackTimer > 0) return;
-    const s = u._si;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    const P = SIM_ACQUIRE_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 0; c.mvReach[s] = 0;
-    c.mvOn[s] = 2;
-}
-function simMoveTryParkIdle(u) {
-    const c = u._us;
-    if (!c || u.dead || u.workerState || u.unitType === 'scout' || u._attackMoveGx != null) return;
-    const s = u._si, reach = c.mvReachA[s];
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT || reach === 255) return;
-    const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    // (128: its periodic check is the kernel's, which keeps it parked: mv.rs move_pre.)
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = 16 | 128; c.mvReach[s] = reach; c.mvWk[s] = 0;
-    c.mvOn[s] = 2;
-}
 // A unit waiting for its way (a pending target, no path: the helpers'
 // answer, or a look again, at its retry tick): parked till then, so the
 // simulation thread does nothing for it meanwhile (the kernel stands it,
@@ -4336,6 +2655,9 @@ function simMoveRun() {
     if (!S || !spatialBlockCols || spatialBlockCounts.length !== spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount) return;
     const n = S.owners.length;
     if (!n) return;
+    // (Targets set before their target had a slot (a restore): their slots,
+    // which the kernel's attack orders read, on every peer alike.)
+    simUnitTargetsResolve();
     const c = S.columns, players = spatialUnitsComplexPlayerCount;
     // (Changed stat tables reach the movement columns as each unit takes them,
     // simMoveStatsChanged; not every unit at once.)
@@ -4467,7 +2789,6 @@ function simMoveRun() {
         if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners[s]) _setUnitAstarBudgetBlockedIndicator(owners[s], 1); }
         if (o === 1 || o === 6 || o === 7 || o === 10 || o === 11 || o === 13 || o === 14 || o === 15) continue;
         // Arrived in the crowd at its destination: the move is done.
-        if (o === 5) { const u = owners[s]; if (u && !u.dead) simFlowArrive(u); continue; }
         // Into a wall tile: the end of Unit.update (pushed out; can start
         // path work on the owner's budget): in id order afterwards.
         if (o === 4) { if (owners[s]) (slow ||= []).push(owners[s]); continue; }
@@ -4588,7 +2909,6 @@ function _spatialUnitTypeNames() {
 // tier below the tick (5 a second each, staggered); the structure look
 // (every 4 ticks) falls on the same ticks.
 const SIM_ACQUIRE_TICKS = 4;
-function _unitAcquireTick(u) { return simStepCrosses(u.id, SIM_ACQUIRE_TICKS); }
 // The nearest visible enemy unit within `range` of an idle or attack-moving
 // unit: this tick's combat scan (the world at the start of the update pass),
 // else (another range, a unit the scan did not cover, or a target killed
@@ -4610,23 +2930,6 @@ function _acqStructureHit(u, range) {
     if (owner === u.owner || (isItem && e.underConstruction)) return null;
     if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return null;
     return e;
-}
-// (The acquisition tier's result, no search here: _combatScanHit.)
-function _combatScanTarget(u, range) { return _combatScanHit(u, range); }
-// The acquisition tier's committed target of u (see _acqTierStep): looked
-// for with this range, alive (as at the pass's start) and the same unit;
-// else null (nothing until the next commit).
-function _combatScanHit(u, range) {
-    const c = u._us;
-    if (!c) return null;
-    const s = u._si;
-    // (The combat brain engages combat units: not their objects.)
-    if (SIM_COMBAT_BRAIN && !c.isWk[s]) return null;
-    if (c.cbTick[s] !== _acqCommitTick || c.cbRangeS[s] !== range) return null;
-    const q = c.cbT[s];
-    if (q < 0) return null;
-    const e = _simUnitState.owners[q];
-    return e && (e.id | 0) === c.cbTId[s] && !_unitTickDead(e) ? e : null;
 }
 // Runs the combat scan for every idle or attack-moving unit before the
 // update pass (in parallel; see SIM_KERNEL_COMBAT_SCAN).
@@ -4750,6 +3053,7 @@ function _acqPost() {
         _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap);
         _acq.cap = cap;
     }
+    simUnitTargetsResolve();
     const P = _simParams;
     P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING; P[4] = SIM_COMBAT_BRAIN ? 1 : 0; P[5] = CMD_MOVING;
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
@@ -4810,7 +3114,7 @@ function _acqPost() {
         _simAreaCsr();
         _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
         _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
-        C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A;
+        C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A; C3[9] = CMD_ATTACKING;
     }
     const stages=[[SIM_KERNEL_ACQ_OMT,prepJobs]];
     if(sampled){
@@ -4857,14 +3161,6 @@ function _acqCommit() {
     if (_acqBrain) { P[0] = n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(n / 8192)); }
     _acqCommitTick = gameTime;
 }
-
-// After the update pass: no unit counts as moved by the kernel any more
-// (a later Unit.update call runs in full).
-function simMoveEndTick() {
-    const S = _simUnitState;
-    if (S) S.columns.mvOut.fill(0, 0, S.owners.length);
-}
-
 
 // How far a unit may have moved within a tick since the unit index was
 // built (a unit's step plus a push), for the collision pass's culling.

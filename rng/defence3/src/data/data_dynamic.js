@@ -2407,6 +2407,12 @@ function clampThingStatValue(key, stat, value) {
     return value;
 }
 
+// Distances counted in areas: whole areas only (0a its own area, 1a and those next to it, ...), as the
+// kernels count them; the data's factors give fractions, the tables keep their whole part. (Not sight:
+// its data tells none (0) from its own area (0.2-0.8), and every use counts its whole steps of a value
+// above 0, getEntityEffectiveVisibilityRangeArea; shown whole, formatAreaDistanceStat.)
+const AREA_STAT_KEYS = new Set(['attackRange', 'workerSearchDistance']);
+function _areaStat(statKey, v) { return AREA_STAT_KEYS.has(statKey) && Number.isFinite(v) ? Math.floor(Math.max(0, v) + 1e-9) : v; }
 function rebuildPrecomputedStatsMap() {
     rebuildThingDefinitionViews();
     PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
@@ -2426,7 +2432,7 @@ function rebuildPrecomputedStatsMap() {
                 for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                     let researched = applyResearchLevelToBaseValue('unit', base[statKey], statKey, r, unitType);
                     let capped = applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap);
-                    arr[r] = clampThingStatValue(unitType, statKey, normalizePrecomputedUnitStatValue(unitType, statKey, capped));
+                    arr[r] = _areaStat(statKey, clampThingStatValue(unitType, statKey, normalizePrecomputedUnitStatValue(unitType, statKey, capped)));
                 }
                 levelEntry[statKey] = arr;
             }
@@ -2448,7 +2454,7 @@ function rebuildPrecomputedStatsMap() {
                 let maxValueBeforeCap = applyResearchLevelToBaseValue('building', baseAtMaxLevel[statKey], statKey, MAX_RESEARCH_LEVEL, buildingKey);
                 for (let r = 0; r <= MAX_RESEARCH_LEVEL; r++) {
                     let researched = applyResearchLevelToBaseValue('building', base[statKey], statKey, r, buildingKey);
-                    arr[r] = clampThingStatValue(buildingKey, statKey, applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap));
+                    arr[r] = _areaStat(statKey, clampThingStatValue(buildingKey, statKey, applyPrecomputedSoftCap(researched, cap, statKey, baselineValue, maxValueBeforeCap)));
                 }
                 levelEntry[statKey] = arr;
             }
@@ -2526,7 +2532,7 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
 
     let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
     let attackCooldownSec = Math.max(0.01, Number(values.atkCd) || 0.01);
-    let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
+    let attackRangeArea = Math.floor(Math.max(0, Number(values.attackRange) || 0));
     let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05, attackRangeArea);
     let transferCooldownSec = Math.max(0.01, Number(values.transferCooldown) || 0.01);
 
@@ -2541,7 +2547,7 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
         attackRangeArea,
         attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
         watchDuration: Math.max(0, Number(values.watchDuration) || 0),
-        workerSearchDistance: Math.max(0, Number(values.workerSearchDistance) || 0),
+        workerSearchDistance: Math.floor(Math.max(0, Number(values.workerSearchDistance) || 0)),
         gatherPerTrip: Math.max(0, Number(values.gatherPerTrip) || 0),
         builderDps: Math.max(0, Number(values.builderDps) || 0),
         healerDps: Math.max(0, Number(values.healerDps) || 0),
@@ -2571,7 +2577,7 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
     let cd = Number(values.cd);
     let spawnCd = Number(values.spawnCd);
     let visionRange = Number(values.visionRange);
-    let attackRangeArea = Math.max(0, Number(values.attackRange) || 0);
+    let attackRangeArea = Math.floor(Math.max(0, Number(values.attackRange) || 0));
 
     if (attackRangeArea > 0) visionRange = Math.max(visionRange || 0, attackRangeArea);
 
@@ -2688,12 +2694,12 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
         entry.visionRange = v * AREA_UNIT_TILE_EQUIVALENT;
     }
     else if (statKey === 'attackRange') {
-        const v = Math.max(0, Number(value) || 0);
+        const v = Math.floor(Math.max(0, Number(value) || 0));
         entry.attackRangeArea = v;
         entry.attackRange = v * AREA_UNIT_TILE_EQUIVALENT * TILE;
     }
     else if (statKey === 'watchDuration') entry.watchDuration = Math.max(0, Number(value) || 0);
-    else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.max(0, Number(value) || 0);
+    else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.floor(Math.max(0, Number(value) || 0));
     else if (statKey === 'gatherPerTrip') entry.gatherPerTrip = Math.max(0, Number(value) || 0);
     else if (statKey === 'builderDps') entry.builderDps = Math.max(0, Number(value) || 0);
     else if (statKey === 'healerDps') entry.healerDps = Math.max(0, Number(value) || 0);
@@ -2726,7 +2732,7 @@ function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
         entry.visionRangeArea = entry.visionRange;
     }
     else if (statKey === 'attackRange') {
-        const v = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
+        const v = Number.isFinite(value) ? Math.floor(Math.max(0, Number(value))) : NaN;
         entry.attackRangeArea = v;
         entry.attackRange = Number.isFinite(v) ? (v * AREA_UNIT_TILE_EQUIVALENT * TILE) : NaN;
     }
@@ -3006,10 +3012,9 @@ function formatResearchStatValue(statKey, value) {
     }
     if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
     if (statKey === 'blastDamage') return compact(value, 2);
-    if (statKey === 'blastRadius') return areaCompact(value);
+    if (statKey === 'blastRadius') return formatBlastRadiusStat(value);
     if (statKey === 'workerSearchDistance') return areaCompact(value);
-    // (The attack range in areas, fractional: 1.5 areas.)
-    if (statKey === 'attackRange') { const a = Math.round(Math.max(0, Number(value) || 0) * 100) / 100; return `${a} area${a === 1 ? '' : 's'}`; }
+    if (statKey === 'attackRange') return areaCompact(value);
     if (statKey === 'visionRange') return areaCompact(value);
     if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);
     if (statKey === 'efficiency') return compact(value, 2);

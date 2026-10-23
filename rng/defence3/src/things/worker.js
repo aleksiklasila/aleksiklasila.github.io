@@ -4141,9 +4141,10 @@ function requeueLocalAction(finalAction) {
     delete lockstepLocalPacketByTick[tick];
     if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) delete lockstepHostPacketsByTick[tick][myPeerId];
 }
+// (Returns the tick it goes in: undefined when it went nowhere.)
 function queueAction(action) {
     if (localDefeated && action && action.action !== 'resign') return;
-    _queueLocalAction(action);
+    return _queueLocalAction(action);
 }
 // The host's administrative commands (HOST_ADMIN_ACTIONS: a leaving
 // player's team resigned): the match's, not the host's player's, so they go
@@ -4190,6 +4191,7 @@ function _queueLocalAction(action) {
     if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) {
         delete lockstepHostPacketsByTick[tick][myPeerId];
     }
+    return tick;
 }
 
 function clearWorkerTaskMemoryForFreeRetarget(u) {

@@ -257,8 +257,13 @@ function flickers(frames, field) {
                 setRenderDimensionMode('${mode}');
                 // (A fighter with open ground ahead: the king may stand in a walled
                 // pocket of its base, with nowhere to go.)
-                const open = u => { const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE); for (let d = 0; d <= 3; d++) { if (gy - d < 1 || grid[gy - d][gx].type === TYPE_WALL || getTileEntityRef(gx, gy - d)) return false; } return true; };
-                const k = units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType && !u.isKing && open(u)) || units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
+                // (Open for the 4 tiles it walks and more; of those, the one with the
+                // fewest units near its way: the crowd's pushes are the crowd
+                // tests' to judge, not the drawing's.)
+                const open = u => { const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE); for (let d = 0; d <= 6; d++) { if (gy - d < 1 || grid[gy - d][gx].type === TYPE_WALL || getTileEntityRef(gx, gy - d)) return false; } return true; };
+                const near = u => units.filter(o => o !== u && !o.dead && Math.abs(o.x - u.x) < 2 * TILE && o.y < u.y + TILE && o.y > u.y - 5 * TILE).length;
+                const ks = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType && !u.isKing && open(u)).map(u => [near(u), u.id, u]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+                const k = ks.length ? ks[0][2] : units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);
                 // (3D close up: the unit is in the unit layer, drawn from the
                 // layer's record of it and the layer's alpha: that position
                 // is the one checked, see RECORD.)

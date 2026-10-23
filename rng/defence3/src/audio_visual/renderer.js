@@ -2695,6 +2695,12 @@ function getUnitOrderTarget(u) {
 // (The most markers a selection shows: an army sent to thousands of points
 // is not drawn as thousands of crosses.)
 const ORDER_MARKERS_MAX = 2000;
+// (A big selection's scans, its buildings' rally points and its units'
+// destinations, made at most every ORDER_MARKERS_SCAN_MS: while an order is
+// on its way (seconds at 1 TPS) they were made every frame, ~100 ms each for
+// a million units and 190k buildings; what is on its way is drawn each frame.)
+const ORDER_MARKERS_SCAN_MS = 200;
+let _orderMarkerScan = null;
 function getOrderMarkers() {
     const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
     const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
@@ -2715,15 +2721,25 @@ function getOrderMarkers() {
         if (seen.has(key)) return;
         seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
     };
+    const R = _orderMarkerScan;
+    const reuse = big && R && now - R.at < ORDER_MARKERS_SCAN_MS && R.version === version && R.units === selectedUnits && R.ulen === selectedUnits.length
+        && R.entities === selectedEntities && R.elen === selectedEntities.length && R.sub === sub && R.ignore === ignoreLevelSubgroups && R.frameUnits === (typeof simClientCurrentUnitVis === 'function' ? !!simClientCurrentUnitVis() : false) ? R : null;
+    const scan = big && !reuse ? { at: now, version, units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length, sub, ignore: ignoreLevelSubgroups,
+        frameUnits: typeof simClientCurrentUnitVis === 'function' ? !!simClientCurrentUnitVis() : false, ent: [], unit: [], entDone: false, unitDone: false } : null;
     // (One order for the whole selection's rally, still on its way: its one
     // marker, no pass over the buildings.)
     const cover = _pendingRallyCovers.length && _pendingRallyMarkers.size === 0 ? _rallyCoverCurrent() : null;
     if (cover) add({ x: cover.x, y: cover.y, kind: 'arrow', color: '#9aa' });
-    else for (const ent of getActiveEntities()) {
-        if (markers.length >= ORDER_MARKERS_MAX) break;
-        if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
-        if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
+    else if (reuse && reuse.entDone) { for (const m of reuse.ent) add(m); }
+    else {
+        for (const ent of getActiveEntities()) {
+            if (markers.length >= ORDER_MARKERS_MAX) break;
+            if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
+            if (_isRallySpawnerType(ent.type)) { const m = getBuildingOrderTarget(ent); add(m); if (scan && m) scan.ent.push(m); }
+        }
+        if (scan) scan.entDone = true;
     }
+    const addU = scan ? m => { add(m); if (m) scan.unit.push(m); } : add;
     // (Big orders not yet shown by the frames: their markers. One that
     // orders the whole selection hides the destinations the frames still
     // show for it: they are superseded.)
@@ -2747,6 +2763,8 @@ function getOrderMarkers() {
     const bySlots = F && X.framed && selectedUnits.length > SELECTED_UNIT_LINES_MAX && !Object.values(activeSubGroups).some(v => v === false);
     if (superseded) {
         // (Destinations as the frames still have them: superseded.)
+    } else if (reuse && reuse.unitDone) {
+        for (const m of reuse.unit) add(m);
     } else if (bySlots) {
         const slots = X.slots, mask = X.mask, n = X.n, O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
         const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId;
@@ -2756,17 +2774,17 @@ function getOrderMarkers() {
             const s = dense ? i : slots[i];
             if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
             if ((pendingAny && _pendingUnitOrderMarkers.has(ID[s])) || (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0)) {
-                if (markers.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) add(getUnitOrderTarget(u)); }
+                if (markers.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) addU(getUnitOrderTarget(u)); }
                 continue;
             }
             const code = OD[s];
             if (code === 0 || code === last) continue;
             last = code;
             if (destinations.has(code)) continue;
-            destinations.add(code);
+            destinations.addU(code);
             if (markers.length >= ORDER_MARKERS_MAX) continue;
             const tile = Math.abs(code) - 1;
-            add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+            addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
         }
     } else for (const u of getActiveUnitsForRender()) {
         if (!u || u.dead) continue;
@@ -2776,15 +2794,20 @@ function getOrderMarkers() {
         if (F && s >= 0 && F.id[s] === u.id) {
             if (F.owner[s] !== localPlayerId || F.energy[s] <= 0) continue;
             if (_pendingUnitOrderMarkers.has(F.id[s]) || (F.cmd[s] === CMD_ATTACKING && (F.flags[s] & SIM_UF_ATTACK_TARGET))) {
-                add(getUnitOrderTarget(u));
+                addU(getUnitOrderTarget(u));
             } else {
                 const code = F.orderDest[s];
                 if (!code || destinations.has(code)) continue;
-                destinations.add(code);
+                destinations.addU(code);
                 const tile = Math.abs(code) - 1;
-                add({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+                addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
             }
-        } else if (u.owner === localPlayerId) add(getUnitOrderTarget(u));
+        } else if (u.owner === localPlayerId) addU(getUnitOrderTarget(u));
+    }
+    if (scan) {
+        scan.unitDone = !superseded;
+        if (!scan.entDone && reuse) { scan.ent = reuse.ent; scan.entDone = reuse.entDone; }
+        _orderMarkerScan = scan;
     }
     for (let i = _orderPings.length - 1; i >= 0; i--) {
         if (now - _orderPings[i].at > ORDER_PING_MS) _orderPings.splice(i, 1);
@@ -4398,21 +4421,28 @@ function redrawBuildPreviewNow(now = false) {
 // A build order reaches the simulation a few ticks later (the command lead,
 // the worker's queue, the next frame): 200-400 ms in which a click showed
 // nothing. Each ordered tile shows the thing's picture at once, see-through,
-// until the building (or its site) is there, or a few seconds at most (an
-// order the simulation refused: gone again). Local, drawn only: nothing of
+// until the building (or its site) is there, or, once the simulation has
+// run the order's tick (and PENDING_BUILD_ANSWER_MS more for its frame) with
+// no building, gone again (an order it refused). At 1 TPS that is seconds:
+// a fixed few seconds let the ghost go before the building came. Without
+// the order's tick: PENDING_BUILD_GHOST_MS. Local, drawn only: nothing of
 // the match depends on it.
 // (Once the building is there the ghost fades over PENDING_BUILD_FADE_MS:
 // the site's own picture is drawn a frame or a few later, and the hover
 // preview is not drawn on a tile with a ghost: preview, ghost and site
 // follow each other without a blink.)
-const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350;
+const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350, PENDING_BUILD_ANSWER_MS = 700, PENDING_BUILD_MAX_MS = 60000;
 const _pendingBuildGhosts = new Map();
 function _tileHoldsStructure(gx, gy) {
     const c = grid[gy] && grid[gy][gx];
     return !!(c && (c.item || (typeof getTileEntityRef === 'function' && getTileEntityRef(gx, gy))));
 }
-function notePendingBuildGhost(gx, gy, key) {
-    _pendingBuildGhosts.set(gx + ',' + gy, { gx, gy, key, at: performance.now(), onTop: _tileHoldsStructure(gx, gy) });
+function notePendingBuildGhost(gx, gy, key, tick = NaN) {
+    _pendingBuildGhosts.set(gx + ',' + gy, { gx, gy, key, at: performance.now(), onTop: _tileHoldsStructure(gx, gy), tick: Number.isFinite(tick) ? tick : NaN, answeredAt: 0 });
+}
+// The last tick whose result this page has (the worker's), else this thread's.
+function _ghostSimTick() {
+    return typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient.appliedTick : currentTick;
 }
 function drawPendingBuildGhosts(ctx) {
     if (_pendingBuildGhosts.size === 0 || !renderer3dInstance || typeof renderer3dInstance.projectWorldToCanvas !== 'function') return;
@@ -4422,7 +4452,10 @@ function drawPendingBuildGhosts(ctx) {
         // (A stack onto a building: a short flash. A new building: until it shows.)
         if (!g.onTop && !g.seenAt && age > 60 && _tileHoldsStructure(g.gx, g.gy)) g.seenAt = now;
         const fade = g.seenAt ? 1 - (now - g.seenAt) / PENDING_BUILD_FADE_MS : g.onTop ? 1 - Math.max(0, age - PENDING_BUILD_STACK_MS + 150) / 150 : 1;
-        if (age > PENDING_BUILD_GHOST_MS || fade <= 0) { _pendingBuildGhosts.delete(k); continue; }
+        // (Its order's tick run: the answer's frame a moment later.)
+        if (Number.isFinite(g.tick) && !g.answeredAt && _ghostSimTick() >= g.tick) g.answeredAt = now;
+        const over = Number.isFinite(g.tick) ? (g.answeredAt && now - g.answeredAt > PENDING_BUILD_ANSWER_MS && age > PENDING_BUILD_STACK_MS) || age > PENDING_BUILD_MAX_MS : age > PENDING_BUILD_GHOST_MS;
+        if (over || fade <= 0) { _pendingBuildGhosts.delete(k); continue; }
         const p = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([dx, dz]) => renderer3dInstance.projectWorldToCanvas(g.gx + dx, 0.06, g.gy + dz));
         if (p.some(q => !q)) continue;
         const minX = Math.min(p[0].x, p[1].x, p[2].x, p[3].x), maxX = Math.max(p[0].x, p[1].x, p[2].x, p[3].x);

@@ -690,29 +690,63 @@ function _noteAmbientSoundTick(target, key, cooldownTicks = AUDIO_AMBIENT_WORK_M
 // A type and subtype's recipe (a pure function of them), kept: a big
 // fight replays thousands of sound events a tick, each made its recipe anew
 // (copies, patterns, hashes) before the caps below turned nearly all away.
+// (By type, then subtype: no key string made a call, which with its
+// hashing was a fifth of a zoomed-out page's main thread at 4M units.)
 const _soundRecipes = new Map();
+let _soundRecipeCount = 0;
 function _soundRecipeKept(type, subtype) {
-    let key = type + '|' + subtype, r = _soundRecipes.get(key);
-    if (!r) {
-        if (_soundRecipes.size >= 1024) _soundRecipes.clear();
-        _soundRecipes.set(key, r = _getSoundRecipe(type, subtype));
+    let m = _soundRecipes.get(type);
+    if (m === undefined) _soundRecipes.set(type, m = new Map());
+    let r = m.get(subtype);
+    if (r === undefined) {
+        if (++_soundRecipeCount > 1024) { _soundRecipes.clear(); _soundRecipeCount = 1; _soundRecipes.set(type, m = new Map()); }
+        m.set(subtype, r = _getSoundRecipe(type, subtype));
     }
     return r;
 }
 
+// Where a sound can be heard at all: within AUDIO_REACH_MAX tiles (the
+// longest reach of any recipe, AUDIO_RECIPES[6] with a light unit's 1.3) of
+// the point looked at, and not at all when the view is so far out that the
+// zoom's distance alone is past it (_getAudioSpatialState). Worked out every
+// AUDIO_LISTEN_MS: each of a big fight's thousands of sound events a tick is
+// turned away by a few compares before its recipe and spatial state.
+const AUDIO_REACH_MAX = 32, AUDIO_LISTEN_MS = 50;
+let _audioListenAt = -Infinity, _audioSilent = false;
+const _audioListen = [0, 0, 0, 0];
+function _audioMayHear(worldX, worldY) {
+    if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !(camera.zoom > 0)) return true;
+    const now = performance.now();
+    if (now - _audioListenAt >= AUDIO_LISTEN_MS) {
+        _audioListenAt = now;
+        const width = viewW / camera.zoom, height = viewH / camera.zoom, cx = camera.x + width * .5, cy = camera.y + height * .5;
+        // (The view's largest scale: in 3D its near edge, a few times its middle's.)
+        let scale = typeof getViewZoomAt === 'function' ? getViewZoomAt(cx, cy) : camera.zoom;
+        if (renderDimensionMode === '3d') scale *= 4;
+        const zoomDistance = Math.max(0, Math.max(viewW, viewH) / Math.max(0.01, scale) / TILE - 12) * .06;
+        _audioSilent = zoomDistance >= AUDIO_REACH_MAX;
+        const r = AUDIO_REACH_MAX * TILE;
+        _audioListen[0] = cx - r; _audioListen[1] = cy - r; _audioListen[2] = cx + r; _audioListen[3] = cy + r;
+    }
+    if (_audioSilent) return false;
+    return worldX >= _audioListen[0] && worldX <= _audioListen[2] && worldY >= _audioListen[1] && worldY <= _audioListen[3];
+}
+
 function playSound(type, worldX, worldY, subtype = '') {
     if (!audioCtx || !audioEnabled) return;
-    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
     // (Turned away anyway once this tick's sounds or the voices are full:
     // _canPlaySoundTypeNow, below. Checked first, without its counting.)
     if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES) return;
     if (_audioFrameSoundTick === (Number.isFinite(gameTime) ? gameTime : 0) && _audioFrameSoundCount >= AUDIO_MAX_SOUNDS_PER_FRAME) return;
+    if (!_audioMayHear(worldX, worldY)) return;
     let recipe = _soundRecipeKept(type, subtype);
     let spatial = _getAudioSpatialState(worldX, worldY, recipe[6]);
     // Cull only below -80 dB of full-scale output, after a smooth zero-slope fade.
     // Inaudible/offscreen events do not consume the audible event budget.
     if (spatial.gain * recipe[5] < .0001) return;
     if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES || !_canPlaySoundTypeNow(type)) return;
+    // (A suspended context asked to resume by a sound that plays, not by every event: a promise each.)
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
     let buffer = _generateEffectBuffer(type, subtype, (_audioVariation++) % 3, recipe);
     _createGeneratedVoice(buffer, recipe[5], worldX, worldY, recipe[6]);
 }

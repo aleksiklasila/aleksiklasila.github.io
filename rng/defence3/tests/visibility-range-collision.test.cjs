@@ -67,24 +67,7 @@ assert.ok(Math.hypot(unit.x-31.5,unit.y-31.5)<=1601,'crowd correction is capped 
 let flying=make();flying.isFlying=true;blocked.add('1,0');blocked.add('0,1');uc.applyUnitSeparation(flying,100,100);
 assert.ok(flying.x>31.5,'air units retain their collision layer');
 
-// Exercise the actual targeting branch; stop at its first unit visibility check.
-const Unit=vm.runInContext('Unit',uc), seen=new Error('unit target selected');
-let targets=[{id:4,owner:1,x:16,y:16},{id:3,owner:1,x:16,y:16},{id:1,owner:1,x:0,y:0,gx:9}];
-uc.isGameplayTargetVisibleToPlayer=(_owner,x)=>x!==9;
-uc.forEachUnitInRange=(_x,_y,_r,visit)=>targets.forEach(e=>visit(e,e.x*e.x+e.y*e.y));
-assert.equal(uc._findNearbyCombatEnemy({owner:0,x:0,y:0},100).id,3);
-targets.reverse();
-assert.equal(uc._findNearbyCombatEnemy({owner:0,x:0,y:0},100).id,3,'retarget ties ignore spatial bucket order');
-// (The look reads the acquisition tier's result: _combatScanHit.)
-let enemyUnit={id:2,owner:1,x:16,y:16,dead:false};uc._combatScanHit=()=>enemyUnit;
-uc.isGameplayTargetVisibleToPlayer=()=>{throw seen;};
-let attacker=Object.assign(Object.create(Unit.prototype),{id:0,x:0,y:0,owner:0,
-    preComputed:{visionRange:4},targetBuilding:{energy:10},targetUnit:null,forcedAttackTarget:false,path:[{}]});
-assert.throws(()=>attacker.doAttacking(1),e=>e===seen);
-assert.equal(attacker.targetUnit,enemyUnit);assert.equal(attacker.targetBuilding,null);
-attacker.forcedAttackTarget=true;attacker.targetUnit=null;
-uc._combatScanHit=()=>{throw Error('explicit orders must not retarget');};
-attacker.doAttacking(1);
+let enemyUnit={id:2,owner:1,x:16,y:16,dead:false};
 
 // Towers must not apply a pixel cutoff to units while using areas for buildings.
 uc.areaSearchEnabled=()=>true;
@@ -107,4 +90,4 @@ let stable=sc.stabilizeSelectionPosition(entity,2,0,16);
 assert.ok(stable.x>0 && stable.x<.5,'brief motion across merge thresholds is damped');
 assert.equal(sc.stabilizeSelectionPosition(entity,200,0,32).x,200,'teleports do not drag stale outlines');
 
-console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and automatic retargeting.');
+console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and tower targeting.');

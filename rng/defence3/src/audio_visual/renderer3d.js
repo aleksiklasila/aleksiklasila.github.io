@@ -6854,6 +6854,7 @@
                     flat out vec3 vGround;
                     flat out vec4 vWorldSprite;
                     flat out vec2 vMotion;
+                    flat out float vOneView;
                     void main() {
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = uStructure != 0 ? current : mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
@@ -6982,7 +6983,14 @@
                         float markerPixels = (uFlat>.5?3.:.75) * uPixelRatio;
                         vSpriteExtent = clamp(vec2(pixels*mix(1.,meta.x,vLod)),vec2(markerPixels),vec2(uPointMax-2.));
                         vSpriteSize = max(vSpriteExtent.x,vSpriteExtent.y);
-                        gl_PointSize = ceil(vSpriteSize + 2.);
+                        // (A sprite of a few pixels: one pixel of margin, not two;
+                        // the map's millions of units were 5x5-pixel points
+                        // around 3-pixel pictures.)
+                        gl_PointSize = ceil(vSpriteSize + (vSpriteSize < 8. ? 1. : 2.));
+                        // One baked view where blending four cannot show: the
+                        // flat view's four are one picture (weights 1, 0, 0, 0),
+                        // and a 3D sprite of a few pixels (see the fragment).
+                        vOneView = uFlat > .5 || vSpriteSize < 4. * uPixelRatio ? 1. : 0.;
                         // Keep the miniature's base on the unit's actual position.
                         if (uFlat < .5 && style.a > 0.) {vGround.y += style.a;gl_Position=uViewProjection*vec4(vGround,1.);}
                         gl_Position.xy += meta.yz * vLod * pixels * 2. / uViewport * gl_Position.w;
@@ -7024,6 +7032,7 @@
                     flat in vec3 vGround;
                     flat in vec4 vWorldSprite;
                     flat in vec2 vMotion;
+                    flat in float vOneView;
                     uniform mat4 uViewProjection;
                     uniform mat4 uInverseViewProjection;
                     uniform vec2 uViewport;
@@ -7142,7 +7151,7 @@
                             vec2 viewPoint=(coord-.5)*vec2(1.,-1.)*vFrameMeta.x+vFrameMeta.yz;
                             viewPoint=inverseBasis*viewPoint;
                             vec4 texel;
-                            if (uFlat < .5 && !uBlendBakedViews) {
+                            if ((uFlat < .5 && !uBlendBakedViews) || vOneView > .5) {
                                 // Diagnostic: keep projection, mip selection and
                                 // framing identical, but display one contributing
                                 // capture instead of averaging unaligned details.

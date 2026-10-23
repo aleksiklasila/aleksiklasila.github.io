@@ -49,7 +49,7 @@ const _FX_ARC = { 0: [.05, .3], 1: [.2, 1.1], 2: [.26, 1.3], 3: [.07, .35], 4: [
 const _fx = {
     batch: null, flat: false, detail: true, now: 0, tickScale: 1, rest: 1,
     limit:10000, cells:new Set(), cellSize:1,
-    minX: 0, minZ: 0, maxX: 0, maxZ: 0, vis: null, full: false, lastNow: -Infinity
+    minX: 0, minZ: 0, maxX: 0, maxZ: 0, vis: null, full: false, lastNow: -Infinity, volleys: false
 };
 let _FXM = null, _FXP = null;
 
@@ -297,14 +297,70 @@ function _fxEvent(kind, x0, z0, x1, z1, style, seed, q) {
     }
 }
 
+// A unit's drawn position by id (pixels, into out): the worker's frames, or
+// the unit itself in this thread; false when it is not drawn.
+const _fxAt = [0, 0];
+function _fxDrawnAt(id, out) {
+    const alpha = typeof tickAlpha === 'number' ? tickAlpha : 0;
+    if (typeof simClientActive === 'function' && simClientActive()) return typeof pageUnitDrawnAt === 'function' && pageUnitDrawnAt(id, alpha, out);
+    const u = typeof getUnitById === 'function' ? getUnitById(id) : null;
+    if (!u || u.dead) return false;
+    out[0] = Number.isFinite(u.prevX) ? u.prevX + (u.x - u.prevX) * alpha : u.x;
+    out[1] = Number.isFinite(u.prevY) ? u.prevY + (u.y - u.prevY) * alpha : u.y;
+    return true;
+}
+
+// A tower's volley (a muzzle record with src -shots: tower.js _towerShotFx):
+// its shots _FX_VOLLEY_GAP ticks apart, each from the muzzle to its target
+// (as drawn, by dst id) at a projectile's speed (8 px a tick), then its
+// impact. Drawn from the record alone, on the effects' clock: beside the
+// worker the simulation's projectiles are not drawn (_fx.volleys), its
+// impact records neither.
+const _FX_VOLLEY_GAP = 6, _FX_VOLLEY_MAX = 4, _FX_PROJ_SPEED = 8, _FX_IMPACT_TICKS = 9;
+const _fxShot = { type: '', startX: 0, startY: 0, aimDist: 0, vx: 0, vy: 0 };
+function _fxVolleyTicks(n, distPx) { return (Math.min(_FX_VOLLEY_MAX, n) - 1) * _FX_VOLLEY_GAP + distPx / _FX_PROJ_SPEED + _FX_IMPACT_TICKS; }
+function _fxVolley(n, x0, z0, x1, z1, style, seed, age, typeName) {
+    const ts = _fx.tickScale;
+    n = Math.min(_FX_VOLLEY_MAX, n);
+    const dx = x1 - x0, dz = z1 - z0, dist = Math.hypot(dx, dz) || .001, flight = dist * TILE / _FX_PROJ_SPEED;
+    for (let i = 0; i < n; i++) {
+        const t = age - i * _FX_VOLLEY_GAP * ts;
+        if (t < 0) break;
+        if (t < _FX_DURATION[10] * ts) _fxEvent(10, x0, z0, x1, z1, style, seed + i, t / (_FX_DURATION[10] * ts));
+        if (t < flight) {
+            const q = t / flight, px = x0 + dx * q, pz = z0 + dz * q;
+            if (!_fxVisible(px, pz)) continue;
+            const S = _fxShot;
+            S.type = typeName; S.startX = x0 * TILE; S.startY = z0 * TILE; S.aimDist = dist * TILE; S.vx = dx / dist * _FX_PROJ_SPEED; S.vy = dz / dist * _FX_PROJ_SPEED;
+            _pushProjectileFx(S, px, pz);
+        } else if (t < flight + _FX_IMPACT_TICKS * ts) _fxEvent(11, x0, z0, x1, z1, style, seed + i, (t - flight) / (_FX_IMPACT_TICKS * ts));
+    }
+}
+// (The projectile type of a shot style: its look, _pushProjectileFx.)
+const _fxStyleType = [];
+function _fxTypeOfStyle(style) {
+    let t = _fxStyleType[style];
+    if (t === undefined) {
+        t = '';
+        if (typeof COMBAT_FX_STYLE !== 'undefined') for (const k in COMBAT_FX_STYLE) if (COMBAT_FX_STYLE[k] === style) { t = k; break; }
+        _fxStyleType[style] = t;
+    }
+    return t;
+}
+
 function _pushCombatRecordFx() {
     if (typeof combatFxData === 'undefined') return;
     const data = combatFxData, stride = COMBAT_FX_STRIDE, now = _fx.now, tickScale = _fx.tickScale;
-    for (let o = 0, end = COMBAT_FX_CAPACITY * stride; o < end; o += stride) {
+    const ids = typeof combatFxIds !== 'undefined' ? combatFxIds : null, P = _fxAt, volleys = _fx.volleys;
+    for (let o = 0, r = 0, end = COMBAT_FX_CAPACITY * stride; o < end; o += stride, r += 2) {
         let kind = data[o];
         if (!kind) continue;
         let age = now - data[o + 5];
-        let duration = (_FX_DURATION[kind] || 8) * tickScale;
+        // (A volley's time: its shots' flights; a projectile's impact record
+        // beside the worker: drawn by its volley.)
+        const volley = kind === 10 && volleys && ids !== null && ids[r] < 0 ? -ids[r] : 0;
+        if (kind === 11 && volleys) { data[o] = 0; continue; }
+        let duration = volley ? _fxVolleyTicks(volley, Math.hypot(data[o + 3] - data[o + 1], data[o + 4] - data[o + 2])) * tickScale : (_FX_DURATION[kind] || 8) * tickScale;
         if (age >= duration) { data[o] = 0; continue; }
         if (age < 0) continue;
         let x1 = data[o + 3] / TILE, z1 = data[o + 4] / TILE;
@@ -323,6 +379,14 @@ function _pushCombatRecordFx() {
                 .7*(1-age/duration),_FXP.GLOW,0,1);
             continue;
         }
+        // (A unit's attack between its units as drawn: a beam's ends stay on
+        // the caster and its target as they move; where they stood once gone.)
+        if (ids !== null) {
+            const a = ids[r], b = ids[r + 1];
+            if (a > 0 && _fxDrawnAt(a, P)) { x0 = P[0] / TILE; z0 = P[1] / TILE; }
+            if (b > 0 && _fxDrawnAt(b, P)) { x1 = P[0] / TILE; z1 = P[1] / TILE; }
+        }
+        if (volley) { _fxVolley(volley, x0, z0, x1, z1, data[o + 6], data[o + 7], age, _fxTypeOfStyle(data[o + 6])); continue; }
         _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
     }
 }
@@ -500,11 +564,14 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
     _fx.cellSize=Math.max(1,3/Math.max(.1,pixelsPerTile));_fx.cells.clear();
     _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);
-    let now = gameTime + (typeof tickAlpha === 'number' ? tickAlpha : 0);
+    // (On the drawn units' clock beside the worker: see simClientDrawnGameTime.)
+    const drawn = typeof simClientDrawnGameTime === 'function' ? simClientDrawnGameTime(typeof tickAlpha === 'number' ? tickAlpha : 0) : NaN;
+    let now = Number.isFinite(drawn) ? drawn : gameTime + (typeof tickAlpha === 'number' ? tickAlpha : 0);
     // A new game or a rewind leaves records in the future: drop them.
     if (now < _fx.lastNow - 2 && typeof clearCombatFx === 'function') clearCombatFx();
     _fx.lastNow = now;
     _fx.now = now;
+    if (typeof simClientNoteView === 'function') simClientNoteView(bounds.minGx, bounds.minGy, bounds.maxGx, bounds.maxGy);
     _fx.minX = bounds.minGx - 2; _fx.minZ = bounds.minGy - 2;
     _fx.maxX = bounds.maxGx + 3; _fx.maxZ = bounds.maxGy + 3;
     _fx.vis = visibility;
@@ -513,10 +580,12 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
 
 function buildFrameEffects(projectiles, particles, towers) {
     if (!_fx.batch) return;
+    // (Beside the worker towers' shots are drawn from their volleys' records.)
+    _fx.volleys = typeof simClientActive === 'function' && simClientActive();
     _pushCombatRecordFx();
     const alpha = typeof tickAlpha === 'number' ? tickAlpha : 0;
     const step = _fx.detail ? 1 : Math.max(1, Math.ceil((projectiles.length + particles.length) / 2000));
-    for (let i = 0; i < projectiles.length && _fx.batch.total < _fx.limit; i += step) {
+    for (let i = 0; !_fx.volleys && i < projectiles.length && _fx.batch.total < _fx.limit; i += step) {
         const p = projectiles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;

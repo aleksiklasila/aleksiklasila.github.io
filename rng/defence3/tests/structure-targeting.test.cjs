@@ -60,38 +60,16 @@ assert.equal(ctx.isWorldTargetWithinAreaRange(1.5 * TILE, 0.5 * TILE, 2.5 * TILE
 assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([0, 1], 0)], [0, 1]);
 assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([1, 0], 1)], [0, 1, 2, 5, 4], 'union keeps first-source order, each area once');
 
-// Unit structure priority within attack range.
-vm.runInContext(read('src/utils/utils_common.js'), ctx);
-vm.runInContext(read('src/things/unit.js'), ctx);
-const Unit = vm.runInContext('Unit', ctx);
+// (Structure priority within attack range is the combat brain's scan's: the
+// tier's choice, see performance-regressions _simAcqStructure.)
 const place = (x, y, props) => {
     const item = { gx: x, gy: y, x: x * TILE + 16, y: y * TILE + 16, energy: 10, owner: 1, ...props };
     if (props.tower) tileTowers.set(y * W + x, item);
     else { grid[y][x].item = item; grid[y][x].owner = item.owner; }
     return item;
 };
-const unit = Object.assign(Object.create(Unit.prototype), { id: 1, owner: 0, x: 1.9 * TILE, y: 0.5 * TILE,
-    preComputed: { attackRangeArea: 0.1 }, path: null, pathIndex: 0 });
-const farm = place(0, 1, { type: 'farm' });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), farm, 'any hostile building in reach');
 const lavaOff = place(1, 1, { type: 'lava' });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'traps before other buildings');
 const lavaOn = place(3, 1, { type: 'poison_puddle' });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'nearest trap when no route');
-unit.path = [{ x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 1 }];
-unit.pathIndex = 1;
-// (A route does not rank traps: the drive-by look is worked out on the
-// helpers, which do not know routes; the nearest trap.)
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'traps by distance, a route or not');
-const turret = place(3, 0, { type: 'pistol', tower: true });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), turret, 'turrets first');
-turret.energy = 0;
-place(3, 0, { type: 'cloud_0a', tower: true });
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'portals are not turrets');
-place(0, 0, { type: 'lava', owner: 0 });
-unit.x = 0.5 * TILE;
-unit.path = null;
-assert.equal(ctx._findHostileStructureInAttackRange(unit), lavaOff, 'own structures are ignored; out-of-window blocks are not in reach');
 
 // Projectiles hit the floor item they were aimed at, and floor items never
 // intercept shots aimed elsewhere.
@@ -109,4 +87,4 @@ assert.equal(lavaOff.energy, 10, 'the trap it flew over was not hit');
 const miss = new pc.Projectile(0.5 * TILE, 1.5 * TILE, { x: 7 * TILE, y: 1.5 * TILE }, 'pistol', 25, 1, { owner: 0, gx: 0, gy: 1 }, 7 * TILE);
 while (miss.update());
 assert.equal(lavaOff.energy, 10, 'shots at other targets pass over floor items');
-console.log(`PASS: +-0.3 tile source windows, structure threat order (turret > trap > building), floor-target projectiles (${flying} ticks).`);
+console.log(`PASS: +-0.3 tile source windows, floor-target projectiles (${flying} ticks).`);

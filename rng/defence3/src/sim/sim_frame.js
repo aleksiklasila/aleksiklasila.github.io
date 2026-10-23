@@ -558,6 +558,17 @@ if (typeof Unit === 'function') Object.setPrototypeOf(PageUnit.prototype, Unit.p
 // The page's unit views by id: a Map's interface over an array indexed by id
 // (ids are dense, from 1: a Map of 8M views was ~20 bytes an entry more, and
 // a hash table the size of the army for the collector to walk).
+// A unit's drawn position (its frame's motion at alpha) by id, into
+// out[0], out[1]; false when it is not drawn (gone, no frame).
+function pageUnitDrawnAt(id, alpha, out) {
+    const F = _pageFrame;
+    if (!F || !(id > 0)) return false;
+    const v = _pageUnitsById.get(id);
+    if (!v || !(v._s >= 0)) return false;
+    const s = v._s, px = F.px[s], py = F.py[s];
+    out[0] = px + (F.x[s] - px) * alpha; out[1] = py + (F.y[s] - py) * alpha;
+    return true;
+}
 class PageUnitIdMap {
     constructor() { this.a = []; this.size = 0; }
     get(id) { return id >= 0 ? this.a[id] : undefined; }

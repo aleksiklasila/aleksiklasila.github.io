@@ -133,7 +133,15 @@ const SNAP_FORMAT = 7;
 // order kept underneath), not by Unit.update; units holding position get no chase
 // from the brain; the kernel's structure attacks land in the order of their
 // attackers' ids.
-const SIM_RULES_REVISION = 33;
+// 34: no Unit.update: every unit's order is the movement kernel's (mv.rs ctl:
+// attack orders, scouts, arrivals, attack-move resumes), what it cannot do an
+// event handled after it in the order of a hash of the tick and the unit's id
+// (unit.js unitEventsRun: workers' AI without a step of their own, mines, ways
+// that are not there, waits that ended); attack orders close in by the atlas.
+// 35: area distances (attack range, vision, work distance) are whole areas in
+// the stat tables (their whole part), not fractions; an attack-mover whose
+// target fell stands for the brain's next word; head-on movers keep right.
+const SIM_RULES_REVISION = 35;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -1575,6 +1583,8 @@ function _snapEncodeGlobals() {
         orderBudgetAll: typeof _orderAllLeft !== 'undefined' ? _orderAllLeft : 0,
         // Actions past their tick's budget, waiting (main.js processActions).
         actionBacklog: typeof actionBacklogSnapshot === 'function' ? actionBacklogSnapshot() : [],
+        // (Their arrivals and the units small orders took ahead of them.)
+        actionEarly: typeof actionEarlySnapshot === 'function' ? actionEarlySnapshot() : null,
         workVer: typeof workerWorkVersionsSnapshot === 'function' ? workerWorkVersionsSnapshot() : null,
         healers: typeof healerCandidatesSnapshot === 'function' ? healerCandidatesSnapshot() : null,
         // The ground navigation's walls (as differences from the live walls).
@@ -2357,6 +2367,7 @@ function snapDecodeState(S, options = null) {
             _orderAllLeft = Number.isFinite(g.orderBudgetAll) ? g.orderBudgetAll : ORDER_UNITS_PER_TICK_ALL;
         }
         if (typeof actionBacklogRestore === 'function') actionBacklogRestore(Array.isArray(g.actionBacklog) ? g.actionBacklog : []);
+        if (typeof actionEarlyRestore === 'function') actionEarlyRestore(g.actionEarly || null);
         globalSpawnerReadyOrderCounter = _snapD(g.spawnOrder);
         if (rng && typeof rng.setState === 'function' && g.rng !== null && g.rng !== undefined) rng.setState(g.rng);
         // (The per-player budget arrays at the restored players' length, as the source peer's: the hash covers all their entries.)
@@ -2563,6 +2574,8 @@ function snapDecodeState(S, options = null) {
         };
     } finally {
         _snapDec = null;
+        // (Targets set while their units' shells had no id of their own yet.)
+        if (typeof simUnitTargetsDecoded === 'function') simUnitTargetsDecoded();
     }
 }
 

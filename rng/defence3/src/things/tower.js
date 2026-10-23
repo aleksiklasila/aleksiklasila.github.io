@@ -87,7 +87,6 @@ function laserBeamsTick() {
                 if (!u || !beam || !(d > 0)) continue;
                 pushHostileDamageAlert(u, d, beam.owner);
                 recordDamageVisual(u, d, beam.owner); shrineDamageTaken(u, d);
-                tryAutoRetaliateOnHostileDamage(u, beam.a, beam.a.x, beam.a.y);
                 createExplosion(u.x, u.y, "#f00", 1);
             }
         }
@@ -296,6 +295,15 @@ function _towerProjectile(t, target, maxRange) {
     if (k.shots > 1) p.shots = k.shots;
     projectiles.push(p);
     t.cd = k.cd;
+    return k.shots;
+}
+// A tower's shot as a look: its muzzle, and (src -shots, dst the target unit's
+// id or 0) the volley the page draws in flight to its target as drawn, on
+// its own clock (effects3d.js _fxVolley): a step of several base ticks fires
+// one projectile for all its shots, often spent within the step, never drawn.
+function _towerShotFx(t, target, shots) {
+    const unit = typeof Unit === 'function' && target instanceof Unit;
+    recordCombatFx(COMBAT_FX.MUZZLE, t.x, t.y, target.x, target.y, t.type, -Math.max(1, shots | 0), unit ? target.id : 0);
 }
 
 class Tower {
@@ -407,9 +415,9 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
         let preferredTarget = getTowerPreferredTargetInRange(this, rangeArea);
         if (preferredTarget) {
             let target = preferredTarget;
-            _towerProjectile(this, target, projectileMaxRange);
+            const shots = _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
-            recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
+            _towerShotFx(this, target, shots);
             playSound('shoot_' + this.type, this.x, this.y);
             return;
         }
@@ -466,9 +474,9 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
         }
 
         if (target) {
-            _towerProjectile(this, target, projectileMaxRange);
+            const shots = _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
-            recordCombatFx(COMBAT_FX.MUZZLE, this.x, this.y, target.x, target.y, this.type);
+            _towerShotFx(this, target, shots);
             playSound('shoot_' + this.type, this.x, this.y);
         }
     }

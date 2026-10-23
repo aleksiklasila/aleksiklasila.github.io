@@ -145,7 +145,7 @@ function _simStubUi() {
     self._simRecordAlert = (target, dmg, owner) => { let r = _simRef(target); if (r) _simEvents.push(['h', r, dmg, owner]); };
     self._simRecordExplosion = (x, y, c, n) => { _simEvents.push(['x', x, y, c, n]); };
     self._simRecordDirected = (fx, fy, tx, ty, c, n) => { _simEvents.push(['p', fx, fy, tx, ty, c, n]); };
-    self._simRecordFx = (kind, x0, y0, x1, y1, style) => { _simEvents.push(['f', kind, x0, y0, x1, y1, style === undefined ? null : style]); };
+    self._simRecordFx = (kind, x0, y0, x1, y1, style, src = 0, dst = 0) => { _simEvents.push(['f', kind, x0, y0, x1, y1, style === undefined ? null : style, src | 0, dst | 0]); };
     for (let [name, rec] of [['playSound', '_simRecordSound'], ['recordDamageVisual', '_simRecordDamage'], ['pushHostileDamageAlert', '_simRecordAlert'],
         ['createExplosion', '_simRecordExplosion'], ['createDirectedParticles', '_simRecordDirected'], ['recordCombatFx', '_simRecordFx']]) {
         try { self.eval(name + ' = self.' + rec); } catch { }
@@ -229,6 +229,9 @@ self.onmessage = (ev) => {
         } else if (msg.type === 'watch') {
             simFrameWatch(msg.list);
             simFrameWatchStructures(msg.structures);
+        } else if (msg.type === 'view') {
+            // (The page's view: its hits' looks first, unit.js.)
+            if (Array.isArray(msg.r) && msg.r.length === 4 && typeof simLookView !== 'undefined') for (let i = 0; i < 4; i++) simLookView[i] = msg.r[i] | 0;
         } else if (msg.type === 'request') {
             // A whole-state restore: the ticks queued before it belong to the
             // old epoch (dropped; requests before it still run, in order).
@@ -600,7 +603,7 @@ function _simDeltaEvents(events) {
 // phases is the rest (collections, the pump).
 const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
     'updateAllPlayerVisibility', 'towersTick', 'projectilesBegin', 'projectilesEnd', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
-    '_forEachUnitInTickOrder', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
+    'unitEventsRun', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
     // (The worker search tier's parts.)

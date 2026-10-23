@@ -1459,28 +1459,28 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
     s(cnt, chunk as usize, n as i32);
 }
 
-/// SIM_KERNEL_HELD_DEAD: after the unit pass, units the movement kernel
-/// moved or held (outputs 1-9, 11, 12) whose energy ran out during it are
-/// dead now, where they stood (moved ones back at their previous place;
-/// held ones (6) stay). Arrays: unit.mvOut, unit.energy, unit.dead, unit.x,
-/// unit.y, unit.prevX, unit.prevY. P: [0] slots, [1] per job.
+/// SIM_KERNEL_DEAD_MARK: after the unit events, live units whose energy ran
+/// out (damage over time, a mine, a ram's recoil) are dead now, where they
+/// stood before this tick's step (the movement kernel's prevX / prevY when it
+/// wrote them: output not 0). Arrays: unit.mvOut, unit.energy, unit.dead,
+/// unit.x, unit.y, unit.prevX, unit.prevY, unit.live. P: [0] slots, [1] per job.
 #[no_mangle]
-pub unsafe extern "C" fn k_held_dead(a: u32, chunk: i32) {
+pub unsafe extern "C" fn k_dead_mark(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
-    let (out, en, dead, xs, ys, px, py) = (k.p::<u8>(0), k.p::<f32>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (out, en, dead, xs, ys, px, py, live) = (k.p::<u8>(0), k.p::<f32>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<u8>(7));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    let fz = f32x4_splat(0.0);
     let mut q = s0;
     while q < s1 {
-        // (Sixteen without a kernel output at once.)
-        if q + 16 <= s1 && !v128_any_true(v128_load(out.add(q) as *const v128)) {
-            q += 16;
+        // (Four with energy left at once.)
+        if q + 4 <= s1 && i32x4_bitmask(f32x4_gt(v128_load(en.add(q) as *const v128), fz)) == 15 {
+            q += 4;
             continue;
         }
-        let o = g(out, q);
-        if !(o == 0 || o == 10 || o >= 13 || o == 4 || o == 5 || g(en, q) > 0.0 || g(dead, q) != 0) {
+        if !(g(en, q) > 0.0) && g(dead, q) == 0 && g(live, q) != 0 {
             s(dead, q, 1);
-            if o != 6 {
+            if g(out, q) != 0 {
                 s(xs, q, g(px, q));
                 s(ys, q, g(py, q));
             }
@@ -1489,36 +1489,53 @@ pub unsafe extern "C" fn k_held_dead(a: u32, chunk: i32) {
     }
 }
 
-/// SIM_KERNEL_UPD_CAND: per block of P[1] units-array indices those still
-/// needing their update (no slot, or a kernel output 0, 10, 13 and above,
-/// or a drive-by shot), in index order at upd.cand[block * P[1]..], how
-/// many at upd.cnt[block]. Arrays: ix.slots, unit.mvOut, unit.mvFire,
-/// upd.cand, upd.cnt. P: [0] units, [1] block size, [2] blocks per job.
+/// SIM_KERNEL_UNIT_EVENTS: per slot chunk of P[1], the live units (alive,
+/// with energy) the movement kernel left to the main thread this tick: an
+/// event (unit.mvEv, cleared here) or no output (a worker's: its AI), as
+/// slot * 8 + event at ev.list[chunk * P[1]..], how many at ev.cnt[chunk].
+/// Arrays: unit.mvOut, unit.mvEv, unit.live, unit.dead, unit.energy, ev.list,
+/// ev.cnt. P: [0] slots, [1] per job.
 #[no_mangle]
-pub unsafe extern "C" fn k_upd_cand(a: u32, chunk: i32) {
+pub unsafe extern "C" fn k_unit_events(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
-    let (sl, out, fire, cand, cnt) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4));
-    let (n, bsz, per) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2).max(0) as usize);
-    let nb = (n + bsz - 1) / bsz;
-    let b0 = (chunk.max(0) as usize * per).min(nb);
-    let b1 = (b0 + per).min(nb);
-    for b in b0..b1 {
-        let mut m = 0usize;
-        let end = ((b + 1) * bsz).min(n);
-        for idx in b * bsz..end {
-            let sv = g(sl, idx);
-            if sv >= 0 {
-                let o = g(out, sv as usize);
-                if o != 0 && o != 10 && o < 13 && g(fire, sv as usize) == 0 {
-                    continue;
-                }
-            }
-            s(cand, b * bsz + m, idx as i32);
-            m += 1;
+    let (out, ev, live, dead, en, list, cnt) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<f32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    let base = chunk.max(0) as usize * k.i(1).max(0) as usize;
+    let zero = i8x16_splat(0);
+    let mut n = 0usize;
+    let mut q = s0;
+    while q < s1 {
+        let mut bits = 0xFFFFu32;
+        let len = (s1 - q).min(16);
+        if len == 16 {
+            // (Sixteen at once: an event, or no output, of a live unit not dead.)
+            let e = v128_load(ev.add(q) as *const v128);
+            let o = v128_load(out.add(q) as *const v128);
+            let c = v128_and(v128_or(i8x16_ne(e, zero), i8x16_eq(o, zero)),
+                v128_andnot(i8x16_ne(v128_load(live.add(q) as *const v128), zero), i8x16_ne(v128_load(dead.add(q) as *const v128), zero)));
+            bits = i8x16_bitmask(c) as u32;
         }
-        s(cnt, b, m as i32);
+        while bits != 0 {
+            let l = bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            if l >= len {
+                break;
+            }
+            let u = q + l;
+            let e = g(ev, u);
+            if e != 0 {
+                s(ev, u, 0);
+            }
+            if (e == 0 && g(out, u) != 0) || g(live, u) == 0 || g(dead, u) != 0 || !(g(en, u) > 0.0) {
+                continue;
+            }
+            s(list, base + n, (u as i32) * 8 + e as i32);
+            n += 1;
+        }
+        q += 16;
     }
+    s(cnt, chunk as usize, n as i32);
 }
 
 /// SIM_KERNEL_UNIT_RETIRE: the tick's end: movement outputs cleared (slots
@@ -1594,6 +1611,94 @@ pub unsafe extern "C" fn k_combat_commit(a: u32, chunk: i32) {
         s(ct, q, if m != 0 { g(bt, q) } else { -1 });
         s(ctid, q, if m != 0 { g(btid, q) } else { 0 });
     }
+}
+
+/// SIM_KERNEL_ORDER_MOVE (main.js _issueGroupMoveOrder): a move or
+/// attack-move order's units (ord.slots[0..P[0]]), per job of P[1]: each one of
+/// the player's, alive, not a worker, not held, indexed this epoch, with no
+/// pending way and no path window, off its destination's tile, takes the order
+/// in its columns: targets cleared, its command, the attack-move tile, the
+/// issued position, its route's end and profile, its path's key (one atlas
+/// node: profile, destination, wide), the path's index; unarmed (the unit
+/// controller, mv.rs ctl, arms it in this tick's movement). Every other slot
+/// is listed for the JavaScript (ord.out[chunk * P[1]..], how many at
+/// ord.cnt[chunk]). Arrays: ord.slots, ord.out, ord.cnt, unit.owner,
+/// unit.dead, unit.isWk, unit.holdF, unit.spEpoch, unit.mvPF, unit.x, unit.y,
+/// unit.sepLayer, unit.tuS, unit.tuId, unit.tbT, unit.acqB, unit.fatF,
+/// unit.fLsX, unit.fLsY, unit.commandState, unit.mvOn, unit.amGx, unit.amGy,
+/// unit.mvTgX, unit.mvTgY, unit.rkF, unit.rtEnd, unit.nvProf, unit.pathIndex,
+/// unit.nvPK, unit.mvCD, unit.mvNavLD, unit.mvPath. P: [0] slots, [1] per job,
+/// [2] player, [3] command, [4] / [5] attack-move tile (-1 none), [6] / [7]
+/// issued position, [8] index epoch, [9] / [10] the destination tile by the
+/// ground / air navigation (-1 none), [11] / [12] wide (a group) by
+/// profile, [13] grid width, [14] tile.
+#[no_mangle]
+pub unsafe extern "C" fn k_order_move(a: u32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let k = K::new(a);
+    let (sl, out, cnt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
+    let (own, dead, iswk, holdf, ep, pf, xs, ys, layer) = (k.p::<i8>(3), k.p::<u8>(4), k.p::<u8>(5), k.p::<u8>(6), k.p::<i32>(7), k.p::<u8>(8),
+        k.p::<i32>(9), k.p::<i32>(10), k.p::<u8>(11));
+    let (tus, tuid, tbt, acqb, fatf, lsx, lsy) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<u8>(15), k.p::<u8>(16), k.p::<f32>(17), k.p::<f32>(18));
+    let (cmdc, on, amgx, amgy, tgx, tgy) = (k.p::<u8>(19), k.p::<u8>(20), k.p::<i16>(21), k.p::<i16>(22), k.p::<f32>(23), k.p::<f32>(24));
+    let (rkf, rte, nvp, pidx, nvpk, cd, nld, mpath) = (k.p::<u8>(25), k.p::<i32>(26), k.p::<i8>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<f32>(31), k.p::<i32>(32));
+    let (player, cmd, ax, ay) = (k.i(2), k.i(3) as u8, k.i(4), k.i(5));
+    let (px, py, epoch) = (k.f(6) as f32, k.f(7) as f32, k.i(8));
+    let dest = [k.i(9), k.i(10)];
+    let wide = [k.i(11) != 0, k.i(12) != 0];
+    let (gw, tile) = (k.i(13), k.f(14));
+    let itile = 1.0 / (tile * 8.0);
+    let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    let base = chunk.max(0) as usize * k.i(1).max(0) as usize;
+    let mut n = 0usize;
+    for i in s0..s1 {
+        let sv = g(sl, i);
+        if sv < 0 {
+            continue;
+        }
+        let q = sv as usize;
+        let prof = if g(layer, q) == 1 { 1usize } else { 0usize };
+        let d = dest[prof];
+        let tl = if d >= 0 { floor(g(ys, q) as f64 * itile) as i32 * gw + floor(g(xs, q) as f64 * itile) as i32 } else { -1 };
+        if g(own, q) as i32 != player || g(dead, q) != 0 || g(iswk, q) != 0 || g(holdf, q) != 0 || g(ep, q) != epoch || g(pf, q) != 0
+            || (!mpath.is_null() && g(mpath, q) >= 0) || d < 0 || tl == d {
+            s(out, base + n, sv);
+            n += 1;
+            continue;
+        }
+        s(tus, q, -1);
+        s(tuid, q, 0);
+        s(tbt, q, -1);
+        s(acqb, q, 0);
+        s(fatf, q, 0);
+        s(lsx, q, f32::NAN);
+        s(lsy, q, f32::NAN);
+        s(cmdc, q, cmd);
+        s(amgx, q, ax as i16);
+        s(amgy, q, ay as i16);
+        s(tgx, q, px);
+        s(tgy, q, py);
+        s(rkf, q, 1);
+        s(rte, q, d);
+        s(nvp, q, prof as i8);
+        s(pidx, q, 0);
+        s(nvpk, q, (prof as i32 * 16777216 + d) * 2 + wide[prof] as i32);
+        s(cd, q, -1);
+        // (A group's unit: its distance to the destination's middle within 64
+        // tiles, -1 further: main.js _ordNavLD.)
+        let mut ld = -1.0f64;
+        if wide[prof] {
+            let (x, y) = (g(xs, q) as f64 * 0.125, g(ys, q) as f64 * 0.125);
+            let (dx, dy) = (d % gw, d / gw);
+            if (dx - floor(x / tile) as i32).abs() <= 64 && (dy - floor(y / tile) as i32).abs() <= 64 {
+                let (ex, ey) = (dx as f64 * tile + 16.0 - x, dy as f64 * tile + 16.0 - y);
+                ld = sqrt(ex * ex + ey * ey);
+            }
+        }
+        s(nld, q, ld as f32);
+        s(on, q, 0);
+    }
+    s(cnt, chunk.max(0) as usize, n as i32);
 }
 
 /// Whether two route ends (tiles, -1 none) are of one crowd: within
@@ -1733,6 +1838,8 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     let (scm, sct, sctid, srk) = (k.p::<u8>(25), k.p::<i32>(26), k.p::<i32>(27), k.p::<u8>(28));
     let rows=k.p::<i16>(29);let hot=k.p::<f32>(30);
     let holdf = k.p::<u8>(31);
+    // (An attack order's target: its unit's slot and id, or its structure's tile.)
+    let (tus, tuid, tbt) = (k.p::<i32>(32), k.p::<i32>(33), k.p::<i32>(34));
     let absent = k.f(2) as u32;
     let cmd_atk = k.i(3) as u8;
     let brain = k.i(4) == 1;
@@ -1804,6 +1911,27 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
             s(sout, q, -1);
         }
         q += 1;
+    }
+    // An attack order's target as the brain's instruction target (cm 32, a
+    // structure's 48): the brain says only whether it is in range.
+    if !tus.is_null() && !tuid.is_null() && !tbt.is_null() {
+        for q in s0..s1 {
+            if g(cmd, q) != cmd_atk {
+                continue;
+            }
+            let id = g(tuid, q);
+            if id != 0 {
+                s(scm, q, 32);
+                s(sct, q, g(tus, q));
+                s(sctid, q, id);
+            } else if g(tbt, q) >= 0 {
+                s(scm, q, 48);
+                s(sct, q, g(tbt, q));
+                s(sctid, q, 0);
+            } else {
+                s(scm, q, 0);
+            }
+        }
     }
 }
 
@@ -2092,7 +2220,7 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
 /// kernel's P[0] + their list position) listed for its looks while fewer
 /// than `looks` are (hit.plist, cnt[1]).
 #[inline(always)]
-unsafe fn hit_one(q: usize, dmg: f32, st: i32, wk: i32, e: i32, looks: i32, acc: *mut i32, touch: *mut u8, sty: *mut u8, bd: *mut i32, pd: *mut i32, wkk: *mut i32, tl: *mut i32, pl: *mut i32, cnt: *mut i32) {
+unsafe fn hit_one(q: usize, dmg: f32, st: i32, wk: i32, e: i32, lv: &Looks, acc: *mut i32, touch: *mut u8, sty: *mut u8, bd: *mut i32, pd: *mut i32, wkk: *mut i32, tl: *mut i32, pl: *mut i32, cnt: *mut i32) {
     use core::sync::atomic::{AtomicI32, AtomicU8, Ordering::Relaxed};
     let ai = |p: *mut i32, i: usize| -> &AtomicI32 { &*(p.add(i) as *const AtomicI32) };
     let dq = {
@@ -2115,11 +2243,35 @@ unsafe fn hit_one(q: usize, dmg: f32, st: i32, wk: i32, e: i32, looks: i32, acc:
         let t = ai(cnt, 0).fetch_add(1, Relaxed);
         s(tl, t as usize, q as i32);
     }
-    if looks > 0 && g(cnt, 1) < looks {
-        let p = ai(cnt, 1).fetch_add(1, Relaxed);
+    // (Its look: in the view's list, or the few of the rest.)
+    let (looks, ci, po) = if lv.inside(q) { (lv.n, 1usize, 0usize) } else { (lv.out, 3usize, lv.n.max(0) as usize) };
+    if looks > 0 && g(cnt, ci) < looks {
+        let p = ai(cnt, ci).fetch_add(1, Relaxed);
         if p < looks {
-            s(pl, p as usize, e);
+            s(pl, po + p as usize, e);
         }
+    }
+}
+
+/// The looks of a tick's hits (presentation only, which differs between
+/// peers): up to n of hits on units within the page's view (a rectangle of
+/// unit.x, unit.y: eighths of a pixel; none: every hit is within), up to out
+/// of the rest after them.
+struct Looks {
+    n: i32,
+    out: i32,
+    xs: *const i32,
+    ys: *const i32,
+    r: [i32; 4],
+}
+impl Looks {
+    #[inline(always)]
+    unsafe fn inside(&self, q: usize) -> bool {
+        if self.xs.is_null() || self.ys.is_null() {
+            return true;
+        }
+        let (x, y) = (g(self.xs, q), g(self.ys, q));
+        x >= self.r[0] && x <= self.r[2] && y >= self.r[1] && y <= self.r[3]
     }
 }
 
@@ -2134,8 +2286,11 @@ unsafe fn hit_one(q: usize, dmg: f32, st: i32, wk: i32, e: i32, looks: i32, acc:
 /// unit.atkDmg, unit.atkSty, unit.atkWatch, unit.owner, unit.id, unit.hAcc,
 /// unit.hTouch, unit.hSty, unit.hBurnD, unit.hPoiD, unit.hWatchK,
 /// hit.tlist, hit.plist, hit.cnt, ?unit.atkN (the attack's shots, mv.rs
-/// fire: its damage that many times). P: [0] JS entries, [1] per job, [2]
-/// looks, [3] JS jobs, [4] chunks a job, [5] chunks, [6] chunk slots.
+/// fire: its damage that many times), unit.statRow, eff.hot, ?occ.offsets,
+/// ?unit.x, ?unit.y (the view's test: Looks). P: [0] JS entries, [1] per
+/// job, [2] looks in the view, [3] JS jobs, [4] chunks a job, [5] chunks,
+/// [6] chunk slots, [7] chunks by offsets, [8]..[11] the view (x0, y0, x1,
+/// y1; [8] > [10]: none), [12] looks of the rest (cnt[3]).
 #[no_mangle]
 pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -2148,7 +2303,9 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
     let atn = k.p::<u8>(21);
     let rows=k.p::<i16>(22);let hot=k.p::<f32>(23);
     let n = k.i(0);
-    let looks = k.i(2);
+    let view = k.i(8) <= k.i(10);
+    let lv = Looks { n: k.i(2), out: k.i(12), xs: if view { k.p::<i32>(25) } else { core::ptr::null() }, ys: if view { k.p::<i32>(26) } else { core::ptr::null() },
+        r: [k.i(8), k.i(9), k.i(10), k.i(11)] };
     let js_jobs = k.i(3);
     if chunk < js_jobs {
         let (i0, i1) = job(chunk, k.i(1), n);
@@ -2157,7 +2314,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             if q < 0 {
                 continue;
             }
-            hit_one(q as usize, g(hd, i), g(hs, i) as i32, g(hw, i), i as i32, looks, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
+            hit_one(q as usize, g(hd, i), g(hs, i) as i32, g(hw, i), i as i32, &lv, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
         }
         return;
     }
@@ -2179,7 +2336,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             let wk = if st == 5 { let w = g(awt, at); if w > 0 { (w.min(2047) << 20) | ((g(uid, at) & 0xFFFF) << 4) | ((g(own, at) as i32 + 1) & 15) } else { 0 } } else { 0 };
             let shots = if atn.is_null() { 1 } else { g(atn, at).max(1) };
             let dmg = if shots > 1 { flat_stat(rows,hot,at,5) * shots as f32 } else { flat_stat(rows,hot,at,5) };
-            hit_one(q as usize, dmg, st, wk, n + j as i32, looks, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
+            hit_one(q as usize, dmg, st, wk, n + j as i32, &lv, acc, touch, sty, bd, pd, wkk, tl, pl, cnt);
         }
     }
 }
@@ -2538,12 +2695,13 @@ unsafe fn scratch(a: *const i32) -> (*mut i32, usize) {
 const TAG_BRAIN: i32 = 0x4252_4149;
 const TAG_EFF: i32 = 0x4546_4641;
 
-/// Whether area b is within k steps of any of src[..ns] (breadth first over
-/// the CSR area graph; stamps by epoch in the scratch).
+/// Whether any of the areas tg[..nt] is within k steps of any of src[..ns]
+/// (breadth first over the CSR area graph; stamps by epoch in the scratch).
 #[inline(always)]
-unsafe fn area_within(off: *const i32, nb: *const i32, na: usize, src: &[i32; 4], ns: usize, b: i32, k: i32, st: *mut i32, q: *mut i32, ep: i32) -> bool {
+unsafe fn area_within(off: *const i32, nb: *const i32, na: usize, src: &[i32; 4], ns: usize, tg: &[i32; 4], nt: usize, k: i32, st: *mut i32, q: *mut i32, ep: i32) -> bool {
+    let hit = |a: i32| -> bool { (0..nt).any(|j| *tg.as_ptr().add(j) == a) };
     for i in 0..ns {
-        if *src.as_ptr().add(i) == b {
+        if hit(*src.as_ptr().add(i)) {
             return true;
         }
     }
@@ -2567,7 +2725,7 @@ unsafe fn area_within(off: *const i32, nb: *const i32, na: usize, src: &[i32; 4]
             qh += 1;
             for j in g(off, a)..g(off, a + 1) {
                 let c = g(nb, j as usize);
-                if c == b {
+                if hit(c) {
                     return true;
                 }
                 if g(st, c as usize) != ep {
@@ -2605,7 +2763,7 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let sout = k.p::<i32>(18);
     // (The structures' owners per tile, a copy: -1 none, the owner, -2 mixed.)
     let sown = k.p::<i8>(19);
-    let (cmd_idle, cmd_am) = (k.i(2) as u8, k.i(3) as u8);
+    let (cmd_idle, cmd_am, cmd_atk) = (k.i(2) as u8, k.i(3) as u8, k.i(9) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
     let nau = na.max(0) as usize;
@@ -2636,7 +2794,9 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         }
         let c = g(cmd, q);
         let mover = fl & 16 != 0;
-        if c != cmd_idle && c != cmd_am && !mover {
+        // (An attack order's: its target given, cm 32.)
+        let order = c == cmd_atk && cmd_atk != 0 && g(cm, q) & 32 != 0;
+        if c != cmd_idle && c != cmd_am && !mover && !order {
             continue;
         }
         let owner = g(own, q) as i32;
@@ -2647,7 +2807,15 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         let mut tq = -1i32;
         let cur = g(ct, q);
         let had_struct = g(cm, q) & 16 != 0;
-        if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 {
+        if order {
+            if had_struct {
+                if !(cur >= 0 && cur < gw * gh) {
+                    continue;
+                }
+            } else if !(cur >= 0 && (cur as usize) < k.i(0).max(0) as usize) || g(flg, cur as usize) & 1 != 0 || g(id, cur as usize) != g(ctid, q) {
+                continue;
+            }
+        } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 {
             let cu = cur as usize;
             if g(flg, cu) & 1 == 0 && g(id, cu) == g(ctid, q) && g(own, cu) as i32 != owner {
                 let ar = area_of(g(xs, cu), g(ys, cu));
@@ -2656,14 +2824,24 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                 }
             }
         }
-        if tq < 0 && g(outa, q) >= 0 {
+        if order {
+            if had_struct {
+                // (Below: sg the structure.)
+            } else {
+                tq = cur;
+            }
+        } else if tq < 0 && g(outa, q) >= 0 {
             tq = g(outa, q);
         }
         // No unit to fight: a hostile structure, the one it has while that
         // stands hostile and in sight, else the scan's (16: the structure's
         // tile in bt, the motor works the rest out; mv.rs move_struct).
         let mut sg = -1i32;
-        if tq < 0 && !mover {
+        if order {
+            if had_struct {
+                sg = cur;
+            }
+        } else if tq < 0 && !mover {
             if had_struct && cur >= 0 && !sown.is_null() && cur < gw * gh {
                 let code = g(sown, cur as usize) as i32;
                 if code != -1 && code != owner {
@@ -2687,9 +2865,10 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         let tu = if sg >= 0 { 0usize } else { tq as usize };
         let ta = if sg >= 0 { g(ag, sg as usize) } else { area_of(g(xs, tu), g(ys, tu)) };
         let mut in_range = false;
-        if ta >= 0 && have_bfs {
-            let fx = g(xs, q) * itile;
-            let fy = g(ys, q) * itile;
+        // The areas of a unit's +-0.3 tile window (at most four).
+        let window = |x: f32, y: f32| -> ([i32; 4], usize) {
+            let fx = x * itile;
+            let fy = y * itile;
             let (gxf, gyf) = (floorf(fx), floorf(fy));
             let (gx, gy) = (gxf as i32, gyf as i32);
             let (rx, ry) = (fx - gxf, fy - gyf);
@@ -2697,21 +2876,28 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             let x1 = if rx < 0.7 { gx } else { gx + 1 };
             let y0 = if ry < 0.3 { gy - 1 } else { gy };
             let y1 = if ry < 0.7 { gy } else { gy + 1 };
-            let mut src = [0i32; 4];
-            let mut ns = 0usize;
+            let mut out = [0i32; 4];
+            let mut n = 0usize;
             for yy in y0..=y1 {
                 for xx in x0..=x1 {
-                    if xx < 0 || yy < 0 || xx >= gw || yy >= gh || ns >= 4 {
+                    if xx < 0 || yy < 0 || xx >= gw || yy >= gh || n >= 4 {
                         continue;
                     }
                     let ar = g(ag, (yy * gw + xx) as usize);
                     if ar >= 0 {
-                        *src.as_mut_ptr().add(ns) = ar;
-                        ns += 1;
+                        *out.as_mut_ptr().add(n) = ar;
+                        n += 1;
                     }
                 }
             }
-            if ns > 0 {
+            (out, n)
+        };
+        if ta >= 0 && have_bfs {
+            let (src, ns) = window(g(xs, q), g(ys, q));
+            // (A unit target by its window too: in range of each other alike,
+            // whichever of the two looks; a structure by its tile.)
+            let (tgt, nt) = if sg >= 0 { ([ta, 0, 0, 0], 1usize) } else { window(g(xs, tu), g(ys, tu)) };
+            if ns > 0 && nt > 0 {
                 let mut ep = *sc.add(1) + 1;
                 if ep >= 0x7fff_ffff {
                     for i in 0..nau {
@@ -2720,8 +2906,14 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                     ep = 1;
                 }
                 *sc.add(1) = ep;
-                in_range = area_within(off, nb, nau, &src, ns, ta, g(rk, q) as i32, st, qq, ep);
+                in_range = area_within(off, nb, nau, &src, ns, &tgt, nt, g(rk, q) as i32, st, qq, ep);
             }
+        }
+        if order {
+            s(bm, q, 32 | if had_struct { 16 } else { 0 } | if in_range { 1 } else { 2 });
+            s(bt, q, cur);
+            s(btid, q, g(ctid, q));
+            continue;
         }
         if mover {
             s(bm, q, if in_range { 4 } else { 0 });

@@ -55,7 +55,8 @@ for (const cue of ['attack_swing', 'attack_cast', 'collector_work', 'astar_work'
 for (const weaponCue of ['weapon_sword', 'weapon_axe', 'weapon_hammer', 'weapon_daggers']) {
     assert.match(audio, new RegExp(`${weaponCue}: \\[`));
 }
-assert.match(unit, /playSound\(attackCue, this\.x, this\.y, this\.unitType\)/);
+// (The kernels' attacks sound where their hits are applied: unitHitsResolve.)
+assert.match(unit, /playSound\(sty >= 1 && sty <= 4 \|\| a\.attackStyle === 'laser' \? 'attack_cast' : 'attack_swing', ax, ay, a\.unitType\)/);
 assert.match(worker, /playSound\(u\.workerType === 'astar_collector' \? 'astar_work' : 'collector_work'/);
 assert.match(worker, /playSound\('salvager_work'/);
 

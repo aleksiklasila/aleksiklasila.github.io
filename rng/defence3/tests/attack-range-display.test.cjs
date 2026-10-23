@@ -9,7 +9,7 @@ const result=i.eval(`(()=>{
  const unit=row(renderUnitInfo(u),'Range'),group=row(renderUnitGroupInfo([u]),'Range');
  const barrack=row(renderBarrackInfo(b),'Unit Range'),bgroup=row(renderBarrackGroupInfo([b]),'Unit Range');
  // Deliberately different sight and range: neither the panel nor matrix may substitute sight.
- const st={...t.currentStats,attackRangeArea:1.5,visionRange:4,visionRangeArea:4};
+ const st={...t.currentStats,attackRangeArea:2,visionRange:4,visionRangeArea:4};
  const proxy=Object.create(t);Object.defineProperties(proxy,{currentStats:{value:st},baseStats:{value:st}});
  const tower=row(renderTowerInfo(proxy),'Range'),tgroup=row(renderTowerGroupInfo([proxy]),'Range');
  const matrixId=/data-matrix-id="([^"]+)"/.exec(tower)[1];
@@ -20,6 +20,6 @@ const result=i.eval(`(()=>{
   tiles:formatRangeStatTiles(7.5),area:getStatAttackRangeArea({attackRangeArea:2.5,attackRange:0})};
 })()`);
 for(const key of ['unit','group','barrack','bgroup'])assert.match(result[key],/>1a(?: avg)?</,key+': '+result[key]);
-for(const key of ['tower','tgroup']){assert.match(result[key],/>1\.5a</,key+': '+result[key]);assert.doesNotMatch(result[key],/>4a</);}
-assert.match(result.preview,/Range/);assert.equal(result.fractional,'0.6a');assert.equal(result.research,'1.5 areas');assert.equal(result.tiles,'1.5a');assert.equal(result.area,2.5);assert.deepEqual(i.errors,[]);
-console.log('PASS: unit/group/barrack/tower ranges use attack range in areas; fractional research and tile conversions agree');
+for(const key of ['tower','tgroup']){assert.match(result[key],/>2a</,key+': '+result[key]);assert.doesNotMatch(result[key],/>4a</);}
+assert.match(result.preview,/Range/);assert.equal(result.fractional,'0a');assert.equal(result.research,'1a');assert.equal(result.tiles,'1a');assert.equal(result.area,2);assert.deepEqual(i.errors,[]);
+console.log('PASS: unit/group/barrack/tower ranges use attack range in areas; areas whole everywhere (fractions floored)');

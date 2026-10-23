@@ -2171,7 +2171,7 @@ function renderBuildItemDetailedStats(key) {
                 addRow('Burn Duration', Number.isFinite(burnDuration) ? `${burnDuration.toFixed(1)}s` : '0.0s', { kind: 'building', key, statKey: 'burnDuration' });
                 if (Number.isFinite(blastDamage) && Number.isFinite(blastRadius) && blastDamage > 0 && blastRadius > 0) {
                     addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
-                    addRow('Blast Radius', formatAreaDistanceStat(blastRadius), { kind: 'building', key, statKey: 'blastRadius' });
+                    addRow('Blast Radius', formatBlastRadiusStat(blastRadius), { kind: 'building', key, statKey: 'blastRadius' });
                 }
             } else if (key === 'poison') {
                 let poisonDps = getBuildingStatForOwner(localPlayerId, key, level, 'poisonDps');
@@ -2236,7 +2236,7 @@ function renderBuildItemDetailedStats(key) {
                 addRow('Blast Damage', blastDamage.toFixed(2), { kind: 'building', key, statKey: 'blastDamage' });
             }
             if (Number.isFinite(blastRadius) && blastRadius > 0) {
-                addRow('Blast Radius', formatAreaDistanceStat(blastRadius), { kind: 'building', key, statKey: 'blastRadius' });
+                addRow('Blast Radius', formatBlastRadiusStat(blastRadius), { kind: 'building', key, statKey: 'blastRadius' });
             }
         }
         if (key === 'lava' && stats.damage > 0) {
@@ -4539,7 +4539,7 @@ function renderUnitGroupInfo(group, big = null) {
     let avgEffRange = totalEffRange / Math.max(1, groupCount);
     let avgBaseVision = totalBaseVision / Math.max(1, groupCount);
     let avgEffVision = totalEffVision / Math.max(1, groupCount);
-    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatAreaDistanceStat(avgBaseRange)} avg`, `${formatAreaDistanceStat(avgEffRange)} avg`);
+    html += infoRow(withInfoPanelStatMatrixButton('Range', { title: `${u0.unitType} / Range`, kind: 'unit', key: u0.unitType, statKey: 'attackRange' }), `${formatAreaDistanceStat(Math.round(avgBaseRange))} avg`, `${formatAreaDistanceStat(Math.round(avgEffRange))} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('Visibility', { title: `${u0.unitType} / Visibility`, kind: 'unit', key: u0.unitType, statKey: 'visionRange' }), `${formatRangeStatTiles(avgBaseVision)} avg`, `${formatRangeStatTiles(avgEffVision)} avg`);
     if (u0.unitType === 'scout') {
         let count = Math.max(1, groupCount);

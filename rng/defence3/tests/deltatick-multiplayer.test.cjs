@@ -18,6 +18,8 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '40', 'cfg-map-type
         'unit:collector_unit': { 1: 6 }, 'building:barrack_norm': { 1: 2 }, 'building:pistol': { 1: 3 } };
     const { host, guests } = await H.startHostedMatch(world, { guests: 1, hostSetup: `startingResourcesConfig = ${JSON.stringify({ spawnCounts, researchLevels: {} })};` });
     const all = [host, ...guests];
+    // (The match must outlast the scenario: a king falling in the fights does not end it, on every peer alike.)
+    for (const inst of all) inst.evalSim('checkWinCondition = function () {};');
     // (The host's pace says the step size: forced here, as a slow machine's
     // pace would set it.)
     host.eval(`__scratch.dk = 1; netStepTicks = () => __scratch.dk;`);

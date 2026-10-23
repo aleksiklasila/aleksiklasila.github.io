@@ -165,7 +165,7 @@ const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX
 const SIM_KERNEL_EFF_AREA_HIST = 100, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
 const SIM_KERNEL_VIS_SNAP = 30, SIM_KERNEL_VIS_SPREAD = 31;
 const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT = 34, SIM_KERNEL_LASER_HITS = 35;
-const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
+const SIM_KERNEL_UNIT_EVENTS = 36, SIM_KERNEL_DEAD_MARK = 37, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
 const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
 const SIM_KERNEL_HEAL_REDUCE = 47;
@@ -247,60 +247,6 @@ const SIM_FLOW_REFRESH_TICKS = 4;
 // the distance made good since its last steer: SIM_STEER_NEAR_TICKS ticks'
 // worth.)
 const SIM_STEER_TICKS = 16, SIM_STEER_NEAR_TICKS = 4;
-// (The steps' tiles carried with their coordinates, a neighbour's from its
-// index's difference: the divisions by the map width were a quarter of the
-// movement kernel.) PL, PB: the build's parts (partL, partBase); ROWS, ro:
-// the destination's row (every part's exit toward it, flownav.js).
-function simFlowLook(LC, s, refresh, tl, gx, gy, dk, Wd, Hd, WL, navVer, wv, fgen,
-    nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh) {
-    const NV = LC.mvNav, r = s * SIM_NAV_STRIDE;
-    if (NV[r] === tl && NV[r + 1] === dk && NV[r + 4] === fgen && (!refresh || (NV[r + 2] === navVer && NV[r + 3] === wv))) return 1;
-    // (Clusters are 16 or 32 tiles: a shift.)
-    const cs = 31 - Math.clz32(nC);
-    if(ROWS===null && _simFlowAtlas && tl!==dk && dk>=0 && dk<Wd*Hd){
-        const A=_simFlowAtlas.atlas,P=A&&A.clearPrefix,dx=dk%Wd,dy=(dk-dx)/Wd;
-        if(P){
-            const stride=A.bw+1,x0=Math.min(gx,dx)>>3,x1=(Math.max(gx,dx)>>3)+1,
-                y0=Math.min(gy,dy)>>3,y1=(Math.max(gy,dy)>>3)+1;
-            if(P[y1*stride+x1]-P[y0*stride+x1]-P[y1*stride+x0]+P[y0*stride+x0]===0){
-                const n=tl+(Math.abs(dx-gx)>=Math.abs(dy-gy)?(dx>gx?1:-1):(dy>gy?Wd:-Wd));
-                if(_simOpenBlockXY(WL,gx,gy,Wd,Hd)&&_simOpenBlockXY(WL,_simStepX(n,tl,gx,Wd),_simStepY(n,tl,gx,gy,Wd),Wd,Hd)){
-                    NV[r]=tl;NV[r+1]=dk;NV[r+2]=navVer;NV[r+3]=wv;NV[r+4]=fgen;
-                    NV[r+5]=n;NV[r+6]=-1;NV[r+7]=(dk<<1)|1;return 1;
-                }
-            }
-        }
-    }
-    let n1 = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, tl, gx, gy, dk);
-    if (n1 < 0) return 0;
-    let n2 = -1, far = n1, open = false;
-    const n1x = _simStepX(n1, tl, gx, Wd), n1y = _simStepY(n1, tl, gx, gy, Wd);
-    if (WL[n1]) {
-        let aim = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, n1, n1x, n1y, dk);
-        if (!(aim >= 0) || WL[aim]) aim = dk;
-        n1 = simNavDetour(WL, Wd, Hd, gx, gy, aim);
-        if (n1 < 0) return -1;
-        far = n1;
-    } else {
-        if (Math.abs(n1x - gx) + Math.abs(n1y - gy) !== 1) return -2;
-        open = _simOpenBlockXY(WL, gx, gy, Wd, Hd) && _simOpenBlockXY(WL, n1x, n1y, Wd, Hd);
-        let cur = n1, cx = n1x, cy = n1y, short=n1;
-        for (let k = 1; k < (open ? 32 : 2); k++) {
-            const nx = simNavStepXY(Wd, cs, nC, ncw, PL, PB, ROWS, ro, NF, NB, NT, NP, df, doff, dbx, dby, dbw, dbh, cur, cx, cy, dk);
-            if (nx < 0 || WL[nx]) break;
-            if (k === 1) n2 = nx;
-            if (!open) break;
-            const nxx = _simStepX(nx, cur, cx, Wd), nxy = _simStepY(nx, cur, cx, cy, Wd);
-            if (!_simOpenBlockXY(WL, nxx, nxy, Wd, Hd)) break;
-            far = cur = nx; cx = nxx; cy = nxy;
-            if(k<6)short=nx;
-        }
-        if(open && far!==short && !simSegOpen(WL,gx*TILE+16,gy*TILE+16,(far%Wd)*TILE+16,Math.floor(far/Wd)*TILE+16))far=short;
-    }
-    NV[r] = tl; NV[r + 1] = dk; NV[r + 2] = navVer; NV[r + 3] = wv; NV[r + 4] = fgen;
-    NV[r + 5] = n1; NV[r + 6] = n2; NV[r + 7] = (far << 1) | (open ? 1 : 0);
-    return 1;
-}
 // Tile n's column and row, n a step from tile t (column tx, row ty): a
 // side neighbour's from the difference, anything else (a portal's pair)
 // divided out.
@@ -337,35 +283,6 @@ function simWallKey(WBLK, WBW, WBH, gx, gy, wver) {
     return wv;
 }
 
-// The flow's next tile from (gx, gy) is a wall the navigation predates (a
-// building since its last build; the next build is made in the background):
-// the open side neighbour (4-way) nearest to tile `aim` (where the flow leads
-// past it), the first in N, S, W, E order on ties; -1 none.
-function simNavDetour(WL, W, H, gx, gy, aim) {
-    const ax = aim % W, ay = (aim - ax) / W;
-    let best = -1, bd = Infinity;
-    for (let k = 0; k < 4; k++) {
-        const x = gx + (k === 2 ? -1 : k === 3 ? 1 : 0), y = gy + (k === 0 ? -1 : k === 1 ? 1 : 0);
-        if (x < 0 || y < 0 || x >= W || y >= H || WL[y * W + x]) continue;
-        const ex = ax - x, ey = ay - y, d = ex * ex + ey * ey;
-        if (d < bd) { bd = d; best = y * W + x; }
-    }
-    return best;
-}
-// A ground unit on a flow at tile (gx, gy) whose step would end in tile
-// (ngx, ngy), a wall or off the map (WL): it slides along the wall on one
-// axis, x first, else stands. Returns which components to drop: 0 none,
-// 2 the y step, 1 the x step, 3 both.
-function simFlowSlide(WL, W, H, gx, gy, ngx, ngy) {
-    // (Staying in its tile: nothing to slide along, even standing in a wall
-    // tile (a building put down under it), which it could never leave.)
-    if (ngx === gx && ngy === gy) return 0;
-    const ox = ngx >= 0 && ngx < W, oy = ngy >= 0 && ngy < H;
-    if (ox && oy && WL[ngy * W + ngx] === 0) return 0;
-    if (ox && gy >= 0 && gy < H && WL[gy * W + ngx] === 0) return 2;
-    if (oy && gx >= 0 && gx < W && WL[ngy * W + gx] === 0) return 1;
-    return 3;
-}
 // The next tile from t toward dest: the destination field where it reaches
 // the destination, else the exit of t's part in the destination's row
 // (rows at ro; part = partBase[cluster] + partL[t]) and that exit's local
@@ -424,40 +341,6 @@ function _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty) {
 // (simFlowLook's steps).
 // (rows null: the route is on the atlas, _simFlowAtlas's build.)
 let _simFlowAtlas = null;
-function simNavStepXY(W, cs, C, cw, partL, partBase, rows, ro, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, tx, ty, dest) {
-    if (t === dest) return -1;
-    if (rows === null) {
-        if (partL[t] === 0xFFFF) return _simWallStepOut(partL, partBase, null, 0, W, C, cw, t, tx, ty);
-        return _simFlowAtlas && typeof navAtlasStep === 'function' ? navAtlasStep(_simFlowAtlas, t, dest) : -1;
-    }
-    if (dfield) {
-        const lx = tx - bx, ly = ty - by;
-        if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) {
-            const o = doff + ly * bw + lx, here = dfield[o];
-            if (here !== 0xFFFF) {
-                let best = -1, bv = here;
-                if (lx + 1 < bw && dfield[o + 1] < bv) { bv = dfield[o + 1]; best = t + 1; }
-                if (lx > 0 && dfield[o - 1] < bv) { bv = dfield[o - 1]; best = t - 1; }
-                if (ly + 1 < bh && dfield[o + bw] < bv) { bv = dfield[o + bw]; best = t + W; }
-                if (ly > 0 && dfield[o - bw] < bv) { bv = dfield[o - bw]; best = t - W; }
-                return best;
-            }
-        }
-    }
-    const cxi = tx >> cs, cyi = ty >> cs, cf = cyi * cw + cxi, pl = partL[t];
-    if (pl === 0xFFFF) return _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty);
-    const e = rows[ro + partBase[cf] + pl];
-    if (e >= 254) return -1;
-    const node = nodeBase[cf] + e;
-    if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
-    const off = node * C * C, lx = tx - (cxi << cs), ly = ty - (cyi << cs), o = off + ly * C + lx;
-    let best = -1, bv = fields[o];
-    if (lx + 1 < C && fields[o + 1] < bv) { bv = fields[o + 1]; best = t + 1; }
-    if (lx > 0 && fields[o - 1] < bv) { bv = fields[o - 1]; best = t - 1; }
-    if (ly + 1 < C && fields[o + C] < bv) { bv = fields[o + C]; best = t + W; }
-    if (ly > 0 && fields[o - C] < bv) { bv = fields[o - C]; best = t - W; }
-    return best;
-}
 // _simOpenBlock at column x, row y.
 function _simOpenBlockXY(WALL, x, y, W, H) {
     if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) return false;
@@ -465,16 +348,6 @@ function _simOpenBlockXY(WALL, x, y, W, H) {
     return true;
 }
 
-// Whether area b is within k steps of area a (data_state.js
-// isAreaWithinDistance) on the area graph area.off / area.nb (CSR): 1 yes,
-// 0 no, -1 not worked out here (k > 2).
-// A source window's key at (x, y): its tile * 9 + zone (which third of the
-// tile on each axis: the window covers the tile before or after below .3 or
-// above .7), as isWorldTargetWithinAreaRange looks at it.
-function simWindowKey(x, y, tile) {
-    const fx = x / tile, fy = y / tile, gx = Math.floor(fx), gy = Math.floor(fy), rx = fx - gx, ry = fy - gy;
-    return (gy * 65536 + gx) * 9 + (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
-}
 function _simAreaNear(OFF, NB, a, b, k) {
     if (a === b) return 1;
     if (k <= 0) return 0;
@@ -1198,9 +1071,9 @@ const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.ne
     // (Words 295, 296: its route's navigation profile and an attack-mover's aggro reach, mv.rs resume_order.)
     '?unit.nvProf', '?unit.mvReachA'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
-// (Off: the unit controller does not run, every unarmed unit is Unit.update's as before; for comparisons.)
+// (Off: no unit controller, no events: a unit the kernel does not move stands. Only for comparisons with old kernels in tests.)
 let _simUnitCtlOn = true;
-const _SIM_MOVE_CTLX = ['unit.holdF', 'unit.isWk', 'unit.rkF', 'unit.amGx', 'unit.amGy', 'unit.tuS', 'unit.tuId', 'unit.fatF', 'unit.tbT', 'unit.nvPK', 'mv.scoutT', 'unit.acqB'];
+const _SIM_MOVE_CTLX = ['unit.holdF', 'unit.isWk', 'unit.rkF', 'unit.amGx', 'unit.amGy', 'unit.tuS', 'unit.tuId', 'unit.fatF', 'unit.tbT', 'unit.nvPK', 'mv.scoutT', 'unit.acqB', 'unit.mvEv'];
 const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE_NAV * 8 }, (_, i) => {
     const p = i >> 3, j = i & 7;
     return '?' + (j < 7 ? 'nav.' + p + '.' + ['fields', 'partL', 'partB', 'nb', 'nt', 'np', 'meta'][j] : p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p);
@@ -1642,8 +1515,11 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // no unit but a hostile structure the scan found (acq.sout) -> 8 engage it
 // (Unit.update, _brainStructureEngage); none -> 0. acq.bm 255: no
 // instruction (not the brain's unit).
+// An attack order's unit (commandState [9]; its target the order's, put in the
+// snapshot's acq.cm 32 / ct / ctid, 48 a structure's tile): only whether it
+// is in range, 32 | 1 (or 48 | 1) in range, 32 | 2 not (mv.rs forced).
 // P: [0] slots, [1] per job, [2] CMD_IDLE, [3] CMD_ATTACK_MOVING, [4] TILE,
-// [5]/[6] grid, [7] players, [8] areas.
+// [5]/[6] grid, [7] players, [8] areas, [9] CMD_ATTACKING.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
     '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown']);
@@ -1653,6 +1529,14 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCom
 // P: [0] slots, [1] per job.
 const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCombatCommitW, P, chunk, 'k_combat_commit', 'COMBAT_COMMIT'); };
+// A move or attack-move order's units into their columns (main.js
+// _issueGroupMoveOrder; k.rs k_order_move): those it cannot take (workers,
+// held, a pending way...) listed for the JavaScript. P: see k_order_move.
+const SIM_KERNEL_ORDER_MOVE = 101;
+const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPF', 'unit.x', 'unit.y',
+    'unit.sepLayer', 'unit.tuS', 'unit.tuId', 'unit.tbT', 'unit.acqB', 'unit.fatF', 'unit.fLsX', 'unit.fLsY', 'unit.commandState', 'unit.mvOn', 'unit.amGx', 'unit.amGy',
+    'unit.mvTgX', 'unit.mvTgY', 'unit.rkF', 'unit.rtEnd', 'unit.nvProf', 'unit.pathIndex', 'unit.nvPK', 'unit.mvCD', 'unit.mvNavLD', 'unit.mvPath']);
+SIM_KERNELS[SIM_KERNEL_ORDER_MOVE] = function (R, P, chunk) { _simRust(_simOrderMoveW, P, chunk, 'k_order_move', 'ORDER_MOVE'); };
 // Adjacency groups on a helper lane (things_utils.js adjacencyLaneStep):
 // from the signature grid's snapshot (adj.sig: an id per operational
 // structure's (owner, type) signature, -1 none), the groups (4-connected,
@@ -1755,19 +1639,17 @@ SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) { _simRust(_simWsOrder
 const _simRetireW = _simWK(['ix.slots', 'unit.dead', 'unit.mvOut', 'retire.list', 'retire.count']);
 SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simRetireW, P, chunk, 'k_unit_retire', 'UNIT_RETIRE'); };
 
-// The unit pass's candidates (main.js _forEachUnitInTickOrder): per block
-// of P[1] units-array indices, those still needing their update (no slot,
-// or a kernel output 0 or above 6: moved, parked and held ones are done),
-// in index order at upd.cand[block * P[1]...], how many at upd.cnt[block].
-// P: [0] units, [1] block size, [2] blocks per job.
-const _simUpdCandW = _simWK(['ix.slots', 'unit.mvOut', 'unit.mvFire', 'upd.cand', 'upd.cnt']);
-SIM_KERNELS[SIM_KERNEL_UPD_CAND] = function (R, P, chunk) { _simRust(_simUpdCandW, P, chunk, 'k_upd_cand', 'UPD_CAND'); };
-// After the pass: units the kernel moved or held (outputs 1-9, 11, 12, not
-// visited in the pass) whose energy ran out during it (a mine) are dead now,
-// where they stood, as Unit.update would have left them at their turn.
-// P: [0] slots, [1] per job.
-const _simHeldDeadW = _simWK(['unit.mvOut', 'unit.energy', 'unit.dead', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY']);
-SIM_KERNELS[SIM_KERNEL_HELD_DEAD] = function (R, P, chunk) { _simRust(_simHeldDeadW, P, chunk, 'k_held_dead', 'HELD_DEAD'); };
+// The units the movement kernel left to the main thread this tick (unit.js
+// unitEventsRun): per slot chunk of P[1], the live units with an event
+// (unit.mvEv, cleared) or no output (a worker's AI), as slot * 8 + event at
+// ev.list[chunk * P[1]...], how many at ev.cnt[chunk]. P: [0] slots, [1] per job.
+const _simUnitEventsW = _simWK(['unit.mvOut', 'unit.mvEv', 'unit.live', 'unit.dead', 'unit.energy', 'ev.list', 'ev.cnt']);
+SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS] = function (R, P, chunk) { _simRust(_simUnitEventsW, P, chunk, 'k_unit_events', 'UNIT_EVENTS'); };
+// After the events: live units whose energy ran out (damage over time, a
+// mine, a ram's recoil) are dead now, where they stood before this tick's
+// step. P: [0] slots, [1] per job.
+const _simDeadMarkW = _simWK(['unit.mvOut', 'unit.energy', 'unit.dead', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.live']);
+SIM_KERNELS[SIM_KERNEL_DEAD_MARK] = function (R, P, chunk) { _simRust(_simDeadMarkW, P, chunk, 'k_dead_mark', 'DEAD_MARK'); };
 
 // The units' cover of one player (chunk = player; renderer.js
 // _visCoverUnits): from this stamp's seeds (vis.useed / ulist / ucnt; areas
@@ -1849,7 +1731,7 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) { _simRust(_simComb
 // [2] SIM_SEP_ABSENT.
 const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', '?-' , 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
     'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
-    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF']);
+    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF', 'unit.tuS', 'unit.tuId', 'unit.tbT']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of
@@ -1979,7 +1861,7 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
 const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', '?-' , 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
-    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets']);
+    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets', '?unit.x', '?unit.y']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).

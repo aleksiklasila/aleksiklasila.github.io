@@ -348,6 +348,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // 1 while Unit.holdPosition is set (its setter's): the brain gives a held
     // unit no chase (k.rs k_combat_brain), only a stand and fire in range.
     ['holdF', Uint8Array, 1],
+    // What the movement kernel leaves to the main thread this tick (unit.js unitEventsRun; 0 none): 1 a floor item it cannot
+    // apply (a mine), 2 no way on, 3 a wait for a way that ended near its target, 4 not in the unit index, 5 a worker's AI look on
+    // its way. Listed and cleared within the tick (SIM_KERNEL_UNIT_EVENTS).
+    ['mvEv', Uint8Array, 1],
     // The unit's order state the kernels work on (unit.js accessors over them): its target unit (slot -1 none, and the id it
     // must still have), whether that target is forced (an order), the attack-move destination tile (amGx, amGy; -1 none) and
     // the structure it targets (its tile, -1 none). Hashed with the other columns (k_snap_units).

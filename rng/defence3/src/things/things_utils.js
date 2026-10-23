@@ -2232,8 +2232,13 @@ function shouldKeepBuildSelectionAfterLeftClick(shiftHeld) {
 }
 
 // Areas, to a hundredth (ranges are fractional: 1.5a).
+// (Whole areas: 0a the thing's own area, 1a and those next to it, ...)
 function formatAreaDistanceStat(v) {
-    return Number.isFinite(v) ? `${Math.round(Math.max(0, v) * 100) / 100}a` : '-';
+    return Number.isFinite(v) ? `${Math.floor(Math.max(0, v) + 1e-9)}a` : '-';
+}
+// A blast's radius: a splash about the hit, in tiles (not areas: a fraction of one).
+function formatBlastRadiusStat(v) {
+    return Number.isFinite(v) ? `${Math.round(Math.max(0, v) * AREA_UNIT_TILE_EQUIVALENT * 10) / 10} tiles` : '-';
 }
 
 function formatRangeStatTiles(v) {
@@ -2243,6 +2248,7 @@ function formatRangeStatTiles(v) {
 // Shared stat rows store the canonical range in areas, plus a derived pixel
 // distance for consumers that need world coordinates.
 function getStatAttackRangeArea(stats) {
-    if (Number.isFinite(stats && stats.attackRangeArea)) return Math.max(0, stats.attackRangeArea);
+    // (Areas are whole: 0 its own, 1 the adjacent ones...)
+    if (Number.isFinite(stats && stats.attackRangeArea)) return Math.max(0, Math.floor(stats.attackRangeArea));
     return 0;
 }

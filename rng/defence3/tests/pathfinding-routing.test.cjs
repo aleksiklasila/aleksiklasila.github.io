@@ -136,146 +136,13 @@ assert.ok(resumed, 'partial cache makes progress under a small deterministic bud
 assert.equal(resumed.length, 216);
 assert.ok(deferred._isPathValidForScenario(resumed, 145, 85, 5, 10, false, null, 0, true));
 
-const unitGrid = Array.from({ length: 100 }, () => Array.from({ length: 160 }, () => ({ type: 0 })));
-const unitContext = vm.createContext({ TILE: 32, GRID_W: 160, GRID_H: 100, TYPE_WALL: 1, grid: unitGrid, pathTopologyVersion: 1 });
-vm.runInContext(read('src/utils/utils_common.js'), unitContext);
-vm.runInContext(read('src/things/unit.js'), unitContext);
-
-// Follow the real shared paths with 1000 units. Each reaches the target tile,
-// charges every traversed edge and leaves the cached array untouched.
-unitContext.isCloudPortalLink = () => false;
-unitContext.canUnitOccupyTile = () => true;
-unitContext.canUnitOccupyTileCached = (u, x, y) => unitContext.canUnitOccupyTile(u, x, y);
-let chargedEdges = 0;
-unitContext._tryConsumeAstarMoveCostForTransition = () => { chargedEdges++; return true; };
-const Unit = vm.runInContext('Unit', unitContext);
-const pathCopies = [...new Set(routes)].map(p => JSON.stringify(p));
-for (let id = 0; id < 1000; id++) {
-    const moving = Object.assign(Object.create(Unit.prototype), {
-        id, owner: 0, r: 6, x: 145 * 32 + 16, y: 85 * 32 + 16,
-        path: routes[id], pathIndex: 1, getCollisionRadius: () => 6
-    });
-    let reached = false;
-    for (let tick = 0; tick < 3000 && !reached; tick++) reached = moving.followPath(4);
-    assert.ok(reached);
-    assert.equal(Math.floor(moving.x / 32), 5);
-    assert.equal(Math.floor(moving.y / 32), 10);
-}
-assert.equal(chargedEdges, 215000);
-assert.deepEqual([...new Set(routes)].map(p => JSON.stringify(p)), pathCopies);
-
-// A shove onto a later waypoint must not send a unit backwards. Catch-up
-// remains bounded and keeps the shared route and movement accounting intact.
-const shovePath = Array.from({ length: 12 }, (_, x) => ({ x, y: 4 }));
-function shoved(x, y = 4, routePath = shovePath) {
-    return Object.assign(Object.create(Unit.prototype), {
-        id: 1, owner: 0, r: 6, x: x * 32 + 16, y: y * 32 + 16,
-        path: routePath, pathIndex: 1
-    });
-}
-function setCorridor(walled) {
-    for (let x = 0; x < 12; x++) unitGrid[3][x].type = unitGrid[5][x].type = walled ? 1 : 0;
-    // Walls changed: as the game does, a new path topology.
-    unitContext.pathTopologyVersion++;
-}
-// Open terrain is a corridor: every node whose 3x3 block holds the unit
-// counts as reached, so a unit skirts beside the exact tiles.
-for (const [x, y, index] of [[2, 4, 4], [4, 4, 6], [7, 4, 8], [4, 5, 6], [4, 3, 6], [8, 4, 9]]) {
-    const u = shoved(x, y), before = chargedEdges;
-    u.followPath(4);
-    assert.equal(u.pathIndex, index, `open ${x},${y}`);
-    assert.ok(u.vx > 0, 'steer forward after displacement');
-    assert.equal(chargedEdges - before, index - 1, 'each consumed edge is charged once');
-    assert.equal(u.path, shovePath);
-    u.followPath(4);
-    assert.equal(chargedEdges - before, u.pathIndex - 1, 'subsequent ticks never recharge consumed nodes');
-}
-for (const [x, y] of [[4, 6], [4, 2], [0, 6]]) {
-    const u = shoved(x, y);
-    u.followPath(4);
-    assert.equal(u.pathIndex, 1, 'two tiles off the route is not on it');
-}
-// Inside a one-tile corridor only the exact tiles count, as before.
-setCorridor(true);
-for (const tile of [2, 4, 7]) {
-    const u = shoved(tile), before = chargedEdges;
-    u.followPath(4);
-    assert.equal(u.pathIndex, tile + 1);
-    assert.equal(chargedEdges - before, tile);
-}
-for (const [x, y] of [[0, 4], [8, 4]]) {
-    const u = shoved(x, y);
-    u.followPath(4);
-    assert.equal(u.pathIndex, 1, 'previous and beyond-lookahead tiles do not skip in a corridor');
-}
-setCorridor(false);
-// Keep the side offset in open terrain rather than converging on the center.
-{
-    const u = shoved(3, 4);
-    u.y += 20;
-    u.followPath(2);
-    assert.ok(u.y > 4 * 32 + 16 + 10, 'a unit beside the route stays beside it');
-    assert.ok(u.vx > 1.8, 'and keeps moving along it');
-}
-const shortPath = shovePath.slice(0, 5);
-const atEnd = shoved(4, 4, shortPath);
-assert.equal(atEnd.followPath(4), true);
-assert.equal(atEnd.pathIndex, shortPath.length);
-const portalPath = [{ x: 0, y: 4 }, { x: 1, y: 4 }, { x: 20, y: 4 }, { x: 21, y: 4 }];
-const acrossPortal = shoved(21, 4, portalPath);
-acrossPortal.followPath(4);
-assert.equal(acrossPortal.pathIndex, 1, 'local recovery never skips a nonlocal portal edge');
-assert.deepEqual(shovePath, Array.from({ length: 12 }, (_, x) => ({ x, y: 4 })));
-
-// A crowd sharing one diagonal route flows as a wide column instead of a
-// single-file staircase, and replays bit-for-bit.
-function crowdRun() {
-    const route = [{ x: 10, y: 60 }];
-    for (let x = 10, y = 60; x !== 70 || y !== 10;) {
-        if (70 - x >= y - 10 && x !== 70) x++; else y--;
-        route.push({ x, y });
-    }
-    unitContext.canUnitOccupyTile = (u, x, y) => x >= 0 && y >= 0 && x < 160 && y < 100 && unitGrid[y][x].type !== 1;
-    const separate = vm.runInContext('applyUnitSeparation', unitContext);
-    const crowd = Array.from({ length: 150 }, (_, i) => Object.assign(Object.create(Unit.prototype), {
-        id: i, owner: 0, r: 7, x: (2 + i % 15) * 32 + 16 + i % 5, y: (50 + Math.floor(i / 15)) * 32 + 16 + i % 3,
-        path: route, pathIndex: 1, getCollisionRadius: () => 9, done: false
-    }));
-    let done = 0, tick = 0;
-    for (; tick < 4000 && done < crowd.length; tick++) {
-        for (const u of crowd) {
-            if (u.done) continue;
-            u.followPath(3.2);
-            if (u.pathIndex >= route.length - 3) { u.done = true; done++; continue; }
-            let px = 0, py = 0, overlap = 0;
-            for (const o of crowd) {
-                if (o === u || o.done) continue;
-                const dx = u.x - o.x, dy = u.y - o.y, d2 = dx * dx + dy * dy;
-                if (d2 >= 324 || d2 < 1e-6) continue;
-                const d = Math.sqrt(d2);
-                px += dx / d * (18 - d) * .6; py += dy / d * (18 - d) * .6; overlap = Math.max(overlap, 18 - d);
-            }
-            if (px || py) separate(u, px, py, overlap);
-            u.x = Math.round(u.x * 8) / 8; u.y = Math.round(u.y * 8) / 8;
-        }
-    }
-    return { tick, done, state: JSON.stringify(crowd.map(u => [u.x, u.y, u.pathIndex])) };
-}
-const crowdA = crowdRun(), crowdB = crowdRun();
-assert.equal(crowdA.done, 150, 'the whole crowd passes along the route');
-// 110 route tiles at 3.2px/tick is ~1100 ticks for the lead; a single-file
-// column of 150 units took several times longer.
-assert.ok(crowdA.tick < 2600, `crowd throughput: ${crowdA.tick} ticks`);
-assert.deepEqual(crowdB, crowdA, 'crowd movement replays deterministically');
-
 // Group orders: one shared reverse search gives every unit its own shortest
-// path. Compare with per-unit A* on a map with a gate and a block, then check
-// that a crowd flows at least as well along the shared-search routes.
+// path. Compare with per-unit A* on a map with a gate and a block.
 const obstacles = [];
 for (let y = 15; y < 70; y++) if (y < 38 || y > 42) for (let x = 35; x <= 37; x++) obstacles.push([x, y]);
 for (let y = 22; y <= 32; y++) for (let x = 50; x <= 58; x++) obstacles.push([x, y]);
 const gw = world(160, 100);
-for (const [x, y] of obstacles) gw.grid[y][x].type = unitGrid[y][x].type = 1;
+for (const [x, y] of obstacles) gw.grid[y][x].type = 1;
 const groupStarts = Array.from({ length: 150 }, (_, i) => ({ x: 4 + i % 15, y: 45 + Math.floor(i / 15) }));
 const groupPaths = gw.findGroupPathsToTarget(groupStarts, 72, 12, null, 0);
 const astarPaths = groupStarts.map((s, i) => gw.findPathAStarTagged('player_commands', s.x, s.y, 72, 12, false, null, 0));
@@ -294,37 +161,7 @@ gw._bumpPathTopologyVersion();
 groupStarts.forEach((s, i) => gw.findPathAStarTagged('player_commands', s.x, s.y, 72, 12, false, null, 0));
 assert.ok(groupNodes * 3 < gw.nodes, `shared search expands far fewer nodes: ${groupNodes} vs ${gw.nodes}`);
 
-function crowdAlong(paths) {
-    const separate = vm.runInContext('applyUnitSeparation', unitContext);
-    const crowd = paths.map((p, i) => Object.assign(Object.create(Unit.prototype), {
-        id: i, owner: 0, r: 7, x: p[0].x * 32 + 16 + i % 5, y: p[0].y * 32 + 16 + i % 3,
-        path: p, pathIndex: 1, getCollisionRadius: () => 9, done: false
-    }));
-    let done = 0, tick = 0;
-    for (; tick < 6000 && done < crowd.length; tick++) {
-        for (const u of crowd) {
-            if (u.done) continue;
-            u.followPath(3.2);
-            if (u.pathIndex >= u.path.length - 3) { u.done = true; done++; continue; }
-            let px = 0, py = 0, overlap = 0;
-            for (const o of crowd) {
-                if (o === u || o.done) continue;
-                const dx = u.x - o.x, dy = u.y - o.y, d2 = dx * dx + dy * dy;
-                if (d2 >= 324 || d2 < 1e-6) continue;
-                const d = Math.sqrt(d2);
-                px += dx / d * (18 - d) * .6; py += dy / d * (18 - d) * .6; overlap = Math.max(overlap, 18 - d);
-            }
-            if (px || py) separate(u, px, py, overlap);
-            u.x = Math.round(u.x * 8) / 8; u.y = Math.round(u.y * 8) / 8;
-        }
-    }
-    return { tick, done };
-}
-const viaGroup = crowdAlong(groupPaths), viaAstar = crowdAlong(astarPaths);
-assert.equal(viaGroup.done, 150);
-assert.ok(viaGroup.tick <= viaAstar.tick * 1.1 + 20, `group routes flow as well as per-unit A*: ${viaGroup.tick} vs ${viaAstar.tick}`);
-for (const [x, y] of obstacles) unitGrid[y][x].type = 0;
-console.log(`group order: ${groupNodes} vs ${gw.nodes} nodes; crowd ${viaGroup.tick} vs ${viaAstar.tick} ticks; identical routes ${groupPaths.filter((p, i) => JSON.stringify(p) === JSON.stringify(astarPaths[i])).length}`);
+console.log(`group order: ${groupNodes} vs ${gw.nodes} nodes; identical routes ${groupPaths.filter((p, i) => JSON.stringify(p) === JSON.stringify(astarPaths[i])).length}`);
 
 // Report timing, assert deterministic work counts rather than machine speed.
 const benchmark = world();

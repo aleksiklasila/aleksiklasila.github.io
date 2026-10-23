@@ -5,79 +5,10 @@ const vm = require('node:vm');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const renderer = read('src/audio_visual/renderer.js');
 
-// A deliberately straightforward reference retains the original scan's tie rule.
-function referenceScan(unit, lists, range, visible) {
-    let result = null;
-    for (const list of lists) for (const target of list) {
-        if (target.owner === unit.owner || target.energy <= 0 || !visible(unit.owner, target)) continue;
-        const distance = Math.hypot(target.x - unit.x, target.y - unit.y);
-        if (distance < range) { range = distance; result = target; }
-    }
-    return result;
-}
-
 let seed = 97;
 function random(n) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % n; }
-const grids = Array.from({ length: 3 }, () => Array.from({ length: 48 }, () => Float32Array.from({ length: 64 }, () => random(3))));
-let lookups = [];
-const ctx = {
-    TILE: 32, GRID_W: 64, GRID_H: 48, localPlayerId: 0,
-    getRawVisibilityGridForPlayer(owner) { lookups.push(owner); return grids[owner]; },
-    // Not on a shared route here (see continueUnitRoute in pathfinding.js).
-    continueUnitRoute: () => false,
-};
-vm.createContext(ctx);
-vm.runInContext(read('src/utils/utils_common.js'), ctx);
-vm.runInContext(read('src/things/unit.js'), ctx);
-function visible(owner, target) {
-    const gx = Number.isFinite(target.gx) ? Math.floor(target.gx) : Math.floor((Number(target.x) || 0) / 32);
-    const gy = Number.isFinite(target.gy) ? Math.floor(target.gy) : Math.floor((Number(target.y) || 0) / 32);
-    if (gx < 0 || gx >= 64 || gy < 0 || gy >= 48) return false;
-    return !!(grids[owner][gy] && grids[owner][gy][gx] > 0);
-}
-const buildings = Array.from({ length: 600 }, (_, id) => ({
-    id, x: random(2048), y: random(1536), owner: random(3), energy: random(5), underConstruction: !!random(2)
-}));
-const lists = [buildings.slice(0, 300), buildings.slice(300)];
-for (let i = 0; i < 1200; i++) {
-    const unit = { x: random(2048), y: random(1536), owner: random(3) };
-    const range = random(1000);
-    lookups = [];
-    assert.equal(ctx._findClosestHostileStructure(unit, lists[0], range, lists[1]), referenceScan(unit, lists, range, visible));
-    assert.equal(lookups.length, 1, 'one raw-grid lookup for the whole scan');
-}
-grids[0].forEach(row => row.fill(1));
-const origin = { x: 0, y: 0, owner: 0 };
-const first = { x: 32, y: 0, owner: 1, energy: 1 };
-const tied = { x: 0, y: 32, owner: 1, energy: 1 };
-assert.equal(ctx._findClosestHostileStructure(origin, [first], 33, [tied]), first);
-assert.equal(ctx._findClosestHostileStructure(origin, [first], 32), null, 'strict range boundary');
-lookups = [];
-assert.equal(ctx._findClosestHostileStructure(origin, [{ ...first, gx: -1 }], 99), null);
-assert.equal(lookups.length, 0, 'out-of-map targets must not materialize a visibility snapshot');
-ctx.getRawVisibilityGridForPlayer = owner => { lookups.push(owner); return grids[owner]; };
-lookups = [];
-ctx._findClosestHostileStructure(origin, [first], 1);
-assert.equal(lookups.length, 1, 'even an out-of-range target retains the original lazy snapshot timing');
-const Unit = vm.runInContext('Unit', ctx);
-ctx.towers = [first]; ctx.barracks = [{ ...tied, x: 1, y: 0 }]; ctx.collectorSpawners = [];
-// The looks of idle and attack-moving units read the acquisition tier's
-// committed choice (_acqStructureHit), on their staggered tick only.
-const picks = [];
-ctx._acqStructureHit = () => { picks.push(ctx.gameTime); return first; };
-for (const method of ['doIdle', 'doAttackMoving']) {
-    picks.length = 0;
-    const attacker = Object.assign(Object.create(Unit.prototype), origin, { id: 1, unitType: 'norm', preComputed: { visionRange: 4 } });
-    // Structure looks are staggered to one tick in four, keyed by unit id.
-    for (ctx.gameTime = 0; ctx.gameTime < 3; ctx.gameTime++) {
-        attacker[method](1);
-        assert.equal(attacker.targetBuilding, undefined, 'no structure look off its staggered tick');
-    }
-    assert.equal(ctx.gameTime, 3);
-    attacker[method](1);
-    assert.equal(attacker.targetBuilding, first, "the tier's choice taken on the staggered tick");
-    assert.deepEqual(picks, [3]);
-}
+// (The structure looks of idle and attack-moving units are the combat brain's,
+// k_combat_brain; its scan's choice:)
 // The tier's choice (sim_parallel.js _simAcqStructure): a turret over a
 // closer barrack, traps before barracks, the nearest within a class, the
 // lower tile on a tie, never the unit's own.
@@ -237,4 +168,4 @@ assert.equal(r.overlayDepthFrame.bytes.length, 400 * 600 * 4);
 assert.notEqual(r.overlayDepthFrame.bytes, depthBytes, 'resize replaces incompatible storage');
 const build = renderer.slice(renderer.indexOf('function build3DFrameData'), renderer.indexOf('\nfunction ', renderer.indexOf('function build3DFrameData') + 20));
 assert.doesNotMatch(build, /get3DSideAudioTextureFor|getAudioReactiveSideTextureAngle/, 'procedural frame construction must not rasterize unused side textures');
-console.log('PASS: 1200 target scans, visibility lifecycle, 1200 sprite replays and 1400 shadow instances preserve behavior.');
+console.log('PASS: the tier structure choice, visibility lifecycle, 1200 sprite replays and 1400 shadow instances preserve behavior.');

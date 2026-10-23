@@ -23,7 +23,8 @@ const result=i.eval(`(()=>{
  for(const [key,s]of Object.entries(BASE_UNIT_STATS))if(s.isWorker&&PRECOMPUTED_STATS_MAP.unit[key][20].attackRange[10]!==0)throw Error('armed worker');
  return rows;
 })()`);
-for(const r of result)assert(Math.abs(r.end-r.max)<1e-5,JSON.stringify(r));
+// (Areas are whole: a fractional cap reached as its floor.)
+for(const r of result)assert(Math.abs(r.end-Math.floor(r.max))<1e-5,JSON.stringify(r));
 assert.deepEqual(i.errors,[]);console.log(JSON.stringify(result));console.log('PASS: bounded monotonic area reach, melee limits, range research publishes adequate sight, unarmed workers');
 const edited=i.eval(`(()=>{
  const config=serializeEditableRuntimeConfigForTransport();
@@ -36,5 +37,6 @@ const edited=i.eval(`(()=>{
  applyEditableRuntimeConfigObject(config,{fromTransport:true});
  return [PRECOMPUTED_STATS_MAP.unit.water_resistant[20].attackRange[10],PRECOMPUTED_STATS_MAP.unit.water_resistant[20].atkCd[10],PRECOMPUTED_STATS_MAP.building.pistol[20].attackRange[10],PRECOMPUTED_STATS_MAP.unit.water_resistant[1].attackRange[0],PRECOMPUTED_STATS_MAP.building.pistol[1].attackRange[0],computeBaseBuildingStatsAtLevel('pistol',20).attackRange];
 })()`);
-for(const [k,value]of [7,.12,6,.5,.75,.75*(1+19*.03)].entries())assert(Math.abs(edited[k]-value)<1e-6);
+// (Published ranges are whole areas: the edited fractional bases floor to 0; the base row itself stays raw.)
+for(const [k,value]of [7,.12,6,0,0,.75*(1+19*.03)].entries())assert(Math.abs(edited[k]-value)<1e-6);
 console.log('PASS: editing only the existing static rows changes range and cooldown endpoints after config transport');

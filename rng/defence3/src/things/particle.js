@@ -44,7 +44,9 @@ function createDirectedParticles(fromX, fromY, toX, toY, c, n) {
 // Attacks, shots and hits append a short record to a fixed ring; the
 // renderers animate each record from its start tick. Nothing here is read by
 // the simulation, snapshots or hashes, and recording never allocates.
-const COMBAT_FX_CAPACITY = 4096;
+// (Room for a few steps of a slow simulation's looks: the drawn clock plays
+// a step a while after it came.)
+const COMBAT_FX_CAPACITY = 16384;
 const COMBAT_FX_STRIDE = 8; // kind, x0, y0, x1, y1, start tick, variant, seed
 const COMBAT_FX = {
     SLASH: 1, DUAL: 2, SMASH: 3, CAST: 4, BEAM: 5, SWOOP: 6, SCOUT: 7, SPIT: 8,
@@ -56,28 +58,44 @@ const COMBAT_FX_STYLE = {
     sniper: 8, sand_gun: 9, elements: 10, watch_tower: 11, king: 12, boss: 13, tank: 14, building: 15
 };
 const combatFxData = new Float32Array(COMBAT_FX_CAPACITY * COMBAT_FX_STRIDE);
+// (Each record's attacker and target unit ids, 0 none: a unit's attack is
+// drawn between the two as they are drawn, not where they stood.)
+const combatFxIds = new Int32Array(COMBAT_FX_CAPACITY * 2);
 let combatFxHead = 0;
 let combatFxSerial = 0;
+// The game time the records now replayed happened within ([from, to]: the
+// page sets it to the step of the result it replays): each record starts at
+// a point of it of its own, so a step of many ticks (a slow simulation)
+// plays its attacks over the step, as they came, not all at its end where
+// they ended at once. null: at gameTime.
+let combatFxSpan = null;
 
-function recordCombatFx(kind, x0, y0, x1, y1, style) {
+function recordCombatFx(kind, x0, y0, x1, y1, style, src = 0, dst = 0) {
     let o = combatFxHead * COMBAT_FX_STRIDE;
+    const serial = combatFxSerial = (combatFxSerial + 1) | 0;
+    let at = typeof gameTime === 'number' ? gameTime : 0;
+    const span = combatFxSpan;
+    if (span && span[1] > span[0]) at = span[0] + (span[1] - span[0]) * ((Math.imul(serial, 2654435761) >>> 8) / 16777216);
     combatFxData[o] = kind;
     combatFxData[o + 1] = x0; combatFxData[o + 2] = y0;
     combatFxData[o + 3] = x1; combatFxData[o + 4] = y1;
-    combatFxData[o + 5] = typeof gameTime === 'number' ? gameTime : 0;
+    combatFxData[o + 5] = at;
     combatFxData[o + 6] = COMBAT_FX_STYLE[style] || (typeof style === 'number' ? style : 0);
-    combatFxData[o + 7] = (combatFxSerial = (combatFxSerial + 1) | 0) & 1023;
+    combatFxData[o + 7] = serial & 1023;
+    combatFxIds[combatFxHead * 2] = src | 0; combatFxIds[combatFxHead * 2 + 1] = dst | 0;
     combatFxHead = (combatFxHead + 1) % COMBAT_FX_CAPACITY;
 }
 
 function clearCombatFx() {
     combatFxData.fill(0);
+    combatFxIds.fill(0);
     combatFxHead = 0;
 }
 
 // A unit's attack as an effect. Melee and caster styles differ by role, so
 // units of one purpose share a look and others are told apart at a glance.
-function recordUnitAttackFx(unit, target) {
+// (unitTarget: the target is a unit, followed as drawn with the attacker.)
+function recordUnitAttackFx(unit, target, unitTarget = false) {
     let style = unit.attackStyle, type = unit.unitType;
     let kind = COMBAT_FX.SLASH, variant = 'default';
     if (style === 'fire' || style === 'water' || style === 'ice' || style === 'poison') { kind = COMBAT_FX.CAST; variant = style; }
@@ -88,5 +106,5 @@ function recordUnitAttackFx(unit, target) {
     else if (type === 'fast') kind = COMBAT_FX.DUAL;
     else if (type === 'tank' || type === 'boss') { kind = COMBAT_FX.SMASH; variant = type; }
     else if (type === 'king') { kind = COMBAT_FX.CLEAVE; variant = 'king'; }
-    recordCombatFx(kind, unit.x, unit.y, target.x, target.y, variant);
+    recordCombatFx(kind, unit.x, unit.y, target.x, target.y, variant, unit.id, unitTarget ? target.id : 0);
 }
