@@ -255,20 +255,6 @@ async function main() {
     }
     writeContactTrace();
     const occupancyAuditResult=occupancy?inst.eval('occupancyAudit()'):null;
-    let occupancyProbes=null;
-    if(process.argv.includes('--occupancy-probes')){
-        inst.scratch.probeNow=()=>performance.now();
-        occupancyProbes=inst.eval(`(()=>{
-            const O=_occ,copies=8,a=simHeapArray(Uint32Array,O.bits.length*copies);
-            for(let k=0;k<copies;k++)a.set(O.bits,k*O.bits.length);
-            const args=_occupancyAddresses();args[0]=_simWEnc(a.byteOffset);const results=[];
-            for(const v of [0,1])for(const c of [1,8])_simWasmX.occ_probe_bench(...args,O.w,O.h,O.stride,O.cell,O.planes,_simUnitState.owners.length,8,c,v);
-            for(const [v,c] of [[0,1],[1,1],[0,8],[1,8],[1,8],[0,8],[1,1],[0,1]]){const start=__scratch.probeNow();const checksum=_simWasmX.occ_probe_bench(...args,O.w,O.h,O.stride,O.cell,O.planes,_simUnitState.owners.length,8,c,v);
-                results.push({variant:v,copies:c,workingSetMiB:c*O.bits.byteLength/1048576,ms:__scratch.probeNow()-start,checksum});}
-            simHeapFree(a);return results;
-        })()`);
-        assert.ok(occupancyProbes.every(r=>r.checksum===occupancyProbes[0].checksum),'Full-footprint and fringe queries must give identical answers');
-    }
     if(occupancy)assert.ok(occupancyAuditResult.ok,'Occupancy bitmap lost or duplicated footprint cells: '+JSON.stringify(occupancyAuditResult));
     assert.deepEqual(inst.errors.map(String),[]);
     assert.equal(inst.eval('gameOver'),false);
@@ -276,7 +262,7 @@ async function main() {
     const mean=samples.reduce((a,b)=>a+b,0)/ticks;
     const result={node:process.version,cpu:require('node:os').cpus()[0].model,initial:inst.scratch.initial,
         final:inst.eval('(()=>{const parts={};const hash=computeLockstepStateHashFast(gameTime,parts);return {units:units.length,towers:towers.length,tick:gameTime,hash,parts};})()'),
-        ticks,warmup,warmupMs,measuredStart,measuredEnd,pmc,group,helpers,dk,chunkSize,occupancy,occupancyPlanes,occupancyAuditResult,occupancyProbes,packed,movementCounters,contactBudget,acquisitionSamples,areaTargets,denseJsCache,sharedStats,cachedLayout,statLayout,referenceStorage,referenceKernel,referenceCollect,kernelFile,shareNavigation,tickMs:{mean,p50:samples[ticks>>1],p95:samples[Math.min(ticks-1,Math.floor(ticks*.95))]},
+        ticks,warmup,warmupMs,measuredStart,measuredEnd,pmc,group,helpers,dk,chunkSize,occupancy,occupancyPlanes,occupancyAuditResult,packed,movementCounters,contactBudget,acquisitionSamples,areaTargets,denseJsCache,sharedStats,cachedLayout,statLayout,referenceStorage,referenceKernel,referenceCollect,kernelFile,shareNavigation,tickMs:{mean,p50:samples[ticks>>1],p95:samples[Math.min(ticks-1,Math.floor(ticks*.95))]},
         tps:1000/mean,setup,timeline,phases:Object.fromEntries(Object.entries(inst.scratch.phases).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),
         phaseSelf:Object.fromEntries(Object.entries(inst.scratch.phaseSelf).map(([k,v])=>[k,v/ticks]).sort((a,b)=>b[1]-a[1])),top,bindings:bindings(),
         resourceUsage:{before:resourcesBefore,after:resourcesAfter},inventory,statStorage:inst.eval('SIM_UNIT_SCHEMA.mvSpd ? "instance-cache" : "shared-row-only"'),referenceColumns:inst.eval('Object.entries(_simUnitState.columns).filter(([k,v])=>v instanceof SimRefColumn).map(([name,v])=>({name,slots:v.length,bytes:v.data?v.data.byteLength:undefined,unique:v.pool?v.pool.values.length:undefined,pages:v.pages.filter(Boolean).length,values:v.pages.reduce((n,p)=>n+(p?p.used:0),0)}))'),memory:process.memoryUsage()};

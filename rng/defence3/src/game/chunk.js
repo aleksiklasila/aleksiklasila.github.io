@@ -430,6 +430,8 @@ function _spatialIndexCollect() {
     _sxEpoch = J.ep;
     _sxListed = X.listed[0];
     _sxBySlot = true;
+    // (The serial build's lists of the objects (_sxList, _sxAList): not read while the index is by slot, and a unit that died since is held by them for good: ~0.45 KB of its detached record each, 95k units after six minutes of a big battle. A serial build fills them again.)
+    if (_sxList.length) _sxList = []; if (_sxAList.length) _sxAList = [];
     _sxTaken = true;
     X.mergeOk = true;
     if (J.masks) _sxOwnerMaskEpoch = J.ep;
@@ -525,6 +527,8 @@ function _spatialIndexRebuildParallel() {
     }
     _sxListed = X.listed[0];
     _sxBySlot = true;
+    // (The serial build's lists of the objects (_sxList, _sxAList): not read while the index is by slot, and a unit that died since is held by them for good: ~0.45 KB of its detached record each, 95k units after six minutes of a big battle. A serial build fills them again.)
+    if (_sxList.length) _sxList = []; if (_sxAList.length) _sxAList = [];
     X.mergeOk = true;
     // (The slots' listing, for the next build by changes.)
     if (SPATIAL_INDEX_DELTA && typeof SIM_KERNEL_IXD_INIT === 'number') {

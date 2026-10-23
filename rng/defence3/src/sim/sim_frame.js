@@ -146,6 +146,15 @@ function _simFrameCode(s) {
 function simFrameReleaseBuffers() {
     _simFramePool.length = 0;
     _simFrameLastViews = null;
+    // (Its render slots too: nothing reads them once the presentation worker makes the frames, and every unit that died since stayed in
+    // their table, with its detached record: 27k units after seven minutes of a big battle. The next simFrameEncode makes them again.)
+    {
+        const R = _simRenderSlots;
+        for (const u of R.owner) if (u) u._rslot = -1;
+        R.owner = []; R.free = []; R.stamp = new Int32Array(0); R.lastX = new Float32Array(0); R.lastY = new Float32Array(0); R.version++;
+        _simFrameOrderLast = null;
+        simParallelBind('frame.lastX', null); simParallelBind('frame.lastY', null);
+    }
     for (const id of _simSharedFrames.keys()) simParallelBind('frame.buffer.' + id, null);
     _simSharedFrames.clear();
     const S = _simFrameInput;

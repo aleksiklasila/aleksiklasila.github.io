@@ -165,7 +165,7 @@ const SIM_KERNEL_INDEX_CLEAR = 10, SIM_KERNEL_INDEX_COUNT = 11, SIM_KERNEL_INDEX
 const SIM_KERNEL_EFF_COUNT = 14, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_COMBAT_SCAN = 20, SIM_KERNEL_INDEX_KEYS = 23;
 const SIM_KERNEL_VIS_SNAP = 30, SIM_KERNEL_VIS_SPREAD = 31;
 const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT = 34, SIM_KERNEL_LASER_HITS = 35;
-const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_DRIVEBY = 38, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
+const SIM_KERNEL_UPD_CAND = 36, SIM_KERNEL_HELD_DEAD = 37, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
 const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
 const SIM_KERNEL_HEAL_REDUCE = 47;
@@ -182,7 +182,7 @@ const _simTrafficW=_simWK(['traffic.config','occ.bits','mv.wall']);
 for(const [id,name]of [[SIM_KERNEL_TRAFFIC_CAPTURE,'traffic_capture'],[SIM_KERNEL_TRAFFIC_SOLVE,'traffic_solve'],[SIM_KERNEL_TRAFFIC_OUTPUT,'traffic_output'],[SIM_KERNEL_TRAFFIC_MASK,'traffic_mask']]){
     SIM_KERNELS[id]=(R,P,c)=>_simRust(_simTrafficW,P,c,name,'TRAFFIC');
 }
-const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active',
+const _simOccW = _simWK(['occ.bits','occ.mask','occ.rec','?-','?-','?-','?-',
     'unit.x','unit.y','unit.prevX','unit.prevY','unit.vx','unit.vy','unit.dead','unit.live',
     'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
     'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config',
@@ -190,7 +190,7 @@ const _simOccW = _simWK(['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ
     // 35: per job's range (as mv.post's), the units its second pass looks at;
     // 36: the phases' blocks with units, heaviest first: occupancyJobs;
     // 37: the first stage's per-slot marks, mv.rs mark_need.)
-    'occ.xswap', '?occ.work', '?occ.jobs', '?occ.need']);
+    'occ.xswap', '?occ.work', '?occ.jobs', '?occ.rec']);
 // Per spatial block its index entries (occ.offsets, summed up after; occ.rs occ_block_counts), 64 blocks a chunk.
 const SIM_KERNEL_OCC_COUNTS = 97;
 SIM_KERNELS[SIM_KERNEL_OCC_COUNTS] = function(R,P,c){
@@ -1031,7 +1031,8 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     // Start with roughly one simulation participant per physical core on an
     // SMT machine. Larger CPUs must not be permanently capped at 7 helpers;
     // the explicit override can use the other hardware threads as well.
-    let n = Math.max(0, Math.ceil(cores / 2) - 1);
+    // (One participant per physical core was the start; the SMT threads are worth more: on an 8-core 16-thread laptop 11 helpers took 17% off the step of a 2.1M-unit match against 7, the same results, frames unchanged; the rest are the simulation worker, the page and the presentation workers: cores - 5, at most 15 unless the CPU is larger.)
+    let n = Math.max(0, Math.max(Math.ceil(cores / 2) - 1, Math.min(cores - 5, 15)));
     if (Number.isFinite(maxHelpers)) n = Math.min(Math.max(0, cores - 2), Math.max(0, Math.floor(maxHelpers)));
     if (n < 1) return 0;
     let ctl = new Int32Array(new SharedArrayBuffer(SIM_PAR_CTL_WORDS * 4));
@@ -1169,7 +1170,7 @@ function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R =
 const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvPath', 'unit.energy', 'unit.sepKey', 'unit.dead',
     'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvFloor', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
     'unit.mvDest', 'unit.mvCD', 'unit.mvCT', 'unit.mvCVx', 'unit.mvCVy', 'unit.mvCTl', 'unit.mvCN', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
-    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.dbT', 'unit.dbS', 'unit.dbTick', 'unit.mvWk',
+    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', '?-', '?-', '?-', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.frozen', 'unit.sandy',
     'unit.cbT', 'unit.cbTick', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
@@ -1180,7 +1181,7 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', '?-' ,
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
-    '?ix.omask', '?mv.scls', '?mv.hstruct', 'unit.dbTI', 'unit.mvFire',
+    '?ix.omask', '?mv.scls', '?mv.hstruct', '?-', 'unit.mvFire',
     '?-' , 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
     '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt',
     // (The separation's finish, fused into the epilogue: mv.rs W_SPX...)
@@ -1233,12 +1234,12 @@ function _simMoveWasm(R, P) {
     // (Word 458: unit.rtEnd, the occupancy swap's crowd test, mv.rs traffic_swap.)
     const rte=R['unit.rtEnd'];
     _simWasmArgI[458]=rte&&simHeapHas(rte)?_simWEnc(rte.byteOffset):0;
-    // (Words 459-462: the occupancy's per-slot marks for its second stage and
-    // the footprints' positions, mv.rs mark_need; 0 without the occupancy.)
-    const occNeed=R['occ.need'];
-    if(occNeed&&simHeapHas(occNeed)&&R['occ.x']&&R['occ.y']&&R['occ.active']){
-        _simWasmArgI[459]=_simWEnc(occNeed.byteOffset);_simWasmArgI[460]=_simWEnc(R['occ.x'].byteOffset);
-        _simWasmArgI[461]=_simWEnc(R['occ.y'].byteOffset);_simWasmArgI[462]=_simWEnc(R['occ.active'].byteOffset);
+    // (Words 459-460: the occupancy's footprint records, whose byte 3 holds the marks for its second stage, and
+    // their positions, mv.rs mark_need; 0 without the occupancy.)
+    const occRec=R['occ.rec'];
+    if(occRec&&simHeapHas(occRec)){
+        _simWasmArgI[459]=_simWEnc(occRec.byteOffset);_simWasmArgI[460]=_simWEnc(occRec.byteOffset);
+        _simWasmArgI[461]=0;_simWasmArgI[462]=0;
     }else _simWasmArgI.fill(0,459,463);
     return true;
 }
@@ -1623,23 +1624,6 @@ const _simLaserHitsW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', '
     'lz.head', 'lz.next', 'lz.beam', 'lz.bown', 'lz.bdmg', 'lz.hit', 'lz.count', '?lz.list']);
 SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaserHitsW, P, chunk, 'k_laser_hits', 'LASER_HITS'); };
 
-// The drive-by look (unit.js _driveByScan) of every moving shooter whose
-// attack timer ran out, on its look tick ((tick + id) & 1), worked out on
-// the helpers before the movement kernel (unit.js combatScanRun): the
-// nearest (then lowest id) enemy unit listed in the tiles of the areas in
-// its reach (mv.areaBox of its area, unit.mvReachD steps), its tile's area
-// in sight, in its attack range (lzFlags 4, a whole range: within
-// unit.mvRangeK area steps; else that or touching one further); none: the
-// structure its look takes (mv.scls: turrets not cloud towers first, then
-// traps, then any other), the nearest by its centre, then the lowest tile,
-// hostile (mv.struct), in sight, within its range by areas. Writes unit.dbT
-// / dbTI / dbS / dbTick (above); -2 where the range is beyond what the
-// kernel works out (more than 2 area steps) or its area box is not made.
-// P: [0] slots, [1] per job, [2] tick, [3]/[4] chunks wide/high, [5] TILE,
-// [6] index stamp, [7] players, [8] CMD_MOVING, [9]/[10] grid, [11]
-// CHUNK_SIZE, [12] SIM_SEP_ABSENT, [13] SIM_MOVE_BOX_STEPS, [14] contact
-// padding, [15] block size (tiles), [16]/[17] blocks wide/high, [18] 1 when
-// ix.omask is this tick's.
 // The combat brain (a helper lane, chained after the acquisition scan; see
 // BRAIN_OFF_MAIN_THREAD_PLAN.md): per unit of the snapshot (acq.*), its
 // instruction: keep its target while alive and in sight, else take the
@@ -1675,25 +1659,6 @@ const SIM_KERNEL_ADJ_FLOOD = 64;
 const _simAdjFloodW = _simWK(['adj.sig', 'adj.seed', 'adj.cloud', 'adj.ag', 'adj.coff', 'adj.ctile', 'adj.mul', 'adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.oarea',
     'adj.oact', 'adj.ocnt', 'adj.wk']);
 SIM_KERNELS[SIM_KERNEL_ADJ_FLOOD] = function (R, P, chunk) { _simRust(_simAdjFloodW, P, chunk, 'k_adj_flood', 'ADJ_FLOOD'); };
-
-// (Its candidates' list, per thread: slot and squared distance.)
-const SIM_DB_CANDS = 64, _simDbCandQ = new Int32Array(SIM_DB_CANDS), _simDbCandD = new Float64Array(SIM_DB_CANDS);
-SIM_KERNELS[SIM_KERNEL_DRIVEBY] = function (R, P, chunk) {
-    const CMD = R['unit.commandState'], DEAD = R['unit.dead'], SEP = R['unit.sepKey'], AT = R['unit.attackTimer'], SHOOT = R['unit.mvShoot'];
-    const ID = R['unit.id'], OWN = R['unit.owner'], X = R['unit.x'], Y = R['unit.y'], AREA = R['unit.spArea'], RD = R['unit.mvReachD'], RK = R['unit.mvRangeK'], LZF = R['unit.lzFlags'];
-    const CRC = R['unit.collisionR'], RRC = R['unit.r'], X0 = R['unit.x0'], Y0 = R['unit.y0'];
-    const AG = R['ix.agrid'], AOFF = R['area.off'], ANB = R['area.nb'], WALL = R['mv.wall'], AB = R['mv.areaBox'], ABOK = R['mv.areaBoxOk'], COV = R['vis.cover'];
-    const rs = R['sep.rs'], rc = R['sep.rc'], rst = R['sep.rstamp'], es = R['sep.eslot'], OM = P[18] ? R['ix.omask'] : null;
-    const SC = R['mv.struct'], SCLS = R['mv.scls'], HSS = R['mv.hstruct'], HS = R['mv.hostile'];
-    const DBT = R['unit.dbT'], DBTI = R['unit.dbTI'], DBS = R['unit.dbS'], DBTK = R['unit.dbTick'];
-    const t = P[2] | 0, CW = P[3] | 0, CH = P[4] | 0, tile = P[5], ep = P[6] | 0, players = P[7] | 0, cmdMove = P[8], W = P[9] | 0, H = P[10] | 0;
-    const cs = P[11] | 0, absent = P[12], BOXSTEPS = P[13] | 0, pad = P[14], Bk = P[15] | 0, bc = P[16] | 0, br = P[17] | 0;
-    const stride = bc + 1, plane = stride * (br + 1), half = tile / 2;
-    if (!AG || !AOFF || !AB || !ABOK || !COV || !rs || !SC || !SCLS) return;
-    // (Its Rust twin: wasm/src/mv.rs mv_driveby.)
-    if (_simMoveWasm(R, P)) { const s0 = chunk * P[1]; _simWasmX.mv_driveby(_simWasmArgsW, s0, Math.min(P[0], s0 + P[1])); return; }
-    _simNoWasm('DRIVEBY');
-};
 
 // The worker search tier (worker.js workerSearchTierStep).
 // SIM_KERNEL_WS_SELECT (the post, every slot chunk of P[1]): a registered

@@ -38,6 +38,9 @@ unsafe fn mv_stat4(m: &Mv, s: usize, k: usize, fallback: *const F32) -> v128 {
 
 
 // ---- argument words (sim_parallel.js _SIM_MOVE_WNAMES) ----
+/// The combat brain (unit.js SIM_COMBAT_BRAIN, always on: its instructions (cmMode) steer the units, the look-by-area of the old
+/// mode is gone from the game). The branches of the other mode are removed from this file.
+const BRAIN: bool = true;
 const W_ON: usize = 0;
 const W_OUT: usize = 1;
 const W_FL: usize = 2;
@@ -74,9 +77,6 @@ const W_AB: usize = 32;
 const W_ABOK: usize = 33;
 const W_HS: usize = 34;
 const W_AT: usize = 35;
-const W_DBT: usize = 36;
-const W_DBS: usize = 37;
-const W_DBTK: usize = 38;
 const W_WK: usize = 39;
 const W_WTC: usize = 40;
 const W_FLOW: usize = 41;
@@ -171,7 +171,6 @@ const W_ES: usize = 134;
 const W_OM: usize = 135;
 const W_SCLS: usize = 136;
 const W_HSS: usize = 137;
-const W_DBTI: usize = 138;
 const W_FIRE: usize = 139;
 const W_ACD: usize = 140;
 const W_FLASH: usize = 141;
@@ -284,14 +283,11 @@ struct Mv {
     traffic_mode: i32,
     /// unit.rtEnd (word 458): a route's end tile, kept after arrival.
     rte: *const i32,
-    /// Per slot, whether the occupancy's second stage visits it (word 459,
-    /// occ.need: the first stage writes it, mark_need; null: every slot);
-    /// the footprints' positions and registrations for it (words 460-462:
-    /// occ.x, occ.y, occ.active).
-    need: *mut u8,
-    ofx: *const i32,
-    ofy: *const i32,
-    oact: *const u8,
+    /// Whether the first stage marks the units the occupancy's second stage visits (word 459 not 0: mark_need writes the mark into
+    /// the footprint record's byte 3, else every slot is visited) and the footprint records (word 460: occ.rec, four words a slot:
+    /// x, y, radius | layer << 8 | active << 16 | need << 24).
+    need: *mut i32,
+    orec: *mut i32,
     /// This occupancy job's swapped idle units (traffic_swap), to list in
     /// its second pass; null outside one.
     swl: *mut i32,
@@ -350,9 +346,6 @@ struct Mv {
     abok: *const u8,
     hs: *const i32,
     at: *const F32,
-    dbt: *mut i32,
-    dbs: *mut i32,
-    dbtk: *mut i32,
     wk: *const u8,
     wtc: *const U16I32,
     flow: *const i32,
@@ -448,7 +441,6 @@ struct Mv {
     om: *const u8,
     scls: *const i8,
     hss: *const i32,
-    dbti: *mut i32,
     fire: *mut u8,
     acd: *const F32,
     flash: *mut U8I32,
@@ -503,7 +495,6 @@ struct Mv {
     trpl: i32,
     tres: *const u8,
     tresn: i32,
-    brain: bool,
     nav: [NavP; NAV_PROFILES],
     offn: usize,
     wkvn: usize,
@@ -609,9 +600,7 @@ impl Mv {
             traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
             rte: p!(458),
             need: p!(459),
-            ofx: p!(460),
-            ofy: p!(461),
-            oact: p!(462),
+            orec: p!(460),
             swl: core::ptr::null_mut(),
             swn: core::ptr::null_mut(),
             span_n: 4,
@@ -670,9 +659,6 @@ impl Mv {
             abok: p!(W_ABOK),
             hs: p!(W_HS),
             at: p!(W_AT),
-            dbt: p!(W_DBT),
-            dbs: p!(W_DBS),
-            dbtk: p!(W_DBTK),
             wk: p!(W_WK),
             wtc: p!(W_WTC),
             flow: p!(W_FLOW),
@@ -768,7 +754,6 @@ impl Mv {
             om: p!(W_OM),
             scls: p!(W_SCLS),
             hss: p!(W_HSS),
-            dbti: p!(W_DBTI),
             fire: p!(W_FIRE),
             acd: p!(W_ACD),
             flash: p!(W_FLASH),
@@ -823,7 +808,6 @@ impl Mv {
             trpl: to_i32(rd(f, 57)),
             tres: p!(W_TRES),
             tresn: to_i32(rd(f, 55)),
-            brain: rd((a as usize + 4096) as *const f64, 48) == 1.0,
             nav,
             offn: word(a, W_OFFN),
             wkvn: word(a, W_WKVN),
@@ -1890,7 +1874,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let vm = i32x4_ne(v128_and(i32x4_splat(valid), i32x4(1, 2, 4, 8)), zero);
     let mut ok = v128_and(vm, v128_and(v128_and(i32x4_eq(on, one), i32x4_ne(v128_and(fl, i32x4_splat(64)), zero)), i32x4_eq(dead, zero)));
     if !v128_any_true(ok) { return 0; }
-    if m.brain {
+    if BRAIN {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
     if m.steady.is_null() {
@@ -2138,7 +2122,7 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
     if !v128_any_true(ok) {
         return 0;
     }
-    if m.brain {
+    if BRAIN {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
     let t = i32x4_splat(m.t);
@@ -2195,7 +2179,7 @@ unsafe fn idle4(m: &Mv, s: usize, done: i32) -> i32 {
     if m.span_n==1&&*m.on.add(s)!=0{return 0;}
     let zero = i32x4_splat(0);
     let mut ok = v128_and(i32x4_eq(ld_u8x4(m.on.add(s)), zero), i32x4_eq(v128_and(i32x4_splat(done), i32x4(1, 2, 4, 8)), zero));
-    if m.brain {
+    if BRAIN {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
     let bits = i32x4_bitmask(ok) as i32;
@@ -2216,7 +2200,7 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
         (p.tr, m.w, m.h, m.itile, p.q, p.iq, p.bsz, p.absent, p.boxsteps, p.wcheck, p.acq_t, p.wkwatch, p.stride, p.plane, p.players);
     let dead = rd(m.dead, s);
     if rd(m.d0, s) != dead { wr(m.d0, s, dead); }
-    if m.brain && rd(m.cmode, s) != 0 {
+    if BRAIN && rd(m.cmode, s) != 0 {
         return;
     }
     let on = rd(m.on, s);
@@ -2305,44 +2289,6 @@ unsafe fn step_flow(
     }
     let ts = tsum(t, id);
     let at = rd(m.at, s);
-    // (With the combat brain the looks are its own: _simMovePre makes none.)
-    if m.brain {
-    } else if (f & 16) != 0 {
-        if rem64_f(ts, acq_t) < m.dk as i64 || (tw & 3) < m.dk {
-            return;
-        }
-    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(rd(m.area, s) >= 0) {
-        return;
-    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(at > 0.0) && rd(m.dbtk, s) == t && rd(m.dbt, s) != -2 {
-        if rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0 {
-            return;
-        }
-    } else if (f & 1) != 0 && (tw & 1) < m.dk && !(at > 0.0) {
-        let area = rd(m.area, s);
-        let k = area * boxsteps + rd(m.reach, s) as i32;
-        if rd(m.abok, k as usize) == 0 {
-            return;
-        }
-        let k4 = (k * 4) as usize;
-        let mut x0 = rd(m.ab, k4);
-        let mut y0 = rd(m.ab, k4 + 1);
-        let mut x1 = rd(m.ab, k4 + 2);
-        let mut y1 = rd(m.ab, k4 + 3);
-        x0 = if x0 < 0 { 0 } else { x0 };
-        y0 = if y0 < 0 { 0 } else { y0 };
-        x1 = if x1 >= w { w - 1 } else { x1 };
-        y1 = if y1 >= h { h - 1 } else { y1 };
-        if x0 <= x1 && y0 <= y1 {
-            let bx0 = floor(x0 as f64 / bsz) as i64;
-            let by0 = floor(y0 as f64 / bsz) as i64;
-            let bx1 = floor(x1 as f64 / bsz) as i64;
-            let by1 = floor(y1 as f64 / bsz) as i64;
-            let o = owner as i64 * plane;
-            if box_sum(m.hs, o, stride, bx0, by0, bx1, by1) > 0 && !(at > 0.0) && (rd(m.dbtk, s) != t || rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0) {
-                return;
-            }
-        }
-    }
     if rd(m.wk, s) == 1 && irem_f(tw, wcheck) < m.dk && !(rd(m.wtc, s) > 0) {
         return;
     }
@@ -2500,14 +2446,16 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         if bx>=bw || by>=bh {return;}
         let job=by*bw+bx;let base=*ptr(32).add(job as usize) as usize;
         p.chunk=job as usize;p.s0=base;
-        let grid=super::occ::MoveGrid::load(a,bx,by,job);grid.reset();m.occ=&grid;
+        let mut grid=super::occ::MoveGrid::load(a,bx,by,job);grid.reset();
+        let mut lcbuf=[0i32;2*18*18];grid.cache_chunks(lcbuf.as_mut_ptr(),18*18,block);
+        m.occ=&grid;
         let mut swbuf=[0i32;SWAP_CAP];let mut swn=0i32;m.swl=swbuf.as_mut_ptr();m.swn=&mut swn;
         // The units the second pass looks at (in the order the first met
         // them), at the job's range of occ.work: out bit 7 marks one listed.
         let wk=if *a.add(512+35)==0{core::ptr::null_mut()}else{(ptr(35) as *mut i32).add(base)};let mut wn=0usize;
         // (37: the first stage's marks, mark_need; a unit not marked in a cell
         // without a push record is passed over.)
-        let need=if *a.add(512+37)==0{core::ptr::null()}else{ptr(37) as *const u8};
+        let need=if *a.add(512+37)==0{core::ptr::null()}else{ptr(37)};
         let mut ep=epi_begin(&m,f,job,0,1);ep.pb=base;
         // (The attacks are listed by the first stage's slot chunks.)
         let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=*cfg.add(11);
@@ -2525,7 +2473,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             let slot=*ptr(24).add(*ptr(25).add(key) as usize);
             if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
                 let s=slot as usize;
-                rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!m.brain||rd(m.cmode,s)&3==0)
+                rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!BRAIN||rd(m.cmode,s)&3==0)
                     && rd(m.cd,s)==rd(m.dest,s) && rd(m.ctl,s)==key as i32
             }) {
                 dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
@@ -2539,7 +2487,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             let pushed=traffic_deferred(&m)&&super::traffic::push_at(m.traffic,cx,cy);
             while i<end {
                 let slot=*ptr(24).add(i as usize);
-                if slot>=0 && (need.is_null()||pushed||*need.add(slot as usize)!=0) {
+                if slot>=0 && (need.is_null()||pushed||*need.add(slot as usize*4+2)>>24!=0) {
                     let s=slot as usize;
                     resolve_slot(&m,s);
                     dbgc!(m,86);
@@ -2615,17 +2563,19 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
 /// then every unit there is visited, as before.
 #[cfg_attr(feature="prof",inline(never))]
 unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
-    let occ=!m.ofx.is_null()&&!m.ofy.is_null()&&!m.oact.is_null();
+    let occ=!m.orec.is_null();
     for s in b0..e{
-        let moved=!occ||(*m.oact.add(s)!=0&&(*(m.x.add(s) as *const i32)!=*m.ofx.add(s)||*(m.y.add(s) as *const i32)!=*m.ofy.add(s)));
-        *m.need.add(s)=(moved||*m.out.add(s)>1||*m.spent.add(s)!=0||*m.on.add(s)==1) as u8;
+        let r=if occ{m.orec.add(s*4)}else{core::ptr::null_mut()};
+        let moved=!occ||((*r.add(2)>>16)&255!=0&&(*(m.x.add(s) as *const i32)!=*r||*(m.y.add(s) as *const i32)!=*r.add(1)));
+        let mark=(moved||*m.out.add(s)>1||*m.spent.add(s)!=0||*m.on.add(s)==1) as i32;
+        if occ{*r.add(2)=(*r.add(2)&0x00ffffff)|(mark<<24);}
     }
 }
 /// A flow unit left short of its step (its second-pass retry may move it:
 /// traffic_yield's walker branch, the same test).
 #[inline(always)]
 unsafe fn walker_short(m:&Mv,s:usize)->bool{
-    if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(m.brain&&rd(m.cmode,s)!=0){return false;}
+    if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0){return false;}
     let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl2=hx*hx+hy*hy;
     if !(hl2>0.0){return false;}
     let dx=rd(m.x,s)-rd(m.x0,s);let dy=rd(m.y,s)-rd(m.y0,s);
@@ -2677,7 +2627,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         // where the coarse pressure field actually reaches it.
         if m.traffic_mode>0 && n<4 {
             let mut quiet=true;
-            for l in 0..n{quiet&=*m.on.add(s+l)==0&&(!m.brain||*m.cmode.add(s+l)==0);}
+            for l in 0..n{quiet&=*m.on.add(s+l)==0&&(!BRAIN||*m.cmode.add(s+l)==0);}
             if quiet{
                 for l in 0..n{let u=s+l;let dead=*m.dead.add(u);
                     if *m.d0.add(u)!=dead{*m.d0.add(u)=dead;}
@@ -2709,7 +2659,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         // A unit the combat brain sent at a hostile structure (cmMode 8):
         // back to Unit.update, which takes it (unit.js _brainStructureEngage).
         let mut handed = 0i32;
-        if m.brain {
+        if BRAIN {
             for l in 0..n {
                 let u = s + l;
                 if *m.cmode.add(u) & 8 != 0 { wr(m.on, u, 0); wr(m.out, u, 0); handed |= 1 << l; }
@@ -2717,7 +2667,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
             done |= handed;
         }
         let idle = handed == 0 && n == 4 && (m.on.add(s) as *const u32).read_unaligned() == 0
-            && (!m.brain || (m.cmode.add(s) as *const u32).read_unaligned() == 0);
+            && (!BRAIN || (m.cmode.add(s) as *const u32).read_unaligned() == 0);
         if idle {
             let dead = (m.dead.add(s) as *const u32).read_unaligned();
             let d0 = m.d0.add(s) as *mut u32;
@@ -2731,13 +2681,13 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
         // Occupancy jobs usually contain combat holds/chases. Finish those
         // before touching flow caches, rather than testing every flow lane
         // first and then discovering it has a combat instruction.
-        if !m.occ.is_null() && m.brain {
+        if !m.occ.is_null() && BRAIN {
             let c=combat4(m,p,s,done,&mut mvd);done|=c;dbgc!(m,2,(c&15).count_ones());
         }
         if fast && done!=15 {
             done |= step4(m, sp, s, &mut mvd, valid);
         }
-        if m.brain && done != 15 && m.occ.is_null() {
+        if BRAIN && done != 15 && m.occ.is_null() {
             let c = combat4(m, p, s, done, &mut mvd);
             dbgc!(m, 2, (c & 15).count_ones());
             done |= c;
@@ -2783,7 +2733,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
             {
                 let on = rd(m.on, u) as usize;
                 dbgc!(m, 4 + on.min(6));
-                if m.brain && rd(m.cmode, u) != 0 { dbgc!(m, 11); }
+                if BRAIN && rd(m.cmode, u) != 0 { dbgc!(m, 11); }
                 if rd(m.dead, u) != 0 { dbgc!(m, 12); }
             }
             if p.step_ran {
@@ -2870,7 +2820,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             if along<=lat*0.3||along*along+lat*lat>(rr+96.0)*(rr+96.0){continue;}
             dbgc!(m,69);
             let ob=rd(m.on,b);
-            if rd(m.dead,b)!=0||rd(m.own,b)!=own||rd(m.wk,b)!=0||(m.brain&&rd(m.cmode,b)!=0){continue;}
+            if rd(m.dead,b)!=0||rd(m.own,b)!=own||rd(m.wk,b)!=0||(BRAIN&&rd(m.cmode,b)!=0){continue;}
             if walkers{
                 if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx,b),rd(m.cvy,b));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
             }else if ob!=0&&ob!=2{continue;}
@@ -2928,12 +2878,12 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     dbgc!(m,73);
     if rd(m.dead,s)!=0||!(rd(m.en,s)>0.0){return;}
     // (Handed back to Unit.update this step: left where it is.)
-    if m.brain&&rd(m.cmode,s)&8!=0{return;}
+    if BRAIN&&rd(m.cmode,s)&8!=0{return;}
     dbgc!(m,75);
     let on=rd(m.on,s);
-    let walker=on==1||on==4||on==6||(m.brain&&rd(m.cmode,s)&3==2);
+    let walker=on==1||on==4||on==6||(BRAIN&&rd(m.cmode,s)&3==2);
     // (A walker other than a flow unit has no cached heading: nothing more.)
-    if walker&&(on!=1||rd(m.fl,s)&64==0||(m.brain&&rd(m.cmode,s)!=0)){return;}
+    if walker&&(on!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0)){return;}
     dbgc!(m,76);
     let xq=*(m.x.add(s) as *const i32);let yq=*(m.y.add(s) as *const i32);
     let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
@@ -3223,7 +3173,7 @@ pub unsafe extern "C" fn mv_hold_bench(a:u32,n:i32,rounds:i32,skip:i32,bulk:i32)
     let ptr=|i:usize|waddr(*a.add(512+i) as u32);
     let mut m:Mv=core::mem::zeroed();
     m.occ=core::ptr::NonNull::<super::occ::MoveGrid>::dangling().as_ptr();
-    m.span_n=2;m.skip_hold_stores=skip!=0;m.bulk_hold_targets=bulk!=0;m.pair_holds=bulk==2;m.dk=1;m.dkf=1.0;m.brain=true;m.argp=a as usize;
+    m.span_n=2;m.skip_hold_stores=skip!=0;m.bulk_hold_targets=bulk!=0;m.pair_holds=bulk==2;m.dk=1;m.dkf=1.0;m.argp=a as usize;
     m.cmode=ptr(0) as *mut u8;m.cmt=ptr(1) as *mut i32;m.ctid=ptr(2) as *mut i32;m.id=ptr(3) as *const i32;
     m.dead=ptr(4) as *const u8;m.en=ptr(5) as *const F32;m.sep=ptr(6) as *mut u32;
     m.x=ptr(7) as *mut Q8;m.y=ptr(8) as *mut Q8;m.px=ptr(9) as *mut Q8;m.py=ptr(10) as *mut Q8;
@@ -3366,7 +3316,7 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
     wr(m.out, s, 0);
     // (An instruction of the combat brain: followed in O(1); see the
     // JavaScript twin, _simMoveCombat.)
-    if m.brain && rd(m.cmode, s) != 0 && move_combat(m, p, s) {
+    if BRAIN && rd(m.cmode, s) != 0 && move_combat(m, p, s) {
         return 0;
     }
     let on = rd(m.on, s);
@@ -3659,78 +3609,6 @@ unsafe fn move_pre(m: &Mv, p: &MoveP, s: usize) -> i32 {
         let bgy = idiv(bt - bgx, w);
         if in_area_range(m, x, y, bgx as f64 * tile + tile / 2.0, bgy as f64 * tile + tile / 2.0, rd(m.reach, s) as i32) != 0 {
             back!();
-        }
-    }
-    let atk = (f & 16) != 0;
-    let mut db_look = !m.brain && !atk && (f & 1) != 0 && (tw & 1) < m.dk;
-    let at = rd(m.at, s);
-    if db_look {
-        if !(rd(m.area, s) >= 0) {
-            back!();
-        }
-        if at > 0.0 {
-            db_look = false;
-        } else if rd(m.dbtk, s) == t && rd(m.dbt, s) != -2 {
-            // (Found something: on with its move, the shot at its turn.)
-            if rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0 {
-                wr(m.fire, s, 1);
-            }
-            db_look = false;
-        }
-    }
-    if if atk { !m.brain && (rem64_f(ts, p.acq_t) < m.dk as i64 || (tw & 3) < m.dk) } else { db_look } {
-        let (x0, y0, x1, y1);
-        if atk {
-            let r = rd(m.reach, s) as f64;
-            x0 = gxf - r;
-            y0 = gyf - r;
-            x1 = gxf + r;
-            y1 = gyf + r;
-        } else {
-            let area = rd(m.area, s);
-            let k = area * p.boxsteps + rd(m.reach, s) as i32;
-            if !(area >= 0) || rd(m.abok, k as usize) == 0 {
-                back!();
-            }
-            let k4 = (k * 4) as usize;
-            x0 = rd(m.ab, k4) as f64;
-            y0 = rd(m.ab, k4 + 1) as f64;
-            x1 = rd(m.ab, k4 + 2) as f64;
-            y1 = rd(m.ab, k4 + 3) as f64;
-        }
-        let (x0, y0, x1, y1) = clamp_box(x0, y0, x1, y1, w, h);
-        if x0 <= x1 && y0 <= y1 {
-            let bx0 = floor(x0 / p.bsz) as i64;
-            let by0 = floor(y0 / p.bsz) as i64;
-            let bx1 = floor(x1 / p.bsz) as i64;
-            let by1 = floor(y1 / p.bsz) as i64;
-            let stride = p.bc + 1;
-            let plane = stride * (p.br + 1);
-            if box_sum(m.hs, owner as i64 * plane, stride, bx0, by0, bx1, by1) > 0 {
-                if !atk {
-                    if !(at > 0.0) && (rd(m.dbtk, s) != t || rd(m.dbt, s) != -1 || rd(m.dbs, s) >= 0) {
-                        back!();
-                    }
-                } else if rem64_f(ts, p.acq_t) < m.dk as i64 && acq_hit(m, s, p.acq_stamp) {
-                    wr(m.on, s, 0);
-                    wr(m.px, s, x);
-                    wr(m.py, s, y);
-                    wr(m.out, s, 14);
-                    return 0;
-                }
-                if atk && (tw & 3) < m.dk && rd(m.cbtk, s) == p.acq_stamp && rd(m.crs, s) == mv_stat(m, s, 3, m.rng) {
-                    let cb = rd(m.cbs, s);
-                    if cb >= 0 {
-                        let code = rd(m.sc, cb as usize) as i32;
-                        if code != -1 && code != owner && !m.ag.is_null() {
-                            let a = rd(m.ag, cb as usize);
-                            if a >= 0 && covered(m, owner, a) {
-                                back!();
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
     if parked {
@@ -4156,12 +4034,6 @@ unsafe fn steady_until(m: &Mv, s: usize, t: i32, end: i32, f: u8, tr: i32, acq_t
     let next = |k: i32| -> i32 { if k <= 0 { t + 1 } else { t + (k - irem_f(tw, k)) } };
     // (Not the second's tick: step4 takes the floor's look itself.)
     let mut u = end;
-    if (f & 16) != 0 && !m.brain {
-        u = u.min(next(4)).min(next(acq_t.max(1).min(1 << 20) as i32));
-    }
-    if (f & 1) != 0 && !m.brain {
-        u = u.min(next(2));
-    }
     if rd(m.wk, s) == 1 {
         u = u.min(next(wcheck));
     }
@@ -5103,339 +4975,5 @@ unsafe fn epi_end(m: &Mv, e: &Epi, chunk: i32) {
     wr(m.postc, chunk, e.cnt as i32);
     if e.push {
         wr(m.sexc, chunk, e.ne as i32);
-    }
-}
-
-/// A drive-by look's candidate q (the JavaScript twin's cheap checks): its
-/// squared distance, or None.
-const DB_CANDS: usize = 64;
-#[inline(always)]
-unsafe fn db_candidate(m: &Mv, q: i32, owner: i32, x: f64, y: f64, x0: i32, y0: i32, x1: i32, y1: i32, tile: f64, w: i32) -> Option<f64> {
-    if q < 0 || rd(m.dead, q as usize) != 0 || rd(m.own, q as usize) == owner {
-        return None;
-    }
-    let qu = q as usize;
-    let tx = rd(m.x0, qu);
-    let ty = rd(m.y0, qu);
-    let qgx = floor(tx / tile);
-    let qgy = floor(ty / tile);
-    // (Not numbers: no area there, skipped as in JavaScript.)
-    if !(qgx >= x0 as f64 && qgy >= y0 as f64 && qgx <= x1 as f64 && qgy <= y1 as f64) {
-        return None;
-    }
-    let a = rd(m.ag, (qgy as i32 * w + qgx as i32) as usize);
-    if !covered(m, owner, a) {
-        return None;
-    }
-    let dx = tx - x;
-    let dy = ty - y;
-    Some(dx * dx + dy * dy)
-}
-
-
-/// SIM_KERNEL_DRIVEBY over slots s0..end.
-#[no_mangle]
-pub unsafe extern "C" fn mv_driveby(a: u32, s0: i32, end: i32) {
-    let a = waddr(a) as *const i32;
-    let m = Mv::load(a);
-    let f = (a as usize + 4096) as *const f64;
-    let t = m.t;
-    let cw = to_i32(rd(f, 3));
-    let ch = to_i32(rd(f, 4));
-    let tile = rd(f, 5);
-    let ep = to_i32(rd(f, 6));
-    let players = to_i32(rd(f, 7));
-    let cmd_move = rd(f, 8);
-    let w = to_i32(rd(f, 9));
-    let h = to_i32(rd(f, 10));
-    let cs = to_i32(rd(f, 11));
-    let absent = rd(f, 12);
-    let boxsteps = to_i32(rd(f, 13));
-    let pad = rd(f, 14);
-    let bk = to_i32(rd(f, 15));
-    let bc = to_i32(rd(f, 16));
-    let br = to_i32(rd(f, 17));
-    let om = if rd(f, 18) != 0.0 && rd(f, 18) == rd(f, 18) { m.om } else { 0 as *const u8 };
-    let stride = bc as i64 + 1;
-    let plane = stride * (br as i64 + 1);
-    let half = tile / 2.0;
-    // (The area helpers read the map's size and tile from the context.)
-    let mut m = m;
-    m.w = w;
-    m.h = h;
-    m.tile = tile;
-    m.itile = 1.0 / tile;
-    let m = &m;
-    if m.ag.is_null() || m.aoff.is_null() || m.ab.is_null() || m.abok.is_null() || m.covf.is_null() || m.rs.is_null() || m.sc.is_null() || m.scls.is_null() {
-        return;
-    }
-    let mut s = s0.max(0) as usize;
-    let end = if end > 0 { end as usize } else { 0 };
-    while s < end {
-        let su = s;
-        s += 1;
-        if rd(m.cmd, su) as f64 != cmd_move || rd(m.dead, su) != 0 || rd(m.sep, su) as f64 == absent || rd(m.shoot, su) == 0 || rd(m.at, su) > 0.0 {
-            continue;
-        }
-        let id = rd(m.id, su);
-        if (t.wrapping_add(id) & 1) >= m.dk {
-            continue;
-        }
-        wr(m.dbtk, su, t);
-        wr(m.dbt, su, -2);
-        wr(m.dbs, su, -1);
-        let owner = rd(m.own, su);
-        let area = rd(m.area, su);
-        let steps = rd(m.rd_, su);
-        if !(owner >= 0 && owner < players) || !(area >= 0) || steps == 255 {
-            continue;
-        }
-        let kb = (area * boxsteps + steps as i32) as usize;
-        if rd(m.abok, kb) == 0 {
-            continue;
-        }
-        if !cover_row(m, owner) {
-            continue;
-        }
-        let x0 = rd(m.ab, kb * 4).max(0);
-        let y0 = rd(m.ab, kb * 4 + 1).max(0);
-        let x1 = (w - 1).min(rd(m.ab, kb * 4 + 2));
-        let y1 = (h - 1).min(rd(m.ab, kb * 4 + 3));
-        let k = rd(m.rk, su) as i32;
-        let whole = (rd(m.lzf, su) & 4) != 0;
-        let x = rd(m.x, su);
-        let y = rd(m.y, su);
-        let foe: u8 = if owner < 8 { 0xFF ^ (1u8 << owner) } else { 0xFF };
-        if !m.hs.is_null() && x0 <= x1 && y0 <= y1 {
-            let bx0 = idiv(x0, bk);
-            let by0 = idiv(y0, bk);
-            let bx1 = (bc - 1).min(idiv(x1, bk));
-            let by1 = (br - 1).min(idiv(y1, bk));
-            if bx0 <= bx1 && by0 <= by1 && box_sum(m.hs, owner as i64 * plane, stride, bx0 as i64, by0 as i64, bx1 as i64, by1 as i64) <= 0 {
-                wr(m.dbt, su, -1);
-                continue;
-            }
-        }
-        // The nearest enemy unit in range (then the lower id): candidates
-        // listed, then range-checked nearest first; over DB_CANDS, the scan
-        // again range-checking each new best. See the JavaScript twin.
-        let mut best: i32 = -1;
-        let mut unknown = false;
-        if x0 <= x1 && y0 <= y1 {
-            let cx0 = floor(x0 as f64 / cs as f64) as i32;
-            let cy0 = floor(y0 as f64 / cs as f64) as i32;
-            let cx1 = (cw - 1).min(floor(x1 as f64 / cs as f64) as i32);
-            let cy1 = (ch - 1).min(floor(y1 as f64 / cs as f64) as i32);
-            // (Each cell's owner mask, 8 cells at a time as one u64: runs
-            // with no foe bit are passed over whole. Same cells, same order.)
-            let rep = (foe as u64).wrapping_mul(0x0101_0101_0101_0101);
-            let mut cqa = [0i32; DB_CANDS];
-            let mut cda = [0f64; DB_CANDS];
-            // (Unchecked: indices stay under DB_CANDS; no panic paths in the module.)
-            let cq = cqa.as_mut_ptr();
-            let cd = cda.as_mut_ptr();
-            let mut nc = 0usize;
-            let mut over = false;
-            let mut cy = cy0;
-            'scan: while cy <= cy1 {
-                let mut cx = cx0;
-                while cx <= cx1 {
-                    if !om.is_null() {
-                        while cx + 7 <= cx1 {
-                            let hit = (om.add((cy * cw + cx) as usize) as *const u64).read_unaligned() & rep;
-                            if hit == 0 {
-                                cx += 8;
-                                continue;
-                            }
-                            cx += (hit.trailing_zeros() / 8) as i32;
-                            break;
-                        }
-                        if cx > cx1 {
-                            break;
-                        }
-                    }
-                    let ck = (cy * cw + cx) as usize;
-                    cx += 1;
-                    if rd(m.rst, ck) != ep || (!om.is_null() && (rd(om, ck) & foe) == 0) {
-                        continue;
-                    }
-                    let e0 = rd(m.rs, ck);
-                    let e1 = e0 + rd(m.rc, ck);
-                    let mut e = e0;
-                    while e < e1 {
-                        let q = rd(m.es, e as usize);
-                        e += 1;
-                        if let Some(d2) = db_candidate(m, q, owner, x, y, x0, y0, x1, y1, tile, w) {
-                            if nc == DB_CANDS {
-                                over = true;
-                                break 'scan;
-                            }
-                            *cq.add(nc) = q;
-                            *cd.add(nc) = d2;
-                            nc += 1;
-                        }
-                    }
-                }
-                cy += 1;
-            }
-            if !over {
-                let mut i = 0;
-                while i < nc {
-                    let mut k2 = i;
-                    let mut j = i + 1;
-                    while j < nc {
-                        let (dj, dk) = (*cd.add(j), *cd.add(k2));
-                        if dj < dk || (dj == dk && rd(m.id, *cq.add(j) as usize) < rd(m.id, *cq.add(k2) as usize)) {
-                            k2 = j;
-                        }
-                        j += 1;
-                    }
-                    core::ptr::swap(cq.add(i), cq.add(k2));
-                    core::ptr::swap(cd.add(i), cd.add(k2));
-                    let qu = *cq.add(i) as usize;
-                    let tx = rd(m.x0, qu);
-                    let ty = rd(m.y0, qu);
-                    let r = if whole { in_area_range(m, x, y, tx, ty, k) } else { in_attack_range(m, pad, su, qu, x, y, tx, ty, k) };
-                    if r < 0 {
-                        unknown = true;
-                        break;
-                    }
-                    if r == 1 {
-                        best = *cq.add(i);
-                        break;
-                    }
-                    i += 1;
-                }
-            } else {
-                let mut bd2 = f64::INFINITY;
-                let mut cy = cy0;
-                'rows: while cy <= cy1 {
-                    let mut cx = cx0;
-                    while cx <= cx1 {
-                        let ck = (cy * cw + cx) as usize;
-                        cx += 1;
-                        if rd(m.rst, ck) != ep || (!om.is_null() && (rd(om, ck) & foe) == 0) {
-                            continue;
-                        }
-                        let e0 = rd(m.rs, ck);
-                        let e1 = e0 + rd(m.rc, ck);
-                        let mut e = e0;
-                        while e < e1 {
-                            let q = rd(m.es, e as usize);
-                            e += 1;
-                            let d2 = match db_candidate(m, q, owner, x, y, x0, y0, x1, y1, tile, w) {
-                                Some(d) => d,
-                                None => continue,
-                            };
-                            let qu = q as usize;
-                            let best_id = if best >= 0 { rd(m.id, best as usize) } else { 0 };
-                            if !(d2 < bd2 || (d2 == bd2 && rd(m.id, qu) < best_id)) {
-                                continue;
-                            }
-                            let tx = rd(m.x0, qu);
-                            let ty = rd(m.y0, qu);
-                            let r = if whole { in_area_range(m, x, y, tx, ty, k) } else { in_attack_range(m, pad, su, qu, x, y, tx, ty, k) };
-                            if r < 0 {
-                                unknown = true;
-                                break 'rows;
-                            }
-                            if r != 1 {
-                                continue;
-                            }
-                            best = q;
-                            bd2 = d2;
-                        }
-                    }
-                    cy += 1;
-                }
-            }
-        }
-        if unknown {
-            continue;
-        }
-        if best >= 0 {
-            wr(m.dbt, su, best);
-            wr(m.dbti, su, rd(m.id, best as usize));
-            continue;
-        }
-        wr(m.dbt, su, -1);
-        if !(x0 <= x1 && y0 <= y1) {
-            continue;
-        }
-        if !m.hss.is_null() {
-            let bx0 = idiv(x0, bk);
-            let by0 = idiv(y0, bk);
-            let bx1 = (bc - 1).min(idiv(x1, bk));
-            let by1 = (br - 1).min(idiv(y1, bk));
-            if bx0 <= bx1 && by0 <= by1 && box_sum(m.hss, owner as i64 * plane, stride, bx0 as i64, by0 as i64, bx1 as i64, by1 as i64) <= 0 {
-                continue;
-            }
-        }
-        let mut best_t: i32 = -1;
-        let mut best_r = 9;
-        let mut best_d = f64::INFINITY;
-        let mut gy = y0;
-        'srows: while gy <= y1 {
-            let mut gx = x0;
-            let mut tt = gy * w + x0;
-            let by = idiv(gy, bk);
-            while gx <= x1 {
-                // (A block of the row with no hostile structure: passed
-                // over whole; see the JavaScript twin.)
-                if !m.hss.is_null() && (gx == x0 || irem_f(gx, bk) == 0) {
-                    let bx = idiv(gx, bk);
-                    if bx < bc && by < br && box_sum(m.hss, owner as i64 * plane, stride, bx as i64, by as i64, bx as i64, by as i64) <= 0 {
-                        let last = x1.min((bx + 1) * bk - 1);
-                        tt += last - gx + 1;
-                        gx = last + 1;
-                        continue;
-                    }
-                }
-                let (cgx, ctt) = (gx, tt);
-                gx += 1;
-                tt += 1;
-                let cls = rd(m.scls, ctt as usize);
-                if cls <= 0 {
-                    continue;
-                }
-                let rank = if cls == 1 { 0 } else if cls == 2 { 2 } else { 3 };
-                if rank > best_r {
-                    continue;
-                }
-                let code = rd(m.sc, ctt as usize) as i32;
-                if code == -1 || code == owner {
-                    continue;
-                }
-                let a = rd(m.ag, ctt as usize);
-                if !covered(m, owner, a) {
-                    continue;
-                }
-                let cxp = cgx as f64 * tile + half;
-                let cyp = gy as f64 * tile + half;
-                let dx = cxp - x;
-                let dy = cyp - y;
-                let d2 = dx * dx + dy * dy;
-                if rank == best_r && (d2 > best_d || (d2 == best_d && ctt > best_t)) {
-                    continue;
-                }
-                let r = in_area_range(m, x, y, cxp, cyp, k);
-                if r < 0 {
-                    unknown = true;
-                    break 'srows;
-                }
-                if r != 1 {
-                    continue;
-                }
-                best_t = ctt;
-                best_r = rank;
-                best_d = d2;
-            }
-            gy += 1;
-        }
-        if unknown {
-            wr(m.dbt, su, -2);
-            continue;
-        }
-        wr(m.dbs, su, best_t);
     }
 }

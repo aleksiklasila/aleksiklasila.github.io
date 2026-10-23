@@ -1131,23 +1131,6 @@ class Unit {
     // The scan itself (a separate method: its closure's context would
     // otherwise be allocated on every call of tryDriveByAttack).
     _driveByScan() {
-        // The helpers' answer this tick (SIM_KERNEL_DRIVEBY): taken when
-        // still standing as found (the best of a superset, so then the best
-        // of what this look would find); else the look itself.
-        const c = this._us;
-        if (c && c.dbTick[this._si] === gameTime) {
-            const s = this._si, q = c.dbT[s];
-            if (q >= 0) {
-                const e = _simUnitState.owners[q];
-                if (e && (e.id | 0) === c.dbTI[s] && !e.dead) { this._performAttackOnUnit(e); return; }
-            } else if (q === -1) {
-                const tl = c.dbS[s];
-                if (tl < 0) return;
-                const gx = tl % GRID_W, gy = (tl - gx) / GRID_W, e = getTileEntityRef(gx, gy), cell = grid[gy] && grid[gy][gx];
-                const owner = e ? (e.owner !== undefined ? e.owner : (cell ? cell.owner : -1)) : -1;
-                if (e && e.energy > 0 && !e.underConstruction && owner !== this.owner && owner >= 0 && isGameplayTargetVisibleToPlayer(this.owner, gx, gy)) { this._performAttackOnBuilding(e); return; }
-            }
-        }
         let closest = null;
         let bestD2 = Infinity;
         // Attack ranges are whole area steps. A unit's bucket area is its
@@ -4523,17 +4506,6 @@ function combatScanRun() {
         P[0] = n; P[1] = 2048; P[2] = gameTime;
     }
     simParallelRun(SIM_KERNEL_COMBAT_SCAN, Math.ceil(n / 2048));
-    // The drive-by looks (SIM_KERNEL_DRIVEBY).
-    if (!SIM_COMBAT_BRAIN && typeof SIM_KERNEL_DRIVEBY === 'number' && _simStructCls) {
-        _simAreaCsr(); simMoveWallGrid();
-        P[0] = n; P[1] = 2048; P[2] = gameTime; P[3] = CHUNKS_W; P[4] = CHUNKS_H; P[5] = TILE; P[6] = _sxEpoch;
-        P[7] = Math.min(spatialUnitsComplexPlayerCount, _visCover.players); P[8] = CMD_MOVING; P[9] = GRID_W; P[10] = GRID_H;
-        P[11] = CHUNK_SIZE; P[12] = SIM_SEP_ABSENT; P[13] = SIM_MOVE_BOX_STEPS;
-        P[14] = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
-        P[15] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[16] = spatialBlockCols; P[17] = spatialBlockRows; P[18] = 1; P[58] = simDk;
-        P[47]=areaSearchEnabled()?1:0;
-        simParallelRun(SIM_KERNEL_DRIVEBY, Math.ceil(n / 2048));
-    }
     _acqTierStep();
 }
 

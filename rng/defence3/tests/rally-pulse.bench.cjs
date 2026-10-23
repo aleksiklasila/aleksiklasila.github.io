@@ -126,7 +126,7 @@ const summary = { units: count, group: groupN, dk, secs, lateOutPct: meanOf(late
     walkerMin: walker ? inst.eval('__scratch.walkerMin') : undefined, leaverMax: leaver ? inst.eval('__scratch.leaverMax') : undefined, msMean: tickMs.reduce((a, b) => a + b, 0) / tickMs.length, msP50: sortedMs[sortedMs.length >> 1], msP90: sortedMs[Math.floor(sortedMs.length * .9)], errors: inst.errors.length };
 console.log('SUMMARY ' + JSON.stringify(summary));
 if (process.env.SWAPDIAG) console.log('SWAPDIAG ' + inst.eval(`JSON.stringify((() => { const l = __scratch.leaver, O = _occ, A = _occupancyAddresses(), out = []; const sl = l._si;
-  const sp = (s, x, y, r) => _simWasmX.occ_spawn(...A, O.w, O.h, O.stride, O.cell, O.planes, s, x, y, r, O.layer[s], 0);
+  const sp = (s, x, y, r) => _simWasmX.occ_spawn(...A, O.w, O.h, O.stride, O.cell, O.planes, s, x, y, r, _occLayer(O, s), 0);
   for (const u of units) { if (u.dead || u === l || Math.hypot(u.x - l.x, u.y - l.y) > 30) continue; const b = u._si;
     const lx = O.x[sl], ly = O.y[sl], bx = O.x[b], by = O.y[b], lr = O.radius[sl], br = O.radius[b];
     _simWasmX.occ_release(...A, O.w, O.h, O.stride, O.cell, O.planes, sl); _simWasmX.occ_release(...A, O.w, O.h, O.stride, O.cell, O.planes, b);

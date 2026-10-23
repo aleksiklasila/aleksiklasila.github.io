@@ -198,10 +198,6 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['cbTId', Int32Array, 1], ['cbRangeS', Float32Array, 1],
     // (And the structure it found: its tile, -1 none.)
     ['cbS', Int32Array, 1],
-    // The drive-by look's answer (SIM_KERNEL_DRIVEBY) at tick dbTick: a unit
-    // (dbT its slot, dbTI its id), -1 none (then dbS a structure's tile, -1
-    // none), -2 not worked out there (Unit.update looks).
-    ['dbT', Int32Array, 1], ['dbTI', Int32Array, 1], ['dbS', Int32Array, 1], ['dbTick', Int32Array, 1],
     // A moving unit with an idle or waiting unit of its owner in its tile or
     // one beside it at the tick's start (cwNear 1) as of tick cwTick (the
     // combat scan): waiting in a crowd (see NAV_CROWD_TILES).
@@ -875,7 +871,7 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
     // (Tick-stamped answers of the slot's last unit are not this one's.)
     S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
-    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.dbTick[s] = -1; S.columns.dbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
+    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     // (Its object fields unset: their digest that of none.)
     _simUnitObjClear(S.columns, s);
     S.columns.hObj[s] = _simHDigest0();
@@ -1023,9 +1019,8 @@ function simUnitStateCompact(force = false) {
         C['oc_' + k] = _simRefCopy(old['oc_' + k], cap, runs);
     }
     for (let s = 0; s < ns; s++) {
-        const a = C.cbT[s], b = C.dbT[s];
+        const a = C.cbT[s];
         if (a >= 0) C.cbT[s] = a < n0 ? map[a] : -1;
-        if (b >= 0) C.dbT[s] = b < n0 ? map[b] : -1;
     }
     // The rest (removed, not yet collected): detached from the old state.
     for (let s = 0; s < n0; s++) if (S.owners[s] && map[s] < 0) simUnitStateDetach(S, s);

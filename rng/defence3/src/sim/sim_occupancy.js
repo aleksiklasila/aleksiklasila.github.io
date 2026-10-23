@@ -7,7 +7,12 @@ let SIM_OCCUPANCY_PLANES = 1, SIM_OCCUPANCY_SUBCELLS = 8, SIM_OCCUPANCY_BLOCK_TI
 // (mv.rs traffic_swap; their index entries are moved after the phases).
 const SIM_OCCUPANCY_XSWAP = 32;
 let _occ = null;
-const _occNames = ['occ.bits','occ.mask','occ.x','occ.y','occ.radius','occ.layer','occ.active'];
+// The footprint of a slot is one 16-byte record in occ.rec (Int32 x4: x, y, meta = radius | layer << 8 | active << 16 | need << 24; the fourth word spare):
+// the second stage's neighbour scans read one line a unit, not one for each of x, y, radius, layer and active.
+const _occNames = ['occ.bits','occ.mask','occ.rec'];
+function _occActive(O,s){return (O.rec[s*4+2]>>16&255)!==0;}
+function _occRadius(O,s){return O.rec[s*4+2]&255;}
+function _occLayer(O,s){return O.rec[s*4+2]>>8&255;}
 function occupancyEnsure() {
     if (!SIM_OCCUPANCY_ENABLED || typeof _simUnitState === 'undefined' || !_simUnitState) return null;
     // (Nothing changed since the last full pass: its arrays bound, as many as the columns have slots. Every spawn made it again:
@@ -36,11 +41,11 @@ function occupancyEnsure() {
     }
     const O=_occ,n=_simUnitState.cap;
     if(O.cap<n){
-        for(const [name,Type]of [['x',Int32Array],['y',Int32Array],['radius',Uint8Array],['layer',Uint8Array],['active',Uint8Array],['need',Uint8Array]]){
-            const old=O[name],a=O[name]=simHeapArray(Type,n);if(old){a.set(old);simHeapFree(old);}
+        for(const [name,Type,per]of [['rec',Int32Array,4]]){
+            const old=O[name],a=O[name]=simHeapArray(Type,n*per);if(old){a.set(old);simHeapFree(old);}
         }O.cap=n;
     }
-    for(const name of ['bits','mask','x','y','radius','layer','active','need'])simParallelBind('occ.'+name,O[name]);
+    for(const name of ['bits','mask','rec'])simParallelBind('occ.'+name,O[name]);
     if(typeof trafficEnsure==='function')trafficEnsure(O);
     O.fast=_simParRegVer;O.fastCap=n;
     return O;
@@ -56,26 +61,27 @@ function occupancySpawn(u) {
     // worker: no grid; the worker's world has one.)
     if(!SIM_OCCUPANCY_ENABLED||typeof _simWasmX==='undefined'||!_simWasmX)return true;
     const O=occupancyEnsure();if(!O||!u._us)return true;
-    const s=u._si;if(O.active[s])return true;
+    const s=u._si;if(_occActive(O,s))return true;
     const x=u._us.x[s],y=u._us.y[s],r=Math.max(1,Math.min(32,Math.ceil((u.collisionR||u.r||1)/(TILE/SIM_OCCUPANCY_SUBCELLS))));
     const layer=O.planes===1?0:Math.min(O.planes-1,u.isFlying?1:u.unitType==='mole'?2:0);
     const A=_occupancyAddresses();
-    const ok=_simWasmX.occ_spawn(A[0],A[1],A[2],A[3],A[4],A[5],A[6],O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
+    const ok=_simWasmX.occ_spawn(A[0],A[1],A[2],O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
     if(!ok){O.rejected++;return false;}
-    if(O.x[s]!==x||O.y[s]!==y){O.relocated++;u._us.x[s]=O.x[s];u._us.y[s]=O.y[s];u._us.prevX[s]=O.x[s];u._us.prevY[s]=O.y[s];u._us.x0[s]=O.x[s];u._us.y0[s]=O.y[s];}
+    const fx=O.rec[s*4],fy=O.rec[s*4+1];
+    if(fx!==x||fy!==y){O.relocated++;u._us.x[s]=fx;u._us.y[s]=fy;u._us.prevX[s]=fx;u._us.prevY[s]=fy;u._us.x0[s]=fx;u._us.y0[s]=fy;}
     O.spawns++;O.registered++;O.expectedBits+=O.sizes[r];return true;
 }
 function occupancyRelease(u) {
-    const O=_occ;if(!SIM_OCCUPANCY_ENABLED||!O||!u._us||!O.active[u._si])return;
+    const O=_occ;if(!SIM_OCCUPANCY_ENABLED||!O||!u._us||!_occActive(O,u._si))return;
     _simWasmX.occ_release(..._occupancyAddresses(),O.w,O.h,O.stride,O.cell,O.planes,u._si);
-    O.registered--;O.expectedBits-=O.sizes[O.radius[u._si]];
+    O.registered--;O.expectedBits-=O.sizes[_occRadius(O,u._si)];
 }
 // Snapshot decoding creates shells and may compact their slots. Rebuild
 // the slot-addressed grid only after every restored unit has its stats.
 function occupancyRebuild() {
     if(!SIM_OCCUPANCY_ENABLED)return;
     const O=occupancyEnsure();if(!O)return;
-    O.bits.fill(0);O.active.fill(0);O.radius.fill(0);O.layer.fill(0);
+    O.bits.fill(0);O.rec.fill(0);
     O.registered=0;O.expectedBits=0;
     for(const u of units)if(u&&!u.dead&&u._us)occupancySpawn(u);
 }
@@ -139,7 +145,7 @@ function occupancyAfterMovement(c) {
 // decoded positions after it: a resync's units were swept from where the
 // diverged peer had them and stopped on the way).
 function occupancyTracks(s){
-    return _occ!==null&&_occ.epoch===spatialEpoch&&_occ.active[s]===1&&(typeof _snapDec==='undefined'||_snapDec===null);
+    return _occ!==null&&_occ.epoch===spatialEpoch&&(_occ.rec[s*4+2]>>16&255)===1&&(typeof _snapDec==='undefined'||_snapDec===null);
 }
 // A jump, not a walk (a portal, a placement): the footprint leaves where it
 // stood and is placed at the nearest free spot around (x, y) (Q8), as a
@@ -147,19 +153,19 @@ function occupancyTracks(s){
 // the first unit on the way, and a target past its block's halo was
 // refused: portal jumps did not happen.)
 function occupancyTeleport(u,x,y) {
-    const O=_occ,s=u._si,c=u._us,ox=O.x[s],oy=O.y[s],r=O.radius[s],layer=O.layer[s];
+    const O=_occ,s=u._si,c=u._us,ox=O.rec[s*4],oy=O.rec[s*4+1],r=_occRadius(O,s),layer=_occLayer(O,s);
     occupancyRelease(u);
     const A=_occupancyAddresses();
     let ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
     if(!ok)ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,ox,oy,r,layer,32);
-    if(ok){O.registered++;O.expectedBits+=O.sizes[r];x=O.x[s];y=O.y[s];}
+    if(ok){O.registered++;O.expectedBits+=O.sizes[r];x=O.rec[s*4];y=O.rec[s*4+1];}
     c.x[s]=x;c.y[s]=y;c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;
 }
 function occupancyMovePosition(u,x,y) {
     const O=_occ,s=u._si,c=u._us;
-    if(x===O.x[s] && y===O.y[s])return;
+    if(x===O.rec[s*4] && y===O.rec[s*4+1])return;
     // (Farther than any step goes: a jump.)
-    if(Math.max(Math.abs(x-O.x[s]),Math.abs(y-O.y[s]))>3*TILE*8){occupancyTeleport(u,x,y);return;}
+    if(Math.max(Math.abs(x-O.rec[s*4]),Math.abs(y-O.rec[s*4+1]))>3*TILE*8){occupancyTeleport(u,x,y);return;}
     // Same bitmap operation for JS-only movement; called at the coordinate
     // write, with helpers idle. It never scans another unit.
     for(let i=0;i<_occNames.length;i++)_simWasmArgI[512+i]=_simWEnc(_simParReg[_occNames[i]].byteOffset);
@@ -172,7 +178,7 @@ function occupancyAudit() {
     const O=_occ;if(!O)return null;
     const actualBits=_simWasmX.occ_count(_simWEnc(O.bits.byteOffset),O.bits.length);
     const c=_simUnitState.columns;let activeUnits=0,positionMismatches=0;
-    for(let s=0;s<O.cap;s++)if(O.active[s]){activeUnits++;if(c.x[s]!==O.x[s]||c.y[s]!==O.y[s])positionMismatches++;}
+    for(let s=0;s<O.cap;s++)if(_occActive(O,s)){activeUnits++;if(c.x[s]!==O.rec[s*4]||c.y[s]!==O.rec[s*4+1])positionMismatches++;}
     return {actualBits,expectedBits:O.expectedBits,registered:O.registered,activeUnits,positionMismatches,ok:actualBits===O.expectedBits&&activeUnits===O.registered&&positionMismatches===0};
 }
 function occupancyStats() {

@@ -24,7 +24,7 @@ const result=i.eval(`(()=>{
   const pos=_simWasmX.occ_move_one(_simWasmArgsW,s,x,y),c=_simUnitState.columns;c.x[s]=Number(BigInt.asIntN(32,pos));c.y[s]=Number(BigInt.asIntN(32,pos>>32n));};
  let cases=0;
  for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
-  O.bits.fill(0);O.active.fill(0);const cy=32;
+  O.bits.fill(0);O.rec.fill(0);const cy=32;
   if(!spawn(0,cx,cy,r,phase[0],phase[1]))throw Error('legal spawn rejected r='+r);
   const own=new Set(disk(cx,cy,r).map(([x,y])=>fold(x,y))),obstacle=new Set();
   const bx=dy>100?cx:cx+(dx>32?64:dx< -32?-64:r+3),by=dy>100?cy+256:cy+1;
@@ -35,7 +35,7 @@ const result=i.eval(`(()=>{
    for(let k=1;k<=n;k++){const tx=ox+Math.trunc((nx-ox)*k/n),ty=oy+Math.trunc((ny-oy)*k/n);if(!free(tx,ty))break;x=tx;y=ty;}return [x,y];};
   let [x,y]=sweep(nx,ny);if(x===ox&&y===oy){[x,y]=sweep(nx,oy);if(x===ox&&y===oy)[x,y]=sweep(ox,ny);}
   moveOne(0,nx,ny);
-  if(O.x[0]!==x||O.y[0]!==y)throw Error('movement mismatch r='+r+' cx='+cx+' delta='+dx+','+dy+' actual='+O.x[0]+','+O.y[0]+' expected='+x+','+y);
+  if(O.rec[0]!==x||O.rec[1]!==y)throw Error('movement mismatch r='+r+' cx='+cx+' delta='+dx+','+dy+' actual='+O.rec[0]+','+O.rec[1]+' expected='+x+','+y);
   const expected=new Set(obstacle);for(const [a,b]of disk(Math.trunc(x/C),Math.trunc(y/C),r))expected.add(fold(a,b));
   verify(expected,'r='+r+' cx='+cx);
   _simWasmX.occ_release(...A,O.w,O.h,O.stride,C,O.planes,0);verify(obstacle,'release');cases++;

@@ -31,7 +31,7 @@ class Worker extends RealWorker { constructor(...args) { super(...args); workers
     };
     restore();
     if(host.eval('SIM_OCCUPANCY_ENABLED')){
-        const shape='JSON.stringify(units.map(u=>[u.id,_occ.radius[u._si],_occ.layer[u._si]]).sort((a,b)=>a[0]-b[0]))';
+        const shape='JSON.stringify(units.map(u=>[u.id,_occRadius(_occ,u._si),_occLayer(_occ,u._si)]).sort((a,b)=>a[0]-b[0]))';
         assert.equal(peer.eval(shape),host.eval(shape),'restored occupancy shapes match');
     }
     peer.scratch.Worker=Worker;

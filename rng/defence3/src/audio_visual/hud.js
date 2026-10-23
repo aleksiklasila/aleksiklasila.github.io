@@ -1040,7 +1040,7 @@ function getFrameUnitSummary(owner) {
         return groups;
     }
     const previous = _frameUnitSummaries.get(owner);
-    if (previous && previous.frame === F) return previous.groups;
+    if (previous && previous.frame.deref() === F) return previous.groups;
     const counts = new Uint32Array(_pageFrameStrings.length*2), groups = new Map(), idleCode=_pageFrameStrings.indexOf('IDLE');
     for (let i=0;i<F.count;i++) {
         const s=F.order[i]; if (F.owner[s]!==owner || F.energy[s]<=0) continue;
@@ -1051,7 +1051,8 @@ function getFrameUnitSummary(owner) {
         const key=_pageFrameStrings[type] || 'other';
         groups.set(key,{label:_prettyUnitTypeLabel(key),total:counts[type*2],idle:counts[type*2+1]});
     }
-    _frameUnitSummaries.set(owner,{frame:F,groups});
+    // (The frame weakly: held for good, a frame made before the sliced counts were in kept its buffer, 282 MB of units, for the whole match.)
+    _frameUnitSummaries.set(owner,{frame:new WeakRef(F),groups});
     return groups;
 }
 
