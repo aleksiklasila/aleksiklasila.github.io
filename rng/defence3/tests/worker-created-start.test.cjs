@@ -30,7 +30,8 @@ const SUMMARY = `JSON.stringify({ tick: currentTick, units: units.length, items:
     const page = new H.World({ controls: CONTROLS });
     const legacy=process.argv.includes('--legacy');
     const options=legacy?{url:'http://localhost/rng/defence3/?acq=exact&occupancy=0'}:undefined;
-    const solo = page.spawn('page',options);
+    // (The reference: the simulation on the page itself, whatever SIM_WORKER says.)
+    const solo = page.spawn('page', { ...(options || {}), simWorker: false });
     await page.run(200);
     solo.eval(SETUP);
     solo.eval('startSoloGame();');

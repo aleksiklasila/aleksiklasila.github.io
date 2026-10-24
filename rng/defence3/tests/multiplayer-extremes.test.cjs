@@ -35,6 +35,20 @@ const NON_FINITE = `(() => {
     const teams = [0, 1, 2, 3, 4, 5, 6, 7];
     const { world, host, guests, all, setupCounts } = await C.setupChaosWorld('random', 7777, { teams, mapSize: 64, exactHashes: true });
     const counts = JSON.parse(setupCounts);
+    // EXT_GC=n: the host's garbage collector runs every n ticks and each peer
+    // fills freed wasm heap with its own byte (as multiplayer-soak): results
+    // must not depend on either (a rare divergence under load found this way).
+    if (Number(process.env.EXT_GC) > 0) {
+        const gcFn = typeof global.gc === 'function' ? global.gc : (() => { try { require('v8').setFlagsFromString('--expose-gc'); return require('vm').runInNewContext('gc'); } catch { return null; } })();
+        all.forEach((i, k) => i.evalSim(`SIM_HEAP_POISON = ${(k * 53 + 17) & 255}`));
+        if (typeof gcFn === 'function') {
+            if (host.simWorker) host.simWorker._sandbox.__gc = gcFn; else host.scratch.gc = gcFn;
+            const hp = JSON.stringify(host.eval('myPeerId'));
+            for (let t = host.eval('currentTick') + 5; t < 6000; t += Number(process.env.EXT_GC)) world.atTick(t, `if (myPeerId === ${hp}) (typeof __gc === 'function' ? __gc : __scratch.gc)()`);
+        }
+    }
+    // EXT_DK=n: the host steps n base ticks at a time (as its adaptive pace does on a loaded machine).
+    if (Number(process.env.EXT_DK) > 1) host.eval(`SIM_ADAPTIVE_STEPS = true; netStepTicks = () => ${Number(process.env.EXT_DK)};`);
     assert.equal(host.eval('activeTeamIds.length'), 8, 'eight teams');
     let s = 31;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
@@ -91,6 +105,10 @@ const NON_FINITE = `(() => {
         await world.run(4000);
         const from = g.lastSnapshotTick;
         const after = world.compareHashes(all, from, 'tickExact');
+        // (The state regions that differ at the first mismatch: no tracing cost.)
+        if (after.mismatches.length) { const m = after.mismatches[0], A = all.find(i => i.name === m.a), B = all.find(i => i.name === m.b); for (const t of [m.tick, m.tick + 1, m.tick + 5]) { const pa = A.tickParts.get(t) || {}, pb = B.tickParts.get(t) || {}; console.error('parts differ at', t, JSON.stringify(Object.keys(pa).filter(k => pa[k] !== pb[k]))); } }
+        // (DIVTRACE=1: what differs first after the patch.)
+        if (process.env.DIVTRACE && after.mismatches.length) { const m = after.mismatches[0]; console.error('DIVTRACE after patch', m.a, 'vs', m.b, 'from', from, JSON.stringify(H.divergenceReport(all.find(i => i.name === m.a), all.find(i => i.name === m.b), from), null, 1)); }
         assert.equal(after.mismatches.length, 0, 'exact after the patch: ' + JSON.stringify(after.mismatches.slice(0, 3)));
         assert.ok(g.patchesApplied - before <= 2 && g.fullPatchesApplied === 0, 'patches ' + (g.patchesApplied - before));
         rows.push(`divergence on one of 8 peers after all that: ${g.patchesApplied - before} patch(es) of ${Math.round(g.eval('netCounters.snapshotBytes') / 1024)} KB, exact again`);

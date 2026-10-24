@@ -252,6 +252,11 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
         const a = all.find(i => i.name === m.a), b = all.find(i => i.name === m.b);
         const pa = a.tickParts.get(m.tick) || {}, pb = b.tickParts.get(m.tick) || {};
         const parts = Object.keys(pa).filter(k => pa[k] !== pb[k]);
+        // (DIVTRACE=1: the first traced difference since the last repair before it.)
+        if (process.env.DIVTRACE) {
+            const since = Math.max(0, ...[...repairTicks(m.a), ...repairTicks(m.b)].filter(t => t <= m.tick));
+            console.error('DIVTRACE real', m.a, 'vs', m.b, 'since', since, JSON.stringify(H.divergenceReport(a, b, since), null, 1));
+        }
         throw new Error(`${mapType}: nondeterministic divergence at tick ${m.tick} (${m.a} vs ${m.b}) in [${parts.join(', ')}]; `
             + `forced ${JSON.stringify(corruptTicks)}, repairs ${JSON.stringify(all.map(i => [i.name, repairTicks(i.name)]))}: ` + JSON.stringify(real.slice(0, 4))
             + '\n  host saw: ' + JSON.stringify(host.scratch.requests)

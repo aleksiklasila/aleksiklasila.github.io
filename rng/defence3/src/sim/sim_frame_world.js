@@ -384,10 +384,21 @@ const _PAGE_STRUCT_ACCESSORS = {
         return out;
     } },
     baseStats: { get() { return _pageStructDetail(this, 'baseStats') || BASE_CARD_TYPES[this.type] || {}; } },
-    currentStats: { get() { return _pageStructDetail(this, 'currentStats') || this._statsFallback(); } },
-    preComputed: { get() { return _pageStructDetail(this, 'preComputed') || this._statsFallback(); } },
-    preComputedEffective: { get() { return _pageStructDetail(this, 'preComputedEffective') || this._statsFallback(); } },
-    basePreComputed: { get() { return _pageStructDetail(this, 'basePreComputed') || this._statsFallback(); } },
+    // (A building's stats: this page's own tables for its owner, type and
+    // levels, as the simulation's objects read theirs (data_state.js
+    // _sThingStatEntryCompute; boosts and research follow the tables). The
+    // stand-in had no range, cooldown or damage: towers showed 0a.)
+    currentStats: { get() { return _pageStructDetail(this, 'currentStats') || this._statsOf('base'); } },
+    preComputed: { get() { return _pageStructDetail(this, 'preComputed') || this._statsOf('base'); } },
+    preComputedBase: { get() { return _pageStructDetail(this, 'preComputedBase') || this._statsOf('base'); } },
+    preComputedEffective: { get() { return _pageStructDetail(this, 'preComputedEffective') || this._statsOf('effective'); } },
+    basePreComputed: { get() { return _pageStructDetail(this, 'basePreComputed') || this._statsOf('base'); } },
+    _statsOf: { value(which) {
+        if (this._kind <= 3 && typeof _sThingStatEntryCompute === 'function') {
+            try { const st = _sThingStatEntryCompute(this, which); if (st) return st; } catch { }
+        }
+        return this._statsFallback();
+    } },
     _statsFallback: { value() {
         let st = this._fst || (this._fst = {});
         st.maxEnergy = this.maxEnergy; st.visionRangeArea = _pageStructCol(this, 'vision'); st.visionRange = st.visionRangeArea;

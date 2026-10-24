@@ -500,7 +500,8 @@ function createInstance(world, name, options = {}) {
     const location = new URL(options.url || 'http://localhost/rng/defence3/index.html');
     // Simulation worker mode for the whole world (or SIM_WORKER=1).
     // Explicit either way (the page's default is the worker).
-    location.searchParams.set('simworker', (world.simWorker || process.env.SIM_WORKER === '1') && options.simWorker !== false ? '1' : '0');
+    // (A world or instance that says which mode wins over SIM_WORKER: tests that run both modes themselves.)
+    location.searchParams.set('simworker', (world.simWorker === true || (world.simWorker !== false && process.env.SIM_WORKER === '1')) && options.simWorker !== false ? '1' : '0');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         // (SIM_SHARED=1: shared memory, as a cross-origin isolated page.)

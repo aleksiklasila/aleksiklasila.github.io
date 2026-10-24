@@ -32,7 +32,8 @@ for (const millions of [2, 4, 8]) {
 
 const spec = fixture({ units: 100, statics: 40, map: 40 });
 const w = new H.World();
-const g = w.spawn('load-startup', { controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(spec.map),
+// (These inspect the simulation's own state on the page: page mode whatever SIM_WORKER says.)
+const g = w.spawn('load-startup', { simWorker: false, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(spec.map),
     'cfg-max-pop': '100', 'cfg-gold-count': '0', 'cfg-astar-mine-count': '0' } });
 g.eval(`ensureMainMenuPrecomputedStateReady();
     startingResourcesConfig={spawnCounts:${JSON.stringify(spec.spawnCounts)},researchLevels:{}};
@@ -53,7 +54,7 @@ g.eval('units[1].id=units[0].id');
 assert.ok(JSON.parse(g.eval(`JSON.stringify(${inspect})`)).errors.some(e => /duplicate unit ID/.test(e)));
 
 const impossible = fixture({ units: 2, statics: 1000, map: 8 });
-const bad = w.spawn('load-truncated', { controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '8', 'cfg-max-pop': '2',
+const bad = w.spawn('load-truncated', { simWorker: false, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '8', 'cfg-max-pop': '2',
     'cfg-gold-count': '0', 'cfg-astar-mine-count': '0' } });
 bad.eval(`ensureMainMenuPrecomputedStateReady(); startingResourcesConfig={spawnCounts:${JSON.stringify(impossible.spawnCounts)},researchLevels:{}};startSoloGame();`);
 const truncated = JSON.parse(bad.eval(`JSON.stringify((${inspectLoadWorld.toString()})(${JSON.stringify(impossible)}))`));

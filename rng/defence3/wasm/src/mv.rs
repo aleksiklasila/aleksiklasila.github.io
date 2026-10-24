@@ -2870,7 +2870,10 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             if along<=lat*0.3||along*along+lat*lat>(rr+96.0)*(rr+96.0){continue;}
             dbgc!(m,69);
             let ob=rd(m.on,b);
-            if rd(m.dead,b)!=0||rd(m.own,b)!=own||rd(m.wk,b)!=0||(BRAIN&&rd(m.cmode,b)!=0){continue;}
+            // (A worker standing at its work keeps its spot; one walking the
+            // other way swaps as any walker: two workers meeting in a one-unit
+            // pocket otherwise pushed against each other for good.)
+            if rd(m.dead,b)!=0||rd(m.own,b)!=own||(rd(m.wk,b)!=0&&!walkers)||(BRAIN&&rd(m.cmode,b)!=0){continue;}
             if walkers{
                 if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx,b),rd(m.cvy,b));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
             }else if ob!=0&&ob!=2{continue;}

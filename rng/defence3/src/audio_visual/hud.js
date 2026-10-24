@@ -4205,8 +4205,10 @@ function renderBarrackGroupInfo(group) {
 
 function renderTowerInfo(e) {
     let html = '';
-    let s = e.currentStats || e.baseStats;
-    let bs = e.baseStats;
+    // (Base column: its stats at its own level; effective: at its effective level. The card
+    // itself (baseStats) has no area range: it showed 0a.)
+    let s = e.preComputedEffective || e.currentStats || e.baseStats;
+    let bs = e.preComputedBase || e.currentStats || e.baseStats;
     let baseLevel = stackCountToLevel(e.stacks || 1);
     let effLevel = getThingEffectiveLevel(e, baseLevel);
     let upg = getNextLevelUpgradeInfo(e);
@@ -4287,8 +4289,10 @@ function renderTowerGroupInfo(group) {
     let html = '';
     let e = group[0];
     let energyDisplay = formatThingGroupEnergyDisplay(group);
-    let s = e.currentStats || e.baseStats;
-    let bs = e.baseStats;
+    // (Base column: its stats at its own level; effective: at its effective level. The card
+    // itself (baseStats) has no area range: it showed 0a.)
+    let s = e.preComputedEffective || e.currentStats || e.baseStats;
+    let bs = e.preComputedBase || e.currentStats || e.baseStats;
     let baseLevel = stackCountToLevel(e.stacks || 1);
     let effLevel = getThingEffectiveLevel(e, baseLevel);
     let dps = s.cd > 0 ? (s.damage / s.cd).toFixed(1) : '0';
