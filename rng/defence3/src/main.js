@@ -3879,6 +3879,9 @@ function _processRawAction(raw, playerId, seq = -1, recorded = false) {
     // One bad action must not take the rest of the tick's actions with
     // it (it throws the same way on every peer).
     try { processAction(a, playerId); } catch (err) { reportRuntimeError('action ' + a.action, err); }
+    // (A building's order: its new state shown at the next tick, not the
+    // presentation's next pass over every structure. Presentation only.)
+    if (a && Number.isFinite(a.gx) && Number.isFinite(a.gy) && typeof simPresentTileDirty === 'function') simPresentTileDirty(a.gx, a.gy);
 }
 function _actionBacklogDrain() {
     if (!_actionBacklog.length || _actionBudgetLeft <= 0) return;
@@ -5009,7 +5012,7 @@ function startGame() {
         let isBuildableStarterTile = (gx, gy) => {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
             let cell = grid[gy][gx];
-            if (!cell || cell.type === TYPE_WALL || cell.item) return false;
+            if (!cell || cell.type === TYPE_WALL || cell.item || getTileEntityRef(gx, gy)) return false;
             if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
             return true;
         };
@@ -5063,6 +5066,7 @@ function startGame() {
         item.effectiveLevel = lvl;
         item.potentialEffectiveLevel = lvl;
         item.underConstruction = false;
+        structureWallSync(item);
         upkeepThingDirty(item);
         item.isUpgrading = false;
 

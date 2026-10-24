@@ -345,9 +345,7 @@ function drawFloorItem(ctx, cell, px, py) {
     }
     let floorSprite = _getFloorItemSprite(item);
     if (floorSprite) queueDrawImage(ctx, floorSprite, px, py, TILE, TILE);
-    if (item.underConstruction) {
-        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
-    } else if (item.isUpgrading) {
+    if (item.isUpgrading) {
         ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
     }
     drawBuildingEnergyProgressBar(ctx, item, x, y + 2, TILE - 8, 3);
@@ -934,9 +932,15 @@ function commitStaticCaches(force = false, scope = 'all') {
     if (didRebuild) _staticCacheCommitVersion++;
 }
 
+// The dirty rects themselves (up to 64; past that their bounds): buildings
+// placed or lost all over the map redraw their own tiles, not the box
+// around them all (most of the map).
+let _combinedBgDirtyRects = [];
+const COMBINED_BG_DIRTY_RECTS_MAX = 64;
 function _markCombinedBgFullDirty() {
     _combinedBgDirtyFull = true;
     _combinedBgDirtyBounds = null;
+    _combinedBgDirtyRects = [];
     _markCombinedTerrainFullDirty();
     _minimapStaticDirty = true;
     dirtyGrid = true;
@@ -961,10 +965,15 @@ function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false,
         } else {
             _combinedBgDirtyBounds = { minGx, minGy, maxGx, maxGy };
         }
+        if (_combinedBgDirtyRects && _combinedBgDirtyRects.length < COMBINED_BG_DIRTY_RECTS_MAX) _combinedBgDirtyRects.push({ minGx, minGy, maxGx, maxGy });
+        else _combinedBgDirtyRects = null;
     }
 
     if (terrainChanged) _markCombinedTerrainRectDirty(minGx, minGy, maxGx, maxGy);
-    _minimapStaticDirty = true;
+    // (The minimap: a few tiles' pixels again, else all of it.)
+    if ((maxGx - minGx + 1) * (maxGy - minGy + 1) <= 64 && typeof minimapStaticTileChanged === 'function') {
+        for (let y = minGy; y <= maxGy; y++) for (let x = minGx; x <= maxGx; x++) minimapStaticTileChanged(x, y);
+    } else _minimapStaticDirty = true;
     dirtyGrid = true;
     if (markAreas) dirtyAreas = true;
     _requestStaticCacheCommit();
@@ -1259,6 +1268,13 @@ function rebuildCombinedBackgroundCache() {
         : _combinedBgDirtyBounds;
     if (_combinedBgDirtyFull) {
         _drawCombinedBackgroundRegion(c, 0, 0, GRID_W - 1, GRID_H - 1, true);
+    } else if (_combinedBgDirtyBounds && _combinedBgDirtyRects && _combinedBgDirtyRects.length) {
+        // (Each rect alone, its mip levels too.)
+        for (const r of _combinedBgDirtyRects) {
+            _drawCombinedBackgroundRegion(c, r.minGx, r.minGy, r.maxGx, r.maxGy, true);
+            updateBackgroundMipLevels(r);
+        }
+        changedRect = null;
     } else if (_combinedBgDirtyBounds) {
         _drawCombinedBackgroundRegion(
             c,
@@ -1275,6 +1291,7 @@ function rebuildCombinedBackgroundCache() {
     dirtyAreas = false;
     _combinedBgDirtyFull = false;
     _combinedBgDirtyBounds = null;
+    _combinedBgDirtyRects = [];
 }
 
 function updateBackgroundMipLevels(rect) {
@@ -1299,7 +1316,13 @@ function updateBackgroundMipLevels(rect) {
         g.save();
         g.beginPath(); g.rect(x, y, right - x, bottom - y); g.clip();
         g.clearRect(x, y, right - x, bottom - y);
-        g.drawImage(source, 0, 0, width, height);
+        // (Only the rect's part of the level above: a small rect of a big
+        // map no longer scales the whole image.)
+        if (resized) g.drawImage(source, 0, 0, width, height);
+        else {
+            const kx = source.width / width, ky = source.height / height;
+            g.drawImage(source, x * kx, y * ky, (right - x) * kx, (bottom - y) * ky, x, y, right - x, bottom - y);
+        }
         g.restore();
         source = mip;
         level++;
@@ -1771,12 +1794,14 @@ function draw() {
         draw2DDamageFlashOverlay(ctx, u, ux, uy, ((Number(u.r) || 8) + 3) * scaleAmount, false);
     }
 
-    // Salvage marks (red X on marked buildings)
-    ctx.strokeStyle = '#f44'; ctx.lineWidth = 2;
-    for (let t of towers) { if (t.markedForSalvage) { let px = t.gx * TILE, py = t.gy * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
-    for (let b of barracks) { if (b.markedForSalvage) { let px = b.gx * TILE, py = b.gy * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
-    for (let s of collectorSpawners) { if (s.markedForSalvage) { let px = s.gx * TILE, py = s.gy * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
-    for (let y = minGy; y <= maxGy; y++) for (let x = minGx; x <= maxGx; x++) { let c = grid[y][x]; if (c.item && c.item.markedForSalvage) { let px = x * TILE, py = y * TILE; ctx.beginPath(); ctx.moveTo(px + 4, py + 4); ctx.lineTo(px + TILE - 4, py + TILE - 4); ctx.moveTo(px + TILE - 4, py + 4); ctx.lineTo(px + 4, py + TILE - 4); ctx.stroke(); } }
+    // Salvage crosses and construction hammers (renderer.js _salvageMarksShown,
+    // _siteMarkLists; the 3D view's sprites, renderer3d siteMarkSprite).
+    if (typeof _siteMarkLists === 'function' && typeof Defence3Renderer3D !== 'undefined') {
+        const inView = t => t.gx >= minGx && t.gx <= maxGx && t.gy >= minGy && t.gy <= maxGy;
+        const cross = Defence3Renderer3D.siteMarkSprite(1), hammer = Defence3Renderer3D.siteMarkSprite(2), k = TILE * 0.6;
+        for (const t of _salvageMarksShown()) if (inView(t)) ctx.drawImage(cross, t.gx * TILE + (TILE - k) / 2, t.gy * TILE + (TILE - k) / 2, k, k);
+        for (const t of _siteMarkLists().build) if (inView(t) && !t.markedForSalvage) ctx.drawImage(hammer, t.gx * TILE + (TILE - k) / 2, t.gy * TILE + (TILE - k) / 2, k, k);
+    }
 
     // Keep the presentation overlay above all queued unit/status sprites.
     flushFrameDrawImageQueue();

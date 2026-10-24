@@ -65,7 +65,7 @@ assert.equal(c.nbad, 0, 'after placing: ' + c.bad.join('; '));
 // Writes through the accessors; a destroyed structure leaves the table.
 a.eval(`(() => {
     const { gx, gy } = ${JSON.stringify(placed.found)};
-    const t = getTileEntityRef(gx, gy); t.energy = 7.5; t.underConstruction = false; t.owner = 1; t.cd = 13;
+    const t = getTileEntityRef(gx, gy); t.energy = 7.5; t.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(t); t.owner = 1; t.cd = 13;
     const f = getTileEntityRef(gx + 2, gy); f.energy = 3;
     const m = goldMines[0]; m.gold = m.gold - 11;
     destroyBuilding(getTileEntityRef(gx + 1, gy));

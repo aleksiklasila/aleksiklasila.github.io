@@ -16,7 +16,7 @@ const labs = read(`(() => {
     let n = 0;
     for (let gy = 4; gy < GRID_H - 4 && n < 20; gy += 2) for (let gx = 4; gx < GRID_W - 4 && n < 20; gx += 2) {
         if (!free(gx, gy) || !placeBuilding(gx, gy, 'research', 0, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: false, buildEnabled: true })) continue;
-        const e = getTileEntityRef(gx, gy) || grid[gy][gx].item; e.underConstruction = false; n++;
+        const e = getTileEntityRef(gx, gy) || grid[gy][gx].item; e.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(e); n++;
         __scratch.lab = e;
     }
     return n;

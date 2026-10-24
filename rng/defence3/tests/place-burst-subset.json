@@ -1,0 +1,642 @@
+[
+  {
+    "mode": "0",
+    "file": "combat-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.\n",
+    "timedOut": false,
+    "elapsedMs": 242
+  },
+  {
+    "mode": "0",
+    "file": "combat-reach.test.cjs",
+    "status": 0,
+    "output": "[{\"kind\":\"unit\",\"key\":\"norm\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"fast\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"tank\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"boss\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"flying\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"unit\",\"key\":\"mole\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"poison_resistant\",\"start\":1,\"end\":4,\"max\":4.5},{\"kind\":\"unit\",\"key\":\"fire_resistant\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"unit\",\"key\":\"water_resistant\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"unit\",\"key\":\"ice_resistant\",\"start\":1,\"end\":3,\"max\":3.5},{\"kind\":\"unit\",\"key\":\"laser_resistant\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"unit\",\"key\":\"snake\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"scout\",\"start\":1,\"end\":6,\"max\":6},{\"kind\":\"unit\",\"key\":\"king\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"building\",\"key\":\"pistol\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"building\",\"key\":\"smg\",\"start\":1,\"end\":2,\"max\":2.5},{\"kind\":\"building\",\"key\":\"water\",\"start\":1,\"end\":3,\"max\":3.5},{\"kind\":\"building\",\"key\":\"poison\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"building\",\"key\":\"fire\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"building\",\"key\":\"sand_gun\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"building\",\"key\":\"ice\",\"start\":1,\"end\":4,\"max\":4.5},{\"kind\":\"building\",\"key\":\"sniper\",\"start\":1,\"end\":8,\"max\":8},{\"kind\":\"building\",\"key\":\"elements\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"building\",\"key\":\"watch_tower\",\"start\":2,\"end\":10,\"max\":10}]\nPASS: bounded monotonic area reach, melee limits, range research publishes adequate sight, unarmed workers\nPASS: editing only the existing static rows changes range and cooldown endpoints after config transport\n",
+    "timedOut": false,
+    "elapsedMs": 2608
+  },
+  {
+    "mode": "0",
+    "file": "construction-walk-driveby.test.cjs",
+    "status": 0,
+    "output": "{\"towerKey\":\"pistol\",\"trapKey\":\"lava\",\"have\":[true,true],\"aEnergy\":[[30,30],[-1,0]],\"aFireOnly\":40,\"aStood\":0,\"aX\":[97,98,99,100,99,99,99,100],\"aCmd\":[0,0,0,0,0,0,0,0],\"bCol\":[30,70],\"bSite\":true,\"siteWall\":[false,0],\"bX\":[9,8,9,8],\"bMaxOff\":4,\"bBuiltWall\":[true,1],\"bStanders\":[[-1,0],[-1,0],[-1,0]]}\nPASS: construction sites walkable, walls when built; drive-by fire at structures\n",
+    "timedOut": false,
+    "elapsedMs": 4351
+  },
+  {
+    "mode": "0",
+    "file": "floor-target.test.cjs",
+    "status": 0,
+    "output": "{\"traps\":40,\"left\":0,\"attacksOnTraps\":0,\"firstHitSec\":0.55,\"energy0\":1200,\"energy1\":0,\"moversAlive\":40,\"idleAlive\":6}\nok\n",
+    "timedOut": false,
+    "elapsedMs": 3125
+  },
+  {
+    "mode": "0",
+    "file": "frame-hud-summary.test.cjs",
+    "status": 0,
+    "output": "PASS: packed HUD counts match owner, death, worker activity, hold, construction, queues and floor ownership.\n",
+    "timedOut": false,
+    "elapsedMs": 186
+  },
+  {
+    "mode": "0",
+    "file": "frame-membership-delta.test.cjs",
+    "status": 0,
+    "output": "PASS 100k-slot death, frozen final position, slot reuse, ordering and restore fallback without survivor writes\n",
+    "timedOut": false,
+    "elapsedMs": 534
+  },
+  {
+    "mode": "0",
+    "file": "frame-order-slots.test.cjs",
+    "status": 0,
+    "output": "PASS: frame id order keeps slots past 2^21 (4M and 8M frames)\n",
+    "timedOut": false,
+    "elapsedMs": 204
+  },
+  {
+    "mode": "0",
+    "file": "floor-trap-kernel.test.cjs",
+    "status": 0,
+    "output": "trap statuses [[\"sand\",[\"sand\"],[\"sand\"]],[\"water_puddle\",[\"water_puddle\"],[\"water_puddle\"]],[\"ice_patch\",[\"ice_patch\"],[\"ice_patch\"]],[\"poison_puddle\",[\"poison_puddle\"],[\"poison_puddle\"]],[\"lava\",[\"lava\"],[\"lava\"]]] Unit.update calls on trap tiles 0 columns walked [9,10,8,10,10]\nPASS: floor traps applied by the movement kernel\n",
+    "timedOut": false,
+    "elapsedMs": 2922
+  },
+  {
+    "mode": "0",
+    "file": "kernel-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: kernel ABI (56 kernels, 301 unit column reads match their JS types; not parsed: _simSatColsW -> k_sat_cols, _simCopyBg2W -> k_copy, _simAcqSampleW -> k_acq_area_build, _simAcqSampleW -> k_acq_area_answers, _simAcqSampleW -> k_acq_sample, _atlBlocksW -> k_atl_blocks, _atlTablesW -> k_atl_tables, _atlRouteW -> k_atl_route)\n",
+    "timedOut": false,
+    "elapsedMs": 441
+  },
+  {
+    "mode": "0",
+    "file": "column-dirty-upload.test.cjs",
+    "status": 0,
+    "output": "PASS column-dirty-upload: 327 drawn frames (938167 live slots) matched on the GPU; uploaded 64.3% of whole columns, 2 whole uploads, 5766 calls\n",
+    "timedOut": false,
+    "elapsedMs": 9571
+  },
+  {
+    "mode": "0",
+    "file": "lane-params-poison.test.cjs",
+    "status": 0,
+    "output": "PASS: lane params poison (160 ticks, 428 units)\n",
+    "timedOut": false,
+    "elapsedMs": 6286
+  },
+  {
+    "mode": "0",
+    "file": "laser-links-incremental.test.cjs",
+    "status": 1,
+    "output": "{\"bad\":\"tick 2: beam map differs\",\"checks\":3,\"changes\":8,\"lasers\":160,\"beamsSeen\":176}\nnode:assert:150\r\n  throw new AssertionError(obj);\r\n  ^\r\n\r\nAssertionError [ERR_ASSERTION]: tick 2: beam map differs\r\n+ actual - expected\r\n\r\n+ 'tick 2: beam map differs'\r\n- ''\r\n\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\laser-links-incremental.test.cjs:54:8)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49 {\r\n  generatedMessage: false,\r\n  code: 'ERR_ASSERTION',\r\n  actual: 'tick 2: beam map differs',\r\n  expected: '',\r\n  operator: 'strictEqual',\r\n  diff: 'simple'\r\n}\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2853
+  },
+  {
+    "mode": "0",
+    "file": "laser-links.test.cjs",
+    "status": 0,
+    "output": "PASS: indexed laser links equal all-pairs links (1776 links over 300 layouts)\n",
+    "timedOut": false,
+    "elapsedMs": 862
+  },
+  {
+    "mode": "0",
+    "file": "laser-activation.test.cjs",
+    "status": 0,
+    "output": "PASS: lasers placed 2 tiles apart link on construction completion (no extra placement) and fire; [{\"gx\":22,\"gy\":11,\"uc\":false,\"lvl\":1,\"links\":1},{\"gx\":24,\"gy\":11,\"uc\":false,\"lvl\":1,\"links\":1}]\n",
+    "timedOut": false,
+    "elapsedMs": 9435
+  },
+  {
+    "mode": "0",
+    "file": "minimap-columns.test.cjs",
+    "status": 0,
+    "output": "PASS: packed minimap matches reference pixels in full/team visibility at both scales; fog picture as the tile rects.\n",
+    "timedOut": false,
+    "elapsedMs": 1042
+  },
+  {
+    "mode": "0",
+    "file": "history-structure-columns.test.cjs",
+    "status": 0,
+    "output": "{\"page\":\"worker\",\"history\":true,\"columns\":true,\"same\":true,\"n\":20,\"tn\":20,\"seen\":3,\"ghosts\":0,\"hidden\":17,\"diffs\":[],\"typed\":[],\"unchanged\":true,\"ghost\":{\"flag\":true,\"alive\":1,\"ghost\":true,\"type\":true,\"energy\":true,\"ver\":true,\"row\":[]},\"back\":{\"flag\":false,\"source\":true}}\nPASS history-structure-columns\n",
+    "timedOut": false,
+    "elapsedMs": 12404
+  },
+  {
+    "mode": "0",
+    "file": "movement-sleep.test.cjs",
+    "status": 0,
+    "output": "PASS: movement sleep and force fallbacks match the original kernel at dk 1/4/20 (18 chunks)\n",
+    "timedOut": false,
+    "elapsedMs": 5249
+  },
+  {
+    "mode": "0",
+    "file": "nav-reach.test.cjs",
+    "status": 0,
+    "output": "{\"build\":\"39 parts, 2 components\",\"aTicks\":204,\"aTile\":[42,36],\"aCmd\":1,\"bTiles\":[[63,32],[63,32],[63,31]],\"bCmd\":[1,1,1],\"bPending\":[true,true,true],\"bDist\":[5,5,6],\"bTicks\":398,\"bAfter\":[[62,37],[63,37],[62,37]],\"bCmdAfter\":[1,0,1],\"cTile\":[35,54],\"cCmd\":1,\"cPending\":true,\"searches\":0}\nPASS: flow navigation reach (39 parts, 2 components; A in 204 ticks, B on after opening in 398)\n",
+    "timedOut": false,
+    "elapsedMs": 3611
+  },
+  {
+    "mode": "0",
+    "file": "order-markers.test.cjs",
+    "status": 0,
+    "output": "PASS: active markers, immediate replacement, deselection/reselection, completion, stop, subgroup toggles, and large worker selections.\n",
+    "timedOut": false,
+    "elapsedMs": 712
+  },
+  {
+    "mode": "0",
+    "file": "path-regions-incremental.test.cjs",
+    "status": 0,
+    "output": "arena 1476 wall changes, 115 full rebuilds, partitions equal\nislands 1500 wall changes, 108 full rebuilds, partitions equal\ncrossroads 1473 wall changes, 117 full rebuilds, partitions equal\nPASS: path regions kept incrementally\n",
+    "timedOut": false,
+    "elapsedMs": 9320
+  },
+  {
+    "mode": "0",
+    "file": "path-regions-portals.test.cjs",
+    "status": 0,
+    "output": "arena 322 checks, 26 portals, 11 plain rebuilds, partitions equal\nislands 320 checks, 25 portals, 8 plain rebuilds, partitions equal\ncrossroads 322 checks, 19 portals, 6 plain rebuilds, partitions equal\nPASS: path regions with portals\n",
+    "timedOut": false,
+    "elapsedMs": 7576
+  },
+  {
+    "mode": "0",
+    "file": "pathfinding-routing.test.cjs",
+    "status": 0,
+    "output": "group order: 4566 vs 14775 nodes; identical routes 150\nPASS: 1000 shared requests, 215 expansions, 45.2ms; shortest paths, replay and movement checks passed.\n",
+    "timedOut": false,
+    "elapsedMs": 2910
+  },
+  {
+    "mode": "0",
+    "file": "presentation-delta.test.cjs",
+    "status": 0,
+    "output": "PASS presentation-delta: 90 frames of 23000 slots by changes equal whole frames byte for byte\n",
+    "timedOut": false,
+    "elapsedMs": 35546
+  },
+  {
+    "mode": "0",
+    "file": "presentation-helpers.test.cjs",
+    "status": 0,
+    "output": "PASS presentation-helpers: 60 frames of 78000 slots made by 4 threads equal the one-thread frames byte for byte (fill, ghosts shared and not, marks, order, index)\n",
+    "timedOut": false,
+    "elapsedMs": 85277
+  },
+  {
+    "mode": "0",
+    "file": "presentation-worker.test.cjs",
+    "status": 0,
+    "output": "PASS: independent shared reader, bounded pool, newest-frame backpressure, slot reuse, immutable outputs and stale returns\n",
+    "timedOut": false,
+    "elapsedMs": 229
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-desync-recovery.test.cjs",
+    "status": 0,
+    "output": "PASS: multiplayer desync recovery\n  guest unit divergence patched in 1300ms (guest waited 67ms, others 0/0ms), in sync 20s after\n  guest player divergence patched in 1220ms (guest waited 50ms, others 0/0ms), in sync 20s after\n  guest mine divergence patched in 1220ms (guest waited 50ms, others 0/0ms), in sync 20s after\n  guest building divergence patched in 1500ms (guest waited 67ms, others 0/0ms), in sync 20s after\n  host divergence in 2v2: each guest patched, in 2100ms\n  two guests diverging together patched in 1700ms\n  commands issued while a patch was pending ran once everywhere\n  disconnects mid-patch: the patch survives another guest dropping out; the patched one rejoins in sync\n  reload while a patch is pending joins cleanly\n  3 repairs under 400ms jitter (reordered messages)\n  15 divergences in 30s: all repaired within 5 s (12 patches), 20.0 of 20 TPS\n  lost patch: guest waited 2083ms at most, re-asked and was patched after 3640ms; others unaffected\n  persistent bug on a guest for 40s: 12 patches (8 full), 1 reload(s) of the match on it alone, 20.0 TPS\n  exact-lockstep mode freezes every peer at the first mismatch and names what differs: state hash mismatch at tick 47 in tiles 12-15,8-11: unit 1 builder_unit, unit 2 healer_unit, builder_spawner at 14,8, he\n  exception mid-tick: match keeps running; same-on-all needs no repair, one-sided is patched\n",
+    "timedOut": false,
+    "elapsedMs": 196044
+  },
+  {
+    "mode": "0",
+    "file": "renderer3d-picking.test.cjs",
+    "status": 0,
+    "output": "PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.\nPASS: distant units and buildings support single clicks in sprite-only and mixed detail scenes.\n",
+    "timedOut": false,
+    "elapsedMs": 226
+  },
+  {
+    "mode": "0",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 0,
+    "output": "PASS: chaos determinism\n  arena: 180 units + 201 buildings at start (max 188 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  random: 159 units + 201 buildings at start (max 160 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  islands: 171 units + 201 buildings at start (max 180 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  crossroads: 177 units + 201 buildings at start (max 177 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  solar_system: 177 units + 201 buildings at start (max 209 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n  island: 177 units + 201 buildings at start (max 179 units), 20 unit types, 27 command kinds, 2598 tick hashes compared, 2 patches for forced divergences\n",
+    "timedOut": false,
+    "elapsedMs": 210531
+  },
+  {
+    "mode": "0",
+    "file": "render-frame-stability.test.cjs",
+    "status": 0,
+    "output": "zoom getMinCameraZoom(): 349 frames over 61 ticks, ~1784 structures, ~2997 units drawn; structures {\"gaps\":0,\"pops\":0,\"example\":null} units {\"gaps\":0,\"pops\":0,\"example\":null}\n  motion {\"between\":0.9312320916905444,\"alphaBack\":0,\"steps\":12928,\"backRate\":0.0003990422984836393,\"big\":2506,\"fromRecords\":0}\nzoom 1.5: 345 frames over 61 ticks, ~1784 structures, ~2974 units drawn; structures {\"gaps\":0,\"pops\":0,\"example\":null} units {\"gaps\":0,\"pops\":0,\"example\":null}\n  motion {\"between\":0.8608695652173913,\"alphaBack\":0,\"steps\":12195,\"backRate\":0.0016638935108153079,\"big\":1803,\"fromRecords\":0}\n  2d repeated orders: 280 moving frames, 1 held (1 waiting for a late result), 0 back; 0 of 283 positions from the unit layer's record\n  3d repeated orders: 249 moving frames, 0 held (0 waiting for a late result), 0 back; 284 of 286 positions from the unit layer's record\nrender-frame-stability: ok\n",
+    "timedOut": false,
+    "elapsedMs": 80844
+  },
+  {
+    "mode": "0",
+    "file": "scene-orders.test.cjs",
+    "status": 0,
+    "output": "PASS imported units engagement (page): 29 units, 0 enemy turrets remain\nPASS imported units engagement (worker): 29 units, 0 enemy turrets remain\nPASS imported towers engagement (page): 100 units, 0 enemy turrets remain\nPASS imported towers engagement (worker): 100 units, 0 enemy turrets remain\n",
+    "timedOut": false,
+    "elapsedMs": 46501
+  },
+  {
+    "mode": "0",
+    "file": "storage-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: storage ABI (106 movement kernel columns match their Rust types; 198 columns, 525 bytes per slot)\n",
+    "timedOut": false,
+    "elapsedMs": 265
+  },
+  {
+    "mode": "0",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 36360
+  },
+  {
+    "mode": "0",
+    "file": "structure-render-hotspots.test.cjs",
+    "status": 0,
+    "output": "PASS: selection reuse, panel invalidation, and zoomed sprite resolution.\n",
+    "timedOut": false,
+    "elapsedMs": 437
+  },
+  {
+    "mode": "0",
+    "file": "structure-instruction.test.cjs",
+    "status": 0,
+    "output": "{\"aCallsAfterSettle\":0,\"aDestroyed\":true,\"aEnergy\":[370,0],\"aDmgAt\":10,\"aInstruction\":1650,\"aAttackingState\":0,\"aCalls\":0,\"aAfter\":[[0,0,2],[0,0,2],[0,0,2],[0,0,2],[0,0,2],[0,0,2]],\"bSpot\":[88,86],\"bAggro\":160,\"bK\":1,\"bDist\":[143.10835055998655,98.55598028531806],\"bDestroyed\":true,\"bEnergy\":[300,-7],\"bInRange\":true,\"cDestroyed\":true,\"cStopped\":true,\"cProgress\":[33,32,32,33],\"cCommand\":[2,2,2,2]}\nPASS: structure instruction (stand and fire, walk to it, the order resumed)\n",
+    "timedOut": false,
+    "elapsedMs": 5345
+  },
+  {
+    "mode": "0",
+    "file": "structure-targeting.test.cjs",
+    "status": 0,
+    "output": "PASS: +-0.3 tile source windows, floor-target projectiles (9 ticks).\n",
+    "timedOut": false,
+    "elapsedMs": 355
+  },
+  {
+    "mode": "0",
+    "file": "tile-ordered-replace.test.cjs",
+    "status": 0,
+    "output": "PASS: batch tile-ordered update equals the one-by-one replacements {\"bad\":0,\"same\":25,\"rounds\":300,\"empty\":0}\n",
+    "timedOut": false,
+    "elapsedMs": 809
+  },
+  {
+    "mode": "0",
+    "file": "structure-table.test.cjs",
+    "status": 0,
+    "output": "placed {\"found\":{\"gx\":8,\"gy\":4},\"out\":[[\"pistol\",true,8,4],[\"barrack_norm\",true,9,4],[\"lava\",true,10,4],[\"sand\",true,11,4]],\"mines\":14,\"floorClass\":\"FloorItem\"}\nstructures 22\nPASS: structure table\n",
+    "timedOut": false,
+    "elapsedMs": 5772
+  },
+  {
+    "mode": "0",
+    "file": "sim-frame-replica.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 34407
+  },
+  {
+    "mode": "0",
+    "file": "work-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS portable work orders: production, salvage and research (page)\nPASS portable work orders: production, salvage and research (worker)\n",
+    "timedOut": false,
+    "elapsedMs": 18866
+  },
+  {
+    "mode": "1",
+    "file": "combat-effects.test.cjs",
+    "status": 0,
+    "output": "PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.\n",
+    "timedOut": false,
+    "elapsedMs": 288
+  },
+  {
+    "mode": "1",
+    "file": "combat-reach.test.cjs",
+    "status": 0,
+    "output": "[{\"kind\":\"unit\",\"key\":\"norm\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"fast\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"tank\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"boss\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"flying\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"unit\",\"key\":\"mole\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"poison_resistant\",\"start\":1,\"end\":4,\"max\":4.5},{\"kind\":\"unit\",\"key\":\"fire_resistant\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"unit\",\"key\":\"water_resistant\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"unit\",\"key\":\"ice_resistant\",\"start\":1,\"end\":3,\"max\":3.5},{\"kind\":\"unit\",\"key\":\"laser_resistant\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"unit\",\"key\":\"snake\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"unit\",\"key\":\"scout\",\"start\":1,\"end\":6,\"max\":6},{\"kind\":\"unit\",\"key\":\"king\",\"start\":1,\"end\":1,\"max\":1},{\"kind\":\"building\",\"key\":\"pistol\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"building\",\"key\":\"smg\",\"start\":1,\"end\":2,\"max\":2.5},{\"kind\":\"building\",\"key\":\"water\",\"start\":1,\"end\":3,\"max\":3.5},{\"kind\":\"building\",\"key\":\"poison\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"building\",\"key\":\"fire\",\"start\":1,\"end\":3,\"max\":3},{\"kind\":\"building\",\"key\":\"sand_gun\",\"start\":1,\"end\":4,\"max\":4},{\"kind\":\"building\",\"key\":\"ice\",\"start\":1,\"end\":4,\"max\":4.5},{\"kind\":\"building\",\"key\":\"sniper\",\"start\":1,\"end\":8,\"max\":8},{\"kind\":\"building\",\"key\":\"elements\",\"start\":1,\"end\":5,\"max\":5},{\"kind\":\"building\",\"key\":\"watch_tower\",\"start\":2,\"end\":10,\"max\":10}]\nPASS: bounded monotonic area reach, melee limits, range research publishes adequate sight, unarmed workers\nPASS: editing only the existing static rows changes range and cooldown endpoints after config transport\n",
+    "timedOut": false,
+    "elapsedMs": 2801
+  },
+  {
+    "mode": "1",
+    "file": "column-dirty-upload.test.cjs",
+    "status": 0,
+    "output": "PASS column-dirty-upload: 327 drawn frames (938167 live slots) matched on the GPU; uploaded 64.3% of whole columns, 2 whole uploads, 5766 calls\n",
+    "timedOut": false,
+    "elapsedMs": 9245
+  },
+  {
+    "mode": "1",
+    "file": "construction-walk-driveby.test.cjs",
+    "status": 0,
+    "output": "{\"towerKey\":\"pistol\",\"trapKey\":\"lava\",\"have\":[true,true],\"aEnergy\":[[30,30],[-1,0]],\"aFireOnly\":40,\"aStood\":0,\"aX\":[97,98,99,100,99,99,99,100],\"aCmd\":[0,0,0,0,0,0,0,0],\"bCol\":[30,70],\"bSite\":true,\"siteWall\":[false,0],\"bX\":[9,8,9,8],\"bMaxOff\":4,\"bBuiltWall\":[true,1],\"bStanders\":[[-1,0],[-1,0],[-1,0]]}\nPASS: construction sites walkable, walls when built; drive-by fire at structures\n",
+    "timedOut": false,
+    "elapsedMs": 4933
+  },
+  {
+    "mode": "1",
+    "file": "floor-target.test.cjs",
+    "status": 0,
+    "output": "{\"traps\":40,\"left\":0,\"attacksOnTraps\":0,\"firstHitSec\":0.55,\"energy0\":1200,\"energy1\":0,\"moversAlive\":40,\"idleAlive\":6}\nok\n",
+    "timedOut": false,
+    "elapsedMs": 4369
+  },
+  {
+    "mode": "1",
+    "file": "frame-hud-summary.test.cjs",
+    "status": 0,
+    "output": "PASS: packed HUD counts match owner, death, worker activity, hold, construction, queues and floor ownership.\n",
+    "timedOut": false,
+    "elapsedMs": 275
+  },
+  {
+    "mode": "1",
+    "file": "frame-membership-delta.test.cjs",
+    "status": 0,
+    "output": "PASS 100k-slot death, frozen final position, slot reuse, ordering and restore fallback without survivor writes\n",
+    "timedOut": false,
+    "elapsedMs": 766
+  },
+  {
+    "mode": "1",
+    "file": "frame-order-slots.test.cjs",
+    "status": 0,
+    "output": "PASS: frame id order keeps slots past 2^21 (4M and 8M frames)\n",
+    "timedOut": false,
+    "elapsedMs": 398
+  },
+  {
+    "mode": "1",
+    "file": "floor-trap-kernel.test.cjs",
+    "status": 0,
+    "output": "trap statuses [[\"sand\",[\"sand\"],[\"sand\"]],[\"water_puddle\",[\"water_puddle\"],[\"water_puddle\"]],[\"ice_patch\",[\"ice_patch\"],[\"ice_patch\"]],[\"poison_puddle\",[\"poison_puddle\"],[\"poison_puddle\"]],[\"lava\",[\"lava\"],[\"lava\"]]] Unit.update calls on trap tiles 0 columns walked [9,10,8,10,10]\nPASS: floor traps applied by the movement kernel\n",
+    "timedOut": false,
+    "elapsedMs": 4476
+  },
+  {
+    "mode": "1",
+    "file": "kernel-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: kernel ABI (56 kernels, 301 unit column reads match their JS types; not parsed: _simSatColsW -> k_sat_cols, _simCopyBg2W -> k_copy, _simAcqSampleW -> k_acq_area_build, _simAcqSampleW -> k_acq_area_answers, _simAcqSampleW -> k_acq_sample, _atlBlocksW -> k_atl_blocks, _atlTablesW -> k_atl_tables, _atlRouteW -> k_atl_route)\n",
+    "timedOut": false,
+    "elapsedMs": 374
+  },
+  {
+    "mode": "1",
+    "file": "lane-params-poison.test.cjs",
+    "status": 0,
+    "output": "PASS: lane params poison (160 ticks, 428 units)\n",
+    "timedOut": false,
+    "elapsedMs": 6043
+  },
+  {
+    "mode": "0",
+    "file": "worker-walk.test.cjs",
+    "status": 0,
+    "output": "workers 6 builder,healer,collector,astar_collector,salvager,researcher\nworker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered\nwork {\"before\":{\"build\":3462,\"sites\":0,\"research\":0},\"after\":{\"build\":3965,\"sites\":0,\"research\":1000136},\"end\":{\"site\":{\"uc\":false,\"energy\":30},\"salvaged\":true}}\nmine cluster at [42,37] collector on it true middle gold 4962\nPASS: worker walk and work builder, healer, collector, astar_collector, salvager, researcher\n",
+    "timedOut": false,
+    "elapsedMs": 34941
+  },
+  {
+    "mode": "1",
+    "file": "laser-links-incremental.test.cjs",
+    "status": 1,
+    "output": "{\"bad\":\"tick 2: beam map differs\",\"checks\":3,\"changes\":8,\"lasers\":160,\"beamsSeen\":176}\nnode:assert:150\r\n  throw new AssertionError(obj);\r\n  ^\r\n\r\nAssertionError [ERR_ASSERTION]: tick 2: beam map differs\r\n+ actual - expected\r\n\r\n+ 'tick 2: beam map differs'\r\n- ''\r\n\r\n    at Object.<anonymous> (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\laser-links-incremental.test.cjs:54:8)\r\n    at Module._compile (node:internal/modules/cjs/loader:1706:14)\r\n    at Object..js (node:internal/modules/cjs/loader:1839:10)\r\n    at Module.load (node:internal/modules/cjs/loader:1441:32)\r\n    at Function._load (node:internal/modules/cjs/loader:1263:12)\r\n    at TracingChannel.traceSync (node:diagnostics_channel:322:14)\r\n    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)\r\n    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)\r\n    at node:internal/main/run_main_module:36:49 {\r\n  generatedMessage: false,\r\n  code: 'ERR_ASSERTION',\r\n  actual: 'tick 2: beam map differs',\r\n  expected: '',\r\n  operator: 'strictEqual',\r\n  diff: 'simple'\r\n}\r\n\r\nNode.js v22.20.0\r\n",
+    "timedOut": false,
+    "elapsedMs": 2369
+  },
+  {
+    "mode": "1",
+    "file": "laser-links.test.cjs",
+    "status": 0,
+    "output": "PASS: indexed laser links equal all-pairs links (1776 links over 300 layouts)\n",
+    "timedOut": false,
+    "elapsedMs": 734
+  },
+  {
+    "mode": "1",
+    "file": "minimap-columns.test.cjs",
+    "status": 0,
+    "output": "PASS: packed minimap matches reference pixels in full/team visibility at both scales; fog picture as the tile rects.\n",
+    "timedOut": false,
+    "elapsedMs": 901
+  },
+  {
+    "mode": "1",
+    "file": "history-structure-columns.test.cjs",
+    "status": 0,
+    "output": "{\"page\":\"worker\",\"history\":true,\"columns\":true,\"same\":true,\"n\":20,\"tn\":20,\"seen\":3,\"ghosts\":0,\"hidden\":17,\"diffs\":[],\"typed\":[],\"unchanged\":true,\"ghost\":{\"flag\":true,\"alive\":1,\"ghost\":true,\"type\":true,\"energy\":true,\"ver\":true,\"row\":[]},\"back\":{\"flag\":false,\"source\":true}}\nPASS history-structure-columns\n",
+    "timedOut": false,
+    "elapsedMs": 11827
+  },
+  {
+    "mode": "1",
+    "file": "movement-sleep.test.cjs",
+    "status": 0,
+    "output": "PASS: movement sleep and force fallbacks match the original kernel at dk 1/4/20 (18 chunks)\n",
+    "timedOut": false,
+    "elapsedMs": 5646
+  },
+  {
+    "mode": "1",
+    "file": "laser-activation.test.cjs",
+    "status": 0,
+    "output": "PASS: lasers placed 2 tiles apart link on construction completion (no extra placement) and fire; [{\"gx\":22,\"gy\":11,\"uc\":false,\"lvl\":1,\"links\":1},{\"gx\":24,\"gy\":11,\"uc\":false,\"lvl\":1,\"links\":1}]\n",
+    "timedOut": false,
+    "elapsedMs": 32683
+  },
+  {
+    "mode": "1",
+    "file": "nav-reach.test.cjs",
+    "status": 0,
+    "output": "{\"build\":\"39 parts, 2 components\",\"aTicks\":204,\"aTile\":[42,36],\"aCmd\":1,\"bTiles\":[[63,32],[63,32],[63,31]],\"bCmd\":[1,1,1],\"bPending\":[true,true,true],\"bDist\":[5,5,6],\"bTicks\":398,\"bAfter\":[[62,37],[63,37],[62,37]],\"bCmdAfter\":[1,0,1],\"cTile\":[35,54],\"cCmd\":1,\"cPending\":true,\"searches\":0}\nPASS: flow navigation reach (39 parts, 2 components; A in 204 ticks, B on after opening in 398)\n",
+    "timedOut": false,
+    "elapsedMs": 3606
+  },
+  {
+    "mode": "1",
+    "file": "order-markers.test.cjs",
+    "status": 0,
+    "output": "PASS: active markers, immediate replacement, deselection/reselection, completion, stop, subgroup toggles, and large worker selections.\n",
+    "timedOut": false,
+    "elapsedMs": 651
+  },
+  {
+    "mode": "1",
+    "file": "path-regions-incremental.test.cjs",
+    "status": 0,
+    "output": "arena 1476 wall changes, 115 full rebuilds, partitions equal\nislands 1500 wall changes, 108 full rebuilds, partitions equal\ncrossroads 1473 wall changes, 117 full rebuilds, partitions equal\nPASS: path regions kept incrementally\n",
+    "timedOut": false,
+    "elapsedMs": 7123
+  },
+  {
+    "mode": "1",
+    "file": "path-regions-portals.test.cjs",
+    "status": 0,
+    "output": "arena 322 checks, 26 portals, 11 plain rebuilds, partitions equal\nislands 320 checks, 25 portals, 8 plain rebuilds, partitions equal\ncrossroads 322 checks, 19 portals, 6 plain rebuilds, partitions equal\nPASS: path regions with portals\n",
+    "timedOut": false,
+    "elapsedMs": 7368
+  },
+  {
+    "mode": "1",
+    "file": "pathfinding-routing.test.cjs",
+    "status": 0,
+    "output": "group order: 4566 vs 14775 nodes; identical routes 150\nPASS: 1000 shared requests, 215 expansions, 42.3ms; shortest paths, replay and movement checks passed.\n",
+    "timedOut": false,
+    "elapsedMs": 2691
+  },
+  {
+    "mode": "1",
+    "file": "presentation-delta.test.cjs",
+    "status": 0,
+    "output": "PASS presentation-delta: 90 frames of 23000 slots by changes equal whole frames byte for byte\n",
+    "timedOut": false,
+    "elapsedMs": 32974
+  },
+  {
+    "mode": "1",
+    "file": "presentation-helpers.test.cjs",
+    "status": 0,
+    "output": "PASS presentation-helpers: 60 frames of 78000 slots made by 4 threads equal the one-thread frames byte for byte (fill, ghosts shared and not, marks, order, index)\n",
+    "timedOut": false,
+    "elapsedMs": 89359
+  },
+  {
+    "mode": "1",
+    "file": "presentation-worker.test.cjs",
+    "status": 0,
+    "output": "PASS: independent shared reader, bounded pool, newest-frame backpressure, slot reuse, immutable outputs and stale returns\n",
+    "timedOut": false,
+    "elapsedMs": 205
+  },
+  {
+    "mode": "1",
+    "file": "render-frame-stability.test.cjs",
+    "status": 0,
+    "output": "zoom getMinCameraZoom(): 353 frames over 60 ticks, ~1784 structures, ~2995 units drawn; structures {\"gaps\":0,\"pops\":0,\"example\":null} units {\"gaps\":0,\"pops\":0,\"example\":null}\n  motion {\"between\":0.8810198300283286,\"alphaBack\":0,\"steps\":14697,\"backRate\":0.000520697734964853,\"big\":3841,\"fromRecords\":0}\nzoom 1.5: 317 frames over 60 ticks, ~1784 structures, ~2973 units drawn; structures {\"gaps\":0,\"pops\":0,\"example\":null} units {\"gaps\":0,\"pops\":0,\"example\":null}\n  motion {\"between\":0.889589905362776,\"alphaBack\":0,\"steps\":11886,\"backRate\":0.0009267840593141798,\"big\":2158,\"fromRecords\":0}\n  2d repeated orders: 266 moving frames, 0 held (0 waiting for a late result), 0 back; 0 of 284 positions from the unit layer's record\n  3d repeated orders: 261 moving frames, 1 held (1 waiting for a late result), 0 back; 285 of 290 positions from the unit layer's record\nrender-frame-stability: ok\n",
+    "timedOut": false,
+    "elapsedMs": 73047
+  },
+  {
+    "mode": "1",
+    "file": "renderer3d-picking.test.cjs",
+    "status": 0,
+    "output": "PASS: mesh picking covers heads, silhouette gaps, squashing, depth, adjacent targets, animation and clipping; box selection follows the drawn mesh.\nPASS: distant units and buildings support single clicks in sprite-only and mixed detail scenes.\n",
+    "timedOut": false,
+    "elapsedMs": 164
+  },
+  {
+    "mode": "1",
+    "file": "scene-orders.test.cjs",
+    "status": 0,
+    "output": "PASS imported units engagement (page): 29 units, 0 enemy turrets remain\nPASS imported units engagement (worker): 29 units, 0 enemy turrets remain\nPASS imported towers engagement (page): 100 units, 0 enemy turrets remain\nPASS imported towers engagement (worker): 100 units, 0 enemy turrets remain\n",
+    "timedOut": false,
+    "elapsedMs": 34555
+  },
+  {
+    "mode": "1",
+    "file": "shared-frame-ownership.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 23949
+  },
+  {
+    "mode": "1",
+    "file": "sim-frame-replica.test.cjs",
+    "status": 0,
+    "output": "PASS: the page's units and world matched the worker on 400 results (up to 480 units); page apply 0 ms, worker encode 0 ms.\n",
+    "timedOut": false,
+    "elapsedMs": 23738
+  },
+  {
+    "mode": "1",
+    "file": "storage-abi.test.cjs",
+    "status": 0,
+    "output": "PASS: storage ABI (106 movement kernel columns match their Rust types; 198 columns, 525 bytes per slot)\n",
+    "timedOut": false,
+    "elapsedMs": 160
+  },
+  {
+    "mode": "1",
+    "file": "structure-instruction.test.cjs",
+    "status": 0,
+    "output": "{\"aCallsAfterSettle\":0,\"aDestroyed\":true,\"aEnergy\":[370,0],\"aDmgAt\":10,\"aInstruction\":1650,\"aAttackingState\":0,\"aCalls\":0,\"aAfter\":[[0,0,2],[0,0,2],[0,0,2],[0,0,2],[0,0,2],[0,0,2]],\"bSpot\":[88,86],\"bAggro\":160,\"bK\":1,\"bDist\":[143.10835055998655,98.55598028531806],\"bDestroyed\":true,\"bEnergy\":[300,-7],\"bInRange\":true,\"cDestroyed\":true,\"cStopped\":true,\"cProgress\":[33,32,32,33],\"cCommand\":[2,2,2,2]}\nPASS: structure instruction (stand and fire, walk to it, the order resumed)\n",
+    "timedOut": false,
+    "elapsedMs": 3140
+  },
+  {
+    "mode": "1",
+    "file": "structure-render-hotspots.test.cjs",
+    "status": 0,
+    "output": "PASS: selection reuse, panel invalidation, and zoomed sprite resolution.\n",
+    "timedOut": false,
+    "elapsedMs": 260
+  },
+  {
+    "mode": "1",
+    "file": "structure-table.test.cjs",
+    "status": 0,
+    "output": "placed {\"found\":{\"gx\":8,\"gy\":4},\"out\":[[\"pistol\",true,8,4],[\"barrack_norm\",true,9,4],[\"lava\",true,10,4],[\"sand\",true,11,4]],\"mines\":14,\"floorClass\":\"FloorItem\"}\nstructures 22\nPASS: structure table\n",
+    "timedOut": false,
+    "elapsedMs": 3663
+  },
+  {
+    "mode": "1",
+    "file": "structure-targeting.test.cjs",
+    "status": 0,
+    "output": "PASS: +-0.3 tile source windows, floor-target projectiles (9 ticks).\n",
+    "timedOut": false,
+    "elapsedMs": 155
+  },
+  {
+    "mode": "1",
+    "file": "tile-ordered-replace.test.cjs",
+    "status": 0,
+    "output": "PASS: batch tile-ordered update equals the one-by-one replacements {\"bad\":0,\"same\":25,\"rounds\":300,\"empty\":0}\n",
+    "timedOut": false,
+    "elapsedMs": 377
+  },
+  {
+    "mode": "1",
+    "file": "work-snapshot.test.cjs",
+    "status": 0,
+    "output": "PASS portable work orders: production, salvage and research (page)\nPASS portable work orders: production, salvage and research (worker)\n",
+    "timedOut": false,
+    "elapsedMs": 14597
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-chaos-determinism.test.cjs",
+    "status": 1,
+    "output": "Error: random: nondeterministic divergence at tick 368 (host vs guest3) in [units]; forced [{\"victim\":\"guest3\",\"tick\":273,\"unit\":\"snake 137\"},{\"victim\":\"guest3\",\"tick\":541,\"unit\":\"snake 137\"}], repairs [[\"host\",[0]],[\"guest1\",[0]],[\"guest2\",[0]],[\"guest3\",[306,394,494,568,0]]]: [{\"tick\":368,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":369,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":370,\"a\":\"host\",\"b\":\"guest3\"},{\"tick\":371,\"a\":\"host\",\"b\":\"guest3\"}]\n  host saw: [{\"peer\":\"autoe5fc76d700\",\"tick\":302,\"differs\":[\"players\",\"globals\",\"tiles 4-7,24-27: unit 145 astar_collector, unit 137 snake, unit 152 builder_unit, unit 126 fire_resistant, unit 129 water_resistant, unit 133 ice_resistant\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":390,\"differs\":[\"players\",\"globals\",\"tiles 12-15,20-23: unit 191 laser_resistant, unit 190 fire_resistant, unit 60 tank, unit 65 flying, unit 193 snake, unit 73 fire_resistant\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":490,\"differs\":[\"tiles 12-15,20-23: unit 191 laser_resistant, unit 190 fire_resistant, unit 60 tank, unit 65 flying, unit 193 snake, unit 73 fire_resistant\"]},{\"peer\":\"autoe5fc76d700\",\"tick\":564,\"differs\":[\"globals\",\"tiles 4-7,24-27: unit 133 ice_resistant, unit 131 ice_resistant, unit 145 astar_collector, unit 137 snake, unit 126 fire_resistant, barrack at 4,26\"]}]\n  patched: host []\n  guest1 []\n  guest2 []\n  guest3 []\n    at chaosMatch (Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:255:15)\n    at async Z:\\data\\gitrepos\\aleksiklasila.github.io\\rng\\defence3\\tests\\multiplayer-chaos-determinism.test.cjs:288:40\n",
+    "timedOut": false,
+    "elapsedMs": 443889
+  },
+  {
+    "mode": "1",
+    "file": "multiplayer-desync-recovery.test.cjs",
+    "status": 0,
+    "output": "PASS: multiplayer desync recovery\n  guest unit divergence patched in 1300ms (guest waited 17ms, others 0/0ms), in sync 20s after\n  guest player divergence patched in 1260ms (guest waited 17ms, others 0/0ms), in sync 20s after\n  guest mine divergence patched in 1260ms (guest waited 17ms, others 0/0ms), in sync 20s after\n  guest building divergence patched in 1560ms (guest waited 17ms, others 0/0ms), in sync 20s after\n  host divergence in 2v2: each guest patched, in 2160ms\n  two guests diverging together patched in 1760ms\n  commands issued while a patch was pending ran once everywhere\n  disconnects mid-patch: the patch survives another guest dropping out; the patched one rejoins in sync\n  reload while a patch is pending joins cleanly\n  3 repairs under 400ms jitter (reordered messages)\n  15 divergences in 30s: all repaired within 5 s (10 patches), 20.0 of 20 TPS\n  lost patch: guest waited 2100ms at most, re-asked and was patched after 3820ms; others unaffected\n  persistent bug on a guest for 40s: 13 patches (9 full), 1 reload(s) of the match on it alone, 20.0 TPS\n  exact-lockstep mode freezes every peer at the first mismatch and names what differs: state hash mismatch at tick 47 in tiles 12-15,8-11: unit 1 builder_unit, unit 2 healer_unit, builder_spawner at 14,8, he\n  exception mid-tick: match keeps running; same-on-all needs no repair, one-sided is patched\n",
+    "timedOut": false,
+    "elapsedMs": 630604
+  },
+  {
+    "mode": "1",
+    "file": "worker-walk.test.cjs",
+    "status": 1,
+    "output": "workers 6 builder,healer,collector,astar_collector,salvager,researcher\nworker states seen astar_collector:IDLE astar_collector:MOVING_TO astar_collector:RETURNING astar_collector:delivered builder:IDLE builder:MOVING_TO_BUILD builder:RETURNING_FOR_GOLD builder:spent collector:IDLE collector:MOVING_TO collector:RETURNING collector:delivered healer:IDLE healer:MOVING_TO_HEAL healer:RETURNING_FOR_GOLD healer:spent researcher:IDLE researcher:MOVING_TO_RESEARCH salvager:IDLE salvager:MOVING_TO salvager:RETURNING salvager:delivered\nwork {\"before\":{\"build\":3686,\"sites\":0,\"research\":0},\"after\":{\"build\":4169,\"sites\":0,\"research\":1000151},\"end\":{\"site\":{\"uc\":false,\"energy\":30},\"salvaged\":true}}\nmine cluster at [42,37] collector on it true middle gold 5000\nFAIL:\n  astar_collector [0,-10]: came no closer than 8 tiles to [45,23] from [45,33] (last [41,31,\"MANUAL_MOVE\"]; {\"wall\":false,\"entity\":\"\",\"profile\":2,\"approach\":[45,23],\"reachable\":true})\n  collector: did not collect from the mine in the middle of mines (on it true, its gold 5000)\n",
+    "timedOut": false,
+    "elapsedMs": 358897
+  }
+]

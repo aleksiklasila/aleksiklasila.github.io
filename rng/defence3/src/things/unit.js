@@ -151,8 +151,8 @@ function unitEventsRun() {
     // (Those whose energy ran out: dead now.)
     P[0] = ns; P[1] = UNIT_DEAD_PER_JOB;
     simParallelRun(SIM_KERNEL_DEAD_MARK, Math.ceil(ns / UNIT_DEAD_PER_JOB));
-    // (And those on a tile that became a wall this tick.)
-    simPassWallFixups(S);
+    // (Those on a tile that became a wall this tick are pushed off it as the
+    // walls take the change at the pass's end: _simWallPushOut.)
 }
 // One unit's event (code: mv.rs EV_*; 0 a worker the kernel left).
 function _unitEvent(u, c, s, code) {
@@ -1966,23 +1966,20 @@ function simMoveTryArm(u) {
     if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
 }
 
-// The units on a tile that became a wall this tick (a building placed, a
-// wall grown): pushed out, in id order.
-function simPassWallFixups(S) {
-    const q = _simMoveWallQ;
-    if (!q.length) return;
-    const c = S.columns, list = [], seen = new Set();
-    for (let i = 0; i < q.length; i += 2) {
-        const gx = q[i], gy = q[i + 1], row = grid[gy], cell = row ? row[gx] : null;
-        if (!cell || cell.type !== TYPE_WALL) continue;
-        forEachUnitInRange(gx * TILE + TILE / 2, gy * TILE + TILE / 2, TILE * 1.5, u => {
-            const s = u._si;
-            if (!(s >= 0) || u._us !== c || seen.has(u)) return;
-            if (u.dead || u.isFlying) return;
-            if (Math.floor(c.x[s] * 0.125 / TILE) !== gx || Math.floor(c.y[s] * 0.125 / TILE) !== gy) return;
-            seen.add(u); list.push(u);
-        });
-    }
+// The units standing on tile (gx, gy) when it became a wall (a tower's
+// construction finished, a wall grown): pushed to the nearest tile they may
+// stand on, in id order. Called as the wall table takes the change
+// (simMoveTileTypeChanged; after the unit pass for changes made in it), so
+// pushUnitOutOfBlockedTile sees the new wall.
+function _simWallPushOut(gx, gy) {
+    if (typeof forEachUnitInRange !== 'function' || !units || !units.length) return;
+    const list = [];
+    forEachUnitInRange(gx * TILE + TILE / 2, gy * TILE + TILE / 2, TILE * 1.5, u => {
+        if (u.dead || u.isFlying) return;
+        if (Math.floor(u.x / TILE) !== gx || Math.floor(u.y / TILE) !== gy) return;
+        list.push(u);
+    });
+    if (!list.length) return;
     list.sort((a, b) => a.id - b.id);
     for (const u of list) {
         pushUnitOutOfBlockedTile(u);
@@ -2337,6 +2334,8 @@ function simMoveTileTypeChanged(gx, gy) {
             _simMoveWall[k] = w; _simMoveWallVer = (_simMoveWallVer + 1) | 0;
             if (_simMoveWallBlk) { _simMoveWallBlk[(gy >> 3) * _simMoveWallBlkW + (gx >> 3)]++; _simMoveWallBlk9Add(gx >> 3, gy >> 3); }
             if (typeof navWallChanged === 'function') navWallChanged(k, was, w);
+            // (A new wall: whoever stands there steps off it.)
+            if (w === 1) _simWallPushOut(gx, gy);
         }
         // (The walk classes' walls: also when only its tile entity changed.)
         _simMoveClassTileChanged(k);

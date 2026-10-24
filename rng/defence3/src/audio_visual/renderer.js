@@ -358,21 +358,14 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '', bars);
 }
 
-// A building site: its picture slightly faded (CONSTRUCTION_ALPHA), so it
-// reads as what is being built. (At 0.25 it was a grey smear over the
-// ground: what it was could not be seen.)
+// A building site is drawn as the building itself (level 0), every level
+// of detail alike; a hammer over it says it is being built (renderer3d
+// drawSiteMarks). (It was faded and lifted, with a see-through pass and
+// look of its own per level of detail.) CONSTRUCTION_ALPHA: the order's
+// ghost on the overlay before the site exists (drawPendingBuildGhosts).
 const CONSTRUCTION_ALPHA = 0.65;
-function get3DConstructionAlpha(entity) {
-    if (!entity) return 1;
-    if (entity.underConstruction) return CONSTRUCTION_ALPHA;
-    return 1;
-}
-
-function get3DConstructionLift(entity) {
-    if (!entity) return 0;
-    if (entity.underConstruction) return 0.03;
-    return 0;
-}
+function get3DConstructionAlpha(entity) { return 1; }
+function get3DConstructionLift(entity) { return 0; }
 
 function get3DUnitStatusGlyph(unit) {
     if (!unit) return null;
@@ -1017,7 +1010,7 @@ function get3DTopTextureForFloorItem(item, statusOptions = null) {
 }
 
 function build3DOverlayData(bounds, alpha) {
-    let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [] };
+    let overlays = { lines: [], rings: [], rects: [], areaTiles: [], markers: [], bars: [], texts: [], siteMarks: [] };
     let activeSelectedEntities = getActiveEntities();
     let activeSelectedUnits = getActiveUnitsForRender();
     overlays.selectionMask = getSelectionMaskOverlay();
@@ -1033,11 +1026,9 @@ function build3DOverlayData(bounds, alpha) {
         markerKeys.add(key);
         overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color, n, minor });
     };
-    let pushSalvageCross = (worldX, worldY) => {
-        let span = TILE * 0.34;
-        pushLine(worldX - span, worldY - span, worldX + span, worldY + span, '#f44');
-        pushLine(worldX + span, worldY - span, worldX - span, worldY + span, '#f44');
-    };
+    // (Drawn over the structure on the overlay canvas, never hidden by its
+    // model: renderer3d drawSiteMarks. kind 1 salvage cross, 2 hammer.)
+    let pushSiteMark = (gx, gy, kind) => overlays.siteMarks.push({ x: gx + 0.5, z: gy + 0.5, kind });
     // (Big selections: their rally points as markers only, getOrderMarkers.)
     const fewEntities = activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX;
     for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color, m.n, m.minor);
@@ -1079,34 +1070,12 @@ function build3DOverlayData(bounds, alpha) {
         if (target) pushLine(ux, uy, target.x, target.y, target.color, rallyLineType === OVERLAY_LINE_DOTTED);
     }
 
-    // (Marked structures gathered once a tick, not every structure a frame.)
-    for (let t of _salvageMarkedStructures()) {
-        if (t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1) continue;
-        if (!fullVisibility && (!visibilityGrid[t.gy] || visibilityGrid[t.gy][t.gx] === 0)) continue;
-        pushSalvageCross(t.x, t.y);
-    }
-
-    // Marked floor items: gathered once a tick with the structures.
-    if (typeof _activeTileEntities !== 'undefined') {
-        for (const item of _salvageMarkedFloorItems()) {
-            const x = item.gx, y = item.gy;
-            if (x < bounds.minGx || x > bounds.maxGx || y < bounds.minGy || y > bounds.maxGy) continue;
-            if (grid[y] && grid[y][x] && grid[y][x].item === item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0)))
-                pushSalvageCross(x * TILE + TILE * .5, y * TILE + TILE * .5);
-        }
-    } else {
-        for (let y = bounds.minGy; y <= bounds.maxGy; y++) {
-            let gridRow = grid[y];
-            let visRow = visibilityGrid[y];
-            if (!gridRow) continue;
-            for (let x = bounds.minGx; x <= bounds.maxGx; x++) {
-                let cell = gridRow[x];
-                if (!cell || !cell.item) continue;
-                if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
-                if (cell.item.markedForSalvage) pushSalvageCross(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
-            }
-        }
-    }
+    // Salvage crosses and construction hammers (gathered once a tick, not
+    // every structure a frame); a pending salvage press at once.
+    const siteSeen = (t) => !(t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1)
+        && (fullVisibility || (visibilityGrid[t.gy] && visibilityGrid[t.gy][t.gx] > 0));
+    for (let t of _salvageMarksShown()) if (siteSeen(t)) pushSiteMark(t.gx, t.gy, 1);
+    for (let t of _siteMarkLists().build) if (siteSeen(t) && !t.markedForSalvage) pushSiteMark(t.gx, t.gy, 2);
 
     return overlays;
 }
@@ -2463,7 +2432,7 @@ function buildScaleFrameData(flat2d, view) {
             d[o + 7] = kind;
             const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
             d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness;
-            d[o + 11] = e._historyGhost ? .3 : e.underConstruction ? CONSTRUCTION_ALPHA : 1;
+            d[o + 11] = e._historyGhost ? .3 : 1;
             layer.sources.push(e);
         };
         for (const layer of cache.layers) { layer.count = 0; layer.sources = layer.sources || []; layer.sources.length = 0; layer.sourceIndex = null; }
@@ -2937,23 +2906,70 @@ function _addBuildingRallyMarkers(list, add, full) {
     }
 }
 function _isRallySpawnerType(t) { return _RALLY_SPAWNER_TYPES.has(t); }
-// Floor items marked for salvage, gathered once per tick (twice a second).
-let _salvageFloorCache = { tick: -1, at: -Infinity, list: [] };
-function _salvageMarkedFloorItems() {
-    const C = _salvageFloorCache, now = performance.now();
-    if (C.tick === gameTime || now - C.at < 500) return C.list;
-    C.tick = gameTime; C.at = now; C.list = [];
-    for (const item of _activeTileEntities) if (item && item.markedForSalvage) C.list.push(item);
-    return C.list;
+// The marks drawn over structures (renderer3d drawSiteMarks): a red cross on
+// those marked for salvage, a hammer on those under construction, gathered
+// once a tick: beside the simulation worker by one typed pass over the
+// frame's structure table (flags), not every structure object (~130k).
+let _siteMarkCache = { tick: -1, table: null, salvage: [], build: [] };
+function _siteMarkLists() {
+    const C = _siteMarkCache;
+    const F = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    if (C.tick === gameTime && C.table === F) return C;
+    C.tick = gameTime; C.table = F; C.salvage = []; C.build = [];
+    if (F && typeof _pageStructViews !== 'undefined') {
+        const n = Math.min(F.n, F.cap), alive = F.alive, flags = F.flags, kind = F.kind;
+        for (let s = 0; s < n; s++) {
+            if (alive[s] !== 1 || kind[s] > 3) continue;
+            const f = flags[s];
+            if (!(f & (SIM_SF_SALVAGE | SIM_SF_UC))) continue;
+            const v = _pageStructViews[s];
+            if (!v) continue;
+            if (f & SIM_SF_SALVAGE) C.salvage.push(v);
+            if (f & SIM_SF_UC) C.build.push(v);
+        }
+        return C;
+    }
+    // (The simulation on this thread: its objects.)
+    for (const L of [towers, barracks, collectorSpawners]) for (const e of L) if (e && e.energy > 0) {
+        if (e.markedForSalvage) C.salvage.push(e);
+        if (e.underConstruction) C.build.push(e);
+    }
+    for (const item of _activeTileEntities) {
+        const cell = item && grid[item.gy] && grid[item.gy][item.gx];
+        if (!cell || cell.item !== item) continue;
+        if (item.markedForSalvage) C.salvage.push(item);
+        if (item.underConstruction) C.build.push(item);
+    }
+    return C;
 }
-// Structures marked for salvage (crosses), gathered once per tick.
-let _salvageMarkCache = { tick: -1, list: [] };
-function _salvageMarkedStructures() {
-    const C = _salvageMarkCache;
-    if (C.tick === gameTime) return C.list;
-    C.tick = gameTime; C.list = [];
-    for (const L of [towers, barracks, collectorSpawners]) for (const e of L) if (e && e.markedForSalvage) C.list.push(e);
-    return C.list;
+// Salvage marks the player just set or cleared, shown at once (the order's
+// answer comes ticks later): by tile, until the frame says the same or
+// SALVAGE_SHOWN_MS passed (an order that came to nothing: the old look).
+const SALVAGE_SHOWN_MS = 3000;
+const _salvageShownAhead = new Map();
+function noteSalvageShown(gx, gy, on) {
+    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
+    _salvageShownAhead.set(gy * GRID_W + gx, { on: !!on, at: performance.now() });
+}
+// The marked structures to draw: the frame's, with the pending presses.
+function _salvageMarksShown() {
+    const list = _siteMarkLists().salvage;
+    if (!_salvageShownAhead.size) return list;
+    const now = performance.now(), out = [], seen = new Set();
+    for (const e of list) {
+        const t = e.gy * GRID_W + e.gx, o = _salvageShownAhead.get(t);
+        seen.add(t);
+        if (o && (o.on || now - o.at > SALVAGE_SHOWN_MS)) _salvageShownAhead.delete(t);
+        if (o && !o.on && now - o.at <= SALVAGE_SHOWN_MS) continue;
+        out.push(e);
+    }
+    for (const [t, o] of _salvageShownAhead) {
+        if (seen.has(t)) continue;
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] ? grid[gy][gx].item : null);
+        if (!o.on || !e || now - o.at > SALVAGE_SHOWN_MS) { _salvageShownAhead.delete(t); continue; }
+        out.push(e);
+    }
+    return out;
 }
 // Per-unit move lines and target lines only for a selection this small
 // (each costs a few views' reads a frame); bigger ones show their orders'
@@ -4031,7 +4047,7 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
         L.reserve(L.count + 1);
         const d = L.data, o = L.count++ * 12, c = colorFor(owner), x = gx + .5, z = gy + .5;
         d[o] = x; d[o + 1] = z; d[o + 2] = x; d[o + 3] = z; d[o + 4] = .94; d[o + 5] = kind === 1 ? .85 : .2; d[o + 6] = 0; d[o + 7] = kind;
-        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : e.underConstruction ? CONSTRUCTION_ALPHA : 1;
+        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : 1;
     };
     for (const list of D.far) for (const e of list) push(e, e.gx | 0, e.gy | 0, e.owner, 1);
     if (floorItems) for (const [e, x, y, owner] of floorItems) push(e, x, y, owner, 2);
@@ -4602,6 +4618,12 @@ function drawPendingBuildGhosts(ctx) {
             ctx.globalAlpha = (typeof CONSTRUCTION_ALPHA === 'number' ? CONSTRUCTION_ALPHA : .65) * Math.max(0, Math.min(1, fade));
             try { ctx.drawImage(img, (minX + maxX) / 2 - size / 2, (minY + maxY) / 2 - size / 2, size, size); } catch { }
         }
+        // (A new building's hammer where its site's will be: the hand-over
+        // keeps the mark in place.)
+        if (!g.onTop && typeof renderer3dInstance.drawSiteMarks === 'function') {
+            ctx.globalAlpha = Math.max(0, Math.min(1, fade));
+            renderer3dInstance.drawSiteMarks([{ x: g.gx + 0.5, z: g.gy + 0.5, kind: 2 }], ctx);
+        }
         ctx.restore();
     }
 }
@@ -4612,7 +4634,7 @@ function drawInteractionOverlay(renderer3dSnapshot = null) {
     const hasContent = !!((isBoxSelecting && selectionBoxScreen) || _pendingBuildGhosts.size > 0
         || (renderer3dSnapshot && renderer3dSnapshot.buildPreview)
         || (o && !o.groundLinesRendered && o.lines && o.lines.length)
-        || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts'].some(key => o[key] && o[key].length)));
+        || (o && ['rects', 'areaTiles', 'rings', 'markers', 'bars', 'texts', 'siteMarks'].some(key => o[key] && o[key].length)));
     if (!hasContent && overlayCanvas._interactionEmpty) return;
     let dpr = window.devicePixelRatio || 1;
     let pad = overlayCanvas._viewPad || 0;
@@ -4823,6 +4845,64 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
     }
 
     _minimapStaticDirty = false;
+    _minimapStaticTiles.clear();
+}
+
+// Structures that came or went: their minimap pixels redrawn alone (at the
+// minimap's next draw), not the whole static layer (a pass over every
+// structure and tile: ~70 ms at 100k buildings, at every change of a build
+// burst or a battle). A pixel holds several tiles when the map is bigger
+// than the minimap: the tiles under the changed pixels are drawn again in
+// the layer's order (buildings, cell items, mines).
+const _minimapStaticTiles = new Set();
+function minimapStaticTileChanged(gx, gy) {
+    if (!_minimapStaticCanvas || _minimapStaticDirty || !(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
+    _minimapStaticTiles.add(gy * GRID_W + gx);
+}
+function _minimapStaticTilesDrain() {
+    const T = _minimapStaticTiles;
+    if (!T.size) return;
+    if (!_minimapStaticCanvas || _minimapStaticDirty || T.size > 4096) { T.clear(); if (_minimapStaticCanvas && !_minimapStaticDirty) { _minimapStaticDirty = true; commitStaticCaches(true, 'minimap'); } return; }
+    const c = _minimapStaticCtx, scale = _minimapStaticScale, W = GRID_W, H = GRID_H;
+    const ownerColor = o => typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(o) : '#c8ced8';
+    // Pixel rects of the changed tiles (as the layer rounds them), merged by pixel.
+    const done = new Set();
+    for (const t of T) {
+        const gx = t % W, gy = (t - gx) / W;
+        const px0 = Math.round(gx * scale), py0 = Math.round(gy * scale);
+        const px1 = Math.max(px0 + 1, Math.round((gx + 1) * scale)), py1 = Math.max(py0 + 1, Math.round((gy + 1) * scale));
+        const key = py0 * 65536 + px0;
+        if (done.has(key)) continue;
+        done.add(key);
+        // The tiles any of whose drawn rects meet this pixel rect.
+        const tx0 = Math.max(0, Math.floor(px0 / scale) - 1), tx1 = Math.min(W - 1, Math.ceil(px1 / scale) + 1);
+        const ty0 = Math.max(0, Math.floor(py0 / scale) - 1), ty1 = Math.min(H - 1, Math.ceil(py1 / scale) + 1);
+        c.save();
+        c.beginPath(); c.rect(px0, py0, px1 - px0, py1 - py0); c.clip();
+        c.fillStyle = '#111'; c.fillRect(px0, py0, px1 - px0, py1 - py0);
+        const cellRect = (x, y) => {
+            let l = Math.round(x * scale), r = Math.round((x + 1) * scale), tp = Math.round(y * scale), b = Math.round((y + 1) * scale);
+            if (r <= l) r = l + Math.max(1, Math.round(_minimapStaticTilePx));
+            if (b <= tp) b = tp + Math.max(1, Math.round(_minimapStaticTilePx));
+            c.fillRect(l, tp, r - l, b - tp);
+        };
+        for (let pass = 0; pass < 3; pass++) for (let y = ty0; y <= ty1; y++) for (let x = tx0; x <= tx1; x++) {
+            const cell = grid[y][x];
+            if (pass === 0) {
+                // (Towers, barracks, spawners: the layer's first loops.)
+                const e = getTileEntityRef(x, y);
+                if (e && (e instanceof Tower || e instanceof Barrack || (typeof isSpawnerEntity === 'function' && isSpawnerEntity(e)))) { c.fillStyle = ownerColor(e.owner); cellRect(x, y); }
+            } else if (pass === 1) {
+                if (cell.item && cell.owner >= 0) { c.fillStyle = ownerColor(cell.owner) + '4d'; cellRect(x, y); }
+            } else {
+                const gm = getGoldMineAt(x, y), am = gm ? null : getAstarMineAt(x, y);
+                if (gm && gm.gold > 0) { c.fillStyle = '#fd0'; cellRect(x, y); }
+                else if (am && am.astar > 0) { c.fillStyle = '#888'; cellRect(x, y); }
+            }
+        }
+        c.restore();
+    }
+    T.clear();
 }
 
 // The minimap only needs a few updates a second. Redraw it immediately when
@@ -4990,6 +5070,7 @@ function drawMinimap() {
         }
     };
 
+    _minimapStaticTilesDrain();
     // Draw base minimap immediately so dynamic overlays (fog/units/alerts) stay visible on top.
     minimapCtx.drawImage(_minimapStaticCanvas, 0, 0);
 

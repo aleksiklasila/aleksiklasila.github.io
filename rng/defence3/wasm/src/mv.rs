@@ -3365,7 +3365,9 @@ unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
     let tx = tx0 as f64 * tile + tile / 2.0;
     let ty = idiv(t - tx0, w) as f64 * tile + tile / 2.0;
     let k = rd(m.rk, s) as i32;
-    let mut inr = (cm & 3) == 1;
+    // (Hold, or a moving shooter's fire-only word: in range by the brain.)
+    let fire_only = (cm & 7) == 4;
+    let mut inr = (cm & 3) == 1 || fire_only;
     if k <= 2 {
         let r = in_area_range(m, x, y, tx, ty, k);
         if r == 1 {
@@ -3391,6 +3393,10 @@ unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
             wr(m.hita, p.s0 + c as usize, s as i32);
             wr(m.hitt, p.s0 + c as usize, -(t + 2));
             wr(m.hitc, p.chunk, c + 1);
+        }
+        // (A drive-by shot: the unit goes on with its own move.)
+        if fire_only {
+            return false;
         }
         stand!();
     }

@@ -1188,6 +1188,12 @@ function _simClientMapChanged() {
     if (typeof _requestStaticCacheCommit === 'function') _requestStaticCacheCommit();
     if (typeof requestBuildMenuRefresh === 'function') requestBuildMenuRefresh();
 }
+// Some structures came or went (their tiles marked dirty by the caller, the
+// background's and the minimap's: _markCombinedBgTileDirty,
+// minimapStaticTileChanged): the build menu (what can be stacked).
+function _simClientStructuresChanged() {
+    if (typeof requestBuildMenuRefresh === 'function') requestBuildMenuRefresh();
+}
 
 // Entities referenced by the worker's side effects.
 function _simClientResolve(ref) {

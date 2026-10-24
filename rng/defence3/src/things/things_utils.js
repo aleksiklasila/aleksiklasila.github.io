@@ -1285,6 +1285,8 @@ function canBuildAt(gx, gy, playerId) {
     if (!(isMultiplayer && gameStarted) && _isBuildAreaContested(gx, gy, playerId)) return false;
     if (grid[gy][gx].type === TYPE_WALL) return false;
     if (grid[gy][gx].item) return false;
+    // (A tower under construction stands on a floor tile.)
+    if (getTileEntityRef(gx, gy)) return false;
     // Don't allow building on gold mines
     if (getGoldMineAt(gx, gy)) return false;
     if (getAstarMineAt(gx, gy)) return false;
@@ -1434,9 +1436,9 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         if (!(existing && existing.type === itemKey && existing.owner === playerId)) existing = null;
         if (existing) { existing.upgrade(); }
         else {
-            grid[gy][gx].type = TYPE_WALL;
+            // (Its tile turns into a wall when it is built: structureWallSync.
+            // Under construction every unit walks over it.)
             grid[gy][gx].owner = playerId;
-            simMoveTileTypeChanged(gx, gy);
             let t = new Tower(gx, gy, itemKey, playerId);
             t.underConstruction = true; t.energy = 1;
             t.autoUpgradeEnabled = useDefaultAutoUpgrade;
@@ -2038,9 +2040,33 @@ function getAreaRangeCellsAtWorld(wx, wy, rangeArea) {
     return getGridCellsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0)));
 }
 
+// A structure's tile wall follows its construction: wall-type things
+// (towers, clouds: BASE_CARD_TYPES target 'wall') block their tile only once
+// built; under construction any unit walks over them, as over the floor
+// things (which never block). The grid type is what every walk check reads
+// (the movement kernel's walls, the navigation, A*); a tile turning into a
+// wall pushes whoever stands on it off (unit.js _simWallPushOut).
+function structureWallSync(item) {
+    if (!item || !(typeof Tower === 'function' && item instanceof Tower)) return;
+    const gx = item.gx, gy = item.gy;
+    if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) || getTileEntityRef(gx, gy) !== item) return;
+    const cell = grid[gy][gx], want = item.underConstruction ? TYPE_FLOOR : TYPE_WALL;
+    if (cell.type === want) return;
+    cell.type = want;
+    simMoveTileTypeChanged(gx, gy);
+    // (Indexes kept from the tile journal see it: the laser beam map's
+    // blocking walls, tower.js laserBeamsTick.)
+    if (typeof noteTileEntityChanged === 'function') noteTileEntityChanged(gx, gy);
+    _markCombinedBgTileDirty(gx, gy, 0, true);
+    if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(gx, gy);
+}
+
 function markConstructionComplete(item) {
     if (!item) return;
     item.underConstruction = false;
+    structureWallSync(item);
+    // (Its hammer off at the next tick: presentation only.)
+    if (typeof simPresentTileDirty === 'function') simPresentTileDirty(item.gx, item.gy);
     if ((item.level || 0) < 1) item.level = 1;
     if ((item.effectiveLevel || 0) < 1) item.effectiveLevel = 1;
     if ((item.potentialEffectiveLevel || 0) < 1) item.potentialEffectiveLevel = 1;

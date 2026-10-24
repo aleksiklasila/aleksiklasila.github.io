@@ -135,34 +135,117 @@ function simPresentationBind() {
     }
 }
 
+// Turret angles by structure slot, live (shared with the page, which reads
+// them in place of the table's: structure tables are published when
+// structures come, go or change, and the metadata cycle, seconds apart at
+// 100k buildings, so far turrets drawn from the table did not turn).
+// angleRev counts the ticks something turned. Presentation only.
+function _simPresentAngles(p, F) {
+    const cap = F.cap;
+    if (!p.angles || p.angles.length < cap) {
+        const a = new Float32Array(new SharedArrayBuffer(cap * 4));
+        // (The rows' angles as written, the live ones over them: newer.)
+        a.set(F.angle.subarray(0, Math.min(cap, F.angle.length)));
+        if (p.angles) a.set(p.angles);
+        p.angles = a;
+    }
+    if (!p.angleRev) p.angleRev = new Int32Array(new SharedArrayBuffer(4));
+    return p.angles;
+}
+// A tower turned (tower.js, as it aims).
+function simPresentTowerAngle(t) {
+    const p = _simPresentation, A = p ? p.angles : null;
+    if (!A) return;
+    const s = t._sslot;
+    if (!(s >= 0 && s < A.length) || _simStructSlots.owner[s] !== t) return;
+    const v = Math.fround(Number(t.angle) || 0);
+    if (A[s] !== v) { A[s] = v; p.angleDirty = true; }
+}
+// Per tile, the slot of the structure (towers, barracks, spawners, cell
+// items) the table shows there, -1 none: a tile whose structure went is
+// cleared by it.
+function _simPresentTileSlots(p) {
+    const n = GRID_W * GRID_H;
+    if (!p.tileSlot || p.tileSlot.length !== n) p.tileSlot = new Int32Array(n).fill(-1);
+    return p.tileSlot;
+}
 // A structure placed, built or changed shows at the next tick: its tile's
 // structure written into the shared table at once (the tile entity journal,
 // tileEntityChangesSince), not at the end of the metadata cycle, which at
 // millions of units and ~200k structures came ~10 s later (a build order's
 // site appeared that long after its ghost). The cycle still refreshes all.
+// A copy of structure table F with room for cap slots (its columns, the
+// order list): a structure placed past the shown table's end shows at the
+// next tick, not after the cycle that makes a bigger one (seconds at 100k
+// buildings).
+function _simStructTableGrow(F, cap) {
+    cap = Math.ceil(cap * 1.25 / 64) * 64;
+    const G = simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(cap * SIM_STRUCT_SPEC.slotBytes), cap);
+    for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, 'order', ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8]) G[k].set(F[k]);
+    return G;
+}
+// Tiles whose structure changed in a way the tile journal does not see (a
+// salvage mark, a toggle, construction finished): shown at the next tick
+// too. Presentation only: nothing of the simulation reads it.
+let _simPresentDirtyTiles = [];
+function simPresentTileDirty(gx, gy) {
+    if (!_simPresentation || !(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
+    if (_simPresentDirtyTiles.length < 65536) _simPresentDirtyTiles.push((gy | 0) * GRID_W + (gx | 0));
+}
 function _simPresentStructureChanges(p) {
-    const F = p.structures;
+    let F = p.structures;
     if (!F || typeof tileEntityChangesSince !== 'function') return;
-    const tiles = tileEntityChangesSince(p.teCursor || (p.teCursor = { epoch: -1, pos: 0 }));
+    let tiles = tileEntityChangesSince(p.teCursor || (p.teCursor = { epoch: -1, pos: 0 }));
+    if (_simPresentDirtyTiles.length) {
+        const d = _simPresentDirtyTiles; _simPresentDirtyTiles = [];
+        tiles = tiles && tiles.length ? [...new Set([...tiles, ...d])] : [...new Set(d)];
+    }
     if (!tiles || !tiles.length) return;
-    const S = _simStructSlots;
+    const S = _simStructSlots, T = _simPresentTileSlots(p);
     let count = Math.min(F.cap, p.structCount | 0), wrote = false;
     for (const t of tiles) {
         const gx = t % GRID_W, gy = (t - gx) / GRID_W;
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
-        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : Array.isArray(e.spawnQueue) ? 2 : -1;
-        else { const cell = grid[gy] && grid[gy][gx]; if (cell && cell.item) { e = cell.item; kind = 3; } }
-        if (!e || kind < 0) continue;
+        const cell = grid[gy] && grid[gy][gx];
+        // (A floor item is its tile's entity and its cell's item: kind 3; a mine, none here.)
+        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : Array.isArray(e.spawnQueue) ? 2 : cell && cell.item === e ? 3 : -1;
+        else if (cell && cell.item) { e = cell.item; kind = 3; }
+        if (kind < 0) e = null;
+        // The structure shown on this tile is gone (destroyed, salvaged, or
+        // another there now): off the table at once, not at the cycle's end.
+        // (A slot freed by a cycle's sweep may hold another tile's structure
+        // since: that one stays.)
+        const prev = T[t];
+        if (prev >= 0 && S.owner[prev] !== e) {
+            const pe = S.owner[prev];
+            if (pe && pe.gx === gx && pe.gy === gy) {
+                pe._sslot = undefined; S.owner[prev] = null; S.free.push(prev); S.version++;
+                if (prev < F.cap) F.alive[prev] = 0;
+                if (p.structuresNext && prev < p.structuresNext.cap) p.structuresNext.alive[prev] = 0;
+                wrote = true;
+            }
+            T[t] = -1;
+        }
+        if (!e) continue;
         const known = e._sslot !== undefined && S.owner[e._sslot] === e;
         const s = S.slotOf(e);
-        if (s >= F.cap) continue;
-        if (!known) { if (count >= F.cap) continue; F.order[count++] = s; S.stamp[s] = S.tick; }
+        T[t] = s;
+        // (Kept by the cycle running now: its sweep frees unstamped slots.)
+        if (!known) S.stamp[s] = S.tick;
+        // (The bigger table the cycle is filling, too.)
+        let N = p.structuresNext;
+        if (N && s >= N.cap) N = p.structuresNext = _simStructTableGrow(N, S.owner.length);
+        if (N) _simWriteStructure(N, s, e, kind, gameTime);
+        if (p.angles && s < p.angles.length) p.angles[s] = Math.fround(Number(e.angle) || 0);
+        if (s >= F.cap || (!known && count >= F.cap)) { F = p.structures = _simStructTableGrow(F, Math.max(S.owner.length, count + 1)); count = Math.min(count, F.cap); }
+        if (!known) F.order[count++] = s;
         _simWriteStructure(F, s, e, kind, gameTime);
         wrote = true;
     }
     if (!wrote) return;
     p.structCount = count;
-    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count,mver:S.version}, revision:++p.revision});
+    _simPresentAngles(p, F);
+    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count,mver:S.version,angles:p.angles,angleRev:p.angleRev}, revision:++p.revision});
 }
 
 function simPresentationPublish(tick) {
@@ -170,6 +253,8 @@ function simPresentationPublish(tick) {
     if (!p) return;
     simPresentationBind();
     try { _simPresentStructureChanges(p); } catch (err) { _simError('presentation structures', err); }
+    // (Turrets that turned this tick: the page's columns take their angles.)
+    if (p.angleDirty && p.angleRev) { p.angleDirty = false; Atomics.add(p.angleRev, 0, 1); }
     // (Team + history: this player's sight grid, shared, for the reader's
     // last-seen positions; units are drawn frozen where last seen.)
     // (With fog: also the fog's light and memory, made there, see
@@ -300,29 +385,44 @@ function* simPresentationMetadata() {
         if ((n & 127) === 127) yield;
     }
     const cap = Math.max(64, S.owner.length);
-    let F = p.structures;
+    let F = p.structures, fresh = false;
     if (!F || F.cap < cap) {
-        F = p.structures = simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(Math.ceil(cap * 1.25 / 64) * 64 * SIM_STRUCT_SPEC.slotBytes), Math.ceil(cap * 1.25 / 64) * 64);
+        // (A bigger table is filled beside the shown one and takes its place
+        // at the cycle's end: published before, half empty, every structure
+        // not yet written looked gone for the frames meanwhile. The changes
+        // of the ticks between go to both: _simPresentStructureChanges.)
+        F = simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(Math.ceil(cap * 1.25 / 64) * 64 * SIM_STRUCT_SPEC.slotBytes), Math.ceil(cap * 1.25 / 64) * 64);
+        if (p.structures) { p.structuresNext = F; fresh = true; } else p.structures = F;
     }
     let j=0;
+    const T=_simPresentTileSlots(p);
+    // (The table again after each yield: a tick's changes may have grown it
+    // since, _simStructTableGrow.)
+    const cur = () => fresh ? p.structuresNext : p.structures;
     for (let kind=0;kind<lists.length;kind++) for (const e of lists[kind]) {
         if (!e || S.owner[e._sslot] !== e) continue;
+        F = cur();
         const s=e._sslot; S.stamp[s]=stamp; F.order[j++]=s;
         _simWriteStructure(F,s,e,kind,gameTime);
+        if (p.angles && s < p.angles.length) p.angles[s] = F.angle[s];
+        if (kind<=3 && e.gx>=0 && e.gy>=0 && e.gx<GRID_W && e.gy<GRID_H) T[(e.gy|0)*GRID_W+(e.gx|0)]=s;
         if ((j & 31) === 31) yield;
     }
     for (let s=0;s<S.owner.length;s++) {
         if (S.stamp[s] !== stamp) {
-            F.alive[s]=0;
+            F = cur(); F.alive[s]=0;
             const e=S.owner[s];
             if (e) { e._sslot=undefined;S.owner[s]=null;S.free.push(s);S.version++; }
         }
         if ((s & 511) === 511) yield;
     }
+    F = cur();
     S.orderChanged(F.order,j);
     simPresentationBind();
+    if (fresh) { p.structures = F; p.structuresNext = null; }
     p.structCount = j;
-    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version}, revision:++p.revision});
+    _simPresentAngles(p, F);
+    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev}, revision:++p.revision});
     // Grid data is not shared by the simulation yet. Publish its primitive
     // columns in small slices too; the reader computes the display delta.
     // (Only when a tile changed, or every few seconds: a million cells

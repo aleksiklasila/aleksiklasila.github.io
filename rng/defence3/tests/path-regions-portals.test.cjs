@@ -70,7 +70,7 @@ for (const [map, seed] of [['arena', 5], ['islands', 9], ['crossroads', 13]]) {
                     if (!free(gx, gy)) continue;
                     if (placeBuilding(gx, gy, 'cloud_' + pair + end, owner, { ignorePlacementRules: true, silent: true })) {
                         portals++;
-                        const t = getTileEntityRef(gx, gy); if (t && rnd() < 0.8) { t.underConstruction = false; t.energy = Math.max(1, t.energy || 200); }
+                        const t = getTileEntityRef(gx, gy); if (t && rnd() < 0.8) { t.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(t); t.energy = Math.max(1, t.energy || 200); }
                         if (rnd() < 0.3) for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { const c = grid[gy + dy] && grid[gy + dy][gx + dx]; if (c && free(gx + dx, gy + dy)) { c.type = TYPE_WALL; simMoveTileTypeChanged(gx + dx, gy + dy); } }
                     }
                 }
@@ -78,7 +78,7 @@ for (const [map, seed] of [['arena', 5], ['islands', 9], ['crossroads', 13]]) {
             } else if (op < 0.5) {
                 // A portal destroyed (or finished).
                 const clouds = towers.filter(t => t.baseStats && t.baseStats.isCloud);
-                if (clouds.length) { const t = clouds[Math.floor(rnd() * clouds.length)]; if (t.underConstruction) t.underConstruction = false; else t.energy = 0; _bumpPathTopologyVersion(); }
+                if (clouds.length) { const t = clouds[Math.floor(rnd() * clouds.length)]; if (t.underConstruction) { t.underConstruction = false; structureWallSync(t); } else t.energy = 0; _bumpPathTopologyVersion(); }
             } else {
                 // A wall changed.
                 const [gx, gy] = spot(), c = grid[gy][gx];

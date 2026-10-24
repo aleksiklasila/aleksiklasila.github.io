@@ -25,7 +25,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         if (!e) return;
         // (Built at level 1, as main.js completeStarterBuilding: under
         // construction, its effective level is 0 and it is in no group.)
-        e.underConstruction = false; e.buildProgress = 1; e.isUpgrading = false;
+        e.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(e); e.buildProgress = 1; e.isUpgrading = false;
         e.stacks = e.effectiveStacks = getRequiredStacksForLevel(1); e.level = e.effectiveLevel = e.potentialEffectiveLevel = 1;
         if (e instanceof Tower) e.updateStats();
         e.energy = e.maxEnergy;

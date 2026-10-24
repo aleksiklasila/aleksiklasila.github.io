@@ -417,6 +417,7 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
             let target = preferredTarget;
             const shots = _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
+            if (typeof simPresentTowerAngle === 'function') simPresentTowerAngle(this);
             _towerShotFx(this, target, shots);
             playSound('shoot_' + this.type, this.x, this.y);
             return;
@@ -476,6 +477,7 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
         if (target) {
             const shots = _towerProjectile(this, target, projectileMaxRange);
             this.angle = Math.atan2(target.y - this.y, target.x - this.x);
+            if (typeof simPresentTowerAngle === 'function') simPresentTowerAngle(this);
             _towerShotFx(this, target, shots);
             playSound('shoot_' + this.type, this.x, this.y);
         }

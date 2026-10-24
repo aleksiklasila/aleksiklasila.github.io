@@ -4680,6 +4680,8 @@
                 ctx.fillRect(x, y, Math.round(width * pct), height);
             }
 
+            this.drawSiteMarks(overlays.siteMarks, ctx);
+
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             for (let text of overlays.texts || []) {
@@ -4699,6 +4701,49 @@
                 ctx.fillText(String(text.text), Math.round(p.x), y);
             }
             ctx.restore();
+        }
+
+        // Marks over structures (renderer.js build3DOverlayData siteMarks):
+        // 1 a red cross (marked for salvage), 2 a hammer (under construction).
+        // On the overlay canvas, over the structure's top: its model never
+        // hides them, close or far. A sprite each, made once.
+        static siteMarkSprite(kind) {
+            const S = Defence3Renderer3D._siteSprites || (Defence3Renderer3D._siteSprites = {});
+            if (S[kind]) return S[kind];
+            const c = document.createElement('canvas'); c.width = c.height = 64;
+            const g = c.getContext('2d');
+            if (kind === 1) {
+                g.lineCap = 'round';
+                g.strokeStyle = 'rgba(0,0,0,0.85)'; g.lineWidth = 15;
+                g.beginPath(); g.moveTo(14, 14); g.lineTo(50, 50); g.moveTo(50, 14); g.lineTo(14, 50); g.stroke();
+                g.strokeStyle = '#ff4444'; g.lineWidth = 8;
+                g.beginPath(); g.moveTo(14, 14); g.lineTo(50, 50); g.moveTo(50, 14); g.lineTo(14, 50); g.stroke();
+            } else {
+                // A hammer: dark outline, wooden handle, steel head.
+                g.translate(32, 32); g.rotate(-Math.PI / 4);
+                const shape = (pad) => {
+                    g.beginPath(); g.roundRect(-4 - pad, -8 - pad, 8 + pad * 2, 36 + pad * 2, 3); g.fill();
+                    g.beginPath(); g.roundRect(-17 - pad, -22 - pad, 34 + pad * 2, 14 + pad * 2, 3); g.fill();
+                };
+                g.fillStyle = 'rgba(0,0,0,0.85)'; shape(4);
+                g.fillStyle = '#c8873a'; g.beginPath(); g.roundRect(-4, -8, 8, 36, 3); g.fill();
+                g.fillStyle = '#d9dee4'; g.beginPath(); g.roundRect(-17, -22, 34, 14, 3); g.fill();
+                g.fillStyle = '#8f99a3'; g.fillRect(-17, -12, 34, 4);
+            }
+            return (S[kind] = c);
+        }
+        drawSiteMarks(marks, ctx) {
+            if (!marks || !marks.length || !ctx) return;
+            const lift = 0.72;
+            for (const m of marks) {
+                const p = this.projectWorldToCanvasDetailed(m.x, lift, m.z);
+                if (!p || !this.isOverlayPointVisible(p)) continue;
+                const ppt = this.getScreenPixelsPerTile(m.x, lift, m.z);
+                if (!(ppt > 0)) continue;
+                // (About half a tile; readable when far, not covering the model when close.)
+                const size = Math.round(Math.max(6, Math.min(26, ppt * 0.48)));
+                ctx.drawImage(Defence3Renderer3D.siteMarkSprite(m.kind), Math.round(p.x - size / 2), Math.round(p.y - size * 0.75), size, size);
+            }
         }
 
         drawBuildPreview(preview, ctx) {
@@ -6515,7 +6560,8 @@
                         // (renderer.js get3DConstructionAlpha). Those are drawn
                         // with the scene's other see-through things, after the
                         // solid ones: drawColumnModelGhosts.)
-                        const ghost=!kind&&(F.flags[s]&1)!==0;
+                        // (Building sites are drawn as built ones now: renderer.js get3DConstructionAlpha.)
+                        const ghost=false;
                         // Middle bodies are smaller than the close layer, which
                         // already uses lod2 below 40px. Spending more geometry
                         // here made dense, tilted views needlessly expensive.
@@ -7123,8 +7169,8 @@
                         if(ghost) shade *= .55;
                         vLight = shade;
                         vPaletteLayer = float(uStructure != 0 && (aKind == 4. || aKind == 5.) ? 0 : uOwnerLayers[clamp(int(aOwner)+1,0,8)]);
-                        // (A building site: slightly faded, renderer.js CONSTRUCTION_ALPHA.)
-                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && aKind < 4. && (flags & 1) != 0 ? .65 : 1.);
+                        // (A building site as the building: renderer.js get3DConstructionAlpha.)
+                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], 1.);
                         // Neutral resource tiles keep their material color even
                         // after the emblem becomes too small to resolve.
                         if(uStructure != 0 && aKind == 4.) vColor.rgb=aResource>0.?vec3(1.,.867,0.):vec3(.17,.158,0.);
@@ -7416,6 +7462,12 @@
                 // (Where each column lies: the selection mask draws from
                 // the same buffer, drawSelectionMask.)
                 S.offsets=offsets;
+                S.angleRev=F.angleRev?Atomics.load(F.angleRev,0):-1;
+            } else if (structure && F.angleRev && S.offsets && S.offsets.has('angle')) {
+                // Turrets turned since (the table's angles are live:
+                // sim_frame_world.js pageApplyStructures): that column alone.
+                const rev=Atomics.load(F.angleRev,0);
+                if (S.angleRev!==rev) { S.angleRev=rev; gl.bufferSubData(gl.ARRAY_BUFFER,S.offsets.get('angle'),F.angle.subarray(0,F.n)); }
             }
             return S;
         }

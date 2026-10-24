@@ -426,30 +426,147 @@ function _pageFreezeStruct(v) {
     v._last = last; v._s = -1; v.dead = true;
 }
 
+// A structure view's page list (towers, barracks, ...; cell items have none:
+// the grid and the tile index hold them), its place there in v._pli.
+function _pageStructList(kind) {
+    return kind === 0 ? towers : kind === 1 ? barracks : kind === 2 ? collectorSpawners : kind === 4 ? goldMines : kind === 5 ? astarMines : kind === 6 ? droppedItems : null;
+}
+// (The lists' membership versions: caches of them are kept by these, the
+// list itself staying the same array.)
+function _pageStructListVersion(v) {
+    const kind = v._kind;
+    if (kind === 0) towerJoinedOrLeft(v);
+    else if (kind === 1) barracksChanged();
+    else if (kind === 2) collectorSpawnersVersion++;
+    else if (kind === 6) droppedItemsVersion++;
+}
+function _pageStructListAdd(v) { const L = _pageStructList(v._kind); if (L) { v._pli = L.length; L.push(v); _pageStructListVersion(v); } }
+function _pageStructListRemove(v) {
+    const L = _pageStructList(v._kind);
+    if (!L) return;
+    _pageStructListVersion(v);
+    let i = v._pli;
+    if (!(i >= 0 && i < L.length && L[i] === v)) i = L.indexOf(v);
+    v._pli = -1;
+    if (i < 0) return;
+    const last = L.pop();
+    if (last !== v) { L[i] = last; last._pli = i; }
+}
+// A view onto its tile (the cell's item, the tile index, the drop grid), and off it.
+function _pageStructPlace(v) {
+    const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy];
+    if (kind === 6) { _setDroppedItemAt(gx, gy, v); return; }
+    if ((kind === 1 || kind === 2 || kind === 3) && row && row[gx]) row[gx].item = v;
+    setTileEntity(gx, gy, _snapTileTypeOf(SIM_STRUCT_KINDS[kind], v), v);
+}
+function _pageStructUnplace(v) {
+    const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy], cell = row ? row[gx] : null;
+    if (kind === 6) { if (cell && cell.droppedItem === v) _setDroppedItemAt(gx, gy, null); return; }
+    if (cell && cell.item === v) cell.item = null;
+    clearTileEntity(gx, gy, v);
+}
+// (Probes: how membership changes were applied.)
+const pageStructStats = { full: 0, inc: 0, changes: 0, fullWhy: '' };
+// (Per slot, whether a live view holds it and its serial: the membership
+// pass reads these, not the views.)
+let _pageViewHas = new Uint8Array(0), _pageViewSer = new Int32Array(0);
+function _pageViewSlot(s, v) {
+    if (s >= _pageViewHas.length) {
+        const n = Math.ceil((s + 1) * 1.25) + 64, h = new Uint8Array(n), r = new Int32Array(n);
+        h.set(_pageViewHas); r.set(_pageViewSer); _pageViewHas = h; _pageViewSer = r;
+    }
+    _pageStructViews[s] = v;
+    _pageViewHas[s] = v && !v.dead ? 1 : 0; _pageViewSer[s] = v ? v._serial | 0 : 0;
+}
+
 // The structures of a new frame: views, lists and the tile index when the
 // membership changed; label sprites of structures whose label changed.
+// A membership change (a building placed or gone: every tick of a build
+// burst or a battle) is applied by slot, O(changes) besides a typed pass
+// over the table: the views, lists, tile index and drawn tiles of the slots
+// whose structure changed. Everything is made anew only for the first frame,
+// a new grid, or a change of most of the table.
 function pageApplyStructures(table, c) {
     let F = simTableViews(SIM_STRUCT_SPEC, table.buf, table.cap);
     F.n = table.n;
+    // (Turret angles live, not as the table was copied: sim_presentation.js
+    // _simPresentAngles. angleRev moves when any turned.)
+    if (table.angles && table.angles.length >= F.cap) { F.angle = table.angles; F.angleRev = table.angleRev || null; }
     let old = _pageTables.s;
     let changed = table.mver !== c.structMver || !old;
     let relabel = [];
+    if (changed && old && c.structGrid === grid) {
+        // Which slots hold which structure now: by each slot's alive byte, not
+        // the order list (the metadata cycle rewrites that in place over many
+        // ticks: a frame copied meanwhile missed some structures and listed
+        // others twice, and their views were made anew frame after frame).
+        const n = Math.max(F.n, old.n, _pageStructViews.length), live = Math.min(F.n, F.cap);
+        if (_pageViewHas.length < n) _pageViewSlot(n - 1, _pageStructViews[n - 1] || null);
+        const H = _pageViewHas, SER = _pageViewSer, alive = F.alive, serial = F.serial;
+        let gone = null, added = null;
+        for (let s = 0; s < n; s++) {
+            const has = H[s] === 1, now = s < live && alive[s] === 1;
+            if (!has && !now) continue;
+            const same = has && now && SER[s] === serial[s];
+            if (same) continue;
+            if (has) (gone ||= []).push(_pageStructViews[s]);
+            if (now) (added ||= []).push(s);
+        }
+        const nGone = gone ? gone.length : 0, nAdded = added ? added.length : 0;
+        pageStructStats.last = [nGone, nAdded, live];
+        if (nGone + nAdded <= Math.max(256, live >> 2)) {
+            pageStructStats.inc++; pageStructStats.changes += nGone + nAdded;
+            // (Off their tiles while their last frame is still the table: a
+            // reused slot's view reads the new one.)
+            if (gone) for (const v of gone) {
+                const s = v._s;
+                _pageFreezeStruct(v);
+                _pageStructUnplace(v);
+                _pageStructListRemove(v);
+                if (s >= 0 && _pageStructViews[s] === v) _pageViewSlot(s, null);
+                _markCombinedBgTileDirty(v.gx, v.gy, 0, false);
+                if (typeof minimapStaticTileChanged === 'function') minimapStaticTileChanged(v.gx, v.gy);
+            }
+            _pageTables.s = F;
+            if (added) for (const s of added) {
+                const v = _pageNewStructView(F.kind[s], _pageFrameStrings[F.type[s]], s, serial[s]);
+                _pageViewSlot(s, v);
+                relabel.push(v);
+                _pageStructListAdd(v);
+                _pageStructPlace(v);
+                _markCombinedBgTileDirty(v.gx, v.gy, 0, false);
+                if (typeof minimapStaticTileChanged === 'function') minimapStaticTileChanged(v.gx, v.gy);
+            }
+            c.structMver = table.mver;
+            c.structViews = null;
+            if (nGone + nAdded) _simClientStructuresChanged();
+            changed = false;
+        }
+    }
     if (changed) {
-        let lists = [[], [], [], [], [], [], []], seen = new Set();
-        for (let k = 0; k < table.count; k++) {
-            let s = F.order[k], kind = F.kind[s], v = _pageStructViews[s];
+        pageStructStats.full++; pageStructStats.fullWhy = !old ? 'first' : c.structGrid !== grid ? 'grid' : 'many';
+        let lists = [[], [], [], [], [], [], []], seen = new Set(), replaced = [];
+        for (let s = 0, live = Math.min(F.n, F.cap); s < live; s++) {
+            if (F.alive[s] !== 1) continue;
+            let kind = F.kind[s], v = _pageStructViews[s];
             if (!v || v._serial !== F.serial[s] || v.dead) {
+                if (v && !v.dead) replaced.push(v);
                 v = _pageNewStructView(kind, _pageFrameStrings[F.type[s]], s, F.serial[s]);
                 _pageStructViews[s] = v;
                 relabel.push(v);
             }
             seen.add(v);
+            v._pli = lists[kind].length;
             lists[kind].push(v);
         }
-        for (let v of c.structViews || []) if (!seen.has(v)) _pageFreezeStruct(v);
-        for (let s = 0; s < _pageStructViews.length; s++) { let v = _pageStructViews[s]; if (v && !seen.has(v)) _pageStructViews[s] = null; }
-        c.structViews = [...seen];
+        for (let v of replaced) _pageFreezeStruct(v);
+        for (let s = 0; s < _pageStructViews.length; s++) { let v = _pageStructViews[s]; if (v && !seen.has(v)) { if (!v.dead) _pageFreezeStruct(v); _pageStructViews[s] = null; } }
+        // (The slots' typed mirror, whole.)
+        _pageViewHas.fill(0); _pageViewSer.fill(0);
+        for (let s = _pageStructViews.length - 1; s >= 0; s--) if (_pageStructViews[s]) _pageViewSlot(s, _pageStructViews[s]);
+        c.structViews = null;
         c.structMver = table.mver;
+        c.structGrid = grid;
         _pageTables.s = F;
         towers = lists[0]; barracks = lists[1]; collectorSpawners = lists[2];
         goldMines.length = 0; for (let m of lists[4]) goldMines.push(m);
@@ -465,9 +582,9 @@ function pageApplyStructures(table, c) {
                 setTileEntity(v.gx, v.gy, _snapTileTypeOf(list, v), v);
             }
         }
-        droppedItems = [];
+        droppedItems = lists[6];
         initDroppedItemGrid();
-        for (let d of lists[6]) { _setDroppedItemAt(d.gx, d.gy, d); droppedItems.push(d); }
+        for (let d of lists[6]) _setDroppedItemAt(d.gx, d.gy, d);
         if (typeof recalculateLaserConnections === 'function') { /* links come from the frame */ }
         _simClientMapChanged();
     } else {
@@ -595,15 +712,22 @@ function pageApplyState(st) {
             // (Its piece of the cached background again: a wall or a mine
             // that became floor, a tile that changed hands. The flag below
             // alone redraws nothing: a mined-out mine kept its rock.)
-            if ((cell.type !== type || cell.owner !== owner) && typeof _markCombinedBgTileDirty === 'function') {
-                if (++redrawn <= 256) _markCombinedBgTileDirty(idx % GRID_W, Math.floor(idx / GRID_W), 0, cell.type !== type);
-                else if (redrawn === 257 && typeof _markCombinedBgFullDirty === 'function') _markCombinedBgFullDirty();
+            if (cell.type !== type || cell.owner !== owner) {
+                ++redrawn;
+                if (redrawn <= 256) {
+                    if (typeof _markCombinedBgTileDirty === 'function') _markCombinedBgTileDirty(idx % GRID_W, Math.floor(idx / GRID_W), 0, cell.type !== type);
+                    // (The tile indexes follow the tile, by the journal.)
+                    noteTileEntityChanged(idx % GRID_W, Math.floor(idx / GRID_W));
+                } else if (redrawn === 257 && typeof _markCombinedBgFullDirty === 'function') _markCombinedBgFullDirty();
             }
             cell.type = type; cell.owner = owner;
         }
-        _tileEntityVersion++;
-        if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();
-        _simClientMapChanged();
+        if (redrawn) {
+            _tileEntityVersion++;
+            // (Many tiles: every index made anew, the whole map drawn again.)
+            if (redrawn > 256) { if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset(); _simClientMapChanged(); }
+            else _simClientStructuresChanged();
+        }
     }
 }
 
@@ -630,8 +754,9 @@ function pageApplyStructureDetails(details, c) {
 }
 
 function pageResetWorldTables(c) {
-    for (let v of (c && c.structViews) || []) _pageFreezeStruct(v);
+    if (_pageTables.s) for (let v of _pageStructViews) if (v && !v.dead) _pageFreezeStruct(v);
     _pageStructViews = []; _pageProjViews = [];
+    _pageViewHas.fill(0); _pageViewSer.fill(0);
     let bufs = [];
     if (_pageTables.s) bufs.push(_pageTables.s.buf);
     if (_pageTables.p) bufs.push(_pageTables.p.buf);

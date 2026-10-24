@@ -2881,8 +2881,16 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                 continue;
             }
         } else if tq < 0 {
-            s(bm, q, 0);
-            continue;
+            // A moving shooter with no unit in reach: the structure the scan
+            // took (its classes in the idle look's order: turrets, traps,
+            // barracks and spawners, other buildings), fired at on the move.
+            if mover && !sout.is_null() {
+                sg = g(sout, q);
+            }
+            if sg < 0 {
+                s(bm, q, 0);
+                continue;
+            }
         }
         let tu = if sg >= 0 { 0usize } else { tq as usize };
         let ta = if sg >= 0 { g(ag, sg as usize) } else { area_of(g(xs, tu), g(ys, tu)) };
@@ -2938,10 +2946,12 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             continue;
         }
         if mover {
-            s(bm, q, if in_range { 4 } else { 0 });
+            // (Fire only, 4; on a structure 16|4: mv.rs move_struct fires and
+            // leaves the unit its own move.)
+            s(bm, q, if !in_range { 0 } else if sg >= 0 { 16 | 4 } else { 4 });
             if in_range {
-                s(bt, q, tq);
-                s(btid, q, g(id, tu));
+                s(bt, q, if sg >= 0 { sg } else { tq });
+                s(btid, q, if sg >= 0 { 0 } else { g(id, tu) });
             }
             continue;
         }

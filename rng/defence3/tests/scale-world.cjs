@@ -19,7 +19,7 @@ function setupCode(unitsPerTeam, buildingsPerTeam) {
                 if (placeBuilding(gx, gy, type, owner, { autoUpgradeEnabled: true, buildEnabled: true, silent: true, ignorePlacementRules: true })) {
                     n++;
                     const e = getTileEntityRef(gx, gy);
-                    if (e && (gx + gy) % 5 !== 0) { e.underConstruction = false; if (Number.isFinite(e.maxEnergy)) e.energy = e.maxEnergy; }
+                    if (e && (gx + gy) % 5 !== 0) { e.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(e); if (Number.isFinite(e.maxEnergy)) e.energy = e.maxEnergy; }
                 }
             }
         }

@@ -121,7 +121,7 @@ const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawne
                 const type = ringTypes[r][(dx + dy + 100) % 2];
                 if (!placeBuilding(gx, gy, type, ${hostTeam}, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: false, buildEnabled: true })) continue;
                 const it = grid[gy][gx].item;
-                if (it) { it.underConstruction = false; it.energy = it.maxEnergy; it.level = 1; }
+                if (it) { it.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(it); it.energy = it.maxEnergy; it.level = 1; }
                 n++;
             }
         })()`);

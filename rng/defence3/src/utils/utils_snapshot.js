@@ -144,7 +144,11 @@ const SNAP_FORMAT = 7;
 // 36: only two area stats, range and vision (a worker's range its work reach),
 // a vision of 0 its own area (0a); a placement goes ahead of waiting actions
 // that do not touch its tile.
-const SIM_RULES_REVISION = 36;
+// 37: a tower blocks its tile only once built (under construction every unit
+// walks over it; units on it when it is done are pushed off); moving shooters
+// drive-by fire at hostile structures (turrets, traps, buildings) when no unit
+// is in reach.
+const SIM_RULES_REVISION = 37;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

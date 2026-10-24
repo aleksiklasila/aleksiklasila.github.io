@@ -1953,7 +1953,9 @@ pub unsafe extern "C" fn acq_scan(
         let y = rd(ys, s);
         let cx = floor(x / cws);
         let cy = floor(y / cws);
-        if cmd == cmd_idle || cmd == cmd_am {
+        // (A moving shooter too: its drive-by takes a structure when no unit
+        // is in reach, k_combat_brain.)
+        if cmd == cmd_idle || cmd == cmd_am || (fl & 16) != 0 {
             wr(sout, s, acq_structure(scls, sown, hss, ag, covf, covf_len, cbase, owner, x, y, r, tile, gw, gh, b, bc, br, stride, plane));
         }
         let rt = ceil(r / cws) + 1.0;

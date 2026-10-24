@@ -22,7 +22,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
             if (!free(gx, gy)) continue;
             if (!placeBuilding(gx, gy, type, owner, { ignorePlacementRules: true, silent: true })) continue;
             const e = getTileEntityRef(gx, gy) || grid[gy][gx].item;
-            if (e) { e.underConstruction = false; e.energy = e.maxEnergy; return e; }
+            if (e) { e.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(e); e.energy = e.maxEnergy; return e; }
         }
         return null;
     };

@@ -6706,6 +6706,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
                 let gx = parseInt(btn.dataset.gx), gy = parseInt(btn.dataset.gy);
                 let marked = btn.dataset.marked === '1';
                 queueAction({ action: 'setSalvage', gx, gy, marked: !marked });
+                // (Its cross shown now, not when the order comes back.)
+                if (typeof noteSalvageShown === 'function') noteSalvageShown(gx, gy, !marked);
             }
             setTimeout(updateInfoPanel, 50);
         });
@@ -6715,7 +6717,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let marked = btn.dataset.marked === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked });
+            for (let c of coords) {
+                queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked });
+                if (typeof noteSalvageShown === 'function') noteSalvageShown(c.gx, c.gy, !marked);
+            }
             setTimeout(updateInfoPanel, 50);
         });
     });

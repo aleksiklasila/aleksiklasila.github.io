@@ -188,7 +188,8 @@ unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){
         }
     }}
     let command=*k.p::<u8>(8).add(s) as i32;
-    if command==k.i(8)||command==k.i(9) {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
+    // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.)
+    if command==k.i(8)||command==k.i(9)||(*k.p::<u8>(7).add(s))&16!=0 {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
     if target_area<0 {return;}
     let ar=target_area as usize;let off=k.p::<i32>(27);let slots=k.p::<i32>(32);let ids=k.p::<i32>(31);
     let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);
@@ -231,7 +232,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
         let x=*xs.add(s);let y=*ys.add(s);
         if k.i(28)==1 {area_answer(&k,s,x,y,owner as usize,r);continue;}
         // Structure selection is still exact, to isolate the unit-target tradeoff.
-        if command==k.i(8)||command==k.i(9) {
+        if command==k.i(8)||command==k.i(9)||fl&16!=0 {
             let bc=k.i(11);let br=k.i(12);let stride=bc+1;let plane=stride*(br+1);
             *sout.add(s)=acq_structure(k.p::<i8>(0),k.p::<i8>(1),k.p::<i32>(2),ag,cov,na*players,owner*na as i32,owner,
                 x as f64,y as f64,r as f64,tile,gw,gh,k.i(10),bc,br,stride,plane);

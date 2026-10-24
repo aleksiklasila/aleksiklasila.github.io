@@ -16,7 +16,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         while (!free(gx, gy)) gx--;
         placeBuilding(gx, gy, type, owner, { ignorePlacementRules: true, silent: true });
         const b = getTileEntityRef(gx, gy) || grid[gy][gx].item;
-        b.underConstruction = false; b.energy = energy > 0 ? energy : b.maxEnergy;
+        b.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(b); b.energy = energy > 0 ? energy : b.maxEnergy;
         return b;
     };
     const mk = (gx, gy, type = 'norm', owner = 0) => {
