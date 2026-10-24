@@ -33,6 +33,8 @@ function random(n) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; retur
 // Scratch storage must not leak reveal coverage between teams, ticks or maps.
 const visCtx = {
     GRID_W: 8, GRID_H: 8, TILE: 32, AREA_UNIT_TILE_EQUIVALENT: 1,
+    // (Area steps: data_static.js areaSteps / areaStepsVisionTiles.)
+    areaSteps: v => { v = Number(v); return v > 0 ? Math.min(63, Math.floor(v + 1e-9)) : 0; }, areaStepsVisionTiles: k => Math.max(0.6, k) * 1,
     units: [], towers: [], barracks: [], collectorSpawners: [],
     grid: Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => ({}))),
     getAreaIdAtWorld: () => -1,

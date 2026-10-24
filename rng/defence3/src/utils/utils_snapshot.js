@@ -141,7 +141,10 @@ const SNAP_FORMAT = 7;
 // 35: area distances (attack range, vision, work distance) are whole areas in
 // the stat tables (their whole part), not fractions; an attack-mover whose
 // target fell stands for the brain's next word; head-on movers keep right.
-const SIM_RULES_REVISION = 35;
+// 36: only two area stats, range and vision (a worker's range its work reach),
+// a vision of 0 its own area (0a); a placement goes ahead of waiting actions
+// that do not touch its tile.
+const SIM_RULES_REVISION = 36;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

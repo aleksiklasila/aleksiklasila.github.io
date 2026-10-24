@@ -13,7 +13,8 @@ const r=i.eval(`(()=>{
   if(!u._us)continue;const c=u._us,s=u._si;
   u.watched=checked%3===0?20:0;u.watchedByTeam=(u.owner+1)%2;
   const active=!u.dead&&u._spatialKey!==undefined;let steps=-1,p1=-1,p2=-1;
-  if(active){const range=getEntityEffectiveVisibilityRangeArea(u);if(range>0){steps=Math.min(VIS_COVER_MAX_STEPS,Math.floor(range));
+  // (Whole area steps: 0 is its own area, every unit sees.)
+  if(active){const range=getEntityEffectiveVisibilityRangeArea(u);if(range>=0){steps=Math.min(VIS_COVER_MAX_STEPS,Math.floor(range));
    const owner=Math.floor(Number(u.owner));p1=owner>=0&&owner<_visCover.players?owner:-1;
    if(u.watched>0){const w=Math.floor(Number(u.watchedByTeam));if(w>=0&&w<_visCover.players&&w!==p1)p2=w;}
    if(p1<0&&p2<0)steps=-1;

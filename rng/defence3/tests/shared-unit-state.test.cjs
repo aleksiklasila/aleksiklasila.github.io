@@ -12,7 +12,8 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     // (4-byte columns, then 2-byte, then bytes: every view aligned for any cap.)
     for (const [keys, bytes] of [[SIM_FRAME_F32,4], [[...SIM_FRAME_I32,'order'],4], [SIM_FRAME_I16,2], [SIM_FRAME_U8,1]])
         for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64; }
-    if (offset !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
+    // (The slot's bytes rounded up to 4: what follows the frame is read as 4-byte arrays.)
+    if (Math.ceil(offset / 64 / 4) * 4 * 64 !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
     // Growth must update every live accessor, including objects that existed
     // before reallocation. Positions are Int32 eighths of a pixel (rules 6).
     const first = units[0]; first.x = 123.1234567890123; const x = Math.round(123.1234567890123 * 8) / 8;

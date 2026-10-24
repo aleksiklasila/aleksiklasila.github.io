@@ -72,7 +72,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261024-ui3', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261024-ui5', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -135,10 +135,41 @@ function simPresentationBind() {
     }
 }
 
+// A structure placed, built or changed shows at the next tick: its tile's
+// structure written into the shared table at once (the tile entity journal,
+// tileEntityChangesSince), not at the end of the metadata cycle, which at
+// millions of units and ~200k structures came ~10 s later (a build order's
+// site appeared that long after its ghost). The cycle still refreshes all.
+function _simPresentStructureChanges(p) {
+    const F = p.structures;
+    if (!F || typeof tileEntityChangesSince !== 'function') return;
+    const tiles = tileEntityChangesSince(p.teCursor || (p.teCursor = { epoch: -1, pos: 0 }));
+    if (!tiles || !tiles.length) return;
+    const S = _simStructSlots;
+    let count = Math.min(F.cap, p.structCount | 0), wrote = false;
+    for (const t of tiles) {
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
+        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : Array.isArray(e.spawnQueue) ? 2 : -1;
+        else { const cell = grid[gy] && grid[gy][gx]; if (cell && cell.item) { e = cell.item; kind = 3; } }
+        if (!e || kind < 0) continue;
+        const known = e._sslot !== undefined && S.owner[e._sslot] === e;
+        const s = S.slotOf(e);
+        if (s >= F.cap) continue;
+        if (!known) { if (count >= F.cap) continue; F.order[count++] = s; S.stamp[s] = S.tick; }
+        _simWriteStructure(F, s, e, kind, gameTime);
+        wrote = true;
+    }
+    if (!wrote) return;
+    p.structCount = count;
+    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count,mver:S.version}, revision:++p.revision});
+}
+
 function simPresentationPublish(tick) {
     const p = _simPresentation;
     if (!p) return;
     simPresentationBind();
+    try { _simPresentStructureChanges(p); } catch (err) { _simError('presentation structures', err); }
     // (Team + history: this player's sight grid, shared, for the reader's
     // last-seen positions; units are drawn frozen where last seen.)
     // (With fog: also the fog's light and memory, made there, see
@@ -290,6 +321,7 @@ function* simPresentationMetadata() {
     }
     S.orderChanged(F.order,j);
     simPresentationBind();
+    p.structCount = j;
     p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version}, revision:++p.revision});
     // Grid data is not shared by the simulation yet. Publish its primitive
     // columns in small slices too; the reader computes the display delta.

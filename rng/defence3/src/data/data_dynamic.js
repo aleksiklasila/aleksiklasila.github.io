@@ -942,12 +942,13 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
 
 
     if (tables.THING_STATS) {
+        migrateThingStatsAreas(tables.THING_STATS);
         validateThingStats(tables.THING_STATS);
         replaceObjectContents(THING_STATS, tables.THING_STATS);
     }
     else importLegacyThingTables(tables,prog);
     if (tables.BUILD_CATEGORIES) replaceObjectContents(BUILD_CATEGORIES, tables.BUILD_CATEGORIES);
-    if (tables.RESEARCH_STAT_LABELS) replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS);
+    if (tables.RESEARCH_STAT_LABELS) { replaceObjectContents(RESEARCH_STAT_LABELS, tables.RESEARCH_STAT_LABELS); delete RESEARCH_STAT_LABELS.workerSearchDistance; }
     rebuildThingDefinitionViews();
     normalizeBaseCardDefinitions();
     PRECOMPUTED_STATS_READY = false;
@@ -955,6 +956,20 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     startingResourcesConfig = normalizeStartingResourcesConfig(startingResourcesConfig);
     refreshStartingResourcesPreviewPrecomputedStats();
     syncMainMenuFromRuntimeConfig();
+}
+
+// Configs from before the two area stats (2026-10-24): a worker's work
+// distance (workerSearchDistance) is its range now; the stat is gone from
+// every thing. (An old config's worker range, base 0, made its workers search
+// only their own area.)
+function migrateThingStatsAreas(thingStats) {
+    if (!thingStats || typeof thingStats !== 'object') return;
+    for (const thing of Object.values(thingStats)) {
+        const stats = thing && thing.stats;
+        if (!stats || !stats.workerSearchDistance) continue;
+        if (thing.isWorker) stats.attackRange = stats.workerSearchDistance;
+        delete stats.workerSearchDistance;
+    }
 }
 
 // Old snapshots used separate base-stat tables. Import their base values into the
@@ -967,14 +982,16 @@ function importLegacyThingTables(tables, progression = {}) {
             if (typeof old.unitType === 'string') thing.spawns = old.unitType;
             for (const [field,value] of Object.entries(old)) {
                 if (['unitType','energyCost','towerEnergy','maxAttackRange','minAttackCooldown','maxVisionRange','rangeGrowthPerLevel'].includes(field)) continue;
-                const stat = kind === 'building' && field === 'energy' ? 'maxEnergy' : field;
+                // (A worker's range is its old work distance: migrateThingStatsAreas.)
+                if (thing.isWorker && field === 'attackRange') continue;
+                const stat = kind === 'building' && field === 'energy' ? 'maxEnergy' : thing.isWorker && field === 'workerSearchDistance' ? 'attackRange' : field;
                 if (thing.stats[stat] && Number.isFinite(value)) {
                     if (!thing.stats[stat].from) thing.stats[stat].base = value;
                 } else if (typeof value !== 'number' && field !== 'stats') thing[field] = value;
             }
-            if (Number.isFinite(old.maxAttackRange) && thing.stats.attackRange) thing.stats.attackRange.softCap = old.maxAttackRange;
+            if (Number.isFinite(old.maxAttackRange) && thing.stats.attackRange && !thing.isWorker) thing.stats.attackRange.softCap = old.maxAttackRange;
             if (Number.isFinite(old.minAttackCooldown) && thing.stats.atkCd) thing.stats.atkCd.softCap = old.minAttackCooldown;
-            if (Number.isFinite(old.rangeGrowthPerLevel) && thing.stats.attackRange) thing.stats.attackRange.level.linear = old.rangeGrowthPerLevel;
+            if (Number.isFinite(old.rangeGrowthPerLevel) && thing.stats.attackRange && !thing.isWorker) thing.stats.attackRange.level.linear = old.rangeGrowthPerLevel;
             if (Number.isFinite(old.maxVisionRange) && thing.stats.visionRange) thing.stats.visionRange.level.max = old.maxVisionRange;
         }
     }
@@ -995,11 +1012,13 @@ function importLegacyThingTables(tables, progression = {}) {
             if (Number.isFinite(c.speedCapAbs)) thing.stats.speed.level.max = c.speedCapAbs;
             else if (Number.isFinite(c.speedCapMul)) thing.stats.speed.level.max = thing.stats.speed.base*c.speedCapMul;
             if (Number.isFinite(c.visionCapBonus)) thing.stats.visionRange.level.max = thing.stats.visionRange.base+c.visionCapBonus;
-            thing.stats.attackRange.level.factor = c.rangeExp ?? c.visionExp ?? thing.stats.attackRange.level.factor;
-            thing.stats.attackRange.level.max = thing.stats.attackRange.base+(c.rangeCapBonus ?? c.visionCapBonus ?? 1.2);
+            if (!thing.isWorker) {
+                thing.stats.attackRange.level.factor = c.rangeExp ?? c.visionExp ?? thing.stats.attackRange.level.factor;
+                thing.stats.attackRange.level.max = thing.stats.attackRange.base+(c.rangeCapBonus ?? c.visionCapBonus ?? 1.2);
+            }
         }
         const eligible = tables.RESEARCHABLE_UNIT_STATS?.[key] || tables.RESEARCHABLE_UNIT_STATS?._default;
-        if (eligible) for (const [stat,rule] of Object.entries(thing.stats)) rule.researchable = eligible.includes(stat);
+        if (eligible) for (const [stat,rule] of Object.entries(thing.stats)) rule.researchable = eligible.includes(thing.isWorker && stat === 'attackRange' ? 'workerSearchDistance' : stat) || (stat === 'attackRange' && eligible.includes(stat));
     }
     for (const [key,description] of Object.entries(tables.DESCRIPTIONS || {})) if (THING_STATS[key]) THING_STATS[key].description = description;
     const building = tables.BUILDING_FORMULA_CONFIG || {}, unit = tables.UNIT_FORMULA_CONFIG || {}, research = tables.RESEARCH_FORMULA_CONFIG || {};

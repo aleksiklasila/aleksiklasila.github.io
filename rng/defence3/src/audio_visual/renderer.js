@@ -358,9 +358,13 @@ function get3DBuildingTextureStatus(entity, extraBars = []) {
     return build3DStatusTextureOptions(entity && entity.textCanvas && shouldShowBuildingLevels(entity) ? getLevelLabelText(entity) : '', bars);
 }
 
+// A building site: its picture slightly faded (CONSTRUCTION_ALPHA), so it
+// reads as what is being built. (At 0.25 it was a grey smear over the
+// ground: what it was could not be seen.)
+const CONSTRUCTION_ALPHA = 0.65;
 function get3DConstructionAlpha(entity) {
     if (!entity) return 1;
-    if (entity.underConstruction) return 0.25;
+    if (entity.underConstruction) return CONSTRUCTION_ALPHA;
     return 1;
 }
 
@@ -2459,7 +2463,7 @@ function buildScaleFrameData(flat2d, view) {
             d[o + 7] = kind;
             const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
             d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness;
-            d[o + 11] = e._historyGhost ? .3 : e.underConstruction ? .6 : 1;
+            d[o + 11] = e._historyGhost ? .3 : e.underConstruction ? CONSTRUCTION_ALPHA : 1;
             layer.sources.push(e);
         };
         for (const layer of cache.layers) { layer.count = 0; layer.sources = layer.sources || []; layer.sources.length = 0; layer.sourceIndex = null; }
@@ -4027,7 +4031,7 @@ function _structureGlyphLayer(D, floorItems, viewGrid) {
         L.reserve(L.count + 1);
         const d = L.data, o = L.count++ * 12, c = colorFor(owner), x = gx + .5, z = gy + .5;
         d[o] = x; d[o + 1] = z; d[o + 2] = x; d[o + 3] = z; d[o + 4] = .94; d[o + 5] = kind === 1 ? .85 : .2; d[o + 6] = 0; d[o + 7] = kind;
-        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : e.underConstruction ? .6 : 1;
+        d[o + 8] = c.r / 255; d[o + 9] = c.g / 255; d[o + 10] = c.b / 255; d[o + 11] = e._historyGhost ? .45 : e.underConstruction ? CONSTRUCTION_ALPHA : 1;
     };
     for (const list of D.far) for (const e of list) push(e, e.gx | 0, e.gy | 0, e.owner, 1);
     if (floorItems) for (const [e, x, y, owner] of floorItems) push(e, x, y, owner, 2);
@@ -4544,7 +4548,18 @@ function redrawBuildPreviewNow(now = false) {
 // the site's own picture is drawn a frame or a few later, and the hover
 // preview is not drawn on a tile with a ghost: preview, ghost and site
 // follow each other without a blink.)
-const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350, PENDING_BUILD_ANSWER_MS = 700, PENDING_BUILD_MAX_MS = 60000;
+// (A big match at low TPS carries a place order past its tick when the
+// action budget is spent: the ghost stays, after the tick, for as long as the
+// tile can still take the building (PENDING_BUILD_WAIT_MS at most); an order
+// the simulation refused leaves the tile as it was, and the ghost goes then.)
+const PENDING_BUILD_GHOST_MS = 2500, PENDING_BUILD_STACK_MS = 450, PENDING_BUILD_FADE_MS = 350, PENDING_BUILD_ANSWER_MS = 700, PENDING_BUILD_MAX_MS = 60000, PENDING_BUILD_WAIT_MS = 20000;
+function _ghostTileStillBuildable(g) {
+    try {
+        if (typeof canBuildAt === 'function' && canBuildAt(g.gx, g.gy, localPlayerId)) return true;
+        if (typeof canStackAt === 'function' && canStackAt(g.gx, g.gy, g.key, localPlayerId)) return true;
+    } catch (err) { }
+    return false;
+}
 const _pendingBuildGhosts = new Map();
 function _tileHoldsStructure(gx, gy) {
     const c = grid[gy] && grid[gy][gx];
@@ -4567,7 +4582,8 @@ function drawPendingBuildGhosts(ctx) {
         const fade = g.seenAt ? 1 - (now - g.seenAt) / PENDING_BUILD_FADE_MS : g.onTop ? 1 - Math.max(0, age - PENDING_BUILD_STACK_MS + 150) / 150 : 1;
         // (Its order's tick run: the answer's frame a moment later.)
         if (Number.isFinite(g.tick) && !g.answeredAt && _ghostSimTick() >= g.tick) g.answeredAt = now;
-        const over = Number.isFinite(g.tick) ? (g.answeredAt && now - g.answeredAt > PENDING_BUILD_ANSWER_MS && age > PENDING_BUILD_STACK_MS) || age > PENDING_BUILD_MAX_MS : age > PENDING_BUILD_GHOST_MS;
+        const late = g.answeredAt && now - g.answeredAt > PENDING_BUILD_ANSWER_MS && age > PENDING_BUILD_STACK_MS;
+        const over = Number.isFinite(g.tick) ? (late && (g.onTop || now - g.answeredAt > PENDING_BUILD_WAIT_MS || !_ghostTileStillBuildable(g))) || age > PENDING_BUILD_MAX_MS : age > PENDING_BUILD_GHOST_MS;
         if (over || fade <= 0) { _pendingBuildGhosts.delete(k); continue; }
         const p = [[0, 0], [1, 0], [1, 1], [0, 1]].map(([dx, dz]) => renderer3dInstance.projectWorldToCanvas(g.gx + dx, 0.06, g.gy + dz));
         if (p.some(q => !q)) continue;
@@ -4575,13 +4591,15 @@ function drawPendingBuildGhosts(ctx) {
         const minY = Math.min(p[0].y, p[1].y, p[2].y, p[3].y), maxY = Math.max(p[0].y, p[1].y, p[2].y, p[3].y);
         ctx.save();
         ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y); for (let i = 1; i < 4; i++) ctx.lineTo(p[i].x, p[i].y); ctx.closePath();
+        // (The thing's picture, slightly faded, as its site will look; a thin
+        // outline of the tile.)
         ctx.globalAlpha = Math.max(0, Math.min(1, fade));
-        ctx.fillStyle = 'rgba(0,255,0,0.22)'; ctx.strokeStyle = 'rgba(120,255,120,0.95)'; ctx.lineWidth = 1.5;
-        ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = 'rgba(160,255,160,0.7)'; ctx.lineWidth = 1;
+        ctx.stroke();
         const img = typeof getItemThumbnailImage === 'function' ? getItemThumbnailImage(g.key, 30) : null;
         if (img && (img.complete === undefined || img.complete) && (img.width || img.naturalWidth)) {
-            const size = Math.max(6, Math.min(maxX - minX, maxY - minY) * 0.86);
-            ctx.globalAlpha = 0.8 * Math.max(0, Math.min(1, fade));
+            const size = Math.max(6, Math.min(maxX - minX, maxY - minY) * 0.94);
+            ctx.globalAlpha = (typeof CONSTRUCTION_ALPHA === 'number' ? CONSTRUCTION_ALPHA : .65) * Math.max(0, Math.min(1, fade));
             try { ctx.drawImage(img, (minX + maxX) / 2 - size / 2, (minY + maxY) / 2 - size / 2, size, size); } catch { }
         }
         ctx.restore();

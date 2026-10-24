@@ -99,6 +99,8 @@ const areas = Array.from({ length: 64 }, () => []);
 for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) areas[Math.floor(y / 8) * 8 + Math.floor(x / 8)].push({ x, y });
 const world = {
     TILE: 32, GRID_W: 64, GRID_H: 64, AREA_UNIT_TILE_EQUIVALENT: 4,
+    // (Area steps: data_static.js areaSteps / areaStepsVisionTiles.)
+    areaSteps: v => { v = Number(v); return v > 0 ? Math.min(63, Math.floor(v + 1e-9)) : 0; }, areaStepsVisionTiles: k => Math.max(0.6, k) * 4,
     units: [], towers: [], barracks: [], collectorSpawners: [], gridCellsByArea: areas,
     grid: Array.from({ length: 64 }, () => Array.from({ length: 64 }, () => ({}))),
     getEntityEffectiveVisibilityRangeArea: b => b.range ?? b.currentStats?.visionRange ?? b.preComputed?.visionRangeArea ?? .6,

@@ -28,7 +28,8 @@ const SIM_FRAME_I16 = ['owner', 'watchedBy', 'level', 'blevel', 'type', 'wtype',
 // (vision: whole area steps, data_static.js areaSteps.)
 const SIM_FRAME_U8 = ['mode', 'status', 'flash', 'cmd', 'vision'];
 // Bytes per slot: the columns, and the order entry (int32).
-const SIM_FRAME_SLOT_BYTES = 4 * (SIM_FRAME_F32.length + SIM_FRAME_I32.length + 1) + 2 * SIM_FRAME_I16.length + SIM_FRAME_U8.length;
+// (Rounded up to 4: what follows a frame in its buffer (index, change marks) is read as 4-byte arrays.)
+const SIM_FRAME_SLOT_BYTES = Math.ceil((4 * (SIM_FRAME_F32.length + SIM_FRAME_I32.length + 1) + 2 * SIM_FRAME_I16.length + SIM_FRAME_U8.length) / 4) * 4;
 
 // flags
 const SIM_UF_FLYING = 1, SIM_UF_SNAKE = 2, SIM_UF_WORKER = 4, SIM_UF_HOLD = 8, SIM_UF_BURNING = 16, SIM_UF_POISONED = 32,
@@ -46,7 +47,7 @@ const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 // bytes a slot, 70 of them never written: ~0.5 GB at 8M units.)
 const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['maxEnergy', 'cargo', 'tx', 'ty'],
     SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'], SIM_META_U8 = ['vision'];
-const SIM_META_SLOT_BYTES = 4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length + SIM_META_U8.length;
+const SIM_META_SLOT_BYTES = Math.ceil((4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length + SIM_META_U8.length) / 4) * 4;
 function simMetaViews(buf, cap) {
     const v = { buf, cap };
     let o = 0;

@@ -85,7 +85,11 @@ async function captureSoloGameSnapshotParts() {
     const settings = createMainMenuSettingsSnapshot();
     settings.editableConfig = serializeEditableRuntimeConfigForTransport();
     const context = { createdAt: new Date().toISOString(), settings, player: localPlayerId,
-        teamColors: { ...teamColorById }, camera: { x: camera.x / TILE, y: camera.y / TILE, zoom: camera.zoom } };
+        teamColors: { ...teamColorById }, camera: { x: camera.x / TILE, y: camera.y / TILE, zoom: camera.zoom,
+            // (The view as seen: its mode and the 3D camera's angles, so an exported scene shows what was on screen.)
+            mode: typeof renderDimensionMode !== 'undefined' ? (renderDimensionMode === '3d' ? '3' : '2') + (typeof renderTeamColorsOnly !== 'undefined' && renderTeamColorsOnly ? '.5d' : 'd') : undefined,
+            pitch: typeof renderer3dInstance !== 'undefined' && renderer3dInstance ? renderer3dInstance.orbitPitch : undefined,
+            yaw: typeof renderer3dInstance !== 'undefined' && renderer3dInstance ? renderer3dInstance.orbitYaw : undefined } };
     return simClientActive() ? simClientRequest('soloSnapshot', context) : buildSoloGameSnapshotParts(context);
 }
 
@@ -387,6 +391,11 @@ async function restoreSoloGameSnapshot(scene) {
         if (made) { setMatchLoadOverlay(true, 'Importing scene…'); await made; }
         else applySoloScene(scene);
         Object.assign(camera, { x: h.camera.x*TILE, y: h.camera.y*TILE, zoom: h.camera.zoom }); clampCamera();
+        if (typeof h.camera.mode === 'string' && typeof setRenderDimensionMode === 'function') setRenderDimensionMode(h.camera.mode);
+        if (typeof renderer3dInstance !== 'undefined' && renderer3dInstance) {
+            if (Number.isFinite(h.camera.pitch)) renderer3dInstance.orbitPitch = h.camera.pitch;
+            if (Number.isFinite(h.camera.yaw)) renderer3dInstance.orbitYaw = h.camera.yaw;
+        }
         _tickAccumulator = 0; _lastTickTime = performance.now();
         setMatchLoadOverlay(false); requestBuildMenuRefresh(); updateInfoPanel();
         showUiBanner('Scene imported. Paths and simulation state rebuilt.', 'success');

@@ -4,7 +4,7 @@
     // (SIM_SF_RESEARCH_TASK). A unit's is 65536 (SIM_UF_GHOST).
     const STRUCT_GHOST_FLAG = 4194304;
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261024-ui3',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261024-ui5',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -6134,8 +6134,15 @@
             if(old)for(const target of [old,old.animation])if(target)for(const name of ['color','meta','lookup'])if(target[name])gl.deleteTexture(target[name]);
             const makeCanvas=()=>{const c=document.createElement('canvas');c.width=c.height=64;return c;};
             const color=makeCanvas(),g=color.getContext('2d');g.__drawImagesImmediately=true;
+            // (A 2D panel without its owner's outline / ring: its coarse mips.)
+            const bare=makeCanvas(),bg=bare.getContext('2d');bg.__drawImagesImmediately=true;
             const mipCanvases=new Map();
-            const upload=(index,meta,bakedLevels=null,target=A,layer=0)=>{
+            // (bareSource: the same picture without its owner markings, for the
+            // mips of BARE_MIP_SIZE pixels and less: far away a 2D thing shows
+            // its own colours, not its owner's outline averaged in; 2.5D's team
+            // colours are the shader's.)
+            const BARE_MIP_SIZE=16;
+            const upload=(index,meta,bakedLevels=null,target=A,layer=0,bareSource=null)=>{
                 const rect=target.rects[index];meta=Array.from(meta);
                 if(target===A&&index%stride===1)meta[1]=rect.code;else meta[3]=rect.code;
                 target.metaData.set(meta,index*4);
@@ -6151,7 +6158,7 @@
                         const scaled=mipCanvases.get(size),ctx=scaled.getContext('2d');
                         // Every mip comes from the original capture, never a
                         // previously filtered miniature.
-                        ctx.clearRect(0,0,size,size);ctx.drawImage(color,0,0,size,size);
+                        ctx.clearRect(0,0,size,size);ctx.drawImage(bareSource&&size<=BARE_MIP_SIZE?bareSource:color,0,0,size,size);
                         gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,level,rect.x>>level,rect.y>>level,layer,size,size,1,gl.RGBA,gl.UNSIGNED_BYTE,scaled);
                     }
                 }
@@ -6209,7 +6216,8 @@
                     g.beginPath();g.arc(32,32,32*.83,0,Math.PI*2);g.stroke();g.restore();
                 }
                 style.draw(g);
-                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,A.animationBases[i]===undefined?1:A.animationBases[i]+2],null,A,layer);
+                bg.clearRect(0,0,64,64);style.draw(bg);
+                upload(i*stride+1,[style.neutral?1/.94:1.35,0,0,A.animationBases[i]===undefined?1:A.animationBases[i]+2],null,A,layer,bare);
                 const panel=document.createElement('canvas');panel.width=panel.height=FLAT_ATLAS_SIZE;
                 const pg=panel.getContext('2d');pg.scale(FLAT_ATLAS_SIZE/64,FLAT_ATLAS_SIZE/64);
                 pg.__drawImagesImmediately=true;pg.imageSmoothingEnabled=false;
@@ -6526,7 +6534,7 @@
                         d[o+8]=sn*sx;d[o+9]=0;d[o+10]=c*sx;d[o+11]=kind?F.prate[s]:0;
                         d[o+12]=x;d[o+13]=kind?.012+(((F.id[s]*1103515245)>>>0)%7)*.003+(flying?(style.isWorker?.36:.30):0):ghost?.03:0;d[o+14]=z;d[o+15]=1;
                         const owner=colors[Math.max(0,Math.min(8,F.owner[s]+1))],tint=style._mediumTint||(style._mediumTint=hexToRgb(style.color||'#aaa'));
-                        d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=ghost?.25:1;
+                        d[o+16]=owner[0];d[o+17]=owner[1];d[o+18]=owner[2];d[o+19]=ghost?(typeof CONSTRUCTION_ALPHA==='number'?CONSTRUCTION_ALPHA:.65):1;
                         if(ghost)S.ghosts++;
                         d[o+20]=kind?F.amount[s]:0;d[o+21]=kind?F.phase[s]:0;
                         d[o+22]=tint[0];d[o+23]=tint[1];d[o+24]=tint[2];
@@ -6860,8 +6868,9 @@
                     uniform int uDebug;
                     uniform vec2 uViewport;
                     uniform vec3 uEye;
-                    uniform highp sampler2D uClaim;
-                    uniform float uClaimMaxPx, uOneViewPx, uClaimCellPx;
+                    uniform highp sampler2D uClaim, uClaimSum;
+                    uniform int uClaimSumOn;
+                    uniform float uClaimMaxPx, uOneViewPx, uClaimCellPx, uGlobalViewPx, uFarGrow;
                     ${CLAIM_HASH_GLSL}
                     out vec4 vColor;
                     flat out float vTeam;
@@ -6887,6 +6896,7 @@
                     flat out float vOneView;
                     flat out float vHeld;
                     flat out float vSolid;
+                    flat out vec2 vDither;
                     void main() {
                         // (Defence3Renderer3D.columnDebug, measurements: 1 every unit culled at once,
                         // 2 culled after its position, 4 a 1-pixel point.)
@@ -6917,7 +6927,7 @@
                         // (A small unit that does not hold its claim cell: hidden
                         // under the one that does, drawUnitClaims.)
                         bool claimLost = false, claimHeld = false;
-                        float claimRead = -1., claimMine = -1.;
+                        float claimRead = -1., claimMine = -1., claimSum = 0.;
                         if (uStructure == 0 && uClaimMaxPx > 0. && pixels < uClaimMaxPx) {
                             // (Its cell by its tick position, not the frame's: who holds
                             // a cell changes at a tick, not as the units glide.)
@@ -6927,6 +6937,7 @@
                             claimMine = claimDepth(gl_VertexID);
                             claimLost = claimRead > -1.5 && abs(claimRead - claimMine) > .5 / 8388608.;
                             claimHeld = claimRead > -1.5 && !claimLost;
+                            if (claimHeld && uClaimSumOn != 0) claimSum = texelFetch(uClaimSum, cell, 0).r;
                             if (claimLost && uDebug != 5 && uDebug != 6) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         }
                         // (Drawn in detail by the CPU: renderer.js _unitDetailSplit,
@@ -6956,6 +6967,13 @@
                         float horizontal=length(eyeRay.xz);
                         float viewYaw=horizontal>.0001?atan(eyeRay.x,eyeRay.z):uYaw;
                         float viewPitch=atan(eyeRay.y,max(horizontal,.0001));
+                        // A small sprite sees the camera's own angles (fading in
+                        // from 16 to 6 pixels): by its own ray, the view about the
+                        // point under the camera turned through every direction,
+                        // and its baked lighting drew wedges about that point.
+                        float globalView = uGlobalViewPx > 0. ? 1. - smoothstep(uGlobalViewPx * .4, uGlobalViewPx, pixels / uPixelRatio) : 0.;
+                        viewYaw += (mod(uYaw - viewYaw + 9.42477796, 6.28318531) - 3.14159265) * globalView;
+                        viewPitch = mix(viewPitch, uPitch, globalView);
                         // Stretching a model changes both its apparent height
                         // and how much roof is visible. Select the equivalent
                         // capture elevation, rather than stretching the roof too.
@@ -7049,13 +7067,36 @@
                         // its sprite covers the cell, as theirs together did: two cells
                         // wide, so that wherever in its cell it stands it fills it and
                         // the holders next to it overlap (no black gaps between them).)
-                        if (claimHeld) vSpriteExtent = max(vSpriteExtent, vec2(uClaimCellPx * 2.));
+                        // (By the units it stands for: the area of their sprites
+                        // together, up to two cells; alone it keeps its own size.)
+                        if (claimHeld) vSpriteExtent = max(vSpriteExtent, vec2(uClaimSumOn != 0 ? min(sqrt(claimSum), uClaimCellPx * 2.) : uClaimCellPx * 2.));
                         // A sprite of a few pixels in 3D covers its body's footprint
                         // (fading in from 5 to 2.5 pixels): cut out by its picture's
                         // alpha, regular rows of tiny things (floors, walls, crowds)
                         // came out as moire lines.
-                        vSolid = uFlat > .5 ? 0. : 1. - smoothstep(2.5, 5., max(vSpriteExtent.x, vSpriteExtent.y) / uPixelRatio);
+                        vSolid = 0.;
+                        // (Each sprite's own phase of the dither: overlapping small
+                        // sprites cover a pixel as together they would, not all in
+                        // the same few pixels.)
+                        uint dh = uint(gl_VertexID) * 2654435761u + uint(uStructure) * 97u;
+                        vDither = vec2(float((dh >> 27) & 3u), float((dh >> 22) & 3u));
                         vSpriteExtent = mix(vSpriteExtent, max(vSpriteExtent, vec2(min(pixels, uPointMax - 2.))), vSolid);
+                        // Far away a thing grows a little (a building up to 1 + uFarGrow,
+                        // a unit 60% of that; none from ~14 pixels up): its picture's
+                        // silhouette covers less than its tile, and a field of small
+                        // things showed the dark ground between them.
+                        {
+                            float px0 = max(vSpriteExtent.x, vSpriteExtent.y) / uPixelRatio;
+                            // (Buildings and floor things: their frame's transparent
+                            // padding and tile edges let the ground show between them.
+                            // Units look right as they are.)
+                            // (2D: units too, and more: its flat pictures sit inside
+                            // wider transparent margins, a panel's border inset and a
+                            // unit's frame padding, and fell apart into dots far out.)
+                            float share = uFlat > .5 ? (uStructure != 0 ? 1.6 : 1.) : (uStructure != 0 ? 1. : 0.);
+                            float grow = 1. + uFarGrow * share * (1. - smoothstep(3., uFlat > .5 ? 20. : 14., px0));
+                            vSpriteExtent = min(vSpriteExtent * grow, vec2(uPointMax - 2.));
+                        }
                         vSpriteSize = max(vSpriteExtent.x,vSpriteExtent.y);
                         // (A sprite of a few pixels: one pixel of margin, not two;
                         // the map's millions of units were 5x5-pixel points
@@ -7070,7 +7111,7 @@
                         // the camera, the view switching from sector to sector.)
                         vOneView = uFlat > .5 ? 1. : 0.;
                         // (A small claim holder: opaque over its cell, see the fragment.)
-                        vHeld = claimHeld && vSpriteSize < 4. * uPixelRatio ? 1. : 0.;
+                        vHeld = claimHeld && vSpriteSize < 4. * uPixelRatio && (uClaimSumOn == 0 || claimSum > 1.5 * pixels * pixels) ? 1. : 0.;
                         // Keep the miniature's base on the unit's actual position.
                         if (uFlat < .5 && style.a > 0.) {vGround.y += style.a;gl_Position=uViewProjection*vec4(vGround,1.);}
                         gl_Position.xy += meta.yz * vLod * pixels * 2. / uViewport * gl_Position.w;
@@ -7082,7 +7123,8 @@
                         if(ghost) shade *= .55;
                         vLight = shade;
                         vPaletteLayer = float(uStructure != 0 && (aKind == 4. || aKind == 5.) ? 0 : uOwnerLayers[clamp(int(aOwner)+1,0,8)]);
-                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && aKind < 4. && (flags & 1) != 0 ? .35 : 1.);
+                        // (A building site: slightly faded, renderer.js CONSTRUCTION_ALPHA.)
+                        vColor = vec4(uColors[clamp(int(aOwner)+1,0,8)], uStructure != 0 && aKind < 4. && (flags & 1) != 0 ? .65 : 1.);
                         // Neutral resource tiles keep their material color even
                         // after the emblem becomes too small to resolve.
                         if(uStructure != 0 && aKind == 4.) vColor.rgb=aResource>0.?vec3(1.,.867,0.):vec3(.17,.158,0.);
@@ -7124,6 +7166,7 @@
                     flat in float vOneView;
                     flat in float vHeld;
                     flat in float vSolid;
+                    flat in vec2 vDither;
                     uniform mat4 uViewProjection;
                     uniform mat4 uInverseViewProjection;
                     uniform vec2 uViewport;
@@ -7257,6 +7300,16 @@
                                 vec4 c=sampleBakedView(vViewC,viewPoint,dx,dy);
                                 vec4 d=sampleBakedView(vViewD,viewPoint,dx,dy);
                                 texel=a*vViewWeights.x+b*vViewWeights.y+c*vViewWeights.z+d*vViewWeights.w;
+                                // A small sprite covers what any of its views covers:
+                                // averaged, two silhouettes that do not line up covered
+                                // less between views than at a view (darker wedges).
+                                float small = 1. - smoothstep(6., 16., vSpriteSize);
+                                if (small > 0.) {
+                                    vec4 w = step(vec4(.001), vViewWeights);
+                                    float union_ = max(max(a.a * w.x, b.a * w.y), max(c.a * w.z, d.a * w.w));
+                                    float a2 = mix(texel.a, max(texel.a, union_), small);
+                                    texel = vec4(texel.rgb / max(texel.a, .001) * a2, a2);
+                                }
                             }
                             // The atlas already contains final framebuffer colors.
                             texel.rgb /= max(texel.a,.001);
@@ -7285,7 +7338,7 @@
                             // bigger moving sprites shimmered).
                             float cut = .5;
                             if (vSpriteSize < 8.) {
-                                ivec2 q = ivec2(gl_FragCoord.xy) & ivec2(3);
+                                ivec2 q = (ivec2(gl_FragCoord.xy) + ivec2(vDither)) & ivec2(3);
                                 int r = ((q.x & 1) ^ (q.y & 1)) * 8 + (q.y & 1) * 4 + (((q.x >> 1) & 1) ^ ((q.y >> 1) & 1)) * 2 + ((q.y >> 1) & 1);
                                 cut = mix((float(r) + .5) / 16., .5, smoothstep(4., 8., vSpriteSize));
                             }
@@ -7306,7 +7359,7 @@
                         }
                     }`);
                 this.columnUniforms = {};
-                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade','BlendBakedViews','BakedSampling','TeamOnly','Debug','Claim','ClaimMaxPx','OneViewPx','ClaimCellPx']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
+                for (const n of ['AtlasPixels','AnimPixels','AnimGrid','AnimSprites','AnimMeta','ViewProjection','InverseViewProjection','Alpha','Tile','Scale','PixelRatio','Flat','LightNorm','Structure','Full','Player','Colors','OwnerLayers','Visibility','Detail','DetailS','DetailMask','Styles','Meta','Sprites','AtlasGrid','StyleWidth','Yaw','Pitch','Time','HeightScale','PointMax','Viewport','Eye','CoverageFade','BlendBakedViews','BakedSampling','TeamOnly','Debug','Claim','ClaimMaxPx','OneViewPx','ClaimCellPx','GlobalViewPx','ClaimSum','ClaimSumOn','FarGrow']) this.columnUniforms[n] = gl.getUniformLocation(this.columnProgram,'u'+n);
                 this.columnStores = [{},{}];
                 this.columnVisibilityTexture = createTexture(gl);
             }
@@ -7449,7 +7502,9 @@
             gl.uniform1f(U.TeamOnly,this.teamColorsOnly?1:0);
             gl.uniform1i(U.Debug,Defence3Renderer3D.columnDebug|0);
             gl.uniform1f(U.OneViewPx,(Defence3Renderer3D.oneViewPx||0)*(this.sceneTargetSize.height / this.cssHeight));
-            gl.uniform1i(U.Claim,13);gl.uniform1f(U.ClaimMaxPx,0);
+            gl.uniform1i(U.Claim,13);gl.uniform1f(U.ClaimMaxPx,0);gl.uniform1i(U.ClaimSum,14);gl.uniform1i(U.ClaimSumOn,0);
+            gl.uniform1f(U.GlobalViewPx,Defence3Renderer3D.globalViewPx||0);
+            gl.uniform1f(U.FarGrow,Defence3Renderer3D.farGrow||0);
             gl.uniform1i(U.BlendBakedViews,Defence3Renderer3D.blendBakedViews!==false?1:0);
             gl.uniform1i(U.BakedSampling,Defence3Renderer3D.bakedSampling==='base-nearest'?2:Defence3Renderer3D.bakedSampling==='base-linear'?1:0);
             gl.uniform1f(U.CoverageFade,this.sceneSamples ? 1 : 0);
@@ -7494,6 +7549,7 @@
                 const claims = structure ? null : this.drawUnitClaims(C, snapshot, F);
                 gl.uniform1f(U.ClaimMaxPx, claims ? Defence3Renderer3D.claimMaxPx * (this.sceneTargetSize.height / this.cssHeight) : 0);
                 gl.uniform1f(U.ClaimCellPx, claims ? Defence3Renderer3D.claimCellPx : 0);
+                gl.uniform1i(U.ClaimSumOn, claims && claims.float && Defence3Renderer3D.claimSum !== false ? 1 : 0);
                 gl.drawArrays(gl.POINTS,0,F.n);
             }
             gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
@@ -7528,12 +7584,14 @@
                     layout(location=7) in float aFlags;
                     layout(location=8) in float aAlive;
                     uniform mat4 uViewProjection;
-                    uniform float uTile, uAlpha, uLightNorm, uScale, uFlat, uClaimMaxPx;
+                    uniform float uTile, uAlpha, uLightNorm, uScale, uFlat, uClaimMaxPx, uMarkerPx;
                     uniform int uFull, uPlayer;
                     uniform ivec2 uCells;
                     uniform sampler2D uVisibility;
+                    out float vArea;
                     ${CLAIM_HASH_GLSL}
                     void main() {
+                        vArea = 0.;
                         vec2 current = vec2(aX,aZ) / uTile;
                         vec2 p = mix(vec2(aPX,aPZ) / uTile,current,uAlpha);
                         int flags = int(aFlags);
@@ -7553,13 +7611,17 @@
                         if (any(lessThan(cell, ivec2(0))) || any(greaterThanEqual(cell, uCells))) { gl_Position = vec4(2.,2.,2.,1.); gl_PointSize = 1.; return; }
                         gl_Position = vec4((vec2(cell) + .5) / vec2(uCells) * 2. - 1., claimDepth(gl_VertexID) * 2. - 1., 1.);
                         gl_PointSize = 1.;
+                        // (Its sprite's area in pixels: the cell's sum, the holder's size.)
+                        float e = max(pixels, uMarkerPx);
+                        vArea = e * e;
                     }`, `#version 300 es
                     precision highp float;
+                    in float vArea;
                     out vec4 color;
-                    void main() { color = vec4(0.); }`);
+                    void main() { color = vec4(vArea, 0., 0., 0.); }`);
             } catch (err) { console.warn('[renderer3d] unit claim pass unavailable:', err && err.message || err); this.claimProgram = null; return false; }
             this.claimUniforms = {};
-            for (const n of ['ViewProjection','Tile','Alpha','LightNorm','Scale','Flat','ClaimMaxPx','Full','Player','Visibility','Cells']) this.claimUniforms[n] = gl.getUniformLocation(this.claimProgram, 'u' + n);
+            for (const n of ['ViewProjection','Tile','Alpha','LightNorm','Scale','Flat','ClaimMaxPx','Full','Player','Visibility','Cells','MarkerPx']) this.claimUniforms[n] = gl.getUniformLocation(this.claimProgram, 'u' + n);
             return true;
         }
         // The claim cells of this frame's small units (the units' VAO bound).
@@ -7570,8 +7632,16 @@
             // (Cells of the target being drawn: its viewport.)
             const prevVp = gl.getParameter(gl.VIEWPORT), width = prevVp[2], height = prevVp[3];
             const cw = Math.max(1, Math.ceil(width / cellPx)), ch = Math.max(1, Math.ceil(height / cellPx));
-            const K = this.claim || (this.claim = { tex: gl.createTexture(), fb: gl.createFramebuffer(), w: 0, h: 0 });
+            const K = this.claim || (this.claim = { tex: gl.createTexture(), sum: gl.createTexture(), fb: gl.createFramebuffer(), w: 0, h: 0,
+                float: !!gl.getExtension('EXT_color_buffer_float') && !!gl.getExtension('EXT_float_blend') });
             if (K.w !== cw || K.h !== ch) {
+                // (Per cell the summed sprite area of its units: the holder's size.)
+                gl.activeTexture(gl.TEXTURE14);
+                gl.bindTexture(gl.TEXTURE_2D, K.sum);
+                if (K.float) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, cw, ch, 0, gl.RED, gl.FLOAT, null);
+                else gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cw, ch, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
                 gl.activeTexture(gl.TEXTURE13);
                 gl.bindTexture(gl.TEXTURE_2D, K.tex);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, cw, ch, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
@@ -7581,14 +7651,18 @@
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, K.fb);
                 gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, K.tex, 0);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, K.sum, 0);
                 K.w = cw; K.h = ch;
             }
-            const prevFb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-            const depthOn = gl.isEnabled(gl.DEPTH_TEST), blendOn = gl.isEnabled(gl.BLEND);
+            const prevFb = gl.getParameter(gl.FRAMEBUFFER_BINDING), prevClear = gl.getParameter(gl.COLOR_CLEAR_VALUE);
+            const depthOn = gl.isEnabled(gl.DEPTH_TEST), blendOn = gl.isEnabled(gl.BLEND), depthMaskOn = gl.getParameter(gl.DEPTH_WRITEMASK);
+            const blendSrc = gl.getParameter(gl.BLEND_SRC_RGB), blendDst = gl.getParameter(gl.BLEND_DST_RGB), blendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA), blendDstA = gl.getParameter(gl.BLEND_DST_ALPHA);
             gl.bindFramebuffer(gl.FRAMEBUFFER, K.fb);
-            gl.drawBuffers([gl.NONE]);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
             gl.viewport(0, 0, cw, ch);
-            gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
+            gl.depthMask(true); gl.clearDepth(1); gl.clearColor(0, 0, 0, 0); gl.colorMask(true, true, true, true);
+            gl.clear(gl.DEPTH_BUFFER_BIT | gl.COLOR_BUFFER_BIT);
+            gl.colorMask(false, false, false, false);
             gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND);
             gl.useProgram(this.claimProgram);
             const U = this.claimUniforms;
@@ -7599,14 +7673,27 @@
             gl.uniform1f(U.Flat, snapshot.flat2d ? 1 : 0); gl.uniform1f(U.ClaimMaxPx, Defence3Renderer3D.claimMaxPx * (this.sceneTargetSize.height / this.cssHeight));
             gl.uniform1i(U.Full, C.fullVisibility ? 1 : 0); gl.uniform1i(U.Player, Number.isFinite(C.player) ? C.player : -99);
             gl.uniform2i(U.Cells, cw, ch);
+            gl.uniform1f(U.MarkerPx, (snapshot.flat2d ? 3 : .75) * (this.sceneTargetSize.height / this.cssHeight));
             gl.drawArrays(gl.POINTS, 0, F.n);
+            if (K.float) {
+                gl.colorMask(true, true, true, true); gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+                gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+                gl.drawArrays(gl.POINTS, 0, F.n);
+                gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+            }
+            gl.colorMask(true, true, true, true);
             gl.bindFramebuffer(gl.FRAMEBUFFER, prevFb);
             gl.viewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+            // (The state as it was: the flat view draws with blending on.)
             gl.depthFunc(gl.LEQUAL);
             if (!depthOn) gl.disable(gl.DEPTH_TEST);
-            if (blendOn) gl.enable(gl.BLEND);
+            gl.blendFuncSeparate(blendSrc, blendDst, blendSrcA, blendDstA);
+            if (blendOn) gl.enable(gl.BLEND); else gl.disable(gl.BLEND);
+            gl.depthMask(depthMaskOn);
+            gl.clearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
             gl.useProgram(this.columnProgram);
             gl.activeTexture(gl.TEXTURE13); gl.bindTexture(gl.TEXTURE_2D, K.tex);
+            gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_2D, K.sum);
             gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture);
             return K;
         }
@@ -8048,6 +8135,10 @@
     Defence3Renderer3D.claimMaxPx = 6;
     Defence3Renderer3D.claimMinUnits = 20000;
     Defence3Renderer3D.oneViewPx = 0;
+    // Sprites under globalViewPx CSS pixels take the camera's angles for their baked view (0: off).
+    Defence3Renderer3D.globalViewPx = 16;
+    // Small far sprites grow by up to this share (buildings; units 60% of it), 0: off.
+    Defence3Renderer3D.farGrow = .3;
     // (Unit column uploads: runs of changed blocks this far apart sent as one; _columnStoreUploadChanged.)
     Defence3Renderer3D.columnUploadGap = 2;
     Defence3Renderer3D.bakedSampling = 'filtered';

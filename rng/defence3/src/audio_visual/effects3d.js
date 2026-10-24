@@ -397,7 +397,10 @@ function _pushCombatRecordFx() {
 // (a shot's dot along its flight, a beam's line, a hit's flash at its
 // target), at least _FX_FAR_MIN_PX on screen: the same timing and colours as
 // close up, without its detail.
-const _FX_FAR_PPT = 14, _FX_FAR_MIN_PX = 3;
+// (Full effects down to _FX_FAR_PPT pixels a tile; under it dots of at least
+// _FX_FAR_MIN_PX, their own colour, not additive: many overlapping
+// additive dots summed to white blobs over the coloured shots.)
+const _FX_FAR_PPT = 6, _FX_FAR_MIN_PX = 1.5;
 function _fxPixelsPerTileAt(x, z) {
     const r = _fx.renderer;
     return _fx.flat || !r ? _fx.ppt : r.pixelsPerWorldAt(x, .3, z);
@@ -421,7 +424,7 @@ function _fxFarColor(kind, style) {
 // A dot of d tiles (at least _FX_FAR_MIN_PX on screen) at (x, z).
 function _fxFarDot(x, z, d, color, alpha, ppt) {
     if (!(alpha > .02) || !_fxVisible(x, z)) return;
-    _fxOrb(x, .3 * _fx.rest, z, Math.max(d, _FX_FAR_MIN_PX / Math.max(.05, ppt)), color, Math.min(1, alpha), 1);
+    _fxOrb(x, .3 * _fx.rest, z, Math.max(d, _FX_FAR_MIN_PX / Math.max(.05, ppt)), color, Math.min(1, alpha), 0);
 }
 function _fxEventFar(kind, x0, z0, x1, z1, style, q, ppt) {
     const color = _fxFarColor(kind, style), fade = 1 - q;
@@ -447,8 +450,11 @@ function _fxEventFar(kind, x0, z0, x1, z1, style, q, ppt) {
         case 10: // a muzzle flash at the barrel
             if (q < .5) _fxFarDot(x0 + dx / (Math.hypot(dx, dz) || 1) * .42, z0 + dz / (Math.hypot(dx, dz) || 1) * .42, .3, color, 1 - q * 2, ppt);
             return;
-        default: // a blow or a hit: a flash at the target
-            _fxFarDot(x1, z1, kind === 3 || kind === 12 ? .7 : .45, color, fade * .95, ppt);
+        default: { // a blow or a hit: a flash at the target (melee blows,
+            // white, smaller and fainter: they hid the coloured shots)
+            const melee = kind === 1 || kind === 2 || kind === 3 || kind === 6 || kind === 9 || kind === 12;
+            _fxFarDot(x1, z1, melee ? (kind === 3 || kind === 12 ? .4 : .25) : .35, color, fade * (melee ? .55 : .95), ppt);
+        }
     }
 }
 

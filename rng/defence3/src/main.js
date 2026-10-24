@@ -3769,6 +3769,17 @@ function _actionJumps(raw) {
     const cost = _actionCost(raw);
     if (cost > ACTION_JUMP_COST || cost > _actionJumpLeft) return false;
     if (_actionMarked(raw)) return true;
+    // (A placement goes ahead of anything waiting that does not touch its
+    // tile: it waited behind research and boost actions, seconds at low TPS,
+    // after its ghost had gone.)
+    if (raw.action === 'place') {
+        for (const e of _actionBacklog) {
+            const w = e[1];
+            if (!w || _actionMarked(w)) continue;
+            if ((w.gx === raw.gx && w.gy === raw.gy) || Array.isArray(w.coords) || Array.isArray(w.towerCoords)) return false;
+        }
+        return true;
+    }
     for (const e of _actionBacklog) if (!_actionMarked(e[1])) return false;
     return true;
 }

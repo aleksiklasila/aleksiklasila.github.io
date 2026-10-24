@@ -25,13 +25,14 @@ state.UNPACK_FLIP_Y_WEBGL=true;state.UNPACK_PREMULTIPLY_ALPHA_WEBGL=true;
 const A=R.prepareColumnAtlas();
 assert.equal(A.next,1,'cold preparation is bounded to one job when the time budget expires');
 R.prepareColumnAtlas();assert.equal(A.next,1,'render-time atlas reads never advance preparation');
-R.advanceColumnAtlas(A);assert.deepEqual(jobs,['gold','gold','astar','astar'],'flat and native model panels precede directional bakes');
+// (Each flat panel is drawn twice: with its owner markings and without, for its coarse mips.)
+R.advanceColumnAtlas(A);assert.deepEqual(jobs,['gold','gold','gold','astar','astar','astar'],'flat and native model panels precede directional bakes');
 for(const panel of A.sources) {assert.equal(panel.width,96);assert.equal(panel._ownerMask,undefined,'panels contain final colors without ownership masks');}
 for(let i=2;i<162;i++) {assert.equal(R.prepareColumnAtlas(),A);R.advanceColumnAtlas(A);assert.equal(A.next,i+1);}
 assert.equal(A.prepare,null);assert.equal(A.sources,null);
-assert.equal(jobs.length,164);
-assert.deepEqual([...new Set(jobs.slice(4).map(j=>Number(j[2].toFixed(2))))],[.08,.35,.65,1.05,1.57],'low, tilted, middle and high camera angles are cached');
-R.prepareColumnAtlas();assert.equal(jobs.length,164,'zoom/camera reuse never rebakes the catalog');
+assert.equal(jobs.length,166);
+assert.deepEqual([...new Set(jobs.slice(6).map(j=>Number(j[2].toFixed(2))))],[.08,.35,.65,1.05,1.57],'low, tilted, middle and high camera angles are cached');
+R.prepareColumnAtlas();assert.equal(jobs.length,166,'zoom/camera reuse never rebakes the catalog');
 for(const upload of uploads)if(upload.args.includes('FLOAT')) {
     assert.equal(upload.state.UNPACK_FLIP_Y_WEBGL,false,'lookup rows are never flipped');
     assert.equal(upload.state.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false,'numeric style data must never be premultiplied');
