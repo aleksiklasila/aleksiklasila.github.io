@@ -949,25 +949,6 @@
             align-items: center;
         }
 
-        #subgroup-options {
-            display: flex;
-            gap: 4px;
-            padding: 3px 4px;
-            border-bottom: 1px solid #2a2a2a;
-            background: #101010;
-        }
-
-        #btn-ignore-level {
-            width: 100%;
-            border: 1px solid #555;
-            border-radius: 3px;
-            background: #181818;
-            color: #999;
-            font-size: 10px;
-            font-weight: bold;
-            cursor: pointer;
-            padding: 2px 6px;
-        }
 
         .control-group-btn {
             flex: 1;
@@ -1180,11 +1161,15 @@
             text-align: center;
             white-space: nowrap;
             font-variant-numeric: tabular-nums;
-            /* The cell reaches 24px past its column on both sides, so a value
-               a little wider than the column stays centered on it (centered
-               text wider than its box would overflow to the right only). */
+            /* The cell reaches 3px (half the gap) past its column on both
+               sides; a longer value wraps (fractions after their slash) instead
+               of running into the next column (it reached 24px past, and two
+               long values overlapped). */
             display: block;
-            margin: 0 -24px;
+            margin: 0 -3px;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            line-height: 1.15;
         }
 
         #info-panel .info-stat > .info-base,

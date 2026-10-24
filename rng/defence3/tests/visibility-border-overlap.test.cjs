@@ -11,6 +11,8 @@ const fn = (text, name) => {
 let lookups = 0;
 const c = vm.createContext({TILE:32, GRID_W:8, GRID_H:8, AREA_UNIT_TILE_EQUIVALENT:5,
     areaIdGrid:Array.from({length:8},(_,y)=>Array.from({length:8},(_,x)=>(y<4?0:2)+(x<4?0:1)))});
+// (Area steps: data_static.js, its lines by text.)
+{ const ds = read('src/data/data_static.js'), line = k => ds.split(/\r?\n/).find(l => l.startsWith(k)); vm.runInContext([line('const AREA_STEPS_MAX'), line('function areaSteps('), line('function areaStepsVisionTiles(')].join('\n'), c); }
 const state = read('src/data/data_state.js');
 for (const name of ['getAreaIdAtTile','getAreaIdAtWorld','addVisibilitySourceAreas']) vm.runInContext(fn(state,name),c);
 const lookup = c.getAreaIdAtTile;
@@ -62,13 +64,14 @@ c.units=[];
 c.towers=[{type:'pistol',owner:0,energy:10,x:2.5*32,y:2.5*32,
     currentStats:{visionRange:.6},preComputedEffective:{visionRangeArea:2.4}}];
 c.computeVisibilityGridForPlayer(0,light);
-assert.equal(light[2][2],12);
+// (Whole area steps: 2.4 is 2a, 10 tiles of light.)
+assert.equal(light[2][2],10);
 assert.ok(light[6][6]>0,'effective range includes farther areas');
 c.units=[{unitType:'norm',owner:0,energy:10,x:2.5*32,y:2.5*32,
     preComputed:{visionRangeArea:.6,attackRangeArea:.1},preComputedEffective:{visionRangeArea:2.4}}];
 c.towers=[];
 c.computeVisibilityGridForPlayer(0,light);
-assert.equal(light[2][2],12,'grouped unit stamps its effective range');
+assert.equal(light[2][2],10,'grouped unit stamps its effective range');
 assert.ok(light[6][6]>0,'grouped unit reveals farther areas');
 
 Object.assign(c,{localPlayerId:0,renderRangeMode:4,renderRangeAllTeam:false,

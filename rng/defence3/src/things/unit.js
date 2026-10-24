@@ -46,9 +46,10 @@ function _quantizeUnitWorldCoord(value) {
     return Math.round(n * UNIT_POSITION_QUANTIZATION) / UNIT_POSITION_QUANTIZATION;
 }
 
+// (Whole area steps. A worker's range is its work reach, not an attack: 0 for the kernels.)
 function _getUnitAttackRangeArea(unit) {
-    const r=Math.max(0, Number(unit && unit.preComputed && unit.preComputed.attackRangeArea) || 0);
-    return Math.floor(r);
+    const pc = unit && unit.preComputed;
+    return pc && !pc.rangeIsWork ? areaSteps(pc.attackRangeArea) : 0;
 }
 
 // Extra reach, beyond the collision distance, at which bodies count as touching.

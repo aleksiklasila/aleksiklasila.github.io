@@ -2522,7 +2522,7 @@ function _getWorkerVisionRangePx(u) {
 function _getWorkerAutoSearchDistancePx(u) {
     if (!u) return TILE * 10;
     let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
-    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
+    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'attackRange');
     let distTiles = Number(distArea) * AREA_UNIT_TILE_EQUIVALENT;
     if (!Number.isFinite(distTiles) || distTiles <= 0) distTiles = 10;
     return Math.max(TILE, distTiles * TILE);
@@ -2531,9 +2531,9 @@ function _getWorkerAutoSearchDistancePx(u) {
 function _getWorkerAutoSearchDistanceArea(u) {
     if (!u) return 2.0;
     let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
-    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-    if (!Number.isFinite(distArea) || distArea <= 0) distArea = 2.0;
-    return Math.max(0, distArea);
+    // (A worker's range is its work reach, whole area steps: 0a its own area.)
+    let distArea = getUnitStatForOwner(u.owner, u.unitType, lvl, 'attackRange');
+    return Number.isFinite(distArea) ? areaSteps(distArea) : 2;
 }
 
 function _workerSearchTileBox(u,x,y,r,pad=1) {

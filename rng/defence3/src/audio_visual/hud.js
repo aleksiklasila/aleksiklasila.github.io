@@ -230,7 +230,7 @@ const _RESOURCE_PENALTY_POPUP_EXEMPT_STATS = new Set([
     'popCap',
     'energy',
     'maxEnergy',
-    'workerSearchDistance',
+    'attackRange',
     'visionRange',
     'visionRangeArea',
     'attackRange',
@@ -1282,9 +1282,8 @@ function _getInfoPanelUnitStateLabel(u) {
 function _getInfoPanelWorkerSearchDistanceText(u) {
     if (!u || !u.workerType) return 'nearby';
     let lvl = Math.max(1, getUnitEffectiveLevel(u, getUnitBaseLevel(u)));
-    let areas = Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance'));
-    if (!Number.isFinite(areas) || areas <= 0) areas = 2.0;
-    return `${Math.max(0, Math.floor(areas))}a`;
+    let areas = Number(getUnitStatForOwner(u.owner, u.unitType, lvl, 'attackRange'));
+    return Number.isFinite(areas) ? `${areaSteps(areas)}a` : 'nearby';
 }
 
 function _getInfoPanelUnitStateHelpText(u) {
@@ -1313,7 +1312,7 @@ function _getInfoPanelUnitStateHelpText(u) {
             if (Number.isFinite(u._astarBudgetBlockedUntil) && gameTime < u._astarBudgetBlockedUntil) {
                 return 'Idle because ★ was exhausted recently. Wait for more ★ income or reduce pathfinding demand.';
             }
-            return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise Work Distance, or give a manual order.`;
+            return `Idle because no valid work was found within range (${searchRange}). Build relevant work closer, raise its Range, or give a manual order.`;
         }
         if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
             return 'Returning carried resources to the nearest drop-off before choosing the next task.';
@@ -2032,7 +2031,6 @@ function renderBuildItemDetailedStats(key) {
         let speed = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'speed');
         let range = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'attackRange');
         let vision = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'visionRange');
-        let workerSearchDistance = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'workerSearchDistance');
         let gatherPerTrip = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'gatherPerTrip');
         let builderDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'builderDps');
         let healerDps = getUnitStatForOwner(localPlayerId, unitType, safeLvl, 'healerDps');
@@ -2047,7 +2045,6 @@ function renderBuildItemDetailedStats(key) {
             speed: Math.max(0.1, Number(speed) || 0.1),
             range: Math.max(0, Number(range) || 0),
             vision: Math.max(0.1, Number(vision) || 0.1),
-            workerSearchDistance: Math.max(0, Number(workerSearchDistance) || 0),
             gatherPerTrip: Math.max(0, Number(gatherPerTrip) || 0),
             builderDps: Math.max(0, Number(builderDps) || 0),
             healerDps: Math.max(0, Number(healerDps) || 0),
@@ -2096,7 +2093,6 @@ function renderBuildItemDetailedStats(key) {
         addRow('Unit Visibility', formatAreaDistanceStat(up.vision), { kind: 'unit', key: unitType, statKey: 'visionRange' });
         addRow('Unit Speed', up.speed.toFixed(1), { kind: 'unit', key: unitType, statKey: 'speed' });
         addRow('Unit ★ / Tile', fmt(up.astarCost, 1), { kind: 'unit', key: unitType, statKey: 'astarCost' });
-        if (up.workerSearchDistance > 0) addRow('Work Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: unitType, statKey: 'workerSearchDistance' });
     } else if (key === 'spawner' || key === 'astar_spawner' || key === 'salvager' || key === 'builder_spawner' || key === 'healer_spawner' || key === 'research') {
         let workerType = key === 'spawner'
             ? 'collector'
@@ -2127,7 +2123,7 @@ function renderBuildItemDetailedStats(key) {
         addRow(key === 'research' ? 'Researcher Visibility' : 'Worker Visibility', formatAreaDistanceStat(up.vision), { kind: 'unit', key: workerType, statKey: 'visionRange' });
         addRow('Speed', up.speed.toFixed(1), { kind: 'unit', key: workerType, statKey: 'speed' });
         addRow(key === 'research' ? 'Researcher ★ / Tile' : 'Worker ★ / Tile', fmt(up.astarCost, 1), { kind: 'unit', key: workerType, statKey: 'astarCost' });
-        if (up.workerSearchDistance > 0) addRow('Work Distance', formatAreaDistanceStat(up.workerSearchDistance), { kind: 'unit', key: workerType, statKey: 'workerSearchDistance' });
+        addRow(key === 'research' ? 'Researcher Range' : 'Worker Range', formatAreaDistanceStat(up.range), { kind: 'unit', key: workerType, statKey: 'attackRange' });
         if (key === 'research') {
             let efficiency = getBuildingStatForOwner(localPlayerId, key, level, 'efficiency');
             if (Number.isFinite(efficiency)) addRow('Efficiency', efficiency.toFixed(2), { kind: 'building', key, statKey: 'efficiency' });
@@ -2486,6 +2482,10 @@ function infoPanelUnitGroupsFromFrame() {
     let sums = _infoPanelBinUnits(F, X, B);
     // (More bins than the table takes half full: a bigger table, again.)
     while (!sums) { _infoPanelBinsAlloc(B, B.cap * 4); sums = _infoPanelBinUnits(F, X, B); }
+    return _infoPanelGroupsFromBins(B, sums);
+}
+// The groups of a binned selection.
+function _infoPanelGroupsFromBins(B, sums) {
     // The bins in the order their first units stand in the selection (the
     // groups' order on the panel, as when made unit by unit).
     const order = Array.from(B.used.subarray(0, B.count)).sort((p, q) => B.first[p] - B.first[q]);
@@ -2521,11 +2521,20 @@ function _infoPanelBinsAlloc(B, cap) {
 }
 function _infoPanelBinUnits(F, X, B) {
     if (!B.cap) _infoPanelBinsAlloc(B, 4096);
+    for (let i = 0; i < B.count; i++) B.key[B.used[i]] = -1;
+    B.count = 0;
+    const dense = X.n * 4 >= F.n, sums = B.sums;
+    sums[0] = sums[1] = sums[2] = 0;
+    return _infoPanelBinRange(F, X, B, 0, dense ? Math.min(F.n, X.mask.length) : X.n, dense, sums) ? sums : null;
+}
+// Bins the selection's units from position i0 to i1 (slots in order when
+// dense, else the selection's slot list) into B, adding to sums; false when
+// the table got half full.
+function _infoPanelBinRange(F, X, B, i0, i1, dense, sums) {
     const key = B.key, cnt = B.n, hold = B.hold, first = B.first, slot = B.slot, energy = B.energy, maxEnergy = B.maxEnergy, used = B.used;
-    for (let i = 0; i < B.count; i++) key[used[i]] = -1;
-    let count = 0;
+    let count = B.count;
     const capMask = B.cap - 1, limit = B.cap >> 1, shift = 32 - Math.round(Math.log2(B.cap));
-    const slots = X.slots, mask = X.mask, n = X.n;
+    const slots = X.slots, mask = X.mask, cap = Math.min(mask.length, F.cap);
     const T = F.type, BL = F.blevel, LV = F.level, FL = F.flags, OW = F.owner, EN = F.energy, ME = F.maxEnergy;
     let totalEnergy = 0, totalMax = 0, total = 0;
     // A selection of a good part of every unit: the slots in memory order
@@ -2533,16 +2542,15 @@ function _infoPanelBinUnits(F, X, B) {
     // read at 300k scattered slots are that many cache misses, 20-30 ms
     // beside a busy renderer; in order, a few. (The bins are then listed by
     // their first slot.)
-    const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
-    for (let i = 0; i < end; i++) {
+    for (let i = i0; i < i1; i++) {
         const s = dense ? i : slots[i];
-        if (mask[s] === 0) continue;
+        if (s >= cap || mask[s] === 0) continue;
         const fl = FL[s], blr = BL[s], bl = blr > 0 ? blr & 127 : 1;
         const k = (((((T[s] & 1023) * 128 + bl) * 128 + (LV[s] & 127)) * 16 + ((OW[s] + 1) & 15)) * 4) + ((fl & SIM_UF_FROZEN) !== 0 ? 1 : 0) + ((fl & SIM_UF_SANDY) !== 0 ? 2 : 0);
         let h = (Math.imul(k, -1640531535) >>> shift) & capMask;
         while (key[h] !== k) {
             if (key[h] === -1) {
-                if (count >= limit) { B.count = count; return null; }
+                if (count >= limit) { B.count = count; return false; }
                 key[h] = k; cnt[h] = 0; hold[h] = 0; energy[h] = 0; maxEnergy[h] = 0; first[h] = i; slot[h] = s; used[count++] = h;
                 break;
             }
@@ -2554,9 +2562,151 @@ function _infoPanelBinUnits(F, X, B) {
         totalEnergy += e; totalMax += m; total++;
     }
     B.count = count;
-    const sums = B.sums; sums[0] = totalEnergy; sums[1] = totalMax; sums[2] = total;
-    return sums;
+    sums[0] += totalEnergy; sums[1] += totalMax; sums[2] += total;
+    return true;
 }
+// ---- the panel's data, apart from its drawing ----
+// The panel is drawn from data made a little at a time: the selection's units
+// binned in slices over frames (infoPanelBackgroundStep, a share of each
+// frame), the buildings grouped once per selection, and each group's section
+// re-made within a time budget per refresh (the groups in view first, then
+// the ones made longest ago); the others keep their last markup. Scrolling
+// never makes anything: the layout is every group's section, always there.
+const INFO_PANEL_SECTION_BUDGET_MS = 4, INFO_PANEL_BG_BUDGET_MS = 2, INFO_UNIT_BINS_REFRESH_MS = 400, INFO_UNIT_BIN_CHUNK = 32768;
+const INFO_ENTITY_SWEEP_BIG = 4096, INFO_ENTITY_SWEEP_MS = 1000;
+const _infoSectionCache = new Map();
+let _infoSectionCacheSel = null, _infoEntitySweepAt = 0;
+const _infoEntityGroupsCache = { ref: null, len: -1, groups: null };
+const _infoSummaryTotals = { groups: null, at: 0, energy: 0, max: 0 };
+// The units' bins: the snapshot the panel draws (snap, for the selection
+// ref), and the pass making the next one (pos > = 0 while running).
+const _infoUnitSnap = { ref: null, snap: null, at: 0, pos: -1, end: 0, dense: false, sums: null };
+
+// Gone buildings leave the selection: a small one at every refresh, a big
+// one once a second.
+function _infoPanelDropGoneEntities() {
+    if (selectedEntities.length > INFO_ENTITY_SWEEP_BIG) {
+        const now = performance.now();
+        if (now - _infoEntitySweepAt < INFO_ENTITY_SWEEP_MS) return;
+        _infoEntitySweepAt = now;
+    }
+    // (A structure view's energy read from the structure table's column, not
+    // its getter: 191k getters were ~33 ms a refresh.)
+    const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null, EN = T ? T.energy : null;
+    const gone = e => {
+        if (EN && e && e._kind !== undefined) { if (e._kind >= 4) return false; const s = e._s; return (s >= 0 ? EN[s] : (e._last ? e._last.energy : 0)) <= 0; }
+        return _infoPanelEntityGone(e);
+    };
+    if (selectedEntities.some(gone)) {
+        const old = selectedEntities;
+        selectedEntities = selectedEntities.filter(e => !gone(e));
+        if (_infoSectionCacheSel && _infoSectionCacheSel.entities === old) _infoSectionCacheSel.entities = selectedEntities;
+    }
+}
+// The buildings by group, made again only when the selection's array is
+// another (a group's key is the same for as long as the building is).
+function _infoPanelEntityGroups() {
+    const C = _infoEntityGroupsCache;
+    if (C.ref === selectedEntities && C.len === selectedEntities.length && C.groups) return C.groups;
+    const groups = {};
+    for (let e of selectedEntities) {
+        let key = getEntityGroupKey(e);
+        if (!groups[key]) groups[key] = { label: getEntityGroupLabel(e), items: [], isEntity: true };
+        groups[key].items.push(e);
+    }
+    C.ref = selectedEntities; C.len = selectedEntities.length; C.groups = groups;
+    return groups;
+}
+// The groups whose sections are made again at this refresh: every one for a
+// new selection (or new group toggles), else those without markup yet, then
+// as many as INFO_PANEL_SECTION_BUDGET_MS takes by their last cost: the ones
+// in view first, each in order of age. (A selection's array made again by a
+// compaction, or its gone buildings dropped, is the same selection.)
+function _infoPanelSectionsToRemake(panel, allGroups, subgroupState) {
+    const C = _infoSectionCacheSel;
+    const keys = [];
+    for (const [key] of allGroups) if (subgroupState[key] !== false) keys.push(key);
+    if (!C || C.units !== selectedUnits || C.entities !== selectedEntities || C.subgroups !== subgroupState) {
+        _infoSectionCache.clear();
+        _infoSectionCacheSel = { units: selectedUnits, entities: selectedEntities, subgroups: subgroupState };
+        return new Set(keys);
+    }
+    const out = new Set(), now = performance.now();
+    // In view: the previous refresh's sections (panel children 1..n) by key.
+    const inView = new Set(), prevKeys = panel._infoSectionKeys;
+    if (prevKeys && panel.children.length === prevKeys.length + 2) {
+        const top = panel.scrollTop, bottom = top + panel.clientHeight, base = panel.getBoundingClientRect().top - top;
+        for (let i = 0; i < prevKeys.length; i++) {
+            const r = panel.children[i + 1].getBoundingClientRect(), y0 = r.top - base, y1 = r.bottom - base;
+            if (y1 > top && y0 < bottom) inView.add(prevKeys[i]);
+        }
+    }
+    const order = [];
+    for (const key of keys) {
+        const c = _infoSectionCache.get(key);
+        if (!c) { out.add(key); continue; }
+        order.push([inView.has(key) ? 0 : 1, c.at, key, c.cost]);
+    }
+    order.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let spent = 0;
+    for (const [, at, key, cost] of order) {
+        if (out.size > 0 && spent + cost > INFO_PANEL_SECTION_BUDGET_MS) break;
+        if (now - at < 100) continue;
+        out.add(key); spent += cost;
+    }
+    return out;
+}
+// A compaction's new array is the same selection (selectionCompactDead).
+function infoPanelSelectionCompacted(oldSel, newSel) {
+    if (_infoUnitSnap.ref === oldSel) _infoUnitSnap.ref = newSel;
+    if (_infoSectionCacheSel && _infoSectionCacheSel.units === oldSel) _infoSectionCacheSel.units = newSel;
+}
+// The unit groups the panel draws: the latest snapshot for this selection
+// (made at once only for a new selection), null for a small one.
+function infoPanelUnitGroupsSnapshot() {
+    const X = selectionIndex();
+    if (!X.framed || selectedUnits.length <= INFO_PANEL_COLUMN_MIN) return null;
+    const S = _infoUnitSnap;
+    if (S.ref !== selectedUnits || !S.snap) {
+        S.ref = selectedUnits; S.pos = -1;
+        S.snap = infoPanelUnitGroupsFromFrame();
+        S.at = performance.now();
+    }
+    return S.snap;
+}
+// A share of each frame: the next snapshot of a big selection's bins, made
+// in slices of the selection's slots (from whichever frame is current: the
+// sums are approximate while units die and move), then the groups from them.
+function infoPanelBackgroundStep(budgetMs = INFO_PANEL_BG_BUDGET_MS) {
+    const S = _infoUnitSnap;
+    if (!S.snap || S.ref !== selectedUnits) return;
+    const now = performance.now();
+    if (S.pos < 0) {
+        if (now - S.at < INFO_UNIT_BINS_REFRESH_MS) return;
+        const X = selectionIndex(), F = simClientCurrentUnitVis();
+        if (!X.framed || !F) return;
+        const B = _infoPanelBins;
+        if (!B.cap) _infoPanelBinsAlloc(B, 4096);
+        for (let i = 0; i < B.count; i++) B.key[B.used[i]] = -1;
+        B.count = 0;
+        S.dense = X.n * 4 >= F.n; S.end = S.dense ? Math.min(F.n, X.mask.length) : X.n; S.pos = 0;
+        S.sums = [0, 0, 0];
+    }
+    const X = selectionIndex(), F = simClientCurrentUnitVis(), B = _infoPanelBins;
+    if (!X.framed || !F) { S.pos = -1; return; }
+    while (S.pos < S.end) {
+        const to = Math.min(S.end, S.pos + INFO_UNIT_BIN_CHUNK);
+        if (!_infoPanelBinRange(F, X, B, S.pos, to, S.dense, S.sums)) {
+            // (A full table: a bigger one, the pass again.)
+            _infoPanelBinsAlloc(B, B.cap * 4); S.pos = -1; S.at = 0; return;
+        }
+        S.pos = to;
+        if (performance.now() - now > budgetMs) return;
+    }
+    S.snap = _infoPanelGroupsFromBins(B, S.sums);
+    S.at = performance.now(); S.pos = -1;
+}
+
 function _infoPanelEntityGone(e) { return e.energy !== undefined && e.energy <= 0; }
 // A unit by its id, as the page has it (the frame's view, else the unit).
 function _infoPanelUnitById(id) {
@@ -2752,8 +2902,10 @@ function formatInfoCurrency(n, d = 0) {
     return `⚡${formatBigNumber(n, d)}`;
 }
 
+// (A break allowed after the slash: two long numbers wrap in their column
+// instead of running into the next one.)
 function formatInfoFraction(a, b, d = 0) {
-    return `${formatBigNumber(a, d)}/${formatBigNumber(b, d)}`;
+    return `${formatBigNumber(a, d)}/<wbr>${formatBigNumber(b, d)}`;
 }
 
 function formatInfoRowValue(value) {
@@ -2800,8 +2952,14 @@ function infoRow(label, value, effValue, matrixOpts = null) {
     return `<div class="info-row info-stat"><span class="info-label">${labelHtml}</span><span class="info-value">${formatInfoRowValue(value)}</span></div>`;
 }
 
+// One id per stat matrix (title, thing, stat): a group's markup stays the
+// same from one refresh to the next, and markup kept from an earlier refresh
+// still opens its matrix. (Ids were numbered anew at every refresh.)
+const _infoPanelStatMatrixIds = new Map();
 function registerInfoPanelStatMatrixDescriptor(label, opts = {}) {
-    let id = nextInfoPanelStatMatrixDescriptorId++;
+    const sig = String(opts.title || label || 'Stat') + '|' + (opts.kind || '') + '|' + (opts.key || '') + '|' + (opts.statKey || '') + '|' + String(opts.fixedValue);
+    let id = _infoPanelStatMatrixIds.get(sig);
+    if (id === undefined) { id = nextInfoPanelStatMatrixDescriptorId++; _infoPanelStatMatrixIds.set(sig, id); }
     infoPanelStatMatrixDescriptorById[id] = {
         title: String(opts.title || label || 'Stat'),
         kind: opts.kind || '',
@@ -3090,15 +3248,18 @@ function captureInfoPanelMouseAnchor(panel, onlyUnderMouse = false) {
     let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
     if (performance.now() - lastManualTs < 250) return null;
 
+    // What stays still: the element under the mouse while it is over the
+    // content; else (the mouse elsewhere, or on the scrollbar) the one at the
+    // middle of the view.
     let rect = panel.getBoundingClientRect();
     let mx = uiMouseClientX;
     let my = uiMouseClientY;
     let mouseInside = Number.isFinite(mx) && Number.isFinite(my)
-        && mx >= rect.left && mx <= rect.right && my >= rect.top && my <= rect.bottom;
+        && mx >= rect.left && mx < rect.left + panel.clientWidth && my >= rect.top && my < rect.top + panel.clientHeight;
     if (!mouseInside && onlyUnderMouse) return null;
     if (!mouseInside) {
-        mx = rect.left + rect.width / 2;
-        my = rect.top + rect.height / 2;
+        mx = rect.left + panel.clientWidth / 2;
+        my = rect.top + panel.clientHeight / 2;
     }
 
     let rawEl = document.elementFromPoint(mx, my);
@@ -3110,9 +3271,6 @@ function captureInfoPanelMouseAnchor(panel, onlyUnderMouse = false) {
 
     let anchorEl = rawEl.closest('[data-kind],[data-key],[data-stat-key],[data-gx],[data-gy],[data-coords],[data-scope],[data-thing-id],[data-unit-id],[data-matrix-id],button,.info-row,.info-title');
     if (!anchorEl || !panel.contains(anchorEl)) anchorEl = rawEl;
-    // A section placeholder is about to be filled in: any other placeholder
-    // "matches" it, so holding one still would scroll the panel away.
-    if (anchorEl.closest('.info-section-placeholder') || anchorEl.querySelector(':scope > .info-section-placeholder')) return null;
 
     let anchorRect = anchorEl.getBoundingClientRect();
     let attributeKey = getInfoPanelAnchorAttributeKey(anchorEl), text = getInfoPanelAnchorText(anchorEl);
@@ -3176,14 +3334,15 @@ function restoreInfoPanelMouseAnchor(panel, anchor) {
         if (!best) best = fallback;
     }
 
+    // (Never sideways: the panel does not scroll horizontally; a sideways
+    // correction shifted all of its content left.)
+    if (panel.scrollLeft) panel.scrollLeft = 0;
     if (!best) return;
     let afterRect = best.getBoundingClientRect();
     let deltaY = afterRect.top - desiredTop;
-    let deltaX = afterRect.left - desiredLeft;
-    if (Math.abs(deltaY) <= 0.5 && Math.abs(deltaX) <= 0.5) return;
+    if (Math.abs(deltaY) <= 0.5) return;
     infoPanelProgrammaticScrollUntilByEl.set(panel, performance.now() + 80);
-    if (Math.abs(deltaY) > 0.5) panel.scrollTop += deltaY;
-    if (Math.abs(deltaX) > 0.5) panel.scrollLeft += deltaX;
+    panel.scrollTop += deltaY;
 }
 
 function getSpawnerEnergyProgress(spawner) {
@@ -3204,10 +3363,54 @@ function getSpawnerEnergyProgress(spawner) {
 // A big group's sums from an even sample of it, scaled (counts stay exact):
 // the panel of 190k selected buildings made each sum through every view's
 // getters, ~0.3 s a refresh. Kept for the group array.
+// A big building group is drawn from an even sample of it (at most
+// INFO_GROUP_RENDER_MAX members): the renderers get the sample array, its _n
+// the group's count (estimated for a part of it, infoGroupFilter) and _all()
+// the whole group, made only when a control is clicked (infoGroupCoordAttr).
+// Counts are exact, sums scaled, any/all flags read from the sample. (Every
+// renderer walked its whole group a dozen times through structure views:
+// a 40k-barrack group was ~140 ms of each panel refresh at 4M units.)
+const INFO_GROUP_RENDER_MAX = 1024;
+const _infoGroupViews = new WeakMap();
+let _infoRenderGroupKey = '';
+function infoGroupRenderView(group) {
+    if (!Array.isArray(group) || group.length <= INFO_GROUP_RENDER_MAX) return group;
+    let v = _infoGroupViews.get(group);
+    if (v && v._n === group.length) return v;
+    v = new Array(INFO_GROUP_RENDER_MAX);
+    const step = group.length / INFO_GROUP_RENDER_MAX;
+    for (let i = 0; i < INFO_GROUP_RENDER_MAX; i++) v[i] = group[Math.floor(i * step)];
+    v._n = group.length; v._all = () => group; v._pred = 'all';
+    _infoGroupViews.set(group, v);
+    return v;
+}
+function infoGroupLen(g) { return !g ? 0 : g._n !== undefined ? g._n : g.length; }
+function infoGroupScaleOf(g) { return g && g._n !== undefined && g.length ? g._n / g.length : 1; }
+// A part of a group (a filter): of a sampled group, the sample's part, its
+// count estimated, its whole made at a click.
+function infoGroupFilter(g, pred, predKey) {
+    const out = g.filter(pred);
+    if (g._n !== undefined) {
+        out._n = g.length ? Math.round(g._n * out.length / g.length) : 0;
+        const all = g._all; out._all = () => all().filter(pred); out._pred = predKey;
+    }
+    return out;
+}
+// The tiles a group control acts on: inline or by token; a sampled group's
+// by a token per group and part, its list made from the whole group when the
+// control is used (infoCoordText).
+const _infoLazyCoords = new Map();
+function infoGroupCoordAttr(g) {
+    if (g._all === undefined) return infoCoordAttr(g.map(b => `${b.gx !== undefined ? b.gx : b._gx},${b.gy !== undefined ? b.gy : b._gy}`).join(';'));
+    const token = '@g:' + _infoRenderGroupKey + ':' + g._pred;
+    _infoLazyCoords.set(token, g._all);
+    return token;
+}
 const INFO_GROUP_EXACT_MAX = 4096;
 const _infoGroupSamples = new WeakMap();
 function infoGroupSample(group) {
-    if (!Array.isArray(group) || group.length <= INFO_GROUP_EXACT_MAX) return group;
+    // (A sampled group's view is its sample already.)
+    if (!Array.isArray(group) || group._n !== undefined || group.length <= INFO_GROUP_EXACT_MAX) return group;
     let s = _infoGroupSamples.get(group);
     if (s && s.n === group.length) return s.out;
     const out = new Array(INFO_GROUP_EXACT_MAX), step = group.length / INFO_GROUP_EXACT_MAX;
@@ -3219,21 +3422,18 @@ function getSpawnerGroupEnergyProgress(spawnerGroup) {
     if (!Array.isArray(spawnerGroup) || spawnerGroup.length <= 0) {
         return { paid: 0, required: 0, left: 0, pct: 0, hasQueue: false };
     }
-    const sample = infoGroupSample(spawnerGroup), scale = spawnerGroup.length / sample.length;
-    if (sample !== spawnerGroup) {
-        const p = getSpawnerGroupEnergyProgress(sample);
-        return { paid: p.paid * scale, required: p.required * scale, left: p.left * scale, pct: p.pct, hasQueue: p.hasQueue };
-    }
+    const sample = infoGroupSample(spawnerGroup), scale = infoGroupLen(spawnerGroup) / sample.length;
     let paid = 0;
     let required = 0;
     let hasQueue = false;
-    for (let s of spawnerGroup) {
+    for (let s of sample) {
         let p = getSpawnerEnergyProgress(s);
         if (!p.hasQueue) continue;
         hasQueue = true;
         paid += p.paid;
         required += p.required;
     }
+    paid *= scale; required *= scale;
     let left = Math.max(0, required - paid);
     let pct = required > 0 ? (paid / required) : 0;
     return { paid, required, left, pct, hasQueue };
@@ -3436,7 +3636,30 @@ function selectionCompactDead(force = false) {
         if (!force && selectedUnits.length > SELECTION_COMPACT_SMALL) {
             const now = performance.now();
             if (now - X.compactAt < (selectedUnits.length >= SELECTION_COMPACT_BIG ? SELECTION_COMPACT_BIG_MS : SELECTION_COMPACT_MS)) return false;
+            // (A big one: once a sixty-fourth of it is dead; what is drawn,
+            // ordered and summed skips the dead by the index's mask meanwhile.)
+            if (selectedUnits.length >= SELECTION_COMPACT_BIG && X.dead * 64 < X.n && now - X.compactAt < SELECTION_COMPACT_BIG_MS * 5) return false;
             X.compactAt = now;
+        }
+        // A big framed selection from its index (the live slots in order),
+        // not a walk over its views: a million views' lookups and getters were
+        // ~140 ms each time.
+        if (X.sel === selectedUnits && selectedUnits.length >= SELECTION_COMPACT_BIG && typeof _pageSlotViews !== 'undefined') {
+            const out = [], slots = X.slots, mask = X.mask;
+            let ns = 0;
+            if (_selCompactSlots.length < X.n) _selCompactSlots = new Int32Array(Math.ceil(X.n * 1.25));
+            const keep = _selCompactSlots;
+            for (let i = 0; i < X.n; i++) {
+                const s = slots[i];
+                if (mask[s] === 0) continue;
+                const v = _pageSlotViews[s];
+                if (!v) continue;
+                out.push(v); keep[ns++] = s;
+            }
+            if (typeof infoPanelSelectionCompacted === 'function') infoPanelSelectionCompacted(selectedUnits, out);
+            selectedUnits = out;
+            const at = X.compactAt; selectionIndexAdopt(out, keep, ns); X.compactAt = at;
+            return true;
         }
     }
     // (A restore's own unit objects: their views. The live views' slots: the
@@ -3452,6 +3675,7 @@ function selectionCompactDead(force = false) {
             if (slotted) { const s = u._s; if (s >= 0 && s < F.cap) slots[ns++] = s; else slotted = false; }
         }
     }
+    if (typeof infoPanelSelectionCompacted === 'function') infoPanelSelectionCompacted(selectedUnits, out);
     selectedUnits = out;
     if (slotted && ns === out.length) { const at = X.compactAt; selectionIndexAdopt(out, slots, ns); X.compactAt = at; }
     return true;
@@ -3779,7 +4003,7 @@ function formatThingGroupEnergyDisplay(group) {
     let totalEnergy = 0;
     let totalUpgradeTriggerMax = 0;
     let totalEffectiveMax = 0;
-    const sample = infoGroupSample(group || []), scale = sample.length ? (group || []).length / sample.length : 1;
+    const sample = infoGroupSample(group || []), scale = sample.length ? infoGroupLen(group || []) / sample.length : 1;
     for (let e of sample) {
         let energyView = getThingEnergyDisplayValues(e);
         totalEnergy += energyView.currentEnergy;
@@ -3875,7 +4099,7 @@ function renderBarrackInfo(e) {
     html += infoRow('Unit Range', formatAreaDistanceStat(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
     if (e.owner === localPlayerId) {
-        html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+        html += infoRow('Rally', Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
     }
     if (e.owner === localPlayerId) {
         let cost = e.getUnitCost();
@@ -3914,10 +4138,10 @@ function renderBarrackGroupInfo(group) {
     let totalEffUpKeep = 0;
     let totalBaseUnitUpKeep = 0;
     let totalEffUnitUpKeep = 0;
-    let readyGroup = group.filter(b => !b.underConstruction);
+    let readyGroup = infoGroupFilter(group, b => !b.underConstruction, 'ready');
     let totalQueue = 0;
     // (Sums over a big group: from its sample, scaled; averages the same.)
-    const statSample = infoGroupSample(group), statScale = group.length / statSample.length;
+    const statSample = infoGroupSample(group), statScale = infoGroupLen(group) / statSample.length;
     for (let b of statSample) {
         let bBaseLevel = b.level || stackCountToLevel(b.stacks || 1);
         let bEffLevel = getThingEffectiveLevel(b, bBaseLevel);
@@ -3932,13 +4156,13 @@ function renderBarrackGroupInfo(group) {
     totalBaseVis *= statScale; totalEffVis *= statScale;
     for (let b of readyGroup) totalQueue += b.spawnQueue.length;
     let energyDisplay = formatThingGroupEnergyDisplay(group);
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-    let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
-    let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+    let avgBaseVis = infoGroupLen(group) > 0 ? totalBaseVis / infoGroupLen(group) : 0;
+    let avgEffVis = infoGroupLen(group) > 0 ? totalEffVis / infoGroupLen(group) : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     html += infoRow('Unit Energy', Number.isFinite(uEnergy) ? Math.floor(uEnergy) : '?');
@@ -3947,7 +4171,7 @@ function renderBarrackGroupInfo(group) {
     html += infoRow('Unit Range', formatAreaDistanceStat(Number(uRange) || 0));
     html += infoRow('Unit Spd', Number.isFinite(uSpeed) ? uSpeed.toFixed(2) : '?');
     if (e.owner === localPlayerId) {
-        html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+        html += infoRow('Rally', Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
     }
     if (e.owner === localPlayerId) {
         let anyMarked = group.some(b => b.markedForSalvage);
@@ -3957,7 +4181,7 @@ function renderBarrackGroupInfo(group) {
         let allBuildEnabled = group.every(b => isBuildEnabled(b));
         let anyBuildEnabled = group.some(b => isBuildEnabled(b));
         let queueReady = readyGroup;
-        let queueCoordStr = infoCoordAttr(queueReady.map(b => `${b.gx},${b.gy}`).join(';'));
+        let queueCoordStr = infoGroupCoordAttr(queueReady);
         let queueCostSource = readyGroup[0] || e;
         let cost = queueCostSource.getUnitCost();
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -3965,7 +4189,7 @@ function renderBarrackGroupInfo(group) {
         let canQueue = queueReady.length > 0;
         let queueBar = spawnCountBar(queueReady, false);
         let queueEnergyEstimate = spawnQueueEnergyEstimate(queueReady, false);
-        let coordStr = infoCoordAttr(group.map(b => `${b.gx},${b.gy}`).join(';'));
+        let coordStr = infoGroupCoordAttr(group);
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(b => isAutoStackEnabled(b)), group.some(b => isAutoStackEnabled(b)));
@@ -4079,9 +4303,10 @@ function renderTowerGroupInfo(group) {
         totalBaseUpKeep += Number(getBuildingStatForOwner(t.owner, t.type, tBaseLevel, 'upKeep')) || 0;
         totalEffUpKeep += Number(getBuildingStatForOwner(t.owner, t.type, tEffLevel, 'upKeep')) || 0;
     }
+    totalBaseUpKeep *= infoGroupScaleOf(group); totalEffUpKeep *= infoGroupScaleOf(group);
     if (!Number.isFinite(baseVis)) baseVis = 0;
     if (!Number.isFinite(effVis)) effVis = baseVis;
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
@@ -4136,7 +4361,7 @@ function renderTowerGroupInfo(group) {
         let hasUnderConstruction = group.some(t => t.underConstruction);
         let allBuildEnabled = group.every(t => isBuildEnabled(t));
         let anyBuildEnabled = group.some(t => isBuildEnabled(t));
-        let coordStr = infoCoordAttr(group.map(t => `${t.gx},${t.gy}`).join(';'));
+        let coordStr = infoGroupCoordAttr(group);
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(t => isAutoStackEnabled(t)), group.some(t => isAutoStackEnabled(t)));
@@ -4179,16 +4404,16 @@ function renderSpawnerInfo(e) {
     if (Number.isFinite(baseWorkerUpKeep)) {
         html += infoRow(withInfoPanelStatMatrixButton('Worker UpKeep', { title: `${workerUnitType} / UpKeep`, kind: 'unit', key: workerUnitType, statKey: 'upKeep' }), formatInfoRate(baseWorkerUpKeep), formatInfoRate(Number.isFinite(effWorkerUpKeep) ? effWorkerUpKeep : baseWorkerUpKeep));
     }
-    let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, sLevel, 'workerSearchDistance');
-    let effWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, effLevel, 'workerSearchDistance');
+    let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, sLevel, 'attackRange');
+    let effWorkerSearchDistance = getUnitStatForOwner(e.owner, workerUnitType, effLevel, 'attackRange');
     if (Number.isFinite(baseWorkerSearchDistance)) {
-        html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${e.type} / Work Distance`, kind: 'unit', key: workerUnitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        html += infoRow(withInfoPanelStatMatrixButton('Worker Range', { title: `${e.type} / Worker Range`, kind: 'unit', key: workerUnitType, statKey: 'attackRange' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     }
     // html += infoRow('Upgrade', `${upg.goldCost}g, ENERGY ${upg.energyNow}->${upg.energyNext}`);
     html += infoRow('Owner', e.owner === localPlayerId ? 'You' : 'Enemy');
     html += infoRow('Value', `⚡${formatBigNumber((BASE_CARD_TYPES[e.type] || {}).price || '?')}`);
     if (e.owner === localPlayerId) {
-        html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+        html += infoRow('Rally', Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
         let cost = e.getUnitCost();
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
         let totalCost = cost * purchaseCount;
@@ -4366,49 +4591,34 @@ function renderUnitInfo(u) {
         let effBuild = Number(effStats.builderDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'builderDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-        let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-        let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u.unitType} / Work Speed`, kind: 'unit', key: u.unitType, statKey: 'builderDps' }), `${formatBigNumber(baseBuild, 1)}\u26A1`, `${formatBigNumber(effBuild, 1)}\u26A1`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'healer') {
         let baseHeal = Number(baseStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'healerDps') || 0;
         let effHeal = Number(effStats.healerDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'healerDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-        let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-        let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u.unitType} / Work Speed`, kind: 'unit', key: u.unitType, statKey: 'healerDps' }), `${formatBigNumber(baseHeal, 1)}\u26A1`, `${formatBigNumber(effHeal, 1)}\u26A1`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'researcher') {
         let baseResearch = Number(baseStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'researcherDps') || 0;
         let effResearch = Number(effStats.researcherDps) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'researcherDps') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-        let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-        let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u.unitType} / Work Speed`, kind: 'unit', key: u.unitType, statKey: 'researcherDps' }), `${formatBigNumber(baseResearch, 1)}\u26A1`, `${formatBigNumber(effResearch, 1)}\u26A1`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'collector' || u.workerType === 'astar_collector') {
         let baseGather = Number(baseStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, lvl, 'gatherPerTrip') || 0;
         let effGather = Number(effStats.gatherPerTrip) || getUnitStatForOwner(u.owner, u.unitType, effLvl, 'gatherPerTrip') || 0;
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-        let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-        let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow(withInfoPanelStatMatrixButton('Work Speed', { title: `${u.unitType} / Work Speed`, kind: 'unit', key: u.unitType, statKey: 'gatherPerTrip' }), `${formatBigNumber(baseGather, 1)}\u26A1`, `${formatBigNumber(effGather, 1)}\u26A1`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else if (u.workerType === 'salvager') {
         let baseTransferCd = getUnitStatForOwner(u.owner, u.unitType, lvl, 'transferCooldown');
         let effTransferCd = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'transferCooldown');
-        let baseWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, lvl, 'workerSearchDistance');
-        let effWorkerSearchDistance = getUnitStatForOwner(u.owner, u.unitType, effLvl, 'workerSearchDistance');
         html += infoRow('Salvage Yield', `10% x L${lvl}`, `10% x L${effLvl}`);
         if (Number.isFinite(baseTransferCd)) html += infoRow(withInfoPanelStatMatrixButton('Transfer CD', { title: `${u.unitType} / Transfer CD`, kind: 'unit', key: u.unitType, statKey: 'transferCooldown' }), `${baseTransferCd.toFixed(2)}s`, Number.isFinite(effTransferCd) ? `${effTransferCd.toFixed(2)}s` : `${baseTransferCd.toFixed(2)}s`);
-        if (Number.isFinite(baseWorkerSearchDistance)) html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `${u.unitType} / Work Distance`, kind: 'unit', key: u.unitType, statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     } else {
         html += infoRow(withInfoPanelStatMatrixButton('Attack', { title: `${u.unitType} / Attack`, kind: 'unit', key: u.unitType, statKey: 'atk' }), baseAtk, effAtk);
         html += infoRow(withInfoPanelStatMatrixButton('DPS', {
@@ -4652,6 +4862,7 @@ function renderEntityBlock(e) {
 }
 
 function renderEntityGroupBlock(group) {
+    group = infoGroupRenderView(group);
     let e = group[0];
     let ctx = getInfoPanelMatrixContextForEntity(e);
     if (e.type === 'barrack' && e.unitType) return runWithInfoPanelStatMatrixContext(ctx, () => renderBarrackGroupInfo(group));
@@ -4679,7 +4890,8 @@ function renderGoldMineGroupInfo(group) {
     let html = '';
     let totalGold = 0, totalMax = 0;
     for (let m of group) { totalGold += m.gold; totalMax += m.maxGold; }
-    html += infoRow('Count', group.length);
+    totalGold *= infoGroupScaleOf(group); totalMax = Math.round(totalMax * infoGroupScaleOf(group));
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('Energy', formatInfoFraction(Math.floor(totalGold), totalMax));
     let pct = totalMax > 0 ? Math.round(totalGold / totalMax * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
@@ -4691,7 +4903,8 @@ function renderAstarMineGroupInfo(group) {
     let html = '';
     let totalAstar = 0, totalMax = 0;
     for (let m of group) { totalAstar += m.astar; totalMax += m.maxAstar; }
-    html += infoRow('Count', group.length);
+    totalAstar *= infoGroupScaleOf(group); totalMax = Math.round(totalMax * infoGroupScaleOf(group));
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('★', formatInfoFraction(Math.floor(totalAstar), totalMax));
     let pct = totalMax > 0 ? Math.round(totalAstar / totalMax * 100) : 0;
     html += infoRow('Remaining', `${pct}%`);
@@ -4719,7 +4932,7 @@ function renderSpawnerGroupInfo(group) {
     let totalEffUpKeep = 0;
     let totalBaseWorkerUpKeep = 0;
     let totalEffWorkerUpKeep = 0;
-    let readyGroup = group.filter(s => !s.underConstruction);
+    let readyGroup = infoGroupFilter(group, s => !s.underConstruction, 'ready');
     let totalQueue = 0;
     for (let s of group) {
         let sBaseLevel = s.level || stackCountToLevel(s.stacks || 1);
@@ -4731,15 +4944,16 @@ function renderSpawnerGroupInfo(group) {
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(s)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(s)) || 0;
     }
+    { const k = infoGroupScaleOf(group); totalBaseUpKeep *= k; totalEffUpKeep *= k; totalBaseWorkerUpKeep *= k; totalEffWorkerUpKeep *= k; totalBaseVis *= k; totalEffVis *= k; }
     for (let s of readyGroup) totalQueue += (s.spawnQueue || []).length;
     let energyDisplay = formatThingGroupEnergyDisplay(group);
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, sLevel, effStacks, effLevel, getThingManualStacks(e));
-    let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
-    let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+    let avgBaseVis = infoGroupLen(group) > 0 ? totalBaseVis / infoGroupLen(group) : 0;
+    let avgEffVis = infoGroupLen(group) > 0 ? totalEffVis / infoGroupLen(group) : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     html += infoRow(withInfoPanelStatMatrixButton('Worker UpKeep', { title: `${workerUnitType} / UpKeep`, kind: 'unit', key: workerUnitType, statKey: 'upKeep' }), formatInfoRate(totalBaseWorkerUpKeep), formatInfoRate(totalEffWorkerUpKeep));
@@ -4753,7 +4967,7 @@ function renderSpawnerGroupInfo(group) {
         let allBuildEnabled = group.every(s => isBuildEnabled(s));
         let anyBuildEnabled = group.some(s => isBuildEnabled(s));
         let queueReady = readyGroup;
-        let queueCoordStr = infoCoordAttr(queueReady.map(s => `${s.gx},${s.gy}`).join(';'));
+        let queueCoordStr = infoGroupCoordAttr(queueReady);
         let queueCostSource = readyGroup[0] || e;
         let cost = queueCostSource.getUnitCost();
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -4761,7 +4975,7 @@ function renderSpawnerGroupInfo(group) {
         let canQueue = queueReady.length > 0;
         let queueBar = spawnCountBar(queueReady, true);
         let queueEnergyEstimate = spawnQueueEnergyEstimate(queueReady, true);
-        let coordStr = infoCoordAttr(group.map(s => `${s.gx},${s.gy}`).join(';'));
+        let coordStr = infoGroupCoordAttr(group);
         let salvBtn = `${salvageToggleGroupBtn(coordStr, group.every(g => g.markedForSalvage), anyMarked)}`;
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let stackBtn = autoStackGroupBtn(coordStr, group.every(s => isAutoStackEnabled(s)), group.some(s => isAutoStackEnabled(s)));
@@ -5077,7 +5291,7 @@ function renderQueuedResearchTasksForGroup(group) {
     }
 
     let anchor = group[0];
-    let labCount = group.filter(r => r && r.type === 'research' && r.owner === owner && r.energy > 0 && !r.underConstruction).length;
+    let labCount = Math.round(group.filter(r => r && r.type === 'research' && r.owner === owner && r.energy > 0 && !r.underConstruction).length * infoGroupScaleOf(group));
     html += `<div style="display:flex;flex-direction:column;gap:6px">`;
     html += `<div style="border:1px solid #2a2a2a;border-radius:4px;padding:4px;background:#111">`;
     html += `<div style="font-size:10px;color:#9cf;margin-bottom:4px">Shared Queue (${labCount} labs)</div>`;
@@ -5391,13 +5605,13 @@ function renderResearchInfo(e) {
     if (Number.isFinite(baseResearcherUpKeep)) {
         html += infoRow(withInfoPanelStatMatrixButton('Worker UpKeep', { title: `researcher_unit / UpKeep`, kind: 'unit', key: 'researcher_unit', statKey: 'upKeep' }), formatInfoRate(baseResearcherUpKeep), Number.isFinite(effResearcherUpKeep) ? formatInfoRate(effResearcherUpKeep) : formatInfoRate(baseResearcherUpKeep));
     }
-    let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', e.level || 1, 'workerSearchDistance');
-    let effWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', getThingEffectiveLevel(e), 'workerSearchDistance');
+    let baseWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', e.level || 1, 'attackRange');
+    let effWorkerSearchDistance = getUnitStatForOwner(e.owner, 'researcher_unit', getThingEffectiveLevel(e), 'attackRange');
     if (Number.isFinite(baseWorkerSearchDistance)) {
-        html += infoRow(withInfoPanelStatMatrixButton('Work Distance', { title: `research / Work Distance`, kind: 'unit', key: 'researcher_unit', statKey: 'workerSearchDistance' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
+        html += infoRow(withInfoPanelStatMatrixButton('Researcher Range', { title: `research / Researcher Range`, kind: 'unit', key: 'researcher_unit', statKey: 'attackRange' }), formatAreaDistanceStat(baseWorkerSearchDistance), Number.isFinite(effWorkerSearchDistance) ? formatAreaDistanceStat(effWorkerSearchDistance) : formatAreaDistanceStat(baseWorkerSearchDistance));
     }
     if (e.owner === localPlayerId) {
-        html += infoRow('Rally', e.rallyX !== null ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
+        html += infoRow('Rally', Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? `(${Math.floor(e.rallyX / TILE)},${Math.floor(e.rallyY / TILE)})` : 'None');
     }
     if (e.owner === localPlayerId) {
         let labLevel = getThingEffectiveLevel(e);
@@ -5455,7 +5669,8 @@ function renderResearchInfo(e) {
 function renderResearchGroupInfo(group) {
     let html = '';
     let e = group[0];
-    let queueScope = `group:${group.map(r => `${r.gx},${r.gy}`).join(';')}`;
+    // (The open state's key: the player's labs, not their tiles.)
+    let queueScope = `group:${e.owner}`;
     let queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
     let popupThreeColumnLayout = researchPopupInfoRenderActive;
     let totalEnergy = 0;
@@ -5473,21 +5688,22 @@ function renderResearchGroupInfo(group) {
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(r)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(r)) || 0;
     }
+    { const k = infoGroupScaleOf(group); totalEnergy *= k; totalBaseUpKeep *= k; totalEffUpKeep *= k; totalBaseResearcherUpKeep *= k; totalEffResearcherUpKeep *= k; totalBaseVis *= k; totalEffVis *= k; }
     let groupEnergyDisplay = formatThingGroupEnergyDisplay(group);
     let totalQueue = getResearchQueueTotalLength(e);
     let queueCap = getResearchQueueCapacityForPlayer(e.owner);
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', infoGroupLen(group));
     html += infoRow('Energy', groupEnergyDisplay.base, groupEnergyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(e.stacks, e.level, e.effectiveStacks, e.effectiveLevel, getThingManualStacks(e));
-    let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
-    let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+    let avgBaseVis = infoGroupLen(group) > 0 ? totalBaseVis / infoGroupLen(group) : 0;
+    let avgEffVis = infoGroupLen(group) > 0 ? totalEffVis / infoGroupLen(group) : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     html += infoRow(withInfoPanelStatMatrixButton('Worker UpKeep', { title: `researcher_unit / UpKeep`, kind: 'unit', key: 'researcher_unit', statKey: 'upKeep' }), formatInfoRate(totalBaseResearcherUpKeep), formatInfoRate(totalEffResearcherUpKeep));
     if (e.owner === localPlayerId) {
-        let rallyTokens = new Set(group.map(r => (r.rallyX !== null && r.rallyY !== null)
+        let rallyTokens = new Set(group.map(r => (Number.isFinite(r.rallyX) && Number.isFinite(r.rallyY))
             ? `${Math.floor(r.rallyX / TILE)},${Math.floor(r.rallyY / TILE)}`
             : 'None'));
         if (rallyTokens.size === 1) {
@@ -5498,14 +5714,14 @@ function renderResearchGroupInfo(group) {
         }
     }
     if (e.owner === localPlayerId) {
-        let readyGroup = group.filter(r => !r.underConstruction);
+        let readyGroup = infoGroupFilter(group, r => !r.underConstruction, 'ready');
         let workerQueueCount = 0;
         for (let r of readyGroup) {
             if (!r || !Array.isArray(r.spawnQueue)) continue;
             workerQueueCount += r.spawnQueue.length;
         }
         let queueReady = readyGroup;
-        let workerCoordStr = infoCoordAttr(queueReady.map(r => `${r.gx},${r.gy}`).join(';'));
+        let workerCoordStr = infoGroupCoordAttr(queueReady);
         let queueCostSource = readyGroup[0] || group[0];
         let cost = queueCostSource ? queueCostSource.getUnitCost() : 0;
         let purchaseCount = Math.max(1, Math.floor(queuePurchaseMultiplier || 1));
@@ -5542,7 +5758,7 @@ function renderResearchGroupInfo(group) {
         }
         html += `</div>`;
 
-        let coordStr = infoCoordAttr(group.map(r => `${r.gx},${r.gy}`).join(';'));
+        let coordStr = infoGroupCoordAttr(group);
         let anyMarked = group.some(r => r.markedForSalvage);
         let allAutoEnabled = group.every(r => isAutoUpgradeEnabled(r));
         let anyAutoEnabled = group.some(r => isAutoUpgradeEnabled(r));
@@ -5668,14 +5884,15 @@ function renderFloorItemGroupInfo(group) {
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(f)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(f)) || 0;
     }
+    { const k = infoGroupScaleOf(group); totalBaseUpKeep *= k; totalEffUpKeep *= k; totalEnergy *= k; totalBaseVis *= k; totalEffVis *= k; }
     let energyDisplay = formatThingGroupEnergyDisplay(group);
-    html += infoRow('Count', group.length);
+    html += infoRow('Count', infoGroupLen(group));
     if (baseStats.maxEnergy > 0) html += infoRow('Energy', energyDisplay.base, energyDisplay.effective);
     html += infoRowLevel('Level', e);
     html += infoRow(withInfoPanelStatMatrixButton('Max Level', { title: `${e.type} / Max Level`, kind: 'building', key: e.type, statKey: 'maxLevel' }), `L${getThingResearchedMaxLevel(e)}`);
     html += infoRowStacks(baseStacks, baseLevel, effStacks, effLevel, getThingManualStacks(e));
-    let avgBaseVis = group.length > 0 ? totalBaseVis / group.length : 0;
-    let avgEffVis = group.length > 0 ? totalEffVis / group.length : 0;
+    let avgBaseVis = infoGroupLen(group) > 0 ? totalBaseVis / infoGroupLen(group) : 0;
+    let avgEffVis = infoGroupLen(group) > 0 ? totalEffVis / infoGroupLen(group) : 0;
     html += infoRow('Visibility', `${formatRangeStatTiles(avgBaseVis)} avg`, `${formatRangeStatTiles(avgEffVis)} avg`);
     html += infoRow(withInfoPanelStatMatrixButton('UpKeep', { title: `${e.type} / UpKeep`, kind: 'building', key: e.type, statKey: 'upKeep' }), formatInfoRate(totalBaseUpKeep), formatInfoRate(totalEffUpKeep));
     if (effStats.damage > 0) {
@@ -5732,6 +5949,7 @@ function renderFloorItemGroupInfo(group) {
             totalBasePopCap += Math.max(1, Math.floor(hBasePop));
             totalEffPopCap += Math.max(1, Math.floor(hEffPop));
         }
+        totalBasePopCap = Math.round(totalBasePopCap * infoGroupScaleOf(group)); totalEffPopCap = Math.round(totalEffPopCap * infoGroupScaleOf(group));
         html += infoRow('Pop Cap', `+${formatBigNumber(totalBasePopCap)}`, totalBasePopCap !== totalEffPopCap ? `+${formatBigNumber(totalEffPopCap)}` : undefined);
     }
     html += infoRow('Value', `⚡${formatBigNumber(def.price || '?')}`);
@@ -5742,7 +5960,7 @@ function renderFloorItemGroupInfo(group) {
         let hasUnderConstruction = group.some(f => f.underConstruction);
         let allBuildEnabled = group.every(f => isBuildEnabled(f));
         let anyBuildEnabled = group.some(f => isBuildEnabled(f));
-        let coordStr = infoCoordAttr(group.map(f => { let gx = f.gx !== undefined ? f.gx : f._gx, gy = f.gy !== undefined ? f.gy : f._gy; return `${gx},${gy}`; }).join(';'));
+        let coordStr = infoGroupCoordAttr(group);
         let autoBtn = autoUpgradeGroupBtn(coordStr, allAutoEnabled, anyAutoEnabled);
         let buildBtn = hasUnderConstruction ? buildToggleGroupBtn(coordStr, allBuildEnabled, anyBuildEnabled) : '';
         let stackBtn = autoStackGroupBtn(coordStr, group.every(f => isAutoStackEnabled(f)), group.some(f => isAutoStackEnabled(f)));
@@ -5927,73 +6145,6 @@ function patchInfoPanelResearchQueue(render, html, bindControls) {
 
 const INFO_PANEL_SECTION_OPEN = '<div class="info-panel-section">';
 
-// Large selections (many groups: one of every building and unit is ~70, each
-// ~100+ elements) render only the group sections in or near view. The others
-// are empty placeholders of their last measured height, filled in when they
-// scroll near view, so building, patching and laying out the panel costs
-// what a few groups cost, not all of them.
-const INFO_PANEL_VIRTUAL_MIN_GROUPS = 6;
-const INFO_PANEL_SECTION_HEIGHT_ESTIMATE = 320;
-const infoPanelSectionHeights = new Map();
-
-function getInfoPanelSectionHeight(key) {
-    return infoPanelSectionHeights.get(key) || INFO_PANEL_SECTION_HEIGHT_ESTIMATE;
-}
-
-// The scroll range to render (one view above and below the visible part),
-// or null to render everything.
-function getInfoPanelVirtualWindow(panel, allGroups, subgroupState) {
-    let active = allGroups.filter(([key]) => subgroupState[key] !== false);
-    if (active.length < INFO_PANEL_VIRTUAL_MIN_GROUPS) return null;
-    bindInfoPanelVirtualScroll(panel);
-    let viewHeight = panel.clientHeight || 600;
-    // The subgroup bar grows with the group count: estimate it until measured.
-    let headerHeight = infoPanelSectionHeights.get('#header:' + allGroups.length)
-        || Math.ceil(allGroups.length / 6) * 40 + 60;
-    let total = headerHeight;
-    for (let [key] of active) total += getInfoPanelSectionHeight(key);
-    // A new, shorter selection is scrolled back to its end by the browser.
-    let viewTop = Math.max(0, Math.min(panel.scrollTop, total - viewHeight));
-    return { top: viewTop - viewHeight, bottom: viewTop + viewHeight * 2, headerHeight };
-}
-
-// Heights of the header and the rendered group sections, after a rebuild.
-// (Measured after the browser has laid the new content out for its own
-// frame: asked for right after the content was set, the heights forced that
-// layout at once, ~25 ms of a rebuilt panel's task.)
-let _infoPanelHeightsPending = 0;
-function rememberInfoPanelSectionHeights(panel, sectionKeys, groupCount) {
-    const token = ++_infoPanelHeightsPending;
-    const measure = () => { if (token === _infoPanelHeightsPending && panel.isConnected) _measureInfoPanelSectionHeights(panel, sectionKeys, groupCount); };
-    if (typeof requestAnimationFrame === 'function' && typeof setTimeout === 'function') requestAnimationFrame(() => setTimeout(measure, 0));
-    else measure();
-}
-function _measureInfoPanelSectionHeights(panel, sectionKeys, groupCount) {
-    let sections = panel.children;
-    if (sections.length !== sectionKeys.length + 2) return;
-    infoPanelSectionHeights.set('#header:' + groupCount, sections[0].offsetHeight);
-    for (let i = 0; i < sectionKeys.length; i++) {
-        let section = sections[i + 1];
-        if (!section.firstElementChild || section.firstElementChild.classList.contains('info-section-placeholder')) continue;
-        infoPanelSectionHeights.set(sectionKeys[i], section.offsetHeight);
-    }
-}
-
-// Scrolling a placeholder near view renders it (on the next frame).
-function bindInfoPanelVirtualScroll(panel) {
-    if (panel._infoPanelVirtualScrollBound) return;
-    panel._infoPanelVirtualScrollBound = true;
-    let pending = false;
-    panel.addEventListener('scroll', () => {
-        if (pending || !panel.querySelector('.info-section-placeholder')) return;
-        pending = true;
-        requestAnimationFrame(() => {
-            pending = false;
-            updateInfoPanel();
-        });
-    }, { passive: true });
-}
-
 // A group's controls carry their structures' tiles as a list in the markup
 // ("gx,gy;gx,gy..."). A long one (thousands of buildings: ~10 bytes each, in
 // half a dozen controls of the group, parsed into the page at every rebuild)
@@ -6017,6 +6168,10 @@ function infoCoordAttr(text) {
 }
 function infoCoordText(text) {
     text = String(text || '');
+    if (text.startsWith('@g:')) {
+        const all = _infoLazyCoords.get(text);
+        return all ? all().map(b => `${b.gx !== undefined ? b.gx : b._gx},${b.gy !== undefined ? b.gy : b._gy}`).join(';') : '';
+    }
     return text.startsWith('@c:') ? (_infoCoordByToken.get(text) || '') : text;
 }
 
@@ -6098,8 +6253,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // Remove dead entities
     // (New arrays only when something went: what is kept per selection,
     // by its array, stays.)
-    if (selectedEntities.some(_infoPanelEntityGone)) selectedEntities = selectedEntities.filter(e => !_infoPanelEntityGone(e));
-    selectionCompactDead(true);
+    _infoPanelDropGoneEntities();
+    selectionCompactDead();
 
     let totalSel = selectedEntities.length + selectedUnits.length;
     if (totalSel === 0) {
@@ -6119,21 +6274,14 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     panel.style.display = 'block';
     bindInfoPanelInteractionTracking(panel);
 
-    infoPanelStatMatrixDescriptorById = {};
-    nextInfoPanelStatMatrixDescriptorId = 1;
 
     let html = '';
     // --- GROUP ENTITIES by key ---
-    let entityGroups = {};
-    for (let e of selectedEntities) {
-        let key = getEntityGroupKey(e);
-        if (!entityGroups[key]) entityGroups[key] = { label: getEntityGroupLabel(e), items: [], isEntity: true };
-        entityGroups[key].items.push(e);
-    }
+    let entityGroups = _infoPanelEntityGroups();
     // Group units by type (a big selection: from the frame's columns, no
     // unit read through its view).
     let unitGroups = {};
-    const frameUnitGroups = infoPanelUnitGroupsFromFrame();
+    const frameUnitGroups = infoPanelUnitGroupsSnapshot();
     if (frameUnitGroups) unitGroups = frameUnitGroups.groups;
     else for (let u of selectedUnits) {
         let key = getUnitGroupKey(u);
@@ -6180,7 +6328,16 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     // --- SUMMARY HEADER ---
     if (totalSel > 1) {
         let totalEnergy = 0, totalmaxEnergy = 0;
-        for (let e of selectedEntities) { if (e.energy !== undefined) { totalEnergy += e.energy; totalmaxEnergy += e.maxEnergy; } }
+        // (Per group from its sample, scaled; a big selection's once a second.)
+        const ST = _infoSummaryTotals, nowT = performance.now();
+        if (ST.groups === entityGroups && selectedEntities.length > INFO_ENTITY_SWEEP_BIG && nowT - ST.at < 1000) { totalEnergy = ST.energy; totalmaxEnergy = ST.max; }
+        else {
+            for (const [, g] of Object.entries(entityGroups)) {
+                const sample = infoGroupRenderView(g.items), k = infoGroupScaleOf(sample);
+                for (let e of sample) { if (e.energy !== undefined) { totalEnergy += e.energy * k; totalmaxEnergy += e.maxEnergy * k; } }
+            }
+            ST.groups = entityGroups; ST.at = nowT; ST.energy = totalEnergy; ST.max = totalmaxEnergy;
+        }
         if (frameUnitGroups) { totalEnergy += frameUnitGroups.totalEnergy; totalmaxEnergy += frameUnitGroups.totalMax; }
         else for (let u of selectedUnits) { totalEnergy += u.energy; totalmaxEnergy += u.maxEnergy; }
         html += `<div class="info-title">${totalSel} selected</div>`;
@@ -6195,22 +6352,17 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let sectionMarks = [];
     let sectionKeys = [];
     let activeGroupCount = 0;
-    let virtualWindow = panelOverride ? null : getInfoPanelVirtualWindow(panel, allGroups, subgroupState);
-    let groupTop = virtualWindow ? virtualWindow.headerHeight : 0;
+    // Which groups are made again this time (the rest keep their markup).
+    const remake = panelOverride ? null : _infoPanelSectionsToRemake(panel, allGroups, subgroupState);
     for (let [key, grp] of allGroups) {
         if (subgroupState[key] === false) continue;
         activeGroupCount++;
         sectionMarks.push(html.length);
         sectionKeys.push(key);
-        if (virtualWindow) {
-            let height = getInfoPanelSectionHeight(key);
-            let top = groupTop;
-            groupTop += height;
-            if (top > virtualWindow.bottom || top + height < virtualWindow.top) {
-                html += `<div class="info-section-placeholder" style="height:${height}px"></div>`;
-                continue;
-            }
-        }
+        const cachedSection = remake ? _infoSectionCache.get(key) : null;
+        if (remake && cachedSection && !remake.has(key)) { html += cachedSection.html; continue; }
+        const sectionStart = html.length, sectionT0 = performance.now();
+        _infoRenderGroupKey = key;
 
         let items = grp.items;
         let label = grp.label;
@@ -6260,6 +6412,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             }
         }
         html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+        if (remake) _infoSectionCache.set(key, { html: html.slice(sectionStart), at: performance.now(), cost: performance.now() - sectionT0 });
     }
 
     sectionMarks.push(html.length);
@@ -6282,10 +6435,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let previousRender = panel._selectionRenderCache;
     // (The same arrays at the same lengths, else the same members: a small
     // selection's are compared one by one, as its array may be made again.)
-    let sameSelection = previousRender && previousRender.subgroups === subgroupState
-        && previousRender.unitsLen === selectedUnits.length && previousRender.entities.length === selectedEntities.length
-        && (previousRender.unitsRef === selectedUnits || (!!previousRender.units && previousRender.units.every((u, i) => u === selectedUnits[i])))
-        && (previousRender.entitiesRef === selectedEntities || previousRender.entities.every((e, i) => e === selectedEntities[i]));
+    // (The same groups in the same order: the sections are patched in place,
+    // whatever the selection's arrays: a compaction or a new selection of
+    // the same groups is no rebuild of the whole panel.)
+    const sectionKeysSig = sectionKeys.join('|');
+    panel._infoSectionKeys = sectionKeys;
+    let sameSelection = previousRender && previousRender.subgroups === subgroupState && previousRender.keysSig === sectionKeysSig;
     if (sameSelection && previousRender.html === html) {
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
         return;
@@ -6342,14 +6497,10 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         if (elements.length === sectionHtml.length) {
             sections = sectionHtml.map((sectionMarkup, i) => ({ html: sectionMarkup, element: elements[i], ...indexInfoPanelText(elements[i], sectionMarkup) }));
         }
-        panel._selectionRenderCache = {
-            html, subgroups: subgroupState, unitsRef: selectedUnits, unitsLen: selectedUnits.length, entitiesRef: selectedEntities,
-            units: selectedUnits.length <= INFO_PANEL_COLUMN_MIN ? selectedUnits.slice() : null, entities: selectedEntities.slice(), sections
-        };
+        panel._selectionRenderCache = { html, subgroups: subgroupState, keysSig: sectionKeysSig, sections };
         bindRoots.push(panel);
     }
     for (let root of bindRoots) bindInfoPanelSectionControls(root);
-    if (virtualWindow) rememberInfoPanelSectionHeights(panel, sectionKeys, allGroups.length);
     restoreInfoPanelMouseAnchor(panel, panelMouseAnchor);
     if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
     refreshResearchPopup();
@@ -7002,29 +7153,10 @@ function renderResearchPopupContent() {
     let infoPanel = holder.querySelector('#research-popup-info-panel');
     if (!infoPanel) {
         holder.innerHTML = `
-        <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
-            <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
-        </div>
         <div id="research-popup-info-panel"></div>
     `;
         infoPanel = holder.querySelector('#research-popup-info-panel');
         updatePurchaseMultiplierBars();
-    }
-
-    let popupIgnoreBtn = holder.querySelector('#btn-ignore-level-popup');
-    if (popupIgnoreBtn && popupIgnoreBtn.dataset.bound !== '1') {
-        popupIgnoreBtn.dataset.bound = '1';
-        bindInstantPress(popupIgnoreBtn, () => {
-            ignoreLevelSubgroups = !ignoreLevelSubgroups;
-            updateIgnoreLevelButton();
-            if (activePopupControlGroupKey) {
-                normalizePopupControlGroup(activePopupControlGroupKey);
-                let snap = getPopupControlGroupSnapshot(activePopupControlGroupKey);
-                if (snap) snap.activeSubGroups = {};
-            }
-            renderResearchPopupContent();
-            updateInfoPanel();
-        });
     }
 
     let prevUnits = selectedUnits;

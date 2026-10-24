@@ -107,17 +107,18 @@ frame(false, [], [], [a, b]);
 assert.equal(c.batch.count[M.BOX], 2, 'one burning fence: glow and core, drawn once per pair');
 
 // A tilted close camera still sees a distant battle. Use depth at the attack,
-// not the camera centre, to aggregate unreadable flashes before building parts.
+// not the camera centre: far away each attack is one dot (its colour where it
+// is, effects3d.js _fxEventFar), not its parts.
 c.clearCombatFx();
 for (let i=0;i<100;i++) c.recordCombatFx(FX.CAST,5*32,5*32,6*32,5*32,'fire');
 const tilted={lodPixelsPerWorld:64,pixelsPerWorldAt:()=>3};
 c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
 c.buildFrameEffects([],[],[]);c.endFrameEffects();
-assert.equal(c.batch.total,1,'distant attacks share one flash even in a close tilted view');
-const distant=instances(M.DECAL);
+assert.equal(c.batch.total,100,'distant attacks: one dot each, even in a close tilted view');
+const distant=instances(M.ORB);
 c.beginFrameEffects(c.batch,false,{...bounds,minGx:.2,minGy:.2},[],64,tilted);
 c.buildFrameEffects([],[],[]);c.endFrameEffects();
-assert.deepEqual(instances(M.DECAL),distant,'panning leaves aggregation anchored to the world');
+assert.deepEqual(instances(M.ORB),distant,'panning leaves the distant dots where they are');
 tilted.pixelsPerWorldAt=()=>64;
 c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
 c.buildFrameEffects([],[],[]);c.endFrameEffects();

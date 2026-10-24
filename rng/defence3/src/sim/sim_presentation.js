@@ -72,7 +72,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261018-separation5', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261024-ui2', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -230,7 +230,7 @@ function simPresentationWriteMetadata(u, F) {
     set(F.wstate, s, _simFrameCode(u.workerState)); set(F.style, s, _simFrameCode(u.attackStyle));
     set(F.watchedBy, s, Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1);
     const e = u.preComputedEffective, b = u.preComputed;
-    set(F.vision, s, Math.fround(e && Number.isFinite(e.visionRangeArea) ? e.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u)));
+    set(F.vision, s, areaSteps(e && Number.isFinite(e.visionRangeArea) ? e.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u)));
     set(F.maxEnergy, s, Math.fround(b ? b.maxEnergy : C.energy[s]));
     set(F.cargo, s, Math.fround(Number(u.carryingValue) || 0));
     const at = u.attackTarget;

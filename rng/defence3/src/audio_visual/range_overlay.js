@@ -254,9 +254,8 @@ function _updateRangeShownAreas(selectedBuildings, selected) {
         addAt(wx, wy, range);
     };
     const addAt = (wx, wy, range) => {
-        // A fractional range includes the source area (distance zero).
-        // Floor only after the positive-range check, as gameplay does.
-        if (!(range > 0)) return;
+        // Whole area steps: 0 is the source's own area (NaN: none).
+        if (!(range >= 0)) return;
         if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
         let r = Math.min(32767, Math.floor(range));
         // Every area under the source's +-0.3 tile window, as gameplay.

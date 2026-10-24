@@ -22,10 +22,11 @@
 // ============================================================
 
 const SIM_FRAME_F32 = ['x', 'y', 'px', 'py', 'vx', 'vy', 'energy', 'maxEnergy', 'tx', 'ty', 'facing', 'amount', 'phase', 'prate',
-    'light', 'sig', 'r', 'vision', 'cargo'];
+    'light', 'sig', 'r', 'cargo'];
 const SIM_FRAME_I32 = ['id', 'flags', 'orderDest', 'orderTick'];
 const SIM_FRAME_I16 = ['owner', 'watchedBy', 'level', 'blevel', 'type', 'wtype', 'wstate', 'style'];
-const SIM_FRAME_U8 = ['mode', 'status', 'flash', 'cmd'];
+// (vision: whole area steps, data_static.js areaSteps.)
+const SIM_FRAME_U8 = ['mode', 'status', 'flash', 'cmd', 'vision'];
 // Bytes per slot: the columns, and the order entry (int32).
 const SIM_FRAME_SLOT_BYTES = 4 * (SIM_FRAME_F32.length + SIM_FRAME_I32.length + 1) + 2 * SIM_FRAME_I16.length + SIM_FRAME_U8.length;
 
@@ -43,58 +44,31 @@ const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 // the slow columns a frame copies (presentation_worker.js META_COPY), the
 // metadata flags and the id they are for. (In a frame's layout it was 116
 // bytes a slot, 70 of them never written: ~0.5 GB at 8M units.)
-const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['vision', 'maxEnergy', 'cargo', 'tx', 'ty'],
-    SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'];
-const SIM_META_SLOT_BYTES = 4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length;
+const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['maxEnergy', 'cargo', 'tx', 'ty'],
+    SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'], SIM_META_U8 = ['vision'];
+const SIM_META_SLOT_BYTES = 4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length + SIM_META_U8.length;
 function simMetaViews(buf, cap) {
     const v = { buf, cap };
     let o = 0;
     for (const k of SIM_META_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
     for (const k of SIM_META_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
     for (const k of SIM_META_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
+    for (const k of SIM_META_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap; }
     return v;
 }
 
-// Typed-array views of a frame buffer laid out for `cap` slots.
+// Typed-array views of a frame buffer laid out for `cap` slots: the 4-byte
+// columns (floats, ints, the order entry), the 2-byte ones, the bytes last
+// (every view aligned for any cap).
 function simFrameViews(buf, cap) {
-    return { buf, cap,
-        x: new Float32Array(buf, 0 * cap, cap),
-        y: new Float32Array(buf, 4 * cap, cap),
-        px: new Float32Array(buf, 8 * cap, cap),
-        py: new Float32Array(buf, 12 * cap, cap),
-        vx: new Float32Array(buf, 16 * cap, cap),
-        vy: new Float32Array(buf, 20 * cap, cap),
-        energy: new Float32Array(buf, 24 * cap, cap),
-        maxEnergy: new Float32Array(buf, 28 * cap, cap),
-        tx: new Float32Array(buf, 32 * cap, cap),
-        ty: new Float32Array(buf, 36 * cap, cap),
-        facing: new Float32Array(buf, 40 * cap, cap),
-        amount: new Float32Array(buf, 44 * cap, cap),
-        phase: new Float32Array(buf, 48 * cap, cap),
-        prate: new Float32Array(buf, 52 * cap, cap),
-        light: new Float32Array(buf, 56 * cap, cap),
-        sig: new Float32Array(buf, 60 * cap, cap),
-        r: new Float32Array(buf, 64 * cap, cap),
-        vision: new Float32Array(buf, 68 * cap, cap),
-        cargo: new Float32Array(buf, 72 * cap, cap),
-        id: new Int32Array(buf, 76 * cap, cap),
-        flags: new Int32Array(buf, 80 * cap, cap),
-        order: new Int32Array(buf, 84 * cap, cap),
-        owner: new Int16Array(buf, 88 * cap, cap),
-        watchedBy: new Int16Array(buf, 90 * cap, cap),
-        level: new Int16Array(buf, 92 * cap, cap),
-        blevel: new Int16Array(buf, 94 * cap, cap),
-        type: new Int16Array(buf, 96 * cap, cap),
-        wtype: new Int16Array(buf, 98 * cap, cap),
-        wstate: new Int16Array(buf, 100 * cap, cap),
-        style: new Int16Array(buf, 102 * cap, cap),
-        mode: new Uint8Array(buf, 104 * cap, cap),
-        status: new Uint8Array(buf, 105 * cap, cap),
-        flash: new Uint8Array(buf, 106 * cap, cap),
-        cmd: new Uint8Array(buf, 107 * cap, cap),
-        orderDest: new Int32Array(buf, 108 * cap, cap),
-        orderTick: new Int32Array(buf, 112 * cap, cap),
-    };
+    const v = { buf, cap };
+    let o = 0;
+    for (const k of SIM_FRAME_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
+    for (const k of SIM_FRAME_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
+    v.order = new Int32Array(buf, o, cap); o += 4 * cap;
+    for (const k of SIM_FRAME_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
+    for (const k of SIM_FRAME_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap; }
+    return v;
 }
 
 // ---- worker side ----
@@ -289,7 +263,7 @@ function simFrameEncode() {
         F.orderDest[s] = getUnitOrderDestinationCode(u);
         F.orderTick[s] = currentTick - 1;
         let eff = u.preComputedEffective;
-        F.vision[s] = eff && Number.isFinite(eff.visionRangeArea) ? eff.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u);
+        F.vision[s] = areaSteps(eff && Number.isFinite(eff.visionRangeArea) ? eff.visionRangeArea : getEntityEffectiveVisibilityRangeArea(u));
         F.cargo[s] = Number(u.carryingValue) || 0;
         F.watchedBy[s] = Number.isFinite(u.watchedByTeam) ? u.watchedByTeam : -1;
         F.type[s] = _simFrameCode(u.unitType);
@@ -302,7 +276,7 @@ function simFrameEncode() {
         // time at 100k units, despite the values already living in columns.
         F.light[s] = C.owner[slot] === localPlayerId || (C.watched[slot] > 0 && u.watchedByTeam === localPlayerId)
             // (At least the fog's full light: see presentation_worker.js.)
-            ? Math.max(VISIBILITY_LIGHT_NORMALIZATION_RANGE, F.vision[s] * AREA_UNIT_TILE_EQUIVALENT) : 0;
+            ? Math.max(VISIBILITY_LIGHT_NORMALIZATION_RANGE, areaStepsVisionTiles(F.vision[s])) : 0;
         // Look: activity, facing, walk phase, status face, own light, panel.
         if (compact) {
             input.still[s] = gameTime; input.flash[s] = 0;

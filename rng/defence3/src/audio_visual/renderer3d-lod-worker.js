@@ -2,7 +2,7 @@
 // owns the final atlas; camera motion only samples its resident textures.
 self.window=self;
 self.document={createElement:()=>new OffscreenCanvas(64,64)};
-importScripts('renderer3d.js?v=20261016-mp3');
+importScripts('renderer3d.js?v=20261024-ui2');
 const renderer=Object.create(Defence3Renderer3D.prototype);
 const color=new OffscreenCanvas(64,64);
 const g=color.getContext('2d',{willReadFrequently:true});

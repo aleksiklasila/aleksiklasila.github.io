@@ -68,11 +68,12 @@ class SimSlots {
 const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a', 'd'];
 const SIM_STRUCT_SPEC = simTableSpec({
     f32: ['x', 'y', 'energy', 'maxEnergy', 'spawnTimer', 'spawnCooldown', 'stackWork', 'stackReq', 'angle', 'amount', 'amountMax', 'cd',
-        'tx', 'ty', 'vision', 'resDone', 'resReq', 'rallyX', 'rallyY', 'timer', 'damage'],
+        'tx', 'ty', 'resDone', 'resReq', 'rallyX', 'rallyY', 'timer', 'damage'],
     i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId'],
     i16: ['kind', 'gx', 'gy', 'owner', 'type', 'utype', 'level', 'elevel', 'stacks', 'mstacks', 'estacks', 'qlen', 'qtype', 'laser',
         'watchedBy', 'label', 'stackCount'],
-    u8: ['alive', 'flash']
+    // (vision: whole area steps.)
+    u8: ['alive', 'flash', 'vision']
 });
 const SIM_SF_UC = 1, SIM_SF_UPGRADING = 2, SIM_SF_SALVAGE = 4, SIM_SF_STACKING = 8, SIM_SF_WATCHED = 16, SIM_SF_BURNING = 32,
     SIM_SF_POISONED = 64, SIM_SF_FROZEN = 128, SIM_SF_WET = 256, SIM_SF_SANDY = 512, SIM_SF_AUTO_UPGRADE = 1024, SIM_SF_BUILD = 2048,
@@ -113,7 +114,7 @@ function _simWriteStructure(F, s, e, kind, tick) {
     F.resDone[s] = task ? Number(task.workDone) || 0 : 0; F.resReq[s] = task ? Number(task.workRequired) || 0 : 0;
     F.rallyX[s] = Number(e.rallyX) || 0; F.rallyY[s] = Number(e.rallyY) || 0;
     F.rallyTargetId[s] = e.rallyTargetUnitId == null ? -1 : e.rallyTargetUnitId;
-    F.vision[s] = kind <= 3 ? (Number(getEntityEffectiveVisibilityRangeArea(e)) || 0) : 0;
+    F.vision[s] = kind <= 3 ? areaSteps(getEntityEffectiveVisibilityRangeArea(e)) : 0;
     F.level[s] = Number.isFinite(e.level) ? e.level : -1;
     F.elevel[s] = Number.isFinite(e.effectiveLevel) ? e.effectiveLevel : -1;
     F.stacks[s] = Number.isFinite(e.stacks) ? e.stacks : -1;

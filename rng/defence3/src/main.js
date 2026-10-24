@@ -2706,15 +2706,6 @@ function initInput() {
         });
     }
 
-    const btnIgnoreLevel = document.getElementById('btn-ignore-level');
-    if (btnIgnoreLevel) {
-        btnIgnoreLevel.addEventListener('click', () => {
-            ignoreLevelSubgroups = !ignoreLevelSubgroups;
-            updateIgnoreLevelButton();
-            activeSubGroups = {};
-            updateInfoPanel();
-        });
-    }
     updateDefaultToggleButtons();
     updateIgnoreLevelButton();
     updatePurchaseMultiplierBars();

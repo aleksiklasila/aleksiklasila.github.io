@@ -48,7 +48,7 @@ const _FX_ARC = { 0: [.05, .3], 1: [.2, 1.1], 2: [.26, 1.3], 3: [.07, .35], 4: [
 
 const _fx = {
     batch: null, flat: false, detail: true, now: 0, tickScale: 1, rest: 1,
-    limit:10000, cells:new Set(), cellSize:1,
+    limit:10000, cells:new Set(), cellSize:1, ppt: 32, farPpt: 0,
     minX: 0, minZ: 0, maxX: 0, maxZ: 0, vis: null, full: false, lastNow: -Infinity, volleys: false
 };
 let _FXM = null, _FXP = null;
@@ -326,7 +326,13 @@ function _fxVolley(n, x0, z0, x1, z1, style, seed, age, typeName) {
     for (let i = 0; i < n; i++) {
         const t = age - i * _FX_VOLLEY_GAP * ts;
         if (t < 0) break;
-        if (t < _FX_DURATION[10] * ts) _fxEvent(10, x0, z0, x1, z1, style, seed + i, t / (_FX_DURATION[10] * ts));
+        const farPpt = _fx.farPpt;
+        if (t < _FX_DURATION[10] * ts) { if (farPpt) _fxEventFar(10, x0, z0, x1, z1, style, t / (_FX_DURATION[10] * ts), farPpt); else _fxEvent(10, x0, z0, x1, z1, style, seed + i, t / (_FX_DURATION[10] * ts)); }
+        if (farPpt) {
+            if (t < flight) { const q = t / flight; _fxFarDot(x0 + dx * q, z0 + dz * q, .15, _FX_SHOT_COLOR[style] || '#fff4c8', 1, farPpt); }
+            else if (t < flight + _FX_IMPACT_TICKS * ts) _fxEventFar(11, x0, z0, x1, z1, style, (t - flight) / (_FX_IMPACT_TICKS * ts), farPpt);
+            continue;
+        }
         if (t < flight) {
             const q = t / flight, px = x0 + dx * q, pz = z0 + dz * q;
             if (!_fxVisible(px, pz)) continue;
@@ -367,18 +373,9 @@ function _pushCombatRecordFx() {
         let x0 = data[o + 1] / TILE, z0 = data[o + 2] / TILE;
         if (!_fxVisible(x1, z1) && !_fxVisible(x0, z0)) continue;
         if (_fx.batch.total >= _fx.limit) continue;
-        if (!_fxDetailAt(x1, z1)) {
-            // At map scale thousands of overlapping multi-part attacks are
-            // smaller than a pixel. Keep one cheap flash per small world cell.
-            // World anchored cells do not reshuffle flashes when the camera pans.
-            const cx=Math.floor(x1/_fx.cellSize),cz=Math.floor(z1/_fx.cellSize);
-            const key=cz*1048576+cx;
-            if(_fx.cells.has(key)) continue;
-            _fx.cells.add(key);
-            _fxDecal(x1,.06,z1,0,Math.max(.7,_fx.cellSize*.6),_FX_SHOT_COLOR[data[o+6]] || '#fff4c8',
-                .7*(1-age/duration),_FXP.GLOW,0,1);
-            continue;
-        }
+        // (Far away: each effect a dot or a line, _fxEventFar; between its
+        // units as drawn as close up.)
+        const ppt = _fxPixelsPerTileAt(x1, z1), farAway = ppt < _FX_FAR_PPT;
         // (A unit's attack between its units as drawn: a beam's ends stay on
         // the caster and its target as they move; where they stood once gone.)
         if (ids !== null) {
@@ -386,8 +383,72 @@ function _pushCombatRecordFx() {
             if (a > 0 && _fxDrawnAt(a, P)) { x0 = P[0] / TILE; z0 = P[1] / TILE; }
             if (b > 0 && _fxDrawnAt(b, P)) { x1 = P[0] / TILE; z1 = P[1] / TILE; }
         }
-        if (volley) { _fxVolley(volley, x0, z0, x1, z1, data[o + 6], data[o + 7], age, _fxTypeOfStyle(data[o + 6])); continue; }
-        _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
+        _fx.farPpt = farAway ? ppt : 0;
+        if (volley) { _fxVolley(volley, x0, z0, x1, z1, data[o + 6], data[o + 7], age, _fxTypeOfStyle(data[o + 6])); _fx.farPpt = 0; continue; }
+        if (farAway) _fxEventFar(kind, x0, z0, x1, z1, data[o + 6], age / duration, ppt);
+        else _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
+        _fx.farPpt = 0;
+    }
+}
+
+// ---- Far away: every effect as a dot or a line ---------------------------
+// Under _FX_FAR_PPT pixels a tile an effect's pieces are smaller than a pixel:
+// each one is drawn instead as what it is from afar, its colour where it is
+// (a shot's dot along its flight, a beam's line, a hit's flash at its
+// target), at least _FX_FAR_MIN_PX on screen: the same timing and colours as
+// close up, without its detail.
+const _FX_FAR_PPT = 14, _FX_FAR_MIN_PX = 3;
+function _fxPixelsPerTileAt(x, z) {
+    const r = _fx.renderer;
+    return _fx.flat || !r ? _fx.ppt : r.pixelsPerWorldAt(x, .3, z);
+}
+// The colour an event reads as from afar.
+function _fxFarColor(kind, style) {
+    switch (kind) {
+        case 1: return '#eef6ff';
+        case 12: return '#ffd84a';
+        case 2: return '#f4f4ff';
+        case 3: return style === 13 ? '#d8c8a8' : '#fff1c8';
+        case 4: return (_FX_ELEMENT[style] || _FX_ELEMENT[1]).main;
+        case 5: return '#e040ff';
+        case 6: return '#fff2a0';
+        case 7: return '#9cf';
+        case 8: return '#7dff3a';
+        case 9: return '#c99a66';
+        default: return _FX_SHOT_COLOR[style] || '#fff4c8';
+    }
+}
+// A dot of d tiles (at least _FX_FAR_MIN_PX on screen) at (x, z).
+function _fxFarDot(x, z, d, color, alpha, ppt) {
+    if (!(alpha > .02) || !_fxVisible(x, z)) return;
+    _fxOrb(x, .3 * _fx.rest, z, Math.max(d, _FX_FAR_MIN_PX / Math.max(.05, ppt)), color, Math.min(1, alpha), 1);
+}
+function _fxEventFar(kind, x0, z0, x1, z1, style, q, ppt) {
+    const color = _fxFarColor(kind, style), fade = 1 - q;
+    const dx = x1 - x0, dz = z1 - z0;
+    switch (kind) {
+        case 5: { // a beam: its line, at least a pixel and a half wide
+            const w = Math.max(.09, 1.5 / Math.max(.05, ppt));
+            _fxBeam(x0, .5 * _fx.rest, z0, x1, .38 * _fx.rest, z1, w, color, .9 * fade);
+            _fxFarDot(x1, z1, .25, '#f08cff', fade, ppt);
+            return;
+        }
+        case 7: case 8: { // a thrown javelin / spat glob: its flight, then its hit
+            const flight = kind === 7 ? .45 : .4;
+            if (q < flight) { const t = q / flight; _fxFarDot(x0 + dx * t, z0 + dz * t, .15, color, 1, ppt); }
+            else _fxFarDot(x1, z1, .35, color, (1 - (q - flight) / (1 - flight)) * .8, ppt);
+            return;
+        }
+        case 4: { // a cast: the mote to the target, then the element there
+            if (q < .3) { const t = q / .3; _fxFarDot(x0 + dx * t, z0 + dz * t, .1, (_FX_ELEMENT[style] || _FX_ELEMENT[1]).glow, 1, ppt); }
+            else _fxFarDot(x1, z1, .5, color, _fxEnvelope(q, .3, .35), ppt);
+            return;
+        }
+        case 10: // a muzzle flash at the barrel
+            if (q < .5) _fxFarDot(x0 + dx / (Math.hypot(dx, dz) || 1) * .42, z0 + dz / (Math.hypot(dx, dz) || 1) * .42, .3, color, 1 - q * 2, ppt);
+            return;
+        default: // a blow or a hit: a flash at the target
+            _fxFarDot(x1, z1, kind === 3 || kind === 12 ? .7 : .45, color, fade * .95, ppt);
     }
 }
 
@@ -560,8 +621,10 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
     // Zoomed far out, secondary pieces (debris, trails, smoke) are subpixel.
     if(!flat2d && renderer && renderer.lodPixelsPerWorld>0) pixelsPerTile=renderer.lodPixelsPerWorld;
     _fx.detail = !(pixelsPerTile < 14);
-    _fx.limit = pixelsPerTile < 4 ? 1024 : pixelsPerTile < 14 ? 2048 : pixelsPerTile < 32 ? 3072 : 6000;
+    // (Far away an effect is one dot or line, _fxEventFar: more of them fit.)
+    _fx.limit = pixelsPerTile < 14 ? 8192 : pixelsPerTile < 32 ? 4096 : 6000;
     _fx.cellSize=Math.max(1,3/Math.max(.1,pixelsPerTile));_fx.cells.clear();
+    _fx.ppt = pixelsPerTile; _fx.farPpt = 0;
     _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);
     // (On the drawn units' clock beside the worker: see simClientDrawnGameTime.)
@@ -589,7 +652,10 @@ function buildFrameEffects(projectiles, particles, towers) {
         const p = projectiles[i];
         let px = (Number.isFinite(p.prevX) ? p.prevX + (p.x - p.prevX) * alpha : p.x) / TILE;
         let pz = (Number.isFinite(p.prevY) ? p.prevY + (p.y - p.prevY) * alpha : p.y) / TILE;
-        if (_fxVisible(px, pz)) _pushProjectileFx(p, px, pz);
+        if (!_fxVisible(px, pz)) continue;
+        const ppt = _fxPixelsPerTileAt(px, pz);
+        if (ppt < _FX_FAR_PPT) _fxFarDot(px, pz, .15, _FX_SHOT_COLOR[_fxStyleOf(p.type)] || '#fff4c8', 1, ppt);
+        else _pushProjectileFx(p, px, pz);
     }
     for (let i = 0; i < particles.length && _fx.batch.total < _fx.limit; i += step) {
         const p = particles[i];

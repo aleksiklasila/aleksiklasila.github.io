@@ -32,7 +32,13 @@ async function worker() {
             child.on('error', e => { text += String(e); });
             child.on('close', status => { clearTimeout(timer); resolve({ mode, file, status, output: text, timedOut, elapsedMs:Date.now()-started }); });
         });
-        rows.push(row); fs.writeFileSync(output, JSON.stringify(rows, null, 2) + '\n');
+        rows.push(row);
+        // (The results file is rewritten after every file; a transient lock on it (sync, antivirus) is
+        // retried, then skipped: the next file's write carries every row.)
+        for (let attempt = 0; attempt < 5; attempt++) {
+            try { fs.writeFileSync(output, JSON.stringify(rows, null, 2) + '\n'); break; }
+            catch (err) { if (attempt === 4) console.warn('results file not written:', err.code); else await new Promise(r => setTimeout(r, 200 * (attempt + 1))); }
+        }
         console.log(row.mode, row.file, row.status === 0 ? 'PASS' : 'FAIL');
     }
 }

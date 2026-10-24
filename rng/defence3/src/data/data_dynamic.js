@@ -124,7 +124,7 @@ function _resolveResourceKeyForPrecomputedStat(kind, statKey) {
 }
 
 // Stats a negative stockpile never scales.
-const RESOURCE_PENALTY_EXEMPT_STATS = new Set(['upKeep', 'popCap', 'energy', 'maxEnergy', 'workerSearchDistance', 'visionRange', 'visionRangeArea', 'attackRange', 'attackRangeArea', 'blastRadius']);
+const RESOURCE_PENALTY_EXEMPT_STATS = new Set(['upKeep', 'popCap', 'energy', 'maxEnergy', 'visionRange', 'visionRangeArea', 'attackRange', 'attackRangeArea', 'blastRadius']);
 
 // The penalty multiplier for one of a player's stats (1 = none).
 function _getPlayerStatPenaltyMultiplier(playerId, kind, statKey) {
@@ -1827,29 +1827,10 @@ function renderResearchPopupContent() {
     if (!infoPanel) {
         holder.innerHTML = `
         <div id="queue-multiplier-bar-popup" class="mult-toggle-bar" style="padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;"></div>
-        <div class="subgroup-options-popup" style="display:flex;gap:4px;padding:3px 4px;border-bottom:1px solid #2a2a2a;background:#101010;margin-bottom:4px;">
-            <button id="btn-ignore-level-popup">Collapse Same Type: OFF</button>
-        </div>
         <div id="research-popup-info-panel"></div>
     `;
         infoPanel = holder.querySelector('#research-popup-info-panel');
         updatePurchaseMultiplierBars();
-    }
-
-    let popupIgnoreBtn = holder.querySelector('#btn-ignore-level-popup');
-    if (popupIgnoreBtn && popupIgnoreBtn.dataset.bound !== '1') {
-        popupIgnoreBtn.dataset.bound = '1';
-        bindInstantPress(popupIgnoreBtn, () => {
-            ignoreLevelSubgroups = !ignoreLevelSubgroups;
-            updateIgnoreLevelButton();
-            if (activePopupControlGroupKey) {
-                normalizePopupControlGroup(activePopupControlGroupKey);
-                let snap = getPopupControlGroupSnapshot(activePopupControlGroupKey);
-                if (snap) snap.activeSubGroups = {};
-            }
-            renderResearchPopupContent();
-            updateInfoPanel();
-        });
     }
 
     let prevUnits = selectedUnits;
@@ -2407,12 +2388,13 @@ function clampThingStatValue(key, stat, value) {
     return value;
 }
 
-// Distances counted in areas: whole areas only (0a its own area, 1a and those next to it, ...), as the
-// kernels count them; the data's factors give fractions, the tables keep their whole part. (Not sight:
-// its data tells none (0) from its own area (0.2-0.8), and every use counts its whole steps of a value
-// above 0, getEntityEffectiveVisibilityRangeArea; shown whole, formatAreaDistanceStat.)
-const AREA_STAT_KEYS = new Set(['attackRange', 'workerSearchDistance']);
-function _areaStat(statKey, v) { return AREA_STAT_KEYS.has(statKey) && Number.isFinite(v) ? Math.floor(Math.max(0, v) + 1e-9) : v; }
+// Distances counted in areas, the two of every thing: its range (attack, or a worker's work reach) and its
+// vision. Whole steps only, small ints (data_static.js areaSteps: 0a its own area, 1a and those next to it,
+// ...); the data's factors give fractions, the tables keep their whole part. A vision of 0 is 0a.
+const AREA_STAT_KEYS = new Set(['attackRange', 'visionRange']);
+function _areaStat(statKey, v) { return AREA_STAT_KEYS.has(statKey) && Number.isFinite(v) ? areaSteps(v) : v; }
+// A thing's vision covers at least its attack range (a worker's range is its work reach: not this).
+function _visionSteps(own, rangeSteps, rangeIsWork) { return rangeIsWork ? own : Math.max(own, rangeSteps); }
 function rebuildPrecomputedStatsMap() {
     rebuildThingDefinitionViews();
     PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
@@ -2532,8 +2514,9 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
 
     let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
     let attackCooldownSec = Math.max(0.01, Number(values.atkCd) || 0.01);
-    let attackRangeArea = Math.floor(Math.max(0, Number(values.attackRange) || 0));
-    let visionRangeArea = Math.max(0.05, Number(values.visionRange) || 0.05, attackRangeArea);
+    let attackRangeArea = areaSteps(values.attackRange);
+    let visionOwn = areaSteps(values.visionRange), rangeIsWork = THING_STATS[key] && THING_STATS[key].isWorker ? 1 : 0;
+    let visionRangeArea = _visionSteps(visionOwn, attackRangeArea, rangeIsWork);
     let transferCooldownSec = Math.max(0.01, Number(values.transferCooldown) || 0.01);
 
     return _simF32Stats({
@@ -2542,12 +2525,12 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
         attackCooldownSec,
         attackCooldown: secondsToTicks(attackCooldownSec),
         speed: Math.max(0.1, Number(values.speed) || 0.1),
+        visionOwn, rangeIsWork,
         visionRangeArea,
-        visionRange: visionRangeArea * AREA_UNIT_TILE_EQUIVALENT,
+        visionRange: areaStepsVisionTiles(visionRangeArea),
         attackRangeArea,
         attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
         watchDuration: Math.max(0, Number(values.watchDuration) || 0),
-        workerSearchDistance: Math.floor(Math.max(0, Number(values.workerSearchDistance) || 0)),
         gatherPerTrip: Math.max(0, Number(values.gatherPerTrip) || 0),
         builderDps: Math.max(0, Number(values.builderDps) || 0),
         healerDps: Math.max(0, Number(values.healerDps) || 0),
@@ -2576,10 +2559,9 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
     let maxEnergy = Number(values.maxEnergy);
     let cd = Number(values.cd);
     let spawnCd = Number(values.spawnCd);
-    let visionRange = Number(values.visionRange);
-    let attackRangeArea = Math.floor(Math.max(0, Number(values.attackRange) || 0));
-
-    if (attackRangeArea > 0) visionRange = Math.max(visionRange || 0, attackRangeArea);
+    let visionOwn = areaSteps(values.visionRange);
+    let attackRangeArea = areaSteps(values.attackRange);
+    let visionRange = _visionSteps(visionOwn, attackRangeArea, 0);
 
     return _simF32Stats({
         maxEnergy: Number.isFinite(maxEnergy) ? Math.max(1, Math.floor(maxEnergy)) : NaN,
@@ -2591,8 +2573,9 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
         spawnCd,
         spawnCdTicks: Number.isFinite(spawnCd) ? secondsToTicks(Math.max(0.001, spawnCd)) : 0,
         unitPrice: Number(values.unitPrice),
-        visionRange: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
-        visionRangeArea: Number.isFinite(visionRange) ? Math.max(0, visionRange) : NaN,
+        visionOwn,
+        visionRange,
+        visionRangeArea: visionRange,
         attackRangeArea,
         attackRange: attackRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE,
         multiplier: Number(values.multiplier),
@@ -2688,18 +2671,17 @@ function _applyUnitPlayerPrecomputedStat(entry, statKey, value) {
         entry.attackCooldown = secondsToTicks(v);
     }
     else if (statKey === 'speed') entry.speed = Math.max(0.1, Number(value) || 0.1);
-    else if (statKey === 'visionRange') {
-        const v = Math.max(0.05, Number(value) || 0.05);
-        entry.visionRangeArea = v;
-        entry.visionRange = v * AREA_UNIT_TILE_EQUIVALENT;
-    }
-    else if (statKey === 'attackRange') {
-        const v = Math.floor(Math.max(0, Number(value) || 0));
-        entry.attackRangeArea = v;
-        entry.attackRange = v * AREA_UNIT_TILE_EQUIVALENT * TILE;
+    else if (statKey === 'visionRange' || statKey === 'attackRange') {
+        if (statKey === 'visionRange') entry.visionOwn = areaSteps(value);
+        else {
+            const v = areaSteps(value);
+            entry.attackRangeArea = v;
+            entry.attackRange = v * AREA_UNIT_TILE_EQUIVALENT * TILE;
+        }
+        entry.visionRangeArea = _visionSteps(entry.visionOwn | 0, entry.attackRangeArea | 0, entry.rangeIsWork);
+        entry.visionRange = areaStepsVisionTiles(entry.visionRangeArea);
     }
     else if (statKey === 'watchDuration') entry.watchDuration = Math.max(0, Number(value) || 0);
-    else if (statKey === 'workerSearchDistance') entry.workerSearchDistance = Math.floor(Math.max(0, Number(value) || 0));
     else if (statKey === 'gatherPerTrip') entry.gatherPerTrip = Math.max(0, Number(value) || 0);
     else if (statKey === 'builderDps') entry.builderDps = Math.max(0, Number(value) || 0);
     else if (statKey === 'healerDps') entry.healerDps = Math.max(0, Number(value) || 0);
@@ -2727,14 +2709,14 @@ function _applyBuildingPlayerPrecomputedStat(entry, statKey, value) {
         entry.spawnCd = v;
         entry.spawnCdTicks = Number.isFinite(v) ? secondsToTicks(Math.max(0.001, v)) : 0;
     }
-    else if (statKey === 'visionRange') {
-        entry.visionRange = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
-        entry.visionRangeArea = entry.visionRange;
-    }
-    else if (statKey === 'attackRange') {
-        const v = Number.isFinite(value) ? Math.floor(Math.max(0, Number(value))) : NaN;
-        entry.attackRangeArea = v;
-        entry.attackRange = Number.isFinite(v) ? (v * AREA_UNIT_TILE_EQUIVALENT * TILE) : NaN;
+    else if (statKey === 'visionRange' || statKey === 'attackRange') {
+        if (statKey === 'visionRange') entry.visionOwn = areaSteps(value);
+        else {
+            const v = areaSteps(value);
+            entry.attackRangeArea = v;
+            entry.attackRange = v * AREA_UNIT_TILE_EQUIVALENT * TILE;
+        }
+        entry.visionRange = entry.visionRangeArea = _visionSteps(entry.visionOwn | 0, entry.attackRangeArea | 0, 0);
     }
     else if (statKey === 'blastRadius') entry.blastRadius = Number.isFinite(value) ? Math.max(0, Number(value)) : NaN;
     else entry[statKey] = Number(value);
@@ -2863,7 +2845,6 @@ function getUnitStatForOwner(playerId, unitType, level, statKey) {
         if (statKey === 'visionRange') return entry.visionRangeArea;
         if (statKey === 'attackRange') return entry.attackRangeArea;
         if (statKey === 'watchDuration') return entry.watchDuration;
-        if (statKey === 'workerSearchDistance') return entry.workerSearchDistance;
         if (statKey === 'gatherPerTrip') return entry.gatherPerTrip;
         if (statKey === 'builderDps') return entry.builderDps;
         if (statKey === 'healerDps') return entry.healerDps;
@@ -3013,7 +2994,6 @@ function formatResearchStatValue(statKey, value) {
     if (statKey === 'burnDps' || statKey === 'poisonDps' || statKey === 'freezeDps') return compact(value, 2);
     if (statKey === 'blastDamage') return compact(value, 2);
     if (statKey === 'blastRadius') return formatBlastRadiusStat(value);
-    if (statKey === 'workerSearchDistance') return areaCompact(value);
     if (statKey === 'attackRange') return areaCompact(value);
     if (statKey === 'visionRange') return areaCompact(value);
     if (statKey === 'speed' || statKey === 'multiplier' || statKey === 'astarCost') return compact(value, 2);

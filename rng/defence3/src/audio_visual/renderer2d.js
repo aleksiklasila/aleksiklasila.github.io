@@ -1837,9 +1837,24 @@ function draw() {
         }
     }
     for (const [color, segments] of orderSegments) drawRallySegments2D(ctx, segments, color, rallyLineType === OVERLAY_LINE_DOTTED);
-    for (const marker of getOrderMarkers()) {
-        const sprite = _getOverlayMarkerSprite(marker.kind === 'arrow' ? 'rally_arrow' : 'plus', marker.color);
-        ctx.drawImage(sprite.canvas, Math.round(marker.x * TILE - sprite.offsetX), Math.round(marker.z * TILE - sprite.offsetY), sprite.drawW, sprite.drawH);
+    // (Close markers merged, sized by their units; roaming scouts' and
+    // workers' as faint dots: renderer.js declutterOrderMarkers, in screen
+    // pixels: world / zoom.)
+    {
+        const z = Math.max(1e-6, camera.zoom || 1);
+        const placed = declutterOrderMarkers(getOrderMarkers(), m => ({ x: m.x * TILE * z, y: m.z * TILE * z }));
+        for (const marker of placed) {
+            if (marker.hidden) continue;
+            const wx = marker.x / z, wy = marker.y / z;
+            if (marker.minor) {
+                ctx.globalAlpha = 0.55; ctx.fillStyle = marker.color;
+                ctx.fillRect(wx - 1 / z, wy - 1 / z, 2 / z, 2 / z);
+                ctx.globalAlpha = 1;
+                continue;
+            }
+            const sprite = _getOverlayMarkerSprite(marker.kind === 'arrow' ? 'rally_arrow' : 'plus', marker.color), k = marker.size || 1;
+            ctx.drawImage(sprite.canvas, Math.round(wx - sprite.offsetX * k), Math.round(wy - sprite.offsetY * k), sprite.drawW * k, sprite.drawH * k);
+        }
     }
     drawRangeBoundary2D(ctx, getRenderRangeBoundary(activeSelectedEntities, activeSelectedUnits));
     drawSelectionContours2D(ctx, getSelectionContours(activeSelectedEntities, activeSelectedUnits, alpha, get2DRenderOwnerColor));

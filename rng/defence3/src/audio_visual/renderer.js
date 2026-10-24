@@ -95,6 +95,8 @@ function requestInfoPanelRefreshAfterFrame() {
 }
 
 function _refreshInfoPanelPeriodic(now) {
+    // (A share of every frame: the panel's data for its next refresh.)
+    if (typeof infoPanelBackgroundStep === 'function') infoPanelBackgroundStep();
     if (_infoPanelRefreshAfterFrames > 0) {
         if (_infoPanelRefreshAfterFrames > 1) { _infoPanelRefreshAfterFrames--; return; }
         if (performance.now() < _infoPanelSettleUntil) return;
@@ -1021,11 +1023,11 @@ function build3DOverlayData(bounds, alpha) {
     overlays.worldTileSize = TILE;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
     let markerKeys = new Set();
-    let pushMarker = (x, y, kind, color) => {
+    let pushMarker = (x, y, kind, color, n = 1, minor = false) => {
         let key = `${x}|${y}|${kind}|${color}`;
         if (markerKeys.has(key)) return;
         markerKeys.add(key);
-        overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color });
+        overlays.markers.push({ x: x / TILE, z: y / TILE, kind, color, n, minor });
     };
     let pushSalvageCross = (worldX, worldY) => {
         let span = TILE * 0.34;
@@ -1034,7 +1036,7 @@ function build3DOverlayData(bounds, alpha) {
     };
     // (Big selections: their rally points as markers only, getOrderMarkers.)
     const fewEntities = activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX;
-    for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color);
+    for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color, m.n, m.minor);
     for (let ent of fewEntities ? activeSelectedEntities : []) {
         if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
@@ -2703,7 +2705,41 @@ const ORDER_MARKERS_MAX = 2000;
 // a million units and 190k buildings; what is on its way is drawn each frame.)
 const ORDER_MARKERS_SCAN_MS = 200, ORDER_MARKERS_SLICE = 200000;
 let _orderMarkerScan = null;
-const _unitDestScan = { at: -1, doneAt: -Infinity, codes: new Set(), out: [], done: null, last: 0, rev: -1, sel: null };
+const _unitDestScan = { at: -1, doneAt: -Infinity, codes: new Map(), out: [], done: null, last: 0, lastM: null, rev: -1, sel: null, scout: -2 };
+// Markers as drawn: those close on screen merged into one (MARKER_CELL_PX
+// cells), sized by how many units go there (n); destinations only roaming
+// scouts and working workers have (minor) as small faint dots, one a
+// MARKER_MINOR_CELL_PX cell, never over a real one. A whole army's thousands
+// of destinations read as a few markers, not a screen of crosses.
+const MARKER_CELL_PX = 22, MARKER_MINOR_CELL_PX = 9;
+const _markerCells = new Map(), _markerMinorCells = new Map(), _markerOut = [];
+function declutterOrderMarkers(markers, project) {
+    _markerCells.clear(); _markerMinorCells.clear(); _markerOut.length = 0;
+    for (const m of markers) {
+        const p = project(m);
+        if (!p) continue;
+        const minor = m.minor === true, cell = minor ? MARKER_MINOR_CELL_PX : MARKER_CELL_PX;
+        const key = Math.floor(p.x / cell) * 65536 + Math.floor(p.y / cell);
+        const cells = minor ? _markerMinorCells : _markerCells;
+        const n = m.n > 0 ? m.n : 1;
+        const had = cells.get(key);
+        if (had) {
+            had.n += n;
+            // (The arrow / red kind wins a cell: rallies and attack points.)
+            if ((m.kind === 'arrow' && had.kind !== 'arrow') || (m.color === '#f66' && had.color !== '#f66' && had.kind === m.kind)) { had.kind = m.kind; had.color = m.color; had.x = p.x; had.y = p.y; }
+            continue;
+        }
+        const e = { x: p.x, y: p.y, kind: m.kind, color: m.color, n, minor };
+        cells.set(key, e); _markerOut.push(e);
+    }
+    // (A minor dot under a real marker's cell: dropped.)
+    for (const e of _markerOut) {
+        if (!e.minor) { e.size = Math.min(2.2, 1 + 0.2 * Math.log2(e.n)); continue; }
+        e.hidden = _markerCells.has(Math.floor(e.x / MARKER_CELL_PX) * 65536 + Math.floor(e.y / MARKER_CELL_PX));
+    }
+    return _markerOut;
+}
+
 function getOrderMarkers() {
     const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
     const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
@@ -2722,7 +2758,7 @@ function getOrderMarkers() {
         // (One marker a point and kind: a whole number key, by the eighth of a pixel.)
         const key = (Math.round(t.x * 8) * 2097152 + Math.round(t.y * 8)) * 4 + (t.kind === 'arrow' ? 1 : 0) + (t.color === '#f66' ? 2 : 0);
         if (seen.has(key)) return;
-        seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
+        seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color, n: t.n || 1, minor: t.minor === true });
     };
     const R = _orderMarkerScan;
     // (Not keyed by the selection index's version or the lists' lengths: in a
@@ -2783,12 +2819,12 @@ function getOrderMarkers() {
             const before = _pendingUnitOrderMarkers.size, m = _pendingOrderTarget(_pendingUnitOrderMarkers, id, u);
             if (m) pendingMarks.push(m); else if (_pendingUnitOrderMarkers.size < before) again = true;
         }
-        if (again || (st.at < 0 && now - st.doneAt >= ORDER_MARKERS_SCAN_MS)) { st.at = 0; st.codes.clear(); st.out = []; st.last = 0; st.rev = _orderMarkerRevision; st.sel = selectedUnits; }
+        if (again || (st.at < 0 && now - st.doneAt >= ORDER_MARKERS_SCAN_MS)) { st.at = 0; st.codes.clear(); st.out = []; st.last = 0; st.lastM = null; st.rev = _orderMarkerRevision; st.sel = selectedUnits; st.scout = _pageFrameStrings.indexOf('scout'); }
         if (st.at >= 0) {
-            const O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
+            const O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id, TY = F.type, scout = st.scout;
             const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId, out = st.out, codes = st.codes;
             const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n, stop = Math.min(end, st.at + ORDER_MARKERS_SLICE);
-            let last = st.last;
+            let last = st.last, lastM = st.lastM;
             for (let i = st.at; i < stop; i++) {
                 const s = dense ? i : slots[i];
                 if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
@@ -2798,15 +2834,23 @@ function getOrderMarkers() {
                     continue;
                 }
                 const code = OD[s];
-                if (code === 0 || code === last) continue;
+                if (code === 0) continue;
+                // (Per destination: how many go there, and whether only
+                // roaming scouts and workers do: a minor marker.)
+                const minor = (FL[s] & SIM_UF_WORKER) !== 0 || TY[s] === scout;
+                if (code === last) { if (lastM) { lastM.n++; if (!minor) lastM.minor = false; } continue; }
                 last = code;
-                if (codes.has(code)) continue;
-                codes.add(code);
-                if (out.length >= ORDER_MARKERS_MAX) continue;
-                const tile = Math.abs(code) - 1;
-                out.push({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+                let m = codes.get(code);
+                if (m === undefined) {
+                    if (out.length >= ORDER_MARKERS_MAX) { lastM = null; continue; }
+                    const tile = Math.abs(code) - 1;
+                    m = { x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4', n: 0, minor: true };
+                    codes.set(code, m); out.push(m);
+                }
+                m.n++; if (!minor) m.minor = false;
+                lastM = m;
             }
-            st.last = last;
+            st.last = last; st.lastM = lastM;
             if (stop >= end) { st.done = out; st.doneAt = now; st.at = -1; } else st.at = stop;
         }
         if (st.done) for (const m of st.done) add(m);
@@ -2827,7 +2871,8 @@ function getOrderMarkers() {
                 if (!code || destinations.has(code)) continue;
                 destinations.add(code);
                 const tile = Math.abs(code) - 1;
-                addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+                addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4',
+                    minor: (F.flags[s] & SIM_UF_WORKER) !== 0 || u.unitType === 'scout' });
             }
         } else if (u.owner === localPlayerId) addU(getUnitOrderTarget(u));
     }
@@ -5087,11 +5132,13 @@ function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLen
         hasSource = true;
         let x = Number(wx);
         let y = Number(wy);
-        let range = Math.max(0, Number(rangeArea) || 0);
+        // (Whole area steps, 0 its own area; NaN: no vision.)
+        if (!(Number(rangeArea) >= 0)) return;
+        let range = areaSteps(rangeArea);
         let areaId = getAreaIdAtWorld(x, y);
-        let rangeTiles = range * AREA_UNIT_TILE_EQUIVALENT;
+        let rangeTiles = areaStepsVisionTiles(range);
         addVisibilitySourceAreas(areaRangeBySourceArea, x, y, range, vis);
-        if (!(range > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         stamps[stampCount++] = Math.floor(x / TILE);
         stamps[stampCount++] = Math.floor(y / TILE);
         stamps[stampCount++] = rangeTiles;
@@ -5667,8 +5714,9 @@ function _visCoverSync(e, isUnit) {
     if (active) area = (gy * GRID_W + gx) * 9 + visWindowZone(wx, wy);
     if (active && area >= 0) {
         let range = getEntityEffectiveVisibilityRangeArea(e);
-        if (range > 0) {
-            steps = Math.min(VIS_COVER_MAX_STEPS, Math.floor(range));
+        // (Whole steps; 0 is its own area.)
+        if (range >= 0) {
+            steps = areaSteps(range);
             let o = Math.floor(Number(owner));
             p1 = o >= 0 && o < C.players ? o : -1;
             if (e.watched > 0) {
@@ -5720,8 +5768,8 @@ function _visCoverSyncUnit(e) {
     const active = !e.dead && e._spatialKey !== undefined;
     if (active) {
         const range = getEntityEffectiveVisibilityRangeArea(e);
-        if (range > 0) {
-            steps = Math.min(VIS_COVER_MAX_STEPS, Math.floor(range));
+        if (range >= 0) {
+            steps = areaSteps(range);
             const o = Math.floor(Number(e.owner));
             p1 = o >= 0 && o < C.players ? o : -1;
             if (e.watched > 0) {
@@ -7076,19 +7124,8 @@ function updateDefaultToggleButtons() {
     }
 }
 
-function updateIgnoreLevelButton() {
-    let buttons = [
-        document.getElementById('btn-ignore-level'),
-        document.getElementById('btn-ignore-level-popup')
-    ].filter(Boolean);
-    if (buttons.length <= 0) return;
-    for (let btn of buttons) {
-        btn.textContent = `Collapse Same Type: ${ignoreLevelSubgroups ? 'ON' : 'OFF'}`;
-        btn.style.borderColor = ignoreLevelSubgroups ? '#fd0' : '#555';
-        btn.style.color = ignoreLevelSubgroups ? '#fd0' : '#999';
-        btn.style.background = ignoreLevelSubgroups ? 'rgba(110,90,20,0.25)' : '#181818';
-    }
-}
+// (Groups are always by type: the old "Collapse Same Type" toggle is gone.)
+function updateIgnoreLevelButton() {}
 
 function formatPurchaseMultiplier(value) {
     return value >= 1024 ? `${Math.floor(value / 1024)}k` : String(value);

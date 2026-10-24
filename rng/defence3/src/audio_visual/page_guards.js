@@ -92,10 +92,16 @@ function bindPageGuards() {
         if (/^[a-z0-9=+\-_]$/.test(key)) ev.preventDefault();
     }, true);
     // Ctrl+wheel (and trackpad pinch) over the panels zoomed the whole page;
-    // over the game area it already zooms the camera (main.js).
-    window.addEventListener('wheel', ev => {
-        if (ev.ctrlKey && pageGuardInMatch()) ev.preventDefault();
-    }, { capture: true, passive: false });
+    // over the game area it already zooms the camera (main.js). Only on the
+    // regions that do not scroll: a non-passive wheel listener on the window
+    // made every scroll of the page (the info panel's) wait for the main
+    // thread, so the panel scrolled at the game's frame rate. (Over the info
+    // panel ctrl+wheel stays the browser's.)
+    const guardWheel = ev => { if (ev.ctrlKey && pageGuardInMatch()) ev.preventDefault(); };
+    for (const id of ['hud', 'left-panel', 'control-group-bar', 'center-column']) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('wheel', guardWheel, { capture: true, passive: false });
+    }
 }
 
 bindPageGuards();

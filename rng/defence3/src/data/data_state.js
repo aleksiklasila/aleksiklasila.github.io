@@ -333,7 +333,8 @@ function getAreaIdAtWorld(wx, wy) {
 // Share border coverage between visibility and its range outline. No per-unit
 // state: at most four nearby tiles, merged into the existing area-source map.
 function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
-    if (!(range > 0) || !Number.isFinite(wx) || !Number.isFinite(wy)) return;
+    // (Whole area steps: 0 is its own area.)
+    if (!(range >= 0) || !Number.isFinite(wx) || !Number.isFinite(wy)) return;
     const x = wx / TILE, y = wy / TILE;
     const minX = Math.floor(x - .3), maxX = Math.floor(x + .3);
     const minY = Math.floor(y - .3), maxY = Math.floor(y + .3);
@@ -341,11 +342,12 @@ function addVisibilitySourceAreas(sources, wx, wy, range, light = null) {
     for (let gy = minY; gy <= maxY; gy++) for (let gx = minX; gx <= maxX; gx++) {
         const area = getAreaIdAtTile(gx, gy);
         if (area < 0) continue;
-        sources.set(area, Math.max(sources.get(area) || 0, range));
+        const had = sources.get(area);
+        sources.set(area, had === undefined ? range : Math.max(had, range));
         // Start the neighboring area's fade before the center crosses into it.
         // Stamping only across area borders preserves normal within-area light.
         if (light && area !== centerArea) {
-            light[gy][gx] = Math.max(light[gy][gx], range * AREA_UNIT_TILE_EQUIVALENT);
+            light[gy][gx] = Math.max(light[gy][gx], areaStepsVisionTiles(range));
         }
     }
 }
@@ -1560,7 +1562,8 @@ let uiMouseClientX = 0;
 let uiMouseClientY = 0;
 let defaultAutoBuildEnabled = true;
 let defaultAutoUpgradeEnabled = true;
-let ignoreLevelSubgroups = true;
+// Selection groups are by type only (levels are never split out).
+const ignoreLevelSubgroups = true;
 
 const BUILD_PLACE_MODE_DRAG_KEEP = 0;
 const BUILD_PLACE_MODE_SHIFT_KEEP = 1;

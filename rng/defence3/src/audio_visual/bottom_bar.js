@@ -23,7 +23,7 @@ const BB_STAT_ABBR = {
     burnDps: 'brn', burnDuration: 'brt', poisonDps: 'psn', poisonDuration: 'pst',
     freezeDps: 'frz', freezeDuration: 'frt', wetDuration: 'wet', sandDuration: 'slw',
     speed: 'spd', atk: 'atk', attackRange: 'rng', atkCd: 'acd', transferCooldown: 'tcd',
-    workerSearchDistance: 'dst', gatherPerTrip: 'wrk', builderDps: 'wrk', healerDps: 'wrk', researcherDps: 'wrk',
+gatherPerTrip: 'wrk', builderDps: 'wrk', healerDps: 'wrk', researcherDps: 'wrk',
 };
 
 let bb = {

@@ -123,7 +123,8 @@ const server = http.createServer((req, res) => {
             const groupPane = panel.querySelector('.research-popup-queue-scroll');
             renderResearchPopupContent();
             check(panel.querySelector('.research-popup-queue-scroll') === groupPane, 'group popup is cached');
-            researchQueuePanelOpenState[getResearchPanelScopeKey(0, `group:${selectedEntities.map(r => `${r.gx},${r.gy}`).join(';')}`)] = true;
+            // (A group's queue panel is keyed by its player: hud.js renderResearchGroupInfo.)
+            researchQueuePanelOpenState[getResearchPanelScopeKey(0, `group:0`)] = true;
             updateInfoPanel();
             const sidebar = document.getElementById('info-panel');
             const sidebarPlus = sidebar.querySelector('.info-research-queue-item .count-slider');

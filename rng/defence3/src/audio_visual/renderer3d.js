@@ -4,7 +4,7 @@
     // (SIM_SF_RESEARCH_TASK). A unit's is 65536 (SIM_UF_GHOST).
     const STRUCT_GHOST_FLAG = 4194304;
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261016-mp3',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261024-ui2',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);
@@ -3103,6 +3103,7 @@
                 uniform highp sampler2D uSlotF;
                 uniform highp isampler2D uSlotI;
                 uniform highp isampler2D uSlotO;
+                uniform highp usampler2D uSlotV;
                 uniform highp sampler2D uSlotVis;
                 uniform int uSlotW, uSlotRows, uSlotFull, uSlotPlayer, uSlotStyleFlags;
                 uniform float uSlotTile, uSlotLightNorm, uSlotHeightScale, uSlotStatus;
@@ -3114,7 +3115,7 @@
                 vec3 color, trim;
                 float alpha, moveAmount, phaseIn, light, atlasLayer, statusLayer;
                 // Columns in bands of uSlotRows rows (_cmSlotTextures): floats
-                // x y px py r facing prate amount phase vision; ints id flags.
+                // x y px py r facing prate amount phase; ints id flags; vision a byte.
                 float slotF(int band, int s) { return texelFetch(uSlotF, ivec2(s % uSlotW, band * uSlotRows + s / uSlotW), 0).r; }
                 int slotI(int band, int s) { return texelFetch(uSlotI, ivec2(s % uSlotW, band * uSlotRows + s / uSlotW), 0).r; }
                 void fetchSlot() {
@@ -3124,7 +3125,7 @@
                     float sx = size * uSlotScale.x, sy = size * uSlotScale.y;
                     bool flying = (uSlotStyleFlags & 1) != 0;
                     if ((uSlotStyleFlags & 2) == 0) sy = (uSlotStyleFlags & 4) != 0 ? max(.24, sy) : max(.48 * uSlotScale.x, sy);
-                    float vision = slotF(9, s);
+                    float vision = float(texelFetch(uSlotV, ivec2(s % uSlotW, s / uSlotW), 0).r);
                     // (uSlotHeightScale: the type's base-sight height, its catalog
                     // bakeHeight; a level or research never makes it taller.)
                     if ((uSlotStyleFlags & 8) == 0) sy *= uSlotHeightScale;
@@ -3155,7 +3156,7 @@
             try { program = createProgram(gl, vs, src.fs); } catch (err) { console.warn('[renderer3d] middle models from columns unavailable:', err && err.message || err); return null; }
             if (!program) return null;
             const U = this.figureUniformLocations(program);
-            for (const n of ['SlotF', 'SlotI', 'SlotO', 'SlotVis', 'SlotW', 'SlotRows', 'SlotFull', 'SlotPlayer', 'SlotStyleFlags', 'SlotTile', 'SlotLightNorm', 'SlotHeightScale',
+            for (const n of ['SlotF', 'SlotI', 'SlotO', 'SlotV', 'SlotVis', 'SlotW', 'SlotRows', 'SlotFull', 'SlotPlayer', 'SlotStyleFlags', 'SlotTile', 'SlotLightNorm', 'SlotHeightScale',
                 'SlotStatus', 'SlotScale', 'SlotTint', 'SlotColors', 'SlotLayers']) U[n] = gl.getUniformLocation(program, 'u' + n);
             this.figureSlotUniforms = U;
             return this.figureSlotProgram = program;
@@ -4603,20 +4604,29 @@
             let plusMarkerGroups = new Map();
             let arrowMarkerGroups = new Map();
             let dotMarkerGroups = new Map();
-            for (let marker of overlays.markers || []) {
-                let p = projectGround(marker.x, marker.z);
-                if (!p) continue;
-                if (marker.kind === 'plus') {
+            let minorMarkerGroups = new Map();
+            // (Close markers merged, sized by their units; roaming scouts'
+            // and workers' as faint dots: renderer.js declutterOrderMarkers.)
+            const placedMarkers = typeof declutterOrderMarkers === 'function'
+                ? declutterOrderMarkers(overlays.markers || [], m => projectGround(m.x, m.z))
+                : (overlays.markers || []).map(m => { const p = projectGround(m.x, m.z); return p ? { x: p.x, y: p.y, kind: m.kind, color: m.color, size: 1 } : null; }).filter(Boolean);
+            for (let marker of placedMarkers) {
+                if (marker.hidden) continue;
+                let p = marker, k = marker.size || 1;
+                if (marker.minor) {
+                    let group = getPathGroup(minorMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
+                    group.path.rect(p.x - 1, p.y - 1, 2, 2);
+                } else if (marker.kind === 'plus') {
                     let group = getPathGroup(plusMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
-                    group.path.moveTo(p.x - 5, p.y);
-                    group.path.lineTo(p.x + 5, p.y);
-                    group.path.moveTo(p.x, p.y - 5);
-                    group.path.lineTo(p.x, p.y + 5);
+                    group.path.moveTo(p.x - 5 * k, p.y);
+                    group.path.lineTo(p.x + 5 * k, p.y);
+                    group.path.moveTo(p.x, p.y - 5 * k);
+                    group.path.lineTo(p.x, p.y + 5 * k);
                 } else if (marker.kind === 'arrow') {
                     let group = getPathGroup(arrowMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
-                    group.path.moveTo(p.x, p.y - 6);
-                    group.path.lineTo(p.x - 5, p.y + 4);
-                    group.path.lineTo(p.x + 5, p.y + 4);
+                    group.path.moveTo(p.x, p.y - 6 * k);
+                    group.path.lineTo(p.x - 5 * k, p.y + 4 * k);
+                    group.path.lineTo(p.x + 5 * k, p.y + 4 * k);
                     group.path.closePath();
                 } else {
                     let group = getPathGroup(dotMarkerGroups, marker.color, () => ({ color: marker.color, path: new Path2D() }));
@@ -4637,6 +4647,12 @@
                 ctx.fillStyle = group.color;
                 ctx.fill(group.path);
             }
+            ctx.globalAlpha = 0.55;
+            for (let group of minorMarkerGroups.values()) {
+                ctx.fillStyle = group.color;
+                ctx.fill(group.path);
+            }
+            ctx.globalAlpha = 1;
 
             for (let bar of overlays.bars || []) {
                 let p = this.projectWorldToCanvasDetailed(bar.x, Number(bar.lift) || 0.6, bar.z);
@@ -6642,18 +6658,18 @@
             let T = this.cmSlotTex;
             if (!T) {
                 const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096;
-                T = this.cmSlotTex = { f: gl.createTexture(), i: gl.createTexture(), o: gl.createTexture(), cap: -1, w: 0, rows: 0, maxSize, frame: null, fver: -1, n: -1 };
+                T = this.cmSlotTex = { f: gl.createTexture(), i: gl.createTexture(), o: gl.createTexture(), v: gl.createTexture(), cap: -1, w: 0, rows: 0, maxSize, frame: null, fver: -1, n: -1 };
             }
             if (T.cap !== F.cap) {
                 // (Each band holds a column of F.cap slots: rows of w.)
                 let w = 1024;
-                while (w < T.maxSize && Math.ceil(F.cap / w) * 10 > T.maxSize) w *= 2;
+                while (w < T.maxSize && Math.ceil(F.cap / w) * 9 > T.maxSize) w *= 2;
                 const rows = Math.max(1, Math.ceil(F.cap / w));
-                if (w > T.maxSize || rows * 10 > T.maxSize) return null;
+                if (w > T.maxSize || rows * 9 > T.maxSize) return null;
                 T.cap = F.cap; T.w = w; T.rows = rows; T.frame = null;
-                for (const [tex, format, h] of [[T.f, gl.R32F, rows * 10], [T.i, gl.R32I, rows * 2], [T.o, gl.R16I, rows]]) {
+                for (const [tex, format, h] of [[T.f, gl.R32F, rows * 9], [T.i, gl.R32I, rows * 2], [T.o, gl.R16I, rows], [T.v, gl.R8UI, rows]]) {
                     gl.bindTexture(gl.TEXTURE_2D, tex);
-                    gl.texImage2D(gl.TEXTURE_2D, 0, format, w, h, 0, format === gl.R32F ? gl.RED : gl.RED_INTEGER, format === gl.R32F ? gl.FLOAT : format === gl.R32I ? gl.INT : gl.SHORT, null);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, format, w, h, 0, format === gl.R32F ? gl.RED : gl.RED_INTEGER, format === gl.R32F ? gl.FLOAT : format === gl.R32I ? gl.INT : format === gl.R8UI ? gl.UNSIGNED_BYTE : gl.SHORT, null);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -6666,7 +6682,7 @@
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
                 gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
                 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-                const bands = [[T.f, ['x', 'y', 'px', 'py', 'r', 'facing', 'prate', 'amount', 'phase', 'vision'], gl.RED, gl.FLOAT], [T.i, ['id', 'flags'], gl.RED_INTEGER, gl.INT], [T.o, ['owner'], gl.RED_INTEGER, gl.SHORT]];
+                const bands = [[T.f, ['x', 'y', 'px', 'py', 'r', 'facing', 'prate', 'amount', 'phase'], gl.RED, gl.FLOAT], [T.i, ['id', 'flags'], gl.RED_INTEGER, gl.INT], [T.o, ['owner'], gl.RED_INTEGER, gl.SHORT], [T.v, ['vision'], gl.RED_INTEGER, gl.UNSIGNED_BYTE]];
                 for (const [tex, names, format, type] of bands) {
                     gl.bindTexture(gl.TEXTURE_2D, tex);
                     for (let b = 0; b < names.length; b++) {
@@ -6686,6 +6702,7 @@
             gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, T.f); gl.uniform1i(U.SlotF, 8);
             gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, T.i); gl.uniform1i(U.SlotI, 9);
             gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, T.o); gl.uniform1i(U.SlotO, 10);
+            gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, T.v); gl.uniform1i(U.SlotV, 12);
             gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.columnVisibilityTexture || null); gl.uniform1i(U.SlotVis, 11);
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(U.SlotW, T.w); gl.uniform1i(U.SlotRows, T.rows);

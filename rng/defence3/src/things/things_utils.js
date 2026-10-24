@@ -736,7 +736,7 @@ function resetNewUnitsForStats() {
 const EFF_AREA_STEPS_MAX = 6;
 function _effAreaStepsOf(b) {
     const v = b ? Number(b.visionRangeArea) : NaN;
-    return v > 0 ? Math.min(EFF_AREA_STEPS_MAX, Math.floor(v)) : 0;
+    return Math.min(EFF_AREA_STEPS_MAX, areaSteps(v));
 }
 
 // The effective levels' counts: the units each lane (owner * unit types + type) has in each area, a snapshot taken by the kernels
@@ -1042,8 +1042,9 @@ function _effRowWrite(r, u, pc, ver) {
     R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
     // (getEntityEffectiveVisibilityRangeArea of a unit whose effective
     // tables are pc.)
-    const va = Number.isFinite(pc.visionRangeArea) ? pc.visionRangeArea : Number.isFinite(pc.visionRange) ? pc.visionRange / AREA_UNIT_TILE_EQUIVALENT : NaN;
-    R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : va > 0 ? Math.min(VIS_COVER_MAX_STEPS, Math.floor(va)) : -1;
+    // (Whole steps, 0 its own area: every unit sees.)
+    const va = Number(pc.visionRangeArea);
+    R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : areaSteps(va);
     // One cache line per shared level/stat row. Rust can broadcast a
     // row for equal SIMD lanes instead of streaming per-unit copies.
     _effHot.set([R.rSpd[r], R.rCost[r], R.rChs[r], R.rCb[r], R.rCd[r], R.rDmg[r], R.rVis[r], R.rRD[r], R.rRA[r], R.rRK[r], R.rVsA[r]], r * EFF_HOT_WIDTH);
@@ -1905,7 +1906,7 @@ function getEntityVisibilityRangeArea(e) {
 
 function getEntityVisibilityRangeTiles(e) {
     let area = getEntityVisibilityRangeArea(e);
-    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
+    return Number.isFinite(area) ? areaStepsVisionTiles(areaSteps(area)) : null;
 }
 
 function getEntityStatsCalcType(e) {
@@ -1934,7 +1935,7 @@ function getEntityBaseVisibilityRangeArea(e) {
 
 function getEntityBaseVisibilityRangeTiles(e) {
     let area = getEntityBaseVisibilityRangeArea(e);
-    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
+    return Number.isFinite(area) ? areaStepsVisionTiles(areaSteps(area)) : null;
 }
 
 function getEntityEffectiveVisibilityRangeArea(e) {
@@ -1962,7 +1963,7 @@ function getEntityEffectiveVisibilityRangeArea(e) {
 
 function getEntityEffectiveVisibilityRangeTiles(e) {
     let area = getEntityEffectiveVisibilityRangeArea(e);
-    return Number.isFinite(area) ? (Number(area) * AREA_UNIT_TILE_EQUIVALENT) : null;
+    return Number.isFinite(area) ? areaStepsVisionTiles(areaSteps(area)) : null;
 }
 
 function getEntityBaseEnergyMax(e) {

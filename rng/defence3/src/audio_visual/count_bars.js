@@ -145,9 +145,13 @@ function _spawnSpecCoords(spec) {
 function spawnCountBar(targets, worker) {
     const sample = typeof infoGroupSample === 'function' ? infoGroupSample(targets) : targets;
     const options = spawnBarOptions(sample.map(o => ({ gx: o.gx, gy: o.gy })), worker);
-    const scale = sample.length ? targets.length / sample.length : 1;
-    const n = sample === targets ? options.length : Math.round(options.length * scale);
-    const spec = targets.length > SPAWN_BAR_COORDS_INLINE_MAX && typeof infoCoordAttr === 'function'
+    // (A sampled panel group's targets: infoGroupLen its count, its tiles by token.)
+    const len = typeof infoGroupLen === 'function' ? infoGroupLen(targets) : targets.length;
+    const scale = sample.length ? len / sample.length : 1;
+    const n = scale === 1 ? options.length : Math.round(options.length * scale);
+    const spec = targets._all !== undefined && typeof infoGroupCoordAttr === 'function'
+        ? { type: 'spawn', coordsRef: infoGroupCoordAttr(targets), worker }
+        : targets.length > SPAWN_BAR_COORDS_INLINE_MAX && typeof infoCoordAttr === 'function'
         ? { type: 'spawn', coordsRef: infoCoordAttr(targets.map(o => o.gx + ',' + o.gy).join(';')), worker }
         : { type: 'spawn', coords: targets.map(o => ({ gx: o.gx, gy: o.gy })), worker };
     return countBarHtml(Math.round(options.reduce((m, o) => m + o.len, 0) * scale), 0,
@@ -158,6 +162,8 @@ function spawnQueueEnergyEstimate(targets, worker) {
     // (A big group: a sample of it, scaled.)
     const sample = typeof infoGroupSample === 'function' ? infoGroupSample(targets) : targets;
     if (sample !== targets) return spawnQueueEnergyEstimate(sample, worker) * (targets.length / sample.length);
+    // (A sampled panel group: its sample, scaled to its count.)
+    if (targets._n !== undefined && targets.length) { const t = targets.slice(); return spawnQueueEnergyEstimate(t, worker) * (targets._n / targets.length); }
     let total = 0;
     for (const option of spawnBarOptions(targets, worker)) {
         const producer = worker ? getSpawnerAtTile(option.gx, option.gy) : getBarrackAtTile(option.gx, option.gy);

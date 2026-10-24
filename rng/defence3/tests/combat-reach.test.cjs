@@ -6,7 +6,7 @@ const result=i.eval(`(()=>{
  startSoloGame();const rows=[];
  for(const [key,def]of Object.entries(THING_STATS)){
   const kind=def.kind,max=def.stats.attackRange?.softCap;
-  if(!Number.isFinite(max)||!(def.stats.attackRange.base>0))continue;
+  if(!Number.isFinite(max)||!(def.stats.attackRange.base>0)||def.isWorker)continue;
   const source=PRECOMPUTED_STATS_MAP[kind][key],start=source[1].attackRange[0],end=source[20].attackRange[10];
   let previous=start;for(let level=1;level<=20;level++)for(let research=0;research<=10;research++){
    const value=source[level].attackRange[research];if(value<1-1e-6||value>max+1e-6)throw Error(key+' range '+value);
@@ -20,7 +20,8 @@ const result=i.eval(`(()=>{
   if(kind==='unit'&&max>=3&&source[20].atkCd[10]<=PRECOMPUTED_STATS_MAP.unit.norm[20].atkCd[10])throw Error(key+' lost its fire-rate tradeoff');
   rows.push({kind,key,start,end,max});
  }
- for(const [key,s]of Object.entries(BASE_UNIT_STATS))if(s.isWorker&&PRECOMPUTED_STATS_MAP.unit[key][20].attackRange[10]!==0)throw Error('armed worker');
+ // (A worker's range is its work reach: flagged, never an attack.)
+ for(const [key,s]of Object.entries(BASE_UNIT_STATS))if(s.isWorker&&!PRECOMPUTED_STATS_MAP_PLAYER[0].unit[key][20].rangeIsWork)throw Error('armed worker');
  return rows;
 })()`);
 // (Areas are whole: a fractional cap reached as its floor.)

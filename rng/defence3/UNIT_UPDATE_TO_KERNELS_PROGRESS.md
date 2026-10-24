@@ -5,7 +5,7 @@ O(1) kernels is; what cannot is a brain (helper-thread decision lane, committed 
 O(effects). Targets: units and buildings, active fighting/working units first, measured at 10x counts
 (1000x1000 / 2000x2000 maps, the atlas for routes).
 
-Last updated 2026-10-23. Companion notes: OPTIMIZATION_PROGRESS.md, BRAIN_OFF_MAIN_THREAD_PLAN.md,
+Last updated 2026-10-24. Companion notes: OPTIMIZATION_PROGRESS.md, BRAIN_OFF_MAIN_THREAD_PLAN.md,
 MEMORY_OPTIMIZATION_PROGRESS.md, CROWD_SEPARATION_PROGRESS.md.
 
 ## Done
@@ -120,3 +120,44 @@ vectorizing the scalar ctl / forced paths.
   runs, so an order's uidz is ~100 KB, not MBs), steps slow down while a million units start moving, unit attack animations
   at low TPS (attackFlash is sampled per presentation frame), the HUD summary and minimap passes (~100 ms/s each on the main
   thread at 2M units: presentation worker candidates).
+
+## Areas, the right panel, far zoom (2026-10-24)
+
+Areas: every thing has two area stats, Range (attackRange; a worker's is its work reach, workerSearchDistance is gone) and
+Visibility (visionRange). Whole steps as small ints in the tables (data_static.js areaSteps; floats only while the tables are
+computed from the data); a vision of 0 is 0a, its own area (fences, floor items now see their own area). Vision covers the
+range except for workers (data_dynamic.js _visionSteps). Tile reaches from steps: areaStepsVisionTiles (0a 3 tiles, k>=1 5k).
+The frames' vision columns (units, metadata, structures) are bytes; the 3D slot shader reads them from an R8UI texture.
+
+Right panel (hud.js), measured in Edge on tests/4M-1K-closeup-fight.gz with 1.08M units + 191k buildings selected
+(.claude/panel_scroll_probe.cjs: EDGE=1 the mouse on the scrollbar, TRACE=1 scroll writes, PROF= a profile):
+- "Collapse Same Type" is gone (always by type, data_state.js ignoreLevelSubgroups const), also from both popups.
+- No virtualization: every group's section is laid out; scrolling makes nothing. A refresh re-makes groups within
+  INFO_PANEL_SECTION_BUDGET_MS (4 ms; in view first, then oldest), the others keep their markup (_infoSectionCache);
+  sections are patched in place whenever the groups are the same (keysSig), whatever the selection's arrays.
+- Big building groups render from a 1024 sample (infoGroupRenderView: exact counts, scaled sums, a control's tiles made
+  from the whole group at its click: '@g:' tokens, infoGroupCoordAttr). Unit bins: a sliced background job a frame
+  (infoPanelBackgroundStep, 2 ms); gone buildings from the structure table's energy column; the 1M selection compacts
+  from its slot index, only once 1/64 of it died. Matrix button ids stable per stat.
+- Refresh 330 -> ~34 ms median. Scroll anchor: the hovered element over the content, else the middle one; never sideways.
+- The ctrl+wheel page-zoom guard was a non-passive wheel listener on window: every scroll in the page waited for the main
+  thread (page_guards.js: now on the non-scrolling regions only). Long values wrap (fractions after the slash).
+- Markers: close ones merged and sized by their units, roaming scouts' / workers' destinations faint dots
+  (renderer.js declutterOrderMarkers).
+
+Far zoom: a density layer (per-tile colours) was tried and rejected by the user (banding, lost shading, transitions).
+Instead the claim pass (renderer3d.js drawUnitClaims): small units (< claimMaxPx) draw a 1-px point into a depth
+texture of claimCellPx cells (1 device px), depth by slot (later slot wins, as the draw order puts it on top), written
+with w = 1; the sprite VS culls a unit that does not hold its cell right after its position; holders cover two cells
+and are opaque when tiny (no gaps). GPU breakdown before (Defence3Renderer3D.columnDebug 1-6): position ~free, fragment
+shader ~free, VS work after the position ~9 ms, multi-pixel point rasterization ~7 ms of 24. Whole map, 2.2M units:
+24 -> 12 ms GPU, 35-40 -> 66-71 FPS in 2D / 2.5D / 3D / 3.5D. One baked view for tiny sprites (oneViewPx) gained nothing.
+Mid zoom: tiny sprites' coverage raised (x2.2 fading out by 10 px) so units do not look fainter than further out.
+
+Effects far away (effects3d.js _fxEventFar, under 14 px a tile): each one a dot or a line in its colour where it is
+(shots along their flight, beams as lines, hits as flashes), at least 3 px; no aggregation (the per-cell glows were
+rejected). tests/combat-effects.test.cjs adapted.
+
+Multiplayer under ping (tests/test-runs/probe_mp_latency.cjs, net harness virtual time, 100 ms ping + 30 ms jitter, step
+sizes 1/4/10): an order is taken on both peers ~280-320 ms after the click (tick sealed ~250 ms: the shared command
+delay), units half a tile on ~300-350 ms; peers in sync. Lower TPS adds little. Next: client-side movement preview.
