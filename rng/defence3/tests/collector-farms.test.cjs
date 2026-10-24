@@ -150,6 +150,8 @@ for (const resource of ['energy', 'astar']) {
     const end = main.indexOf('    function screenToWorldClamped(', start);
     const helperStart = main.indexOf('    function _assignToNearestPoints(');
     const helperEnd = main.indexOf('    function applyRallyTargets(', helperStart);
+    // (The split itself: src/utils/assign_nearest.js.)
+    vm.runInContext(read('src/utils/assign_nearest.js'), c);
     vm.runInContext(main.slice(helperStart, helperEnd).replace('let _entityWorldXY', 'var _entityWorldXY'), c);
     vm.runInContext(main.slice(start, end), c);
     Object.assign(c, { multiCollectorAssignTargets: [], multiBuilderAssignTargets: [], multiResearcherAssignTargets: [], multiHealerAssignTargets: [] });

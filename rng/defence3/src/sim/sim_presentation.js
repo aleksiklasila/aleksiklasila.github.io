@@ -44,7 +44,7 @@ function simPresentTickEnd() {
     if (typeof SIM_KERNEL_PV_MARKS === 'number' && S.columns.pvAt) {
         // (Small jobs: 65536 slots a job were four, and the helpers' share of them small: this thread did most of the ~2.7 ms.)
         const P = _simParams, per = 8192;
-        P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0;
+        P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0; P[3] = GRID_W; P[4] = TILE;
         simParallelRun(SIM_KERNEL_PV_MARKS, Math.ceil(Math.max(1, n) / per));
     }
     if (Atomics.exchange(Q.ctl, 1, 0) !== 1) return;
@@ -60,7 +60,7 @@ function simPresentTickEnd() {
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
     'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
-    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT','pvAt'];
+    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT','pvAt','pvOD'];
 
 function simPresentationStop() {
     const p = _simPresentation;
@@ -218,7 +218,7 @@ function* simPresentationProjectiles() {
 let _simMetaChanged = false;
 function _simMetaSet(A, s, v) { if (A[s] !== v && !(v !== v && A[s] !== A[s])) { A[s] = v; _simMetaChanged = true; } }
 function simPresentationWriteMetadata(u, F) {
-    const C = u._us, s = u._si;
+    const C = u._us, s = u._si, p0Dest = !!(_simPresentation && _simPresentation.meta === F);
     if (!C || s < 0 || s >= F.cap || C.dead[s]) return;
     // Publish identity last: a reader never assigns a recycled slot the old
     // unit's type. Dynamic positions/statuses come straight from authority.
@@ -235,7 +235,9 @@ function simPresentationWriteMetadata(u, F) {
     set(F.cargo, s, Math.fround(Number(u.carryingValue) || 0));
     const at = u.attackTarget;
     set(F.tx, s, Math.fround(at ? at.x : 0)); set(F.ty, s, Math.fround(at ? at.y : 0));
-    set(F.orderDest, s, getUnitOrderDestinationCode(u) | 0);
+    // (A unit of the columns: its destination is the marks kernel's, each
+    // tick (unit.pvOD; the reader takes it from there).)
+    if (!(p0Dest && C.pvOD)) set(F.orderDest, s, getUnitOrderDestinationCode(u) | 0);
     F.orderTick[s] = currentTick - 1;
     set(F.flags, s, (u.isFlying ? SIM_UF_FLYING : 0) | (u.isSnake ? SIM_UF_SNAKE : 0) | (u.isWorker ? SIM_UF_WORKER : 0)
         | (u.holdPosition ? SIM_UF_HOLD : 0) | (u.isKing ? SIM_UF_KING : 0)

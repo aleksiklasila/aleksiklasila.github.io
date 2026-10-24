@@ -258,6 +258,12 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
     // it changed since this buffer last had it (or covers more slots now).
     if (stamped) {for (const k of META_COPY) {const D=F[k], S=meta[k];for (let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}}
     else if (metaCopy) for (const k of META_COPY) F[k].set(meta[k].subarray(s0,s1),s0);
+    // (The order destinations from the units' column, made each tick by the
+    // marks kernel: the metadata pass over every unit showed new orders late.)
+    if (C.pvOD) {
+        if (stamped) {const D=F.orderDest,S=C.pvOD;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
+        else F.orderDest.set(C.pvOD.subarray(s0,s1),s0);
+    }
     {const D=F.owner,S=C.owner;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
     {const D=F.energy,S=C.energy;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
     {const D=F.r,S=C.r;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}

@@ -1078,7 +1078,12 @@ pub unsafe extern "C" fn k_ixd_owners(a: u32, _chunk: i32) {
 /// dead, id, x, y, x0, y0, energy, owner, commandState, effectiveLevel,
 /// attackFlash, stOn, tmOn, cmMode, pvAt, pvE, pvO, pvC, pvL, pvId, vx, vy,
 /// pvV (bit 0 a velocity, bit 1 an attack flash at the mark: their ends are
-/// changes too).
+/// changes too), ?unit.mvTgX, ?unit.mvTgY, ?unit.pvOD: with them, the
+/// slot's order destination for the presentation (unit.pvOD, the reader's
+/// frame orderDest: (tile + 1) of its issued target while it moves, its
+/// negative while it attack-moves, 0 else; P[3] grid width, P[4] tile), a
+/// change of it a change too (the JavaScript's metadata pass over every unit
+/// showed an army's new orders tens of seconds late at millions of units).
 #[no_mangle]
 pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -1087,6 +1092,9 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
     let (en, own, cmd, lvl, fl, st, tm, cm) = (k.p::<f32>(7), k.p::<i8>(8), k.p::<u8>(9), k.p::<f32>(10), k.p::<u8>(11), k.p::<u8>(12), k.p::<u8>(13), k.p::<u8>(14));
     let (at, pe, po, pc, pl, pid) = (k.p::<i32>(15), k.p::<f32>(16), k.p::<i8>(17), k.p::<u8>(18), k.p::<i16>(19), k.p::<i32>(20));
     let (vxs, vys, pv) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<u8>(23));
+    let (tgx, tgy, od) = (k.p::<f32>(24), k.p::<f32>(25), k.p::<i32>(26));
+    let (gw, itile) = (k.i(3), 1.0f32 / (k.i(4).max(1) as f32));
+    let dest = !tgx.is_null() && !tgy.is_null() && !od.is_null();
     let tick = k.i(2);
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for sv in s0..s1 {
@@ -1095,10 +1103,24 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
         let lv = g(lvl, sv);
         let li: i16 = if lv >= 0.0 && lv < 32767.0 { lv as i16 } else { -1 };
         let vel = (g(vxs, sv) != 0.0 || g(vys, sv) != 0.0) as u8 | (((g(fl, sv) != 0) as u8) << 1);
-        let changed = idv != g(pid, sv)
+        let mut changed = idv != g(pid, sv)
             || (alive && (g(xs, sv) != g(pxs, sv) || g(ys, sv) != g(pys, sv) || g(en, sv).to_bits() != g(pe, sv).to_bits() || g(own, sv) != g(po, sv)
                 || g(cmd, sv) != g(pc, sv) || li != g(pl, sv) || g(st, sv) != 0 || g(tm, sv) != 0 || (g(cm, sv) & 4) != 0
                 || vel != 0 || g(pv, sv) != 0));
+        if dest && alive {
+            let c = g(cmd, sv);
+            let (x, y) = (g(tgx, sv), g(tgy, sv));
+            let code = if (c == 1 || c == 2) && x == x && y == y && x >= 0.0 && y >= 0.0 {
+                let t = floorf(y * itile) as i32 * gw + floorf(x * itile) as i32 + 1;
+                if c == 2 { -t } else { t }
+            } else {
+                0
+            };
+            if code != g(od, sv) {
+                s(od, sv, code);
+                changed = true;
+            }
+        }
         if changed {
             s(pv, sv, vel);
             s(at, sv, tick);

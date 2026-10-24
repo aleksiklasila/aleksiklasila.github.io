@@ -4156,8 +4156,13 @@ function queueHostAdminAction(action) {
     if (!isHost || !action || !HOST_ADMIN_ACTIONS.has(action.action)) return;
     _queueLocalAction(action);
 }
+// (Told of each unit order this player makes: main.js keeps those made
+// while a big multi-point split is still on its worker, whose late answer
+// leaves their units out: the later order wins, as on the wire.)
+let localUnitOrderHook = null;
 function _queueLocalAction(action) {
     if (gameOver) return;
+    if (localUnitOrderHook && action && Array.isArray(action.unitIds)) localUnitOrderHook(action);
     // (A research order: shown at once, see hud.js noteResearchOrder.)
     if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
         noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));

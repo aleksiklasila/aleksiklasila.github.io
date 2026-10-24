@@ -298,6 +298,9 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // command or level changed, a flash, a timer, a fire target, made or
     // gone), and those values as of then (pvId -1: not alive).
     // (pvV: it had a velocity then.)
+    // (pvOD: its order destination as the presentation shows it, the marks
+    // kernel's: k_pv_marks.)
+    ['pvOD', Int32Array, 1],
     ['pvAt', Int32Array, 1], ['pvId', Int32Array, 1], ['pvE', Float32Array, 1], ['pvO', Int8Array, 1], ['pvC', Uint8Array, 1], ['pvL', Int16Array, 1], ['pvV', Uint8Array, 1],
     // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
     // for the attacks the movement kernel makes for held units.

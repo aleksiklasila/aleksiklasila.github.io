@@ -101,6 +101,22 @@ vectorizing the scalar ctl / forced paths.
   their attacker and target as drawn (combatFxIds; a beam's ends follow both). Towers' shots beside the worker are drawn from
   their muzzle records as volleys (effects3d.js _fxVolley: the step's shots, each flying to its target as drawn), not from the
   sampled projectiles. Probe: .claude/fight_fx_probe.cjs (Edge, BASELINE=1 for the old clock and looks).
-- Still open: zoomed-out FPS, multiplayer end-to-end latency at ~100 ms ping (wire: a 1.09M-unit team of the 4M close-up scene
-  is ~16.8k id runs, so an order's uidz is ~100 KB, not MBs), selection lag of 2M-unit boxes, unit attack animations at low
-  TPS (attackFlash is sampled per presentation frame).
+- Big selections in the 4M close-up scene (1.09M units + 191k buildings, Edge, .claude/rally_latency_probe.cjs): box mouseup
+  1.1 s -> ~0.6 s; ctrl+right click handlers up to 5-6 s -> <= ~2 s; the tenth ctrl click's order on 100% of a sample at ~16 s
+  (before: not within 37 s); a small group's order shown at ~3 s. What changed: order markers (buildings' rally read from the
+  structure frame's columns, the units' destinations scanned a slice a frame, small pending orders drawn per frame),
+  getActiveUnitsForRender (a big selection's own array), selection compaction (every 2 s, its index from the same pass),
+  the multi-point split (src/utils/assign_nearest.js, grid cells, ~100 ms at 1M x 10; big splits and their bucketing on
+  assign_worker, a later small order wins over its late answer), the info panel's big groups (sums from a sample, the queue
+  slider's coordinates by token), click picking (structures by tile around the click), the action backlog (arrival-recorded
+  latest marks: superseded waiting orders pass in O(1); tests/action-supersede.test.cjs), order budgets 4x (JS ~0.5 us a
+  unit), workers last in a queued order, pending-way units through the order kernel, and the frames' order destinations
+  from columns each tick (k_pv_marks -> unit.pvOD; they came from the metadata pass over every unit, tens of seconds late).
+- Zoomed out (whole map, 2.2M units): 22 -> ~36 FPS in 2D and 3D (GPU 46 -> 26 ms): one baked view per fragment where the
+  blend cannot show (flat view, sprites of a few pixels) and a 1 px pad for small point sprites. What is left is rasterizing
+  ~2.2M point primitives (~19 ms even at 1 px): a density layer for map scale would be the next step (a visual change).
+  Sound events: _audioMayHear (zoom / listening box) before any recipe; the recipe cache keyed without strings.
+- Still open: multiplayer end-to-end latency at ~100 ms ping (wire: a 1.09M-unit team of the 4M close-up scene is ~16.8k id
+  runs, so an order's uidz is ~100 KB, not MBs), steps slow down while a million units start moving, unit attack animations
+  at low TPS (attackFlash is sampled per presentation frame), the HUD summary and minimap passes (~100 ms/s each on the main
+  thread at 2M units: presentation worker candidates).

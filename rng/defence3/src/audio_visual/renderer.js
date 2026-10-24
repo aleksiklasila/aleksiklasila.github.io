@@ -2604,6 +2604,7 @@ function resetOrderMarkers() {
     _pendingRallyCovers.length = 0; _rallyCoverOpen = null;
     _orderPings.length = 0;
     _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
+    _unitDestScan.at = -1; _unitDestScan.done = null; _unitDestScan.doneAt = -Infinity;
     _orderMarkerCache = null; _orderMarkerRevision++;
     _rallyVisualLastSeen = new WeakMap();
 }
@@ -2626,7 +2627,8 @@ function noteOrderMarker(a, tick = currentTick) {
         if (_rallyCoverOpen) _rallyCoverOpen.tick = Math.max(_rallyCoverOpen.tick, tick);
         else {
             const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
-            for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i] + ',' + coords[i + 1], pending);
+            // (Keyed by tile index: a ctrl click on 190k buildings made a string a building.)
+            for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i + 1] * GRID_W + coords[i], pending);
         }
     } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
     else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
@@ -2651,7 +2653,7 @@ function _pendingOrderTarget(map, key, entity) {
     return pending.target;
 }
 function getBuildingOrderTarget(ent) {
-    let pending = _pendingRallyMarkers.size ? _pendingOrderTarget(_pendingRallyMarkers, ent.gx + ',' + ent.gy, ent) : undefined;
+    let pending = _pendingRallyMarkers.size ? _pendingOrderTarget(_pendingRallyMarkers, ent.gy * GRID_W + ent.gx, ent) : undefined;
     if (pending === undefined && _pendingRallyCovers.length) {
         const c = _rallyCoverOf(ent);
         if (c) pending = { x: c.x, y: c.y, targetUnitId: null };
@@ -2699,8 +2701,9 @@ const ORDER_MARKERS_MAX = 2000;
 // destinations, made at most every ORDER_MARKERS_SCAN_MS: while an order is
 // on its way (seconds at 1 TPS) they were made every frame, ~100 ms each for
 // a million units and 190k buildings; what is on its way is drawn each frame.)
-const ORDER_MARKERS_SCAN_MS = 200;
+const ORDER_MARKERS_SCAN_MS = 200, ORDER_MARKERS_SLICE = 200000;
 let _orderMarkerScan = null;
+const _unitDestScan = { at: -1, doneAt: -Infinity, codes: new Set(), out: [], done: null, last: 0, rev: -1, sel: null };
 function getOrderMarkers() {
     const frame = typeof _pageFrameSerial === 'number' ? _pageFrameSerial : -1;
     const sub = JSON.stringify(activeSubGroups), version = selectionIndex().version;
@@ -2722,9 +2725,12 @@ function getOrderMarkers() {
         seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color });
     };
     const R = _orderMarkerScan;
-    const reuse = big && R && now - R.at < ORDER_MARKERS_SCAN_MS && R.version === version && R.units === selectedUnits && R.ulen === selectedUnits.length
-        && R.entities === selectedEntities && R.elen === selectedEntities.length && R.sub === sub && R.ignore === ignoreLevelSubgroups && R.frameUnits === (typeof simClientCurrentUnitVis === 'function' ? !!simClientCurrentUnitVis() : false) ? R : null;
-    const scan = big && !reuse ? { at: now, version, units: selectedUnits, ulen: selectedUnits.length, entities: selectedEntities, elen: selectedEntities.length, sub, ignore: ignoreLevelSubgroups,
+    // (Not keyed by the selection index's version or the lists' lengths: in a
+    // fight every death changes them, every frame. A new selection is a new
+    // array; the dead leave it a few times a second.)
+    const reuse = big && R && now - R.at < ORDER_MARKERS_SCAN_MS && R.units === selectedUnits
+        && R.entities === selectedEntities && R.sub === sub && R.ignore === ignoreLevelSubgroups && R.frameUnits === (typeof simClientCurrentUnitVis === 'function' ? !!simClientCurrentUnitVis() : false) ? R : null;
+    const scan = big && !reuse ? { at: now, units: selectedUnits, entities: selectedEntities, sub, ignore: ignoreLevelSubgroups,
         frameUnits: typeof simClientCurrentUnitVis === 'function' ? !!simClientCurrentUnitVis() : false, ent: [], unit: [], entDone: false, unitDone: false } : null;
     // (One order for the whole selection's rally, still on its way: its one
     // marker, no pass over the buildings.)
@@ -2732,11 +2738,7 @@ function getOrderMarkers() {
     if (cover) add({ x: cover.x, y: cover.y, kind: 'arrow', color: '#9aa' });
     else if (reuse && reuse.entDone) { for (const m of reuse.ent) add(m); }
     else {
-        for (const ent of getActiveEntities()) {
-            if (markers.length >= ORDER_MARKERS_MAX) break;
-            if (!ent || ent.owner !== localPlayerId || (ent.energy !== undefined && ent.energy <= 0)) continue;
-            if (_isRallySpawnerType(ent.type)) { const m = getBuildingOrderTarget(ent); add(m); if (scan && m) scan.ent.push(m); }
-        }
+        _addBuildingRallyMarkers(getActiveEntities(), scan ? m => { add(m); if (m) scan.ent.push(m); } : add, () => markers.length >= ORDER_MARKERS_MAX);
         if (scan) scan.entDone = true;
     }
     const addU = scan ? m => { add(m); if (m) scan.unit.push(m); } : add;
@@ -2763,29 +2765,54 @@ function getOrderMarkers() {
     const bySlots = F && X.framed && selectedUnits.length > SELECTED_UNIT_LINES_MAX && !Object.values(activeSubGroups).some(v => v === false);
     if (superseded) {
         // (Destinations as the frames still have them: superseded.)
+    } else if (bySlots) {
+        // (A big selection's destinations, made a slice a frame: the last
+        // complete set shown meanwhile, made again ORDER_MARKERS_SCAN_MS
+        // after; a pass over a million slots was a ~100 ms frame each time.)
+        const st = _unitDestScan, slots = X.slots, mask = X.mask, n = X.n;
+        // (Small orders still on their way: their markers each frame, not
+        // the scan's; one the frames now show, or a new order, makes the
+        // scan again at once.)
+        let again = st.rev !== _orderMarkerRevision || st.sel !== selectedUnits;
+        const pendingMarks = [];
+        if (_pendingUnitOrderMarkers.size) for (const id of _pendingUnitOrderMarkers.keys()) {
+            let u = _pageUnitsById.get(id);
+            if (!u && n <= 4096) { const FID = F.id; for (let i = 0; i < n; i++) if (FID[slots[i]] === id) { u = _pageSlotViews[slots[i]]; break; } }
+            const s = u && !u.dead ? u._s : -1;
+            if (!(s >= 0) || mask[s] === 0) continue;
+            const before = _pendingUnitOrderMarkers.size, m = _pendingOrderTarget(_pendingUnitOrderMarkers, id, u);
+            if (m) pendingMarks.push(m); else if (_pendingUnitOrderMarkers.size < before) again = true;
+        }
+        if (again || (st.at < 0 && now - st.doneAt >= ORDER_MARKERS_SCAN_MS)) { st.at = 0; st.codes.clear(); st.out = []; st.last = 0; st.rev = _orderMarkerRevision; st.sel = selectedUnits; }
+        if (st.at >= 0) {
+            const O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
+            const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId, out = st.out, codes = st.codes;
+            const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n, stop = Math.min(end, st.at + ORDER_MARKERS_SLICE);
+            let last = st.last;
+            for (let i = st.at; i < stop; i++) {
+                const s = dense ? i : slots[i];
+                if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
+                if (pendingAny && _pendingUnitOrderMarkers.has(ID[s])) continue;
+                if (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0) {
+                    if (out.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) { const m = getUnitOrderTarget(u); if (m) out.push(m); } }
+                    continue;
+                }
+                const code = OD[s];
+                if (code === 0 || code === last) continue;
+                last = code;
+                if (codes.has(code)) continue;
+                codes.add(code);
+                if (out.length >= ORDER_MARKERS_MAX) continue;
+                const tile = Math.abs(code) - 1;
+                out.push({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
+            }
+            st.last = last;
+            if (stop >= end) { st.done = out; st.doneAt = now; st.at = -1; } else st.at = stop;
+        }
+        if (st.done) for (const m of st.done) add(m);
+        for (const m of pendingMarks) add(m);
     } else if (reuse && reuse.unitDone) {
         for (const m of reuse.unit) add(m);
-    } else if (bySlots) {
-        const slots = X.slots, mask = X.mask, n = X.n, O = F.owner, EN = F.energy, CM = F.cmd, FL = F.flags, OD = F.orderDest, ID = F.id;
-        const pendingAny = _pendingUnitOrderMarkers.size > 0, me = localPlayerId;
-        const dense = n * 4 >= F.n, end = dense ? Math.min(F.n, mask.length) : n;
-        let last = 0;
-        for (let i = 0; i < end; i++) {
-            const s = dense ? i : slots[i];
-            if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
-            if ((pendingAny && _pendingUnitOrderMarkers.has(ID[s])) || (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0)) {
-                if (markers.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) addU(getUnitOrderTarget(u)); }
-                continue;
-            }
-            const code = OD[s];
-            if (code === 0 || code === last) continue;
-            last = code;
-            if (destinations.has(code)) continue;
-            destinations.addU(code);
-            if (markers.length >= ORDER_MARKERS_MAX) continue;
-            const tile = Math.abs(code) - 1;
-            addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
-        }
     } else for (const u of getActiveUnitsForRender()) {
         if (!u || u.dead) continue;
         const s = u._s;
@@ -2798,7 +2825,7 @@ function getOrderMarkers() {
             } else {
                 const code = F.orderDest[s];
                 if (!code || destinations.has(code)) continue;
-                destinations.addU(code);
+                destinations.add(code);
                 const tile = Math.abs(code) - 1;
                 addU({ x: (tile % GRID_W + .5) * TILE, y: (Math.floor(tile / GRID_W) + .5) * TILE, kind: 'plus', color: code < 0 ? '#f66' : '#4f4' });
             }
@@ -2819,6 +2846,47 @@ function getOrderMarkers() {
     return markers;
 }
 const _RALLY_SPAWNER_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+// The rally markers of the player's buildings in a list, read from the
+// structure frame's columns beside the worker (190k buildings through their
+// views' getters, an object each, were ~0.3 s a pass): a building with a
+// rally on its way, a unit to follow or no columns goes the views' way
+// (getBuildingOrderTarget); one marker per run of equal rally points.
+const _rallyTypeByCode = [];
+function _addBuildingRallyMarkers(list, add, full) {
+    const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    const me = localPlayerId, pend = _pendingRallyMarkers.size > 0, covers = _pendingRallyCovers.length > 0;
+    let lastX = NaN, lastY = NaN, lastPending = null;
+    for (const ent of list) {
+        if (full()) break;
+        const s = T && ent && ent._kind !== undefined ? ent._s : -1;
+        if (!(s >= 0)) {
+            if (!ent || ent.owner !== me || (ent.energy !== undefined && ent.energy <= 0)) continue;
+            if (_isRallySpawnerType(ent.type)) add(getBuildingOrderTarget(ent));
+            continue;
+        }
+        if (T.owner[s] !== me || !(T.energy[s] > 0)) continue;
+        const code = T.type[s];
+        let rt = _rallyTypeByCode[code];
+        if (rt === undefined) rt = _rallyTypeByCode[code] = _isRallySpawnerType(_pageFrameStrings[code]);
+        if (!rt) continue;
+        // (A rally on its way: its point, once a run of buildings sharing it,
+        // until the frames show the order's tick; then the columns'.)
+        if (pend) {
+            const key = T.gy[s] * GRID_W + T.gx[s], p = _pendingRallyMarkers.get(key);
+            if (p !== undefined) {
+                if (T.orderTick[s] >= p.tick) _pendingRallyMarkers.delete(key);
+                else if (p.target && p.target.targetUnitId == null) { if (p.target !== lastPending) { lastPending = p.target; add(p.target); } lastX = NaN; continue; }
+                else { add(getBuildingOrderTarget(ent)); lastX = NaN; continue; }
+            }
+        }
+        if (covers || T.rallyTargetId[s] >= 0) { add(getBuildingOrderTarget(ent)); lastX = NaN; continue; }
+        if ((T.flags[s] & SIM_SF_RALLY) === 0) continue;
+        const x = T.rallyX[s], y = T.rallyY[s];
+        if (x === lastX && y === lastY) continue;
+        lastX = x; lastY = y;
+        add({ x, y, kind: 'arrow', color: '#9aa' });
+    }
+}
 function _isRallySpawnerType(t) { return _RALLY_SPAWNER_TYPES.has(t); }
 // Floor items marked for salvage, gathered once per tick (twice a second).
 let _salvageFloorCache = { tick: -1, at: -Infinity, list: [] };

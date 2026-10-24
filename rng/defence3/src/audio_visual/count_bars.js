@@ -134,15 +134,30 @@ function spawnBarOptions(coords, worker) {
     });
 }
 
+// (A big group's bar: its count from a sample of its producers, scaled
+// (infoGroupSample); its coordinates by token, not as JSON in the markup:
+// 190k producers were ~4 MB of attribute each time the panel was made.)
+const SPAWN_BAR_COORDS_INLINE_MAX = 512;
+function _spawnSpecCoords(spec) {
+    if (spec.coords) return spec.coords;
+    return typeof infoCoordText === 'function' ? infoCoordText(spec.coordsRef).split(';').filter(Boolean).map(c => { const [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; }) : [];
+}
 function spawnCountBar(targets, worker) {
-    const coords = targets.map(o => ({ gx: o.gx, gy: o.gy }));
-    const options = spawnBarOptions(coords, worker);
-    return countBarHtml(options.reduce((n, o) => n + o.len, 0), 0,
-        options.length * (worker ? 10 : 20), { type: 'spawn', coords, worker },
-        worker ? 'Worker queue count' : 'Unit queue count', '', !options.length);
+    const sample = typeof infoGroupSample === 'function' ? infoGroupSample(targets) : targets;
+    const options = spawnBarOptions(sample.map(o => ({ gx: o.gx, gy: o.gy })), worker);
+    const scale = sample.length ? targets.length / sample.length : 1;
+    const n = sample === targets ? options.length : Math.round(options.length * scale);
+    const spec = targets.length > SPAWN_BAR_COORDS_INLINE_MAX && typeof infoCoordAttr === 'function'
+        ? { type: 'spawn', coordsRef: infoCoordAttr(targets.map(o => o.gx + ',' + o.gy).join(';')), worker }
+        : { type: 'spawn', coords: targets.map(o => ({ gx: o.gx, gy: o.gy })), worker };
+    return countBarHtml(Math.round(options.reduce((m, o) => m + o.len, 0) * scale), 0,
+        n * (worker ? 10 : 20), spec, worker ? 'Worker queue count' : 'Unit queue count', '', !options.length);
 }
 
 function spawnQueueEnergyEstimate(targets, worker) {
+    // (A big group: a sample of it, scaled.)
+    const sample = typeof infoGroupSample === 'function' ? infoGroupSample(targets) : targets;
+    if (sample !== targets) return spawnQueueEnergyEstimate(sample, worker) * (targets.length / sample.length);
     let total = 0;
     for (const option of spawnBarOptions(targets, worker)) {
         const producer = worker ? getSpawnerAtTile(option.gx, option.gy) : getBarrackAtTile(option.gx, option.gy);
@@ -163,7 +178,7 @@ function spawnQueueEnergyEstimate(targets, worker) {
 }
 
 function setSpawnBarCount(spec, target) {
-    const options = spawnBarOptions(spec.coords, spec.worker);
+    const options = spawnBarOptions(_spawnSpecCoords(spec), spec.worker);
     const cap = spec.worker ? 10 : 20;
     target = Math.max(0, Math.min(cap * options.length, Math.floor(target)));
     let delta = target - options.reduce((n, o) => n + o.len, 0);

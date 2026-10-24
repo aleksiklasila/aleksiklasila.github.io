@@ -1000,7 +1000,8 @@ function frameUnitSummaryStep() {
     if (!F || F.count <= FRAME_SUMMARY_SLICE) { S.running = false; S.done = null; return; }
     const strings = _pageFrameStrings.length;
     if (!S.running) {
-        if (S.done && performance.now() - S.at < FRAME_SUMMARY_EVERY_MS) return;
+        // (An army of millions: less often, ~1 ms per thousand units (a pass a quarter second was ~110 ms of every second at 2.2M).)
+        if (S.done && performance.now() - S.at < Math.max(FRAME_SUMMARY_EVERY_MS, F.count / 1000)) return;
         S.running = true; S.next = 0; S.strings = strings; S.counts = new Uint32Array(strings * 2 * FRAME_SUMMARY_OWNERS);
     } else if (S.strings !== strings) { S.next = 0; S.strings = strings; S.counts = new Uint32Array(strings * 2 * FRAME_SUMMARY_OWNERS); }
     const end = Math.min(F.count, S.next + FRAME_SUMMARY_SLICE);
@@ -3200,9 +3201,28 @@ function getSpawnerEnergyProgress(spawner) {
     return { paid, required, left, pct, hasQueue: true };
 }
 
+// A big group's sums from an even sample of it, scaled (counts stay exact):
+// the panel of 190k selected buildings made each sum through every view's
+// getters, ~0.3 s a refresh. Kept for the group array.
+const INFO_GROUP_EXACT_MAX = 4096;
+const _infoGroupSamples = new WeakMap();
+function infoGroupSample(group) {
+    if (!Array.isArray(group) || group.length <= INFO_GROUP_EXACT_MAX) return group;
+    let s = _infoGroupSamples.get(group);
+    if (s && s.n === group.length) return s.out;
+    const out = new Array(INFO_GROUP_EXACT_MAX), step = group.length / INFO_GROUP_EXACT_MAX;
+    for (let i = 0; i < INFO_GROUP_EXACT_MAX; i++) out[i] = group[Math.floor(i * step)];
+    _infoGroupSamples.set(group, { n: group.length, out });
+    return out;
+}
 function getSpawnerGroupEnergyProgress(spawnerGroup) {
     if (!Array.isArray(spawnerGroup) || spawnerGroup.length <= 0) {
         return { paid: 0, required: 0, left: 0, pct: 0, hasQueue: false };
+    }
+    const sample = infoGroupSample(spawnerGroup), scale = spawnerGroup.length / sample.length;
+    if (sample !== spawnerGroup) {
+        const p = getSpawnerGroupEnergyProgress(sample);
+        return { paid: p.paid * scale, required: p.required * scale, left: p.left * scale, pct: p.pct, hasQueue: p.hasQueue };
     }
     let paid = 0;
     let required = 0;
@@ -3400,7 +3420,12 @@ function selectionNoteDead(slot) {
 // The dead leave the selection's array: at once for a small one, a few times
 // a second for a big one (a pass over it, and every cache keyed by the array
 // made again; what is drawn and ordered skips the dead meanwhile).
-const SELECTION_COMPACT_SMALL = 4096, SELECTION_COMPACT_MS = 500;
+// (An army of SELECTION_COMPACT_BIG or more: every SELECTION_COMPACT_BIG_MS,
+// its index made from the same pass: in a fight a million selected units
+// compacted twice a second, then indexed again, were ~150 ms of long frames
+// a second.)
+const SELECTION_COMPACT_SMALL = 4096, SELECTION_COMPACT_MS = 500, SELECTION_COMPACT_BIG = 100000, SELECTION_COMPACT_BIG_MS = 2000;
+let _selCompactSlots = new Int32Array(0);
 function selectionCompactDead(force = false) {
     if (selectedUnits.length === 0) return false;
     const X = selectionIndex();
@@ -3410,18 +3435,25 @@ function selectionCompactDead(force = false) {
         if (X.dead === 0) return false;
         if (!force && selectedUnits.length > SELECTION_COMPACT_SMALL) {
             const now = performance.now();
-            if (now - X.compactAt < SELECTION_COMPACT_MS) return false;
+            if (now - X.compactAt < (selectedUnits.length >= SELECTION_COMPACT_BIG ? SELECTION_COMPACT_BIG_MS : SELECTION_COMPACT_MS)) return false;
             X.compactAt = now;
         }
     }
-    // (A restore's own unit objects: their views.)
-    const out = [];
+    // (A restore's own unit objects: their views. The live views' slots: the
+    // new array's index, selectionIndexAdopt, no second pass.)
+    const out = [], F = X.framed ? simClientCurrentUnitVis() : null;
+    let slots = F ? _selCompactSlots : null, ns = 0, slotted = !!F;
+    if (F && slots.length < selectedUnits.length) slots = _selCompactSlots = new Int32Array(Math.ceil(selectedUnits.length * 1.25));
     for (let i = 0; i < selectedUnits.length; i++) {
         let u = selectedUnits[i];
         if (u && X.framed && !u._frameView) u = _pageUnitsById.get(u.id);
-        if (u && !u.dead) out.push(u);
+        if (u && !u.dead) {
+            out.push(u);
+            if (slotted) { const s = u._s; if (s >= 0 && s < F.cap) slots[ns++] = s; else slotted = false; }
+        }
     }
     selectedUnits = out;
+    if (slotted && ns === out.length) { const at = X.compactAt; selectionIndexAdopt(out, slots, ns); X.compactAt = at; }
     return true;
 }
 
@@ -3599,6 +3631,10 @@ function getActiveUnitsForRender() {
     if (selectedUnits.length === 0) return [];
     let disabled = '';
     for (let key in activeSubGroups) if (activeSubGroups[key] === false) disabled += key + ';';
+    // (A big selection with nothing turned off: its own array, the dead in it
+    // until it is compacted (their drawers skip them). Filtered, it was made
+    // again every frame of a fight: each death is a new version.)
+    if (!disabled && typeof SELECTED_UNIT_LINES_MAX === 'number' && selectedUnits.length > SELECTED_UNIT_LINES_MAX) return selectedUnits;
     let c = _renderActiveUnits;
     if (c.tick === gameTime && c.selected === selectedUnits && c.length === selectedUnits.length
         && c.ignore === ignoreLevelSubgroups && c.disabled === disabled) return c.result;
@@ -3743,12 +3779,14 @@ function formatThingGroupEnergyDisplay(group) {
     let totalEnergy = 0;
     let totalUpgradeTriggerMax = 0;
     let totalEffectiveMax = 0;
-    for (let e of (group || [])) {
+    const sample = infoGroupSample(group || []), scale = sample.length ? (group || []).length / sample.length : 1;
+    for (let e of sample) {
         let energyView = getThingEnergyDisplayValues(e);
         totalEnergy += energyView.currentEnergy;
         totalUpgradeTriggerMax += energyView.upgradeTriggerMax;
         totalEffectiveMax += energyView.effectiveMax;
     }
+    totalEnergy *= scale; totalUpgradeTriggerMax *= scale; totalEffectiveMax *= scale;
     let totalCurrent = Math.floor(totalEnergy);
     return {
         base: formatInfoFraction(totalCurrent, Math.max(1, Math.floor(totalUpgradeTriggerMax || 1))),
@@ -3878,7 +3916,9 @@ function renderBarrackGroupInfo(group) {
     let totalEffUnitUpKeep = 0;
     let readyGroup = group.filter(b => !b.underConstruction);
     let totalQueue = 0;
-    for (let b of group) {
+    // (Sums over a big group: from its sample, scaled; averages the same.)
+    const statSample = infoGroupSample(group), statScale = group.length / statSample.length;
+    for (let b of statSample) {
         let bBaseLevel = b.level || stackCountToLevel(b.stacks || 1);
         let bEffLevel = getThingEffectiveLevel(b, bBaseLevel);
         totalBaseUpKeep += Number(getBuildingStatForOwner(b.owner, b.type, bBaseLevel, 'upKeep')) || 0;
@@ -3888,6 +3928,8 @@ function renderBarrackGroupInfo(group) {
         totalBaseVis += Number(getEntityBaseVisibilityRangeTiles(b)) || 0;
         totalEffVis += Number(getEntityEffectiveVisibilityRangeTiles(b)) || 0;
     }
+    totalBaseUpKeep *= statScale; totalEffUpKeep *= statScale; totalBaseUnitUpKeep *= statScale; totalEffUnitUpKeep *= statScale;
+    totalBaseVis *= statScale; totalEffVis *= statScale;
     for (let b of readyGroup) totalQueue += b.spawnQueue.length;
     let energyDisplay = formatThingGroupEnergyDisplay(group);
     html += infoRow('Count', group.length);

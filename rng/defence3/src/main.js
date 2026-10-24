@@ -883,62 +883,16 @@ function initInput() {
             )));
     }
 
-    // Split selected things across ctrl multi-points by proximity. Each point
-    // still receives an equal share (as round-robin did), but the closest
-    // thing/point pairs are matched first (squared distance, then index).
-    // (Per point, its things by distance in whole pixels, a counting sort
-    // (ties in thing order); then the points' lists merged, the closest pair
-    // first, as a sort of every pair would visit them: 56k units and 10
-    // points take tens of ms, not a second.)
+    // Split selected things across ctrl multi-points by proximity: each point
+    // an equal share, the nearest pairs first (assign_nearest.js
+    // assignNearestXY: by cells of a grid over the things).
     function _assignToNearestPoints(things, points, thingXY, pointXY, fillXY = null) {
-        let n = things.length, k = points.length;
-        let result = new Array(n).fill(0);
-        if (k <= 1 || n === 0) return result;
-        let capacity = Math.ceil(n / k);
-        let load = new Int32Array(k);
-        let pts = points.map(pointXY);
-        let xs = new Float64Array(n), ys = new Float64Array(n), has = new Uint8Array(n);
+        const n = things.length;
+        if (points.length <= 1 || n === 0) return new Int32Array(n);
+        const xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
         if (fillXY) fillXY(xs, ys, has);
-        else for (let i = 0; i < n; i++) { let a = thingXY(things[i]); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
-        const B = 65536, cnt = new Int32Array(B + 1), dist = new Int32Array(n);
-        // lists[j]: thing indices by distance; keys[j]: their distances.
-        let lists = [], keys = [];
-        for (let j = 0; j < k; j++) {
-            let p = pts[j];
-            cnt.fill(0);
-            for (let i = 0; i < n; i++) {
-                let dx = (has[i] && p) ? xs[i] - p.x : 0, dy = (has[i] && p) ? ys[i] - p.y : 0;
-                let d = Math.min(B - 1, Math.floor(Math.sqrt(dx * dx + dy * dy)));
-                dist[i] = d; cnt[d + 1]++;
-            }
-            for (let d = 0; d < B; d++) cnt[d + 1] += cnt[d];
-            let L = new Int32Array(n), K = new Int32Array(n);
-            for (let i = 0; i < n; i++) { let o = cnt[dist[i]]++; L[o] = i; K[o] = dist[i]; }
-            lists.push(L); keys.push(K);
-        }
-        // Merge: the smallest head of the k lists (k is small: a scan), a
-        // full point's list left out.
-        let head = new Int32Array(k), done = new Uint8Array(n), left = n, open = k;
-        let alive = new Uint8Array(k).fill(1);
-        while (left && open) {
-            let bj = -1, bk = Infinity, bi = 0;
-            for (let j = 0; j < k; j++) {
-                if (!alive[j]) continue;
-                let L = lists[j], h = head[j];
-                // (Things already placed are passed over.)
-                while (h < n && done[L[h]]) h++;
-                head[j] = h;
-                if (h >= n) { alive[j] = 0; open--; continue; }
-                let kk = keys[j][h];
-                if (kk < bk || (kk === bk && L[h] < bi)) { bk = kk; bj = j; bi = L[h]; }
-            }
-            if (bj < 0) break;
-            let i = bi;
-            head[bj]++;
-            done[i] = 1; left--; load[bj]++; result[i] = bj;
-            if (load[bj] >= capacity) { alive[bj] = 0; open--; }
-        }
-        return result;
+        else for (let i = 0; i < n; i++) { const a = thingXY(things[i]); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+        return assignNearestXY(xs, ys, has, points.map(pointXY));
     }
 
     let _entityWorldXY = e => e ? { x: Number.isFinite(e.x) ? e.x : (e.gx * TILE + 16), y: Number.isFinite(e.y) ? e.y : (e.gy * TILE + 16) } : null;
@@ -951,7 +905,14 @@ function initInput() {
             multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
         }
         if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
-        let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, _entityWorldXY, p => p);
+        // (Positions straight into the split's arrays: no object a building.)
+        let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, null, p => p, (xs, ys, has) => {
+            for (let i = 0; i < selSpawners.length; i++) {
+                const e = selSpawners[i];
+                if (!e) continue;
+                xs[i] = Number.isFinite(e.x) ? e.x : e.gx * TILE + 16; ys[i] = Number.isFinite(e.y) ? e.y : e.gy * TILE + 16; has[i] = 1;
+            }
+        });
         // One action per point with its buildings' tiles (setRallyMany; at
         // most ACTION_MAX_RALLY_COORDS each): an action per building could
         // not carry thousands of them (a packet holds 256 actions).
@@ -1281,8 +1242,12 @@ function initInput() {
         if (slots.length < n) slots = _boxUnitSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
         let c = 0;
         // (The cells under the box when the frame has buckets: their slots,
-        // sorted, so the selection is in slot order as from the pass.)
-        const cells = _frameListInBox(F, sx, sy, ex, ey);
+        // sorted, so the selection is in slot order as from the pass. A box
+        // over much of the map: the pass, no gathering and two sorts of
+        // millions of entries, ~0.5 s for a whole 4M-unit map.)
+        const B = F.renderBuckets, cellPx = B && B.columns > 0 ? 16 * (B.tile || TILE) : 0;
+        const boxCells = cellPx ? (Math.floor(ex / cellPx) - Math.floor(sx / cellPx) + 3) * (Math.floor(ey / cellPx) - Math.floor(sy / cellPx) + 3) : 0;
+        const cells = cellPx && boxCells * 4 < B.columns * B.rows ? _frameListInBox(F, sx, sy, ex, ey) : null;
         if (cells) {
             const ord = F.order;
             let m = 0;
@@ -1311,6 +1276,12 @@ function initInput() {
         _boxUnitSlotCount = c; _boxUnitSlotsFor = out;
         return out;
     }
+    const CLICK_STRUCT_REACH_3D = 4, CLICK_STRUCT_REACH_2D = 2;
+    // (A structure's kind for picking: a frame view's table kind, else its class.)
+    function _clickStructKind(e) {
+        if (e._kind !== undefined) return e._kind === 0 ? 'tower' : e._kind === 1 ? 'barrack' : e._kind === 2 ? 'spawner' : null;
+        return e instanceof Tower ? 'tower' : e instanceof Barrack ? 'barrack' : isSpawnerEntity(e) ? 'spawner' : null;
+    }
     function collectEnemyClickTargetCandidates(worldX, worldY, includeUnits = true) {
         let out = [];
         if (includeUnits) {
@@ -1329,20 +1300,19 @@ function initInput() {
                 });
             }
         }
-        for (let t of towers) {
-            if (t.owner === localPlayerId || t.energy <= 0) continue;
-            if (!isGameplayTargetVisibleToPlayer(localPlayerId, t.gx, t.gy)) continue;
-            out.push({ kind: 'tower', ref: t, x: t.x, y: t.y, hitShape: { kind: 'rect', hw: 15, hh: 15 }, hitRadius: 20, hitZ: 20 });
-        }
-        for (let b of barracks) {
-            if (b.owner === localPlayerId || b.energy <= 0) continue;
-            if (!isGameplayTargetVisibleToPlayer(localPlayerId, b.gx, b.gy)) continue;
-            out.push({ kind: 'barrack', ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
-        }
-        for (let s of collectorSpawners) {
-            if (s.owner === localPlayerId || s.energy <= 0) continue;
-            if (!isGameplayTargetVisibleToPlayer(localPlayerId, s.gx, s.gy)) continue;
-            out.push({ kind: 'spawner', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
+        // Structures by their tiles within a few of the click's ground point
+        // (a tall one drawn over the point stands at most ~2 tiles behind it
+        // at the 3D camera's pitch): every enemy building of the map, an
+        // object each, was a right click's cost at a hundred thousand.
+        const reach = renderDimensionMode === '3d' ? CLICK_STRUCT_REACH_3D : CLICK_STRUCT_REACH_2D;
+        const cgx = Math.floor(worldX / TILE), cgy = Math.floor(worldY / TILE);
+        for (let gy = Math.max(0, cgy - reach); gy <= Math.min(GRID_H - 1, cgy + reach); gy++) for (let gx = Math.max(0, cgx - reach); gx <= Math.min(GRID_W - 1, cgx + reach); gx++) {
+            const e = getTileEntityRef(gx, gy);
+            if (!e || e.gx !== gx || e.gy !== gy || e.owner === localPlayerId || !(e.energy > 0)) continue;
+            const kind = _clickStructKind(e);
+            if (!kind || !isGameplayTargetVisibleToPlayer(localPlayerId, gx, gy)) continue;
+            out.push(kind === 'tower' ? { kind, ref: e, x: e.x, y: e.y, hitShape: { kind: 'rect', hw: 15, hh: 15 }, hitRadius: 20, hitZ: 20 }
+                : { kind, ref: e, x: e.x, y: e.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let addEnemyFloorItem = (cell, gx, gy) => {
             if (cell && cell.item && cell.item.energy > 0 && cell.owner !== localPlayerId && isGameplayTargetVisibleToPlayer(localPlayerId, gx, gy)) {
@@ -1361,9 +1331,9 @@ function initInput() {
         };
         let clickGx = Math.floor(worldX / TILE), clickGy = Math.floor(worldY / TILE);
         if (renderDimensionMode === '3d') {
-            let bounds = get3DVisibleWorldBounds();
-            for (let gy = bounds.minGy; gy <= bounds.maxGy; gy++) {
-                for (let gx = bounds.minGx; gx <= bounds.maxGx; gx++) addEnemyFloorItem(grid[gy] && grid[gy][gx], gx, gy);
+            // (The same few tiles: every visible tile was a million at a zoomed-out view.)
+            for (let gy = Math.max(0, clickGy - reach); gy <= Math.min(GRID_H - 1, clickGy + reach); gy++) {
+                for (let gx = Math.max(0, clickGx - reach); gx <= Math.min(GRID_W - 1, clickGx + reach); gx++) addEnemyFloorItem(grid[gy] && grid[gy][gx], gx, gy);
             }
         } else if (clickGx >= 0 && clickGx < GRID_W && clickGy >= 0 && clickGy < GRID_H) {
             addEnemyFloorItem(grid[clickGy][clickGx], clickGx, clickGy);
@@ -1628,17 +1598,21 @@ function initInput() {
     function _assignWorkerGet() {
         if (_assignWorker || _assignWorkerFailed) return _assignWorker;
         try {
-            _assignWorker = new Worker('./src/sim/assign_worker.js?v=20261022-j');
+            _assignWorker = new Worker('./src/sim/assign_worker.js?v=20261024-cells');
             _assignWorker.onmessage = ev => {
                 const m = ev.data || {}, P = _assignPending;
                 if (!P || m.seq !== P.seq) return;
                 _assignPending = null;
-                if (!m.pick) { console.error('[assign worker]', m.error); return; }
-                const buckets = Array.from({ length: P.points.length }, () => []);
-                for (let i = 0; i < P.unitIds.length; i++) buckets[m.pick[i]].push(P.unitIds[i]);
-                for (let i = 0; i < buckets.length; i++) {
-                    if (buckets[i].length === 0) continue;
-                    queueAction({ action: P.actionName, unitIds: buckets[i], targetX: P.points[i].x, targetY: P.points[i].y });
+                localUnitOrderHook = null;
+                if (!m.buckets) { console.error('[assign worker]', m.error); return; }
+                // (Units ordered since the click: theirs is the later order.)
+                const later = P.later.length ? new Set(P.later.flat()) : null;
+                // (Each point's ids, split there: an array each for the actions.)
+                for (let i = 0; i < m.buckets.length; i++) {
+                    let ids = Array.from(m.buckets[i]);
+                    if (later) ids = ids.filter(id => !later.has(id));
+                    if (ids.length === 0) continue;
+                    queueAction({ action: P.actionName, unitIds: ids, targetX: P.points[i].x, targetY: P.points[i].y });
                 }
             };
             _assignWorker.onerror = () => { _assignWorkerFailed = true; _assignWorker = null; };
@@ -1660,43 +1634,39 @@ function initInput() {
             queueAction({ action: actionName, unitIds: unitIds.length >= 64 ? unitIds : unitIds.slice(), targetX: multiUnitCommandPoints[0].x, targetY: multiUnitCommandPoints[0].y });
             return;
         }
-        // (The units' views, for the split by distance: a function, made only now.)
-        if (typeof unitObjs === 'function') unitObjs = unitObjs();
-
-        let buckets = Array.from({ length: multiUnitCommandPoints.length }, () => []);
-        let pick;
-        // The units given (in the ids' order): their positions straight from
-        // the frame's columns (no map of every unit, no views' getters).
+        // The units' positions by their ids: beside the worker from the frame's
+        // columns (its id map is an array; no view getters, no object a unit),
+        // else from the units. (Not from a list of views: in a fight the ids
+        // and the views of a selection differ by the dead, and a million
+        // units took the slow way, a map look-up and an object each.)
         const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-        // A big multi-point split runs on a worker (assign_worker.js): this
-        // thread only packs the positions; the orders go when the answer
-        // comes (a click's own later answer replaces an earlier one's).
-        if (unitObjs && unitObjs.length === unitIds.length && multiUnitCommandPoints.length > 1 && unitIds.length >= ASSIGN_ASYNC_MIN && _assignWorkerGet()) {
-            const n = unitObjs.length, xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
+        const n = unitIds.length, xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
+        if (F && typeof _pageUnitsById !== 'undefined') {
+            const PU = _pageUnitsById, FID = F.id, FX = F.x, FY = F.y;
             for (let i = 0; i < n; i++) {
-                const u = unitObjs[i], s = u ? u._s : -1;
-                if (F && s >= 0) { xs[i] = F.x[s]; ys[i] = F.y[s]; has[i] = 1; }
-                else { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+                const id = unitIds[i], u = PU.get(id), s = u ? u._s : -1;
+                if (s >= 0 && FID[s] === id) { xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; }
+                else if (u) { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
             }
-            const seq = ++_assignSeq, points = multiUnitCommandPoints.map(p => ({ x: p.x, y: p.y }));
-            _assignPending = { seq, unitIds: unitIds.slice(), points, actionName };
-            _assignWorker.postMessage({ seq, xs, ys, has, points }, [xs.buffer, ys.buffer, has.buffer]);
-            return;
-        }
-        if (unitObjs && unitObjs.length === unitIds.length) {
-            pick = _assignToNearestPoints(unitObjs, multiUnitCommandPoints, _entityWorldXY, p => p, (xs, ys, has) => {
-                for (let i = 0; i < unitObjs.length; i++) {
-                    const u = unitObjs[i], s = u ? u._s : -1;
-                    if (F && s >= 0) { xs[i] = F.x[s]; ys[i] = F.y[s]; has[i] = 1; }
-                    else { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
-                }
-            });
         } else {
             // (The kept id map: no map of every unit per click.)
-            let unitById = typeof _unitByIdMap === 'function' ? _unitByIdMap() : new Map(units.map(u => [u.id, u]));
-            pick = _assignToNearestPoints(unitIds, multiUnitCommandPoints, id => _entityWorldXY(unitById.get(id)), p => p);
+            const unitById = typeof _unitByIdMap === 'function' ? _unitByIdMap() : new Map(units.map(u => [u.id, u]));
+            for (let i = 0; i < n; i++) { const u = unitById.get(unitIds[i]); if (u) { xs[i] = u.x; ys[i] = u.y; has[i] = 1; } }
         }
-        for (let i = 0; i < unitIds.length; i++) buckets[pick[i]].push(unitIds[i]);
+        const points = multiUnitCommandPoints.map(p => ({ x: p.x, y: p.y }));
+        // A big split runs on a worker (assign_worker.js), the ids split by
+        // point there too; the orders go when the answer comes (a later
+        // click's answer replaces an earlier one's).
+        if (n >= ASSIGN_ASYNC_MIN && _assignWorkerGet()) {
+            const seq = ++_assignSeq, ids = Int32Array.from(unitIds);
+            const pending = _assignPending = { seq, points, actionName, later: [] };
+            localUnitOrderHook = a => { if (_assignPending === pending) pending.later.push(a.unitIds); };
+            _assignWorker.postMessage({ seq, xs, ys, has, points, ids }, [xs.buffer, ys.buffer, has.buffer, ids.buffer]);
+            return;
+        }
+        const pick = assignNearestXY(xs, ys, has, points);
+        const buckets = Array.from({ length: points.length }, () => []);
+        for (let i = 0; i < n; i++) buckets[pick[i]].push(unitIds[i]);
 
         for (let i = 0; i < buckets.length; i++) {
             if (buckets[i].length === 0) continue;
@@ -3470,17 +3440,23 @@ function _orderMoveByKernel(a, playerId, cmd, targetGx, targetGy, targetPos, S) 
     const jobs = Math.ceil(n / ORDER_KERNEL_PER_JOB);
     if (!_ordCnt || _ordCnt.length < jobs) { _ordCnt = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('ord.cnt', _ordCnt); }
     const slots = _ordSlots, objs = [];
-    // (Units not of the columns, or with a pending way or a fallback path (their
-    // digest fields): the JavaScript's; their slot -1. The kernel's own: off
-    // a group path's wait, as _ordClearFast.)
-    const first = [-1, -1], count = [0, 0], layer = S.sepLayer, ppt = c.jr__ppt, pfa = c.jr__pfa, wait = c.j__awaitGroupPath;
+    // (Units not of the columns: the JavaScript's; their slot -1. The kernel's
+    // own: off a group path's wait and any pending way or fallback path (their
+    // digest fields, as _ordClearFast clears them: a fight's army had a tenth
+    // of its units waiting for a way, each left to the JavaScript).)
+    const first = [-1, -1], count = [0, 0], layer = S.sepLayer, ppt = c.jr__ppt, pfa = c.jr__pfa, wait = c.j__awaitGroupPath, K = _ordKeys();
     for (let i = 0; i < n; i++) {
         const u = map.get(ids[i]);
         if (u === undefined || u._us !== c || !(u._si >= 0)) { slots[i] = -1; if (u !== undefined) objs.push(u); continue; }
         const s = u._si;
-        if (ppt.get(s) != null || pfa.get(s)) { slots[i] = -1; objs.push(u); continue; }
         slots[i] = s;
         if (c.owner[s] !== playerId || c.dead[s] === 1 || c.isWk[s] !== 0) continue;
+        if (c.holdF[s] === 0 && c.spEpoch[s] === spatialEpoch && (ppt.get(s) != null || pfa.get(s))) {
+            let h = c.hObj[s];
+            h += _ordSet(ppt, s, K.ppt, null, K.pptNull);
+            h += _ordSet(pfa, s, K.pfa, false, K.pfaFalse);
+            c.hObj[s] = h | 0; c.mvPF[s] = 0;
+        }
         wait.clear(s);
         const prof = layer[s] === 1 ? 1 : 0;
         count[prof]++;
@@ -3795,7 +3771,7 @@ const ACTION_JUMP_COST = 12;
 // (Within an allowance a tick, as the budget's: a flood of small actions
 // waits like any other.)
 const ACTION_JUMP_BUDGET_PER_TICK = 48;
-let _actionArrival = 0, _actionEarly = [], _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK;
+let _actionArrival = 0, _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK;
 function _actionMarked(raw) { return !!raw && (ACTION_JUMP_UNITS.has(raw.action) || raw.action === 'setRally' || raw.action === 'setRallyMany'); }
 function _actionJumps(raw) {
     if (!raw) return false;
@@ -3805,51 +3781,99 @@ function _actionJumps(raw) {
     for (const e of _actionBacklog) if (!_actionMarked(e[1])) return false;
     return true;
 }
-// (The marks only older waiting actions read: those not newer than every waiting one dropped.)
-function _actionEarlyPrune() {
-    if (!_actionBacklog.length) { if (_actionEarly.length) _actionEarly = []; return; }
+// The latest unit order by arrival. While older actions wait, each unit
+// order or rally change that arrives records itself as the latest for its
+// units (or its buildings' tiles: rallies) at once (arrival + 1; 0 none), and
+// each waiting one keeps how many of them it still is the latest for (its
+// live count, made less as later ones take them; as the order queue's
+// stamps). A waiting action whose units all were ordered again is passed
+// over in O(1) when its turn comes, one with some ordered again applies to
+// the rest: the latest order wins as before, but ten ctrl clicks on an army
+// no longer process nine superseded orders' millions of ids ahead of the
+// tenth (seconds at 1 TPS). In arrival order still (rallies, placements and
+// unit orders keep their order), every peer alike. Dropped once no action
+// waits.
+let _actLatest = [], _actLive = new Map();
+function _actLatestOf(p) { return _actLatest[p] || (_actLatest[p] = { u: { a: new Int32Array(1 << 12), m: null }, t: null }); }
+// (Its units' ids or its buildings' tiles (tile index), as given: before
+// the action is cleaned, any id it carries; an invalid one never matches.)
+function _actionMarkKeys(raw) {
+    if (ACTION_JUMP_UNITS.has(raw.action)) return { ids: Array.isArray(raw.unitIds) ? raw.unitIds : (typeof raw.uidz === 'string' ? actionIdsDecode(raw.uidz) : []), tiles: null };
+    const c = raw.action === 'setRally' ? [raw.gx, raw.gy] : (Array.isArray(raw.coords) ? raw.coords : []), tiles = [];
+    for (let k = 0; k + 1 < c.length; k += 2) { const x = c[k], y = c[k + 1]; if (Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) tiles.push(y * GRID_W + x); }
+    return { ids: null, tiles };
+}
+function _actionRecordArrival(raw, p, seq, waits) {
+    const L = _actLatestOf(p), mark = seq + 1, K = _actionMarkKeys(raw);
+    let live = 0, lastS = -1, lastE = null;
+    const dec = old => { if (old !== lastS) { lastS = old; lastE = _actLive.get(old - 1) || null; } if (lastE) lastE.live--; };
+    if (K.ids) for (const id of K.ids) {
+        if (!Number.isInteger(id)) continue;
+        const old = _orderStampGet(L.u, id);
+        if (old === mark) continue;
+        if (old > 0) dec(old);
+        _orderStampSet(L.u, id, mark); live++;
+    }
+    if (K.tiles) {
+        const T = L.t || (L.t = new Int32Array(GRID_W * GRID_H));
+        for (const k of K.tiles) { const old = T[k]; if (old === mark) continue; if (old > 0) dec(old); T[k] = mark; live++; }
+    }
+    if (waits) _actLive.set(seq, { live });
+}
+// (The keys an action recorded at its arrival is still the latest for.)
+function _actionKeepLatest(a, p, seq) {
+    const L = _actLatest[p], mark = seq + 1;
+    if (!L) return true;
+    if (ACTION_JUMP_UNITS.has(a.action)) {
+        const ids = (a.unitIds || []).filter(id => _orderStampGet(L.u, id) === mark);
+        a.unitIds = ids;
+        Object.defineProperty(a, '_idsDistinct', { value: ids, enumerable: false, configurable: true });
+        return ids.length > 0;
+    }
+    const T = L.t, c = a.action === 'setRally' ? [a.gx, a.gy] : (Array.isArray(a.coords) ? a.coords : []), keep = [];
+    if (!T) return true;
+    for (let k = 0; k + 1 < c.length; k += 2) if (T[c[k + 1] * GRID_W + c[k]] === mark) keep.push(c[k], c[k + 1]);
+    if (a.action === 'setRally') return keep.length > 0;
+    a.coords = keep;
+    return keep.length > 0;
+}
+function _actionMarksClear() { if (_actLatest.length) _actLatest = []; if (_actLive.size) _actLive.clear(); }
+// (In a snapshot: the arrival, the marks that waiting actions read (those
+// of their arrivals and later: unit ids, tiles as -(tile + 1)), the live counts.)
+function actionEarlySnapshot() {
+    const marks = [], lives = [];
     let min = Infinity;
     for (const e of _actionBacklog) if (e[2] < min) min = e[2];
-    for (const M of _actionEarly) if (M) for (const [id, s] of M) if (s <= min) M.delete(id);
-}
-function actionEarlySnapshot() {
-    const marks = [];
-    for (let p = 0; p < _actionEarly.length; p++) if (_actionEarly[p]) for (const [id, s] of _actionEarly[p]) marks.push(p, id, s);
-    return { arrival: _actionArrival, marks };
+    if (_actionBacklog.length) for (let p = 0; p < _actLatest.length; p++) {
+        const L = _actLatest[p];
+        if (!L) continue;
+        const A = L.u.a;
+        for (let id = 0; id < A.length; id++) if (A[id] > min) marks.push(p, id, A[id]);
+        if (L.u.m) for (const [id, s] of L.u.m) if (s > min) marks.push(p, id, s);
+        if (L.t) for (let k = 0; k < L.t.length; k++) if (L.t[k] > min) marks.push(p, -(k + 1), L.t[k]);
+    }
+    for (const [s, v] of _actLive) lives.push(s, v.live);
+    return { arrival: _actionArrival, marks, lives, v: 2 };
 }
 function actionEarlyRestore(v) {
     _actionArrival = v && Number.isFinite(v.arrival) ? v.arrival : 0;
-    _actionEarly = [];
-    const m = v && Array.isArray(v.marks) ? v.marks : [];
-    for (let i = 0; i + 2 < m.length; i += 3) (_actionEarly[m[i] | 0] || (_actionEarly[m[i] | 0] = new Map())).set(m[i + 1], m[i + 2]);
+    _actionMarksClear();
+    if (!v || v.v !== 2) return;
+    const m = Array.isArray(v.marks) ? v.marks : [], l = Array.isArray(v.lives) ? v.lives : [];
+    for (let i = 0; i + 2 < m.length; i += 3) {
+        const L = _actLatestOf(m[i] | 0), key = m[i + 1], s = m[i + 2] | 0;
+        if (key >= 0) _orderStampSet(L.u, key, s);
+        else { const T = L.t || (L.t = new Int32Array(GRID_W * GRID_H)); const k = -key - 1; if (k < T.length) T[k] = s; }
+    }
+    for (let i = 0; i + 1 < l.length; i += 2) _actLive.set(l[i] | 0, { live: l[i + 1] | 0 });
 }
-// (seq: its arrival, -1 unknown (an old snapshot's); early: it goes ahead of older waiting actions.)
-function _processRawAction(raw, playerId, seq = -1, early = false) {
+// (seq: its arrival, -1 unknown (an old snapshot's); recorded: its arrival
+// recorded the latest marks (it waited, or went ahead of waiting ones): only
+// what it still is the latest for.)
+function _processRawAction(raw, playerId, seq = -1, recorded = false) {
     let a = sanitizeAction(raw);
     if (!a) return;
-    if (seq >= 0 && _actionMarked(a)) {
-        // (Keys: unit ids; a building's tile as -(tile + 1).)
-        const rally = !ACTION_JUMP_UNITS.has(a.action);
-        const coords = !rally ? null : a.action === 'setRally' ? [a.gx, a.gy] : (Array.isArray(a.coords) ? a.coords : []);
-        if (early) {
-            const N = _actionEarly[playerId] || (_actionEarly[playerId] = new Map());
-            if (!rally) { for (const id of a.unitIds || []) N.set(id, seq); }
-            else for (let k = 0; k + 1 < coords.length; k += 2) N.set(-(coords[k + 1] * GRID_W + coords[k] + 1), seq);
-        } else {
-            // (What a later action took meanwhile: passed over.)
-            const M = _actionEarly[playerId];
-            if (M && M.size) {
-                let later = null;
-                for (const [key, s] of M) if (s > seq) (later || (later = new Set())).add(key);
-                if (later && !rally && Array.isArray(a.unitIds)) a.unitIds = a.unitIds.filter(id => !later.has(id));
-                if (later && rally) {
-                    const keep = [];
-                    for (let k = 0; k + 1 < coords.length; k += 2) if (!later.has(-(coords[k + 1] * GRID_W + coords[k] + 1))) keep.push(coords[k], coords[k + 1]);
-                    if (a.action === 'setRally') { if (!keep.length) return; } else a.coords = keep;
-                }
-            }
-        }
-    }
+    if (recorded && seq >= 0 && _actionMarked(a) && !_actionKeepLatest(a, playerId, seq)) return;
     // One bad action must not take the rest of the tick's actions with
     // it (it throws the same way on every peer).
     try { processAction(a, playerId); } catch (err) { reportRuntimeError('action ' + a.action, err); }
@@ -3858,19 +3882,23 @@ function _actionBacklogDrain() {
     if (!_actionBacklog.length || _actionBudgetLeft <= 0) return;
     let i = 0;
     for (; i < _actionBacklog.length && _actionBudgetLeft > 0; i++) {
-        const e = _actionBacklog[i], split = _actionSplit(e[1], _actionBudgetLeft);
+        const e = _actionBacklog[i], lv = _actLive.get(e[2]);
+        // (Every unit of it ordered again since: passed over, nearly free.)
+        if (lv && lv.live <= 0) { _actionBudgetLeft -= 1; _actLive.delete(e[2]); continue; }
+        const split = _actionSplit(e[1], _actionBudgetLeft);
         if (split) {
             // (Its units paid for now; the rest stays first.)
             _actionBudgetLeft = 0;
             e[1] = split[1];
-            _processRawAction(split[0], e[0], e[2]);
+            _processRawAction(split[0], e[0], e[2], !!lv);
             break;
         }
         _actionBudgetLeft -= _actionCost(e[1]);
-        _processRawAction(e[1], e[0], e[2]);
+        _processRawAction(e[1], e[0], e[2], !!lv);
+        if (lv) _actLive.delete(e[2]);
     }
     _actionBacklog.splice(0, i);
-    _actionEarlyPrune();
+    if (!_actionBacklog.length) _actionMarksClear();
 }
 function processActions(actions, playerId) {
     if (!Array.isArray(actions)) return;
@@ -3884,14 +3912,25 @@ function _processActions(actions, playerId) {
     if (typeof spatialIndexPrebuildSettle === 'function') spatialIndexPrebuildSettle();
     _actionBacklogDrain();
     for (let raw of actions) {
-        const seq = _actionArrival++;
+        const seq = _actionArrival++, marked = _actionMarked(raw);
         if (_actionBacklog.length || _actionBudgetLeft <= 0) {
+            const older = _actionBacklog.length > 0;
             // (A small unit order: now, ahead of those waiting.)
-            if (_actionJumps(raw)) { const cost = _actionCost(raw); _actionBudgetLeft -= cost; _actionJumpLeft -= cost; _processRawAction(raw, playerId, seq, _actionBacklog.length > 0); continue; }
+            if (_actionJumps(raw)) {
+                const cost = _actionCost(raw); _actionBudgetLeft -= cost; _actionJumpLeft -= cost;
+                if (marked && older) _actionRecordArrival(raw, playerId, seq, false);
+                _processRawAction(raw, playerId, seq, marked && older);
+                continue;
+            }
+            if (marked) _actionRecordArrival(raw, playerId, seq, true);
             _actionBacklog.push([playerId, raw, seq]); continue;
         }
         const split = _actionSplit(raw, _actionBudgetLeft);
-        if (split) { _actionBudgetLeft = 0; _actionBacklog.push([playerId, split[1], seq]); _processRawAction(split[0], playerId, seq); continue; }
+        if (split) {
+            if (marked) _actionRecordArrival(raw, playerId, seq, true);
+            _actionBudgetLeft = 0; _actionBacklog.push([playerId, split[1], seq]); _processRawAction(split[0], playerId, seq, marked);
+            continue;
+        }
         _actionBudgetLeft -= _actionCost(raw);
         _processRawAction(raw, playerId, seq);
     }
@@ -3941,7 +3980,8 @@ function actionBacklogChecksum() {
         h = Math.imul(h ^ (seq | 0), 16777619);
     }
     h = Math.imul(h ^ (_actionArrival | 0), 2246822519);
-    for (let p = 0; p < _actionEarly.length; p++) if (_actionEarly[p]) for (const [id, s] of _actionEarly[p]) h = (h + Math.imul((id | 0) ^ Math.imul(s | 0, 2654435761) ^ (p << 24), 16777619)) | 0;
+    // (The waiting actions' live counts: what the latest marks left them.)
+    for (const [s, v] of _actLive) h = (h + Math.imul((s | 0) ^ Math.imul(v.live | 0, 2654435761), 16777619)) | 0;
     return h | 0;
 }
 
@@ -3953,9 +3993,10 @@ function actionBacklogChecksum() {
 // other order) for a unit drops it from the queued ones, so the latest order
 // always wins. The queue and the budgets are simulation state (snapshotted
 // with the globals).
-// (2-2.5 us a unit: 2500 a tick are ~6 ms, 50k units a second. 4000 were
-// ~10 ms a tick on top of a ~38 ms tick in the mixed chaos scenario.)
-let ORDER_UNITS_PER_PLAYER_TICK = 2000, ORDER_UNITS_PER_TICK_ALL = 2500, ORDER_UNITS_PER_ROUND = 500;
+// (Once 2-2.5 us a unit, 2500 a tick; the columns' fast path and the order
+// kernel made it ~0.4-0.5 us a unit (tests/test-runs/probe_workermove.cjs):
+// 10000 a tick are ~5 ms, 200k units a second.)
+let ORDER_UNITS_PER_PLAYER_TICK = 8000, ORDER_UNITS_PER_TICK_ALL = 10000, ORDER_UNITS_PER_ROUND = 2000;
 // (A unit the order kernel takes costs a fraction of one the JavaScript does: 1/ORDER_KERNEL_GAIN.)
 const ORDER_KERNEL_GAIN = 16;
 let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
@@ -4055,11 +4096,31 @@ function _orderStampIds(T, ids, seq) {
         } else { _orderStampSuperseded(_orderStampGet(T, id), id); _orderStampSet(T, id, seq); }
     }
 }
+function _orderWorkersLast(ids) {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!S) return ids;
+    const map = _unitByIdMap(), c = S.columns, wk = c.isWk, out = new Float64Array(ids.length);
+    let a = 0, b = 0, late = null;
+    for (let i = 0; i < ids.length; i++) {
+        const u = map.get(ids[i]), s = u !== undefined && u._us === c ? u._si : -1;
+        if (s >= 0 && wk[s] !== 0) (late || (late = new Float64Array(ids.length)))[b++] = ids[i];
+        else out[a++] = ids[i];
+    }
+    if (!late) return ids;
+    out.set(late.subarray(0, b), a);
+    return out;
+}
 function _queueGroupMoveOrder(a, playerId, cmd) {
     // (Each id once, in the order given (sanitizeAction); the units' latest
     // order now. Kept typed: queued ids are nothing for the collector to
     // trace.)
-    const ids = Float64Array.from(_actionDistinctIds(a)), seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
+    let ids = Float64Array.from(_actionDistinctIds(a));
+    const seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
+    // (A big order's units the kernel takes first, its workers after (the
+    // JavaScript's, ~30x the budget a unit): an army with a third of it
+    // workers moved at the workers' pace. The same order on every peer: by
+    // the units' columns at the order.)
+    if (ORDER_KERNEL && ids.length >= 64) ids = _orderWorkersLast(ids);
     _orderStampIds(T, ids, seq);
     const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length, sum: _orderIdsSum(ids) };
     _orderQueue.push(e); _orderBySeq.set(seq, e);
@@ -4120,7 +4181,7 @@ function _runQueuedOrders() {
     }
 }
 function _refillOrderBudget() { _orderBudgets.length = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
-function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionEarly = []; }
+function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionMarksClear(); }
 // The queue as state (snapshots): each entry's units still to apply that
 // it ordered last, entries with none left out.
 function orderQueueSnapshot() {

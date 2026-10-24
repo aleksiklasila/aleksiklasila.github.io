@@ -540,7 +540,7 @@ SIM_KERNELS[SIM_KERNEL_INDEX_IDSORT] = function (R, P, chunk) { _simRust(_simIxI
 const SIM_KERNEL_PV_MARKS = 85;
 const _simPvMarksW = _simWK(['unit.live', 'unit.dead', 'unit.id', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.energy', 'unit.owner', 'unit.commandState',
     'unit.effectiveLevel', 'unit.attackFlash', 'unit.stOn', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvE', 'unit.pvO', 'unit.pvC', 'unit.pvL', 'unit.pvId',
-    'unit.vx', 'unit.vy', 'unit.pvV']);
+    'unit.vx', 'unit.vy', 'unit.pvV', '?unit.mvTgX', '?unit.mvTgY', '?unit.pvOD']);
 SIM_KERNELS[SIM_KERNEL_PV_MARKS] = function (R, P, chunk) { _simRust(_simPvMarksW, P, chunk, 'k_pv_marks', 'PV_MARKS'); };
 const SIM_KERNEL_IXD_SCAN = 78, SIM_KERNEL_IXD_APPLY = 79, SIM_KERNEL_IXD_MERGE = 80, SIM_KERNEL_IXD_COPY = 81, SIM_KERNEL_IXD_OWNERS = 82, SIM_KERNEL_IXD_INIT = 83;
 const _simIxdW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'unit.owner', 'ixd.k', 'ixd.id', 'ixd.own', 'sep.eslot', 'sep.ekey', 'ix.eid',
