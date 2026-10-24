@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261024-ui2','sim_frame_world.js?v=20261024-ui2');
+importScripts('sim_frame.js?v=20261024-ui3','sim_frame_world.js?v=20261024-ui3');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
