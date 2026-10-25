@@ -246,3 +246,25 @@ Cut 2:
 - Timing: no regression. HEAD vs working tree alternating (100000-1000 ACTIVE=1, 7 helpers): p50 48.8-50.8 vs 46.1-48.5 ms,
   mean 93-94 vs 48-50 (HEAD's growth spikes). A python3.13 process on this machine uses a core all the time and Firefox ~0.8:
   absolute numbers drift between runs; compare alternating runs only.
+
+Cut 3 (sparse status records):
+- The seven status timers, three tick damages, the unreported damage over time and the status pre-pass's report (event,
+  amount) are a pool of records (sim_unit_state.js SIM_UNIT_ST_SIDE, stTh..stEv), unit.stIx the slot's (0 none; record 0
+  holds zeros, never written, so readers index without a test). Replaces stOn, stAcc, stEv, stDot and the ten status
+  columns: 459 -> 427 B/slot, plus ~35 B per unit with a status.
+- Taken at the first write of anything but 0: JS accessors (simUnitSt), the hits apply kernel and the movement kernel's
+  floor traps on the helpers (lib.rs st_take: compare-exchange pop of the free stack, else a bump of the next-record word;
+  st.hdr / st.free). Given back by SIM_KERNEL_STATUS (st_give, an atomic push) once the timers are out, the damage reported
+  and nothing shown this pass, and at a slot's detach. A phase only takes or only gives back, so one atomic word suffices.
+- Room is made before each helper phase that takes (simUnitStReserve): the hits apply one per listed target; the movement
+  kernel one per unit in a chunk with a kernel trap (kinds 1-5) or beside one (unit.js _simTrapUnitsBound, from the
+  spatial counts; floor checks happen where a unit stood at the tick's start, or a tile on after the occupancy's swaps).
+  A take that still finds no room is counted (st.hdr[3]), warned by simUnitStSettle, and the floor trap falls back to the
+  main thread (EV_FLOOR). Reserve at a start/restore: a sixteenth of the units.
+- Gameplay change (deliberate, both builds and every peer alike): a unit's tick damages (burn/poison/ice) are dropped with
+  its record, i.e. once all its timers are out and its damage is reported. Before, a stale burnTickDamage stayed for good
+  and was the floor of the next burn's max(). Done first on the dense layout (stOn = "would hold a record", the release
+  zeroing the damages): BATTLE=mix 100000-1000 HASH_AT=400 966469f6/34801e1a; the record layout gives the same hash.
+- Pitfall: _SIM_MOVE_WNAMES has several runs of '?-'; some are words a W_ constant still reads (73..78: W_HWIN..W_CBS,
+  null on purpose). New words go only where no W_ constant points (storage-abi checks types, not this).
+- Script versions bumped to ?v=20261025-st1 (every file had 20261024-ui5, through both earlier waves).

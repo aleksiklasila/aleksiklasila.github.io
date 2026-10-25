@@ -215,7 +215,16 @@ const W_FRZW: usize = 281;
 const W_ICED: usize = 282;
 const W_WET: usize = 283;
 const W_SNDW: usize = 284;
+// (Each slot's status record, unit.stIx: the status columns above and
+// unit.stFr / unit.stSa (W_FRZ, W_SND) are by record, sim_unit_state.js
+// SIM_UNIT_ST_SIDE; the pool's words and free stack at W_STHDR, W_STFREE.)
 const W_STON: usize = 285;
+const W_STHDR: usize = 94;
+const W_STFREE: usize = 95;
+// (The attackers' styles and each chunk's count of listed attacks with a
+// status style: hit_sty_count.)
+const W_ASTY: usize = 96;
+const W_HSC: usize = 97;
 const W_UPT: usize = 286;
 const W_TRK: usize = 287;
 const W_TRL: usize = 288;
@@ -473,6 +482,8 @@ struct Mv {
     hita: *mut i32,
     hitt: *mut i32,
     hitc: *mut i32,
+    asty: *const u8,
+    hsc: *mut i32,
     tmon: *mut u8,
     cmode: *mut u8,
     cmt: *const i32,
@@ -512,7 +523,9 @@ struct Mv {
     iced: *mut F32,
     wet: *mut U16I32,
     sndw: *mut U16I32,
-    ston: *mut u8,
+    stix: *mut i32,
+    sthdr: *mut i32,
+    stfree: *mut i32,
     upt: *const i16,
     trk: *const u8,
     trl: *const u8,
@@ -802,6 +815,8 @@ impl Mv {
             hita: p!(W_HITA),
             hitt: p!(W_HITT),
             hitc: p!(W_HITC),
+            asty: p!(W_ASTY),
+            hsc: p!(W_HSC),
             tmon: p!(W_TMON),
             cmode: p!(W_CMODE),
             cmt: p!(W_CMT),
@@ -840,7 +855,9 @@ impl Mv {
             iced: p!(W_ICED),
             wet: p!(W_WET),
             sndw: p!(W_SNDW),
-            ston: p!(W_STON),
+            stix: p!(W_STON),
+            sthdr: p!(W_STHDR),
+            stfree: p!(W_STFREE),
             upt: p!(W_UPT),
             trk: p!(W_TRK),
             trl: p!(W_TRL),
@@ -893,7 +910,7 @@ unsafe fn floor_hit(m: &Mv, s: usize, tl: i32) -> bool {
     if !floor_acts(m, tl) {
         return false;
     }
-    if m.trk.is_null() || m.trl.is_null() || m.trt.is_null() || m.trtg.is_null() || m.burn.is_null() || m.tres.is_null() || m.upt.is_null() || m.ston.is_null() {
+    if m.trk.is_null() || m.trl.is_null() || m.trt.is_null() || m.trtg.is_null() || m.burn.is_null() || m.tres.is_null() || m.upt.is_null() || m.stix.is_null() || m.sthdr.is_null() || m.stfree.is_null() {
         return true;
     }
     let tu = tl as usize;
@@ -928,16 +945,36 @@ unsafe fn floor_hit(m: &Mv, s: usize, tl: i32) -> bool {
         4 => (m.wet, core::ptr::null_mut()),
         _ => (m.sndw, core::ptr::null_mut()),
     };
-    if rd(tm, s) < d {
-        wr(tm, s, d);
+    // (Its status record, taken when the trap gives it anything: room for
+    // every unit in a trap's chunk is made before the kernel, unit.js
+    // simMoveRun; none left (never expected): the main thread's, as a mine.)
+    let mut r = rd(m.stix, s) as usize;
+    if !(rd(tm, r) < d || (!dm.is_null() && rd(dm, r) < g)) {
+        return false;
     }
-    if !dm.is_null() && rd(dm, s) < g {
-        wr(dm, s, g);
+    if r == 0 {
+        r = st_take(m.sthdr, m.stfree, m.stix, s) as usize;
+        if r == 0 {
+            return true;
+        }
     }
-    if d > 0 {
-        wr(m.ston, s, 1);
+    if rd(tm, r) < d {
+        wr(tm, r, d);
+    }
+    if !dm.is_null() && rd(dm, r) < g {
+        wr(dm, r, g);
     }
     false
+}
+
+/// Slot s's frozen and sand timers (by its status record; record 0 the zeros).
+#[inline(always)]
+unsafe fn st_frz(m: &Mv, s: usize) -> i32 {
+    rd(m.frz, rd(m.stix, s) as usize)
+}
+#[inline(always)]
+unsafe fn st_snd(m: &Mv, s: usize) -> i32 {
+    rd(m.snd, rd(m.stix, s) as usize)
 }
 
 // ---- JavaScript helpers ----
@@ -2609,7 +2646,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         // one it wants; the occupancy jobs then resolve the positions against
         // the footprints and run the epilogue: mv_move_occupancy.)
         let intent=rd(f,4)<0.0;
-        if !m.hita.is_null(){wr(m.hitc,p.chunk,0);}
+        if !m.hita.is_null(){wr(m.hitc,p.chunk,0);if !m.hsc.is_null(){wr(m.hsc,p.chunk,0);}}
         let b0=s0.max(0) as usize;let e=end.max(0) as usize;
         let mut ep=if intent{epi_none()}else{epi_begin(&m,f,chunk,b0,e)};
         move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
@@ -2857,7 +2894,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
     // start when that reaches a neighbour (long steps); else a hop of a
     // contact spacing once every k steps, its speed on average; the looks
     // only on those steps.)
-    let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
+    let mut spd=mv_stat(m,s,0,m.spd);if st_frz(m, s)>0{spd*=0.5;}if st_snd(m, s)>0{spd*=0.5;}
     let step=spd*m.dkf*8.0;if !(step>0.0){return None;}
     dbgc!(m,66);
     let spacing=(2*rq+16) as f64;
@@ -2910,7 +2947,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
         if !hop{
             let ex=(bx-sx0) as f64;let ey=(by-sy0) as f64;if ex*ex+ey*ey>step*step{continue;}
             // (A walker's exchange within its own step too.)
-            if walker{let mut sb=mv_stat(m,b,0,m.spd);if rd(m.frz,b)>0{sb*=0.5;}if rd(m.snd,b)>0{sb*=0.5;}let sb=sb*m.dkf*8.0;
+            if walker{let mut sb=mv_stat(m,b,0,m.spd);if st_frz(m, b)>0{sb*=0.5;}if st_snd(m, b)>0{sb*=0.5;}let sb=sb*m.dkf*8.0;
                 let ex=(ox-*(m.x0.add(b) as *const i32)) as f64;let ey=(oy-*(m.y0.add(b) as *const i32)) as f64;if ex*ex+ey*ey>sb*sb{continue;}}
         }
         let (x0,y0,x1,y1)=(ox as f64*0.125,oy as f64*0.125,bx as f64*0.125,by as f64*0.125);
@@ -2967,7 +3004,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     let xq=*(m.x.add(s) as *const i32);let yq=*(m.y.add(s) as *const i32);
     let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
     let dx=x-x0;let dy=y-y0;let spent=sqrt(dx*dx+dy*dy);
-    let mut spd=mv_stat(m,s,0,m.spd);if rd(m.frz,s)>0{spd*=0.5;}if rd(m.snd,s)>0{spd*=0.5;}
+    let mut spd=mv_stat(m,s,0,m.spd);if st_frz(m, s)>0{spd*=0.5;}if st_snd(m, s)>0{spd*=0.5;}
     let remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
     dbgc!(m,77);
     let own=rd(m.own,s);
@@ -3131,7 +3168,7 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
             let firing=v128_and(lane,v128_and(i32x4_ne(v128_and(cm,i32x4_splat(4)),zero),v128_not(f32x4_gt(v128_load(m.at.add(s) as *const v128),fz))));
             let fire_bits=i32x4_bitmask(firing);
             for l in 0..m.span_n {if fire_bits&(1<<l)!=0 {
-                let u=s+l;fire(m,u);let c=rd(m.hitc,p.chunk);
+                let u=s+l;fire(m,u);hit_sty_count(m,p,u);let c=rd(m.hitc,p.chunk);
                 let ct=rd(m.cmt,u);
                 wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,if rd(m.cmode,u)&16!=0 {-(ct+2)}else{ct});wr(m.hitc,p.chunk,c+1);
                 dbgc!(m,34);
@@ -3163,8 +3200,13 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let half = f32x4_splat(0.5);
     let one = f32x4_splat(1.0);
     let mut spd = mv_stat4(m, s, 0, m.spd);
-    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.frz.add(s) as *const u16), zero)));
-    spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(u32x4_load_extend_u16x4(m.snd.add(s) as *const u16), zero)));
+    // (Frozen, sandy: by the four's status records, none the most.)
+    if v128_any_true(v128_load(m.stix.add(s) as *const v128)) {
+        let fz4 = i32x4(st_frz(m, s), st_frz(m, s + 1), st_frz(m, s + 2), st_frz(m, s + 3));
+        let sd4 = i32x4(st_snd(m, s), st_snd(m, s + 1), st_snd(m, s + 2), st_snd(m, s + 3));
+        spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(fz4, zero)));
+        spd = f32x4_mul(spd, v128_bitselect(half, one, i32x4_gt(sd4, zero)));
+    }
     let go = v128_and(v128_and(lane, chase), v128_and(f32x4_gt(d, spd), f32x4_gt(spd, fz)));
     let stand = v128_andnot(lane, go);
     // (Several base ticks: their way, stopping a base tick's step short of
@@ -3244,7 +3286,7 @@ unsafe fn combat_hold2(m:&Mv,p:&MoveP,s:usize,cm:u16)->bool {
     if !valid {return false;}
     if cm&0x0404!=0 && !m.hita.is_null() {
         for l in 0..2 {let u=s+l;if cm&(4<<(l*8))!=0 && !(rd(m.at,u)>0.0) {
-            fire(m,u);let c=rd(m.hitc,p.chunk);
+            fire(m,u);hit_sty_count(m,p,u);let c=rd(m.hitc,p.chunk);
             wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,*m.cmt.add(u));wr(m.hitc,p.chunk,c+1);
             dbgc!(m,34);
         }}
@@ -3407,6 +3449,7 @@ unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
     if inr {
         if (k <= 2 || (cm & 4) != 0) && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
             fire(m, s);
+            hit_sty_count(m, p, s);
             let c = rd(m.hitc, p.chunk);
             wr(m.hita, p.s0 + c as usize, s as i32);
             wr(m.hitt, p.s0 + c as usize, -(t + 2));
@@ -3427,10 +3470,10 @@ unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
     let dy = ty - y;
     let d = sqrt(dx * dx + dy * dy);
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     if !(d > 0.0) || !(spd > 0.0) {
@@ -3683,10 +3726,10 @@ unsafe fn near_issued(m: &Mv, s: usize) -> bool {
         return false;
     }
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     let tol = js_max(8.0, js_min(m.tile, floor(spd * 2.0)));
@@ -3700,10 +3743,10 @@ unsafe fn near_issued(m: &Mv, s: usize) -> bool {
 /// mvTgX / mvTgY and the tolerance); near it, back to this controller.
 unsafe fn park_route(m: &Mv, s: usize, cmd: i32) {
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     wc(m.tgtol, s, js_max(8.0, js_min(m.tile, floor(spd * 2.0))));
@@ -3804,20 +3847,34 @@ unsafe fn list_hit(m: &Mv, p: &MoveP, s: usize, target: i32) {
         return;
     }
     fire(m, s);
+    hit_sty_count(m, p, s);
     let c = rd(m.hitc, p.chunk);
     wr(m.hita, p.s0 + c as usize, s as i32);
     wr(m.hitt, p.s0 + c as usize, target);
     wr(m.hitc, p.chunk, c + 1);
+}
+/// An attack of slot s listed in chunk p.chunk: counted when its style gives
+/// a status (k.rs hit_one: 1-4, 5 a swoop's watch), the most status
+/// sub-records the hits may take (unit.js unitHitsResolve).
+#[inline(always)]
+unsafe fn hit_sty_count(m: &Mv, p: &MoveP, s: usize) {
+    if m.hsc.is_null() || m.asty.is_null() {
+        return;
+    }
+    let a = rd(m.asty, s);
+    if a >= 1 && a <= 5 {
+        wr(m.hsc, p.chunk, rd(m.hsc, p.chunk) + 1);
+    }
 }
 
 /// The unit's speed this tick (frozen, sandy: half).
 #[inline(always)]
 unsafe fn speed_now(m: &Mv, s: usize) -> f64 {
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     spd
@@ -4251,6 +4308,7 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     }
     if (cm & 4) != 0 && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
         fire(m, s);
+        hit_sty_count(m, p, s);
         let c = rd(m.hitc, p.chunk);
         wr(m.hita, p.s0 + c as usize, s as i32);
         wr(m.hitt, p.s0 + c as usize, q);
@@ -4275,10 +4333,10 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
     let dy = rd(m.y0, qu) - y;
     let d = sqrt(dx * dx + dy * dy);
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     if !(d > spd) || !(spd > 0.0) {
@@ -4659,10 +4717,10 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         let now = sqrt(ex * ex + ey * ey);
         let last = rd(m.nld, s);
         let mut es = mv_stat(m, s, 0, m.spd);
-        if rd(m.frz, s) > 0 {
+        if st_frz(m, s) > 0 {
             es *= 0.5;
         }
-        if rd(m.snd, s) > 0 {
+        if st_snd(m, s) > 0 {
             es *= 0.5;
         }
         let near = (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8;
@@ -4794,10 +4852,10 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         }
     }
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     let mut vx = (dx / dist) * spd;
@@ -5115,10 +5173,10 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
         return;
     }
     let mut spd = mv_stat(m, s, 0, m.spd);
-    if rd(m.frz, s) > 0 {
+    if st_frz(m, s) > 0 {
         spd *= 0.5;
     }
-    if rd(m.snd, s) > 0 {
+    if st_snd(m, s) > 0 {
         spd *= 0.5;
     }
     // (Several base ticks a step: to the node's point at most.)

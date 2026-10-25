@@ -580,8 +580,8 @@ class Unit {
     // and shrine share). State: snapshots and patches carry them (a repair
     // dropped them on every peer: the reports, shrine income and
     // retaliations of an uninterrupted match never came).
-    get _dotPending() { const c = this._us; return c ? c.stAcc[this._si] : (this._det ? this._det._dotPending || 0 : this._dtp || 0); }
-    set _dotPending(v) { v = Number(v) || 0; const c = this._us; if (c) c.stAcc[this._si] = v; else if (this._det) this._det._dotPending = v; else Object.defineProperty(this, '_dtp', { value: v, writable: true, configurable: true }); }
+    get _dotPending() { const c = this._us; return c ? c.stAc[c.stIx[this._si]] : (this._det ? this._det._dotPending || 0 : this._dtp || 0); }
+    set _dotPending(v) { v = Number(v) || 0; const c = this._us; if (c) { const s = this._si; let r = c.stIx[s]; if (r === 0 && v !== 0) r = simUnitSt(c, s); if (r !== 0) c.stAc[r] = v; } else if (this._det) this._det._dotPending = v; else Object.defineProperty(this, '_dtp', { value: v, writable: true, configurable: true }); }
     get _laserPending() { const c = this._us; return c ? c.lzAcc[this._si] : (this._det ? this._det._laserPending || 0 : this._lzp || 0); }
     set _laserPending(v) { v = Number(v) || 0; const c = this._us; if (c) c.lzAcc[this._si] = v; else if (this._det) this._det._laserPending = v; else Object.defineProperty(this, '_lzp', { value: v, writable: true, configurable: true }); }
     get _laserBeam() { const c = this._us; return c ? c.lzBeam[this._si] : (this._det ? this._det._laserBeam || 0 : this._lzb || 0); }
@@ -1174,7 +1174,7 @@ function _hitArrays(n, total) {
         simParallelBind('hit.tlist', K.tlist); simParallelBind('hit.wlist', K.wlist);
     }
     if (!K.cnt) {
-        K.cnt = simSharedArray(Int32Array, 4); K.plist = simSharedArray(Int32Array, SIM_HITS_PRESENT_MAX + SIM_HITS_OUT);
+        K.cnt = simSharedArray(Int32Array, 8); K.plist = simSharedArray(Int32Array, SIM_HITS_PRESENT_MAX + SIM_HITS_OUT);
         simParallelBind('hit.cnt', K.cnt); simParallelBind('hit.plist', K.plist);
     }
     const NO = Math.max(16, players.length);
@@ -1213,6 +1213,19 @@ function _structHitsApply(KC, HC, HA, HT, CH) {
         _unitHitBuilding(a, tb, dmg);
     }
 }
+// The hits' status sub-records (unit.hSx: style bits, fire / poison tick
+// damage, a watch key), room for ns: zeros between ticks, the apply kernel
+// clears what it read.
+function _hitStArrays(ns) {
+    const K = _hitK;
+    if (!K.rsty || K.scap < ns) {
+        const cap = simReserveCap(Math.max(1, ns), 4096);
+        K.rsty = simSharedArray(Uint8Array, cap); K.rbd = simSharedArray(Int32Array, cap); K.rpd = simSharedArray(Int32Array, cap); K.rwk = simSharedArray(Int32Array, cap);
+        K.scap = cap;
+        simParallelBind('hit.rsty', K.rsty); simParallelBind('hit.rbd', K.rbd); simParallelBind('hit.rpd', K.rpd); simParallelBind('hit.rwk', K.rwk);
+    }
+    return K.scap;
+}
 function unitHitsResolve() {
     const Q = _hitQ, n = Q.n, S = _simUnitState;
     const KC = _simMoveHitChunks, HC = _simMoveHitC, HA = _simMoveHitA, HT = _simMoveHitT, CH = SIM_MOVE_CHUNK;
@@ -1235,27 +1248,37 @@ function unitHitsResolve() {
     const C = S.columns, owners = S.owners, K = _hitArrays(n, total);
     const HQ = K.q, HD = K.dmg, HS = K.sty, HW = K.wk, CNT = K.cnt;
     // (Structures and units without columns: here, below.)
-    let nl = 0;
+    let nl = 0, ns = 0;
     for (let i = 0; i < n; i++) {
         const t = Q.t[i];
         if (Q.b[i] !== 0 || t._us !== C || !(t._si >= 0)) { HQ[i] = -1; nl++; continue; }
         const a = Q.a[i], sty = _hitStyleCode(a);
         HQ[i] = t._si; HD[i] = Q.dmg[i]; HS[i] = sty; HW[i] = sty === 5 ? _hitWatchKey(a) : 0;
+        if (sty >= 1 && sty <= 5) ns++;
     }
     if (nl < total) {
-        CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0;
+        CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0; CNT[4] = 0; CNT[5] = 0;
+        // (Status sub-records for every hit with a status style: the JS
+        // entries' and the movement kernel's counts, mv.hitsc.)
+        const HSC = _simMoveHitSC;
+        if (HSC) for (let k = 0; k < KC; k++) ns += HSC[k];
+        const scap = _hitStArrays(ns);
         const P = _simParams;
         const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
         const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
         const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
         P[0] = n; P[1] = per; P[2] = looks; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
-        P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0;
+        P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0; P[13] = scap;
         simParallelRun(SIM_KERNEL_HITS, jj + kj);
+        if (CNT[5] > 0) console.warn('hits: ' + CNT[5] + ' status sub-records past the count of hits with a status style');
         const nt = CNT[0];
         if (nt > 0) {
             const NO = Math.max(16, players.length), pa = Math.max(SIM_HITS_PER_JOB, Math.ceil(nt / 48)), ja = Math.min(64, Math.ceil(nt / pa));
             P[0] = nt; P[1] = pa; P[2] = NO; P[3] = RESOURCE_FIXED_POINT_SCALE;
+            // (A status record for each unit with a status sub-record at most: taken on the helpers.)
+            if (typeof simUnitStReserve === 'function') simUnitStReserve(Math.min(CNT[4], scap));
             simParallelRun(SIM_KERNEL_HITS_APPLY, ja);
+            if (typeof simUnitStSettle === 'function') simUnitStSettle();
             // (The shrines' share: integers, any order.)
             const SHR = K.shr;
             for (let j = 0; j < ja; j++) for (let o = 0; o < NO; o++) {
@@ -1361,8 +1384,9 @@ const _UH_WS = _uhKey('workerState'), _UH_WNR = _uhKey('_workerNextIdleRetargetT
     _UH_PPT = _uhKey('_pendingPathTarget');
 function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) - _simHTerm(key, o)) | 0; }
 
-// Status effect fields: columns (SIM_UNIT_STATUS_COLUMNS), like x and y.
-// (A timer set running flags its unit for the status pre-pass: stOn.)
+// Status effect fields: the slot's status record (SIM_UNIT_ST_SIDE, unit.stIx;
+// record 0 the zeros: a write of anything else takes a record first), the
+// transfer cooldown a column (its count down flagged: tmOn).
 // (Made per column with its name in the code: one closure over the key did
 // c[k] for every column at one site, a megamorphic lookup on every read.)
 // (Uint16 timers, SIM_UNIT_U16_TIMERS: a store saturates at 0..SIM_TIMER_MAX,
@@ -1371,8 +1395,12 @@ for (const k of (typeof SIM_UNIT_STATUS_COLUMNS !== 'undefined' ? SIM_UNIT_STATU
     const timer = SIM_STATUS_TIMER_COLUMNS.includes(k);
     const sat = typeof SIM_UNIT_U16_TIMERS !== 'undefined' && SIM_UNIT_U16_TIMERS.includes(k);
     const store = sat ? `v > 0 && v !== Infinity ? (v < ${SIM_TIMER_MAX} ? v : ${SIM_TIMER_MAX}) : 0` : 'v';
-    const get = new Function(`return function () { const c = this._us; return c ? c.${k}[this._si] : (this._det ? this._det.${k} : undefined); };`)();
-    const set = new Function('k', `return function (v) { const c = this._us; if (c) { c.${k}[this._si] = ${store};${timer ? ' if (v > 0) c.stOn[this._si] = 1;' : k === 'workerTransferCooldown' ? ' if (v > 0) c.tmOn[this._si] = 1;' : ''} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
+    const f = SIM_UNIT_ST_FIELD[k];
+    const at = f ? `c.${f}[c.stIx[this._si]]` : `c.${k}[this._si]`;
+    const get = new Function(`return function () { const c = this._us; return c ? ${at} : (this._det ? this._det.${k} : undefined); };`)();
+    const put = f ? `const s = this._si, w = ${store}; let r = c.stIx[s]; if (r === 0 && w !== 0) r = simUnitSt(c, s); if (r !== 0) c.${f}[r] = w;`
+        : `c.${k}[this._si] = ${store}; if (v > 0) c.tmOn[this._si] = 1;`;
+    const set = new Function('k', `return function (v) { const c = this._us; if (c) { ${put} } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
 }
 
@@ -1388,8 +1416,7 @@ const STATUS_DOT_REPORT_TICKS = 4;
 // At a resync every peer drops the sums not yet reported (a restored peer
 // has none).
 function statusDotAccReset() {
-    const S = _simUnitState;
-    if (S) S.columns.stAcc.fill(0);
+    if (typeof simUnitStDropPending === 'function') simUnitStDropPending();
 }
 let _statusCounts = null, _statusList = null;
 function statusPrepassRun() {
@@ -1419,18 +1446,18 @@ function statusPrepassRun() {
             _shrinePendingFixed[o] += v;
         }
     }
-    const C = S.columns, EV = C.stEv, DOT = C.stDot, owners = S.owners;
+    const C = S.columns, EV = C.stEv, DOT = C.stDt, IX = C.stIx, owners = S.owners;
     // (Each job's slots with events, in slot order: the kernel's lists;
     // what is done with them does not depend on their order.)
     const LIST = _statusList;
     for (let k = 0; k < chunks; k++) {
         for (let j = k * STATUS_PREPASS_CHUNK, je = j + _statusCounts[k]; j < je; j++) {
-            const s = LIST[j], ev = EV[s];
+            const s = LIST[j], r = IX[s], ev = EV[r];
             if (ev === 0) continue;
-            EV[s] = 0;
+            EV[r] = 0;
             const u = owners[s];
             if (!u || u._si !== s) continue;
-            if (ev & 1) recordDamageVisual(u, DOT[s]);
+            if (ev & 1) recordDamageVisual(u, DOT[r]);
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
@@ -2486,7 +2513,35 @@ function _simTrapAlloc() {
         simParallelBind('mv.trapK', _simTrapK); simParallelBind('mv.trapL', _simTrapL);
     }
     _simTrapK.fill(0); _simTrapL.fill(0);
+    _simTrapChunks.clear();
     _simTrapOwnersDirty.add(-1);
+}
+// The chunks with a trap the kernel applies (kinds 1-5), and how many such
+// tiles each has: the units around them are the most that take a status
+// record in the movement kernel (_simTrapUnitsBound).
+const _simTrapChunks = new Map();
+let _simTrapNbStamp = null, _simTrapNbEpoch = 0;
+function _simTrapChunkOf(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W; return CHUNK_SIZE === 1 ? t : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE); }
+// Units in the chunks with a trap and those beside them (a unit meets its
+// floor where it stood at the tick's start, or a tile on after the
+// occupancy's swaps and pushes): from the spatial counts, O(trap chunks).
+function _simTrapUnitsBound() {
+    if (!_simTrapK || !SIM_TRAP_KERNEL || !_simTrapChunks.size || !spatialUnitsComplex) return 0;
+    const nch = CHUNKS_W * CHUNKS_H, C = spatialUnitsComplex, st = spatialUnitsComplexStridePerChunk, np = spatialUnitsComplexPlayerCount;
+    if (!_simTrapNbStamp || _simTrapNbStamp.length !== nch) { _simTrapNbStamp = new Int32Array(nch); _simTrapNbEpoch = 0; }
+    if (++_simTrapNbEpoch === 0x7fffffff) { _simTrapNbStamp.fill(0); _simTrapNbEpoch = 1; }
+    const M = _simTrapNbStamp, ep = _simTrapNbEpoch;
+    let n = 0;
+    for (const c of _simTrapChunks.keys()) {
+        const cx = c % CHUNKS_W, cy = (c - cx) / CHUNKS_W;
+        for (let y = Math.max(0, cy - 1); y <= Math.min(CHUNKS_H - 1, cy + 1); y++) for (let x = Math.max(0, cx - 1); x <= Math.min(CHUNKS_W - 1, cx + 1); x++) {
+            const k = y * CHUNKS_W + x;
+            if (M[k] === ep) continue;
+            M[k] = ep;
+            for (let o = 0, b = k * st; o < np; o++) n += C[b + o];
+        }
+    }
+    return n;
 }
 function simTrapDirty(gx, gy) { if (_simTrapK && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simTrapDirtyQ.push(gy * GRID_W + gx); }
 function simTrapResearchDone(owner) { _simTrapOwnersDirty.add(Number.isInteger(owner) ? owner : -1); }
@@ -2498,6 +2553,11 @@ function _simTrapRefresh(t) {
     if (spec && tileEntityRef[gy] && tileEntityRef[gy][gx] === item) {
         k = spec[0];
         l = Math.max(1, Math.min(255, clampThingLevel(getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1)) || 1)));
+    }
+    const was = _simTrapK[t];
+    if ((was >= 1 && was <= 5) !== (k >= 1 && k <= 5)) {
+        const c = _simTrapChunkOf(t), m = (_simTrapChunks.get(c) || 0) + (k >= 1 && k <= 5 ? 1 : -1);
+        if (m > 0) _simTrapChunks.set(c, m); else _simTrapChunks.delete(c);
     }
     _simTrapK[t] = k; _simTrapL[t] = l;
 }
@@ -2648,7 +2708,7 @@ function _simAreaCsr() {
 let _simMoveSpendTypes = null, _simMovePost = null, _simMovePostC = null, _simScoutT = null;
 // The kernel's attacks (unit holds, mvFlags 4): attacker and target slots per
 // chunk of SIM_MOVE_CHUNK, how many per chunk; chunks this tick (0: none).
-let _simMoveHitA = null, _simMoveHitT = null, _simMoveHitC = null, _simMoveHitChunks = 0;
+let _simMoveHitA = null, _simMoveHitT = null, _simMoveHitC = null, _simMoveHitSC = null, _simMoveHitChunks = 0;
 // (The occupancy jobs' second-pass lists: mv.rs move_job.)
 let _simMoveWork = null;
 let SIM_KERNEL_FIRE = true;
@@ -2681,6 +2741,9 @@ function simMoveRun() {
             if (a >= 0 && !ok[a * SIM_MOVE_BOX_STEPS + RE[s]]) _simMoveEnsureAreaBox(a, RE[s]);
         }
     }
+    // (Room for a status record for every unit a floor trap may meet: the
+    // kernel takes them on the helpers, mv.rs floor_hit.)
+    if (typeof simUnitStReserve === 'function') simUnitStReserve(_simTrapUnitsBound() + 64);
     const P = _simParams, CH = SIM_MOVE_CHUNK;
     P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = TICK_RATE; P[4] = 0; P[5] = GRID_W; P[6] = GRID_H;
     P[7] = TILE; P[8] = UNIT_POSITION_QUANTIZATION; P[9] = spatialBlockCols; P[10] = spatialBlockRows;
@@ -2725,6 +2788,8 @@ function simMoveRun() {
         simParallelBind('mv.hita', _simMoveHitA); simParallelBind('mv.hitt', _simMoveHitT);
     }
     if (!_simMoveHitC || _simMoveHitC.length < hitChunks) { _simMoveHitC = simHeapArrayAuto(Int32Array, Math.max(64, hitChunks * 2)); simParallelBind('mv.hitc', _simMoveHitC); }
+    // (Each chunk's attacks with a status style, mv.rs hit_sty_count.)
+    if (!_simMoveHitSC || _simMoveHitSC.length < _simMoveHitC.length) { _simMoveHitSC = simHeapArrayAuto(Int32Array, _simMoveHitC.length); simParallelBind('mv.hitsc', _simMoveHitSC); }
     _simMoveHitChunks = hitChunks;
     // (The kernel's epilogue: the index columns of units in other tiles, the
     // node steps' charges per chunk, owner and type.)
@@ -2777,6 +2842,7 @@ function simMoveRun() {
         const J=occupancyJobs(_simMovePostC,P[54]===1&&_sep?_sep.exc:null,_simMoveChFix,NPa+1);
         for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase]);}}
     }else simParallelRun(SIM_KERNEL_MOVE, chunks);
+    if (typeof simUnitStSettle === 'function') simUnitStSettle();
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
     _spatialKernelMoves = true;
     _simMoveChargeSteps(chunks, NPa, NT, names);

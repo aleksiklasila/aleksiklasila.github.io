@@ -181,6 +181,45 @@ impl Scalar for U16I32 { type Value=i32; #[inline(always)] fn load(self)->i32 { 
 #[inline(always)]
 pub fn sat16(v: i32) -> u16 { if v <= 0 { 0 } else if v >= 65535 { 65535 } else { v as u16 } }
 
+// Status records (sim_unit_state.js SIM_UNIT_ST_SIDE): unit.stIx a slot's
+// record (0 none: record 0 holds zeros, never written). The pool's words
+// (st.hdr): [0] records on the free stack (st.free), [1] the next never used,
+// [2] records, [3] takes that found no room. A phase only takes (the hits,
+// floor traps) or only gives back (the status pre-pass): a pop needs only a
+// compare-exchange on [0], a push only an add.
+/// Slot q's record taken (fresh records are zeros): its index, 0 when the
+/// pool had no room (counted in [3]; room is made before each phase).
+#[inline(never)]
+pub unsafe fn st_take(hdr: *mut i32, free: *const i32, stix: *mut i32, q: usize) -> i32 {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    let top = &*(hdr as *const AtomicI32);
+    let mut n = top.load(Ordering::Acquire);
+    while n > 0 {
+        match top.compare_exchange_weak(n, n - 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                let r = *free.add((n - 1) as usize);
+                *stix.add(q) = r;
+                return r;
+            }
+            Err(v) => n = v,
+        }
+    }
+    let r = (&*(hdr.add(1) as *const AtomicI32)).fetch_add(1, Ordering::AcqRel);
+    if r < *hdr.add(2) {
+        *stix.add(q) = r;
+        return r;
+    }
+    (&*(hdr.add(3) as *const AtomicI32)).fetch_add(1, Ordering::Relaxed);
+    0
+}
+/// Record r onto the free stack (its fields zeroed by the caller first).
+#[inline(always)]
+pub unsafe fn st_give(hdr: *mut i32, free: *mut i32, r: i32) {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    let i = (&*(hdr as *const AtomicI32)).fetch_add(1, Ordering::AcqRel);
+    *free.add(i as usize) = r;
+}
+
 // =====================================================================
 // SEPARATION
 // =====================================================================

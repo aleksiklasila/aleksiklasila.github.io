@@ -14,7 +14,9 @@ function reader(n) {
     ctx.importScripts = (...files) => { for (const f of files) vm.runInContext(fs.readFileSync(path.join(dir, f.split('?')[0]), 'utf8'), ctx); };
     vm.runInContext(code, ctx);
     const C = {};
-    for (const k of ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'teleportHideTicks', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE']) C[k] = new Float32Array(n);
+    for (const k of ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE']) C[k] = new Float32Array(n);
+    for (const k of ['stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh']) C[k] = new Float32Array(n + 1);
+    C.stIx = new Int32Array(n);
     const M = ctx.simMetaViews(new SharedArrayBuffer(n * 48), n);
     for (let s = 0; s < n; s++) { C.id[s] = M.id[s] = s + 1; C.live[s] = 1; C.energy[s] = 20; C.r[s] = 8; M.type[s] = 1; }
     const send = data => { ctx.onmessage({ data }); while (jobs.length) jobs.shift()(); };
@@ -70,10 +72,10 @@ for (const step of [1, 10, 20]) {
     const R = reader(1), C = R.C;
     C.x[0] = C.prevX[0] = 100; R.tick(0);
     C.x[0] = 130; R.tick(1);
-    C.x[0] = 2000; C.teleportHideTicks[0] = 2;
+    C.x[0] = 2000; C.stIx[0] = 1; C.stTh[1] = 2;
     const hidden = R.tick(2);
     assert.equal(hidden[0][0], 2000); assert.equal(hidden[2][0], 2000);
-    C.teleportHideTicks[0] = 0; C.prevX[0] = C.x[0]; C.x[0] += 10;
+    C.stTh[1] = 0; C.stIx[0] = 0; C.prevX[0] = C.x[0]; C.x[0] += 10;
     assert.equal(R.tick(3)[2][0], 2000, 'portal exit continues at its destination');
     C.id[0] = R.M.id[0] = 99; C.x[0] = C.prevX[0] = 500;
     const reused = R.tick(4);

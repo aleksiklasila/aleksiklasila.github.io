@@ -539,7 +539,7 @@ SIM_KERNELS[SIM_KERNEL_INDEX_IDSORT] = function (R, P, chunk) { _simRust(_simIxI
 // its last frame.
 const SIM_KERNEL_PV_MARKS = 85;
 const _simPvMarksW = _simWK(['unit.live', 'unit.dead', 'unit.id', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.energy', 'unit.owner', 'unit.commandState',
-    'unit.effectiveLevel', 'unit.attackFlash', 'unit.stOn', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvS', '?-', '?-', '?-', '?-',
+    'unit.effectiveLevel', 'unit.attackFlash', 'unit.stIx', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvS', '?-', '?-', '?-', '?-',
     'unit.vx', 'unit.vy', '?-', '?unit.mvTgX', '?unit.mvTgY', '?unit.pvOD']);
 SIM_KERNELS[SIM_KERNEL_PV_MARKS] = function (R, P, chunk) { _simRust(_simPvMarksW, P, chunk, 'k_pv_marks', 'PV_MARKS'); };
 const SIM_KERNEL_IXD_SCAN = 78, SIM_KERNEL_IXD_APPLY = 79, SIM_KERNEL_IXD_MERGE = 80, SIM_KERNEL_IXD_COPY = 81, SIM_KERNEL_IXD_OWNERS = 82, SIM_KERNEL_IXD_INIT = 83;
@@ -749,8 +749,9 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
     const X = R['unit.x'], Y = R['unit.y'], VX = R['unit.vx'], VY = R['unit.vy'];
     const PREVX = R['unit.prevX'], PREVY = R['unit.prevY'], ID = R['unit.id'];
     const ENERGY = R['unit.energy'], OWNER = R['unit.owner'], RAD = R['unit.r'], CMD = R['unit.commandState'];
-    const BURN = R['unit.burning'], POISON = R['unit.poisoned'], FROZEN = R['unit.frozen'], WET = R['unit.wet'], SAND = R['unit.sandy'];
-    const WATCH = R['unit.watched'], HIDE = R['unit.teleportHideTicks'], TRANSFER = R['unit.workerTransferCooldown'];
+    // (The status timers by the slot's status record, unit.stIx: 0 the zeros'.)
+    const STIX = R['unit.stIx'], BURN = R['unit.stBu'], POISON = R['unit.stPo'], FROZEN = R['unit.stFr'], WET = R['unit.stWe'], SAND = R['unit.stSa'];
+    const WATCH = R['unit.stWa'], HIDE = R['unit.stTh'], TRANSFER = R['unit.workerTransferCooldown'];
     const LEVEL = R['unit.effectiveLevel'], BASE = R['unit.unitLevel'], FLASH = R['unit.attackFlash'];
     const slots = R['frame.slot'], lastX = R['frame.lastX'], lastY = R['frame.lastY'];
     const targetX = R['frame.targetX'], targetY = R['frame.targetY'], still = R['frame.still'], flash = R['frame.flash'];
@@ -758,9 +759,10 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
     for (let i = chunk * P[2], end = Math.min(P[1], i + P[2]); i < end; i++) {
         const s = F.order[i], u = slots[s], x = X[u] * 0.125, y = Y[u] * 0.125, vx = VX[u] || 0, vy = VY[u] || 0;
         F.id[s] = ID[u]; F.owner[s] = OWNER[u]; F.energy[s] = ENERGY[u]; F.r[s] = RAD[u]; F.cmd[s] = CMD[u] | 0;
-        F.flags[s] |= (BURN[u] > 0 ? SIM_UF_BURNING : 0) | (POISON[u] > 0 ? SIM_UF_POISONED : 0)
-            | (FROZEN[u] > 0 ? SIM_UF_FROZEN : 0) | (WET[u] > 0 ? SIM_UF_WET : 0) | (SAND[u] > 0 ? SIM_UF_SANDY : 0)
-            | (WATCH[u] > 0 ? SIM_UF_WATCHED : 0) | (HIDE[u] > 0 ? SIM_UF_HIDDEN : 0) | (TRANSFER[u] > 0 ? SIM_UF_TRANSFER : 0);
+        const sr = STIX[u];
+        F.flags[s] |= (sr !== 0 ? (BURN[sr] > 0 ? SIM_UF_BURNING : 0) | (POISON[sr] > 0 ? SIM_UF_POISONED : 0)
+            | (FROZEN[sr] > 0 ? SIM_UF_FROZEN : 0) | (WET[sr] > 0 ? SIM_UF_WET : 0) | (SAND[sr] > 0 ? SIM_UF_SANDY : 0)
+            | (WATCH[sr] > 0 ? SIM_UF_WATCHED : 0) | (HIDE[sr] > 0 ? SIM_UF_HIDDEN : 0) : 0) | (TRANSFER[u] > 0 ? SIM_UF_TRANSFER : 0);
         F.level[s] = LEVEL[u] > 0 ? LEVEL[u] : -1;
         F.blevel[s] = BASE[u] > 0 ? BASE[u] : -1;
         F.flash[s] = Math.max(0, Math.min(255, FLASH[u]));
@@ -1045,11 +1047,13 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.mvDest', 'unit.mvCD', 'unit.mvCT', 'unit.mvCVx', 'unit.mvCVy', 'unit.mvCTl', 'unit.mvCN', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
     'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', '?-', '?-', '?-', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
-    'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.frozen', 'unit.sandy',
+    'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.stFr', 'unit.stSa',
     '?-', '?-', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
     'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', '?-', '?-', '?-', '?-', '?-', '?-',
     'unit.fLsX', 'unit.fLsY', '?-', '?-', '?-', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
-    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', '?-', '?-', '?-', '?-',
+    // (94, 95: the status records' pool words and free stack, mv.rs floor_hit.)
+    // (96, 97: the attackers' styles and each chunk's count of attacks with a status style, mv.rs hit_sty_count.)
+    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', 'st.hdr', 'st.free', '?unit.atkSty', '?mv.hitsc',
     '?-', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', '?-' ,
@@ -1061,9 +1065,9 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     '?sep.px', '?sep.py', '?sep.ov', '?sep.hit', '?unit.sepCx'];
 // (From word 268, after the navigation profiles' words and their lengths.)
 // (?mv.lookc: the flow looks shared by every thread, see mv.rs look_cache.)
-// (?unit.burning... ?mv.tres: floor traps applied in the kernel, mv.rs floor_hit.)
+// (?unit.stBu... ?mv.tres: floor traps applied in the kernel, mv.rs floor_hit; the status fields by record, unit.stIx.)
 const _SIM_MOVE_WNAMES2 = ['?-', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
-    '?unit.burning', '?unit.burnTickDamage', '?unit.poisoned', '?unit.poisonTickDamage', '?unit.frozen', '?unit.iceTickDamage', '?unit.wet', '?unit.sandy', '?unit.stOn', '?unit.upT',
+    '?unit.stBu', '?unit.stBd', '?unit.stPo', '?unit.stPd', '?unit.stFr', '?unit.stId', '?unit.stWe', '?unit.stSa', 'unit.stIx', '?unit.upT',
     '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG',
     // (Word 292: each slot's worker record, the wk* arrays' index; 293, 294
     // the attack carry and shots, mv.rs fire.)
@@ -1464,9 +1468,11 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     '?upk.h', '?eff.tver', 'unit.esVer', 'unit.statRow', '?eff.rowOf', '?eff.rowVer', '?eff.rSpd', '?eff.rCost', '?eff.rRD', '?eff.rRA', '?eff.rRK', '?eff.rLzW',
     '?eff.rCb', '?eff.rCd', '?eff.rDmg', '?eff.rVis', '?eff.rChs', 'unit.mvOn', 'unit.mvFlags', 'unit.mvReach', '?-' , '?-' , '?-' ,
     'unit.mvReachD', 'unit.mvReachA', 'unit.mvShoot', 'unit.mvRangeK', 'unit.lzFlags', '?-' , '?-' , '?-' , 'unit.spArea', 'unit.energy',
-    'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.watched', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2',
+    'unit.maxE', '?mv.areaBoxOk', '?eff.rVsA', 'unit.stWa', 'unit.wTeam', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsA', 'unit.vsP1', 'unit.vsP2',
     // (Base entries: units behind their stat tables, P[23].)
-    '?eff.bVer', '?eff.bRad', '?eff.bMaxE', '?area.nb', '?eff.bcnt']);
+    '?eff.bVer', '?eff.bRad', '?eff.bMaxE', '?area.nb', '?eff.bcnt',
+    // (68: its status record, for unit.stWa.)
+    'unit.stIx']);
 // The effective levels' counts: the units of each lane (owner, type) in each area, a snapshot (things_utils.js _effAreaHistEnsure).
 const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist']);
 SIM_KERNELS[SIM_KERNEL_EFF_AREA_HIST] = function (R, P, chunk) { _simRust(_simEffAreaHistW, P, chunk, 'k_eff_area_hist', 'EFF_AREA_HIST'); };
@@ -1682,9 +1688,9 @@ function _snapOrderMix(i, id) {
 }
 const SIM_KERNEL_SNAP_MERGE = 65;
 const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
-    'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.poisoned', 'unit.burning', 'unit.frozen', 'unit.wet', 'unit.sandy', 'unit.watched',
+    'unit.attackTimer', 'unit.attackFlash', 'unit.stTh', 'unit.stPo', 'unit.stBu', 'unit.stFr', 'unit.stWe', 'unit.stSa', 'unit.stWa',
     'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
-    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS']);
+    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS', 'unit.stIx']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
 const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
 SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };
@@ -1693,17 +1699,18 @@ SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapM
 // at slot ix.slots[i]) its position copied (unit.x0, y0), and if not dead,
 // its status effects counted down and their
 // damage dealt, then its attack timers counted down, as Unit.update did
-// them. unit.stEv: 1 damaged (unit.stDot: how much), 2 its watch ended,
+// them. unit.stEv: 1 damaged (unit.stDt: how much), 2 its watch ended,
 // 4 died; st.count[chunk]: the chunk's units with events. Damage over time
 // is reported (event 1, for its flash and the shrines) every P[3] ticks per
 // unit ((tick + id) % P[3] === 0, tick P[2]) and when it dies, as the sum
-// since the last report (unit.stAcc): the same damage, its record later by
+// since the last report (unit.stAc): the same damage, its record later by
 // at most P[3] - 1 ticks.
 // P: [0] units, [1] per job, [2] tick, [3] report period.
-const _simStatusW = _simWK(['unit.live', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.teleportHideTicks', 'unit.burning',
-    'unit.burnTickDamage', 'unit.poisoned', 'unit.poisonTickDamage', 'unit.frozen', 'unit.iceTickDamage', 'unit.wet', 'unit.sandy', 'unit.watched', 'unit.stEv',
-    'unit.stDot', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAcc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
-    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stOn', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr', '?unit.atkL', '?unit.wtcL']);
+// (The status fields by record, unit.stIx: sim_unit_state.js SIM_UNIT_ST_SIDE.)
+const _simStatusW = _simWK(['unit.live', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.stTh', 'unit.stBu',
+    'unit.stBd', 'unit.stPo', 'unit.stPd', 'unit.stFr', 'unit.stId', 'unit.stWe', 'unit.stSa', 'unit.stWa', 'unit.stEv',
+    'unit.stDt', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
+    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stIx', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr', '?unit.atkL', '?unit.wtcL', 'st.hdr', 'st.free']);
 SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) { _simRust(_simStatusW, P, chunk, 'k_status', 'STATUS'); };
 
 // Owners per tile of the unit index (ix.omask: bit p set when a unit of
@@ -1861,13 +1868,14 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 // targets' sums (wasm/src/k.rs k_hits).
 const SIM_KERNEL_HITS = 60;
 const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', '?-' , 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
-    'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.hWatchK', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets', '?unit.x', '?unit.y']);
+    'unit.hAcc', 'unit.hTouch', 'hit.rsty', 'hit.rbd', 'hit.rpd', 'hit.rwk', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets', '?unit.x', '?unit.y',
+    'unit.hSx']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).
 const SIM_KERNEL_HITS_APPLY = 66;
-const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'unit.hSty', 'unit.hBurnD', 'unit.hPoiD', 'unit.energy', 'unit.dead', 'unit.owner', 'unit.stOn',
-    'unit.burning', 'unit.burnTickDamage', 'unit.wet', 'unit.frozen', 'unit.poisoned', 'unit.poisonTickDamage', 'hit.shr', 'unit.hWatchK', 'unit.watched', 'unit.wTeam', 'hit.wlist', 'hit.cnt']);
+const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'hit.rsty', 'hit.rbd', 'hit.rpd', 'unit.energy', 'unit.dead', 'unit.owner', 'unit.stIx',
+    'unit.stBu', 'unit.stBd', 'unit.stWe', 'unit.stFr', 'unit.stPo', 'unit.stPd', 'hit.shr', 'hit.rwk', 'unit.stWa', 'unit.wTeam', 'hit.wlist', 'hit.cnt', 'st.hdr', 'st.free', 'unit.hSx']);
 SIM_KERNELS[SIM_KERNEL_HITS_APPLY] = function (R, P, chunk) { _simRust(_simHitsApplyW, P, chunk, 'k_hits_apply', 'HITS_APPLY'); };
 
 const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', '?-', 'unit.cbTick', '?-', 'unit.cbRangeS']);

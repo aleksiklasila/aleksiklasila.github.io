@@ -4,7 +4,7 @@
     // (SIM_SF_RESEARCH_TASK). A unit's is 65536 (SIM_UF_GHOST).
     const STRUCT_GHOST_FLAG = 4194304;
     const COLUMN_BAKE_WORKER_URL = typeof document !== 'undefined' && document.currentScript?.src
-        ? new URL('renderer3d-lod-worker.js?v=20261024-ui5',document.currentScript.src).href : null;
+        ? new URL('renderer3d-lod-worker.js?v=20261025-st1',document.currentScript.src).href : null;
     function createShader(gl, type, source) {
         let shader = gl.createShader(type);
         gl.shaderSource(shader, source);

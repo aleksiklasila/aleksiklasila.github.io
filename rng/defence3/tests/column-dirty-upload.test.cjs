@@ -25,16 +25,19 @@ const send = data => {
     while (jobs.length) jobs.shift()();
     assert.equal(messages.some(m => m.type === 'error'), false, JSON.stringify(messages.filter(m => m.type === 'error')));
 };
-const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'burning', 'poisoned', 'frozen', 'wet', 'sandy',
-    'watched', 'teleportHideTicks', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE'];
+// (Status timers by status record, stIx: here record s + 1 for slot s.)
+const ST = ['stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh'];
+const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', ...ST,
+    'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stIx'];
 let C = null, M = null, cap = 0, n = 0, nextId = 1;
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
 function bind(newCap) {
     const C2 = {};
-    for (const k of COLS) C2[k] = k === 'id' ? new Int32Array(new SharedArrayBuffer(newCap * 4)) : new Float32Array(new SharedArrayBuffer(newCap * 4));
+    for (const k of COLS) C2[k] = k === 'id' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(newCap * 4)) : new Float32Array(new SharedArrayBuffer((newCap + 1) * 4));
+    for (let s = 0; s < newCap; s++) C2.stIx[s] = s + 1;
     const M2 = W.simMetaViews(new SharedArrayBuffer(newCap * vm.runInContext("SIM_META_SLOT_BYTES", W)), newCap);
     M2.id.fill(-1); C2.id.fill(-1);
-    if (C) { for (const k of COLS) C2[k].set(C[k].subarray(0, n)); for (const k of ['id', 'type', 'vision', 'watchedBy']) M2[k].set(M[k].subarray(0, n)); }
+    if (C) { for (const k of COLS) if (k !== 'stIx') C2[k].set(C[k].subarray(0, ST.includes(k) ? n + 1 : n)); for (const k of ['id', 'type', 'vision', 'watchedBy']) M2[k].set(M[k].subarray(0, n)); }
     C = C2; M = M2; cap = newCap;
     send({ type: 'bind', epoch: 1, generation: 1, columns: C, meta: { buf: M.buf, cap }, metaRev });
 }
@@ -122,7 +125,7 @@ for (tick = 1; tick <= 500; tick++) {
     if (rnd() < .2) { const s = Math.floor(rnd() * n); C.x[s] += 500; }
     for (let k = 0; k < 4; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) C.energy[s] -= 3; }
     for (let k = 0; k < 3; k++) { const s = Math.floor(rnd() * n); C.attackFlash[s] = 8; }
-    if (rnd() < .3) { const s = Math.floor(rnd() * n); C.burning[s] = C.burning[s] > 0 ? 0 : 5; }
+    if (rnd() < .3) { const s = Math.floor(rnd() * n); C.stBu[s + 1] = C.stBu[s + 1] > 0 ? 0 : 5; }
     if (rnd() < .1) { const s = Math.floor(rnd() * n); C.owner[s] = 1 - C.owner[s]; }
     // (+0 / -0: equal as numbers, not as bits; a word of two zero radii.)
     if (rnd() < .3) { const s = 2 * Math.floor(rnd() * n / 2); C.r[s] = 0; C.r[s + 1] = Object.is(C.r[s + 1], -0) ? 0 : -0; }

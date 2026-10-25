@@ -44,11 +44,11 @@ const A = reader(true), B = reader(false);
 const both = data => { A.send(data); B.send(data); };
 
 // ---- the simulation's columns (shared by both readers, read only) ----
-const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'burning', 'poisoned', 'frozen', 'wet', 'sandy',
-    'watched', 'teleportHideTicks', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stOn', 'cmMode', 'cmT'];
+const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh',
+    'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stIx', 'cmMode', 'cmT'];
 const cap = 90000, SLOT = vm.runInContext('SIM_FRAME_SLOT_BYTES', B.ctx);
 const C = {};
-for (const k of COLS) C[k] = k === 'id' || k === 'cmT' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer(cap * 4));
+for (const k of COLS) C[k] = k === 'id' || k === 'cmT' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer((cap + 1) * 4));
 const M = B.ctx.simMetaViews(new SharedArrayBuffer(cap * 48), cap);
 C.id.fill(-1); M.id.fill(-1); C.cmT.fill(-1);
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
@@ -77,7 +77,7 @@ for (let tick = 1; tick <= 60; tick++) {
     for (let k = 0; k < 200; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += rnd() * 3; C.vx[s] = 1; } }
     for (let k = 0; k < 50; k++) C.attackFlash[Math.floor(rnd() * n)] = 8;
     for (let k = 0; k < 100; k++) C.energy[Math.floor(rnd() * n)] -= 1;
-    for (let k = 0; k < 20; k++) C.burning[Math.floor(rnd() * n)] = rnd() < .5 ? 3 : 0;
+    for (let k = 0; k < 20; k++) { const s = Math.floor(rnd() * n); C.stIx[s] = s + 1; C.stBu[s + 1] = rnd() < .5 ? 3 : 0; }
     // (From tick 50 units die and are made only in the first helper's slots.)
     const span = tick >= 50 ? 10000 : n;
     for (let k = 0; k < 40; k++) { const s = Math.floor(rnd() * span); C.live[s] = 0; C.dead[s] = 1; }

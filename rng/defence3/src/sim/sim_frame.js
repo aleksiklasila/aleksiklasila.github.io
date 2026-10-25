@@ -275,7 +275,7 @@ function simFrameEncode() {
         // Numeric status/level/flash fields are gathered by the frame kernel.
         // Calling the generic status accessors here used most of the encoder's
         // time at 100k units, despite the values already living in columns.
-        F.light[s] = C.owner[slot] === localPlayerId || (C.watched[slot] > 0 && u.watchedByTeam === localPlayerId)
+        F.light[s] = C.owner[slot] === localPlayerId || (C.stWa[C.stIx[slot]] > 0 && u.watchedByTeam === localPlayerId)
             // (At least the fog's full light: see presentation_worker.js.)
             ? Math.max(VISIBILITY_LIGHT_NORMALIZATION_RANGE, areaStepsVisionTiles(F.vision[s])) : 0;
         // Look: activity, facing, walk phase, status face, own light, panel.

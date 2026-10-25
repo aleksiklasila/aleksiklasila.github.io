@@ -28,11 +28,11 @@ function reader(delta) {
 const A = reader(true), B = reader(false);
 const both = data => { A.send(data); B.send(data); };
 
-const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'burning', 'poisoned', 'frozen', 'wet', 'sandy',
-    'watched', 'teleportHideTicks', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stOn', 'cmMode', 'cmT', 'pvAt'];
+const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh',
+    'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stIx', 'cmMode', 'cmT', 'pvAt'];
 const cap = 30000, SLOT = vm.runInContext('SIM_FRAME_SLOT_BYTES', B.ctx);
 const C = {};
-for (const k of COLS) C[k] = k === 'id' || k === 'cmT' || k === 'pvAt' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer(cap * 4));
+for (const k of COLS) C[k] = k === 'id' || k === 'cmT' || k === 'pvAt' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer((cap + 1) * 4));
 // The simulation's marks (wasm/src/k.rs k_pv_marks), as the kernel makes them
 // at a tick's end: the tick of each slot's last visible change.
 const PV = { id: new Int32Array(cap).fill(0), e: new Float32Array(cap), o: new Float32Array(cap), c: new Float32Array(cap), l: new Int16Array(cap), v: new Uint8Array(cap) };
@@ -41,7 +41,7 @@ function marks(tick) {
         const alive = C.live[s] !== 0 && C.dead[s] === 0, idv = alive ? C.id[s] : -1, lv = C.effectiveLevel[s], li = lv >= 0 && lv < 32767 ? Math.trunc(lv) : -1;
         const vel = (C.vx[s] !== 0 || C.vy[s] !== 0 ? 1 : 0) | (C.attackFlash[s] !== 0 ? 2 : 0);
         const changed = idv !== PV.id[s] || (alive && (C.x[s] !== C.prevX[s] || C.y[s] !== C.prevY[s] || C.energy[s] !== PV.e[s] || C.owner[s] !== PV.o[s]
-            || C.commandState[s] !== PV.c[s] || li !== PV.l[s] || C.stOn[s] !== 0 || (C.cmMode[s] & 4) !== 0 || vel !== 0 || PV.v[s] !== 0));
+            || C.commandState[s] !== PV.c[s] || li !== PV.l[s] || C.stIx[s] !== 0 || (C.cmMode[s] & 4) !== 0 || vel !== 0 || PV.v[s] !== 0));
         if (changed) { C.pvAt[s] = tick; PV.v[s] = vel; PV.id[s] = idv; PV.e[s] = C.energy[s]; PV.o[s] = C.owner[s]; PV.c[s] = C.commandState[s]; PV.l[s] = li; }
     }
 }
@@ -74,8 +74,8 @@ for (let tick = 1; tick <= 90; tick++) {
     for (let k = 0; k < 30; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += rnd() * 3; C.vx[s] = 1; } }
     for (let k = 0; k < 30; k++) C.attackFlash[Math.floor(rnd() * n)] = 8;
     for (let k = 0; k < 60; k++) C.energy[Math.floor(rnd() * n)] -= 1;
-    for (let k = 0; k < 10; k++) { const s = Math.floor(rnd() * n), on = rnd() < .5; C.burning[s] = on ? 3 : 0; C.stOn[s] = on ? 1 : C.stOn[s]; }
-    for (let s = 0; s < n; s++) if (C.stOn[s] && !C.burning[s] && rnd() < .5) C.stOn[s] = 0;
+    for (let k = 0; k < 10; k++) { const s = Math.floor(rnd() * n), on = rnd() < .5; C.stBu[s + 1] = on ? 3 : 0; C.stIx[s] = on ? s + 1 : C.stIx[s]; }
+    for (let s = 0; s < n; s++) if (C.stIx[s] && !C.stBu[s + 1] && rnd() < .5) C.stIx[s] = 0;
     for (let k = 0; k < 5; k++) { const s = Math.floor(rnd() * n); C.owner[s] = 1 - C.owner[s]; }
     for (let k = 0; k < 5; k++) C.commandState[Math.floor(rnd() * n)] = 1 + Math.floor(rnd() * 3);
     for (let k = 0; k < 20; k++) { const s = Math.floor(rnd() * n); C.live[s] = 0; C.dead[s] = 1; }

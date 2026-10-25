@@ -17,7 +17,7 @@ const H = require('./net-harness.cjs');
     const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         const u = units.find(u => !u.dead && u._us), id = u.id;
         u._dotPending = 7; u._laserPending = 9; u._laserBeam = 2;
-        const out = { columns: [u._us.stAcc[u._si], u._us.lzAcc[u._si], u._us.lzBeam[u._si]] };
+        const out = { columns: [u._us.stAc[u._us.stIx[u._si]], u._us.lzAcc[u._si], u._us.lzBeam[u._si]] };
         snapFlushHistoryCaches();
         out.flushed = [u._dotPending, u._laserPending, u._laserBeam];
         // A whole snapshot and its restore.

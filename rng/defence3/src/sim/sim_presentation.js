@@ -59,8 +59,8 @@ function simPresentTickEnd() {
 }
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
-    'attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks',
-    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stOn','cmMode','cmT','pvAt','pvOD'];
+    'attackFlash','stBu','stPo','stFr','stWe','stSa','stWa','stTh',
+    'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stIx','cmMode','cmT','pvAt','pvOD'];
 
 function simPresentationStop() {
     const p = _simPresentation;
@@ -72,7 +72,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261024-ui5', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261025-st1', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -113,20 +113,25 @@ function simPresentationBind() {
     if (!p || !S) return;
     // (By the column itself, not its buffer: columns in the wasm heap all
     // share one, see sim_wasm.js.)
-    if (p.sourceBuffer !== S.columns.x) {
+    // (And again when the status records' pool grew: its arrays are new.)
+    if (p.sourceBuffer !== S.columns.x || p.stSource !== S.columns.stBu) {
         const columns = {};
         for (const k of SIM_PRESENT_COLUMNS) columns[k] = S.columns[k];
+        p.stSource = S.columns.stBu;
+        const grown = p.sourceBuffer !== S.columns.x;
         p.columns = columns; p.sourceBuffer = S.columns.x;
-        const old = p.meta;
-        p.meta = simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
-        p.meta.id.fill(-1);
-        if (old) for (const k of [...SIM_META_I32, ...SIM_META_F32, ...SIM_META_I16]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
-        else simPresentationSeedMetadata(p.meta);
-        // (metaRev: bumped when the metadata table changed in a way a frame
-        // must show at once (a slot's new unit) and at each cycle's end; the
-        // reader copies the table into a frame only when its revision moved.)
-        if (!p.metaRev) p.metaRev = new Int32Array(new SharedArrayBuffer(4));
-        Atomics.add(p.metaRev, 0, 1);
+        if (grown) {
+            const old = p.meta;
+            p.meta = simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
+            p.meta.id.fill(-1);
+            if (old) for (const k of [...SIM_META_I32, ...SIM_META_F32, ...SIM_META_I16]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
+            else simPresentationSeedMetadata(p.meta);
+            // (metaRev: bumped when the metadata table changed in a way a frame
+            // must show at once (a slot's new unit) and at each cycle's end; the
+            // reader copies the table into a frame only when its revision moved.)
+            if (!p.metaRev) p.metaRev = new Int32Array(new SharedArrayBuffer(4));
+            Atomics.add(p.metaRev, 0, 1);
+        }
         p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap}, metaRev:p.metaRev});
     }
     const strings = _simFrameStrings.list;

@@ -5856,7 +5856,7 @@ function _visCoverSyncUnit(e) {
             let steps=-1,p1=-1,p2=-1;
             if(active&&range>=0){
                 steps=range;const owner=c.owner[s];p1=owner>=0&&owner<C.players?owner:-1;
-                const watch=c.wTeam[s];if(c.watched[s]>0&&watch>=0&&watch<C.players&&watch!==p1)p2=watch;
+                const watch=c.wTeam[s];if(c.stWa[c.stIx[s]]>0&&watch>=0&&watch<C.players&&watch!==p1)p2=watch;
                 if(p1<0&&p2<0)steps=-1;
             }
             c.vsGen[s]=C.gen;c.vsR[s]=steps;c.vsP1[s]=p1;c.vsP2[s]=p2;c.vsA[s]=active?1:0;

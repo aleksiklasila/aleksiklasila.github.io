@@ -2506,8 +2506,7 @@ function snapDecodeState(S, options = null) {
         if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
         if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact(true);
-        // (Every unit's status timers looked at by the next pre-pass.)
-        if (typeof _simUnitState !== 'undefined' && _simUnitState && _simUnitState.columns.stOn) _simUnitState.columns.stOn.fill(1);
+        // (Every unit with a status holds a status record: its accessors took one.)
         // (A unit's effective tables are derived, not sent (preComputed /
         // preComputedEffective: non-enumerable, or its stat row): made again
         // from its base tables (sent) at its effective level, from the current

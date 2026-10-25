@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261024-ui5';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261025-st1';
 
 function _simClientCreate() {
     let c = {

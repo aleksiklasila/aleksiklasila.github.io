@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261024-ui5','sim_frame_world.js?v=20261024-ui5');
+importScripts('sim_frame.js?v=20261025-st1','sim_frame_world.js?v=20261025-st1');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
@@ -203,7 +203,7 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
         const A=dl.A;
         for (let c=0;c<STAMP_COPY.length;c++) {const D=F[STAMP_COPY[c]], S=A[STAMP_COPY[c]];for (let i=0;i<nc;i++) {const s=CL[i];D[s]=S[s];}}
     } else {
-        const VX=vis.x, VY=vis.y, VI=vis.id, SX=mot.x, SY=mot.y, CVX=C.vx, CVY=C.vy, AF=C.attackFlash, ON=C.stOn, TC=C.workerTransferCooldown, CM=C.cmMode;
+        const VX=vis.x, VY=vis.y, VI=vis.id, SX=mot.x, SY=mot.y, CVX=C.vx, CVY=C.vy, AF=C.attackFlash, ON=C.stIx, TC=C.workerTransferCooldown, CM=C.cmMode;
         const A=dl.A, PF=A.flash, PFL=A.flags, PVX=A.vx, PVY=A.vy, PEN=A.energy, POW=A.owner, PCM=A.cmd, CEN=C.energy, COW=C.owner, CCM=C.commandState;
         const FA=fullAt, bseq=dl.bseq, seq=dl.seq, K=dl.K, ph=dl.phase, B=DIRTY_BLOCK;
         BK.fill(0,0,nbk);
@@ -218,7 +218,7 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
             FID[s]=id;FORD[s0+count++]=s;
             let act=L[s]!==id;
             if (act) {changed=true;L[s]=id;}
-            else act=VI[s]!==id || VX[s]!==SX[s] || VY[s]!==SY[s] || CVX[s]!==0 || CVY[s]!==0 || PVX[s]!==0 || PVY[s]!==0 || AF[s]>0 || PF[s]>0 || (ON && ON[s]===1) || TC[s]>0
+            else act=VI[s]!==id || VX[s]!==SX[s] || VY[s]!==SY[s] || CVX[s]!==0 || CVY[s]!==0 || PVX[s]!==0 || PVY[s]!==0 || AF[s]>0 || PF[s]>0 || (ON && ON[s]!==0) || TC[s]>0
                 || (PFL[s]&FILL_STATUS)!==0 || CEN[s]!==PEN[s] || COW[s]!==POW[s] || CCM[s]!==PCM[s] || (CM && (CM[s]&4)!==0) || ((s>>8)%K)===ph;
             if (act) {AL[na++]=s;FA[s]=seq;BK[((s-s0)/B)|0]=1;}
             else if (FA[s]>bseq) CL[nc++]=s;
@@ -235,13 +235,13 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
     // a hidden flag; a restore starts a new reader. Ordinary movement always
     // continues from the preceding visual endpoint, including large steps.
     {
-        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing, H=C.teleportHideTicks;
+        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing, HT=C.stTh, HX=C.stIx;
         for (let i=0;i<na;i++) {
-            const s=AL[i], id=FID[s];
+            const s=AL[i], id=FID[s], h=HT[HX[s]];
             if (id<0) {VI[s]=-1;if (ES) ES[s]=0;continue;}
             const x=SX[s], y=SY[s];
             const ox=VX[s], oy=VY[s], gap=Math.abs(x-ox)+Math.abs(y-oy);
-            if (VI[s]!==id || H[s]>0) {DPX[s]=H[s]>0?x:SPX[s];DPY[s]=H[s]>0?y:SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
+            if (VI[s]!==id || h>0) {DPX[s]=h>0?x:SPX[s];DPY[s]=h>0?y:SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
             if (gap<VIS_REST) {DPX[s]=x;DPY[s]=y;DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;if (ES) ES[s]&=~1;continue;}
             // The usual crowd filter is unchanged. Beyond its lag budget,
             // increase only the endpoint's catch-up, never jump the start.
@@ -273,11 +273,11 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
     {const D=F.blevel,S=C.unitLevel;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
     {const D=F.flash,S=C.attackFlash;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>255?255:v>0?v:0;}}
     {
-        // (The status timers only of units with one running, stOn: the
-        // rest read one byte instead of seven columns.)
-        const D=F.flags, M=meta.flags, B=C.burning, P=C.poisoned, Z=C.frozen, W=C.wet, Y=C.sandy, V=C.watched, H=C.teleportHideTicks, T=C.workerTransferCooldown, ON=C.stOn;
-        for (let i=0;i<na;i++) {const s=AL[i];D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (ON && !ON[s] ? 0 : (B[s]>0?SIM_UF_BURNING:0) | (P[s]>0?SIM_UF_POISONED:0) | (Z[s]>0?SIM_UF_FROZEN:0) | (W[s]>0?SIM_UF_WET:0)
-            | (Y[s]>0?SIM_UF_SANDY:0) | (V[s]>0?SIM_UF_WATCHED:0) | (H[s]>0?SIM_UF_HIDDEN:0));}
+        // (The status timers only of units with a status record (stIx, the
+        // timers by record): the rest read one word instead of seven columns.)
+        const D=F.flags, M=meta.flags, B=C.stBu, P=C.stPo, Z=C.stFr, W=C.stWe, Y=C.stSa, V=C.stWa, H=C.stTh, T=C.workerTransferCooldown, ON=C.stIx;
+        for (let i=0;i<na;i++) {const s=AL[i], r=ON[s];D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (r===0 ? 0 : (B[r]>0?SIM_UF_BURNING:0) | (P[r]>0?SIM_UF_POISONED:0) | (Z[r]>0?SIM_UF_FROZEN:0) | (W[r]>0?SIM_UF_WET:0)
+            | (Y[r]>0?SIM_UF_SANDY:0) | (V[r]>0?SIM_UF_WATCHED:0) | (H[r]>0?SIM_UF_HIDDEN:0));}
     }
     {
         // The light a unit is drawn with at least: a unit that is a light
@@ -287,8 +287,8 @@ function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
         // own area got half, and the fog's light of an area it had just
         // walked into rises over most of a second: it dimmed and brightened
         // at every border it crossed.)
-        const D=F.light, O=F.owner, V=C.watched, WB=F.watchedBy, VIS=F.vision, ON=C.stOn, full=lightFull;
-        for (let i=0;i<na;i++) {const s=AL[i];D[s]=O[s]===player || ((!ON || ON[s]) && V[s]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;}
+        const D=F.light, O=F.owner, V=C.stWa, WB=F.watchedBy, VIS=F.vision, ON=C.stIx, full=lightFull;
+        for (let i=0;i<na;i++) {const s=AL[i], r=ON[s];D[s]=O[s]===player || (r!==0 && V[r]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;}
     }
     {
         const X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flash, MO=F.mode, ST=F.status, AM=F.amount;

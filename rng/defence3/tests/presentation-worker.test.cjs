@@ -12,7 +12,8 @@ c.importScripts=(...files)=>{for(const f of files)vm.runInContext(fs.readFileSyn
 vm.runInContext(fs.readFileSync(path.join(root,'presentation_worker.js'),'utf8'),c);
 vm.runInContext(`
 var C={};
-for(const k of ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState','attackFlash','burning','poisoned','frozen','wet','sandy','watched','teleportHideTicks','workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE']) C[k]=new Float64Array(new SharedArrayBuffer(64*8));
+for(const k of ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState','attackFlash','stBu','stPo','stFr','stWe','stSa','stWa','stTh','workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE']) C[k]=new Float64Array(new SharedArrayBuffer((k.startsWith('st')?65:64)*8));
+C.stIx=new Int32Array(new SharedArrayBuffer(64*4));
 var M=simMetaViews(new SharedArrayBuffer(64*SIM_META_SLOT_BYTES),64);M.id.fill(-1);
 for(let s=0;s<4;s++) { C.id[s]=10+s;C.live[s]=1;C.x[s]=100+s;C.energy[s]=20;C.r[s]=8;M.id[s]=10+s;M.type[s]=1;M.vision[s]=2;M.orderDest[s]=s===3?-41:23;M.orderTick[s]=7; }
 `,c);
@@ -27,7 +28,7 @@ const first=messages[0], f=c.simFrameViews(first.world.units.buf,64);
 assert.equal(first.world.units.count,4);assert.equal(f.x[0],100);
 assert.equal(f.orderDest[0],23);assert.equal(f.orderDest[3],-41);assert.equal(f.orderTick[0],7);
 const saved=Buffer.from(new Uint8Array(first.world.units.buf));
-c.C.x[0]=500;c.C.burning[0]=1;c.C.teleportHideTicks[2]=3;
+c.C.x[0]=500;c.C.stIx[0]=1;c.C.stBu[1]=1;c.C.stIx[2]=3;c.C.stTh[3]=3;
 tick(1);tick(2);tick(3);tick(4);
 assert.equal(messages.length,3,'a stalled page owns at most three unit snapshots');
 assert.deepEqual(Buffer.from(new Uint8Array(first.world.units.buf)),saved,'reader never rewrites a page-owned snapshot');
