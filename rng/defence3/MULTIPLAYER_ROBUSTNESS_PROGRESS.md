@@ -152,3 +152,36 @@ placement burst), CPU profiles (main + helpers) and a heap profile, then Edge pr
 scene TPS + heap log, placement burst, site marks, UI long tasks, click/input latency, order marker, page stalls,
 motion jitter, LOD, view switch, action spikes, panel scroll). Per step output: `tests/test-runs/full-20261025/<step>.txt`;
 progress and exit codes: `status.txt`; script log: `run_all.log`. Nothing is committed yet.
+
+### Results and fixes (2026-10-25)
+
+`status.txt` showed exit=0 for every step: `step()` read `$?` after `$(date ...)` had reset it. Fixed (exit code
+read first, `TIMEOUT` noted for 124); the step outputs were read instead. Failures found and fixed:
+- **multiplayer-patch** (both modes; solar_system, seed 5212): a restored guest's `u173.effectiveStacks` differed
+  11 ticks after the restore. Cause: the spatial index kept a stale tile for walking workers. Walker swaps
+  (traffic_swap with walkers, added in the worker-walk fix) happen in the occupancy job's second pass, after the
+  swapped partners' list (`swl`) was already drained, so the partner's new tile never reached the index (spTile,
+  spArea, chunk key) until it crossed another tile. The host's effective-levels area snapshot (`_effAreaHist`)
+  counted it in its old area; a restored guest rebuilt the index from positions. Fix: mv.rs, after the second
+  pass, the epilogue once more for partners of the second pass's swaps whose tile changed (epi_slot's index
+  update is a no-op for a slot already at its tile). Scratch probe (stale spTile between ticks) found 0 after.
+- **multiplayer-snapshot** round 3 (both modes): a builder walking to a site that had been removed (in no list,
+  not at its tile) keeps the object; the codec sends it as a pooled object (`~c`). `_snapDPool` made it with
+  `Object.create(C.prototype)`, no structure table row (`_sr` undefined), so all its fields went to the tables'
+  shared stray slot: the last such structure that peer decoded (another barrack at 13,20 on guest3). Fix:
+  structures in `~c` get `_snapStructShell` (structTableInit), as listed ones do. New test
+  tests/snapshot-pooled-structure.test.cjs (fails before: both targets read 13,20).
+  (Still true: a worker keeps a removed target until it arrives; deterministic, now restored alike.)
+- **attack-range-display**: the test faked the tower's stats through currentStats/baseStats, which the panel no
+  longer reads first (preComputedBase/preComputedEffective since the 0a fix); the test fakes those too.
+- Stale suites/benches: crowd-scenarios read the removed `mvSpd` column (now the stat row's rSpd);
+  checkerboard-tps and crowd-front wrapped the removed `_forEachUnitInTickOrder` (missing phases skipped, as the
+  other benches do); checkerboard-tps defaults to 2M units without memory64 (4M filled Node 22's 4 GiB heap);
+  area-acquisition-sample used memory64 unconditionally (32-bit build when the runtime lacks it, as sim_wasm.js);
+  active-scale's baseline commit 99a1e51 no longer exists (baseline = HEAD for timings; hashes compared among
+  the current runs, and to the baseline only when DEFENCE_TEST_BASELINE is named); unit-id-index needs
+  `--expose-gc` (run_all passes it to every bench); edge-action-spike ran without arguments (now
+  `VIEW=3d 100000-1000.json eval:0x8`); the scale-world step removed (a library, not a test).
+- Not failures, noted: Edge render-TPS crashed the tab at the end of 100000-1000 Team cases (two 100k peers on
+  one machine, known 3-5 TPS); 50000-200 combat views 10 TPS; edge-lod one glError 1282 on its first case;
+  join-stall counted desyncs repaired by patches (71 on one peer) with ~2.1 s long tasks at a spectator join.

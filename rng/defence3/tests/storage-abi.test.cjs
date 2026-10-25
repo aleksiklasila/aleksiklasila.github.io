@@ -54,7 +54,8 @@ for (const l of rs.matchAll(/^\s*([a-z_0-9]+): p!\((W_[A-Z0-9_]+)\),/gm)) {
     checked++;
 }
 assert.equal(bad.length, 0, 'movement ABI mismatches:\n  ' + bad.join('\n  '));
-assert.ok(checked >= 100, 'unit columns checked: ' + checked);
+// (A floor against a parse that found nothing; dead columns were removed 2026-10-25.)
+assert.ok(checked >= 80, 'unit columns checked: ' + checked);
 
 // No column declared twice (the schema throws on a duplicate when built),
 // and no name both a unit and a movement column.

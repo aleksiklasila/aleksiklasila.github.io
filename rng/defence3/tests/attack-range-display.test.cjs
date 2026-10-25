@@ -10,7 +10,7 @@ const result=i.eval(`(()=>{
  const barrack=row(renderBarrackInfo(b),'Unit Range'),bgroup=row(renderBarrackGroupInfo([b]),'Unit Range');
  // Deliberately different sight and range: neither the panel nor matrix may substitute sight.
  const st={...t.currentStats,attackRangeArea:2,visionRange:4,visionRangeArea:4};
- const proxy=Object.create(t);Object.defineProperties(proxy,{currentStats:{value:st},baseStats:{value:st}});
+ const proxy=Object.create(t);Object.defineProperties(proxy,{currentStats:{value:st},baseStats:{value:st},preComputedBase:{value:st},preComputedEffective:{value:st}});
  const tower=row(renderTowerInfo(proxy),'Range'),tgroup=row(renderTowerGroupInfo([proxy]),'Range');
  const matrixId=/data-matrix-id="([^"]+)"/.exec(tower)[1];
  if(infoPanelStatMatrixDescriptorById[matrixId].statKey!=='attackRange')throw Error('Tower range matrix still opens sight');

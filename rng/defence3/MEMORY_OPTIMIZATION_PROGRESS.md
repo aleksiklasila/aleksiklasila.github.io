@@ -189,3 +189,48 @@ cache mvNav* (33 B, flow movers): sidecars.
 Benchmark matrix (400k/800k; idle, moving, active, mixed; helpers 0/3/7;
 Edge in three visibility modes), then the full validation pass
 (determinism suite, equivalence, late join/patch/host migration).
+
+## 4M units in the 32-bit heap (2026-10-25)
+
+Decision: the 32-bit kernels stay the default for the game and the tests (memory64: V8 bounds-checks every access
+explicitly, ~10% of a tick at 200k, the movement kernel +26%, Node 24 and Edge 155 alike; tests/test-runs/node24-wasm64-20261025).
+So big matches must fit 4 GiB: shrink memory (SoA, packing, narrower types, sparse records, shared slots by unit kind),
+cache layout kept in mind where kernels read fields together. Tests run on Node 24 (nvm 24.22.1); WASM64=1 / ?wasm64=1 opt in.
+
+Measure: `node --max-old-space-size=12000 --expose-gc tests/checkerboard-tps.bench.cjs --memory-inventory --ticks=3 --warmup=2`
+(4M units, 125k towers, 1000x1000), `SIM_HEAP_SITES=1` adds the biggest live call sites at each heap peak
+(`inventory.peaks`). Per-column value stats: tests/test-runs/memory-4m-20261025/colplan.cjs over tickbench AFTERALL dumps.
+
+| step | live MB | peak MB | heap MB | unit B/slot |
+|---|---|---|---|---|
+| start (64-bit only: did not fit 32-bit) | 3670 (end) | 5822 | 7059 | 525 |
+| reserve with slab slack (no growth copies at the start) | 3532 | 3653 | 4096 | 525 |
+| cut 1 (below) | 3249 | 3400 | 4053 | 463 |
+
+Final simulation hash identical throughout (cd88b396).
+
+Cut 1:
+- Reservation counted no room for the slabs' allowed holes: a starting army a few percent past it grew every column by
+  1/8 with old and new copies held at once (sim_unit_state.js simUnitStateReserve).
+- Levels (unitLevel, baseLevel, effectiveLevel, _lastAppliedEffectiveLevel) Int8, 0 not set (NaN stores as 0; accessors read
+  undefined): k_eff_units, k_upkeep, k_snap_units (gi8), k_pv_marks, main.js _upkUnitBin, presentation level copy.
+- esRad Uint8, esType Int8, vsA Int8.
+- Dead columns removed (written or loaded, read by nothing): mvHWin, mvHTT, mvHVer, fLsPX, fLsPY, fLsT, cbT, cbTId (32 B).
+  Tool: the movement kernel's struct fields with no use (scratchpad mvunused.cjs logic: `.field` count in wasm/src).
+- Presentation marks: pvId/pvE/pvO/pvC/pvL/pvV (13 B) -> pvS, a 32-bit signature (bit 31: moved), k_pv_marks.
+- Acquisition sampling: no per-entry owner / id copies (acq.saOwner, acq.saId): the bucket is the owner's, the id the slot's.
+- Structure tables (data_state.js): number kinds f (Float32), i/s/c (Int32/16/8, undefined = the type's lowest value) for
+  tiles, list places, stacks, levels, owners, timers, tick damages, angles; and rows reused: a structure leaving the world
+  (clearTileEntity / setTileEntity replacing it) moves its values into its record (_sdet) and gives its row back
+  (structRowDetach; placed again: structRowAttach). Rows used to grow for good in a long match. Test:
+  tests/structure-row-reuse.test.cjs.
+
+Still per unit at 4M (cut 1): columns 463 B/slot (~1.97 GB at 4.25M slots), unit-sized work arrays ~229 B/unit (877 MB).
+Next candidates (bytes per unit):
+- Lists sized for every unit (ev.list, st.list, retire.list, hit.tlist/wlist, mv.post, mv.hita/hitt, occ.work, mv.lookc:
+  ~40 B): share by phase (needs the tick's lifetimes) or grow on demand with an overflow path in the kernels.
+- Hit accumulators hAcc/hTouch/hSty/hBurnD/hPoiD/hWatchK (18 B, live only in the hits phase): share with other per-tick scratch.
+- Status: 8 u16 timers + 3 f32 tick damages + stAcc/stDot (36 B) for units mostly not affected: a sparse record.
+- prevX/prevY vs x0/y0 (8 B), sepCx/sepCy as i16 halves like sepIv (4 B), r/collisionR/sepR0/maxE from the stat row (16 B),
+  mvNav's 8 words (32 B) with narrower version words.
+- occ.rec (17 B), ixd room arrays (Float64 keys), vt.x/vt.y copies.

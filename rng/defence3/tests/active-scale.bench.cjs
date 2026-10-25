@@ -5,7 +5,11 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
-const baseline = process.env.DEFENCE_TEST_BASELINE || '99a1e51';
+// The baseline revision timed beside the working tree: DEFENCE_TEST_BASELINE (its hashes must then equal the current ones),
+// else the last commit (timings only: the working tree may change behaviour on purpose). The current runs (0, 7, 11 helpers)
+// always agree exactly with each other.
+const baselineNamed = !!process.env.DEFENCE_TEST_BASELINE;
+const baseline = process.env.DEFENCE_TEST_BASELINE || execFileSync('git', ['rev-parse', '--short', 'HEAD'], {cwd: __dirname, encoding: 'utf8'}).trim();
 const results = [];
 const cases = process.argv.includes('--quick')
     ? [{fixture:'10000.json',ticks:40,scenario:'moving'}]
@@ -23,9 +27,10 @@ for (const c of cases) {
             cpu:os.cpus()[0].model, results},null,2)+'\n');
         assert.equal(row.gameOver, false, 'fixture ended early');
     }
-    for (const row of pair.slice(1)) {
-        assert.equal(row.hash,pair[0].hash,c.scenario+' lockstep');
-        assert.equal(row.exact,pair[0].exact,c.scenario+' exact fingerprint');
-        assert.deepEqual(row.populations,pair[0].populations,c.scenario+' activity counts');
+    const ref = baselineNamed ? pair[0] : pair[1];
+    for (const row of pair.slice(baselineNamed ? 1 : 2)) {
+        assert.equal(row.hash,ref.hash,c.scenario+' lockstep');
+        assert.equal(row.exact,ref.exact,c.scenario+' exact fingerprint');
+        assert.deepEqual(row.populations,ref.populations,c.scenario+' activity counts');
     }
 }

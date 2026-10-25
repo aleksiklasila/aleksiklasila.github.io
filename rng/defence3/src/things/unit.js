@@ -536,19 +536,20 @@ class Unit {
     set _vsP2(v) { const c = this._us; if (c) c.vsP2[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_vsP2', { value: v, writable: true, configurable: true }); }
     get _spatialKey() { const c = this._us; if (!c) return undefined; const k = c.sepKey[this._si]; return k === SIM_SEP_ABSENT ? undefined : k; }
     set _spatialKey(v) { const c = this._us; if (c) c.sepKey[this._si] = v === undefined ? SIM_SEP_ABSENT : v; else if (c === undefined) Object.defineProperty(this, '_spatialKey', { value: v, writable: true, configurable: true }); }
-    // Stacks and levels: columns (SIM_UNIT_LEVEL_COLUMNS; NaN: not set);
+    // Stacks and levels: columns (SIM_UNIT_LEVEL_COLUMNS; NaN: not set; the
+    // levels Int8, 0 not set: a NaN stored is 0);
     // the upkeep bin follows them (upkeepUnitRefresh).
     get stackCount() { const c = this._us; const v = c ? c.stackCount[this._si] : (this._det ? this._det.stackCount : undefined); return v === v ? v : undefined; }
     set stackCount(v) { const c = this._us; if (c) { c.stackCount[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.stackCount = v; else Object.defineProperty(this, 'stackCount', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get unitLevel() { const c = this._us; const v = c ? c.unitLevel[this._si] : (this._det ? this._det.unitLevel : undefined); return v === v ? v : undefined; }
+    get unitLevel() { const c = this._us; const v = c ? c.unitLevel[this._si] : (this._det ? this._det.unitLevel : undefined); return v > 0 ? v : undefined; }
     set unitLevel(v) { const c = this._us; if (c) { c.unitLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.unitLevel = v; else Object.defineProperty(this, 'unitLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get baseLevel() { const c = this._us; const v = c ? c.baseLevel[this._si] : (this._det ? this._det.baseLevel : undefined); return v === v ? v : undefined; }
+    get baseLevel() { const c = this._us; const v = c ? c.baseLevel[this._si] : (this._det ? this._det.baseLevel : undefined); return v > 0 ? v : undefined; }
     set baseLevel(v) { const c = this._us; if (c) { c.baseLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.baseLevel = v; else Object.defineProperty(this, 'baseLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     get effectiveStacks() { const c = this._us; const v = c ? c.effectiveStacks[this._si] : (this._det ? this._det.effectiveStacks : undefined); return v === v ? v : undefined; }
     set effectiveStacks(v) { const c = this._us; if (c) c.effectiveStacks[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det.effectiveStacks = v; else Object.defineProperty(this, 'effectiveStacks', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get effectiveLevel() { const c = this._us; const v = c ? c.effectiveLevel[this._si] : (this._det ? this._det.effectiveLevel : undefined); return v === v ? v : undefined; }
+    get effectiveLevel() { const c = this._us; const v = c ? c.effectiveLevel[this._si] : (this._det ? this._det.effectiveLevel : undefined); return v > 0 ? v : undefined; }
     set effectiveLevel(v) { const c = this._us; if (c) { c.effectiveLevel[this._si] = typeof v === 'number' ? v : NaN; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.effectiveLevel = v; else Object.defineProperty(this, 'effectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get _lastAppliedEffectiveLevel() { const c = this._us; const v = c ? c._lastAppliedEffectiveLevel[this._si] : (this._det ? this._det._lastAppliedEffectiveLevel : undefined); return v === v ? v : undefined; }
+    get _lastAppliedEffectiveLevel() { const c = this._us; const v = c ? c._lastAppliedEffectiveLevel[this._si] : (this._det ? this._det._lastAppliedEffectiveLevel : undefined); return v > 0 ? v : undefined; }
     set _lastAppliedEffectiveLevel(v) { const c = this._us; if (c) c._lastAppliedEffectiveLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._lastAppliedEffectiveLevel = v; else Object.defineProperty(this, '_lastAppliedEffectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     // The tile whose floor it last checked (Unit.update's floor items): a
     // column (mvFloor) the movement kernel keeps as it moves the unit.
@@ -1803,7 +1804,7 @@ function simMoveRefreshAllStats() {
 // that was armed before and a restored one start alike: leftovers of an
 // earlier arming made the two peers' units move differently.)
 const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen', 'mvScan', 'mvWake', 'mvFlow', 'mvFGen', 'mvDest', 'mvReady', 'mvNP',
-    'mvHWin', 'mvHTT', 'mvHVer', 'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
+    'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
     'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
     const S = _simUnitState;
@@ -3122,7 +3123,8 @@ function _acqPost() {
         for(const name of ['saCount','saCursor'])_acqArray('acq.'+name,Int32Array,A*np);
         for(const name of ['saSeen','saNearN'])_acqArray('acq.'+name,Int32Array,A);
         for(const name of ['saX','saY'])_acqArray('acq.'+name,Float32Array,ecap);
-        for(const name of ['saOwner','saId','saSlot'])_acqArray('acq.'+name,Int32Array,ecap);
+        // (No owner or id copies: the bucket is the owner's, the slot gives the id.)
+        _acqArray('acq.saSlot',Int32Array,ecap);
         _acqArray('acq.saKey',Int32Array,ecap);
         const near=_acqArray('acq.saNear',Int32Array,areaTargets?1:A*64);
         const I=simParallelStageParams(ACQ_LANE,1);I.fill(0);I[0]=ne;I[20]=A;I[7]=B[7];

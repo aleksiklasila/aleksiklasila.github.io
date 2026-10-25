@@ -1951,7 +1951,11 @@ function _snapDPool(i) {
         }
         if (tag === '~c') {
             let C = _snapClassByName(enc[1]);
-            let out = C ? Object.create(C.prototype) : {};
+            // (A structure no longer in its list, still referenced (a worker's
+            // target): its own table row, as its constructor gives it. Without
+            // one its fields went to the tables' shared stray slot, the last
+            // such structure this peer decoded: another peer's target.)
+            let out = !C ? {} : typeof STRUCT_TABLE_FIELDS !== 'undefined' && STRUCT_TABLE_FIELDS[C.name] ? _snapStructShell(C) : Object.create(C.prototype);
             if (C === Unit) simUnitStateAllocate(out);
             memo[i] = out;
             let fields = enc[2];

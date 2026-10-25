@@ -1089,9 +1089,11 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (live, dead, id, xs, ys, pxs, pys) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
-    let (en, own, cmd, lvl, fl, st, tm, cm) = (k.p::<f32>(7), k.p::<i8>(8), k.p::<u8>(9), k.p::<f32>(10), k.p::<u8>(11), k.p::<u8>(12), k.p::<u8>(13), k.p::<u8>(14));
-    let (at, pe, po, pc, pl, pid) = (k.p::<i32>(15), k.p::<f32>(16), k.p::<i8>(17), k.p::<u8>(18), k.p::<i16>(19), k.p::<i32>(20));
-    let (vxs, vys, pv) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<u8>(23));
+    let (en, own, cmd, lvl, fl, st, tm, cm) = (k.p::<f32>(7), k.p::<i8>(8), k.p::<u8>(9), k.p::<i8>(10), k.p::<u8>(11), k.p::<u8>(12), k.p::<u8>(13), k.p::<u8>(14));
+    // (unit.pvS: a signature of what it showed at its last mark (id, energy, owner, command, level), bit 31 whether it moved
+    // then; its values are only compared: 4 bytes a slot instead of six columns' 13.)
+    let (at, sg) = (k.p::<i32>(15), k.p::<u32>(16));
+    let (vxs, vys) = (k.p::<f32>(21), k.p::<f32>(22));
     let (tgx, tgy, od) = (k.p::<f32>(24), k.p::<f32>(25), k.p::<i32>(26));
     let (gw, itile) = (k.i(3), 1.0f32 / (k.i(4).max(1) as f32));
     let dest = !tgx.is_null() && !tgy.is_null() && !od.is_null();
@@ -1101,12 +1103,19 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
         let alive = g(live, sv) != 0 && g(dead, sv) == 0;
         let idv = if alive { g(id, sv) } else { -1 };
         let lv = g(lvl, sv);
-        let li: i16 = if lv >= 0.0 && lv < 32767.0 { lv as i16 } else { -1 };
+        let li: i16 = lv as i16;
         let vel = (g(vxs, sv) != 0.0 || g(vys, sv) != 0.0) as u8 | (((g(fl, sv) != 0) as u8) << 1);
-        let mut changed = idv != g(pid, sv)
-            || (alive && (g(xs, sv) != g(pxs, sv) || g(ys, sv) != g(pys, sv) || g(en, sv).to_bits() != g(pe, sv).to_bits() || g(own, sv) != g(po, sv)
-                || g(cmd, sv) != g(pc, sv) || li != g(pl, sv) || g(st, sv) != 0 || g(tm, sv) != 0 || (g(cm, sv) & 4) != 0
-                || vel != 0 || g(pv, sv) != 0));
+        let fin = |mut h: u32| { h ^= h >> 16; h = h.wrapping_mul(0x7feb352d); h ^= h >> 15; h = h.wrapping_mul(0x846ca68b); h ^ (h >> 16) };
+        let mut h = fin(idv as u32 ^ 0x9e37_79b9);
+        if alive {
+            h = fin(h ^ g(en, sv).to_bits());
+            h = fin(h ^ (g(own, sv) as u8 as u32 | (g(cmd, sv) as u32) << 8 | (li as u16 as u32) << 16));
+        }
+        let sig = (h & 0x7fff_ffff) | ((vel != 0) as u32) << 31;
+        let old = g(sg, sv);
+        let mut changed = (sig ^ old) & 0x7fff_ffff != 0
+            || (alive && (g(xs, sv) != g(pxs, sv) || g(ys, sv) != g(pys, sv) || g(st, sv) != 0 || g(tm, sv) != 0 || (g(cm, sv) & 4) != 0
+                || vel != 0 || old >> 31 != 0));
         if dest && alive {
             let c = g(cmd, sv);
             let (x, y) = (g(tgx, sv), g(tgy, sv));
@@ -1122,13 +1131,8 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
             }
         }
         if changed {
-            s(pv, sv, vel);
             s(at, sv, tick);
-            s(pid, sv, idv);
-            s(pe, sv, g(en, sv));
-            s(po, sv, g(own, sv));
-            s(pc, sv, g(cmd, sv));
-            s(pl, sv, li);
+            s(sg, sv, sig);
         }
     }
 }
@@ -1597,7 +1601,9 @@ pub unsafe extern "C" fn k_acq_commit(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (outa, tid, si, sr, id, sout, cbs) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<f32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
-    let (ct, ctk, cti, crs) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<f32>(10));
+    // (Its structure, the range and tick of the look: the unit target is the combat brain's, unit.cmT; the slot and id columns
+    // this wrote (cbT, cbTId) were read by nothing.)
+    let (ctk, crs) = (k.p::<i32>(8), k.p::<f32>(10));
     let t = k.i(2);
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for q in s0..s1 {
@@ -1605,8 +1611,7 @@ pub unsafe extern "C" fn k_acq_commit(a: u32, chunk: i32) {
         if o == -2 || g(id, q) != g(si, q) {
             continue;
         }
-        s(ct, q, o);
-        s(cti, q, g(tid, q));
+        let _ = tid;
         s(crs, q, g(sr, q));
         s(ctk, q, t);
         s(cbs, q, g(sout, q));
@@ -2035,8 +2040,9 @@ pub unsafe extern "C" fn k_eff_area_hist(a: u32, chunk: i32) {
 pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
-    let (sl, dead, ok, rad, typ, taken) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
-    let (stk, ulv, blv, esk, elv, last) = (k.p::<f32>(6), k.p::<f32>(7), k.p::<f32>(8), k.p::<f32>(9), k.p::<f32>(10), k.p::<f32>(11));
+    // (esRad u8, esType i8; the levels i8, 0 not set.)
+    let (sl, dead, ok, rad, typ, taken) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<i8>(4), k.p::<i32>(5));
+    let (stk, ulv, blv, esk, elv, last) = (k.p::<f32>(6), k.p::<i8>(7), k.p::<i8>(8), k.p::<f32>(9), k.p::<i8>(10), k.p::<i8>(11));
     let (spa, aoff, own, data, fl) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i8>(14), k.p::<i32>(15), k.p::<u8>(16));
     let anb = k.p::<i32>(66);
     let (ut, ub, uh, tv, ev) = (k.p::<i16>(17), k.p::<i32>(18), k.p::<i32>(19), k.p::<i32>(20), k.p::<i32>(21));
@@ -2069,7 +2075,7 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
             }
             let q = sv as usize;
             let o = g(own, q) as i32;
-            if g(ok, q) == 0 || tv.is_null() || ntv == 0 || !(o >= 0 && o < players) || g(ev, q) != g(tv, (o * ntv + g(typ, q)) as usize) {
+            if g(ok, q) == 0 || tv.is_null() || ntv == 0 || !(o >= 0 && o < players) || g(ev, q) != g(tv, (o * ntv + g(typ, q) as i32) as usize) {
                 cnt += 1;
             }
         }
@@ -2094,21 +2100,21 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
         }
         let base = floorf(sc);
         let bl = stack_level(base, maxl);
-        if g(blv, q) != bl as f32 {
+        if g(blv, q) as i32 != bl {
             s(fl, j, 2);
             continue;
         }
         s(stk, q, base);
-        s(ulv, q, bl as f32);
+        s(ulv, q, bl as i8);
         let o = g(own, q) as i32;
         if !(o >= 0 && o < players) {
             s(fl, j, 2);
             continue;
         }
-        let ty = g(typ, q);
+        let ty = g(typ, q) as i32;
         // (Behind: its base entry's version, index and radius.)
         let mut behind: Option<(i32, usize)> = None;
-        let mut r = g(rad, q);
+        let mut r = g(rad, q) as i32;
         if !tv.is_null() && ntv != 0 {
             let cur = g(tv, (o * ntv + ty) as usize);
             if g(ev, q) != cur {
@@ -2171,11 +2177,11 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
         }
         let effs = floorf((sum as f32 * base).max(1.0));
         let el0 = stack_level(effs, maxl);
-        let lst = g(last, q);
-        let el = if !(lst >= 1.0) || el0 as f32 == lst {
+        let lst = g(last, q) as i32;
+        let el = if !(lst >= 1) || el0 == lst {
             el0
         } else {
-            let l = lst as i32;
+            let l = lst;
             if el0 == l - 1 {
                 if effs * 5.0 >= 4.0 * (1u64 << (l - 1).clamp(0, 62)) as f32 { l } else { el0 }
             } else if el0 == l + 1 {
@@ -2199,19 +2205,19 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
                 continue;
             }
             s(ev, q, cur);
-            s(rad, q, r);
-            s(last, q, el as f32);
+            s(rad, q, r as u8);
+            s(last, q, el as i8);
             fv = if vis { 6 } else { 5 };
         }
         s(esk, q, effs);
-        s(elv, q, el as f32);
+        s(elv, q, el as i8);
         s(taken, q, stamp);
         // (A new level: its stat row's tables (4: another vision range), else
         // the JavaScript's, 1.)
-        if behind.is_none() && lst != el as f32 {
+        if behind.is_none() && lst != el {
             let mut vis = false;
             if k.i(18) > 0 && eff_row_apply(&k, q, o, ty, bl, el, g(ev, q), &mut vis) {
-                s(last, q, el as f32);
+                s(last, q, el as i8);
                 fv = if vis { 4 } else { 0 };
             } else {
                 fv = 1;
@@ -3825,7 +3831,8 @@ pub unsafe extern "C" fn k_upkeep(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (sl, own, ut, ub) = (k.p::<i32>(0), k.p::<i8>(1), k.p::<i16>(2), k.p::<i32>(3));
-    let (el, ul, bl, sc, hist) = (k.p::<f32>(4), k.p::<f32>(5), k.p::<f32>(6), k.p::<f32>(7), k.p::<i32>(8));
+    // (The levels i8, 0 not set.)
+    let (el, ul, bl, sc, hist) = (k.p::<i8>(4), k.p::<i8>(5), k.p::<i8>(6), k.p::<f32>(7), k.p::<i32>(8));
     let (np, nt, maxl) = (k.i(2), k.i(3), k.i(4));
     let l1 = maxl + 1;
     let fin = |v: f32| v - v == 0.0;
@@ -3842,18 +3849,18 @@ pub unsafe extern "C" fn k_upkeep(a: u32, chunk: i32) {
         if !(ow >= 0 && ow < np) || t < 0 || t >= nt {
             continue;
         }
-        let mut l = g(el, q);
-        if !fin(l) {
-            l = g(ul, q);
-            if !fin(l) {
-                l = g(bl, q);
-                if !fin(l) {
+        let mut l = g(el, q) as i32;
+        if l <= 0 {
+            l = g(ul, q) as i32;
+            if l <= 0 {
+                l = g(bl, q) as i32;
+                if l <= 0 {
                     let st = g(sc, q);
-                    l = if fin(st) { stack_level(if st == 0.0 { 1.0 } else { st }, i32::MAX) as f32 } else { 1.0 };
+                    l = if fin(st) { stack_level(if st == 0.0 { 1.0 } else { st }, i32::MAX) } else { 1 };
                 }
             }
         }
-        let lv = (floorf(l) as i32).min(maxl).max(1);
+        let lv = l.min(maxl).max(1);
         let b = (t * np + ow) * l1 + lv;
         s(ub, q, b);
         atomic_add(hist, b as usize, 1);
@@ -5113,7 +5120,7 @@ unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver:
     } else if !rvsa.is_null() && g(rvsa, ru) >= -1 {
         let st = g(rvsa, ru) as i32;
         let (watched, wteam, sepk) = (k.p::<u16>(55), k.p::<i8>(56), k.p::<u32>(57));
-        let (vgen, vr, va, vp1, vp2) = (k.p::<i32>(58), k.p::<i8>(59), k.p::<i32>(60), k.p::<i8>(61), k.p::<i8>(62));
+        let (vgen, vr, va, vp1, vp2) = (k.p::<i32>(58), k.p::<i8>(59), k.p::<i8>(60), k.p::<i8>(61), k.p::<i8>(62));
         let cp = k.i(21);
         let active = g(k.p::<u8>(1), q) == 0 && g(sepk, q) != k.f(22) as u32;
         let (mut steps, mut p1, mut p2) = (-1i32, -1i32, -1i32);
@@ -5233,7 +5240,7 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
     let (live, dead, xs, ys, uid, sl) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (own, vx, vy, en, cmd, at, af) = (k.p::<i8>(6), k.p::<f32>(7), k.p::<f32>(8), k.p::<f32>(9), k.p::<u8>(10), k.p::<f32>(11), k.p::<u8>(12));
     let (tp, po, bu, fr, we, sa, wa, wt) = (k.p::<u16>(13), k.p::<u16>(14), k.p::<u16>(15), k.p::<u16>(16), k.p::<u16>(17), k.p::<u16>(18), k.p::<u16>(19), k.p::<u16>(20));
-    let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24), k.p::<i32>(25), k.p::<i32>(26));
+    let (sc, ul, es, el, pi, ho) = (k.p::<f32>(21), k.p::<i8>(22), k.p::<f32>(23), k.p::<i8>(24), k.p::<i32>(25), k.p::<i32>(26));
     let (pr, ph, nl, nlh, nu, cc, ords) = (k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<i32>(33));
     let wtm = k.p::<i8>(34);
     // (The order columns: its target unit's id, forced, the attack-move tile, its target structure's tile.)
@@ -5369,9 +5376,9 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
         mix!(15, gu16!(wa));
         mix!(16, gu16!(wt));
         mix!(17, gf!(sc));
-        mix!(18, gf!(ul));
+        mix!(18, gi8!(ul));
         mix!(19, gf!(es));
-        mix!(20, gf!(el));
+        mix!(20, gi8!(el));
         mix!(21, g32!(pi));
         mix!(22, gi8!(wtm));
         let tu_eff = {

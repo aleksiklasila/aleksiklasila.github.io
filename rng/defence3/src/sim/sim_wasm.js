@@ -17,9 +17,13 @@
 // ============================================================
 
 // false before a match: every array in plain shared memory, JS kernels only.
-// (Diagnostics, off: the heap's allocations by call site, _simHeapSiteTotals.)
-const SIM_HEAP_SITES = false;
-const _simHeapSiteOf = new Map(), _simHeapSiteTotals = new Map();
+// (Diagnostics, off unless the global SIM_HEAP_SITES_ON is set (the test
+// harness: SIM_HEAP_SITES=1): the heap's allocations by call site,
+// _simHeapSiteTotals, and at each new peak (every 128 MB more) the live
+// bytes of the biggest sites then, _simHeapPeakSnaps.)
+const SIM_HEAP_SITES = typeof globalThis !== 'undefined' && !!globalThis.SIM_HEAP_SITES_ON;
+const _simHeapSiteOf = new Map(), _simHeapSiteTotals = new Map(), _simHeapPeakSnaps = [];
+let _simHeapPeakSnapAt = 256 << 20;
 let SIM_WASM_ENABLED = true;
 const SIM_HEAP_ALIGN = 64;
 // Bytes past each array's end: the SIMD loops read whole vectors.
@@ -32,11 +36,16 @@ const SIM_HEAP_FREE_TICKS = 2;
 const SIM_HEAP_PAGE = 65536;
 // 4 GiB under wasm32; 16 GiB with the memory64 build (SIM_WASM64).
 let SIM_HEAP_MAX_PAGES = 65536;
-// The memory64 build (sim_wasm64_bin.js, wasm/build.cjs --wasm64): the heap
-// past 4 GiB (millions of units), where the browser has a shared memory64;
-// else wasm32 (node, the test harness). Off with ?wasm64=0.
+// The 32-bit build (sim_wasm_bin.js) is the default everywhere (browsers and
+// tests alike): V8 bounds-checks every memory64 access explicitly, ~10% of a
+// tick at 200k (the movement kernel +26%; Node 24 and Edge 155 alike). The
+// memory64 build (sim_wasm64_bin.js, wasm/build.cjs --wasm64: the heap past
+// 4 GiB) only on request: ?wasm64=1 on the page (sent to the simulation
+// worker with its load message), WASM64=1 in the test harness. Big matches
+// are to fit the 4 GiB heap (MEMORY_OPTIMIZATION_PROGRESS.md).
 let SIM_WASM64 = false;
-let SIM_WASM64_ENABLED = !(typeof location !== 'undefined' && location && /[?&]wasm64=0\b/.test(String(location.search || '')));
+let SIM_WASM64_ENABLED = typeof self !== 'undefined' && self && self.SIM_WASM64_OPT !== undefined ? !!self.SIM_WASM64_OPT
+    : typeof location !== 'undefined' && !!location && /[?&]wasm64=1\b/.test(String(location.search || ''));
 // A shared memory of these sizes in pages (memory64: BigInt sizes).
 function _simWasmMemory(initial, maximum) {
     if (!SIM_WASM64) return new WebAssembly.Memory({ initial, maximum, shared: true });
@@ -188,6 +197,14 @@ function _simHeapAllocImpl(Type, n, clear = true) {
 function _simHeapSiteAlloc(p, bytes) {
     const st = String(new Error().stack).split('\n').slice(3, 8).map(l => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^ )]*\/([^\/ )?:]+)[^ )]*?:(\d+):\d+\)?/, '$1:$2')).join(' < ');
     const t =_simHeapSiteTotals.get(st) || { n: 0, bytes: 0, freedN: 0, freedBytes: 0 }; t.n++; t.bytes += bytes; _simHeapSiteTotals.set(st, t); _simHeapSiteOf.set(p, [st, bytes]);
+    const H = _simHeap;
+    if (H.live >= _simHeapPeakSnapAt) {
+        _simHeapPeakSnapAt = H.live + (128 << 20);
+        const by = new Map();
+        for (const [, e] of _simHeapSiteOf) by.set(e[0], (by.get(e[0]) || 0) + e[1]);
+        const top = [...by].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([s, b]) => [Math.round(b / 1048576), s]);
+        _simHeapPeakSnaps.push({ liveMB: Math.round(H.live / 1048576), memoryMB: Math.round(H.memory.buffer.byteLength / 1048576), tick: typeof currentTick !== 'undefined' ? currentTick : null, top });
+    }
 }
 function _simHeapSiteFree(p) {
     const e = _simHeapSiteOf.get(p); if (!e) return;

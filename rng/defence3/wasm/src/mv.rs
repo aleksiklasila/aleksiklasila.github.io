@@ -2563,6 +2563,9 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
                 if gy*m.w+gx!=rd(m.spt,b){wr(m.out,b,3|listed);}else if *m.out.add(b)&127==0{wr(m.out,b,1|listed);}
                 if listed==0&&!wk.is_null(){*wk.add(wn)=b as i32;wn+=1;*m.out.add(b)|=128;}
             }
+            // (Swaps made from here on, walkers passing each other in the
+            // second pass: their partners' tiles go to the index after it.)
+            let sw0=swn as usize;
             // All intentions/ordinary moves in this ownership block finish
             // first. Resolve residual pressure only after leaders have had
             // their turn, then publish each unit's epilogue exactly once.
@@ -2584,6 +2587,17 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
                     if *m.out.add(s)>1||*m.spent.add(s)!=0{epi_slot(&m,f,&mut ep,s,false);}
                 }
             }}
+            }
+            // The partners of the second pass's swaps: their own epilogue may
+            // have run before they were moved (the index then kept their old
+            // tile until they next crossed one). epi_slot's index update is a
+            // no-op for a slot already at its tile.
+            for k in sw0..swn as usize{let b=*swbuf.as_ptr().add(k) as usize;
+                let gx=floor(rd(m.x,b)*m.itile) as i32;let gy=floor(rd(m.y,b)*m.itile) as i32;
+                if gy*m.w+gx==rd(m.spt,b){continue;}
+                let o=*m.out.add(b)&127;
+                wr(m.out,b,3);epi_slot(&m,f,&mut ep,b,false);
+                if o>3{wr(m.out,b,o);}
             }
         }
         epi_end(&m,&ep,job);

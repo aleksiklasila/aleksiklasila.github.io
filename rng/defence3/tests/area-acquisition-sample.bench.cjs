@@ -1,7 +1,9 @@
 // Identical-snapshot quality and cost of exact vs bounded area acquisition.
 'use strict';
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),{performance}=require('node:perf_hooks');
-const file=process.argv.slice(2).find(a=>!a.startsWith('--'))||'src/sim/sim_wasm64_bin.js',wasm32=process.argv.includes('--wasm32');
+// (The 32-bit build, as the game runs it; --wasm64: the memory64 build, Node 24+.)
+const fileArg=process.argv.slice(2).find(a=>!a.startsWith('--')),wasm32=!process.argv.includes('--wasm64');
+const file=fileArg||(wasm32?'src/sim/sim_wasm_bin.js':'src/sim/sim_wasm64_bin.js');
 const outFile=process.argv.find(a=>a.startsWith('--out='))?.slice(6);
 const areaTargets=process.argv.includes('--area-targets');
 const directPack=process.argv.includes('--direct-area-pack');

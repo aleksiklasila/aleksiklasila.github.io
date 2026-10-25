@@ -47,7 +47,8 @@ const PRELUDE = `
         return { pen: n ? o / n : 0, pairs: n, deep }; };
     const footprint = list => { let mx = 0, my = 0; for (const u of list) { mx += u.x; my += u.y; } mx /= list.length; my /= list.length;
         let r = 0; for (const u of list) r += Math.hypot(u.x - mx, u.y - my); return { cx: mx, cy: my, r: r / list.length }; };
-    const spd = u => u._us.mvSpd[u._si];
+    // (Movement speed: the unit's stat row, as the kernel reads it; the mvSpd column is gone.)
+    const spd = u => { const r = u._us.statRow[u._si]; return r >= 0 ? _effRowCols.rSpd[r] : u.preComputed.speed * _getUnitAstarSpeedMultiplier(u); };
     const r3 = v => Math.round(v * 1000) / 1000;
 `;
 

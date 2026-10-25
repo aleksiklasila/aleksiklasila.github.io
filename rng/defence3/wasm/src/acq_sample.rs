@@ -49,20 +49,20 @@ pub unsafe extern "C" fn k_acq_area_build(a:u32,_chunk:i32){
         for e in 0..n {if let Some((ar,owner,_,_,_,_))=candidate(&k,e){if ar<na&&owner<players {*counts.add(ar*players+owner)+=1;}}}
     }
     let mut total=0;for key in 0..keys {*off.add(key)=total;*cursor.add(key)=total;total+=*counts.add(key);}*off.add(keys)=total;
-    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let ao=k.p::<i32>(30);let aid=k.p::<i32>(31);let slots=k.p::<i32>(32);
+    // (Per entry its slot and position: the owner is its bucket's (key = area * players + owner), the id its slot's (acq.id).)
+    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
     if !keyv.is_null()&&k.i(30)!=0 {
         // (As candidate's slot-snapshot case: the entry's slot, its owner from the key, its position and id from the slot's columns.)
-        let (es,xs,ys,ids)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5),k.p::<i32>(10));
-        let pl=players as i32;
+        let (es,xs,ys)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5));
         for e in 0..n {let key=*keyv.add(e);if key<0 {continue;}
             let slot=*es.add(e);let s=slot as usize;
             let cur=cursor.add(key as usize);let j=*cur as usize;*cur+=1;
-            *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*ao.add(j)=key%pl;*aid.add(j)=*ids.add(s);*slots.add(j)=slot;
+            *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*slots.add(j)=slot;
         }
     }else{
-    for e in 0..n {if let Some((ar,owner,x,y,id,slot))=candidate(&k,e){if ar>=na||owner>=players {continue;}
+    for e in 0..n {if let Some((ar,owner,x,y,_id,slot))=candidate(&k,e){if ar>=na||owner>=players {continue;}
         let cur=cursor.add(ar*players+owner);let j=*cur as usize;*cur+=1;
-        *ax.add(j)=x;*ay.add(j)=y;*ao.add(j)=owner as i32;*aid.add(j)=id;*slots.add(j)=slot;
+        *ax.add(j)=x;*ay.add(j)=y;*slots.add(j)=slot;
     }
     }
     }
@@ -191,7 +191,8 @@ unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){
     // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.)
     if command==k.i(8)||command==k.i(9)||(*k.p::<u8>(7).add(s))&16!=0 {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
     if target_area<0 {return;}
-    let ar=target_area as usize;let off=k.p::<i32>(27);let slots=k.p::<i32>(32);let ids=k.p::<i32>(31);
+    let ar=target_area as usize;let off=k.p::<i32>(27);let slots=k.p::<i32>(32);let sid=k.p::<i32>(10);
+    let ids=|e:usize|*sid.add(*slots.add(e) as usize);
     let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);
     let seed=mix((*k.p::<i32>(10).add(s) as u32)^(k.i(25) as u32).wrapping_mul(0x9e3779b9));
     for j in 0..players {let foe=seed.wrapping_add(j as u32) as usize%players;if foe==owner {continue;}
@@ -202,12 +203,12 @@ unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){
             let dx=f32x4_sub(v128_load(ax.add(e) as *const v128),f32x4_splat(x));
             let dy=f32x4_sub(v128_load(ay.add(e) as *const v128),f32x4_splat(y));
             let ds:[f32;4]=core::mem::transmute(f32x4_add(f32x4_mul(dx,dx),f32x4_mul(dy,dy)));
-            for lane in 0..4 {let d=*ds.get_unchecked(lane);if d<best||(d==best&&*ids.add(e+lane)<*ids.add(winner)){best=d;winner=e+lane;}}
+            for lane in 0..4 {let d=*ds.get_unchecked(lane);if d<best||(d==best&&ids(e+lane)<ids(winner)){best=d;winner=e+lane;}}
         }else{
-            for lane in 0..count {let dx=*ax.add(e+lane)-x;let dy=*ay.add(e+lane)-y;let d=dx*dx+dy*dy;if d<best||(d==best&&*ids.add(e+lane)<*ids.add(winner)){best=d;winner=e+lane;}}
+            for lane in 0..count {let dx=*ax.add(e+lane)-x;let dy=*ay.add(e+lane)-y;let d=dx*dx+dy*dy;if d<best||(d==best&&ids(e+lane)<ids(winner)){best=d;winner=e+lane;}}
         }
         // Distance ranks a fixed batch only. It cannot reject an area-valid unit.
-        *k.p::<i32>(11).add(s)=*slots.add(winner);*k.p::<i32>(12).add(s)=*ids.add(winner);return;
+        *k.p::<i32>(11).add(s)=*slots.add(winner);*k.p::<i32>(12).add(s)=ids(winner);return;
     }
 }
 
@@ -219,7 +220,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
     let xs=k.p::<f32>(4);let ys=k.p::<f32>(5);let own=k.p::<i8>(6);let flags=k.p::<u8>(7);let cmd=k.p::<u8>(8);
     let ranges=k.p::<f32>(9);let ids=k.p::<i32>(10);let out=k.p::<i32>(11);let tid=k.p::<i32>(12);let sout=k.p::<i32>(3);
     let ag=k.p::<i32>(13);let cov=k.p::<u8>(14);let na=k.i(20).max(0) as usize;
-    let off=k.p::<i32>(27);let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let ao=k.p::<i32>(30);let aid=k.p::<i32>(31);let slots=k.p::<i32>(32);
+    let off=k.p::<i32>(27);let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
     let near=k.p::<i32>(33);let near_n=k.p::<i32>(34);
     let gw=k.i(15);let gh=k.i(16);let tile=k.f(5);let budget=k.i(24).clamp(4,256) as usize;
     let batch_budget=budget/4;let epoch=k.i(25) as u32;let players=k.i(7).max(1) as usize;
@@ -241,7 +242,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
         if gx<0||gy<0||gx>=gw||gy>=gh {continue;}
         let ar=*ag.add((gy*gw+gx) as usize);if ar<0||(ar as usize)>=na {continue;}
         let ar=ar as usize;let nareas=(*near_n.add(ar) as usize).min(NEAR);
-        let ox=f32x4_splat(x);let oy=f32x4_splat(y);let owner4=i32x4_splat(owner);
+        let ox=f32x4_splat(x);let oy=f32x4_splat(y);
         let seed=mix((*ids.add(s) as u32)^epoch.wrapping_mul(0x9e3779b9));
         let mut best=-1;let mut best_id=0;let mut b2=r*r;
         let mut batches=0;
@@ -258,13 +259,13 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
             if take==4 {
                 let dx=f32x4_sub(v128_load(ax.add(e) as *const v128),ox);let dy=f32x4_sub(v128_load(ay.add(e) as *const v128),oy);
                 let d2=f32x4_add(f32x4_mul(dx,dx),f32x4_mul(dy,dy));
-                let mask=v128_and(f32x4_le(d2,f32x4_splat(b2)),i32x4_ne(v128_load(ao.add(e) as *const v128),owner4));
+                let mask=f32x4_le(d2,f32x4_splat(b2));
                 let mut bits=i32x4_bitmask(mask);let distances:[f32;4]=core::mem::transmute(d2);
-                while bits!=0 {let l=bits.trailing_zeros() as usize;bits&=bits-1;let d=*distances.get_unchecked(l);let id=*aid.add(e+l);
+                while bits!=0 {let l=bits.trailing_zeros() as usize;bits&=bits-1;let d=*distances.get_unchecked(l);let id=*ids.add(*slots.add(e+l) as usize);
                     if d<=b2&&(best<0||d<b2||id<best_id){best=*slots.add(e+l);best_id=id;b2=d;}
                 }
             }else{
-                for l in 0..take {if *ao.add(e+l)==owner {continue;}let dx=*ax.add(e+l)-x;let dy=*ay.add(e+l)-y;let d=dx*dx+dy*dy;let id=*aid.add(e+l);
+                for l in 0..take {let dx=*ax.add(e+l)-x;let dy=*ay.add(e+l)-y;let d=dx*dx+dy*dy;let id=*ids.add(*slots.add(e+l) as usize);
                     if d<=b2&&(best<0||d<b2||id<best_id){best=*slots.add(e+l);best_id=id;b2=d;}
                 }
             }

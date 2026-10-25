@@ -783,21 +783,24 @@ function structListRemove(list, e) {
 // row (_sr): ~0.4 KB a structure instead of ~1.5 KB of object, properties
 // and boxed numbers (200k buildings: ~200 MB less on each of the page and the
 // worker). Kinds: 'n' a number (Float64; undefined stored as NaN, read back
-// as undefined, as a field never set), 'b' a boolean (Uint8: 0 unset, 1
-// false, 2 true), 'r' anything else (an array of values). Fields not listed
+// as undefined, as a field never set), 'f' a Float32 one (the same; values
+// whose precision does not matter: tick damages, angles), 'i' / 's' / 'c' a
+// whole number in Int32 / Int16 / Int8 (tiles, list places, stacks, levels,
+// owners, timers; undefined stored as the type's lowest value), 'b' a boolean
+// (Uint8: 0 unset, 1 false, 2 true), 'r' anything else (an array of values). Fields not listed
 // stay the object's own. Rows are not reused within a match (a destroyed
 // structure's object may still be read); the tables start over with it
 // (structTableReset). Lists from a census of chaos matches
 // (.claude/struct_field_census.cjs).
-const _STF_BUILDING = 'n:_stT n:_li n:_ow b:_uc n:_en n:gx n:gy n:x n:y r:type n:stacks n:manualStacks n:effectiveStacks n:level n:effectiveLevel '
-    + 'n:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
-    + 'n:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
-    + 'r:preComputedPotential n:burning n:burnTickDamage n:poisoned n:poisonTickDamage n:frozen n:iceTickDamage n:wet n:sandy n:watched n:watchedByTeam '
-    + 'r:_levelTextLabel n:_vsGen n:_vsR n:_vsA n:_vsP1 n:_vsP2 n:_vsListId b:autoStackEnabled r:_ambientSoundTicks';
+const _STF_BUILDING = 'i:_stT i:_li c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stacks i:manualStacks i:effectiveStacks c:level c:effectiveLevel '
+    + 'c:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
+    + 'i:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
+    + 'r:preComputedPotential i:burning f:burnTickDamage i:poisoned f:poisonTickDamage i:frozen f:iceTickDamage i:wet i:sandy i:watched c:watchedByTeam '
+    + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks';
 const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue r:rallyX r:rallyY r:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder r:_rallyLastSeenX r:_rallyLastSeenY b:_pendingRallyDetach';
-const _STF_MINE = 'n:_stT n:_li n:_mv n:gx n:gy n:x n:y';
+const _STF_MINE = 'i:_stT i:_li n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
-    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil n:angle r:connectedLasers n:laserState n:laserTimer r:_laserLinkLevel r:preferredTarget r:preferredTargetSpec r:_lzRow r:_lzCol',
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle r:connectedLasers c:laserState n:laserTimer r:_laserLinkLevel r:preferredTarget r:preferredTargetSpec r:_lzRow r:_lzCol',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
     CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
     BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
@@ -806,6 +809,8 @@ const STRUCT_TABLE_FIELDS = {
     GoldMine: _STF_MINE + ' n:maxGold', AstarMine: _STF_MINE + ' n:maxAstar'
 };
 const _sTables = new Map();
+// The number kinds' arrays and the value standing for undefined.
+const _S_NUM_KINDS = { n: [Float64Array, NaN], f: [Float32Array, NaN], i: [Int32Array, -2147483648], s: [Int16Array, -32768], c: [Int8Array, -128] };
 const STRUCT_SHARED_REFS = new Set(['type','unitType']);
 // Only genuinely unique overrides have instance storage. Ordinary stats
 // resolve owner/type/level directly into shared flat-table views.
@@ -817,7 +822,7 @@ const _sBuildingStatKeys=new Map();
 // sweeps over thousands of structures (cover, work sites, statuses) read it
 // for each one: ~4 us a lookup was a third of a tick at 4M units.
 function _sThingStatEntry(e,which='base') {
-    const sr=e._sr,T=sr===undefined?null:_sTables.get(e.constructor),ix=sr*3+(which==='effective'?1:which==='potential'?2:0);
+    const sr=e._sr,T=sr===undefined||sr<0?null:_sTables.get(e.constructor),ix=sr*3+(which==='effective'?1:which==='potential'?2:0);
     if(T!==null&&T.mTok[ix]===_precomputedStatsVersion+1)return T.mEnt[ix];
     const res=_sThingStatEntryCompute(e,which);
     if(T!==null&&res!==undefined){T.mTok[ix]=_precomputedStatsVersion+1;T.mEnt[ix]=res;}
@@ -873,19 +878,22 @@ function _sTableOf(C) {
     const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
     const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
     const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
-    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, free: [], keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
     for (const f of fields) T[f.col] = null;
     _sTables.set(C, T);
     _sTableGrow(T, 1024);
-    for(const name of derived)Object.defineProperty(C.prototype,name,{configurable:true,get(){const map=T.unique[name],v=map.size?map.get(this._sr):undefined;return v!==undefined?v:_sDerivedValue(this,name);},set(v){_sDerivedSet(T,this,name,v);}});
+    // (A structure taken out of the world (structRowDetach: _sr -1) keeps its values in its _sdet record, a derived override as $name.)
+    for(const name of derived)Object.defineProperty(C.prototype,name,{configurable:true,get(){if(this._sr<0){const d=this._sdet,v=d?d['$'+name]:undefined;return v!==undefined?v:_sDerivedValue(this,name);}const map=T.unique[name],v=map.size?map.get(this._sr):undefined;return v!==undefined?v:_sDerivedValue(this,name);},set(v){if(this._sr<0){_sDetOf(this)['$'+name]=v==null||Number.isNaN(v)?undefined:v;return;}_sDerivedSet(T,this,name,v);}});
     for (const f of fields) {
         const col='T.' + f.col;
         const at = col + '[this._sr]';
-        const read = f.kind === 'n' ? 'let x = ' + at + '; return x === x ? x : undefined;' : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
-        let write = f.kind === 'n' ? at + ' = v === undefined ? NaN : v;' : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
+        const nk = _S_NUM_KINDS[f.kind], fl = f.kind === 'n' || f.kind === 'f', und = nk ? String(nk[1]) : '';
+        const read = nk ? (fl ? 'let x = ' + at + '; return x === x ? x : undefined;' : 'const x = ' + at + '; return x === ' + und + ' ? undefined : x;') : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
+        let write = nk ? (fl ? at + ' = v === undefined ? NaN : v;' : at + ' = v === undefined || v === null || v !== v ? ' + und + ' : v;') : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
         if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType','stacks','manualStacks'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
         Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
-            get: new Function('T', 'return function () { ' + read + ' };')(T), set: new Function('T','_sDerivedReconcile', 'return function (v) { ' + write + ' };')(T,_sDerivedReconcile) });
+            get: new Function('T', 'return function () { if (this._sr < 0) { const d = this._sdet; return d ? d[' + JSON.stringify(f.name) + '] : undefined; } ' + read + ' };')(T),
+            set: new Function('T','_sDerivedReconcile','_sDetOf', 'return function (v) { if (this._sr < 0) { _sDetOf(this)[' + JSON.stringify(f.name) + '] = v; return; } ' + write + ' };')(T,_sDerivedReconcile,_sDetOf) });
     }
     return T;
 }
@@ -895,7 +903,7 @@ function _sTableGrow(T, cap) {
         let a;
         if (f.shared) { a=_simRefGrow(was,cap,undefined,true); }
         else if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
-        else { a = f.kind === 'n' ? new Float64Array(cap).fill(NaN) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
+        else { const nk = _S_NUM_KINDS[f.kind]; a = nk ? new nk[0](cap).fill(nk[1]) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
         T[f.col] = a;
     }
     {
@@ -909,19 +917,66 @@ function _sTableGrow(T, cap) {
 function _sRowTake(o) {
     const T = _sTableOf(o.constructor);
     if (!T) return false;
-    if (T.n >= T.cap) _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024);
-    Object.defineProperty(o, '_sr', { value: T.n++, writable: true, configurable: true });
+    // (A row a removed structure gave back first: structRowDetach cleared it.)
+    let r;
+    if (T.free.length) r = T.free.pop();
+    else { if (T.n >= T.cap) _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); r = T.n++; }
+    Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
     return true;
+}
+// A removed structure's record (its values while it has no row).
+function _sDetOf(o) {
+    let d = o._sdet;
+    if (!d) { d = Object.create(null); Object.defineProperty(o, '_sdet', { value: d, writable: true, configurable: true, enumerable: false }); }
+    return d;
+}
+// A structure taken out of the world (its tile cleared): its values into its
+// record and its row back to the table, cleared, for the next structure
+// (rows were never reused: a long match's placements and removals grew the
+// tables for good). A stale reference (a worker's target, a selection, a
+// pooled snapshot object) reads and writes the record; placed again, it takes
+// a row (structRowAttach).
+function structRowDetach(o) {
+    const r = o && o._sr;
+    if (!(r >= 0)) return;
+    const T = _sTables.get(o.constructor);
+    if (!T) return;
+    const vals = T.fields.map(f => o[f.name]);
+    const over = T.derived.map(name => { const m = T.unique[name]; return m.size && m.has(r) ? m.get(r) : undefined; });
+    for (const f of T.fields) {
+        const a = T[f.col];
+        if (f.shared) a.set(r, undefined);
+        else if (f.kind === 'r') a[r] = undefined;
+        else { const nk = _S_NUM_KINDS[f.kind]; a[r] = nk ? nk[1] : 0; }
+    }
+    for (const name of T.derived) T.unique[name].delete(r);
+    T.mTok[r * 3] = 0; T.mTok[r * 3 + 1] = 0; T.mTok[r * 3 + 2] = 0;
+    T.mEnt[r * 3] = undefined; T.mEnt[r * 3 + 1] = undefined; T.mEnt[r * 3 + 2] = undefined;
+    o._sr = -1;
+    const d = _sDetOf(o);
+    T.fields.forEach((f, i) => { d[f.name] = vals[i]; });
+    T.derived.forEach((name, i) => { if (over[i] !== undefined) d['$' + name] = over[i]; });
+    T.free.push(r);
+}
+function structRowAttach(o) {
+    if (!o || !(o._sr < 0)) return;
+    const d = o._sdet;
+    if (!_sRowTake(o)) return;
+    o._sdet = undefined;
+    if (!d) return;
+    const T = _sTables.get(o.constructor);
+    for (const f of T.fields) if (d[f.name] !== undefined) o[f.name] = d[f.name];
+    for (const name of T.derived) if (d['$' + name] !== undefined) o[name] = d['$' + name];
 }
 // The tables start over (a new match: resetWorldState. Not at a restore,
 // whose new structures' rows are taken before it indexes the tiles; the rows
 // of the structures it replaced stay until the next match.)
 function _sTablesReset() {
     for (const T of _sTables.values()) {
-        T.n = 0;
+        T.n = 0; T.free.length = 0;
         T.mTok.fill(0); T.mEnt.fill(undefined);
         for(const map of Object.values(T.unique))map.clear();
-        for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (f.kind === 'n') T[f.col].fill(NaN); else T[f.col].fill(0);
+        for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (_S_NUM_KINDS[f.kind]) T[f.col].fill(_S_NUM_KINDS[f.kind][1]); else T[f.col].fill(0);
     }
 }
 // The snapshot's keys of a tabled structure: its fields that hold a value
@@ -931,7 +986,8 @@ function _sTableKeys(e) {
     if (!T || e._sr === undefined) return null;
     const out = [];
     for (const k of T.keys) if (e[k] !== undefined) out.push(k);
-    for(const name of T.derived)if(T.unique[name].has(e._sr))out.push(name);
+    if (e._sr < 0) { const d = e._sdet; if (d) for (const name of T.derived) if (d['$' + name] !== undefined) out.push(name); }
+    else for(const name of T.derived)if(T.unique[name].has(e._sr))out.push(name);
     for (const k of Object.keys(e)) out.push(k);
     return out;
 }
@@ -1252,6 +1308,8 @@ function setTileEntity(gx, gy, type, ref) {
     if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef && prevRef !== ref) _activeTileEntities.delete(prevRef);
+    // (A removed structure placed again takes a row.)
+    if (ref && ref._sr < 0) structRowAttach(ref);
     structTableSet(gx, gy, prevRef, ref || null);
     tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = ref || null;
@@ -1265,6 +1323,7 @@ function setTileEntity(gx, gy, type, ref) {
         if (prevRef && prevRef !== ref) visCoverOnBuildingChanged(prevRef);
         if (ref) visCoverOnBuildingChanged(ref);
     }
+    if (prevRef && prevRef !== ref) structRowDetach(prevRef);
 }
 
 function clearTileEntity(gx, gy, expectedRef = null) {
@@ -1290,6 +1349,8 @@ function clearTileEntity(gx, gy, expectedRef = null) {
         workerReservedSet(baseIndex + i, null);
     }
     _markAdjacencyDirtyAt(gx, gy, 1);
+    // (Out of the world: its row back to the table, its values in its record.)
+    if (prevRef) structRowDetach(prevRef);
 }
 
 function getTileEntityType(gx, gy) {

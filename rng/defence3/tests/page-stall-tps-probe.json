@@ -11,25 +11,73 @@
   "rows": [
     {
       "stalled": "host",
+      "stallMs": 120,
+      "times": 1,
+      "totalMs": 120,
+      "host": {
+        "maxGapMs": 80,
+        "ticks": 23,
+        "expected": 22.5,
+        "lostTicks": -0.5,
+        "paceMs": 49.9,
+        "lateMs": 16,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 62,
+        "ticks": 23,
+        "expected": 22.4,
+        "lostTicks": -0.6,
+        "paceMs": 50.1,
+        "lateMs": 14,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "host",
       "stallMs": 250,
       "times": 1,
       "totalMs": 250,
       "host": {
         "maxGapMs": 64,
-        "ticks": 24,
-        "expected": 25,
-        "lostTicks": 1,
-        "paceMs": 50,
+        "ticks": 25,
+        "expected": 25.1,
+        "lostTicks": 0.1,
+        "paceMs": 49.8,
         "lateMs": 15,
         "order": "40/40"
       },
       "guest": {
-        "maxGapMs": 62,
+        "maxGapMs": 56,
         "ticks": 25,
         "expected": 25,
         "lostTicks": 0,
         "paceMs": 50,
-        "lateMs": 15,
+        "lateMs": 6,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "host",
+      "stallMs": 500,
+      "times": 1,
+      "totalMs": 500,
+      "host": {
+        "maxGapMs": 64,
+        "ticks": 30,
+        "expected": 30,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 14,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 56,
+        "ticks": 30,
+        "expected": 30,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 6,
         "order": "40/40"
       }
     },
@@ -39,21 +87,45 @@
       "times": 1,
       "totalMs": 1000,
       "host": {
-        "maxGapMs": 62,
+        "maxGapMs": 64,
         "ticks": 40,
         "expected": 40,
         "lostTicks": 0,
         "paceMs": 50,
-        "lateMs": 13,
+        "lateMs": 14,
         "order": "40/40"
       },
       "guest": {
-        "maxGapMs": 65,
+        "maxGapMs": 60,
         "ticks": 40,
-        "expected": 40.1,
-        "lostTicks": 0.1,
+        "expected": 40,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 10,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "guest",
+      "stallMs": 120,
+      "times": 1,
+      "totalMs": 120,
+      "host": {
+        "maxGapMs": 67,
+        "ticks": 23,
+        "expected": 22.5,
+        "lostTicks": -0.5,
         "paceMs": 49.9,
-        "lateMs": 15,
+        "lateMs": 16,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 64,
+        "ticks": 23,
+        "expected": 22.4,
+        "lostTicks": -0.6,
+        "paceMs": 50,
+        "lateMs": 14,
         "order": "40/40"
       }
     },
@@ -63,18 +135,42 @@
       "times": 1,
       "totalMs": 250,
       "host": {
-        "maxGapMs": 73,
+        "maxGapMs": 65,
         "ticks": 25,
         "expected": 25,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 15,
+        "order": "40/40"
+      },
+      "guest": {
+        "maxGapMs": 57,
+        "ticks": 25,
+        "expected": 25,
+        "lostTicks": 0,
+        "paceMs": 50,
+        "lateMs": 9,
+        "order": "40/40"
+      }
+    },
+    {
+      "stalled": "guest",
+      "stallMs": 500,
+      "times": 1,
+      "totalMs": 500,
+      "host": {
+        "maxGapMs": 63,
+        "ticks": 30,
+        "expected": 30,
         "lostTicks": 0,
         "paceMs": 50,
         "lateMs": 13,
         "order": "40/40"
       },
       "guest": {
-        "maxGapMs": 63,
-        "ticks": 25,
-        "expected": 25,
+        "maxGapMs": 61,
+        "ticks": 30,
+        "expected": 30,
         "lostTicks": 0,
         "paceMs": 50,
         "lateMs": 14,
@@ -87,46 +183,46 @@
       "times": 1,
       "totalMs": 1000,
       "host": {
-        "maxGapMs": 62,
+        "maxGapMs": 64,
         "ticks": 40,
-        "expected": 40.2,
-        "lostTicks": 0.2,
-        "paceMs": 49.7,
-        "lateMs": 14,
+        "expected": 39.7,
+        "lostTicks": -0.3,
+        "paceMs": 50.4,
+        "lateMs": 15,
         "order": "40/40"
       },
       "guest": {
-        "maxGapMs": 67,
+        "maxGapMs": 62,
         "ticks": 40,
         "expected": 40,
         "lostTicks": 0,
         "paceMs": 50,
-        "lateMs": 16,
+        "lateMs": 14,
         "order": "40/40"
       }
     }
   ],
   "errors": [],
   "stateAt": {
-    "tick": 747,
+    "tick": 1192,
     "hashes": [
       [
-        747,
-        "f2d00fe9"
+        1192,
+        "442ec314"
       ],
       [
-        747,
-        "f2d00fe9"
+        1192,
+        "442ec314"
       ]
     ],
     "equal": true
   },
   "host": {
     "net": {
-      "lateSeals": 12,
-      "autoTicks": 21,
-      "autoSeals": 26,
-      "carried": 1,
+      "lateSeals": 34,
+      "autoTicks": 26,
+      "autoSeals": 30,
+      "carried": 9,
       "desyncs": 0,
       "patches": 0,
       "hard": 0
@@ -138,55 +234,59 @@
       "helpers": 3,
       "shared": true,
       "epoch": 2,
-      "appliedTick": 746,
+      "appliedTick": 1191,
       "inFlight": 3,
       "heals": 0,
       "dropped": 0,
       "presentation": true,
-      "presentationTick": 746,
-      "presentationBuildMs": 5.335000038146973,
+      "presentationTick": 1191,
+      "presentationBuildMs": 8.459999978542328,
       "presentationPhases": [
-        1.9800000190734863,
-        2.715000033378601,
-        0.019999980926513672,
-        0.6150000095367432
+        0.22499996423721313,
+        4.840000033378601,
+        2.1549999713897705,
+        1.2350000143051147,
+        1,
+        1,
+        0,
+        0
       ],
       "presentationTorn": 0,
       "firstDiff": null,
       "rowsPerTick": 0,
       "rowsPerTickByList": {},
       "applyMs": {
-        "mean": 0.3,
-        "p95": 0.51
+        "mean": 0.15,
+        "p95": 0.23
       },
       "workerSimMs": {
-        "mean": 3.99,
-        "p95": 5.5
+        "mean": 3.76,
+        "p95": 4.94
       },
       "workerEncodeMs": {
-        "mean": 0.27,
-        "p95": 0.38
+        "mean": 0.21,
+        "p95": 0.28
       },
       "latencyMs": {
-        "mean": 31.39,
-        "p95": 30.37,
-        "shown": 11
+        "mean": 25.16,
+        "p95": 26.16,
+        "shown": 12
       },
       "workerLateMs": {
-        "mean": 2.66,
-        "p95": 12.71
+        "mean": 3.72,
+        "p95": 14.27
       },
       "dispatchAhead": true,
       "workerAhead": 3,
       "auto": true,
-      "autoTicks": 21,
-      "autoSeals": 26
+      "autoTicks": 26,
+      "autoSeals": 30
     }
   },
   "guest": {
     "net": {
-      "lateSeals": 12,
-      "autoTicks": 19,
+      "lateSeals": 34,
+      "autoTicks": 27,
       "autoSeals": 0,
       "carried": 0,
       "desyncs": 0,
@@ -200,48 +300,52 @@
       "helpers": 3,
       "shared": true,
       "epoch": 2,
-      "appliedTick": 746,
+      "appliedTick": 1191,
       "inFlight": 3,
       "heals": 0,
       "dropped": 0,
       "presentation": true,
-      "presentationTick": 746,
-      "presentationBuildMs": 3.899999976158142,
+      "presentationTick": 1191,
+      "presentationBuildMs": 8.7950000166893,
       "presentationPhases": [
-        0.2250000238418579,
-        3.0199999809265137,
-        0.019999980926513672,
-        0.6349999904632568
+        0.19499999284744263,
+        4.719999969005585,
+        2.4100000262260437,
+        1.4649999737739563,
+        1,
+        1,
+        0,
+        0
       ],
       "presentationTorn": 0,
       "firstDiff": null,
       "rowsPerTick": 0,
       "rowsPerTickByList": {},
       "applyMs": {
-        "mean": 0.26,
-        "p95": 0.44
+        "mean": 0.15,
+        "p95": 0.24
       },
       "workerSimMs": {
-        "mean": 3.84,
-        "p95": 5.27
+        "mean": 3.82,
+        "p95": 5
       },
       "workerEncodeMs": {
-        "mean": 0.26,
-        "p95": 0.37
+        "mean": 0.21,
+        "p95": 0.31
       },
       "latencyMs": {
-        "mean": 32.87,
-        "p95": 91.22,
+        "mean": 30.72,
+        "p95": 127.18,
         "shown": 10
       },
       "workerLateMs": {
-        "mean": 2.82,
-        "p95": 13.88
+        "mean": 1.14,
+        "p95": 4.9
       },
       "dispatchAhead": true,
       "workerAhead": 3,
       "auto": true,
-      "autoTicks": 19,
+      "autoTicks": 27,
       "autoSeals": 0
     }
   }

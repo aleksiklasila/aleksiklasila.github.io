@@ -7,6 +7,12 @@ const path = require('node:path');
 const nodeCrypto = require('node:crypto');
 
 const root = path.join(__dirname, '..');
+// The kernels as in browsers: the 32-bit build by default; WASM64=1 the
+// memory64 build, as the page's ?wasm64=1 (sim_wasm.js). That needs Node 24+.
+if (process.env.WASM64 === '1') {
+    try { new WebAssembly.Memory({ initial: 1n, maximum: 2n, address: 'i64', shared: true }); }
+    catch (err) { throw new Error('WASM64=1 needs wasm memory64: Node 24+ (this is ' + process.version + ')'); }
+}
 // Paired scale replays can load a historical implementation without checking
 // out files or touching the user's working tree.
 const baselineRef = process.env.DEFENCE_TEST_BASELINE;
@@ -501,11 +507,13 @@ function createInstance(world, name, options = {}) {
     // Simulation worker mode for the whole world (or SIM_WORKER=1).
     // Explicit either way (the page's default is the worker).
     // (A world or instance that says which mode wins over SIM_WORKER: tests that run both modes themselves.)
+    // (WASM64=1: the memory64 kernels, as the page's ?wasm64=1.)
+    if (process.env.WASM64 === '1') location.searchParams.set('wasm64', '1');
     location.searchParams.set('simworker', (world.simWorker === true || (world.simWorker !== false && process.env.SIM_WORKER === '1')) && options.simWorker !== false ? '1' : '0');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
         // (SIM_SHARED=1: shared memory, as a cross-origin isolated page.)
-        crossOriginIsolated: process.env.SIM_SHARED === '1',
+        crossOriginIsolated: process.env.SIM_SHARED === '1', SIM_HEAP_SITES_ON: process.env.SIM_HEAP_SITES === '1',
         addEventListener: (type, fn) => { (inst.winListeners[type] ||= []).push(fn); }, removeEventListener: () => { },
         dispatchEvent: ev => { for (const fn of (inst.winListeners[ev && ev.type] || []).slice()) fn(ev); return true; },
         getComputedStyle: () => ({ getPropertyValue: () => '' }), open: () => null, focus: () => { },
@@ -575,12 +583,12 @@ function createInstance(world, name, options = {}) {
                 // (WebAssembly from the same realm as SharedArrayBuffer: a wasm
                 // memory's buffer must pass `instanceof SharedArrayBuffer`.
                 // atob/btoa as a browser worker has them.)
-                crossOriginIsolated: process.env.SIM_SHARED === '1', SharedArrayBuffer, WebAssembly, atob, btoa,
+                crossOriginIsolated: process.env.SIM_SHARED === '1', SIM_HEAP_SITES_ON: process.env.SIM_HEAP_SITES === '1', SharedArrayBuffer, WebAssembly, atob, btoa,
                 console: { log() { }, info() { }, debug() { }, warn() { }, error: (...a) => inst.errors.push(new Error('[sim worker] ' + a.map(x => (x && x.stack) || String(x)).join(' '))) },
                 MessageChannel: class { constructor() { this.port1 = { onmessage: null, unref() { } }; this.port2 = { postMessage() { }, unref() { } }; } },
                 performance: { now: () => sched.now }, setTimeout: () => 0, clearTimeout() { }, setInterval: () => 0, clearInterval() { },
                 Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
-                location: { search: '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
+                location: { search: process.env.WASM64 === '1' ? '?wasm64=1' : '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
                 // (A worker's global scope is an event target: UI scripts
                 // loaded with the game's bind their listeners on it, idle.)

@@ -539,8 +539,8 @@ SIM_KERNELS[SIM_KERNEL_INDEX_IDSORT] = function (R, P, chunk) { _simRust(_simIxI
 // its last frame.
 const SIM_KERNEL_PV_MARKS = 85;
 const _simPvMarksW = _simWK(['unit.live', 'unit.dead', 'unit.id', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.energy', 'unit.owner', 'unit.commandState',
-    'unit.effectiveLevel', 'unit.attackFlash', 'unit.stOn', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvE', 'unit.pvO', 'unit.pvC', 'unit.pvL', 'unit.pvId',
-    'unit.vx', 'unit.vy', 'unit.pvV', '?unit.mvTgX', '?unit.mvTgY', '?unit.pvOD']);
+    'unit.effectiveLevel', 'unit.attackFlash', 'unit.stOn', 'unit.tmOn', 'unit.cmMode', 'unit.pvAt', 'unit.pvS', '?-', '?-', '?-', '?-',
+    'unit.vx', 'unit.vy', '?-', '?unit.mvTgX', '?unit.mvTgY', '?unit.pvOD']);
 SIM_KERNELS[SIM_KERNEL_PV_MARKS] = function (R, P, chunk) { _simRust(_simPvMarksW, P, chunk, 'k_pv_marks', 'PV_MARKS'); };
 const SIM_KERNEL_IXD_SCAN = 78, SIM_KERNEL_IXD_APPLY = 79, SIM_KERNEL_IXD_MERGE = 80, SIM_KERNEL_IXD_COPY = 81, SIM_KERNEL_IXD_OWNERS = 82, SIM_KERNEL_IXD_INIT = 83;
 const _simIxdW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'unit.owner', 'ixd.k', 'ixd.id', 'ixd.own', 'sep.eslot', 'sep.ekey', 'ix.eid',
@@ -761,8 +761,8 @@ SIM_KERNELS[SIM_KERNEL_UNIT_FRAME] = function (R, P, chunk) {
         F.flags[s] |= (BURN[u] > 0 ? SIM_UF_BURNING : 0) | (POISON[u] > 0 ? SIM_UF_POISONED : 0)
             | (FROZEN[u] > 0 ? SIM_UF_FROZEN : 0) | (WET[u] > 0 ? SIM_UF_WET : 0) | (SAND[u] > 0 ? SIM_UF_SANDY : 0)
             | (WATCH[u] > 0 ? SIM_UF_WATCHED : 0) | (HIDE[u] > 0 ? SIM_UF_HIDDEN : 0) | (TRANSFER[u] > 0 ? SIM_UF_TRANSFER : 0);
-        F.level[s] = Number.isFinite(LEVEL[u]) ? LEVEL[u] : -1;
-        F.blevel[s] = Number.isFinite(BASE[u]) ? BASE[u] : -1;
+        F.level[s] = LEVEL[u] > 0 ? LEVEL[u] : -1;
+        F.blevel[s] = BASE[u] > 0 ? BASE[u] : -1;
         F.flash[s] = Math.max(0, Math.min(255, FLASH[u]));
         F.x[s] = x; F.y[s] = y; F.vx[s] = vx; F.vy[s] = vy;
         F.px[s] = lastX[s]; F.py[s] = lastY[s]; lastX[s] = x; lastY[s] = y;
@@ -1046,9 +1046,9 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', '?-', '?-', '?-', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.frozen', 'unit.sandy',
-    'unit.cbT', 'unit.cbTick', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
-    'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', 'unit.mvHWin', 'unit.mvHTT', 'unit.mvHVer', 'unit.cbTId', 'unit.cbRangeS', 'unit.cbS',
-    'unit.fLsX', 'unit.fLsY', 'unit.fLsPX', 'unit.fLsPY', 'unit.fLsT', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
+    '?-', '?-', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
+    'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', '?-', '?-', '?-', '?-', '?-', '?-',
+    'unit.fLsX', 'unit.fLsY', '?-', '?-', '?-', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
     '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', '?-', '?-', '?-', '?-',
     '?-', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
@@ -1760,7 +1760,7 @@ const _simAcqScanW = _simWK(['acq.scls', 'acq.sown', '?acq.hss', 'acq.sout', 'ac
 const SIM_KERNEL_ACQ_AREA_BUILD=90;
 const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x','acq.y','acq.own','acq.flags','acq.cmd','acq.rng','acq.id',
     'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
-    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','acq.saOwner','acq.saId','acq.saSlot',
+    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','?-','?-','acq.saSlot',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
     // (The build's per-entry key.)
@@ -1870,7 +1870,7 @@ const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'unit.hS
     'unit.burning', 'unit.burnTickDamage', 'unit.wet', 'unit.frozen', 'unit.poisoned', 'unit.poisonTickDamage', 'hit.shr', 'unit.hWatchK', 'unit.watched', 'unit.wTeam', 'hit.wlist', 'hit.cnt']);
 SIM_KERNELS[SIM_KERNEL_HITS_APPLY] = function (R, P, chunk) { _simRust(_simHitsApplyW, P, chunk, 'k_hits_apply', 'HITS_APPLY'); };
 
-const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', 'unit.cbT', 'unit.cbTick', 'unit.cbTId', 'unit.cbRangeS']);
+const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', '?-', 'unit.cbTick', '?-', 'unit.cbRangeS']);
 SIM_KERNELS[SIM_KERNEL_ACQ_COMMIT] = function (R, P, chunk) { _simRust(_simAcqCommitW, P, chunk, 'k_acq_commit', 'ACQ_COMMIT'); };
 
 // The unit index's keys (chunk.js _spatialIndexRebuildParallel): per units

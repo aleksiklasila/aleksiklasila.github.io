@@ -310,12 +310,13 @@ function _upkUnitBin(U, c, s) {
     const ow = c.owner[s], t = c.upT[s];
     if (!(ow >= 0 && ow < U.np) || t < 0) return -1;
     // (getUnitEffectiveLevel, as SIM_KERNEL_UPKEEP.)
+    // (Levels Int8, 0 not set.)
     let l = c.effectiveLevel[s];
-    if (!(l - l === 0)) {
+    if (!(l > 0)) {
         l = c.unitLevel[s];
-        if (!(l - l === 0)) {
+        if (!(l > 0)) {
             l = c.baseLevel[s];
-            if (!(l - l === 0)) {
+            if (!(l > 0)) {
                 const sc = c.stackCount[s];
                 if (sc - sc === 0) { let v = Math.floor(Math.max(1, sc || 1)), k = 0; while (v >= 2) { v = Math.floor(v / 2); k++; } l = k + 1; }
                 else l = 1;

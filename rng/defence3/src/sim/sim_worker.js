@@ -200,6 +200,8 @@ self.onmessage = (ev) => {
             // (The page's shared control block: [epoch, last tick run].)
             _simCtl = msg.ctl instanceof Int32Array ? msg.ctl : null;
             _simAuto.base = Number(msg.ctlBase) || 0;
+            // (The page's kernel build, before sim_wasm.js reads it.)
+            if (msg.wasm64 !== undefined) self.SIM_WASM64_OPT = !!msg.wasm64;
             for (let url of msg.scripts) _simImport(url);
             _simStubUi();
             _simLoaded = true;

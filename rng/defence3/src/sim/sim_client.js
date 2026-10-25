@@ -129,7 +129,9 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
         c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search) });
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search),
+        // (The kernel build, as the page picks it: sim_wasm.js SIM_WASM64_ENABLED.)
+        wasm64: typeof SIM_WASM64_ENABLED !== 'undefined' ? !!SIM_WASM64_ENABLED : false });
 }
 
 // Loaded ahead (the scripts take a few hundred ms), so matches start at once.

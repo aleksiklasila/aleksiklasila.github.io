@@ -173,7 +173,8 @@ async function mapCase(mapType, seed) {
 (async () => {
     const maps = (process.argv[2] || process.env.PATCH_MAPS || 'crossroads,islands,solar_system').split(',');
     const rows = [];
-    for (let k = 0; k < maps.length; k++) rows.push(...await mapCase(maps[k], 5150 + k * 31));
+    // PATCH_SEED=n runs each map with that seed (the default list gives map k seed 5150 + 31k).
+    for (let k = 0; k < maps.length; k++) rows.push(...await mapCase(maps[k], process.env.PATCH_SEED ? +process.env.PATCH_SEED : 5150 + k * 31));
     console.log('PASS: per-guest patches\n  ' + rows.join('\n  '));
     process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

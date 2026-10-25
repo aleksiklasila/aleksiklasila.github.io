@@ -26,7 +26,9 @@ const SIM_UNIT_INT_COLUMNS = new Set(['id', 'owner', 'commandState', 'attackFlas
 // stores clamp to 0..SIM_TIMER_MAX (the setters, unit.js; Rust: sat16).
 const SIM_TIMER_MAX = 65535;
 const SIM_UNIT_U16_TIMERS = ['teleportHideTicks', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'workerTransferCooldown'];
+// Levels Int8 (1..MAX_THING_LEVEL; 0 not set: NaN stores as 0, the accessors read undefined).
 const SIM_UNIT_NARROW_COLUMNS = { owner: Int8Array, commandState: Uint8Array, attackFlash: Uint8Array,
+    unitLevel: Int8Array, baseLevel: Int8Array, effectiveLevel: Int8Array, _lastAppliedEffectiveLevel: Int8Array,
     ...Object.fromEntries(SIM_UNIT_U16_TIMERS.map(k => [k, Uint16Array])) };
 // Positions (x, y, prevX, prevY; and x0, y0 below): Int32 in eighths of a
 // pixel (UNIT_POSITION_QUANTIZATION: every position is a whole eighth), so
@@ -183,19 +185,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // navigation build V, wall version W and destination field kind G: the
     // next tile, the one after, the farthest one it heads straight for, and
     // whether that is over open ground.
-    // A long-range hold (mvReach above 1): held while the unit's window (tile
-    // * 9 + zone, mvHWin) and its target's tile (mvHTT) are those it was
-    // found in range by areas at, under area layout mvHVer.
-    ['mvHWin', Int32Array, 1], ['mvHTT', Int32Array, 1], ['mvHVer', Int32Array, 1],
     // (One record a slot, SIM_NAV_STRIDE words: T, D, V, W, G, N1, N2,
     // Far << 1 | Open; a steer touches one cache line. See simFlowLook.)
     ['mvNav', Int32Array, SIM_NAV_STRIDE],
-    // The combat scan (SIM_KERNEL_COMBAT_SCAN): its aggro range (pixels),
-    // and at tick cbTick the nearest visible enemy's slot (-1 none).
-    ['cbT', Int32Array, 1], ['cbTick', Int32Array, 1],
-    // (The acquisition tier's result as committed: its target's id and the
-    // range it was looked for with; see unit.js _acqTierStep.)
-    ['cbTId', Int32Array, 1], ['cbRangeS', Float32Array, 1],
+    // The acquisition tier's structure result as committed (unit.js _acqTierStep): the tick, the range it was looked for with,
+    // and the structure (its tile, -1 none). (Its unit target is the combat brain's: cmT.)
+    ['cbTick', Int32Array, 1], ['cbRangeS', Float32Array, 1],
     // (And the structure it found: its tile, -1 none.)
     ['cbS', Int32Array, 1],
     // A moving unit with an idle or waiting unit of its owner in its tile or
@@ -223,7 +218,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // fit its baseLevel and its window is known (esRad chunks around it,
     // esType its spatial type); esTaken the pass that took it; esFlag the
     // kernel's verdict per strided entry.
-    ['esOk', Uint8Array, 1], ['esRad', Int32Array, 1], ['esType', Int32Array, 1], ['esTaken', Int32Array, 1],
+    ['esOk', Uint8Array, 1], ['esRad', Uint8Array, 1], ['esType', Int8Array, 1], ['esTaken', Int32Array, 1],
     // Its worker record (SIM_UNIT_WK_SIDE; 0: none, the defaults' record).
     ['wkIx', Int32Array, 1],
     // The status pre-pass's events (1 damaged, 2 its watch ended, 4 died)
@@ -269,7 +264,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // renderer.js), so their updates need not read the unit object.
     ['spTile', Int32Array, 1], ['spArea', Int32Array, 1], ['spOwner', Int8Array, 1], ['spEpoch', Int32Array, 1],
     ['spType', Int16Array, 1], ['vsGen', Int32Array, 1], ['vsR', Int8Array, 1],
-    ['vsA', Int32Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1],
+    ['vsA', Int8Array, 1], ['vsP1', Int8Array, 1], ['vsP2', Int8Array, 1],
     // Unit.maxEnergy as of its last stat change (simUnitMaxE, where the
     // stats are applied), and 1 while the slot holds a unit: the healer
     // candidates' kernel (worker.js healerCandidatesStep).
@@ -301,7 +296,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (pvOD: its order destination as the presentation shows it, the marks
     // kernel's: k_pv_marks.)
     ['pvOD', Int32Array, 1],
-    ['pvAt', Int32Array, 1], ['pvId', Int32Array, 1], ['pvE', Float32Array, 1], ['pvO', Int8Array, 1], ['pvC', Uint8Array, 1], ['pvL', Int16Array, 1], ['pvV', Uint8Array, 1],
+    // (pvS: a signature of those values, k_pv_marks; bit 31 the velocity.)
+    ['pvAt', Int32Array, 1], ['pvS', Uint32Array, 1],
     // A unit's attack cooldown and damage (its stats: simMoveStatsChanged),
     // for the attacks the movement kernel makes for held units.
     ['atkSty', Uint8Array, 1],
@@ -336,9 +332,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['statRow', Int16Array, 1],
     // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
     // position, which the movement kernel writes for forced holds and chases
-    // (mvFlags 8); the values before its write (fLsPX/fLsPY) and the tick of
-    // it (fLsT), put back when the unit runs Unit.update after all that tick.
-    ['fLsX', Float32Array, 1], ['fLsY', Float32Array, 1], ['fLsPX', Float32Array, 1], ['fLsPY', Float32Array, 1], ['fLsT', Int32Array, 1],
+    // (mvFlags 8).
+    ['fLsX', Float32Array, 1], ['fLsY', Float32Array, 1],
     // 1 while Unit.targetBuilding holds a structure (its accessor writes it):
     // the acquisition tier skips units attacking a unit (SIM_KERNEL_ACQ_SNAP).
     ['acqB', Uint8Array, 1],
@@ -584,7 +579,11 @@ function simUnitStateReserve(n, room = n) {
     // columns, simUnitStateAllocate.)
     if (!(n > 0) && !(room > 0)) return;
     const S = _simUnitState || _simUnitStateNew();
-    const slots = k => Math.max(1024, Math.ceil((S.owners.length + Math.max(0, k - S.sl.nfree)) / 4096) * 4096);
+    // (With the slabs' allowed holes, up to 1 in 2^SIM_SLAB_SLACK_SHIFT: units
+    // fill 64-slot slabs block by block, and without that room a starting army
+    // a few percent past the count grew every column by 1/8, the old and new
+    // copies held at once: 4.7 GB at 4M units, more than a 32-bit heap.)
+    const slots = k => { const more = Math.max(0, k - S.sl.nfree); return Math.max(1024, Math.ceil((S.owners.length + more + (more >> SIM_SLAB_SLACK_SHIFT)) / 4096) * 4096); };
     const need = slots(Math.max(0, n | 0)), want = Math.max(need, slots(Math.max(0, room | 0)));
     // (Columns outside the heap, an earlier allocation's failure: made
     // again, in the heap, when it has room now.)
@@ -1066,7 +1065,7 @@ function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
     S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
-    S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN; S.columns.fLsT[s] = -1;
+    S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN;
     // (A worker record for a worker, or a unit carrying a builder's watch.)
     S.columns.wkIx[s] = 0;
     if (u.workerType || typeof u._bwx === 'number' || typeof u._bwy === 'number' || typeof u._bmt === 'number') {
@@ -1084,7 +1083,7 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
     S.columns.rkF[s] = 0; S.columns.mvTgX[s] = NaN; S.columns.mvTgY[s] = NaN;
     S.columns.tuS[s] = -1; S.columns.tuId[s] = 0; S.columns.fatF[s] = 0; S.columns.amGx[s] = -1; S.columns.amGy[s] = -1; S.columns.tbT[s] = -1;
-    S.columns.cbTick[s] = -1; S.columns.cbT[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
+    S.columns.cbTick[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
     // (Its object fields unset: their digest that of none.)
     _simUnitObjClear(S.columns, s);
     S.columns.hObj[s] = _simHDigest0();
@@ -1245,8 +1244,6 @@ function simUnitStateCompact(force = false) {
         C['oc_' + k] = _simRefCopy(old['oc_' + k], cap, runs);
     }
     for (let s = 0; s < ns; s++) {
-        const a = C.cbT[s];
-        if (a >= 0) C.cbT[s] = a < n0 ? map[a] : -1;
         const t = C.tuS[s];
         if (t >= 0) C.tuS[s] = t < n0 ? map[t] : -1;
     }

@@ -157,7 +157,8 @@ inst.eval(`__scratch.phases={}; __scratch.phaseSelf={}; __scratch.phaseStack=[];
         'simParallelRun','simParallelBackgroundWait','_simMoveSepListed','_simMoveChargeSteps',
         'simUnitStateCollect','runUnitSeparationPass','occupancyPrepareMovement','spawnerStructuresTick','processGlobalSpawnerQueue',
         '_simMoveBuildHostile','_simMoveWalls','_simMoveAreaBoxes','_simAreaCsr','_simMoveEnsureAreaBox']) {
-        const original=eval(name);
+        // (A phase that no longer exists is skipped.)
+        let original;try{original=eval(name);}catch(e){continue;}if(typeof original!=='function')continue;
         const wrapped=function(){
             if(!__scratch.measuring)return original.apply(this,arguments);
             const stack=__scratch.phaseStack, frame={start:__scratch.now(),child:0};stack.push(frame);
@@ -226,7 +227,7 @@ async function main() {
             else for(let s=0;s<S.owners.length;s++)if(!Object.is(a[s],value))populated++;
             jsFields.push({name,kind,bytes:a.byteLength,populated,slots:S.owners.length,sparse,pages:sparse?a.activePages:undefined});
         }
-        return {cap:S.cap,slots:S.owners.length,bytesPerSlot:_simUnitBytesPerSlot(),heap:simHeapStats(),jsFields,
+        return {cap:S.cap,slots:S.owners.length,bytesPerSlot:_simUnitBytesPerSlot(),heap:simHeapStats(),jsFields,peaks:typeof _simHeapPeakSnaps!=='undefined'?_simHeapPeakSnaps:null,
             regions:[...regions.values()].sort((a,b)=>b.bytes-a.bytes)};
     })()`):null;
     let movementCounters=null;
