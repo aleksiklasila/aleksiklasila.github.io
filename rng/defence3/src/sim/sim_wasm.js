@@ -304,6 +304,17 @@ function _simHeapReleaseImpl(arr) {
     H.ptr.delete(arr); H.size.delete(arr);
     _simHeapQueue(arr, p, s);
 }
+// (simHeapFreeAuto: an auto array no longer the collector's, given back as
+// simHeapFree's; a view, of no block of its own, never.)
+function _simHeapReleaseAutoImpl(arr) {
+    const H = _simHeap;
+    if (!arr || !H.size.has(arr)) return;
+    if (_simHeapAuto.has(arr)) { _simHeapAuto.delete(arr); if (_simHeapAutoGone) _simHeapAutoGone.unregister(arr); }
+    const p = H.ptr.get(arr), s = H.size.get(arr);
+    if (p === undefined) return;
+    H.ptr.delete(arr); H.size.delete(arr);
+    _simHeapQueue(arr, p, s);
+}
 // A block to give back once nothing can read it (arr: its array while
 // alive, for the binding check; null when the collector took it).
 function _simHeapQueue(arr, p, s) {
@@ -324,7 +335,8 @@ function _simHeapAllocAutoImpl(Type, n, clear = true) {
     const arr = _simHeapAllocImpl(Type, n, clear), H = _simHeap, p = H.ptr.get(arr);
     if (p === undefined || !_simHeapAutoGone) return arr;
     _simHeapAuto.add(arr);
-    _simHeapAutoGone.register(arr, { p, s: H.size.get(arr), site: SIM_HEAP_GC_FREE_SITES ? String(new Error().stack).split('\n')[3] || '' : '' });
+    // (arr its own unregister token: simHeapFreeAuto.)
+    _simHeapAutoGone.register(arr, { p, s: H.size.get(arr), site: SIM_HEAP_GC_FREE_SITES ? String(new Error().stack).split('\n')[3] || '' : '' }, arr);
     return arr;
 }
 // Once per tick (gameTick): freed arrays that nothing can still read go
@@ -418,5 +430,6 @@ function simWasmHelperInit(w) {
 _simHeapAlloc = _simHeapAllocImpl;
 _simHeapAllocAuto = _simHeapAllocAutoImpl;
 _simHeapRelease = _simHeapReleaseImpl;
+_simHeapReleaseAuto = _simHeapReleaseAutoImpl;
 _simHeapPtrOf = _simHeapPtrImpl;
 _simHeapViewReg = (arr, v, off) => { const p = _simHeap.ptr.get(arr); if (p !== undefined) _simHeap.ptr.set(v, p + off); };

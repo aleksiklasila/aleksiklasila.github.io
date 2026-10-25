@@ -268,3 +268,38 @@ Cut 3 (sparse status records):
 - Pitfall: _SIM_MOVE_WNAMES has several runs of '?-'; some are words a W_ constant still reads (73..78: W_HWIN..W_CBS,
   null on purpose). New words go only where no W_ constant points (storage-abi checks types, not this).
 - Script versions bumped to ?v=20261025-st1 (every file had 20261024-ui5, through both earlier waves).
+- Hits: hAcc + hTouch stay per slot; the status parts (hSty bits, hBurnD, hPoiD, hWatchK) are sub-records (unit.hSx + 1;
+  hit.rsty / rbd / rpd / rwk) only hits with a status style take (k.rs hit_one: compare-exchange on hSx, -1 while taken).
+  Sized by the status-style attacks counted where they are listed: the JS entries, and the movement kernel's list sites
+  (mv.rs hit_sty_count, mv.hitsc per chunk; unit.atkSty bound at word 96, mv.hitsc at 97). The same count bounds the status
+  records hits apply may take. 18 -> 9 B/slot.
+  Tried first: whole hit records by place in hit.tlist (unit.hIx): no gain at 4M, where ~3.9M units are hit a tick (17 B a
+  record + 4 B a slot), and reserving a status record per unit hit grew the pool to 2.7M records: the heap reached 4096 MB.
+- Pitfall: every listing site of mv.hita must count (five: 3171, 3289, 3453, list_hit, 4311). One missed made the count
+  short, and which unit lost its status then depended on the threads: 176 desyncs. The overflow warning goes to the peers'
+  console, which tickbench does not show.
+- 100000-1000 BATTLE=mix HASH_AT=400: 966469f6/34801e1a (the step-1 reference), 0 desyncs, mean 36.7 ms (one run).
+
+| step | live MB | peak MB | heap MB | unit B/slot |
+|---|---|---|---|---|
+| cut 3, 4M (checkerboard) | 3033 | 3185 | 3965-4064 | 418 |
+| cut 3, 3M (checkerboard --units=3000000) | 2357 | 2578 | 3133 | 418 |
+
+## Growth with match length (2026-10-25): navigation rebuilds
+
+The wasm heap grew with the length of a match whatever the units did: 100000-1000 BATTLE=mix, live 683 MB at tick 571,
+757-858 MB at ticks 3071-5071 with fewer units (135k -> 78k), heap 890 -> 1127 MB. Found with SIM_HEAP_SITES=1 and an
+EVALOUT of live bytes by allocation site (scratch sites.sh / out.js / sitediff: live = _simHeapSiteOf grouped by site):
+every array of the background navigation rebuilds (_navJobStep: nodes, fields, graph, parts, atlas), 4 -> 9 builds alive.
+They were simHeapArrayAuto arrays, given back only when the JS collector took their views; a build's views are a few
+hundred bytes of JS heap for 20-40 MB of wasm heap, so the collector had no reason to run.
+
+Fix: flownav.js _navArr records every build and atlas array as navigation's (_navOwned); _navSweep (after a publish,
+an install, a dropped next build, a reset, and every NAV_SWEEP_TICKS) walks the builds in use (_nav, _navNext.nav, the
+job's b / next / atl / shared; shared builds share arrays, hence reachability, not ownership by build) and queues the rest;
+NAV_FREE_TICKS (40) later simHeapFreeAuto (sim_wasm.js: unregisters the collector's entry, then simHeapFree's queue: jobs
+in flight, two ticks, no name binding it). The atlas header holds raw addresses (not names): it is rebound with its build
+at the publish, and the grace covers jobs started before.
+Same run after the fix: live 681 MB at tick 3071 and at tick 5071, heap 890 MB throughout; hash 966469f6/34801e1a,
+0 desyncs. Still to look at: JS heap after a forced GC 805 -> 863 MB and array buffers 205 -> 247 MB over those
+5000 ticks (both peers in one process).

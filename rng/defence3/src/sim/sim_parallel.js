@@ -95,6 +95,11 @@ function simSharedArray(Type, n) {
 let _simHeapAlloc = null, _simHeapRelease = null, _simHeapPtrOf = null, _simHeapAllocAuto = null;
 function simHeapArray(Type, n) { return _simHeapAlloc !== null ? _simHeapAlloc(Type, n) : simSharedArray(Type, n); }
 function simHeapFree(arr) { if (_simHeapRelease !== null && arr) _simHeapRelease(arr); }
+// An array from simHeapArrayAuto given back now, not when the collector takes
+// it: for owners that know when nothing reads it (navigation builds, flownav.js
+// _navSweep). The same queue as simHeapFree (jobs in flight, two ticks, names).
+let _simHeapReleaseAuto = null;
+function simHeapFreeAuto(arr) { if (_simHeapReleaseAuto !== null && arr) _simHeapReleaseAuto(arr); }
 // A view of part of a heap array (byte offset `off`, n elements of Type)
 // with its heap address: the kernels take it like any array. Freed with its
 // array, never alone.

@@ -61,19 +61,60 @@ function navBuild(profile, wall, costs, W, H) {
     navBuildParts(b);
     return navBuildFinish(b);
 }
+// Every array of a build and its atlas (navBuildStart .. navAtlasHeader) is
+// navigation's (_navOwned): given back once no build in use reaches it
+// (_navSweep: the installed builds, the next one, the job's), NAV_FREE_TICKS
+// later. They waited for the JS collector before, which on a quiet JS heap
+// rarely came: every rebuild stayed in the wasm heap (+20-40 MB each at
+// 1000x1000, 4 to 9 builds over 4500 ticks of a battle).
+const _navOwned = new Set(), _navFreeQ = [];
+const NAV_FREE_TICKS = 40, NAV_SWEEP_TICKS = 32;
+let _navFreeClock = 0;
+function _navArr(Type, n, clear = true) {
+    const a = simHeapArrayAuto(Type, n, clear);
+    _navOwned.add(a);
+    return a;
+}
+function _navReach(o, seen, out, depth) {
+    if (!o || typeof o !== 'object' || depth > 5) return;
+    if (ArrayBuffer.isView(o)) { out.add(o); return; }
+    if (seen.has(o) || o instanceof Map || o instanceof Set) return;
+    seen.add(o);
+    if (Array.isArray(o)) { for (let i = 0; i < o.length; i++) { const v = o[i]; if (v && typeof v === 'object') _navReach(v, seen, out, depth + 1); } return; }
+    for (const k in o) { const v = o[k]; if (v && typeof v === 'object') _navReach(v, seen, out, depth + 1); }
+}
+// Arrays of navigation no build in use reaches: queued (given back
+// NAV_FREE_TICKS later, by then no job of any lane started before reads them).
+function _navSweep() {
+    if (!_navOwned.size) return;
+    const live = new Set(), seen = new Set();
+    for (const b of _nav) _navReach(b, seen, live, 0);
+    _navReach(_navNext.nav, seen, live, 0);
+    const J = _navJob;
+    if (J) { _navReach(J.b, seen, live, 0); _navReach(J.next, seen, live, 0); _navReach(J.atl, seen, live, 0); _navReach(J.shared, seen, live, 0); }
+    for (const a of _navOwned) if (!live.has(a)) { _navOwned.delete(a); _navFreeQ.push(_navFreeClock, a); }
+}
+// Each tick (navTick): the sweep now and then, the queued arrays due given back.
+function _navFreeTick() {
+    _navFreeClock++;
+    if (_navFreeClock % NAV_SWEEP_TICKS === 0) _navSweep();
+    let i = 0;
+    while (i < _navFreeQ.length && _navFreeClock - _navFreeQ[i] >= NAV_FREE_TICKS) { if (typeof simHeapFreeAuto === 'function') simHeapFreeAuto(_navFreeQ[i + 1]); i += 2; }
+    if (i) _navFreeQ.splice(0, i);
+}
 // The walls (copied) and room for their step costs, bound for the kernels.
 function navBuildStart(profile, wallLive, withCosts, W, H) {
     // (A build's background stage still running reads the names bound here.)
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
     const C = Math.max(W, H) > 512 ? 32 : 16;
-    const wall = simHeapArrayAuto(Uint8Array, W * H);
+    const wall = _navArr(Uint8Array, W * H);
     wall.set(wallLive.length === W * H ? wallLive : wallLive.subarray(0, W * H));
-    const cost = withCosts ? simHeapArrayAuto(Uint8Array, W * H) : null, h = withCosts ? simHeapArrayAuto(Uint8Array, W * H) : null;
+    const cost = withCosts ? _navArr(Uint8Array, W * H) : null, h = withCosts ? _navArr(Uint8Array, W * H) : null;
     const cw = Math.ceil(W / C), ch = Math.ceil(H / C), nc = cw * ch;
-    const partL = simHeapArrayAuto(Uint16Array, W * H), partN = simHeapArrayAuto(Int32Array, nc);
+    const partL = _navArr(Uint16Array, W * H), partN = _navArr(Int32Array, nc);
     // (A cluster's exit nodes before they are numbered: NM slots each (a
     // border has at most C / 2 spans), and their count per border.)
-    const NM = 2 * C, ns = simHeapArrayAuto(Int32Array, Math.max(1, nc * NM)), nsc = simHeapArrayAuto(Int32Array, Math.max(1, nc * 4));
+    const NM = 2 * C, ns = _navArr(Int32Array, Math.max(1, nc * NM)), nsc = _navArr(Int32Array, Math.max(1, nc * 4));
     const bld = { profile, C, cw, ch, nc, W, H, k: 0, wall, cost, h, nodeBase: null, nodeTile: null, nodePair: null, fields: null,
         adjStart: null, adjA: null, adjC: null, adjN: null, adjMax: null, B: 1, partL, partN, NM, ns, nsc };
     simParallelBind('navb.wall', wall); simParallelBind('navb.cost', cost || _navNoCost); if (h) simParallelBind('navb.h', h);
@@ -126,11 +167,11 @@ SIM_KERNELS[SIM_KERNEL_NAV_NODES] = function (R, P, chunk) { _simRust(_navNodesW
 function navBuildNodesFinish(b) {
     b.h = null;
     const { nc, cw, C, NM, ns, nsc } = b;
-    const nodeBase = simHeapArrayAuto(Int32Array, nc + 1);
+    const nodeBase = _navArr(Int32Array, nc + 1);
     let k = 0;
     for (let c = 0; c < nc; c++) { nodeBase[c] = k; k += Math.min(NM, nsc[c * 4] + nsc[c * 4 + 1] + nsc[c * 4 + 2] + nsc[c * 4 + 3]); }
     nodeBase[nc] = k;
-    const nodeTile = simHeapArrayAuto(Int32Array, Math.max(1, k)), nodePair = simHeapArrayAuto(Int32Array, Math.max(1, k));
+    const nodeTile = _navArr(Int32Array, Math.max(1, k)), nodePair = _navArr(Int32Array, Math.max(1, k));
     for (let c = 0; c < nc; c++) {
         const b0 = nodeBase[c], n = nodeBase[c + 1] - b0, o = c * 4, nN = nsc[o], nW = nsc[o + 1], nE = nsc[o + 2];
         for (let i = 0; i < n; i++) {
@@ -146,8 +187,8 @@ function navBuildNodesFinish(b) {
         }
     }
     // (Each node's field is preset by the kernel that makes it.)
-    const CC = C * C, fields = simHeapArrayAuto(Uint16Array, Math.max(1, k * CC));
-    const adjN = simHeapArrayAuto(Int32Array, Math.max(1, k));
+    const CC = C * C, fields = _navArr(Uint16Array, Math.max(1, k * CC));
+    const adjN = _navArr(Int32Array, Math.max(1, k));
     b.k = k; b.nodeBase = nodeBase; b.nodeTile = nodeTile; b.nodePair = nodePair; b.fields = fields; b.adjN = adjN;
     _navBuildBind(b);
     simParallelBind('navb.adjN', adjN);
@@ -219,13 +260,13 @@ SIM_KERNELS[SIM_KERNEL_NAV_PARTS] = function (R, P, chunk) { _simRust(_navPartsW
 // parts), at a build's end.
 function navBuildPartsFinish(b) {
     const { nc, k, nodeBase, nodeTile, nodePair, partL, partN } = b;
-    const partBase = simHeapArrayAuto(Int32Array, nc + 1);
+    const partBase = _navArr(Int32Array, nc + 1);
     let np = 0;
     for (let c = 0; c < nc; c++) { partBase[c] = np; np += partN[c]; }
     partBase[nc] = np;
-    const partCluster = simHeapArrayAuto(Int32Array, Math.max(1, np));
+    const partCluster = _navArr(Int32Array, Math.max(1, np));
     for (let c = 0; c < nc; c++) for (let p = partBase[c]; p < partBase[c + 1]; p++) partCluster[p] = c;
-    const nodePart = simHeapArrayAuto(Int32Array, Math.max(1, k));
+    const nodePart = _navArr(Int32Array, Math.max(1, k));
     for (let c = 0; c < nc; c++) for (let i = nodeBase[c]; i < nodeBase[c + 1]; i++) nodePart[i] = partBase[c] + partL[nodeTile[i]];
     // (Union-find; a set's root its smallest part.)
     const uf = new Int32Array(np);
@@ -237,10 +278,10 @@ function navBuildPartsFinish(b) {
         const a = find(nodePart[i]), c = find(nodePart[j]);
         if (a < c) uf[c] = a; else if (c < a) uf[a] = c;
     }
-    const partComp = simHeapArrayAuto(Int32Array, Math.max(1, np)), compOfRoot = new Int32Array(np).fill(-1);
+    const partComp = _navArr(Int32Array, Math.max(1, np)), compOfRoot = new Int32Array(np).fill(-1);
     let ncomp = 0;
     for (let p = 0; p < np; p++) { const r = find(p); if (compOfRoot[r] < 0) compOfRoot[r] = ncomp++; partComp[p] = compOfRoot[r]; }
-    const compStart = simHeapArrayAuto(Int32Array, ncomp + 1), compParts = simHeapArrayAuto(Int32Array, Math.max(1, np));
+    const compStart = _navArr(Int32Array, ncomp + 1), compParts = _navArr(Int32Array, Math.max(1, np));
     for (let p = 0; p < np; p++) compStart[partComp[p] + 1]++;
     for (let i = 0; i < ncomp; i++) compStart[i + 1] += compStart[i];
     const fill = new Int32Array(ncomp);
@@ -294,12 +335,12 @@ function navBuildGraph(b) {
 }
 // Each node's first edge (adjStart: the counts summed) and the edge arrays.
 function navBuildGraphAlloc(b) {
-    const k = b.k, N = b.adjN, adjStart = simHeapArrayAuto(Int32Array, k + 1);
+    const k = b.k, N = b.adjN, adjStart = _navArr(Int32Array, k + 1);
     let e = 0;
     for (let i = 0; i < k; i++) { adjStart[i] = e; e += N[i]; }
     adjStart[k] = e;
-    b.adjStart = adjStart; b.adjA = simHeapArrayAuto(Int32Array, Math.max(1, e)); b.adjC = simHeapArrayAuto(Int32Array, Math.max(1, e));
-    b.adjMax = simHeapArrayAuto(Int32Array, Math.max(1, Math.ceil(k / NAV_GRAPH_PER_JOB)));
+    b.adjStart = adjStart; b.adjA = _navArr(Int32Array, Math.max(1, e)); b.adjC = _navArr(Int32Array, Math.max(1, e));
+    b.adjMax = _navArr(Int32Array, Math.max(1, Math.ceil(k / NAV_GRAPH_PER_JOB)));
     simParallelBind('navb.adjS', adjStart); simParallelBind('navb.adjA', b.adjA); simParallelBind('navb.adjC', b.adjC); simParallelBind('navb.adjMax', b.adjMax);
 }
 // The graph's bucket count (largest edge + 1) from the jobs' largest.
@@ -364,8 +405,8 @@ function navAtlasStart(b, bg) {
     if (!NAV_ATLAS || !(b.np > 0) || typeof simParallelRun !== 'function') return null;
     const { W, H, C, cw, ch, nc, np, k, nodePair, nodePart, partCluster } = b;
     const bw = Math.ceil(W / 8), bh = Math.ceil(H / 8), nb = bw * bh;
-    const bm = simHeapArrayAuto(Uint32Array, nb * 2), bc = simHeapArrayAuto(Uint8Array, W * H), cb = simHeapArrayAuto(Uint16Array, nb), cn = simHeapArrayAuto(Int32Array, nc);
-    const psx = simHeapArrayAuto(Float64Array, np), psy = simHeapArrayAuto(Float64Array, np), psn = simHeapArrayAuto(Int32Array, np);
+    const bm = _navArr(Uint32Array, nb * 2), bc = _navArr(Uint8Array, W * H), cb = _navArr(Uint16Array, nb), cn = _navArr(Int32Array, nc);
+    const psx = _navArr(Float64Array, np), psy = _navArr(Float64Array, np), psn = _navArr(Int32Array, np);
     // ---- The hierarchy over the parts ----
     // Items of the level below (parts first) with their domain coordinates
     // (clusters, then the domains of the level below); each part's item.
@@ -374,7 +415,7 @@ function navAtlasStart(b, bg) {
     for (let p = 0; p < np; p++) { const c = partCluster[p]; ix[p] = c % cw; iy[p] = (c - ix[p]) / cw; }
     const partItem = new Int32Array(np);
     for (let p = 0; p < np; p++) partItem[p] = p;
-    const levels = [], cip = simHeapArrayAuto(Uint16Array, np);
+    const levels = [], cip = _navArr(Uint16Array, np);
     let total = 0, span = 1;
     for (let lv = 0; lv < 16; lv++) {
         span *= 4;
@@ -414,22 +455,22 @@ function navAtlasStart(b, bg) {
         if (dwx <= 1 && dhy <= 1) break;
     }
     const L = levels.length;
-    const anc = simHeapArrayAuto(Int32Array, Math.max(1, np * L)), cinA = simHeapArrayAuto(Uint16Array, Math.max(1, total)), nchA = new Int32Array(Math.max(1, total));
+    const anc = _navArr(Int32Array, Math.max(1, np * L)), cinA = _navArr(Uint16Array, Math.max(1, total)), nchA = new Int32Array(Math.max(1, total));
     for (let lv = 0; lv < L; lv++) { const Lv = levels[lv], A = Lv.anc; for (let p = 0; p < np; p++) anc[p * L + lv] = A[p]; for (let d = 0; d < Lv.n; d++) { nchA[Lv.base + d] = Lv.nch[d]; if (Lv.cinUp) cinA[Lv.base + d] = Lv.cinUp[d]; } }
     // Each node's exit nodes (those of its parts), in node order, and each
     // exit node's place in its node at every level.
-    const dn = simHeapArrayAuto(Int32Array, Math.max(1, total)), dno = simHeapArrayAuto(Int32Array, total + 1), didx = simHeapArrayAuto(Int32Array, Math.max(1, k * L));
+    const dn = _navArr(Int32Array, Math.max(1, total)), dno = _navArr(Int32Array, total + 1), didx = _navArr(Int32Array, Math.max(1, k * L));
     for (let lv = 0; lv < L; lv++) for (let e = 0; e < k; e++) dn[anc[nodePart[e] * L + lv]]++;
     for (let d = 0; d < total; d++) dno[d + 1] = dno[d] + dn[d];
-    const dnodes = simHeapArrayAuto(Int32Array, Math.max(1, dno[total])), fill = new Int32Array(total);
+    const dnodes = _navArr(Int32Array, Math.max(1, dno[total])), fill = new Int32Array(total);
     for (let lv = 0; lv < L; lv++) for (let e = 0; e < k; e++) { const d = anc[nodePart[e] * L + lv], x = fill[d]++; dnodes[dno[d] + x] = e; didx[e * L + lv] = x; }
     // The costs on to each child of a node from each of its exit nodes
     // (kernel ATL_ROUTE, a job a node and child: nodes of one child need
     // none).
-    const rco = simHeapArrayAuto(Int32Array, Math.max(1, total));
+    const rco = _navArr(Int32Array, Math.max(1, total));
     let pool = 0, nj = 0;
     for (let d = 0; d < total; d++) { rco[d] = pool; if (nchA[d] > 1) { pool += nchA[d] * dn[d]; nj += nchA[d]; } }
-    const rc = simHeapArrayAuto(Uint32Array, Math.max(1, pool), false), jobs = simHeapArrayAuto(Int32Array, Math.max(3, nj * 3));
+    const rc = _navArr(Uint32Array, Math.max(1, pool), false), jobs = _navArr(Int32Array, Math.max(3, nj * 3));
     let jx = 0;
     for (let lv = 0; lv < L; lv++) { const Lv = levels[lv]; for (let d = Lv.base; d < Lv.base + Lv.n; d++) if (nchA[d] > 1) for (let t = 0; t < nchA[d]; t++) { jobs[jx++] = d; jobs[jx++] = t; jobs[jx++] = lv; } }
     simParallelBind('navb.wall', b.wall); simParallelBind('navb.partL', b.partL); simParallelBind('atl.partB', b.partBase);
@@ -462,9 +503,9 @@ function navAtlasStart(b, bg) {
 function navAtlasTables(A, bg) {
     if (!A) return;
     const { nc, cn } = A;
-    const co = simHeapArrayAuto(Int32Array, nc + 1);
+    const co = _navArr(Int32Array, nc + 1);
     for (let c = 0; c < nc; c++) co[c + 1] = co[c] + cn[c] * cn[c];
-    const ct = simHeapArrayAuto(Uint32Array, Math.max(1, co[nc]), false);
+    const ct = _navArr(Uint32Array, Math.max(1, co[nc]), false);
     A.co = co; A.ct = ct;
     simParallelBind('atl.bm', A.bm); simParallelBind('atl.bc', A.bc); simParallelBind('atl.cb', A.cb); simParallelBind('atl.cn', cn);
     simParallelBind('atl.co', co); simParallelBind('atl.ct', ct);
@@ -485,7 +526,7 @@ function navAtlasFinish(A) {
     // Four reads certify an empty rectangle of 8x8 blocks. This belongs to
     // the shared immutable geometry (~63 KiB for a 1000x1000 map).
     const stride=A.bw+1,bh=(A.H+7)>>3;
-    A.clearPrefix=simHeapArrayAuto(Int32Array,stride*(bh+1));
+    A.clearPrefix=_navArr(Int32Array,stride*(bh+1));
     for(let y=0;y<bh;y++){
         let row=0;
         for(let x=0;x<A.bw;x++){
@@ -502,7 +543,7 @@ function navAtlasFinish(A) {
 }
 // The header the kernels read (atlas.rs Atl): sizes, the arrays' addresses.
 function navAtlasHeader(A, nodePart, nodeBase) {
-    const h = simHeapArrayAuto(Int32Array, 24), ptr = a => _simWEnc(_simHeapPtrOf(a));
+    const h = _navArr(Int32Array, 24), ptr = a => _simWEnc(_simHeapPtrOf(a));
     h[0] = A.L; h[1] = A.C; h[2] = A.cw; h[3] = A.bw; h[4] = A.np;
     h[5] = ptr(A.bm); h[6] = ptr(A.bc); h[7] = ptr(A.cb); h[8] = ptr(A.co); h[9] = ptr(A.ct); h[10] = ptr(A.anc); h[11] = ptr(A.cip);
     h[12] = ptr(A.cin); h[13] = ptr(A.rco); h[14] = ptr(A.rc); h[15] = ptr(A.dn); h[16] = ptr(nodePart); h[17] = ptr(A.cn);
@@ -1122,6 +1163,8 @@ function navPublish(nav, made = false) {
     _navBindBuild('nav.', nav);
     for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
     _navRowsEnsure();
+    // (The build it replaced, and its job's own arrays: given back later.)
+    _navSweep();
     // Every destination field again over the new build (same slots: the
     // routes keep following them), at the next flush (navFieldsFlush):
     // until then the old build's. (Rows: the new build's parts.)
@@ -1358,6 +1401,7 @@ function _navNextDrop() {
     _navNextRelease();
     _navNext.nav = null; _navNext.copyPairs = null; _navNext.copying = false;
     _navFieldsHeader();
+    _navSweep();
 }
 
 // The current build of a profile, made now when there is none (the map's
@@ -1404,6 +1448,7 @@ function navReset() {
     _nav = new Array(NAV_PROFILES).fill(null);
     _navSeq = new Array(NAV_PROFILES).fill(0);
     _navJob = null; _navDiff.fill(0); _navLastJobProfile = -1;
+    _navSweep();
     // (The class walls made again from the grid as it is now: a restore.)
     _navClassWall.fill(null); _navClassGrid = null;
     _navSubReset();
@@ -1679,6 +1724,7 @@ function _navDiffChanged(p, t, was, now) {
 // A ground wall tile changed from `was` to `now` (simMoveTileTypeChanged).
 function navWallChanged(t, was, now) { _navDiffChanged(NAV_PROFILE_GROUND, t, was, now); }
 function navTick() {
+    _navFreeTick();
     // (The map's first builds at its first tick, not at the first order:
     // on a big map that build takes long.)
     if (!_nav[NAV_PROFILE_GROUND]) { for (const p of _navProfilesInUse()) navEnsure(p); return; }

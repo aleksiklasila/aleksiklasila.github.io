@@ -689,9 +689,14 @@ function _simUnitColumnsOutside(S) {
 }
 // The largest of cap and minCap (4096-slot steps) whose columns the heap
 // holds now (grown as needed); minCap when none does.
+// (With room for the work arrays sized by the slots too, made again at the
+// next tick (occupancy records, index scratch, flow tables: ~230 B a slot at
+// 4M): columns alone left them none in a full heap, and they were made
+// outside it, where no kernel reads them (heap-full-reserve, tick 39).)
+const SIM_UNIT_WORK_BYTES_PER_SLOT = 256;
 function _simUnitCapThatFits(cap, minCap) {
     if (cap <= minCap || typeof simHeapRoom !== 'function') return Math.max(cap, minCap);
-    const per = _simUnitBytesPerSlot() * 1.01;
+    const per = (_simUnitBytesPerSlot() + SIM_UNIT_WORK_BYTES_PER_SLOT) * 1.01;
     for (let c = cap; c > minCap; c = Math.max(minCap, Math.floor(c / 2 / 4096) * 4096)) if (simHeapRoom(per * c)) return c;
     return minCap;
 }
