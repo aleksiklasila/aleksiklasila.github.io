@@ -6,6 +6,9 @@ good enough for now.
 
 Start here: commit `7c1099e` ("3d fixes") holds all of the 2026-10-24 session's work (see "What changed").
 
+**Update 2026-10-25:** all five below are resolved or no longer reproduce on the current (uncommitted) code: see
+"Resolved later the same session" at the end.
+
 ## Known failing tests (as of 7c1099e)
 
 From the full regression (`node tests/run-regressions.cjs 3`, both modes; results in
@@ -119,9 +122,33 @@ Changes (all uncommitted at the time of writing):
 - New test: tests/construction-walk-driveby.test.cjs. Probes: .claude/place_tps_probe.cjs,
   .claude/site_marks_probe.cjs. Bench: tests/test-runs/place-burst-20261025/run.sh.
 
-Open from this session:
-- worker-walk fails in worker mode (also on HEAD 7c1099e): a worker stuck short of its target when other
-  workers are about; with only the collectors walking it passes. Being investigated.
-- User report: a builder and a healer walking head-on jitter in place instead of passing. Not reproduced yet
-  on open ground, in a one-tile lane, with worker-driven builders or at dk 4/10 (scratch headon.cjs);
-  traffic_swap skips partners with mvWk != 0 (workers), a suspect.
+Resolved later the same session:
+- worker-walk (worker mode, also failed on 7c1099e): two collectors met in a one-unit pocket of the base's tower
+  ring and pushed against each other for good: mv.rs traffic_swap skipped any partner with a worker task
+  (mvWk != 0). Workers walking the other way now swap (standing workers at their job still keep their spot).
+- Head-on builder/healer jitter: the user confirmed it is gone with the current code.
+- Tower Range 0a in the info panel (worker mode): page views' currentStats/preComputed were a stub; they read
+  the page's stat tables now, and the panel columns use preComputedBase / preComputedEffective (the card itself
+  has no area range). The simulation always read the range from the tables (boosts included).
+- load-world, worker-created-start, solo-snapshot (worker mode): test setup, not bugs: they inspect the
+  simulation on the page, which SIM_WORKER=1 moved into a worker. Those instances are pinned to page mode
+  (simWorker: false), and the harness now honours an explicit world.simWorker = false over SIM_WORKER
+  (solo-snapshot runs both modes itself).
+- multiplayer-chaos-determinism (worker mode): passes on the current code (5 runs, also under heavy load).
+- multiplayer-extremes (worker mode): failed once ('exact after the patch', host vs guest4 from tick 847) in a run
+  beside four other heavy tests; 15 runs since passed (plain, 3-5 heavy tests at once, EXT_GC=3/5 forced host GC
+  plus per-peer heap poison, EXT_DK=2/4/10 forced step sizes). Not reproduced. On a failure the test now prints
+  which state regions differ (cheap) and, with DIVTRACE=1, the first traced difference after the patch.
+  Note: DIVTRACE itself changes timing (the failing run did not fail with it).
+
+## Background run started 2026-10-25 03:09 (check results in the next session)
+
+`tests/test-runs/full-20261025/run_all.sh`, started detached, one step at a time: full regression (both modes,
+`tests/full-20261025.json`, summary in `regression-summary.txt`), other suites (crowd-scenarios, scale-world,
+storage census, extremes with EXT_GC/EXT_DK, chaos with CHAOS_HOST_HELPERS), fuzzing (long soak both modes,
+corruption/action fuzz, ui-fuzz, browser MP GUI fuzz, join stall), every tests/*.bench.cjs, tickbench modes
+(benchall base/active/battle/towers/siege, memory/GC/CPU-per-kernel runs, RALLY10, B800, 200k and 4M scenes,
+placement burst), CPU profiles (main + helpers) and a heap profile, then Edge probes (render TPS, render scale,
+scene TPS + heap log, placement burst, site marks, UI long tasks, click/input latency, order marker, page stalls,
+motion jitter, LOD, view switch, action spikes, panel scroll). Per step output: `tests/test-runs/full-20261025/<step>.txt`;
+progress and exit codes: `status.txt`; script log: `run_all.log`. Nothing is committed yet.
