@@ -301,5 +301,16 @@ NAV_FREE_TICKS (40) later simHeapFreeAuto (sim_wasm.js: unregisters the collecto
 in flight, two ticks, no name binding it). The atlas header holds raw addresses (not names): it is rebound with its build
 at the publish, and the grace covers jobs started before.
 Same run after the fix: live 681 MB at tick 3071 and at tick 5071, heap 890 MB throughout; hash 966469f6/34801e1a,
-0 desyncs. Still to look at: JS heap after a forced GC 805 -> 863 MB and array buffers 205 -> 247 MB over those
-5000 ticks (both peers in one process).
+0 desyncs. JS side (MEMSTAT=gc, both peers in one process): heap 879 MB / array buffers 245 MB at tick 571, 863 / 247 at
+tick 5071: flat (the 805 at "mem start" is before the battle's setup). 10000-160: JS 174 -> 177 MB, wasm 59 -> 58 MB.
+
+Also fixed (pre-existing, timing-dependent: heap-full-reserve mode 0, also at HEAD): a reservation made smaller to fit a
+full heap counted the unit columns only; the work arrays sized by the slots (occ.rec, ixd.*, flow.*) made again next tick
+found no room and went outside the heap (SIM_KERNEL_OCC_COUNTS failed). _simUnitCapThatFits counts
+SIM_UNIT_WORK_BYTES_PER_SLOT (256) too.
+Regression after cut 3 + the fixes: 425/426 (full-20261025-diet4.json); the one failure is heap-full-reserve mode 0, fixed
+during the run (3/3 passes after).
+
+Memory work paused here (user, 2026-10-25): memory stays flat over a match's length; next candidates were mvNav (32 B),
+navigation fields, occ.rec, laser pending damage (9 B), path-only fields (13 B), and a restore at 4M (compaction makes a
+second set of columns: untested at 4M).
