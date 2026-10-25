@@ -48,12 +48,13 @@ inst.eval(`_simWasm64Bytes=()=>null;startSoloGame();gameTick();currentTick++;
         for(let s=0;s<n;s++){
             C.mvOn[s]=0;C.cmMode[s]=0;C.mvOut[s]=0;
             C.x0[s]=C.prevX[s]=C.x[s];C.y0[s]=C.prevY[s]=C.y[s];
-            C.sepCx[s]=C.sepCy[s]=C.sepCv[s]=C.sepIv[s]=0;
+            C.sepCx[s]=C.sepCv[s]=C.sepIv[s]=0;
             C.sepMov[s]=kind==='brake'?224:0;
             _sep.hit[s]=s%3?4:0;_sep.ov[s]=C.collisionR[s]*(kind==='wake'?0.8:0.2);
             _sep.px[s]=1234;_sep.py[s]=-2345;_sep.cx[s]=_sep.cy[s]=_sep.fx[s]=_sep.fy[s]=0;
         }
-        if(kind==='carry')C.sepCx[4]=0.25;
+        // (sepCx: x and y as i16 halves, 1/256 px: x 0.25.)
+        if(kind==='carry')C.sepCx[4]=64<<16;
         if(kind==='closing')_sep.cx[4]=512;
         if(kind==='flow')_sep.fx[4]=1024;
         _sepPending={tick:currentTick,lane:0};

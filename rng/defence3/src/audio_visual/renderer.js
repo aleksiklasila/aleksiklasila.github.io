@@ -5681,11 +5681,11 @@ const _visCover = {
     // + area] = stamp << 6 | steps), the areas seeded this stamp (ulist,
     // ucnt), the areas covered at the last run (uprev, uprevn; ust 1: counted
     // in the cover), the last run's change (uplus, uminus, udiff), scratch;
-    // the snapshot (vtx, vty, vtkey); uStage: 0 idle, 1 seeds posted, 2 the
+    // the snapshot (vtp, vtkey); uStage: 0 idle, 1 seeds posted, 2 the
     // spread posted; uTick: the tick of the last step.
     uGen: 0, useed: null, ulist: null, ucnt: null, ustamp: 0, urem: null, ust: null, uprev: null, uprevn: null,
     uplus: null, uminus: null, udiff: null, ubufA: null, ubufB: null, ubufC: null, ucur: null, uaok: null,
-    vtx: null, vty: null, vtkey: null, uStage: 0, uTick: -1,
+    vtp: null, vtkey: null, uStage: 0, uTick: -1,
 };
 
 function resetVisibilityCoverage() {
@@ -6049,16 +6049,16 @@ function _visCoverUnitsPost() {
     _visCoverUnitsAlloc();
     simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
     const n = S ? S.owners.length : 0, A = C.areaCount, np = C.players;
-    // (The tick's positions and sight keys, snapshotted for the background
-    // seed: Int32 eighths like the columns, 12 bytes a unit.)
-    if (!C.vtx || C.vtx.length < n) {
+    // (The tick's tiles (with where in the tile: k.rs vis_tile_of) and sight
+    // keys, snapshotted for the background seed: 8 bytes a unit.)
+    if (!C.vtp || C.vtp.length < n) {
         const cap = simReserveCap(n);
-        C.vtx = simSharedArray(Int32Array, cap); C.vty = simSharedArray(Int32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
-        simParallelBind('vt.x', C.vtx); simParallelBind('vt.y', C.vty); simParallelBind('vt.key', C.vtkey);
+        C.vtp = simSharedArray(Int32Array, cap); C.vtkey = simSharedArray(Int32Array, cap);
+        simParallelBind('vt.p', C.vtp); simParallelBind('vt.key', C.vtkey);
     }
     if (n > 0) {
         const P = _simParams;
-        P[0] = n; P[1] = 8192; P[2] = C.gen; P[3] = SIM_SEP_ABSENT;
+        P[0] = n; P[1] = 8192; P[2] = C.gen; P[3] = SIM_SEP_ABSENT; P[4] = TILE; P[5] = GRID_W; P[6] = GRID_H;
         simParallelRun(SIM_KERNEL_VIS_SNAP, Math.ceil(n / 8192));
     }
     // The layout as of now (its arrays are its own: see above).

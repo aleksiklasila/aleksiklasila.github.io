@@ -1062,7 +1062,7 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
 // (From word 268, after the navigation profiles' words and their lengths.)
 // (?mv.lookc: the flow looks shared by every thread, see mv.rs look_cache.)
 // (?unit.burning... ?mv.tres: floor traps applied in the kernel, mv.rs floor_hit.)
-const _SIM_MOVE_WNAMES2 = ['?unit.sepCy', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
+const _SIM_MOVE_WNAMES2 = ['?-', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?sep.fast', '?sep.ex', '?sep.exc', '?unit.mvPF', '?mv.lookc',
     '?unit.burning', '?unit.burnTickDamage', '?unit.poisoned', '?unit.poisonTickDamage', '?unit.frozen', '?unit.iceTickDamage', '?unit.wet', '?unit.sandy', '?unit.stOn', '?unit.upT',
     '?mv.trapK', '?mv.trapL', '?mv.trapT', '?mv.tres', '?mv.trapTG',
     // (Word 292: each slot's worker record, the wk* arrays' index; 293, 294
@@ -1478,7 +1478,7 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUni
 // key vt.key = steps | (vsP1 + 1) << 8 | (vsP2 + 1) << 16 (its player and a
 // watching team), else -1.
 // P: [0] slots, [1] per job, [2] coverage generation, [3] SIM_SEP_ABSENT.
-const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsP1', 'unit.vsP2', 'vt.x', 'vt.y', 'vt.key']);
+const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsP1', 'unit.vsP2', 'vt.p', '?-', 'vt.key']);
 SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnapW, P, chunk, 'k_vis_snap', 'VIS_SNAP'); };
 
 // Units' visibility seeds (renderer.js _visCoverUnits): every unit of the
@@ -1490,7 +1490,7 @@ SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnap
 // player * A, vis.ucnt[player] entries, in no particular order).
 // P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [6] areas, [7]
 // players, [8] stamp.
-const _simVisSeedW = [false, true].map(live => _simWK([live ? 'unit.x' : 'vt.x', live ? 'unit.y' : 'vt.y', live ? '?vt.key' : 'vt.key', 'vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.agrid',
+const _simVisSeedW = [false, true].map(live => _simWK([live ? 'unit.x' : 'vt.p', live ? 'unit.y' : '?-', live ? '?vt.key' : 'vt.key', 'vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.agrid',
     'unit.vsGen', 'unit.dead', 'unit.sepKey', 'unit.vsR', 'unit.vsP1', 'unit.vsP2']));
 SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeedW[P[9] === 1 ? 1 : 0], P, chunk, 'k_vis_seed', 'VIS_SEED'); };
 // Laser beams on units (tower.js laserBeamsTick): a unit on a tile of a

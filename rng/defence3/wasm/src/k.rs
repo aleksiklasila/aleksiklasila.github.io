@@ -1716,7 +1716,7 @@ pub unsafe extern "C" fn k_order_move(a: u32, chunk: i32) {
         let mut ld = -1.0f64;
         if wide[prof] {
             let (x, y) = (g(xs, q) as f64 * 0.125, g(ys, q) as f64 * 0.125);
-            let (dx, dy) = (d % gw, d / gw);
+            let (dx, dy) = (irem(d, gw), idiv(d, gw));
             if (dx - floor(x / tile) as i32).abs() <= 64 && (dy - floor(y / tile) as i32).abs() <= 64 {
                 let (ex, ey) = (dx as f64 * tile + 16.0 - x, dy as f64 * tile + 16.0 - y);
                 ld = sqrt(ex * ex + ey * ey);
@@ -2483,15 +2483,39 @@ pub unsafe extern "C" fn k_vis_snap(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (xs, ys, dead, sk, vg, vr, v1, v2) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u32>(3), k.p::<i32>(4), k.p::<i8>(5), k.p::<i8>(6), k.p::<i8>(7));
-    let (tx, ty, key) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
+    // (vt.p: its tile and where in it, vis_tile_of; one word for the position's two.)
+    let (tp, key) = (k.p::<i32>(8), k.p::<i32>(10));
     let gen = k.i(2);
     let absent = k.f(3) as u32;
+    let itile = (1.0 / (k.f(4) * 8.0)) as f32;
+    let (w, h) = (k.i(5), k.i(6));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for q in s0..s1 {
-        s(tx, q, g(xs, q));
-        s(ty, q, g(ys, q));
+        s(tp, q, vis_tile_of(g(xs, q), g(ys, q), itile, w, h));
         s(key, q, vis_key(vg, dead, sk, vr, v1, v2, q, gen, absent));
     }
+}
+
+/// A position (eighths of a pixel) as its tile index << 4 and where in the
+/// tile it is: bit 0 within 0.3 of its left edge, 1 of its right (0.7 on),
+/// 2 / 3 its top / bottom; -1 off the map. The seed marks the tiles beside it
+/// on those sides (k_vis_seed).
+#[inline(always)]
+fn vis_tile_of(x: i32, y: i32, itile: f32, w: i32, h: i32) -> i32 {
+    let fx = x as f32 * itile;
+    let fy = y as f32 * itile;
+    if !(fx > -1e9 && fx < 1e9 && fy > -1e9 && fy < 1e9) {
+        return -1;
+    }
+    let gxf = floorf(fx);
+    let gyf = floorf(fy);
+    let (gx, gy) = (gxf as i32, gyf as i32);
+    if gx < 0 || gy < 0 || gx >= w || gy >= h {
+        return -1;
+    }
+    let (rx, ry) = (fx - gxf, fy - gyf);
+    let fl = (rx < 0.3) as i32 | ((rx >= 0.7) as i32) << 1 | ((ry < 0.3) as i32) << 2 | ((ry >= 0.7) as i32) << 3;
+    (gy * w + gx) << 4 | fl
 }
 
 /// An area's seed for player p: the most steps this stamp (atomic max of
@@ -2539,19 +2563,18 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
         if key < 0 {
             continue;
         }
-        let fx = g(xs, q) as f32 * itile;
-        let fy = g(ys, q) as f32 * itile;
-        if !(fx > -1e9 && fx < 1e9 && fy > -1e9 && fy < 1e9) {
+        // (Live: from the units' positions; else the snapshot's vt.p, as vis_tile_of made it.)
+        let tp = if live { vis_tile_of(g(xs, q), g(ys, q), itile, w, h) } else { g(xs, q) };
+        if tp < 0 {
             continue;
         }
-        let gxf = floorf(fx);
-        let gyf = floorf(fy);
-        let (gx, gy) = (gxf as i32, gyf as i32);
-        let (rx, ry) = (fx - gxf, fy - gyf);
-        let x0 = if rx < 0.3 { gx - 1 } else { gx };
-        let x1 = if rx < 0.7 { gx } else { gx + 1 };
-        let y0 = if ry < 0.3 { gy - 1 } else { gy };
-        let y1 = if ry < 0.7 { gy } else { gy + 1 };
+        let (t, fl) = (tp >> 4, tp & 15);
+        let (gx, gy) = (irem(t, w), idiv(t, w));
+        // (Arithmetic, not branches: LLVM made those a lookup table, a data segment.)
+        let x0 = gx - (fl & 1);
+        let x1 = gx + ((fl >> 1) & 1);
+        let y0 = gy - ((fl >> 2) & 1);
+        let y1 = gy + ((fl >> 3) & 1);
         let p1 = ((key >> 8) & 255) - 1;
         let p2 = ((key >> 16) & 255) - 1;
         let val = (stamp << 6) | (key & 63);

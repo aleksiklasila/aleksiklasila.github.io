@@ -317,9 +317,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The separation's tick-start copy (SIM_KERNEL_STATUS writes it with
     // x0/y0, its tier job reads it while the pass moves units): dead, radius,
     // layer; and the push it found that is still to be applied next tick
-    // (sepCx/sepCy: separation velocity carried into the next update).
+    // (sepCx: separation velocity carried into the next update, x and y as
+    // i16 halves, 1/256 px a base tick, as sepIv: mv.rs iv_pack).
     ['sepD0', Uint8Array, 1], ['sepR0', Float32Array, 1], ['sepL0', Uint8Array, 1],
-    ['sepCx', Float32Array, 1], ['sepCy', Float32Array, 1],
+    ['sepCx', Int32Array, 1],
     // Its intended velocity (its navigation's step of the last update per
     // base tick, before contacts) and the closing response it carries into
     // the next update: x and y as i16 halves, 1/256 px a base tick
@@ -1064,7 +1065,7 @@ const _simSlotDesc = { value: null, writable: true };
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepCy[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.stAcc[s] = typeof u._dtp === 'number' ? u._dtp : 0; S.columns.stEv[s] = 0; S.columns.stOn[s] = 1; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN;
     // (A worker record for a worker, or a unit carrying a builder's watch.)
     S.columns.wkIx[s] = 0;
@@ -1333,6 +1334,18 @@ function simUnitStateKeys(u) {
 // entries, 3.125% headroom already covers 32k births; 12.5% across the
 // separation/acquisition/index pools wastes hundreds of MB at 4M units.
 function simReserveCap(n, min = 1024) { return Math.max(min, Math.ceil(n * (n >= 1048576 ? 1.03125 : 1.125) / 4096) * 4096); }
+// One slot list for the tick's phases that list units one after another, each
+// used up before the next fills it (main.js _gameTickBody): the status
+// pre-pass's (st.list), the unit events' (ev.list), the dead units' (retire.list).
+// Three lists as long as the slots cost 12 bytes a unit (48 MB at 4M).
+let _simPhaseList = null;
+function simPhaseList(len, min = 8192) {
+    if (!_simPhaseList || _simPhaseList.length < len) {
+        _simPhaseList = simSharedArray(Int32Array, simReserveCap(len, min));
+        for (const nm of ['st.list', 'ev.list', 'retire.list']) simParallelBind(nm, _simPhaseList);
+    }
+    return _simPhaseList;
+}
 
 // Explicit paths alone own a window. Flow movers keep only a -1 handle.
 function simUnitPathWindow(c, s) {

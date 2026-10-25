@@ -112,7 +112,8 @@ function unitEventsRun() {
     const ns = S.owners.length;
     if (!ns) return;
     const c = S.columns, owners = S.owners, per = UNIT_EVENTS_PER_JOB, chunks = Math.ceil(ns / per);
-    if (!_unitEvList || _unitEvList.length < chunks * per) { _unitEvList = simSharedArray(Int32Array, simReserveCap(chunks * per, 8192)); simParallelBind('ev.list', _unitEvList); }
+    // (The tick's shared phase list: sim_unit_state.js simPhaseList.)
+    _unitEvList = simPhaseList(chunks * per);
     if (!_unitEvCnt || _unitEvCnt.length < chunks) { _unitEvCnt = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('ev.cnt', _unitEvCnt); }
     const P = _simParams;
     P[0] = ns; P[1] = per;
@@ -1397,7 +1398,7 @@ function statusPrepassRun() {
     // (By slot: every unit's slot, the free ones passed over by unit.live.)
     const chunks = Math.ceil(n / STATUS_PREPASS_CHUNK);
     if (!_statusCounts || _statusCounts.length < chunks) { _statusCounts = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('st.count', _statusCounts); }
-    if (!_statusList || _statusList.length < chunks * STATUS_PREPASS_CHUNK) { _statusList = simSharedArray(Int32Array, simReserveCap(chunks * STATUS_PREPASS_CHUNK, 4096)); simParallelBind('st.list', _statusList); }
+    _statusList = simPhaseList(chunks * STATUS_PREPASS_CHUNK);
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS; P[8] = simDk;
     // (The separation's tick-start copy only when separationStart, next,
@@ -3312,7 +3313,7 @@ function separationPrebuildTaken(ep) {
 function separationReset() {
     const U = _simUnitState;
     if (U) {
-        U.columns.sepCx.fill(0); U.columns.sepCy.fill(0); U.columns.sepCv.fill(0); U.columns.sepIv.fill(0);
+        U.columns.sepCx.fill(0); U.columns.sepCv.fill(0); U.columns.sepIv.fill(0);
         // Settling is derived from the cached force, dropped on every peer.
         const M = U.columns.sepMov;
         for (let s = 0; s < U.owners.length; s++) M[s] &= 1;

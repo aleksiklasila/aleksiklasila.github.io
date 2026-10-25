@@ -505,7 +505,8 @@ let _unitRetireList = new Int32Array(0), _unitRetireCounts = new Int32Array(0);
 function unitRetirePrepare() {
     const S = _simUnitState, n = units.length, ns = S ? S.owners.length : n;
     const blocks = Math.ceil(Math.max(n, ns) / UNIT_RETIRE_BLOCK);
-    if (_unitRetireList.length < n) { _unitRetireList = simSharedArray(Int32Array, simReserveCap(n)); simParallelBind('retire.list', _unitRetireList); }
+    // (The tick's shared phase list: sim_unit_state.js simPhaseList.)
+    _unitRetireList = typeof simPhaseList === 'function' ? simPhaseList(blocks * UNIT_RETIRE_BLOCK, 1024) : (_unitRetireList.length < blocks * UNIT_RETIRE_BLOCK ? new Int32Array(blocks * UNIT_RETIRE_BLOCK) : _unitRetireList);
     if (_unitRetireCounts.length < blocks) { _unitRetireCounts = simSharedArray(Int32Array, Math.max(16, blocks * 2)); simParallelBind('retire.count', _unitRetireCounts); }
     if (S) {
         simParallelBind('ix.slots', _unitSlotMapEnsure());

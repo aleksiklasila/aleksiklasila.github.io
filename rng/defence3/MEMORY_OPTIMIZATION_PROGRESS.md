@@ -206,6 +206,7 @@ Measure: `node --max-old-space-size=12000 --expose-gc tests/checkerboard-tps.ben
 | start (64-bit only: did not fit 32-bit) | 3670 (end) | 5822 | 7059 | 525 |
 | reserve with slab slack (no growth copies at the start) | 3532 | 3653 | 4096 | 525 |
 | cut 1 (below) | 3249 | 3400 | 4053 | 463 |
+| cut 2 (below) | 3185 | 3337 | 3964 | 459 |
 
 Final simulation hash identical throughout (cd88b396).
 
@@ -234,3 +235,14 @@ Next candidates (bytes per unit):
 - prevX/prevY vs x0/y0 (8 B), sepCx/sepCy as i16 halves like sepIv (4 B), r/collisionR/sepR0/maxE from the stat row (16 B),
   mvNav's 8 words (32 B) with narrower version words.
 - occ.rec (17 B), ixd room arrays (Float64 keys), vt.x/vt.y copies.
+
+Cut 2:
+- One shared slot list for st.list, ev.list, retire.list (sim_unit_state.js simPhaseList): filled one after another in
+  _gameTickBody, each used up before the next (status pre-pass, unit events, dead units).
+- Visibility snapshot vt.x + vt.y -> vt.p: the tile << 4 and where in it (k.rs vis_tile_of); the seed decodes it.
+- sepCx / sepCy (Float32 x2) -> sepCx as i16 halves (mv.rs iv_pack / iv_unpack, as sepIv).
+- Build pitfall: an integer % or / in Rust adds a panic location (a data segment): the 32-bit build refuses it
+  (wasm/build.cjs). Use idiv / irem (lib.rs). The 64-bit build did not trip on it; check both builds' 'wrote' lines.
+- Timing: no regression. HEAD vs working tree alternating (100000-1000 ACTIVE=1, 7 helpers): p50 48.8-50.8 vs 46.1-48.5 ms,
+  mean 93-94 vs 48-50 (HEAD's growth spikes). A python3.13 process on this machine uses a core all the time and Firefox ~0.8:
+  absolute numbers drift between runs; compare alternating runs only.

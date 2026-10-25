@@ -487,7 +487,8 @@ struct Mv {
     spy: *mut i32,
     sov: *mut F32,
     shit: *mut u32,
-    scx: *mut F32,
+    // (unit.sepCx: the carried separation velocity, x and y as i16 halves (iv_pack); scy unused.)
+    scx: *mut i32,
     scy: *mut F32,
     siv: *mut i32,
     scv: *mut i32,
@@ -5285,8 +5286,7 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
         v128_store(m.siv.add(s) as *mut v128, v128_andnot(iv_pack(ivx, ivy), dead));
     }
     let hits = v128_load(m.shit.add(s) as *const v128);
-    let cx = v128_load(m.scx.add(s) as *const v128);
-    let cy = v128_load(m.scy.add(s) as *const v128);
+    let (cx, cy) = iv_unpack(v128_load(m.scx.add(s) as *const v128));
     let cv = if m.scv.is_null() { zero } else { v128_load(m.scv.add(s) as *const v128) };
     if !v128_any_true(v128_or(v128_or(hits, bb_old), v128_or(cv, v128_or(cx, cy)))) {
         return 0;
@@ -5423,8 +5423,7 @@ unsafe fn push4(m: &Mv, c: &PushC, s: usize, end: usize, known: i32, mvd: i32) -
     if !m.siv.is_null() {
         v128_store(m.siv.add(s) as *mut v128, v128_andnot(iv_pack(f32x4_add(ivx, f32x4_mul(bx, idk)), f32x4_add(ivy, f32x4_mul(by, idk))), dead));
     }
-    v128_store(m.scx.add(s) as *mut v128, v128_andnot(f32x4_mul(f32x4_sub(gx, hx), idk), dead));
-    v128_store(m.scy.add(s) as *mut v128, v128_andnot(f32x4_mul(f32x4_sub(gy, hy), idk), dead));
+    v128_store(m.scx.add(s) as *mut v128, v128_andnot(iv_pack(f32x4_mul(f32x4_sub(gx, hx), idk), f32x4_mul(f32x4_sub(gy, hy), idk)), dead));
     if !m.scv.is_null() {
         v128_store(m.scv.add(s) as *mut v128, v128_andnot(iv_pack(vcx, vcy), dead));
     }
@@ -5674,7 +5673,7 @@ unsafe fn epi_begin(m: &Mv, f: *const f64, chunk: i32, b0: usize, end: usize) ->
         }
     }
     let push = on && rd(f, 54) == 1.0 && end > b0 && !m.shit.is_null() && !m.spx.is_null() && !m.spy.is_null() && !m.sov.is_null() && !m.scx.is_null()
-        && !m.scy.is_null() && !m.smv.is_null() && !m.snx.is_null() && !m.sny.is_null() && !m.sfast.is_null() && !m.sex.is_null() && !m.sexc.is_null();
+        && !m.smv.is_null() && !m.snx.is_null() && !m.sny.is_null() && !m.sfast.is_null() && !m.sex.is_null() && !m.sexc.is_null();
     Epi {
         absent: rd(f, 15),
         boxsteps: to_i32(rd(f, 17)),
