@@ -1099,10 +1099,15 @@ const UNIT_TYPE_FIELDS = { vis: s => s.vis || 'circle', color: s => s.color || '
     poisonResistant: s => s.poisonResistant || false, fireResistant: s => s.fireResistant || false, waterResistant: s => s.waterResistant || false,
     iceResistant: s => s.iceResistant || false, laserResistant: s => s.laserResistant || false, sandResistant: s => s.sandResistant || false,
     attackStyle: s => s.attackStyle || 'melee' };
+// Rare legacy/custom per-instance resistances retain the object query path.
+// Normal games share a tiny type table rather than repeating these flags in
+// persistent per-unit columns. Conservative for the rest of this session.
+let SIM_TOWER_TYPE_OVERRIDES=false;
+const _TOWER_TYPE_FIELDS=new Set(['turretImmune','fireResistant','waterResistant','poisonResistant','iceResistant']);
 for (const [k, of] of Object.entries(UNIT_TYPE_FIELDS)) {
     Object.defineProperty(Unit.prototype, k, { configurable: true, enumerable: false,
         get() { return of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm); },
-        set(v) { if (v !== of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm)) Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); } });
+        set(v) { if (v !== of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm)) { if(_TOWER_TYPE_FIELDS.has(k))SIM_TOWER_TYPE_OVERRIDES=true; Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); } } });
 }
 Object.defineProperty(Unit.prototype, 'isKing', { configurable: true, enumerable: false,
     get() { return this.unitType === 'king'; },

@@ -189,6 +189,41 @@ function _findTowerFloorTarget(tower, rangeArea, traps) {
     return best;
 }
 
+// One traversal for the structure fallback. The old cascade walked the same
+// areas up to four times (and repeated their range/hostility lookups). Reduce
+// by target class first, distance second and tile index third instead.
+function _findTowerBuildingTarget(tower,rangeArea){
+    const x=tower.x,y=tower.y,owner=tower.owner,sources=getSourceAreaIdsAtWorld(x,y);
+    if(!sources.length)return null;
+    const range=Math.floor(Math.max(0,Number(rangeArea)||0)),box=getAreaRangeTileBox(sources,range);
+    if(!hasHostileStructureInTileRect(owner,box[0],box[1],box[2],box[3]))return null;
+    const byArea=getStructuresByArea();
+    let best=null,priority=4,bestD2=Infinity,bestKey=Infinity;
+    for(const area of getAreaIdsWithinDistanceOfSources(sources,range)){
+        const list=byArea[area];if(!list)continue;
+        for(const e of list){
+            if(e===tower||e.owner===owner||!(e.energy>0))continue;
+            let p;
+            if(e instanceof Tower)p=0;
+            else if(priority===0)continue;
+            else if(_isProducerStructure(e))p=2;
+            else{
+                p=isTrapItem(e)?1:3;
+                if(p>priority)continue;
+                if(e.underConstruction||getFloorItemAtTile(e.gx,e.gy)!==e)continue;
+                const own=e.owner!==undefined?e.owner:grid[e.gy][e.gx].owner;
+                if(own===owner||own<0)continue;
+            }
+            if(p>priority)continue;
+            const dx=e.x-x,dy=e.y-y,d2=dx*dx+dy*dy,key=e.gy*GRID_W+e.gx;
+            if(p<priority||d2<bestD2||(d2===bestD2&&key<bestKey)){
+                best=e;priority=p;bestD2=d2;bestKey=key;
+            }
+        }
+    }
+    return best;
+}
+
 // ============================================================
 // TOWER CLASS
 // ============================================================
@@ -232,6 +267,71 @@ function _towerDueBuild(now) {
     }
     return W;
 }
+// Read-only acquisition for all due towers, before any of them shoot. Their
+// projectiles are resolved afterwards, so every query sees the same live unit
+// state. Snapshot by spatial ENTRY (not slot) for contiguous SIMD loads.
+// No persistent per-unit columns: three reusable scratch arrays, 12 B/entry.
+let SIM_TOWER_WASM=true,SIM_TOWER_VERIFY=false;
+const _towerAcq={list:[],areaLists:[],arrays:{},pos:0,ready:false,tick:-1,lastN:0,lastActive:0,lastUsed:0};
+const _towerAcqTypes={fire:1,water:2,poison:3,ice:4,elements:5,sand_gun:6,watch_tower:7};
+function _towerAcqArray(name,Type,n){
+    const T=_towerAcq,old=T.arrays[name];
+    if(old&&old.length>=n)return old;
+    const a=T.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
+    simParallelBind('tac.'+name,a);if(old)simHeapFree(old);return a;
+}
+function _towerAcqPrepare(due){
+    const T=_towerAcq;T.ready=false;T.list.length=0;T.areaLists.length=0;T.pos=0;T.lastN=0;T.lastActive=0;T.lastUsed=0;
+    if(!SIM_TOWER_WASM||SIM_TOWER_TYPE_OVERRIDES||CHUNK_SIZE!==1||!_sxBySlot||!_ST.n||!_simWasmOk(_simParReg)||typeof _simWasmX.k_tower_scan!=='function'||due.length<128)return;
+    spatialIndexEnsure();_visibilityKernelAreas();
+    const qx=_towerAcqArray('qx',Float64Array,due.length),qy=_towerAcqArray('qy',Float64Array,due.length),owner=_towerAcqArray('owner',Int32Array,due.length),type=_towerAcqArray('type',Int32Array,due.length);
+    const ST=_ST;
+    let prev=null,total=0,active=0;
+    for(const t of due){
+        if(t===prev)continue;prev=t;
+        // The authoritative tile SoA avoids repeatedly going through the
+        // structure object's paged accessors while preparing a large burst.
+        const tile=t._stT;
+        if(tile<0||ST.code[tile]!==0x22||!(ST.val[tile]>0)||ST.uc[tile]||gameTime<=Math.ceil(ST.tim[tile]))continue;
+        const gx=tile%GRID_W,gy=(tile-gx)/GRID_W;
+        if(tileEntityRef[gy][gx]!==t)continue;
+        const name=t.type;if(name==='laser'||name.startsWith('cloud'))continue;
+        const x=t.x,y=t.y,own=ST.own[tile],sources=getSourceAreaIdsAtWorld(x,y),range=Math.floor(_getTowerAttackRangeArea(t));
+        let ids=null;
+        if(sources.length){
+            const box=getAreaRangeTileBox(sources,range);
+            if(box[2]>=0&&_regionMayHaveEnemyUnits(own,box[0],box[1],box[2],box[3]))ids=getAreaIdsWithinDistanceOfSources(sources,range);
+        }
+        const i=T.list.length;qx[i]=x;qy[i]=y;owner[i]=own;type[i]=_towerAcqTypes[name]||0;
+        T.list.push(t);T.areaLists.push(ids);if(ids?.length){total+=ids.length;active++;}
+    }
+    T.lastN=T.list.length;T.lastActive=active;
+    if(active<16){T.list.length=0;T.areaLists.length=0;return;}
+    const n=T.list.length,nt=_simUnitTypeNames.length,flags=_towerAcqArray('flags',Uint8Array,nt);
+    for(let i=0;i<nt;i++){
+        const b=BASE_UNIT_STATS[_simUnitTypeNames[i]]||BASE_UNIT_STATS.norm;
+        flags[i]=(b.turretImmune?1:0)|(b.fireResistant?2:0)|(b.waterResistant?4:0)|(b.poisonResistant?8:0)|(b.iceResistant?16:0);
+    }
+    for(const name of ['x','y','meta'])_towerAcqArray(name,Int32Array,_sxListed+4);
+    const off=_towerAcqArray('off',Int32Array,n+1),ids=_towerAcqArray('areas',Int32Array,total);
+    _towerAcqArray('out',Int32Array,n);
+    let at=0;
+    for(let i=0;i<n;i++){
+        const areas=T.areaLists[i];off[i]=at;
+        if(areas){ids.set(areas,at);at+=areas.length;}
+    }
+    off[n]=at;
+    const P=_simParams;P[0]=_sxListed;P[1]=4096;P[2]=nt;
+    const normal=BASE_UNIT_STATS.norm;P[3]=(normal.turretImmune?1:0)|(normal.fireResistant?2:0)|(normal.waterResistant?4:0)|(normal.poisonResistant?8:0)|(normal.iceResistant?16:0);
+    simParallelRun(SIM_KERNEL_TOWER_PACK,Math.ceil(_sxListed/4096));
+    P[0]=n;P[1]=32;P[2]=_sxEpoch;
+    simParallelRun(SIM_KERNEL_TOWER_SCAN,Math.ceil(n/32));
+    T.ready=true;T.tick=gameTime;
+}
+function _towerAcqTake(t){
+    const T=_towerAcq;if(!T.ready||T.tick!==gameTime||T.list[T.pos]!==t)return undefined;
+    T.lastUsed++;const s=T.arrays.out[T.pos++];return s>=0?_simUnitState.owners[s]||null:null;
+}
 // A tick of the towers: statuses of those with some running (every tick, as
 // ever), then the towers due, in tile order; any whose energy ran out are
 // removed (the list from the end, as ever).
@@ -253,6 +353,7 @@ function towersTick() {
     }
     if (due) {
         due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        _towerAcqPrepare(due);
         let prev = null;
         for (const t of due) {
             if (t === prev) continue;
@@ -270,6 +371,7 @@ function towersTick() {
             _towerLate = 0;
             if (!(t.energy > 0)) dead = true;
         }
+        _towerAcq.ready=false;_towerAcq.list.length=0;_towerAcq.areaLists.length=0;
     }
     if (dead) {
         for (let i = towers.length - 1; i >= 0; i--) if (towers[i].energy <= 0) destroyBuilding(towers[i]);
@@ -410,6 +512,7 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
 
     shoot() {
         if (this.cd > 0) return;
+        const cachedUnit=_towerAcqTake(this);
         let rangeArea = _getTowerAttackRangeArea(this);
         let projectileMaxRange = Math.max(WORLD_W, WORLD_H) * 2;
         let preferredTarget = getTowerPreferredTargetInRange(this, rangeArea);
@@ -422,38 +525,52 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
             playSound('shoot_' + this.type, this.x, this.y);
             return;
         }
+        const wholeRange=Math.floor(rangeArea);
+        let target;
+        if(cachedUnit===undefined||SIM_TOWER_VERIFY){
         let bestPrimary = null, bestSecondary = null, bestImmune = null;
         let dPrimary = Infinity, dSecondary = Infinity, dImmune = Infinity;
+        const x=this.x,y=this.y,type=this.type,owner=this.owner;
+        const canImmune=type==='fire'||type==='water'||type==='poison'||type==='ice'||type==='elements';
+        const canAffected=type==='fire'||type==='water'||type==='poison'||type==='ice'||type==='sand_gun'||type==='watch_tower';
 
         // Every unit in the areas within floor(range) steps is in range (the
         // area of its tile is its bucket's), so no per-unit range check.
-        let wholeRange = Math.floor(rangeArea);
-        forEachUnitInAreaRange(this.x, this.y, wholeRange, (u) => {
+        forEachUnitInAreaRange(x, y, wholeRange, (u) => {
             if (u.turretImmune) return;
-            let dx = u.x - this.x;
-            let dy = u.y - this.y;
+            let dx = u.x - x;
+            let dy = u.y - y;
             let d2 = dx * dx + dy * dy;
             let d = Math.sqrt(d2);
+            // None of the target classes this tower can choose can improve.
+            // Preserve strict distance ties and the area's visiting order.
+            if(d>=dPrimary&&(!canAffected||d>=dSecondary)&&(!canImmune||d>=dImmune))return;
 
-            let immune = (this.type === 'fire' && u.fireResistant) || (this.type === 'water' && u.waterResistant) ||
-                (this.type === 'poison' && u.poisonResistant) || (this.type === 'ice' && u.iceResistant) ||
-                (this.type === 'elements' && (u.waterResistant || u.fireResistant || u.poisonResistant || u.iceResistant));
+            let immune = (type === 'fire' && u.fireResistant) || (type === 'water' && u.waterResistant) ||
+                (type === 'poison' && u.poisonResistant) || (type === 'ice' && u.iceResistant) ||
+                (type === 'elements' && (u.waterResistant || u.fireResistant || u.poisonResistant || u.iceResistant));
 
             if (immune) { if (d < dImmune) { dImmune = d; bestImmune = u; } }
             else {
                 let affected = false;
-                if (this.type === 'fire') affected = u.burning > 0;
-                else if (this.type === 'poison') affected = u.poisoned > 0;
-                else if (this.type === 'water') affected = u.wet > 0;
-                else if (this.type === 'ice') affected = u.frozen > 0;
-                else if (this.type === 'sand_gun') affected = u.sandy > 0;
-                else if (this.type === 'watch_tower') affected = u.watched > 0 && u.watchedByTeam === this.owner;
+                if (type === 'fire') affected = u.burning > 0;
+                else if (type === 'poison') affected = u.poisoned > 0;
+                else if (type === 'water') affected = u.wet > 0;
+                else if (type === 'ice') affected = u.frozen > 0;
+                else if (type === 'sand_gun') affected = u.sandy > 0;
+                else if (type === 'watch_tower') affected = u.watched > 0 && u.watchedByTeam === owner;
                 if (!affected) { if (d < dPrimary) { dPrimary = d; bestPrimary = u; } }
                 else { if (d < dSecondary) { dSecondary = d; bestSecondary = u; } }
             }
-        }, { enemyOfPlayer: this.owner, areaOnly: true });
+        }, { enemyOfPlayer: owner, areaOnly: true, readOnlyColumns: true });
 
-        let target = bestPrimary || bestSecondary || bestImmune;
+        target = bestPrimary || bestSecondary || bestImmune;
+        if(cachedUnit!==undefined&&target!==cachedUnit){
+            const info=u=>u&&({id:u.id,type:u.unitType,x:u.x,y:u.y,owner:u.owner,dead:u.dead,fire:u.fireResistant,water:u.waterResistant,poison:u.poisonResistant,ice:u.iceResistant,burning:u.burning,wet:u.wet,poisoned:u.poisoned,frozen:u.frozen,sandy:u.sandy,watched:u.watched,team:u.watchedByTeam});
+            throw Error('Tower SIMD target differs '+this.type+' at '+this.gx+','+this.gy+': '+JSON.stringify({scalar:info(target),simd:info(cachedUnit)}));
+        }
+        }
+        if(cachedUnit!==undefined)target=cachedUnit;
 
         // If no unit target, the nearest enemy building in range: towers
         // first, then traps, then barracks and spawners, then other floor
@@ -461,12 +578,7 @@ let newmaxEnergy = Number(this.preComputedBase && this.preComputedBase.maxEnergy
         // (First whether any hostile structure or floor item stands in the
         // box of the areas in either range: most idle towers have none near,
         // and each search visited every structure of those areas.)
-        if (!target && _towerHostileStructureNear(this, wholeRange, rangeArea)) {
-            target = _findTowerStructureTarget(this, wholeRange, 'tower');
-            if (!target) target = _findTowerFloorTarget(this, rangeArea, true);
-            if (!target) target = _findTowerStructureTarget(this, wholeRange, 'producer');
-            if (!target) target = _findTowerFloorTarget(this, rangeArea, false);
-        }
+        if (!target) target=_findTowerBuildingTarget(this,rangeArea);
         if (!target) {
             // (Nothing to shoot: it looks again on a tick of its own. Set
             // once, when nothing was found: a cooldown set twice with

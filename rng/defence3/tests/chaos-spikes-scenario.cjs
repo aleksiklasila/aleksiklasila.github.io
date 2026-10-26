@@ -65,6 +65,8 @@ function chaosSetup(o) {
     const towerKeys = BUILD_CATEGORIES.towers.filter(k => k !== 'watch_tower' && BASE_CARD_TYPES[k]);
     const trapKeys = ['lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand', 'mine'].filter(k => BASE_CARD_TYPES[k]);
     const built = [[], []];
+    const jobs=[{},{}];
+    const fronts=[];
     for (let p = 0; p < Math.min(2, np); p++) {
         // Collector buildings by the mines of the team's band, the collectors at them.
         const [y0, y1] = band(p);
@@ -80,6 +82,9 @@ function chaosSetup(o) {
                 if (!e) continue;
                 st.collectorBuildings[p]++; built[p].push(e);
                 for (let k = 0; k < 4 && ci < cols.length; k++) put(cols[ci++], mines[(i + k) % mines.length].gx, mines[(i + k) % mines.length].gy);
+            }
+            if(o.structures)for(;ci<cols.length&&mines.length;ci++){
+                const m=mines[ci%mines.length];put(cols[ci],m.gx+(ci%3)-1,m.gy+((ci/3|0)%3)-1);
             }
         }
         // The lattice: every 3rd tile, a healer building every 10th.
@@ -135,11 +140,64 @@ function chaosSetup(o) {
         }
         if (typeof recalculateLaserConnections === 'function') recalculateLaserConnections();
     }
+    if(o.layout==='front'){
+        for(let y=Math.floor(H/3)+12;y+30<2*H/3;y+=40)for(let x=8;x<W-8;x+=2){
+            // Gaps break the solid production rows into walkable sections.
+            if(x%16===0)continue;
+            for(let p=0;p<2;p++){
+                const gy=y+p*24,homeY=gy+(p?2:-2);
+                const b=place(x,gy,barrackKeys[(x/2+y)%barrackKeys.length],p);
+                if(b){built[p].push(b);fronts.push({b,homeY,targetY:y+(p?8:16)});}
+                const h=place(x,homeY,'healer_spawner',p);if(h)built[p].push(h);
+                if(x%32===8)place(x,homeY+(p?2:-2),towerKeys[(x+y)%towerKeys.length],p);
+            }
+        }
+        st.frontBarracks=fronts.length;
+    }
+    // Dense checkerboard with open corridors: retain the mixed battle and
+    // economy above, but stress hundreds of thousands of live things as well.
+    // Insert before queues and worker placement, so these are real job sites.
+    if(o.structures){
+        let total=new Set([...towers,...getCellItemsRowMajor()]).size,k=0;
+        st.dense={added:0,types:{}};
+        const remember=(p,role,e)=>{(jobs[p][role]||(jobs[p][role]=[])).push(e);};
+        for(let gy=3;gy<H-3&&total<o.structures;gy+=2)for(let gx=3;gx<W-3&&total<o.structures;gx++){
+            // Alternating solid turret runs form staggered choke points;
+            // intervening rows of isolated buildings allow local circulation.
+            if(gy%8===3?((gx+((gy>>3)&1)*8)%16>=12):(gx&1)===0)continue;
+            const bx=Math.floor(gx/12),by=Math.floor(gy/12),district=(bx+by*3)%8;
+            const p=district>=6&&o.layout!=='front'?((gx>>2)+(gy>>2))&1:gy<H/2?0:1;
+            const center=gx%12===5&&gy%12===5,home=gy%12===9;
+            let key;
+            if(district<2)key=center?(district?'astar_spawner':'spawner'):(district?'astar_farm':'farm');
+            else if(district===2)key='research';
+            else if(district===3)key=home?'healer_spawner':barrackKeys[(bx+by+gx+gy)%barrackKeys.length];
+            else if(district===4)key=home?'salvager':towerKeys[(gx+gy)%towerKeys.length];
+            else if(district===5)key=home?'builder_spawner':towerKeys[(gx+gy)%towerKeys.length];
+            else key=towerKeys[(gx+gy+bx)%towerKeys.length];
+            const site=district===5&&!home;
+            const e=place(gx,gy,key,p,!site);
+            if(!e)continue;
+            if(district===4&&!home){e.markedForSalvage=true;st.salvage++;remember(p,'salvager',e);}
+            if(site)st.towerSites[p]++;
+            if(site)remember(p,'builder',e);
+            if(district<2&&!center)remember(p,district?'astar_collector':'collector',e);
+            if(key==='research')remember(p,'researcher',e);
+            if(e.type==='barrack')remember(p,'healer',e);
+            if(e.type==='barrack'||['research','healer_spawner','spawner','astar_spawner','builder_spawner','salvager'].includes(e.type))built[p].push(e);
+            total++;k++;st.dense.added++;st.dense.types[key]=(st.dense.types[key]||0)+1;
+        }
+        if(total<o.structures)st.errors.push('Only '+total+' structures fit; requested '+o.structures);
+        st.structures=total;
+    }
     // Research: the labs' and researchers' stats raised, the researchers at level 9 by the labs.
     const things = Object.values(RESEARCH_THINGS_BY_ID || {}).filter(t => t && t.stats && t.stats.length);
     for (let p = 0; p < Math.min(2, np); p++) {
         const levels = ensurePlayerResearchLevels(p);
-        for (const t of things) if (/research/.test(String(t.key)) || /research/.test(String(t.kind))) for (const s of t.stats) levels[makeResearchLevelId(t.kind, t.key, s.statKey)] = Math.min(MAX_RESEARCH_LEVEL, 7);
+        for (const t of things) for (const s of t.stats) {
+            if(o.structures)levels[makeResearchLevelId(t.kind,t.key,s.statKey)]=Math.floor(rnd()*(MAX_RESEARCH_LEVEL+1));
+            else if(/research/.test(String(t.key))||/research/.test(String(t.kind)))levels[makeResearchLevelId(t.kind,t.key,s.statKey)]=Math.min(MAX_RESEARCH_LEVEL,7);
+        }
     }
     rebuildPrecomputedStatsMapPlayer();
     for (let p = 0; p < Math.min(2, np); p++) {
@@ -149,9 +207,12 @@ function chaosSetup(o) {
         mine.filter(u => u.workerType === 'healer').forEach((u, i) => { if (healerHomes.length) { const b = healerHomes[(i * 7) % healerHomes.length]; put(u, b.gx + 1 + (i % 3), b.gy + ((i >> 2) % 3) - 1); st.healersPlaced++; } });
         // Research queue: as many as the labs allow, stats by turns (cheap
         // and dear: every thing and stat over the list).
-        for (let i = 0; i < labs.length && i < 400; i++) {
+        for (let i = 0; i < labs.length && i < (o.structures?labs.length:400); i++) {
             const t = things[(i * 13 + p) % things.length], s = t.stats[(i * 5) % t.stats.length], lab = labs[i];
-            processAction(sanitizeAction({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: t.kind, key: t.key, statKey: s.statKey, count: 1 + (i % 4) }), p);
+            // Full stats cannot accept another task. Avoid repeating a no-op
+            // action/capacity scan at tens of thousands of labs during setup.
+            if(getPlayerResearchLevel(p,t.kind,t.key,s.statKey)+getResearchQueuedDepthForPlayer(p,t.kind,t.key,s.statKey)<MAX_RESEARCH_LEVEL)
+                processAction(sanitizeAction({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: t.kind, key: t.key, statKey: s.statKey, count: 1 + (i % 4) }), p);
             st.research++;
         }
         // Queues full.
@@ -175,6 +236,12 @@ function chaosSetup(o) {
             if (!e) continue;
             st.towerSites[p]++;
             if (builders.length) put(builders[i % builders.length], gx + 1, gy);
+        }
+        if(o.structures){
+            // Spread builders across actual unfinished jobs, rather than leaving
+            // most of them at the starting base waiting on distant assignments.
+            const sites=towers.filter(t=>t.owner===p&&t.underConstruction);
+            for(let i=0;i<builders.length&&sites.length;i++){const t=sites[i%sites.length];put(builders[i],t.gx+1,t.gy);}
         }
         for (let i = 0; i < salvagers.length; i++) {
             const at = freeNear(Math.floor(salvagers[i].x / TILE), Math.floor(salvagers[i].y / TILE), 5);
@@ -218,6 +285,15 @@ function chaosSetup(o) {
             y += 18; pair++;
         }
         for (let p = 0; p < 2; p++) {
+            if(o.structures){
+                // The original line fixture has room for only ~130k fighters.
+                // Give the remainder real orders and spread it through the
+                // maze instead of silently leaving most of a million at base.
+                for(let i=next[p];i<teams[p].length;i++){
+                    put(teams[p][i],6+(i*37)%(W-12),y0+((i/(W-12)|0)*7+p*3)%(y1-y0));
+                }
+                next[p]=teams[p].length;
+            }
             st.army[p] = next[p];
             const ids = teams[p].slice(0, next[p]).map(u => u.id);
             for (let k = 0; k < ids.length; k += 5000) processAction(sanitizeAction({ action: 'attackMove', unitIds: ids.slice(k, k + 5000), targetX: (W / 2) * TILE, targetY: (p ? 0.36 : 0.64) * H * TILE }), p);
@@ -225,6 +301,56 @@ function chaosSetup(o) {
         if (typeof recalculateLaserConnections === 'function') recalculateLaserConnections();
     }
     recalculateAdjacency(true);
+    if(o.structures){
+        st.jobs={};const assigned=[{},{}];
+        for(const u of units){
+            if(u.dead||!u.workerType)continue;
+            const list=jobs[u.owner]?.[u.workerType];if(!list?.length)continue;
+            const j=assigned[u.owner][u.workerType]||0;assigned[u.owner][u.workerType]=j+1;
+            const t=list[j%list.length];put(u,t.gx+1,t.gy);
+            // Establish real reservations through the normal setter. Oversupply
+            // stays unassigned and exercises the normal no-work fallback.
+            if(j>=list.length)continue;
+            const type=u.workerType==='researcher'?'research':u.workerType==='healer'?'queue':u.workerType==='collector'?'farm':u.workerType==='astar_collector'?'astar_farm':null;
+            if(u.workerType==='healer')u._healerPinnedQueueTarget=t;
+            if(_setWorkerTarget(u,t,type)){
+                u.path=null;u.pathIndex=0;u.commandState=CMD_IDLE;
+                u.workerState=u.workerType==='researcher'?'MOVING_TO_RESEARCH':u.workerType==='healer'?'MOVING_TO_HEAL':u.workerType==='builder'?'MOVING_TO_BUILD':'MOVING_TO';
+            }
+        }
+        for(let p=0;p<2;p++)for(const [role,list]of Object.entries(jobs[p]))st.jobs[role]=(st.jobs[role]||0)+list.length;
+    }
+    if(fronts.length){
+        __scratch.chaosFrontArmy=new Set();
+        __scratch.chaosFrontBuildings=fronts;
+        const orders=new Map();
+        const byOwner=[fronts.filter(f=>f.b.owner===0),fronts.filter(f=>f.b.owner===1)],armyCount=[0,0],healerCount=[0,0];
+        for(const f of fronts){
+            f.b.rallyX=f.b.x;f.b.rallyY=f.targetY*TILE+16;f.b.rallyTargetUnitId=null;
+        }
+        for(const u of units){
+            if(u.dead)continue;const p=u.owner;
+            if(u.workerType==='healer'){
+                const i=healerCount[p]++,f=byOwner[p][i%byOwner[p].length];
+                // One healer per barrack, extras continue ordinary nearby work.
+                if(i<byOwner[p].length){put(u,f.b.gx+1,f.homeY);u._healerPinnedQueueTarget=f.b;_clearWorkerTarget(u);_setWorkerTarget(u,f.b,'queue');u.workerState='MOVING_TO_HEAL';u.path=null;}
+            }else if(!u.workerType&&!u.isKing){
+                const i=armyCount[p]++,f=byOwner[p][i%byOwner[p].length];
+                const fighting=i<Math.max(500,byOwner[p].length/4);
+                if(fighting){put(u,f.b.gx,f.b.gy+(p?-3:3));__scratch.chaosFrontArmy.add(u.id);}
+                else{
+                    const [lo,hi]=band(p);put(u,6+(i*37)%(W-12),lo+(i/(W-12)|0)%(hi-lo));
+                }
+                // The reserve population travels between flanks through the
+                // dense job/maze districts; the frontline is replenished by
+                // ordinary paid queues, not out-of-band unit injections.
+                const action=fighting?'attackMove':'move',x=fighting?f.b.gx:(i&1?W-12:12),y=fighting?f.targetY:Math.floor(u.y/TILE),key=p+':'+action+':'+x+':'+y;
+                let a=orders.get(key);if(!a)orders.set(key,a={p,action,unitIds:[],targetX:x*TILE,targetY:y*TILE});a.unitIds.push(u.id);
+            }
+        }
+        for(const a of orders.values())for(let i=0;i<a.unitIds.length;i+=5000)processAction(sanitizeAction({...a,unitIds:a.unitIds.slice(i,i+5000)}),a.p);
+        st.frontFighters=__scratch.chaosFrontArmy.size;
+    }
     st.units = units.length; st.barracks = barracks.length; st.spawners = collectorSpawners.length; st.towers = towers.length;
     st.researchQueued = [0, 1].map(p => getPlayerResearchQueueTotalLength(p));
     // (The upgraded areas, for the bursts' further upgrades: the same on
@@ -246,12 +372,20 @@ function chaosBurst(o, k) {
         else if (b.type !== 'research') { if (b.spawnQueue && b.spawnQueue.length < 10) { queueAction({ action: 'queueWorker', gx: b.gx, gy: b.gy, count: 10 - b.spawnQueue.length }); out.queue++; } }
     }
     // Every 3rd burst: the rally points moved (30 points, all buildings).
-    if (k % 3 === 0) {
+    if (k % 3 === 0 && o.layout!=='front') {
         const pts = [];
         for (let r = 0; r < 30; r++) { const t = findNearestWalkable(Math.floor(W * (0.05 + 0.9 * rnd())), Math.floor(H * (0.05 + 0.9 * rnd()))); pts.push([t.x * TILE + 16, t.y * TILE + 16]); }
         const byPt = pts.map(() => []);
         mineB.forEach((b, i) => byPt[(i + k) % pts.length].push(b.gx, b.gy));
         byPt.forEach((c, j) => { for (let q = 0; q < c.length; q += 2 * ACTION_MAX_RALLY_COORDS) { queueAction({ action: 'setRallyMany', coords: c.slice(q, q + 2 * ACTION_MAX_RALLY_COORDS), targetX: pts[j][0], targetY: pts[j][1], targetUnitId: null }); out.rally++; } });
+    }
+    if(o.layout==='front'){
+        const line=(__scratch.chaosFrontBuildings||[]).filter(f=>f.b.owner===me&&f.b.energy>0);
+        for(let i=0;i<150&&i<line.length;i++){
+            const f=line[(k*150+i)%line.length],b=f.b;
+            queueAction({action:'setRally',gx:b.gx,gy:b.gy,targetX:b.x+((k&1)?8:-8)*TILE,targetY:f.targetY*TILE+16,targetUnitId:null});out.rally++;
+            if(b.spawnQueue.length<20){queueAction({action:'queueUnit',gx:b.gx,gy:b.gy,count:20-b.spawnQueue.length});out.queue++;}
+        }
     }
     // Research: 20 stats queued at labs (cheap and dear, by turns).
     const things = Object.values(RESEARCH_THINGS_BY_ID || {}).filter(t => t && t.stats && t.stats.length);
@@ -273,7 +407,7 @@ function chaosBurst(o, k) {
     // mega's every fourth burst sends that quarter raiding the enemy's
     // buildings instead.
     if (o.mode === 'mixed' || o.mode === 'mega') {
-        const army = units.filter(u => !u.dead && u.owner === me && !u.workerType && u.commandState !== undefined);
+        const army = units.filter(u => !u.dead && u.owner === me && !u.workerType && u.commandState !== undefined && (o.layout!=='front'||__scratch.chaosFrontArmy.has(u.id)));
         const q = k & 3, part = army.filter((u, i) => (i & 3) === q).map(u => u.id);
         const raid = o.mode === 'mega' && (k & 3) === 2;
         const tx = W * (0.1 + 0.8 * rnd()) * TILE, ty = raid ? H * (me ? 1 / 6 : 5 / 6) * TILE : H * (me ? 0.36 : 0.64) * TILE;

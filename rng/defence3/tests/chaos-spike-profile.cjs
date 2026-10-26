@@ -21,12 +21,15 @@ const label=frame=>{
  return name+(url&&!/wasm/.test(url)?' '+path.basename(url)+':'+(frame.lineNumber+1):'');
 };
 const noise=name=>/^(\(root\)|\(idle\)|\(program\)|wrapped|eval |inst\.eval |gameTick|_gameTickBody|loop |executeUserEntryPoint|wrapModuleLoad|\(anonymous\) (loader|run_main)|\(anonymous\)$)/.test(name);
-function slice(profile,row,origin){
+function slice(profile,row,origin,allowEmpty=false){
  const nodes=new Map(profile.nodes.map(n=>[n.id,n])),parent=new Map();
  for(const n of profile.nodes)for(const id of n.children||[])parent.set(id,n.id);
  const self=new Map(),total=new Map();
  const intervals=phase?(row.intervals||[]).filter(x=>x[0]===phase).map(x=>[x[1]-origin,x[1]-origin+x[2]]):[[row.at-origin,row.at-origin+duration(row)]];
- if(!intervals.length)throw Error('No timeline interval for '+phase+' in step '+row.step+'; capture with --timeline.');
+ if(!intervals.length){
+  if(allowEmpty)return {self,total,sampledMs:0,idleMs:0};
+  throw Error('No timeline interval for '+phase+' in step '+row.step+'; capture with --timeline.');
+ }
  const from=Math.min(...intervals.map(x=>x[0])),to=Math.max(...intervals.map(x=>x[1]));
  let time=0,sampledMs=0,idleMs=0;
  for(let i=0;i<profile.samples.length;i++){
@@ -45,7 +48,12 @@ function slice(profile,row,origin){
  return{self,total,sampledMs,idleMs};
 }
 const sum=(dest,src)=>{for(const[k,v]of src)dest.set(k,(dest.get(k)||0)+v);};
-const tables={spike:{self:new Map(),total:new Map()},reference:{self:new Map(),total:new Map()}},threads=[];
+const steps={spike,reference};
+for(const [name,offset]of [['previous',-1],['next',1]]){
+ const r=run.rows.find(r=>r.step===spike.step+offset);
+ if(r&&r.step>=(run.profileOrigins.startStep||0))steps[name]=r;
+}
+const tables=Object.fromEntries(Object.keys(steps).map(name=>[name,{self:new Map(),total:new Map()}])),threads=[];
 const profiles=[{name:'main',file:file+'.cpuprofile',origin:run.profileOrigins.main},...(run.profileOrigins.helpers||[]).map((origin,i)=>({name:'helper'+i,file:file+'.helper'+i+'.cpuprofile',origin}))];
 for(const item of profiles){
  if(!fs.existsSync(item.file))continue;
@@ -53,8 +61,8 @@ for(const item of profiles){
  // Earlier captures timestamped the synchronous start call's return. Its
  // substantial profiler-start overhead is the profile's first time delta.
  const origin=run.profileOrigins.beforeStart?item.origin:item.origin-(profile.timeDeltas[0]||0)/1000;
- for(const [name,step]of Object.entries({spike,reference})){
-  const s=slice(profile,step,origin);sum(tables[name].self,s.self);sum(tables[name].total,s.total);
+ for(const [name,step]of Object.entries(steps)){
+  const s=slice(profile,step,origin,name==='previous'||name==='next');sum(tables[name].self,s.self);sum(tables[name].total,s.total);
   row[name]={sampledMs:s.sampledMs,idleMs:s.idleMs,top:[...s.self].filter(([k])=>!noise(k)).sort((a,b)=>b[1]-a[1]).slice(0,6)};
  }threads.push(row);
 }
@@ -62,5 +70,6 @@ const top=(table,other)=>[...table].filter(([name])=>!noise(name)).map(([name,ms
 const topSelf=top(tables.spike.self,tables.reference.self),topTotal=top(tables.spike.total,tables.reference.total);
 const describe=r=>({step:r.step,ms:r.ms,wallMs:duration(r),gcMs:r.gcMs,cpuMs:r.cpu?(r.cpu.user+r.cpu.system)/1000:null,freeMB:r.freeMB,heapUsedMB:r.heapUsedMB,phases:r.phases,index:r.index});
 const result={phase,note:'Sampled thread time across concurrent threads; inclusive values overlap. Process CPU time is reported separately.',spike:describe(spike),reference:describe(reference),self:topSelf.sort((a,b)=>b.ms-a.ms).slice(0,25),extraSelf:topSelf.slice().sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),extraInclusive:topTotal.sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),threads};
+result.neighbors=Object.fromEntries(['previous','next'].filter(name=>steps[name]).map(name=>[name,{...describe(steps[name]),self:top(tables[name].self,tables.reference.self).sort((a,b)=>b.ms-a.ms).slice(0,15)}]));
 fs.writeFileSync(file+(phase?'.'+phase.replace(/[^a-z0-9_-]/gi,'-'):'')+'.spike-analysis.json',JSON.stringify(result,null,2));
-console.log(JSON.stringify({spike:result.spike,reference:result.reference,extraSelf:result.extraSelf.slice(0,14),extraInclusive:result.extraInclusive.slice(0,12)},null,2));
+console.log(JSON.stringify({spike:result.spike,reference:result.reference,neighbors:result.neighbors,extraSelf:result.extraSelf.slice(0,14),extraInclusive:result.extraInclusive.slice(0,12)},null,2));

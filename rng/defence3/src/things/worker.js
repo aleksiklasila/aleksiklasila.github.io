@@ -4036,15 +4036,54 @@ function _spawnerNearOf(T, key, ux, uy, list) {
     if (M.size >= SPAWNER_NEAR_MAX_TILES) M.clear();
     const K = SPAWNER_NEAR_K, GX = T.gx, GY = T.gy, bi = new Int32Array(K), bd = new Float64Array(K).fill(Infinity);
     let m = 0;
-    for (let i = 0, n = T.n; i < n; i++) {
+    const visit = i => {
         const sx = GX[i], sy = GY[i];
         // (One key for the order: distance, then row, then column.)
         const d = ((Math.abs(sx - ux) + Math.abs(sy - uy)) * 65536 + (sy + 16384)) * 65536 + (sx + 16384);
-        if (m === K && d >= bd[K - 1]) continue;
-        if (m === K && d === bd[K - 1] && !((Number(list[i] && list[i].id) || 0) < (Number(list[bi[K - 1]] && list[bi[K - 1]].id) || 0))) continue;
+        if (m === K && d > bd[K - 1]) return;
+        if (m === K && d === bd[K - 1] && !((Number(list[i] && list[i].id) || 0) < (Number(list[bi[K - 1]] && list[bi[K - 1]].id) || 0))) return;
         let j = m < K ? m++ : K - 1;
         while (j > 0 && (bd[j - 1] > d || (bd[j - 1] === d && (Number(list[i] && list[i].id) || 0) < (Number(list[bi[j - 1]] && list[bi[j - 1]].id) || 0)))) { bd[j] = bd[j - 1]; bi[j] = bi[j - 1]; j--; }
         bd[j] = d; bi[j] = i;
+    };
+    // A cache miss used to scan every spawner, even in dense economies.
+    // Visit nearby buckets until the closest possible unvisited tile is
+    // strictly farther than the fourth candidate. Equal-distance buckets
+    // must still be visited for the row/column/id tie break. Eligibility
+    // remains live in _findClosestSpawner, including its exhaustive fallback.
+    if(T.n>64&&ux>=0&&uy>=0&&ux<GRID_W&&uy<GRID_H){
+        let I=T.spatial;
+        if(!I){
+            const cols=Math.ceil(GRID_W/STRUCTURE_BUCKET_TILES),rows=Math.ceil(GRID_H/STRUCTURE_BUCKET_TILES);
+            I=T.spatial={cols,rows,buckets:new Array(cols*rows)};
+            for(let i=0;i<T.n;i++){
+                const bx=Math.max(0,Math.min(cols-1,Math.floor(GX[i]/STRUCTURE_BUCKET_TILES)));
+                const by=Math.max(0,Math.min(rows-1,Math.floor(GY[i]/STRUCTURE_BUCKET_TILES)));
+                (I.buckets[by*cols+bx]||(I.buckets[by*cols+bx]=[])).push(i);
+            }
+        }
+        const B=STRUCTURE_BUCKET_TILES,cx=Math.floor(ux/B),cy=Math.floor(uy/B);
+        let bucketsSeen=0;
+        const bucket=(x,y)=>{bucketsSeen++;const a=I.buckets[y*I.cols+x];if(a)for(let j=0;j<a.length;j++)visit(a[j]);};
+        for(let r=0;r<Math.max(I.cols,I.rows);r++){
+            const x0=Math.max(0,cx-r),x1=Math.min(I.cols-1,cx+r),y0=Math.max(0,cy-r),y1=Math.min(I.rows-1,cy+r);
+            if(cy-r>=0)for(let x=x0;x<=x1;x++)bucket(x,cy-r);
+            if(r&&cy+r<I.rows)for(let x=x0;x<=x1;x++)bucket(x,cy+r);
+            for(let y=Math.max(0,cy-r+1);y<=Math.min(I.rows-1,cy+r-1);y++){
+                if(cx-r>=0)bucket(cx-r,y);
+                if(r&&cx+r<I.cols)bucket(cx+r,y);
+            }
+            const outside=Math.min(x0>0?ux-x0*B+1:Infinity,x1<I.cols-1?(x1+1)*B-ux:Infinity,
+                y0>0?uy-y0*B+1:Infinity,y1<I.rows-1?(y1+1)*B-uy:Infinity);
+            if(outside===Infinity||(m===K&&outside>Math.floor(bd[K-1]/4294967296)))break;
+            // A distant, sparse economy can have more empty buckets than
+            // spawners. Bound that case with the original contiguous scan.
+            if(bucketsSeen>Math.max(32,T.n/8)){
+                m=0;bd.fill(Infinity);for(let i=0;i<T.n;i++)visit(i);break;
+            }
+        }
+    }else{
+        for(let i=0;i<T.n;i++)visit(i);
     }
     near = m < K ? bi.subarray(0, m) : bi;
     M.set(key, near);
@@ -4267,7 +4306,19 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
 function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {
     if (!assigningUnit || !target || !assigningUnit.workerState) return;
     let targetTileIndex = _getWorkerTargetTileIndex(target);
-    for (let other of units) {
+    // Reuse the live reservation index instead of visiting a million units
+    // for every rally/manual assignment. Moving patients are checked live;
+    // a worker indexed in both buckets is harmless after its first release.
+    _getWorkersWithTargetThisTick();
+    const slot=_getWorkerReservationSlotIndex(target,assigningUnit.workerType);
+    const fixed=_workerConflictTiles.get(slot),moving=_workerMovingTargetConflicts.get(assigningUnit.workerType);
+    const indexed=targetTileIndex>=0&&_workerTypeToLoadIndex(assigningUnit.workerType)>=0;
+    const candidates=indexed?null:units;
+    for(let pass=0;pass<(indexed?2:1);pass++){
+      const entries=indexed?(pass===0?fixed:moving):candidates;
+      if(!entries)continue;
+      for(let i=0;i<entries.length;i++){
+        const other=indexed?entries[i].unit:entries[i];
         if (!other || other === assigningUnit || other.dead || !other.workerState) continue;
         if (other.owner !== assigningUnit.owner) continue;
         if (other.workerType !== assigningUnit.workerType) continue;
@@ -4283,6 +4334,7 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
         other._pendingPathTarget = null;
         other.commandState = CMD_IDLE;
         other.workerState = 'IDLE';
+      }
     }
 }
 

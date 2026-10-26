@@ -530,6 +530,21 @@ function gameTick() {
 }
 // How many ticks one pass over the buildings' and floor items' status guard takes.
 const THING_STATUS_GUARD_TICKS = 512;
+// Keep the whole projectile pass under the phase name used by simtrace and
+// CPU-profile slicing; timing just projectilesBegin/End missed its body.
+function projectilesAdvance() {
+    projectilesBegin();
+    try {
+        let n0 = projectiles.length, spent = null;
+        for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
+        if (spent) {
+            let w = 0;
+            for (let i = 0; i < projectiles.length; i++) if (i >= n0 || !spent[i]) projectiles[w++] = projectiles[i];
+            projectiles.length = w;
+        }
+    } finally { projectilesEnd(); }
+}
+
 function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
     // next tick's action budget.)
@@ -651,16 +666,7 @@ function _gameTickBody() {
     // Projectiles
     // (Last to first, as ever; spent shots removed in one pass after, the
     // rest keeping their order.)
-    projectilesBegin();
-    try {
-        let n0 = projectiles.length, spent = null;
-        for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
-        if (spent) {
-            let w = 0;
-            for (let i = 0; i < projectiles.length; i++) if (i >= n0 || !spent[i]) projectiles[w++] = projectiles[i];
-            projectiles.length = w;
-        }
-    } finally { projectilesEnd(); }
+    projectilesAdvance();
 
     // Units: the movement kernel (simMoveRun: every unit's order, its
     // movement and its attacks, the combat brain's instructions) and what it

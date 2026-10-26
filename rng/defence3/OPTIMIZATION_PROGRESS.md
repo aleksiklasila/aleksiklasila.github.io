@@ -4,6 +4,76 @@ Working log for `SIMULATION_OPTIMIZATION_REFINEMENT.md` (the plan). Update this
 file at the end of every work session: what changed, what was measured, what
 is next. Newest entries first within each section.
 
+**TPS spike investigation:** read `AGENTS.md` and
+`tests/CHAOS_SPIKES_BENCHMARK.md`. Use the existing per-tick trace/profile
+slicer to inspect the previous, slow and next gameplay tick across all
+threads, plus a nearby normal tick. Prioritize gameplay p99/max and slow-tick
+counts over mean TPS; loading before play is separate. Historical bit equality
+is diagnostic; current implementation determinism and intended behavior are
+required.
+
+## 2026-10-26: dense mixed workload and turret burst reduction
+
+- Expanded the chaos fixture to start with 1,000,004 units and 250,000
+  structures on a 1000x1000 map, real nearby worker jobs, R0–R10 research,
+  paid production/healer queues, collector farms/mines, construction,
+  salvage, portals, turret choke points and recurring player actions.
+  Added work/throughput and population censuses, a secondary opposing
+  production layout, and serial scenario comparisons. Deaths remain real:
+  the dk=1 measured window contains 455k–722k surviving units, not a
+  maintained million. Front production has not been proven to sustain it.
+- Profiled the large scene across twelve threads. A turret phase expanded
+  to 437 ms versus 47 ms in a nearby normal tick. Added spatial-entry SoA
+  scratch and helper-dispatched WASM SIMD tower acquisition, using packed
+  type/status filters and f64x2 distances. The first SIMD-only trial was a
+  regression overall; a follow-up previous/slow/next capture found repeated
+  structure searches and preparation overhead. Preparation now reads the
+  existing structure SoA directly; the four-class building fallback uses
+  one traversal. Scratch costs about 32 MiB, without persistent unit fields.
+- Also indexed dense nearest-spawner misses and live manual-assignment
+  conflicts; bounded sparse-query fallback; reduced projectile structure
+  tile probes and removed a per-projectile closure. Scalar tower scans
+  filter through existing dead/owner columns before object access.
+- Two serial 140-step dk=1 pairs, eleven helpers, reversed order, 20 warmup
+  steps: mean **408/399 → 362/364 ms**, p99 **813/695 → 565/553 ms**,
+  maximum **836/719 → 617/574 ms**. Worst-5% mean **696/639 → 512/527 ms**;
+  over-500-ms steps **19/14 → 2/4** out of 120 per run. These are warmed
+  gameplay results. The first gameplay tick still costs about 8.4 seconds
+  in this mass-created scene; all early ticks and their initialization/
+  initial-command costs are retained separately, not classified as free
+  pre-game loading. Do not claim all gameplay spikes have been eliminated.
+- Both optimized repeats finish with hash `b304549`. Historical reference
+  hashes varied between these runs, so legacy equality is diagnostic.
+  Current implementation's 32-step combat replay is deterministic with
+  zero versus three helpers in both WASM modes, and asserts actual SIMD
+  consumption while verifying live scalar targets. Focused structure
+  targeting (6,805 cases), SIMD acquisition (4,800 cases/run), projectile
+  collision (6,050), dense/sparse spawner/reservation tests and both scene
+  layout checks pass. A separate 45-step million-unit live SIMD verification
+  also passed. Both production binaries rebuilt: `7268f4d0c6f19362` (32),
+  `18802f7ca0e70ac0` (64).
+- Persistent spike-hunting guidance is in `AGENTS.md`; the profile slicer
+  now includes the immediately previous and next tick plus a nearby normal
+  reference, across captured threads, and supports phase-local slicing.
+  Benchmark output includes worst-5% mean, absolute/relative slow counts,
+  excess pause time, raw early gameplay ticks and OS/GC measurements.
+- Raw captures, rejected trial results and detailed limitations:
+  [dense-chaos report](tests/test-runs/chaos-dense-20261026/README.md).
+  A final serial dk=20 pair (100 steps, 20 warmup, 80 measured) also improved:
+  mean **1167 → 1042 ms**, p95 **1540 → 1399 ms**, p99/max **1894 → 1772 ms**.
+  Production-queue processing averaged **110 → 25 ms**. Population was
+  401k–451k; optimized work included 28,391 births, 7,601 research deposits,
+  61,313 energy and 53,736 astar deposits, and 15,406 construction completions.
+  This larger-stride pair is not a repeated long-run tail guarantee: relative
+  over-1.5-median counts actually rose 1 → 2 as the median fell. Peak live
+  WASM memory grew 1633 → 1665 MiB, committed memory 1940 → 2182 MiB.
+- Remaining costs include mass orders, worker events, movement/traffic/
+  atlas work and projectile bursts. The dk=20 worst step still took 1.77 s.
+  Moved the unchanged inline projectile update/compaction pass under the
+  existing `projectilesAdvance` trace name, so future traces can measure its
+  whole body instead of only its begin/end toggles. Focused structure,
+  parallel-kernel and both-mode deterministic combat checks pass afterwards.
+
 ## 2026-10-20: collision and shared stat rows
 
 - Vectorized stationary contact geometry; reused exact opposite-force

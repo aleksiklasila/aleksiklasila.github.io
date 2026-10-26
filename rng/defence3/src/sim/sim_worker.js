@@ -604,7 +604,7 @@ function _simDeltaEvents(events) {
 // only in the slow ticks is the spike; time in the tick but in none of the
 // phases is the rest (collections, the pump).
 const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
-    'updateAllPlayerVisibility', 'towersTick', 'projectilesBegin', 'projectilesEnd', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
+    'updateAllPlayerVisibility', 'towersTick', '_towerAcqPrepare', 'projectilesBegin', 'projectilesEnd', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
     'unitEventsRun', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',

@@ -1544,6 +1544,13 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCo
 // _issueGroupMoveOrder; k.rs k_order_move): those it cannot take (workers,
 // held, a pending way...) listed for the JavaScript. P: see k_order_move.
 const SIM_KERNEL_ORDER_MOVE = 101;
+const SIM_KERNEL_TOWER_PACK=102,SIM_KERNEL_TOWER_SCAN=103;
+const _simTowerPackW=_simWK(['sep.eslot','unit.x','unit.y','unit.dead','unit.owner','unit.upT','tac.flags','unit.stIx',
+    'unit.stBu','unit.stWe','unit.stPo','unit.stFr','unit.stSa','unit.stWa','unit.wTeam','tac.x','tac.y','tac.meta']);
+const _simTowerScanW=_simWK(['tac.x','tac.y','tac.meta','sep.eslot','ix.start','ix.cnt','ix.stamp','vis.cellOff','vis.cells',
+    'tac.qx','tac.qy','tac.owner','tac.type','tac.off','tac.areas','tac.out']);
+SIM_KERNELS[SIM_KERNEL_TOWER_PACK]=function(R,P,chunk){_simRust(_simTowerPackW,P,chunk,'k_tower_pack','TOWER_PACK');};
+SIM_KERNELS[SIM_KERNEL_TOWER_SCAN]=function(R,P,chunk){_simRust(_simTowerScanW,P,chunk,'k_tower_scan','TOWER_SCAN');};
 const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPF', 'unit.x', 'unit.y',
     'unit.sepLayer', 'unit.tuS', 'unit.tuId', 'unit.tbT', 'unit.acqB', 'unit.fatF', 'unit.fLsX', 'unit.fLsY', 'unit.commandState', 'unit.mvOn', 'unit.amGx', 'unit.amGy',
     'unit.mvTgX', 'unit.mvTgY', 'unit.rkF', 'unit.rtEnd', 'unit.nvProf', 'unit.pathIndex', 'unit.nvPK', 'unit.mvCD', 'unit.mvNavLD', 'unit.mvPath']);

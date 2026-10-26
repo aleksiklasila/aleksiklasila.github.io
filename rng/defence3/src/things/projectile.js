@@ -33,8 +33,11 @@ function _projectileBuildingHit(p) {
         [towers, barracks, collectorSpawners].forEach((list, kind) => { for (const b of list) consider(b, kind); });
         return best;
     }
-    const gx0 = Math.max(0, Math.floor((p.x - 18) / TILE) - 1), gx1 = Math.min(GRID_W - 1, Math.floor((p.x + 18) / TILE) + 1);
-    const gy0 = Math.max(0, Math.floor((p.y - 18) / TILE) - 1), gy1 = Math.min(GRID_H - 1, Math.floor((p.y + 18) / TILE) + 1);
+    // Structure centres belong to their own tiles. The radius already
+    // covers every possible hit tile; expanding it another tile on all
+    // sides made every projectile inspect 16–25 cells instead of 4–9.
+    const gx0 = Math.max(0, Math.floor((p.x - 18) / TILE)), gx1 = Math.min(GRID_W - 1, Math.floor((p.x + 18) / TILE));
+    const gy0 = Math.max(0, Math.floor((p.y - 18) / TILE)), gy1 = Math.min(GRID_H - 1, Math.floor((p.y + 18) / TILE));
     for (let gy = gy0; gy <= gy1; gy++) {
         const refs = tileEntityRef[gy];
         if (!refs) continue;
@@ -91,26 +94,23 @@ class Projectile {
         this.x += this.vx; this.y += this.vy;
         this.life--;
 
-        let checkHits = () => {
-            if (forEachUnitInRange(this.x, this.y, 16, (u) => {
+        // This check runs once per base tick of every projectile. Keeping it
+        // inline avoids allocating a second closure for every flight step.
+        if (forEachUnitInRange(this.x, this.y, 16, (u) => {
                 let hitRange = u.r + 8;
                 let dx = u.x - this.x, dy = u.y - this.y;
                 if (dx * dx + dy * dy <= hitRange * hitRange) {
                     this.hit(u);
                     return true;
                 }
-            }, { enemyOfPlayer: this.sourceOwner })) return true;
-            let b = _projectileBuildingHit(this);
-            if (b) { this.hitBuilding(b); return true; }
-            if (this.floorTargetGx >= 0) {
-                let item = getFloorItemAtTile(this.floorTargetGx, this.floorTargetGy);
-                if (item && item.owner !== this.sourceOwner && item.energy > 0
-                    && detHypot(item.x - this.x, item.y - this.y) <= 18) { this.hitBuilding(item); return true; }
-            }
-            return false;
-        };
-
-        if (checkHits()) return false;
+            }, { enemyOfPlayer: this.sourceOwner })) return false;
+        let b = _projectileBuildingHit(this);
+        if (b) { this.hitBuilding(b); return false; }
+        if (this.floorTargetGx >= 0) {
+            let item = getFloorItemAtTile(this.floorTargetGx, this.floorTargetGy);
+            if (item && item.owner !== this.sourceOwner && item.energy > 0
+                && detHypot(item.x - this.x, item.y - this.y) <= 18) { this.hitBuilding(item); return false; }
+        }
         if (detHypot(this.x - this.startX, this.y - this.startY) >= this.maxRange || this.life <= 0) return false;
         return true;
     }

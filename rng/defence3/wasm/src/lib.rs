@@ -30,6 +30,7 @@ mod atlas;
 mod occ;
 mod traffic;
 mod acq_sample;
+mod tower;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

@@ -734,6 +734,9 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
     // Each area's tiles (in the area's cell order), each tile's units in
     // units order (the unit index by tile).
     const ep = _sxEpoch, own = _sxOwners(), list = own ? null : _sxList, ES = _sxESlot, ST = _sxStamp, SS = _sxStart, SC = _sxCount, cs = CHUNK_SIZE;
+    // Pure tower searches can reject dead/friendly slots before touching
+    // their objects. Mutating visitors keep live object access throughout.
+    const columns=own&&opts&&opts.readOnlyColumns?_simUnitState.columns:null;
     for (let i = 0; i < areaIds.length; i++) {
         let areaId = areaIds[i];
         const cells = gridCellsByArea[areaId];
@@ -744,10 +747,19 @@ function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
         const ck = cs === 1 ? cell.y * GRID_W + cell.x : Math.floor(cell.y / cs) * CHUNKS_W + Math.floor(cell.x / cs);
         if (ST[ck] !== ep) continue;
         for (let k = SS[ck], k1 = k + SC[ck]; k < k1; k++) {
-            let u = own ? own[ES[k]] : list[k];
-            if (!u || (!includeDead && u.dead)) continue;
-            if (playerFilter >= 0 && u.owner !== playerFilter) continue;
-            if (enemyFilter >= 0 && u.owner === enemyFilter) continue;
+            const s=own?ES[k]:-1;
+            if(columns){
+                if(!includeDead&&columns.dead[s]===1)continue;
+                if(playerFilter>=0&&columns.owner[s]!==playerFilter)continue;
+                if(enemyFilter>=0&&columns.owner[s]===enemyFilter)continue;
+            }
+            let u = own ? own[s] : list[k];
+            if (!u) continue;
+            if(!columns){
+                if(!includeDead&&u.dead)continue;
+                if(playerFilter>=0&&u.owner!==playerFilter)continue;
+                if(enemyFilter>=0&&u.owner===enemyFilter)continue;
+            }
             if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
             if (!areaOnly) {
                 let dx = (Number(tickStart ? _unitTickX(u) : u.x) || 0) - wx;
