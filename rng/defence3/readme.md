@@ -15,3 +15,6 @@
   * `node wasm/build.cjs`
 * Details, rules for the Rust code, switches and tests: [wasm/README.md](wasm/README.md).
 * Local testing needs cross-origin isolation (shared memory): `python serve.py`.
+
+# Perf fuzzer (slowdowns and leaks)
+* `node tests/perf-fuzz.cjs [fixture] --hours=8` plays random UI and in-game actions in real Edge against a big match and records FPS, TPS, wasm heap, JS heaps, browser/GPU memory and more; the report names what each action costs and what leaks. Usage, metrics and options: [tests/perf-fuzz/README.md](tests/perf-fuzz/README.md); working log: [PERF_FUZZ_PROGRESS.md](PERF_FUZZ_PROGRESS.md).
