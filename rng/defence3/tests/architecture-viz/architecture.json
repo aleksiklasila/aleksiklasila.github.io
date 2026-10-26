@@ -1,0 +1,2540 @@
+{
+  "schema": "defence3-architecture/1",
+  "generated_by": "tests/architecture-viz/extract.cjs",
+  "source": {
+    "commit": "069ff7b",
+    "js_files": 67,
+    "rust_files": 9
+  },
+  "units": {
+    "time": "base ticks; one base tick = TICK_MS of game time",
+    "tick_rate_hz": 20,
+    "tick_ms": 50
+  },
+  "constants": {
+    "TICK_RATE": {
+      "name": "TICK_RATE",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 31
+    },
+    "SIM_DK_MAX": {
+      "name": "SIM_DK_MAX",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 92
+    },
+    "SIM_CLIENT_MAX_IN_FLIGHT": {
+      "name": "SIM_CLIENT_MAX_IN_FLIGHT",
+      "value": 2,
+      "file": "src/sim/sim_client.js",
+      "line": 33
+    },
+    "SIM_CLIENT_LEAD_TICKS": {
+      "name": "SIM_CLIENT_LEAD_TICKS",
+      "value": 3,
+      "file": "src/sim/sim_client.js",
+      "line": 42
+    },
+    "SIM_PRESENT_SNAPS": {
+      "name": "SIM_PRESENT_SNAPS",
+      "value": 3,
+      "file": "src/sim/sim_presentation.js",
+      "line": 16
+    }
+  },
+  "deltatick": {
+    "meaning": "simDk = base ticks per simulation step. A periodic event of period P at phase φ fires in a step when some base tick of the step satisfies (t + φ) mod P == 0 (simStepCrosses).",
+    "step_for_ms": "ceil(ms / TICK_MS - 0.1), 1 when <= 1, at most SIM_DK_MAX"
+  },
+  "threads": [
+    {
+      "id": "page",
+      "file": "src/main.js",
+      "files": [
+        "src/main.js",
+        "src/sim/sim_client.js",
+        "src/sim/sim_presentation.js",
+        "src/audio_visual/renderer.js"
+      ],
+      "role": "Page (main thread): lockstep, network, input, rendering, UI. Runs the requestAnimationFrame loops (simulationFrame, _rafLoopFrame).",
+      "file_found": true
+    },
+    {
+      "id": "sim_worker",
+      "file": "src/sim/sim_worker.js",
+      "files": [
+        "src/sim/sim_worker.js",
+        "src/sim/sim_parallel.js"
+      ],
+      "role": "Simulation authority: runs the ticks (game scripts in a worker with a stand-in DOM). Starts the helpers and feeds them lane jobs (sim_parallel.js).",
+      "file_found": true
+    },
+    {
+      "id": "sim_helper",
+      "file": "src/sim/sim_helper.js",
+      "files": [
+        "src/sim/sim_helper.js"
+      ],
+      "role": "Helper of the simulation worker: takes chunks of lane jobs and parallel kernels.",
+      "file_found": true
+    },
+    {
+      "id": "presentation_worker",
+      "file": "src/sim/presentation_worker.js",
+      "files": [
+        "src/sim/presentation_worker.js"
+      ],
+      "role": "Presentation reader: draws unit positions from the newest tick snapshot; never a simulation barrier.",
+      "file_found": true
+    },
+    {
+      "id": "present_helper",
+      "file": "src/sim/presentation_worker.js",
+      "files": [
+        "src/sim/presentation_worker.js"
+      ],
+      "role": "Helper of the presentation worker (same file, name present-helper); count = min(3, cores/4 - 1).",
+      "file_found": true
+    },
+    {
+      "id": "assign_worker",
+      "file": "src/sim/assign_worker.js",
+      "files": [
+        "src/sim/assign_worker.js"
+      ],
+      "role": "Multi-point order split (assign_nearest.js), off the main thread.",
+      "file_found": true
+    },
+    {
+      "id": "net_background",
+      "file": "src/utils/utils_net_quality.js",
+      "files": [
+        "src/utils/utils_net_quality.js"
+      ],
+      "role": "Network quality background worker (timers while the page is hidden).",
+      "file_found": true
+    }
+  ],
+  "spawns": [
+    {
+      "from": "page",
+      "to": "sim_worker",
+      "via": "src/sim/sim_client.js",
+      "line": 102,
+      "label": "sim_worker",
+      "found": true
+    },
+    {
+      "from": "sim_worker",
+      "to": "sim_helper",
+      "via": "src/sim/sim_parallel.js",
+      "line": 925,
+      "label": "sim_helper",
+      "found": true
+    },
+    {
+      "from": "page",
+      "to": "presentation_worker",
+      "via": "src/sim/sim_presentation.js",
+      "line": 75,
+      "label": "presentation_worker",
+      "found": true
+    },
+    {
+      "from": "presentation_worker",
+      "to": "present_helper",
+      "via": "src/sim/presentation_worker.js",
+      "line": 651,
+      "label": "present_helper",
+      "found": true
+    },
+    {
+      "from": "page",
+      "to": "assign_worker",
+      "via": "src/main.js",
+      "line": 1603,
+      "label": "assign_worker",
+      "found": true
+    },
+    {
+      "from": "page",
+      "to": "net_background",
+      "via": "src/utils/utils_net_quality.js",
+      "line": 870,
+      "label": "net_background",
+      "found": true
+    }
+  ],
+  "message_channels": [
+    {
+      "from": "page",
+      "to": "sim_worker",
+      "types": [
+        "auto",
+        "bind",
+        "frameReturn",
+        "load",
+        "netChannel",
+        "presentationStop",
+        "request",
+        "sealed",
+        "tick",
+        "view",
+        "watch"
+      ]
+    },
+    {
+      "from": "page",
+      "to": "presentation_worker",
+      "types": [
+        "bind",
+        "cellBaseline",
+        "cells",
+        "port",
+        "projectiles",
+        "release",
+        "snaps",
+        "strings",
+        "structures",
+        "tick"
+      ]
+    },
+    {
+      "from": "page",
+      "to": "present_helper",
+      "types": [
+        "bind",
+        "cellBaseline",
+        "cells",
+        "port",
+        "projectiles",
+        "release",
+        "snaps",
+        "strings",
+        "structures",
+        "tick"
+      ]
+    },
+    {
+      "from": "sim_worker",
+      "to": "presentation_worker",
+      "types": [
+        "bind"
+      ]
+    },
+    {
+      "from": "sim_worker",
+      "to": "present_helper",
+      "types": [
+        "bind"
+      ]
+    },
+    {
+      "from": "presentation_worker",
+      "to": "page",
+      "types": [
+        "fogBind",
+        "presentation"
+      ]
+    },
+    {
+      "from": "present_helper",
+      "to": "page",
+      "types": [
+        "fogBind",
+        "presentation"
+      ]
+    }
+  ],
+  "presentation": {
+    "frame_driver": "requestAnimationFrame (renderer.js simulationFrame, _rafLoopFrame)",
+    "snapshot_per_tick": {
+      "file": "src/sim/sim_presentation.js",
+      "fn": "simPresentTickEnd",
+      "snaps_constant": "SIM_PRESENT_SNAPS"
+    },
+    "target_fps_illustrative": 60
+  },
+  "helpers": {
+    "sim_helpers": "spawned by sim_parallel.js (simParallelBackgroundHelper spawn)",
+    "presentation_helpers": "min(3, cores >> 2 - 1)"
+  },
+  "lanes": [
+    {
+      "lane": "TICK",
+      "id": 0,
+      "label": "tick kernels",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": null,
+      "actual_period_ticks": 1,
+      "actual_hz": 20,
+      "events": [
+        {
+          "name": "tick run",
+          "kind": "run",
+          "period": {
+            "name": null,
+            "value": 1
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/sim/sim_parallel.js",
+          "period_value": 1
+        }
+      ],
+      "notes": "The tick's own kernels on the simulation thread with the helpers (lane 0 is taken first)."
+    },
+    {
+      "lane": "IX",
+      "id": 6,
+      "label": "unit index",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": null,
+      "actual_period_ticks": 1,
+      "actual_hz": 20,
+      "events": [
+        {
+          "name": "index prebuild",
+          "kind": "run",
+          "period": {
+            "name": null,
+            "value": 1
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/game/chunk.js",
+          "period_value": 1
+        }
+      ],
+      "notes": "Next tick's unit index, built after a tick's end (spatialIndexPrebuild), waited for at the next tick."
+    },
+    {
+      "lane": "HASH",
+      "id": 10,
+      "label": "state hash slices",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": null,
+      "actual_period_ticks": 1,
+      "actual_hz": 20,
+      "events": [
+        {
+          "name": "hash slice",
+          "kind": "run",
+          "period": {
+            "name": "SNAP_HASH_EVERY",
+            "value": 1,
+            "file": "src/utils/utils_snapshot.js",
+            "line": 165
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/utils/utils_snapshot.js",
+          "period_value": 1
+        }
+      ],
+      "notes": "Rolling state hash, one slice per tick (SNAP_HASH_EVERY)."
+    },
+    {
+      "lane": "TRAFFIC",
+      "id": 12,
+      "label": "traffic solve",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": null,
+      "actual_period_ticks": 1,
+      "actual_hz": 20,
+      "events": [
+        {
+          "name": "traffic post",
+          "kind": "run",
+          "period": {
+            "name": null,
+            "value": 1
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 2,
+          "file": "src/sim/sim_traffic.js",
+          "period_value": 1
+        }
+      ],
+      "notes": "Crowd traffic solve posted after each step's movement; its result is published two base ticks later (pending = gameTime + 2)."
+    },
+    {
+      "lane": "T10",
+      "id": 2,
+      "label": "acquisition (enemy search)",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": 10,
+      "actual_period_ticks": 4,
+      "actual_hz": 5,
+      "events": [
+        {
+          "name": "acq post (snap+scan)",
+          "kind": "post",
+          "period": {
+            "name": "SIM_ACQUIRE_TICKS",
+            "value": 4,
+            "file": "src/things/unit.js",
+            "line": 2979
+          },
+          "phase": 2,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/things/unit.js",
+          "period_value": 4
+        },
+        {
+          "name": "acq commit",
+          "kind": "commit",
+          "period": {
+            "name": "SIM_ACQUIRE_TICKS",
+            "value": 4,
+            "file": "src/things/unit.js",
+            "line": 2979
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/things/unit.js",
+          "period_value": 4
+        }
+      ],
+      "notes": "Enemy search; snapshot+scan posted at phase 2, commit at phase 0. Gate: SIM_ACQUIRE_TICKS."
+    },
+    {
+      "lane": "T5",
+      "id": 3,
+      "label": "units' cover (visibility)",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": 5,
+      "actual_period_ticks": 4,
+      "actual_hz": 5,
+      "events": [
+        {
+          "name": "cover units post",
+          "kind": "post",
+          "period": {
+            "name": "VIS_COVER_UNITS_TICKS",
+            "value": 4,
+            "file": "src/audio_visual/renderer.js",
+            "line": 5998
+          },
+          "phase": 1,
+          "phase_source": "VIS_COVER_UNITS_PHASE",
+          "latency_ticks": 0,
+          "file": "src/audio_visual/renderer.js",
+          "period_value": 4
+        }
+      ],
+      "notes": "Renderer-side cover sweep over the units, posted at VIS_COVER_UNITS_PHASE. Lane shared with the adjacency flood."
+    },
+    {
+      "lane": "T5",
+      "id": 3,
+      "label": "adjacency flood",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": 5,
+      "actual_period_ticks": 8,
+      "actual_hz": 2.5,
+      "events": [
+        {
+          "name": "adjacency post",
+          "kind": "post",
+          "period": {
+            "name": "ADJACENCY_BATCH_TICKS",
+            "value": 8,
+            "file": "src/things/things_utils.js",
+            "line": 516
+          },
+          "phase": 3,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/things/things_utils.js",
+          "period_value": 8
+        }
+      ],
+      "notes": "Adjacency groups recalculated in batches: simStepCrosses(-3, ADJACENCY_BATCH_TICKS), i.e. at t mod 8 === 3."
+    },
+    {
+      "lane": "T1",
+      "id": 4,
+      "label": "worker search tier",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": 1,
+      "actual_period_ticks": 4,
+      "actual_hz": 5,
+      "events": [
+        {
+          "name": "ws post (scan)",
+          "kind": "post",
+          "period": {
+            "name": "WS_TICKS",
+            "value": 4,
+            "file": "src/things/worker.js",
+            "line": 960
+          },
+          "phase": 3,
+          "phase_source": "WS_POST_PHASE",
+          "latency_ticks": 0,
+          "file": "src/things/worker.js",
+          "period_value": 4
+        },
+        {
+          "name": "ws order",
+          "kind": "run",
+          "period": {
+            "name": "WS_TICKS",
+            "value": 4,
+            "file": "src/things/worker.js",
+            "line": 960
+          },
+          "phase": 0,
+          "phase_source": "WS_POST_PHASE+1",
+          "latency_ticks": 0,
+          "file": "src/things/worker.js",
+          "period_value": 4
+        },
+        {
+          "name": "ws commit",
+          "kind": "commit",
+          "period": {
+            "name": "WS_TICKS",
+            "value": 4,
+            "file": "src/things/worker.js",
+            "line": 960
+          },
+          "phase": 1,
+          "phase_source": "WS_POST_PHASE+2",
+          "latency_ticks": 0,
+          "file": "src/things/worker.js",
+          "period_value": 4
+        }
+      ],
+      "notes": "Workers' searches: post at WS_POST_PHASE, order at phase +1, commit at phase +2 (WS_TICKS cycle)."
+    },
+    {
+      "lane": "T05",
+      "id": 5,
+      "label": "healer candidates",
+      "thread": "sim_worker",
+      "on_demand": false,
+      "nominal_hz": 0.5,
+      "actual_period_ticks": 10,
+      "actual_hz": 2,
+      "events": [
+        {
+          "name": "heal cand post",
+          "kind": "post",
+          "period": {
+            "name": "HEALER_CANDIDATE_CACHE_TICKS",
+            "value": 10,
+            "file": "src/things/worker.js",
+            "line": 3514
+          },
+          "phase": 0,
+          "phase_source": null,
+          "latency_ticks": 0,
+          "file": "src/things/worker.js",
+          "period_value": 10
+        }
+      ],
+      "notes": "Healer candidate scan, a round over HEALER_CANDIDATE_CACHE_TICKS, posted at the round's phase 0."
+    },
+    {
+      "lane": "NAV",
+      "id": 8,
+      "label": "navigation fields",
+      "thread": "sim_worker",
+      "on_demand": true,
+      "nominal_hz": null,
+      "actual_period_ticks": null,
+      "actual_hz": null,
+      "events": [],
+      "notes": "Destination fields asked for in a tick, made by the next tick's flush."
+    },
+    {
+      "lane": "LONG",
+      "id": 1,
+      "label": "navigation build",
+      "thread": "sim_worker",
+      "on_demand": true,
+      "nominal_hz": null,
+      "actual_period_ticks": null,
+      "actual_hz": null,
+      "events": [],
+      "notes": "Navigation build (flownav.js _navBuildLane), spread over NAV_BUILD_TICKS."
+    },
+    {
+      "lane": "NAVX",
+      "id": 9,
+      "label": "navigation install",
+      "thread": "sim_worker",
+      "on_demand": true,
+      "nominal_hz": null,
+      "actual_period_ticks": null,
+      "actual_hz": null,
+      "events": [],
+      "notes": "Every live field remade over a new navigation build, before it is installed."
+    },
+    {
+      "lane": "BUILD",
+      "id": 7,
+      "label": "area boxes / path regions",
+      "thread": "sim_worker",
+      "on_demand": true,
+      "nominal_hz": null,
+      "actual_period_ticks": null,
+      "actual_hz": null,
+      "events": [],
+      "notes": "Tables made once in a while and taken when done."
+    },
+    {
+      "lane": "GROW",
+      "id": 11,
+      "label": "wasm heap growth",
+      "thread": "sim_worker",
+      "on_demand": true,
+      "nominal_hz": null,
+      "actual_period_ticks": null,
+      "actual_hz": null,
+      "events": [],
+      "notes": "Wasm memory grown ahead of need (sim_wasm.js _simHeapGrowAhead)."
+    }
+  ],
+  "lane_ids": {
+    "TICK": 0,
+    "LONG": 1,
+    "T10": 2,
+    "T5": 3,
+    "T1": 4,
+    "T05": 5,
+    "IX": 6,
+    "BUILD": 7,
+    "NAV": 8,
+    "NAVX": 9,
+    "HASH": 10,
+    "GROW": 11,
+    "TRAFFIC": 12
+  },
+  "cadences": [
+    {
+      "name": "AUDIO_AMBIENT_WORK_MIN_TICKS",
+      "value": 10,
+      "file": "src/audio_visual/audio.js",
+      "line": 17,
+      "ms_at_default_rate": 500
+    },
+    {
+      "name": "VISIBILITY_TICK_INTERVAL",
+      "value": 2,
+      "file": "src/audio_visual/renderer.js",
+      "line": 46,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "DAMAGE_FLASH_TICKS",
+      "value": 10,
+      "file": "src/audio_visual/renderer.js",
+      "line": 142,
+      "ms_at_default_rate": 500
+    },
+    {
+      "name": "VISIBILITY_SIGNATURE_BACKOFF_TICKS",
+      "value": 8,
+      "file": "src/audio_visual/renderer.js",
+      "line": 5538,
+      "ms_at_default_rate": 400
+    },
+    {
+      "name": "VIS_COVER_SWEEP_TICKS",
+      "value": 1024,
+      "file": "src/audio_visual/renderer.js",
+      "line": 5794,
+      "ms_at_default_rate": 51200
+    },
+    {
+      "name": "VIS_COVER_UNIT_SWEEP_TICKS",
+      "value": 512,
+      "file": "src/audio_visual/renderer.js",
+      "line": 5796,
+      "ms_at_default_rate": 25600
+    },
+    {
+      "name": "VIS_COVER_UNITS_TICKS",
+      "value": 4,
+      "file": "src/audio_visual/renderer.js",
+      "line": 5998,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "VIS_COVER_UNITS_PHASE",
+      "value": 1,
+      "file": "src/audio_visual/renderer.js",
+      "line": 5998,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "HISTORY_STRUCTURE_TICKS",
+      "value": 4,
+      "file": "src/audio_visual/visibility_history.js",
+      "line": 130,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "BOOST_CHECK_TICKS",
+      "value": 20,
+      "file": "src/data/data_dynamic.js",
+      "line": 243,
+      "ms_at_default_rate": 1000
+    },
+    {
+      "name": "TICK_RATE",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 31,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "UNIT_EFFECTIVE_STATS_RECALC_TICKS",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 34,
+      "ms_at_default_rate": 1000
+    },
+    {
+      "name": "UNIT_COLLISION_RECALC_TICKS",
+      "value": 5,
+      "file": "src/data/data_static.js",
+      "line": 37,
+      "ms_at_default_rate": 250
+    },
+    {
+      "name": "LOCKSTEP_HOST_PREBUILD_TICKS",
+      "value": 1,
+      "file": "src/data/data_static.js",
+      "line": 74,
+      "ms_at_default_rate": 50
+    },
+    {
+      "name": "SIM_DK_MAX",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 92,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "PATH_CACHE_TTL_TICKS",
+      "value": 24,
+      "file": "src/data/data_static.js",
+      "line": 1373,
+      "ms_at_default_rate": 1200
+    },
+    {
+      "name": "PARTIAL_PATH_CACHE_TTL_TICKS",
+      "value": 36,
+      "file": "src/data/data_static.js",
+      "line": 1376,
+      "ms_at_default_rate": 1800
+    },
+    {
+      "name": "SPAWNER_RALLY_TEMPLATE_TTL_TICKS",
+      "value": 20,
+      "file": "src/data/data_static.js",
+      "line": 1378,
+      "ms_at_default_rate": 1000
+    },
+    {
+      "name": "NAV_FREE_TICKS",
+      "value": 40,
+      "file": "src/game/flownav.js",
+      "line": 71,
+      "ms_at_default_rate": 2000
+    },
+    {
+      "name": "NAV_SWEEP_TICKS",
+      "value": 32,
+      "file": "src/game/flownav.js",
+      "line": 71,
+      "ms_at_default_rate": 1600
+    },
+    {
+      "name": "NAV_FIELD_SWEEP_TICKS",
+      "value": 128,
+      "file": "src/game/flownav.js",
+      "line": 626,
+      "ms_at_default_rate": 6400
+    },
+    {
+      "name": "NAV_SWAP_TICKS",
+      "value": 30,
+      "file": "src/game/flownav.js",
+      "line": 641,
+      "ms_at_default_rate": 1500
+    },
+    {
+      "name": "NAV_SUB_TICKS",
+      "value": 2,
+      "file": "src/game/flownav.js",
+      "line": 1530,
+      "ms_at_default_rate": 100
+    },
+    {
+      "name": "NAV_GOAL_RECHECK_TICKS",
+      "value": 256,
+      "file": "src/game/pathfinding.js",
+      "line": 259,
+      "ms_at_default_rate": 12800
+    },
+    {
+      "name": "THING_STATUS_GUARD_TICKS",
+      "value": 512,
+      "file": "src/main.js",
+      "line": 532,
+      "ms_at_default_rate": 25600
+    },
+    {
+      "name": "GROUP_PATH_WAIT_TICKS",
+      "value": 20,
+      "file": "src/main.js",
+      "line": 3126,
+      "ms_at_default_rate": 1000
+    },
+    {
+      "name": "LOCKSTEP_RAN_KEEP_TICKS",
+      "value": 2400,
+      "file": "src/main.js",
+      "line": 6023,
+      "ms_at_default_rate": 120000
+    },
+    {
+      "name": "HOST_LATE_SEAL_LEAD_TICKS",
+      "value": 2,
+      "file": "src/main.js",
+      "line": 6157,
+      "ms_at_default_rate": 100
+    },
+    {
+      "name": "SIM_CLIENT_MAX_IN_FLIGHT",
+      "value": 2,
+      "file": "src/sim/sim_client.js",
+      "line": 33,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "SIM_CLIENT_LEAD_TICKS",
+      "value": 3,
+      "file": "src/sim/sim_client.js",
+      "line": 42,
+      "ms_at_default_rate": 150
+    },
+    {
+      "name": "SIM_PLAY_SNAP_TICKS",
+      "value": 8,
+      "file": "src/sim/sim_client.js",
+      "line": 763,
+      "ms_at_default_rate": 400
+    },
+    {
+      "name": "SIM_PLAY_MARGIN_TICKS",
+      "value": 0.4,
+      "file": "src/sim/sim_client.js",
+      "line": 763,
+      "ms_at_default_rate": 20
+    },
+    {
+      "name": "SIM_STRUCT_LABEL_TICKS",
+      "value": 8,
+      "file": "src/sim/sim_frame_world.js",
+      "line": 85,
+      "ms_at_default_rate": 400
+    },
+    {
+      "name": "SIM_REROUTE_TICKS",
+      "value": 32,
+      "file": "src/sim/sim_parallel.js",
+      "line": 181,
+      "ms_at_default_rate": 1600
+    },
+    {
+      "name": "SIM_FLOW_REFRESH_TICKS",
+      "value": 4,
+      "file": "src/sim/sim_parallel.js",
+      "line": 243,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "SIM_STEER_TICKS",
+      "value": 16,
+      "file": "src/sim/sim_parallel.js",
+      "line": 254,
+      "ms_at_default_rate": 800
+    },
+    {
+      "name": "SIM_STEER_NEAR_TICKS",
+      "value": 4,
+      "file": "src/sim/sim_parallel.js",
+      "line": 254,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "SIM_PRESENT_SNAPS",
+      "value": 3,
+      "file": "src/sim/sim_presentation.js",
+      "line": 16,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "SIM_HEAP_FREE_TICKS",
+      "value": 2,
+      "file": "src/sim/sim_wasm.js",
+      "line": 35,
+      "ms_at_default_rate": 100
+    },
+    {
+      "name": "SIM_AUTO_MAX_TICKS",
+      "value": 60,
+      "file": "src/sim/sim_worker.js",
+      "line": 316,
+      "ms_at_default_rate": 3000
+    },
+    {
+      "name": "SPAWNER_UPDATE_TICKS",
+      "value": 4,
+      "file": "src/things/barrack.js",
+      "line": 454,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "ADJACENCY_BATCH_TICKS",
+      "value": 8,
+      "file": "src/things/things_utils.js",
+      "line": 516,
+      "ms_at_default_rate": 400
+    },
+    {
+      "name": "LASER_REPORT_TICKS",
+      "value": 4,
+      "file": "src/things/tower.js",
+      "line": 8,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "STATUS_DOT_REPORT_TICKS",
+      "value": 4,
+      "file": "src/things/unit.js",
+      "line": 1415,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "UNIT_SEPARATION_RELAX_TICKS",
+      "value": 4,
+      "file": "src/things/unit.js",
+      "line": 1762,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "UNIT_SEPARATION_PATH_RETRY_TICKS",
+      "value": 4,
+      "file": "src/things/unit.js",
+      "line": 1765,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "SIM_IDLE_PARK_TICKS",
+      "value": 1000,
+      "file": "src/things/unit.js",
+      "line": 2028,
+      "ms_at_default_rate": 50000
+    },
+    {
+      "name": "SIM_ACQUIRE_TICKS",
+      "value": 4,
+      "file": "src/things/unit.js",
+      "line": 2979,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "RESEARCH_DRAIN_TICKS",
+      "value": 10,
+      "file": "src/things/worker.js",
+      "line": 33,
+      "ms_at_default_rate": 500
+    },
+    {
+      "name": "WORKER_MANUAL_MOVE_MAX_PENDING_TICKS",
+      "value": 120,
+      "file": "src/things/worker.js",
+      "line": 54,
+      "ms_at_default_rate": 6000
+    },
+    {
+      "name": "WORKER_MOVE_CHECK_TICKS",
+      "value": 128,
+      "file": "src/things/worker.js",
+      "line": 103,
+      "ms_at_default_rate": 6400
+    },
+    {
+      "name": "BUILDER_WATCH_TICKS",
+      "value": 64,
+      "file": "src/things/worker.js",
+      "line": 104,
+      "ms_at_default_rate": 3200
+    },
+    {
+      "name": "WS_TICKS",
+      "value": 4,
+      "file": "src/things/worker.js",
+      "line": 960,
+      "ms_at_default_rate": 200
+    },
+    {
+      "name": "WS_POST_PHASE",
+      "value": 3,
+      "file": "src/things/worker.js",
+      "line": 960,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "WS_TAKE_TICKS",
+      "value": 3,
+      "file": "src/things/worker.js",
+      "line": 982,
+      "ms_at_default_rate": 150
+    },
+    {
+      "name": "BUILDER_WORK_CACHE_TICKS",
+      "value": 10,
+      "file": "src/things/worker.js",
+      "line": 2108,
+      "ms_at_default_rate": 500
+    },
+    {
+      "name": "HEALER_CANDIDATE_CACHE_TICKS",
+      "value": 10,
+      "file": "src/things/worker.js",
+      "line": 3514,
+      "ms_at_default_rate": 500
+    },
+    {
+      "name": "WORKER_WORK_LIST_TICKS",
+      "value": 20,
+      "file": "src/things/worker.js",
+      "line": 3866,
+      "ms_at_default_rate": 1000
+    },
+    {
+      "name": "NET_MAX_INPUT_DELAY_TICKS",
+      "value": 40,
+      "file": "src/utils/utils_net_quality.js",
+      "line": 16,
+      "ms_at_default_rate": 2000
+    },
+    {
+      "name": "RESYNC_FAILURE_WINDOW_TICKS",
+      "value": 60,
+      "file": "src/utils/utils_resync.js",
+      "line": 37,
+      "ms_at_default_rate": 3000
+    },
+    {
+      "name": "SNAP_HASH_EVERY",
+      "value": 1,
+      "file": "src/utils/utils_snapshot.js",
+      "line": 165,
+      "ms_at_default_rate": null
+    },
+    {
+      "name": "SNAP_HASH_HISTORY_TICKS",
+      "value": 200,
+      "file": "src/utils/utils_snapshot.js",
+      "line": 1038,
+      "ms_at_default_rate": 10000
+    }
+  ],
+  "kernels": [
+    {
+      "name": "SIM_KERNEL_VISIBILITY",
+      "id": 0,
+      "defined_at": "src/sim/sim_parallel.js:166",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/audio_visual/renderer.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SEPARATION",
+      "id": 1,
+      "defined_at": "src/sim/sim_parallel.js:166",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_UNIT_FRAME",
+      "id": 2,
+      "defined_at": "src/sim/sim_parallel.js:166",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_frame.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_UNIT_PACK",
+      "id": 3,
+      "defined_at": "src/sim/sim_parallel.js:166",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SPATIAL_HISTOGRAM",
+      "id": 4,
+      "defined_at": "src/sim/sim_parallel.js:167",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SPATIAL_SCATTER",
+      "id": 5,
+      "defined_at": "src/sim/sim_parallel.js:167",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SEPARATION_PREPARE",
+      "id": 6,
+      "defined_at": "src/sim/sim_parallel.js:167",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SEPARATION_FINISH",
+      "id": 7,
+      "defined_at": "src/sim/sim_parallel.js:168",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_MOVE",
+      "id": 8,
+      "defined_at": "src/sim/sim_parallel.js:168",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 0,
+        "other": 13
+      },
+      "files": [
+        "src/game/flownav.js",
+        "src/game/pathfinding.js",
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js",
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SEPARATION_YIELD",
+      "id": 9,
+      "defined_at": "src/sim/sim_parallel.js:168",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_CLEAR",
+      "id": 10,
+      "defined_at": "src/sim/sim_parallel.js:169",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_COUNT",
+      "id": 11,
+      "defined_at": "src/sim/sim_parallel.js:169",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_SCATTER",
+      "id": 12,
+      "defined_at": "src/sim/sim_parallel.js:169",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_ORDER",
+      "id": 13,
+      "defined_at": "src/sim/sim_parallel.js:169",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_LOCAL",
+      "id": 15,
+      "defined_at": "src/game/flownav.js:54",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": "nav_field",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_NAV_PARTS",
+      "id": 16,
+      "defined_at": "src/game/flownav.js:54",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_SUBST",
+      "id": 17,
+      "defined_at": "src/game/flownav.js:1571",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_COST",
+      "id": 18,
+      "defined_at": "src/game/flownav.js:316",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SNAP_REGION",
+      "id": 19,
+      "defined_at": "src/sim/sim_parallel.js:170",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 3
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/utils/utils_snapshot.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COMBAT_SCAN",
+      "id": 20,
+      "defined_at": "src/sim/sim_parallel.js:170",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 3
+      },
+      "files": [
+        "src/game/chunk.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_FIELDS",
+      "id": 21,
+      "defined_at": "src/game/flownav.js:940",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 2,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_KEYS",
+      "id": 23,
+      "defined_at": "src/sim/sim_parallel.js:170",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_STATUS",
+      "id": 24,
+      "defined_at": "src/sim/sim_parallel.js:174",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 9
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_FILL",
+      "id": 25,
+      "defined_at": "src/sim/sim_parallel.js:174",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_RUNS",
+      "id": 26,
+      "defined_at": "src/sim/sim_parallel.js:174",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_EFF_UNITS",
+      "id": 27,
+      "defined_at": "src/sim/sim_parallel.js:174",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 0,
+        "other": 7
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/things_utils.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_VIS_SEED",
+      "id": 28,
+      "defined_at": "src/sim/sim_parallel.js:174",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 2
+      },
+      "files": [
+        "src/audio_visual/renderer.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_TILE_OWNERS",
+      "id": 29,
+      "defined_at": "src/sim/sim_parallel.js:175",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_VIS_SNAP",
+      "id": 30,
+      "defined_at": "src/sim/sim_parallel.js:171",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/audio_visual/renderer.js",
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_VIS_SPREAD",
+      "id": 31,
+      "defined_at": "src/sim/sim_parallel.js:171",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 2
+      },
+      "files": [
+        "src/audio_visual/renderer.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_SNAP",
+      "id": 32,
+      "defined_at": "src/sim/sim_parallel.js:172",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_SCAN",
+      "id": 33,
+      "defined_at": "src/sim/sim_parallel.js:172",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 4
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": "acq_scan",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_COMMIT",
+      "id": 34,
+      "defined_at": "src/sim/sim_parallel.js:172",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_LASER_HITS",
+      "id": 35,
+      "defined_at": "src/sim/sim_parallel.js:172",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/things/tower.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_UNIT_EVENTS",
+      "id": 36,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_DEAD_MARK",
+      "id": 37,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_WS_SCAN",
+      "id": 39,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_HEAL_CAND",
+      "id": 40,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 1
+      },
+      "files": [
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SP_COUNTS",
+      "id": 41,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/game/chunk.js",
+        "src/sim/sim_unit_state.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_MOVE_STEP",
+      "id": 42,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 4
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SAT_ROWS",
+      "id": 43,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 3
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SAT_COLS",
+      "id": 44,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_WS_SELECT",
+      "id": 45,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_UPKEEP",
+      "id": 46,
+      "defined_at": "src/sim/sim_parallel.js:173",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 3
+      },
+      "files": [
+        "src/main.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_HEAL_REDUCE",
+      "id": 47,
+      "defined_at": "src/sim/sim_parallel.js:176",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_WS_ORDER",
+      "id": 48,
+      "defined_at": "src/sim/sim_parallel.js:177",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_UNIT_RETIRE",
+      "id": 49,
+      "defined_at": "src/sim/sim_parallel.js:178",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/main.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SEP_PACK",
+      "id": 50,
+      "defined_at": "src/sim/sim_parallel.js:182",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 1
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": "sep_pack",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_SEP_MARK",
+      "id": 51,
+      "defined_at": "src/sim/sim_parallel.js:182",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 0
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": "sep_mark",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_SEP_PAIRS",
+      "id": 52,
+      "defined_at": "src/sim/sim_parallel.js:182",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 4,
+        "other": 1
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": "sep_pairs",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_ZERO",
+      "id": 53,
+      "defined_at": "src/sim/sim_parallel.js:182",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 2,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SPATIAL_PREFIX",
+      "id": 54,
+      "defined_at": "src/sim/sim_parallel.js:182",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_AREA_BOX",
+      "id": 55,
+      "defined_at": "src/sim/sim_parallel.js:183",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 2
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_MERGE",
+      "id": 56,
+      "defined_at": "src/sim/sim_parallel.js:183",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 3
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_NODES",
+      "id": 57,
+      "defined_at": "src/game/flownav.js:54",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 2
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_NAV_GRAPH",
+      "id": 58,
+      "defined_at": "src/game/flownav.js:54",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 2,
+        "other": 3
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_OMT",
+      "id": 59,
+      "defined_at": "src/sim/sim_parallel.js:1813",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 3
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": "acq_omt",
+      "rust_file": "wasm/src/lib.rs"
+    },
+    {
+      "name": "SIM_KERNEL_HITS",
+      "id": 60,
+      "defined_at": "src/sim/sim_parallel.js:1874",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 3
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COMBAT_BRAIN",
+      "id": 62,
+      "defined_at": "src/sim/sim_parallel.js:1534",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COMBAT_COMMIT",
+      "id": 63,
+      "defined_at": "src/sim/sim_parallel.js:1534",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_unit_state.js",
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ADJ_FLOOD",
+      "id": 64,
+      "defined_at": "src/sim/sim_parallel.js:1563",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/things/things_utils.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_SNAP_MERGE",
+      "id": 65,
+      "defined_at": "src/sim/sim_parallel.js:1694",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 3
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/utils/utils_snapshot.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_HITS_APPLY",
+      "id": 66,
+      "defined_at": "src/sim/sim_parallel.js:1881",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXM_INV",
+      "id": 68,
+      "defined_at": "src/sim/sim_parallel.js:526",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXM_KEEP",
+      "id": 69,
+      "defined_at": "src/sim/sim_parallel.js:526",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXM_CHG",
+      "id": 70,
+      "defined_at": "src/sim/sim_parallel.js:526",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXM_PLAN",
+      "id": 71,
+      "defined_at": "src/sim/sim_parallel.js:526",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXM_WRITE",
+      "id": 72,
+      "defined_at": "src/sim/sim_parallel.js:526",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COPY",
+      "id": 73,
+      "defined_at": "src/sim/sim_parallel.js:591",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COPY_BG",
+      "id": 74,
+      "defined_at": "src/sim/sim_parallel.js:599",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_HEAP_GROW",
+      "id": 75,
+      "defined_at": "src/sim/sim_parallel.js:624",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_wasm.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_COPY_BG2",
+      "id": 76,
+      "defined_at": "src/sim/sim_parallel.js:599",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_DIFF_COUNT",
+      "id": 77,
+      "defined_at": "src/sim/sim_parallel.js:603",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_SCAN",
+      "id": 78,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_APPLY",
+      "id": 79,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_MERGE",
+      "id": 80,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_COPY",
+      "id": 81,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_OWNERS",
+      "id": 82,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_IXD_INIT",
+      "id": 83,
+      "defined_at": "src/sim/sim_parallel.js:550",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 2,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_INDEX_IDSORT",
+      "id": 84,
+      "defined_at": "src/sim/sim_parallel.js:539",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/game/chunk.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_PV_MARKS",
+      "id": 85,
+      "defined_at": "src/sim/sim_parallel.js:545",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/sim/sim_presentation.js",
+        "src/sim/sim_unit_state.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ATL_BLOCKS",
+      "id": 86,
+      "defined_at": "src/game/flownav.js:382",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ATL_TABLES",
+      "id": 87,
+      "defined_at": "src/game/flownav.js:382",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ATL_ROUTE",
+      "id": 88,
+      "defined_at": "src/game/flownav.js:382",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/game/flownav.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_MOVE_OCCUPANCY",
+      "id": 89,
+      "defined_at": "src/sim/sim_parallel.js:184",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_AREA_BUILD",
+      "id": 90,
+      "defined_at": "src/sim/sim_parallel.js:1772",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_TRAFFIC_CAPTURE",
+      "id": 93,
+      "defined_at": "src/sim/sim_parallel.js:185",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_traffic.js"
+      ],
+      "rust_export": "traffic_capture",
+      "rust_file": "wasm/src/traffic.rs"
+    },
+    {
+      "name": "SIM_KERNEL_TRAFFIC_SOLVE",
+      "id": 94,
+      "defined_at": "src/sim/sim_parallel.js:185",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_traffic.js"
+      ],
+      "rust_export": "traffic_solve",
+      "rust_file": "wasm/src/traffic.rs"
+    },
+    {
+      "name": "SIM_KERNEL_TRAFFIC_OUTPUT",
+      "id": 95,
+      "defined_at": "src/sim/sim_parallel.js:185",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_traffic.js"
+      ],
+      "rust_export": "traffic_output",
+      "rust_file": "wasm/src/traffic.rs"
+    },
+    {
+      "name": "SIM_KERNEL_TRAFFIC_MASK",
+      "id": 96,
+      "defined_at": "src/sim/sim_parallel.js:185",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 2,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/sim/sim_traffic.js"
+      ],
+      "rust_export": "traffic_mask",
+      "rust_file": "wasm/src/traffic.rs"
+    },
+    {
+      "name": "SIM_KERNEL_OCC_COUNTS",
+      "id": 97,
+      "defined_at": "src/sim/sim_parallel.js:200",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 0
+      },
+      "files": [
+        "src/sim/sim_occupancy.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ACQ_AREA_ANSWERS",
+      "id": 98,
+      "defined_at": "src/sim/sim_parallel.js:1785",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 0
+      },
+      "files": [
+        "src/things/unit.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_WS_NEARFIELD",
+      "id": 99,
+      "defined_at": "src/sim/sim_parallel.js:1615",
+      "js_sites": {
+        "foreground_run": 0,
+        "background_lane": 1,
+        "other": 1
+      },
+      "files": [
+        "src/sim/sim_parallel.js",
+        "src/things/worker.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_EFF_AREA_HIST",
+      "id": 100,
+      "defined_at": "src/sim/sim_parallel.js:170",
+      "js_sites": {
+        "foreground_run": 2,
+        "background_lane": 0,
+        "other": 1
+      },
+      "files": [
+        "src/things/things_utils.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    },
+    {
+      "name": "SIM_KERNEL_ORDER_MOVE",
+      "id": 101,
+      "defined_at": "src/sim/sim_parallel.js:1546",
+      "js_sites": {
+        "foreground_run": 1,
+        "background_lane": 0,
+        "other": 2
+      },
+      "files": [
+        "src/main.js"
+      ],
+      "rust_export": null,
+      "rust_file": null
+    }
+  ],
+  "findings": [
+    {
+      "kind": "nominal-vs-actual-rate",
+      "lane": "T10",
+      "text": "acquisition (enemy search): lane T10 is named for 10/s but its gate runs it at 5/s (period 4 ticks at TICK_RATE 20)."
+    },
+    {
+      "kind": "nominal-vs-actual-rate",
+      "lane": "T5",
+      "text": "adjacency flood: lane T5 is named for 5/s but its gate runs it at 2.5/s (period 8 ticks at TICK_RATE 20)."
+    },
+    {
+      "kind": "nominal-vs-actual-rate",
+      "lane": "T1",
+      "text": "worker search tier: lane T1 is named for 1/s but its gate runs it at 5/s (period 4 ticks at TICK_RATE 20)."
+    },
+    {
+      "kind": "nominal-vs-actual-rate",
+      "lane": "T05",
+      "text": "healer candidates: lane T05 is named for 0.5/s but its gate runs it at 2/s (period 10 ticks at TICK_RATE 20)."
+    },
+    {
+      "kind": "kernel-without-rust-twin",
+      "text": "85 of 95 JS kernels have no Rust twin found (by a \"Rust:\" note in their definition or an export of the same name). Either they have no Rust twin or the twin is not named in the way this scan looks for: SIM_KERNEL_VISIBILITY, SIM_KERNEL_SEPARATION, SIM_KERNEL_UNIT_FRAME, SIM_KERNEL_UNIT_PACK, SIM_KERNEL_SPATIAL_HISTOGRAM, SIM_KERNEL_SPATIAL_SCATTER, SIM_KERNEL_SEPARATION_PREPARE, SIM_KERNEL_SEPARATION_FINISH, SIM_KERNEL_MOVE, SIM_KERNEL_SEPARATION_YIELD, ...."
+    }
+  ]
+}
