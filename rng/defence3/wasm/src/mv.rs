@@ -294,6 +294,7 @@ struct NavP {
 
 struct Mv {
     area_only: bool,
+    nav_step_cache: *mut AtlasStepEntry,
     occ: *const super::occ::MoveGrid,
     traffic: *const i32,
     traffic_mode: i32,
@@ -635,6 +636,7 @@ impl Mv {
         let tile = rd(f, 7);
         Mv {
             area_only: rd(f,47)==1.0,
+            nav_step_cache: core::ptr::null_mut(),
             occ: core::ptr::null(),
             traffic: p!(456),
             traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
@@ -1296,11 +1298,23 @@ unsafe fn flow_slide(wl: *const u8, w: i32, h: i32, gx: i32, gy: i32, ngx: f64, 
     }
     3
 }
+// A look-ahead asks for up to 32 successive tiles. Nearby units' looks
+// overlap, even when their complete look-ahead cache entries miss. Keep
+// the pure atlas steps on this job's stack, shared by its units, so a burst
+// of steers does not rescan the atlas exits for every overlapping segment.
+const ATLAS_STEP_CACHE_ENTRIES: usize = 512;
+struct AtlasStepEntry {
+    atlas: *const i32,
+    tile: i32,
+    dest: i32,
+    next: i32,
+}
 /// The navigation context of one look (simFlowLook's arguments).
 struct Nav {
     /// The profile's atlas header when the route is on the atlas (no rows,
     /// no destination field): null otherwise.
     atl: *const i32,
+    step_cache: *mut AtlasStepEntry,
     w: i32,
     h: i32,
     cs: i32,
@@ -1359,10 +1373,19 @@ unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32) -> i32 {
         if rd(v.pl, t as usize) == 0xFFFF {
             return wall_step_out(v, tx, ty);
         }
-        return match crate::atlas::Atl::from(v.atl) {
+        let cache = if v.step_cache.is_null() { core::ptr::null_mut() } else {
+            let h = (t as u32).wrapping_mul(0x9e3779b1) ^ (dest as u32).wrapping_mul(0x85ebca77);
+            v.step_cache.add(((h ^ (h >> 16)) as usize) & (ATLAS_STEP_CACHE_ENTRIES - 1))
+        };
+        if !cache.is_null() && (*cache).atlas == v.atl && (*cache).tile == t && (*cache).dest == dest {
+            return (*cache).next;
+        }
+        let next = match crate::atlas::Atl::from(v.atl) {
             Some(a) => crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest),
             None => -1,
         };
+        if !cache.is_null() { core::ptr::write(cache, AtlasStepEntry { atlas: v.atl, tile: t, dest, next }); }
+        return next;
     }
     if !v.df.is_null() {
         let lx = tx - v.bx;
@@ -1651,7 +1674,11 @@ unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1:
     // (Ending in its own tile or one beside it, the most: the tiles the
     // segment passes, exactly: the end one, and on a diagonal the one whose
     // edge it crosses first.)
-    let (ax, ay, bx, by) = (floor(x0 * itile), floor(y0 * itile), floor(x1 * itile), floor(y1 * itile));
+    let inv = f64x2_splat(itile);
+    let axy = f64x2_floor(f64x2_mul(f64x2(x0, y0), inv));
+    let bxy = f64x2_floor(f64x2_mul(f64x2(x1, y1), inv));
+    let (ax, ay) = (f64x2_extract_lane::<0>(axy), f64x2_extract_lane::<1>(axy));
+    let (bx, by) = (f64x2_extract_lane::<0>(bxy), f64x2_extract_lane::<1>(bxy));
     if (bx - ax).abs() <= 1.0 && (by - ay).abs() <= 1.0 {
         let open = |gx: f64, gy: f64| inb(gx, w) && inb(gy, h) && rd(wl, (gy as i32 * w + gx as i32) as usize) == 0;
         if !open(bx, by) { return false; }
@@ -1668,7 +1695,22 @@ unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1:
     }
     let len = sqrt(dx * dx + dy * dy);
     let n = (floor(len / (tile * 0.25)) as i32 + 1).min(256);
-    for i in 1..=n {
+    // Exact f64 sample arithmetic in two lanes: no reciprocal approximation
+    // or reassociation, so a point on a tile boundary keeps the same tile.
+    let (vx0, vy0, vdx, vdy, vn) = (f64x2_splat(x0), f64x2_splat(y0), f64x2_splat(dx), f64x2_splat(dy), f64x2_splat(n as f64));
+    let (zero, vw, vh) = (f64x2_splat(0.0), f64x2_splat(w as f64), f64x2_splat(h as f64));
+    let mut i = 1;
+    while i + 1 <= n {
+        let k = f64x2_div(f64x2(i as f64, (i + 1) as f64), vn);
+        let gx = f64x2_floor(f64x2_mul(f64x2_add(vx0, f64x2_mul(vdx, k)), inv));
+        let gy = f64x2_floor(f64x2_mul(f64x2_add(vy0, f64x2_mul(vdy, k)), inv));
+        let valid = v128_and(v128_and(f64x2_ge(gx, zero), f64x2_lt(gx, vw)), v128_and(f64x2_ge(gy, zero), f64x2_lt(gy, vh)));
+        if i64x2_bitmask(valid) != 3 { return false; }
+        let cells = i32x4_add(i32x4_trunc_sat_f64x2_zero(gx), i32x4_mul(i32x4_trunc_sat_f64x2_zero(gy), i32x4_splat(w)));
+        if (rd(wl, i32x4_extract_lane::<0>(cells) as usize) | rd(wl, i32x4_extract_lane::<1>(cells) as usize)) != 0 { return false; }
+        i += 2;
+    }
+    if i <= n {
         let k = i as f64 / n as f64;
         let gx = floor((x0 + dx * k) * itile);
         let gy = floor((y0 + dy * k) * itile);
@@ -2496,6 +2538,11 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
     wr(a as *mut i32, 299, s0);
     core::ptr::write_bytes(a.add(300) as *mut u8, 0, if spatial {4}else{(end-s0).max(0) as usize});
     let mut m = Mv::load(a);
+    let mut step_cache = core::mem::MaybeUninit::<[AtlasStepEntry; ATLAS_STEP_CACHE_ENTRIES]>::uninit();
+    if !spatial {
+        m.nav_step_cache = step_cache.as_mut_ptr() as *mut AtlasStepEntry;
+        core::ptr::write_bytes(m.nav_step_cache, 0, ATLAS_STEP_CACHE_ENTRIES);
+    }
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
     let mut p = MoveP {
@@ -4750,6 +4797,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let cs = 31 - (n_c as u32).leading_zeros() as i32;
     let v = Nav {
         atl: atlh,
+        step_cache: m.nav_step_cache,
         w,
         h,
         cs,

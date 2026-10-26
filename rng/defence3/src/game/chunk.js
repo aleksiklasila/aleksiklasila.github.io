@@ -302,7 +302,7 @@ function spatialIndexPrebuild() {
     // By its changes (k.rs k_ixd_*) when the index in use is a parallel
     // build whose slots' listing is recorded, else built whole (and the
     // listing recorded for the next).
-    const D = SPATIAL_INDEX_DELTA && typeof SIM_KERNEL_IXD_SCAN === 'number' && X.mergeOk && _sxBySlot && !_sxDirty
+    const D = SPATIAL_INDEX_DELTA && !_spatialPreferParallelMerge(n) && typeof SIM_KERNEL_IXD_SCAN === 'number' && X.mergeOk && _sxBySlot && !_sxDirty
         ? _spatialDeltaArrays(X, _simUnitState.cap, _sxESlot.length) : null;
     const slotsN = _simUnitState.owners.length, DJ = Math.ceil(slotsN / SPATIAL_IXD_UJ);
     const dp = D ? [slotsN, SPATIAL_IXD_UJ, nChunks, _sxListed, ep, _sxEpoch, TILE, GRID_W, GRID_H, SPATIAL_IXD_BANDS, Math.ceil(nChunks / SPATIAL_IXD_BANDS), DJ,
@@ -373,6 +373,22 @@ function _spatialPrebuildFullStages(X, n, nChunks, ep, uj, base, masks) {
 // its slots' listing recorded (X.ixd.ok). (Every build lists a chunk's units
 // by id: SIM_KERNEL_INDEX_IDSORT, SPATIAL_IDSORT_PER entries a job.)
 let SPATIAL_INDEX_DELTA = true;
+// A long step can move a large part of an army at once. The delta build's
+// insert sort and owner refresh are serial, stalling the entire helper
+// chain on those ticks. Use the parallel merge when movement is widespread;
+// retain the cheap delta path for quiet scenes and single-threaded runs.
+function _spatialPreferParallelMerge(n) {
+    if (n < 250000 || typeof simDk === 'undefined' || simDk < 4
+        || typeof simParallelHelpers !== 'function' || simParallelHelpers() < 2
+        || typeof _occ === 'undefined' || !_occ || !_occ.stats) return false;
+    const stats = _occ.stats, limit = n / 16;
+    let moved = 0;
+    for (let i = 2; i < stats.length - 8; i += 8) {
+        moved += stats[i];
+        if (moved > limit) return true;
+    }
+    return false;
+}
 const SPATIAL_IDSORT_PER = 65536;
 const SPATIAL_IXD_BANDS = 64, SPATIAL_IXD_UJ = 8192, SPATIAL_IXD_CPER = 65536;
 // Its arrays: per slot (slots, whole scan blocks) the listing (key, id,

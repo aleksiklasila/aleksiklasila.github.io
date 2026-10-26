@@ -986,13 +986,18 @@ function navFieldsSweepStep() {
     const step = NAV_FIELD_SWEEP_TICKS;
     // (The slices of the step's base ticks in turn; a cycle ends with its
     // last, the next one's marks after it.)
-    for (const k of simStepPhases(step)) {
+    const phases = simStepPhases(step);
+    for (let i = 0; i < phases.length;) {
+        const k = phases[i];
+        let end = i + 1;
+        while (end < phases.length && phases[end] === phases[end - 1] + 1) end++;
         const mark = _navFields.seenCycle + 1;
-        _navFieldsSweepSlice(k, step, mark);
-        if (k === step - 1) _navFieldsSweepEnd(k, step, mark);
+        _navFieldsSweepSlice(k, step, mark, end - i);
+        if (phases[end - 1] === step - 1) _navFieldsSweepEnd(step - 1, step, mark);
+        i = end;
     }
 }
-function _navFieldsSweepSlice(k, step, mark) {
+function _navFieldsSweepSlice(k, step, mark, count = 1) {
     // (From the slots' columns: a unit's route field (rtEnd, nvProf, its
     // route key in oc__routeKey) and its path's last flow node's (nvPK, the
     // path setter's). No unit object is read.)
@@ -1004,7 +1009,10 @@ function _navFieldsSweepSlice(k, step, mark) {
     if (S && slots) {
         const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.rkF, n = units.length;
         const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
-        for (let i = k; i < n; i += step) {
+        // Adjacent base-tick shares touch adjacent entries. Visit them together
+        // so a long adaptive step reads each cache line once, while retaining
+        // the same shares and the cycle boundary's field-expiry decisions.
+        for (let base = k; base < n; base += step) for (let i = base, end = Math.min(n, base + count); i < end; i++) {
             const s = slots[i];
             if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
             const e = RE[s];

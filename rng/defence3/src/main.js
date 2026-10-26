@@ -5185,7 +5185,9 @@ function startGame() {
         return 1.1 * (side >= 1 ? 1 / (side * side) : Math.ceil(d / TILE) ** 2);
     };
     let starterOccupancy = () => typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED;
-    let getNextStarterUnitSpawnTile = (pid, origin) => {
+    let starterUnitWeightByTeam = {};
+    let starterUnitWeight = (unitType) => starterOccupancy() ? starterUnitFootprintTiles(unitType) : 1;
+    let getNextStarterUnitSpawnTile = (pid, origin, unitType) => {
         let state = teamStarterSpawnState[pid];
         if (!state) {
             let want = starterOccupancy() && starterUnitTilesByTeam[pid] > 0 ? Math.ceil(starterUnitTilesByTeam[pid])
@@ -5202,17 +5204,27 @@ function startGame() {
             let tiles = starterSpawnTilesFirst(origin, keep, false, others);
             if (tiles.length < want) tiles = starterSpawnTilesFirst(origin, keep, true, others);
             if (tiles.length > keep) tiles.length = keep;
-            state = { tiles, cursor: 0 };
+            state = { tiles, pos: 0, fill: new Int32Array(tiles.length) };
             teamStarterSpawnState[pid] = state;
         }
         if (!state.tiles || state.tiles.length <= 0) {
             let fallback = findNearestWalkable(origin.gx, origin.gy, origin.gx, origin.gy);
             return { gx: fallback.x, gy: fallback.y, ox: 0, oy: 0 };
         }
+        // (Each group of units takes its own run of neighbouring tiles, in
+        // the order they are placed, no longer dealt round robin over all of
+        // them, which mixed every kind through the whole army. A unit moves
+        // the position on by its share of the tiles: its weight over the
+        // army's, so the army ends where the tiles do; a small army still
+        // has a tile for each.)
         let n = state.tiles.length;
-        let tile = state.tiles[state.cursor % n];
-        let off = STARTER_TILE_OFFSETS[Math.floor(state.cursor / n) % STARTER_TILE_OFFSETS.length];
-        state.cursor++;
+        let total = starterUnitWeightByTeam[pid] || 0;
+        let step = total > 0 ? n * starterUnitWeight(unitType) / total : 1;
+        let index = Math.floor(state.pos) % n;
+        let slot = state.fill[index]++;
+        state.pos = (state.pos + step) % n;
+        let tile = state.tiles[index];
+        let off = STARTER_TILE_OFFSETS[slot % STARTER_TILE_OFFSETS.length];
         return { gx: tile.gx, gy: tile.gy, ox: off[0], oy: off[1] };
     };
 
@@ -5225,7 +5237,7 @@ function startGame() {
         let rejected = starterRejectedByTeam[pid] || 0;
         let u = null, tries = rejected < Math.max(256, (starterUnitCountByTeam[pid] || 0) >> 6) ? 8 : 1;
         for (let k = 0; k < tries; k++) {
-            let spawnTile = getNextStarterUnitSpawnTile(pid, origin);
+            let spawnTile = getNextStarterUnitSpawnTile(pid, origin, unitType);
             u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
             if (!u.dead) break;
             starterRejectedByTeam[pid] = ++rejected;
@@ -5293,16 +5305,18 @@ function startGame() {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};
         // Buildings first, then units on the tiles left free.
-        let unitCount = 0, unitTiles = 0;
+        let unitCount = 0, unitTiles = 0, unitWeight = 0;
         for (let thingId in spawnByThing) {
             let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
             if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
             let n = 0;
             for (let levelText in levelMap) n += normalizeStartingSpawnCount(levelMap[levelText]);
             unitCount += n;
+            unitWeight += n * starterUnitWeight(parsed.key);
             if (starterOccupancy()) unitTiles += n * starterUnitFootprintTiles(parsed.key);
         }
         starterUnitCountByTeam[pid] = Math.min(unitCount, getConfiguredMaxPop());
+        starterUnitWeightByTeam[pid] = unitCount > 0 ? unitWeight * starterUnitCountByTeam[pid] / unitCount : 0;
         starterUnitTilesByTeam[pid] = unitCount > 0 ? unitTiles * starterUnitCountByTeam[pid] / unitCount : 0;
         // (Units: the population cap takes them in the listed order; with
         // occupancy the largest footprints are placed first, the small ones
