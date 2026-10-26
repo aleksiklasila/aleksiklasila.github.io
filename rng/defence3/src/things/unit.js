@@ -132,7 +132,10 @@ function unitEventsRun() {
         }
         const ord = _unitEvOrd.subarray(0, j);
         for (let i = 0; i < j; i++) ord[i] = i;
-        ord.sort((a, b) => K[a] - K[b]);
+        // The 52-bit ordering keys have heap-number-sized differences. The
+        // native sort boxes each comparator result; return small integers
+        // instead so busy worker ticks do not allocate per comparison.
+        ord.sort((a, b) => K[a] < K[b] ? -1 : K[a] > K[b] ? 1 : 0);
         _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
         let over = 0;
         try {

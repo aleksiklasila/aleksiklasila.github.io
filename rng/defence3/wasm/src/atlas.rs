@@ -534,6 +534,55 @@ pub unsafe extern "C" fn k_atl_route(a: u32, chunk: i32) {
     }
 }
 
+// A look visits successive tiles of the same part toward the same target.
+// Only the local field changes: the cost beyond each exit stays constant.
+// Keep those costs on the look's stack, in exit order (including ties).
+pub struct ExitCache {
+    atlas: *const i32,
+    sp: i32,
+    dp: i32,
+    count: usize,
+    nodes: [i32; 64],
+    costs: [u32; 64],
+}
+impl ExitCache {
+    pub fn new() -> Self {
+        Self { atlas: core::ptr::null(), sp: -1, dp: -1, count: 0, nodes: [0; 64], costs: [0; 64] }
+    }
+    unsafe fn best(&self, fields: *const u16, o: usize, cc2: usize) -> i32 {
+        let mut best = -1;
+        let mut value = u32::MAX;
+        let mut i = 0;
+        while i + 4 <= self.count {
+            let nodes = self.nodes.as_ptr().add(i);
+            let f = i32x4(g(fields, *nodes as usize * cc2 + o) as i32,
+                g(fields, *nodes.add(1) as usize * cc2 + o) as i32,
+                g(fields, *nodes.add(2) as usize * cc2 + o) as i32,
+                g(fields, *nodes.add(3) as usize * cc2 + o) as i32);
+            let r = v128_load(self.costs.as_ptr().add(i) as *const v128);
+            let sum = i32x4_add(r, f);
+            // Match scalar saturation and unreachable fields exactly.
+            let invalid = v128_or(u32x4_lt(sum, r), i32x4_eq(f, i32x4_splat(0xFFFF)));
+            let score = v128_bitselect(i32x4_splat(-1), sum, invalid);
+            let low = u32x4_min(score, i32x4_shuffle::<2, 3, 0, 1>(score, score));
+            let low = u32x4_min(low, i32x4_shuffle::<1, 0, 3, 2>(low, low));
+            let v = i32x4_extract_lane::<0>(low) as u32;
+            if v < value {
+                let lane = (i32x4_bitmask(i32x4_eq(score, low)) as u32).trailing_zeros() as usize;
+                value = v; best = *nodes.add(lane);
+            }
+            i += 4;
+        }
+        for i in i..self.count {
+            let node = *self.nodes.get_unchecked(i);
+            let f = g(fields, node as usize * cc2 + o);
+            if f == 0xFFFF { continue; }
+            let v = (*self.costs.get_unchecked(i)).saturating_add(f as u32);
+            if v < value { value = v; best = node; }
+        }
+        best
+    }
+}
 /// A profile's atlas header (flownav.js navAtlasHeader, nav.<p>.atl):
 /// words [0] levels L, [1] C, [2] cw, [3] blocks across, [4] parts, then the
 /// arrays' addresses: [5] bm, [6] bc, [7] cb, [8] co, [9] ct (blocks and the
@@ -544,6 +593,8 @@ pub unsafe extern "C" fn k_atl_route(a: u32, chunk: i32) {
 /// didx (L an exit node: its index in its node at each level), [19] the
 /// build's nodeBase.
 pub struct Atl {
+    pub exit_cache: *mut ExitCache,
+    header: *const i32,
     pub l: usize,
     pub c: i32,
     pub cw: i32,
@@ -583,6 +634,8 @@ impl Atl {
         }
         let p = |i: usize| waddr(*h.add(i) as u32);
         Some(Atl {
+            exit_cache: core::ptr::null_mut(),
+            header: h,
             l: *h as usize,
             c: *h.add(1),
             cw: *h.add(2),
@@ -615,6 +668,14 @@ impl Atl {
         if sp == dp || sp < 0 || dp < 0 {
             return -1;
         }
+        if !self.exit_cache.is_null() {
+            let cache = &*self.exit_cache;
+            if cache.atlas == self.header && cache.sp == sp && cache.dp == dp {
+                return cache.best(fields, o, cc2);
+            }
+            (*self.exit_cache).atlas = core::ptr::null();
+            (*self.exit_cache).count = 0;
+        }
         let l = self.l;
         let (su, tu) = (sp as usize, dp as usize);
         let mut lv = 0usize;
@@ -630,6 +691,7 @@ impl Atl {
         let base = g(self.rco, d) as usize + ct * n;
         let mut best = -1i32;
         let mut bv = u32::MAX;
+        let mut cache_count = 0usize;
         for i in g(self.nb, cf)..g(self.nb, cf + 1) {
             let iu = i as usize;
             if g(self.npart, iu) != sp {
@@ -646,8 +708,16 @@ impl Atl {
                 continue;
             }
             let r = g(self.rc, base + x);
+            if r == !0u32 { continue; }
+            if !self.exit_cache.is_null() {
+                if cache_count < 64 {
+                    *(*self.exit_cache).nodes.as_mut_ptr().add(cache_count) = i;
+                    *(*self.exit_cache).costs.as_mut_ptr().add(cache_count) = r;
+                }
+                cache_count += 1;
+            }
             let f = g(fields, iu * cc2 + o);
-            if r == !0u32 || f == 0xFFFF {
+            if f == 0xFFFF {
                 continue;
             }
             let v = r.saturating_add(f as u32);
@@ -655,6 +725,10 @@ impl Atl {
                 bv = v;
                 best = i;
             }
+        }
+        if !self.exit_cache.is_null() && cache_count <= 64 {
+            let cache = &mut *self.exit_cache;
+            cache.atlas = self.header; cache.sp = sp; cache.dp = dp; cache.count = cache_count;
         }
         best
     }

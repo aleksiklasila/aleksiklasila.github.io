@@ -1365,7 +1365,7 @@ unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
     first
 }
 /// simNavStepXY.
-unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32) -> i32 {
+unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mut crate::atlas::ExitCache) -> i32 {
     if t == dest {
         return -1;
     }
@@ -1381,7 +1381,10 @@ unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32) -> i32 {
             return (*cache).next;
         }
         let next = match crate::atlas::Atl::from(v.atl) {
-            Some(a) => crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest),
+            Some(mut a) => {
+                a.exit_cache = exit_cache;
+                crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest)
+            },
             None => -1,
         };
         if !cache.is_null() { core::ptr::write(cache, AtlasStepEntry { atlas: v.atl, tile: t, dest, next }); }
@@ -1596,7 +1599,9 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
             }
         }
     }
-    let mut n1 = nav_step(v, tl, gx, gy, dk);
+    let mut exit_cache = crate::atlas::ExitCache::new();
+    let exit_cache = &mut exit_cache as *mut crate::atlas::ExitCache;
+    let mut n1 = nav_step(v, tl, gx, gy, dk, exit_cache);
     if n1 < 0 {
         return 0;
     }
@@ -1606,7 +1611,7 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
     let n1x = step_x(n1, tl, gx, w);
     let n1y = step_y(n1, tl, gx, gy, w);
     if rd(wl, n1 as usize) != 0 {
-        let mut aim = nav_step(v, n1, n1x, n1y, dk);
+        let mut aim = nav_step(v, n1, n1x, n1y, dk, exit_cache);
         if !(aim >= 0) || rd(wl, aim as usize) != 0 {
             aim = dk;
         }
@@ -1627,7 +1632,7 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
         let lim = if open { 32 } else { 2 };
         let mut k = 1;
         while k < lim {
-            let nx = nav_step(v, cur, cx, cy, dk);
+            let nx = nav_step(v, cur, cx, cy, dk, exit_cache);
             if nx < 0 || rd(wl, nx as usize) != 0 {
                 break;
             }

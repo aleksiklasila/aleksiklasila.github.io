@@ -49,7 +49,8 @@ function _ensurePlayerResourceState(playerId) {
     if (!player.resourceMaxValues || typeof player.resourceMaxValues !== 'object') player.resourceMaxValues = {};
     if (!player._resourceFixedValues || typeof player._resourceFixedValues !== 'object') player._resourceFixedValues = {};
     if (!PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || typeof PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] !== 'object') PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {};
-    for (let cfg of RESOURCE_TYPE_LIST) {
+    for (let i = 0; i < RESOURCE_TYPE_LIST.length; i++) {
+        const cfg = RESOURCE_TYPE_LIST[i];
         let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
         if (!stockpileKey) continue;
         let currentValue = Number(player[stockpileKey]);
@@ -178,7 +179,8 @@ function _updatePlayerResourcePenaltyMultipliers(playerId) {
     let player = _ensurePlayerResourceState(pid);
     if (!player) return [];
     let changedResources = [];
-    for (let cfg of RESOURCE_TYPE_LIST) {
+    for (let i = 0; i < RESOURCE_TYPE_LIST.length; i++) {
+        const cfg = RESOURCE_TYPE_LIST[i];
         let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
         if (!stockpileKey) continue;
         let currentValue = Number(player[stockpileKey]);

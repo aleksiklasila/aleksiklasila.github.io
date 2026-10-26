@@ -9,7 +9,7 @@ function initSpatialHash() {
     _sxDirty = true;
     closestEnemyChunkQueryCache.clear();
     // (New count tables: changes to the old ones are void.)
-    _spatialCountQ.length = 0;
+    _spatialCountQN = 0;
     // (New type indexes: the effective-stats windows are worked out again.)
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
 
@@ -137,10 +137,20 @@ function _spatialCountUnit(u, chunkKey, owner, delta) {
 // they filter (spatialIndexRebuild): a unit the movement kernel moved
 // before the pass is still counted where the index lists it, whichever
 // peer moved it when. The changes are applied at the pass's end.
-let _spatialCountDefer = false, _spatialCountQ = [];
+let _spatialCountDefer = false, _spatialCountQ = new Float64Array(4096), _spatialCountQN = 0;
 function _spatialCountAdd(chunkKey, owner, typeIdx, delta) {
     if (!(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return;
-    if (_spatialCountDefer) { _spatialCountQ.push(chunkKey, owner, typeIdx, delta); return; }
+    if (_spatialCountDefer) {
+        const n = _spatialCountQN;
+        if (n + 4 > _spatialCountQ.length) {
+            const next = new Float64Array(Math.max(n + 4, _spatialCountQ.length * 2));
+            next.set(_spatialCountQ); _spatialCountQ = next;
+        }
+        const q = _spatialCountQ;
+        q[n] = chunkKey; q[n + 1] = owner; q[n + 2] = typeIdx; q[n + 3] = delta;
+        _spatialCountQN = n + 4;
+        return;
+    }
     spatialUnitsComplex[chunkKey * spatialUnitsComplexStridePerChunk + owner] += delta;
     if (typeIdx >= 0) spatialTypeCounts[spatialTypeBlockOf(chunkKey) * spatialTypeStridePerBlock + owner * spatialUnitsComplexUnitTypeCount + typeIdx] += delta;
     _adjustSpatialBlockCount(chunkKey, owner, delta);
@@ -159,8 +169,10 @@ let _spatialKernelMoves = false;
 function spatialCountsDeferEnd(keepKernel = false) {
     _spatialCountDefer = false;
     const q = _spatialCountQ;
-    for (let i = 0; i < q.length; i += 4) _spatialCountAdd(q[i], q[i + 1], q[i + 2], q[i + 3]);
-    q.length = 0;
+    for (let i = 0; i < _spatialCountQN; i += 4) _spatialCountAdd(q[i], q[i + 1], q[i + 2], q[i + 3]);
+    // Keep the backing store: clearing a JS array discarded it and made
+    // the next movement pass allocate the same growing queue again.
+    _spatialCountQN = 0;
     if (_spatialKernelMoves && !keepKernel) {
         _spatialKernelMoves = false;
         const S = _simUnitState;
