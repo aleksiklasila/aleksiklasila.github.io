@@ -25,7 +25,7 @@ for(const n of [count,ticks,dk,burstEvery])assert.ok(Number.isInteger(n)&&n>0);
 for(const n of [structures,workerMinimum,unitLevelOffset])assert.ok(Number.isInteger(n)&&n>=0);
 assert.ok(Number.isInteger(helpers)&&helpers>=0);
 assert.ok(Number.isInteger(warmup)&&warmup>=0&&warmup<ticks);
-assert.ok(Number.isInteger(profileStartStep)&&profileStartStep>=warmup&&profileStartStep<ticks);
+assert.ok(Number.isInteger(profileStartStep)&&profileStartStep>=0&&profileStartStep<ticks);
 if(helpers)globalThis.self={crossOriginIsolated:true};
 const H=require('./net-harness.cjs'),chaos=require('./chaos-spikes-scenario.cjs');
 const data=JSON.parse(fs.readFileSync(path.join(__dirname,'chaos-mega-1000.json')));
@@ -48,6 +48,10 @@ for(const k of Object.keys(counts))if(k.startsWith('unit:')&&k!=='unit:king'){
 }
 data.lobby.numbers['cfg-max-pop']=Math.max(2000000,count);
 if(data.editableConfig?.config)data.editableConfig.config.CONFIG_MAX_POP=data.lobby.numbers['cfg-max-pop'];
+// (No building limit below the structure pool's: the fixture's 125k structures
+// a team, and its players' placements, as before the limit.)
+data.lobby.numbers['cfg-max-buildings']=10000000;
+if(data.editableConfig?.config)data.editableConfig.config.CONFIG_MAX_BUILDINGS=10000000;
 const controls={...H.SMALL_MATCH_CONTROLS};
 for(const group of ['numbers','selects','checkboxes'])for(const [k,v] of Object.entries(data.lobby[group]||{}))controls[k]=typeof v==='boolean'?v:String(v);
 const world=new H.World({controls}),inst=world.spawn('chaos-spikes',{controls,simWorker:false});
@@ -66,6 +70,7 @@ assert.deepEqual(setup.errors,[]);
 const {upgradeAreas,...setupSummary}=setup;
 console.log('Setup',JSON.stringify(setupSummary));
 inst.eval(`if(typeof SIM_TOWER_WASM!=='undefined'){SIM_TOWER_WASM=${towerMode!=='js'};SIM_TOWER_VERIFY=${towerMode==='verify'};}`);
+if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
  const spawn=spawnQueuedUnitFromSpawner,research=_researcherDeposit,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
  spawnQueuedUnitFromSpawner=function(s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
@@ -140,9 +145,11 @@ for(let i=0;i<ticks;i++){
  const ms=performance.now()-a;
  if(yieldBetween)await new Promise(setImmediate);
  const wallMs=performance.now()-a;
- const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
+ const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projectiles.length,phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
- row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed})`);
+ row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed,native:!!_towerAcq.native,prepared:_towerAcq.lastPrepared||0})`);
+ row.workerBrain=inst.eval(`typeof _workerBrain==='undefined'?null:({prepared:_workerBrain.prepared,used:_workerBrain.used,misses:_workerBrain.misses,bytes:Object.values(_workerBrain.arrays).reduce((n,a)=>n+a.byteLength,0),recordBytes:_simUnitState?.wk?9*_simUnitState.wk.cap:0})`);
+ if(i%10===0||i===ticks-1)row.stationary=inst.eval(`typeof _stationaryReach==='undefined'?null:({areas:areaNeighborIds.length,depth:_stationaryReach.depth,phase:_stationaryReach.phase,ready:_stationaryReach.ready,entries:_stationaryReach.arrays.meta?.[0],scratchWords:_simWasmScratchWords,bytes:(_ST.brain?.byteLength||0)+Object.values(_stationaryReach.arrays).reduce((n,a)=>n+a.byteLength,0)+Object.values(_stationaryStats.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
  row.tileJournal=inst.eval(`({base:_teLogBase,end:typeof _teLogEnd==='number'?_teLogEnd:_teLogBase+_teLog.length,storageBytes:_teLog.byteLength||null})`);
  if(eventMetrics)row.events=inst.eval('__scratch.events');
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
@@ -159,6 +166,8 @@ const steady=rows.slice(warmup);
 if(gcObserver){gcEntries.push(...gcObserver.takeRecords().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})));gcObserver.disconnect();for(const row of rows)row.gcMs=gcEntries.reduce((n,e)=>n+Math.max(0,Math.min(e.at+e.ms,row.at+row.wallMs)-Math.max(e.at,row.at)),0);}
 const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:typeof _unitEvSort!=="undefined"?[...new Set(Object.values(_unitEvSort))].reduce((n,a)=>n+(ArrayBuffer.isView(a)?a.byteLength:0),0):_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
 if(process.argv.includes('--hash'))result.hash=inst.eval('__exactStateHash()');
+result.projFlight=inst.eval('typeof _pjf!=="undefined"?_pjf.stats:null');result.structRows=inst.eval('typeof structRowStats!=="undefined"?structRowStats:null');
+if(session)result.wasmFunctionNames=require('./wasm-profile-exports.cjs')(inst.eval(`SIM_WASM64?SIM_WASM64_BIN:SIM_WASM_BIN`));
 result.layout=layout;result.towerMode=towerMode;
 result.tower=inst.eval(`typeof _towerAcq==='undefined'?null:({enabled:SIM_TOWER_WASM,typeOverrides:SIM_TOWER_TYPE_OVERRIDES,scratchBytes:Object.values(_towerAcq.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
 result.population={min:Math.min(...steady.map(r=>r.units)),max:Math.max(...steady.map(r=>r.units)),births:steady.reduce((n,r)=>n+r.births,0),deaths:steady.reduce((n,r)=>n+r.deaths,0),work:rows.at(-1).work};

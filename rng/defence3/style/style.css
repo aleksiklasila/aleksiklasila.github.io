@@ -337,7 +337,7 @@
             font-size: 14px;
             line-height: 19px;
         }
-        .lf-pop #hud-pop, .lf-pop #bb-research-label { display: contents; }
+        .lf-pop #hud-pop, .lf-pop #hud-builds, .lf-pop #bb-research-label { display: contents; }
         .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { grid-column: 1; text-align: right; color: #8a949c; font-weight: normal; font-size: 12px; }
         .lf-pop .pop-nums, .lf-pop #bb-research-label .bb-lcount { grid-column: 2; text-align: left; font-size: 13px; line-height: 19px; white-space: nowrap; letter-spacing: -0.2px; }
         .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { line-height: 19px; }

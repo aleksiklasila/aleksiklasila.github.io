@@ -31,6 +31,8 @@ mod occ;
 mod traffic;
 mod acq_sample;
 mod tower;
+mod worker_brain;
+mod proj;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

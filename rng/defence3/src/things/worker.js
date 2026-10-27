@@ -4142,7 +4142,46 @@ function _spawnerNearOf(T, key, ux, uy, list) {
     M.set(key, near);
     return near;
 }
+let WORKER_BRAIN_WASM=true;
+const _workerBrainSpawnerTypes=['spawner','astar_spawner','salvager','builder_spawner','healer_spawner','research'];
+const _workerBrain={arrays:{},tick:-1,prepared:0,used:0,misses:0};
+function _workerBrainArray(name,Type,n){
+    const B=_workerBrain,old=B.arrays[name];if(old&&old.length>=n)return old;
+    const a=B.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(n,1),256));simParallelBind('wb.'+name,a);if(old)simHeapFree(old);return a;
+}
+function workerBrainsPrepare(n,defer=false){
+    if(_workerBrain.pending)workerBrainsCollect();
+    const B=_workerBrain;B.active=false;B.tick=-1;B.prepared=0;B.used=0;B.misses=0;
+    if(!WORKER_BRAIN_WASM||n<64||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.free.length<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
+    const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
+    _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);
+    for(const key of ['code','own','uc','val','brain'])simParallelBind('st.'+key,_ST[key]);
+    const lane=SIM_LANE_TICK;
+    for(let stage=0;stage<3;stage++){
+        const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=nb;P[1]=32;P[2]=stage;P[3]=w;P[4]=h;P[5]=cols;P[6]=np;P[7]=stride;
+        for(let k=0;k<6;k++)P[16+k]=(_stationaryTypeIds.get(_workerBrainSpawnerTypes[k])??-1)+1;
+        if(stage===2){P[0]=n;P[1]=256;P[2]=gameTime;P[8]=TILE*8;}
+    }
+    B.pending={tick:gameTime,n};
+    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/32)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
+    if(!defer)workerBrainsCollect();
+}
+function workerBrainsCollect(){
+    const B=_workerBrain,J=B.pending;if(!J)return;
+    simParallelBackgroundWait(SIM_LANE_TICK);B.tick=J.tick;B.prepared=J.n;B.pending=null;B.active=true;
+}
+function workerBrainsEnd(){_workerBrain.active=false;}
 function _findClosestSpawner(u, type) {
+    if(WORKER_BRAIN_WASM&&_workerBrain.active&&_workerBrain.tick===gameTime&&u&&u._us){
+        const c=u._us,w=c.wkIx[u._si];
+        if(w>0&&c.wbTick[w]===gameTime&&type===_workerBrainSpawnerTypes[c.wbType[w]-1]){
+            const t=c.wbSpawner[w];
+            if(t===-1){_workerBrain.used++;return null;}
+            const s=t>=0?getTileEntityRef(t%GRID_W,Math.floor(t/GRID_W)):null;
+            if(s&&s.type===type&&s.owner===u.owner&&s.energy>0&&!s.underConstruction){_workerBrain.used++;return s;}
+            _workerBrain.misses++;
+        }
+    }
     // (The owner's own: the others never pass the test below.)
     let list = _ownedSpawnersOfType(type, u && u.owner);
     if (list.length === 0) return null;

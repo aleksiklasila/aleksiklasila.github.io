@@ -158,7 +158,9 @@ const SNAP_FORMAT = 7;
 // neighborhood, so cache warmth and helper scheduling cannot change routes.
 // 41: expired status damage is cleared independently of visual-report
 // retention; weaker subsequent effects cannot inherit a peer-local value.
-const SIM_RULES_REVISION = 41;
+// 42: worker return-site brains read a shared snapshot at the start of the
+// event phase. Newly completed spawners become candidates next brain batch.
+const SIM_RULES_REVISION = 42;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

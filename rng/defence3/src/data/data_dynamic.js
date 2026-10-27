@@ -669,6 +669,7 @@ function createEditableRuntimeConfigSnapshot() {
             TYPE_FLOOR,
             TYPE_WALL,
             CONFIG_MAX_POP,
+            CONFIG_MAX_BUILDINGS,
             TICK_RATE,
             LOCKSTEP_PIPELINE_MIN,
             THING_STATS_RECALC_INTERVAL_SECONDS,
@@ -721,6 +722,7 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
     syncResourceAbundanceFromRuntime();
     setValue('cfg-max-pop', CONFIG_MAX_POP);
+    setValue('cfg-max-buildings', CONFIG_MAX_BUILDINGS);
     setValue('cfg-starting-energy', STARTING_MONEY);
     setValue('cfg-starting-astar', STARTING_ASTAR);
     setValue('cfg-map-type', MAP_TYPE);
@@ -785,6 +787,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
         teamVisibilityHistory = cfg.MAP_VISIBILITY === 'history';
     }
     if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
+    if (Number.isFinite(Number(cfg.CONFIG_MAX_BUILDINGS))) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_BUILDINGS)));
 
     let nextTickRate = Number(cfg.TICK_RATE);
     let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
@@ -1047,6 +1050,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.GAME_MODE = getString('cfg-gamemode', cfg.GAME_MODE);
     cfg.MAP_VISIBILITY = getString('cfg-full-vis', cfg.MAP_VISIBILITY);
     cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
+    cfg.CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(getNumber('cfg-max-buildings', cfg.CONFIG_MAX_BUILDINGS || CONFIG_MAX_BUILDINGS)));
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
     cfg.THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, getNumber('cfg-thing-stats-seconds', cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
@@ -1083,6 +1087,7 @@ function applyMainMenuControlsToRuntimeState() {
     SHRINES_ENABLED = cfg.SHRINES_ENABLED !== undefined ? !!cfg.SHRINES_ENABLED : SHRINES_ENABLED;
     MAP_TYPE = cfg.MAP_TYPE;
     CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
+    if (cfg.CONFIG_MAX_BUILDINGS) CONFIG_MAX_BUILDINGS = cfg.CONFIG_MAX_BUILDINGS;
     MAX_THING_LEVEL = prog.MAX_THING_LEVEL;
     MAX_RESEARCH_LEVEL = prog.MAX_RESEARCH_LEVEL;
     THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, Number(cfg.THING_STATS_RECALC_INTERVAL_SECONDS) || THING_STATS_RECALC_INTERVAL_SECONDS));

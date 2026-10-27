@@ -1375,6 +1375,11 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         if (defaults.ignorePlacementRules !== undefined) ignorePlacementRules = !!defaults.ignorePlacementRules;
     }
 
+    // The building limit (getPlayerStructureLimit): a new structure on an
+    // empty tile only; stacking or upgrading one in place still works.
+    if (!ignorePlacementRules && playerId >= 0 && typeof playerStructureCount === 'function'
+        && !getTileEntityRef(gx, gy) && playerStructureCount(playerId) >= getPlayerStructureLimit()) return false;
+
     if (itemKey.startsWith('cloud_')) {
         let hasSameCloud = towers.some(t => t.owner === playerId && t.type === itemKey && t.energy > 0);
         if (hasSameCloud) return false;

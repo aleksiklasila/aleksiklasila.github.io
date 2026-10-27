@@ -1554,7 +1554,28 @@ const _simTowerStructW = _simWK(['st.code','st.own','st.uc','st.val','mv.scls','
     'tac.qx','tac.qy','tac.owner','tac.off','tac.areas','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
 const SIM_KERNEL_TOWER_ORDER=105;
 const SIM_KERNEL_TOWER_COARSE=106;
-const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct']);
+const SIM_KERNEL_STATIONARY_AREAS=109,SIM_KERNEL_TOWER_PREPARE=110,SIM_KERNEL_STATIONARY_NEED=111;
+const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
+const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any']);
+const _simWorkerSpawnersW=_simWK(['ev.sorted','unit.isWk','unit.wkIx','unit.wbType','unit.wbTick','unit.wbSpawner','unit.x','unit.y','unit.owner',
+    'wb.sites','wb.count','wb.any','st.brain','st.own','unit.workerTransferCooldown','unit.wsKind']);
+SIM_KERNELS[SIM_KERNEL_WORKER_SITES]=function(R,P,chunk){_simRust(_simWorkerSitesW,P,chunk,'k_worker_sites','WORKER_SITES');};
+SIM_KERNELS[SIM_KERNEL_WORKER_SPAWNERS]=function(R,P,chunk){_simRust(_simWorkerSpawnersW,P,chunk,'k_worker_spawners','WORKER_SPAWNERS');};
+// Projectile flight (projectile.js _projectilesAdvanceNative; wasm/src/proj.rs k_proj_flight).
+const SIM_KERNEL_PROJ_FLIGHT=114;
+const _simProjFlightW=_simWK(['pj.x','pj.y','pj.vx','pj.vy','pj.life','pj.sx','pj.sy','pj.range','pj.own','pj.ft','ix.stamp','ix.start','ix.cnt','sep.eslot',
+    'unit.x','unit.y','unit.r','unit.dead','unit.live','unit.owner','?ix.complex','st.code','st.own','st.val','st.brain','pj.ev','pj.arg','pj.ox','pj.oy','pj.px','pj.py','pj.ol','pj.pl']);
+SIM_KERNELS[SIM_KERNEL_PROJ_FLIGHT]=function(R,P,chunk){_simRust(_simProjFlightW,P,chunk,'k_proj_flight','PROJ_FLIGHT');};
+const _simStationaryAreasW=_simWK(['area.off','area.nb','area.bounds','sta.off','?sta.ids','sta.box','sta.meta','sta.need']);
+const _simStationaryNeedW=_simWK(['st.code','st.own','st.brain','vis.areaGrid','sta.maxRange','sta.need']);
+SIM_KERNELS[SIM_KERNEL_STATIONARY_NEED]=function(R,P,chunk){_simRust(_simStationaryNeedW,P,chunk,'k_stationary_need','STATIONARY_NEED');};
+const _simTowerPrepareW=_simWK(['tac.input','st.code','st.own','st.uc','st.val','st.tim','st.brain',
+    'sta.range','sta.cd','sta.kind','vis.areaGrid','sta.off','sta.box',
+    'tac.qx','tac.qy','tac.owner','tac.type','tac.base','tac.tile','tac.off','tac.boxes','tac.valid',
+    'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','sta.need']);
+SIM_KERNELS[SIM_KERNEL_STATIONARY_AREAS]=function(R,P,chunk){_simRust(_simStationaryAreasW,P,chunk,'k_stationary_areas','STATIONARY_AREAS');};
+SIM_KERNELS[SIM_KERNEL_TOWER_PREPARE]=function(R,P,chunk){_simRust(_simTowerPrepareW,P,chunk,'k_tower_prepare','TOWER_PREPARE');};
+const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct','?tac.off','?tac.count','?tac.valid']);
 SIM_KERNELS[SIM_KERNEL_TOWER_COARSE]=function(R,P,chunk){_simRust(_simTowerCoarseW,P,chunk,'k_tower_coarse','TOWER_COARSE');};
 const _simTowerOrderW=_simWK(['tac.sortKeys','tac.sortOrder','tac.sortTmp']);
 SIM_KERNELS[SIM_KERNEL_TOWER_ORDER]=function(R,P,chunk){_simRust(_simTowerOrderW,P,chunk,'k_tower_order','TOWER_ORDER');};

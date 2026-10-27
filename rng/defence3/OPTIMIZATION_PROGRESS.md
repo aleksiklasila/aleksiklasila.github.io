@@ -2048,3 +2048,229 @@ Raw output: `tests/test-runs/multiplayer-checkerboard/four-teams-final32.json`.
 The targeted multiplayer suite passes 10/10 across simulation modes 0/1, and
 status expiry, mixed/front fixture checks and scalar/three-helper determinism
 pass 3/3. No legacy memory64 tests were run after the target clarification.
+
+## 2026-10-27: shared stationary preparation and SIMD worker brain batches
+
+Moved ordinary turret query preparation and nearest-return-spawner decisions
+from repeated foreground JS lookups to shared SoA/WASM helper batches. Details,
+raw tick rows, source checkpoints and reproduction commands are in
+[`tests/test-runs/stationary-brains-20261027/README.md`](tests/test-runs/stationary-brains-20261027/README.md).
+
+Fresh baseline neighboring-tick attribution identifies the worker JS event
+phase as the largest spike expansion: previous/slow/next/reference ticks
+71/72/73/68 take 1301/1473/1011/1256 ms, of which events take
+434/586/316/441 ms. Movement kernel 8 and four occupancy kernel 89 passes
+dominate foreground kernels. All-thread CPU samples are not elapsed time.
+
+Stationary entities publish compact descriptors on mutation; helpers resolve
+owner/type/level stats, eligibility, area slices, adaptive shots and cooldown
+proposals. Immutable reach lists are built on the low-priority tier, sharing
+one ordered list per source and cumulative range endpoints. Longer ranges are
+prepared only where entities need them, including unfinished entities. Ordinary
+shot/idle commits bypass repeated JS `act()/shoot()` decisions. The initial
+all-area/all-range attempts hit the entry cap and did not activate; their raw
+failures remain saved, without speedup claims.
+
+Worker batches build a compact spatial spawner index and availability masks,
+then compute SIMD nearest decisions while independent route preparation runs.
+Eight packed sites fit one 128-bit load; coordinate/class decoding avoids
+per-site division and random tile gathers. Helper jobs own contiguous buckets
+and padded count/mask rows. Result columns cost nine bytes per worker pool
+record rather than per army slot. Event commits consume stamped numeric
+handles; stale destroyed targets revalidate. Rules revision **42** defines
+newly completed spawners as visible at the next frozen brain batch, independent
+of helper timing. Full worker FSMs and projectile creation remain in JS.
+
+Final unprofiled dk=20 pairs reverse execution order, 120 steady ticks each:
+
+| Reference → current (ms) | Current first | Reference first |
+| --- | ---: | ---: |
+| Mean | 1000.0 → 837.6 | 908.6 → 842.3 |
+| p95 | 1449.0 → 1163.7 | 1235.6 → 1152.5 |
+| p99 | 1724.6 → 1202.5 | 1291.7 → 1240.0 |
+| Maximum | 1923.2 → 1228.9 | 1328.2 → 1366.4 |
+| >1500 ms ticks | 3 → 0 | 0 → 0 |
+
+Mean improves **7.3–16.2%**, TPS **7.9–19.4%**. Both p95/p99 improve, but
+the reverse-order maximum worsens **2.9%**; worst-tick improvement is mixed.
+Preparation averages 58.5–59.8 → 10.1–10.3 ms; total turret phase
+92.6–93.3 → 42.6–43.5 ms, events 245.9–288.6 → 220.9–222.7 ms.
+All 120 steady ticks activate native preparation and consume 280,656 prepared
+worker decisions per run. The isolated worker pair also reduces mean event
+time 259.9 → 218.3 ms; it uses the earlier int32/four-site layout and does not
+prove an independent speedup for the final packed representation.
+
+All final dk=20 runs match hash `fbe2814e` and useful work: population
+389,643–450,452 after starting at 1,000,004; 35,774 births, 100,338 deaths,
+38,047 spawns (29,101 army), 7,728 research deposits, 99,909 collector
+deposits, 87,566 astar deposits, 17,218 completions and 83,005 destructions.
+These are not sustained-million-unit measurements. Committed/live/peak WASM
+MiB changes 2230/1636/1704 → 2239/1693/1761: **+57 MiB live/peak**.
+Stationary tables occupy 50,006,272 bytes, packed worker index 3,399,680,
+worker record columns 2,285,568. The 3M-unit memory budget remains unmeasured.
+First gameplay ticks remain roughly 15 seconds; no startup gain is claimed.
+
+The fresh all-thread profile retains previous/slow/next/reference ticks
+57/58/59/47: wall 1106.9/1612.3/979.3/920.9 ms, events
+364.6/348.8/267.9/291.8, movement 288.3/284.7/289.0/272.6 and turrets
+47.0/272.7/40.1/43.8. This maximum is GC-heavy: about 420 ms sampled
+foreground GC, including 212 ms in turrets. The row GC observer records only
+63 ms; the attribution discrepancy is retained explicitly. Movement does
+not expand versus neighbors. Slow-tick kernels 8 and four occupancy passes
+take 121.5 and 146.7 ms respectively; profile-window means are 113.0 and
+134.6 ms. CPU profile overhead is excluded from acceptance timings.
+
+Worker FSM/object work remains expensive every tick: `_unitWorkerEvent`
+294 ms inclusive, `updateWorkerAI` 262 ms inclusive on the slow event slice,
+with most helpers idle. `_findClosestSpawner` now samples about 5.7 ms self
+time there. The next targets are shared worker state/transfer/builder checks,
+production invalidation and route/reference handling; projectile creation,
+cooldown commits, legacy path-region work and GC also remain. This is not
+a complete native event-FSM migration or removal of synchronous joins.
+
+**22/22 WASM32 validation jobs pass**: focused stationary reach/query checks
+(1136/4500 per zero/three-helper configuration), worker decisions (6400 per
+configuration), scalar/native tower targeting and helper determinism, boost,
+storage/status/unit ABI, orders, snapshots and worker/construction regressions.
+Six-map multiplayer replay compares 918 hashes/map; explicitly activated
+simulation-worker harness mode compares 915/map and completes in 418 seconds.
+Repairs remain inside deliberate-corruption windows. Four-team islands with
+18,004 starting units, 8000 structures, helpers 3/0/1/2 and dk=4 passes all
+30 actions, 567 clean exact comparisons, one intentional repair and 196
+post-repair comparisons without another patch/full snapshot. Both production
+variants are rebuilt: **e220cd852546b2b3 / c16dd713e614ea7d**, 107 exports.
+Memory64 is rebuilt but not claimed validated; routine checks target WASM32.
+Exact final source/binary SHA-256 checkpoints are in `final-source.json`.
+The report-summary script's correctness-row filtering failure is retained and
+fixed independently of production code.
+
+The dk=1 cross-check **regresses overall** in both execution orders (80 steady
+ticks/run). Reference → current mean is **394.5 → 408.1 ms** and
+**376.3 → 388.1 ms**; p95 **487.7 → 616.1** and **463.3 → 489.3**;
+p99/maximum **661.6 → 646.5** and **628.0 → 1042.8**. Thus mean is
+**3.1–3.4% worse**, despite faster preparation/turrets/events. The reverse
+current maximum expands mainly in projectile advancement (387.8 ms) and
+action processing (132.6 ms), with row GC 51.8 ms and free physical memory
+452 MiB. No matching profile establishes the exact cause. This limitation
+remains explicit; the dk=20 improvement is not generalized to every TPS tier.
+
+All dk=1 runs match hash `5e330c1`, population 461,971–722,320, 664 births,
+262,095 deaths, 667 spawns (273 army), 366 research/426 collector/361 astar
+deposits, 245 completions and 53,205 destructions. Each native run consumes
+6791 prepared decisions; live/peak WASM is 1581/1617 MiB versus reference
+1526/1561–1562. `summary.json` and `summary-regenerated.log` retain all
+16 raw-run summaries and neighboring ticks. Final source hashes match the
+validated checkpoint; no production edits followed the paired measurements.
+
+## 2026-10-27: dk=1 spikes: structure row pool, native projectile flight, building limit
+
+Details, raw rows, profiles and scripts:
+[`tests/test-runs/dk1-spikes-20261027/README.md`](tests/test-runs/dk1-spikes-20261027/README.md).
+Workload: 1M-unit mixed chaos at **dk=1** (real-time play), 11 helpers.
+
+Spike slicing (previous/slow/next + same-burst reference) of a profiled dk=1
+run found three distinct causes: (1) a **292 ms major GC** (worker heap
+1639 → 1108 MB) landing inside `adjacencyLaneStep`; (2) structure kills from
+unit hits → `destroyBuilding` → `structRowDetach` **50 ms** copying every field
+of each destroyed structure into a dictionary record; (3) on input bursts, the
+worker search roster rebuild `_wsGroupBuild` (114 ms). Projectile flight also
+cost 58 ms mean / 187 ms max every tick (~30k live shots). dk=1 allocates
+~36 MB/tick of simulation garbage (unit death detach 450 MB, projectile flight
+450 MB, pending-path iterator 207 MB, structure detach 177 MB per 60 ticks).
+
+Changes (an unused projectile object pool from the previous session was
+reverted; projectiles cost time in their queries, not their allocation):
+
+- Structure rows are a pool reserved at match start (`structTablesReserve`,
+  256 MiB by class share, at most a row per tile). A destroyed structure keeps
+  its row (no copy); rows expire `STRUCT_ROW_KEEP_TICKS` = 200 after
+  destruction, in destroy order (deterministic), then the old object reads as
+  destroyed. Full table: oldest retired row reused early; growth only with
+  none retired (`structRowStats`).
+- Native projectile flight (`wasm/src/proj.rs` `k_proj_flight`): one helper
+  batch finds each shot's first event over the step's base ticks from the
+  typed index/unit columns/tile table; JS applies events in the old order,
+  re-checking targets (3,923 re-checks in 3.35M shot-steps). Equal state hash
+  to the JS loop at dk=1/dk=4 and 0/3 helpers (diagnostic only: JS is legacy).
+- Building limit (user request): `CONFIG_MAX_BUILDINGS` lobby setting (100k
+  default) capped by each team's structure-pool share (597k per player for two
+  teams on 1000×1000), per-owner counts on the tile table, placement refused
+  at the limit, HUD "Bld count / limit". The chaos bench lifts the menu limit
+  so its workload is unchanged.
+
+Unprofiled dk=1 pairs, both orders, 120 steady ticks each, identical final
+hash `b00f46eb` and work (population 722k → 458k, 266,732 deaths, 57,253
+structures destroyed):
+
+| Reference → current | Pair 1 (ref first) | Pair 2 (current first) |
+| --- | ---: | ---: |
+| Mean ms | 529 → 387 (−27%) | 481 → 444 (−8%) |
+| p95 | 972 → 513 | 709 → 658 |
+| p99 = max | 1263 → 995 | 957 → 791 |
+| >600 ms ticks | 25 → 2 | 17 → 7 |
+| >800 ms ticks | 7 → 1 | 2 → 0 |
+| projectilesAdvance mean/max | 73/224 → 18/49 | 66/222 → 23/46 |
+| unitHitsResolve mean/max | 36/192 → 17/56 | 33/177 → 22/152 |
+| adjacencyLaneStep max (GC lands here) | 490 → 116 | 426 → 84 |
+| GC ms mean/max | 9.7/76 → 8.0/62 | 10.0/65 → 9.2/81 |
+
+Remaining (in order): movement kernel (`simMoveRun` ~115–130 ms mean, kernel
+8 + occupancy 89); worker search roster rebuilds (`workerSearchTierStep` max
+155–239 ms: full `_wsGroupBuild` over ~28k farms with a WeakMap write each,
+needs incremental rosters); GC still ~9 ms mean / 60–80 ms max (unit death
+detach records, pending-path iterators, `_tileOrderedReplaceMany`); unit
+death detach should become a kept-slot pool like structures. Not yet
+verified: whether the 10 structure-table growths in the bench happen in setup
+or play (expiry was not exercised within 140 ticks; the unit test covers it);
+per-class table shares do not follow the per-player limit exactly (a single
+shared structure table would); the global startup memory budget across units,
+structures and projectiles is still to be designed.
+
+### Open issues at the end of this session (continue here)
+
+1. **Four-team checkerboard recovery diverges at 320 ticks (pre-existing).**
+   `node tests/multiplayer-checkerboard-chaos.cjs --units=18000 --map=256
+   --structures=8000 --dk=4 --helpers=3,0,1,2 --teams=0,1,2,3 --seed=999
+   --map-type=islands --network=unstable --recover --ticks=320` (WASM64=0,
+   SIM_WORKER=0) fails "repaired checkerboard stays in sync: tickHashes"
+   with **66** mismatches. The pre-session sources (`baseline-state.js` +
+   `baseline-projectile.js` overrides, `ft-baseline320.json`) fail
+   identically (66), so it predates this session; the previous session ran
+   it at 160 ticks only. After the forced guest-1 damage and its repair patch,
+   all four peers match at ticks 355–360; from **tick 361** guest 1's
+   **units** hash part alone differs (towers/barracks/spawners/floor/mines
+   and players match). The patch restores the hashed state but leaves some
+   non-hashed unit state (caches, kernel columns, path/worker/event state,
+   tier/lane results) different, which changes the next tick. Next step: rerun
+   with `DIVTRACE=2 DIVTRACE_TICKS=80 DIVTRACE_FROM=355` (not `--trace`,
+   which keeps only 4 ticks) to name the first diverging units and fields,
+   then `DIVNEAR=id,tick` for their neighbours' columns. The started trace
+   run was stopped before it reported.
+2. **Correction:** the first `validate.cjs` run here was reported as 19/19
+   passing; the wrapper's `echo exit $?` hid the script's exit code. The
+   four-team job failed in both runs (issue 1); the other 18 jobs passed,
+   and the multiplayer/snapshot subset passed again on the final code
+   (`validation-final.log`: multiplayer-snapshot, solo-snapshot,
+   multiplayer-resync-messages, multiplayer-chaos-determinism page and
+   worker).
+3. **Fixed during that investigation:** structure expiry was not part of
+   snapshot state. A destroyed structure still referenced by a unit is sent
+   as a pooled shell; a restored peer's shell held a live row and never
+   expired, while the original expired after `STRUCT_ROW_KEEP_TICKS`. Now
+   tabled structures carry a `_retiredAt` snapshot key (retire tick, or -2
+   once expired), restored shells re-enter the retire queue in tick order,
+   and a full table grows (counted) instead of expiring the oldest row early
+   (that depended on each peer's table size). Test:
+   `tests/structure-row-expiry-snapshot.test.cjs`. The 1M timing pairs above
+   ran before this change (it touches only destroy/restore bookkeeping); the
+   four-team failure is unchanged by it (issue 1).
+4. Unverified: whether the 10 structure-table growths in the 1M bench happen
+   during setup or play (record `structRowStats` at the first timed tick);
+   the bench never reaches expiry (200 ticks) within 140 ticks.
+5. Next optimization targets (dk=1): movement kernel (~115–130 ms mean),
+   worker search roster rebuild spikes (incremental `_wsGroupBuild`), unit
+   death detach as a kept-slot pool like structures, remaining per-tick
+   allocations (pending-path iterators, `_tileOrderedReplaceMany`), and the
+   global startup memory budget across units, structures and projectiles
+   (single shared structure table so per-class shares match the per-player
+   building limit).

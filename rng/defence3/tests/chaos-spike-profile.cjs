@@ -15,6 +15,8 @@ const reference=option('reference')!==undefined?run.rows.find(r=>r.step===Number
 if(!reference)throw Error('Need a reference step.');
 const label=frame=>{
  let name=frame.functionName||'(anonymous)';
+ const numeric=/^wasm-function\[(\d+)\]$/.exec(name);
+ if(numeric&&run.wasmFunctionNames?.[numeric[1]])name=run.wasmFunctionNames[numeric[1]]+' '+name;
  const at=name.indexOf('12defence3_sim');
  if(at>=0)name=name.slice(at+14).replace(/NtB\d+_/g,'_').replace(/\d+/g,'::').replace(/^:+/,'');
  const url=frame.url||'';

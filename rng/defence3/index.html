@@ -97,6 +97,10 @@
                         <label>Max Population</label>
                         <input id="cfg-max-pop" type="number" min="1" max="10000000" value="200000" style="width:72px">
                     </div>
+                    <div class="lobby-setting-row" title="Structures each player may hold at once (buildings, towers, floor items, construction sites). No more than the match's structure memory holds per player.">
+                        <label>Max Buildings</label>
+                        <input id="cfg-max-buildings" type="number" min="1" max="10000000" value="100000" style="width:72px">
+                    </div>
                     <div class="lobby-setting-row">
                         <label>Starting Energy</label>
                         <input id="cfg-starting-energy" type="number" min="0" max="100000000000000000" value="10000" style="width:90px">
@@ -805,6 +809,7 @@
                 </div>
                 <div class="lf-row lf-pop">
                     <span class="hud-pop" id="hud-pop"></span>
+                    <span class="hud-pop" id="hud-builds"></span>
                     <div id="bb-research-label" title="Research queue: the left-most item is being researched. Drag to reorder; drag a thing from the row above to insert upgrades."></div>
                 </div>
             </div>

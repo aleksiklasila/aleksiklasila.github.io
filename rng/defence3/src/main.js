@@ -536,7 +536,10 @@ function projectilesAdvance() {
     projectilesBegin();
     try {
         let n0 = projectiles.length, spent = null;
-        for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
+        // (On the helpers when there are enough shots: projectile.js projectilesAdvanceNative.)
+        const native = typeof projectilesAdvanceNative === 'function' ? projectilesAdvanceNative() : false;
+        if (native !== false) { if (_pjf.ended) spent = native; }
+        else for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
         if (spent) {
             let w = 0;
             for (let i = 0; i < projectiles.length; i++) if (i >= n0 || !spent[i]) projectiles[w++] = projectiles[i];
@@ -553,6 +556,8 @@ function _gameTickBody() {
     gameTime += simDk;
     // (The wasm heap's clock: freed arrays are reused some ticks later.)
     if (typeof simHeapTick === 'function') simHeapTick();
+    // (Destroyed structures' rows past their keep: back to the pool, see STRUCT_ROW_KEEP_TICKS.)
+    if (typeof structRowsExpire === 'function') structRowsExpire();
     // (The unit columns' next size allocated ahead, a share a tick.)
     if (typeof simUnitStatePrepareStep === 'function') simUnitStatePrepareStep();
     // The unit index for this tick's queries and collision pass, from the
@@ -5281,6 +5286,8 @@ function startGame() {
         teamSpawnPos[pid] = pos;
     }
 
+    // (The structure rows' pool for the whole match: see structTablesReserve.)
+    if (typeof structTablesReserve === 'function') structTablesReserve();
     // (Room for every starting unit at once: see simUnitStateReserve.)
     if (!startGameSkipStarters && typeof simUnitStateReserve === 'function') {
         let spawnByThing = startingResourcesConfig.spawnCounts || {}, perTeam = 0;

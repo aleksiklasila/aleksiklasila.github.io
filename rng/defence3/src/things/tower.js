@@ -194,7 +194,7 @@ function _findTowerFloorTarget(tower, rangeArea, traps) {
 // by target class first, distance second and tile index third instead.
 function _findTowerBuildingTarget(tower,rangeArea){
     const T = _towerAcq;
-    if (T.ready && T.tick === gameTime && T.list[T.pos - 1] === tower) {
+    if (T.ready && T.tick === gameTime && T.list[T.pos - 1] === tower && (!T.native || T.arrays.valid[T.pos - 1])) {
         const tile = T.arrays.sout[T.pos - 1];
         if (tile !== -2) return tile >= 0 ? getTileEntityRef(tile % GRID_W, Math.floor(tile / GRID_W)) : null;
     }
@@ -285,8 +285,8 @@ function _towerAcqArray(name,Type,n){
     const a=T.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
     simParallelBind('tac.'+name,a);if(old)simHeapFree(old);return a;
 }
-function _towerAcqPrepare(due){
-    const T=_towerAcq;T.ready=false;T.list.length=0;T.areaLists.length=0;T.pos=0;T.lastN=0;T.lastActive=0;T.lastUsed=0;
+function _towerAcqPrepareLegacy(due){
+    const T=_towerAcq;T.native=false;T.lastPrepared=0;T.ready=false;T.list.length=0;T.areaLists.length=0;T.pos=0;T.lastN=0;T.lastActive=0;T.lastUsed=0;
     if(!SIM_TOWER_WASM||SIM_TOWER_TYPE_OVERRIDES||CHUNK_SIZE!==1||!_sxBySlot||!_ST.n||!_simWasmOk(_simParReg)||typeof _simWasmX.k_tower_scan!=='function'||due.length<128)return;
     spatialIndexEnsure();_visibilityKernelAreas();
     _simMoveStructs();
@@ -318,7 +318,7 @@ function _towerAcqPrepare(due){
         T.list.push(t);T.areaLists.push(sources);
     }
     if(!T.list.length)return;
-    const P=_simParams;P[0]=T.list.length;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;
+    const P=_simParams;P[0]=T.list.length;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;P[6]=0;
     simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(T.list.length/32));
     for(let i=0;i<T.list.length;i++){
         const sources=T.areaLists[i],ids=live[i]?getAreaIdsWithinDistanceOfSources(sources,qr[i]):null;
@@ -331,16 +331,17 @@ function _towerAcqPrepare(due){
         flags[i]=(b.turretImmune?1:0)|(b.fireResistant?2:0)|(b.waterResistant?4:0)|(b.poisonResistant?8:0)|(b.iceResistant?16:0);
     }
     for(const name of ['x','y','meta'])_towerAcqArray(name,Int32Array,_sxListed+4);
-    const off=_towerAcqArray('off',Int32Array,n+1),ids=_towerAcqArray('areas',Int32Array,total);
+    const off=_towerAcqArray('off',Int32Array,n*2),ids=_towerAcqArray('areas',Int32Array,total);
+    simParallelBind('tac.areas',ids);
     _towerAcqArray('out',Int32Array,n);
     _towerAcqArray('sout',Int32Array,n);
     _towerAcqArray('idle',Int32Array,n);
     let at=0;
     for(let i=0;i<n;i++){
-        const areas=T.areaLists[i];off[i]=at;
+        const areas=T.areaLists[i];off[i*2]=at;
         if(areas){ids.set(areas,at);at+=areas.length;}
+        off[i*2+1]=at;
     }
-    off[n]=at;
     P[0]=_sxListed;P[1]=4096;P[2]=nt;
     const normal=BASE_UNIT_STATS.norm;P[3]=(normal.turretImmune?1:0)|(normal.fireResistant?2:0)|(normal.waterResistant?4:0)|(normal.poisonResistant?8:0)|(normal.iceResistant?16:0);
     if(active)simParallelRun(SIM_KERNEL_TOWER_PACK,Math.ceil(_sxListed/4096));
@@ -350,9 +351,145 @@ function _towerAcqPrepare(due){
     simParallelRun(SIM_KERNEL_TOWER_STRUCT,Math.ceil(n/32));
     T.ready=true;T.tick=gameTime;
 }
+
+// Layout work is a background tier shared by stationary brains. The tick
+// never waits for a cold table: the exact scalar query remains usable until
+// the immutable CSR and boxes are published. Fixed positions make every
+// turret in an area/range reuse the same slice without packing or copying it.
+const _stationaryReach={layout:null,depth:0,phase:0,ready:false,refresh:false,arrays:{}};
+const _stationaryStats={version:-1,types:0,players:0,levels:0,arrays:{},maxRange:0};
+let SIM_STATIONARY_BRAINS=true;
+function _stationaryArray(S,name,Type,n){
+    const old=S.arrays[name];if(old&&old.length>=n)return old;
+    const a=S.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
+    simParallelBind('sta.'+name,a);if(old)simHeapFree(old);return a;
+}
+function _stationaryStatsPrepare(){
+    const S=_stationaryStats,nt=_stationaryTypes.length,np=players.length,nl=MAX_THING_LEVEL+1;
+    if(S.version===_precomputedStatsVersion&&S.types===nt&&S.players===np&&S.levels===nl&&S.sources?.every((entry,o)=>entry===PRECOMPUTED_STATS_MAP_PLAYER[o]))return S;
+    const ranges=_stationaryArray(S,'range',Int32Array,(np+1)*nt*nl),cds=_stationaryArray(S,'cd',Int32Array,(np+1)*nt*nl),kinds=_stationaryArray(S,'kind',Int32Array,nt);
+    const damage=_stationaryArray(S,'damage',Float32Array,(np+1)*nt*nl),blast=_stationaryArray(S,'blast',Float32Array,(np+1)*nt*nl),radius=_stationaryArray(S,'radius',Float32Array,(np+1)*nt*nl);
+    const maxRanges=_stationaryArray(S,'maxRange',Int32Array,(np+1)*nt);
+    let max=0;
+    for(let ty=0;ty<nt;ty++){
+        const name=_stationaryTypes[ty],key=normalizeBuildingResearchKey(name);
+        kinds[ty]=name==='laser'||name.startsWith('cloud')?-1:(_towerAcqTypes[name]||0);
+        for(let own=-1;own<np;own++){
+        let maximum=0;
+        for(let lvl=1;lvl<nl;lvl++){
+            const st=own>=0?PRECOMPUTED_STATS_MAP_PLAYER[own]?.building?.[key]?.[lvl]:_thingStatTables.get('-1|building|'+key)?.entries[lvl];
+            const at=((own+1)*nt+ty)*nl+lvl;
+            // Unknown/custom stat entries stay on the scalar behavior path.
+            const r=st?Math.floor(Math.max(0,Number(st.attackRangeArea)||0)):-1;
+            ranges[at]=r;cds[at]=st?Math.max(1,Math.ceil(secondsToTicks(st.cd||1.5))):0;
+            damage[at]=st?.damage;blast[at]=st?.blastDamage;radius[at]=st?.blastRadius;
+            if(r>maximum)maximum=r;
+        }
+        maxRanges[(own+1)*nt+ty]=maximum;
+        if(kinds[ty]>=0&&BASE_CARD_TYPES[name]?.target==='wall'&&maximum>max)max=maximum;
+        }
+    }
+    S.version=_precomputedStatsVersion;S.types=nt;S.players=np;S.levels=nl;S.sources=PRECOMPUTED_STATS_MAP_PLAYER.slice(0,np);S.maxRange=Math.min(63,max);return S;
+}
+function _stationaryReachStep(depth){
+    const S=_stationaryReach,lane=SIM_LANE_BUILD;
+    const same=S.layout===areaNeighborIds&&S.depth>=depth&&!S.refresh;
+    if(same&&S.ready)return true;
+    if(simParallelBackgroundPending(lane)){
+        if(!S.phase||!simParallelBackgroundDone(lane))return false;
+        simParallelBackgroundWait(lane);
+    }
+    if(!same){
+        S.layout=areaNeighborIds;S.depth=depth;S.phase=0;S.ready=false;S.refresh=false;
+    }
+    _simAreaCsr();const na=areaNeighborIds.length,dd=S.depth+1;
+    if(!na)return false;
+    if(!S.phase){
+        _stationaryArray(S,'off',Int32Array,na*(dd+1));_stationaryArray(S,'box',Int32Array,na*dd*4);_stationaryArray(S,'meta',Int32Array,16).fill(0);
+        _stationaryArray(S,'need',Int32Array,na).fill(Math.min(3,S.depth));
+        _visibilityKernelAreas();for(const key of ['code','own','brain'])simParallelBind('st.'+key,_ST[key]);
+        const N=_simParams;N[0]=_ST.n;N[1]=4096;N[2]=_stationaryStats.types;N[3]=_stationaryStats.players;N[4]=S.depth;N[5]=na;
+        simParallelRun(SIM_KERNEL_STATIONARY_NEED,Math.ceil(_ST.n/4096));
+        // Thread-local BFS scratch holds two words per source area.
+        if(na*2>_simWasmScratchWords)return false;
+        for(let stage=0;stage<2;stage++){
+            const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=na;P[1]=32;P[2]=dd;P[3]=stage?2:0;P[4]=16*1024*1024;
+        }
+        S.phase=1;simParallelBackgroundChain(lane,[[SIM_KERNEL_STATIONARY_AREAS,Math.ceil(na/32)],[SIM_KERNEL_STATIONARY_AREAS,1]],true);return false;
+    }
+    if(S.phase===1){
+        const total=S.arrays.meta[0];if(total<0){S.phase=3;return false;}
+        _stationaryArray(S,'ids',Int32Array,total);
+        const P=simParallelStageParams(lane,0);P.fill(0);P[0]=na;P[1]=32;P[2]=dd;P[3]=1;
+        S.phase=2;simParallelBackground(SIM_KERNEL_STATIONARY_AREAS,Math.ceil(na/32),lane);return false;
+    }
+    if(S.phase===2){S.phase=0;S.ready=true;return true;}
+    return false;
+}
+function _towerAcqPrepare(due){
+    const T=_towerAcq;T.native=false;
+    if(!SIM_STATIONARY_BRAINS||!SIM_TOWER_WASM||SIM_TOWER_TYPE_OVERRIDES||CHUNK_SIZE!==1||!_sxBySlot||!_ST.n||!_simWasmOk(_simParReg)||typeof _simWasmX.k_tower_prepare!=='function'||due.length<128)return _towerAcqPrepareLegacy(due);
+    const stats=_stationaryStatsPrepare();
+    if(!_stationaryReachStep(stats.maxRange))return _towerAcqPrepareLegacy(due);
+    spatialIndexEnsure();_visibilityKernelAreas();_simMoveStructs();
+    for(const key of ['code','own','uc','val','tim','brain'])simParallelBind('st.'+key,_ST[key]);
+    simParallelBind('mv.stblk',_simMoveStructBlocks);
+    const n=due.length,input=_towerAcqArray('input',Int32Array,n),valid=_towerAcqArray('valid',Int32Array,n);
+    // Object identity/order is all that crosses the JS boundary. Everything
+    // else is read from the shared stationary tables by the helper batch.
+    T.list.length=n;for(let i=0;i<n;i++){input[i]=due[i]._stT;T.list[i]=due[i];}
+    for(const name of ['qx','qy'])_towerAcqArray(name,Float32Array,n+4);
+    for(const name of ['owner','type','base','tile','out','sout','idle'])_towerAcqArray(name,Int32Array,n);
+    for(const name of ['shots','shotCd','level'])_towerAcqArray(name,Int32Array,n);
+    for(const name of ['damage','blast','radius'])_towerAcqArray(name,Float64Array,n);
+    _towerAcqArray('off',Int32Array,n*2);_towerAcqArray('boxes',Int32Array,n*4);_towerAcqArray('live',Uint32Array,n);
+    _towerAcqArray('count',Int32Array,Math.ceil(n/32)*16);
+    T.ready=false;T.areaLists.length=0;T.pos=0;T.lastN=n;T.lastActive=0;T.lastPrepared=0;T.lastUsed=0;T.native=true;
+    const P=_simParams;P[0]=n;P[1]=256;P[2]=GRID_W;P[3]=_stationaryReach.depth+1;P[4]=stats.types;P[5]=stats.levels;P[6]=stats.players;P[7]=gameTime;P[8]=TILE;P[9]=_ST.n;P[10]=areaNeighborIds.length;P[11]=simDk;
+    simParallelRun(SIM_KERNEL_TOWER_PREPARE,Math.ceil(n/256));
+    P[0]=n;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;P[6]=1;
+    simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(n/32));
+    let fallback=0,extend=0;
+    for(let c=0;c<Math.ceil(n/32);c++){T.lastActive+=T.arrays.count[c*16];T.lastPrepared+=T.arrays.count[c*16+1];fallback+=T.arrays.count[c*16+2];extend+=T.arrays.count[c*16+3];}
+    // Cache readiness and helper speed must not select different arithmetic
+    // for custom/range-unsupported queries. Keep the exact legacy batch for
+    // the whole pass when any eligible query needs its object preparation.
+    if(fallback){if(extend)_stationaryReach.refresh=true;return _towerAcqPrepareLegacy(due);}
+    // Empty broad-phase queries share the empty CSR slice. The kernel can
+    // skip their searches without another foreground query walk.
+    const nt=_simUnitTypeNames.length,flags=_towerAcqArray('flags',Uint8Array,nt);
+    for(let i=0;i<nt;i++){const b=BASE_UNIT_STATS[_simUnitTypeNames[i]]||BASE_UNIT_STATS.norm;flags[i]=(b.turretImmune?1:0)|(b.fireResistant?2:0)|(b.waterResistant?4:0)|(b.poisonResistant?8:0)|(b.iceResistant?16:0);}
+    for(const name of ['x','y','meta'])_towerAcqArray(name,Int32Array,_sxListed+4);
+    simParallelBind('tac.areas',_stationaryReach.arrays.ids);
+    P[0]=_sxListed;P[1]=4096;P[2]=nt;
+    const b=BASE_UNIT_STATS.norm;P[3]=(b.turretImmune?1:0)|(b.fireResistant?2:0)|(b.waterResistant?4:0)|(b.poisonResistant?8:0)|(b.iceResistant?16:0);
+    if(T.lastActive)simParallelRun(SIM_KERNEL_TOWER_PACK,Math.ceil(_sxListed/4096));
+    P[0]=n;P[1]=32;P[2]=_sxEpoch;
+    if(T.lastActive)simParallelRun(SIM_KERNEL_TOWER_SCAN,Math.ceil(n/32));else T.arrays.out.fill(-1,0,n);
+    P[3]=GRID_W;P[4]=TILE;P[5]=gameTime;simParallelRun(SIM_KERNEL_TOWER_STRUCT,Math.ceil(n/32));
+    T.ready=true;T.tick=gameTime;
+}
 function _towerAcqTake(t){
     const T=_towerAcq;if(!T.ready||T.tick!==gameTime||T.list[T.pos]!==t)return undefined;
+    if(T.native&&!T.arrays.valid[T.pos]){T.pos++;return undefined;}
     T.lastUsed++;const s=T.arrays.out[T.pos++];return s>=0?_simUnitState.owners[s]||null:null;
+}
+// Only shot events cross back to JS. All readiness, targeting, adaptive shot
+// counts, stat reads and cooldown arithmetic were computed in helper batches.
+// Preferred/custom behavior retains its existing path and live validation.
+function _towerApplyPrepared(t,q){
+    const T=_towerAcq,A=T.arrays;
+    if(!T.native||!T.ready||SIM_TOWER_VERIFY||A.valid[q]!==1||A.base[q]<=0||A.sout[q]===-2)return false;
+    T.pos=q+1;T.lastUsed++;
+    if(A.idle[q]>0){t.cd=A.idle[q];return true;}
+    const target=A.out[q]>=0?_simUnitState.owners[A.out[q]]:A.sout[q]>=0?getTileEntityRef(A.sout[q]%GRID_W,Math.floor(A.sout[q]/GRID_W)):null;
+    if(!target){T.lastUsed--;T.pos=q;return false;}
+    const x=A.qx[q],y=A.qy[q],type=_stationaryTypes[(_ST.brain[A.tile[q]]&65535)-1],shots=A.shots[q];
+    const p=new Projectile(x,y,target,type,A.damage[q],A.level[q],t,Math.max(WORLD_W,WORLD_H)*2,A.blast[q],A.radius[q]);
+    if(shots>1)p.shots=shots;projectiles.push(p);t.cd=A.shotCd[q];
+    t.angle=Math.atan2(target.y-y,target.x-x);
+    if(typeof simPresentTowerAngle==='function')simPresentTowerAngle(t);
+    _towerShotFx(t,target,shots);playSound('shoot_'+type,x,y);return true;
 }
 // Attached structures already carry their row-major tile key. Reading gx/gy
 // through the paged structure table for every sort comparison is costly on
@@ -400,10 +537,12 @@ function towersTick() {
         _towerSortDue(due);
         _towerAcqPrepare(due);
         let prev = null;
-        for (const t of due) {
+        for (let i=0;i<due.length;i++) {
+            const t=due[i];if(_towerAcq.native)_towerAcq.pos=i;
             if (t === prev) continue;
             prev = t;
             const A=_towerAcq;
+            if(_towerApplyPrepared(t,i))continue;
             if(!SIM_TOWER_VERIFY&&A.ready&&A.list[A.pos]===t&&A.arrays.idle[A.pos]>0){
                 const cd=A.arrays.idle[A.pos++];A.lastUsed++;t.cd=cd;continue;
             }

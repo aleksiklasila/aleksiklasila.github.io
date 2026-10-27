@@ -71,7 +71,7 @@ const SIM_UNIT_OBJ_FIELDS = ['holdPosition',
 // (Statements a field's setter runs too, with c the columns, s the slot, v
 // the value: columns kept from it.)
 const SIM_UNIT_OBJ_DEFAULTS = {};
-const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0; if (v) simUnitWk(c, s);', holdPosition: 'c.holdF[s] = v ? 1 : 0;' };
+const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0; if (v) { const w=simUnitWk(c,s); c.wbType[w]=v==="collector"?1:v==="astar_collector"?2:v==="salvager"?3:v==="builder"?4:v==="healer"?5:v==="researcher"?6:0; c.wbTick[w]=-1; } else if(c.wkIx[s]>0)c.wbType[c.wkIx[s]]=0;', holdPosition: 'c.holdF[s] = v ? 1 : 0;' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'targetPos', '_routeKey', 'targetUnit', 'forcedAttackTarget', '_attackMoveGx', '_attackMoveGy', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
     '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS,
     // (Damage not reported yet: unit.js _dotPending.)
@@ -393,7 +393,7 @@ const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, 
 // given back at its slot's detach), unit.wkIx its index; record 0 holds the
 // defaults every other unit reads and is never written (a write takes a
 // record first: simUnitWk). The kernels read them by the same names, by
-// wkIx. (87 bytes a slot: at 2M units, a third of them workers, ~115 MB.)
+// wkIx. Brain mirrors add nine bytes per worker record, never per army unit.
 // A parked idle worker's work version check (mvFlags 2; see simMoveTryPark):
 // its work type, reach (tiles), origin tile, whether its own tile counts too
 // (wkTwice 1; 0: the origin is the worker itself; 2: a healer), the version
@@ -408,8 +408,9 @@ const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, 
 const SIM_UNIT_WK_SIDE = [['wkType', Int32Array], ['wkD', Int32Array], ['wkOx', Int32Array], ['wkOy', Int32Array], ['wkTwice', Uint8Array],
     ['wkFail', Int32Array], ['wkUntil', Int32Array], ['wkSched', Int32Array], ['wkWx', Float32Array], ['wkWy', Float32Array], ['wkLmt', Int32Array],
     ['wsCfg', Int8Array], ['wsT', Int32Array], ['wsOU', Int32Array], ['wsOx', Float32Array], ['wsOy', Float32Array], ['wsR', Float32Array],
-    ['wsAx', Float32Array], ['wsAy', Float32Array], ['wsAk', Int8Array], ['wsNeed', Int32Array], ['wsJid', Int32Array], ['wsCur', Int32Array], ['wsMy', Int32Array]];
-const SIM_WK_DEFAULTS = { wkWx: NaN, wkWy: NaN, wkLmt: -2147483648 };
+    ['wsAx', Float32Array], ['wsAy', Float32Array], ['wsAk', Int8Array], ['wsNeed', Int32Array], ['wsJid', Int32Array], ['wsCur', Int32Array], ['wsMy', Int32Array],
+    ['wbType', Uint8Array], ['wbTick', Int32Array], ['wbSpawner', Int32Array]];
+const SIM_WK_DEFAULTS = { wkWx: NaN, wkWy: NaN, wkLmt: -2147483648, wbTick: -1, wbSpawner: -2 };
 const _simWkInit = new Function('C', 'i', SIM_UNIT_WK_SIDE.map(([k]) => 'C.' + k + '[i] = ' + (k in SIM_WK_DEFAULTS ? String(SIM_WK_DEFAULTS[k]) : '0') + ';').join(' '));
 function _simWkPool(S) { return S.wk || (S.wk = { cap: 0, used: 1, free: [] }); }
 // Slot s's worker record (columns c), taken now when it has none: before a

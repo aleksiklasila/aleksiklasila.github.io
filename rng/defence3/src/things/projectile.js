@@ -17,6 +17,101 @@ if (typeof simDk === 'undefined') {
 let _projPhase = false;
 function projectilesBegin() { _projPhase = true; }
 function projectilesEnd() { _projPhase = false; }
+
+// ---- Native flight (wasm/src/proj.rs k_proj_flight) ----
+// Every shot's base ticks of the step on the helpers: its first event (a unit
+// hit, a structure hit, its floor target, out of range or life) from the
+// typed unit index, unit columns and tile table, no object reads. The events
+// are applied here in the shots' order (the JavaScript loop's), each target
+// checked again: an earlier shot of the phase may have killed or destroyed
+// it, and then that shot flies on in JavaScript from that base tick (kills
+// only remove candidates, so a target still standing is still the first).
+let SIM_PROJECTILE_WASM = true;
+const SIM_PROJ_FLIGHT_MIN = 256, SIM_PROJ_FLIGHT_PER_JOB = 512;
+// (Room for this many shots from the first use: grown past it only.)
+const SIM_PROJ_FLIGHT_RESERVE = 65536;
+const _pjf = { cap: 0, a: {}, stats: { steps: 0, shots: 0, rechecks: 0, js: 0 } };
+const _PJF_F64 = ['x', 'y', 'vx', 'vy', 'life', 'sx', 'sy', 'range', 'ox', 'oy', 'px', 'py', 'ol', 'pl'], _PJF_I32 = ['own', 'ft', 'ev', 'arg'];
+function _pjfReserve(n) {
+    if (_pjf.cap >= n) return;
+    const cap = simReserveCap(Math.max(n, SIM_PROJ_FLIGHT_RESERVE), 4096);
+    for (const [names, Type] of [[_PJF_F64, Float64Array], [_PJF_I32, Int32Array]]) for (const k of names) {
+        const old = _pjf.a[k];
+        _pjf.a[k] = simSharedArray(Type, cap);
+        simParallelBind('pj.' + k, _pjf.a[k]);
+        if (old) simHeapFree(old);
+    }
+    _pjf.cap = cap;
+}
+function _projFlightReady(n) {
+    if (!SIM_PROJECTILE_WASM || n < SIM_PROJ_FLIGHT_MIN || CHUNK_SIZE !== 1 || typeof SIM_KERNEL_PROJ_FLIGHT !== 'number') return false;
+    if (typeof _simWasmX === 'undefined' || !_simWasmX || typeof _simWasmX.k_proj_flight !== 'function' || !_simWasmOk(_simParReg)) return false;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!S || _sxOwners() === null || _ST.n !== GRID_W * GRID_H) return false;
+    const R = _simParReg, C = S.columns;
+    return R['ix.stamp'] === _sxStamp && R['ix.start'] === _sxStart && R['ix.cnt'] === _sxCount && R['sep.eslot'] === _sxESlot
+        && R['unit.x'] === C.x && R['unit.y'] === C.y && R['unit.r'] === C.r && R['unit.dead'] === C.dead && R['unit.live'] === C.live && R['unit.owner'] === C.owner;
+}
+// A shot's base ticks in JavaScript (its update, or its rest after a target
+// the kernel named went down earlier in the phase).
+function _projectileFly(p, ticks) {
+    for (let k = ticks; k > 1; k--) if (!p._tick()) return false;
+    return p._tick();
+}
+// The step's flight for all shots: false when not available (the JavaScript
+// loop flies them), else the mask of the shots that ended (spent[i] 1; how
+// many in _pjf.ended).
+function projectilesAdvanceNative() {
+    const n = projectiles.length;
+    if (n < SIM_PROJ_FLIGHT_MIN) return false;
+    spatialIndexEnsure();
+    if (!_projFlightReady(n)) return false;
+    _pjfReserve(n);
+    const A = _pjf.a, X = A.x, Y = A.y, VX = A.vx, VY = A.vy, L = A.life, SX = A.sx, SY = A.sy, RG = A.range, OW = A.own, FT = A.ft;
+    for (let i = 0; i < n; i++) {
+        const p = projectiles[i];
+        X[i] = p.x; Y[i] = p.y; VX[i] = p.vx; VY[i] = p.vy; L[i] = p.life; SX[i] = p.startX; SY[i] = p.startY; RG[i] = p.maxRange;
+        const o = p.sourceOwner; OW[i] = Number.isFinite(o) ? Math.floor(o) : -1;
+        FT[i] = p.floorTargetGx >= 0 ? p.floorTargetGy * GRID_W + p.floorTargetGx : -1;
+    }
+    for (const key of ['code', 'own', 'val', 'brain']) simParallelBind('st.' + key, _ST[key]);
+    const cplxOk = spatialUnitsComplex.length > 0 && spatialUnitsComplexStridePerChunk > 0 && spatialUnitsComplexStridePerPlayer > 0;
+    if (cplxOk) simParallelBind('ix.complex', spatialUnitsComplex);
+    const P = _simParams, per = Math.max(SIM_PROJ_FLIGHT_PER_JOB, Math.ceil(n / 64));
+    P[0] = n; P[1] = per; P[2] = simDk; P[3] = GRID_W; P[4] = GRID_H; P[5] = TILE; P[6] = _sxEpoch;
+    P[7] = spatialUnitsComplexPlayerCount; P[8] = cplxOk && _simParReg['ix.complex'] === spatialUnitsComplex ? spatialUnitsComplexStridePerChunk : 0; P[9] = GRID_W * GRID_H;
+    simParallelRun(SIM_KERNEL_PROJ_FLIGHT, Math.ceil(n / per));
+    const EV = A.ev, ARG = A.arg, OX = A.ox, OY = A.oy, PX = A.px, PY = A.py, OL = A.ol, PL = A.pl, owners = _simUnitState.owners;
+    if (!_pjf.spent || _pjf.spent.length < n) _pjf.spent = new Uint8Array(_pjf.cap);
+    const spent = _pjf.spent;
+    spent.fill(0, 0, n);
+    let ended = 0, rechecks = 0, js = 0;
+    for (let i = n - 1; i >= 0; i--) {
+        const p = projectiles[i], e = EV[i], kind = e & 15, j = e >> 4;
+        let alive = true, again = kind === 5;
+        if (kind === 5) js++;
+        else {
+            p.x = OX[i]; p.y = OY[i]; p.life = OL[i];
+            if (kind === 0) alive = true;
+            else if (kind === 4) alive = false;
+            else if (kind === 1) {
+                const u = owners[ARG[i]];
+                if (u && !u.dead) { p.hit(u); alive = false; } else again = true;
+            } else {
+                const t = ARG[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
+                const b = kind === 2 ? getTileEntityRef(gx, gy) : getFloorItemAtTile(gx, gy);
+                const ok = !!b && b.owner !== p.sourceOwner && (kind === 2 ? _projBuildingKind(b) >= 0 && !(b.energy <= 0) : b.energy > 0);
+                if (ok) { p.hitBuilding(b); alive = false; } else again = true;
+            }
+            if (again) rechecks++;
+        }
+        if (again) { p.x = PX[i]; p.y = PY[i]; p.life = PL[i]; alive = _projectileFly(p, simDk - j + 1); }
+        if (!alive) { spent[i] = 1; ended++; }
+    }
+    const st = _pjf.stats; st.steps++; st.shots += n; st.rechecks += rechecks; st.js += js;
+    _pjf.ended = ended;
+    return spent;
+}
 // 0 tower, 1 barrack, 2 spawner, -1 none of these.
 function _projBuildingKind(b) {
     return b instanceof Tower ? 0 : b instanceof Barrack ? 1 : isSpawnerEntity(b) ? 2 : -1;
@@ -86,10 +181,7 @@ class Projectile {
 
     // A step: its base ticks (simDk) one at a time (a shot's hit is looked
     // for where it is each base tick: one stride of several passed by).
-    update() {
-        for (let k = simDk; k > 1; k--) if (!this._tick()) return false;
-        return this._tick();
-    }
+    update() { return _projectileFly(this, simDk); }
     _tick() {
         this.x += this.vx; this.y += this.vy;
         this.life--;

@@ -667,7 +667,7 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 // regions with mines in a compact list, mineReg*): the same sums as each
 // mine's term added there, without 20k mines read a tick (scattered tiles,
 // ~0.5 ms at 105k units).)
-const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, brain: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
     mineSum: null, mineRc: null, mineRegArr: new Int32Array(64), mineRegN: 0, mineRegAt: null };
 // A mine's term in its region's sum (the state hash's, as it was per mine).
 function _stMineTerm(t) {
@@ -717,6 +717,26 @@ function _stMineVal(t, v) {
     T.mineSum[r] = (T.mineSum[r] + _stMineTerm(t)) | 0;
 }
 const ST_OWNER_NONE = 0x7ff9;
+// Structures per owner (mines and unowned ones aside): cnt holds the owner a
+// tile is counted for, + 1 (0: none), so a refresh or an owner change moves
+// the count once. The page's copy comes with the frame globals.
+const structCountByOwner = new Int32Array(64);
+function _stOwnCount(t, w) {
+    const T = _ST, c = T.cnt[t];
+    if (c) structCountByOwner[c - 1]--;
+    if (w >= 0 && w < 64 && T.code[t] !== 0 && T.code[t] < 0x66) { structCountByOwner[w]++; T.cnt[t] = w + 1; } else T.cnt[t] = 0;
+}
+function playerStructureCount(pid) { return pid >= 0 && pid < 64 ? structCountByOwner[pid] : 0; }
+// The limit: the menu's Max Buildings, no more than each team's share of
+// the structure pool (from constants and the map: the same on every peer).
+function getPlayerStructureLimit() {
+    const cfg = Math.max(1, Math.floor(Number(CONFIG_MAX_BUILDINGS) || 100000));
+    return Math.min(cfg, structMemoryLimitPerPlayer());
+}
+function structMemoryLimitPerPlayer() {
+    const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : Math.max(1, typeof players !== 'undefined' && Array.isArray(players) ? players.length : 1);
+    return Math.max(1, Math.floor(structReserveRowsTotal() / teams));
+}
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
 // (Made at the first entity joining: the page's lookup holds views only.)
 function structTableReset() {
@@ -724,11 +744,12 @@ function structTableReset() {
     const T = _ST;
     T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
     T.mineRegN = 0; if (T.mineSum) { T.mineSum.fill(0); T.mineRc.fill(0); T.mineRegAt.fill(0); }
-    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.rcnt = null; }
-    else { T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.rcnt.fill(0); }
+    structCountByOwner.fill(0);
+    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rcnt = T.cnt = null; }
+    else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rcnt.fill(0); }
 }
 function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
-function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } if (T.cnt[t]) _stOwnCount(t, -1); T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; T.brain[t] = 0; }
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
 function structTableSet(gx, gy, prev, ref) {
     const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
@@ -740,7 +761,8 @@ function structTableSet(gx, gy, prev, ref) {
         // Keep the authoritative structure SoA directly readable by kernels:
         // no per-tick object walk or full-grid mirror for tower queries.
         const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
-        T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n);
+        T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n); T.brain = alloc(Int32Array, n);
+        T.cnt = new Uint8Array(n);
         T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
     }
     _stClear(t);
@@ -755,7 +777,27 @@ function structTableSet(gx, gy, prev, ref) {
 function _stWrite(ref, t) {
     const T = _ST;
     if (ref._stMine) { T.own[t] = ST_OWNER_NONE; _stMineVal(t, Number(ref._mv)); T.tim[t] = 0; }
-    else { T.own[t] = _stOwnerWord(ref._ow); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
+    else { T.own[t] = _stOwnerWord(ref._ow); _stOwnCount(t, T.own[t]); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
+    stationaryBrainChanged(ref);
+}
+
+// Shared stationary descriptor: type (16 bits), base level (8), preference
+// and override flags (2), effective level (6).
+// Published only on placement or field changes, never packed per tick. The
+// tile core above remains authoritative for life, owner and construction.
+const _stationaryTypes = [], _stationaryTypeIds = new Map();
+function stationaryBrainChanged(e) {
+    const tile = e._stT;
+    if (!(tile >= 0) || !_ST.brain || e._stMine) return;
+    const raw = e.type === 'barrack' ? 'barrack_' + e.unitType : e.type;
+    if (!raw) { _ST.brain[tile] = 0; return; }
+    let type = _stationaryTypeIds.get(raw);
+    if (type === undefined) { type = _stationaryTypes.length; _stationaryTypeIds.set(raw, type); _stationaryTypes.push(raw); }
+    const T = _sTables.get(e.constructor), row = e._sr;
+    const effective = getThingEffectiveLevel(e);
+    const custom = effective>63 || (T && ['currentStats', 'x', 'y'].some(k => T.unique[k]?.has(row)));
+    const preferred = e._stCode === 0x22 && (e.preferredTarget || e.preferredTargetSpec);
+    _ST.brain[tile] = (type + 1) | (Math.min(255, getThingBaseLevel(e)) << 16) | (preferred ? 1 << 24 : 0) | (custom ? 1 << 25 : 0) | (Math.min(63,effective) << 26);
 }
 // A structure's entry written again from its fields (a restore sets some
 // fields directly, not through the accessors).
@@ -864,13 +906,15 @@ function _sDerivedValue(e,name) {
 }
 function _sDerivedSet(T,e,name,v) {
     const map=T.unique[name];
-    if(v==null || Number.isNaN(v) || (_thingStatViews.has(v)) || (name==='currentStats'&&v===BASE_CARD_TYPES[e.type])){map.delete(e._sr);return;}
+    if(v==null || Number.isNaN(v) || (_thingStatViews.has(v)) || (name==='currentStats'&&v===BASE_CARD_TYPES[e.type])){map.delete(e._sr);if(name==='currentStats'||name==='x'||name==='y')stationaryBrainChanged(e);return;}
     const normal=_sDerivedValue(e,name);
     if(Object.is(v,normal))map.delete(e._sr);else map.set(e._sr,v);
+    if(name==='currentStats'||name==='x'||name==='y')stationaryBrainChanged(e);
 }
 function _sDerivedReconcile(T,e) {
     { const b=e._sr*3,m=T.mTok; m[b]=0; m[b+1]=0; m[b+2]=0; }
     for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name)))map.delete(e._sr);}
+    stationaryBrainChanged(e);
 }
 // Class C's table (made, and its accessors defined, at its first row).
 function _sTableOf(C) {
@@ -881,7 +925,7 @@ function _sTableOf(C) {
     const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
     const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
     const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
-    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, free: [], keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, nfree: 0, qh: -1, qt: -1, qn: 0, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
     for (const f of fields) T[f.col] = null;
     _sTables.set(C, T);
     _sTableGrow(T, 1024);
@@ -894,10 +938,17 @@ function _sTableOf(C) {
         const read = nk ? (fl ? 'let x = ' + at + '; return x === x ? x : undefined;' : 'const x = ' + at + '; return x === ' + und + ' ? undefined : x;') : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
         let write = nk ? (fl ? at + ' = v === undefined ? NaN : v;' : at + ' = v === undefined || v === null || v !== v ? ' + und + ' : v;') : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
         if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType','stacks','manualStacks'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
+        if(['preferredTarget','preferredTargetSpec'].includes(f.name))write+=' stationaryBrainChanged(this);';
         Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
             get: new Function('T', 'return function () { if (this._sr < 0) { const d = this._sdet; return d ? d[' + JSON.stringify(f.name) + '] : undefined; } ' + read + ' };')(T),
             set: new Function('T','_sDerivedReconcile','_sDetOf', 'return function (v) { if (this._sr < 0) { _sDetOf(this)[' + JSON.stringify(f.name) + '] = v; return; } ' + write + ' };')(T,_sDerivedReconcile,_sDetOf) });
     }
+    // (The tick its row retired at while kept, -2 once it expired: a snapshot
+    // key, so a restored peer's copy expires at the same tick, see
+    // structRowRetireAt.)
+    Object.defineProperty(C.prototype, '_retiredAt', { configurable: true, enumerable: false,
+        get() { const r = this._sr; if (r >= 0) return T.ret[r] && T.rowObj[r] === this ? T.rt[r] : undefined; return this._sdet === _S_GONE ? -2 : undefined; },
+        set(v) { if (Number.isFinite(v)) structRowRetireAt(this, v); } });
     return T;
 }
 function _sTableGrow(T, cap) {
@@ -914,55 +965,122 @@ function _sTableGrow(T, cap) {
         if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent[i] = T.mEnt[i]; }
         T.mTok = tok; T.mEnt = ent;
     }
+    // (The row pool: rowObj the structure holding a row, ret 1 while it is
+    // retired (out of the world, its values still in the row), rt the tick it
+    // retired, rp/rn the retire queue (oldest first), free the expired rows.)
+    {
+        const n = T.n, obj = new Array(cap).fill(null), ret = new Uint8Array(cap), rt = new Int32Array(cap), rp = new Int32Array(cap), rn = new Int32Array(cap), free = new Int32Array(cap);
+        if (T.rowObj) { for (let i = 0; i < n; i++) obj[i] = T.rowObj[i]; ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); }
+        T.rowObj = obj; T.ret = ret; T.rt = rt; T.rp = rp; T.rn = rn; T.freeRows = free;
+    }
     T.cap = cap;
 }
-// A row for structure o (its class's table; none: its fields stay its own).
-function _sRowTake(o) {
-    const T = _sTableOf(o.constructor);
-    if (!T) return false;
-    // (A row a removed structure gave back first: structRowDetach cleared it.)
-    let r;
-    if (T.free.length) r = T.free.pop();
-    else { if (T.n >= T.cap) _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); r = T.n++; }
-    Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
-    return true;
+// Structure rows are a pool sized at the match's start (structTablesReserve)
+// and reused, never copied: a structure taken out of the world keeps its row
+// (its values stay readable through stale references: a worker's target, a
+// selection, a pooled snapshot object) for STRUCT_ROW_KEEP_TICKS, then the
+// row is cleared for the next structure and the old object reads as
+// destroyed (_S_GONE). Expiry goes by the destroy order and the tick (the
+// same on every peer), not by when a row is next wanted. (Detach used to copy
+// every field into a dictionary record: 50 ms in a destroy wave, ~3 MB a
+// tick of garbage.)
+const STRUCT_ROW_KEEP_TICKS = 200;
+// (What a structure whose row expired reads: out of the world, no energy.
+// Writes to it go to a sink nobody reads.)
+const _S_GONE = Object.freeze(Object.assign(Object.create(null), { _stT: -1, _li: -1, _en: 0, _ow: -1, _uc: false, _mv: 0, _spt: 0 }));
+const _sGoneSink = Object.create(null);
+// (Not enumerable: _sdet is no snapshot key, see _sTableKeys.)
+function _sSetGone(o) { o._sr = -1; Object.defineProperty(o, '_sdet', { value: _S_GONE, writable: true, configurable: true, enumerable: false }); }
+let structRowStats = { retired: 0, expired: 0, grown: 0 };
+function _sRowQueueUnlink(T, r) {
+    const p = T.rp[r], n = T.rn[r];
+    if (p < 0) T.qh = n; else T.rn[p] = n;
+    if (n < 0) T.qt = p; else T.rp[n] = p;
+    T.ret[r] = 0; T.qn--;
 }
-// A removed structure's record (its values while it has no row).
-function _sDetOf(o) {
-    let d = o._sdet;
-    if (!d) { d = Object.create(null); Object.defineProperty(o, '_sdet', { value: d, writable: true, configurable: true, enumerable: false }); }
-    return d;
+// Row r into the retire queue at tick (in tick order: a restore's
+// structures come with their own ticks).
+function _sRowQueueInsert(T, r, tick) {
+    let p = T.qt;
+    while (p >= 0 && T.rt[p] > tick) p = T.rp[p];
+    const n = p < 0 ? T.qh : T.rn[p];
+    T.rp[r] = p; T.rn[r] = n;
+    if (p < 0) T.qh = r; else T.rn[p] = r;
+    if (n < 0) T.qt = r; else T.rp[n] = r;
+    T.ret[r] = 1; T.rt[r] = tick; T.qn++;
 }
-// A structure taken out of the world (its tile cleared): its values into its
-// record and its row back to the table, cleared, for the next structure
-// (rows were never reused: a long match's placements and removals grew the
-// tables for good). A stale reference (a worker's target, a selection, a
-// pooled snapshot object) reads and writes the record; placed again, it takes
-// a row (structRowAttach).
-function structRowDetach(o) {
-    const r = o && o._sr;
-    if (!(r >= 0)) return;
-    const T = _sTables.get(o.constructor);
+// o retired at tick (its row kept till then + STRUCT_ROW_KEEP_TICKS), or
+// (-2) already expired: a snapshot's _retiredAt.
+function structRowRetireAt(o, tick) {
+    const r = o._sr, T = _sTables.get(o.constructor);
     if (!T) return;
-    const vals = T.fields.map(f => o[f.name]);
-    const over = T.derived.map(name => { const m = T.unique[name]; return m.size && m.has(r) ? m.get(r) : undefined; });
+    if (r >= 0 && T.rowObj[r] === o && T.ret[r]) _sRowQueueUnlink(T, r);
+    if (tick === -2) { if (r >= 0 && T.rowObj[r] === o) _sRowFree(T, r); _sSetGone(o); return; }
+    if (r >= 0 && T.rowObj[r] === o) { _sRowQueueInsert(T, r, tick); structRowStats.retired++; }
+}
+// Row r's retired structure lets go of it: the row cleared, onto the free stack.
+function _sRowExpire(T, r) {
+    const o = T.rowObj[r];
+    _sRowQueueUnlink(T, r);
+    _sRowFree(T, r);
+    if (o) _sSetGone(o);
+    structRowStats.expired++;
+}
+function _sRowFree(T, r) {
     for (const f of T.fields) {
         const a = T[f.col];
         if (f.shared) a.set(r, undefined);
         else if (f.kind === 'r') a[r] = undefined;
         else { const nk = _S_NUM_KINDS[f.kind]; a[r] = nk ? nk[1] : 0; }
     }
-    for (const name of T.derived) T.unique[name].delete(r);
+    for (const name of T.derived) { const m = T.unique[name]; if (m.size) m.delete(r); }
     T.mTok[r * 3] = 0; T.mTok[r * 3 + 1] = 0; T.mTok[r * 3 + 2] = 0;
     T.mEnt[r * 3] = undefined; T.mEnt[r * 3 + 1] = undefined; T.mEnt[r * 3 + 2] = undefined;
-    o._sr = -1;
-    const d = _sDetOf(o);
-    T.fields.forEach((f, i) => { d[f.name] = vals[i]; });
-    T.derived.forEach((name, i) => { if (over[i] !== undefined) d['$' + name] = over[i]; });
-    T.free.push(r);
+    T.rowObj[r] = null;
+    T.freeRows[T.nfree++] = r;
+}
+// Once a tick: rows retired STRUCT_ROW_KEEP_TICKS ago expire.
+function structRowsExpire() {
+    for (const T of _sTables.values()) while (T.qn > 0 && gameTime - T.rt[T.qh] >= STRUCT_ROW_KEEP_TICKS) _sRowExpire(T, T.qh);
+}
+// A row for structure o (its class's table; none: its fields stay its own).
+function _sRowTake(o) {
+    const T = _sTableOf(o.constructor);
+    if (!T) return false;
+    // (An expired row first, then a fresh one; the table full: it grows, which
+    // structTablesReserve's budget is there to avoid. Retired rows are not
+    // taken early: when a structure reads as destroyed must not depend on a
+    // peer's table size.)
+    let r;
+    if (T.nfree === 0 && T.n >= T.cap) { _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); structRowStats.grown++; }
+    r = T.nfree > 0 ? T.freeRows[--T.nfree] : T.n++;
+    Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
+    T.rowObj[r] = o;
+    return true;
+}
+// A removed structure's record (its values while it has no row: a restore's
+// shell, or a structure whose row expired: its writes go nowhere).
+function _sDetOf(o) {
+    let d = o._sdet;
+    if (d === _S_GONE) return _sGoneSink;
+    if (!d) { d = Object.create(null); Object.defineProperty(o, '_sdet', { value: d, writable: true, configurable: true, enumerable: false }); }
+    return d;
+}
+// A structure taken out of the world (its tile cleared): its row retired, its
+// values left in place (see STRUCT_ROW_KEEP_TICKS); placed again, it keeps it
+// (structRowAttach).
+function structRowDetach(o) {
+    const r = o && o._sr;
+    if (!(r >= 0)) return;
+    const T = _sTables.get(o.constructor);
+    if (!T || T.ret[r] || T.rowObj[r] !== o) return;
+    _sRowQueueInsert(T, r, gameTime);
+    structRowStats.retired++;
 }
 function structRowAttach(o) {
-    if (!o || !(o._sr < 0)) return;
+    if (!o) return;
+    if (o._sr >= 0) { const T = _sTables.get(o.constructor); if (T && T.ret[o._sr] && T.rowObj[o._sr] === o) _sRowQueueUnlink(T, o._sr); return; }
+    if (!(o._sr < 0)) return;
     const d = o._sdet;
     if (!_sRowTake(o)) return;
     o._sdet = undefined;
@@ -971,12 +1089,58 @@ function structRowAttach(o) {
     for (const f of T.fields) if (d[f.name] !== undefined) o[f.name] = d[f.name];
     for (const name of T.derived) if (d['$' + name] !== undefined) o[name] = d['$' + name];
 }
+// The match's structure rows, allocated at its start (startGame): a share of
+// STRUCT_RESERVE_BYTES for each class, no more rows than the map has tiles.
+// Past it, retired rows are reused early, then the table grows (counted in
+// structRowStats.grown: a budget too small for the match).
+const STRUCT_RESERVE_BYTES = 256 << 20;
+const STRUCT_RESERVE_SHARE = { Tower: 0.4, FloorItem: 0.25, Barrack: 0.1, CollectorSpawner: 0.04, AstarSpawner: 0.04, SalvagerSpawner: 0.03, BuilderSpawner: 0.03, HealerSpawner: 0.03, ResearchSpawner: 0.04, GoldMine: 0.02, AstarMine: 0.02 };
+function _sRowBytes(T) {
+    let n = 12 + 24 + 21;
+    for (const f of T.fields) { const nk = _S_NUM_KINDS[f.kind]; n += nk ? nk[0].BYTES_PER_ELEMENT : f.kind === 'b' ? 1 : 8; }
+    return n;
+}
+// (Rows a class gets: its share of the budget, no more than the map's tiles.
+// From the row layout and constants, not from the tables as they are.)
+function _structReserveRows(T, name) {
+    const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' ? GRID_W * GRID_H : 0;
+    return Math.ceil(Math.min(tiles || Infinity, STRUCT_RESERVE_BYTES * STRUCT_RESERVE_SHARE[name] / _sRowBytes(T)) / 1024) * 1024;
+}
+let _structReserveRowsCache = null;
+function structReserveRowsTotal() {
+    const key = GRID_W + 'x' + GRID_H;
+    if (_structReserveRowsCache && _structReserveRowsCache.key === key) return _structReserveRowsCache.rows;
+    let rows = 0;
+    for (const [name, C] of Object.entries(_structClasses())) { const T = C ? _sTableOf(C) : null; if (T) rows += _structReserveRows(T, name); }
+    _structReserveRowsCache = { key, rows };
+    return rows;
+}
+function _structClasses() {
+    return { Tower: typeof Tower !== 'undefined' ? Tower : null, FloorItem, Barrack: typeof Barrack !== 'undefined' ? Barrack : null,
+        CollectorSpawner: typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, AstarSpawner: typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
+        SalvagerSpawner: typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, BuilderSpawner: typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null,
+        HealerSpawner: typeof HealerSpawner !== 'undefined' ? HealerSpawner : null, ResearchSpawner: typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null, GoldMine, AstarMine };
+}
+function structTablesReserve() {
+    const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' ? GRID_W * GRID_H : 0;
+    const classes = { Tower: typeof Tower !== 'undefined' ? Tower : null, FloorItem, Barrack: typeof Barrack !== 'undefined' ? Barrack : null,
+        CollectorSpawner: typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, AstarSpawner: typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
+        SalvagerSpawner: typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, BuilderSpawner: typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null,
+        HealerSpawner: typeof HealerSpawner !== 'undefined' ? HealerSpawner : null, ResearchSpawner: typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null, GoldMine, AstarMine };
+    for (const name in STRUCT_RESERVE_SHARE) {
+        const C = classes[name], T = C ? _sTableOf(C) : null;
+        if (!T) continue;
+        const want = Math.ceil(Math.min(tiles || Infinity, STRUCT_RESERVE_BYTES * STRUCT_RESERVE_SHARE[name] / _sRowBytes(T)) / 1024) * 1024;
+        if (want > T.cap) _sTableGrow(T, want);
+    }
+}
 // The tables start over (a new match: resetWorldState. Not at a restore,
 // whose new structures' rows are taken before it indexes the tiles; the rows
 // of the structures it replaced stay until the next match.)
 function _sTablesReset() {
     for (const T of _sTables.values()) {
-        T.n = 0; T.free.length = 0;
+        for (let r = 0; r < T.n; r++) { const o = T.rowObj[r]; if (o && T.ret[r]) _sSetGone(o); T.rowObj[r] = null; }
+        T.n = 0; T.nfree = 0; T.qh = -1; T.qt = -1; T.qn = 0; T.ret.fill(0);
         T.mTok.fill(0); T.mEnt.fill(undefined);
         for(const map of Object.values(T.unique))map.clear();
         for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (_S_NUM_KINDS[f.kind]) T[f.col].fill(_S_NUM_KINDS[f.kind][1]); else T[f.col].fill(0);
@@ -992,6 +1156,8 @@ function _sTableKeys(e) {
     if (e._sr < 0) { const d = e._sdet; if (d) for (const name of T.derived) if (d['$' + name] !== undefined) out.push(name); }
     else for(const name of T.derived)if(T.unique[name].has(e._sr))out.push(name);
     for (const k of Object.keys(e)) out.push(k);
+    // (Last: decoded after its fields, see structRowRetireAt.)
+    if (e._retiredAt !== undefined) out.push('_retiredAt');
     return out;
 }
 
@@ -1018,7 +1184,7 @@ function structTableAccessors(C, code, mineKey = null) {
     }
     Object.defineProperty(P, 'owner', { enumerable: true, configurable: true,
         get() { return this._ow; },
-        set(v) { this._ow = v; const t = this._stT; if (t >= 0) _ST.own[t] = _stOwnerWord(v); } });
+        set(v) { this._ow = v; const t = this._stT; if (t >= 0) { _ST.own[t] = _stOwnerWord(v); _stOwnCount(t, _ST.own[t]); } } });
     Object.defineProperty(P, 'underConstruction', { enumerable: true, configurable: true,
         get() { return this._uc; },
         set(v) { this._uc = v; const t = this._stT; if (t >= 0) _ST.uc[t] = v ? 1 : 0; } });
@@ -1331,7 +1497,7 @@ function setTileEntity(gx, gy, type, ref) {
     let prevRef = tileEntityRef[gy][gx];
     if (prevRef && prevRef !== ref) _activeTileEntities.delete(prevRef);
     // (A removed structure placed again takes a row.)
-    if (ref && ref._sr < 0) structRowAttach(ref);
+    if (ref && ref._sr !== undefined) structRowAttach(ref);
     structTableSet(gx, gy, prevRef, ref || null);
     tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
     tileEntityRef[gy][gx] = ref || null;

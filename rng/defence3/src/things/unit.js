@@ -141,6 +141,7 @@ function unitEventsRun() {
         P[2] = gameTime; P[3] = chunks;
         _simRust(_simUnitEventSortW, P, 0, 'k_unit_event_sort', 'UNIT_EVENT_SORT');
         const E = _unitEvSort.ent, j = CNT[chunks * 16];
+        if(typeof workerBrainsPrepare==='function')workerBrainsPrepare(j,true);
         let routes = null;
         if (UNIT_EVENT_ROUTE_BATCH && j >= 64 && typeof SIM_KERNEL_EVENT_ROUTES === 'number') {
             P[0] = j; P[1] = 2048; P[2] = TILE * 8;
@@ -148,6 +149,7 @@ function unitEventsRun() {
             routes = _unitEvSort.routes;
         }
         const trueTerm = _simHTerm(_UH_PFA, true);
+        if(typeof workerBrainsCollect==='function')workerBrainsCollect();
         _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
         let over = 0;
         playerResourceBatchBegin();
@@ -164,7 +166,7 @@ function unitEventsRun() {
                 if (routes && routes[i * 2] >= 0 && !u.workerState && _unitNoWayCommit(u, c, s, routes[i * 2], routes[i * 2 + 1], trueTerm)) continue;
                 _unitEvent(u, c, s, ent & 7);
             }
-        } finally { playerResourceBatchEnd(); _workerEventsLeft = Infinity; }
+        } finally { playerResourceBatchEnd(); _workerEventsLeft = Infinity; if(typeof workerBrainsEnd==='function')workerBrainsEnd(); }
     }
     // (Those whose energy ran out: dead now.)
     P[0] = ns; P[1] = UNIT_DEAD_PER_JOB;

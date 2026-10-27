@@ -28,6 +28,10 @@ let SHRINES_ENABLED = true;
 let MAP_TYPE = 'random';
 let TYPE_FLOOR = 0, TYPE_WALL = 1;
 let CONFIG_MAX_POP = 200;
+// Structures a player may hold at once (towers, buildings, floor items, sites):
+// the menu's Max Buildings, no more than the structure pool holds for each
+// player (data_state.js structMemoryLimitPerPlayer).
+let CONFIG_MAX_BUILDINGS = 100000;
 let TICK_RATE = 20; // ticks per second (menu configurable)
 let TICK_MS = 1000 / TICK_RATE;
 // A tier below the tick: a unit's stacks and effective level once a second.

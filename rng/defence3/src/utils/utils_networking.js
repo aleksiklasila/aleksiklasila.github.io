@@ -1183,6 +1183,7 @@ function buildRuntimeConfigHashForSnapshot() {
         exactLockstep: !!lockstepStrictDebugMode,
         gameMode: gameMode,
         maxPop: CONFIG_MAX_POP,
+        maxBuildings: CONFIG_MAX_BUILDINGS,
         maxThingLevel: MAX_THING_LEVEL,
         maxResearchLevel: MAX_RESEARCH_LEVEL,
         mapType: MAP_TYPE,
@@ -1624,6 +1625,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         teamVisibilityHistory = !!data.cfg.teamHistory;
         gameMode = data.cfg.gameMode || 'destroy';
         CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
+        if (data.cfg.maxBuildings) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(data.cfg.maxBuildings));
         STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
         STARTING_ASTAR = Math.max(0, Number(data.cfg.startingAstar) || 9000);
         SHRINES_ENABLED = data.cfg.shrines === undefined ? true : !!data.cfg.shrines;
@@ -3729,6 +3731,7 @@ function startHostedGame(opts = null) {
                 teamHistory: teamVisibilityHistory,
                 gameMode: gameMode,
                 maxPop: CONFIG_MAX_POP,
+                maxBuildings: CONFIG_MAX_BUILDINGS,
                 startingMoney: STARTING_MONEY,
                 startingAstar: STARTING_ASTAR,
                 shrines: !!SHRINES_ENABLED,
@@ -4181,6 +4184,7 @@ function readConfigFromMenu() {
     teamVisibilityHistory = document.getElementById('cfg-full-vis').value === 'history';
     gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
     CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
+    { let el = document.getElementById('cfg-max-buildings'); if (el) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(parseInt(el.value) || CONFIG_MAX_BUILDINGS)); }
     STARTING_MONEY = readResource('cfg-starting-energy', 2000);
     STARTING_ASTAR = readResource('cfg-starting-astar', STARTING_ASTAR, false);
     { let el = document.getElementById('cfg-shrines'); if (el) SHRINES_ENABLED = !!el.checked; }

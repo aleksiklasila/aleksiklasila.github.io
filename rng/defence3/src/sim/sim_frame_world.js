@@ -245,6 +245,8 @@ function simFrameEncodeState(includeCells = true) {
         // (The population caps: made each tick in the simulation, from its
         // houses and their stats; the page's HUD reads them.)
         caps: typeof playerPopCaps !== 'undefined' ? Array.from(playerPopCaps) : null,
+        // (Structures per player, for the HUD's building count.)
+        builds: typeof structCountByOwner !== 'undefined' ? Array.from(structCountByOwner.subarray(0, Math.max(8, players.length))) : null,
         pathBudget: pathfindBudgetByPlayer ? Array.from(pathfindBudgetByPlayer) : null,
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer) : null };
     let gs = JSON.stringify(g);
@@ -699,6 +701,7 @@ function pageApplyState(st) {
         resignedTeams = new Set(g.resigned || []);
         if (Array.isArray(g.teams) && g.teams.length) activeTeamIds = g.teams;
         if (Array.isArray(g.caps) && typeof playerPopCaps !== 'undefined') for (let i = 0; i < g.caps.length; i++) playerPopCaps[i] = g.caps[i];
+        if (Array.isArray(g.builds) && typeof structCountByOwner !== 'undefined') for (let i = 0; i < g.builds.length && i < structCountByOwner.length; i++) structCountByOwner[i] = g.builds[i];
         if (g.pathBudget) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = g.pathBudget[i];
         if (g.astarBudget) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = g.astarBudget[i];
     }

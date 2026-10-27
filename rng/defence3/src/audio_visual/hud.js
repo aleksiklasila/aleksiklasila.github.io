@@ -1361,6 +1361,7 @@ function updateHUD() {
         _hudEls.shrine = document.getElementById('hud-shrine');
         _bindHudShrineDrain(_hudEls.shrine);
         _hudEls.pop = document.getElementById('hud-pop');
+        _hudEls.builds = document.getElementById('hud-builds');
         _hudEls.time = document.getElementById('hud-time');
         _hudEls.fps = document.getElementById('hud-fps');
     }
@@ -1384,6 +1385,7 @@ function updateHUD() {
     let playerCap = getPlayerPopCap(localPlayerId);
     let cfgCap = getConfiguredMaxPop();
     _renderHudPop(p.popCount, playerCap, cfgCap);
+    if (_hudEls.builds && typeof playerStructureCount === 'function') _renderHudBuilds(playerStructureCount(localPlayerId), getPlayerStructureLimit());
     let secs = Math.floor(gameTime / TICK_RATE);
     if (_hudCache.time !== secs) { _hudCache.time = secs; let m = Math.floor(secs / 60), s = secs % 60; _hudEls.time.textContent = `${m}:${s.toString().padStart(2, '0')}`; }
     let netText = _hudNetText();
@@ -1451,6 +1453,27 @@ function _renderHudPop(pop, houseCap, maxPop) {
     }
     let vals = [[pop, popCls], [houseCap, capCls], [maxPop, maxCls]];
     vals.forEach(([v, cls], i) => { el._nums[i].textContent = String(v); el._nums[i].className = 'pop-n ' + cls; });
+    el._tip.textContent = lines.join('\n');
+}
+
+// Structures held against the building limit (getPlayerStructureLimit): no
+// houses, the match's Max Buildings within its structure memory per player.
+function _renderHudBuilds(count, limit) {
+    const key = count + '/' + limit;
+    if (_hudCache.buildsText === key) return;
+    _hudCache.buildsText = key;
+    const el = _hudEls.builds;
+    if (!el._tip) {
+        el.innerHTML = '<span class="pop-label">Bld</span><span class="pop-nums"><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span></span><span class="lf-tip" role="tooltip"></span>';
+        el._nums = el.querySelectorAll('.pop-n');
+        el._tip = el.querySelector('.lf-tip');
+    }
+    const full = count >= limit, cls = full ? 'pop-bad' : count >= limit * 0.9 ? 'pop-warn' : 'pop-cur';
+    el._nums[0].textContent = String(count); el._nums[0].className = 'pop-n ' + cls;
+    el._nums[1].textContent = String(limit); el._nums[1].className = 'pop-n ' + (full ? 'pop-bad' : 'pop-good');
+    const lines = ['Buildings: ' + count + ' structures (buildings, towers, floor items, construction sites)', 'Max buildings: ' + limit, ''];
+    lines.push(full ? 'Building limit reached: no new structures until some are destroyed or salvaged. Upgrading and stacking still work.' : 'Room for ' + (limit - count) + ' more structures.');
+    lines.push("The limit is the match's Max Buildings, no more than its structure memory holds per player.");
     el._tip.textContent = lines.join('\n');
 }
 
