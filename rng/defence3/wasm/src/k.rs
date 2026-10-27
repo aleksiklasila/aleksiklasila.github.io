@@ -1420,6 +1420,11 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                 let d = g(pd, r);
                 if d > 0.0 { let d = if n > 1 { d * n as f32 } else { d }; e -= d; dot += d; ev = 1; }
             }
+            // A visual report can retain an otherwise expired status record.
+            // Its old damage must not survive until a weaker status starts:
+            // report budgets and record allocation differ between peers.
+            if b0 <= dku { s(bd, r, 0.0); }
+            if p0 <= dku { s(pd, r, 0.0); }
             let (f0, w0) = (g(fr, r), g(we, r));
             if f0 > 0 && w0 > 0 && g(idm, r) > 0.0 {
                 let n = f0.min(w0).min(dku);
@@ -1427,6 +1432,7 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                 e -= d; dot += d; ev = 1;
             }
             if f0 > 0 { s(fr, r, f0 - f0.min(dku)); }
+            if f0 <= dku { s(idm, r, 0.0); }
             if w0 > 0 { s(we, r, w0 - w0.min(dku)); }
             let sa0 = g(sa, r);
             if sa0 > 0 { s(sa, r, sa0 - sa0.min(dku)); }

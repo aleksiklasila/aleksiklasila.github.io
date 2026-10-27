@@ -26,7 +26,7 @@
 
 // (Evaluated in the game's context: game globals only, no closures.)
 function chaosSetup(o) {
-    let seed = 777;
+    let seed = o.seed || 777;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const W = GRID_W, H = GRID_H, np = players.length;
     const st = { buildings: [0, 0], collectorBuildings: [0, 0], queued: 0, research: 0, rallies: 0, towerSites: [0, 0], salvage: 0, army: [0, 0], traps: 0, armyTowers: 0, healersPlaced: 0, errors: [] };
@@ -361,7 +361,7 @@ function chaosSetup(o) {
 
 // One burst of the local player's commands (k: the burst's number).
 function chaosBurst(o, k) {
-    let seed = 4242 + k * 7919 + localPlayerId * 104729;
+    let seed = 4242 + ((o.seed || 777) - 777) + k * 7919 + localPlayerId * 104729;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const me = localPlayerId, W = GRID_W, H = GRID_H, out = { queue: 0, rally: 0, research: 0, place: 0, orders: 0 };
     const mineB = [...barracks, ...collectorSpawners].filter(b => b.owner === me && b.energy > 0 && !b.underConstruction);

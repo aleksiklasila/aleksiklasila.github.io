@@ -1067,6 +1067,7 @@ const DIVTRACE_SRC = `(() => {
         const out = f.apply(this, arguments);
         try {
             const t = __DIVTICK__, o = {};
+            if (t < ${Number(process.env.DIVTRACE_FROM) || 0}) return out;
             for (const u of units) o['u' + u.id] = [u.owner, u.x, u.y, u.vx, u.vy, u.energy, u.commandState, u.workerState, u.path ? u.path.length : -1, u.pathIndex,
                 u.targetUnit, u.targetBuilding, u.workerTarget, u.carryingValue, u.attackTimer, u.dead, u.effectiveLevel, u._pendingPathTarget ? 'P' : '-',
                 u._us ? 'h' + u._us.hObj[u._si] : '-', u.stackCount, u.effectiveStacks, u.burning, u.poisoned, u.frozen, u.wet, u.sandy, u.watched].map(r).join(',')
@@ -1102,7 +1103,10 @@ function divergenceReport(a, b, fromTick = -Infinity) {
     const ticks = [...A.keys()].filter(t => B.has(t) && t >= fromTick).sort((x, y) => x - y);
     for (const t of ticks) {
         const x = A.get(t), y = B.get(t), diff = [];
-        for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (x[k] !== y[k] && (!process.env.DIVPREFIX || k.startsWith(process.env.DIVPREFIX))) diff.push(k + ': ' + (x[k] ?? 'none') + '  |  ' + (y[k] ?? 'none'));
+        // Native cache rows are peer-local allocation indices. Keep them in
+        // the report, but do not mistake them for a gameplay divergence.
+        const comparable = v => typeof v === 'string' && !process.env.DIVTRACE_COMPARE_NATIVE ? v.split(' K')[0] : v;
+        for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) if (comparable(x[k]) !== comparable(y[k]) && (!process.env.DIVPREFIX || k.startsWith(process.env.DIVPREFIX))) diff.push(k + ': ' + (x[k] ?? 'none') + '  |  ' + (y[k] ?? 'none'));
         if (diff.length) return { tick: t, entities: diff.length, first: diff.slice(0, 8) };
     }
     return { tick: null, compared: ticks.length };

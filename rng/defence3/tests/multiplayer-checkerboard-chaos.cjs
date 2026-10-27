@@ -4,10 +4,14 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const num=(k,v)=>Number(process.argv.find(a=>a.startsWith('--'+k+'='))?.slice(k.length+3)??v);
 const count=num('units',12000),map=num('map',192),structures=num('structures',5000),ticks=num('ticks',160),dk=num('dk',4);
+const seed=num('seed',777),mapType=process.argv.find(a=>a.startsWith('--map-type='))?.slice(11)||'arena';
+const networkName=process.argv.find(a=>a.startsWith('--network='))?.slice(10)||'wan';
+const network={wan:{latencyMs:60,jitterMs:35},unstable:{latencyMs:80,jitterMs:150,lossRate:.03,spikeEveryMs:7000,spikeMs:600},slow:{latencyMs:400,jitterMs:120,lossRate:.01}}[networkName];
+assert.ok(network,'known network profile');
 const helperCounts=(process.argv.find(a=>a.startsWith('--helpers='))?.slice(10)||'7,0,3').split(',').map(Number);
 const legacyCollisions=process.argv.includes('--legacy-collisions');
 const out=path.resolve(process.argv.find(a=>a.startsWith('--out='))?.slice(6)||'tests/test-runs/multiplayer-checkerboard/latest.json');
-if(process.argv.includes('--trace')){process.env.DIVTRACE='2';process.env.DIVTRACE_TICKS='4';}
+if(process.argv.includes('--trace')){process.env.DIVTRACE='2';process.env.DIVTRACE_TICKS='4';process.env.DIVTRACE_FROM=String(num('trace-from',0));}
 globalThis.self={crossOriginIsolated:true};
 const H=require('./net-harness.cjs'),chaos=require('./chaos-spikes-scenario.cjs');
 const data=JSON.parse(fs.readFileSync(path.join(__dirname,'chaos-mega-1000.json')));
@@ -22,9 +26,9 @@ for(const k of Object.keys(spawnCounts)) {
  else if(k.startsWith('unit:'))spawnCounts[k]={10:Math.max(1,Math.round(Object.values(spawnCounts[k]).reduce((a,b)=>a+b,0)*perTeam/totalCombat))};
  else spawnCounts[k]={10:k==='building:house'?20:1};
 }
-const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(map),'cfg-map-type':'arena','cfg-gold-count':String(Math.floor(map*1.5)),
+const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(map),'cfg-map-type':mapType,'cfg-gold-count':String(Math.floor(map*1.5)),
  'cfg-astar-mine-count':String(map),'cfg-max-pop':String(count*4),'cfg-full-vis':'full','cfg-starting-energy':'1000000000000','cfg-starting-astar':'1000000000000'};
-const options={mode:'mega',layout:'mixed',buildings:Math.max(30,Math.floor(map/3)),level:6,towerSites:Math.floor(map/4),collectorBuildings:Math.floor(map/6),structures,keepKings:true};
+const options={mode:'mega',layout:'mixed',seed,buildings:Math.max(30,Math.floor(map/3)),level:6,towerSites:Math.floor(map/4),collectorBuildings:Math.floor(map/6),structures,keepKings:true};
 const metrics=`__scratch.stressWork={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,placed:0,healerDeliveries:0,salvagerReturns:0,contestedPlacements:0};{
  const spawn=spawnQueuedUnitFromSpawner,research=_researcherDeposit,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding,place=placeBuilding;
  spawnQueuedUnitFromSpawner=function(s){const r=spawn.apply(this,arguments);if(r){__scratch.stressWork.spawns++;if(s.type==='barrack')__scratch.stressWork.armySpawns++;}return r;};
@@ -37,13 +41,14 @@ const metrics=`__scratch.stressWork={spawns:0,armySpawns:0,researchDeposits:0,co
   const r=ai.apply(this,arguments);if(role==='healer'&&material&&!u.healerHasMaterial&&u.workerTransferCooldown>cooldown)__scratch.stressWork.healerDeliveries++;
   if(role==='salvager'&&!carry&&u.carryingValue>0)__scratch.stressWork.salvagerReturns++;return r;};
 }__scratch.stressMines=[...goldMines.map(m=>[m,'gold']),...astarMines.map(m=>[m,'astar'])];`;
-const rows=[],bursts=[];
+const rows=[],bursts=[];let recovery=null;
 let world,all,start;
 fs.mkdirSync(path.dirname(out),{recursive:true});
 fs.writeFileSync(out+'.jsonl','');
 const state=i=>i.eval(`(()=>{const roles={};for(const u of units)if(u.workerType){const r=roles[u.workerType]||(roles[u.workerType]={count:0,assigned:0,carrying:0});r.count++;if(u.workerTarget)r.assigned++;if(u.carryingValue||u.builderHasMaterial||u.healerHasMaterial)r.carrying++;}
  return {name:${JSON.stringify(i.name)},tick:currentTick,units:units.length,work:{...__scratch.stressWork},roles,depletedMines:__scratch.stressMines?.filter(([m,key])=>m[key]<=0).length,desyncs:netCounters.desyncsDetected,patches:${i.patchesApplied},snapshots:${i.snapshotsApplied},heap:simHeapStats(),occupancy:occupancyAudit(),gameOver};})()`);
-function persist(status,error){fs.writeFileSync(out,JSON.stringify({status,error:String(error?.stack||error||''),count,map,structures,ticks,dk,helperCounts,options,bursts,rows,states:all?.map(state),hashes:all?.map(i=>({name:i.name,fast:[...i.tickHashes],exact:[...i.tickExact],parts:[...i.tickParts]}))},null,2));}
+function persist(status,error){fs.writeFileSync(out,JSON.stringify({status,error:String(error?.stack||error||''),count,map,mapType,networkName,structures,ticks,dk,helperCounts,legacyCollisions,options,recovery,bursts,rows,states:all?.map(state),hashes:all?.map(i=>({name:i.name,fast:[...i.tickHashes],exact:[...i.tickExact],parts:[...i.tickParts]}))},null,2));
+ if(error&&process.argv.includes('--trace'))fs.writeFileSync(out+'.trace.json.gz',require('node:zlib').gzipSync(JSON.stringify(all.map(i=>({name:i.name,trace:[...(i.scratch.div||[])]}))),{level:1}));}
 function check(){
  for(const i of all)assert.deepEqual(i.errors.map(e=>String(e.stack||e)),[],i.name+' threw');
  for(const field of ['tickHashes','tickExact']){
@@ -54,7 +59,7 @@ function check(){
  for(const i of all){assert.equal(i.eval('netCounters.desyncsDetected'),0,i.name+' detected a desync');assert.equal(i.patchesApplied,0,i.name+' repaired state');}
 }
 (async()=>{
- world=new H.World({controls,network:{latencyMs:60,jitterMs:35},hashEvery:1,recordParts:true,exactHashes:true});
+ world=new H.World({controls,network,hashEvery:1,recordParts:true,exactHashes:true});
  const match=await H.startHostedMatch(world,{guests:helperCounts.length-1,teams:helperCounts.map((_,i)=>i&1),maxMs:90000,
   hostSetup:`MAX_THING_LEVEL=20;MAX_RESEARCH_LEVEL=10;startingResourcesConfig=normalizeStartingResourcesConfig(${JSON.stringify({spawnCounts,researchLevels:{}})});`});
  all=[match.host,...match.guests];
@@ -96,5 +101,24 @@ function check(){
  assert.ok(await world.runUntil(()=>all.every(i=>i.eval('currentTick')>last+3),60000,20),'last collision burst executed');check();
  for(const [netId]of world.issued)for(const i of all)assert.ok(i.executedActions.has(netId),i.name+' missed '+netId);
  for(const i of all){const s=state(i);assert.ok(s.occupancy.ok,i.name+' collision occupancy');assert.equal(s.gameOver,false);for(const k of ['spawns','collectorDeposits','astarDeposits','researchDeposits','constructionCompleted','destroyedStructures','placed','healerDeliveries','salvagerReturns','contestedPlacements'])assert.ok(s.work[k]>0,i.name+' exercised '+k);}
+ if(process.argv.includes('--recover')){
+  const guest=all[1],before=all.map(i=>({patches:i.patchesApplied,snapshots:i.snapshotsApplied})),began=world.now;
+  const id=guest.eval(`(()=>{const u=units.find(u=>!u.dead&&!u.isKing&&u.energy>300);u.energy-=123;return u.id;})()`);
+  assert.ok(await world.runUntil(()=>guest.patchesApplied>before[1].patches&&all.every(i=>i.eval('isHost ? resyncHostPending.size===0 : resyncGuest.T<0&&!resyncGuest.outstanding')),120000,20),'large-scene guest repair completed');
+  const from=Math.max(...all.map(i=>i.eval('currentTick')))+4;
+  const repairs=all.map(i=>i.patchesApplied);
+  assert.ok(await world.runUntil(()=>all.every(i=>i.eval('currentTick')>from+64),120000,20),'continued after repair');
+  for(const field of ['tickHashes','tickExact'])assert.equal(world.compareHashes(all,from,field).mismatches.length,0,'repaired checkerboard stays in sync: '+field);
+  for(let j=0;j<all.length;j++){
+   assert.equal(all[j].patchesApplied,repairs[j],'repair did not repeat');
+   assert.equal(all[j].snapshotsApplied,before[j].snapshots,'no match-wide snapshot');
+   assert.ok(state(all[j]).occupancy.ok,'repaired occupancy remains exclusive');
+   assert.deepEqual(all[j].errors.map(String),[]);
+  }
+  assert.equal(guest.patchesApplied,before[1].patches+1,'only one patch required');
+  for(let j=0;j<all.length;j++)if(j!==1)assert.equal(all[j].patchesApplied,before[j].patches,'other peers kept playing');
+  recovery={id,from,virtualMs:world.now-began,exactComparisons:world.compareHashes(all,from,'tickExact').compared};
+  console.log('PASS: large-scene repair',JSON.stringify(recovery));
+ }
  persist('passed');console.log('PASS: mixed checkerboard multiplayer,',world.compareHashes(all,start,'tickExact').compared,'exact peer/tick comparisons,',bursts.length,'same-tick collision bursts, no repair');
 })().catch(e=>{try{persist('failed',e);}catch{}console.error(e);process.exitCode=1;}).finally(()=>{for(const w of require('./real-sim-helper.cjs').instances||[])w.terminate();});

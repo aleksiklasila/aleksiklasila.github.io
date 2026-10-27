@@ -156,7 +156,9 @@ const SNAP_FORMAT = 7;
 // Worker-failure fallback restores collision occupancy and navigation too.
 // 40: shared movement looks invalidate for wall edits beyond the source
 // neighborhood, so cache warmth and helper scheduling cannot change routes.
-const SIM_RULES_REVISION = 40;
+// 41: expired status damage is cleared independently of visual-report
+// retention; weaker subsequent effects cannot inherit a peer-local value.
+const SIM_RULES_REVISION = 41;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

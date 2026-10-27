@@ -7466,6 +7466,11 @@ function tickStatusEffects(target) {
         recordDamageVisual(target, d); shrineDamageTaken(target, d);
     }
     if (target.frozen > 0) target.frozen -= Math.min(dk, target.frozen);
+    // Damage belongs to the active status, independently of how long its
+    // record or pending visual report remains allocated.
+    if (target.burning <= 0) target.burnTickDamage = 0;
+    if (target.poisoned <= 0) target.poisonTickDamage = 0;
+    if (target.frozen <= 0) target.iceTickDamage = 0;
     if (target.wet > 0) target.wet -= Math.min(dk, target.wet);
     if (target.sandy > 0) target.sandy -= Math.min(dk, target.sandy);
     if (target.watched > 0) {
