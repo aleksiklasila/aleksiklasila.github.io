@@ -185,3 +185,89 @@ read first, `TIMEOUT` noted for 124); the step outputs were read instead. Failur
 - Not failures, noted: Edge render-TPS crashed the tab at the end of 100000-1000 Team cases (two 100k peers on
   one machine, known 3-5 TPS); 50000-200 combat views 10 TPS; edge-lod one glError 1282 on its first case;
   join-stall counted desyncs repaired by patches (71 on one peer) with ~2.1 s long tasks at a spectator join.
+
+## 2026-10-27: checkerboard continuation and local input overflow
+
+Continued the saved 50k checkerboard run after the status-expiry desync fix.
+The previous run's final missing-command assertion was a separate problem:
+some bursts contained 280-308 actions, above the host's 256-action packet cap.
+The harness inserted them directly with queueAt, but the normal input queue
+also allowed this overflow. The cap intentionally protects every peer against
+floods; it remains unchanged.
+
+- worker.js `_localActionTick` now selects a later unsent/unsealed tick when
+  the local packet is full. Ordinary commands, split unit commands and reload
+  requeues share this path. No shared simulation or protocol rules changed.
+- `multiplayer-input-overflow.test.cjs` queues 513 ordinary and 257 preserved-ID
+  reload commands from each of three peers (two teammates). All 2,310 must be
+  delivered to every peer and applied exactly once, with matching state and no
+  repairs. Removing only the fix fails the local packet-cap assertion; retained
+  diagnostic: `tests/test-runs/multiplayer-checkerboard/input-overflow-before.log`.
+- Checkerboard bursts now split at the actual transport cap, put shared-tile
+  conflicts first, and drain the last packet plus simulation action backlog.
+  `--teams=0,1,2,0` configures three distinct teams with two teammate clients;
+  the fixture now builds/researches/orders armies for every configured team,
+  distributes dense job districts across them, and checks all six job types
+  per team. Population scaling uses actual team count.
+- Added missing live-game commands, valid multiply/divide group modes, explicit
+  handler-dispatch counters and assertions for all 30 live-game action kinds.
+  Dispatch alone is not a successful effect: stale targets, losing placements
+  and full queues remain expected. Real work counters remain separate.
+- Added `tests/MULTIPLAYER_CHECKERBOARD.md` with commands and limits. Resign and
+  host-only force-resign are covered by the dedicated lifecycle/authority fuzz
+  suites; they are not injected into the middle of a continuing battle.
+
+WASM32 results retained in `tests/test-runs/multiplayer-checkerboard/`:
+
+- `continued-50k.json`: PASS, original two-team/three-peer scene with helpers
+  7/0/3, 49,998 starting units, 20,000 requested structures, dk=20, 260 gameplay
+  ticks plus delivery drain to tick 295. All 12,828 actions delivered; 570 exact
+  peer/tick comparisons, 22 collision bursts, zero patches/desyncs. Final
+  population 17,493; 8,287 spawns, 43,310 researcher deposits, 15,198 energy and
+  11,416 astar deposits, 1,067 completions, 8,532 destroyed structures, 1,190
+  placements, 10,089 healer deliveries, 1,756 salvage returns, 1,092 contested
+  placement attempts. This compatibility run preceded the expanded 30-action
+  counters and multi-team fixture changes.
+- `three-teams-unstable.json`: PASS, four peers/helpers 3/0/1/2, teams 0/1/2/0,
+  solar_system map, 11,994 starting units, 5,000 requested structures, dk=4,
+  160 gameplay ticks, 13 bursts. All 30 live-game command handlers reached on
+  every peer and no unplanned repair. Deliberate guest energy corruption then
+  required exactly one targeted patch, no match-wide snapshot, and 200 exact
+  comparisons over the following 64+ ticks with no repeated repair. This run
+  preceded the final per-team district-distribution assertion.
+
+These are correctness runs, not performance comparisons. State fingerprints
+are checked at common ticks: final wall-clock samples can show different
+populations because clients have completed different ticks under jitter.
+The unstable network models reliable SCTP retransmission delay, not permanent
+loss of reliable messages. Further current validation uses WASM32 only, per
+the user's production-target clarification; no more legacy memory64 runs.
+
+Additional WASM32 validation: `targeted-regressions.json` reports **10/10 PASS**
+(serial, SIM_WORKER=0 and 1): multiplayer-action-fuzz, input-overflow,
+late-carry-restore, reload-input and roles-rematch. This includes hostile
+force-resign rejection, teammate/last-player resignation and rematch lifecycle
+coverage. Input-overflow verifies every original and requeued command is
+applied exactly once in both simulation modes. The packet limit stays 256.
+
+Final production-target run: `four-teams-final32.json` **PASS**, WASM32,
+helpers 3/0/1/2, four distinct teams 0/1/2/3, seed 999, islands 256, 18,004 actual
+starting units and 8,000 requested structures, dk=4. Every team has each of the
+six professions' job types (ownership uses a sub-district tile pattern, avoiding
+a four-team correlation that would omit some professions). All 11,464 commands
+were delivered, all 30 live-game handlers were reached on every peer, and
+567 clean exact comparisons passed over 13 collision bursts plus backlog drain.
+No unplanned patch or snapshot occurred. Forced guest corruption then needed
+one targeted patch and passed 196 further exact comparisons over 64+ ticks,
+with no repeat patch and exclusive occupancy on every peer. Host tick 312:
+1,442 surviving units, 673 spawns, 6,031 research deposits, 445 energy / 215
+astar deposits, 104 completions, 5,499 destroyed structures, 792 placements,
+1,086 healer deliveries, 372 salvage returns and 642 contested placements.
+Combat substantially thins this workload; it is not a sustained 18k population.
+Clean and intentionally corrupted recovery windows are reported separately.
+
+`focused-final32.json`: **3/3 PASS**: status-expiry-records (fire, poison, ice),
+chaos-spikes-scenario (mixed/front structural and work-site checks) and
+chaos-scenario-determinism (65 exact state hashes matching across two scalar
+replays and one three-helper replay). Changed JavaScript syntax checks pass.
+All validation after the user's target clarification used WASM32 only.

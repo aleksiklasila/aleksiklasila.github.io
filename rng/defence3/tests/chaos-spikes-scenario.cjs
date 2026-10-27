@@ -28,8 +28,9 @@
 function chaosSetup(o) {
     let seed = o.seed || 777;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const W = GRID_W, H = GRID_H, np = players.length;
-    const st = { buildings: [0, 0], collectorBuildings: [0, 0], queued: 0, research: 0, rallies: 0, towerSites: [0, 0], salvage: 0, army: [0, 0], traps: 0, armyTowers: 0, healersPlaced: 0, errors: [] };
+    const W = GRID_W, H = GRID_H, np = Math.min(o.teams || 2, players.length);
+    const zeros = () => Array(np).fill(0);
+    const st = { buildings: zeros(), collectorBuildings: zeros(), queued: 0, research: 0, rallies: 0, towerSites: zeros(), salvage: 0, army: zeros(), traps: 0, armyTowers: 0, healersPlaced: 0, errors: [] };
     const free = (gx, gy) => { if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2) return false; const c = grid[gy][gx]; return c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
     const entityAt = (gx, gy) => getTileEntityRef(gx, gy) || (grid[gy][gx] && grid[gy][gx].item) || null;
     // As main.js completeStarterBuilding: built, at a level, full.
@@ -59,15 +60,19 @@ function chaosSetup(o) {
     // Each team's band of rows for its buildings (queue: its half; mixed and
     // mega: its outer third, the armies between).
     const battle = o.mode === 'mixed' || o.mode === 'mega';
-    const band = p => battle ? (p === 0 ? [4, Math.floor(H / 3) - 4] : [Math.floor(2 * H / 3) + 4, H - 4]) : (p === 0 ? [4, Math.floor(H / 2) - 3] : [Math.floor(H / 2) + 3, H - 4]);
+    const band = p => {
+        const [lo, hi] = battle ? (!(p&1) ? [4, Math.floor(H/3)-4] : [Math.floor(2*H/3)+4,H-4]) : (!(p&1) ? [4,Math.floor(H/2)-3] : [Math.floor(H/2)+3,H-4]);
+        const n=Math.ceil((np-(p&1))/2),part=p>>1;
+        return [lo+Math.floor((hi-lo)*part/n),lo+Math.floor((hi-lo)*(part+1)/n)];
+    };
     const barrackKeys = BUILD_CATEGORIES.barracks.filter(k => BASE_CARD_TYPES[k]);
     const workerKeys = ['builder_spawner', 'salvager', 'research', 'builder_spawner', 'research'].filter(k => BASE_CARD_TYPES[k]);
     const towerKeys = BUILD_CATEGORIES.towers.filter(k => k !== 'watch_tower' && BASE_CARD_TYPES[k]);
     const trapKeys = ['lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand', 'mine'].filter(k => BASE_CARD_TYPES[k]);
-    const built = [[], []];
-    const jobs=[{},{}];
+    const built = Array.from({length:np},()=>[]);
+    const jobs=Array.from({length:np},()=>({}));
     const fronts=[];
-    for (let p = 0; p < Math.min(2, np); p++) {
+    for (let p = 0; p < np; p++) {
         // Collector buildings by the mines of the team's band, the collectors at them.
         const [y0, y1] = band(p);
         const mine = units.filter(u => !u.dead && u.owner === p);
@@ -102,7 +107,7 @@ function chaosSetup(o) {
     // some boosts on.
     if (o.mode === 'mega') {
         st.extra = { farms: 0, upgraders: 0, watch: 0, clouds: 0, boosts: 0 };
-        for (let p = 0; p < Math.min(2, np); p++) {
+        for (let p = 0; p < np; p++) {
             const [y0, y1] = band(p);
             for (const b of built[p]) {
                 const cfg = RESOURCE_TYPE_LIST.find(c => c.collectorBuildingKey === b.type);
@@ -123,7 +128,7 @@ function chaosSetup(o) {
                 for (const c of cells) if (!entityAt(c.x, c.y)) place(c.x, c.y, 'house', p);
                 if (!cells.every(c => entityAt(c.x, c.y))) continue;
                 areasDone++;
-                (st.upgradeAreas || (st.upgradeAreas = [[], []]))[p].push(cells[0].x, cells[0].y);
+                (st.upgradeAreas || (st.upgradeAreas = Array.from({length:np},()=>[])))[p].push(cells[0].x, cells[0].y);
                 for (let l = 0; l <= a % 3; l++) if (placeBuilding(cells[0].x, cells[0].y, 'area_upgrader', p, { silent: true })) st.extra.upgraders++;
             }
             for (let c = 0; c < 4; c++) for (const end of ['a', 'b']) {
@@ -144,7 +149,7 @@ function chaosSetup(o) {
         for(let y=Math.floor(H/3)+12;y+30<2*H/3;y+=40)for(let x=8;x<W-8;x+=2){
             // Gaps break the solid production rows into walkable sections.
             if(x%16===0)continue;
-            for(let p=0;p<2;p++){
+            for(let p=0;p<np;p++){
                 const gy=y+p*24,homeY=gy+(p?2:-2);
                 const b=place(x,gy,barrackKeys[(x/2+y)%barrackKeys.length],p);
                 if(b){built[p].push(b);fronts.push({b,homeY,targetY:y+(p?8:16)});}
@@ -166,7 +171,9 @@ function chaosSetup(o) {
             // intervening rows of isolated buildings allow local circulation.
             if(gy%8===3?((gx+((gy>>3)&1)*8)%16>=12):(gx&1)===0)continue;
             const bx=Math.floor(gx/12),by=Math.floor(gy/12),district=(bx+by*3)%8;
-            const p=district>=6&&o.layout!=='front'?((gx>>2)+(gy>>2))&1:gy<H/2?0:1;
+            // Use sub-district tiles for ownership: reusing the district's
+            // bx/by sum correlated profession and owner for four teams.
+            const p=np>2?((gx>>2)+(gy>>2))%np:district>=6&&o.layout!=='front'?((gx>>2)+(gy>>2))&1:gy<H/2?0:1;
             const center=gx%12===5&&gy%12===5,home=gy%12===9;
             let key;
             if(district<2)key=center?(district?'astar_spawner':'spawner'):(district?'astar_farm':'farm');
@@ -192,7 +199,7 @@ function chaosSetup(o) {
     }
     // Research: the labs' and researchers' stats raised, the researchers at level 9 by the labs.
     const things = Object.values(RESEARCH_THINGS_BY_ID || {}).filter(t => t && t.stats && t.stats.length);
-    for (let p = 0; p < Math.min(2, np); p++) {
+    for (let p = 0; p < np; p++) {
         const levels = ensurePlayerResearchLevels(p);
         for (const t of things) for (const s of t.stats) {
             if(o.structures)levels[makeResearchLevelId(t.kind,t.key,s.statKey)]=Math.floor(rnd()*(MAX_RESEARCH_LEVEL+1));
@@ -200,7 +207,7 @@ function chaosSetup(o) {
         }
     }
     rebuildPrecomputedStatsMapPlayer();
-    for (let p = 0; p < Math.min(2, np); p++) {
+    for (let p = 0; p < np; p++) {
         const labs = built[p].filter(b => b.type === 'research'), healerHomes = built[p].filter(b => b.type === 'healer_spawner' || b.type === 'barrack');
         const mine = units.filter(u => !u.dead && u.owner === p);
         mine.filter(u => u.workerType === 'researcher').forEach((u, i) => { if (labs.length) { const s = labs[i % labs.length]; put(u, s.gx + 1, s.gy); s.autoResearchEnabled = true; } });
@@ -254,37 +261,37 @@ function chaosSetup(o) {
     // blocks of 4 rows, facing each other 6 rows apart), a row of towers and
     // a row of traps between every pair; then attack-move across.
     if (battle) {
-        const teams = [0, 1].map(p => units.filter(u => !u.dead && u.owner === p && !u.workerType && (!o.keepKings || !u.isKing)));
+        const teams = Array.from({length:np},(_,p) => units.filter(u => !u.dead && u.owner === p && !u.workerType && (!o.keepKings || !u.isKing)));
         // (mega: 15% of each army as raiding blocks in front of its own
         // buildings, attack-moving into the enemy's building band at points
         // spread across the map; the lines take the rest.)
         if (o.mode === 'mega') {
-            st.raid = [0, 0];
-            for (let p = 0; p < 2; p++) {
+            st.raid = zeros();
+            for (let p = 0; p < np; p++) {
                 const n = Math.floor(teams[p].length * 0.15), raid = teams[p].splice(0, n);
                 const [by0, by1] = band(p), gy = p === 0 ? by1 + 1 : by0 - 31, groups = Math.max(1, Math.ceil(n / 900));
                 for (let g = 0; g < groups; g++) {
                     const gx = 6 + Math.floor((W - 40) * (g + 0.5) / groups), ids = [];
                     for (let k = 0; k < 900; k++) { const u = raid[g * 900 + k]; if (!u) break; put(u, gx + (k % 30), gy + Math.floor(k / 30)); ids.push(u.id); }
-                    const [ey0, ey1] = band(1 - p), tx = 6 + Math.floor((W - 12) * (((g * 7) % groups) + 0.5) / groups);
+                    const [ey0, ey1] = band((p + 1) % np), tx = 6 + Math.floor((W - 12) * (((g * 7) % groups) + 0.5) / groups);
                     for (let q = 0; q < ids.length; q += 5000) processAction(sanitizeAction({ action: 'attackMove', unitIds: ids.slice(q, q + 5000), targetX: tx * TILE, targetY: Math.floor((ey0 + ey1) / 2) * TILE }), p);
                     st.raid[p] += ids.length;
                 }
             }
         }
-        const y0 = Math.floor(H / 3) + 2, y1 = Math.floor(2 * H / 3) - 2, next = [0, 0];
+        const y0 = Math.floor(H / 3) + 2, y1 = Math.floor(2 * H / 3) - 2, next = zeros();
         let y = y0, pair = 0;
-        while (y + 16 < y1 && (next[0] < teams[0].length || next[1] < teams[1].length)) {
-            for (let p = 0; p < 2; p++) {
+        while (y + np * 10 - 4 < y1 && teams.some((a,p)=>next[p]<a.length)) {
+            for (let p = 0; p < np; p++) {
                 const ys = y + p * 10;
                 for (let r = 0; r < 4; r++) for (let gx = 6; gx < W - 6; gx++) { const u = teams[p][next[p]]; if (!u) break; if (grid[ys + r][gx].type === TYPE_WALL) continue; next[p]++; put(u, gx, ys + r); }
             }
             // Between the blocks: towers of both teams, then traps.
             for (let gx = 6 + (pair & 1); gx < W - 6; gx += 4) { if (place(gx, y + 5, towerKeys[(gx >> 2) % towerKeys.length], gx & 4 ? 1 : 0)) st.armyTowers++; }
             for (let gx = 7; gx < W - 6; gx += 3) { if (place(gx, y + 7, trapKeys[(gx / 3 | 0) % trapKeys.length], (gx / 3 | 0) & 1)) st.traps++; }
-            y += 18; pair++;
+            y += np * 10 - 2; pair++;
         }
-        for (let p = 0; p < 2; p++) {
+        for (let p = 0; p < np; p++) {
             if(o.structures){
                 // The original line fixture has room for only ~130k fighters.
                 // Give the remainder real orders and spread it through the
@@ -302,7 +309,8 @@ function chaosSetup(o) {
     }
     recalculateAdjacency(true);
     if(o.structures){
-        st.jobs={};const assigned=[{},{}];
+        st.jobs={};st.jobsByTeam=jobs.map(j=>Object.fromEntries(Object.entries(j).map(([role,list])=>[role,list.length])));
+        const assigned=Array.from({length:np},()=>({}));
         for(const u of units){
             if(u.dead||!u.workerType)continue;
             const list=jobs[u.owner]?.[u.workerType];if(!list?.length)continue;
@@ -318,13 +326,13 @@ function chaosSetup(o) {
                 u.workerState=u.workerType==='researcher'?'MOVING_TO_RESEARCH':u.workerType==='healer'?'MOVING_TO_HEAL':u.workerType==='builder'?'MOVING_TO_BUILD':'MOVING_TO';
             }
         }
-        for(let p=0;p<2;p++)for(const [role,list]of Object.entries(jobs[p]))st.jobs[role]=(st.jobs[role]||0)+list.length;
+        for(let p=0;p<np;p++)for(const [role,list]of Object.entries(jobs[p]))st.jobs[role]=(st.jobs[role]||0)+list.length;
     }
     if(fronts.length){
         __scratch.chaosFrontArmy=new Set();
         __scratch.chaosFrontBuildings=fronts;
         const orders=new Map();
-        const byOwner=[fronts.filter(f=>f.b.owner===0),fronts.filter(f=>f.b.owner===1)],armyCount=[0,0],healerCount=[0,0];
+        const byOwner=Array.from({length:np},(_,p)=>fronts.filter(f=>f.b.owner===p)),armyCount=zeros(),healerCount=zeros();
         for(const f of fronts){
             f.b.rallyX=f.b.x;f.b.rallyY=f.targetY*TILE+16;f.b.rallyTargetUnitId=null;
         }
@@ -352,7 +360,7 @@ function chaosSetup(o) {
         st.frontFighters=__scratch.chaosFrontArmy.size;
     }
     st.units = units.length; st.barracks = barracks.length; st.spawners = collectorSpawners.length; st.towers = towers.length;
-    st.researchQueued = [0, 1].map(p => getPlayerResearchQueueTotalLength(p));
+    st.researchQueued = Array.from({length:np},(_,p) => getPlayerResearchQueueTotalLength(p));
     // (The upgraded areas, for the bursts' further upgrades: the same on
     // every peer.)
     if (st.upgradeAreas) __scratch.chaosUpgradeAreas = st.upgradeAreas;
@@ -483,13 +491,33 @@ function chaosConflicts(o, k, shared) {
     const destination = { targetX: (point.gx + .5) * TILE, targetY: (point.gy + .5) * TILE };
     if (ids.length) {
         add({ action: 'attackMove', unitIds: ids, ...destination });
-        add({ action: 'resizeUnitGroup', unitIds: ids.slice(0, 12), mode: k & 1 ? 'd2' : 'x2' });
+        add({ action: 'resizeUnitGroup', unitIds: ids.slice(0, 12), mode: k & 1 ? 'd2' : 'm2' });
+        // Small groups guarantee coverage even after the armies have thinned;
+        // the ordinary burst's sampled groups may no longer have 100 units.
+        add({ action: 'move', unitIds: ids.slice(0, 8), ...destination });
+        add({ action: 'hold', unitIds: ids.slice(8, 16) });
+        add({ action: 'stop', unitIds: ids.slice(16, 24) });
+        const enemy=units.find(u=>!u.dead&&u.owner!==me&&!u.isKing);
+        if(enemy)add({action:'attack',unitIds:ids.slice(24,32),targetId:enemy.id,targetX:enemy.x,targetY:enemy.y});
+        const building=[...towers,...barracks].find(b=>b.owner!==me&&b.energy>0);
+        if(building)add({action:'attackBuilding',unitIds:ids.slice(32,40),targetGx:building.gx,targetGy:building.gy});
+        add({action:'killUnit',unitIds:ids.slice(-1)});
     }
+    add({action:'shrineDrain',drain:(k+variant)&3});
     const production = owned.filter(b => b instanceof Barrack || isSpawnerEntity(b));
+    const workerHome=production.find(b=>!(b instanceof Barrack)&&b.type!=='research');
+    if(workerHome){
+        add({action:'queueWorker',gx:workerHome.gx,gy:workerHome.gy,count:2});
+        add({action:'dequeueWorker',gx:workerHome.gx,gy:workerHome.gy,count:1});
+    }
     for (const b of production.slice(k % 7, k % 7 + 16)) {
         add({ action: 'setRally', gx: b.gx, gy: b.gy, ...destination, targetX: destination.targetX + (o.clientVariant === undefined ? 0 : variant - 1) * TILE });
         add({ action: b instanceof Barrack ? 'queueUnit' : 'queueWorker', gx: b.gx, gy: b.gy, count: 2 });
         add({ action: 'setQueueEnabled', gx: b.gx, gy: b.gy, enabled: true });
+        add({ action: b instanceof Barrack ? 'dequeueUnit' : 'dequeueWorker', gx: b.gx, gy: b.gy, count: 1 });
+        add({ action: 'setBuildEnabled', gx: b.gx, gy: b.gy, enabled: !!((k+variant)&1) });
+        add({ action: 'setAutoUpgrade', gx: b.gx, gy: b.gy, enabled: !!(k&1) });
+        add({ action: 'setAutoStack', gx: b.gx, gy: b.gy, enabled: !!(k&1) });
     }
     const keys = Object.keys(BASE_CARD_TYPES).filter(key => !BASE_CARD_TYPES[key].notBuildable);
     for (let j = 0; j < shared.tiles.length; j++) {
@@ -515,6 +543,7 @@ function chaosConflicts(o, k, shared) {
     const lab = production.find(b => b.type === 'research');
     if (lab) {
         add({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'building', key: 'pistol', statKey: 'maxLevel', count: 2 });
+        add({ action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 1, toIndex: 0, fromActive: false, toActive: !!(k&1) });
         add({ action: 'setAutoResearch', gx: lab.gx, gy: lab.gy, enabled: true });
     }
     return out;

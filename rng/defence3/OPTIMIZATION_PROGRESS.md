@@ -2012,3 +2012,39 @@ Production WASM hashes **364592b7a032ae85 / ccb7503e0b52a57a**, rules revision 3
 The user proposes the same L0/type eligibility test for movement, collision and pathfinding. The existing hot collision representation already reduces that rule to one byte per tile: `structureWallSync` changes the completed tower's tile, `simMoveTileTypeChanged` updates `mv.wall[t]` and bounded neighboring block versions, and native movement reads that byte. Adding object/type/level reads to every movement query would duplicate this cached predicate; no extra per-tile readiness array or such hot-path change was made.
 
 Cached navigation also contains connected components, cluster exits and destination fields. Closing the only doorway changes distant reachability, so checking the current tile prevents entering the wall but cannot repair those derived answers. Current `navWallChanged` only updates a difference count; `navTick` stages the derived rebuild, with bulk kernels on helpers. This is separate from collector roster eligibility. Remaining foreground work is **not all O(1)**: legacy path-region maintenance, deterministic evacuation of units already on a closing tile, and navigation build allocation/prefix bookkeeping remain audit targets. Future changes should keep completion publication bounded, move derived preparation to helpers with deterministic publication, and retain rerouting/doorway-connectivity behavior rather than simply suppressing invalidation. This audit adds no gameplay changes or measured performance claim.
+
+## 2026-10-27: multiplayer checkerboard robustness continuation
+
+Continued the chaos multiplayer investigation rather than a TPS optimization.
+The status-expiry-fixed 50k/20k mixed scene now passes 260 gameplay ticks and
+command drain with helpers 7/0/3: 570 exact comparisons and zero repairs. Actual
+population falls from 49,998 to 17,493 through combat; useful work and raw hashes
+remain in `tests/test-runs/multiplayer-checkerboard/continued-50k.json`.
+
+Found and fixed a separate input-loss issue: legitimate local bursts exceeded
+the host's 256-action packet cap. `_localActionTick` now spills commands and
+reload requeues into later unsent ticks; the host cap stays intact. The focused
+three-peer regression applies all 2,310 original/requeued commands exactly once
+and fails when only this fix is removed. Checkerboard packets also respect the
+cap, preserve same-tick contested placements and drain the simulation backlog.
+
+The fixture supports configurable team assignments and all 30 live-game command
+handlers, including per-team dense jobs for every profession. The first WASM32
+three-team/four-peer solar_system run passes under jitter/retransmission delays,
+then recovers deliberately corrupted guest energy with one targeted patch and
+200 subsequent exact comparisons. See `MULTIPLAYER_ROBUSTNESS_PROGRESS.md` and
+`tests/MULTIPLAYER_CHECKERBOARD.md` for raw artifacts, commands and coverage
+limits. Current validation targets WASM32 only per the user's clarification.
+No timing speedup, p99/max improvement or gameplay hitch reduction is claimed;
+remaining performance bottlenecks and profile priorities are unchanged.
+
+Final current-target validation: WASM32 four-team islands checkerboard (18,004
+actual starting units, 8,000 structures, helpers 3/0/1/2, dk=4) passes all 30
+live-game handlers and delivers all 11,464 commands. It records 567 clean exact
+comparisons, no unplanned repair, then one intentional targeted guest repair
+and 196 further exact comparisons with no repeat patch. Host population falls
+to 1,442 by tick 312; this is correctness coverage, not sustained-load timing.
+Raw output: `tests/test-runs/multiplayer-checkerboard/four-teams-final32.json`.
+The targeted multiplayer suite passes 10/10 across simulation modes 0/1, and
+status expiry, mixed/front fixture checks and scalar/three-helper determinism
+pass 3/3. No legacy memory64 tests were run after the target clarification.

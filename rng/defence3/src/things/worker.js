@@ -4219,7 +4219,10 @@ function _localActionTick() {
         // never changes, so new commands always go to a later tick. This also
         // keeps commands safe when the input delay shrinks.
         if (!isHost) tick = Math.max(tick, lockstepHighestSentLocalTick + 1);
-        while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]) tick++;
+        // The host caps packets against floods. Spill legitimate local bursts
+        // into later unsent ticks instead of letting that cap discard orders.
+        while (lockstepCommittedByTick[tick] || lockstepBundleByTick[tick]
+            || (localInputBuffer[tick] || []).length >= LOCKSTEP_MAX_ACTIONS_PER_PACKET) tick++;
     }
     return tick;
 }
