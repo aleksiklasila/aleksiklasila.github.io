@@ -1073,7 +1073,7 @@ const DIVTRACE_SRC = `(() => {
                 // (DIVTRACE=2: the movement kernel's steering state too.)
                 + (${process.env.DIVTRACE === '2'} && u._us ? ' K' + (() => { const c = u._us, s = u._si, nv = c.mvNav ? Array.from(c.mvNav.subarray(s * 8, s * 8 + 8)).join('/') : '';
                     return [c.mvOn[s], c.mvFlags[s], c.mvCD[s], c.mvCT[s], c.mvCN[s], c.mvCTl[s], c.mvCVx[s], c.mvCVy[s], c.mvSteady[s], c.mvFlow[s], c.mvFGen[s], c.mvDest[s], c.mvNavLD[s], c.cwTick[s], c.cwNear[s], nv,
-                        'spd', c.mvSpd[s], u.preComputed && u.preComputed.speed, 'ver', c.esVer[s], 'row', c.statRow[s], 'stk', u.effectiveStacks, u.stackCount, u.unitLevel].map(r).join(','); })() : '');
+                        'spd', c.mvSpd ? c.mvSpd[s] : undefined, u.preComputed && u.preComputed.speed, 'ver', c.esVer[s], 'row', c.statRow[s], 'stk', u.effectiveStacks, u.stackCount, u.unitLevel].map(r).join(','); })() : '');
             players.forEach((p, i) => { if (p) o['p' + i] = [p.energy, p.astar, p.shrine, p.popCount, p.researchTask ? p.researchTask.key + ':' + p.researchTask.workDone : '-'].map(r).join(','); });
             for (const L of [towers, barracks, collectorSpawners, _snapFloorItems(), goldMines, astarMines]) for (const b of L) o['b' + b.gx + ',' + b.gy] = [b.type, b.owner, b.energy, b.level, b.stacks, b.underConstruction, b.spawnTimer,
                 Array.isArray(b.spawnQueue) ? b.spawnQueue.length : -1, b.stackingWorkDone, b.cd, b.gold, b.astar, b.effectiveLevel, b.isUpgrading, b.markedForSalvage, b.burning, b.watched].map(r).join(',');

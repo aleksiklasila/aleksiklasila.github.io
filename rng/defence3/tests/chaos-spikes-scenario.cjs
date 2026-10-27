@@ -254,7 +254,7 @@ function chaosSetup(o) {
     // blocks of 4 rows, facing each other 6 rows apart), a row of towers and
     // a row of traps between every pair; then attack-move across.
     if (battle) {
-        const teams = [0, 1].map(p => units.filter(u => !u.dead && u.owner === p && !u.workerType));
+        const teams = [0, 1].map(p => units.filter(u => !u.dead && u.owner === p && !u.workerType && (!o.keepKings || !u.isKing)));
         // (mega: 15% of each army as raiding blocks in front of its own
         // buildings, attack-moving into the enemy's building band at points
         // spread across the map; the lines take the rest.)
@@ -407,7 +407,7 @@ function chaosBurst(o, k) {
     // mega's every fourth burst sends that quarter raiding the enemy's
     // buildings instead.
     if (o.mode === 'mixed' || o.mode === 'mega') {
-        const army = units.filter(u => !u.dead && u.owner === me && !u.workerType && u.commandState !== undefined && (o.layout!=='front'||__scratch.chaosFrontArmy.has(u.id)));
+        const army = units.filter(u => !u.dead && u.owner === me && !u.workerType && (!o.keepKings || !u.isKing) && u.commandState !== undefined && (o.layout!=='front'||__scratch.chaosFrontArmy.has(u.id)));
         const q = k & 3, part = army.filter((u, i) => (i & 3) === q).map(u => u.id);
         const raid = o.mode === 'mega' && (k & 3) === 2;
         const tx = W * (0.1 + 0.8 * rnd()) * TILE, ty = raid ? H * (me ? 1 / 6 : 5 / 6) * TILE : H * (me ? 0.36 : 0.64) * TILE;
@@ -467,7 +467,61 @@ function chaosBurst(o, k) {
     return out;
 }
 
+// All clients receive the same contested tiles/mines, but act as their own
+// player. The multiplayer driver seals these alongside the ordinary chaos
+// burst at one shared tick, including competing commands from teammates.
+function chaosConflicts(o, k, shared) {
+    const me = localPlayerId, variant = o.clientVariant || 0, out = [], add = a => out.push(a);
+    const owned = [...towers, ...barracks, ...collectorSpawners, ...getCellItemsRowMajor()]
+        .filter(b => b && b.owner === me && b.energy > 0);
+    const workers = units.filter(u => !u.dead && u.owner === me && u.workerType);
+    const army = units.filter(u => !u.dead && u.owner === me && !u.workerType && !u.isKing);
+    const point = shared.tiles[0] || { gx: GRID_W >> 1, gy: GRID_H >> 1 };
+    const rank = u => Math.abs(u.x / TILE - point.gx) + Math.abs(u.y / TILE - point.gy);
+    army.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+    const ids = army.slice(0, 400).map(u => u.id);
+    const destination = { targetX: (point.gx + .5) * TILE, targetY: (point.gy + .5) * TILE };
+    if (ids.length) {
+        add({ action: 'attackMove', unitIds: ids, ...destination });
+        add({ action: 'resizeUnitGroup', unitIds: ids.slice(0, 12), mode: k & 1 ? 'd2' : 'x2' });
+    }
+    const production = owned.filter(b => b instanceof Barrack || isSpawnerEntity(b));
+    for (const b of production.slice(k % 7, k % 7 + 16)) {
+        add({ action: 'setRally', gx: b.gx, gy: b.gy, ...destination, targetX: destination.targetX + (o.clientVariant === undefined ? 0 : variant - 1) * TILE });
+        add({ action: b instanceof Barrack ? 'queueUnit' : 'queueWorker', gx: b.gx, gy: b.gy, count: 2 });
+        add({ action: 'setQueueEnabled', gx: b.gx, gy: b.gy, enabled: true });
+    }
+    const keys = Object.keys(BASE_CARD_TYPES).filter(key => !BASE_CARD_TYPES[key].notBuildable);
+    for (let j = 0; j < shared.tiles.length; j++) {
+        const t = shared.tiles[j], key = j < 3 ? ['pistol', 'sand', 'barrack_fast'][(j + me + k + variant) % 3] : keys[(k * 7 + j + variant) % keys.length];
+        add({ action: 'place', gx: t.gx, gy: t.gy, itemType: key, count: 1 + (j & 1), buildEnabled: true, autoUpgradeEnabled: !!(k & 1) });
+    }
+    const assign = (role, target, type) => {
+        if (!target) return;
+        const list = workers.filter(u => u.workerType === role).sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+        if (list.length) add({ action: 'workerAssign', unitIds: list.slice(0, 16).map(u => u.id), targetType: type, targetGx: target.gx, targetGy: target.gy });
+    };
+    assign('collector', shared.gold, 'mine');
+    assign('astar_collector', shared.astar, 'astar_mine');
+    const sites = owned.filter(b => b.underConstruction || b.isUpgrading || b.isStacking);
+    assign('builder', sites[variant % Math.max(1, sites.length)], 'build');
+    assign('healer', production.find(b => !b.underConstruction), 'queue');
+    assign('researcher', production.find(b => b.type === 'research'), 'research');
+    // Removing active workplaces tests reservations, worker return trips,
+    // route invalidation and collision footprints while other clients build.
+    const salvage = owned.filter(b => b instanceof Tower && !b.type.startsWith('cloud'));
+    for (const b of salvage.slice(k * 3 % Math.max(1, salvage.length), k * 3 % Math.max(1, salvage.length) + 12))
+        add({ action: 'setSalvage', gx: b.gx, gy: b.gy, marked: true });
+    const lab = production.find(b => b.type === 'research');
+    if (lab) {
+        add({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'building', key: 'pistol', statKey: 'maxLevel', count: 2 });
+        add({ action: 'setAutoResearch', gx: lab.gx, gy: lab.gy, enabled: true });
+    }
+    return out;
+}
+
 module.exports = {
     setup: o => `(${chaosSetup.toString()})(${JSON.stringify(o)})`,
     burst: (o, k) => `(${chaosBurst.toString()})(${JSON.stringify(o)}, ${k})`,
+    conflicts: (o, k, shared) => `(${chaosConflicts.toString()})(${JSON.stringify(o)}, ${k}, ${JSON.stringify(shared)})`,
 };

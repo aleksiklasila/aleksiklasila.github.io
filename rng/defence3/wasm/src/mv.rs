@@ -1462,8 +1462,10 @@ unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mu
 /// The flow looks shared by every thread (mv.lookc, LOOKC_ENTRIES entries
 /// of 16 words): a look's result is a pure function of its tile, its
 /// destination and field kind, the navigation profile, its build and the
-/// wall version of its block (what the per-unit look-ahead columns are
-/// trusted by), so the units walking a route through a tile share one look.
+/// global wall version, so the units walking a route through a tile share
+/// one look. A look can inspect 32 tiles ahead: the per-unit neighborhood
+/// version does not cover every wall it reads. Reusing that narrower key
+/// here made cache warmth and helper ordering affect the route after edits.
 /// Entries are seqlocked (word 0 even and at least 2: valid; a writer makes
 /// it odd while it writes): a torn or busy entry is a miss, never a wrong
 /// answer; which thread made an entry does not show.
@@ -1554,7 +1556,7 @@ unsafe fn nv_put(m: &Mv, s: usize, tl: i32, dk: i32, ver: i32, wv: i32, fgen: i3
 /// simFlowLook: 1 in the look-ahead record, 0 no way, -1 walled in, -2 a
 /// bad build.
 #[cfg_attr(feature = "prof", inline(never))]
-unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
+unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, global_wv: i32, fgen: i32) -> i32 {
     let r = m.nv.add(s * NV_STRIDE);
     if *r == tl && *r.add(NV_D) == dk && *r.add(NV_G) == fgen && (!refresh || (*r.add(NV_V) == nav_ver && *r.add(NV_W) == wv)) {
         return 1;
@@ -1563,7 +1565,7 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     // (The walls it looks against: the profile's, else the air or ground
     // map: a flyer's bit.)
     let kp = fgen | ((rd(m.npr, s) as i32) << 8) | (if wl == m.airw { 1 << 20 } else { 0 });
-    if let Some((code, n1, n2, far, open)) = look_get(m, tl, dk, kp, nav_ver, wv) {
+    if let Some((code, n1, n2, far, open)) = look_get(m, tl, dk, kp, nav_ver, global_wv) {
         if code == 1 {
             nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open != 0);
         }
@@ -1572,11 +1574,11 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     dbgc!(m, 18);
     let code = flow_look_calc(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen);
     if code != 1 {
-        look_put(m, tl, dk, kp, nav_ver, wv, code, 0, 0, 0, false);
+        look_put(m, tl, dk, kp, nav_ver, global_wv, code, 0, 0, 0, false);
     } else {
         let r = m.nv.add(s * NV_STRIDE);
         let fo = *r.add(NV_FO);
-        look_put(m, tl, dk, kp, nav_ver, wv, 1, *r.add(NV_N1), *r.add(NV_N2), fo >> 1, (fo & 1) != 0);
+        look_put(m, tl, dk, kp, nav_ver, global_wv, 1, *r.add(NV_N1), *r.add(NV_N2), fo >> 1, (fo & 1) != 0);
     }
     code
 }
@@ -4833,7 +4835,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     };
     let wv = if m.wblk9.is_null() { p.wver } else { rd(m.wblk9, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
     let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) < m.dk;
-    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, if on_atl { 3 } else if wide { 2 } else { 1 });
+    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, p.wver, if on_atl { 3 } else if wide { 2 } else { 1 });
     if lk == 0 {
         // (No way: an event on its own tick of SIM_REROUTE_TICKS (the main
         // thread's pending target, a worker at its task done there), standing

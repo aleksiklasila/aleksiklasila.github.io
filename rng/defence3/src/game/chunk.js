@@ -296,7 +296,7 @@ function spatialIndexPrebuild() {
     // index, later.)
     if (_sxPre || typeof SIM_LANE_IX !== 'number') return;
     const n = units.length;
-    if (n < SPATIAL_PARALLEL_MIN_UNITS || !_simUnitState || !_sxPar || _sxEpoch + 1 >= 0x3fffffff) return;
+    if (!n || n < SPATIAL_PARALLEL_MIN_UNITS || !_simUnitState || !_sxPar || _sxEpoch + 1 >= 0x3fffffff) return;
     // (Background readers of the current index finish first.)
     if (typeof acqTierIndexWait === 'function') acqTierIndexWait();
     const X = _sxPar, nChunks = CHUNKS_W * CHUNKS_H, players = spatialUnitsComplexPlayerCount;
@@ -495,7 +495,9 @@ function spatialIndexRebuild() {
     if (_sxPar && _sxPar.ixd) _sxPar.ixd.ok = false;
     _spatialIndexChainDrop();
     const n = units.length;
-    if (n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_KEYS === 'number' && _spatialIndexRebuildParallel()) return;
+    // An initially empty match has no native entry buffers to bind. The
+    // serial empty build also expires the old ranges after the last death.
+    if (n > 0 && n >= SPATIAL_PARALLEL_MIN_UNITS && _simUnitState && typeof SIM_KERNEL_INDEX_KEYS === 'number' && _spatialIndexRebuildParallel()) return;
     _spatialIndexRebuildSerial();
 }
 function _spatialIndexRebuildParallel() {

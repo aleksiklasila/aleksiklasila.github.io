@@ -1102,6 +1102,7 @@ function _wswFlagsOf(e, o) {
     else if (e.underConstruction) { if (e.buildEnabled !== false) f |= WSW_BUILD; }
     else if (e.isUpgrading || e.isStacking) f |= WSW_BUILD;
     else if (e.energy > 0 && e.energy < e.maxEnergy) f |= WSW_BUILD;
+    else if (_isBuilderStackCandidate(e)) f |= WSW_BUILD;
     else if (e.autoUpgradeEnabled !== false && !(e.effectiveLevel <= e.level)) {
         // (_isBuilderUpgradeCandidate, the researched level once a step per
         // owner and building.)
@@ -3117,6 +3118,12 @@ function _isBuilderRepairTarget(target) {
         && !target.isStacking;
 }
 
+function _isBuilderStackCandidate(target) {
+    if (!target || target.underConstruction || target.isUpgrading || target.isStacking || !isAutoStackEnabled(target)) return false;
+    if (!(getThingRemainingStacks(target) > 0)) return false;
+    return stackCountToLevel(getThingStackedStacks(target) + 1) <= getThingResearchedMaxLevel(target);
+}
+
 function _isBuilderUpgradeCandidate(target) {
     if (!target || target.underConstruction || target.isUpgrading || target.isStacking) return false;
     // (Cheapest first: most structures are not due an upgrade.)
@@ -3134,7 +3141,11 @@ function _isBuilderWorkTarget(target, owner, allowDisabledBuild = false) {
     if (target.owner !== owner) return false;
     if (target.markedForSalvage) return false;
     if (!target.underConstruction && !target.isUpgrading && !target.isStacking && !_isBuilderRepairTarget(target)) {
-        if (_isBuilderUpgradeCandidate(target)) {
+        // Research can unlock queued stacks without changing adjacency.
+        // Publish eligibility in the search grid, activate work on selection.
+        if (_isBuilderStackCandidate(target)) {
+            refreshThingProgressState(target);
+        } else if (_isBuilderUpgradeCandidate(target)) {
             beginUpgradeProgress(target, Math.max(1, getThingBaseLevel(target) + 1));
         }
     }

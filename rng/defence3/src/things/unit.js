@@ -2993,7 +2993,8 @@ function _simMoveChargeSteps(chunks, NP, NT, names) {
 let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
 // The movement kernel's shared flow looks (mv.rs LOOKC_ENTRIES entries of 16
 // words): keyed by what a look depends on, among them the navigation build
-// and wall block versions, counters that start again after a navigation
+// and the global wall version (looks extend beyond the source's wall block),
+// counters that start again after a navigation
 // reset or a wall rebuild: emptied then (peer-local, results unchanged).
 const SIM_MOVE_LOOKC_ENTRIES = 1 << 18;
 let _simMoveLookC = null;

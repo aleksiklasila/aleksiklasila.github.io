@@ -44,7 +44,7 @@ const errorsOf = i => i.errors.map(e => String(e.message || e).slice(0, 160)).fi
     }
     // Multiplayer: the failure set up on the guest before the match starts.
     for (const [name, setup] of [['load', FAIL_LOAD], ['start', FAIL_START]]) {
-        const world = new H.World({ network: { latencyMs: 40, jitterMs: 5 }, controls: H.SMALL_MATCH_CONTROLS });
+        const world = new H.World({ network: { latencyMs: 40, jitterMs: 5 }, controls: H.SMALL_MATCH_CONTROLS, recordParts: true, exactHashes: true });
         world.simWorker = true;
         const host = world.spawn('host', { controls: H.SMALL_MATCH_CONTROLS });
         host.eval('loadOrCreateLocalIdentity(); hostOnlineGame();');
@@ -63,11 +63,19 @@ const errorsOf = i => i.errors.map(e => String(e.message || e).slice(0, 160)).fi
         assert.ok(await world.runUntil(() => [host, g].every(i => i.eval('gameStarted') && !i.eval('matchStartWaitingForReady')) && host.eval('currentTick') > 40, 30000),
             name + ': the match starts and runs: ' + JSON.stringify([host, g].map(i => [i.name, i.eval('currentTick'), i.eval('matchStartWaitingForReady')])));
         assert.equal(g.eval('simClientActive()'), false, name + ': the guest runs it on its page');
+        for (const inst of [host, g]) {
+            const occupancy = JSON.parse(inst.evalSim(`JSON.stringify({audit:occupancyAudit(),live:units.filter(u=>!u.dead).length})`));
+            assert.ok(occupancy.audit && occupancy.audit.ok, name + ': collision occupancy is valid');
+            assert.equal(occupancy.audit.registered, occupancy.live, name + ': every live unit has a collision footprint');
+        }
         const from = host.eval('currentTick') + 5;
         await H.playFor(world, [host, g], 3000, { seed: 51 });
         await world.run(1500);
         assert.deepEqual(errorsOf(g), [], name + ': no errors on the guest');
         H.checkHealthy(world, [host, g], { minCompared: 10, fromTick: from, label: name + ' failure' });
+        const exact = world.compareHashes([host, g], from, 'tickExact');
+        assert.ok(exact.compared >= 10, name + ': exact states compared');
+        assert.deepEqual(exact.mismatches, [], name + ': fallback and worker exact states agree');
         rows.push(`${name} failure, a guest: on its page, in sync with the host's worker`);
     }
     console.log('PASS sim-worker-failure\n  ' + rows.join('\n  '));

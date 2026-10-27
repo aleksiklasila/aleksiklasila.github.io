@@ -282,7 +282,7 @@ function flickers(frames, field) {
                     rec = rec && '${mode}' === '3d' ? rec : null;
                     const res = orig.apply(this, arguments);
                     const fromLayer = '${mode}' === '3d' && rec && layerAlpha === layerAlpha && Number.isFinite(rec[1]);
-                    ys.push([fromLayer ? (rec[0] + rec[1] * (1 - layerAlpha)) * TILE : kv().prevY + (kv().y - kv().prevY) * tickAlpha, tickAlpha, performance.now(), fromLayer ? 1 : 0]);
+                    ys.push([fromLayer ? (rec[0] + rec[1] * (1 - layerAlpha)) * TILE : kv().prevY + (kv().y - kv().prevY) * tickAlpha, tickAlpha, performance.now(), fromLayer ? 1 : 0, fromLayer ? rec[1] * TILE : kv().y - kv().prevY]);
                     return res;
                 };
                 for (let n = 0; n < 8; n++) {
@@ -298,15 +298,20 @@ function flickers(frames, field) {
             const ry = r.map(x => x[0]);
             // Reversals: consecutive steps in opposite directions (a path
             // may turn back; drawn motion may not flip frame to frame).
-            let first = ry.findIndex((y, i) => i > 0 && Math.abs(y - ry[i - 1]) > 0.01), back = 0, holds = 0, steps = 0, starved = 0, last = 0;
+            let first = ry.findIndex((y, i) => i > 0 && Math.abs(y - ry[i - 1]) > 0.01), back = 0, holds = 0, steps = 0, starved = 0, idle = 0, last = 0;
             for (let i = Math.max(1, first + 1); i < ry.length; i++) {
                 const dy = ry[i] - ry[i - 1];
-                if (Math.abs(dy) <= 0.01) { holds++; if (r[i][1] >= 1) starved++; continue; }
+                if (Math.abs(dy) <= 0.01) {
+                    // Collision/path waits can legitimately give a frame no
+                    // simulated motion. A renderer cannot interpolate that.
+                    if (Math.abs(r[i][4]) <= 0.01 && Math.abs(r[i - 1][4]) <= 0.01) { idle++; continue; }
+                    holds++; if (r[i][1] >= 1) starved++; continue;
+                }
                 steps++;
                 if (Math.abs(dy) > 0.05 && Math.abs(last) > 0.05 && Math.sign(dy) !== Math.sign(last)) back++;
                 last = dy;
             }
-            console.log(`  ${mode} repeated orders: ${steps} moving frames, ${holds} held (${starved} waiting for a late result), ${back} back; ${r.filter(x => x[3]).length} of ${r.length} positions from the unit layer's record`);
+            console.log(`  ${mode} repeated orders: ${steps} moving frames, ${holds} held (${starved} waiting for a late result), ${idle} simulation-idle, ${back} back; ${r.filter(x => x[3]).length} of ${r.length} positions from the unit layer's record`);
             if (process.env.DUMP_MOTION) console.log(r.map(x => x.map(v => +v.toFixed(2)).join(' ')).join(String.fromCharCode(10)));
             assert.ok(first >= 0 && steps > 40, `${mode}: the unit moves`);
             assert.ok(back <= 2, `${mode}: repeated orders make the unit jitter back and forth (${back} reversals)`);

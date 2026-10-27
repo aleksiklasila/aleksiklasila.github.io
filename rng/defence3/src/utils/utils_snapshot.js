@@ -150,7 +150,13 @@ const SNAP_FORMAT = 7;
 // is in reach.
 // 38: f32 SIMD tower distance ranking; resources reduced in fixed-point
 // batches; retired debt-penalty snapshot state is no longer applied.
-const SIM_RULES_REVISION = 38;
+// 39: interleaved navigation-profile builds retain their own graph/field
+// bindings; older builds could publish another profile's geometry.
+// Builder searches also resume queued stacks unlocked by max-level research.
+// Worker-failure fallback restores collision occupancy and navigation too.
+// 40: shared movement looks invalidate for wall edits beyond the source
+// neighborhood, so cache warmth and helper scheduling cannot change routes.
+const SIM_RULES_REVISION = 40;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -2501,10 +2507,11 @@ function snapDecodeState(S, options = null) {
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         // The navigation as the snapshot's peer has it (the same walls). Not
-        // on a page whose simulation runs in its worker (simClientEnabled: its
-        // copy of the world is for drawing; it has no kernels, and the worker
-        // restores its own): a join or host change there threw.
-        const pageOnly = typeof simClientEnabled !== 'undefined' && simClientEnabled;
+        // A healthy worker owns its kernels; the page only draws its world.
+        // After worker failure the page simulates and must restore these too.
+        const pageOnly = typeof simClientEnabled !== 'undefined' && simClientEnabled
+            && !(typeof _simWasmWorkerFailed === 'function' && _simWasmWorkerFailed())
+            && !(typeof _simClientPageSimulates === 'function' && _simClientPageSimulates());
         if (!pageOnly && typeof occupancyRebuild === 'function') occupancyRebuild();
         if (!pageOnly && typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
         if (!pageOnly && typeof navFieldsRestore === 'function') navFieldsRestore();

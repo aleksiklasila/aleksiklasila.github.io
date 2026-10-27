@@ -126,6 +126,7 @@ function navBuildStart(profile, wallLive, withCosts, W, H) {
 // everywhere), then the exit nodes (SIM_KERNEL_NAV_NODES) and their
 // numbering, now.
 function navBuildNodes(b) {
+    _navBuildBind(b);
     if (b.cost) {
         const P = _navBuildParams(b);
         P[2] = NAV_COST_ROWS; P[0] = 0;
@@ -143,6 +144,7 @@ function navBuildNodes(b) {
 // The same as a background chain (lane SIM_LANE_LONG): taken by
 // navBuildCollect, then navBuildNodesFinish.
 function navBuildNodesBackground(b) {
+    _navBuildBind(b);
     const lane = _navBuildLane(), stages = [];
     for (let pass = 0; pass < 2; pass++) {
         const P = _navStageParams(b, lane, pass);
@@ -196,10 +198,16 @@ function navBuildNodesFinish(b) {
 // The build's arrays for the kernels (a new build is bound once; helpers
 // get them before its first kernel runs, a tick later when staggered).
 function _navBuildBind(b) {
+    // Another profile may have built synchronously between these stages.
+    // Finish any reader before restoring this build's complete bindings.
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
     simParallelBind('navb.wall', b.wall); simParallelBind('navb.cost', b.cost || _navNoCost);
+    simParallelBind('navb.h', b.h); simParallelBind('navb.ns', b.ns); simParallelBind('navb.nsc', b.nsc);
     simParallelBind('navb.nt', b.nodeTile); simParallelBind('navb.nb', b.nodeBase); simParallelBind('navb.np', b.nodePair);
     simParallelBind('navb.fields', b.fields);
     simParallelBind('navb.partL', b.partL); simParallelBind('navb.partN', b.partN);
+    simParallelBind('navb.adjN', b.adjN); simParallelBind('navb.adjS', b.adjStart);
+    simParallelBind('navb.adjA', b.adjA); simParallelBind('navb.adjC', b.adjC); simParallelBind('navb.adjMax', b.adjMax);
 }
 const _navNoCost = new Uint8Array(0);
 // A kernel's parameters: the build's (P[3..11]); the caller sets the range
@@ -221,6 +229,7 @@ function _navBuildLane() { return typeof SIM_LANE_LONG === 'number' ? SIM_LANE_L
 // SIM_KERNEL_NAV_GRAPH mode 0), as a background chain: collected by
 // navBuildCollect before the next stage.
 function navBuildLocalBackground(b) {
+    _navBuildBind(b);
     const lane = _navBuildLane();
     let P = _navStageParams(b, lane, 0);
     P[0] = 0; P[1] = b.k; P[2] = NAV_LOCAL_PER_JOB;
@@ -232,6 +241,7 @@ const NAV_PARTS_PER_JOB = 16;
 // The graph's edges (SIM_KERNEL_NAV_GRAPH mode 1, after navBuildGraphAlloc)
 // and the parts, as a background chain.
 function navBuildGraphBackground(b) {
+    _navBuildBind(b);
     const lane = _navBuildLane();
     let P = _navStageParams(b, lane, 0);
     P[0] = 0; P[1] = b.k; P[2] = NAV_GRAPH_PER_JOB; P[12] = 1;
@@ -241,6 +251,7 @@ function navBuildGraphBackground(b) {
 }
 // The parts now (a build made at once), and what follows from them.
 function navBuildParts(b) {
+    _navBuildBind(b);
     if (b.nc > 0) {
         const P = _navBuildParams(b);
         P[0] = 0; P[1] = b.nc; P[2] = NAV_PARTS_PER_JOB;
@@ -292,6 +303,7 @@ function navBuildPartsFinish(b) {
 function navBuildCollect() { simParallelBackgroundWait(_navBuildLane()); }
 // Local fields of the nodes (Dijkstra inside the cluster from each), now.
 function navBuildLocal(b) {
+    _navBuildBind(b);
     if (b.k <= 0) return;
     const P = _navBuildParams(b);
     P[0] = 0; P[1] = b.k; P[2] = NAV_LOCAL_PER_JOB;
@@ -320,6 +332,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_COST] = function (R, P, chunk) { _simRust(_navCostW, 
 // the border crossings (the step cost of the tile entered), now: the edge
 // counts, their places, the edges.
 function navBuildGraph(b) {
+    _navBuildBind(b);
     if (b.k > 0) {
         const P = _navBuildParams(b);
         P[0] = 0; P[1] = b.k; P[2] = NAV_GRAPH_PER_JOB; P[12] = 0;
@@ -335,6 +348,7 @@ function navBuildGraph(b) {
 }
 // Each node's first edge (adjStart: the counts summed) and the edge arrays.
 function navBuildGraphAlloc(b) {
+    _navBuildBind(b);
     const k = b.k, N = b.adjN, adjStart = _navArr(Int32Array, k + 1);
     let e = 0;
     for (let i = 0; i < k; i++) { adjStart[i] = e; e += N[i]; }
@@ -403,6 +417,7 @@ function navAtlasBuild(b) {
 // (bg) a chain on the build's lane.
 function navAtlasStart(b, bg) {
     if (!NAV_ATLAS || !(b.np > 0) || typeof simParallelRun !== 'function') return null;
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
     const { W, H, C, cw, ch, nc, np, k, nodePair, nodePart, partCluster } = b;
     const bw = Math.ceil(W / 8), bh = Math.ceil(H / 8), nb = bw * bh;
     const bm = _navArr(Uint32Array, nb * 2), bc = _navArr(Uint8Array, W * H), cb = _navArr(Uint16Array, nb), cn = _navArr(Int32Array, nc);
@@ -502,6 +517,7 @@ function navAtlasStart(b, bg) {
 // navAtlasStart's kernels), now or (bg) on the build's lane.
 function navAtlasTables(A, bg) {
     if (!A) return;
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
     const { nc, cn } = A;
     const co = _navArr(Int32Array, nc + 1);
     for (let c = 0; c < nc; c++) co[c + 1] = co[c] + cn[c] * cn[c];
