@@ -15,7 +15,7 @@ assert.equal(teams.length,helperCounts.length,'one team per peer');
 assert.ok(teamCount>=2&&teams.every(t=>Number.isInteger(t)&&t>=0&&t<teamCount),'contiguous teams starting at zero');
 const legacyCollisions=process.argv.includes('--legacy-collisions');
 const out=path.resolve(process.argv.find(a=>a.startsWith('--out='))?.slice(6)||'tests/test-runs/multiplayer-checkerboard/latest.json');
-if(process.argv.includes('--trace')){process.env.DIVTRACE='2';process.env.DIVTRACE_TICKS='4';process.env.DIVTRACE_FROM=String(num('trace-from',0));}
+if(process.argv.includes('--trace')){process.env.DIVTRACE||='2';process.env.DIVTRACE_TICKS||='4';process.env.DIVTRACE_FROM||=String(num('trace-from',0));}
 globalThis.self={crossOriginIsolated:true};
 const H=require('./net-harness.cjs'),chaos=require('./chaos-spikes-scenario.cjs');
 const data=JSON.parse(fs.readFileSync(path.join(__dirname,'chaos-mega-1000.json')));
@@ -53,7 +53,7 @@ fs.writeFileSync(out+'.jsonl','');
 const state=i=>i.eval(`(()=>{const roles={};for(const u of units)if(u.workerType){const r=roles[u.workerType]||(roles[u.workerType]={count:0,assigned:0,carrying:0});r.count++;if(u.workerTarget)r.assigned++;if(u.carryingValue||u.builderHasMaterial||u.healerHasMaterial)r.carrying++;}
  return {name:${JSON.stringify(i.name)},tick:currentTick,units:units.length,work:{...__scratch.stressWork},actionKinds:{...__scratch.actionKinds},roles,depletedMines:__scratch.stressMines?.filter(([m,key])=>m[key]<=0).length,desyncs:netCounters.desyncsDetected,patches:${i.patchesApplied},snapshots:${i.snapshotsApplied},heap:simHeapStats(),occupancy:occupancyAudit(),gameOver};})()`);
 function persist(status,error){fs.writeFileSync(out,JSON.stringify({status,error:String(error?.stack||error||''),count,map,mapType,networkName,structures,ticks,dk,helperCounts,teams,legacyCollisions,options,cleanComparisons,recovery,bursts,rows,states:all?.map(state),hashes:all?.map(i=>({name:i.name,fast:[...i.tickHashes],exact:[...i.tickExact],parts:[...i.tickParts]}))},null,2));
- if(error&&process.argv.includes('--trace'))fs.writeFileSync(out+'.trace.json.gz',require('node:zlib').gzipSync(JSON.stringify(all.map(i=>({name:i.name,trace:[...(i.scratch.div||[])]}))),{level:1}));}
+ if(error&&process.env.DIVTRACE)fs.writeFileSync(out+'.trace.json.gz',require('node:zlib').gzipSync(JSON.stringify(all.map(i=>({name:i.name,trace:[...(i.scratch.div||[])],near:i.scratch.near}))),{level:1}));}
 function check(){
  for(const i of all)assert.deepEqual(i.errors.map(e=>String(e.stack||e)),[],i.name+' threw');
  for(const field of ['tickHashes','tickExact']){

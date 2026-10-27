@@ -160,7 +160,9 @@ const SNAP_FORMAT = 7;
 // retention; weaker subsequent effects cannot inherit a peer-local value.
 // 42: worker return-site brains read a shared snapshot at the start of the
 // event phase. Newly completed spawners become candidates next brain batch.
-const SIM_RULES_REVISION = 42;
+// 43: full player/type stat rebuilds publish native effective rows and
+// invalidate unit stat versions, as individual research updates do.
+const SIM_RULES_REVISION = 43;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -2028,14 +2030,13 @@ function _snapEnsureStatMaps() {
         else for (let pid of stale) _snapRebuildStatsInPlace(pid);
         ctx.statMapsRebuilt = stale.length;
         ctx.statMapsStale = stale;
-        // Units of a player whose tables were made again here are behind
-        // them (as after a research of its own): each takes them at its next
+        // The rebuild marks units of these players behind their tables
+        // (as after research): each takes them at its next
         // refresh. A unit this restore does not carry kept what it took from
         // the tables as they were (a research this peer alone had counted:
         // its units' max energy stayed doubled after the repair, unhashed,
         // and they stood in the healers' lists for good). A unit the restore
         // carries has its own flag (effStatsAppliedSync).
-        if (typeof unitStatsTablesChanged === 'function') for (let pid of stale) unitStatsTablesChanged(pid);
     }
 }
 

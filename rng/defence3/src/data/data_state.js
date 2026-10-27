@@ -1091,8 +1091,8 @@ function structRowAttach(o) {
 }
 // The match's structure rows, allocated at its start (startGame): a share of
 // STRUCT_RESERVE_BYTES for each class, no more rows than the map has tiles.
-// Past it, retired rows are reused early, then the table grows (counted in
-// structRowStats.grown: a budget too small for the match).
+// Past it, the table grows (counted in structRowStats.grown). Retired rows
+// remain readable until their deterministic expiry tick on every peer.
 const STRUCT_RESERVE_BYTES = 256 << 20;
 const STRUCT_RESERVE_SHARE = { Tower: 0.4, FloorItem: 0.25, Barrack: 0.1, CollectorSpawner: 0.04, AstarSpawner: 0.04, SalvagerSpawner: 0.03, BuilderSpawner: 0.03, HealerSpawner: 0.03, ResearchSpawner: 0.04, GoldMine: 0.02, AstarMine: 0.02 };
 function _sRowBytes(T) {

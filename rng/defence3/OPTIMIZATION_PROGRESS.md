@@ -2226,7 +2226,7 @@ per-class table shares do not follow the per-player limit exactly (a single
 shared structure table would); the global startup memory budget across units,
 structures and projectiles is still to be designed.
 
-### Open issues at the end of this session (continue here)
+### Open issues at the end of the 2026-10-27 session
 
 1. **Four-team checkerboard recovery diverges at 320 ticks (pre-existing).**
    `node tests/multiplayer-checkerboard-chaos.cjs --units=18000 --map=256

@@ -2502,6 +2502,17 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
 function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
     if (!ensurePrecomputedStatsMap()) return [];
 
+    // Flat stat entries are rewritten in place. Publish those changes to
+    // native rows too: otherwise a snapshot restore attaches fresh rows
+    // while the other peers keep moving with the old numeric stats.
+    _precomputedStatsVersion++;
+    const publishUnits = playerId => {
+        if (typeof unitStatsTablesChanged === 'function') unitStatsTablesChanged(playerId);
+        if (typeof effSharedTablesChanged === 'function') {
+            for (const key in PRECOMPUTED_STATS_MAP_PLAYER[playerId].unit) effSharedTablesChanged(playerId, key);
+        }
+    };
+
     let targetIds = [];
     if (Number.isFinite(targetPlayerId)) {
         targetIds.push(Math.max(0, Math.floor(targetPlayerId)));
@@ -2531,6 +2542,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
                 for (let key in template[kind]) copy[kind][key] = template[kind][key].map((entry,level) => entry ? _flatThingStatEntry(playerId,kind,key,level,{...entry}) : entry);
             }
             PRECOMPUTED_STATS_MAP_PLAYER[playerId] = copy;
+            publishUnits(playerId);
             if (typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
             continue;
         }
@@ -2548,6 +2560,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
             }
         }
         PRECOMPUTED_STATS_MAP_PLAYER[playerId] = playerEntry;
+        publishUnits(playerId);
         if (signature !== null) builtBySignature.set(signature, playerEntry);
         if (typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
     }
@@ -2634,6 +2647,8 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
         : _normalizePlayerPrecomputedBuildingKey(key);
 
     if (!statKey) {
+        _precomputedStatsVersion++;
+        if (branch === 'unit' && typeof unitStatsTablesChanged === 'function') unitStatsTablesChanged(pid, normalizedKey);
         if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
         if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
         let levels = playerEntry[branch][normalizedKey];
@@ -2642,6 +2657,7 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
                 ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
                 : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
         }
+        if (branch === 'unit' && typeof effSharedTablesChanged === 'function') effSharedTablesChanged(pid, normalizedKey);
         return levels;
     }
     // (Building stats: the movement kernel's trap strengths, its owner's.)
