@@ -1325,18 +1325,10 @@ const RESEARCH_STAT_LABELS = {
 
 const PRECOMPUTED_UNIT_STAT_KEYS = ['trainingTime', 'energy', 'atk', 'atkCd', 'speed', 'visionRange', 'attackRange', 'watchDuration', 'gatherPerTrip', 'builderDps', 'healerDps', 'researcherDps', 'transferCooldown', 'astarCost', 'upKeep'];
 const PRECOMPUTED_BUILDING_STAT_KEYS = ['maxEnergy', 'popCap', 'damage', 'blastDamage', 'blastRadius', 'cd', 'spawnCd', 'unitPrice', 'visionRange', 'attackRange', 'multiplier', 'burnDps', 'burnDuration', 'poisonDps', 'poisonDuration', 'freezeDps', 'freezeDuration', 'wetDuration', 'sandDuration', 'watchDuration', 'efficiency', 'upKeep', 'drainRate'];
-const RESOURCE_PRECOMPUTED_STAT_MAP = {
-    astar: {
-        unit: ['speed'],
-        building: []
-    }
-};
-
 function getSpawnedUnitTypeForBuildingKey(key) { return THING_STATS[key]?.spawns || null; }
 
 let PRECOMPUTED_STATS_MAP = { unit: {}, building: {} };
 let PRECOMPUTED_STATS_MAP_PLAYER = [];
-let PLAYER_RESOURCE_STAT_MULTIPLIERS = [];
 let PRECOMPUTED_STATS_READY = false;
 
 // Spatial hash (10x10 tile chunks)

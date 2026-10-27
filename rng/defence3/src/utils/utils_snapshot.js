@@ -148,7 +148,9 @@ const SNAP_FORMAT = 7;
 // walks over it; units on it when it is done are pushed off); moving shooters
 // drive-by fire at hostile structures (turrets, traps, buildings) when no unit
 // is in reach.
-const SIM_RULES_REVISION = 37;
+// 38: f32 SIMD tower distance ranking; resources reduced in fixed-point
+// batches; retired debt-penalty snapshot state is no longer applied.
+const SIM_RULES_REVISION = 38;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -542,7 +544,7 @@ function _snapHashGlobals(slice = -1, round = 0) {
     h = Math.imul(h ^ resigned, 16777619);
     for (let t of (activeTeamIds || [])) h = Math.imul(h ^ ((t | 0) + 1), 16777619);
     h = _snapHV(h, !!_adjacencyPassiveRefreshMode);
-    h = Math.imul(h ^ _pendingResourceStatRebuilds.size, 16777619);
+    h = Math.imul(h, 16777619); // Reserved zero word from the retired debt mechanic.
     h = _snapHV(h, !!_adjacencyNeedsRecalc);
     h = _snapHV(h, !!_adjacencyDirtyAll);
     h = _snapHDeep(h, _adjacencyLastRecalcTick, 1);
@@ -1576,12 +1578,6 @@ function _snapEncodeGlobals() {
         // can still win): peers joining later must not work it out from the
         // lobby roster.
         teams: Array.from(activeTeamIds || [], _snapE),
-        pendingStatRebuilds: Array.from(_pendingResourceStatRebuilds),
-        // Per player and stockpile the penalty multiplier last seen (what a
-        // spend compares with) and the one its stat tables were built with
-        // (data_dynamic.js _statAppliedMult): a restored peer's tables follow
-        // these, not its own history.
-        statMult: _snapStatMultEncode(),
         // The upkeep breakdown of the second in progress (built over its ticks).
         upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
         // Move orders still being applied in slices (see runQueuedOrders).
@@ -1975,24 +1971,8 @@ function _snapStatMapSignature(pid) {
     let p = players[pid];
     if (!p) return '';
     try {
-        return JSON.stringify([p.researchLevels || null, p.researchMultipliers || null, p.resourceStatMultipliers || null, p.boosts || null, p.boostOn || null]);
+        return JSON.stringify([p.researchLevels || null, p.researchMultipliers || null, p.boosts || null, p.boostOn || null]);
     } catch { return ''; }
-}
-
-function _snapStatMultKeys() {
-    return (typeof RESOURCE_TYPE_LIST !== 'undefined' ? RESOURCE_TYPE_LIST : []).map(cfg => String(cfg.stockpileKey || cfg.key || '')).filter(Boolean);
-}
-function _snapStatMultEncode() {
-    if (typeof _statAppliedGet !== 'function') return null;
-    let keys = _snapStatMultKeys();
-    return players.map((_, pid) => keys.map(k => [Math.max(1, Number((PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || {})[k]) || 1), _statAppliedGet(pid, k)]));
-}
-// Whether this peer's tables for pid were built as the snapshot's were.
-function _snapStatMultSame(pid, rows) {
-    if (!Array.isArray(rows)) return true;
-    let keys = _snapStatMultKeys();
-    for (let i = 0; i < keys.length && i < rows.length; i++) if (_statAppliedGet(pid, keys[i]) !== rows[i][1]) return false;
-    return true;
 }
 
 // A player's tables rebuilt into its existing entry objects: units and
@@ -2029,25 +2009,13 @@ function _snapEnsureStatMaps() {
     ctx.statMapReady = true;
     // (The restored players' count: a peer that started its world for another team list holds more tables.)
     if (PRECOMPUTED_STATS_MAP_PLAYER.length > players.length) PRECOMPUTED_STATS_MAP_PLAYER.length = players.length;
-    let target = Array.isArray(ctx.statMult) && typeof _statAppliedGet === 'function' ? ctx.statMult : null;
     let stale = [];
     for (let pid = 0; pid < players.length; pid++) {
-        if (!PRECOMPUTED_STATS_MAP_PLAYER[pid] || ctx.statSignaturesBefore[pid] !== _snapStatMapSignature(pid)
-            || (target && !_snapStatMultSame(pid, target[pid]))) stale.push(pid);
+        if (!PRECOMPUTED_STATS_MAP_PLAYER[pid] || ctx.statSignaturesBefore[pid] !== _snapStatMapSignature(pid)) stale.push(pid);
     }
     if (stale.length > 0) {
         if (PRECOMPUTED_STATS_MAP_PLAYER.length !== players.length || stale.length === players.length) rebuildPrecomputedStatsMapPlayer();
         else for (let pid of stale) _snapRebuildStatsInPlace(pid);
-        // (Rebuilt with the current multipliers; the snapshot's tables may
-        // have been behind them for a stockpile (a rebuild pending).)
-        if (target) {
-            let keys = _snapStatMultKeys();
-            for (let pid = 0; pid < players.length; pid++) {
-                let rows = target[pid];
-                if (!Array.isArray(rows)) continue;
-                for (let i = 0; i < keys.length && i < rows.length; i++) if (_statAppliedGet(pid, keys[i]) !== rows[i][1]) rebuildPrecomputedStatsMapPlayerResource(pid, keys[i], rows[i][1]);
-            }
-        }
         ctx.statMapsRebuilt = stale.length;
         ctx.statMapsStale = stale;
         // Units of a player whose tables were made again here are behind
@@ -2058,16 +2026,6 @@ function _snapEnsureStatMaps() {
         // and they stood in the healers' lists for good). A unit the restore
         // carries has its own flag (effStatsAppliedSync).
         if (typeof unitStatsTablesChanged === 'function') for (let pid of stale) unitStatsTablesChanged(pid);
-    }
-    // What a spend compares with, as the snapshot's peer had it.
-    if (target) {
-        let keys = _snapStatMultKeys();
-        for (let pid = 0; pid < players.length; pid++) {
-            let rows = target[pid];
-            if (!Array.isArray(rows)) continue;
-            let seen = PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || (PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {});
-            for (let i = 0; i < keys.length && i < rows.length; i++) seen[keys[i]] = rows[i][0];
-        }
     }
 }
 
@@ -2144,8 +2102,7 @@ function snapDecodeState(S, options = null) {
     _snapDec = {
         byRef: new Map(), pool, poolMemo: new Array(pool.length), statMemo: new Map(), statMapReady: false,
         statSignaturesBefore, missingRefs: 0, statMapsRebuilt: 0, lazyIndex: {}, finals: null,
-        partial: !!S.partial, unitFind: new Map(),
-        statMult: S.g && Array.isArray(S.g.statMult) ? S.g.statMult : null
+        partial: !!S.partial, unitFind: new Map()
     };
     let ctx = _snapDec;
     let changed = collect ? [] : null;
@@ -2387,10 +2344,6 @@ function snapDecodeState(S, options = null) {
         if (Array.isArray(g.astarBudget)) for (let i = 0; i < g.astarBudget.length && i < astarNodeBudgetRemainingByPlayer.length; i++) astarNodeBudgetRemainingByPlayer[i] = _snapD(g.astarBudget[i]);
         resignedTeams = new Set((g.resigned || []).map(_snapD));
         if (Array.isArray(g.teams) && g.teams.length > 0) activeTeamIds = g.teams.map(_snapD);
-        if (Array.isArray(g.pendingStatRebuilds)) {
-            _pendingResourceStatRebuilds.clear();
-            for (let k of g.pendingStatRebuilds) _pendingResourceStatRebuilds.add(k);
-        }
         if (Array.isArray(g.areaState)) {
             let was = new Map();
             for (let ar of (areas || [])) if (ar) { was.set(ar, ar.active + ':' + ar.multiplierLevel); ar.active = false; ar.multiplierLevel = 0; }

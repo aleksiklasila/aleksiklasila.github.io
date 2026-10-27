@@ -278,12 +278,12 @@ impl MoveGrid {
         let ptr=|i:usize|waddr(*a.add(512+i) as u32);
         let g=Grid{bits:ptr(0) as *mut u32,mask:ptr(1) as *const i8,
             w:get(0),h:get(1),stride:get(2),cell:get(3),planes:get(4),plane:get(2)*get(1),diag:(a as *mut u32).add(1536)};
-        let stats=(ptr(28) as *mut i32).add(job as usize*8);
+        let stats=(ptr(28) as *mut i32).add(job as usize*16);
         Self{g,rec:ptr(2) as *mut i32,stats,
             blockq:get(7)*get(15)*get(14),bx,by,
             ix_slot:ptr(24) as *const i32,ix_start:ptr(25) as *const i32,ix_count:ptr(26) as *const i32,ix_stamp:ptr(27) as *const i32,
             cw:get(9),ch:get(10),epoch:get(11),chq:get(15)*get(14),
-            xsw:if *a.add(512+34)==0{core::ptr::null_mut()}else{(ptr(34) as *mut i32).add(job as usize*(XSWAP_CAP+1))},
+            xsw:if *a.add(512+34)==0{core::ptr::null_mut()}else{(ptr(34) as *mut i32).add(job as usize*48)},
             lc:core::ptr::null(),lcx:0,lcy:0,lcn:0}
     }
     /// The chunk records of this block and one chunk around it into buf (room for 2 words a cell, `cells` cells): the tick-start
@@ -337,6 +337,23 @@ impl MoveGrid {
     pub(super) unsafe fn slot(&self,i:i32)->i32{*self.ix_slot.add(i as usize)}
     pub(super) fn chunk_q(&self)->i32{self.chq}
     pub(super) unsafe fn pos(&self,s:usize)->(i32,i32){let p=self.rec.add(s*4);(*p,*p.add(1))}
+    /// Gather four packed occupancy records, transpose hot fields to SoA,
+    /// and reject distant swap candidates together. A one-Q8-unit margin
+    /// keeps this f32 broad phase conservative; exact f64 tests follow.
+    #[inline(always)]
+    pub(super) unsafe fn swap_candidates4(&self,slots:&[i32;4],ox:i32,oy:i32,rq:i32)->u32 {
+        let load=|s:i32|if s<0{i32x4_splat(0)}else{v128_load(self.rec.add(s as usize*4) as *const v128)};
+        let (a,b,c,d)=(load(slots[0]),load(slots[1]),load(slots[2]),load(slots[3]));
+        let ab=i32x4_shuffle::<0,4,1,5>(a,b);let cd=i32x4_shuffle::<0,4,1,5>(c,d);
+        let x=i32x4_shuffle::<0,1,4,5>(ab,cd);let y=i32x4_shuffle::<2,3,6,7>(ab,cd);
+        let m=i32x4(i32x4_extract_lane::<2>(a),i32x4_extract_lane::<2>(b),i32x4_extract_lane::<2>(c),i32x4_extract_lane::<2>(d));
+        let radius=i32x4_add(i32x4_mul(v128_and(m,i32x4_splat(255)),i32x4_splat(self.g.cell)),i32x4_splat(rq+97));
+        let dx=f32x4_convert_i32x4(i32x4_sub(x,i32x4_splat(ox)));let dy=f32x4_convert_i32x4(i32x4_sub(y,i32x4_splat(oy)));
+        let r=f32x4_convert_i32x4(radius);
+        let ok=v128_and(i32x4_ne(v128_and(m,i32x4_splat(255<<16)),i32x4_splat(0)),
+            f32x4_le(f32x4_add(f32x4_mul(dx,dx),f32x4_mul(dy,dy)),f32x4_mul(r,r)));
+        i32x4_bitmask(ok) as u32
+    }
     /// Whether (x, y) lies in this job's block (its units' tick-start tiles).
     pub(super) fn owns(&self,x:i32,y:i32)->bool{
         x>=self.bx*self.blockq&&x<(self.bx+1)*self.blockq&&y>=self.by*self.blockq&&y<(self.by+1)*self.blockq

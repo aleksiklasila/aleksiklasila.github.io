@@ -103,7 +103,20 @@ function _unitEvOrderKey(t, id) {
     h ^= h >>> 13;
     return (h >>> 11) * 2147483648 + ((id | 0) & 0x7fffffff);
 }
-let _unitEvList = null, _unitEvCnt = null, _unitEvKey = new Float64Array(1024), _unitEvEnt = new Int32Array(1024), _unitEvOrd = new Uint32Array(1024);
+let _unitEvList = null, _unitEvCnt = null;
+const _unitEvSort = { cap: 0, ent: null };
+function _unitEventSortReserve(n) {
+    if (_unitEvSort.cap >= n) return;
+    const m = simReserveCap(n, 1024);
+    // The helper binding protocol supports Float64Array; Rust treats these
+    // opaque eight-byte key buffers as u64 (JavaScript never reads them).
+    for (const [key, Type] of [['sorted', Int32Array], ['temp', Int32Array], ['keys', Float64Array], ['keytmp', Float64Array]]) {
+        const old = _unitEvSort[key], a = _unitEvSort[key] = simSharedArray(Type, m);
+        simParallelBind('ev.' + key, a);
+        if (old) simHeapFree(old);
+    }
+    _unitEvSort.cap = m; _unitEvSort.ent = _unitEvSort.sorted;
+}
 // (Events of no kind for a unit that is not a worker: none expected; counted.)
 let unitEventsStray = 0;
 function unitEventsRun() {
@@ -114,33 +127,25 @@ function unitEventsRun() {
     const c = S.columns, owners = S.owners, per = UNIT_EVENTS_PER_JOB, chunks = Math.ceil(ns / per);
     // (The tick's shared phase list: sim_unit_state.js simPhaseList.)
     _unitEvList = simPhaseList(chunks * per);
-    if (!_unitEvCnt || _unitEvCnt.length < chunks) { _unitEvCnt = simSharedArray(Int32Array, Math.max(64, chunks * 2)); simParallelBind('ev.cnt', _unitEvCnt); }
+    // Each helper owns a cache line, including the final compacted count.
+    if (!_unitEvCnt || _unitEvCnt.length < (chunks + 1) * 16) { const old = _unitEvCnt; _unitEvCnt = simSharedArray(Int32Array, Math.max(64, (chunks + 1) * 16)); simParallelBind('ev.cnt', _unitEvCnt); if (old) simHeapFree(old); }
     const P = _simParams;
     P[0] = ns; P[1] = per;
     simParallelRun(SIM_KERNEL_UNIT_EVENTS, chunks);
     const L = _unitEvList, CNT = _unitEvCnt;
     let n = 0;
-    for (let k = 0; k < chunks; k++) n += CNT[k];
+    for (let k = 0; k < chunks; k++) n += CNT[k * 16];
     if (n > 0) {
-        if (_unitEvKey.length < n) { const m = simReserveCap(n, 1024); _unitEvKey = new Float64Array(m); _unitEvEnt = new Int32Array(m); _unitEvOrd = new Uint32Array(m); }
-        const K = _unitEvKey, E = _unitEvEnt;
-        let j = 0;
-        for (let k = 0; k < chunks; k++) for (let i = k * per, e = i + CNT[k]; i < e; i++) {
-            const ent = L[i], u = owners[ent >> 3];
-            if (!u || u._si !== ent >> 3) continue;
-            K[j] = _unitEvOrderKey(gameTime, u.id); E[j] = ent; j++;
-        }
-        const ord = _unitEvOrd.subarray(0, j);
-        for (let i = 0; i < j; i++) ord[i] = i;
-        // The 52-bit ordering keys have heap-number-sized differences. The
-        // native sort boxes each comparator result; return small integers
-        // instead so busy worker ticks do not allocate per comparison.
-        ord.sort((a, b) => K[a] < K[b] ? -1 : K[a] > K[b] ? 1 : 0);
+        _unitEventSortReserve(n);
+        P[2] = gameTime; P[3] = chunks;
+        _simRust(_simUnitEventSortW, P, 0, 'k_unit_event_sort', 'UNIT_EVENT_SORT');
+        const E = _unitEvSort.ent, j = CNT[chunks * 16];
         _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
         let over = 0;
+        playerResourceBatchBegin();
         try {
             for (let i = 0; i < j; i++) {
-                const ent = E[ord[i]], s = ent >> 3, u = owners[s];
+                const ent = E[i], s = ent >> 3, u = owners[s];
                 if (!u || u.dead) continue;
                 // (Where it stood, for its interpolation, unless the kernel moved it.)
                 if (c.mvOut[s] === 0) { c.prevX[s] = c.x[s]; c.prevY[s] = c.y[s]; }
@@ -150,7 +155,7 @@ function unitEventsRun() {
                 }
                 _unitEvent(u, c, s, ent & 7);
             }
-        } finally { _workerEventsLeft = Infinity; }
+        } finally { playerResourceBatchEnd(); _workerEventsLeft = Infinity; }
     }
     // (Those whose energy ran out: dead now.)
     P[0] = ns; P[1] = UNIT_DEAD_PER_JOB;

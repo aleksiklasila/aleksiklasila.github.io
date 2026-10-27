@@ -8,6 +8,22 @@
 //! chunk).
 use super::*;
 
+/// Two independent fixed-point stockpiles per player. Exact integer sums
+/// within JavaScript's existing safe-integer range; f32 would lose credits.
+/// One f64x2 operation updates both resources, preserving per-resource order
+/// and the maximum reached between deposits and spends.
+#[no_mangle]
+pub unsafe extern "C" fn resource_reduce(data:u32,n:i32,state:u32) {
+    let data=waddr(data) as *const f64;let state=waddr(state) as *mut f64;
+    let mut balance=v128_load(state as *const v128);
+    let mut peak=v128_load(state.add(2) as *const v128);
+    for i in 0..n.max(0) as usize {
+        balance=f64x2_add(balance,v128_load(data.add(i*2) as *const v128));
+        peak=f64x2_max(peak,balance);
+    }
+    v128_store(state as *mut v128,balance);v128_store(state.add(2) as *mut v128,peak);
+}
+
 pub struct K {
     w: *const i32,
     f: *const f64,
@@ -1581,7 +1597,40 @@ pub unsafe extern "C" fn k_unit_events(a: u32, chunk: i32) {
         }
         q += 16;
     }
-    s(cnt, chunk as usize, n as i32);
+    s(cnt, chunk as usize * 16, n as i32);
+}
+
+/// Compact event jobs and stable radix-sort their exact 52-bit (hash, id)
+/// keys. Five 11-bit passes replace object accessor reads and JS comparator
+/// calls. Scratch is proportional to emitted events, not the unit capacity.
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_event_sort(a:u32,_chunk:i32) {
+    let k=K::new(waddr(a) as *const i32);
+    let (list,cnt,id,live)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<u8>(3));
+    let (mut out,mut tmp)=(k.p::<i32>(4),k.p::<i32>(5));
+    let (mut keys,mut kt)=(k.p::<u64>(6),k.p::<u64>(7));
+    let mut n=0usize;let tick=k.i(2) as u32;
+    for c in 0..k.i(3) as usize {
+        for i in 0..*cnt.add(c*16) as usize {
+            let e=*list.add(c*k.i(1) as usize+i);let s=(e>>3) as usize;
+            if *live.add(s)==0 {continue;}
+            let uid=*id.add(s) as u32;
+            let mut h=(tick^0x2545f491).wrapping_mul(0x9e3779b1)^uid.wrapping_add(0x632be5ab).wrapping_mul(0x85ebca6b);
+            h=(h^(h>>15)).wrapping_mul(0xc2b2ae35);h^=h>>13;
+            *keys.add(n)=((h>>11) as u64)<<31 | (uid&0x7fffffff) as u64;
+            *out.add(n)=e;n+=1;
+        }
+    }
+    for pass in 0..5 {
+        let shift=pass*11;let mut counts=[0usize;2048];
+        for i in 0..n {counts[((*keys.add(i)>>shift)&2047) as usize]+=1;}
+        let mut sum=0;for c in counts.iter_mut(){let v=*c;*c=sum;sum+=v;}
+        for i in 0..n {let key=*keys.add(i);let b=((key>>shift)&2047) as usize;let o=counts[b];counts[b]+=1;*kt.add(o)=key;*tmp.add(o)=*out.add(i);}
+        core::mem::swap(&mut out,&mut tmp);core::mem::swap(&mut keys,&mut kt);
+    }
+    // An odd number of passes leaves the result in the temporary buffers.
+    core::ptr::copy_nonoverlapping(out,k.p::<i32>(4),n);
+    *cnt.add(k.i(3) as usize*16)=n as i32;
 }
 
 /// SIM_KERNEL_UNIT_RETIRE: the tick's end: movement outputs cleared (slots

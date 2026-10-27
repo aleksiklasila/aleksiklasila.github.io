@@ -80,6 +80,7 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
   'navTick','navFieldsFlush','compactRemovedUnits','unitHitsResolve','statusPrepassRun','runQueuedOrders','visCoverHoldEnd','updateAllPlayerVisibility','unitEventsRun',
   'towersTick','_towerAcqPrepare','projectilesBegin','projectilesAdvance','projectilesEnd','laserBeamsTick','spawnerStructuresTick','adjacencyLaneStep','unitRetirePrepare',
   'updateVisibility','spatialIndexPrebuild','_upKeepSecond','ensureLaserConnections','healerCandidatesStep','pathRegionsWarm',
+  'workerSearchTierStep','_wswBuild','flushPendingResourceStatRebuilds','resourceTick','researchDrainTick','shrineTick','recomputePlayerPopCaps',
   ...${JSON.stringify((process.env.SUBPHASES||'').split(',').filter(Boolean))}])) {
   let f;try{f=eval(name);}catch{continue;}if(typeof f!=='function')continue;
   // Per-unit diagnostics aggregate durations without allocating timeline
@@ -128,6 +129,7 @@ for(let i=0;i<ticks;i++){
  const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
  row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed})`);
+ row.tileJournal=inst.eval(`({base:_teLogBase,end:typeof _teLogEnd==='number'?_teLogEnd:_teLogBase+_teLog.length,storageBytes:_teLog.byteLength||null})`);
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
  if(metrics){row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=require('node:v8').getHeapStatistics().used_heap_size/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and
@@ -140,7 +142,7 @@ for(let i=0;i<ticks;i++){
 function stats(rows){const a=rows.map(r=>r.ms).sort((a,b)=>a-b),mean=a.reduce((a,b)=>a+b,0)/a.length,tail=a.slice(Math.floor(a.length*.95));return{samples:a.length,mean,tps:1000/mean,p50:a[Math.floor(a.length*.5)],p95:a[Math.floor(a.length*.95)],p99:a[Math.floor(a.length*.99)],p999:a[Math.floor(a.length*.999)],worst5Mean:tail.reduce((n,v)=>n+v,0)/tail.length,max:a.at(-1)};}
 const steady=rows.slice(warmup);
 if(gcObserver){gcEntries.push(...gcObserver.takeRecords().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})));gcObserver.disconnect();for(const row of rows)row.gcMs=gcEntries.reduce((n,e)=>n+Math.max(0,Math.min(e.at+e.ms,row.at+row.wallMs)-Math.max(e.at,row.at)),0);}
-const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
+const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:typeof _unitEvSort!=="undefined"?[...new Set(Object.values(_unitEvSort))].reduce((n,a)=>n+(ArrayBuffer.isView(a)?a.byteLength:0),0):_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
 if(process.argv.includes('--hash'))result.hash=inst.eval('__exactStateHash()');
 result.layout=layout;result.towerMode=towerMode;
 result.tower=inst.eval(`typeof _towerAcq==='undefined'?null:({enabled:SIM_TOWER_WASM,typeOverrides:SIM_TOWER_TYPE_OVERRIDES,scratchBytes:Object.values(_towerAcq.arrays).reduce((n,a)=>n+a.byteLength,0)})`);

@@ -6,6 +6,7 @@ let SIM_OCCUPANCY_PLANES = 1, SIM_OCCUPANCY_SUBCELLS = 8, SIM_OCCUPANCY_BLOCK_TI
 // Per movement job: idle units it swapped with across its block's edge
 // (mv.rs traffic_swap; their index entries are moved after the phases).
 const SIM_OCCUPANCY_XSWAP = 32;
+const SIM_OCCUPANCY_XSWAP_STRIDE = 48; // 33 words rounded to cache lines.
 let _occ = null;
 // The footprint of a slot is one 16-byte record in occ.rec (Int32 x4: x, y, meta = radius | layer << 8 | active << 16 | need << 24; the fourth word spare):
 // the second stage's neighbour scans read one line a unit, not one for each of x, y, radius, layer and active.
@@ -27,9 +28,9 @@ function occupancyEnsure() {
         const block=Math.max(16,SIM_OCCUPANCY_BLOCK_TILES),bw=Math.ceil(CHUNKS_W/block),bh=Math.ceil(CHUNKS_H/block);
         _occ.config=simHeapArray(Int32Array,16);
         _occ.config.set([w,h,stride,_occ.cell,planes,bw,bh,block,0,CHUNKS_W,CHUNKS_H,_sxEpoch,GRID_W,GRID_H,TILE*8,CHUNK_SIZE]);
-        _occ.stats=simHeapArray(Int32Array,(bw*bh+1)*8);
+        _occ.stats=simHeapArray(Int32Array,(bw*bh+1)*16);
         _occ.offsets=simHeapArray(Int32Array,bw*bh+1);
-        _occ.xswap=simHeapArray(Int32Array,bw*bh*(SIM_OCCUPANCY_XSWAP+1));_occ.xswap.fill(0);
+        _occ.xswap=simHeapArray(Int32Array,bw*bh*SIM_OCCUPANCY_XSWAP_STRIDE);_occ.xswap.fill(0);
         for(const name of ['config','stats','offsets','xswap'])simParallelBind('occ.'+name,_occ[name]);
         _occ.mask=simHeapArray(Int8Array,33*65);_occ.mask.fill(-1);
         _occ.sizes=new Array(33).fill(0);
@@ -90,7 +91,7 @@ function occupancyPrepareMovement() {
     simParallelBind('occ.eslot',_sxESlot);simParallelBind('occ.start',_sxStart);simParallelBind('occ.count',_sxCount);simParallelBind('occ.stamp',_sxStamp);
     simParallelBind('occ.areaGrid',_spatialAreaGridFlat());
     C[11]=_sxEpoch;
-    O.stats.fill(0,bw*bh*8);
+    O.stats.fill(0,bw*bh*16);
     // Prefix sizes only reserve each spatial job's hit/post list. No units
     // are visited here; occupancy work happens at position writes in WASM.
     // (The blocks' counts on the helpers, summed up here: 4096 entries.)
@@ -112,11 +113,11 @@ function occupancyPrepareMovement() {
 // inputs all at once (each job cleared its own block's). The order within a
 // phase decides nothing: its blocks touch disjoint cells.
 function occupancyJobs(postc,sexc,chFix,W){
-    const O=_occ,C=O.config,bw=C[5],bh=C[6],jobs=bw*bh,F=O.offsets,k=SIM_OCCUPANCY_XSWAP+1;
+    const O=_occ,C=O.config,bw=C[5],bh=C[6],jobs=bw*bh,F=O.offsets,k=SIM_OCCUPANCY_XSWAP_STRIDE;
     if(!O.jobs||O.jobs.length<jobs+8){if(O.jobs)simHeapFree(O.jobs);O.jobs=simHeapArray(Int32Array,jobs+8);O.jobKeys=new Float64Array(jobs);}
     simParallelBind('occ.jobs',O.jobs);
     const J=O.jobs,K=O.jobKeys;
-    O.stats.fill(0,0,jobs*8);
+    O.stats.fill(0,0,jobs*16);
     let n=8;
     for(let p=0;p<4;p++){
         let m=0;J[p]=n-8;
@@ -135,7 +136,7 @@ function occupancyJobs(postc,sexc,chFix,W){
 // Idle units a movement job swapped with in a neighbouring block: their
 // tiles in the index (its own epilogue may have run before the swap).
 function occupancyAfterMovement(c) {
-    const O=_occ,X=O.xswap,jobs=O.config[5]*O.config[6],k=SIM_OCCUPANCY_XSWAP+1;
+    const O=_occ,X=O.xswap,jobs=O.config[5]*O.config[6],k=SIM_OCCUPANCY_XSWAP_STRIDE;
     for(let j=0;j<jobs;j++){const n=X[j*k];for(let i=1;i<=n;i++)spatialSlotUpdate(c,X[j*k+i]);}
 }
 // Whether a position write moves unit slot s through the grid: a unit in

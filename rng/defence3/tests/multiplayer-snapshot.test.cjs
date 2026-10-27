@@ -55,7 +55,9 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         g.eval(`(() => { const orig = _handleConnectionMessage; _handleConnectionMessage = (c, d) => { if (d && d.type === 'RESYNC_PATCH') __scratch.kinds.push((d.full ? 'full:' : 'delta:') + (d.payload.z ? 'z' : 'json')); return orig(c, d); }; })()`);
         await H.playFor(w, pair, 4000, { seed: 2 });
         const snapshots0 = g.snapshotsApplied;
-        g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 13; })()`);
+        // Corrupt the authoritative column: the public position setter can
+        // clip this move to zero against occupancy, leaving no divergence.
+        g.evalSim(`(() => { const u = units.find(u => !u.dead); u._us.x[u._si] += 13 * 8; })()`);
         let ok = await w.runUntil(() => g.patchesApplied >= 1, 15000, 20);
         assert.ok(ok, 'delta patch arrived over the compressed transport');
         g.eval(`resyncGuest.forceFull = true`);

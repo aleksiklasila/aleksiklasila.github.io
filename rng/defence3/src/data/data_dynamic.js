@@ -1,7 +1,6 @@
 "use strict";
 
 const RESOURCE_FIXED_POINT_SCALE = 1024;
-const RESOURCE_NEGATIVE_PENALTY_BASE = 3.5;
 
 function _toFixedResourceUnits(value) {
     let n = Number(value);
@@ -43,12 +42,12 @@ function refreshStartingResourcesPreviewPrecomputedStats() {
 }
 
 function _ensurePlayerResourceState(playerId) {
+    if (_resourceBatchActive) playerResourceBatchFlush();
     let pid = Math.max(0, Math.floor(playerId || 0));
     if (!players[pid]) return null;
     let player = players[pid];
     if (!player.resourceMaxValues || typeof player.resourceMaxValues !== 'object') player.resourceMaxValues = {};
     if (!player._resourceFixedValues || typeof player._resourceFixedValues !== 'object') player._resourceFixedValues = {};
-    if (!PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || typeof PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] !== 'object') PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] = {};
     for (let i = 0; i < RESOURCE_TYPE_LIST.length; i++) {
         const cfg = RESOURCE_TYPE_LIST[i];
         let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
@@ -64,164 +63,33 @@ function _ensurePlayerResourceState(playerId) {
         player[stockpileKey] = currentValue;
         if (!Number.isFinite(currentMax)) currentMax = Math.max(1, currentValue);
         player.resourceMaxValues[stockpileKey] = Math.max(1, currentMax, currentValue);
-        let multiplier = PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey];
-        if (!Number.isFinite(multiplier) || multiplier < 1) PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey] = 1;
     }
     return player;
 }
 
-// The debt as a share of the most ever held, in steps of
-// 1 / RESOURCE_PENALTY_STEP_DIV (the nearest step): the
-// stat tables are rebuilt when the step changes, not on every spend while
-// in debt (each rebuild sends every unit of the player through a stats
-// refresh).
-const RESOURCE_PENALTY_STEP_DIV = 16;
-function _getResourcePenaltySteps(currentValue, maxValue) {
-    let cur = Number(currentValue);
-    let maxSeen = Math.max(1, Number(maxValue) || 0);
-    if (!Number.isFinite(cur) || cur >= 0) return 0;
-    return Math.max(0, Math.round(Math.abs(cur) / maxSeen * RESOURCE_PENALTY_STEP_DIV) / RESOURCE_PENALTY_STEP_DIV);
-}
-
-function _getPlayerResourcePenaltyMultiplier(playerId, resourceKey) {
-    // A stockpile in debt no longer scales any stat (it switches the
-    // player's boosts of that resource off instead: boostTick below).
-    return 1;
-    let player = _ensurePlayerResourceState(playerId);
-    if (!player) return 1;
-    let stockpileKey = String(resourceKey || '');
-    if (!stockpileKey) return 1;
-    let maxSeen = Math.max(1, Number(player.resourceMaxValues && player.resourceMaxValues[stockpileKey]) || 0);
-    let currentValue = Number(player[stockpileKey]);
-    if (!Number.isFinite(currentValue) || currentValue >= 0) return 1;
-    let steps = _getResourcePenaltySteps(currentValue, maxSeen);
-    return Math.max(1, detPow(RESOURCE_NEGATIVE_PENALTY_BASE, steps));
-}
-
-function _hasExplicitResourceStatMapping(resourceKey, kind, statKey) {
-    let mapped = (((RESOURCE_PRECOMPUTED_STAT_MAP || {})[resourceKey] || {})[kind] || null);
-    return Array.isArray(mapped) ? mapped.includes(statKey) : false;
-}
-
-// Static config: cached per kind/stat (the resource penalty rebuild asks for
-// every stat of every thing).
-const _resourceKeyForStatCache = new Map();
-function _getResourceKeyForPrecomputedStat(kind, statKey) {
-    let cacheKey = kind + '|' + statKey;
-    let cached = _resourceKeyForStatCache.get(cacheKey);
-    if (cached !== undefined) return cached;
-    let resolved = _resolveResourceKeyForPrecomputedStat(kind, statKey);
-    _resourceKeyForStatCache.set(cacheKey, resolved);
-    return resolved;
-}
-
-function _resolveResourceKeyForPrecomputedStat(kind, statKey) {
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
-        if (!stockpileKey || stockpileKey === 'energy') continue;
-        if (_hasExplicitResourceStatMapping(stockpileKey, kind, statKey)) return stockpileKey;
-    }
-    return 'energy';
-}
-
-// Stats a negative stockpile never scales.
-const RESOURCE_PENALTY_EXEMPT_STATS = new Set(['upKeep', 'popCap', 'energy', 'maxEnergy', 'visionRange', 'visionRangeArea', 'attackRange', 'attackRangeArea', 'blastRadius']);
-
-// The penalty multiplier for one of a player's stats (1 = none).
-function _getPlayerStatPenaltyMultiplier(playerId, kind, statKey) {
-    if (RESOURCE_PENALTY_EXEMPT_STATS.has(statKey)) return 1;
-    return _getPlayerResourcePenaltyMultiplier(playerId, _getResourceKeyForPrecomputedStat(kind, statKey));
-}
-
-function _penalizeStatValue(statKey, value, multiplier) {
-    let numericValue = Number(value);
-    if (!Number.isFinite(numericValue) || !(multiplier > 1)) return numericValue;
-    return RESEARCH_DECREASE_STATS[statKey]
-        ? (numericValue * multiplier)
-        : (numericValue / multiplier);
-}
-
-// The multiplier each player's stat tables were last built with, per
-// stockpile. The current one (above) runs ahead of it until the tick's flush
-// (flushPendingResourceStatRebuilds); the tables follow this one only, so
-// they are a function of research and these, which a snapshot carries
-// (utils_snapshot.js statMult): a restored peer builds the same tables
-// whatever its own were (they followed its own history before).
-let _statAppliedMult = [];
-function _statAppliedGet(playerId, stockpileKey) {
-    let m = _statAppliedMult[playerId];
-    let v = m ? m[stockpileKey] : undefined;
-    return v >= 1 ? v : 1;
-}
-function _statAppliedSet(playerId, stockpileKey, multiplier) {
-    if (!stockpileKey) return;
-    (_statAppliedMult[playerId] || (_statAppliedMult[playerId] = {}))[stockpileKey] = Math.max(1, Number(multiplier) || 1);
-}
-function _statAppliedSetCurrent(playerId) {
-    for (let cfg of RESOURCE_TYPE_LIST) {
-        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
-        if (stockpileKey) _statAppliedSet(playerId, stockpileKey, _getPlayerResourcePenaltyMultiplier(playerId, stockpileKey));
-    }
-}
-function _getPlayerStatAppliedMultiplier(playerId, kind, statKey) {
-    if (RESOURCE_PENALTY_EXEMPT_STATS.has(statKey)) return 1;
-    return _statAppliedGet(playerId, _getResourceKeyForPrecomputedStat(kind, statKey));
-}
-
-function _applyPlayerResourcePenaltyToStatValue(playerId, kind, statKey, value) {
-    let numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return numericValue;
-    return _penalizeStatValue(statKey, numericValue, _getPlayerStatAppliedMultiplier(playerId, kind, statKey));
-}
-
-function _updatePlayerResourcePenaltyMultipliers(playerId) {
-    let pid = Math.max(0, Math.floor(playerId || 0));
-    let player = _ensurePlayerResourceState(pid);
-    if (!player) return [];
-    let changedResources = [];
-    for (let i = 0; i < RESOURCE_TYPE_LIST.length; i++) {
-        const cfg = RESOURCE_TYPE_LIST[i];
-        let stockpileKey = String(cfg.stockpileKey || cfg.key || '');
-        if (!stockpileKey) continue;
-        let currentValue = Number(player[stockpileKey]);
-        if (!Number.isFinite(currentValue)) currentValue = 0;
-        let prevMax = Math.max(1, Number(player.resourceMaxValues[stockpileKey]) || 0);
-            let nextMax = Math.max(1, currentValue, prevMax);
-        if (nextMax !== prevMax) player.resourceMaxValues[stockpileKey] = nextMax;
-        let prevMultiplier = Math.max(1, Number((PLAYER_RESOURCE_STAT_MULTIPLIERS[pid] || {})[stockpileKey]) || 1);
-        let nextMultiplier = _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
-        PLAYER_RESOURCE_STAT_MULTIPLIERS[pid][stockpileKey] = nextMultiplier;
-        if (nextMultiplier !== prevMultiplier) changedResources.push(stockpileKey);
-    }
-    return changedResources;
-}
-
 function _setPlayerResourceValue(playerId, resourceKey, value) {
+    if (_resourceBatchActive) playerResourceBatchEnd();
     let pid = Math.max(0, Math.floor(playerId || 0));
     let player = _ensurePlayerResourceState(pid);
     if (!player) return 0;
     let stockpileKey = String(resourceKey || '');
     if (!stockpileKey) return 0;
+    return _setEnsuredPlayerResourceValue(pid, player, stockpileKey, value);
+}
+
+// Resource mutations already normalize all stockpiles at entry. Keep that
+// player through the commit rather than rewriting every stockpile twice
+// more (including boxed fractional values) for each worker transfer.
+function _setEnsuredPlayerResourceValue(pid, player, stockpileKey, value) {
     let nextValue = Number(value);
     if (!Number.isFinite(nextValue)) nextValue = 0;
     let fixedMap = player._resourceFixedValues || (player._resourceFixedValues = {});
     fixedMap[stockpileKey] = _toFixedResourceUnits(nextValue);
     nextValue = _fromFixedResourceUnits(fixedMap[stockpileKey]);
     player[stockpileKey] = nextValue;
-    let changedResources = _updatePlayerResourcePenaltyMultipliers(pid);
-    // A negative stockpile changes its penalty on every spend. Movement spends
-    // per tile, so rebuilding here costs a full stat table per unit step.
-    // During play, coalesce into one rebuild at fixed tick boundaries (see
-    // gameTick). The rebuild reads live values, so it is idempotent and every
-    // peer sees identical stats at the same simulation points.
-    for (let changedResourceKey of changedResources) {
-        if (typeof gameStarted !== 'undefined' && gameStarted) _pendingResourceStatRebuilds.add(pid + '|' + changedResourceKey);
-        else rebuildPrecomputedStatsMapPlayerResource(pid, changedResourceKey);
-    }
-    return player[stockpileKey];
+    player.resourceMaxValues[stockpileKey] = Math.max(1, Number(player.resourceMaxValues[stockpileKey]) || 0, nextValue);
+    return nextValue;
 }
-
-const _pendingResourceStatRebuilds = new Set();
 
 // ============================================================
 // BOOSTS
@@ -277,7 +145,7 @@ function rebuildPlayerThingBoost(playerId, branch, key) {
     if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
     for (let statKey of (branch === 'unit' ? PRECOMPUTED_UNIT_STAT_KEYS : PRECOMPUTED_BUILDING_STAT_KEYS)) {
         if (branch === 'building' && !_buildingStatHasValues(key, statKey)) continue;
-        _rebuildPlayerThingStatLevels(playerId, branch, key, statKey, 1);
+        _rebuildPlayerThingStatLevels(playerId, branch, key, statKey);
     }
     if (branch === 'building' && key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
 }
@@ -320,21 +188,64 @@ function boostTick() {
     }
 }
 
-function flushPendingResourceStatRebuilds() {
+function resourceTick() {
+    playerResourceBatchFlush();
     boostTick();
-    if (_pendingResourceStatRebuilds.size === 0) return;
-    // Sort for a stable rebuild order regardless of which spend came first.
-    let pending = Array.from(_pendingResourceStatRebuilds).sort();
-    _pendingResourceStatRebuilds.clear();
-    for (let entry of pending) {
-        let split = entry.indexOf('|');
-        rebuildPrecomputedStatsMapPlayerResource(Number(entry.slice(0, split)), entry.slice(split + 1));
+}
+
+// Worker events may credit/debit freely: debt is checked only by boostTick.
+// Keep two fixed-point resource lanes per player. The native reduction also
+// retains each lane's high-water mark, including intermediate deposits.
+let _resourceBatchActive = false;
+const _resourceBatchRows = [];
+function playerResourceBatchBegin() {
+    if (typeof _simWasmX === 'undefined' || !_simWasmX || typeof _simWasmX.resource_reduce !== 'function') return;
+    for (let pid = 0; pid < players.length; pid++) {
+        const p = _ensurePlayerResourceState(pid); if (!p) continue;
+        let r = _resourceBatchRows[pid];
+        if (!r) r = _resourceBatchRows[pid] = { state: simSharedArray(Float64Array, 4), deltas: simSharedArray(Float64Array, 256), n: 0, logical: [0, 0] };
+        r.player = p; r.n = 0;
+        r.state[0] = r.logical[0] = p._resourceFixedValues.energy;
+        r.state[1] = r.logical[1] = p._resourceFixedValues.astar;
+        r.state[2] = p.resourceMaxValues.energy * RESOURCE_FIXED_POINT_SCALE;
+        r.state[3] = p.resourceMaxValues.astar * RESOURCE_FIXED_POINT_SCALE;
+    }
+    _resourceBatchActive = true;
+}
+function playerResourceBatchFlush() {
+    if (!_resourceBatchActive) return;
+    for (let pid = 0; pid < players.length; pid++) {
+        const r = _resourceBatchRows[pid]; if (!r || !r.n) continue;
+        _simWasmX.resource_reduce(_simWEnc(_simHeapPtrOf(r.deltas)), r.n, _simWEnc(_simHeapPtrOf(r.state)));
+        const p = r.player, v = r.state, fixed = p._resourceFixedValues;
+        fixed.energy = v[0]; fixed.astar = v[1];
+        p.energy = v[0] / RESOURCE_FIXED_POINT_SCALE; p.astar = v[1] / RESOURCE_FIXED_POINT_SCALE;
+        p.resourceMaxValues.energy = v[2] / RESOURCE_FIXED_POINT_SCALE;
+        p.resourceMaxValues.astar = v[3] / RESOURCE_FIXED_POINT_SCALE;
+        r.n = 0;
     }
 }
+function playerResourceBatchEnd() { playerResourceBatchFlush(); _resourceBatchActive = false; }
 
 function addPlayerResource(playerId, resourceKey, delta) {
     let pid = Math.max(0, Math.floor(playerId || 0));
-    let player = _ensurePlayerResourceState(pid);
+    const lane = resourceKey === 'energy' ? 0 : resourceKey === 'astar' ? 1 : -1;
+    const r = _resourceBatchActive && lane >= 0 ? _resourceBatchRows[pid] : null;
+    if (r && r.player === players[pid]) {
+        const amount = Number(delta), d = Number.isFinite(amount) ? _toFixedResourceUnits(amount) : 0;
+        if (d === 0) return r.logical[lane] / RESOURCE_FIXED_POINT_SCALE;
+        if (Number.isFinite(r.logical[lane] + d)) {
+            if (r.n * 2 === r.deltas.length) { const old = r.deltas; r.deltas = simSharedArray(Float64Array, old.length * 2); r.deltas.set(old); simHeapFree(old); }
+            const at = r.n++ * 2; r.deltas[at] = lane === 0 ? d : 0; r.deltas[at + 1] = lane === 1 ? d : 0;
+            r.logical[lane] += d;
+            return r.logical[lane] / RESOURCE_FIXED_POINT_SCALE;
+        }
+    }
+    // Initialize restored/missing state once; the normal mutation touches
+    // only its own stockpile, rather than normalizing every resource.
+    if (_resourceBatchActive) playerResourceBatchEnd();
+    let player = players[pid];
+    if (!player || !player._resourceFixedValues || !Number.isFinite(player._resourceFixedValues[resourceKey]) || !player.resourceMaxValues || !(player.resourceMaxValues[resourceKey] >= 1)) player = _ensurePlayerResourceState(pid);
     if (!player) return 0;
     let stockpileKey = String(resourceKey || '');
     if (!stockpileKey) return 0;
@@ -346,7 +257,7 @@ function addPlayerResource(playerId, resourceKey, delta) {
         : _toFixedResourceUnits(Number(player[stockpileKey]) || 0);
     let deltaFixed = _toFixedResourceUnits(amount);
     fixedMap[stockpileKey] = currentFixed + deltaFixed;
-    return _setPlayerResourceValue(pid, stockpileKey, _fromFixedResourceUnits(fixedMap[stockpileKey]));
+    return _setEnsuredPlayerResourceValue(pid, player, stockpileKey, _fromFixedResourceUnits(fixedMap[stockpileKey]));
 }
 
 // ============================================================
@@ -430,39 +341,6 @@ function shrineTick() {
 }
 // Nothing pending between ticks (a restore starts clean).
 function shrineResetPending() { _shrinePendingFixed.fill(0); }
-
-// A stockpile's penalty multiplier changed: refresh the stats it scales.
-// While a stockpile is negative this runs on every upkeep payment, so it
-// only touches penalty-scaled stats (exempt ones cannot have changed; research
-// rebuilds its own stats) and resolves the multiplier once per stat.
-// (multiplierOverride: the one a snapshot's tables were built with, see
-// _statAppliedMult; else the current one.)
-function rebuildPrecomputedStatsMapPlayerResource(playerId, resourceKey, multiplierOverride) {
-    if (!ensurePrecomputedStatsMap()) return;
-    let pid = Math.max(0, Math.floor(playerId || 0));
-    let stockpileKey = String(resourceKey || '');
-    if (!stockpileKey) return;
-
-    // Every stat handled here is scaled by this one stockpile's multiplier.
-    let multiplier = multiplierOverride >= 1 ? multiplierOverride : _getPlayerResourcePenaltyMultiplier(pid, stockpileKey);
-    _statAppliedSet(pid, stockpileKey, multiplier);
-    for (let [branch, statKeys] of [['unit', PRECOMPUTED_UNIT_STAT_KEYS], ['building', PRECOMPUTED_BUILDING_STAT_KEYS]]) {
-        let scaled = statKeys.filter(statKey => !RESOURCE_PENALTY_EXEMPT_STATS.has(statKey) && _getResourceKeyForPrecomputedStat(branch, statKey) === stockpileKey);
-        if (scaled.length === 0) continue;
-        let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
-        for (let key in PRECOMPUTED_STATS_MAP[branch]) {
-            let normalizedKey = branch === 'unit' ? _normalizePlayerPrecomputedUnitKey(key) : _normalizePlayerPrecomputedBuildingKey(key);
-            let levels = playerEntry[branch][normalizedKey];
-            let complete = !!levels && levels.length > MAX_THING_LEVEL;
-            for (let statKey of scaled) {
-                // A building stat with no value at any level stays NaN
-                // whatever the multiplier (most buildings use few stats).
-                if (complete && branch === 'building' && !_buildingStatHasValues(normalizedKey, statKey)) continue;
-                _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier);
-            }
-        }
-    }
-}
 
 function getStartingThingId(kind, key) {
     return `${kind}:${key}`;
@@ -2530,7 +2408,7 @@ function _getUnitPlayerPrecomputedEntryObject(playerId, unitType, level) {
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'unit', key, statKey);
         let rawValue = arr ? arr[rLvl] : normalizePrecomputedUnitStatValue(key, statKey, NaN);
-        values[statKey] = _applyPlayerResourcePenaltyToStatValue(playerId, 'unit', statKey, rawValue);
+        values[statKey] = Number(rawValue);
     }
 
     let maxEnergy = Math.max(1, Math.floor(Number(values.energy) || 1));
@@ -2574,7 +2452,7 @@ function _getBuildingPlayerPrecomputedEntryObject(playerId, buildingKey, level) 
         let arr = levelEntry[statKey] || null;
         let rLvl = getPlayerResearchLevel(playerId, 'building', key, statKey);
         let rawValue = arr ? arr[rLvl] : NaN;
-        values[statKey] = _applyPlayerResourcePenaltyToStatValue(playerId, 'building', statKey, rawValue);
+        values[statKey] = Number(rawValue);
     }
 
     let maxEnergy = Number(values.maxEnergy);
@@ -2627,16 +2505,13 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
     }
 
     PRECOMPUTED_STATS_MAP_PLAYER.length = Array.isArray(players) ? players.length : PRECOMPUTED_STATS_MAP_PLAYER.length;
-    // Players with the same research levels and resource penalties get the
+    // Players with the same research levels and boosts get the
     // same values: build those once and copy the (flat) entries. Entries are
     // later updated in place per player, so each player owns its copies.
     let builtBySignature = new Map();
     let previewLevels = gameStarted ? null : ((startingResourcesConfig || {}).researchLevels || null);
     for (let playerId of targetIds) {
         _ensurePlayerResourceState(playerId);
-        _updatePlayerResourcePenaltyMultipliers(playerId);
-        // (Built with the current multipliers: they are the applied ones now.)
-        _statAppliedSetCurrent(playerId);
         let signature = null;
         try {
             signature = JSON.stringify([
@@ -2766,9 +2641,7 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
     }
     // (Building stats: the movement kernel's trap strengths, its owner's.)
     if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
-    // (With the multiplier its table follows: a newer one comes with the
-    // tick's flush, for every stat of its stockpile at once.)
-    return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, _getPlayerStatAppliedMultiplier(pid, branch, statKey));
+    return _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey);
 }
 
 // Whether a building's precomputed stat has any finite value (any level,
@@ -2792,9 +2665,9 @@ function _buildingStatHasValues(buildingKey, statKey) {
     return found;
 }
 
-// One stat of one thing at every level. Research level, penalty and the unit
+// One stat of one thing at every level. Research level, boost and the unit
 // fallback do not depend on the thing level, so they are resolved once.
-function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, multiplier) {
+function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey) {
     _precomputedStatsVersion++;
     if (branch === 'unit') unitStatsTablesChanged(pid, normalizedKey);
     let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
@@ -2821,7 +2694,7 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey, mult
         if (source) rawValue = source[rLvl];
         else if (isUnit) rawValue = fallback !== undefined ? fallback : (fallback = normalizePrecomputedUnitStatValue(normalizedKey, statKey, NaN));
         else rawValue = NaN;
-        let value = _penalizeStatValue(statKey, rawValue, multiplier);
+        let value = Number(rawValue);
         if (isUnit) _applyUnitPlayerPrecomputedStat(entry, statKey, value);
         else _applyBuildingPlayerPrecomputedStat(entry, statKey, value);
     }

@@ -1549,6 +1549,16 @@ const _simTowerPackW=_simWK(['sep.eslot','unit.x','unit.y','unit.dead','unit.own
     'unit.stBu','unit.stWe','unit.stPo','unit.stFr','unit.stSa','unit.stWa','unit.wTeam','tac.x','tac.y','tac.meta']);
 const _simTowerScanW=_simWK(['tac.x','tac.y','tac.meta','sep.eslot','ix.start','ix.cnt','ix.stamp','vis.cellOff','vis.cells',
     'tac.qx','tac.qy','tac.owner','tac.type','tac.off','tac.areas','tac.out']);
+const SIM_KERNEL_TOWER_STRUCT = 104;
+const _simTowerStructW = _simWK(['st.code','st.own','st.uc','st.val','mv.scls','vis.cellOff','vis.cells',
+    'tac.qx','tac.qy','tac.owner','tac.off','tac.areas','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
+const SIM_KERNEL_TOWER_ORDER=105;
+const SIM_KERNEL_TOWER_COARSE=106;
+const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct']);
+SIM_KERNELS[SIM_KERNEL_TOWER_COARSE]=function(R,P,chunk){_simRust(_simTowerCoarseW,P,chunk,'k_tower_coarse','TOWER_COARSE');};
+const _simTowerOrderW=_simWK(['tac.sortKeys','tac.sortOrder','tac.sortTmp']);
+SIM_KERNELS[SIM_KERNEL_TOWER_ORDER]=function(R,P,chunk){_simRust(_simTowerOrderW,P,chunk,'k_tower_order','TOWER_ORDER');};
+SIM_KERNELS[SIM_KERNEL_TOWER_STRUCT] = function(R,P,chunk){_simRust(_simTowerStructW,P,chunk,'k_tower_struct','TOWER_STRUCT');};
 SIM_KERNELS[SIM_KERNEL_TOWER_PACK]=function(R,P,chunk){_simRust(_simTowerPackW,P,chunk,'k_tower_pack','TOWER_PACK');};
 SIM_KERNELS[SIM_KERNEL_TOWER_SCAN]=function(R,P,chunk){_simRust(_simTowerScanW,P,chunk,'k_tower_scan','TOWER_SCAN');};
 const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPF', 'unit.x', 'unit.y',
@@ -1662,6 +1672,7 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 // (unit.mvEv, cleared) or no output (a worker's AI), as slot * 8 + event at
 // ev.list[chunk * P[1]...], how many at ev.cnt[chunk]. P: [0] slots, [1] per job.
 const _simUnitEventsW = _simWK(['unit.mvOut', 'unit.mvEv', 'unit.live', 'unit.dead', 'unit.energy', 'ev.list', 'ev.cnt']);
+const _simUnitEventSortW = _simWK(['ev.list','ev.cnt','unit.id','unit.live','ev.sorted','ev.temp','ev.keys','ev.keytmp']);
 SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS] = function (R, P, chunk) { _simRust(_simUnitEventsW, P, chunk, 'k_unit_events', 'UNIT_EVENTS'); };
 // After the events: live units whose energy ran out (damage over time, a
 // mine, a ram's recoil) are dead now, where they stood before this tick's

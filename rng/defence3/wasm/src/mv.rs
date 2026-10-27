@@ -2965,7 +2965,13 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
         let (a,e)=g.chunk_entries_near(qx+(pass%3-1)*cq,qy+(pass/3-1)*cq);
         let mut i=a;
         while i<e{
-            let b=g.slot(i);i+=1;dbgc!(m,68);
+            let n=(e-i).min(4) as usize;let mut slots=[-1i32;4];
+            for lane in 0..n {*slots.get_unchecked_mut(lane)=g.slot(i+lane as i32);}
+            i+=n as i32;
+            let mut mask=g.swap_candidates4(&slots,ox,oy,rq)&((1<<n)-1);
+            while mask!=0 {
+            let lane=mask.trailing_zeros() as usize;mask&=mask-1;
+            let b=*slots.get_unchecked(lane);dbgc!(m,68);
             if b<0||b as usize==s||!g.active(b as usize){continue;}
             let b=b as usize;
             let (bx,by)=g.pos(b);
@@ -2987,6 +2993,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             dbgc!(m,70);
             let mut j=3;while j>0&&cand[j-1].0>score{j-=1;}
             if j<3{let mut q=2;while q>j{cand[q]=cand[q-1];q-=1;}cand[j]=(score,b);}
+            }
         }
     }
     let walls=|b:usize|{let p=rd(m.npr,b) as usize;

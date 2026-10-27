@@ -3956,12 +3956,15 @@ function _cellItemsOfType(type) {
         if (_cellItemsByTypeSet !== _activeTileEntities) tileEntityChangesSince(_cellItemsByTypeCursor);
         _cellItemsByTypeCache = new Map(); _cellItemsByTypeSet = _activeTileEntities;
     } else if (changes.length && _cellItemsByTypeCache.size) {
-        for (let i = 0; i < changes.length; i++) {
-            const t = changes[i], item = _cellItemAtTile(t);
-            for (const [ty, list] of _cellItemsByTypeCache) {
-                const next = _tileOrderedReplace(list, t, item && item.type === ty ? item : null);
-                if (next !== list) _cellItemsByTypeCache.set(ty, next);
-            }
+        // A burst of removals/placements used to copy each type's entire
+        // list once per edited tile. Apply its journal in one copy, keeping
+        // the old list intact for searches already holding it.
+        for (const [ty, list] of _cellItemsByTypeCache) {
+            const next = _tileOrderedReplaceMany(list, changes, t => {
+                const item = _cellItemAtTile(t);
+                return item && item.type === ty ? item : null;
+            }, true);
+            if (next !== list) _cellItemsByTypeCache.set(ty, next);
         }
     }
     let list = _cellItemsByTypeCache.get(type);

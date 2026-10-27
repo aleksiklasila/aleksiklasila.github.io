@@ -737,7 +737,10 @@ function structTableSet(gx, gy, prev, ref) {
     const joins = !!ref && typeof ref._stT === 'number' && !!ref._stCode;
     if (T.n !== n) {
         if (!joins) return;
-        T.n = n; T.code = new Uint8Array(n); T.own = new Int32Array(n); T.uc = new Uint8Array(n); T.val = new Float64Array(n); T.tim = new Float64Array(n);
+        // Keep the authoritative structure SoA directly readable by kernels:
+        // no per-tick object walk or full-grid mirror for tower queries.
+        const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
+        T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n);
         T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
     }
     _stClear(t);
@@ -1072,23 +1075,31 @@ function initTileEntityLookup() {
 // epoch (a new lookup, cell owners replaced by a restore) means everything
 // may have changed: the indexes rebuild. The indexes hold their entries in
 // tile order, so they are the same on every peer whatever the history.
-let _teLog = [], _teLogBase = 0, _tileEntityEpoch = 1;
+const TE_LOG_CAP = 262144;
+let _teLog = new Uint32Array(0), _teLogBase = 0, _teLogEnd = 0, _tileEntityEpoch = 1;
 function noteTileEntityChanged(gx, gy) {
-    _teLog.push(gy * GRID_W + gx);
-    // (A long journal is dropped: indexes that far behind rebuild.)
-    if (_teLog.length >= 262144) { _teLogBase += _teLog.length; _teLog = []; }
+    // Grow small worlds on demand, then retain a bounded rolling suffix.
+    // Dropping the entire log at capacity also invalidated current readers,
+    // forcing all structure/work-site indexes to rebuild on the same tick.
+    if (_teLog.length < TE_LOG_CAP && _teLogEnd === _teLog.length) {
+        const next = new Uint32Array(Math.min(TE_LOG_CAP, Math.max(256, _teLog.length * 2)));
+        next.set(_teLog); _teLog = next;
+    }
+    _teLog[_teLogEnd & (_teLog.length - 1)] = gy * GRID_W + gx;
+    _teLogEnd++;
+    _teLogBase = Math.max(0, _teLogEnd - _teLog.length);
 }
 function tileEntityIndexesReset() { _tileEntityEpoch++; }
 // The tiles changed since the cursor (distinct, ascending), and the cursor
 // moved to now; null when the index must rebuild.
 function tileEntityChangesSince(c) {
-    const end = _teLogBase + _teLog.length;
+    const end = _teLogEnd;
     if (c.epoch !== _tileEntityEpoch || c.pos < _teLogBase) { c.epoch = _tileEntityEpoch; c.pos = end; return null; }
     if (c.pos === end) return _TE_NO_CHANGES;
-    const from = c.pos - _teLogBase;
+    const from = c.pos;
     c.pos = end;
     const tiles = [];
-    for (let i = from; i < _teLog.length; i++) tiles.push(_teLog[i]);
+    for (let i = from; i < end; i++) tiles.push(_teLog[i & (_teLog.length - 1)]);
     tiles.sort((a, b) => a - b);
     let w = 0;
     for (let i = 0; i < tiles.length; i++) if (i === 0 || tiles[i] !== tiles[i - 1]) tiles[w++] = tiles[i];
@@ -1123,24 +1134,35 @@ function _tileOrderedReplace(list, t, e) {
 // stretches between the changes copied as they are (a copy of the whole list
 // for each of the tiles took ~1 ms each at 300k items); `itemAt(t)` gives
 // the entry at tile t, null for none. The list itself when nothing changed.
-function _tileOrderedReplaceMany(list, tiles, itemAt) {
+// replaceSame also publishes a fresh list for an unchanged object on a
+// journaled tile: type indexes use list identity to invalidate metadata.
+function _tileOrderedReplaceMany(list, tiles, itemAt, replaceSame = false) {
+    if (tiles.length === 0) return list;
     if (tiles.length === 1) return _tileOrderedReplace(list, tiles[0], itemAt(tiles[0]));
-    const parts = [];
-    let pos = 0, changed = false;
+    // Record only edits, then copy directly into the final list. Slicing
+    // every unchanged stretch before concat copied the whole index twice
+    // and left a second index's worth of references for GC on busy ticks.
+    const edits = [];
+    let length = list.length;
     for (let k = 0; k < tiles.length; k++) {
         const t = tiles[k], i = _tileOrderedIndexOf(list, t), e = itemAt(t);
         const has = i < list.length && list[i].gy * GRID_W + list[i].gx === t;
         if (!has && !e) continue;
-        if (has && e === list[i]) continue;
-        if (i > pos) parts.push(list.slice(pos, i));
-        pos = i;
-        if (e) parts.push([e]);
-        if (has) pos = i + 1;
-        changed = true;
+        if (!replaceSame && has && e === list[i]) continue;
+        edits.push(i, e, has);
+        length += (e ? 1 : 0) - (has ? 1 : 0);
     }
-    if (!changed) return list;
-    if (pos < list.length) parts.push(pos ? list.slice(pos) : list);
-    return [].concat(...parts);
+    if (edits.length === 0) return list;
+    const out = new Array(length);
+    let pos = 0, w = 0;
+    for (let k = 0; k < edits.length; k += 3) {
+        const i = edits[k], e = edits[k + 1], has = edits[k + 2];
+        while (pos < i) out[w++] = list[pos++];
+        if (e) out[w++] = e;
+        if (has) pos++;
+    }
+    while (pos < list.length) out[w++] = list[pos++];
+    return out;
 }
 
 // Cell items (floor items, barracks, spawners...) in row-major tile order,

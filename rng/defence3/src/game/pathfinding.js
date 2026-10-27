@@ -51,12 +51,14 @@ function _setPlayerAstarBudget(owner, value) {
 }
 
 function _getPlayerAstarBudgetAvailable(owner) {
+    playerResourceBatchFlush();
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return 0;
     return Number(players[pid].astar) || 0;
 }
 
 function _getPlayerAstarBudgetRemaining(owner) {
+    playerResourceBatchFlush();
     let pid = _normalizeOwnerId(owner);
     if (pid < 0 || !players[pid]) return 0;
     return Number(players[pid].astar) || 0;

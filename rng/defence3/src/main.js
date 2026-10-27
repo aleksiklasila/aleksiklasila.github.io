@@ -647,7 +647,7 @@ function _gameTickBody() {
     }
 
     flushPendingMovementAstarSpend();
-    flushPendingResourceStatRebuilds();
+    resourceTick();
     recalculateUnitEffectiveLevel();
 
     // Every player's gameplay visibility for this tick, from positions at
@@ -800,7 +800,7 @@ function _gameTickBody() {
     // Research pools into the research queues (every RESEARCH_DRAIN_TICKS).
     researchDrainTick();
     flushPendingMovementAstarSpend();
-    flushPendingResourceStatRebuilds();
+    resourceTick();
     // Laser links of the structures placed and removed this tick (the state
     // between ticks has them; hashes and snapshots include them).
     ensureLaserConnections();
@@ -4978,7 +4978,6 @@ function startGame() {
         p.energy = STARTING_MONEY;
         p.astar = STARTING_ASTAR;
         p.resourceMaxValues = {};
-        p.resourceStatMultipliers = {};
         p.popCount = 0;
         p.researchLevels = {};
         p.researchMultipliers = {};
@@ -4993,7 +4992,6 @@ function startGame() {
     shrineResetPending();
     for (let playerId = 0; playerId < players.length; playerId++) {
         _ensurePlayerResourceState(playerId);
-        _updatePlayerResourcePenaltyMultipliers(playerId);
     }
 
     rng = mulberry32(gameSeed);

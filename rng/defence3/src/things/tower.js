@@ -193,6 +193,11 @@ function _findTowerFloorTarget(tower, rangeArea, traps) {
 // areas up to four times (and repeated their range/hostility lookups). Reduce
 // by target class first, distance second and tile index third instead.
 function _findTowerBuildingTarget(tower,rangeArea){
+    const T = _towerAcq;
+    if (T.ready && T.tick === gameTime && T.list[T.pos - 1] === tower) {
+        const tile = T.arrays.sout[T.pos - 1];
+        if (tile !== -2) return tile >= 0 ? getTileEntityRef(tile % GRID_W, Math.floor(tile / GRID_W)) : null;
+    }
     const x=tower.x,y=tower.y,owner=tower.owner,sources=getSourceAreaIdsAtWorld(x,y);
     if(!sources.length)return null;
     const range=Math.floor(Math.max(0,Number(rangeArea)||0)),box=getAreaRangeTileBox(sources,range);
@@ -284,7 +289,12 @@ function _towerAcqPrepare(due){
     const T=_towerAcq;T.ready=false;T.list.length=0;T.areaLists.length=0;T.pos=0;T.lastN=0;T.lastActive=0;T.lastUsed=0;
     if(!SIM_TOWER_WASM||SIM_TOWER_TYPE_OVERRIDES||CHUNK_SIZE!==1||!_sxBySlot||!_ST.n||!_simWasmOk(_simParReg)||typeof _simWasmX.k_tower_scan!=='function'||due.length<128)return;
     spatialIndexEnsure();_visibilityKernelAreas();
-    const qx=_towerAcqArray('qx',Float64Array,due.length),qy=_towerAcqArray('qy',Float64Array,due.length),owner=_towerAcqArray('owner',Int32Array,due.length),type=_towerAcqArray('type',Int32Array,due.length);
+    _simMoveStructs();
+    simParallelBind('mv.stblk',_simMoveStructBlocks);
+    for (const key of ['code','own','uc','val']) simParallelBind('st.' + key, _ST[key]);
+    const qx=_towerAcqArray('qx',Float32Array,due.length),qy=_towerAcqArray('qy',Float32Array,due.length),owner=_towerAcqArray('owner',Int32Array,due.length),type=_towerAcqArray('type',Int32Array,due.length);
+    const base=_towerAcqArray('base',Int32Array,due.length),qtile=_towerAcqArray('tile',Int32Array,due.length);
+    const boxes=_towerAcqArray('boxes',Int32Array,due.length*4),live=_towerAcqArray('live',Uint32Array,due.length),qr=_towerAcqArray('range',Int32Array,due.length);
     const ST=_ST;
     let prev=null,total=0,active=0;
     for(const t of due){
@@ -296,17 +306,25 @@ function _towerAcqPrepare(due){
         const gx=tile%GRID_W,gy=(tile-gx)/GRID_W;
         if(tileEntityRef[gy][gx]!==t)continue;
         const name=t.type;if(name==='laser'||name.startsWith('cloud'))continue;
-        const x=t.x,y=t.y,own=ST.own[tile],sources=getSourceAreaIdsAtWorld(x,y),range=Math.floor(_getTowerAttackRangeArea(t));
-        let ids=null;
+        const stats=t.currentStats,x=t.x,y=t.y,own=ST.own[tile],sources=getSourceAreaIdsAtWorld(x,y),range=Math.floor(Math.max(0,Number(stats.attackRangeArea)||0));
+        const i=T.list.length,o=i*4;boxes[o+2]=-1;
         if(sources.length){
             const box=getAreaRangeTileBox(sources,range);
-            if(box[2]>=0&&_regionMayHaveEnemyUnits(own,box[0],box[1],box[2],box[3]))ids=getAreaIdsWithinDistanceOfSources(sources,range);
+            boxes[o]=box[0];boxes[o+1]=box[1];boxes[o+2]=box[2];boxes[o+3]=box[3];
         }
-        const i=T.list.length;qx[i]=x;qy[i]=y;owner[i]=own;type[i]=_towerAcqTypes[name]||0;
-        T.list.push(t);T.areaLists.push(ids);if(ids?.length){total+=ids.length;active++;}
+        qx[i]=x;qy[i]=y;owner[i]=own;type[i]=_towerAcqTypes[name]||0;qr[i]=range;
+        // Preferred targets retain their ordered resolution in shoot().
+        base[i]=!t.preferredTarget&&!t.preferredTargetSpec?Math.max(1,Math.ceil(secondsToTicks(stats.cd||1.5))):0;qtile[i]=tile;
+        T.list.push(t);T.areaLists.push(sources);
+    }
+    if(!T.list.length)return;
+    const P=_simParams;P[0]=T.list.length;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;
+    simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(T.list.length/32));
+    for(let i=0;i<T.list.length;i++){
+        const sources=T.areaLists[i],ids=live[i]?getAreaIdsWithinDistanceOfSources(sources,qr[i]):null;
+        T.areaLists[i]=ids;if(ids?.length){total+=ids.length;active++;}
     }
     T.lastN=T.list.length;T.lastActive=active;
-    if(active<16){T.list.length=0;T.areaLists.length=0;return;}
     const n=T.list.length,nt=_simUnitTypeNames.length,flags=_towerAcqArray('flags',Uint8Array,nt);
     for(let i=0;i<nt;i++){
         const b=BASE_UNIT_STATS[_simUnitTypeNames[i]]||BASE_UNIT_STATS.norm;
@@ -315,22 +333,49 @@ function _towerAcqPrepare(due){
     for(const name of ['x','y','meta'])_towerAcqArray(name,Int32Array,_sxListed+4);
     const off=_towerAcqArray('off',Int32Array,n+1),ids=_towerAcqArray('areas',Int32Array,total);
     _towerAcqArray('out',Int32Array,n);
+    _towerAcqArray('sout',Int32Array,n);
+    _towerAcqArray('idle',Int32Array,n);
     let at=0;
     for(let i=0;i<n;i++){
         const areas=T.areaLists[i];off[i]=at;
         if(areas){ids.set(areas,at);at+=areas.length;}
     }
     off[n]=at;
-    const P=_simParams;P[0]=_sxListed;P[1]=4096;P[2]=nt;
+    P[0]=_sxListed;P[1]=4096;P[2]=nt;
     const normal=BASE_UNIT_STATS.norm;P[3]=(normal.turretImmune?1:0)|(normal.fireResistant?2:0)|(normal.waterResistant?4:0)|(normal.poisonResistant?8:0)|(normal.iceResistant?16:0);
-    simParallelRun(SIM_KERNEL_TOWER_PACK,Math.ceil(_sxListed/4096));
+    if(active)simParallelRun(SIM_KERNEL_TOWER_PACK,Math.ceil(_sxListed/4096));
     P[0]=n;P[1]=32;P[2]=_sxEpoch;
-    simParallelRun(SIM_KERNEL_TOWER_SCAN,Math.ceil(n/32));
+    if(active)simParallelRun(SIM_KERNEL_TOWER_SCAN,Math.ceil(n/32));else T.arrays.out.fill(-1,0,n);
+    P[3]=GRID_W;P[4]=TILE;P[5]=gameTime;
+    simParallelRun(SIM_KERNEL_TOWER_STRUCT,Math.ceil(n/32));
     T.ready=true;T.tick=gameTime;
 }
 function _towerAcqTake(t){
     const T=_towerAcq;if(!T.ready||T.tick!==gameTime||T.list[T.pos]!==t)return undefined;
     T.lastUsed++;const s=T.arrays.out[T.pos++];return s>=0?_simUnitState.owners[s]||null:null;
+}
+// Attached structures already carry their row-major tile key. Reading gx/gy
+// through the paged structure table for every sort comparison is costly on
+// a mass cooldown burst. Detached entries retain their coordinate fallback.
+function _towerTileOrder(a, b) {
+    const at = a._stT, bt = b._stT;
+    return (at >= 0 ? at : a.gy * GRID_W + a.gx) - (bt >= 0 ? bt : b.gy * GRID_W + b.gx);
+}
+const _towerSort={list:[]};
+function _towerSortDue(due){
+    if(due.length<128||!_simWasmOk(_simParReg)||typeof _simWasmX.k_tower_order!=='function'){due.sort(_towerTileOrder);return;}
+    const n=due.length,keys=_towerAcqArray('sortKeys',Int32Array,n),order=_towerAcqArray('sortOrder',Int32Array,n);
+    _towerAcqArray('sortTmp',Int32Array,n);
+    for(let i=0;i<n;i++){const t=due[i],tile=t._stT;keys[i]=tile>=0?tile:t.gy*GRID_W+t.gx;}
+    simParallelStageParams(SIM_LANE_TICK,0)[0]=n;
+    simParallelBackground(SIM_KERNEL_TOWER_ORDER,1,SIM_LANE_TICK);
+    // Independent input preparation lets the helper finish the radix pass.
+    spatialIndexEnsure();_visibilityKernelAreas();_simMoveStructs();
+    simParallelBackgroundWait(SIM_LANE_TICK);
+    const copy=_towerSort.list;copy.length=n;
+    for(let i=0;i<n;i++)copy[i]=due[i];
+    for(let i=0;i<n;i++)due[i]=copy[order[i]];
+    copy.length=0;
 }
 // A tick of the towers: statuses of those with some running (every tick, as
 // ever), then the towers due, in tile order; any whose energy ran out are
@@ -339,7 +384,7 @@ function towersTick() {
     let dead = false, st = null;
     for (const e of _thingStatusSelf) if (e instanceof Tower) (st || (st = [])).push(e);
     if (st) {
-        st.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        st.sort(_towerTileOrder);
         for (const e of st) { if (e.energy > 0) thingStatusTickSelf(e); if (!(e.energy > 0)) dead = true; }
     }
     const W = _towerDue || _towerDueBuild(gameTime);
@@ -352,12 +397,16 @@ function towersTick() {
         due = due ? due.concat(L) : L;
     }
     if (due) {
-        due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+        _towerSortDue(due);
         _towerAcqPrepare(due);
         let prev = null;
         for (const t of due) {
             if (t === prev) continue;
             prev = t;
+            const A=_towerAcq;
+            if(!SIM_TOWER_VERIFY&&A.ready&&A.list[A.pos]===t&&A.arrays.idle[A.pos]>0){
+                const cd=A.arrays.idle[A.pos++];A.lastUsed++;t.cd=cd;continue;
+            }
             if (!(t.energy > 0)) { dead = true; continue; }
             // (Only once its cooldown is over, by its deadline: an entry
             // left from a cooldown set again since never acts early, so
