@@ -29,6 +29,7 @@ Useful options:
 - `--profile-start=300` delays CPU profiling until step 300 to investigate late-game outliers without accumulating a whole run's profiling overhead. The analyzer selects its worst step from the captured window.
 - `--timeline` records phase intervals for profile slicing with `--phase=kernel:8`, `--phase=kernel:89:0` or `--phase=simMoveRun` in the analyzer.
 - `--allocation-profile` samples JavaScript allocations during the steady window, including objects later collected, into a `.heapprofile` sidecar. Use this diagnostic separately from unprofiled timing comparisons.
+- `--event-metrics` counts event codes, worker AI states/transitions, budget deferrals and fast route commits per tick. It adds per-event wrapper overhead; use it for attribution separately from acceptance timings.
 - `--no-delta` and `--no-merge` compare index construction strategies; `--no-yield` deliberately stresses an uninterrupted headless loop.
 - `DEFENCE_TEST_SOURCE_OVERRIDES` selects historical source/binary snapshots without replacing working files.
 

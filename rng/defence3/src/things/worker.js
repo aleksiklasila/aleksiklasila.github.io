@@ -1014,7 +1014,7 @@ function _wsWait(u) {
 function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
     _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null; _wsSkipped = 0;
-    _wsGroups.clear();
+    _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
     _wsw = null; _wswDirty = []; _wswResvDirty = [];
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
 }
@@ -1059,20 +1059,39 @@ const WSW_SWEEP = 90, WSW_MAXOWN = 16;
 const WSW_SLOW_UNITS = 250000, WSW_SLOW = 4;
 let _wsw = null, _wswDirty = [], _wswResvDirty = [];
 const _wswResMax = new Map();
-// Construction done (the collectors' groups of that building type are made
-// again; the grid's tile). (Any completion made every group again: towers
-// completed every few ticks of the mega scenario, ~2-11 ms each time.)
-let _wsBuiltVer = 0;
-const _wsBuiltByType = new Map();
-function _wsBuiltVerOf(type) { return _wsBuiltVer + '/' + (_wsBuiltByType.get(type) | 0); }
+// Rosters include unfinished buildings. Completion only publishes the first
+// search batch allowed to use the existing row, never a roster rebuild.
+let _wsPostEpoch = 0;
+const _wsGroupById = [], _wsCompletionRows = new WeakMap();
+const WS_NOT_BUILT = 2147483647;
+function _wsNoteCompletionRow(item, row) {
+    const old = _wsCompletionRows.get(item);
+    if (old === undefined || (typeof old === 'number' && old >>> 24 === row >>> 24)) { _wsCompletionRows.set(item, row); return; }
+    if (typeof old === 'number') { _wsCompletionRows.set(item, [old, row]); return; }
+    for (let i = 0; i < old.length; i++) if (old[i] >>> 24 === row >>> 24) { old[i] = row; return; }
+    old.push(row);
+}
+function _wsPublishCompletionRow(item, row) {
+    const G = _wsGroupById[row >>> 25], ix = row & 0xffffff, spawner = !!(row & 0x1000000);
+    if (!G || (spawner ? G.spawnerObjs[ix] : G.objs[ix]) !== item) return;
+    const ready = G.arrays[spawner ? 'pready' : 'sready'];
+    if (Atomics.load(ready, ix) === WS_NOT_BUILT) {
+        Atomics.store(ready, ix, _wsPostEpoch + 1);
+        if (spawner) G.nfEligibilityDirty = true;
+    }
+}
 function workSiteDirty(gx, gy) {
     if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) _wswDirty.push(gy * _wsw.w + gx);
 }
 function workSiteBuilt(item) {
-    // (A completion without its building: every group again.)
-    if (!item || typeof item.type !== 'string') { _wsBuiltVer = (_wsBuiltVer + 1) | 0; return; }
-    _wsBuiltByType.set(item.type, ((_wsBuiltByType.get(item.type) | 0) + 1) | 0);
+    if (!item || typeof item.type !== 'string') return;
     workSiteDirty(item.gx, item.gy);
+    const row = _wsCompletionRows.get(item);
+    if (row === undefined || !(item.energy > 0)) return;
+    // One-way publication: an in-flight batch sees either NOT_BUILT or a
+    // future epoch. Both reject the row, independent of helper scheduling.
+    if (typeof row === 'number') _wsPublishCompletionRow(item, row);
+    else for (const r of row) _wsPublishCompletionRow(item, r); // at most 8 resource groups
 }
 // (As _isBuilderWorkTarget without its side effect, and the others' tests;
 // the common cases first: no upgrade due while the effective level is not
@@ -1238,6 +1257,7 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     const cap = (drops ? drops.length : 0) + mines.length + farms.length, np = spawners.length, pre = 'wsg' + G.id + '.';
     const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
     const SX = arr('sx', Float32Array, cap), SY = arr('sy', Float32Array, cap), ST = arr('st', Int32Array, cap), SO = arr('so', Int32Array, cap);
+    const SR = arr('sready', Int32Array, cap); SR.fill(0, 0, cap);
     const objs = [], types = [];
     let n = 0;
     if (drops) for (let i = 0; i < drops.length; i++) { const d = drops[i]; if (!d) continue; objs.push(d); types.push('drop'); SX[n] = Number(d.x); SY[n] = Number(d.y); ST[n] = 0; SO[n] = -1; n++; }
@@ -1250,11 +1270,14 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     }
     for (let i = 0; i < farms.length; i++) {
         const fm = farms[i];
-        if (!(fm && fm.type === cfg.farmKey && !fm.underConstruction && fm.energy > 0)) continue;
+        if (!(fm && fm.type === cfg.farmKey && fm.energy > 0)) continue;
+        SR[n] = fm.underConstruction ? WS_NOT_BUILT : 0;
+        _wsNoteCompletionRow(fm, G.id * 33554432 + n);
         objs.push(fm); types.push(cfg.farmKey); SX[n] = Number(fm.x); SY[n] = Number(fm.y); ST[n] = 2; SO[n] = Number.isFinite(fm.owner) ? fm.owner : -1; n++;
     }
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
     const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, n);
+    arr('abc', Int32Array, nb); arr('abi', Int32Array, n);
     BC.fill(0, 0, nb);
     const bk = s => Math.max(0, Math.min(brows - 1, Math.floor(SY[s] / TILE / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(SX[s] / TILE / WS_BUCKET)));
     for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) BC[bk(s)]++;
@@ -1263,6 +1286,7 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) { const b = bk(s); BI[BS[b] + BC[b]++] = s; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
     const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np);
+    const PR = arr('pready', Int32Array, np), spawnerObjs = new Array(np);
     // The spawners sorted by the bucket of their tile (the kernel finds an owner's
     // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
     // its count, then (16) the count of each owner's.
@@ -1281,10 +1305,12 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     for (let p = 0; p < np; p++) {
         const sp = spawners[p], b = sb[p], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
         PGX[q] = Math.floor(Number(sp.gx) || 0); PGY[q] = Math.floor(Number(sp.gy) || 0); PO[q] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[q] = Number(sp.id) || 0; PX[q] = Number(sp.x); PY[q] = Number(sp.y);
+        PR[q] = sp.underConstruction ? WS_NOT_BUILT : 0; spawnerObjs[q] = sp;
+        _wsNoteCompletionRow(sp, G.id * 33554432 + 16777216 + q);
     }
     meta[0] = n; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
     _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta);
-    G.objs = objs; G.types = types; G.n = n;
+    G.objs = objs; G.types = types; G.n = n; G.spawnerObjs = spawnerObjs;
 }
 // Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
 // at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
@@ -1320,19 +1346,23 @@ function _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta) {
         for (let r = 0; r < np; r++) { RK[r] = idx[r]; RO[idx[r]] = r; }
     }
     const fkey = fieldOwners.join(',');
-    G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey;
+    G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey || !!G.nfEligibilityDirty;
+    G.nfEligibilityDirty = false;
     G.nfSetKey = setKey; G.nfOrdKey = ordKey; G.nfOwnersKey = fkey; G.nfList = fieldOwners;
 }
 function _wsCollectorGroup(cfg) {
     const key = 'c:' + cfg.collectorUnitKey;
     let G = _wsGroups.get(key);
-    if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, objs: [], types: [] }; _wsGroups.set(key, G); }
+    if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, objs: [], types: [] }; _wsGroups.set(key, G); _wsGroupById[G.id] = G; }
     const mines = _getResourceCollectorMineArray(cfg) || [], farms = _cellItemsOfType(cfg.farmKey);
-    const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length, _wsBuiltVerOf(cfg.farmKey) + ':' + _wsBuiltVerOf(cfg.collectorBuildingKey)];
-    if (G.sig && G.mines === mines && G.farms === farms && G.spl === collectorSpawners && G.sig.every((v, i) => v === sig[i])) return G;
+    const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length];
+    if (G.sig && G.mines === mines && G.farms === farms && G.spl === collectorSpawners && G.sig.every((v, i) => v === sig[i])) {
+        if (G.nfEligibilityDirty) { G.nfBuild = true; G.nfEligibilityDirty = false; }
+        return G;
+    }
     G.sig = sig; G.mines = mines; G.farms = farms; G.spl = collectorSpawners;
     const spawners = [];
-    for (const sp of _getWorkerSpawnersByType(cfg.collectorBuildingKey)) if (sp && sp.type === cfg.collectorBuildingKey && sp.energy > 0 && !sp.underConstruction) spawners.push(sp);
+    for (const sp of _getWorkerSpawnersByType(cfg.collectorBuildingKey)) if (sp && sp.type === cfg.collectorBuildingKey && sp.energy > 0) spawners.push(sp);
     _wsGroupBuild(G, cfg, mines, farms, spawners);
     return G;
 }
@@ -1373,6 +1403,7 @@ function _wsPost() {
     for (let c = 0; c < chunks; c++) { PRE[c] = total; total += CNT[c]; }
     PRE[chunks] = total;
     if (!total) return;
+    _wsPostEpoch++;
     const cap = total;
     for (const k of ['ws.rslot', 'ws.rid', 'ws.rwt', 'ws.rkind', 'ws.rowner', 'ws.rak', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy']) _wsArr(k, Int32Array, cap);
     for (const k of ['ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rax', 'ws.ray']) _wsArr(k, Float32Array, cap);
@@ -1381,8 +1412,8 @@ function _wsPost() {
     P[5] = 2;
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
     CNT[0] = total; // Compact requests are one logical region for ordering.
-    // (Stage 1's params: the scan after the fields' job.)
-    const Bp = _simBgStageParams[WS_LANE][1];
+    // Stage 2 scans after eligibility compaction and near-field preparation.
+    const Bp = _simBgStageParams[WS_LANE][2];
     // The collectors' groups, per resource type.
     const groups = [], nfSeen = new Set(), nfPairs = [];
     for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
@@ -1414,11 +1445,19 @@ function _wsPost() {
     Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = 1; Bp[12] = total; Bp[13] = HM; Bp[14] = 1;
     Bp[5] = np; Bp[15] = _simParReg['ws.aoff'] ? _simParReg['ws.aoff'].length - 1 : 0;
     Bp[56]=areaSearchEnabled()?1:0;
-    // (The fields' job: its own params slot 0, the scan's slot 1 (Bp, above).)
-    const Np = _simBgStageParams[WS_LANE][0];
+    Bp[57]=_wsPostEpoch;
+    // Near fields use stage 1; stage 0 compacts the eligible bucket rows.
+    const Np = _simBgStageParams[WS_LANE][1];
     Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
+    Np[63] = _wsPostEpoch;
     for (let i = 0; i < nfPairs.length; i++) Np[3 + i] = nfPairs[i];
-    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)]]);
+    const eligibleGroups = [...new Set(groups.map((g, i) => Bp[16 + i]))];
+    const Ep = _simBgStageParams[WS_LANE][0]; Ep.fill(0);
+    Ep[0] = eligibleGroups.length; Ep[1] = 128; Ep[2] = _wsPostEpoch;
+    const bucketJobs = Math.ceil(Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET) / 128);
+    Ep[3] = bucketJobs;
+    for (let g = 0; g < eligibleGroups.length; g++) Ep[4 + g] = eligibleGroups[g];
+    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)]]);
     _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups

@@ -105,13 +105,14 @@ function _unitEvOrderKey(t, id) {
 }
 let _unitEvList = null, _unitEvCnt = null;
 const _unitEvSort = { cap: 0, ent: null };
+let UNIT_EVENT_ROUTE_BATCH = true;
 function _unitEventSortReserve(n) {
     if (_unitEvSort.cap >= n) return;
     const m = simReserveCap(n, 1024);
     // The helper binding protocol supports Float64Array; Rust treats these
     // opaque eight-byte key buffers as u64 (JavaScript never reads them).
-    for (const [key, Type] of [['sorted', Int32Array], ['temp', Int32Array], ['keys', Float64Array], ['keytmp', Float64Array]]) {
-        const old = _unitEvSort[key], a = _unitEvSort[key] = simSharedArray(Type, m);
+    for (const [key, Type, stride = 1] of [['sorted', Int32Array], ['temp', Int32Array], ['keys', Float64Array], ['keytmp', Float64Array], ['routes', Int32Array, 2]]) {
+        const old = _unitEvSort[key], a = _unitEvSort[key] = simSharedArray(Type, m * stride);
         simParallelBind('ev.' + key, a);
         if (old) simHeapFree(old);
     }
@@ -140,6 +141,13 @@ function unitEventsRun() {
         P[2] = gameTime; P[3] = chunks;
         _simRust(_simUnitEventSortW, P, 0, 'k_unit_event_sort', 'UNIT_EVENT_SORT');
         const E = _unitEvSort.ent, j = CNT[chunks * 16];
+        let routes = null;
+        if (UNIT_EVENT_ROUTE_BATCH && j >= 64 && typeof SIM_KERNEL_EVENT_ROUTES === 'number') {
+            P[0] = j; P[1] = 2048; P[2] = TILE * 8;
+            simParallelRun(SIM_KERNEL_EVENT_ROUTES, Math.ceil(j / 2048));
+            routes = _unitEvSort.routes;
+        }
+        const trueTerm = _simHTerm(_UH_PFA, true);
         _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
         let over = 0;
         playerResourceBatchBegin();
@@ -153,6 +161,7 @@ function unitEventsRun() {
                     if (_workerEventsLeft <= 0) { _simParkEventWait(u, over++); continue; }
                     _workerEventsLeft--;
                 }
+                if (routes && routes[i * 2] >= 0 && !u.workerState && _unitNoWayCommit(u, c, s, routes[i * 2], routes[i * 2 + 1], trueTerm)) continue;
                 _unitEvent(u, c, s, ent & 7);
             }
         } finally { playerResourceBatchEnd(); _workerEventsLeft = Infinity; }
@@ -215,6 +224,33 @@ function _unitNoWay(u) {
     u.path = null; u.pathIndex = 0; u._routeKey = null; u.pathIsFallbackAstar = true;
     navPathSubstitute(u, Math.floor(u.x / TILE), Math.floor(u.y / TILE), pt);
     notePendingPathUnit(u);
+}
+// Ordered commit for a helper-prepared combat route failure. Preserve JS
+// reference values and digest deltas exactly, as the regular setters do.
+// The common native path needs no temporary JS path or repeated accessors.
+function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
+    if (c.nvPK[s] !== key || c.pathIndex[s] !== 0) return false;
+    const cached = c.jr__path.get(s);
+    if (cached && cached.length > 1) return false;
+    const decoded = key >> 1, profile = Math.floor(decoded / 16777216), dest = decoded % 16777216;
+    if (profile !== (c.j_isFlying[s] ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND)) return false;
+    let pt = c.jr__ppt.get(s), h = c.hObj[s];
+    if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
+    else {
+        pt = { gx: dest % GRID_W, gy: Math.floor(dest / GRID_W), cmd: c.commandState[s], src: 'nav_unreachable' };
+        const old = c.jr__ppt.set(s, pt);
+        h = (h + _simHTerm(_UH_PPT, pt) - _simHTerm(_UH_PPT, old)) | 0;
+    }
+    c.nvPK[s] = -1; simUnitPathRelease(c, s); c.jr__path.clear(s);
+    c.mvOn[s] = 0; c.mvCD[s] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
+    const old = c.jr__pfa.set(s, true);
+    if (old !== true) h = (h + trueTerm - _simHTerm(_UH_PFA, old)) | 0;
+    c.hObj[s] = h; c.mvPF[s] = 1;
+    if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
+    const to = Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0));
+    navPathSubstitutePrepared(u, profile, to, comp, pt);
+    notePendingPathUnit(u);
+    return true;
 }
 // A unit waiting for its way (a pending target) near its issued target (the
 // controller's look): its way once more, else the order ends where it stands.

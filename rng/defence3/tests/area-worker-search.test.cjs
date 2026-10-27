@@ -1,9 +1,9 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-const ctx=vm.createContext({self:{crossOriginIsolated:true},console});
 const wasm64=process.argv.includes('--wasm64');
+const ctx=vm.createContext({self:{crossOriginIsolated:true,SIM_WASM64_OPT:wasm64},console});
 const source=['sim_parallel.js','sim_wasm_bin.js',...(wasm64?['sim_wasm64_bin.js']:[]),'sim_wasm.js'].map(f=>fs.readFileSync(path.join(__dirname,'../src/sim',f),'utf8')).join('\n');
-vm.runInContext(source+';globalThis.scan=SIM_KERNELS[SIM_KERNEL_WS_SCAN];simWasmInit();',ctx);
+vm.runInContext(source+';globalThis.scan=SIM_KERNELS[SIM_KERNEL_WS_SCAN];globalThis.eligible=SIM_KERNELS[SIM_KERNEL_WS_ELIGIBLE];simWasmInit();',ctx);
 assert.equal(vm.runInContext('SIM_WASM64',ctx),wasm64);
 const R={};
 function put(name,type,values){const a=vm.runInContext(`simHeapArray(${type},${Math.max(1,values.length)})`,ctx);a.set(values);R[name]=a;ctx.__a=a;ctx.__name=name;vm.runInContext('simParallelBind(__name,__a)',ctx);return a;}
@@ -23,6 +23,8 @@ put('wsw.own','Int8Array',Array(w*h).fill(0));put('wsw.area','Int32Array',ag);pu
 put('wsh.x','Float32Array',[336]);put('wsh.y','Float32Array',[16]);put('wsh.a','Int32Array',[1]);put('wsh.n','Int32Array',[1]);
 put('wsg0.meta','Int32Array',[2,0,0,2,1]);put('wsg0.sx','Float32Array',[336,464]);put('wsg0.sy','Float32Array',[16,16]);
 put('wsg0.st','Int32Array',[1,1]);put('wsg0.so','Int32Array',[-1,-1]);put('wsg0.bs','Int32Array',[0,0]);put('wsg0.bc','Int32Array',[0,2]);put('wsg0.bi','Int32Array',[0,1]);
+put('wsg0.abc','Int32Array',[0,0]);put('wsg0.abi','Int32Array',[-1,-1]);
+const E=Array(64).fill(0);Object.assign(E,{0:1,1:2,2:0,3:1,4:0});ctx.eligible(R,E,0);
 const P=Array(64).fill(0);Object.assign(P,{0:n,1:n,2:3,3:32,4:8,5:1,8:w,9:h,10:2,11:1,12:n,13:1,14:1,15:3,16:0});
 ctx.scan(R,P,0);assert.equal(R['ws.res'][0],-1);assert.equal(R['ws.ures'][3],-1);assert.equal(R['ws.res'][6],-1);
 P[56]=1;ctx.scan(R,P,0);

@@ -16,6 +16,7 @@ assert.ok(['auto','js','verify'].includes(towerMode));
 const profileStartStep=num('profile-start',warmup);
 const metrics=process.argv.includes('--system-metrics');
 const timeline=process.argv.includes('--timeline');
+const eventMetrics=process.argv.includes('--event-metrics');
 const yieldBetween=!process.argv.includes('--no-yield');
 const gcEntries=[],gcObserver=metrics?new PerformanceObserver(list=>gcEntries.push(...list.getEntries().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})))):null;
 if(gcObserver)gcObserver.observe({entryTypes:['gc']});
@@ -96,6 +97,18 @@ if(process.argv.includes('--kernels'))inst.eval(`{
  _spatialIndexCollect=function(){const j=_sxPre;const r=collect.apply(this,arguments);if(j){const d=_sxPar&&_sxPar.ixd;__scratch.index={delta:j.delta,inserts:j.delta&&d?d.plan[j.dj]:null,bad:j.delta&&d?d.plan[j.dj+3]:null};}return r;};
 }`);
 const profileHelpers=process.argv.includes('--helper-profile');
+// Diagnostic only: distinguish event volume from cost per event. Do not use
+// these wrappers in acceptance timing runs (they add per-event overhead).
+if(eventMetrics)inst.eval(`{
+ const event=_unitEvent,ai=updateWorkerAI,park=_simParkEventWait;
+ _unitEvent=function(u,c,s,code){const m=__scratch.events;m.codes[code]=(m.codes[code]||0)+1;m[u.workerState?'workerEvents':'combatEvents']++;return event.apply(this,arguments);};
+ updateWorkerAI=function(u){const m=__scratch.events,key=u.workerType+':'+u.workerState;m.ai[key]=(m.ai[key]||0)+1;const before=u.workerState;try{return ai.apply(this,arguments);}finally{if(u.workerState!==before){const k=key+'>'+u.workerState;m.transitions[k]=(m.transitions[k]||0)+1;}}};
+ _simParkEventWait=function(){__scratch.events.budgetParked++;return park.apply(this,arguments);};
+ if(typeof _unitNoWayCommit==='function'){
+  const commit=_unitNoWayCommit;
+  _unitNoWayCommit=function(){const r=commit.apply(this,arguments);if(r){const m=__scratch.events;m.codes[2]=(m.codes[2]||0)+1;m.combatEvents++;m.fastRoutes=(m.fastRoutes||0)+1;}return r;};
+ }
+}`);
 const profileInterval=num('profile-interval',5000);
 const session=process.argv.includes('--profile')||profileHelpers?new(require('node:inspector').Session)():null;
 const allocationSession=process.argv.includes('--allocation-profile')?new(require('node:inspector').Session)():null;
@@ -116,6 +129,7 @@ for(let i=0;i<ticks;i++){
   profileOrigins={beforeStart:true,startStep:profileStartStep,interval:profileInterval,main:profileStart,helpers:origins.map(r=>r.startedAt)};
  }
  inst.eval('__scratch.phases={};__scratch.index=null;__scratch.intervals=[]');
+ if(eventMetrics)inst.eval('__scratch.events={codes:{},ai:{},transitions:{},workerEvents:0,combatEvents:0,budgetParked:0}');
  // Generating synthetic player inputs is outside tick timing; applying them is inside.
  const burst=i%burstEvery===0;
  if(burst)for(let team=0;team<2;team++)inst.eval(`localPlayerId=${team};__scratch.actions=[];${chaos.burst(options,Math.floor(i/burstEvery))};__scratch['actions'+${team}]=__scratch.actions;`);
@@ -130,6 +144,7 @@ for(let i=0;i<ticks;i++){
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
  row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed})`);
  row.tileJournal=inst.eval(`({base:_teLogBase,end:typeof _teLogEnd==='number'?_teLogEnd:_teLogBase+_teLog.length,storageBytes:_teLog.byteLength||null})`);
+ if(eventMetrics)row.events=inst.eval('__scratch.events');
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
  if(metrics){row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=require('node:v8').getHeapStatistics().used_heap_size/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and

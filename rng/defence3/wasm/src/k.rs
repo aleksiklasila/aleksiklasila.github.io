@@ -1633,6 +1633,35 @@ pub unsafe extern "C" fn k_unit_event_sort(a:u32,_chunk:i32) {
     *cnt.add(k.i(3) as usize*16)=n as i32;
 }
 
+/// Pure preparation for combat NOWAY events. No unit writes: foreground
+/// commits pending requests in the original event order. Output key -1 means
+/// scalar fallback; component -2 asks JS for its uncommon wall escape rule.
+#[no_mangle]
+pub unsafe extern "C" fn k_event_routes(a:u32,chunk:i32) {
+    let k=K::new(waddr(a) as *const i32);
+    let (events,pk,pi,wk,x,y,out)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<u8>(3),k.p::<i32>(4),k.p::<i32>(5),k.p::<i32>(6));
+    let (a,b)=job(chunk,k.i(1),k.i(0));
+    for i in a..b {
+        *out.add(i*2)=-1;
+        let e=*events.add(i);if e&7!=2 {continue;}
+        let s=(e>>3) as usize;let key=*pk.add(s);
+        if key<0||*pi.add(s)!=0||*wk.add(s)!=0 {continue;}
+        let profile=(key>>1)/16777216;
+        if profile>1 {continue;}
+        let base=7+profile as usize*4;
+        let meta=k.p::<i32>(base);if meta.is_null(){continue;}
+        let (w,h,c,cw)=(*meta.add(4),*meta.add(5),*meta,*meta.add(1));
+        let gx=floor(*x.add(s) as f64/k.f(2)) as i32;
+        let gy=floor(*y.add(s) as f64/k.f(2)) as i32;
+        if gx<0||gy<0||gx>=w||gy>=h||c<=0 {continue;}
+        let pl=k.p::<u16>(base+1);let pb=k.p::<i32>(base+2);let pc=k.p::<i32>(base+3);
+        if pl.is_null()||pb.is_null()||pc.is_null(){continue;}
+        let local=*pl.add((gy*w+gx) as usize);
+        let comp=if local==0xffff {-2}else{*pc.add((*pb.add(((gy/c)*cw+gx/c) as usize)+local as i32) as usize)};
+        *out.add(i*2)=key;*out.add(i*2+1)=comp;
+    }
+}
+
 /// SIM_KERNEL_UNIT_RETIRE: the tick's end: movement outputs cleared (slots
 /// of the job's range), the units-array indices of dead units (or without a
 /// slot) listed at retire.list[chunk * P[1]..], how many at
@@ -3313,6 +3342,35 @@ macro_rules! kc {
 /// select chunks, [12] slots a select chunk, [13] healer slots per owner,
 /// [14] 1: requests by position, [15] areas, [16..24) group per config,
 /// [24..56) research bits per owner.
+#[inline(always)]
+unsafe fn ws_ready(p:*const i32,i:usize,epoch:i32)->bool {
+    p.is_null() || (&*(p.add(i) as *const core::sync::atomic::AtomicI32)).load(core::sync::atomic::Ordering::Relaxed)<=epoch
+}
+
+/// Build compact eligible bucket prefixes once on the brain lane, rather
+/// than re-testing unfinished rows for every collector query. The roster
+/// and geometric bucket offsets stay fixed across completion.
+#[no_mangle]
+pub unsafe extern "C" fn k_ws_eligible(a:u32,chunk:i32) {
+    let k=K::new(waddr(a) as *const i32);
+    let jobs=k.i(3).max(1) as usize;let group=chunk.max(0) as usize/jobs;
+    if group>=k.i(0).max(0) as usize{return;}
+    let gid=k.i(4+group);if gid<0||gid>=8{return;}let gid=gid as usize;
+    let base=30+gid*14;let meta=k.p::<i32>(base);if meta.is_null(){return;}
+    let (bs,bc,bi)=(k.p::<i32>(base+11),k.p::<i32>(base+12),k.p::<i32>(base+13));
+    let (ready,counts,indices)=(k.p::<i32>(168+gid),k.p::<i32>(184+gid),k.p::<i32>(192+gid));
+    let n=(*meta.add(3)* *meta.add(4)).max(0) as usize;
+    let first=chunk as usize%jobs*k.i(1).max(1) as usize;let end=(first+k.i(1).max(1) as usize).min(n);
+    for b in first..end {
+        let start=*bs.add(b) as usize;let mut count=0;
+        for j in start..start+*bc.add(b) as usize {
+            let site=*bi.add(j);
+            if ws_ready(ready,site as usize,k.i(2)){*(indices as *mut i32).add(start+count)=site;count+=1;}
+        }
+        *(counts as *mut i32).add(b)=count as i32;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -3540,6 +3598,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
             continue;
         }
         let (n, np, bcols, brows) = (g(meta, 0), g(meta, 1), g(meta, 3), g(meta, 4));
+        let (pready,epoch)=(k.p::<i32>(176+gid as usize),k.i(57));
         let (sx, sy, stp, so) = (k.p::<f32>(gb + 1), k.p::<f32>(gb + 2), k.p::<i32>(gb + 3), k.p::<i32>(gb + 4));
         let (ux, uy) = (g(rux, i), g(ruy, i));
         let (mut ax, mut ay) = (g(rax, i), g(ray, i));
@@ -3583,7 +3642,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                     for p in p0..p0 + g(meta, 6 + 2 * b) {
                         let p = p as usize;
                         kc!(a, 93, 1);
-                        if g(po, p) != owner {
+                        if g(po, p) != owner || !ws_ready(pready,p,epoch) {
                             continue;
                         }
                         let d = (g(pgx, p) - utx).abs() + (g(pgy, p) - uty).abs();
@@ -3626,7 +3685,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                 ay = uy;
             }
         }
-        let (bs, bc, bi) = (k.p::<i32>(gb + 11), k.p::<i32>(gb + 12), k.p::<i32>(gb + 13));
+        let (bs, bc, bi) = (k.p::<i32>(gb + 11), k.p::<i32>(184+gid as usize), k.p::<i32>(192+gid as usize));
         let rb = if rv.is_null() { 0u8 } else { ((g(rn, i) >> 16) & 255) as u8 };
         let my = g(rm, i);
         let ibt = itile / bt as f32;
@@ -3765,13 +3824,14 @@ pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
         return;
     }
     let (pgx, pgy, po) = (k.p::<i32>(gb + 5), k.p::<i32>(gb + 6), k.p::<i32>(gb + 7));
+    let pready=k.p::<i32>(176+gid);let epoch=k.i(63);
     let f = nf.add(slot as usize * w * h);
     let inf = u32::MAX;
     for i in 0..w * h {
         s(f, i, inf);
     }
     for q in 0..np {
-        if g(po, q) != owner {
+        if g(po, q) != owner || !ws_ready(pready,q,epoch) {
             continue;
         }
         let (x, y) = (g(pgx, q), g(pgy, q));

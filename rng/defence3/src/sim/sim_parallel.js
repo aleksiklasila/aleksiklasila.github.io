@@ -1626,7 +1626,13 @@ const _simWsScanW = _simWK(['ws.rkind', 'ws.rowner', 'ws.rox', 'ws.roy', 'ws.rux
     'ws.rpre', 'ws.res', 'ws.score', '?ws.ures', '?ws.agrid', '?ws.aoff', '?ws.anb', '?wsh.x', '?wsh.y', '?wsh.a', '?wsh.n', '?wsw.flags', '?wsw.own', '?wsw.area', '?wsw.resv',
     '?wsg0.meta', '?wsg0.sx', '?wsg0.sy', '?wsg0.st', '?wsg0.so', '?wsg0.pgx', '?wsg0.pgy', '?wsg0.po', '?wsg0.pid', '?wsg0.px', '?wsg0.py', '?wsg0.bs', '?wsg0.bc', '?wsg0.bi', '?wsg1.meta', '?wsg1.sx', '?wsg1.sy', '?wsg1.st', '?wsg1.so', '?wsg1.pgx', '?wsg1.pgy', '?wsg1.po', '?wsg1.pid', '?wsg1.px', '?wsg1.py', '?wsg1.bs', '?wsg1.bc', '?wsg1.bi', '?wsg2.meta', '?wsg2.sx', '?wsg2.sy', '?wsg2.st', '?wsg2.so', '?wsg2.pgx', '?wsg2.pgy', '?wsg2.po', '?wsg2.pid', '?wsg2.px', '?wsg2.py', '?wsg2.bs', '?wsg2.bc', '?wsg2.bi', '?wsg3.meta', '?wsg3.sx', '?wsg3.sy', '?wsg3.st', '?wsg3.so', '?wsg3.pgx', '?wsg3.pgy', '?wsg3.po', '?wsg3.pid', '?wsg3.px', '?wsg3.py', '?wsg3.bs', '?wsg3.bc', '?wsg3.bi', '?wsg4.meta', '?wsg4.sx', '?wsg4.sy', '?wsg4.st', '?wsg4.so', '?wsg4.pgx', '?wsg4.pgy', '?wsg4.po', '?wsg4.pid', '?wsg4.px', '?wsg4.py', '?wsg4.bs', '?wsg4.bc', '?wsg4.bi', '?wsg5.meta', '?wsg5.sx', '?wsg5.sy', '?wsg5.st', '?wsg5.so', '?wsg5.pgx', '?wsg5.pgy', '?wsg5.po', '?wsg5.pid', '?wsg5.px', '?wsg5.py', '?wsg5.bs', '?wsg5.bc', '?wsg5.bi', '?wsg6.meta', '?wsg6.sx', '?wsg6.sy', '?wsg6.st', '?wsg6.so', '?wsg6.pgx', '?wsg6.pgy', '?wsg6.po', '?wsg6.pid', '?wsg6.px', '?wsg6.py', '?wsg6.bs', '?wsg6.bc', '?wsg6.bi', '?wsg7.meta', '?wsg7.sx', '?wsg7.sy', '?wsg7.st', '?wsg7.so', '?wsg7.pgx', '?wsg7.pgy', '?wsg7.po', '?wsg7.pid', '?wsg7.px', '?wsg7.py', '?wsg7.bs', '?wsg7.bc', '?wsg7.bi', '?wsw.cnt', '?area.bounds',
     // (The collectors' groups' nearest-spawner fields, k_ws_nearfield: wsg<g>.nf at 144 + g, the order of the spawners wsg<g>.rk by rank at 152 + g, wsg<g>.ro by spawner at 160 + g.)
-    '?wsg0.nf', '?wsg1.nf', '?wsg2.nf', '?wsg3.nf', '?wsg4.nf', '?wsg5.nf', '?wsg6.nf', '?wsg7.nf', '?wsg0.rk', '?wsg1.rk', '?wsg2.rk', '?wsg3.rk', '?wsg4.rk', '?wsg5.rk', '?wsg6.rk', '?wsg7.rk', '?wsg0.ro', '?wsg1.ro', '?wsg2.ro', '?wsg3.ro', '?wsg4.ro', '?wsg5.ro', '?wsg6.ro', '?wsg7.ro']);
+    '?wsg0.nf', '?wsg1.nf', '?wsg2.nf', '?wsg3.nf', '?wsg4.nf', '?wsg5.nf', '?wsg6.nf', '?wsg7.nf', '?wsg0.rk', '?wsg1.rk', '?wsg2.rk', '?wsg3.rk', '?wsg4.rk', '?wsg5.rk', '?wsg6.rk', '?wsg7.rk', '?wsg0.ro', '?wsg1.ro', '?wsg2.ro', '?wsg3.ro', '?wsg4.ro', '?wsg5.ro', '?wsg6.ro', '?wsg7.ro',
+    '?wsg0.sready','?wsg1.sready','?wsg2.sready','?wsg3.sready','?wsg4.sready','?wsg5.sready','?wsg6.sready','?wsg7.sready',
+    '?wsg0.pready','?wsg1.pready','?wsg2.pready','?wsg3.pready','?wsg4.pready','?wsg5.pready','?wsg6.pready','?wsg7.pready',
+    '?wsg0.abc','?wsg1.abc','?wsg2.abc','?wsg3.abc','?wsg4.abc','?wsg5.abc','?wsg6.abc','?wsg7.abc',
+    '?wsg0.abi','?wsg1.abi','?wsg2.abi','?wsg3.abi','?wsg4.abi','?wsg5.abi','?wsg6.abi','?wsg7.abi']);
+const SIM_KERNEL_WS_ELIGIBLE = 108;
+SIM_KERNELS[SIM_KERNEL_WS_ELIGIBLE] = function(R,P,chunk){_simRust(_simWsScanW,P,chunk,'k_ws_eligible','WS_ELIGIBLE');};
 SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) { _simRust(_simWsScanW, P, chunk, 'k_ws_scan', 'WS_SCAN'); };
 // SIM_KERNEL_WS_NEARFIELD (k.rs k_ws_nearfield): a job a (group, owner) pair, the field of each tile's nearest working spawner.
 const SIM_KERNEL_WS_NEARFIELD = 99;
@@ -1673,6 +1679,11 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 // ev.list[chunk * P[1]...], how many at ev.cnt[chunk]. P: [0] slots, [1] per job.
 const _simUnitEventsW = _simWK(['unit.mvOut', 'unit.mvEv', 'unit.live', 'unit.dead', 'unit.energy', 'ev.list', 'ev.cnt']);
 const _simUnitEventSortW = _simWK(['ev.list','ev.cnt','unit.id','unit.live','ev.sorted','ev.temp','ev.keys','ev.keytmp']);
+const SIM_KERNEL_EVENT_ROUTES = 107;
+const _simEventRoutesW = _simWK(['ev.sorted','unit.nvPK','unit.pathIndex','unit.isWk','unit.x','unit.y','ev.routes',
+    '?nav.0.meta','?nav.0.partL','?nav.0.partB','?nav.0.pcomp',
+    '?nav.1.meta','?nav.1.partL','?nav.1.partB','?nav.1.pcomp']);
+SIM_KERNELS[SIM_KERNEL_EVENT_ROUTES] = function(R,P,chunk){_simRust(_simEventRoutesW,P,chunk,'k_event_routes','EVENT_ROUTES');};
 SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS] = function (R, P, chunk) { _simRust(_simUnitEventsW, P, chunk, 'k_unit_events', 'UNIT_EVENTS'); };
 // After the events: live units whose energy ran out (damage over time, a
 // mine, a ram's recoil) are dead now, where they stood before this tick's

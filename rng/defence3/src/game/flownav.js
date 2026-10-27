@@ -1195,6 +1195,7 @@ function _navBindBuild(pre, nav) {
     simParallelBind(pre + p + '.meta', meta);
     simParallelBind(pre + p + '.nb', nav.nodeBase); simParallelBind(pre + p + '.nt', nav.nodeTile); simParallelBind(pre + p + '.np', nav.nodePair);
     simParallelBind(pre + p + '.partL', nav.partL); simParallelBind(pre + p + '.partB', nav.partBase); simParallelBind(pre + p + '.npart', nav.nodePart);
+    simParallelBind(pre + p + '.pcomp', nav.partComp);
     simParallelBind(pre + p + '.adjS', nav.adjStart); simParallelBind(pre + p + '.adjA', nav.adjA); simParallelBind(pre + p + '.adjC', nav.adjC);
     simParallelBind(pre + p + '.pclu', nav.partCluster); simParallelBind(pre + p + '.cstart', nav.compStart); simParallelBind(pre + p + '.cparts', nav.compParts);
     simParallelBind(pre + p + '.atl', nav.atlas && nav.atlas.header ? nav.atlas.header : null);
@@ -1555,13 +1556,22 @@ function navPathSubstitute(u, sx, sy, pt) {
     const to = Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0));
     const from = (sx >= 0 && sy >= 0 && sx < GRID_W && sy < GRID_H) ? sy * GRID_W + sx : Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE);
     const comp = _navUnitComp(profile, from);
+    return navPathSubstitutePrepared(u, profile, to, comp, pt);
+}
+// Same ordered request/retry commit with a component prepared by helpers.
+// Navigation geometry is immutable throughout the unit-event phase.
+function navPathSubstitutePrepared(u, profile, to, comp, pt) {
     if (comp < 0) return [];
-    const ask = () => { navSubstituteRequest(profile, to, comp); pt.sub = gameTime + NAV_SUB_TICKS; u._astarBudgetRetryTick = pt.sub; return null; };
-    if (!(pt.sub > 0) || gameTime < pt.sub) return pt.sub > 0 ? null : ask();
+    if (!(pt.sub > 0) || gameTime < pt.sub) return pt.sub > 0 ? null : _navSubAsk(u, profile, to, comp, pt);
     const r = _navSub.map.get(_navSubKey(profile, to, comp));
-    if (r === undefined || r === -2) return ask();
+    if (r === undefined || r === -2) return _navSubAsk(u, profile, to, comp, pt);
     if (r < 0) return [];
     return [navNode(profile, r % GRID_W, (r - r % GRID_W) / GRID_W)];
+}
+function _navSubAsk(u, profile, to, comp, pt) {
+    navSubstituteRequest(profile, to, comp);
+    pt.sub = gameTime + NAV_SUB_TICKS; u._astarBudgetRetryTick = pt.sub;
+    return null;
 }
 // The substitutes asked for (at the flush; one job each).
 function _navSubstitutesMake() {
