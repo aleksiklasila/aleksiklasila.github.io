@@ -635,20 +635,28 @@ function _gameTickBody() {
     // scheduled again.
     if (_pendingPathDue.size > 0) {
         let waiting = takeDuePendingPathUnits(gameTime);
-        let pendingBuckets = [[], [], [], [], []];
-        for (let u of waiting) {
+        const pendingBuckets = _pendingPathBuckets;
+        for (let i = 0; i < waiting.length; i++) {
+            const u = waiting[i];
             let src = u._pendingPathTarget && u._pendingPathTarget.src;
             let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
             pendingBuckets[srcTier].push(u);
         }
 
         for (let srcTier = 0; srcTier <= 4; srcTier++) {
-            for (let u of pendingBuckets[srcTier]) if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
+            const bucket = pendingBuckets[srcTier];
+            for (let i = 0; i < bucket.length; i++) {
+                const u = bucket[i];
+                if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
+            }
+            pendingBuckets[srcTier].length = 0;
         }
-        for (let u of waiting) {
+        for (let i = 0; i < waiting.length; i++) {
+            const u = waiting[i];
             if (u.dead || !u._pendingPathTarget) _pendingPathUnits.delete(u);
             else schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
         }
+        waiting.length = 0;
     }
 
     flushPendingMovementAstarSpend();

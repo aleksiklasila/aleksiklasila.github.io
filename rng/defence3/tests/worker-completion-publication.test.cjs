@@ -41,6 +41,15 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  post(11);simParallelBackgroundWait(WS_LANE);check(11);
  _wsPostEpoch=20;workSiteBuilt(farm);workSiteBuilt(spawner);
  if(G.arrays.sready[fi]!==11||G.arrays.pready[pi]!==11)throw Error('duplicate completion changed active eligibility');
+ // Force a roster rebuild after completion: finished structures need no
+ // new completion registration; reused arrays must still hold the right rows.
+ const oldBuckets=G.spawnerBuckets, oldSpawners=G.spawnerObjs;
+ const note=_wsNoteCompletionRow;let finishedNotes=0;
+ _wsNoteCompletionRow=function(item,row){if(!item.underConstruction)finishedNotes++;return note(item,row);};
+ G.sig=null;_wsCollectorGroup(cfg);_wsNoteCompletionRow=note;
+ if(finishedNotes)throw Error('completed structures registered completion rows');
+ if(G.objs!==objs||G.types!==types||G.spawnerObjs!==oldSpawners||G.spawnerBuckets!==oldBuckets)throw Error('roster buffers not reused');
+ if(G.objs[fi]!==farm||G.spawnerObjs[pi]!==spawner||G.arrays.sready[fi]!==0||G.arrays.pready[pi]!==0)throw Error('rebuilt completed rows');
  workerSearchTierReset();const restored=_wsCollectorGroup(cfg);
  if(restored.arrays.sready[restored.objs.indexOf(farm)]!==0)throw Error('reset eligibility');
  return {queries,rosterStable:true,nextEpoch:11,duplicateStable:true};

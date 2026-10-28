@@ -449,13 +449,16 @@ function _withPathfindSource(source, fn) {
 // from the unit's state, so a restored peer rebuilds the same schedule.
 let _pendingPathUnits = new Set();
 let _pendingPathDue = new Map(); // tick -> [unit] (duplicates dropped when taken)
+const _pendingPathListPool = [];
+const _pendingPathDueScratch = [];
+const _pendingPathBuckets = [[], [], [], [], []];
 function _pendingPathDueTick(u, afterTick) {
     let retry = u._astarBudgetRetryTick;
     return Number.isFinite(retry) && retry > afterTick + 1 ? retry : afterTick + 1;
 }
 function schedulePendingPathUnit(u, tick) {
     let list = _pendingPathDue.get(tick);
-    if (!list) _pendingPathDue.set(tick, list = []);
+    if (!list) _pendingPathDue.set(tick, list = _pendingPathListPool.pop() || []);
     list.push(u);
 }
 function notePendingPathUnit(u) {
@@ -463,6 +466,9 @@ function notePendingPathUnit(u) {
     schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
 }
 function resetPendingPathUnits() {
+    _pendingPathListPool.length = 0;
+    _pendingPathDueScratch.length = 0;
+    for (const bucket of _pendingPathBuckets) bucket.length = 0;
     _pendingPathUnits = new Set();
     _pendingPathDue = new Map();
     for (let u of units) if (u && !u.dead && u._pendingPathTarget) notePendingPathUnit(u);
@@ -470,16 +476,22 @@ function resetPendingPathUnits() {
 // The pending units due at `tick` (each once, in id order); those no longer
 // waiting are dropped.
 function takeDuePendingPathUnits(tick) {
-    let due = [];
+    const due = _pendingPathDueScratch;
+    due.length = 0;
     for (let [t, list] of _pendingPathDue) {
         if (t > tick) continue;
         _pendingPathDue.delete(t);
-        for (let u of list) {
+        // This loop can visit millions of duplicate scheduled entries.
+        // Indexed traversal avoids allocating ArrayIterator results in V8.
+        for (let i = 0; i < list.length; i++) {
+            const u = list[i];
             if (u._pendingDueStamp === tick) continue;
             u._pendingDueStamp = tick;
             if (u.dead || !u._pendingPathTarget) { _pendingPathUnits.delete(u); continue; }
             due.push(u);
         }
+        list.length = 0;
+        _pendingPathListPool.push(list);
     }
     due.sort((a, b) => a.id - b.id);
     return due;

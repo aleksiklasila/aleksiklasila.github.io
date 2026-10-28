@@ -245,7 +245,18 @@ function _updateMatchLoadOverlayPlayers() {
     }
 }
 
+// The large mixed trace builds lazy state across the first four steps
+// (9.0/1.7/1.5/1.0 seconds); subsequent steps enter the normal cost range.
+// These are ordinary sealed ticks, never extra local simulation advances.
+const MATCH_START_LOADING_STEPS = 4;
 function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Preparing game state...') {
+    // Ready/countdown only releases lockstep. Keep the world covered while
+    // its startup ticks build lazy simulation state, on every peer.
+    const sim = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
+    if (!visible && gameStarted && !gameOver && (sim ? !simClientWorldReady() || sim.appliedTick < sim.startTick + MATCH_START_LOADING_STEPS - 1 : currentTick < MATCH_START_LOADING_STEPS)) {
+        _matchLoadOverlayUntilRunning();
+        return;
+    }
     let el = ensureMatchLoadOverlayElement();
     let t = document.getElementById('match-load-overlay-title');
     let d = document.getElementById('match-load-overlay-detail');
@@ -4302,17 +4313,17 @@ function startSoloGame() {
     return _soloStartPreparation=preparation.then(begin).finally(()=>{_soloStartPreparation=null;});
 }
 
-// The load popup until the simulation worker has the match's world and its
-// first tick is shown (units on the move): a start that nobody else waits
-// for (solo, a host alone).
+// Keep startup behind loading until the initial warmup steps are presented.
+// This also covers page simulation and multiplayer's post-countdown tick.
+let _matchFirstTickWait = 0;
 function _matchLoadOverlayUntilRunning() {
-    if (typeof _simClient === 'undefined' || !_simClient || !_simClient.active) { setMatchLoadOverlay(false); return; }
-    const c = _simClient, epoch = c.epoch;
+    const c = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
+    const epoch = c && c.epoch, gen = ++_matchFirstTickWait, loadGen = _matchLoadGen;
     let stage = 0;
     const wait = () => {
-        if (c.epoch !== epoch || !gameStarted) return;
-        const ready = simClientWorldReady();
-        if (!ready || c.appliedTick < c.startTick) {
+        if (gen !== _matchFirstTickWait || loadGen !== _matchLoadGen || (c && c.epoch !== epoch) || !gameStarted) return;
+        const ready = !c || simClientWorldReady();
+        if (!gameOver && (!ready || (c ? c.appliedTick < c.startTick + MATCH_START_LOADING_STEPS - 1 : currentTick < MATCH_START_LOADING_STEPS))) {
             const want = ready ? 2 : 1;
             if (stage !== want) {
                 stage = want;

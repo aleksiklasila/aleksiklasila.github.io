@@ -1066,6 +1066,7 @@ const _wsGroupById = [], _wsCompletionRows = new WeakMap();
 const WS_NOT_BUILT = 2147483647;
 function _wsNoteCompletionRow(item, row) {
     const old = _wsCompletionRows.get(item);
+    if (old === row) return;
     if (old === undefined || (typeof old === 'number' && old >>> 24 === row >>> 24)) { _wsCompletionRows.set(item, row); return; }
     if (typeof old === 'number') { _wsCompletionRows.set(item, [old, row]); return; }
     for (let i = 0; i < old.length; i++) if (old[i] >>> 24 === row >>> 24) { old[i] = row; return; }
@@ -1259,22 +1260,25 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
     const SX = arr('sx', Float32Array, cap), SY = arr('sy', Float32Array, cap), ST = arr('st', Int32Array, cap), SO = arr('so', Int32Array, cap);
     const SR = arr('sready', Int32Array, cap); SR.fill(0, 0, cap);
-    const objs = [], types = [];
+    // Rebuild only after the previous batch has been consumed. Keep these
+    // backing arrays; obsolete references are released below.
+    const objs = G.objs, types = G.types;
+
     let n = 0;
-    if (drops) for (let i = 0; i < drops.length; i++) { const d = drops[i]; if (!d) continue; objs.push(d); types.push('drop'); SX[n] = Number(d.x); SY[n] = Number(d.y); ST[n] = 0; SO[n] = -1; n++; }
+    if (drops) for (let i = 0; i < drops.length; i++) { const d = drops[i]; if (!d) continue; objs[n] = d; types[n] = 'drop'; SX[n] = Number(d.x); SY[n] = Number(d.y); ST[n] = 0; SO[n] = -1; n++; }
     for (let i = 0; i < mines.length; i++) {
         const m = mines[i];
         if (!m) continue;
         const v = m[mk];
         if (!(Number.isFinite(v) && v > 0)) continue;
-        objs.push(m); types.push(cfg.mineTileType); SX[n] = Number(m.x); SY[n] = Number(m.y); ST[n] = 1; SO[n] = -1; n++;
+        objs[n] = m; types[n] = cfg.mineTileType; SX[n] = Number(m.x); SY[n] = Number(m.y); ST[n] = 1; SO[n] = -1; n++;
     }
     for (let i = 0; i < farms.length; i++) {
         const fm = farms[i];
         if (!(fm && fm.type === cfg.farmKey && fm.energy > 0)) continue;
         SR[n] = fm.underConstruction ? WS_NOT_BUILT : 0;
-        _wsNoteCompletionRow(fm, G.id * 33554432 + n);
-        objs.push(fm); types.push(cfg.farmKey); SX[n] = Number(fm.x); SY[n] = Number(fm.y); ST[n] = 2; SO[n] = Number.isFinite(fm.owner) ? fm.owner : -1; n++;
+        if (fm.underConstruction) _wsNoteCompletionRow(fm, G.id * 33554432 + n);
+        objs[n] = fm; types[n] = cfg.farmKey; SX[n] = Number(fm.x); SY[n] = Number(fm.y); ST[n] = 2; SO[n] = Number.isFinite(fm.owner) ? fm.owner : -1; n++;
     }
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
     const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, n);
@@ -1287,7 +1291,8 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) { const b = bk(s); BI[BS[b] + BC[b]++] = s; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
     const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np);
-    const PR = arr('pready', Int32Array, np), spawnerObjs = new Array(np);
+    const PR = arr('pready', Int32Array, np), spawnerObjs = G.spawnerObjs || (G.spawnerObjs = []);
+    spawnerObjs.length = np;
     // The spawners sorted by the bucket of their tile (the kernel finds an owner's
     // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
     // its count, then (16) the count of each owner's.
@@ -1295,7 +1300,8 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     meta.fill(0, 0, 5 + 2 * nb + 32);
     // (meta[5 + 2 nb + 16 + owner]: the owner's slot in the nearest-spawner field, -1 none.)
     for (let o = 0; o < 16; o++) meta[5 + 2 * nb + 16 + o] = -1;
-    const sb = new Int32Array(np);
+    let sb = G.spawnerBuckets;
+    if (!sb || sb.length < np) sb = G.spawnerBuckets = new Int32Array(Math.max(64, np * 2));
     for (let p = 0; p < np; p++) {
         const sp = spawners[p];
         sb[p] = Math.max(0, Math.min(brows - 1, Math.floor((Number(sp.gy) || 0) / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor((Number(sp.gx) || 0) / WS_BUCKET)));
@@ -1307,11 +1313,12 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
         const sp = spawners[p], b = sb[p], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
         PGX[q] = Math.floor(Number(sp.gx) || 0); PGY[q] = Math.floor(Number(sp.gy) || 0); PO[q] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[q] = Number(sp.id) || 0; PX[q] = Number(sp.x); PY[q] = Number(sp.y);
         PR[q] = sp.underConstruction ? WS_NOT_BUILT : 0; spawnerObjs[q] = sp;
-        _wsNoteCompletionRow(sp, G.id * 33554432 + 16777216 + q);
+        if (sp.underConstruction) _wsNoteCompletionRow(sp, G.id * 33554432 + 16777216 + q);
     }
     meta[0] = n; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
     _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta);
-    G.objs = objs; G.types = types; G.n = n; G.spawnerObjs = spawnerObjs;
+    objs.length = n; types.length = n;
+    G.n = n;
 }
 // Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
 // at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
