@@ -2274,3 +2274,65 @@ structures and projectiles is still to be designed.
    global startup memory budget across units, structures and projectiles
    (single shared structure table so per-class shares match the per-player
    building limit).
+
+### 2026-10-28 — recovery validation and structure-pool attribution
+
+The four-team recovery failure above is fixed. The trace corrects the old
+handoff: tick 361 was the intentional 123-energy corruption; tick 406 was
+the first repair-induced divergence (179 units). Full player/type stat
+rebuilds updated JS values without publishing native effective rows. Restore
+then refreshed only the repaired peer's native speeds. Rebuilds now publish
+those rows and invalidate stat versions; rules revision is 43.
+
+The retained 18k-unit/8k-structure four-team islands run, with helpers
+3/0/1/2 and unstable transport, passes 1,054 clean exact comparisons and
+197 recovery comparisons. All 14 correctness checks pass across the original
+13 successes and the corrected six-map worker rerun (5,490 tick comparisons).
+The worker job originally failed before executing because its preload path
+was treated as a package name. The validation runner now resolves it
+absolutely, retains live per-job logs and writes subset results separately.
+Evidence: `tests/test-runs/desync-fix-20261028/README.md` and its linked logs.
+
+The 240-step large mixed capture (1,000,004 initial units, 250k structures,
+dk=1, 11 helpers) confirms **all 10 structure-table growths occurred before
+gameplay**. Growth remains 10 at the steady boundary and after gameplay.
+Expiry starts at step 200 and frees 31,370 rows by the end (51,382 retired).
+The bench now records those checkpoints, per-tick counters and a direct
+`structRowsExpire` phase timer.
+
+The all-thread profile's worst steady step is 30: previous/slow/next wall
+times 310/831/341 ms, versus same-burst reference step 50 at 471 ms.
+Action processing expands from 65 to 256 ms; movement is 99 versus 110 ms.
+The main-thread profile attributes about 319 ms to GC versus 27 ms in the
+reference, although overlapping PerformanceObserver GC reports only 44
+versus 19 ms: these diagnostics disagree, so do not interpret sampled GC as
+an exact pause duration. At step 210, previous/slow/next are 283/640/273 ms
+versus same-burst step 220 at 286 ms. Spawner processing is 138 versus 11 ms,
+worker search 98 ms, with `_wsGroupBuild` about 74 ms sampled inclusive.
+All 12 thread profiles and both neighborhood analyses are retained.
+
+These are current-workload measurements, not a before/after speedup claim:
+correcting stale speeds changes combat and population relative to old runs.
+Serial 240-step runs (220 steady samples), retained as `pool-profile.json`
+and `pool-unprofiled.json` with raw JSONL sidecars:
+
+| Wall time / work | All-thread profile | Unprofiled |
+| --- | ---: | ---: |
+| Mean / p95 / p99 / max, ms | 308.8 / 437.0 / 529.9 / 830.8 | 292.5 / 427.5 / 512.9 / 622.6 |
+| Ticks >500 / >833 ms | 3 / 0 | 4 / 0 |
+| Measured population min–max | 424,226–579,908 | 424,226–579,908 |
+| Steady births / deaths | 2,765 / 160,691 | 2,765 / 160,691 |
+
+Both produce identical work totals: 859 research, 1,554 collector and 1,440
+astar deposits; 1,032 construction completions; 2,768 spawns (1,396 army);
+50,725 structures destroyed. Raw per-tick counters retain throughput.
+Unprofiled expiry totals 375 ms across its 40 active ticks (9.4 ms mean),
+maximum 50.9 ms at step 205, whose whole wall time is 275.3 ms. No gameplay
+growth occurs in either run. Thus pool expiry is measurable but does not
+explain the worst steady hitches in these captures.
+
+Remaining targets include action bursts, worker roster rebuilds, GC and
+movement; the initial gameplay tick also needs separate profiling (8.6 s in
+the profile and 8.4 s unprofiled, outside the steady profile but retained in
+the raw data). No production optimization was added during this continuation;
+it completes recovery validation and the previously outstanding pool audit.

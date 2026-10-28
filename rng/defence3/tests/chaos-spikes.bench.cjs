@@ -86,7 +86,7 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
   'navTick','navFieldsFlush','compactRemovedUnits','unitHitsResolve','statusPrepassRun','runQueuedOrders','visCoverHoldEnd','updateAllPlayerVisibility','unitEventsRun',
   'towersTick','_towerAcqPrepare','projectilesBegin','projectilesAdvance','projectilesEnd','laserBeamsTick','spawnerStructuresTick','adjacencyLaneStep','unitRetirePrepare',
   'updateVisibility','spatialIndexPrebuild','_upKeepSecond','ensureLaserConnections','healerCandidatesStep','pathRegionsWarm',
-  'workerSearchTierStep','_wswBuild','flushPendingResourceStatRebuilds','resourceTick','researchDrainTick','shrineTick','recomputePlayerPopCaps',
+  'workerSearchTierStep','_wswBuild','flushPendingResourceStatRebuilds','resourceTick','researchDrainTick','shrineTick','recomputePlayerPopCaps','structRowsExpire',
   ...${JSON.stringify((process.env.SUBPHASES||'').split(',').filter(Boolean))}])) {
   let f;try{f=eval(name);}catch{continue;}if(typeof f!=='function')continue;
   // Per-unit diagnostics aggregate durations without allocating timeline
