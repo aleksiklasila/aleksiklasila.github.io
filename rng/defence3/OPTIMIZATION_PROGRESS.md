@@ -2336,3 +2336,182 @@ movement; the initial gameplay tick also needs separate profiling (8.6 s in
 the profile and 8.4 s unprofiled, outside the steady profile but retained in
 the raw data). No production optimization was added during this continuation;
 it completes recovery validation and the previously outstanding pool audit.
+
+### 2026-10-28 — startup masking, roster reuse and bulk worker orders
+
+Working continuation (not a zero-allocation or stable-maximum claim):
+
+- Keep the loading overlay through four normal synchronized simulation steps,
+  including multiplayer. No extra hidden simulation steps are introduced.
+- Reuse worker roster arrays and pending-path lists/buckets; avoid registering
+  already completed structures and redundant completion-row publication.
+- Replace pending-path iteration allocations, including Map entry iteration.
+- Charge bulk orders for their actual JS worker/held-unit path before taking
+  the batch. Previously the native discount admitted an oversized worker batch
+  and charged its expensive work only afterward. JS work now costs four budget
+  units; native movement keeps its existing allowance. Rules revision is 44.
+
+All evidence below lives in `tests/test-runs/pools-20261028/`. Serial large
+mixed runs use 1,000,004 starting units, 250k structures and 11 helpers, 140
+steps / 120 steady samples. Before the last Map-iteration and order-budget
+edits, baseline/current p95/p99/max were 471.6/527.4/707.4 versus
+455.8/555.5/564.2 ms. Reverse-order repeats were current 423.0/527.4/628.4
+versus baseline 437.0/513.2/550.1 ms. Thus maximum improvement is **not
+established**. All four have steady populations 431,799–579,908, 1,245 births,
+151,598 deaths and identical work totals (1,248 spawns, 598 army; 433 research,
+744 collector, 728 astar, 540 completions, 46,279 destroyed structures).
+Repeat hashes match `b1b39307`. Raw ticks and counters accompany each JSON.
+
+All-thread `profile.json` attributes step 30 against previous/next and a
+same-burst reference: 340/661/379 ms versus reference step 20 at 417 ms.
+Actions, worker search, movement and GC all expand. Allocation sampling finds
+about 1,673 MiB on the simulation thread over 80 steady steps, including unit
+detachment/construction, pending iterators, ordered tile indexes and owned
+spawner lists. Replacing the inner pending iterator reduces the sampled total
+to about 1,511 MiB (`profile-indexed.json`); remaining Map iterator allocations
+motivated the subsequent static callback. The latter capture encountered severe
+physical-memory pressure, so its wall timings are not a clean speed comparison.
+Both captures retain all-thread profiles and neighboring-tick analyses.
+
+The real-browser mixed-selection reproduction initially selected 45,676 units
+and 1,250 houses (91,352 total units); this is much smaller than the user's
+500k selected units plus several hundred thousand selected buildings. Three
+ground clicks, two appended, with 11 helpers: `mixed-rally-browser-before.json`
+has simulation max 210.7 ms, queued-order max 143.8 ms and applied-tick gap max
+442.7 ms. `mixed-rally-browser-final.json` after the order-budget change has
+simulation p95/p99/max 34.5/50.1/115.3 ms, queued-order max 54.8 ms and gap max
+363.2 ms (one gap >250 ms). Page input still reaches 100 ms; presentation build
+130.3 ms. All CPU profiles and raw traces are retained. This is evidence for
+the small workload only; houses do not exercise actual rally assignment.
+
+The expanded `mass-rally-500k-250k.json` requests **per player** 500k mixed units,
+200k barracks and 50k builder spawners on a 2000 map. Actual placed/selected
+counts must be measured; configured counts are not a successful reproduction.
+Building multi-point assignment currently still runs synchronously on the page,
+unlike large unit multi-point assignment. Investigate it and command admission,
+transfer and simulation costs at full scale before claiming this hitch fixed.
+
+Validation so far: `validation.json` retains nine passing checks plus the serial
+benchmarks, including four-team recovery with helpers 3/0/1/2. After the order
+budget edit, order-fast, action-budget, action-supersede, event-route-batch and
+the new worker-budget regression pass. Final recovery validation of rules 44
+and the last Map-iteration edit is still pending. Allocation/GC elimination,
+full-scale rally latency and reliable gameplay maximum reduction remain open.
+
+### 2026-10-28 — bounded rally helper submission and commits (continuation)
+
+The requirement is stable simulation TPS: total command preparation may grow
+with selection size on background helpers, but that work must not be folded
+into the simulation tick. Responsiveness is secondary; pending commands may
+take multiple ticks. This continuation addresses the unfinished rally path,
+not all remaining simulation work.
+
+- Large building rally assignment now uses `assign_worker.js`, including
+  coordinate bucketing. Page-side packing yields every 2,048 buildings; helper
+  results submit one 512-building action per task. Jobs preserve click order,
+  including a later small selection, and discard old-match results. The
+  existing nearest/equal-share assignment algorithm is retained.
+- `setRallyMany` splits at the remaining simulation action allowance, preserving
+  the uncommitted coordinates in the existing deterministic snapshot backlog.
+  Rules revision is 45. This fixes commit overshoot; it does **not** remove
+  arrival bookkeeping scans or make all action admission constant time.
+- Finish the interrupted marker-pool work: cap building and framed-unit scans
+  to 2,048 entries, reuse projected marker records, invalidate building scan
+  state on reset/subgroup/command changes, and let unfinished scans advance
+  without the completed-cache throttle. Other marker fallback paths and
+  selection preparation still need auditing; this is not zero-allocation.
+
+Evidence is retained in `tests/test-runs/bounded-20261028/`. The six targeted
+checks pass, including helper assignment equivalence, chunk limits, click
+ordering, stale-match cancellation, rally backlog restore, marker reuse,
+action supersession and worker-order budgets. Four-peer unstable-network
+recovery with helpers 3/0/1/2 passes 1,054 clean exact comparisons and 197
+post-repair comparisons, exercising all 30 gameplay actions (`recovery.json`).
+
+The full-scale browser fixture here corrects `editableConfig`'s embedded
+`CONFIG_MAX_POP=100000` to 500000; the older fixture's requested UI population
+was overridden by that value. Actual measured counts remain the acceptance
+criterion. Large mixed baseline and subsequent serial measurements are
+retained with raw ticks and work counters; measurement analysis follows below.
+
+Serial mixed runs (140 steps, 120 steady, 1,000,004 starting units, 250k
+structures, 11 helpers, dk=1) produced these wall times. These are broad
+regression diagnostics, **not rally-setting measurements or a speedup claim**:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| p95 / p99 / max, ms | 440.3 / 531.3 / 536.4 | 515.8 / 673.1 / 718.1 |
+| Ticks >500 / >833 ms | 2 / 0 | 7 / 0 |
+| Steady population min–max | 431,136–579,865 | 431,102–579,881 |
+| Births / deaths | 1,181 / 152,070 | 1,234 / 152,227 |
+| Spawns (army) | 1,184 (587) | 1,237 (605) |
+| Research / collector / astar deposits | 444 / 765 / 760 | 443 / 764 / 743 |
+| Construction / destroyed structures | 540 / 46,243 | 558 / 46,286 |
+
+Hardware/memory conditions are a substantial confound: free physical memory
+at the worst ticks was only 247/264 MiB. The after run's worst step 38 has
+previous/slow/next wall times 384/718/475 ms; nearby non-burst step 36 is
+401 ms. Worker search expands to 359 ms versus 15 ms at steps 37/36 and
+0.2 ms at 39. The before maximum instead expands in `navFieldsFlush`
+(245 ms at step 126). Do not attribute this difference to rally commits.
+
+All-thread profiling (`profile.json`, 80 steps) captures step 30 versus
+same-burst reference 50: previous/slow/next 347/1,028/492 ms, reference
+504 ms. `simUnitStateCollect` grows from 23 to 369 ms, actions 57 to 109 ms,
+movement 115 to 140 ms and worker search 76 to 99 ms. Main-thread sampled GC
+is about 379 ms on the slow tick; overlapping GC events report 111 ms, so
+these diagnostics disagree on duration. Helpers are largely idle in the
+expanded wall window (e.g. helper0 851 ms idle versus 377 ms at reference).
+All twelve profiles and previous/slow/next/reference slicing are retained.
+This supports further allocation and simulation-path work; it does not
+establish a causal rally regression. The user freed memory afterward; the
+remaining timing work prioritizes rally-specific browser measurements.
+
+Rally-specific results (all files in the same evidence directory):
+
+- `browser.json` reaches **500,000 selected units plus 250,000 selected
+  buildings**, one million total units, 2000-square map, 11 helpers. Three
+  ground clicks (two appended), 34.5 measured seconds, no errors. Simulation
+  p95/p99/max 381.9/614.7/614.7 ms; applied gap max 1275.3 ms. A first-command
+  `sanitizeAction` call takes 312.8 ms and `processActions` 364.4 ms.
+- `browser-synchronous.json` restores only synchronous building assignment
+  and unsplit rally commits, retaining the current marker code. It also
+  reaches the full population, but **is not a controlled timing comparison**:
+  the harness's temporary fixed Date was restored before asynchronous solo
+  startup used it, so the armies started at different positions. Keep this
+  run as diagnostic evidence, not an improvement/regression claim.
+- Fix the harness by awaiting solo startup while the seed override is active,
+  recording the actual seed, retaining raw tick/presentation/event rows and
+  each rally submission, and recording slow sanitizer payload sizes. Optional
+  source overrides allow comparisons without replacing working sources.
+- `browser-profile.json` uses seed 1790000000000 and the full population for
+  61.9 seconds. All **750,000** building coordinates are submitted in 1,468
+  chunks, first-to-last submission **47.7 s**. This confirms submission, not
+  per-building acknowledgment. No errors, no sanitizer call above 8 ms.
+  Simulation p95/p99/max **465.3/486.7/494.6 ms**, applied gap p95/p99/max
+  **570.9/648.3/685.3 ms**. Marker work is 1,972 ms over 4,120 calls, maximum
+  **8.4 ms**; page input still reaches **878 ms** and info-panel work 442 ms.
+  Profiling affects timing; do not compare this directly to unprofiled runs.
+
+Within the final browser measurement window, traced simulation tick 56 is
+slowest: previous/slow/next totals 449/498/411 ms, versus nearby action-bearing
+reference tick 74 at 379 ms. Actions are 68 versus 5 ms; movement is 190 versus
+240 ms, so movement does not explain this particular expansion. The worker
+reports queued-order max 116 ms elsewhere. The earlier 313 ms sanitation
+outlier did not recur, so it is not established as a consistent algorithmic
+bottleneck. The trace also retains a 2.18-second tick during premeasurement
+profiler setup (visibility 1.86 s); do not mix it into the measured window or
+silently discard it. CPU profiles of the page and existing simulation/helper
+workers are retained; the lazily created assignment worker is not included
+in that profiler attachment set.
+
+Remaining: stable TPS for arbitrary player bursts is **not achieved**. Work
+still scales in simulation-side action arrival bookkeeping and unit-order
+processing; those need bounded admission/commits and background preparation
+over reusable SoA/native data. No new WASM/SIMD kernel was added in this
+continuation. Full-scale pending-command latency is long, as expected from
+serialized submissions; optimize it only while preserving the tick bound.
+Marker fallback scans, selection/input work and the info panel also remain.
+The browser's first sandbox launch failed with access-denied errors; successful
+browser runs used the approved unsandboxed retry. No further mixed runs were
+started after the user prioritized rally-specific testing.

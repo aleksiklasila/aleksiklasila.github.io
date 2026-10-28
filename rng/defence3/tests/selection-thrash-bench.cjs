@@ -25,12 +25,15 @@ const path = require('node:path');
 const http = require('node:http');
 const { chromium } = require('playwright');
 const root = path.resolve(__dirname, '..');
+// Local source snapshots let serial browser comparisons use the same fixture
+// without replacing production files while the server is running.
+const sourceOverrides = JSON.parse(process.env.DEFENCE_TEST_SOURCE_OVERRIDES || '{}');
 const mime = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.wasm': 'application/wasm' };
 const server = http.createServer((req, res) => {
     const name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname).replace(/^\//, '') || 'index.html';
     const file = path.resolve(root, name);
     if (!file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
-    fs.readFile(file, (err, data) => {
+    fs.readFile(sourceOverrides[name] || file, (err, data) => {
         if (err) { res.writeHead(404).end(); return; }
         res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store',
             'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' });
@@ -55,7 +58,7 @@ const PAGE_FNS = ['processRenderFrame', 'build3DFrameData', 'draw', 'drawMinimap
     'doesCurrentSelectionMatchSnapshot', 'toggleVisibleSameTypeSelectionFromHit', 'findNearestOwnedSelectableClickTarget', 'netMaintain', 'resyncAfterTick',
     'snapStoreTickHash', '_simClientReplayEvents', '_simClientUpdateStableSlots', '_simClientRebaseFrame', 'actionIdsEncode', 'sanitizeAction'];
 const PAGE_SETUP = names => {
-    const W = window.__sel = { frames: [], ticks: [], long: [], events: [], pres: [], fn: {}, slow: [], on: false };
+    const W = window.__sel = { frames: [], ticks: [], long: [], events: [], pres: [], fn: {}, slow: [], rallies: [], on: false };
     const raf = ts => { if (W.on) W.frames.push(ts); requestAnimationFrame(raf); };
     requestAnimationFrame(raf);
     try { new PerformanceObserver(list => { if (W.on) for (const e of list.getEntries()) W.long.push([e.startTime, e.duration]); }).observe({ type: 'longtask', buffered: false }); } catch { }
@@ -65,6 +68,9 @@ const PAGE_SETUP = names => {
         const a = performance.now();
         try { return f.apply(self || this, arguments); } finally {
             if (W.on) {
+                if (name === 'queueAction' && arguments[0] && arguments[0].action === 'setRallyMany') {
+                    const r = arguments[0]; W.rallies.push({ at: a, count: r.coords.length / 2, x: r.targetX, y: r.targetY });
+                }
                 const d = performance.now() - a, s = W.fn[name] || (W.fn[name] = { n: 0, ms: 0, max: 0 });
                 s.n++; s.ms += d; if (d > s.max) s.max = d;
                 if (d > 8 && W.slow.length < 4000) W.slow.push([name, Math.round(a), Math.round(d * 10) / 10]);
@@ -89,18 +95,20 @@ const WORKER_FNS = ['_simTick', '_simRequest', 'gameTick', 'processActions', '_s
     'adjacencyLaneStep', '_acqTierStep', 'simParallelBackgroundWait', 'actionIdsDecode', 'sanitizeAction', 'issueMoveOrder', 'issueAttackMoveOrder'];
 const workerSetup = page => page.evaluate(names => simClientRequest('debugEval', { expr: `(() => {
     if (self.__ph) return Object.keys(self.__ph.w).length;
-    const P = self.__ph = { t: {}, c: {}, m: {}, w: {}, slow: [], n0: currentTick, on: false }, now = () => performance.now();
+    const P = self.__ph = { t: {}, c: {}, m: {}, w: {}, slow: [], actionSlow: [], n0: currentTick, on: false }, now = () => performance.now();
     for (const name of ${JSON.stringify(names)}) {
         let f; try { f = self.eval(name); } catch (e) { continue; }
         if (typeof f !== 'function') continue;
         P.w[name] = 1;
         self.__phw = function () { const a = now(); try { return f.apply(this, arguments); } finally { if (P.on) { const d = now() - a; P.t[name] = (P.t[name] || 0) + d; P.c[name] = (P.c[name] || 0) + 1; if (d > (P.m[name] || 0)) P.m[name] = d;
-            if (d > 25 && name !== '_simTick' && name !== 'gameTick' && P.slow.length < 400) P.slow.push([name, currentTick, Math.round(d * 10) / 10]); } } };
+            if (d > 25 && name !== '_simTick' && name !== 'gameTick' && P.slow.length < 400) P.slow.push([name, currentTick, Math.round(d * 10) / 10]);
+            if (d > 8 && name === 'sanitizeAction' && P.actionSlow.length < 400) { const raw = arguments[0] || {}; P.actionSlow.push({ tick: currentTick, ms: d, action: raw.action, ids: Array.isArray(raw.unitIds) ? raw.unitIds.length : null, encodedChars: typeof raw.uidz === 'string' ? raw.uidz.length : null, coords: Array.isArray(raw.coords) ? raw.coords.length / 2 : null }); }
+        } } };
         self.eval(name + ' = self.__phw');
     }
     return Object.keys(P.w).length; })()` }), WORKER_FNS);
-const workerBegin = page => page.evaluate(() => simClientRequest('debugEval', { expr: '(() => { const P = self.__ph; P.t = {}; P.c = {}; P.m = {}; P.slow = []; P.n0 = currentTick; P.on = true; return 1; })()' }));
-const workerEnd = async page => JSON.parse(await page.evaluate(() => simClientRequest('debugEval', { expr: '(() => { const P = self.__ph; P.on = false; return { t: P.t, c: P.c, m: P.m, slow: P.slow, n: currentTick - P.n0, units: units.length }; })()' })));
+const workerBegin = page => page.evaluate(() => simClientRequest('debugEval', { expr: '(() => { const P = self.__ph; P.t = {}; P.c = {}; P.m = {}; P.slow = []; P.actionSlow = []; P.n0 = currentTick; P.on = true; return 1; })()' }));
+const workerEnd = async page => JSON.parse(await page.evaluate(() => simClientRequest('debugEval', { expr: '(() => { const P = self.__ph; P.on = false; return { t: P.t, c: P.c, m: P.m, slow: P.slow, actionSlow: P.actionSlow, n: currentTick - P.n0, units: units.length }; })()' })));
 
 const PAGE_VIEW = mode => {
     setRenderDimensionMode(mode);
@@ -136,6 +144,8 @@ const PAGE_COLLECT = () => {
     const sim = W.ticks.map(r => r[2]), late = W.ticks.map(r => r[4]);
     const fn = Object.entries(W.fn).map(([k, v]) => [k, v.n, Math.round(v.ms), Math.round(v.max * 10) / 10]).sort((a, b) => b[3] - a[3]);
     const out = {
+        raw: { ticks: W.ticks, presentation: W.pres, events: W.events, rallies: W.rallies },
+        rallyCoordsIssued: W.rallies.reduce((n, r) => n + r.count, 0),
         fps: fd.length ? Math.round(fd.length / span(W.frames) * 10) / 10 : 0,
         frameMs: { p50: q(fd, .5), p95: q(fd, .95), p99: q(fd, .99), max: q(fd, 1) },
         frameOver: { 33: fd.filter(d => d > 33).length, 50: fd.filter(d => d > 50).length, 100: fd.filter(d => d > 100).length, 250: fd.filter(d => d > 250).length },
@@ -154,7 +164,7 @@ const PAGE_COLLECT = () => {
     };
     return out;
 };
-const PAGE_BEGIN = () => { const W = window.__sel; W.frames = []; W.ticks = []; W.long = []; W.events = []; W.pres = []; W.fn = {}; W.slow = []; W.on = true; };
+const PAGE_BEGIN = () => { const W = window.__sel; W.frames = []; W.ticks = []; W.long = []; W.events = []; W.pres = []; W.fn = {}; W.slow = []; W.rallies = []; W.on = true; };
 
 async function workersProfileStart(browser) {
     const cdp = await browser.newBrowserCDPSession();
@@ -203,8 +213,8 @@ let browser;
         applyMainMenuSettingsSnapshot(data);
         document.getElementById('cfg-full-vis').value = vis;
         const now = Date.now; Date.now = () => 1790000000000;
-        try { startSoloGame(); } finally { Date.now = now; }
-        return { towers: towers.length, map: GRID_W, vis, fullVisibility, isolated: window.crossOriginIsolated };
+        try { await startSoloGame(); } finally { Date.now = now; }
+        return { towers: towers.length, map: GRID_W, seed: gameSeed, vis, fullVisibility, isolated: window.crossOriginIsolated };
     }, [fixture, VIS]);
     await page.waitForFunction(() => typeof simClientStats === 'function' && simClientStats().appliedTick >= 5, {}, { timeout: 600000 });
     setup.startS = Math.round((Date.now() - t0) / 100) / 10;
@@ -251,6 +261,20 @@ let browser;
         return k;
     };
     const actions = {
+        mixedrally: async ms => {
+            // The HUD's full-team selection, including buildings, followed
+            // by ground orders and appended rally points through real input.
+            await page.locator('[title="Select all owned units and buildings"]').first().click();
+            const R = (await page.evaluate(PAGE_GEOM)).rect;
+            for (let k = 0; k < 3; k++) {
+                if (k) await page.keyboard.down('Control');
+                await page.mouse.click(R.left + (R.right-R.left) * (.35 + k * .12), R.top + (R.bottom-R.top) * .55, {button:'right'});
+                if (k) await page.keyboard.up('Control');
+                await sleep(750);
+            }
+            await sleep(Math.max(0, ms - 2250));
+            return 3;
+        },
         idle: async ms => { await page.keyboard.press('Escape'); await sleep(ms); return 0; },
         selall: async ms => { await selectAll(); await sleep(ms); return 1; },
         box: ms => thrash(ms, null),
@@ -310,7 +334,7 @@ let browser;
         const wk = Object.keys(W.t).map(k => [k, W.c[k], Math.round(W.t[k] / Math.max(1, W.n) * 100) / 100, Math.round(W.m[k] * 10) / 10]);
         r.workerTps = Math.round(W.n / secs * 10) / 10; r.actions = acts; r.secs = Math.round(secs * 10) / 10; r.unitsAtEnd = W.units;
         r.workerByMax = wk.slice().sort((a, b) => b[3] - a[3]).slice(0, 14); r.workerByMean = wk.slice().sort((a, b) => b[2] - a[2]).slice(0, 14);
-        r.workerSlow = W.slow.slice(0, 60); r.pageSlow = slow.slice(0, 200);
+        r.workerSlow = W.slow; r.actionSlow = W.actionSlow; r.pageSlow = slow.slice(0, 200);
         out.phases[phase] = r;
         console.log(`\n== ${phase} (${r.secs}s, ${acts} actions, ${r.selected} selected) ==`);
         console.log('  fps', r.fps, 'frame ms', JSON.stringify(r.frameMs), 'over', JSON.stringify(r.frameOver));
@@ -323,6 +347,7 @@ let browser;
         console.log('  worker by max [name, calls, ms/tick, max ms]:', r.workerByMax.slice(0, 10).map(x => `${x[0]} ${x[1]}/${x[2]}/${x[3]}`).join('  '));
         console.log('  worker by mean:', r.workerByMean.slice(0, 10).map(x => `${x[0]} ${x[2]}`).join('  '));
     }
+    out.simTrace = await page.evaluate(() => window.__simTrace || null);
     fs.writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n');
     console.log('\nwritten', OUT, 'errors', errors.length ? errors.slice(0, 8) : 0);
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(async () => { if (browser) await browser.close(); server.close(); });

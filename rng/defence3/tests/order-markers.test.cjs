@@ -79,4 +79,19 @@ assert.deepEqual(points(), [[112,144,'#4f4'],[800,816,'#4f4']], 'pending feedbac
 run('__scratch.F.orderDest[399] = 25 * GRID_W + 26; __scratch.F.orderTick[399] = 510; _pageFrameSerial++;');
 assert.deepEqual(points(), [[112,144,'#4f4'],[816,816,'#4f4']]);
 assert.deepEqual(game.errors, []);
+run(`
+    resetOrderMarkers(); _pageFrame = null; simClientCurrentUnitVis = () => null;
+    selectedUnits = []; activeSubGroups = {}; selectedEntities = [];
+    for (let i = 0; i < 5000; i++) selectedEntities.push({ owner: 0, type: 'barrack', unitType: 'norm', energy: 100, gx: i, gy: 1, rallyX: 100, rallyY: 200 });
+    __scratch.pool = _orderMarkerPool.slice();
+    getOrderMarkers();
+`);
+assert.equal(run('_buildingMarkerScan.cursor'), 2048, 'large building scan uses a fixed slice');
+run('gameTime++; getOrderMarkers();');
+assert.equal(run('_buildingMarkerScan.cursor'), 4096);
+run('gameTime++; getOrderMarkers();');
+assert.deepEqual(points(), [[100,200,'#9aa']], 'duplicate destinations publish only one record');
+assert.equal(run('_orderMarkerPool.every((m, i) => m === __scratch.pool[i])'), true, 'marker records reused');
+run('resetOrderMarkers(); gameTime++; getOrderMarkers();');
+assert.equal(run('_buildingMarkerScan.published'), 0, 'reset cannot reuse previous building scan');
 console.log('PASS: active markers, immediate replacement, deselection/reselection, completion, stop, subgroup toggles, and large worker selections.');

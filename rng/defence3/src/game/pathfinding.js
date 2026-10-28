@@ -452,6 +452,7 @@ let _pendingPathDue = new Map(); // tick -> [unit] (duplicates dropped when take
 const _pendingPathListPool = [];
 const _pendingPathDueScratch = [];
 const _pendingPathBuckets = [[], [], [], [], []];
+let _pendingTakeTick = 0;
 function _pendingPathDueTick(u, afterTick) {
     let retry = u._astarBudgetRetryTick;
     return Number.isFinite(retry) && retry > afterTick + 1 ? retry : afterTick + 1;
@@ -478,8 +479,17 @@ function resetPendingPathUnits() {
 function takeDuePendingPathUnits(tick) {
     const due = _pendingPathDueScratch;
     due.length = 0;
-    for (let [t, list] of _pendingPathDue) {
-        if (t > tick) continue;
+    _pendingTakeTick = tick;
+    // Map iteration also allocates a pair and iterator results per entry.
+    // The callback is shared; this synchronous pass never schedules work.
+    _pendingPathDue.forEach(_takePendingPathList);
+    due.sort(_pendingPathIdOrder);
+    return due;
+}
+function _pendingPathIdOrder(a, b) { return a.id - b.id; }
+function _takePendingPathList(list, t) {
+        const tick = _pendingTakeTick, due = _pendingPathDueScratch;
+        if (t > tick) return;
         _pendingPathDue.delete(t);
         // This loop can visit millions of duplicate scheduled entries.
         // Indexed traversal avoids allocating ArrayIterator results in V8.
@@ -492,9 +502,6 @@ function takeDuePendingPathUnits(tick) {
         }
         list.length = 0;
         _pendingPathListPool.push(list);
-    }
-    due.sort((a, b) => a.id - b.id);
-    return due;
 }
 
 function _countPendingPathBacklog() {

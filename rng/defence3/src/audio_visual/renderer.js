@@ -2580,6 +2580,8 @@ function resetOrderMarkers() {
     _orderPings.length = 0;
     _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
     _unitDestScan.at = -1; _unitDestScan.done = null; _unitDestScan.doneAt = -Infinity;
+    _buildingMarkerScan.list = null; _buildingMarkerScan.published = 0;
+    _orderMarkerScan = null;
     _orderMarkerCache = null; _orderMarkerRevision++;
     _rallyVisualLastSeen = new WeakMap();
 }
@@ -2672,11 +2674,50 @@ function getUnitOrderTarget(u) {
 // (The most markers a selection shows: an army sent to thousands of points
 // is not drawn as thousands of crosses.)
 const ORDER_MARKERS_MAX = 2000;
+// Fixed storage, independent of the selected population. Hash slots are
+// epoch-cleared without allocating Set entries on every presentation frame.
+function _markerKeyTable() { return { keys: new Float64Array(8192), stamps: new Uint32Array(8192), epoch: 1 }; }
+function _markerKeysReset(t) { if (++t.epoch >= 0xffffffff) { t.stamps.fill(0); t.epoch = 1; } }
+function _markerKeyInsert(t, key) {
+    let s = ((key | 0) ^ (Math.floor(key / 4294967296) | 0)) & 8191;
+    while (t.stamps[s] === t.epoch) { if (t.keys[s] === key) return false; s = (s + 1) & 8191; }
+    t.stamps[s] = t.epoch; t.keys[s] = key; return true;
+}
+function _markerKey(t) { return (Math.round(t.x * 8) * 2097152 + Math.round(t.y * 8)) * 4 + (t.kind === 'arrow' ? 1 : 0) + (t.color === '#f66' ? 2 : 0); }
+const _orderMarkerPool = Array.from({ length: ORDER_MARKERS_MAX }, () => ({ x: 0, z: 0, kind: 'plus', color: '#4f4', n: 1, minor: false, visible: false }));
+const _orderMarkerOutput = [], _orderMarkerKeys = _markerKeyTable();
+const BUILDING_MARKER_SLICE = 2048;
+const _buildingMarkerScan = { list: null, sub: '', cursor: 0, count: 0, published: 0, doneAt: -Infinity,
+    keys: _markerKeyTable(), write: Array.from({ length: ORDER_MARKERS_MAX }, () => ({ x: 0, y: 0, kind: 'arrow', color: '#9aa' })),
+    read: Array.from({ length: ORDER_MARKERS_MAX }, () => ({ x: 0, y: 0, kind: 'arrow', color: '#9aa' })) };
+function _buildingMarkerAdd(t) {
+    const S = _buildingMarkerScan;
+    if (!t || S.count >= ORDER_MARKERS_MAX || !_markerKeyInsert(S.keys, _markerKey(t))) return;
+    const m = S.write[S.count++]; m.x = t.x; m.y = t.y; m.kind = t.kind; m.color = t.color;
+}
+function _buildingMarkerFull() { return _buildingMarkerScan.count >= ORDER_MARKERS_MAX; }
+function _buildingMarkersStep(sub, now, add) {
+    const S = _buildingMarkerScan, list = selectedEntities;
+    if (S.list !== list || S.sub !== sub || S.ignore !== ignoreLevelSubgroups || S.revision !== _orderMarkerRevision || S.length !== list.length) {
+        S.list = list; S.sub = sub; S.ignore = ignoreLevelSubgroups; S.revision = _orderMarkerRevision; S.length = list.length;
+        S.cursor = 0; S.count = S.published = 0; S.doneAt = -Infinity; _markerKeysReset(S.keys);
+    }
+    if (S.cursor < list.length || now - S.doneAt >= ORDER_MARKERS_SCAN_MS) {
+        if (S.cursor >= list.length) { S.cursor = 0; S.count = 0; _markerKeysReset(S.keys); }
+        const end = Math.min(list.length, S.cursor + BUILDING_MARKER_SLICE);
+        _addBuildingRallyMarkers(list, _buildingMarkerAdd, _buildingMarkerFull, S.cursor, end, true);
+        S.cursor = end;
+        if (end === list.length || _buildingMarkerFull()) {
+            const tmp = S.read; S.read = S.write; S.write = tmp; S.published = S.count; S.doneAt = now; S.cursor = list.length;
+        }
+    }
+    for (let i = 0; i < S.published; i++) add(S.read[i]);
+}
 // (A big selection's scans, its buildings' rally points and its units'
 // destinations, made at most every ORDER_MARKERS_SCAN_MS: while an order is
 // on its way (seconds at 1 TPS) they were made every frame, ~100 ms each for
 // a million units and 190k buildings; what is on its way is drawn each frame.)
-const ORDER_MARKERS_SCAN_MS = 200, ORDER_MARKERS_SLICE = 200000;
+const ORDER_MARKERS_SCAN_MS = 200, ORDER_MARKERS_SLICE = 2048;
 let _orderMarkerScan = null;
 const _unitDestScan = { at: -1, doneAt: -Infinity, codes: new Map(), out: [], done: null, last: 0, lastM: null, rev: -1, sel: null, scout: -2 };
 // Markers as drawn: those close on screen merged into one (MARKER_CELL_PX
@@ -2686,6 +2727,7 @@ const _unitDestScan = { at: -1, doneAt: -Infinity, codes: new Map(), out: [], do
 // of destinations read as a few markers, not a screen of crosses.
 const MARKER_CELL_PX = 22, MARKER_MINOR_CELL_PX = 9;
 const _markerCells = new Map(), _markerMinorCells = new Map(), _markerOut = [];
+const _markerDrawPool = Array.from({ length: ORDER_MARKERS_MAX }, () => ({ x: 0, y: 0, kind: 'plus', color: '#4f4', n: 1, minor: false, hidden: false, size: 1 }));
 function declutterOrderMarkers(markers, project) {
     _markerCells.clear(); _markerMinorCells.clear(); _markerOut.length = 0;
     for (const m of markers) {
@@ -2702,7 +2744,9 @@ function declutterOrderMarkers(markers, project) {
             if ((m.kind === 'arrow' && had.kind !== 'arrow') || (m.color === '#f66' && had.color !== '#f66' && had.kind === m.kind)) { had.kind = m.kind; had.color = m.color; had.x = p.x; had.y = p.y; }
             continue;
         }
-        const e = { x: p.x, y: p.y, kind: m.kind, color: m.color, n, minor };
+        if (_markerOut.length >= ORDER_MARKERS_MAX) break;
+        const e = _markerDrawPool[_markerOut.length];
+        e.x = p.x; e.y = p.y; e.kind = m.kind; e.color = m.color; e.n = n; e.minor = minor; e.hidden = false; e.size = 1;
         cells.set(key, e); _markerOut.push(e);
     }
     // (A minor dot under a real marker's cell: dropped.)
@@ -2724,14 +2768,19 @@ function getOrderMarkers() {
     // (A big selection's markers a few times a second: thousands of rally
     // points and an army's destinations do not move by the frame.)
     const big = selectedUnits.length + selectedEntities.length > SELECTED_UNIT_LINES_MAX, now = performance.now();
-    if (same && big && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0 && _orderPings.length === 0 && _pendingRallyCovers.length === 0) return C.markers;
-    const markers = [], seen = new Set();
+    const scanning = _unitDestScan.at >= 0 || (_buildingMarkerScan.list === selectedEntities && _buildingMarkerScan.cursor < selectedEntities.length);
+    if (same && big && !scanning && now - C.at < 150 && _pendingUnitOrderMarkers.size === 0 && _pendingRallyMarkers.size === 0 && _pendingCommandMarkers.length === 0 && _orderPings.length === 0 && _pendingRallyCovers.length === 0) return C.markers;
+    const markers = _orderMarkerOutput;
+    for (let i = 0; i < markers.length; i++) markers[i].visible = false;
+    markers.length = 0; _markerKeysReset(_orderMarkerKeys);
     const add = t => {
         if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y) || markers.length >= ORDER_MARKERS_MAX) return;
         // (One marker a point and kind: a whole number key, by the eighth of a pixel.)
-        const key = (Math.round(t.x * 8) * 2097152 + Math.round(t.y * 8)) * 4 + (t.kind === 'arrow' ? 1 : 0) + (t.color === '#f66' ? 2 : 0);
-        if (seen.has(key)) return;
-        seen.add(key); markers.push({ x: t.x / TILE, z: t.y / TILE, kind: t.kind, color: t.color, n: t.n || 1, minor: t.minor === true });
+        if (!_markerKeyInsert(_orderMarkerKeys, _markerKey(t))) return;
+        const m = _orderMarkerPool[markers.length];
+        m.x = t.x / TILE; m.z = t.y / TILE; m.kind = t.kind; m.color = t.color;
+        m.n = t.n || 1; m.minor = t.minor === true; m.visible = true; markers.push(m);
+        return true;
     };
     const R = _orderMarkerScan;
     // (Not keyed by the selection index's version or the lists' lengths: in a
@@ -2745,12 +2794,13 @@ function getOrderMarkers() {
     // marker, no pass over the buildings.)
     const cover = _pendingRallyCovers.length && _pendingRallyMarkers.size === 0 ? _rallyCoverCurrent() : null;
     if (cover) add({ x: cover.x, y: cover.y, kind: 'arrow', color: '#9aa' });
+    else if (selectedEntities.length > BUILDING_MARKER_SLICE) _buildingMarkersStep(sub, now, add);
     else if (reuse && reuse.entDone) { for (const m of reuse.ent) add(m); }
     else {
-        _addBuildingRallyMarkers(getActiveEntities(), scan ? m => { add(m); if (m) scan.ent.push(m); } : add, () => markers.length >= ORDER_MARKERS_MAX);
+        _addBuildingRallyMarkers(getActiveEntities(), scan ? m => { if (add(m)) scan.ent.push(m); } : add, () => markers.length >= ORDER_MARKERS_MAX);
         if (scan) scan.entDone = true;
     }
-    const addU = scan ? m => { add(m); if (m) scan.unit.push(m); } : add;
+    const addU = scan ? m => { if (add(m)) scan.unit.push(m); } : add;
     // (Big orders not yet shown by the frames: their markers. One that
     // orders the whole selection hides the destinations the frames still
     // show for it: they are superseded.)
@@ -2870,12 +2920,14 @@ const _RALLY_SPAWNER_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'sa
 // rally on its way, a unit to follow or no columns goes the views' way
 // (getBuildingOrderTarget); one marker per run of equal rally points.
 const _rallyTypeByCode = [];
-function _addBuildingRallyMarkers(list, add, full) {
+function _addBuildingRallyMarkers(list, add, full, start = 0, end = list.length, filter = false) {
     const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
     const me = localPlayerId, pend = _pendingRallyMarkers.size > 0, covers = _pendingRallyCovers.length > 0;
     let lastX = NaN, lastY = NaN, lastPending = null;
-    for (const ent of list) {
+    for (let i = start; i < end; i++) {
         if (full()) break;
+        const ent = list[i];
+        if (!ent || (filter && activeSubGroups[getEntityGroupKey(ent)] === false)) continue;
         const s = T && ent && ent._kind !== undefined ? ent._s : -1;
         if (!(s >= 0)) {
             if (!ent || ent.owner !== me || (ent.energy !== undefined && ent.energy <= 0)) continue;

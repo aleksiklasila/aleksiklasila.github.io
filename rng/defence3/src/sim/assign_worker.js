@@ -12,12 +12,17 @@ self.onmessage = event => {
     const m = event.data;
     try {
         const pick = assign(m.xs, m.ys, m.has, m.points);
-        if (!m.ids) { self.postMessage({ seq: m.seq, pick }, [pick.buffer]); return; }
+        if (!m.ids && !m.coords) { self.postMessage({ seq: m.seq, pick }, [pick.buffer]); return; }
         // (With ids: each point's ids, in their order.)
         const k = m.points.length, count = new Int32Array(k);
         for (let i = 0; i < pick.length; i++) count[pick[i]]++;
-        const buckets = Array.from({ length: k }, (_, j) => new Int32Array(count[j])), at = new Int32Array(k);
-        for (let i = 0; i < pick.length; i++) { const j = pick[i]; buckets[j][at[j]++] = m.ids[i]; }
+        const stride = m.coords ? 2 : 1;
+        const buckets = Array.from({ length: k }, (_, j) => new Int32Array(count[j] * stride)), at = new Int32Array(k);
+        for (let i = 0; i < pick.length; i++) {
+            const j = pick[i];
+            if (m.coords) { buckets[j][at[j]++] = m.coords[i * 2]; buckets[j][at[j]++] = m.coords[i * 2 + 1]; }
+            else buckets[j][at[j]++] = m.ids[i];
+        }
         self.postMessage({ seq: m.seq, buckets }, buckets.map(b => b.buffer));
     } catch (err) {
         self.postMessage({ seq: m.seq, error: String(err && err.stack || err) });

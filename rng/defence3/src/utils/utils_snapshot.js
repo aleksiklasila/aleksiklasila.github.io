@@ -162,7 +162,7 @@ const SNAP_FORMAT = 7;
 // event phase. Newly completed spawners become candidates next brain batch.
 // 43: full player/type stat rebuilds publish native effective rows and
 // invalidate unit stat versions, as individual research updates do.
-const SIM_RULES_REVISION = 43;
+const SIM_RULES_REVISION = 45;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

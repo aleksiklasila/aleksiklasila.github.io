@@ -918,6 +918,68 @@ function initInput() {
 
     let _entityWorldXY = e => e ? { x: Number.isFinite(e.x) ? e.x : (e.gx * TILE + 16), y: Number.isFinite(e.y) ? e.y : (e.gy * TILE + 16) } : null;
 
+    // Large rally preparation stays off the input handler. Preserve click order,
+    // including a later small selection, and submit at most one fixed chunk per
+    // page task. Peers receive ordinary actions; helper completion is not sim state.
+    const RALLY_PREP_SLICE = 2048, RALLY_COMMIT_SLICE = 512;
+    let _rallyJobs = [], _rallyWorker = null, _rallySeq = 0;
+    function _rallyJobNext(job) {
+        if (_rallyJobs[0] !== job) return;
+        _rallyJobs.shift();
+        if (_rallyJobs.length) setTimeout(() => _rallyJobStart(_rallyJobs[0]), 0);
+    }
+    function _rallyJobCurrent(job) {
+        return _rallyJobs[0] === job && job.generation === _matchLoadGen;
+    }
+    function _rallyJobCommit(job) {
+        if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
+        while (job.point < job.buckets.length && job.offset >= job.buckets[job.point].length) { job.point++; job.offset = 0; }
+        if (job.point === job.buckets.length) { _rallyJobNext(job); return; }
+        const p = job.points[job.point], c = job.buckets[job.point];
+        const end = Math.min(c.length, job.offset + RALLY_COMMIT_SLICE * 2);
+        queueAction({ action: 'setRallyMany', coords: Array.from(c.subarray(job.offset, end)), targetX: p.x, targetY: p.y, targetUnitId: p.targetUnitId ?? null });
+        job.offset = end;
+        setTimeout(() => _rallyJobCommit(job), 0);
+    }
+    function _rallyJobStart(job) {
+        if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
+        try {
+            if (!_rallyWorker) {
+                _rallyWorker = new Worker('./src/sim/assign_worker.js?v=20261028-rally');
+                _rallyWorker.onmessage = ev => {
+                    const j = _rallyJobs[0], m = ev.data || {};
+                    if (!j || j.seq !== m.seq) return;
+                    if (!m.buckets) { reportRuntimeError('rally assignment', new Error(m.error || 'Missing result')); _rallyJobNext(j); return; }
+                    j.buckets = m.buckets; j.point = j.offset = 0;
+                    _rallyJobCommit(j);
+                };
+                _rallyWorker.onerror = err => {
+                    _rallyWorker.terminate(); _rallyWorker = null;
+                    reportRuntimeError('rally assignment', err);
+                    if (_rallyJobs.length) _rallyJobNext(_rallyJobs[0]);
+                };
+            }
+            const n = job.list.length;
+            job.xs = new Float32Array(n); job.ys = new Float32Array(n);
+            job.has = new Uint8Array(n); job.coords = new Int32Array(n * 2); job.at = 0;
+            const pack = () => {
+                if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
+                const end = Math.min(n, job.at + RALLY_PREP_SLICE);
+                for (let i = job.at; i < end; i++) {
+                    const e = job.list[i];
+                    job.coords[i * 2] = e.gx; job.coords[i * 2 + 1] = e.gy;
+                    job.xs[i] = Number.isFinite(e.x) ? e.x : e.gx * TILE + 16;
+                    job.ys[i] = Number.isFinite(e.y) ? e.y : e.gy * TILE + 16; job.has[i] = 1;
+                }
+                job.at = end;
+                if (end < n) { setTimeout(pack, 0); return; }
+                _rallyWorker.postMessage({ seq: job.seq, xs: job.xs, ys: job.ys, has: job.has, coords: job.coords, points: job.points },
+                    [job.xs.buffer, job.ys.buffer, job.has.buffer, job.coords.buffer]);
+                job.list = null;
+            };
+            pack();
+        } catch (err) { reportRuntimeError('rally assignment', err); _rallyJobNext(job); }
+    }
     function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally, targetUnitId = null) {
         if (!selSpawners || selSpawners.length === 0) return;
         if (appendToMultiRally && multiRallyPoints.length > 0) {
@@ -926,6 +988,12 @@ function initInput() {
             multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
         }
         if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
+        if (selSpawners.length > RALLY_PREP_SLICE || _rallyJobs.length) {
+            const job = { seq: ++_rallySeq, generation: _matchLoadGen, list: selSpawners, points: multiRallyPoints.slice() };
+            _rallyJobs.push(job);
+            if (_rallyJobs.length === 1) setTimeout(() => _rallyJobStart(job), 0);
+            return;
+        }
         // (Positions straight into the split's arrays: no object a building.)
         let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, null, p => p, (xs, ys, has) => {
             for (let i = 0; i < selSpawners.length; i++) {
@@ -3731,6 +3799,12 @@ const ACTION_SPLIT_UNITS = new Set(['attack', 'attackBuilding', 'hold', 'stop', 
 const ACTION_SPLIT_MIN_UNITS = 64;
 // [now, later] of a unit order over `budget`, or null (it runs whole).
 function _actionSplit(raw, budget) {
+    if (raw && raw.action === 'setRallyMany' && Array.isArray(raw.coords)) {
+        const n = Math.min(ACTION_MAX_RALLY_COORDS, Math.floor(raw.coords.length / 2));
+        const k = Math.max(1, Math.floor((budget - 1) * 100));
+        if (k < n) return [{ ...raw, coords: raw.coords.slice(0, k * 2) }, { ...raw, coords: raw.coords.slice(k * 2, n * 2) }];
+        return null;
+    }
     if (!raw || !ACTION_SPLIT_UNITS.has(raw.action)) return null;
     const cost = _actionCost(raw);
     if (cost <= budget) return null;
@@ -4025,6 +4099,10 @@ function actionBacklogChecksum() {
 let ORDER_UNITS_PER_PLAYER_TICK = 8000, ORDER_UNITS_PER_TICK_ALL = 10000, ORDER_UNITS_PER_ROUND = 2000;
 // (A unit the order kernel takes costs a fraction of one the JavaScript does: 1/ORDER_KERNEL_GAIN.)
 const ORDER_KERNEL_GAIN = 16;
+// A worker's task cleanup and flow assignment are substantially heavier
+// than the old scalar combat-order estimate. Keep the native allowance,
+// but limit this work to 2,000 units/player/base tick (2,500 total).
+const ORDER_JS_COST = 4;
 let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
 function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK + _orderPlayerBonus : b; }
 // A step of several base ticks (simDk): the budgets of its base ticks, the
@@ -4167,6 +4245,9 @@ function runQueuedOrders() {
     try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.units += Math.max(0, b0 - _orderAllLeft); simOrderStats.calls++; }
 }
 function _runQueuedOrders() {
+    const state = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    const columns = state && state.columns;
+    const byId = _orderQueue.length && ORDER_KERNEL && columns ? _unitByIdMap() : null;
     // In rounds of at most ORDER_UNITS_PER_ROUND units per player (its
     // newest unfinished order only: a click on a few units right after big
     // orders moves them at once; the latest order wins by the stamps anyway),
@@ -4185,11 +4266,22 @@ function _runQueuedOrders() {
             // the slice charged by the JavaScript's share and the kernel's.)
             const gain = ORDER_KERNEL ? ORDER_KERNEL_GAIN : 1;
             const T = _unitOrderSeqOf(p), ids = [];
-            while (e.live > 0 && e.next < e.ids.length && ids.length < left * gain) {
-                const id = e.ids[e.next++];
-                if (_orderStampGet(T, id) === e.seq) { ids.push(id); _orderStampSet(T, id, 0); e.live--; e.sum = (e.sum - _orderIdH(id)) | 0; }
+            let estimated = 0;
+            while (e.live > 0 && e.next < e.ids.length && estimated < left * gain) {
+                const id = e.ids[e.next];
+                if (_orderStampGet(T, id) !== e.seq) { e.next++; continue; }
+                // Only likely native candidates receive the native discount.
+                // Previously a round took left*16 workers, applied them all
+                // synchronously, then discovered the 16x budget overshoot.
+                const u = byId ? byId.get(id) : null;
+                const s = u && u._us === columns ? u._si : -1;
+                const native = gain > 1 && s >= 0 && columns.isWk[s] === 0 && columns.holdF[s] === 0;
+                const cost = native ? 1 : gain * ORDER_JS_COST;
+                if (ids.length && estimated + cost > left * gain) break;
+                estimated += cost; e.next++;
+                ids.push(id); _orderStampSet(T, id, 0); e.live--; e.sum = (e.sum - _orderIdH(id)) | 0;
             }
-            let charge = ids.length;
+            let charge = ids.length * ORDER_JS_COST;
             // (Finished: the player's next order may run in this round.)
             if (e.live <= 0 || e.next >= e.ids.length) { _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq); if (_orderSupSeq === e.seq) { _orderSupSeq = 0; _orderSupEntry = null; } seen.delete(p); }
             progress = true;
@@ -4198,7 +4290,7 @@ function _runQueuedOrders() {
             if (ids.length) {
                 try {
                     const js = _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: null, distinct: true }, e.playerId, e.cmd);
-                    if (gain > 1 && Number.isFinite(js)) charge = js + Math.ceil((ids.length - js) / gain);
+                    if (Number.isFinite(js)) charge = js * ORDER_JS_COST + Math.ceil((ids.length - js) / gain);
                 }
                 catch (err) { reportRuntimeError('queued order', err); }
             }
