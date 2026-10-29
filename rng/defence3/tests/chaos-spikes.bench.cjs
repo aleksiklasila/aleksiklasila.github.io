@@ -47,6 +47,8 @@ for(const k of Object.keys(counts))if(k.startsWith('unit:')&&k!=='unit:king'){
  const levels={};for(const [l,n]of Object.entries(counts[k])){const next=Math.min(20,Number(l)+unitLevelOffset);levels[next]=(levels[next]||0)+n;}counts[k]=levels;
 }
 data.lobby.numbers['cfg-max-pop']=Math.max(2000000,count);
+// --map=N: the map's side (the fixture's 1000 holds ~290k dense structures).
+if(process.argv.some(a=>a.startsWith('--map=')))data.lobby.selects['cfg-mapsize']=String(num('map',1000));
 if(data.editableConfig?.config)data.editableConfig.config.CONFIG_MAX_POP=data.lobby.numbers['cfg-max-pop'];
 // (No building limit below the structure pool's: the fixture's 125k structures
 // a team, and its players' placements, as before the limit.)
@@ -64,12 +66,13 @@ console.log('Starting mixed chaos',count,'units');
 inst.eval('SIM_IN_WORKER=true;startSoloGame();');
 if(process.argv.includes('--no-delta'))inst.eval('SPATIAL_INDEX_DELTA=false');
 if(process.argv.includes('--no-merge'))inst.eval('SPATIAL_INDEX_MERGE=false');
-const options={mode:'mega',buildings:5000,level:6,towerSites:1500,collectorBuildings:600,structures,layout};
+const options={mode:'mega',buildings:5000,level:6,towerSites:1500,collectorBuildings:600,structures,layout,rallyMix:process.argv.includes('--rally-mix')};
 const setup=JSON.parse(inst.eval(`JSON.stringify(${chaos.setup(options)})`));
 assert.deepEqual(setup.errors,[]);
 const {upgradeAreas,...setupSummary}=setup;
 console.log('Setup',JSON.stringify(setupSummary));
-inst.eval(`if(typeof SIM_TOWER_WASM!=='undefined'){SIM_TOWER_WASM=${towerMode!=='js'};SIM_TOWER_VERIFY=${towerMode==='verify'};}`);
+// (PRE=<js>: run in the instance after setup, before the measured ticks: A/B switches.)
+if(process.env.PRE)inst.eval(process.env.PRE);
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
  const spawn=spawnQueuedUnitFromSpawner,research=_researcherDeposit,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
@@ -84,7 +87,7 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
   'processActions','gameTick','simMoveRun','simMoveEndTick','runUnitSeparationPass','_forEachUnitInTickOrder','spatialIndexRebuild','simUnitStateCollect',
   '_resolveDeferredPathsByGroup','_runAdjacencyRecalculation','syncVisibilityCoverage','sampleGameStats','recalculateUnitEffectiveLevel','processGlobalSpawnerQueue',
   'navTick','navFieldsFlush','compactRemovedUnits','unitHitsResolve','statusPrepassRun','runQueuedOrders','visCoverHoldEnd','updateAllPlayerVisibility','unitEventsRun',
-  'towersTick','_towerAcqPrepare','projectilesBegin','projectilesAdvance','projectilesEnd','laserBeamsTick','spawnerStructuresTick','adjacencyLaneStep','unitRetirePrepare',
+  'towersTick','_towerAcqKernels','projectilesAdvance','laserBeamsTick','spawnerStructuresTick','adjacencyLaneStep','unitRetirePrepare',
   'updateVisibility','spatialIndexPrebuild','_upKeepSecond','ensureLaserConnections','healerCandidatesStep','pathRegionsWarm',
   'workerSearchTierStep','_wswBuild','flushPendingResourceStatRebuilds','resourceTick','researchDrainTick','shrineTick','recomputePlayerPopCaps','structRowsExpire',
   ...${JSON.stringify((process.env.SUBPHASES||'').split(',').filter(Boolean))}])) {
@@ -100,6 +103,48 @@ if(process.argv.includes('--kernels'))inst.eval(`{
  simParallelRun=function(kind,n){const key='kernel:'+kind+(kind===SIM_KERNEL_MOVE_OCCUPANCY?':'+_simParams[4]:'');const a=__scratch.now();try{return run.apply(this,arguments);}finally{const ms=__scratch.now()-a;__scratch.phases[key]=(__scratch.phases[key]||0)+ms;if(${timeline})__scratch.intervals.push([key,a,ms]);}};
  simParallelBackgroundWait=function(lane=1){const a=__scratch.now();try{return wait.apply(this,arguments);}finally{const key='wait:'+lane;__scratch.phases[key]=(__scratch.phases[key]||0)+__scratch.now()-a;}};
  _spatialIndexCollect=function(){const j=_sxPre;const r=collect.apply(this,arguments);if(j){const d=_sxPar&&_sxPar.ixd;__scratch.index={delta:j.delta,inserts:j.delta&&d?d.plan[j.dj]:null,bad:j.delta&&d?d.plan[j.dj+3]:null};}return r;};
+}`);
+// --mass-at=STEP: the mass command (see the step loop); --mass-team,
+// --mass-gap (steps between clicks), --mass-clicks.
+const massAt=num('mass-at',0),massTeam=num('mass-team',0),massGap=num('mass-gap',2),massClicks=num('mass-clicks',3);
+const MASS_COMMAND=`((click)=>{
+ const p=${massTeam},out=[],pts=[];
+ for(let k=0;k<=click;k++)pts.push({x:Math.floor(GRID_W*(.35+k*.12))*TILE+16,y:Math.floor(GRID_H*.55)*TILE+16,targetUnitId:null});
+ const sel=[];for(const u of units)if(u&&!u.dead&&u.owner===p&&!u.isKing)sel.push(u);
+ const n=sel.length,xs=new Float32Array(n),ys=new Float32Array(n),has=new Uint8Array(n).fill(1);
+ for(let i=0;i<n;i++){xs[i]=sel[i].x;ys[i]=sel[i].y;}
+ const pick=pts.length>1?assignNearestXY(xs,ys,has,pts):new Int32Array(n),byPt=pts.map(()=>[]);
+ for(let i=0;i<n;i++)byPt[pick[i]].push(sel[i].id);
+ byPt.forEach((ids,j)=>{for(let q=0;q<ids.length;q+=ACTION_MAX_UNIT_IDS){const part=ids.slice(q,q+ACTION_MAX_UNIT_IDS);out.push({action:'move',uidz:actionIdsEncode(part),targetX:pts[j].x,targetY:pts[j].y});}});
+ const bs=[];for(const b of barracks)if(b&&b.owner===p&&!b.dead)bs.push(b);for(const b of collectorSpawners)if(b&&b.owner===p&&!b.dead&&isSpawnerEntity(b)&&('rallyX' in b))bs.push(b);
+ const m=bs.length,bx=new Float32Array(m),by=new Float32Array(m),bh=new Uint8Array(m).fill(1);
+ for(let i=0;i<m;i++){bx[i]=bs[i].x;by[i]=bs[i].y;}
+ const bp=pts.length>1?assignNearestXY(bx,by,bh,pts):new Int32Array(m);
+ const exp=__scratch.massRally=new Map();
+ out.push(...(typeof massRallyActions==='function'?massRallyActions:__scratch.massRallyActions)(bs,bp,pts));
+ for(let i=0;i<m;i++)exp.set(bs[i],pts[bp[i]]);
+ __scratch.massSel={units:n,buildings:m};
+ return out;
+})`;
+// (The pending part of the mass command: units still to be ordered, buildings
+// whose rally is not yet the last click's.)
+const MASS_PENDING=`(()=>{
+ let ids=0,coords=0,live=0,off=0;
+ for(const e of _actionBacklog){const r=e[1];if(!r)continue;if(r.action==='setRallyMany')coords+=(typeof massRallyCount==='function'?massRallyCount:__scratch.massRallyCount)(r);else if(Array.isArray(r.unitIds))ids+=r.unitIds.length;else if(typeof r.uidz==='string')ids+=actionIdsCount(r.uidz);}
+ for(const e of _orderQueue)live+=e.live;
+ if(__scratch.massRally)for(const [b,pt] of __scratch.massRally)if(!b.dead&&(b.rallyX!==pt.x||b.rallyY!==pt.y))off++;
+ return {backlogIds:ids,backlogRally:coords,queuedUnits:live,rallyOff:off,sel:__scratch.massSel||null};
+})()`;
+// (The rally as the page sends it: one action a point, tile keys
+// (rallyAssignTiles); older sources, coordinate lists.)
+if(massAt>0)inst.eval(`{
+ __scratch.massRallyActions=typeof rallyAssignTiles==='function'?(bs,pick,pts)=>{
+  const m=bs.length,keys=new Int32Array(m),xs=new Float32Array(m),ys=new Float32Array(m),has=new Uint8Array(m).fill(1);
+  for(let i=0;i<m;i++){keys[i]=bs[i].gy*GRID_W+bs[i].gx;xs[i]=bs[i].x;ys[i]=bs[i].y;}
+  const r=rallyAssignTiles(keys,xs,ys,has,pts);return r.tkz.map((tkz,j)=>({action:'setRallyMany',tkz,targetX:pts[j].x,targetY:pts[j].y,targetUnitId:null})).filter((a,j)=>r.keys[j].length);
+ }:(bs,pick,pts)=>{const out=[],c=pts.map(()=>[]);for(let i=0;i<bs.length;i++)c[pick[i]].push(bs[i].gx,bs[i].gy);
+  c.forEach((l,j)=>{for(let q=0;q<l.length;q+=2*ACTION_MAX_RALLY_COORDS)out.push({action:'setRallyMany',coords:l.slice(q,q+2*ACTION_MAX_RALLY_COORDS),targetX:pts[j].x,targetY:pts[j].y,targetUnitId:null});});return out;};
+ __scratch.massRallyCount=r=>Array.isArray(r.coords)?r.coords.length/2:0;
 }`);
 const profileHelpers=process.argv.includes('--helper-profile');
 // Diagnostic only: distinguish event volume from cost per event. Do not use
@@ -142,21 +187,28 @@ for(let i=0;i<ticks;i++){
  // Generating synthetic player inputs is outside tick timing; applying them is inside.
  const burst=i%burstEvery===0;
  if(burst)for(let team=0;team<2;team++)inst.eval(`localPlayerId=${team};__scratch.actions=[];${chaos.burst(options,Math.floor(i/burstEvery))};__scratch['actions'+${team}]=__scratch.actions;`);
+ // A player's whole selection (every unit and building) ctrl-clicked to
+ // massClicks appended points, massGap steps apart, as the page sends them
+ // (wire form: JSON round trip, ids compact). Outside the timing too.
+ const massClick=massAt>0&&i>=massAt&&(i-massAt)%massGap===0&&(i-massAt)/massGap<massClicks?(i-massAt)/massGap:-1;
+ if(massClick>=0){inst.eval(`__scratch.massActions=JSON.parse(JSON.stringify(${MASS_COMMAND}(${massClick})))`);}
  const cpu0=metrics?process.cpuUsage():null;
  const a=performance.now();
  if(burst)for(let team=0;team<2;team++)inst.eval(`processActions(__scratch.actions${team},${team})`);
+ if(massClick>=0)inst.eval(`processActions(__scratch.massActions,${massTeam})`);
  inst.eval('gameTick();currentTick++;');
  const ms=performance.now()-a;
  if(yieldBetween)await new Promise(setImmediate);
  const wallMs=performance.now()-a;
- const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projectiles.length,phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
+ const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
  row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed,native:!!_towerAcq.native,prepared:_towerAcq.lastPrepared||0})`);
  row.workerBrain=inst.eval(`typeof _workerBrain==='undefined'?null:({prepared:_workerBrain.prepared,used:_workerBrain.used,misses:_workerBrain.misses,bytes:Object.values(_workerBrain.arrays).reduce((n,a)=>n+a.byteLength,0),recordBytes:_simUnitState?.wk?9*_simUnitState.wk.cap:0})`);
- if(i%10===0||i===ticks-1)row.stationary=inst.eval(`typeof _stationaryReach==='undefined'?null:({areas:areaNeighborIds.length,depth:_stationaryReach.depth,phase:_stationaryReach.phase,ready:_stationaryReach.ready,entries:_stationaryReach.arrays.meta?.[0],scratchWords:_simWasmScratchWords,bytes:(_ST.brain?.byteLength||0)+Object.values(_stationaryReach.arrays).reduce((n,a)=>n+a.byteLength,0)+Object.values(_stationaryStats.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
+ if(i%10===0||i===ticks-1)row.stationary=inst.eval(`typeof _stationaryReach==='undefined'?null:(()=>{const R=_stationaryReach,A=R.active>=0?R.sets[R.active]:{},sz=s=>Object.values(s).reduce((n,a)=>n+(a&&a.byteLength||0),0);return{areas:areaNeighborIds.length,depth:R.depth,phase:R.phase,active:R.active,entries:A.meta?.[0],scratchWords:_simWasmScratchWords,bytes:(_ST.brain?.byteLength||0)+sz(R.sets[0])+sz(R.sets[1])+sz(_stationaryStats.arrays)};})()`);
  row.tileJournal=inst.eval(`({base:_teLogBase,end:typeof _teLogEnd==='number'?_teLogEnd:_teLogBase+_teLog.length,storageBytes:_teLog.byteLength||null})`);
  row.structRows=readStructRows();
  if(eventMetrics)row.events=inst.eval('__scratch.events');
+ if(massAt>0&&i>=massAt-1){row.mass=inst.eval(MASS_PENDING);if(massClick>=0)row.mass.click=massClick;}
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
  if(metrics){row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=require('node:v8').getHeapStatistics().used_heap_size/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and
@@ -171,11 +223,11 @@ const steady=rows.slice(warmup);
 if(gcObserver){gcEntries.push(...gcObserver.takeRecords().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})));gcObserver.disconnect();for(const row of rows)row.gcMs=gcEntries.reduce((n,e)=>n+Math.max(0,Math.min(e.at+e.ms,row.at+row.wallMs)-Math.max(e.at,row.at)),0);}
 const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:typeof _unitEvSort!=="undefined"?[...new Set(Object.values(_unitEvSort))].reduce((n,a)=>n+(ArrayBuffer.isView(a)?a.byteLength:0),0):_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
 if(process.argv.includes('--hash'))result.hash=inst.eval('__exactStateHash()');
-result.projFlight=inst.eval('typeof _pjf!=="undefined"?_pjf.stats:null');result.structRows=inst.eval('typeof structRowStats!=="undefined"?structRowStats:null');
+result.projFlight=inst.eval('({..._pj.stats,notMade:_pj.cap?_pj.hdr[3]:0,fired:_pj.cap?_pj.hdr[2]:0})');result.structRows=inst.eval('typeof structRowStats!=="undefined"?structRowStats:null');
 result.structRowCheckpoints={beforeGameplay:structRowsAtStart,beforeSteady:structRowsAtSteady,afterGameplay:result.structRows};
 if(session)result.wasmFunctionNames=require('./wasm-profile-exports.cjs')(inst.eval(`SIM_WASM64?SIM_WASM64_BIN:SIM_WASM_BIN`));
 result.layout=layout;result.towerMode=towerMode;
-result.tower=inst.eval(`typeof _towerAcq==='undefined'?null:({enabled:SIM_TOWER_WASM,typeOverrides:SIM_TOWER_TYPE_OVERRIDES,scratchBytes:Object.values(_towerAcq.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
+result.tower=inst.eval(`typeof _towerAcq==='undefined'?null:({scratchBytes:Object.values(_towerAcq.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
 result.population={min:Math.min(...steady.map(r=>r.units)),max:Math.max(...steady.map(r=>r.units)),births:steady.reduce((n,r)=>n+r.births,0),deaths:steady.reduce((n,r)=>n+r.deaths,0),work:rows.at(-1).work};
 result.phases={};for(const r of steady)for(const [name,ms]of Object.entries(r.phases))result.phases[name]=(result.phases[name]||0)+ms/steady.length;
 result.outliers={over500ms:steady.filter(r=>r.wallMs>500).length,overMedian1_5:steady.filter(r=>r.wallMs>result.wall.p50*1.5).length,maxToMedian:result.wall.max/result.wall.p50};

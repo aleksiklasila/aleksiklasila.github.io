@@ -1,4 +1,6 @@
 'use strict';
+// (The reference is a unit's _scoutTarget, which holds any object: a worker's
+// target is its tile in its columns, read back from the world: gone, null.)
 // A destroyed structure keeps its row (its values) until STRUCT_ROW_KEEP_TICKS
 // after its destruction, then reads as destroyed. That moment is state: a
 // peer restored from a snapshot must expire the structure (a unit's stale
@@ -14,7 +16,7 @@ const out = JSON.parse(i.eval(`(() => {
     const placed = spots.map(([gx, gy]) => { placeBuilding(gx, gy, 'pistol', 0, { silent: true, ignorePlacementRules: true }); return getTileEntityRef(gx, gy); });
     const a = new Unit('builder_unit', 0, 5 * TILE, 5 * TILE), b = new Unit('builder_unit', 0, 6 * TILE, 6 * TILE);
     for (const u of [a, b]) { units.push(u); unitSlotMapPushed(u); }
-    a.workerTarget = placed[0]; b.workerTarget = placed[1];
+    a._scoutTarget = placed[0]; b._scoutTarget = placed[1];
     const ids = [a.id, b.id];
     // The first destroyed long ago (expired), the second recently (kept).
     destroyBuilding(placed[0]);
@@ -26,7 +28,7 @@ const out = JSON.parse(i.eval(`(() => {
     const before = [look(placed[0]), look(placed[1])];
     const text = JSON.stringify(snapEncodeState());
     snapDecodeState(JSON.parse(text));
-    const got = ids.map(id => units.find(u => u.id === id).workerTarget);
+    const got = ids.map(id => units.find(u => u.id === id)._scoutTarget);
     const after = got.map(look);
     // Past the second's keep: it expires on the restored peer too.
     gameTime = t1 + STRUCT_ROW_KEEP_TICKS - 1; structRowsExpire();

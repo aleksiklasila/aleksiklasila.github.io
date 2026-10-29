@@ -178,7 +178,68 @@ function unitSlotMapPushed(u) {
     M.slots[M.len++] = u && u._us ? u._si : -1;
     M.ver++;
 }
-function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; }
+// The units by id, ascending, with their slots (wasm heap: the order kernels
+// join an order's sorted ids with it, ord.rs k_order_admit). Not the units
+// array's order: deaths swap-remove from that. A new unit is appended (ids
+// only rise); a removed one leaves a hole (slot -2), squeezed out once holes
+// are a quarter; slot -1: a unit outside the columns. Made again in full only
+// when the list is another (a restore) or ids came out of order; the slots
+// read again when they moved (unitSlotMapInvalidate: a compaction).
+const _uix = { for: null, ids: new Int32Array(0), slots: new Int32Array(0), n: 0, holes: 0, slotsOld: true };
+function _uixRoom(n) {
+    if (_uix.ids.length >= n) return;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, cap = simReserveCap(Math.max(n, S ? S.cap : 0));
+    const ids = simHeapArray(Int32Array, cap), slots = simHeapArray(Int32Array, cap);
+    ids.set(_uix.ids.subarray(0, _uix.n)); slots.set(_uix.slots.subarray(0, _uix.n));
+    if (_uix.ids.length) { simHeapFree(_uix.ids); simHeapFree(_uix.slots); }
+    _uix.ids = ids; _uix.slots = slots;
+}
+const _uixSlotOf = u => u && u._us && u._si >= 0 ? u._si : -1;
+function _uixRebuild() {
+    const n = units.length, ord = new Int32Array(n);
+    _uixRoom(n);
+    for (let i = 0; i < n; i++) ord[i] = i;
+    let sorted = true;
+    for (let i = 1; i < n && sorted; i++) if (!(units[i].id > units[i - 1].id)) sorted = false;
+    if (!sorted) ord.sort((a, b) => units[a].id - units[b].id);
+    for (let k = 0; k < n; k++) { const u = units[ord[k]]; _uix.ids[k] = u.id; _uix.slots[k] = _uixSlotOf(u); }
+    _uix.n = n; _uix.holes = 0; _uix.for = units; _uix.slotsOld = false;
+}
+// (The index's position of an id, -1 none.)
+function _uixFind(id) {
+    let lo = 0, hi = _uix.n;
+    const A = _uix.ids;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (A[m] < id) lo = m + 1; else hi = m; }
+    return lo < _uix.n && A[lo] === id ? lo : -1;
+}
+function _uixAdded(u) {
+    if (_uix.for !== units || !u) return;
+    if (_uix.n && !(u.id > _uix.ids[_uix.n - 1])) { _uix.for = null; return; }
+    _uixRoom(_uix.n + 1);
+    _uix.ids[_uix.n] = u.id; _uix.slots[_uix.n] = _uixSlotOf(u); _uix.n++;
+}
+function _uixRemoved(u) {
+    if (_uix.for !== units || !u) return;
+    const k = _uixFind(u.id);
+    if (k < 0 || _uix.slots[k] === -2) return;
+    _uix.slots[k] = -2;
+    if (++_uix.holes * 4 > _uix.n) {
+        let w = 0;
+        for (let r = 0; r < _uix.n; r++) if (_uix.slots[r] !== -2) { _uix.ids[w] = _uix.ids[r]; _uix.slots[w] = _uix.slots[r]; w++; }
+        _uix.n = w; _uix.holes = 0;
+    }
+}
+function unitIdIndex() {
+    // (A unit put into the list another way (tools, tests): made again, as _unitByIdMap.)
+    if (_uix.for !== units || _uix.n - _uix.holes !== units.length) _uixRebuild();
+    else if (_uix.slotsOld) {
+        const map = _unitByIdMap();
+        for (let k = 0; k < _uix.n; k++) if (_uix.slots[k] !== -2) { const u = map.get(_uix.ids[k]); _uix.slots[k] = u === undefined ? -2 : _uixSlotOf(u); }
+        _uix.slotsOld = false;
+    }
+    return _uix;
+}
+function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; _uix.slotsOld = true; }
 
 // Buildings: the same order scheme, seeded per building type.
 const _buildingOrderOut = new Map();
@@ -520,6 +581,59 @@ function unitRetirePrepare() {
     }
     return blocks;
 }
+function _unitRetireTotal(blocks) { let n = 0; for (let b = 0; b < blocks; b++) n += _unitRetireCounts[b]; return n; }
+// Death sounds a tick (the first deaths in the retire order).
+const UNIT_DEATH_SOUNDS = 16;
+// The gone kernel's buffers (heap arrays; the list grows only past the most
+// deaths a tick seen so far).
+let _unitGone = null;
+function _unitGoneRoom(n) {
+    let G = _unitGone;
+    if (!G || !simHeapHas(G.cnt)) {
+        G = _unitGone = { list: null, olist: null, cnt: simSharedArray(Int32Array, 160), tt: simSharedArray(Int32Array, 8), P: new Float64Array(40) };
+        // (Worker record types, unit.wbType 1..6: their work type indices.)
+        ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { G.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
+    }
+    if (!G.list || G.list.length < n || !simHeapHas(G.list)) {
+        const m = simReserveCap(Math.max(n, 1), 4096);
+        if (G.list && simHeapHas(G.list)) { simHeapFree(G.list); simHeapFree(G.olist); }
+        G.list = simSharedArray(Int32Array, m); G.olist = simSharedArray(Int32Array, m);
+    }
+    return G;
+}
+// The removed units' slots (G.list[0..n]) through the gone kernel; then the
+// JavaScript's few: their queued orders' entries, the population, the
+// occupancy's totals, the work versions' checksum.
+function _unitGoneRun(G, n, S) {
+    if (_spatialCountDefer) throw new Error('unit retire inside the unit pass');
+    const c = S.columns, P = G.P, V = _workerWorkTable(), U = unitIdIndex();
+    const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
+    const wsl = _wsw ? _wswResvRoom() : null;
+    if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
+    const O = typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && typeof _occ !== 'undefined' ? _occ : null;
+    const upk = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c ? _upkU.cnt : null;
+    const vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+    const arrays = [G.list, G.cnt, G.olist, c.owner, c.id, c.x, c.y, c.spEpoch, S.sepKey, S.sepLayer, c.spOwner, c.spType, c.spTile, c.spArea,
+        c.mvOn, c.mvOut, c.live, c.statRow, c.vsGen, c.vsR, c.vsP1, c.vsP2, c.vsA, O ? O.bits : null, O ? O.mask : null, O ? O.rec : null,
+        spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.upB, upk, c.ordSq,
+        c.wkS, c.wkT, c.wkR, c.wkIx, c.wbType, G.tt, workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots,
+        c.mvPath, S.pathPool ? S.pathPool.fs : null, c.dead];
+    P.fill(0);
+    P[0] = n; P[1] = spatialEpoch; P[2] = SIM_SEP_ABSENT; P[3] = spatialUnitsComplexPlayerCount; P[4] = spatialUnitsComplexStridePerChunk; P[5] = CHUNKS_W;
+    P[6] = spatialTypeBlocksW; P[7] = SPATIAL_TYPE_BLOCK; P[8] = spatialTypeStridePerBlock; P[9] = spatialUnitsComplexUnitTypeCount;
+    P[10] = spatialBlockCols; P[11] = SPATIAL_BLOCK_SIZE; P[12] = spatialBlockCounts.length; P[13] = vis ? 1 : 0; P[14] = vis ? _visCover.gen : 0;
+    if (O) { P[15] = O.w; P[16] = O.h; P[17] = O.stride; P[18] = O.cell; P[19] = O.planes; }
+    P[20] = GRID_W; P[21] = TILE; P[22] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[23] = SNAP_REGION_TILES; P[24] = Math.ceil(GRID_W / SNAP_REGION_TILES);
+    P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
+    P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
+    simRustDirect('k_unit_gone', arrays, P);
+    const C = G.cnt;
+    for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
+    for (let o = 0; o < 64 && o < players.length; o++) if (C[72 + o]) players[o].popCount -= C[72 + o];
+    if (O) for (let r = 0; r <= 32; r++) if (C[32 + r]) { O.registered -= C[32 + r]; O.expectedBits -= C[32 + r] * O.sizes[r]; }
+    V.sum = (V.sum + C[1]) | 0;
+    if (C[2]) _wsw = null;
+}
 // (True while gameTick runs: work requested mid-tick that can wait for the
 // tick's end, such as the adjacency recalculation, waits.)
 let _inGameTick = false;
@@ -530,23 +644,7 @@ function gameTick() {
 }
 // How many ticks one pass over the buildings' and floor items' status guard takes.
 const THING_STATUS_GUARD_TICKS = 512;
-// Keep the whole projectile pass under the phase name used by simtrace and
-// CPU-profile slicing; timing just projectilesBegin/End missed its body.
-function projectilesAdvance() {
-    projectilesBegin();
-    try {
-        let n0 = projectiles.length, spent = null;
-        // (On the helpers when there are enough shots: projectile.js projectilesAdvanceNative.)
-        const native = typeof projectilesAdvanceNative === 'function' ? projectilesAdvanceNative() : false;
-        if (native !== false) { if (_pjf.ended) spent = native; }
-        else for (let i = n0 - 1; i >= 0; i--) { if (!projectiles[i].update()) (spent || (spent = new Uint8Array(n0)))[i] = 1; }
-        if (spent) {
-            let w = 0;
-            for (let i = 0; i < projectiles.length; i++) if (i >= n0 || !spent[i]) projectiles[w++] = projectiles[i];
-            projectiles.length = w;
-        }
-    } finally { projectilesEnd(); }
-}
+// (Projectiles: projectile.js projectilesAdvance, the pool's step.)
 
 function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
@@ -572,7 +670,6 @@ function _gameTickBody() {
     if (gameTime >= 3 && !_actionSanitizeWarm) actionSanitizeWarm();
     // The destination fields asked for so far (the orders'), for this tick.
     navFieldsFlush();
-    _refillOrderBudget();
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();
@@ -587,34 +684,21 @@ function _gameTickBody() {
     _upKeepAccum = null;
 
     let floorChanged = false;
-    // Buildings and floor items: a TICK_RATE-th of them a tick (by their
-    // place in row-major order) count their upkeep and are looked at for
-    // statuses (a guard for the hooks); then the statuses of those with
-    // something running (thingStatusWake: status effects, damage), in
-    // row-major order.
+    // Buildings and floor items: their statuses, and removals.
     {
-        const cellItems = getCellItemsRowMajor();
-        // (A guard for the hooks, which wake an item at once: a 512th of the
-        // items a tick. A TICK_RATE-th read seven columns of each of ~200k
-        // items a tick at 4M units: ~100 ms.)
-        for (const guardSlice of simStepPhases(THING_STATUS_GUARD_TICKS)) for (let i = guardSlice; i < cellItems.length; i += THING_STATUS_GUARD_TICKS) {
-            const item = cellItems[i];
-            if (grid[item.gy][item.gx].item !== item) continue;
-            // (No ensureStatusState: applyStatusEffect and tickStatusEffects
-            // make the fields; ten reads of 10k items a tick at 200k.)
-            if (thingStatusPending(item)) thingStatusWake(item);
+        // Every structure's statuses (the kernel; renderer.js structStatusTick),
+        // then those it found without energy: floor items cleared from their
+        // tiles, towers, barracks and spawners destroyed (tile order).
+        const st = structStatusTick();
+        if (st.floor) for (const item of st.floor) {
+            const cell = grid[item.gy][item.gx];
+            if (cell.item !== item) continue;
+            clearTileEntity(item.gx, item.gy, item);
+            cell.item = null;
+            cell.owner = -1;
+            floorChanged = true;
         }
-        for (const item of thingStatusDue()) {
-            let cell = grid[item.gy][item.gx];
-            if (cell.item !== item) { thingStatusDone(item); continue; }
-            if (tickStatusEffects(item)) {
-                clearTileEntity(item.gx, item.gy, item);
-                cell.item = null;
-                cell.owner = -1;
-                floorChanged = true;
-                thingStatusDone(item);
-            } else if (!thingStatusPending(item)) thingStatusDone(item);
-        }
+        if (st.dead) for (const e of st.dead) if (e.energy <= 0) destroyBuilding(e);
     }
     if (floorChanged) {
         _minimapStaticDirty = true;
@@ -625,15 +709,12 @@ function _gameTickBody() {
     recomputePlayerPopCaps();
     healerCandidatesStep();
 
-    // Previous positions for interpolation: units set theirs in update().
-    for (let p of projectiles) { p.prevX = p.x; p.prevY = p.y; }
-
     // Units waiting for their way (a pending target: the helpers' answer of
     // the closest tile they can reach, or a look again), in id order, by
     // source priority: O(1) each (_tryUpgradeAstarFallbackPath). Only the
     // units due this tick are visited; those still waiting afterwards are
     // scheduled again.
-    if (_pendingPathDue.size > 0) {
+    if (pendingPathWaiting() > 0) {
         let waiting = takeDuePendingPathUnits(gameTime);
         const pendingBuckets = _pendingPathBuckets;
         for (let i = 0; i < waiting.length; i++) {
@@ -653,8 +734,7 @@ function _gameTickBody() {
         }
         for (let i = 0; i < waiting.length; i++) {
             const u = waiting[i];
-            if (u.dead || !u._pendingPathTarget) _pendingPathUnits.delete(u);
-            else schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
+            if (!u.dead && u._pendingPathTarget) schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
         }
         waiting.length = 0;
     }
@@ -676,9 +756,8 @@ function _gameTickBody() {
     // tile order; statuses and removals.
     towersTick();
 
-    // Projectiles
-    // (Last to first, as ever; spent shots removed in one pass after, the
-    // rest keeping their order.)
+    // Projectiles: the pool's flight on the helpers, their hits on
+    // structures now, on units with the units' hits (unitHitsResolve).
     projectilesAdvance();
 
     // Units: the movement kernel (simMoveRun: every unit's order, its
@@ -728,31 +807,39 @@ function _gameTickBody() {
         if (keep) { M.len = n; M.ver++; }
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
         for (let k = 0; k < removedIndices.length; k++) unitByIdRemoved(removedUnits[k]);
+        // (Detached now, at its removal's tick on every peer: no sweep later.)
+        const S = _simUnitState;
+        if (S) for (let k = 0; k < removedUnits.length; k++) { const u = removedUnits[k]; if (u._us === S.columns && S.owners[u._si] === u) simUnitStateDetachGone(S, u._si); }
     };
+    // What the removed units hold (spatial counts and registrations, worker
+    // reservations, upkeep, population, path windows) is let go by the gone
+    // kernel (ord.rs k_unit_gone) over their slots; this loop only lists
+    // them (and the units without a slot, the JavaScript's).
+    const G = DS ? _unitGoneRoom(_unitRetireTotal(retireBlocks)) : null;
+    let ng = 0, kingDied = false, sounds = 0;
     for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
         const i = _unitRetireList[b * UNIT_RETIRE_BLOCK + j];
         let u = units[i];
-        const si = dslots ? dslots[i] : -1;
-        if (si >= 0 && downers[si] === u ? DEAD[si] === 0 : !u.dead) continue;
-        upkeepUnitGone(u);
+        const si = dslots ? dslots[i] : -1, slotted = si >= 0 && downers[si] === u;
+        if (slotted ? DEAD[si] === 0 : !u.dead) continue;
+        removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
         if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
-            removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
-        } else {
-            if (!u.isKing && !u.workerState) playSound('unit_death', u.x, u.y, u.unitType);
-            // Release worker lock on target
-            _clearWorkerTarget(u);
-            if (u.workerTarget && u.workerTarget.lockedBy === u) {
-                u.workerTarget.lockedBy = null;
-            }
-            if (u.isKing) checkWinCondition();
-            removeUnitSpatial(u);
-            players[u.owner].popCount--;
-            removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
-            if (gameOver) { compactRemovedUnits(); return; }
+            if (slotted) G.list[ng++] = ~si; else upkeepUnitGone(u);
+            continue;
         }
+        // (A death's sound: the first few a tick; more are not heard apart.)
+        if (sounds < UNIT_DEATH_SOUNDS && !u.workerState && !u.isKing) { sounds++; playSound('unit_death', u.x, u.y, u.unitType); }
+        if (u.isKing) kingDied = true;
+        if (slotted) { G.list[ng++] = si; continue; }
+        upkeepUnitGone(u);
+        _clearWorkerTarget(u);
+        removeUnitSpatial(u);
+        players[u.owner].popCount--;
     }
+    if (ng > 0) _unitGoneRun(G, ng, DS);
     compactRemovedUnits();
+    if (kingDied) { checkWinCondition(); if (gameOver) return; }
     simUnitStateCollect();
     runUnitSeparationPass();
 
@@ -918,67 +1005,69 @@ function initInput() {
 
     let _entityWorldXY = e => e ? { x: Number.isFinite(e.x) ? e.x : (e.gx * TILE + 16), y: Number.isFinite(e.y) ? e.y : (e.gy * TILE + 16) } : null;
 
-    // Large rally preparation stays off the input handler. Preserve click order,
-    // including a later small selection, and submit at most one fixed chunk per
-    // page task. Peers receive ordinary actions; helper completion is not sim state.
-    const RALLY_PREP_SLICE = 2048, RALLY_COMMIT_SLICE = 512;
-    let _rallyJobs = [], _rallyWorker = null, _rallySeq = 0;
-    function _rallyJobNext(job) {
-        if (_rallyJobs[0] !== job) return;
-        _rallyJobs.shift();
-        if (_rallyJobs.length) setTimeout(() => _rallyJobStart(_rallyJobs[0]), 0);
+    // A rally order: which point each building goes to (the nearest split, as
+    // units'), then one setRallyMany a point with all of its buildings, as
+    // tile keys (tkz: id_codec.js, ~1-2 bytes a building), at once. The page
+    // only packs the buildings' tiles and positions (one typed pass over its
+    // structure table); a big selection's split and encoding run on
+    // assign_worker.js, whose answers come in click order (one worker, its
+    // messages in order: a later click's rally, small ones too, goes after
+    // them) and are queued as they come. The simulation applies each action
+    // whole when it arrives (_rallySetTiles: column writes).
+    const RALLY_ASYNC_MIN = 2048;
+    let _rallyWorker = null, _rallyWorkerFailed = false, _rallySeq = 0;
+    const _rallyJobs = new Map();
+    function _rallyQueue(point, keys, tkz) {
+        const a = { action: 'setRallyMany', tkz, targetX: point.x, targetY: point.y, targetUnitId: point.targetUnitId ?? null };
+        // (Its tiles for this page's pending markers: not sent.)
+        Object.defineProperty(a, '_keys', { value: keys, enumerable: false });
+        queueAction(a);
     }
-    function _rallyJobCurrent(job) {
-        return _rallyJobs[0] === job && job.generation === _matchLoadGen;
+    function _rallyAnswer(job, tkz, keys) {
+        if (job.generation !== _matchLoadGen || gameOver) return;
+        // (One point for all: the selection's one cover, the tick its order goes in.)
+        if (job.cover) _rallyCoverOpen = job.cover;
+        try { for (let j = 0; j < tkz.length; j++) if (keys[j].length) _rallyQueue(job.points[j], keys[j], tkz[j]); }
+        finally { if (job.cover) noteRallyCoverDone(); }
     }
-    function _rallyJobCommit(job) {
-        if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
-        while (job.point < job.buckets.length && job.offset >= job.buckets[job.point].length) { job.point++; job.offset = 0; }
-        if (job.point === job.buckets.length) { _rallyJobNext(job); return; }
-        const p = job.points[job.point], c = job.buckets[job.point];
-        const end = Math.min(c.length, job.offset + RALLY_COMMIT_SLICE * 2);
-        queueAction({ action: 'setRallyMany', coords: Array.from(c.subarray(job.offset, end)), targetX: p.x, targetY: p.y, targetUnitId: p.targetUnitId ?? null });
-        job.offset = end;
-        setTimeout(() => _rallyJobCommit(job), 0);
-    }
-    function _rallyJobStart(job) {
-        if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
+    function _rallyWorkerGet() {
+        if (_rallyWorker || _rallyWorkerFailed || typeof Worker === 'undefined') return _rallyWorker;
         try {
-            if (!_rallyWorker) {
-                _rallyWorker = new Worker('./src/sim/assign_worker.js?v=20261028-rally');
-                _rallyWorker.onmessage = ev => {
-                    const j = _rallyJobs[0], m = ev.data || {};
-                    if (!j || j.seq !== m.seq) return;
-                    if (!m.buckets) { reportRuntimeError('rally assignment', new Error(m.error || 'Missing result')); _rallyJobNext(j); return; }
-                    j.buckets = m.buckets; j.point = j.offset = 0;
-                    _rallyJobCommit(j);
-                };
-                _rallyWorker.onerror = err => {
-                    _rallyWorker.terminate(); _rallyWorker = null;
-                    reportRuntimeError('rally assignment', err);
-                    if (_rallyJobs.length) _rallyJobNext(_rallyJobs[0]);
-                };
-            }
-            const n = job.list.length;
-            job.xs = new Float32Array(n); job.ys = new Float32Array(n);
-            job.has = new Uint8Array(n); job.coords = new Int32Array(n * 2); job.at = 0;
-            const pack = () => {
-                if (!_rallyJobCurrent(job)) { _rallyJobNext(job); return; }
-                const end = Math.min(n, job.at + RALLY_PREP_SLICE);
-                for (let i = job.at; i < end; i++) {
-                    const e = job.list[i];
-                    job.coords[i * 2] = e.gx; job.coords[i * 2 + 1] = e.gy;
-                    job.xs[i] = Number.isFinite(e.x) ? e.x : e.gx * TILE + 16;
-                    job.ys[i] = Number.isFinite(e.y) ? e.y : e.gy * TILE + 16; job.has[i] = 1;
-                }
-                job.at = end;
-                if (end < n) { setTimeout(pack, 0); return; }
-                _rallyWorker.postMessage({ seq: job.seq, xs: job.xs, ys: job.ys, has: job.has, coords: job.coords, points: job.points },
-                    [job.xs.buffer, job.ys.buffer, job.has.buffer, job.coords.buffer]);
-                job.list = null;
+            _rallyWorker = new Worker('./src/sim/assign_worker.js?v=20261029-tkz');
+            _rallyWorker.onmessage = ev => {
+                const m = ev.data || {}, job = _rallyJobs.get(m.seq);
+                if (!job) return;
+                _rallyJobs.delete(m.seq);
+                if (!m.tkz) { reportRuntimeError('rally assignment', new Error(m.error || 'Missing result')); return; }
+                _rallyAnswer(job, m.tkz, m.keys);
             };
-            pack();
-        } catch (err) { reportRuntimeError('rally assignment', err); _rallyJobNext(job); }
+            _rallyWorker.onerror = err => {
+                // (Its jobs are lost: done here instead, in order.)
+                const jobs = [..._rallyJobs.values()];
+                _rallyWorkerFailed = true; _rallyWorker = null; _rallyJobs.clear();
+                reportRuntimeError('rally assignment', err);
+                for (const job of jobs) { const r = rallyAssignTiles(job.keys, job.xs, job.ys, job.has, job.points); _rallyAnswer(job, r.tkz, r.keys); }
+            };
+        } catch (err) { _rallyWorkerFailed = true; _rallyWorker = null; }
+        return _rallyWorker;
+    }
+    // (The buildings' tile keys and positions, from the page's structure
+    // table beside the worker: no view getters.)
+    function _rallyPack(list) {
+        const n = list.length, T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+        const keys = new Int32Array(n), xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
+        let k = 0;
+        for (let i = 0; i < n; i++) {
+            const e = list[i];
+            if (!e) continue;
+            const s = T && e._kind !== undefined ? e._s : -1;
+            let gx, gy, x, y;
+            if (s >= 0) { gx = T.gx[s]; gy = T.gy[s]; x = T.x[s]; y = T.y[s]; }
+            else { gx = e.gx; gy = e.gy; x = Number.isFinite(e.x) ? e.x : gx * TILE + 16; y = Number.isFinite(e.y) ? e.y : gy * TILE + 16; }
+            if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) continue;
+            keys[k] = gy * GRID_W + gx; xs[k] = x; ys[k] = y; has[k] = 1; k++;
+        }
+        return k === n ? { keys, xs, ys, has } : { keys: keys.slice(0, k), xs: xs.slice(0, k), ys: ys.slice(0, k), has: has.slice(0, k) };
     }
     function applyRallyTargets(selSpawners, targetX, targetY, appendToMultiRally, targetUnitId = null) {
         if (!selSpawners || selSpawners.length === 0) return;
@@ -988,39 +1077,23 @@ function initInput() {
             multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
         }
         if (multiRallyPoints.length === 0) multiRallyPoints = [{ x: targetX, y: targetY, targetUnitId }];
-        if (selSpawners.length > RALLY_PREP_SLICE || _rallyJobs.length) {
-            const job = { seq: ++_rallySeq, generation: _matchLoadGen, list: selSpawners, points: multiRallyPoints.slice() };
-            _rallyJobs.push(job);
-            if (_rallyJobs.length === 1) setTimeout(() => _rallyJobStart(job), 0);
-            return;
-        }
-        // (Positions straight into the split's arrays: no object a building.)
-        let pick = _assignToNearestPoints(selSpawners, multiRallyPoints, null, p => p, (xs, ys, has) => {
-            for (let i = 0; i < selSpawners.length; i++) {
-                const e = selSpawners[i];
-                if (!e) continue;
-                xs[i] = Number.isFinite(e.x) ? e.x : e.gx * TILE + 16; ys[i] = Number.isFinite(e.y) ? e.y : e.gy * TILE + 16; has[i] = 1;
-            }
-        });
-        // One action per point with its buildings' tiles (setRallyMany; at
-        // most ACTION_MAX_RALLY_COORDS each): an action per building could
-        // not carry thousands of them (a packet holds 256 actions).
+        const points = multiRallyPoints.map(p => ({ x: p.x, y: p.y, targetUnitId: p.targetUnitId ?? null }));
+        const job = { seq: ++_rallySeq, generation: _matchLoadGen, points, cover: null, ..._rallyPack(selSpawners) };
         // (One point: all the buildings' pending rally is that one, see
         // renderer.js noteRallyCover; a unit to follow keeps its own keys.)
-        const single = multiRallyPoints.length === 1 && !multiRallyPoints[0].targetUnitId && typeof noteRallyCover === 'function';
-        if (single) noteRallyCover(selSpawners, multiRallyPoints[0].x, multiRallyPoints[0].y);
-        try {
-        let byPoint = multiRallyPoints.map(() => []);
-        for (let i = 0; i < selSpawners.length; i++) {
-            let b = selSpawners[i];
-            let rp = multiRallyPoints[pick[i]];
-            byPoint[pick[i]].push(b.gx, b.gy);
+        if (points.length === 1 && !points[0].targetUnitId && typeof noteRallyCover === 'function') {
+            noteRallyCover(selSpawners, points[0].x, points[0].y);
+            job.cover = _rallyCoverOpen; noteRallyCoverDone();
         }
-        for (let j = 0; j < byPoint.length; j++) {
-            let rp = multiRallyPoints[j], c = byPoint[j];
-            for (let k = 0; k < c.length; k += 2 * ACTION_MAX_RALLY_COORDS) queueAction({ action: 'setRallyMany', coords: c.slice(k, k + 2 * ACTION_MAX_RALLY_COORDS), targetX: rp.x, targetY: rp.y, targetUnitId: rp.targetUnitId || null });
+        const W = (job.keys.length >= RALLY_ASYNC_MIN || _rallyJobs.size) ? _rallyWorkerGet() : null;
+        if (W) {
+            _rallyJobs.set(job.seq, job);
+            // (Copies kept only while the worker may fail: not transferred then.)
+            W.postMessage({ seq: job.seq, rally: true, keys: job.keys, xs: job.xs, ys: job.ys, has: job.has, points });
+            return;
         }
-        } finally { if (single) noteRallyCoverDone(); }
+        const r = rallyAssignTiles(job.keys, job.xs, job.ys, job.has, points);
+        _rallyAnswer(job, r.tkz, r.keys);
     }
 
     function _findResearchRallyTargetNear(worldX, worldY, owner, radius = 48) {
@@ -3287,8 +3360,8 @@ function _unitByIdMap() {
     }
     return _unitById;
 }
-function unitByIdAdded(u) { if (_unitByIdFor === units && u) _unitById.set(u.id, u); }
-function unitByIdRemoved(u) { if (_unitByIdFor === units && u && _unitById.get(u.id) === u) _unitById.delete(u.id); }
+function unitByIdAdded(u) { if (_unitByIdFor === units && u) _unitById.set(u.id, u); _uixAdded(u); }
+function unitByIdRemoved(u) { if (_unitByIdFor === units && u && _unitById.get(u.id) === u) _unitById.delete(u.id); _uixRemoved(u); }
 function getUnitById(id) {
     const u = _unitByIdMap().get(id);
     return u === undefined ? null : u;
@@ -3342,11 +3415,20 @@ function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
     if (c.commandState[s] !== cmd) { c.mvOn[s] = 0; c.commandState[s] = cmd; }
     c.amGx[s] = amGx === null ? -1 : amGx; c.amGy[s] = amGy === null ? -1 : amGy;
     c.mvTgX[s] = targetPos.x; c.mvTgY[s] = targetPos.y;
-    c.j__awaitGroupPath.clear(s);
+    c.agWait[s] = 0;
     h += _ordSet(c.jr__ppt, s, K.ppt, null, K.pptNull);
     h += _ordSet(c.jr__pfa, s, K.pfa, false, K.pfaFalse);
-    c.mvPF[s] = 0;
+    c.mvPF[s] = 0; c.mvPP[s] = 0;
     c.hObj[s] = h | 0;
+}
+// A worker's own part of a player's move order (interruptWorkerForManualMove's;
+// the order's fields _ordClearFast wrote): its task let go, MANUAL_MOVE.
+function _ordWorkerManual(u) {
+    _clearWorkerTarget(u, 'manual_rally_change');
+    clearWorkerTaskMemoryForFreeRetarget(u);
+    u.path = null; u.pathIndex = 0;
+    u._manualMoveIssuedTick = gameTime;
+    u.workerState = 'MANUAL_MOVE';
 }
 // A group member's distance to its destination tile's middle (mvNavLD, as
 // the movement kernel's flow look keeps it within 64 tiles; -1 further):
@@ -3381,23 +3463,26 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
         const flying = profile === NAV_PROFILE_AIR;
         for (let u of reachable) {
             const c = u._us, s = u._si;
-            // (A unit of the columns, no worker: the setters' writes below, as
-            // they make them, straight to its columns.)
-            if (K && c && !c.jr__ws.get(s)) {
+            // (A unit of the columns, no worker or one the player sent
+            // (MANUAL_MOVE: all the way, handed back there): the setters'
+            // writes below, as they make them, straight to its columns.)
+            const ws = K && c ? (c.wkS[s] & 31) : null;
+            if (K && c && (!ws || ws === SIM_WS_MANUAL)) {
+                const wk = !!ws;
                 c.rkF[s] = 1;
-                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.j__navReady.set(s, ready);
+                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.navRdy[s] = ready;
                 if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
                 c.nvPK[s] = at ? -1 : pk;
                 simUnitPathRelease(c, s);
                 c.jr__path.set(s, at ? null : navPath);
                 c.mvOn[s] = 0; c.mvCD[s] = -1;
-                c.j__routeSegEnd.set(s, at ? -1 : destKey);
-                c.mvNavLD[s] = group && !at ? _ordNavLD(c, s, destKey) : -1;
-                if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, cmd, flying, ready, !group, 0, profile);
+                c.rsEnd[s] = at ? -1 : destKey;
+                c.mvNavLD[s] = group && !at && !wk ? _ordNavLD(c, s, destKey) : -1;
+                if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, wk ? CMD_MOVING : cmd, flying, ready, wk || !group, wk ? 2 : 0, profile);
                 // (A group's unit on the destination tile has arrived: only lone
                 // units and workers go to its middle.)
-                if (at && group) simFlowArrive(u);
+                if (at && group && !wk) simFlowArrive(u);
                 continue;
             }
             u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready; u.pathIndex = 0;
@@ -3424,29 +3509,28 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
 // flow navigation; flying ones on the air one); a unit the kernel cannot
 // arm (held, not indexed) a nav node of its own (Unit.update follows it).
 // No search: O(1) a unit. Unit order and every tie-break are deterministic.
-// The order's units by the kernel (SIM_KERNEL_ORDER_MOVE): their slots, the
-// slots it leaves to the JavaScript, per job. (Off: every unit by the
-// JavaScript below, as before.)
-let ORDER_KERNEL = true;
+// The order's units by the kernel (SIM_KERNEL_ORDER_MOVE, _orderMoveSlots):
+// their slots, the units it leaves to the JavaScript (_issueGroupMoveOrderList).
 const ORDER_KERNEL_PER_JOB = 16384;
 let _ordSlots = null, _ordOut = null, _ordCnt = null;
-// (Returns how many units the JavaScript took: the budget's measure, the
-// kernel's a fraction of it, see _runQueuedOrders.)
+// An order for units by id (the queue's own go by slot, _orderTake).
 function _issueGroupMoveOrder(a, playerId, cmd) {
-    let targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, map = _unitByIdMap();
+    const ids = a.unitIdSet && !a.distinct ? Array.from(a.unitIdSet) : (a.unitIds || []), list = [];
+    _ordSlotsRoom(ids.length);
+    let n = 0;
+    for (const id of ids) { const u = map.get(id); if (u === undefined) continue; if (S && u._us === S.columns && u._si >= 0) _ordSlots[n++] = u._si; else list.push(u); }
+    const targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
+    if (n) for (const u of _orderMoveSlots(n, playerId, cmd, targetGx, targetGy, { x: targetGx * TILE + 16, y: targetGy * TILE + 16 }, S)) list.push(u);
+    return _issueGroupMoveOrderList(_unitsInIdOrder(list), playerId, cmd, a.targetX, a.targetY);
+}
+// The JavaScript's part of a move order: units the kernel left (workers,
+// held, a pending way...), in id order.
+function _issueGroupMoveOrderList(list, playerId, cmd, targetX, targetY) {
+    const targetGx = Math.floor(targetX / TILE), targetGy = Math.floor(targetY / TILE);
     // (One target position for the order's units: never changed in place,
     // only replaced.)
     const targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
-    let list;
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (ORDER_KERNEL && S && a.distinct && !a.unitIdSet && a.unitIds.length >= 64 && typeof SIM_KERNEL_ORDER_MOVE === 'number' && typeof _simWasmOk === 'function' && _simWasmOk(_simParReg)) {
-        list = _orderMoveByKernel(a, playerId, cmd, targetGx, targetGy, targetPos, S);
-    } else if (a.distinct && !a.unitIdSet) {
-        const map = _unitByIdMap();
-        list = [];
-        for (const id of a.unitIds) { const u = map.get(id); if (u !== undefined) list.push(u); }
-        _unitsInIdOrder(list);
-    } else list = _actionUnits(a);
     let applyPath = (u, ugx, ugy, path) => {
         if (path && path.length > 0) {
             u.path = path;
@@ -3466,8 +3550,11 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
         // case): what the setters below write, straight to its columns, its
         // digest moved once (~25 accessor calls a unit were most of an
         // order's cost).
-        if (K && c && c.owner[s] === playerId && c.dead[s] !== 1 && !c.jr__ws.get(s) && !c.oc_holdPosition.get(s) && c.spEpoch[s] === spatialEpoch) {
-            _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp);
+        // Workers too: their order fields the same (a move, no attack-move
+        // tile), their own part (_ordWorkerManual) through their setters.
+        if (K && c && c.owner[s] === playerId && c.dead[s] !== 1 && !c.oc_holdPosition.get(s) && c.spEpoch[s] === spatialEpoch) {
+            if ((c.wkS[s] & 31)) { _ordClearFast(c, s, K, CMD_MOVING, null, null, tAmx, tAmy, targetPos, tTp); _ordWorkerManual(u); }
+            else _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp);
             const ugx = Math.floor(c.x[s] * 0.125 / TILE), ugy = Math.floor(c.y[s] * 0.125 / TILE);
             const profile = navProfileOf(u);
             if (!flowDest[profile]) flowDest[profile] = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
@@ -3514,30 +3601,26 @@ function _issueGroupMoveOrder(a, playerId, cmd) {
 // ground's, the air's: from the order's first unit of each, as the JavaScript
 // takes it), each unit's columns in parallel; returns the units it left, in
 // the order's order (unit objects), for the JavaScript.
-function _orderMoveByKernel(a, playerId, cmd, targetGx, targetGy, targetPos, S) {
-    const c = S.columns, map = _unitByIdMap(), ids = a.unitIds, n = ids.length;
-    if (!_ordSlots || _ordSlots.length < n) { _ordSlots = simSharedArray(Int32Array, simReserveCap(n, 16384)); _ordOut = simSharedArray(Int32Array, _ordSlots.length + ORDER_KERNEL_PER_JOB); simParallelBind('ord.slots', _ordSlots); simParallelBind('ord.out', _ordOut); }
+// (Its n units' slots in ord.slots (_ordSlots), in the order's order.)
+function _orderMoveSlots(n, playerId, cmd, targetGx, targetGy, targetPos, S) {
+    const c = S.columns;
     const jobs = Math.ceil(n / ORDER_KERNEL_PER_JOB);
     if (!_ordCnt || _ordCnt.length < jobs) { _ordCnt = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('ord.cnt', _ordCnt); }
     const slots = _ordSlots, objs = [];
-    // (Units not of the columns: the JavaScript's; their slot -1. The kernel's
-    // own: off a group path's wait and any pending way or fallback path (their
+    // (The kernel's own: off a group path's wait and any pending way or fallback path (their
     // digest fields, as _ordClearFast clears them: a fight's army had a tenth
     // of its units waiting for a way, each left to the JavaScript).)
-    const first = [-1, -1], count = [0, 0], layer = S.sepLayer, ppt = c.jr__ppt, pfa = c.jr__pfa, wait = c.j__awaitGroupPath, K = _ordKeys();
+    const first = [-1, -1], count = [0, 0], layer = S.sepLayer, ppt = c.jr__ppt, pfa = c.jr__pfa, wait = c.agWait, K = _ordKeys();
     for (let i = 0; i < n; i++) {
-        const u = map.get(ids[i]);
-        if (u === undefined || u._us !== c || !(u._si >= 0)) { slots[i] = -1; if (u !== undefined) objs.push(u); continue; }
-        const s = u._si;
-        slots[i] = s;
+        const s = slots[i];
         if (c.owner[s] !== playerId || c.dead[s] === 1 || c.isWk[s] !== 0) continue;
         if (c.holdF[s] === 0 && c.spEpoch[s] === spatialEpoch && (ppt.get(s) != null || pfa.get(s))) {
             let h = c.hObj[s];
             h += _ordSet(ppt, s, K.ppt, null, K.pptNull);
             h += _ordSet(pfa, s, K.pfa, false, K.pfaFalse);
-            c.hObj[s] = h | 0; c.mvPF[s] = 0;
+            c.hObj[s] = h | 0; c.mvPF[s] = 0; c.mvPP[s] = 0;
         }
-        wait.clear(s);
+        wait[s] = 0;
         const prof = layer[s] === 1 ? 1 : 0;
         count[prof]++;
         if (first[prof] < 0) first[prof] = s;
@@ -3602,140 +3685,74 @@ function _actionStr(v) {
     return (typeof v === 'string' && !ACTION_RESERVED_STRINGS.has(v)) ? v.slice(0, 64) : null;
 }
 
-// The action ids' stamps (sanitizeAction's duplicates), by unit id.
-const ACTION_ID_STAMP_MAX = 1 << 26;
-let _actionIdStamp = new Int32Array(1 << 16), _actionIdStampNow = 0;
+// An action's ids' duplicate stamps (sanitizeAction): per slot, the unit
+// columns' idStp (allocated with the slots, never by unit id: ids grow
+// without bound). Peer-local scratch.
+let _actionIdStampNow = 0;
 function _actionIdStampNext() {
-    if (++_actionIdStampNow >= 0x7fffffff) { _actionIdStamp.fill(0); _actionIdStampNow = 1; }
+    if (++_actionIdStampNow >= 0x7fffffff) { const c = _orderCols(); if (c) c.idStp.fill(0); _actionIdStampNow = 1; }
     return _actionIdStampNow;
 }
-function _actionIdStampGrow(id) {
-    let n = _actionIdStamp.length;
-    while (n <= id) n *= 2;
-    const a = new Int32Array(Math.min(n, ACTION_ID_STAMP_MAX));
-    a.set(_actionIdStamp);
-    _actionIdStamp = a;
-}
+// (The unit columns, or null: before the match's units.)
+function _orderCols() { const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null; return S && S.cap > 0 ? S.columns : null; }
 
-// Big orders' id loops warmed up (compiled, the id stamps grown) early in
-// a match, not at its first big order: a click's 180k ids took ~30 ms cold
-// (deopts and recompiles), ~5 warm. Fed as a packet's lists are (parsed:
-// packed small integers): warmed on other shapes they deopted at the first
-// real order. Peer-local scratch only (the order stamps' are a scratch
-// table; seqs no order has, the supersede cache kept).
+// Big orders' id loops warmed up (compiled) early in a match, not at its
+// first big order: a select-all ctrl click's first admission was ~280 ms
+// cold, ~50 warm. On the match's own shapes: its units' ids as a click sends
+// them (uidz, parsed as a packet's lists are), a rally's tile keys over its
+// buildings. For no player (-1000): nothing stamped or written.
 let _actionSanitizeWarm = false;
 function actionSanitizeWarm() {
     if (_actionSanitizeWarm) return;
     _actionSanitizeWarm = true;
-    const ids = JSON.parse(JSON.stringify(Array.from({ length: 5000 }, (_, i) => 3 + i * 61)));
-    for (let k = 0; k < 16; k++) _actionCleanIds(ids);
-    const T = { a: new Int32Array(1 << 12), m: null }, f = Float64Array.from(ids), sq = _orderSupSeq, se = _orderSupEntry;
-    for (let k = 0; k < 16; k++) _orderStampIds(T, f, 0x7ffffff1 + k);
-    _orderSupSeq = sq; _orderSupEntry = se;
+    const real = [];
+    for (let i = 0; i < units.length && real.length < ACTION_MAX_UNIT_IDS; i++) { const u = units[i]; if (u && !u.dead) real.push(u.id); }
+    if (real.length) {
+        const raw = JSON.parse(JSON.stringify({ action: 'move', uidz: actionIdsEncode(real), targetX: 0, targetY: 0 }));
+        const hold = JSON.parse(JSON.stringify({ action: 'hold', unitIds: real.slice(0, 5000) }));
+        // (For no player: nothing stamped, no entry; the ids' copy and join warmed.)
+        for (let k = 0; k < 8; k++) { const x = sanitizeAction(raw); const q = _orderSeq; _orderAdmit(x.unitIds, x.unitIds.length, -1000, CMD_MOVING, 'move', 0, 0, 0); _orderSeq = q; sanitizeAction(hold); }
+    }
+    const keys = [];
+    for (const list of [barracks, collectorSpawners]) for (const b of list) { if (keys.length >= 20000) break; if (b && b.gx >= 0) keys.push(b.gy * GRID_W + b.gx); }
+    if (keys.length) {
+        keys.sort((x, y) => x - y);
+        const r = JSON.parse(JSON.stringify({ action: 'setRallyMany', tkz: actionIdsEncode(keys), targetX: 0, targetY: 0 }));
+        for (let k = 0; k < 8; k++) _rallySetTiles(sanitizeAction(r), -1000);
+    }
 }
-// The distinct integer ids of a list in the order given, at most
-// ACTION_MAX_UNIT_IDS (sanitizeAction: a stamp per id, no set of them).
+// The distinct ids of a list in the order given, at most ACTION_MAX_UNIT_IDS
+// (sanitizeAction: a stamp per unit's slot, no set of them), of units there
+// are: an id no unit has does nothing in any action, so it is dropped (a unit
+// outside the columns keeps its id, its duplicates by a set: rare).
 function _actionCleanIds(ids) {
-    const clean = [], now = _actionIdStampNext();
+    const clean = [], now = _actionIdStampNext(), map = _unitByIdMap(), c = _orderCols(), st = c ? c.idStp : null;
     let odd = null;
     for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
         const id = ids[i];
         if (!(typeof id === 'number' && Number.isInteger(id))) continue;
-        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
-            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
-            if (_actionIdStamp[id] === now) continue;
-            _actionIdStamp[id] = now;
-        } else if ((odd || (odd = new Set())).has(id)) continue;
+        const u = map.get(id);
+        if (u === undefined) continue;
+        if (st && u._us === c && u._si >= 0) { const s = u._si; if (st[s] === now) continue; st[s] = now; }
+        else if ((odd || (odd = new Set())).has(id)) continue;
         else odd.add(id);
         clean.push(id);
     }
     return clean;
 }
-// An order's unit ids on the wire (`uidz`): per id its difference from the
-// previous one (zigzag, times two, plus one when a run follows) and then, if
-// so, how many more ids follow it one by one, as base-64 varints. The same ids in the same order; a big army's order was
-// ~7 bytes an id (2-3 MB for 400k units, sent to every player).
-const _UIDZ_ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-const _UIDZ_VAL = (() => { const t = new Int8Array(128).fill(-1); for (let i = 0; i < 64; i++) t[_UIDZ_ABC.charCodeAt(i)] = i; return t; })();
-// (Only plain non-negative integer ids; anything else stays a list.)
-function actionIdsEncode(ids) {
-    if (!Array.isArray(ids)) return null;
-    for (let i = 0; i < ids.length; i++) { const v = ids[i]; if (!(Number.isInteger(v) && v >= 0 && v <= 0x7fffffff)) return null; }
-    let out = '', prev = 0;
-    const put = v => { while (v >= 32) { out += _UIDZ_ABC[32 | (v & 31)]; v = Math.floor(v / 32); } out += _UIDZ_ABC[v]; };
-    for (let i = 0; i < ids.length;) {
-        const id = ids[i], d = id - prev;
-        let run = 0;
-        while (i + 1 + run < ids.length && ids[i + 1 + run] === id + 1 + run) run++;
-        put((d >= 0 ? d * 2 : -d * 2 - 1) * 2 + (run > 0 ? 1 : 0));
-        if (run > 0) put(run - 1);
-        prev = id + run;
-        i += 1 + run;
-    }
-    return out;
-}
-// How many ids actionIdsDecode(s, max) gives, without the list (an order's
-// cost: a run of ids is a few characters).
-function actionIdsCount(s, max = ACTION_MAX_UNIT_IDS) {
-    if (typeof s !== 'string') return 0;
-    let pos = 0, prev = 0, n = 0;
-    const get = () => {
-        let v = 0, mul = 1;
-        for (let k = 0; k < 8 && pos < s.length; k++) {
-            const c = s.charCodeAt(pos++), x = c < 128 ? _UIDZ_VAL[c] : -1;
-            if (x < 0) return -1;
-            v += (x & 31) * mul;
-            if (!(x & 32)) return v;
-            mul *= 32;
-        }
-        return -1;
-    };
-    while (pos < s.length && n < max) {
-        const zf = get();
-        if (zf < 0) break;
-        const z = Math.floor(zf / 2), run = zf % 2 ? get() + 1 : 0;
-        if (run < 0) break;
-        const id = prev + (z % 2 === 0 ? z / 2 : -(z + 1) / 2);
-        if (!(id >= 0 && id <= 0x7fffffff)) break;
-        n = Math.min(max, n + 1 + run);
-        prev = id + run;
-    }
-    return n;
-}
-// Malformed or oversized input decodes to at most `max` ids (others' actions).
-function actionIdsDecode(s, max = ACTION_MAX_UNIT_IDS) {
-    const out = [];
-    if (typeof s !== 'string') return out;
-    let pos = 0, prev = 0;
-    const get = () => {
-        let v = 0, mul = 1;
-        for (let k = 0; k < 8 && pos < s.length; k++) {
-            const c = s.charCodeAt(pos++), x = c < 128 ? _UIDZ_VAL[c] : -1;
-            if (x < 0) return -1;
-            v += (x & 31) * mul;
-            if (!(x & 32)) return v;
-            mul *= 32;
-        }
-        return -1;
-    };
-    while (pos < s.length && out.length < max) {
-        const zf = get();
-        if (zf < 0) break;
-        const z = Math.floor(zf / 2), run = zf % 2 ? get() + 1 : 0;
-        if (run < 0) break;
-        const id = prev + (z % 2 === 0 ? z / 2 : -(z + 1) / 2);
-        if (!(id >= 0 && id <= 0x7fffffff)) break;
-        out.push(id);
-        for (let r = 1; r <= run && out.length < max; r++) out.push(id + r);
-        prev = id + run;
-    }
-    return out;
-}
+// (The ids' wire form, actionIdsEncode / actionIdsDecode: utils/id_codec.js.)
 function sanitizeAction(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
     let a = { ...raw };
     // (Ids sent compactly: the list they stand for.)
-    if (typeof a.uidz === 'string') { if (!Array.isArray(a.unitIds)) a.unitIds = actionIdsDecode(a.uidz); delete a.uidz; }
+    // (A move order's: kept as it came, decoded by the queue's admission
+    // straight into its scratch (_queueGroupMoveOrder; the kernel takes each
+    // unit once, the player's own only); others' as a list.)
+    if (typeof a.uidz === 'string') {
+        if (!Array.isArray(a.unitIds) && (a.action === 'move' || a.action === 'attackMove')) { Object.defineProperty(a, '_uidz', { value: a.uidz, enumerable: false, configurable: true }); a.unitIds = []; }
+        else if (!Array.isArray(a.unitIds)) a.unitIds = actionIdsDecode(a.uidz);
+        delete a.uidz;
+    }
     for (let k of ['gx', 'gy', 'targetGx', 'targetGy']) if (k in a) a[k] = _actionInt(a[k]) ?? -1;
     // World positions stay on the map (paths and tiles are looked up there).
     if ('targetX' in a) { let v = _actionNum(a.targetX); a.targetX = v === null ? null : Math.max(0, Math.min(GRID_W * TILE - 1, v)); }
@@ -3765,6 +3782,9 @@ function sanitizeAction(raw) {
             if (gx !== null && gy !== null) a.towerCoords.push({ gx, gy });
         }
     }
+    // (A rally's tile keys: a string, decoded as it is applied, at most a
+    // key a tile: _rallySetTiles.)
+    if ('tkz' in a && typeof a.tkz !== 'string') delete a.tkz;
     if ('coords' in a) {
         let coords = Array.isArray(a.coords) ? a.coords : [];
         a.coords = [];
@@ -3799,12 +3819,6 @@ const ACTION_SPLIT_UNITS = new Set(['attack', 'attackBuilding', 'hold', 'stop', 
 const ACTION_SPLIT_MIN_UNITS = 64;
 // [now, later] of a unit order over `budget`, or null (it runs whole).
 function _actionSplit(raw, budget) {
-    if (raw && raw.action === 'setRallyMany' && Array.isArray(raw.coords)) {
-        const n = Math.min(ACTION_MAX_RALLY_COORDS, Math.floor(raw.coords.length / 2));
-        const k = Math.max(1, Math.floor((budget - 1) * 100));
-        if (k < n) return [{ ...raw, coords: raw.coords.slice(0, k * 2) }, { ...raw, coords: raw.coords.slice(k * 2, n * 2) }];
-        return null;
-    }
     if (!raw || !ACTION_SPLIT_UNITS.has(raw.action)) return null;
     const cost = _actionCost(raw);
     if (cost <= budget) return null;
@@ -3819,7 +3833,7 @@ function _actionSplit(raw, budget) {
 let _actionBacklog = [], _actionBudgetLeft = ACTION_BUDGET_PER_TICK;
 function _actionCost(raw) {
     if (!raw || typeof raw !== 'object') return 1;
-    const ids = Array.isArray(raw.unitIds) ? raw.unitIds.length : (typeof raw.uidz === 'string' ? actionIdsCount(raw.uidz) : 0);
+    const ids = Array.isArray(raw.unitIds) ? raw.unitIds.length : (typeof raw.uidz === 'string' ? _actionIdsCountSim(raw.uidz) : 0);
     const coords = Array.isArray(raw.coords) ? raw.coords.length / 2 : (Array.isArray(raw.towerCoords) ? raw.towerCoords.length : 0);
     const count = Math.max(1, Math.min(ACTION_MAX_COUNT, Math.floor(Number(raw.count) || 1)));
     // (Measured in a chaos scenario: a unit of cost ~0.05 ms. Per kind, the
@@ -3831,7 +3845,6 @@ function _actionCost(raw) {
         case 'hold': case 'stop': return 1 + ids / 40;
         case 'killUnit': return 1 + ids / 300;
         case 'towerTarget': return 1 + coords / 100;
-        case 'setRallyMany': return 1 + coords / 100;
         // (A task put in the queue's middle: its stat's tasks made again, ~0.2 ms.)
         case 'queueResearch': return 1 + (raw.insertAt !== undefined && raw.insertAt !== null ? 4 : 1) * count;
         // (The moved or removed tasks' stats made again: ~0.2-0.4 ms with 900
@@ -3858,7 +3871,11 @@ const ACTION_JUMP_COST = 12;
 // waits like any other.)
 const ACTION_JUMP_BUDGET_PER_TICK = 48;
 let _actionArrival = 0, _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK;
-function _actionMarked(raw) { return !!raw && (ACTION_JUMP_UNITS.has(raw.action) || raw.action === 'setRally' || raw.action === 'setRallyMany'); }
+function _actionMarked(raw) { return !!raw && ACTION_JUMP_UNITS.has(raw.action); }
+// Rally orders never wait: column writes, whole at once (_rallySetTiles).
+function _actionIsRally(raw) { return !!raw && (raw.action === 'setRally' || raw.action === 'setRallyMany'); }
+function _actionIsQueuedOrder(raw) { return !!raw && (raw.action === 'move' || raw.action === 'attackMove'); }
+function _actionBacklogHasMarked() { for (const e of _actionBacklog) if (_actionMarked(e[1])) return true; return false; }
 function _actionJumps(raw) {
     if (!raw) return false;
     const cost = _actionCost(raw);
@@ -3890,77 +3907,60 @@ function _actionJumps(raw) {
 // tenth (seconds at 1 TPS). In arrival order still (rallies, placements and
 // unit orders keep their order), every peer alike. Dropped once no action
 // waits.
-let _actLatest = [], _actLive = new Map();
-function _actLatestOf(p) { return _actLatest[p] || (_actLatest[p] = { u: { a: new Int32Array(1 << 12), m: null }, t: null }); }
-// (Its units' ids or its buildings' tiles (tile index), as given: before
-// the action is cleaned, any id it carries; an invalid one never matches.)
-function _actionMarkKeys(raw) {
-    if (ACTION_JUMP_UNITS.has(raw.action)) return { ids: Array.isArray(raw.unitIds) ? raw.unitIds : (typeof raw.uidz === 'string' ? actionIdsDecode(raw.uidz) : []), tiles: null };
-    const c = raw.action === 'setRally' ? [raw.gx, raw.gy] : (Array.isArray(raw.coords) ? raw.coords : []), tiles = [];
-    for (let k = 0; k + 1 < c.length; k += 2) { const x = c[k], y = c[k + 1]; if (Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) tiles.push(y * GRID_W + x); }
-    return { ids: null, tiles };
+let _actMarked = false, _actLive = new Map();
+// (Its units' ids, as given: before the action is cleaned, any id it carries;
+// an id of no unit, or of another player's, is not marked.)
+function _actionMarkIds(raw) {
+    return Array.isArray(raw.unitIds) ? raw.unitIds : (typeof raw.uidz === 'string' ? actionIdsDecode(raw.uidz) : []);
 }
+// (The marks: per slot, the unit columns' actMk (arrival + 1, 0 none).)
 function _actionRecordArrival(raw, p, seq, waits) {
-    const L = _actLatestOf(p), mark = seq + 1, K = _actionMarkKeys(raw);
+    const mark = seq + 1, c = _orderCols(), map = _unitByIdMap();
     let live = 0, lastS = -1, lastE = null;
     const dec = old => { if (old !== lastS) { lastS = old; lastE = _actLive.get(old - 1) || null; } if (lastE) lastE.live--; };
-    if (K.ids) for (const id of K.ids) {
-        if (!Number.isInteger(id)) continue;
-        const old = _orderStampGet(L.u, id);
+    if (c) for (const id of _actionMarkIds(raw)) {
+        const u = map.get(id);
+        if (u === undefined || u._us !== c || !(u._si >= 0) || c.owner[u._si] !== p) continue;
+        const s = u._si, old = c.actMk[s];
         if (old === mark) continue;
         if (old > 0) dec(old);
-        _orderStampSet(L.u, id, mark); live++;
-    }
-    if (K.tiles) {
-        const T = L.t || (L.t = new Int32Array(GRID_W * GRID_H));
-        for (const k of K.tiles) { const old = T[k]; if (old === mark) continue; if (old > 0) dec(old); T[k] = mark; live++; }
+        c.actMk[s] = mark; live++; _actMarked = true;
     }
     if (waits) _actLive.set(seq, { live });
 }
-// (The keys an action recorded at its arrival is still the latest for.)
+// (The units an action recorded at its arrival is still the latest for.)
 function _actionKeepLatest(a, p, seq) {
-    const L = _actLatest[p], mark = seq + 1;
-    if (!L) return true;
-    if (ACTION_JUMP_UNITS.has(a.action)) {
-        const ids = (a.unitIds || []).filter(id => _orderStampGet(L.u, id) === mark);
-        a.unitIds = ids;
-        Object.defineProperty(a, '_idsDistinct', { value: ids, enumerable: false, configurable: true });
-        return ids.length > 0;
-    }
-    const T = L.t, c = a.action === 'setRally' ? [a.gx, a.gy] : (Array.isArray(a.coords) ? a.coords : []), keep = [];
-    if (!T) return true;
-    for (let k = 0; k + 1 < c.length; k += 2) if (T[c[k + 1] * GRID_W + c[k]] === mark) keep.push(c[k], c[k + 1]);
-    if (a.action === 'setRally') return keep.length > 0;
-    a.coords = keep;
-    return keep.length > 0;
+    const c = _orderCols(), mark = seq + 1;
+    if (!c || !_actMarked || !ACTION_JUMP_UNITS.has(a.action)) return true;
+    const map = _unitByIdMap();
+    const ids = (a.unitIds || []).filter(id => { const u = map.get(id); return u !== undefined && u._us === c && u._si >= 0 && c.actMk[u._si] === mark; });
+    a.unitIds = ids;
+    Object.defineProperty(a, '_idsDistinct', { value: ids, enumerable: false, configurable: true });
+    return ids.length > 0;
 }
-function _actionMarksClear() { if (_actLatest.length) _actLatest = []; if (_actLive.size) _actLive.clear(); }
+function _actionMarksClear() { if (_actMarked) { const c = _orderCols(); if (c) c.actMk.fill(0); _actMarked = false; } if (_actLive.size) _actLive.clear(); }
 // (In a snapshot: the arrival, the marks that waiting actions read (those
-// of their arrivals and later: unit ids, tiles as -(tile + 1)), the live counts.)
+// of their arrivals and later, as (player, unit id, mark)), the live counts.)
 function actionEarlySnapshot() {
     const marks = [], lives = [];
     let min = Infinity;
     for (const e of _actionBacklog) if (e[2] < min) min = e[2];
-    if (_actionBacklog.length) for (let p = 0; p < _actLatest.length; p++) {
-        const L = _actLatest[p];
-        if (!L) continue;
-        const A = L.u.a;
-        for (let id = 0; id < A.length; id++) if (A[id] > min) marks.push(p, id, A[id]);
-        if (L.u.m) for (const [id, s] of L.u.m) if (s > min) marks.push(p, id, s);
-        if (L.t) for (let k = 0; k < L.t.length; k++) if (L.t[k] > min) marks.push(p, -(k + 1), L.t[k]);
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, c = _orderCols();
+    if (_actionBacklog.length && _actMarked && c) {
+        const M = c.actMk;
+        for (let s = 0; s < S.cap; s++) if (M[s] > min) { const u = S.owners[s]; if (u) marks.push(c.owner[s], u.id, M[s]); }
     }
     for (const [s, v] of _actLive) lives.push(s, v.live);
-    return { arrival: _actionArrival, marks, lives, v: 2 };
+    return { arrival: _actionArrival, marks, lives, v: 3 };
 }
 function actionEarlyRestore(v) {
     _actionArrival = v && Number.isFinite(v.arrival) ? v.arrival : 0;
     _actionMarksClear();
-    if (!v || v.v !== 2) return;
-    const m = Array.isArray(v.marks) ? v.marks : [], l = Array.isArray(v.lives) ? v.lives : [];
-    for (let i = 0; i + 2 < m.length; i += 3) {
-        const L = _actLatestOf(m[i] | 0), key = m[i + 1], s = m[i + 2] | 0;
-        if (key >= 0) _orderStampSet(L.u, key, s);
-        else { const T = L.t || (L.t = new Int32Array(GRID_W * GRID_H)); const k = -key - 1; if (k < T.length) T[k] = s; }
+    if (!v || v.v !== 3) return;
+    const m = Array.isArray(v.marks) ? v.marks : [], l = Array.isArray(v.lives) ? v.lives : [], c = _orderCols(), map = _unitByIdMap();
+    if (c) for (let i = 0; i + 2 < m.length; i += 3) {
+        const u = map.get(m[i + 1]);
+        if (u !== undefined && u._us === c && u._si >= 0 && c.owner[u._si] === (m[i] | 0)) { c.actMk[u._si] = m[i + 2] | 0; _actMarked = true; }
     }
     for (let i = 0; i + 1 < l.length; i += 2) _actLive.set(l[i] | 0, { live: l[i + 1] | 0 });
 }
@@ -4013,6 +4013,19 @@ function _processActions(actions, playerId) {
     _actionBacklogDrain();
     for (let raw of actions) {
         const seq = _actionArrival++, marked = _actionMarked(raw);
+        if (_actionIsRally(raw)) { _processRawAction(raw, playerId, seq); continue; }
+        // Move orders go into the order queue at once (it applies each by
+        // its deadline, ORDER_DRAIN_STEPS; there they are their units' latest
+        // order), never into this backlog: an older unit order still waiting
+        // here passes their units over (the arrival marks). They waited
+        // twice, here and there: a select-all ctrl click's 290k units took
+        // ~10 ticks to reach the queue, each tick marking them again.
+        if (_actionIsQueuedOrder(raw)) {
+            if (_actionBacklog.length && _actionBacklogHasMarked()) _actionRecordArrival(raw, playerId, seq, false);
+            _actionBudgetLeft -= 1;
+            _processRawAction(raw, playerId, seq);
+            continue;
+        }
         if (_actionBacklog.length || _actionBudgetLeft <= 0) {
             const older = _actionBacklog.length > 0;
             // (A small unit order: now, ahead of those waiting.)
@@ -4085,38 +4098,27 @@ function actionBacklogChecksum() {
     return h | 0;
 }
 
-// Move orders over many units are applied in slices: each player at most
-// ORDER_UNITS_PER_PLAYER_TICK units a tick (a budget of its own: one
-// player's huge order never slows another player's orders, nor a tick by
-// more than its share), the rest queued and applied at the start of the next
-// ticks in order. The first slice moves at once; a later order (or any
-// other order) for a unit drops it from the queued ones, so the latest order
-// always wins. The queue and the budgets are simulation state (snapshotted
-// with the globals).
-// (Once 2-2.5 us a unit, 2500 a tick; the columns' fast path and the order
-// kernel made it ~0.4-0.5 us a unit (tests/test-runs/probe_workermove.cjs):
-// 10000 a tick are ~5 ms, 200k units a second.)
-let ORDER_UNITS_PER_PLAYER_TICK = 8000, ORDER_UNITS_PER_TICK_ALL = 10000, ORDER_UNITS_PER_ROUND = 2000;
-// (A unit the order kernel takes costs a fraction of one the JavaScript does: 1/ORDER_KERNEL_GAIN.)
-const ORDER_KERNEL_GAIN = 16;
-// A worker's task cleanup and flow assignment are substantially heavier
-// than the old scalar combat-order estimate. Keep the native allowance,
-// but limit this work to 2,000 units/player/base tick (2,500 total).
-const ORDER_JS_COST = 4;
-let _orderQueue = [], _orderBudgets = [], _orderAllLeft = ORDER_UNITS_PER_TICK_ALL;
-function _orderBudgetOf(p) { const b = _orderBudgets[p]; return b === undefined || b === null ? ORDER_UNITS_PER_PLAYER_TICK + _orderPlayerBonus : b; }
-// A step of several base ticks (simDk): the budgets of its base ticks, the
-// action and order rates a second as at one a step (added at the step's
+// Move and attack-move orders go into a queue at once (_queueGroupMoveOrder)
+// and their units are applied over at most ORDER_DRAIN_STEPS steps
+// (_runQueuedOrders): an order of up to ORDER_NOW units at once, a bigger one
+// spread evenly over the steps to its deadline (e.due). A later order (or any
+// other order) for a unit takes it from the queued ones, so the latest order
+// always wins. Admission and take are kernels over the unit columns
+// (wasm/src/ord.rs); the queue is simulation state (snapshotted with the
+// globals). A select-all ctrl click's 290k units took ~50 steps at the
+// per-tick budgets this replaced.
+const ORDER_DRAIN_STEPS = 4, ORDER_NOW = 4096;
+let _orderQueue = [];
+// A step of several base ticks (simDk): the action budgets of its base
+// ticks, the action rates a second as at one a step (added at the step's
 // first use, simDk known then; every peer alike).
-let _budgetStep = -1, _orderPlayerBonus = 0;
+let _budgetStep = -1;
 function _stepBudgets() {
     if (_budgetStep === currentTick) return;
     _budgetStep = currentTick;
     const k = simDk > 1 ? simDk - 1 : 0;
-    _orderPlayerBonus = ORDER_UNITS_PER_PLAYER_TICK * k;
     if (!k) return;
     _actionBudgetLeft += ACTION_BUDGET_PER_TICK * k; _actionJumpLeft += ACTION_JUMP_BUDGET_PER_TICK * k;
-    _orderAllLeft += ORDER_UNITS_PER_TICK_ALL * k;
 }
 // Per player, each unit's latest order (its queue entry's seq, or a drop's):
 // a queued unit is applied only by the entry that ordered it last, so a new
@@ -4127,7 +4129,7 @@ function _stepBudgets() {
 // those ordered again since): an entry whose units were all ordered again
 // is dropped at once, not walked id by id (a click's 158k superseded ids
 // cost ~9 ms a tick).
-let _orderSeq = 0, _unitOrderSeq = [], _orderBySeq = new Map();
+let _orderSeq = 0, _orderBySeq = new Map();
 // (A unit's stamp changing from `old`: that entry has one live unit less.
 // The last entry looked up is kept: a new order's units mostly come from
 // one earlier order.)
@@ -4141,190 +4143,312 @@ function _orderStampSuperseded(old, id) {
 // apply, order-free, kept as they are applied or ordered again; the state
 // hash reads it, orderQueueChecksum.)
 function _orderIdH(id) { const x = Math.imul((id | 0) ^ 0x5bd1e995, 2654435761); return (x ^ (x >>> 15)) | 0; }
-function _orderIdsSum(ids) { let s = 0; for (let i = 0; i < ids.length; i++) s = (s + _orderIdH(ids[i])) | 0; return s; }
-// (Per player: { a: Int32Array by unit id, m: Map for ids past it }.)
-function _unitOrderSeqOf(p) { return _unitOrderSeq[p] || (_unitOrderSeq[p] = { a: new Int32Array(1 << 12), m: null }); }
-function _orderStampSet(T, id, seq) {
-    if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
-        if (id >= T.a.length) { let n = T.a.length; while (n <= id) n *= 2; const a = new Int32Array(Math.min(n, ACTION_ID_STAMP_MAX)); a.set(T.a); T.a = a; }
-        T.a[id] = seq;
-    } else (T.m || (T.m = new Map())).set(id, seq);
+// The stamps: per slot, the unit columns' ordSq (allocated with the slots,
+// zeroed with one; never by unit id: ids grow without bound). One table for
+// every player: a player's order stamps its own units only (another's do
+// nothing for it), and reads 0 for others'. T: the player's view, { p }.
+const _orderSeqViews = [];
+function _unitOrderSeqOf(p) { return _orderSeqViews[p] || (_orderSeqViews[p] = { p }); }
+// (The slot of the player's unit with that id, -1 none.)
+function _orderStampSlot(T, id, map = _unitByIdMap(), c = _orderCols()) {
+    const u = map.get(id);
+    return c && u !== undefined && u._us === c && u._si >= 0 && c.owner[u._si] === T.p ? u._si : -1;
 }
-function _orderStampGet(T, id) {
-    if (id >= 0 && id < ACTION_ID_STAMP_MAX) return id < T.a.length ? T.a[id] : 0;
-    const v = T.m ? T.m.get(id) : undefined;
-    return v === undefined ? 0 : v;
-}
+// (A unit's queued order: its entry, null none; pathfinding.js order codes.)
+function orderQueuedOf(u) { const c = u && u._us; return c && u._si >= 0 && c.ordSq ? _orderBySeq.get(c.ordSq[u._si]) || null : null; }
 function _orderSeqNext() {
-    if (_orderSeq >= 0x7ffffff0) { _unitOrderSeq = []; _orderSeq = 0; }
+    if (_orderSeq >= 0x7ffffff0) { const c = _orderCols(); if (c) c.ordSq.fill(0); _orderSeq = 0; }
     return ++_orderSeq;
 }
-// An action's ids, each once in the order given (a set given with it: its order).
+// An action's ids, each once in the order given (a set given with it: its
+// order): _actionCleanIds' (slot stamps).
 function _actionDistinctIds(a) {
     if (a._idsDistinct && a._idsDistinct === a.unitIds) return a.unitIds;
     const d = Object.getOwnPropertyDescriptor(a, 'unitIdSet');
     if (d && !d.get && d.value) return Array.from(d.value);
-    const now = _actionIdStampNext(), out = [];
-    let odd = null;
-    for (const id of a.unitIds || []) {
-        if (!(typeof id === 'number' && Number.isInteger(id))) continue;
-        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
-            if (id >= _actionIdStamp.length) _actionIdStampGrow(id);
-            if (_actionIdStamp[id] === now) continue;
-            _actionIdStamp[id] = now;
-        } else if ((odd || (odd = new Set())).has(id)) continue;
-        else odd.add(id);
-        out.push(id);
-    }
-    return out;
+    return _actionCleanIds(a.unitIds || []);
 }
 function _dropQueuedOrderUnits(idSet, playerId) {
     if (!_orderQueue.length || !idSet || !idSet.size) return;
-    const T = _unitOrderSeqOf(playerId), seq = _orderSeqNext();
-    for (const id of idSet) { _orderStampSuperseded(_orderStampGet(T, id), id); _orderStampSet(T, id, seq); }
+    const T = _unitOrderSeqOf(playerId), map = _unitByIdMap(), c = _orderCols();
+    for (const id of idSet) { const s = _orderStampSlot(T, id, map, c); if (s >= 0) { _orderStampSuperseded(c.ordSq[s], id); c.ordSq[s] = 0; } }
 }
-// An order's ids made their units' latest order (seq) in T (the entries
-// ordering them before lose them).
-function _orderStampIds(T, ids, seq) {
-    // (The table grown once for the largest id; the common ids stamped inline.)
-    let max = -1;
-    for (let i = 0; i < ids.length; i++) { const id = ids[i]; if (id > max && id < ACTION_ID_STAMP_MAX) max = id; }
-    if (max >= T.a.length) { let n = T.a.length; while (n <= max) n *= 2; const a = new Int32Array(Math.min(n, ACTION_ID_STAMP_MAX)); a.set(T.a); T.a = a; }
-    const A = T.a;
-    for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        if (id >= 0 && id < ACTION_ID_STAMP_MAX) {
-            const old = A[id];
-            if (old > 0) _orderStampSuperseded(old, id);
-            A[id] = seq;
-        } else { _orderStampSuperseded(_orderStampGet(T, id), id); _orderStampSet(T, id, seq); }
+// The queue's buffers (wasm heap, bound for the order kernels), allocated at
+// the match's start (orderQueueReserve), sized from the settings so every
+// peer's are alike: an action's ids at most (ACTION_MAX_UNIT_IDS), the
+// entries' slots (ord.ring: twice the units the budget reserves, the queued
+// orders' slots in id order, entry after entry; compacted when full, the
+// oldest order applied whole when even that has no room).
+const ORDER_ENTRIES_MAX = 16384;
+let _oq = null;
+function orderQueueReserve() {
+    const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
+    const ring = 2 * memoryBudgetUnits(getConfiguredMaxPop(), teams, GRID_W * GRID_H) + 2 * ACTION_MAX_UNIT_IDS;
+    // (An action's ids or a rally's tile keys: a player's structures at most;
+    // their wire form's bytes: two a tile at most, ~14 an id.)
+    const keys = Math.max(ACTION_MAX_UNIT_IDS, memoryBudgetBuildings(getConfiguredMaxPop(), teams, GRID_W * GRID_H)), bytes = Math.max(14 * ACTION_MAX_UNIT_IDS, 2 * GRID_W * GRID_H);
+    // (Kept while the wasm heap holds them: a heap made since (the match's
+    // first, a restarted worker's) gets them anew, the queued slots carried.)
+    const inHeap = !_oq || typeof simHeapHas !== 'function' || simHeapHas(_oq.ring);
+    if (_oq && _oq.ring.length === ring && _oq.ids.length === keys && _oq.bytes.length === bytes && inHeap) return _oq;
+    const I = n => simSharedArray(Int32Array, n), m = ACTION_MAX_UNIT_IDS, was = _oq;
+    _oq = { ids: I(keys), keysOut: I(keys), bytes: simSharedArray(Uint8Array, bytes), out: I(m), out2: I(m), loose: I(m), eseq: I(ORDER_ENTRIES_MAX), edl: I(ORDER_ENTRIES_MAX), eds: I(ORDER_ENTRIES_MAX), cnt: I(8), ring: I(ring), top: 0 };
+    for (const [k, v] of [['q.ids', _oq.ids], ['q.bytes', _oq.bytes], ['q.out', _oq.out], ['q.out2', _oq.out2], ['q.loose', _oq.loose], ['q.eseq', _oq.eseq], ['q.edl', _oq.edl], ['q.eds', _oq.eds], ['q.cnt', _oq.cnt], ['ord.ring', _oq.ring]]) simParallelBind(k, v);
+    if (was) { _oq.top = Math.min(was.top, ring); _oq.ring.set(was.ring.subarray(0, _oq.top)); }
+    // (The order move kernel's list: an entry's take at most.)
+    if (_ordSlots && typeof simHeapHas === 'function' && !simHeapHas(_ordSlots)) _ordSlots = null;
+    _ordSlotsRoom(m);
+    return _oq;
+}
+function _ordSlotsRoom(n) {
+    if (_ordSlots && _ordSlots.length >= n) return;
+    _ordSlots = simSharedArray(Int32Array, simReserveCap(n, 16384)); _ordOut = simSharedArray(Int32Array, _ordSlots.length + ORDER_KERNEL_PER_JOB);
+    simParallelBind('ord.slots', _ordSlots); simParallelBind('ord.out', _ordOut);
+}
+// Room for k more slots at the ring's top: the entries' slots still to apply
+// moved to its start (in queue order), then, while that is not enough, the
+// oldest order applied whole.
+function _orderRingRoom(k) {
+    const Q = _oq, R = Q.ring;
+    if (Q.top + k <= R.length) return;
+    let top = 0;
+    for (const e of _orderQueue) { const n = e.rn - e.next; R.copyWithin(top, e.ro + e.next, e.ro + e.rn); e.ro = top; e.rn = n; e.next = 0; top += n; }
+    Q.top = top;
+    while (Q.top + k > R.length && _orderQueue.length) {
+        const e = _orderQueue[0];
+        while (e.live > 0 && e.next < e.rn) _orderTake(e, e.live);
+        _orderDone(0);
+        _orderRingRoom(0);
     }
 }
-function _orderWorkersLast(ids) {
+function _orderDone(qi) {
+    const e = _orderQueue[qi];
+    _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq);
+    if (_orderSupSeq === e.seq) { _orderSupSeq = 0; _orderSupEntry = null; }
+    if (!_orderQueue.length) _oq.top = 0;
+}
+// An order's ids (a list of integers; null: already in the queue's scratch,
+// q.ids) made its units' latest order (the admission kernel): a new entry with
+// their slots, due at `due`; units outside the columns (rare) ordered at once.
+function _orderAdmit(ids, n, playerId, cmd, action, targetX, targetY, due) {
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (!S) return ids;
-    const map = _unitByIdMap(), c = S.columns, wk = c.isWk, out = new Float64Array(ids.length);
-    let a = 0, b = 0, late = null;
-    for (let i = 0; i < ids.length; i++) {
-        const u = map.get(ids[i]), s = u !== undefined && u._us === c ? u._si : -1;
-        if (s >= 0 && wk[s] !== 0) (late || (late = new Float64Array(ids.length)))[b++] = ids[i];
-        else out[a++] = ids[i];
+    if (!S || !S.cap || !(n > 0)) return null;
+    const Q = orderQueueReserve(), A = Q.ids;
+    n = Math.min(n, A.length);
+    // (A typed list: one copy; then sorted, in place, when it is not.)
+    if (ids === null) { } else if (ArrayBuffer.isView(ids)) A.set(ids.subarray(0, n)); else for (let i = 0; i < n; i++) A[i] = ids[i];
+    // (Decoded by the kernel: ascending already, _idsDecode.)
+    if (ids !== null) {
+        let sorted = true;
+        for (let i = 1; i < n && sorted; i++) if (A[i] < A[i - 1]) sorted = false;
+        if (!sorted) A.subarray(0, n).sort();
     }
-    if (!late) return ids;
-    out.set(late.subarray(0, b), a);
-    return out;
-}
-function _queueGroupMoveOrder(a, playerId, cmd) {
-    // (Each id once, in the order given (sanitizeAction); the units' latest
-    // order now. Kept typed: queued ids are nothing for the collector to
-    // trace.)
-    let ids = Float64Array.from(_actionDistinctIds(a));
-    const seq = _orderSeqNext(), T = _unitOrderSeqOf(playerId);
-    // (A big order's units the kernel takes first, its workers after (the
-    // JavaScript's, ~30x the budget a unit): an army with a third of it
-    // workers moved at the workers' pace. The same order on every peer: by
-    // the units' columns at the order.)
-    if (ORDER_KERNEL && ids.length >= 64) ids = _orderWorkersLast(ids);
-    _orderStampIds(T, ids, seq);
-    const e = { playerId, cmd, action: a.action, targetX: a.targetX, targetY: a.targetY, ids, next: 0, seq, live: ids.length, sum: _orderIdsSum(ids) };
+    const U = unitIdIndex(), E = Math.min(_orderQueue.length, ORDER_ENTRIES_MAX);
+    for (let k = 0; k < E; k++) { Q.eseq[k] = _orderQueue[k].seq; Q.edl[k] = 0; Q.eds[k] = 0; }
+    // (Bound again only when they are other arrays: a binding reaches every helper.)
+    if (Q.um !== U.ids) { simParallelBind('um.ids', U.ids); simParallelBind('um.slots', U.slots); Q.um = U.ids; }
+    const seq = _orderSeqNext(), P = _simParams;
+    P[0] = n; P[1] = U.n; P[2] = playerId; P[3] = seq; P[4] = E;
+    simParallelRun(SIM_KERNEL_ORDER_ADMIT, 1);
+    for (let k = 0; k < E; k++) if (Q.edl[k]) { const e = _orderQueue[k]; e.live += Q.edl[k]; e.sum = (e.sum + Q.eds[k]) | 0; }
+    const C = Q.cnt, nn = C[0], nw = C[1], nl = C[2], sum = C[3];
+    if (nl) {
+        const map = _unitByIdMap(), loose = [];
+        for (let i = 0; i < nl; i++) { const u = map.get(U.ids[Q.loose[i]]); if (u !== undefined && u.owner === playerId) loose.push(u); }
+        if (loose.length) _issueGroupMoveOrderList(loose, playerId, cmd, targetX, targetY);
+    }
+    if (!(nn + nw)) return null;
+    _orderRingRoom(nn + nw);
+    const ro = Q.top;
+    Q.ring.set(Q.out.subarray(0, nn + nw), ro);
+    Q.top += nn + nw;
+    const e = { playerId, cmd, action, targetX, targetY, ro, rn: nn + nw, next: 0, seq, live: nn + nw, sum, due };
     _orderQueue.push(e); _orderBySeq.set(seq, e);
-    // (Its first slice at gameTick's start, the same tick (runQueuedOrders,
-    // within the tick's order budget): applied here, a big order's 2500
-    // units (~6 ms) were the action's cost, on top of the order budget's own
-    // work at the start of the tick.)
+    return e;
 }
-// Applies queued orders within this tick's budgets, in queue order (a
-// player whose budget is spent waits, its later orders too). Units ordered
-// again since are passed over (no budget).
+// An order's ids or a rally's tile keys from their wire form (id_codec.js)
+// into the queue's q.ids by the decode kernel (ord.rs k_ids_decode): how many,
+// at most max; sorted ascending when sort; only counted when !write.
+const _idsEnc = typeof TextEncoder === 'function' ? new TextEncoder() : null;
+const _idsP = new Float64Array(4);
+let _idsScratch = null;
+function _idsDecode(s, max, write = true, sort = false) {
+    if (typeof s !== 'string' || !(max > 0)) return 0;
+    const Q = orderQueueReserve();
+    // (The wire form is ASCII: a character a byte. Longer than the buffer:
+    // cut there, as on every peer.)
+    // (Browsers encode into unshared memory only: a scratch buffer as long
+    // as the heap's, made once, copied over.)
+    if (!_idsScratch || _idsScratch.length !== Q.bytes.length) _idsScratch = new Uint8Array(Q.bytes.length);
+    const len = _idsEnc.encodeInto(s, _idsScratch).written;
+    Q.bytes.set(_idsScratch.subarray(0, len));
+    const D = _idsP;
+    D[0] = len; D[1] = Math.min(max, Q.ids.length); D[2] = write ? 1 : 0; D[3] = sort ? 1 : 0;
+    // (On this thread, no job posted: a click decodes several actions' ids.)
+    simRustDirect('k_ids_decode', [Q.bytes, Q.ids, Q.cnt], D);
+    return Q.cnt[4];
+}
+// (An action's id count where the simulation runs: by the kernel.)
+function _actionIdsCountSim(s) { return typeof _simWasmX !== 'undefined' && _simWasmX !== null ? _idsDecode(s, ACTION_MAX_UNIT_IDS, false) : actionIdsCount(s); }
+function _queueGroupMoveOrder(a, playerId, cmd) {
+    const due = currentTick + ORDER_DRAIN_STEPS - 1;
+    if (typeof a._uidz === 'string') {
+        const Q = orderQueueReserve();
+        _orderAdmit(null, _idsDecode(a._uidz, Math.min(ACTION_MAX_UNIT_IDS, Q.out.length), true, true), playerId, cmd, a.action, a.targetX, a.targetY, due);
+        return;
+    }
+    const ids = a.unitIds || [];
+    _orderAdmit(ids, ids.length, playerId, cmd, a.action, a.targetX, a.targetY, due);
+}
+// The workers of a move order (q.out2[0..n], slots) by the workers' order
+// kernel (ord.rs k_order_workers): their tasks let go and the order's flow
+// armed, each navigation profile's destination worked out once here (as
+// _issueFlowOrder's, from its first worker). Returns the units it left to
+// the JavaScript (not the player's, held, not indexed, shooters, a profile
+// with no way there). (Its buffers: heap arrays made once a size.)
+let _ordW = null;
+function _orderWorkers(n, playerId, targetGx, targetGy, S) {
+    const Q = _oq, c = S.columns, m = Q.out2.length;
+    if (!_ordW || _ordW.out.length !== m || !simHeapHas(_ordW.out)) {
+        const I = k => simSharedArray(Int32Array, k);
+        _ordW = { out: I(m), fix: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(24) };
+        // (Worker record types, unit.wbType 1..6: their reservation load and work type indices.)
+        ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { _ordW.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
+    }
+    const W = _ordW, P = W.P, V = _workerWorkTable(), U = unitIdIndex();
+    const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
+    const wsl = _wsw ? _wswResvRoom() : null;
+    if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
+    const arrays = [Q.out2, W.out, W.fix, W.cnt, W.pd,
+        c.owner, c.dead, c.isWk, c.holdF, c.spEpoch, c.x, c.y, S.sepLayer, S.sepKey, c.id,
+        c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.commandState, c.mvOn, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.agWait, c.mvPP, c.mvPF,
+        c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.rmClr, c.wkIdle, c.wsKind, c.wkIx, c.wbType,
+        c.rkF, c.rtEnd, c.nvProf, c.navRdy, c.pathIndex, c.nvPK, c.mvPath, S.pathPool.fs, c.mvCD, c.rsEnd, c.mvNavLD,
+        c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
+        workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots, W.tt];
+    P.fill(0);
+    P[1] = n; P[2] = playerId; P[3] = spatialEpoch; P[4] = gameTime; P[5] = targetGx * TILE + 16; P[6] = targetGy * TILE + 16;
+    P[7] = GRID_W; P[8] = TILE; P[9] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[10] = SNAP_REGION_TILES; P[11] = Math.ceil(GRID_W / SNAP_REGION_TILES);
+    P[12] = _WORKER_WORK_TYPES.length; P[13] = V.rw; P[14] = V.rh; P[15] = V.np; P[16] = WORKER_WORK_REGION_TILES; P[17] = U.n;
+    P[18] = CMD_MOVING; P[19] = SIM_SEP_ABSENT; P[20] = workerReservedTiles.length; P[21] = V.length; P[22] = wsl ? wsl.length : 0;
+    P[0] = 0;
+    simRustDirect('k_order_workers', arrays, P);
+    // Each profile's destination, flow and its readiness (its first worker's).
+    const C = W.cnt, pd = W.pd;
+    pd.fill(0);
+    for (let p = 0; p < 11; p++) {
+        const count = C[8 + p], q = C[20 + p];
+        if (!count || q < 0) continue;
+        navEnsure(p);
+        const u = S.owners[q], ugx = Math.floor(c.x[q] * 0.125 / TILE), ugy = Math.floor(c.y[q] * 0.125 / TILE);
+        const fd = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
+        const to = navApproachTile(p, fd.y * GRID_W + fd.x);
+        if (to < 0) continue;
+        const group = count >= NAV_GROUP_MIN, did = navFieldRequest(p, to, group);
+        pd[6 * p] = to; pd[6 * p + 1] = group ? 1 : 0; pd[6 * p + 2] = did; pd[6 * p + 3] = did >= 0 ? navFieldGen(did) : 0; pd[6 * p + 4] = navFieldReadyFor(did); pd[6 * p + 5] = 1;
+    }
+    P[0] = 1;
+    simRustDirect('k_order_workers', arrays, P);
+    V.sum = (V.sum + C[2]) | 0;
+    if (C[3]) _wsw = null;
+    // Pending ways: their references let go here (their digest terms).
+    const K = _ordKeys();
+    for (let i = 0, nf = C[1]; i < nf; i++) {
+        const s = W.fix[i];
+        let h = c.hObj[s];
+        h += _ordSet(c.jr__ppt, s, K.ppt, null, K.pptNull);
+        h += _ordSet(c.jr__pfa, s, K.pfa, false, K.pfaFalse);
+        c.hObj[s] = h | 0; c.mvPP[s] = 0;
+    }
+    const left = [];
+    for (let i = 0, no = C[0]; i < no; i++) { const u = S.owners[W.out[i]]; if (u) left.push(u); }
+    return left;
+}
+// An entry's next `need` units (the take kernel): those of the kernel to its
+// order move kernel, the rest (workers, held, a pending way) the JavaScript's.
+function _orderTake(e, need) {
+    const Q = orderQueueReserve(), P = _simParams;
+    _ordSlotsRoom(need);
+    P[0] = e.ro + e.next; P[1] = e.rn - e.next; P[2] = need; P[3] = e.seq;
+    simParallelRun(SIM_KERNEL_ORDER_TAKE, 1);
+    const C = Q.cnt, passed = C[0], nn = C[1], nw = C[2], sum = C[3];
+    e.next += passed; e.live -= nn + nw; e.sum = (e.sum - sum) | 0;
+    simOrderStats.units += nn + nw;
+    if (!(nn + nw)) return;
+    const S = _simUnitState, targetGx = Math.floor(e.targetX / TILE), targetGy = Math.floor(e.targetY / TILE);
+    // (The workers first: the order move kernel lists its leftovers in
+    // ord.out, the workers' kernel reads q.out2.)
+    const left = nw ? _orderWorkers(nw, e.playerId, targetGx, targetGy, S) : null;
+    const list = nn ? _orderMoveSlots(nn, e.playerId, e.cmd, targetGx, targetGy, { x: targetGx * TILE + 16, y: targetGy * TILE + 16 }, S) : [];
+    if (left) for (const u of left) list.push(u);
+    if (list.length) { try { _issueGroupMoveOrderList(_unitsInIdOrder(list), e.playerId, e.cmd, e.targetX, e.targetY); } catch (err) { reportRuntimeError('queued order', err); } }
+}
+// Applies queued orders, oldest first: each order's share of its units by
+// its deadline (all of a small one). Units ordered again since are passed over.
 // (Diagnostics: the time and units of the queued orders applied, the
 // actions' time; reset by whoever reads them.)
 const simOrderStats = globalThis.simOrderStats = { ms: 0, units: 0, calls: 0, actionsMs: 0 };
 function runQueuedOrders() {
     _stepBudgets();
-    const t0 = performance.now(), b0 = _orderAllLeft;
-    try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.units += Math.max(0, b0 - _orderAllLeft); simOrderStats.calls++; }
+    const t0 = performance.now();
+    try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.calls++; }
 }
 function _runQueuedOrders() {
-    const state = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    const columns = state && state.columns;
-    const byId = _orderQueue.length && ORDER_KERNEL && columns ? _unitByIdMap() : null;
-    // In rounds of at most ORDER_UNITS_PER_ROUND units per player (its
-    // newest unfinished order only: a click on a few units right after big
-    // orders moves them at once; the latest order wins by the stamps anyway),
-    // until the players' budgets or the tick's (ORDER_UNITS_PER_TICK_ALL) run
-    // out: players ordering at once share the tick evenly.
-    for (let progress = true; progress && _orderQueue.length && _orderAllLeft > 0;) {
-        progress = false;
-        const seen = new Set();
-        for (let qi = _orderQueue.length - 1; qi >= 0 && _orderAllLeft > 0; qi--) {
-            let e = _orderQueue[qi], p = e.playerId;
-            if (seen.has(p)) continue;
-            seen.add(p);
-            const left = Math.min(_orderBudgetOf(p), _orderAllLeft, ORDER_UNITS_PER_ROUND);
-            if (left <= 0) continue;
-            // (The kernel's units cost a fraction: ORDER_KERNEL_GAIN as many taken,
-            // the slice charged by the JavaScript's share and the kernel's.)
-            const gain = ORDER_KERNEL ? ORDER_KERNEL_GAIN : 1;
-            const T = _unitOrderSeqOf(p), ids = [];
-            let estimated = 0;
-            while (e.live > 0 && e.next < e.ids.length && estimated < left * gain) {
-                const id = e.ids[e.next];
-                if (_orderStampGet(T, id) !== e.seq) { e.next++; continue; }
-                // Only likely native candidates receive the native discount.
-                // Previously a round took left*16 workers, applied them all
-                // synchronously, then discovered the 16x budget overshoot.
-                const u = byId ? byId.get(id) : null;
-                const s = u && u._us === columns ? u._si : -1;
-                const native = gain > 1 && s >= 0 && columns.isWk[s] === 0 && columns.holdF[s] === 0;
-                const cost = native ? 1 : gain * ORDER_JS_COST;
-                if (ids.length && estimated + cost > left * gain) break;
-                estimated += cost; e.next++;
-                ids.push(id); _orderStampSet(T, id, 0); e.live--; e.sum = (e.sum - _orderIdH(id)) | 0;
-            }
-            let charge = ids.length * ORDER_JS_COST;
-            // (Finished: the player's next order may run in this round.)
-            if (e.live <= 0 || e.next >= e.ids.length) { _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq); if (_orderSupSeq === e.seq) { _orderSupSeq = 0; _orderSupEntry = null; } seen.delete(p); }
-            progress = true;
-            // (The slice's ids are distinct: its units are looked up in order,
-            // no set of them.)
-            if (ids.length) {
-                try {
-                    const js = _issueGroupMoveOrder({ action: e.action, targetX: e.targetX, targetY: e.targetY, unitIds: ids, unitIdSet: null, distinct: true }, e.playerId, e.cmd);
-                    if (Number.isFinite(js)) charge = js * ORDER_JS_COST + Math.ceil((ids.length - js) / gain);
-                }
-                catch (err) { reportRuntimeError('queued order', err); }
-            }
-            _orderBudgets[p] = _orderBudgetOf(p) - charge; _orderAllLeft -= charge;
+    for (let qi = 0; qi < _orderQueue.length; qi++) {
+        const e = _orderQueue[qi];
+        if (e.live > 0 && e.next < e.rn) {
+            const need = e.live <= ORDER_NOW ? e.live : Math.max(ORDER_NOW, Math.ceil(e.live / Math.max(1, e.due - currentTick + 1)));
+            try { _orderTake(e, need); } catch (err) { reportRuntimeError('queued order', err); }
         }
+        if (e.live <= 0 || e.next >= e.rn) { _orderDone(qi); qi--; }
     }
 }
-function _refillOrderBudget() { _orderBudgets.length = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; }
-function resetOrderQueue() { _orderQueue = []; _orderBudgets = []; _unitOrderSeq = []; _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _orderAllLeft = ORDER_UNITS_PER_TICK_ALL; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionMarksClear(); }
+// A unit removed (main.js gameTick's retire pass): no longer its queued
+// order's (its live count and sum), its stamp cleared. The same tick on every
+// peer: a restored one's entries (from a snapshot, units alive) match.
+function orderQueueUnitGone(s, id) {
+    const c = _orderCols(), q = c ? c.ordSq[s] : 0;
+    if (!(q > 0)) return;
+    c.ordSq[s] = 0;
+    const e = _orderBySeq.get(q);
+    if (e) { e.live--; e.sum = (e.sum - _orderIdH(id)) | 0; }
+}
+// (Slots moved by a compaction, simUnitStateCompact: the queued ones too;
+// -1 a unit gone, passed over.)
+function orderQueueRemapSlots(map) {
+    if (!_oq) return;
+    const R = _oq.ring;
+    for (const e of _orderQueue) for (let i = e.ro + e.next, end = e.ro + e.rn; i < end; i++) { const s = R[i]; R[i] = s >= 0 && s < map.length ? map[s] : -1; }
+}
+function resetOrderQueue() { _orderQueue = []; if (_oq) _oq.top = 0; { const c = _orderCols(); if (c) c.ordSq.fill(0); } _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionMarksClear(); }
 // The queue as state (snapshots): each entry's units still to apply that
-// it ordered last, entries with none left out.
+// it ordered last, in its order (its slots' units, by id), entries with none
+// left out. A restore admits them again: the same order (ascending ids, as
+// the admission made it).
 function orderQueueSnapshot() {
-    const out = [];
+    const out = [], S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!S || !_oq) return out;
+    const c = S.columns, R = _oq.ring;
     for (const e of _orderQueue) {
-        const T = _unitOrderSeqOf(e.playerId), ids = [];
-        for (let i = e.next; i < e.ids.length; i++) if (_orderStampGet(T, e.ids[i]) === e.seq) ids.push(e.ids[i]);
-        if (ids.length) out.push([e.playerId, e.cmd, e.action, e.targetX, e.targetY, ids]);
+        const ids = [];
+        for (let i = e.ro + e.next, end = e.ro + e.rn; i < end; i++) { const s = R[i]; if (s >= 0 && c.ordSq[s] === e.seq) ids.push(c.id[s]); }
+        if (ids.length) out.push([e.playerId, e.cmd, e.action, e.targetX, e.targetY, ids, e.due]);
     }
     return out;
 }
 function orderQueueRestore(rows) {
     resetOrderQueue();
+    orderQueueReserve();
     for (const r of rows || []) {
-        const ids = Float64Array.from(Array.isArray(r[5]) ? r[5] : []), seq = _orderSeqNext(), T = _unitOrderSeqOf(r[0]);
-        _orderStampIds(T, ids, seq);
-        const e = { playerId: r[0], cmd: r[1], action: r[2], targetX: r[3], targetY: r[4], ids, next: 0, seq, live: ids.length, sum: _orderIdsSum(ids) };
-        _orderQueue.push(e); _orderBySeq.set(seq, e);
+        const ids = Array.isArray(r[5]) ? r[5] : [];
+        _orderAdmit(ids, ids.length, r[0] | 0, r[1] | 0, r[2], r[3], r[4], Number.isFinite(r[6]) ? r[6] : currentTick + ORDER_DRAIN_STEPS - 1);
     }
 }
 
 // (The state hash's share: each queued order in turn, its player, kind,
 // target, and its units still to apply (their count and order-free sum: the
-// same for a peer restored from a snapshot, which carries those alone); the
-// tick's budgets. It was not hashed: a pending move order showed nowhere.)
+// same for a peer restored from a snapshot, which carries those alone) and
+// its deadline. It was not hashed: a pending move order showed nowhere.)
 function orderQueueChecksum() {
     // (Entries with none left are passed over: a restored peer has none.)
     let h = 2654435761 | 0;
@@ -4336,16 +4460,86 @@ function orderQueueChecksum() {
         h = _lsHashValue(h, e.targetX); h = _lsHashValue(h, e.targetY);
         h = Math.imul(h ^ (e.live | 0), 16777619);
         h = Math.imul(h ^ (e.sum | 0), 2246822519);
+        h = Math.imul(h ^ (e.due | 0), 16777619);
     }
-    h = Math.imul(h ^ (_orderAllLeft | 0), 16777619);
-    for (let p = 0; p < _orderBudgets.length; p++) if (_orderBudgets[p] !== undefined && _orderBudgets[p] !== null) h = Math.imul(h ^ ((p + 1) * 65599 + (_orderBudgets[p] | 0)), 16777619);
     return h | 0;
+}
+
+// A rally order's buildings (setRally: its tile; setRallyMany: tkz, their
+// tile keys, id_codec.js, or coords, gx, gy pairs): the player's barracks and
+// spawners there get the point, written straight to their rows' columns
+// (data_state.js 'N' fields; the setters for a building out of its table),
+// and to the presentation's table (simPresentRally). Whole, at once: ~25 ns
+// a building, 250k in a few ms; no budget, no backlog (a later rally
+// action is later in the tick's order, so the latest wins as it is).
+const _rallyAt = { p: -1, x: NaN, y: NaN, tid: NaN, C: null, ok: false, T: null, present: false, n: 0 };
+function _rallySetTile(key) {
+    const R = _rallyAt;
+    if (!(key >= 0 && key < GRID_W * GRID_H)) return;
+    const gx = key % GRID_W, gy = (key - gx) / GRID_W, row = tileEntityRef[gy], b = row ? row[gx] : null;
+    if (!b) return;
+    // (Barrack or spawner: by its class, looked up once a class.)
+    if (b.constructor !== R.C) { R.C = b.constructor; R.ok = (b instanceof Barrack) || isSpawnerEntity(b); R.T = R.ok && typeof _sTables !== 'undefined' ? _sTables.get(R.C) || null : null; }
+    if (!R.ok) return;
+    const T = R.T, r = b._sr;
+    if (T && r >= 0 && T.rowObj[r] === b) {
+        // (Its owner: the row's column, no accessor.)
+        if (T.c__ow[r] !== R.p) return;
+        T.c_rallyX[r] = R.x; T.c_rallyY[r] = R.y; T.c_rallyTargetUnitId[r] = R.tid;
+        T.c__rallyLastSeenX[r] = R.x; T.c__rallyLastSeenY[r] = R.y; T.c__pendingRallyDetach[r] = 1;
+    } else {
+        if (b.owner !== R.p) return;
+        const x = R.x === R.x ? R.x : null, y = R.y === R.y ? R.y : null;
+        b.rallyX = x; b.rallyY = y; b.rallyTargetUnitId = R.tid === R.tid ? R.tid : null;
+        b._rallyLastSeenX = x; b._rallyLastSeenY = y; b._pendingRallyDetach = false;
+    }
+    R.n++;
+    if (R.present) simPresentRally(b, R.x, R.y, R.tid);
+}
+// A rally's tile keys (tkz) by the kernels: decoded (k_ids_decode), the
+// player's rally structures' rows written (k_rally_tiles, over every rally
+// class's table: data_state.js _ST_RALLY_CLASSES, the tiles' tables and
+// rows _ST.rtab / _ST.rrow), the presentation's cells for those it wrote.
+const _rallyP = new Float64Array(8);
+function _rallyKernel(tkz) {
+    const R = _rallyAt, Q = orderQueueReserve(), ST = typeof _ST !== 'undefined' ? _ST : null;
+    if (!ST || !ST.rtab) return;
+    const n = _idsDecode(tkz, Q.ids.length, true, false);
+    if (!n) return;
+    // (A heap made since (a restarted worker's): the tables moved into it.)
+    if (!simHeapHas(ST.rtab)) structTablesRehome();
+    const arrays = [Q.ids, ST.rtab, ST.rrow, Q.keysOut, Q.cnt];
+    for (const C of structRallyClasses()) { const T = C ? _sTables.get(C) : null; arrays.push(T ? T.c__ow : null, T ? T.c_rallyX : null, T ? T.c_rallyY : null, T ? T.c_rallyTargetUnitId : null, T ? T.c__rallyLastSeenX : null, T ? T.c__rallyLastSeenY : null, T ? T.c__pendingRallyDetach : null); }
+    const P = _rallyP;
+    P[0] = n; P[1] = R.p; P[2] = R.x; P[3] = R.y; P[4] = R.tid; P[5] = GRID_W * GRID_H;
+    simRustDirect('k_rally_tiles', arrays, P);
+    const m = Q.cnt[6];
+    R.n += m;
+    if (R.present) for (let i = 0; i < m; i++) { const t = Q.keysOut[i], gx = t % GRID_W; simPresentRally(tileEntityRef[(t - gx) / GRID_W][gx], R.x, R.y, R.tid); }
+}
+function _rallySetTiles(a, playerId) {
+    const R = _rallyAt;
+    R.p = playerId; R.n = 0; R.C = null;
+    R.x = Number.isFinite(a.targetX) ? a.targetX : NaN; R.y = Number.isFinite(a.targetY) ? a.targetY : NaN;
+    R.tid = Number.isFinite(a.targetUnitId) ? a.targetUnitId : NaN;
+    R.present = typeof simPresentRally === 'function' && typeof _simPresentation !== 'undefined' && !!_simPresentation;
+    if (typeof a.tkz === 'string') _rallyKernel(a.tkz);
+    else {
+        const c = a.action === 'setRally' ? [a.gx, a.gy] : (a.coords || []);
+        for (let k = 0; k + 1 < c.length; k += 2) if (c[k] >= 0 && c[k + 1] >= 0 && c[k] < GRID_W && c[k + 1] < GRID_H) _rallySetTile(c[k + 1] * GRID_W + c[k]);
+    }
+    R.C = null; R.T = null;
+    return R.n;
 }
 
 function processAction(a, playerId) {
     {
-        // An order may give the player's idle workers something to do.
-        workerWorkChanged(playerId);
+        // An order may give the player's idle workers something to do. (Not
+        // move, attack or rally orders: they make no work; the workers they
+        // take let go of theirs where it was, k_order_workers. Every idle
+        // worker of the player searched again after a select-all click:
+        // ~90 ms.)
+        { const k = a.action; if (k !== 'move' && k !== 'attackMove' && k !== 'attack' && k !== 'attackBuilding' && k !== 'setRally' && k !== 'setRallyMany' && k !== 'towerTarget') workerWorkChanged(playerId); }
         // Any order for units supersedes queued move orders for them.
         if (a.action !== 'move' && a.action !== 'attackMove' && a.unitIdSet && a.unitIdSet.size) _dropQueuedOrderUnits(a.unitIdSet, playerId);
         if (a.action === 'place') {
@@ -4566,19 +4760,7 @@ function processAction(a, playerId) {
                 }
             }
         } else if (a.action === 'setRally' || a.action === 'setRallyMany') {
-            const coords = a.action === 'setRally' ? [a.gx, a.gy] : (a.coords || []);
-            for (let k = 0; k + 1 < coords.length; k += 2) {
-                let b = getTileEntityRef(coords[k], coords[k + 1]);
-                if (!(b && b.owner === playerId && ((b instanceof Barrack) || isSpawnerEntity(b)))) b = null;
-                if (b) {
-                    b.rallyX = a.targetX;
-                    b.rallyY = a.targetY;
-                    b.rallyTargetUnitId = (a.targetUnitId != null) ? a.targetUnitId : null;
-                    b._rallyLastSeenX = Number.isFinite(a.targetX) ? a.targetX : null;
-                    b._rallyLastSeenY = Number.isFinite(a.targetY) ? a.targetY : null;
-                    b._pendingRallyDetach = false;
-                }
-            }
+            _rallySetTiles(a, playerId);
         } else if (a.action === 'resign') {
             resignedTeams.add(playerId);
             if (playerId === localPlayerId) enterSpectateMode('defeated');
@@ -5386,8 +5568,13 @@ function startGame() {
         teamSpawnPos[pid] = pos;
     }
 
+    // (The population as the memory budget holds it on this map with these
+    // teams, the same on every peer: data_static.js memoryBudgetPop.)
+    if (typeof memoryBudgetPop === 'function') CONFIG_MAX_POP = memoryBudgetPop(CONFIG_MAX_POP, teams.length, GRID_W * GRID_H);
     // (The structure rows' pool for the whole match: see structTablesReserve.)
     if (typeof structTablesReserve === 'function') structTablesReserve();
+    // (The order queue's buffers, from the same settings.)
+    orderQueueReserve();
     // (Room for every starting unit at once: see simUnitStateReserve.)
     if (!startGameSkipStarters && typeof simUnitStateReserve === 'function') {
         let spawnByThing = startingResourcesConfig.spawnCounts || {}, perTeam = 0;

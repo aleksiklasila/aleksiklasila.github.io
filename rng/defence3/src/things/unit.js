@@ -247,7 +247,7 @@ function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
     c.mvOn[s] = 0; c.mvCD[s] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
     const old = c.jr__pfa.set(s, true);
     if (old !== true) h = (h + trueTerm - _simHTerm(_UH_PFA, old)) | 0;
-    c.hObj[s] = h; c.mvPF[s] = 1;
+    c.hObj[s] = h; c.mvPF[s] = 1; c.mvPP[s] = 3;
     if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
     const to = Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0));
     navPathSubstitutePrepared(u, profile, to, comp, pt);
@@ -653,23 +653,55 @@ class Unit {
         else if (this._det) this._det.dead = !!v;
         else Object.defineProperty(this, '_deadv', { value: !!v, writable: true, configurable: true });
     }
-    // A worker's state and its next idle search: plain values (non-enumerable
-    // _ws, _wnr); a change wakes a parked worker (see simMoveTryPark).
-    get workerState() { return this._ws; }
+    // A worker's task: columns (sim_unit_state.js SIM_UNIT_WK_FIELDS: wkS,
+    // wkT, wkR, wkN), hashed from them by the hash kernel. Before its slot
+    // plain values (_wkv), detached its _det's. A change of its state or next
+    // idle search wakes a parked worker (see simMoveTryPark).
+    get workerState() { const c = this._us; if (c) return SIM_WS_NAMES[c.wkS[this._si] & 31]; return this._det ? this._det.workerState : this._wkv && this._wkv.workerState; }
     set workerState(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_ws', { value: v, writable: true, configurable: true }); return; }
-        // (A change only: the same state set again keeps a parked worker.)
-        if (c && this._ws !== v) { c.mvOn[this._si] = 0; if (v !== 'IDLE') c.wsKind[this._si] = 0; _unitHD(c, this._si, _UH_WS, this._ws, v); c.wkIdle[this._si] = v === 'IDLE' ? 1 : 0; }
-        this._ws = v;
+        if (c) {
+            const s = this._si, w = c.wkS[s], code = simWsCode(v);
+            // (A change only: the same state set again keeps a parked worker.)
+            if ((w & 31) !== code) { c.mvOn[s] = 0; if (code !== SIM_WS_IDLE) c.wsKind[s] = 0; c.wkIdle[s] = code === SIM_WS_IDLE ? 1 : 0; c.wkS[s] = (w & ~31) | code; }
+        } else _unitWkPre(this, 'workerState', v);
     }
-    get _workerNextIdleRetargetTick() { return this._wnr; }
+    get _workerNextIdleRetargetTick() { const c = this._us; if (c) return _unitWkNum(c.wkN[this._si]); return this._det ? this._det._workerNextIdleRetargetTick : this._wkv && this._wkv._workerNextIdleRetargetTick; }
     set _workerNextIdleRetargetTick(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_wnr', { value: v, writable: true, configurable: true }); return; }
-        if (c && this._wnr !== v) { c.mvOn[this._si] = 0; _unitHD(c, this._si, _UH_WNR, this._wnr, v); }
-        this._wnr = v;
+        if (c) { const s = this._si, n = _unitWkNumOf(v); if (c.wkN[s] !== n) { c.mvOn[s] = 0; c.wkN[s] = n; } }
+        else _unitWkPre(this, '_workerNextIdleRetargetTick', v);
     }
+    get workerTarget() { const c = this._us; if (c) { const s = this._si; return simWtDecode((c.wkS[s] >>> 10) & 7, c.wkT[s]); } return this._det ? this._det.workerTarget : this._wkv && this._wkv.workerTarget; }
+    set workerTarget(v) {
+        const c = this._us;
+        if (c) {
+            // (A snapshot carries the columns themselves: _wkTgt.)
+            const s = this._si, [k, t] = simWtEncode(v); c.wkS[s] = (c.wkS[s] & ~(7 << 10)) | (k << 10); c.wkT[s] = t;
+        }
+        else _unitWkPre(this, 'workerTarget', v);
+    }
+    get _wkTgt() { const c = this._us; if (c) { const s = this._si; return c.wkT[s] * 8 + ((c.wkS[s] >>> 10) & 7); } return this._det ? this._det._wkTgt : undefined; }
+    set _wkTgt(v) {
+        const c = this._us;
+        if (!c || !Number.isFinite(v)) return;
+        const s = this._si, k = ((v % 8) + 8) % 8;
+        c.wkS[s] = (c.wkS[s] & ~(7 << 10)) | (k << 10); c.wkT[s] = (v - k) / 8;
+    }
+    get workerTargetType() { const c = this._us; if (c) return _simWttNames[(c.wkS[this._si] >>> 5) & 31]; return this._det ? this._det.workerTargetType : this._wkv && this._wkv.workerTargetType; }
+    set workerTargetType(v) {
+        const c = this._us;
+        if (c) { const s = this._si; c.wkS[s] = (c.wkS[s] & ~(31 << 5)) | (simWttCode(v) << 5); }
+        else _unitWkPre(this, 'workerTargetType', v);
+    }
+    get _workerReservedTileIndex() { const c = this._us; if (c) return _unitWkNum(c.wkR[this._si]); return this._det ? this._det._workerReservedTileIndex : this._wkv && this._wkv._workerReservedTileIndex; }
+    set _workerReservedTileIndex(v) { const c = this._us; if (c) c.wkR[this._si] = _unitWkNumOf(v); else _unitWkPre(this, '_workerReservedTileIndex', v); }
+    get builderHasMaterial() { return _unitWkMat(this, 13, 'builderHasMaterial'); }
+    set builderHasMaterial(v) { _unitWkMatSet(this, 13, 'builderHasMaterial', v); }
+    get healerHasMaterial() { return _unitWkMat(this, 15, 'healerHasMaterial'); }
+    set healerHasMaterial(v) { _unitWkMatSet(this, 15, 'healerHasMaterial', v); }
+    get researcherHasMaterial() { return _unitWkMat(this, 17, 'researcherHasMaterial'); }
+    set researcherHasMaterial(v) { _unitWkMatSet(this, 17, 'researcherHasMaterial', v); }
     // The path: a plain reference (non-enumerable _path, see
     // simUnitStateAllocate); a new one disarms the movement kernel.
     // A structure target (its value in _tb), mirrored into the acqB column:
@@ -783,7 +815,7 @@ class Unit {
         if (c === undefined) { Object.defineProperty(this, '_pfa', { value: v, writable: true, configurable: true }); return; }
         if (c && this._pfa !== v) _unitHD(c, this._si, _UH_PFA, this._pfa, v);
         this._pfa = v;
-        if (c) c.mvPF[this._si] = v && this._ppt ? 1 : 0;
+        if (c) { const p = this._ppt; c.mvPF[this._si] = v && p ? 1 : 0; c.mvPP[this._si] = (v ? 1 : 0) | (p != null ? 2 : 0); }
     }
     get _pendingPathTarget() { return this._ppt; }
     set _pendingPathTarget(v) {
@@ -791,7 +823,7 @@ class Unit {
         if (c === undefined) { Object.defineProperty(this, '_ppt', { value: v, writable: true, configurable: true }); return; }
         if (c && this._ppt !== v) _unitHD(c, this._si, _UH_PPT, this._ppt, v);
         this._ppt = v;
-        if (c) c.mvPF[this._si] = v && this._pfa ? 1 : 0;
+        if (c) { const f = this._pfa; c.mvPF[this._si] = v && f ? 1 : 0; c.mvPP[this._si] = (f ? 1 : 0) | (v != null ? 2 : 0); }
     }
     // The effective stat tables: its stat row's (unit.statRow >= 0, see
     // things_utils.js _effRowAttach), else its own (_pc, _pce: non-enumerable,
@@ -1106,10 +1138,25 @@ const UNIT_ROLE_FIELDS = ['_resourceCollectorMemory', '_collectorPinnedTarget', 
     '_researchLastMoveTick', '_researchNextRecheckTick', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
 // (Every field takes any kind of value from the start: see _makeUnitFieldsMutable.)
 const _UnitRoleMem = new Function(UNIT_ROLE_FIELDS.map(k => 'this.' + k + ' = 1; this.' + k + ' = _UNIT_FIELD_WIDEN; this.' + k + ' = 0.5; this.' + k + ' = undefined;').join(' '));
+// (A role memory clear an order kernel left pending, rmClr: made at its
+// first use, the same values the clear made at once would leave.)
+function _unitRmApply(u) {
+    const c = u._us, s = u._si, t = c.rmClr[s] - 1;
+    c.rmClr[s] = 0;
+    clearWorkerRoleMemory(u);
+    u._manualMoveIssuedTick = t;
+}
 for (const k of UNIT_ROLE_FIELDS) {
-    const get = new Function('return function () { const m = this._rm; return m ? m.' + k + ' : undefined; };')();
-    const set = new Function('M', 'return function (v) { let m = this._rm; if (!m) { if (v === undefined) return; m = new M();'
+    const get = new Function('return function () { const c = this._us; if (c && c.rmClr[this._si] !== 0) _unitRmApply(this); const m = this._rm; return m ? m.' + k + ' : undefined; };')();
+    const set = new Function('M', 'return function (v) { const c = this._us; if (c && c.rmClr[this._si] !== 0) _unitRmApply(this); let m = this._rm; if (!m) { if (v === undefined) return; m = new M();'
         + " if (this._rm === null) this._rm = m; else Object.defineProperty(this, '_rm', { value: m, writable: true, configurable: true }); } m." + k + ' = v; };')(_UnitRoleMem);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
+// The route and worker fields order kernels write: heap columns
+// (sim_unit_state.js SIM_UNIT_KCOL_FIELDS), detached its _det's.
+for (const [k, col] of (typeof SIM_UNIT_KCOL_FIELDS !== 'undefined' ? SIM_UNIT_KCOL_FIELDS : [])) {
+    const get = new Function('return function () { const c = this._us; if (c) return c.' + col + '[this._si]; return this._det ? this._det.' + k + ' : this._kc' + col + '; };')();
+    const set = new Function('return function (v) { const c = this._us; if (c) c.' + col + '[this._si] = v; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, "_kc' + col + '", { value: v, writable: true, configurable: true }); };')();
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
 // Its other fields: columns of the unit table (sim_unit_state.js
@@ -1142,15 +1189,12 @@ const UNIT_TYPE_FIELDS = { vis: s => s.vis || 'circle', color: s => s.color || '
     poisonResistant: s => s.poisonResistant || false, fireResistant: s => s.fireResistant || false, waterResistant: s => s.waterResistant || false,
     iceResistant: s => s.iceResistant || false, laserResistant: s => s.laserResistant || false, sandResistant: s => s.sandResistant || false,
     attackStyle: s => s.attackStyle || 'melee' };
-// Rare legacy/custom per-instance resistances retain the object query path.
-// Normal games share a tiny type table rather than repeating these flags in
-// persistent per-unit columns. Conservative for the rest of this session.
-let SIM_TOWER_TYPE_OVERRIDES=false;
-const _TOWER_TYPE_FIELDS=new Set(['turretImmune','fireResistant','waterResistant','poisonResistant','iceResistant']);
+// (The kernels read them by type, tower.js / projectile.js flags tables: an
+// instance's own value (tests) is the object's only.)
 for (const [k, of] of Object.entries(UNIT_TYPE_FIELDS)) {
     Object.defineProperty(Unit.prototype, k, { configurable: true, enumerable: false,
         get() { return of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm); },
-        set(v) { if (v !== of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm)) { if(_TOWER_TYPE_FIELDS.has(k))SIM_TOWER_TYPE_OVERRIDES=true; Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); } } });
+        set(v) { if (v !== of(BASE_UNIT_STATS[this.unitType] || BASE_UNIT_STATS.norm)) { Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); } } });
 }
 Object.defineProperty(Unit.prototype, 'isKing', { configurable: true, enumerable: false,
     get() { return this.unitType === 'king'; },
@@ -1237,43 +1281,94 @@ function _hitArrays(n, total) {
 // the order of their attackers' ids (a slot is a place on this peer, an id is
 // the same everywhere), the first looks with their sounds.
 const SIM_STRUCT_HIT_LOOKS = 256;
-let _shKeys = new Float64Array(1024);
-function _structHitsApply(KC, HC, HA, HT, CH) {
-    const S = _simUnitState, C = S.columns, owners = S.owners, ids = C.id;
-    let m = 0;
-    for (let k = 0; k < KC; k++) {
-        const cnt = HC[k];
-        if (cnt <= 0) continue;
-        for (let j = k * CH, e = j + cnt; j < e; j++) {
-            if (HT[j] > -2) continue;
-            if (m === _shKeys.length) { const a = new Float64Array(m * 2); a.set(_shKeys); _shKeys = a; }
-            _shKeys[m++] = ids[HA[j]] * 33554432 + j;
-        }
+// By the kernel (ord.rs k_struct_hits; the shots' k_proj_struct_hits, the
+// same hit): statuses, damage, shrine income, energy; then the first hits'
+// looks, the watches' vision cover and the structures destroyed (in hit
+// order) here.
+let _shK = null;
+const _shP = new Float64Array(12);
+// (Per structure type id: the statuses it is immune to, bits ord.rs FX_*: 1
+// fire 2 water 4 ice 8 poison 16 sand 32 watch: isEffectImmune of its type,
+// made as types appear.)
+function _structImmuneTable() {
+    const n = _stationaryTypes.length + 1;
+    if (_shK.imm && _shK.immN === n && simHeapHas(_shK.imm)) return _shK.imm;
+    const M = simSharedArray(Uint8Array, Math.max(64, n * 2));
+    for (let i = 0; i < _stationaryTypes.length; i++) {
+        const raw = _stationaryTypes[i], type = raw.startsWith('barrack_') ? 'barrack' : raw, base = (typeof BASE_CARD_TYPES !== 'undefined' && BASE_CARD_TYPES[type]) || {};
+        const probe = { type, fireResistant: !!base.fireResistant, poisonResistant: !!base.poisonResistant, waterResistant: !!base.waterResistant, iceResistant: !!base.iceResistant, sandResistant: !!base.sandResistant };
+        M[i + 1] = (isEffectImmune(probe, 'fire') ? 1 : 0) | (isEffectImmune(probe, 'water') ? 2 : 0) | (isEffectImmune(probe, 'ice') ? 4 : 0) | (isEffectImmune(probe, 'poison') ? 8 : 0)
+            | (isEffectImmune(probe, 'sand') ? 16 : 0) | (isEffectImmune(probe, 'watch') ? 32 : 0);
     }
-    if (m === 0) return;
-    const keys = _shKeys.subarray(0, m);
-    keys.sort();
-    for (let i = 0; i < m; i++) {
-        const key = keys[i], j = key - Math.floor(key / 33554432) * 33554432;
-        const s = HA[j], a = owners[s], t = -HT[j] - 2;
-        if (!a) continue;
-        const gx = t % GRID_W, gy = (t - gx) / GRID_W, tb = getTileEntityRef(gx, gy);
-        if (!tb) continue;
-        const shots = C.atkN ? Math.max(1, C.atkN[s]) : 1, dmg = shots > 1 ? simUnitStatValue(C, s, 5) * shots : simUnitStatValue(C, s, 5);
-        if (i < SIM_STRUCT_HIT_LOOKS) { recordUnitAttackFx(a, tb); playSound(C.atkSty[s] >= 1 && C.atkSty[s] <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', a.x, a.y, a.unitType); }
-        _unitHitBuilding(a, tb, dmg);
-    }
+    _shK.imm = M; _shK.immN = n;
+    return M;
 }
-// The hits' status sub-records (unit.hSx: style bits, fire / poison tick
-// damage, a watch key), room for ns: zeros between ticks, the apply kernel
-// clears what it read.
+// A structure hit kernel over the structure tables: head its first 14
+// arrays ('keys': its sort scratch), P its params (the common ones set here), room for `cap` hits.
+// The kernel's lists in the returned record (null: no structure tables).
+function _structHitsRun(fn, head, P, cap) {
+    const ST = _ST;
+    if (!ST.stab) return null;
+    if (!simHeapHas(ST.code)) structTablesRehome();
+    const NO = Math.max(16, players.length);
+    if (!_shK || _shK.cap < cap || !simHeapHas(_shK.cnt) || _shK.shrine.length < NO) {
+        const c = Math.max(cap, _shK ? _shK.cap : 0, 4096);
+        _shK = { cap: c, keys: simSharedArray(Float64Array, c), dead: simSharedArray(Int32Array, c), watch: simSharedArray(Int32Array, c), looks: simSharedArray(Int32Array, 3 * SIM_STRUCT_HIT_LOOKS),
+            shrine: simSharedArray(Float64Array, NO), cnt: simSharedArray(Int32Array, 4), imm: null, immN: 0 };
+    }
+    const K = _shK, imm = _structImmuneTable();
+    K.shrine.fill(0);
+    const args = head.slice(0, 14).map(a => a === 'keys' ? K.keys : a);
+    while (args.length < 14) args.push(null);
+    args.push(ST.stab, ST.rrow, ST.val, ST.brain, imm, K.cnt);
+    const cls = STRUCT_STATUS_CLASSES();
+    for (let j = 0; j < 9; j++) {
+        const T = cls[j] ? _sTables.get(cls[j]) : null;
+        if (T && !_sColsInHeap(T)) _sTableGrow(T, T.cap);
+        for (const f of ['c__en', 'c__stT', 'c_burning', 'c_burnTickDamage', 'c_poisoned', 'c_poisonTickDamage', 'c_frozen', 'c_iceTickDamage', 'c_wet', 'c_watched', 'c_watchedByTeam', 'c_sandy']) args.push(T ? T[f] : null);
+    }
+    for (let j = 0; j < 9; j++) { const T = cls[j] ? _sTables.get(cls[j]) : null; args.push(T ? T.c__ow : null); }
+    while (args.length < 140) args.push(null);
+    args.push(K.dead, K.looks, K.watch, K.shrine);
+    P[2] = SIM_STRUCT_HIT_LOOKS; P[3] = NO; P[5] = TICK_RATE; P[6] = MAX_THING_LEVEL; P[7] = ST.n; P[8] = imm.length; P[9] = RESOURCE_FIXED_POINT_SCALE;
+    simRustDirect(fn, args, P);
+    for (let o = 0; o < NO; o++) if (K.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += K.shrine[o]; }
+    return K;
+}
+// After a structure hit kernel: the looks (look(slot, structure, damage):
+// presentation only), the watches' vision cover, the destroyed in hit order.
+function _structHitsAfter(K, look) {
+    const at = t => { const gx = t % GRID_W; return getTileEntityRef(gx, (t - gx) / GRID_W); };
+    for (let i = 0, n = K.cnt[1]; i < n; i++) { const tb = at(K.looks[3 * i + 1]); if (tb) look(K.looks[3 * i], tb, K.looks[3 * i + 2] / 1024); }
+    if (typeof visCoverOnEntityChanged === 'function') for (let i = 0, n = K.cnt[2]; i < n; i++) { const tb = at(K.watch[i]); if (tb) visCoverOnEntityChanged(tb); }
+    for (let i = 0, n = K.cnt[0]; i < n; i++) { const tb = at(K.dead[i]); if (tb && tb.energy <= 0) destroyBuilding(tb); }
+}
+function _structHitsApply(KC, HC, HA, HT, CH) {
+    const S = _simUnitState, C = S.columns, owners = S.owners;
+    if (!_effHot || !simHeapHas(_effHot)) return;
+    const P = _shP;
+    P[0] = KC; P[1] = CH; P[4] = EFF_HOT_WIDTH;
+    const K = _structHitsRun('k_struct_hits', [HC, HA, HT, 'keys', C.id, C.owner, C.atkN, C.atkSty, _effHot, C.statRow, C.unitLevel, C.baseLevel, C.effectiveLevel, C.atkWatch], P, KC * CH);
+    if (!K) return;
+    _structHitsAfter(K, (s, tb, dmg) => {
+        const a = owners[s];
+        if (!a) return;
+        recordUnitAttackFx(a, tb); playSound(C.atkSty[s] >= 1 && C.atkSty[s] <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', a.x, a.y, a.unitType);
+        pushHostileDamageAlert(tb, dmg, a.owner); recordDamageVisual(tb, dmg, a.owner);
+        if (dmg > 0) playSound('melee_hit', tb.x, tb.y, a.unitType);
+    });
+}
+// The hits' status sub-records (unit.hSx: status bits, fire / poison tick
+// damage, a watch key, five timers), room for ns: zeros between ticks, the
+// apply kernel clears what it read.
 function _hitStArrays(ns) {
     const K = _hitK;
     if (!K.rsty || K.scap < ns) {
         const cap = simReserveCap(Math.max(1, ns), 4096);
         K.rsty = simSharedArray(Uint8Array, cap); K.rbd = simSharedArray(Int32Array, cap); K.rpd = simSharedArray(Int32Array, cap); K.rwk = simSharedArray(Int32Array, cap);
+        K.rdu = simSharedArray(Int32Array, cap * 5);
         K.scap = cap;
-        simParallelBind('hit.rsty', K.rsty); simParallelBind('hit.rbd', K.rbd); simParallelBind('hit.rpd', K.rpd); simParallelBind('hit.rwk', K.rwk);
+        simParallelBind('hit.rsty', K.rsty); simParallelBind('hit.rbd', K.rbd); simParallelBind('hit.rpd', K.rpd); simParallelBind('hit.rwk', K.rwk); simParallelBind('hit.rdu', K.rdu);
     }
     return K.scap;
 }
@@ -1284,7 +1379,12 @@ function unitHitsResolve() {
     if (KC > 0 && S && HT) _structHitsApply(KC, HC, HA, HT, CH);
     let nk = 0;
     for (let k = 0; k < KC; k++) nk += HC[k];
-    const total = n + nk;
+    // (The step's shots that hit a unit, projectile.js: their slots in
+    // pj.uev; room for the units their blasts reach.)
+    const PJ = _pj, npj = PJ.cap && S ? PJ.unitHits : 0;
+    PJ.unitHits = 0;
+    const room = npj > 0 ? projBlastRoom(npj) : null;
+    const total = n + nk + npj + (room ? room[0] : 0);
     if (total === 0) return;
     if (!S || typeof SIM_KERNEL_HITS !== 'number') {
         for (let i = 0; i < n; i++) {
@@ -1313,6 +1413,7 @@ function unitHitsResolve() {
         // entries' and the movement kernel's counts, mv.hitsc.)
         const HSC = _simMoveHitSC;
         if (HSC) for (let k = 0; k < KC; k++) ns += HSC[k];
+        if (npj) ns += PJ.hdr[7] + room[1];
         const scap = _hitStArrays(ns);
         const P = _simParams;
         const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
@@ -1320,7 +1421,12 @@ function unitHitsResolve() {
         const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
         P[0] = n; P[1] = per; P[2] = looks; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
         P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0; P[13] = scap;
-        simParallelRun(SIM_KERNEL_HITS, jj + kj);
+        const ppj = Math.max(SIM_HITS_PER_JOB / 4, Math.ceil(npj / 32)), pjj = npj ? Math.ceil(npj / ppj) : 0;
+        P[14] = npj; P[15] = ppj; P[16] = pjj;
+        if (npj) {
+            P[17] = GRID_W; P[18] = GRID_H; P[19] = TILE; P[20] = _sxEpoch; P[21] = (projUnitFlagsTable(), _pj.tflN); P[22] = _projUnitFlags(BASE_UNIT_STATS.norm); P[23] = TICK_RATE;
+        }
+        simParallelRun(SIM_KERNEL_HITS, jj + pjj + kj);
         if (CNT[5] > 0) console.warn('hits: ' + CNT[5] + ' status sub-records past the count of hits with a status style');
         const nt = CNT[0];
         if (nt > 0) {
@@ -1348,7 +1454,13 @@ function unitHitsResolve() {
             const e = PL[p < np ? p : looks + p - np];
             let a, t, ax, ay, dmg, sty;
             if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
-            else { const j = e - n, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
+            else if (e < n + npj) {
+                // (A shot's: its impact's look is the projectile phase's.)
+                const sl = PJ.uev[e - n], tu = owners[PJ.a.arg[sl]], own = PJ.a.own[sl];
+                if (tu) { pushHostileDamageAlert(tu, PJ.a.dmg[sl], own); recordDamageVisual(tu, PJ.a.dmg[sl], own); }
+                continue;
+            }
+            else { const j = e - n - npj, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
             if (e >= n) { recordUnitAttackFx(a, t, true); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
@@ -1434,6 +1546,17 @@ const _uhKey = typeof _simHKey === 'function' ? _simHKey : () => 0;
 const _UH_WS = _uhKey('workerState'), _UH_WNR = _uhKey('_workerNextIdleRetargetTick'), _UH_PFA = _uhKey('pathIsFallbackAstar'),
     _UH_PPT = _uhKey('_pendingPathTarget');
 function _unitHD(c, s, key, o, v) { c.hObj[s] = (c.hObj[s] + _simHTerm(key, v) - _simHTerm(key, o)) | 0; }
+// (A worker task field before the unit's slot, or detached: a plain value.)
+function _unitWkPre(u, k, v) {
+    if (u._det) { u._det[k] = v; return; }
+    if (!u._wkv) Object.defineProperty(u, '_wkv', { value: {}, writable: true, configurable: true });
+    u._wkv[k] = v;
+}
+// (wkR / wkN: a whole number, or undefined / null as sentinels.)
+function _unitWkNum(n) { return n === SIM_WK_UNDEF ? undefined : n === SIM_WK_NULL ? null : n; }
+function _unitWkNumOf(v) { return v === undefined ? SIM_WK_UNDEF : v === null ? SIM_WK_NULL : Math.floor(Number(v)) | 0; }
+function _unitWkMat(u, b, k) { const c = u._us; if (c) { const x = (c.wkS[u._si] >>> b) & 3; return x === 0 ? undefined : x === 2; } return u._det ? u._det[k] : u._wkv && u._wkv[k]; }
+function _unitWkMatSet(u, b, k, v) { const c = u._us; if (c) { const s = u._si; c.wkS[s] = (c.wkS[s] & ~(3 << b)) | ((v === undefined ? 0 : v ? 2 : 1) << b); } else _unitWkPre(u, k, v); }
 
 // Status effect fields: the slot's status record (SIM_UNIT_ST_SIDE, unit.stIx;
 // record 0 the zeros: a write of anything else takes a record first), the

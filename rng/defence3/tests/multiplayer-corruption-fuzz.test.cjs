@@ -83,7 +83,7 @@ const KINDS = {
     area: `(() => { const a = (areas || []).find(a => a && a.cells && a.cells.length > 0); if (!a) return ''; a.multiplierLevel = (a.multiplierLevel || 0) + 1; return 'area level'; })()`,
     mine: `(() => { const m = goldMines.find(m => m.gold > 100) || astarMines.find(m => m.astar > 100); if (!m) return ''; if (m.gold > 100) m.gold -= 50; else m.astar -= 50; return 'mine'; })()`,
     drop: `(() => { const d = droppedItems[0]; if (!d) return ''; d.value += 5; return 'dropped item'; })()`,
-    projectile: `(() => { const p = projectiles[0]; if (!p) return ''; p.x += 13; return 'projectile'; })()`
+    projectile: `(() => { if (!projCount()) return ''; _pj.a.x[_pj.live[0]] += 13; return 'projectile'; })()`
 };
 
 // The unit count planes against a recount from the units (DIVTRACE).

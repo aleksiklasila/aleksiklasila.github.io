@@ -65,21 +65,14 @@
                     <div class="lobby-setting-row">
                         <label>Map Size</label>
                         <select id="cfg-mapsize">
-                            <option value="20">Tiny (20x20)</option>
-                            <option value="40">Small (40x40)</option>
-                            <option value="60" selected>Medium (60x60)</option>
-                            <option value="80">Large (80x80)</option>
-                            <option value="120">Huge (120x120)</option>
-                            <option value="160">Giant (160x160)</option>
-                            <option value="200">Colossal (200x200)</option>
-                            <option value="250">Titanic (250x250)</option>
-                            <option value="300">Gargantuan (300x300)</option>
-                            <option value="400">Monumental (400x400)</option>
-                            <option value="500">Astronomical (500x500)</option>
-                            <option value="600">Cosmic (600x600)</option>
-                            <option value="800">Galactic (800x800)</option>
-                            <option value="1000">Universal (1000x1000)</option>
-                            <option value="2000">Infinite (2000x2000)</option>
+                            <option value="16">Tiny (16x16)</option>
+                            <option value="32">Small (32x32)</option>
+                            <option value="64" selected>Medium (64x64)</option>
+                            <option value="128">Large (128x128)</option>
+                            <option value="256">Huge (256x256)</option>
+                            <option value="512">Giant (512x512)</option>
+                            <option value="1024">Colossal (1024x1024)</option>
+                            <option value="2048">Infinite (2048x2048)</option>
                         </select>
                     </div>
                     <div class="lobby-setting-row">
@@ -95,11 +88,28 @@
                     </div>
                     <div class="lobby-setting-row">
                         <label>Max Population</label>
-                        <input id="cfg-max-pop" type="number" min="1" max="10000000" value="200000" style="width:72px">
-                    </div>
-                    <div class="lobby-setting-row" title="Structures each player may hold at once (buildings, towers, floor items, construction sites). No more than the match's structure memory holds per player.">
-                        <label>Max Buildings</label>
-                        <input id="cfg-max-buildings" type="number" min="1" max="10000000" value="100000" style="width:72px">
+                        <!-- Per player, powers of two. The building limit and the memory reserved follow
+                             from it, the map and the teams at the match's start (data_static.js memory budget). -->
+                        <select id="cfg-max-pop" title="Population per player. The building limit is what the 4 GB memory budget leaves beside it on the map.">
+                            <option value="8">8</option>
+                            <option value="16">16</option>
+                            <option value="32">32</option>
+                            <option value="64">64</option>
+                            <option value="128">128</option>
+                            <option value="256" selected>256</option>
+                            <option value="512">512</option>
+                            <option value="1024">1,024</option>
+                            <option value="2048">2,048</option>
+                            <option value="4096">4,096</option>
+                            <option value="8192">8,192</option>
+                            <option value="16384">16,384</option>
+                            <option value="32768">32,768</option>
+                            <option value="65536">65,536</option>
+                            <option value="131072">131,072</option>
+                            <option value="262144">262,144</option>
+                            <option value="524288">524,288</option>
+                            <option value="1048576">1,048,576</option>
+                        </select>
                     </div>
                     <div class="lobby-setting-row">
                         <label>Starting Energy</label>
@@ -876,6 +886,7 @@
     <script src="./src/sim/sim_unit_state.js?v=20261025-st1"></script>
     <script src="./src/utils/utils_common.js?v=20261025-st1"></script>
     <script src="./src/utils/assign_nearest.js?v=20261024-cells"></script>
+    <script src="./src/utils/id_codec.js?v=20261029-tkz"></script>
     <script src="./src/utils/utils_file_io.js?v=20261025-st1"></script>
     <script src="./src/audio_visual/menu_actions.js?v=20261025-st1"></script>
     <script src="./src/utils/utils_net_quality.js?v=20261025-st1"></script>

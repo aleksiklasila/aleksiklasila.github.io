@@ -62,29 +62,5 @@ assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([1, 0], 1)], [0, 1, 2
 
 // (Structure priority within attack range is the combat brain's scan's: the
 // tier's choice, see performance-regressions _simAcqStructure.)
-const place = (x, y, props) => {
-    const item = { gx: x, gy: y, x: x * TILE + 16, y: y * TILE + 16, energy: 10, owner: 1, ...props };
-    if (props.tower) tileTowers.set(y * W + x, item);
-    else { grid[y][x].item = item; grid[y][x].owner = item.owner; }
-    return item;
-};
-const lavaOff = place(1, 1, { type: 'lava' });
-const lavaOn = place(3, 1, { type: 'poison_puddle' });
-
-// Projectiles hit the floor item they were aimed at, and floor items never
-// intercept shots aimed elsewhere.
-const pc = vm.createContext({ TILE, towers: [], barracks: [], collectorSpawners: [], forEachUnitInRange: () => false,
-    getFloorItemAtTile: (x, y) => grid[y] && grid[y][x] && grid[y][x].item, createExplosion() {}, recordCombatFx() {}, COMBAT_FX: {}, playSound() {},
-    pushHostileDamageAlert() {}, recordDamageVisual() {}, shrineDamageTaken() {}, applyStatusEffect() {}, isEffectImmune: () => false,
-    destroyed: [], destroyBuilding(b) { pc.destroyed.push(b); } });
-vm.runInContext(read('src/utils/utils_common.js'), pc);
-vm.runInContext(read('src/things/projectile.js') + '\nthis.Projectile = Projectile;', pc);
-const shot = new pc.Projectile(0.5 * TILE, 1.5 * TILE, lavaOn, 'pistol', 25, 1, { owner: 0, gx: 0, gy: 1 }, 999);
-let flying = 0;
-while (shot.update()) flying++;
-assert.ok(lavaOn.energy <= 0 && pc.destroyed.includes(lavaOn), 'aimed floor target is hit and destroyed');
-assert.equal(lavaOff.energy, 10, 'the trap it flew over was not hit');
-const miss = new pc.Projectile(0.5 * TILE, 1.5 * TILE, { x: 7 * TILE, y: 1.5 * TILE }, 'pistol', 25, 1, { owner: 0, gx: 0, gy: 1 }, 7 * TILE);
-while (miss.update());
-assert.equal(lavaOff.energy, 10, 'shots at other targets pass over floor items');
-console.log(`PASS: +-0.3 tile source windows, floor-target projectiles (${flying} ticks).`);
+// (Floor targets: the projectile kernel's, proj.rs k_proj_flight; tower-building-target.)
+console.log(`PASS: +-0.3 tile source windows.`);

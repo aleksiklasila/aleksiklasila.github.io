@@ -50,9 +50,10 @@ function world(resource, localPlayerId = 0) {
     c._actionUnits = a => c.units.filter(u => (a.unitIdSet || new Set(a.unitIds || [])).has(u.id));
     c._dropQueuedOrderUnits = () => {};
     c.getUnitById = id => c.units.find(u => u.id === id) || null;
+    c._unitByIdMap = () => ({ get: id => c.units.find(u => u.id === id) });
     vm.runInContext(main.match(/const ACTION_MAX_COUNT = [\s\S]*?const ACTION_MAX_TOWER_COORDS = \d+;/)[0], c);
     for (const name of ['_isCollectorGatherTargetType', '_getGatherTargetAtForCollectorWorkerType', '_isValidGatherTargetForCollectorWorkerType',
-        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_actionIdStampGrow', '_actionCleanIds', 'sanitizeAction', 'processActions', '_processActions', 'processAction',
+        '_actionInt', '_actionNum', '_actionStr', '_actionIdStampNext', '_orderCols', '_actionCleanIds', '_actionIsRally', '_actionIsQueuedOrder', '_actionBacklogHasMarked', 'sanitizeAction', 'processActions', '_processActions', 'processAction',
         '_actionCost', '_actionMarked', '_actionJumps', '_processRawAction', '_actionBacklogDrain', '_actionSplit', 'actionIdsCount']) {
         vm.runInContext(mainFunction(name), c);
     }
@@ -66,6 +67,8 @@ function world(resource, localPlayerId = 0) {
     // (The pixel search limit; the area-targets mode is chunk.js's, off here.)
     c._getWorkerAutoSearchDistanceArea = () => 4;
     c.areaSearchEnabled = () => false;
+    // (The reservation table: a fixed id table, made with the map in the game.)
+    vm.runInContext('workerReservedTiles = workerReservedTable();', c);
     c._findClosestSpawner = () => null;
     c._workerReturnPath = u => { u.workerState = 'RETURNING'; };
     c._isWorkerWithinTileInteractionRange = (u, t) => Math.hypot(u.x - t.x, u.y - t.y) <= 32;

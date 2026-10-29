@@ -447,65 +447,91 @@ function _withPathfindSource(source, fn) {
 // (u._astarBudgetRetryTick). The resolver visits only the units due, so a
 // big army waiting its turn costs nothing per tick. The due tick follows
 // from the unit's state, so a restored peer rebuilds the same schedule.
-let _pendingPathUnits = new Set();
-let _pendingPathDue = new Map(); // tick -> [unit] (duplicates dropped when taken)
-const _pendingPathListPool = [];
+// The wheel: a bucket a tick (PENDING_WHEEL of them, by due tick modulo),
+// each a list through the units' columns (ppDue, ppNext, ppPrev: a unit in
+// one bucket at most), its first slot in _ppHead (heap, -1 none). Nothing
+// grows and nothing is made in play.
+const PENDING_WHEEL = 1024;
+let _ppHead = null, _ppCount = 0, _ppTaken = -1;
 const _pendingPathDueScratch = [];
 const _pendingPathBuckets = [[], [], [], [], []];
-let _pendingTakeTick = 0;
+function _ppHeads() {
+    if (!_ppHead || (typeof simHeapHas === 'function' && !simHeapHas(_ppHead))) { _ppHead = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, PENDING_WHEEL) : new Int32Array(PENDING_WHEEL); _ppHead.fill(-1); }
+    return _ppHead;
+}
+function _ppLink(c, s, tick) {
+    const H = _ppHeads(), b = tick & (PENDING_WHEEL - 1), h = H[b];
+    c.ppNext[s] = h; c.ppPrev[s] = -1;
+    if (h >= 0) c.ppPrev[h] = s;
+    H[b] = s; c.ppDue[s] = tick; _ppCount++;
+}
+// Slot s out of its bucket (its slot let go, taken, or scheduled again).
+function pendingPathUnlink(c, s) {
+    const H = _ppHeads(), b = c.ppDue[s] & (PENDING_WHEEL - 1), p = c.ppPrev[s], n = c.ppNext[s];
+    if (p >= 0) c.ppNext[p] = n; else if (H[b] === s) H[b] = n;
+    if (n >= 0) c.ppPrev[n] = p;
+    c.ppDue[s] = -1; _ppCount--;
+}
+// (After a compaction: the buckets made again from the slots' due ticks.)
+function pendingPathRelink() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    _ppHeads().fill(-1); _ppCount = 0;
+    if (!S) return;
+    const c = S.columns, owners = S.owners;
+    for (let s = 0; s < owners.length; s++) { const t = c.ppDue[s]; if (t >= 0) { c.ppDue[s] = -1; if (owners[s]) _ppLink(c, s, t); } }
+}
 function _pendingPathDueTick(u, afterTick) {
     let retry = u._astarBudgetRetryTick;
     return Number.isFinite(retry) && retry > afterTick + 1 ? retry : afterTick + 1;
 }
 function schedulePendingPathUnit(u, tick) {
-    let list = _pendingPathDue.get(tick);
-    if (!list) _pendingPathDue.set(tick, list = _pendingPathListPool.pop() || []);
-    list.push(u);
+    const c = u._us;
+    if (!c) return;
+    const s = u._si;
+    if (c.ppDue[s] === tick) return;
+    if (c.ppDue[s] >= 0) pendingPathUnlink(c, s);
+    _ppLink(c, s, tick);
 }
 function notePendingPathUnit(u) {
-    _pendingPathUnits.add(u);
     schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
 }
 function resetPendingPathUnits() {
-    _pendingPathListPool.length = 0;
     _pendingPathDueScratch.length = 0;
     for (const bucket of _pendingPathBuckets) bucket.length = 0;
-    _pendingPathUnits = new Set();
-    _pendingPathDue = new Map();
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) S.columns.ppDue.fill(-1);
+    _ppHeads().fill(-1); _ppCount = 0; _ppTaken = gameTime;
     for (let u of units) if (u && !u.dead && u._pendingPathTarget) notePendingPathUnit(u);
 }
+function pendingPathWaiting() { return _ppCount; }
 // The pending units due at `tick` (each once, in id order); those no longer
 // waiting are dropped.
 function takeDuePendingPathUnits(tick) {
-    const due = _pendingPathDueScratch;
+    const due = _pendingPathDueScratch, S = _simUnitState;
     due.length = 0;
-    _pendingTakeTick = tick;
-    // Map iteration also allocates a pair and iterator results per entry.
-    // The callback is shared; this synchronous pass never schedules work.
-    _pendingPathDue.forEach(_takePendingPathList);
+    if (!S) return due;
+    const c = S.columns, owners = S.owners, H = _ppHeads();
+    // (The buckets of the ticks since the last take, each once.)
+    const from = _ppTaken < 0 || tick - _ppTaken >= PENDING_WHEEL ? tick - PENDING_WHEEL + 1 : _ppTaken + 1;
+    for (let t = from; t <= tick; t++) {
+        let s = H[t & (PENDING_WHEEL - 1)];
+        while (s >= 0) {
+            const next = c.ppNext[s];
+            if (c.ppDue[s] <= tick) {
+                pendingPathUnlink(c, s);
+                const u = owners[s];
+                if (u && !u.dead && u._pendingPathTarget) due.push(u);
+            }
+            s = next;
+        }
+    }
+    _ppTaken = tick;
     due.sort(_pendingPathIdOrder);
     return due;
 }
 function _pendingPathIdOrder(a, b) { return a.id - b.id; }
-function _takePendingPathList(list, t) {
-        const tick = _pendingTakeTick, due = _pendingPathDueScratch;
-        if (t > tick) return;
-        _pendingPathDue.delete(t);
-        // This loop can visit millions of duplicate scheduled entries.
-        // Indexed traversal avoids allocating ArrayIterator results in V8.
-        for (let i = 0; i < list.length; i++) {
-            const u = list[i];
-            if (u._pendingDueStamp === tick) continue;
-            u._pendingDueStamp = tick;
-            if (u.dead || !u._pendingPathTarget) { _pendingPathUnits.delete(u); continue; }
-            due.push(u);
-        }
-        list.length = 0;
-        _pendingPathListPool.push(list);
-}
-
 function _countPendingPathBacklog() {
-    return _pendingPathUnits.size;
+    return _ppCount;
 }
 
 function _pendingPathPriority(src) {
@@ -2444,8 +2470,7 @@ function unitDisplayDest(u) {
 // outside the watched-detail budget. Zero means no destination; negative is
 // attack-move. A queued group order supersedes its previous route immediately.
 function getUnitOrderDestinationCode(u) {
-    const stamps = typeof _unitOrderSeq !== 'undefined' && _unitOrderSeq[u.owner];
-    const queued = stamps && _orderBySeq.get(_orderStampGet(stamps, u.id));
+    const queued = typeof orderQueuedOf === 'function' ? orderQueuedOf(u) : null;
     let x, y, cmd = u.commandState;
     if (queued) {
         x = Math.max(0, Math.min(GRID_W - 1, Math.floor(queued.targetX / TILE)));

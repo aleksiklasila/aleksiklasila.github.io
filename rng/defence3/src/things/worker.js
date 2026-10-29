@@ -1015,7 +1015,7 @@ function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
     _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null; _wsSkipped = 0;
     _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
-    _wsw = null; _wswDirty = []; _wswResvDirty = [];
+    _wsw = null; _wswDirty = []; _wswResvRoom()[0] = 0;
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
 }
 // Once a tick, before the unit pass: the commit, the grid's changes (while
@@ -1057,29 +1057,31 @@ const WSW_BUILD = 1, WSW_SALVAGE = 2, WSW_QUEUE = 4, WSW_RESEARCH = 8, WSW_AUTOR
 // a tick; what the sweep finds (damage, an upgrade come due) may wait.)
 const WSW_SWEEP = 90, WSW_MAXOWN = 16;
 const WSW_SLOW_UNITS = 250000, WSW_SLOW = 4;
-let _wsw = null, _wswDirty = [], _wswResvDirty = [];
+let _wsw = null, _wswDirty = [];
+// Reservation slots changed since the work site grid's last step: a heap list
+// ([0] the count, the slots from 1) sized by the population (each unit at most
+// once a tick; full: the grid is made again).
+let _wswResvList = null;
+function _wswResvRoom() {
+    const n = typeof memoryBudgetUnits === 'function' && typeof getConfiguredMaxPop === 'function' ? Math.max(4096, memoryBudgetUnits(getConfiguredMaxPop(), Math.max(1, typeof activeTeamIds !== 'undefined' && activeTeamIds ? activeTeamIds.length : 2), GRID_W * GRID_H)) : 65536;
+    if (!_wswResvList || _wswResvList.length !== n + 1 || (typeof simHeapHas === 'function' && !simHeapHas(_wswResvList))) {
+        _wswResvList = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, n + 1) : new Int32Array(n + 1);
+        if (typeof simParallelBind === 'function') simParallelBind('wsw.resvDirty', _wswResvList);
+    }
+    return _wswResvList;
+}
+function _wswResvMark(slot) { const L = _wswResvList || _wswResvRoom(), n = L[0]; if (n + 1 < L.length) { L[n + 1] = slot; L[0] = n + 1; } else _wsw = null; }
 const _wswResMax = new Map();
 // Rosters include unfinished buildings. Completion only publishes the first
 // search batch allowed to use the existing row, never a roster rebuild.
 let _wsPostEpoch = 0;
-const _wsGroupById = [], _wsCompletionRows = new WeakMap();
+const _wsGroupById = [];
 const WS_NOT_BUILT = 2147483647;
-function _wsNoteCompletionRow(item, row) {
-    const old = _wsCompletionRows.get(item);
-    if (old === row) return;
-    if (old === undefined || (typeof old === 'number' && old >>> 24 === row >>> 24)) { _wsCompletionRows.set(item, row); return; }
-    if (typeof old === 'number') { _wsCompletionRows.set(item, [old, row]); return; }
-    for (let i = 0; i < old.length; i++) if (old[i] >>> 24 === row >>> 24) { old[i] = row; return; }
-    old.push(row);
-}
-function _wsPublishCompletionRow(item, row) {
-    const G = _wsGroupById[row >>> 25], ix = row & 0xffffff, spawner = !!(row & 0x1000000);
-    if (!G || (spawner ? G.spawnerObjs[ix] : G.objs[ix]) !== item) return;
-    const ready = G.arrays[spawner ? 'pready' : 'sready'];
-    if (Atomics.load(ready, ix) === WS_NOT_BUILT) {
-        Atomics.store(ready, ix, _wsPostEpoch + 1);
-        if (spawner) G.nfEligibilityDirty = true;
-    }
+// The row of tile t in an ascending tile list (L[0 .. n)), -1 none.
+function _wsTileRow(L, n, t) {
+    let lo = 0, hi = n;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (L[m] < t) lo = m + 1; else hi = m; }
+    return lo < n && L[lo] === t ? lo : -1;
 }
 function workSiteDirty(gx, gy) {
     if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) _wswDirty.push(gy * _wsw.w + gx);
@@ -1087,12 +1089,18 @@ function workSiteDirty(gx, gy) {
 function workSiteBuilt(item) {
     if (!item || typeof item.type !== 'string') return;
     workSiteDirty(item.gx, item.gy);
-    const row = _wsCompletionRows.get(item);
-    if (row === undefined || !(item.energy > 0)) return;
-    // One-way publication: an in-flight batch sees either NOT_BUILT or a
-    // future epoch. Both reject the row, independent of helper scheduling.
-    if (typeof row === 'number') _wsPublishCompletionRow(item, row);
-    else for (const r of row) _wsPublishCompletionRow(item, r); // at most 8 resource groups
+    if (!(item.energy > 0)) return;
+    // Its rows in the groups, by its tile (the groups' lists are in tile
+    // order). One-way publication: an in-flight batch sees either NOT_BUILT
+    // or a future epoch. Both reject the row, independent of helper scheduling.
+    const t = item.gy * GRID_W + item.gx;
+    for (const G of _wsGroupById) {
+        if (!G || !G.arrays.tile) continue;
+        const i = _wsTileRow(G.arrays.tile, G.n, t);
+        if (i >= 0 && Atomics.load(G.arrays.sready, i) === WS_NOT_BUILT) Atomics.store(G.arrays.sready, i, _wsPostEpoch + 1);
+        const k = G.arrays.qid ? _wsTileRow(G.arrays.qid, G.np | 0, t) : -1;
+        if (k >= 0) { const q = G.arrays.qp[k]; if (Atomics.load(G.arrays.pready, q) === WS_NOT_BUILT) { Atomics.store(G.arrays.pready, q, _wsPostEpoch + 1); G.nfEligibilityDirty = true; } }
+    }
 }
 // (As _isBuilderWorkTarget without its side effect, and the others' tests;
 // the common cases first: no upgrade due while the effective level is not
@@ -1123,7 +1131,7 @@ function _wswFlagsOf(e, o) {
 function _wswResvOf(W, t) {
     const NT = Math.min(8, _WORKER_TARGET_LOAD_TYPE_COUNT), base = t * _WORKER_TARGET_LOAD_TYPE_COUNT;
     let rv = 0;
-    for (let i = 0; i < NT; i++) { const r = workerReservedTiles[base + i]; if (r && !r.dead) rv |= 1 << i; }
+    for (let i = 0; i < NT; i++) { const r = workerReservedAt(base + i); if (r && !r.dead) rv |= 1 << i; }
     return rv;
 }
 // u's type's reservation bit (0: none), and the tile it holds reserved (-1).
@@ -1160,10 +1168,10 @@ function _wswBuild() {
     W.own.fill(-1); W.area.fill(-1);
     for (const k of ['flags', 'own', 'area', 'resv', 'cnt']) simParallelBind('wsw.' + k, W[k]);
     tileEntityChangesSince(W.cursor);
-    _wswDirty = []; _wswResvDirty = [];
+    _wswDirty = []; _wswResvRoom()[0] = 0;
     // Every live reservation, then every owned structure.
     const R = workerReservedTiles, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
-    for (let slot = 0; slot < R.length; slot++) { const r = R[slot]; if (r && !r.dead) { const i = slot % NT; if (i < 8) W.resv[(slot - i) / NT] |= 1 << i; } }
+    for (let slot = 0; slot < R.length; slot++) { const r = R[slot] ? workerReservedAt(slot) : null; if (r && !r.dead) { const i = slot % NT; if (i < 8) W.resv[(slot - i) / NT] |= 1 << i; } }
     for (const e of _activeTileEntities) {
         if (!e || !(e.gx >= 0 && e.gy >= 0 && e.gx < GRID_W && e.gy < GRID_H)) continue;
         const t = e.gy * GRID_W + e.gx, x = _ownedStructureAtTile(t);
@@ -1181,10 +1189,11 @@ function _wswStep(step, sweepOn = true) {
     if (ch === null) { _wswBuild(); return; }
     for (let i = 0; i < ch.length; i++) _wswSet(W, ch[i], _ownedStructureAtTile(ch[i]));
     if (_wswDirty.length) { const d = _wswDirty; _wswDirty = []; for (let i = 0; i < d.length; i++) _wswSet(W, d[i], _ownedStructureAtTile(d[i])); }
-    if (_wswResvDirty.length) {
-        const d = _wswResvDirty, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
-        _wswResvDirty = [];
-        for (let i = 0; i < d.length; i++) { const t = Math.floor(d[i] / NT); if (t < W.n) W.resv[t] = _wswResvOf(W, t); }
+    const RL = _wswResvRoom();
+    if (RL[0]) {
+        const n = RL[0], NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
+        RL[0] = 0;
+        for (let i = 1; i <= n; i++) { const t = Math.floor(RL[i] / NT); if (t < W.n) W.resv[t] = _wswResvOf(W, t); }
     }
     if (!sweepOn) return;
     // The sweep: every owner's structure buckets k = step (mod WSW_SWEEP).
@@ -1254,45 +1263,47 @@ const WS_BUCKET = 8;
 // (a site object per drop, mine and farm was ~20 ms a rebuild in a battle:
 // drops last 120 s, tens of thousands of them, and every change of them
 // makes the energy group again).
-function _wsGroupBuild(G, cfg, mines, farms, spawners) {
-    const drops = cfg.supportsDropTarget ? droppedItems : null, mk = cfg.mineStatKey;
-    const cap = (drops ? drops.length : 0) + mines.length + farms.length, np = spawners.length, pre = 'wsg' + G.id + '.';
-    const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
+// A collector group's sites (its mines with gold or astar left, its farms
+// alive) and its spawners (alive), in tile order, from the per-tile
+// structure table by the kernel (ord.rs k_ws_group); then their buckets.
+// (Drops: none are made in play; old snapshots' are not searched for.)
+const _wsGP = new Float64Array(16);
+let _wsGC = null;
+function _wsGroupBuild(G, cfg) {
+    if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
+    const T = _ST, n = T.n || 0, pre = 'wsg' + G.id + '.';
+    const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len || !simHeapHas(a)) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
+    if (!_wsGC || !simHeapHas(_wsGC)) _wsGC = simSharedArray(Int32Array, 4);
+    const farmId = _stationaryTypeIds.get(cfg.farmKey), spId = _stationaryTypeIds.get(cfg.collectorBuildingKey), P = _wsGP, C = _wsGC;
+    P[0] = 0; P[1] = n; P[2] = GRID_W; P[3] = cfg.mineArrayKey === 'astarMines' ? 0x77 : 0x66; P[4] = farmId === undefined ? 0 : farmId + 1; P[5] = spId === undefined ? 0 : spId + 1;
+    P[6] = TILE; P[7] = WS_NOT_BUILT; P[8] = ST_OWNER_NONE;
+    // (The structures' tiles, not every tile of the map: _wsCandidates.)
+    const CAND = _wsCandidates(), cand = [];
+    for (let j = 0; j < 13; j++) cand.push(null);
+    cand.push(CAND.tiles);
+    P[9] = CAND.n;
+    C[0] = 0; C[1] = 0;
+    if (n && T.code) simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, ...cand], P);
+    const cap = C[0], np = C[1];
     const SX = arr('sx', Float32Array, cap), SY = arr('sy', Float32Array, cap), ST = arr('st', Int32Array, cap), SO = arr('so', Int32Array, cap);
-    const SR = arr('sready', Int32Array, cap); SR.fill(0, 0, cap);
-    // Rebuild only after the previous batch has been consumed. Keep these
-    // backing arrays; obsolete references are released below.
-    const objs = G.objs, types = G.types;
-
-    let n = 0;
-    if (drops) for (let i = 0; i < drops.length; i++) { const d = drops[i]; if (!d) continue; objs[n] = d; types[n] = 'drop'; SX[n] = Number(d.x); SY[n] = Number(d.y); ST[n] = 0; SO[n] = -1; n++; }
-    for (let i = 0; i < mines.length; i++) {
-        const m = mines[i];
-        if (!m) continue;
-        const v = m[mk];
-        if (!(Number.isFinite(v) && v > 0)) continue;
-        objs[n] = m; types[n] = cfg.mineTileType; SX[n] = Number(m.x); SY[n] = Number(m.y); ST[n] = 1; SO[n] = -1; n++;
-    }
-    for (let i = 0; i < farms.length; i++) {
-        const fm = farms[i];
-        if (!(fm && fm.type === cfg.farmKey && fm.energy > 0)) continue;
-        SR[n] = fm.underConstruction ? WS_NOT_BUILT : 0;
-        if (fm.underConstruction) _wsNoteCompletionRow(fm, G.id * 33554432 + n);
-        objs[n] = fm; types[n] = cfg.farmKey; SX[n] = Number(fm.x); SY[n] = Number(fm.y); ST[n] = 2; SO[n] = Number.isFinite(fm.owner) ? fm.owner : -1; n++;
-    }
+    const SR = arr('sready', Int32Array, cap), TL = arr('tile', Int32Array, cap);
+    // (The spawners as the kernel lists them, in tile order; sorted into their buckets below.)
+    const QGX = arr('qgx', Int32Array, np), QGY = arr('qgy', Int32Array, np), QO = arr('qo', Int32Array, np), QID = arr('qid', Int32Array, np);
+    const QX = arr('qx', Float32Array, np), QY = arr('qy', Float32Array, np), QR = arr('qready', Int32Array, np);
+    if (n && T.code && (cap || np)) { P[0] = 1; simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR, CAND.tiles], P); }
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
-    const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, n);
-    arr('abc', Int32Array, nb); arr('abi', Int32Array, n);
+    const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, cap);
+    arr('abc', Int32Array, nb); arr('abi', Int32Array, cap);
     BC.fill(0, 0, nb);
-    const bk = s => Math.max(0, Math.min(brows - 1, Math.floor(SY[s] / TILE / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(SX[s] / TILE / WS_BUCKET)));
-    for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) BC[bk(s)]++;
+    const bk = i => Math.max(0, Math.min(brows - 1, Math.floor(SY[i] / TILE / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(SX[i] / TILE / WS_BUCKET)));
+    for (let i = 0; i < cap; i++) BC[bk(i)]++;
     let fill = 0;
     for (let b = 0; b < nb; b++) { BS[b] = fill; fill += BC[b]; BC[b] = 0; }
-    for (let s = 0; s < n; s++) if (SX[s] === SX[s] && SY[s] === SY[s]) { const b = bk(s); BI[BS[b] + BC[b]++] = s; }
+    for (let i = 0; i < cap; i++) { const b = bk(i); BI[BS[b] + BC[b]++] = i; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
-    const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np);
-    const PR = arr('pready', Int32Array, np), spawnerObjs = G.spawnerObjs || (G.spawnerObjs = []);
-    spawnerObjs.length = np;
+    const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np), PR = arr('pready', Int32Array, np);
+    // (A spawner's place: tile order (the q arrays) to bucket order (the p arrays), for workSiteBuilt.)
+    const QP = arr('qp', Int32Array, np);
     // The spawners sorted by the bucket of their tile (the kernel finds an owner's
     // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
     // its count, then (16) the count of each owner's.
@@ -1300,25 +1311,26 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
     meta.fill(0, 0, 5 + 2 * nb + 32);
     // (meta[5 + 2 nb + 16 + owner]: the owner's slot in the nearest-spawner field, -1 none.)
     for (let o = 0; o < 16; o++) meta[5 + 2 * nb + 16 + o] = -1;
-    let sb = G.spawnerBuckets;
-    if (!sb || sb.length < np) sb = G.spawnerBuckets = new Int32Array(Math.max(64, np * 2));
-    for (let p = 0; p < np; p++) {
-        const sp = spawners[p];
-        sb[p] = Math.max(0, Math.min(brows - 1, Math.floor((Number(sp.gy) || 0) / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor((Number(sp.gx) || 0) / WS_BUCKET)));
-        meta[6 + 2 * sb[p]]++;
-        if (Number.isFinite(sp.owner) && sp.owner >= 0 && sp.owner < 16) meta[5 + 2 * nb + sp.owner]++;
+    const sb = arr('sbk', Int32Array, np);
+    for (let q = 0; q < np; q++) {
+        sb[q] = Math.max(0, Math.min(brows - 1, Math.floor(QGY[q] / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(QGX[q] / WS_BUCKET)));
+        meta[6 + 2 * sb[q]]++;
+        if (QO[q] >= 0 && QO[q] < 16) meta[5 + 2 * nb + QO[q]]++;
     }
     for (let b = 0, at = 0; b < nb; b++) { meta[5 + 2 * b] = at; at += meta[6 + 2 * b]; meta[6 + 2 * b] = 0; }
-    for (let p = 0; p < np; p++) {
-        const sp = spawners[p], b = sb[p], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
-        PGX[q] = Math.floor(Number(sp.gx) || 0); PGY[q] = Math.floor(Number(sp.gy) || 0); PO[q] = Number.isFinite(sp.owner) ? sp.owner : -9; PID[q] = Number(sp.id) || 0; PX[q] = Number(sp.x); PY[q] = Number(sp.y);
-        PR[q] = sp.underConstruction ? WS_NOT_BUILT : 0; spawnerObjs[q] = sp;
-        if (sp.underConstruction) _wsNoteCompletionRow(sp, G.id * 33554432 + 16777216 + q);
+    for (let k = 0; k < np; k++) {
+        const b = sb[k], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
+        PGX[q] = QGX[k]; PGY[q] = QGY[k]; PO[q] = QO[k]; PID[q] = QID[k]; PX[q] = QX[k]; PY[q] = QY[k]; PR[q] = QR[k]; QP[k] = q;
     }
-    meta[0] = n; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
-    _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta);
-    objs.length = n; types.length = n;
-    G.n = n;
+    meta[0] = cap; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
+    G.np = np;
+    _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta);
+    G.n = cap;
+}
+// A group's site i: its object (null: gone since the post) and its type name.
+function _wsSiteTarget(g, i) {
+    const t = g.tile[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
+    return g.st[i] === 1 ? (tileEntityRef[gy] && tileEntityRef[gy][gx]) || null : (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
 }
 // Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
 // at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
@@ -1327,13 +1339,13 @@ function _wsGroupBuild(G, cfg, mines, farms, spawners) {
 // ring search: both give the least (steps, row, column, id).
 // (Off: the ring search as before; the same results either way, which the tests compare.)
 let WS_NEARFIELD = true;
-function _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta) {
+function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
     G.nfBuild = false; G.nfList = [];
     if (!WS_NEARFIELD || !(np > 0 && np <= 65535)) { G.nfSetKey = null; return; }
     let h1 = 0, h2 = 0x9e3779b9 | 0;
     for (let p = 0; p < np; p++) {
-        const sp = spawners[p], o = Number.isFinite(sp.owner) ? sp.owner : -9;
-        const hh = Math.imul(((Math.floor(Number(sp.gx) || 0) * 73856093) ^ (Math.floor(Number(sp.gy) || 0) * 19349663) ^ ((Number(sp.id) || 0) * 83492791) ^ ((o + 16) * 2654435761)) | 0, 0x85ebca6b);
+        const o = PO[p];
+        const hh = Math.imul(((PGX[p] * 73856093) ^ (PGY[p] * 19349663) ^ (PID[p] * 83492791) ^ ((o + 16) * 2654435761)) | 0, 0x85ebca6b);
         h1 = (h1 + hh) | 0; h2 = Math.imul(h2 ^ hh, 0x01000193);
     }
     const owners = [];
@@ -1361,17 +1373,16 @@ function _wsNearField(G, spawners, np, nb, arr, pre, PGX, PGY, PID, meta) {
 function _wsCollectorGroup(cfg) {
     const key = 'c:' + cfg.collectorUnitKey;
     let G = _wsGroups.get(key);
-    if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, objs: [], types: [] }; _wsGroups.set(key, G); _wsGroupById[G.id] = G; }
-    const mines = _getResourceCollectorMineArray(cfg) || [], farms = _cellItemsOfType(cfg.farmKey);
-    const sig = [mines.length, cfg.supportsDropTarget ? droppedItemsVersion : -1, farms.length, typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1, collectorSpawners.length];
-    if (G.sig && G.mines === mines && G.farms === farms && G.spl === collectorSpawners && G.sig.every((v, i) => v === sig[i])) {
+    if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, n: 0 }; _wsGroups.set(key, G); _wsGroupById[G.id] = G; }
+    // (Made again when any structure was placed or removed, or a spawner
+    // came or went: the tile table's version.)
+    const sig = _tileEntityVersion * 4096 + (typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion % 4096 : 0);
+    if (G.sig === sig && G.gridW === GRID_W) {
         if (G.nfEligibilityDirty) { G.nfBuild = true; G.nfEligibilityDirty = false; }
         return G;
     }
-    G.sig = sig; G.mines = mines; G.farms = farms; G.spl = collectorSpawners;
-    const spawners = [];
-    for (const sp of _getWorkerSpawnersByType(cfg.collectorBuildingKey)) if (sp && sp.type === cfg.collectorBuildingKey && sp.energy > 0) spawners.push(sp);
-    _wsGroupBuild(G, cfg, mines, farms, spawners);
+    G.sig = sig; G.gridW = GRID_W;
+    _wsGroupBuild(G, cfg);
     return G;
 }
 function _wsArr(name, Type, n) {
@@ -1425,7 +1436,7 @@ function _wsPost() {
     // The collectors' groups, per resource type.
     const groups = [], nfSeen = new Set(), nfPairs = [];
     for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
-        const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { objs: G.objs, types: G.types }; Bp[16 + k] = G.id;
+        const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { tile: G.arrays.tile, st: G.arrays.st, cfg: RESOURCE_TYPE_LIST[k] }; Bp[16 + k] = G.id;
         // (Fields to make again: a job a (group, owner), before the scan in this chain.)
         if (G.nfBuild && !nfSeen.has(G.id)) { nfSeen.add(G.id); G.nfBuild = false; for (const o of G.nfList) if (nfPairs.length < 60) nfPairs.push(G.id * 16 + o); else { const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET); _simParReg['wsg' + G.id + '.meta'][5 + 2 * nb + 16 + o] = -1; } }
     }
@@ -1527,7 +1538,7 @@ function _wsTakeSome() {
             if (kind === WSR_COLLECT) {
                 const G = J.groups[RG[i]];
                 if (!G) continue;
-                for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; res.push({ target: G.objs[x], targetType: G.types[x], dist: OSC[o0 + k] }); }
+                for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; const t = _wsSiteTarget(G, x); if (t) res.push({ target: t, targetType: G.st[x] === 1 ? G.cfg.mineTileType : G.cfg.farmKey, dist: OSC[o0 + k] }); }
             } else for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; res.push({ site: x, dist: OSC[o0 + k] }); }
             let units = null;
             if (kind === WSR_HEAL) { units = []; const L = J.heal[RO[i]] || []; for (let k = 0; k < 3; k++) { const q = UOUT[i * 3 + k]; if (q >= 0 && L[q]) units.push(L[q]); } }
@@ -2618,7 +2629,23 @@ function _getTargetPriorityLevel(target) {
 }
 
 // Per-target worker load counters (updated on target set/clear).
-let workerReservedTiles = [];
+// (Unit ids, 0 none: a heap table, tile * load types + the type's index, made
+// with the map (workerReservedTable); a kernel's to read and write too.)
+let workerReservedTiles = new Int32Array(0);
+function workerReservedTable() {
+    const n = Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT);
+    const t = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, n) : new Int32Array(n);
+    if (typeof simParallelBind === 'function') simParallelBind('wk.resv', t);
+    return t;
+}
+// The unit holding reservation slot i: null none; a unit that left the list
+// as a dead placeholder (its id).
+function workerReservedAt(i) {
+    const id = workerReservedTiles[i];
+    if (!(id > 0)) return null;
+    const u = getUnitById(id);
+    return u || { id, dead: true, _workerReservedTileIndex: -1 };
+}
 // Every write goes through workerReservedSet: per snapshot region, the
 // number of occupied slots (for the tick hash, which skips empty regions)
 // and an order-free digest of its entries (slot and unit id: the tick hash
@@ -2626,16 +2653,17 @@ let workerReservedTiles = [];
 // the region's round). Made again when the table is replaced
 // (_workerReservedCounts).
 let _workerResCount = null, _workerResSum = null, _workerResCountFor = null;
-function _workerResTerm(slot, u) { if (!u) return 0; const h = Math.imul((slot + 1) ^ Math.imul((Number(u.id) | 0) + 0x3c6ef372, 2654435761), 2246822519); return Math.imul(h ^ (h >>> 13), 3266489917); }
+function _workerResTerm(slot, id) { if (!id) return 0; const h = Math.imul((slot + 1) ^ Math.imul((id | 0) + 0x3c6ef372, 2654435761), 2246822519); return Math.imul(h ^ (h >>> 13), 3266489917); }
+// (v: a unit or its id, null / 0 none.)
 function workerReservedSet(slot, v) {
-    const t = workerReservedTiles, old = t[slot];
-    t[slot] = v;
+    const t = workerReservedTiles, old = t[slot], id = !v ? 0 : typeof v === 'number' ? v : (Number(v.id) | 0);
+    t[slot] = id;
     // (The work site grid's copy, at its next step.)
-    if (_wsw && old !== v) _wswResvDirty.push(slot);
-    if (_workerResCountFor === t && old !== v) {
+    if (_wsw && old !== id) _wswResvMark(slot);
+    if (_workerResCountFor === t && old !== id) {
         const r = _snapReservationRegionIndex(slot);
-        if ((!old) !== (!v)) _workerResCount[r] += v ? 1 : -1;
-        _workerResSum[r] = (_workerResSum[r] + _workerResTerm(slot, v) - _workerResTerm(slot, old)) | 0;
+        if ((!old) !== (!id)) _workerResCount[r] += id ? 1 : -1;
+        _workerResSum[r] = (_workerResSum[r] + _workerResTerm(slot, id) - _workerResTerm(slot, old)) | 0;
     }
 }
 function workerReservedCountsInvalidate() { _workerResCountFor = null; }
@@ -2647,7 +2675,8 @@ function _workerReservedCounts() {
     if (_workerResCountFor === t) return _workerResCount;
     if (typeof _snapReservationRegionIndex !== 'function') return null;
     const n = _snapReservationRegionCount();
-    if (!_workerResCount || _workerResCount.length !== n) { _workerResCount = new Int32Array(n); _workerResSum = new Int32Array(n); } else { _workerResCount.fill(0); _workerResSum.fill(0); }
+    // (Heap arrays: the order kernel keeps them as it lets reservations go.)
+    if (!_workerResCount || _workerResCount.length !== n || (typeof simHeapHas === 'function' && !simHeapHas(_workerResCount))) { const A = typeof simSharedArray === 'function' ? simSharedArray : (T, k) => new T(k); _workerResCount = A(Int32Array, n); _workerResSum = A(Int32Array, n); } else { _workerResCount.fill(0); _workerResSum.fill(0); }
     for (let s = 0; s < t.length; s++) if (t[s]) { const r = _snapReservationRegionIndex(s); _workerResCount[r]++; _workerResSum[r] = (_workerResSum[r] + _workerResTerm(s, t[s])) | 0; }
     _workerResCountFor = t;
     return _workerResCount;
@@ -2679,7 +2708,7 @@ function _getWorkerReservationSlotIndex(target, workerType) {
 function _getReservedWorkerForTarget(target, workerType) {
     let slotIndex = _getWorkerReservationSlotIndex(target, workerType);
     if (slotIndex < 0) return null;
-    let reservedUnit = workerReservedTiles[slotIndex];
+    let reservedUnit = workerReservedAt(slotIndex);
     if (!reservedUnit || reservedUnit.dead) {
         if (slotIndex >= 0) workerReservedSet(slotIndex, null);
         return null;
@@ -2687,95 +2716,8 @@ function _getReservedWorkerForTarget(target, workerType) {
     return reservedUnit;
 }
 
-// Workers that may hold a target: collected from every unit when invalid
-// (NaN: at first use, after the reservation table or the entities were
-// replaced), then extended by _setWorkerTarget (the only place a target is
-// set) and kept: a superset of the workers with a target. Callers only ask
-// whether any conflicting worker exists, so order and history are
-// irrelevant; entries are checked live. Compacted from its own entries
-// (those still holding a target) once enough were added.
-let _workersWithTargetTick = NaN, _workerConflictAdds = 0;
-let _workersWithTarget = [];
-let _workerConflictTiles = new Map();
-let _workerMovingTargetConflicts = new Map();
-let _workerConflictEntries = new Map();
-
-function _indexWorkerTargetConflict(unit) {
-    if (!unit.workerTarget) return;
-    let entry = _workerConflictEntries.get(unit);
-    if (!entry) {
-        entry = { unit, order: _workerConflictEntries.size, slots: new Set(), moving: false };
-        _workerConflictEntries.set(unit, entry);
-        _workerConflictAdds++;
-    }
-    // Healers can target moving units. These must be tested live, even after
-    // the target crossed a tile earlier in this same simulation tick.
-    if (!Number.isFinite(unit.workerTarget.gx) || !Number.isFinite(unit.workerTarget.gy)) {
-        if (!entry.moving) {
-            entry.moving = true;
-            let bucket = _workerMovingTargetConflicts.get(unit.workerType);
-            if (!bucket) _workerMovingTargetConflicts.set(unit.workerType, bucket = []);
-            bucket.push(entry);
-        }
-        return;
-    }
-    let slot = _getWorkerReservationSlotIndex(unit.workerTarget, unit.workerType);
-    if (slot < 0 || entry.slots.has(slot)) return;
-    entry.slots.add(slot);
-    _workerConflictAdds++;
-    let bucket = _workerConflictTiles.get(slot);
-    if (!bucket) _workerConflictTiles.set(slot, bucket = []);
-    bucket.push(entry);
-}
-
-function _getWorkersWithTargetThisTick() {
-    let tick = typeof gameTime === 'number' ? gameTime : 0;
-    const full = _workersWithTargetTick !== _workersWithTargetTick;
-    if (full || _workerConflictAdds > Math.max(4096, 2 * _workersWithTarget.length)) {
-        let list = [];
-        if (full) { for (let other of units) if (other && other.workerTarget) list.push(other); }
-        else for (const other of _workerConflictEntries.keys()) if (!other.dead && other.workerTarget) list.push(other);
-        _workersWithTarget = list;
-        _workersWithTargetTick = tick;
-        _workerConflictTiles.clear();
-        _workerMovingTargetConflicts.clear();
-        _workerConflictEntries.clear();
-        for (let other of list) _indexWorkerTargetConflict(other);
-        _workerConflictAdds = 0;
-    }
-    return _workersWithTarget;
-}
-
-function _findConflictingWorkerOnTargetTile(unit, target) {
-    if (!unit || !target || !unit.workerType) return null;
-    let targetTileIndex = _getWorkerTargetTileIndex(target);
-    if (targetTileIndex < 0) return null;
-    _getWorkersWithTargetThisTick();
-    let slot = _getWorkerReservationSlotIndex(target, unit.workerType);
-    let bucket = _workerConflictTiles.get(slot);
-    let best = null;
-    for (let pass = 0; pass < 2; pass++) {
-        let entries = pass === 0 ? bucket : _workerMovingTargetConflicts.get(unit.workerType);
-        if (!entries) continue;
-        for (let entry of entries) {
-            let other = entry.unit;
-            if (best && entry.order >= best.order) continue;
-            if (other === unit || other.dead || !other.workerTarget) continue;
-            if (other.owner !== unit.owner || other.workerType !== unit.workerType) continue;
-            if (_getWorkerTargetTileIndex(other.workerTarget) !== targetTileIndex) continue;
-            best = entry;
-        }
-    }
-    return best ? best.unit : null;
-}
-
 function _invalidateWorkerTargetLoadCache() {
-    _workersWithTargetTick = NaN;
-    _workerConflictTiles.clear();
-    _workerMovingTargetConflicts.clear();
-    _workerConflictEntries.clear();
-    _workersWithTarget = [];
-    workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
+    workerReservedTiles = workerReservedTable();
 }
 
 // Caches stamped with the current tick hold references to live entities. A
@@ -2793,6 +2735,7 @@ function resetSimulationTickCaches() {
     _healerDamagedCandidatesTick = NaN;
     _healerDamagedCandidatesByOwner = [];
     _workerSpawnerIndex = null;
+    if (typeof _wsCand !== 'undefined') { _wsCand.all.sig = -1; _wsCand.spawners.sig = -1; _spIdx.sig = -1; }
     if (typeof _upKeepAccum !== 'undefined') _upKeepAccum = null;
     _adjacencyNeedsRecalc = true;
     _adjacencyLastRecalcTick = -1;
@@ -2805,7 +2748,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
 
     let nextSlotIndex = target ? _getWorkerReservationSlotIndex(target, unit.workerType) : -1;
     if (nextSlotIndex >= 0) {
-        let reservedUnit = workerReservedTiles[nextSlotIndex];
+        let reservedUnit = workerReservedAt(nextSlotIndex);
         if (reservedUnit && reservedUnit !== unit && !reservedUnit.dead && reservedUnit.owner === unit.owner && reservedUnit.workerType === unit.workerType) {
             let contenderId = Math.floor(Number(unit.id) || 0);
             let reservedId = Math.floor(Number(reservedUnit.id) || 0);
@@ -2815,7 +2758,7 @@ function _setWorkerTarget(unit, target, targetType = null) {
             let reservedSlotIndex = Number.isFinite(reservedUnit._workerReservedTileIndex)
                 ? Math.floor(reservedUnit._workerReservedTileIndex)
                 : -1;
-            if (reservedSlotIndex >= 0 && workerReservedTiles[reservedSlotIndex] === reservedUnit) {
+            if (reservedSlotIndex >= 0 && workerReservedTiles[reservedSlotIndex] === reservedUnit.id) {
                 workerReservedSet(reservedSlotIndex, null);
             }
             if (reservedUnit.workerTarget === target) {
@@ -2829,25 +2772,17 @@ function _setWorkerTarget(unit, target, targetType = null) {
             }
             reservedUnit._workerReservedTileIndex = -1;
         }
-        if (!reservedUnit) {
-            let directConflict = _findConflictingWorkerOnTargetTile(unit, target);
-            if (directConflict) return false;
-        }
     }
 
     let prevTarget = unit.workerTarget;
     if (prevTarget) {
         let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
-        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedSet(prevSlotIndex, null);
+        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit.id) workerReservedSet(prevSlotIndex, null);
     }
 
     unit.workerTarget = target;
     unit.workerTargetType = nextType;
     if (target && unit._us) unit._us.wsKind[unit._si] = 0;
-    if (target && _workersWithTargetTick === _workersWithTargetTick) {
-        if (!_workerConflictEntries.has(unit)) _workersWithTarget.push(unit);
-        _indexWorkerTargetConflict(unit);
-    }
     unit._workerReservedTileIndex = -1;
     if (target && nextSlotIndex >= 0) {
         workerReservedSet(nextSlotIndex, unit);
@@ -2871,7 +2806,7 @@ function _clearWorkerTarget(unit, reason = null) {
     let prevTarget = unit.workerTarget;
     if (prevTarget) {
         let prevSlotIndex = Number.isFinite(unit._workerReservedTileIndex) ? Math.floor(unit._workerReservedTileIndex) : -1;
-        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit) workerReservedSet(prevSlotIndex, null);
+        if (prevSlotIndex >= 0 && workerReservedTiles[prevSlotIndex] === unit.id) workerReservedSet(prevSlotIndex, null);
     }
 
     unit.workerTarget = null;
@@ -2887,11 +2822,9 @@ function _canAssignWorkerTargetExclusive(u, target, targetType = null, conflictC
     if (!u || !target || !u.workerType) return false;
     if (u.workerTarget === target && (targetType === null || u.workerTargetType === targetType)) return true;
     let reservedUnit = _getReservedWorkerForTarget(target, u.workerType);
-    if (!reservedUnit) {
-        // Indexed static targets, plus a live check for moving healer targets.
-        // Assignments extend the index; released/dead entries are checked live.
-        return !_findConflictingWorkerOnTargetTile(u, target);
-    }
+    // (The reservation table holds every target's tile: a free slot is free.
+    // A healer's moving patient is reserved where it stood when taken.)
+    if (!reservedUnit) return true;
     if (reservedUnit === u) return true;
     return reservedUnit.owner !== u.owner || reservedUnit.workerType !== u.workerType;
 }
@@ -4054,100 +3987,64 @@ function _forEachStructureInTileBox(list, x0, y0, x1, y1, fn) {
     }
 }
 
-// Nearest working spawner of the type and owner by tile Manhattan distance,
-// ties to the lower row then column (_findClosestSpawner).
-// A type's spawners of one owner (in the type list's order), made again with
-// the type list (a new list when spawners change).
-const _ownedSpawnerLists = new WeakMap();
-function _ownedSpawnersOfType(type, owner) {
-    const all = _getWorkerSpawnersByType(type);
-    let m = _ownedSpawnerLists.get(all);
-    if (!m) _ownedSpawnerLists.set(all, m = new Map());
-    let l = m.get(owner);
-    if (!l) { l = []; for (const s of all) if (s && s.owner === owner) l.push(s); m.set(owner, l); }
-    return l;
+// The structures' tiles worth a look, ascending (ord.rs k_ws_candidates):
+// the collectors' groups' from the floor items' and spawners' rows and the
+// mines, made again when any structure comes or goes (the tile table's
+// version); the spawner index's from the spawners' rows alone, when
+// spawners come or go. Not every tile of the map.
+const _wsCand = { all: { sig: -1 }, spawners: { sig: -1 }, P: new Float64Array(12) };
+function _wsCandidates(spawnersOnly = false) {
+    const C = spawnersOnly ? _wsCand.spawners : _wsCand.all;
+    const sig = spawnersOnly ? (typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : _tileEntityVersion) : _tileEntityVersion;
+    if (C.sig === sig && C.tiles && simHeapHas(C.tiles) && C.w === GRID_W) return C;
+    if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
+    const cls = STRUCT_STATUS_CLASSES().filter(K => K && K !== Tower && K !== Barrack && (!spawnersOnly || K !== FloorItem)), tabs = [];
+    let room = 0;
+    for (const K of cls) { const T = _sTables.get(K); if (!T || !T.n) continue; if (!_sColsInHeap(T)) _sTableGrow(T, T.cap); tabs.push(T); room += T.n; }
+    if (!spawnersOnly && _ST.mineArr && !simHeapHas(_ST.mineArr)) { const m = simSharedArray(Int32Array, Math.max(64, _ST.mineArr.length)); m.set(_ST.mineArr); _ST.mineArr = m; }
+    if (!spawnersOnly) room += _ST.mineN || 0;
+    if (!C.tiles || C.tiles.length < room || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, Math.max(1024, Math.ceil(room * 1.25))); C.tmp = simSharedArray(Int32Array, C.tiles.length); }
+    if (!C.cnt || !simHeapHas(C.cnt)) C.cnt = simSharedArray(Int32Array, 4);
+    const P = _wsCand.P, args = [];
+    for (let j = 0; j < 8; j++) { const T = tabs[j]; args.push(T ? T.c__stT : null); P[1 + j] = T ? T.n : 0; }
+    P[0] = Math.min(8, tabs.length); P[9] = spawnersOnly ? 0 : _ST.mineN || 0; P[10] = _ST.n || 0;
+    args.push(spawnersOnly ? null : _ST.mineArr || null, _ST.rrow, _ST.code, C.tmp, C.tiles, C.cnt);
+    C.cnt[0] = 0;
+    if (_ST.n && _ST.code) simRustDirect('k_ws_candidates', args, P);
+    C.n = C.cnt[0]; C.sig = sig; C.w = GRID_W;
+    return C;
 }
-// Per owned spawner list (lists are made anew when spawners change: see
-// _getWorkerSpawnersByType), their tiles as typed arrays: the nearest-spawner
-// scan reads two Int32Arrays and looks at an object only when it would win.
-const _spawnerScanTables = new WeakMap();
-function _spawnerScanTable(list) {
-    let t = _spawnerScanTables.get(list);
-    if (t && t.n === list.length) return t;
-    const n = list.length, gx = new Int32Array(n), gy = new Int32Array(n);
-    for (let i = 0; i < n; i++) {
-        const s = list[i];
-        gx[i] = s ? Math.floor(Number(s.gx) || 0) : -0x3fffffff;
-        gy[i] = s ? Math.floor(Number(s.gy) || 0) : -0x3fffffff;
-    }
-    t = { n, gx, gy };
-    _spawnerScanTables.set(list, t);
-    return t;
+// Spawners by (type, owner) in tile order (ord.rs k_spawner_index), from
+// the candidates: the nearest working one by k_spawner_nearest.
+const SPAWNER_OWNER_SLOTS = 17;
+const _spIdx = { sig: -1, nty: 0, tiles: null, off: null, out: null, P: new Float64Array(8) };
+function _spawnerIndex() {
+    const X = _spIdx, C = _wsCandidates(true), nty = _stationaryTypes.length;
+    if (X.sig === C.sig && X.nty === nty && X.w === GRID_W && X.tiles && simHeapHas(X.tiles) && X.cand === C.tiles) return X;
+    const nb = nty * SPAWNER_OWNER_SLOTS;
+    if (!X.tiles || X.tiles.length < C.n || !simHeapHas(X.tiles)) X.tiles = simSharedArray(Int32Array, Math.max(1024, Math.ceil(C.n * 1.25)));
+    if (!X.off || X.off.length < 2 * nb + 2 || !simHeapHas(X.off)) X.off = simSharedArray(Int32Array, Math.max(256, 2 * (2 * nb + 2)));
+    if (!X.out || !simHeapHas(X.out)) X.out = simSharedArray(Int32Array, 4);
+    const P = X.P;
+    P[0] = C.n; P[1] = nty; P[2] = SPAWNER_OWNER_SLOTS; P[3] = ST_OWNER_NONE;
+    simRustDirect('k_spawner_index', [C.tiles, _ST.code, _ST.own, _ST.brain, X.tiles, X.off], P);
+    X.sig = C.sig; X.nty = nty; X.w = GRID_W; X.cand = C.tiles;
+    return X;
 }
-// A tile's SPAWNER_NEAR_K nearest of a scan table by tile distance, then
-// row, column, then id (as _findClosestSpawner orders them; a tie of the
-// first three only on one tile), cached per tile.
-const SPAWNER_NEAR_K = 4, SPAWNER_NEAR_MAX_TILES = 1 << 16;
-function _spawnerNearOf(T, key, ux, uy, list) {
-    let M = T.near;
-    if (!M) M = T.near = new Map();
-    let near = M.get(key);
-    if (near) return near;
-    if (M.size >= SPAWNER_NEAR_MAX_TILES) M.clear();
-    const K = SPAWNER_NEAR_K, GX = T.gx, GY = T.gy, bi = new Int32Array(K), bd = new Float64Array(K).fill(Infinity);
-    let m = 0;
-    const visit = i => {
-        const sx = GX[i], sy = GY[i];
-        // (One key for the order: distance, then row, then column.)
-        const d = ((Math.abs(sx - ux) + Math.abs(sy - uy)) * 65536 + (sy + 16384)) * 65536 + (sx + 16384);
-        if (m === K && d > bd[K - 1]) return;
-        if (m === K && d === bd[K - 1] && !((Number(list[i] && list[i].id) || 0) < (Number(list[bi[K - 1]] && list[bi[K - 1]].id) || 0))) return;
-        let j = m < K ? m++ : K - 1;
-        while (j > 0 && (bd[j - 1] > d || (bd[j - 1] === d && (Number(list[i] && list[i].id) || 0) < (Number(list[bi[j - 1]] && list[bi[j - 1]].id) || 0)))) { bd[j] = bd[j - 1]; bi[j] = bi[j - 1]; j--; }
-        bd[j] = d; bi[j] = i;
-    };
-    // A cache miss used to scan every spawner, even in dense economies.
-    // Visit nearby buckets until the closest possible unvisited tile is
-    // strictly farther than the fourth candidate. Equal-distance buckets
-    // must still be visited for the row/column/id tie break. Eligibility
-    // remains live in _findClosestSpawner, including its exhaustive fallback.
-    if(T.n>64&&ux>=0&&uy>=0&&ux<GRID_W&&uy<GRID_H){
-        let I=T.spatial;
-        if(!I){
-            const cols=Math.ceil(GRID_W/STRUCTURE_BUCKET_TILES),rows=Math.ceil(GRID_H/STRUCTURE_BUCKET_TILES);
-            I=T.spatial={cols,rows,buckets:new Array(cols*rows)};
-            for(let i=0;i<T.n;i++){
-                const bx=Math.max(0,Math.min(cols-1,Math.floor(GX[i]/STRUCTURE_BUCKET_TILES)));
-                const by=Math.max(0,Math.min(rows-1,Math.floor(GY[i]/STRUCTURE_BUCKET_TILES)));
-                (I.buckets[by*cols+bx]||(I.buckets[by*cols+bx]=[])).push(i);
-            }
-        }
-        const B=STRUCTURE_BUCKET_TILES,cx=Math.floor(ux/B),cy=Math.floor(uy/B);
-        let bucketsSeen=0;
-        const bucket=(x,y)=>{bucketsSeen++;const a=I.buckets[y*I.cols+x];if(a)for(let j=0;j<a.length;j++)visit(a[j]);};
-        for(let r=0;r<Math.max(I.cols,I.rows);r++){
-            const x0=Math.max(0,cx-r),x1=Math.min(I.cols-1,cx+r),y0=Math.max(0,cy-r),y1=Math.min(I.rows-1,cy+r);
-            if(cy-r>=0)for(let x=x0;x<=x1;x++)bucket(x,cy-r);
-            if(r&&cy+r<I.rows)for(let x=x0;x<=x1;x++)bucket(x,cy+r);
-            for(let y=Math.max(0,cy-r+1);y<=Math.min(I.rows-1,cy+r-1);y++){
-                if(cx-r>=0)bucket(cx-r,y);
-                if(r&&cx+r<I.cols)bucket(cx+r,y);
-            }
-            const outside=Math.min(x0>0?ux-x0*B+1:Infinity,x1<I.cols-1?(x1+1)*B-ux:Infinity,
-                y0>0?uy-y0*B+1:Infinity,y1<I.rows-1?(y1+1)*B-uy:Infinity);
-            if(outside===Infinity||(m===K&&outside>Math.floor(bd[K-1]/4294967296)))break;
-            // A distant, sparse economy can have more empty buckets than
-            // spawners. Bound that case with the original contiguous scan.
-            if(bucketsSeen>Math.max(32,T.n/8)){
-                m=0;bd.fill(Infinity);for(let i=0;i<T.n;i++)visit(i);break;
-            }
-        }
-    }else{
-        for(let i=0;i<T.n;i++)visit(i);
-    }
-    near = m < K ? bi.subarray(0, m) : bi;
-    M.set(key, near);
-    return near;
+// The nearest working spawner of the type and owner to (x, y) (by tile
+// Manhattan distance, then row, column): its object, null none.
+function _spawnerNearest(type, owner, x, y, retry = false) {
+    const ty = _stationaryTypeIds.get(type);
+    if (ty === undefined || !(owner >= -1 && owner < SPAWNER_OWNER_SLOTS - 1) || !_ST.n) return null;
+    const X = _spawnerIndex(), b = ty * SPAWNER_OWNER_SLOTS + owner + 1;
+    if (ty >= X.nty || X.off[b + 1] === X.off[b]) return null;
+    const P = X.P;
+    P[0] = b; P[1] = Math.floor(Number(x) / TILE); P[2] = Math.floor(Number(y) / TILE); P[3] = GRID_W;
+    simRustDirect('k_spawner_nearest', [X.tiles, X.off, _ST.val, _ST.uc, X.out], P);
+    const t = X.out[0], s = t >= 0 ? getTileEntityRef(t % GRID_W, (t - t % GRID_W) / GRID_W) : null;
+    // (A change the spawners' version missed: the index made again, once.)
+    if (t >= 0 && !(s && s.type === type && s.owner === owner)) { if (retry) return null; _wsCand.spawners.sig = -1; return _spawnerNearest(type, owner, x, y, true); }
+    return s;
 }
 let WORKER_BRAIN_WASM=true;
 const _workerBrainSpawnerTypes=['spawner','astar_spawner','salvager','builder_spawner','healer_spawner','research'];
@@ -4189,40 +4086,7 @@ function _findClosestSpawner(u, type) {
             _workerBrain.misses++;
         }
     }
-    // (The owner's own: the others never pass the test below.)
-    let list = _ownedSpawnersOfType(type, u && u.owner);
-    if (list.length === 0) return null;
-    let ux = Math.floor(Number(u && u.x) / TILE);
-    let uy = Math.floor(Number(u && u.y) / TILE);
-    // Nearest by tile distance, then row, column, id; whatever the order
-    // they are looked at in. (A scan of the typed tiles: the bucket rings
-    // it replaced walked thousands of empty buckets from a far mine, ~100 us
-    // a collector's return at 200k units.)
-    const T = _spawnerScanTable(list), GX = T.gx, GY = T.gy, owner = u.owner;
-    // (The tile's nearest few by that order, from the tiles alone, kept
-    // with the table (it is made anew when the list changes): the first of
-    // them that works now is the answer; none of them: the whole scan.
-    // Collectors return from the same mines, healers' takes come in
-    // crowds: the scan was ~1/3 of the worker takes' time.)
-    if (ux >= 0 && uy >= 0 && ux < GRID_W && uy < GRID_H && T.n > SPAWNER_NEAR_K) {
-        const near = _spawnerNearOf(T, uy * GRID_W + ux, ux, uy, list);
-        for (let k = 0; k < near.length; k++) {
-            const s = list[near[k]];
-            if (s && s.type === type && s.owner === owner && s.energy > 0 && !s.underConstruction) return s;
-        }
-    }
-    let closest = null, bestDist = Infinity, cx = 0, cy = 0;
-    for (let i = 0, n = T.n; i < n; i++) {
-        const sx = GX[i], sy = GY[i];
-        const d = Math.abs(sx - ux) + Math.abs(sy - uy);
-        if (d > bestDist) continue;
-        if (d === bestDist && (sy > cy || (sy === cy && sx > cx))) continue;
-        const s = list[i];
-        if (!s || s.type !== type || s.owner !== owner || !(s.energy > 0) || s.underConstruction) continue;
-        if (d === bestDist && sy === cy && sx === cx && !((Number(s.id) || 0) < (Number(closest.id) || 0))) continue;
-        bestDist = d; closest = s; cx = sx; cy = sy;
-    }
-    return closest;
+    return _spawnerNearest(type, u && u.owner, u && u.x, u && u.y);
 }
 
 function _workerReturnPath(u) {
@@ -4340,6 +4204,16 @@ function _queueLocalAction(action) {
     return tick;
 }
 
+// A worker's role memory of its task (unit.js UNIT_ROLE_FIELDS) let go: the
+// part of clearWorkerTaskMemoryForFreeRetarget an order kernel leaves pending.
+function clearWorkerRoleMemory(u) {
+    if (isResourceCollectorWorkerType(u.workerType)) _clearResourceCollectorTaskMemory(u);
+    else if (u.workerType === 'builder') { u._builderLastWorkX = null; u._builderLastWorkY = null; u._builderLastWorkGx = null; u._builderLastWorkGy = null; u._builderSpawnerTarget = null; }
+    else if (u.workerType === 'healer') {
+        u._healerPinnedQueueTarget = null; _clearHealerQueueCommit(u);
+        u._healerLastWorkX = null; u._healerLastWorkY = null; u._healerLastWorkGx = null; u._healerLastWorkGy = null; u._healerSpawnerTarget = null; u._healerQueueTripCost = 0;
+    } else if (u.workerType === 'researcher') { u._researchSpawnerTarget = null; u._researcherTripWork = 0; u._researcherTripCost = 0; u._researcherMaterialReadyTick = 0; }
+}
 function clearWorkerTaskMemoryForFreeRetarget(u) {
     if (!u || !u.workerState) return;
     if (isResourceCollectorWorkerType(u.workerType)) {
@@ -4407,28 +4281,10 @@ function issueWorkerBlockedAssignFallbackMove(u, targetGx, targetGy) {
 
 function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetType = null) {
     if (!assigningUnit || !target || !assigningUnit.workerState) return;
-    let targetTileIndex = _getWorkerTargetTileIndex(target);
-    // Reuse the live reservation index instead of visiting a million units
-    // for every rally/manual assignment. Moving patients are checked live;
-    // a worker indexed in both buckets is harmless after its first release.
-    _getWorkersWithTargetThisTick();
-    const slot=_getWorkerReservationSlotIndex(target,assigningUnit.workerType);
-    const fixed=_workerConflictTiles.get(slot),moving=_workerMovingTargetConflicts.get(assigningUnit.workerType);
-    const indexed=targetTileIndex>=0&&_workerTypeToLoadIndex(assigningUnit.workerType)>=0;
-    const candidates=indexed?null:units;
-    for(let pass=0;pass<(indexed?2:1);pass++){
-      const entries=indexed?(pass===0?fixed:moving):candidates;
-      if(!entries)continue;
-      for(let i=0;i<entries.length;i++){
-        const other=indexed?entries[i].unit:entries[i];
-        if (!other || other === assigningUnit || other.dead || !other.workerState) continue;
-        if (other.owner !== assigningUnit.owner) continue;
-        if (other.workerType !== assigningUnit.workerType) continue;
-        let sameTarget = other.workerTarget === target && other.workerTargetType === targetType;
-        let otherTileIndex = _getWorkerTargetTileIndex(other.workerTarget);
-        let sameTile = targetTileIndex >= 0 && otherTileIndex >= 0 && targetTileIndex === otherTileIndex;
-        if (!sameTarget && !sameTile) continue;
-
+    // (The worker holding the target's tile for this type: the reservation table's.)
+    const slot = _getWorkerReservationSlotIndex(target, assigningUnit.workerType);
+    const other = slot >= 0 ? workerReservedAt(slot) : null;
+    if (other && other !== assigningUnit && !other.dead && other.workerState && other.owner === assigningUnit.owner && other.workerType === assigningUnit.workerType) {
         _clearWorkerTarget(other, 'manual_rally_change');
         clearWorkerTaskMemoryForFreeRetarget(other);
         other.path = null;
@@ -4436,7 +4292,6 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
         other._pendingPathTarget = null;
         other.commandState = CMD_IDLE;
         other.workerState = 'IDLE';
-      }
     }
 }
 

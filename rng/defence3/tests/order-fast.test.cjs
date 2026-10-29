@@ -30,7 +30,6 @@ function run(fast) {
             if (i % 5 === 0) { u._attackMoveGx = 3; u._attackMoveGy = 9; u.commandState = CMD_ATTACK_MOVING; }
         });
         const all = ids.map(u => u.id);
-        ORDER_UNITS_PER_TICK_ALL = 150; ORDER_UNITS_PER_PLAYER_TICK = 150; ORDER_UNITS_PER_ROUND = 60;
         processAction({ action: 'move', unitIds: all, targetX: 40 * TILE + 16, targetY: 40 * TILE + 16 }, 0);
         gameTick(); currentTick++;
         processAction({ action: 'attackMove', unitIds: all.filter((_, i) => i % 3), targetX: 12 * TILE + 3, targetY: 50 * TILE + 9 }, 0);
@@ -38,7 +37,7 @@ function run(fast) {
         // (One standing on its destination; a small group, no crowd arrival.)
         const u0 = ids[0], gx = Math.floor(u0.x / TILE), gy = Math.floor(u0.y / TILE);
         processAction({ action: 'move', unitIds: [u0.id, ids[1].id, ids[2].id], targetX: gx * TILE + 16, targetY: gy * TILE + 16 }, 0);
-        _refillOrderBudget(); runQueuedOrders();
+        runQueuedOrders();
         // Every unit's columns, slot by slot (references by their digest word,
         // paths by content).
         const c = units[0]._us, out = {};

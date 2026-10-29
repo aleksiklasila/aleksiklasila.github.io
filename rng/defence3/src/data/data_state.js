@@ -32,26 +32,22 @@ let tileEntityType = []; // 2D lookup [y][x] -> string type
 let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
 let _activeTileEntities = new Set();
 let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
-// Tiles whose adjacency is to be worked out again (_runAdjacencyRecalculation
-// takes them lowest tile first, ADJACENCY_TILES_PER_TICK a tick): a flag per
-// tile, their count, the lowest flagged tile (nothing below it is flagged)
+// Tiles whose adjacency is to be worked out again (the adjacency post kernel
+// takes them all at a batch, ord.rs k_adj_post): a flag per tile, their count, the lowest flagged tile (nothing below it is flagged)
 // and the order-free sum the state hash takes (sum of (k + 1) * 2654435761),
 // kept as tiles come and go. (A Set copied and sorted every tick cost ~60 ms
 // with 230k tiles waiting after a mass placement.) Set-like: add, delete,
 // has, size, clear, iteration (ascending).
 class _AdjDirtySet {
-    // (blk: flagged tiles per 256: empty stretches skipped by takeFirst and
-    // the iteration; scanning the flags of a 1M-tile map was ~1 ms a tick.)
+    // (blk: flagged tiles per 256: empty stretches skipped by the post kernel
+    // and the iteration; scanning the flags of a 1M-tile map was ~1 ms a tick.)
     constructor() { this.flag = new Uint8Array(0); this.blk = new Int32Array(0); this.n = 0; this.min = 0; this.sum = 0; }
     get size() { return this.n; }
     has(k) { return k >= 0 && k < this.flag.length && this.flag[k] === 1; }
     add(k) {
         k = k | 0;
         if (k < 0) return this;
-        if (k >= this.flag.length) {
-            const f = new Uint8Array(Math.max(k + 1, GRID_W * GRID_H, this.flag.length * 2)); f.set(this.flag); this.flag = f;
-            const b = new Int32Array((f.length + 255) >> 8); b.set(this.blk); this.blk = b;
-        }
+        if (k >= this.flag.length) this.room(Math.max(k + 1, GRID_W * GRID_H, this.flag.length * 2));
         if (this.flag[k]) return this;
         this.flag[k] = 1; this.blk[k >> 8]++;
         if (this.n++ === 0 || k < this.min) this.min = k;
@@ -65,21 +61,20 @@ class _AdjDirtySet {
         return true;
     }
     clear() { if (this.n) { this.flag.fill(0); this.blk.fill(0); } this.n = 0; this.min = 0; this.sum = 0; }
-    // The first `max` tiles by index, taken out.
-    takeFirst(max) {
-        const out = [], f = this.flag, B = this.blk;
-        let k = this.min;
-        for (; k < f.length && out.length < max && this.n > 0; k++) {
-            if ((k & 255) === 0) while (k < f.length && B[k >> 8] === 0) k += 256;
-            if (k >= f.length) break;
-            if (!f[k]) continue;
-            f[k] = 0; this.n--; B[k >> 8]--;
-            this.sum = (this.sum - Math.imul(k + 1, 2654435761)) | 0;
-            out.push(k);
-        }
-        this.min = k;
-        return out;
+    // (Room for n tiles; the arrays in the wasm heap once it is up: the
+    // adjacency post kernel takes and clears the flags, ord.rs k_adj_post.)
+    room(n) {
+        const heap = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null;
+        if (n <= this.flag.length && (!heap || simHeapHas(this.flag))) return;
+        n = Math.max(n, this.flag.length);
+        const mk = (T, m) => heap ? simSharedArray(T, m) : new T(m);
+        const f = mk(Uint8Array, n); f.set(this.flag);
+        const b = mk(Int32Array, (n + 255) >> 8); b.set(this.blk);
+        if (heap) { if (simHeapHas(this.flag)) simHeapFree(this.flag); if (simHeapHas(this.blk)) simHeapFree(this.blk); }
+        this.flag = f; this.blk = b;
     }
+    // (Every flag taken by the post kernel: the counts follow.)
+    takenAll() { this.n = 0; this.min = 0; this.sum = 0; }
     *[Symbol.iterator]() { const f = this.flag, B = this.blk; let left = this.n; for (let k = this.min; k < f.length && left > 0; k++) { if ((k & 255) === 0) while (k < f.length && B[k >> 8] === 0) k += 256; if (k >= f.length) break; if (f[k]) { left--; yield k; } } }
 }
 let _adjacencyDirtyTiles = new _AdjDirtySet();
@@ -667,7 +662,10 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 // regions with mines in a compact list, mineReg*): the same sums as each
 // mine's term added there, without 20k mines read a tick (scattered tiles,
 // ~0.5 ms at 105k units).)
-const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, brain: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
+// (rtab / rrow: a rally structure's class (1 + its index in
+// structRallyClasses, 0 none) and its table row, per tile: the rally kernel's,
+// main.js _rallyKernel.)
+const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, brain: null, rtab: null, rrow: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
     mineSum: null, mineRc: null, mineRegArr: new Int32Array(64), mineRegN: 0, mineRegAt: null };
 // A mine's term in its region's sum (the state hash's, as it was per mine).
 function _stMineTerm(t) {
@@ -727,15 +725,15 @@ function _stOwnCount(t, w) {
     if (w >= 0 && w < 64 && T.code[t] !== 0 && T.code[t] < 0x66) { structCountByOwner[w]++; T.cnt[t] = w + 1; } else T.cnt[t] = 0;
 }
 function playerStructureCount(pid) { return pid >= 0 && pid < 64 ? structCountByOwner[pid] : 0; }
-// The limit: the menu's Max Buildings, no more than each team's share of
-// the structure pool (from constants and the map: the same on every peer).
+// The limit: the match's (configuredMaxBuildings: the menu's, from the
+// memory budget and the population), no more than each team's share of the
+// structure pool (from constants, the map and the teams: the same on every peer).
+function _structTeams() { return typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : Math.max(1, typeof players !== 'undefined' && Array.isArray(players) ? players.length : 1); }
 function getPlayerStructureLimit() {
-    const cfg = Math.max(1, Math.floor(Number(CONFIG_MAX_BUILDINGS) || 100000));
-    return Math.min(cfg, structMemoryLimitPerPlayer());
+    return Math.max(1, Math.min(configuredMaxBuildings(_structTeams(), GRID_W * GRID_H), structMemoryLimitPerPlayer()));
 }
 function structMemoryLimitPerPlayer() {
-    const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : Math.max(1, typeof players !== 'undefined' && Array.isArray(players) ? players.length : 1);
-    return Math.max(1, Math.floor(structReserveRowsTotal() / teams));
+    return Math.max(1, Math.floor(structReserveRowsTotal() / _structTeams()));
 }
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
 // (Made at the first entity joining: the page's lookup holds views only.)
@@ -745,11 +743,37 @@ function structTableReset() {
     T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
     T.mineRegN = 0; if (T.mineSum) { T.mineSum.fill(0); T.mineRc.fill(0); T.mineRegAt.fill(0); }
     structCountByOwner.fill(0);
-    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rcnt = T.cnt = null; }
-    else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rcnt.fill(0); }
+    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rtab = T.stab = T.rrow = T.rcnt = T.cnt = null; }
+    else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rtab.fill(0); T.stab.fill(0); T.rrow.fill(-1); T.rcnt.fill(0); }
 }
 function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
-function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } if (T.cnt[t]) _stOwnCount(t, -1); T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; T.brain[t] = 0; }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } if (T.cnt[t]) _stOwnCount(t, -1); T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; T.brain[t] = 0; T.rtab[t] = 0; T.stab[t] = 0; T.rrow[t] = -1; }
+// The per-tile rally index and every table's columns into the current wasm
+// heap (a restarted worker's heap is new; the kernels read only it).
+function structTablesRehome() {
+    const T = _ST;
+    if (T.code && typeof simSharedArray === 'function') for (const k of ['code', 'own', 'uc', 'val', 'tim', 'brain', 'rtab', 'stab', 'rrow']) {
+        const was = T[k], a = simSharedArray(was.constructor, T.n);
+        a.set(was); T[k] = a;
+    }
+    for (const t of _sTables.values()) {
+        if (!_sColsInHeap(t) || (typeof _simHeapPtrOf === 'function' && t.mTok && !(_simHeapPtrOf(t.mTok) >= 0))) _sTableGrow(t, t.cap);
+        if (t.mxOvN && typeof _simHeapPtrOf === 'function' && !(_simHeapPtrOf(t.mxOvN) >= 0)) { const a = _sColAlloc(Int32Array, 4); a.set(t.mxOvN); t.mxOvN = a; }
+    }
+}
+// The rally structures' classes (their tables' rally fields: the rally kernel's,
+// ord.rs RALLY_TABLES of them, in this order).
+let _stRallyCls = null, _stRallyIx = null, _stStatusIx = null;
+function structRallyClasses() {
+    if (_stRallyCls) return _stRallyCls;
+    _stRallyCls = [typeof Barrack !== 'undefined' ? Barrack : null, typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
+        typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null, typeof HealerSpawner !== 'undefined' ? HealerSpawner : null,
+        typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null];
+    _stRallyIx = new Map(); _stRallyCls.forEach((C, i) => { if (C) _stRallyIx.set(C, i + 1); });
+    // (The status classes: renderer.js STRUCT_STATUS_CLASSES, the per-tile stab.)
+    _stStatusIx = new Map(); [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls].forEach((C, i) => { if (C) _stStatusIx.set(C, i + 1); });
+    return _stRallyCls;
+}
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
 function structTableSet(gx, gy, prev, ref) {
     const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
@@ -762,10 +786,16 @@ function structTableSet(gx, gy, prev, ref) {
         // no per-tick object walk or full-grid mirror for tower queries.
         const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
         T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n); T.brain = alloc(Int32Array, n);
+        T.rtab = alloc(Uint8Array, n); T.stab = alloc(Uint8Array, n); T.rrow = alloc(Int32Array, n); T.rrow.fill(-1);
         T.cnt = new Uint8Array(n);
         T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
     }
     _stClear(t);
+    if (ref && ref._sr >= 0) {
+        structRallyClasses(); T.rrow[t] = ref._sr;
+        const j = _stRallyIx.get(ref.constructor); if (j) T.rtab[t] = j;
+        const k = _stStatusIx.get(ref.constructor); if (k) T.stab[t] = k;
+    }
     if (!joins) return;
     // (An entity moved to another tile leaves its old one.)
     if (ref._stT >= 0 && ref._stT !== t) _stClear(ref._stT);
@@ -774,10 +804,12 @@ function structTableSet(gx, gy, prev, ref) {
     if (ref._stMine) _stMineAdd(t);
     _stWrite(ref, t);
 }
+function _stCellOwner(t) { const gx = t % GRID_W, row = typeof grid !== 'undefined' && grid ? grid[(t - gx) / GRID_W] : null; return row && row[gx] ? row[gx].owner : undefined; }
 function _stWrite(ref, t) {
     const T = _ST;
     if (ref._stMine) { T.own[t] = ST_OWNER_NONE; _stMineVal(t, Number(ref._mv)); T.tim[t] = 0; }
-    else { T.own[t] = _stOwnerWord(ref._ow); _stOwnCount(t, T.own[t]); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
+    // (A floor item given no owner: its cell's, as the towers' floor search took it.)
+    else { T.own[t] = _stOwnerWord(ref._ow !== undefined || ref._stCode !== 0x55 ? ref._ow : _stCellOwner(t)); _stOwnCount(t, T.own[t]); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
     stationaryBrainChanged(ref);
 }
 
@@ -796,7 +828,9 @@ function stationaryBrainChanged(e) {
     const T = _sTables.get(e.constructor), row = e._sr;
     const effective = getThingEffectiveLevel(e);
     const custom = effective>63 || (T && ['currentStats', 'x', 'y'].some(k => T.unique[k]?.has(row)));
-    const preferred = e._stCode === 0x22 && (e.preferredTarget || e.preferredTargetSpec);
+    // (A preferred target: tower.js Tower.preferredTargetSpec, its row's _ptK; custom values: its row's tc.*.)
+    const preferred = e._stCode === 0x22 && e._ptK > 0;
+    if (custom && e._stCode === 0x22 && typeof towerCustomWrite === 'function') towerCustomWrite(e, row);
     _ST.brain[tile] = (type + 1) | (Math.min(255, getThingBaseLevel(e)) << 16) | (preferred ? 1 << 24 : 0) | (custom ? 1 << 25 : 0) | (Math.min(63,effective) << 26);
 }
 // A structure's entry written again from its fields (a restore sets some
@@ -829,7 +863,9 @@ function structListRemove(list, e) {
 // and boxed numbers (200k buildings: ~200 MB less on each of the page and the
 // worker). Kinds: 'n' a number (Float64; undefined stored as NaN, read back
 // as undefined, as a field never set), 'f' a Float32 one (the same; values
-// whose precision does not matter: tick damages, angles), 'i' / 's' / 'c' a
+// whose precision does not matter: tick damages, angles), 'N' a number or null
+// (Float64, null stored as NaN: rally points, written in bulk by
+// main.js _rallySetTiles), 'i' / 's' / 'c' a
 // whole number in Int32 / Int16 / Int8 (tiles, list places, stacks, levels,
 // owners, timers; undefined stored as the type's lowest value), 'b' a boolean
 // (Uint8: 0 unset, 1 false, 2 true), 'r' anything else (an array of values). Fields not listed
@@ -841,11 +877,11 @@ const _STF_BUILDING = 'i:_stT i:_li c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i
     + 'c:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
     + 'i:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
     + 'r:preComputedPotential i:burning f:burnTickDamage i:poisoned f:poisonTickDamage i:frozen f:iceTickDamage i:wet i:sandy i:watched c:watchedByTeam '
-    + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks';
-const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue r:rallyX r:rallyY r:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder r:_rallyLastSeenX r:_rallyLastSeenY b:_pendingRallyDetach';
+    + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:upgrademaxEnergy n:_mxOv n:_ovMx c:_ovVs';
+const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'i:_stT i:_li n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
-    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle r:connectedLasers c:laserState n:laserTimer r:_laserLinkLevel r:preferredTarget r:preferredTargetSpec r:_lzRow r:_lzCol',
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle r:connectedLasers c:laserState n:laserTimer r:_laserLinkLevel c:_ptK i:_ptV r:_lzRow r:_lzCol',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
     CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
     BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
@@ -855,7 +891,7 @@ const STRUCT_TABLE_FIELDS = {
 };
 const _sTables = new Map();
 // The number kinds' arrays and the value standing for undefined.
-const _S_NUM_KINDS = { n: [Float64Array, NaN], f: [Float32Array, NaN], i: [Int32Array, -2147483648], s: [Int16Array, -32768], c: [Int8Array, -128] };
+const _S_NUM_KINDS = { n: [Float64Array, NaN], N: [Float64Array, NaN], f: [Float32Array, NaN], i: [Int32Array, -2147483648], s: [Int16Array, -32768], c: [Int8Array, -128] };
 const STRUCT_SHARED_REFS = new Set(['type','unitType']);
 // Only genuinely unique overrides have instance storage. Ordinary stats
 // resolve owner/type/level directly into shared flat-table views.
@@ -906,15 +942,42 @@ function _sDerivedValue(e,name) {
 }
 function _sDerivedSet(T,e,name,v) {
     const map=T.unique[name];
-    if(v==null || Number.isNaN(v) || (_thingStatViews.has(v)) || (name==='currentStats'&&v===BASE_CARD_TYPES[e.type])){map.delete(e._sr);if(name==='currentStats'||name==='x'||name==='y')stationaryBrainChanged(e);return;}
+    if(v==null || Number.isNaN(v) || (_thingStatViews.has(v)) || (name==='currentStats'&&v===BASE_CARD_TYPES[e.type])){map.delete(e._sr);_sOvSync(T,e._sr,name);if(name==='currentStats'||name==='x'||name==='y')stationaryBrainChanged(e);return;}
     const normal=_sDerivedValue(e,name);
     if(Object.is(v,normal))map.delete(e._sr);else map.set(e._sr,v);
+    _sOvSync(T,e._sr,name);
     if(name==='currentStats'||name==='x'||name==='y')stationaryBrainChanged(e);
+}
+// The adjacency kernel's mirrors of a row's object overrides (ord.rs
+// k_adj_apply): _ovMx its preComputedBase's maxEnergy (Tower.updateStats
+// reads it), _ovVs the vision steps of its preComputedEffective (NaN / -128:
+// none).
+function _sOvSync(T,r,name) {
+    if(T.c__ovMx===undefined)return;
+    if(name==='preComputedBase'){const o=T.unique.preComputedBase.get(r),m=o?Number(o.maxEnergy):NaN;T.c__ovMx[r]=Number.isFinite(m)?m:NaN;}
+    else if(name==='preComputedEffective'){
+        const o=T.unique.preComputedEffective.get(r),range=!o?NaN:Number.isFinite(o.visionRangeArea)?o.visionRangeArea:Number.isFinite(o.visionRange)?o.visionRange:NaN;
+        T.c__ovVs[r]=!o?-128:Number.isFinite(range)?(range>=0?Math.min(127,areaSteps(range)):-1):-2;
+    }
 }
 function _sDerivedReconcile(T,e) {
     { const b=e._sr*3,m=T.mTok; m[b]=0; m[b+1]=0; m[b+2]=0; }
-    for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name)))map.delete(e._sr);}
+    for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name))){map.delete(e._sr);_sOvSync(T,e._sr,name);}}
     stationaryBrainChanged(e);
+}
+// Override columns (not snapshot keys: the derived names are).
+const _S_OV_COLS = new Set(['_mxOv', '_ovMx', '_ovVs']);
+// The maxEnergy overrides of a table, as a Map of row -> value over the heap
+// column _mxOv (NaN none) and a heap count word (T.mxOvN[0]): the adjacency
+// kernel reads and clears them (ord.rs k_adj_apply).
+class SOverrideColumn {
+    constructor(T) { this.T = T; if (!T.mxOvN) T.mxOvN = _sColAlloc(Int32Array, 4); }
+    get size() { return this.T.mxOvN[0]; }
+    get(r) { const v = this.T.c__mxOv[r]; return v === v ? v : undefined; }
+    has(r) { const v = this.T.c__mxOv[r]; return v === v; }
+    set(r, v) { const a = this.T.c__mxOv; if (a[r] !== a[r]) this.T.mxOvN[0]++; a[r] = v; return this; }
+    delete(r) { const a = this.T.c__mxOv; if (a[r] !== a[r]) return false; a[r] = NaN; this.T.mxOvN[0]--; return true; }
+    clear() { this.T.c__mxOv.fill(NaN); this.T.mxOvN[0] = 0; }
 }
 // Class C's table (made, and its accessors defined, at its first row).
 function _sTableOf(C) {
@@ -925,20 +988,21 @@ function _sTableOf(C) {
     const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
     const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
     const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
-    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, nfree: 0, qh: -1, qt: -1, qn: 0, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li').map(f => f.name) };
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, nfree: 0, qh: -1, qt: -1, qn: 0, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li' && !_S_OV_COLS.has(f.name)).map(f => f.name) };
     for (const f of fields) T[f.col] = null;
     _sTables.set(C, T);
     _sTableGrow(T, 1024);
+    if (T.unique.maxEnergy && T.c__mxOv !== undefined) T.unique.maxEnergy = new SOverrideColumn(T);
     // (A structure taken out of the world (structRowDetach: _sr -1) keeps its values in its _sdet record, a derived override as $name.)
     for(const name of derived)Object.defineProperty(C.prototype,name,{configurable:true,get(){if(this._sr<0){const d=this._sdet,v=d?d['$'+name]:undefined;return v!==undefined?v:_sDerivedValue(this,name);}const map=T.unique[name],v=map.size?map.get(this._sr):undefined;return v!==undefined?v:_sDerivedValue(this,name);},set(v){if(this._sr<0){_sDetOf(this)['$'+name]=v==null||Number.isNaN(v)?undefined:v;return;}_sDerivedSet(T,this,name,v);}});
     for (const f of fields) {
         const col='T.' + f.col;
         const at = col + '[this._sr]';
-        const nk = _S_NUM_KINDS[f.kind], fl = f.kind === 'n' || f.kind === 'f', und = nk ? String(nk[1]) : '';
-        const read = nk ? (fl ? 'let x = ' + at + '; return x === x ? x : undefined;' : 'const x = ' + at + '; return x === ' + und + ' ? undefined : x;') : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
-        let write = nk ? (fl ? at + ' = v === undefined ? NaN : v;' : at + ' = v === undefined || v === null || v !== v ? ' + und + ' : v;') : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
+        const nk = _S_NUM_KINDS[f.kind], fl = f.kind === 'n' || f.kind === 'f', nul = f.kind === 'N', und = nk ? String(nk[1]) : '';
+        const read = nul ? 'let x = ' + at + '; return x === x ? x : null;' : nk ? (fl ? 'let x = ' + at + '; return x === x ? x : undefined;' : 'const x = ' + at + '; return x === ' + und + ' ? undefined : x;') : f.kind === 'b' ? 'const x = ' + at + '; return x === 2 ? true : x === 1 ? false : undefined;' : 'return ' + (f.shared ? col+'.get(this._sr)' : at) + ';';
+        let write = nul ? at + " = typeof v === 'number' ? v : NaN;" : nk ? (fl ? at + ' = v === undefined ? NaN : v;' : at + ' = v === undefined || v === null || v !== v ? ' + und + ' : v;') : f.kind === 'b' ? at + ' = v === undefined ? 0 : v ? 2 : 1;' : f.shared ? col+'.set(this._sr,v);' : at + ' = v;';
         if(['_ow','level','effectiveLevel','potentialEffectiveLevel','type','unitType','stacks','manualStacks'].includes(f.name))write+=' _sDerivedReconcile(T,this);';
-        if(['preferredTarget','preferredTargetSpec'].includes(f.name))write+=' stationaryBrainChanged(this);';
+        if(f.name==='_ptK')write+=' stationaryBrainChanged(this);';
         Object.defineProperty(C.prototype, f.name, { configurable: true, enumerable: false,
             get: new Function('T', 'return function () { if (this._sr < 0) { const d = this._sdet; return d ? d[' + JSON.stringify(f.name) + '] : undefined; } ' + read + ' };')(T),
             set: new Function('T','_sDerivedReconcile','_sDetOf', 'return function (v) { if (this._sr < 0) { _sDetOf(this)[' + JSON.stringify(f.name) + '] = v; return; } ' + write + ' };')(T,_sDerivedReconcile,_sDetOf) });
@@ -949,7 +1013,24 @@ function _sTableOf(C) {
     Object.defineProperty(C.prototype, '_retiredAt', { configurable: true, enumerable: false,
         get() { const r = this._sr; if (r >= 0) return T.ret[r] && T.rowObj[r] === this ? T.rt[r] : undefined; return this._sdet === _S_GONE ? -2 : undefined; },
         set(v) { if (Number.isFinite(v)) structRowRetireAt(this, v); } });
+    // (A gone structure's kept tile (_sKeepTile), gy * 65536 + gx: a snapshot
+    // key after _retiredAt, so a restored copy's digest term is the host's.)
+    Object.defineProperty(C.prototype, '_goneTile', { configurable: true, enumerable: false,
+        get() { return this._sr < 0 && this._sdet === _S_GONE && typeof this._hgx === 'number' ? (this._hgy | 0) * 65536 + (this._hgx | 0) : undefined; },
+        set(v) { if (Number.isFinite(v)) { _sKeepTile({ gx: v % 65536, gy: Math.floor(v / 65536) }, this); } } });
     return T;
+}
+// A table's number and flag columns: in the wasm heap once it is up (the
+// structure kernels read them: main.js _rallyKernel), allocated at the
+// match's start (structTablesReserve), never grown in play.
+function _sColAlloc(Type, n) { return typeof simHeapArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null ? simHeapArray(Type, n) : new Type(n); }
+function _sColFree(a) { if (typeof simHeapFree === 'function' && typeof _simHeapPtrOf !== 'undefined' && _simHeapPtrOf !== null && _simHeapPtrOf(a) >= 0) simHeapFree(a); }
+// (Whether its columns are where the kernels read them: false while the heap
+// is up and they are not in it.)
+function _sColsInHeap(T) {
+    if (typeof _simHeapAlloc === 'undefined' || _simHeapAlloc === null || typeof _simHeapPtrOf === 'undefined' || _simHeapPtrOf === null) return true;
+    for (const f of T.fields) if (!f.shared && f.kind !== 'r') return _simHeapPtrOf(T[f.col]) >= 0;
+    return true;
 }
 function _sTableGrow(T, cap) {
     for (const f of T.fields) {
@@ -957,12 +1038,13 @@ function _sTableGrow(T, cap) {
         let a;
         if (f.shared) { a=_simRefGrow(was,cap,undefined,true); }
         else if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
-        else { const nk = _S_NUM_KINDS[f.kind]; a = nk ? new nk[0](cap).fill(nk[1]) : new Uint8Array(cap); if (was) a.set(was.subarray(0, T.n)); }
+        else { const nk = _S_NUM_KINDS[f.kind]; a = _sColAlloc(nk ? nk[0] : Uint8Array, cap); if (nk) a.fill(nk[1]); if (was) { a.set(was.subarray(0, T.n)); _sColFree(was); } }
         T[f.col] = a;
     }
     {
-        const was = T.mTok, tok = new Int32Array(cap * 3), ent = new Array(cap * 3).fill(undefined);
-        if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent[i] = T.mEnt[i]; }
+        // (The tokens in the heap: the adjacency kernel clears a row's.)
+        const was = T.mTok, tok = _sColAlloc(Int32Array, cap * 3), ent = new Array(cap * 3).fill(undefined);
+        if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent[i] = T.mEnt[i]; _sColFree(was); }
         T.mTok = tok; T.mEnt = ent;
     }
     // (The row pool: rowObj the structure holding a row, ret 1 while it is
@@ -990,6 +1072,11 @@ const STRUCT_ROW_KEEP_TICKS = 200;
 const _S_GONE = Object.freeze(Object.assign(Object.create(null), { _stT: -1, _li: -1, _en: 0, _ow: -1, _uc: false, _mv: 0, _spt: 0 }));
 const _sGoneSink = Object.create(null);
 // (Not enumerable: _sdet is no snapshot key, see _sTableKeys.)
+// (Its tile kept on the object, hidden (_hgx, _hgy): a unit's digest term of
+// it as a target (sim_unit_state.js _simHEnc) the same as while it was
+// there; a row that expired read no tile, and the digest moved off its
+// fields. Read before the row is cleared.)
+function _sKeepTile(o, to = o) { const gx = o.gx, gy = o.gy; if (typeof gx === 'number') { Object.defineProperty(to, '_hgx', { value: gx, writable: true, configurable: true, enumerable: false }); Object.defineProperty(to, '_hgy', { value: gy, writable: true, configurable: true, enumerable: false }); } }
 function _sSetGone(o) { o._sr = -1; Object.defineProperty(o, '_sdet', { value: _S_GONE, writable: true, configurable: true, enumerable: false }); }
 let structRowStats = { retired: 0, expired: 0, grown: 0 };
 function _sRowQueueUnlink(T, r) {
@@ -1015,25 +1102,26 @@ function structRowRetireAt(o, tick) {
     const r = o._sr, T = _sTables.get(o.constructor);
     if (!T) return;
     if (r >= 0 && T.rowObj[r] === o && T.ret[r]) _sRowQueueUnlink(T, r);
-    if (tick === -2) { if (r >= 0 && T.rowObj[r] === o) _sRowFree(T, r); _sSetGone(o); return; }
+    if (tick === -2) { _sKeepTile(o); if (r >= 0 && T.rowObj[r] === o) _sRowFree(T, r); _sSetGone(o); return; }
     if (r >= 0 && T.rowObj[r] === o) { _sRowQueueInsert(T, r, tick); structRowStats.retired++; }
 }
 // Row r's retired structure lets go of it: the row cleared, onto the free stack.
 function _sRowExpire(T, r) {
     const o = T.rowObj[r];
+    if (o) _sKeepTile(o);
     _sRowQueueUnlink(T, r);
     _sRowFree(T, r);
     if (o) _sSetGone(o);
     structRowStats.expired++;
 }
 function _sRowFree(T, r) {
+    for (const name of T.derived) { const m = T.unique[name]; if (m.size) m.delete(r); }
     for (const f of T.fields) {
         const a = T[f.col];
         if (f.shared) a.set(r, undefined);
         else if (f.kind === 'r') a[r] = undefined;
         else { const nk = _S_NUM_KINDS[f.kind]; a[r] = nk ? nk[1] : 0; }
     }
-    for (const name of T.derived) { const m = T.unique[name]; if (m.size) m.delete(r); }
     T.mTok[r * 3] = 0; T.mTok[r * 3 + 1] = 0; T.mTok[r * 3 + 2] = 0;
     T.mEnt[r * 3] = undefined; T.mEnt[r * 3 + 1] = undefined; T.mEnt[r * 3 + 2] = undefined;
     T.rowObj[r] = null;
@@ -1089,26 +1177,27 @@ function structRowAttach(o) {
     for (const f of T.fields) if (d[f.name] !== undefined) o[f.name] = d[f.name];
     for (const name of T.derived) if (d['$' + name] !== undefined) o[name] = d['$' + name];
 }
-// The match's structure rows, allocated at its start (startGame): a share of
-// STRUCT_RESERVE_BYTES for each class, no more rows than the map has tiles.
+// The match's structure rows, allocated at its start (startGame): the
+// match's building limit for every team (configuredMaxBuildings, the memory
+// budget's), a share of them for each class, no more rows than the map has tiles.
 // Past it, the table grows (counted in structRowStats.grown). Retired rows
 // remain readable until their deterministic expiry tick on every peer.
-const STRUCT_RESERVE_BYTES = 256 << 20;
 const STRUCT_RESERVE_SHARE = { Tower: 0.4, FloorItem: 0.25, Barrack: 0.1, CollectorSpawner: 0.04, AstarSpawner: 0.04, SalvagerSpawner: 0.03, BuilderSpawner: 0.03, HealerSpawner: 0.03, ResearchSpawner: 0.04, GoldMine: 0.02, AstarMine: 0.02 };
 function _sRowBytes(T) {
     let n = 12 + 24 + 21;
     for (const f of T.fields) { const nk = _S_NUM_KINDS[f.kind]; n += nk ? nk[0].BYTES_PER_ELEMENT : f.kind === 'b' ? 1 : 8; }
     return n;
 }
-// (Rows a class gets: its share of the budget, no more than the map's tiles.
-// From the row layout and constants, not from the tables as they are.)
+// (Rows a class gets: its share of the teams' limits, no more than the map's
+// tiles. From the settings and constants, not from the tables as they are.)
 function _structReserveRows(T, name) {
-    const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' ? GRID_W * GRID_H : 0;
-    return Math.ceil(Math.min(tiles || Infinity, STRUCT_RESERVE_BYTES * STRUCT_RESERVE_SHARE[name] / _sRowBytes(T)) / 1024) * 1024;
+    const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' ? GRID_W * GRID_H : 0, teams = _structTeams();
+    const total = Math.min(tiles || Infinity, configuredMaxBuildings(teams, tiles) * teams);
+    return Math.ceil(Math.min(tiles || Infinity, total * STRUCT_RESERVE_SHARE[name]) / 1024) * 1024;
 }
 let _structReserveRowsCache = null;
 function structReserveRowsTotal() {
-    const key = GRID_W + 'x' + GRID_H;
+    const key = GRID_W + 'x' + GRID_H + ':' + _structTeams() + ':' + CONFIG_MAX_POP + ':' + CONFIG_MAX_BUILDINGS;
     if (_structReserveRowsCache && _structReserveRowsCache.key === key) return _structReserveRowsCache.rows;
     let rows = 0;
     for (const [name, C] of Object.entries(_structClasses())) { const T = C ? _sTableOf(C) : null; if (T) rows += _structReserveRows(T, name); }
@@ -1130,8 +1219,8 @@ function structTablesReserve() {
     for (const name in STRUCT_RESERVE_SHARE) {
         const C = classes[name], T = C ? _sTableOf(C) : null;
         if (!T) continue;
-        const want = Math.ceil(Math.min(tiles || Infinity, STRUCT_RESERVE_BYTES * STRUCT_RESERVE_SHARE[name] / _sRowBytes(T)) / 1024) * 1024;
-        if (want > T.cap) _sTableGrow(T, want);
+        const want = _structReserveRows(T, name);
+        if (want > T.cap || !_sColsInHeap(T)) _sTableGrow(T, Math.max(want, T.cap));
     }
 }
 // The tables start over (a new match: resetWorldState. Not at a restore,
@@ -1158,6 +1247,7 @@ function _sTableKeys(e) {
     for (const k of Object.keys(e)) out.push(k);
     // (Last: decoded after its fields, see structRowRetireAt.)
     if (e._retiredAt !== undefined) out.push('_retiredAt');
+    if (e._goneTile !== undefined) out.push('_goneTile');
     return out;
 }
 
@@ -1532,7 +1622,7 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     let tileIndex = gy * GRID_W + gx;
     let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
     for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
-        let reservedUnit = workerReservedTiles[baseIndex + i];
+        let reservedUnit = workerReservedAt(baseIndex + i);
         if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
         workerReservedSet(baseIndex + i, null);
     }
@@ -1712,7 +1802,7 @@ function removeDroppedItem(drop) {
         let tileIndex = gy * GRID_W + gx;
         let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
         for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
-            let reservedUnit = workerReservedTiles[baseIndex + i];
+            let reservedUnit = workerReservedAt(baseIndex + i);
             if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
             workerReservedSet(baseIndex + i, null);
         }

@@ -26,9 +26,10 @@ const H = require('./net-harness.cjs');
         inst.dispatch('game-area', 'mousedown', { button: 2, clientX: 296, clientY: 296 });
         const issued = JSON.parse(inst.eval(`JSON.stringify(Object.values(localInputBuffer).flat()
             .filter(a => Number(a.netId.split(':').pop()) >= ${before})
-            .map(a => ({ action: a.action, unitIds: a.unitIds || [], gx: a.gx, gy: a.gy, coords: a.coords || [] })))`));
-        // (Rallies go as one action per point with the buildings' tiles.)
-        assert.ok(issued.some(a => (a.action === 'setRally' && a.gx === setup.bx && a.gy === setup.by) || (a.action === 'setRallyMany' && a.coords.some((v, i) => i % 2 === 0 && v === setup.bx && a.coords[i + 1] === setup.by))), inst.name + ' rallies building');
+            .map(a => ({ action: a.action, unitIds: a.unitIds || [], gx: a.gx, gy: a.gy, keys: typeof a.tkz === 'string' ? actionIdsDecode(a.tkz, 1e9) : [] })))`));
+        // (Rallies go as one action per point with the buildings' tile keys.)
+        const key = inst.eval('GRID_W') * setup.by + setup.bx;
+        assert.ok(issued.some(a => (a.action === 'setRally' && a.gx === setup.bx && a.gy === setup.by) || (a.action === 'setRallyMany' && a.keys.includes(key))), inst.name + ' rallies building');
         assert.ok(issued.some(a => a.action === 'move' && a.unitIds.includes(setup.id)), inst.name + ' moves unit');
         await world.run(1000);
         assert.equal(inst.eval(`(() => { const u = units.find(u => u.id === ${setup.id}); return u.x !== ${setup.x} || u.y !== ${setup.y}; })()`), true, 'the selected unit actually moves');

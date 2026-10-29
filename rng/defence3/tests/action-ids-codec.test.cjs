@@ -33,15 +33,21 @@ const r = JSON.parse(a.eval(`JSON.stringify((() => {
     const bigRun = actionIdsDecode('B' + '_'.repeat(6) + 'B', 100).length;
     // Through the sanitizer, as every peer processes it.
     const ids = Array.from({ length: 300 }, (_, i) => 1000 + (i * 7) % 300);
+    // (A move order keeps its string for the queue's admission, which decodes
+    // it into its scratch; other actions get the list, of units there are.)
     const san = sanitizeAction({ action: 'move', uidz: actionIdsEncode(ids), targetX: 10, targetY: 10 });
-    return { out, rejected, hostileOut, bigRun, sanitized: JSON.stringify(san.unitIds) === JSON.stringify(ids), noUidz: !('uidz' in san) };
+    const real = units.filter(u => u && !u.dead).slice(0, 3).map(u => u.id);
+    const hold = sanitizeAction({ action: 'hold', uidz: actionIdsEncode([...real, 9e8, ...real]) });
+    return { out, rejected, hostileOut, bigRun, sanitized: JSON.stringify(actionIdsDecode(san._uidz, 1e9)) === JSON.stringify(ids) && san.unitIds.length === 0, noUidz: !('uidz' in san) && !Object.keys(san).includes('_uidz'),
+        hold: JSON.stringify(hold.unitIds) === JSON.stringify(real) && !('uidz' in hold) };
 })())`));
 for (const c of r.out) assert.ok(c.same, 'round trip of ' + c.n + ' ids');
 assert.deepEqual(r.rejected, [null, null, null, null], 'only plain non-negative integer ids are encoded');
 for (const n of r.hostileOut) assert.equal(typeof n, 'number', 'hostile input decodes without throwing: ' + n);
 assert.ok(r.hostileOut.every(n => n <= 20000), 'decoded lists are bounded');
 assert.ok(r.bigRun <= 100, 'a huge run is cut at the bound');
-assert.ok(r.sanitized && r.noUidz, 'the sanitizer turns uidz into the id list');
+assert.ok(r.sanitized && r.noUidz, 'a move order keeps its ids compact (not a sent field) for the queue');
+assert.ok(r.hold, 'another action gets its list: each unit once, ids of no unit dropped');
 const run = r.out[3], scattered = r.out[4];
 assert.ok(run.bytes < 20, 'a run of 20000 ids takes a few bytes: ' + run.bytes);
 assert.ok(scattered.bytes < scattered.json * 0.7, 'scattered ids smaller than JSON: ' + scattered.bytes + ' vs ' + scattered.json);

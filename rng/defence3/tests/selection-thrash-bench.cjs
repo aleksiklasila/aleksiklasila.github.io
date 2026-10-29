@@ -69,7 +69,7 @@ const PAGE_SETUP = names => {
         try { return f.apply(self || this, arguments); } finally {
             if (W.on) {
                 if (name === 'queueAction' && arguments[0] && arguments[0].action === 'setRallyMany') {
-                    const r = arguments[0]; W.rallies.push({ at: a, count: r.coords.length / 2, x: r.targetX, y: r.targetY });
+                    const r = arguments[0]; W.rallies.push({ at: a, count: r._keys ? r._keys.length : Array.isArray(r.coords) ? r.coords.length / 2 : 0, bytes: typeof r.tkz === 'string' ? r.tkz.length : 0, x: r.targetX, y: r.targetY });
                 }
                 const d = performance.now() - a, s = W.fn[name] || (W.fn[name] = { n: 0, ms: 0, max: 0 });
                 s.n++; s.ms += d; if (d > s.max) s.max = d;

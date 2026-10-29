@@ -110,26 +110,9 @@ function spawnerProductionChanged(s) {
         s.isResearching = !!(task && !s.isUpgrading && isAutoResearchEnabled(s) && (task.workDone || 0) < task.workRequired);
     }
 }
-// A tick of the barracks and spawners: those with statuses running (woken
-// by damage or effects: thingStatusWake) tick them at their phase
-// (spawnerDue), in tile order; any whose energy ran out are removed (the
-// lists from the end, as ever); the players' research moves on.
+// A tick of the barracks and spawners: the players' research moves on.
 function spawnerStructuresTick() {
-    let dead = false, due = null;
-    for (const e of _thingStatusSelf) {
-        if (!(e instanceof Barrack) && !isSpawnerEntity(e)) continue;
-        if (!(e.energy > 0)) { dead = true; continue; }
-        if (spawnerDue(e)) (due || (due = [])).push(e);
-    }
-    if (due) {
-        due.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
-        for (const e of due) { thingStatusTickSelf(e); if (!(e.energy > 0)) dead = true; }
-    }
-    if (dead) {
-        for (let i = barracks.length - 1; i >= 0; i--) if (barracks[i].energy <= 0) destroyBuilding(barracks[i]);
-        for (let i = collectorSpawners.length - 1; i >= 0; i--) if (collectorSpawners[i].energy <= 0) destroyBuilding(collectorSpawners[i]);
-        for (const e of [..._thingStatusSelf]) if (!(e.energy > 0) && ((e instanceof Barrack) || isSpawnerEntity(e)) && getTileEntityRef(e.gx, e.gy) !== e) _thingStatusSelf.delete(e);
-    }
+    // (Their statuses: the status kernel's, main.js; removals there too.)
     researchAdvanceTick();
 }
 // Each player's research moves on once a tick while it has a research
@@ -389,7 +372,6 @@ class Barrack {
     }
 
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -489,7 +471,6 @@ class CollectorSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -549,7 +530,6 @@ class AstarSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -609,7 +589,6 @@ class SalvagerSpawner {
         return Math.max(1, Math.floor(Number.isFinite(energyCost) ? energyCost : 1));
     }
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -677,7 +656,6 @@ class BuilderSpawner {
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -744,7 +722,6 @@ class HealerSpawner {
         return Math.max(1, Math.round(Number.isFinite(dps) ? dps : fallback));
     }
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
@@ -819,7 +796,6 @@ class ResearchSpawner {
     }
 
     update() {
-        thingStatusTickSelf(this);
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 

@@ -11,8 +11,10 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  const farm=put(60,30,'farm'),spawner=put(62,30,'spawner');
  if(!farm.underConstruction||!spawner.underConstruction)throw Error('unfinished fixture');
  const cfg=RESOURCE_TYPE_LIST.find(c=>c.farmKey==='farm');
- _wsPostEpoch=10;const G=_wsCollectorGroup(cfg),objs=G.objs,types=G.types,SX=G.arrays.sx;
- const fi=G.objs.indexOf(farm),pi=G.spawnerObjs.indexOf(spawner);
+ _wsPostEpoch=10;const G=_wsCollectorGroup(cfg),TL=G.arrays.tile,SX=G.arrays.sx;
+ // (Sites and spawners by tile: the group's lists hold no objects.)
+ const ft=farm.gy*GRID_W+farm.gx,pt=spawner.gy*GRID_W+spawner.gx,site=g=>Array.from(g.arrays.tile.subarray(0,g.n)).indexOf(ft),spawnerAt=g=>Array.from(g.arrays.pid.subarray(0,g.arrays.meta[1])).indexOf(pt);
+ const fi=site(G),pi=spawnerAt(G);
  if(fi<0||pi<0)throw Error('unfinished structures missing from stable roster');
  if(G.arrays.sready[fi]!==WS_NOT_BUILT||G.arrays.pready[pi]!==WS_NOT_BUILT)throw Error('unfinished eligibility');
  for(const name of ['rkind','rowner','rox','roy','rux','ruy','rr','rak','rax','ray','rgrp','rneed','rjid','rcur','rmy','rpre','res','score'])
@@ -30,28 +32,25 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    const actual=Array.from(A.abi.subarray(A.bs[b],A.bs[b]+A.abc[b]));if(JSON.stringify(actual)!==JSON.stringify(expected))throw Error('eligible bucket '+b);}
   if(slot<0)throw Error('owner field slot');
   for(let t=0;t<GRID_W*GRID_H;t+=31){let best=0xffffffff;
-   for(let q=0;q<G.spawnerObjs.length;q++)if(A.po[q]===0&&A.pready[q]<=epoch){
+   for(let q=0;q<A.meta[1];q++)if(A.po[q]===0&&A.pready[q]<=epoch){
     const d=Math.abs(A.pgx[q]-t%GRID_W)+Math.abs(A.pgy[q]-Math.floor(t/GRID_W));best=Math.min(best,d*65536+A.ro[q]);}
    if(A.nf[slot*GRID_W*GRID_H+t]!==best)throw Error('eligibility field '+epoch+' tile '+t);queries++;
   }};
  check(10);
  const same=_wsCollectorGroup(cfg);
- if(same!==G||same.objs!==objs||same.types!==types||same.arrays.sx!==SX)throw Error('completion rebuilt roster');
+ if(same!==G||same.arrays.tile!==TL||same.arrays.sx!==SX)throw Error('completion rebuilt roster');
  if(!G.nfBuild)throw Error('nearest field was not invalidated for helper refresh');
  post(11);simParallelBackgroundWait(WS_LANE);check(11);
  _wsPostEpoch=20;workSiteBuilt(farm);workSiteBuilt(spawner);
  if(G.arrays.sready[fi]!==11||G.arrays.pready[pi]!==11)throw Error('duplicate completion changed active eligibility');
- // Force a roster rebuild after completion: finished structures need no
- // new completion registration; reused arrays must still hold the right rows.
- const oldBuckets=G.spawnerBuckets, oldSpawners=G.spawnerObjs;
- const note=_wsNoteCompletionRow;let finishedNotes=0;
- _wsNoteCompletionRow=function(item,row){if(!item.underConstruction)finishedNotes++;return note(item,row);};
- G.sig=null;_wsCollectorGroup(cfg);_wsNoteCompletionRow=note;
- if(finishedNotes)throw Error('completed structures registered completion rows');
- if(G.objs!==objs||G.types!==types||G.spawnerObjs!==oldSpawners||G.spawnerBuckets!==oldBuckets)throw Error('roster buffers not reused');
- if(G.objs[fi]!==farm||G.spawnerObjs[pi]!==spawner||G.arrays.sready[fi]!==0||G.arrays.pready[pi]!==0)throw Error('rebuilt completed rows');
+ // Force a roster rebuild after completion (completion finds rows by tile:
+ // nothing registered); reused arrays must still hold the right rows.
+ const oldBuckets=G.arrays.sbk, oldSpawners=G.arrays.pid;
+ G.sig=null;_wsCollectorGroup(cfg);
+ if(G.arrays.tile!==TL||G.arrays.pid!==oldSpawners||G.arrays.sbk!==oldBuckets)throw Error('roster buffers not reused');
+ if(G.arrays.tile[fi]!==ft||G.arrays.pid[pi]!==pt||G.arrays.sready[fi]!==0||G.arrays.pready[pi]!==0)throw Error('rebuilt completed rows');
  workerSearchTierReset();const restored=_wsCollectorGroup(cfg);
- if(restored.arrays.sready[restored.objs.indexOf(farm)]!==0)throw Error('reset eligibility');
+ if(restored.arrays.sready[site(restored)]!==0)throw Error('reset eligibility');
  return {queries,rosterStable:true,nextEpoch:11,duplicateStable:true};
 })())`));
 assert.ok(result.queries>1000);assert.deepEqual(i.errors.map(String),[]);console.log(JSON.stringify({helpers,...result}));

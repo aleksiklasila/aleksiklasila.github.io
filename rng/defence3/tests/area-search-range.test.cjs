@@ -18,7 +18,7 @@ const result=inst.eval(`(()=>{
     _canAssignWorkerTargetExclusive=()=>true;
     if(_findNearestDamagedFriendlyUnit(source)!==target)throw Error('healer fallback kept pixel cutoff');
     const tower={x:source.x,y:source.y,currentStats:{attackRangeArea:0}};
-    if(!_isTargetWithinTowerAttackAreaRange(tower,target))throw Error('tower range differs from areas');
+    if(!isWorldTargetWithinAreaRange(tower.x,tower.y,target.x,target.y,Math.floor(tower.currentStats.attackRangeArea)))throw Error('tower range differs from areas');
     SIM_ACQ_AREA_TARGETS=false;found=false;
     forEachUnitInAreaRange(source.x,source.y,0,u=>{if(u===target)found=true;});
     if(found)throw Error('legacy pixel-limited mode was lost');

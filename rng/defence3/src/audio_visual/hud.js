@@ -1383,6 +1383,7 @@ function updateHUD() {
             SHRINES_ENABLED ? _hudShrineDrainHtml(localPlayerId) : '<span></span>', _hudShrineGlyphHtml(localPlayerId));
     }
     let playerCap = getPlayerPopCap(localPlayerId);
+    // (The match's: the menu's choice as the memory budget fits it, data_static.js.)
     let cfgCap = getConfiguredMaxPop();
     _renderHudPop(p.popCount, playerCap, cfgCap);
     if (_hudEls.builds && typeof playerStructureCount === 'function') _renderHudBuilds(playerStructureCount(localPlayerId), getPlayerStructureLimit());

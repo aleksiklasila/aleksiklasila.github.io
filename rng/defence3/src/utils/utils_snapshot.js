@@ -162,7 +162,35 @@ const SNAP_FORMAT = 7;
 // event phase. Newly completed spawners become candidates next brain batch.
 // 43: full player/type stat rebuilds publish native effective rows and
 // invalidate unit stat versions, as individual research updates do.
-const SIM_RULES_REVISION = 45;
+// 46: rally orders (setRallyMany tkz tile keys) apply whole on arrival, never
+// budgeted or backlogged; rally fields are nullable number columns.
+// 47: move orders queue by kernels (wasm ord.rs: admission, take), applied
+// over at most ORDER_DRAIN_STEPS steps, no per-tick unit budgets; order
+// stamps, arrival marks and duplicate stamps per slot (unit columns).
+// 48: a queued order's units in id order, workers among the others (the
+// drain spreads the workers over its steps); gone structures' kept tiles
+// in snapshots (_goneTile).
+// 49: a worker's task in columns (wkS/wkT/wkR/wkN: state and target type
+// codes, the target by kind and tile or unit id, read back from the world),
+// hashed from them; rallies and order ids by kernels.
+// 50: workers' move orders by a kernel (k_order_workers: task release,
+// flow arm; role memory cleared at first use), reservations an id table;
+// move, attack and rally orders bump no work versions.
+// 51: structure statuses and hits by kernels (k_struct_status,
+// k_struct_hits); projectiles a heap pool (projectile.js): their unit hits
+// with the unit hits (sums), structure hits by shot id, the snapshot's
+// records in id order with the next id.
+// 52: towers all by kernels (k_tower_due over the tower table, k_tower_fire:
+// shots into the pool, cooldowns, preferred targets as the _ptK / _ptV
+// columns, custom rows); shot ids from the tick and the tower's tile.
+// 53: workers' targets exclusive by the reservation table alone (no conflict
+// index); nearest spawners and the collectors' groups from heap indexes
+// (k_spawner_index / k_spawner_nearest, k_ws_candidates).
+// 54: removed units let go by a kernel (k_unit_gone): a dead worker's
+// reservation always freed (a returning one's was kept), a dead unit
+// target's region not woken; death sounds the first few a tick; towers,
+// barracks and spawners out of energy destroyed in tile order.
+const SIM_RULES_REVISION = 54;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -245,7 +273,8 @@ function _snapListEntities(list) {
         case 'g': return goldMines;
         case 'a': return astarMines;
         case 'd': return droppedItems;
-        case 'p': return projectiles;
+        // (The shots: records made from the pool, projectile.js.)
+        case 'p': return projSnapshotRecords();
         case 'P': return players;
     }
     return [];
@@ -310,7 +339,7 @@ function _snapNewShell(list, typeKey) {
         case 'f': return new FloorItem();
         case 'g': return new GoldMine();
         case 'a': return new AstarMine();
-        case 'p': return Object.create(Projectile.prototype);
+        case 'p': return {};
     }
     return {};
 }
@@ -324,7 +353,6 @@ function _snapClassByName(name) {
         case 'Unit': return Unit;
         case 'Tower': return Tower;
         case 'Barrack': return Barrack;
-        case 'Projectile': return Projectile;
         case 'CollectorSpawner': return CollectorSpawner;
         case 'AstarSpawner': return AstarSpawner;
         case 'SalvagerSpawner': return SalvagerSpawner;
@@ -439,16 +467,16 @@ const SNAP_HASH_FIELDS = {
         'targetUnit', 'targetBuilding', 'targetPos', 'path', '_pendingPathTarget', 'pathIsFallbackAstar', '_attackMoveGx', '_attackMoveGy',
         'stackCount', 'effectiveStacks', 'unitLevel', 'effectiveLevel', 'dead', 'teleportHideTicks',
         'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'watchedByTeam',
-        'workerState', 'workerTarget', 'workerTargetType', 'carryingValue', 'workerTransferCooldown', '_workerReservedTileIndex',
+        'workerState', '_wkTgt', 'workerTargetType', 'carryingValue', 'workerTransferCooldown', '_workerReservedTileIndex',
         'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial', '_workerNextIdleRetargetTick', '_astarBudgetRetryTick', '_scoutTarget'],
     b: ['owner', 'type', 'unitType', 'energy', 'maxEnergy', 'stacks', 'manualStacks', 'level', 'effectiveLevel', 'effectiveStacks',
         'stackingWorkDone', 'isStacking', 'underConstruction', 'isUpgrading', 'buildProgress', 'markedForSalvage',
         'autoUpgradeEnabled', 'autoStackEnabled', 'buildEnabled', 'queueEnabled', 'autoResearchEnabled', 'isResearching', 'researchTask',
-        'spawnTimer', 'spawnCooldown', 'spawnQueue', 'cd', 'laserState', 'laserTimer', 'preferredTarget',
+        'spawnTimer', 'spawnCooldown', 'spawnQueue', 'cd', 'laserState', 'laserTimer', '_ptK', '_ptV',
         'rallyX', 'rallyY', 'rallyTargetUnitId', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'watchedByTeam'],
     m: ['gold', 'astar', 'maxGold', 'maxAstar'],
     d: ['type', 'value', 'timer'],
-    p: ['x', 'y', 'vx', 'vy', 'life', 'dmg', 'level', 'type', 'sx', 'sy', 'sourceOwner']
+    p: ['x', 'y', 'vx', 'vy', 'life', 'dmg', 'lvl', 'type', 'sx', 'sy', 'own']
 };
 
 // Generated per field list. Integers (most fields) skip the float bits;
@@ -767,8 +795,7 @@ function _snapForRegionReservations(r, fn) {
     if (!table || gx0 >= gx1) return;
     for (let gy = ry * rt, gy1 = Math.min(GRID_H, gy + rt); gy < gy1; gy++) {
         for (let slot = (gy * GRID_W + gx0) * n, end = (gy * GRID_W + gx1) * n; slot < end; slot++) {
-            let u = table[slot];
-            if (u) fn(slot, u);
+            if (table[slot]) fn(slot, workerReservedAt(slot));
         }
     }
 }
@@ -779,10 +806,7 @@ function _snapForReservations(slice, fn, round = -1) {
     let table = workerReservedTiles;
     if (!table || table.length === 0) return;
     if (slice < 0) {
-        for (let slot = 0; slot < table.length; slot++) {
-            let u = table[slot];
-            if (u) fn(slot, u, _snapReservationRegion(slot));
-        }
+        for (let slot = 0; slot < table.length; slot++) if (table[slot]) fn(slot, workerReservedAt(slot), _snapReservationRegion(slot));
         return;
     }
     let rt = SNAP_REGION_TILES, rw = Math.ceil(GRID_W / rt), rh = Math.ceil(GRID_H / rt);
@@ -825,14 +849,14 @@ function _snapDecodeReservations(enc, partial = null) {
     if (partial) {
         // The carried regions' entries, and the entry each carried or
         // removed unit held elsewhere (by its slot from before the restore).
-        for (let r of partial.regions) _snapForRegionReservations(r, slot => { table[slot] = null; });
+        for (let r of partial.regions) _snapForRegionReservations(r, slot => { table[slot] = 0; });
         let ids = new Set();
         for (let u of partial.carried) ids.add(u.id);
         for (let [u, slot] of partial.slots) {
-            if (!(slot >= 0 && slot < table.length) || table[slot] !== u) continue;
+            if (!(slot >= 0 && slot < table.length) || table[slot] !== u.id) continue;
             // Carried (or replaced by a unit of the same id): the patch has
-            // its entries; otherwise it left the list.
-            table[slot] = ids.has(u.id) ? null : placeholder(Number(u.id) || 0);
+            // its entries; otherwise it left the list (its id: dead).
+            table[slot] = ids.has(u.id) ? 0 : (Number(u.id) || 0);
         }
     }
     if (!Array.isArray(enc)) return;
@@ -841,7 +865,7 @@ function _snapDecodeReservations(enc, partial = null) {
         if (!(Number.isInteger(slot) && slot >= 0 && slot < table.length)) continue;
         let x = enc[j + 1];
         let u = typeof x === 'number' ? placeholder(x) : _snapD(x);
-        table[slot] = (u && typeof u === 'object') ? u : null;
+        table[slot] = (u && typeof u === 'object') ? (Number(u.id) | 0) : 0;
     }
 }
 
@@ -976,9 +1000,8 @@ function snapTickHash(tick, allSlices = false) {
         // (Big research tables and queues a slice a hash: _snapHDeep.)
         for (let p of players) h = _snapHDeep(h, p, 4, allSlices ? -1 : slice);
         push(SNAP_PART_PLAYERS * SNAP_CODE_SHIFT, h >>> 0);
-        let hp = Math.imul(2166136261 ^ projectiles.length, 16777619);
-        for (let pr of projectiles) hp = Math.imul(hp ^ _snapHashEntity('p', pr, 0), 16777619);
-        push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, hp >>> 0);
+        // (The shots: a kernel's sum over the pool, projectile.js projHash.)
+        push(SNAP_PART_PROJECTILES * SNAP_CODE_SHIFT, projHash());
         push(SNAP_PART_GLOBALS * SNAP_CODE_SHIFT, _snapHashGlobals(allSlices ? -1 : slice, Math.floor(t / SNAP_HASH_SLICES)));
         // (The units' order: from the units kernel below.)
         // (The towers', barracks' and spawners' order in SNAP_HASH_ORDER_ROUNDS
@@ -1003,6 +1026,8 @@ function snapTickHash(tick, allSlices = false) {
         jobs = Math.max(1, Math.ceil((u1 - u0) / per));
         _snapUnitLists(jobs * per, jobs);
         simParallelBind('ix.slots', slots);
+        // (The worker target types' terms: wk.ttTerm, bound once.)
+        simWttTerms();
         // (Its own lane: lane 0 holds the next tick's separation, which a
         // post there waited for, run by this thread.)
         const B = simParallelStageParams(SIM_LANE_HASH, 0);
@@ -1292,7 +1317,7 @@ function _snapRootRef(v) {
         let cell = grid[gy][gx];
         if (v instanceof Barrack) return cell.item === v ? '~b' + gx + ',' + gy : null;
         if (isSpawnerEntity(v)) return cell.item === v ? '~s' + gx + ',' + gy : null;
-        if (!(v instanceof Projectile)) {
+        {
             if (cell.item === v) return '~f' + gx + ',' + gy;
             if (droppedItemGrid[gy] && droppedItemGrid[gy][gx] === v) return '~d' + gx + ',' + gy;
             if (tileEntityRef[gy][gx] === v) {
@@ -1301,11 +1326,6 @@ function _snapRootRef(v) {
                 if (type === TILE_ENTITY_ASTARMINE) return '~a' + gx + ',' + gy;
             }
         }
-    }
-    if (v instanceof Projectile) {
-        if (!ctx.projIndex) { ctx.projIndex = new Map(); projectiles.forEach((p, i) => ctx.projIndex.set(p, i)); }
-        let i = ctx.projIndex.get(v);
-        return i === undefined ? null : '~p' + i;
     }
     let pi = players.indexOf(v);
     if (pi >= 0) return '~P' + pi;
@@ -1594,8 +1614,6 @@ function _snapEncodeGlobals() {
         upkeepAcc: (typeof _upKeepAccum !== 'undefined' && _upKeepAccum) ? JSON.parse(JSON.stringify(_upKeepAccum)) : null,
         // Move orders still being applied in slices (see runQueuedOrders).
         orderQueue: typeof orderQueueSnapshot === 'function' ? orderQueueSnapshot() : [],
-        orderBudget: typeof _orderBudgets !== 'undefined' ? Array.from(_orderBudgets, v => (v === undefined || v === null ? -1 : v)) : [],
-        orderBudgetAll: typeof _orderAllLeft !== 'undefined' ? _orderAllLeft : 0,
         // Actions past their tick's budget, waiting (main.js processActions).
         actionBacklog: typeof actionBacklogSnapshot === 'function' ? actionBacklogSnapshot() : [],
         // (Their arrivals and the units small orders took ahead of them.)
@@ -1689,7 +1707,7 @@ function snapEncodeState(options = null) {
                 for (let i = 0; i < players.length; i++) add('P', players[i], i);
                 for (let i of labs) add('s', collectorSpawners[i], i);
             }
-            if (only.projectiles) for (let i = 0; i < projectiles.length; i++) add('p', projectiles[i], i);
+            if (only.projectiles) { const pr = projSnapshotRecords(); for (let i = 0; i < pr.length; i++) add('p', pr[i], i); }
             // Explicit entities (the simulation worker's per-tick changes):
             // Map list -> [[entity, index], ...].
             if (only.entities) for (let [list, items] of only.entities) for (let [e, i] of items) add(list, e, i);
@@ -1738,7 +1756,7 @@ function snapEncodeState(options = null) {
                 for (let e of done) {
                     if (!(e instanceof Unit)) continue;
                     let slot = e._workerReservedTileIndex;
-                    if (Number.isInteger(slot) && slot >= 0 && workerReservedTiles[slot] === e && !regions.has(_snapReservationRegion(slot))) _snapEncodeReservation(res, slot, e);
+                    if (Number.isInteger(slot) && slot >= 0 && workerReservedTiles[slot] === e.id && !regions.has(_snapReservationRegion(slot))) _snapEncodeReservation(res, slot, e);
                 }
             }
             out.res = res;
@@ -2079,11 +2097,6 @@ function _snapTileTypeOf(list, e) {
 
 // Worker caches that hold entities; the reservation table itself is kept.
 function _snapResetWorkerCaches() {
-    _workersWithTargetTick = NaN;
-    _workerConflictTiles.clear();
-    _workerMovingTargetConflicts.clear();
-    _workerConflictEntries.clear();
-    _workersWithTarget = [];
     _activeBuilderWorkCacheTick = NaN;
     _activeBuilderWorkTargetsByOwner = new Map();
     _activeBuilderPathTiles = new Set();
@@ -2330,7 +2343,7 @@ function snapDecodeState(S, options = null) {
         collectorSpawners = finals.s;
         if (finals.g !== goldMines) { let a = finals.g.slice(); goldMines.length = 0; for (let m of a) goldMines.push(m); }
         if (finals.a !== astarMines) { let a = finals.a.slice(); astarMines.length = 0; for (let m of a) astarMines.push(m); }
-        projectiles = finals.p;
+        projSnapshotLoad(finals.p);
 
         let g = S.g || {};
         currentTick = Math.max(0, Math.floor(Number(g.tick) || 0));
@@ -2341,9 +2354,6 @@ function snapDecodeState(S, options = null) {
         pendingPathResolveCursor = _snapD(g.cursor);
         if (typeof _orderQueue !== 'undefined') {
             orderQueueRestore(Array.isArray(g.orderQueue) ? g.orderQueue : []);
-            // (Per player; -1: untouched this tick.)
-            _orderBudgets = Array.isArray(g.orderBudget) ? g.orderBudget.map(v => (Number.isFinite(v) && v >= 0 ? v : undefined)) : [];
-            _orderAllLeft = Number.isFinite(g.orderBudgetAll) ? g.orderBudgetAll : ORDER_UNITS_PER_TICK_ALL;
         }
         if (typeof actionBacklogRestore === 'function') actionBacklogRestore(Array.isArray(g.actionBacklog) ? g.actionBacklog : []);
         if (typeof actionEarlyRestore === 'function') actionEarlyRestore(g.actionEarly || null);
@@ -2523,7 +2533,6 @@ function snapDecodeState(S, options = null) {
         // Rebuilt from the restored world on its first query.
         if (typeof resetVisibilityCoverage === 'function') resetVisibilityCoverage();
         // Statuses as restored (buildings running them tick them: woken).
-        if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
         if (!partial || shells.t.length > 0 || removed.t.length > 0) recalculateLaserConnections();
         // Idle workers' work versions as sent (last: the tile entities and
         // drops set again above count as changes here).
@@ -2595,7 +2604,6 @@ function snapFlushHistoryCaches() {
     if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
-    if (typeof thingStatusRebuild === 'function') thingStatusRebuild();
     // (Damage not reported yet is state, kept: unit.js _dotPending.)
     // (Separation pushes carried to the next tick: none on any peer.)
     if (typeof separationReset === 'function') separationReset();
@@ -2612,7 +2620,6 @@ function snapFlushHistoryCaches() {
     if (typeof healerCandidatesTierReset === 'function') healerCandidatesTierReset();
     if (typeof upkeepReset === 'function') upkeepReset();
     if (typeof spawnerReadyReset === 'function') spawnerReadyReset();
-    if (typeof towerDueReset === 'function') towerDueReset();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and
     // the next tick's first part share it, so a peer that restores would

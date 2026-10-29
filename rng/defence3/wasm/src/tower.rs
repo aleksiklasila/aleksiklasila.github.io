@@ -86,50 +86,68 @@ pub unsafe extern "C" fn k_stationary_areas(a:u32,chunk:i32) {
 /// changes; stats and reach tables are shared by owner/type/level and area.
 /// Queries reference immutable CSR slices directly. Four adjacent query
 /// origins are written with SIMD; there is no JS stat/area work per turret.
+/// A tower with custom stats or position (descriptor bit 25) reads its row's
+/// (tc.*, by st.rrow: tower.js towerCustomWrite). A reach past what the
+/// table holds (its area's need, its depth) is the table's for now, counted
+/// (tac.ext[job]): the next table is made deep enough (tower.js). A preferred
+/// target (bit 24): tac.pref 1 (k_tower_fire looks at it first).
 #[no_mangle]
 pub unsafe extern "C" fn k_tower_prepare(a:u32,chunk:i32) {
     let k=K::new(waddr(a) as *const i32);
     let input=k.p::<i32>(0);let code=k.p::<u8>(1);let owner=k.p::<i32>(2);let uc=k.p::<u8>(3);let energy=k.p::<f64>(4);let timer=k.p::<f64>(5);let brain=k.p::<u32>(6);
     let ranges=k.p::<i32>(7);let cds=k.p::<i32>(8);let kinds=k.p::<i32>(9);let grid=k.p::<i32>(10);let offsets=k.p::<i32>(11);let boxes=k.p::<i32>(12);
     let qx=k.p::<f32>(13);let qy=k.p::<f32>(14);let qo=k.p::<i32>(15);let qt=k.p::<i32>(16);let qb=k.p::<i32>(17);let qtile=k.p::<i32>(18);let qoff=k.p::<i32>(19);let qbox=k.p::<i32>(20);let valid=k.p::<i32>(21);
+    let need=k.p::<i32>(31);let rrow=k.p::<i32>(32);
+    let (cx,cy,crange,ccd,cdmg,cblast,crad,clvl)=(k.p::<f32>(33),k.p::<f32>(34),k.p::<i32>(35),k.p::<i32>(36),k.p::<f32>(37),k.p::<f32>(38),k.p::<f32>(39),k.p::<i32>(40));
+    let pref=k.p::<i32>(41);let ext=k.p::<i32>(42);
     let w=k.i(2).max(1);let dd=k.i(3);let nt=k.i(4);let nl=k.i(5);let np=k.i(6);let now=k.f(7);let tile=k.f(8) as f32;
     let start=chunk*k.i(1);let end=((chunk+1)*k.i(1)).min(k.i(0));
+    let mut extended=0;
     for first in (start..end).step_by(4) {
-        let mut xs=[0i32;4];let mut ys=[0i32;4];
+        let mut xs=[0i32;4];let mut ys=[0i32;4];let mut cpos=[(-1i32,0f32,0f32);4];
         for lane in 0..(end-first).min(4) as usize {
-            let q=first as usize+lane;*valid.add(q)=0;*qoff.add(q*2)=0;*qoff.add(q*2+1)=0;*qbox.add(q*4+2)=-1;*qb.add(q)=0;
+            let q=first as usize+lane;*valid.add(q)=0;*qoff.add(q*2)=0;*qoff.add(q*2+1)=0;*qbox.add(q*4+2)=-1;*qb.add(q)=0;*pref.add(q)=0;
             let t=*input.add(q);*qtile.add(q)=t;
             if t<0||t>=k.i(9)||*code.add(t as usize)!=0x22||*uc.add(t as usize)!=0||!(*energy.add(t as usize)>0.0)||now<=ceil(*timer.add(t as usize)) {continue;}
             if q>0&&*input.add(q-1)==t {continue;}
             let t=t as usize;let descriptor=*brain.add(t);let ty=(descriptor&65535) as i32-1;let level=((descriptor>>16)&255) as i32;let own=*owner.add(t);
-            if descriptor&(1<<25)!=0||ty<0||ty>=nt||level<1||level>=nl||own< -1||own>=np {*valid.add(q)=-2;continue;}
+            if ty<0||ty>=nt||own< -1||own>=np {continue;}
             let kind=*kinds.add(ty as usize);if kind<0 {continue;}
-            let stat=(((own+1)*nt+ty)*nl+level) as usize;let range=*ranges.add(stat);let area=*grid.add(t);
-            if range<0||range>=dd {*valid.add(q)=if range>=0&&range<=63{-1}else{-2};continue;}
-            if area<0||area>=k.i(10) {continue;}
-            if range>*k.p::<i32>(31).add(area as usize) {*valid.add(q)=-1;continue;}
-            let row=(area*dd+range) as usize;
+            let custom=descriptor&(1<<25)!=0;let row=*rrow.add(t);
+            if custom&&row<0 {continue;}
+            let ru=row.max(0) as usize;
+            let stat=(((own+1)*nt+ty)*nl+level.max(1).min(nl-1)) as usize;
+            let (mut range,cd,damage,blast,radius,elvl)=if custom{(*crange.add(ru),*ccd.add(ru),*cdmg.add(ru) as f64,*cblast.add(ru) as f64,*crad.add(ru) as f64,*clvl.add(ru))}
+                else{if level<1||level>=nl {continue;}(*ranges.add(stat),*cds.add(stat),*k.p::<f32>(22).add(stat) as f64,*k.p::<f32>(23).add(stat) as f64,*k.p::<f32>(24).add(stat) as f64,(descriptor>>26) as i32)};
+            let area=*grid.add(t);
+            if range<0||area<0||area>=k.i(10) {continue;}
+            let cap=(*need.add(area as usize)).min(dd-1);
+            if range>cap {range=cap.max(0);extended+=1;}
+            let row4=(area*dd+range) as usize;
             let list=(area*(dd+1)) as usize;
             *qoff.add(q*2)=*offsets.add(list);*qoff.add(q*2+1)=*offsets.add(list+range as usize+1);
-            v128_store(qbox.add(q*4) as *mut v128,v128_load(boxes.add(row*4) as *const v128));
+            v128_store(qbox.add(q*4) as *mut v128,v128_load(boxes.add(row4*4) as *const v128));
             *xs.get_unchecked_mut(lane)=t as i32%w;*ys.get_unchecked_mut(lane)=t as i32/w;*qo.add(q)=own;*qt.add(q)=kind;
-            if descriptor&(1<<24)==0 {*qb.add(q)=*cds.add(stat);}
-            let cd=*cds.add(stat);let late=(now-(ceil(*timer.add(t))+1.0)).max(0.0).min((k.f(11)-1.0).max(0.0));
+            if custom {*cpos.get_unchecked_mut(lane)=(q as i32,*cx.add(ru),*cy.add(ru));}
+            *qb.add(q)=cd;
+            if descriptor&(1<<24)!=0 {*pref.add(q)=1;}
+            let late=(now-(ceil(*timer.add(t))+1.0)).max(0.0).min((k.f(11)-1.0).max(0.0));
             let shots=1.0+floor(late/(cd as f64+1.0));
             *k.p::<i32>(28).add(q)=shots as i32;
             *k.p::<i32>(29).add(q)=(shots*(cd as f64+1.0)-1.0-late) as i32;
-            *k.p::<i32>(30).add(q)=(descriptor>>26) as i32;
-            let damage=*k.p::<f32>(22).add(stat) as f64;let blast=*k.p::<f32>(23).add(stat) as f64;
+            *k.p::<i32>(30).add(q)=elvl;
             *k.p::<f64>(25).add(q)=damage*shots;
             *k.p::<f64>(26).add(q)=if shots>1.0&&blast!=0.0&&!blast.is_nan(){blast*shots}else{blast};
-            *k.p::<f64>(27).add(q)=*k.p::<f32>(24).add(stat) as f64;
+            *k.p::<f64>(27).add(q)=radius;
             *valid.add(q)=1;
         }
         let half=f32x4_splat(tile*0.5);let scale=f32x4_splat(tile);
         // Output allocations include a four-query tail for safe SIMD stores.
         v128_store(qx.add(first as usize) as *mut v128,f32x4_add(f32x4_mul(f32x4_convert_i32x4(v128_load(xs.as_ptr() as *const v128)),scale),half));
         v128_store(qy.add(first as usize) as *mut v128,f32x4_add(f32x4_mul(f32x4_convert_i32x4(v128_load(ys.as_ptr() as *const v128)),scale),half));
+        for &(q,x,y) in cpos.iter(){if q>=0{*qx.add(q as usize)=x;*qy.add(q as usize)=y;}}
     }
+    *ext.add(chunk as usize)=extended;
 }
 
 #[no_mangle]
@@ -237,8 +255,8 @@ pub unsafe extern "C" fn k_tower_struct(a:u32,chunk:i32) {
                     if c==0||*code.add(t)==0||o==owner||!(*energy.add(t)>0.0){continue;}
                     let p=match c {1|5=>0,2=>1,3=>2,4=>3,_=>continue};
                     if p>priority||((p==1||p==3)&&(*uc.add(t)!=0||o<0)){continue;}
-                    // Unspecified floor ownership needs the scalar cell fallback.
-                    if (p==1||p==3)&&o==0x7ff9 {unsupported=true;continue;}
+                    // (No owner given: none, as a cell without one; tower.js resolves a floor item's from its cell.)
+                    if (p==1||p==3)&&o==0x7ff9 {continue;}
                     *ps.get_unchecked_mut(lane)=p;*xs.get_unchecked_mut(lane)=(t as i32%w) as f32*tile+16.0;*ys.get_unchecked_mut(lane)=(t as i32/w) as f32*tile+16.0;
                 }
                 let dx=f32x4_sub(v128_load(xs.as_ptr() as *const v128),x);
@@ -257,23 +275,6 @@ pub unsafe extern "C" fn k_tower_struct(a:u32,chunk:i32) {
             let b=*base.add(q);let period=b+1;
             *idle.add(q)=b+((*tiles.add(q)%period-(k.i(5)+period)).rem_euclid(period));
         }
-    }
-}
-
-/// Stable tile order over dedicated contiguous scratch. Four streaming byte
-/// passes replace comparator calls through paged structure accessors. The
-/// source index retains stale wheel-entry identity and equal-key ordering.
-#[no_mangle]
-pub unsafe extern "C" fn k_tower_order(a:u32,_chunk:i32) {
-    let k=K::new(waddr(a) as *const i32);let n=k.i(0) as usize;
-    let keys=k.p::<u32>(0);let mut src=k.p::<i32>(1);let mut dst=k.p::<i32>(2);
-    for i in 0..n {*src.add(i)=i as i32;}
-    for shift in [0,8,16,24] {
-        let mut hist=[0usize;256];
-        for i in 0..n {let b=((*keys.add(*src.add(i) as usize)^0x80000000)>>shift)&255;hist[b as usize]+=1;}
-        let mut sum=0;for c in hist.iter_mut(){let count=*c;*c=sum;sum+=count;}
-        for i in 0..n {let s=*src.add(i);let b=(((*keys.add(s as usize)^0x80000000)>>shift)&255) as usize;*dst.add(hist[b])=s;hist[b]+=1;}
-        core::mem::swap(&mut src,&mut dst);
     }
 }
 
@@ -315,4 +316,166 @@ pub unsafe extern "C" fn k_tower_coarse(a:u32,chunk:i32) {
         if hit {active+=1;}else if k.i(6)!=0 {let off=k.p::<i32>(6);*off.add(q*2+1)=*off.add(q*2);}
     }
     if k.i(6)!=0 {let count=k.p::<i32>(7).add(chunk as usize*16);*count=active;*count.add(1)=prepared;*count.add(2)=fallback;*count.add(3)=extend;}
+}
+
+/// The towers due this step (towersTick; no JS wheel): every row of the
+/// tower table (_stT its tile, P[0] rows) standing at its tile (st.rrow),
+/// a tower (0x22), built, with energy, past its cooldown (now > ceil(st.tim)),
+/// of a kind that shoots (sta.kind >= 0; an unknown type id is listed: the
+/// prepare marks it for the JavaScript). Listed in row order: tac.input its
+/// tile, tac.row its row; cnt[0] how many. Nothing after depends on the order.
+#[no_mangle]
+pub unsafe extern "C" fn k_tower_due(a:u32,_chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let stt=k.p::<i32>(0);let code=k.p::<u8>(1);let uc=k.p::<u8>(2);let val=k.p::<f64>(3);let tim=k.p::<f64>(4);let brain=k.p::<u32>(5);
+    let kinds=k.p::<i32>(6);let rrow=k.p::<i32>(7);let out=k.p::<i32>(8);let orow=k.p::<i32>(9);let cnt=k.p::<i32>(10);
+    let rows=k.i(0).max(0) as usize;let now=k.f(1);let nt=k.i(2);let tiles=k.i(3);
+    let mut n=0usize;
+    for r in 0..rows{
+        let t=*stt.add(r);
+        if t<0||t>=tiles{continue;}
+        let tu=t as usize;
+        if *code.add(tu)!=0x22||*rrow.add(tu)!=r as i32||*uc.add(tu)!=0||!(*val.add(tu)>0.0)||now<=ceil(*tim.add(tu)){continue;}
+        let ty=(*brain.add(tu)&65535) as i32-1;
+        if ty>=0&&ty<nt&&*kinds.add(ty as usize)<0{continue;}
+        *out.add(n)=t;*orow.add(n)=r as i32;n+=1;
+    }
+    *cnt=n as i32;
+}
+
+/// atan2 for the turret's look (presentation only: never hashed, not
+/// required to agree between peers): an octant-reduced polynomial, ~1e-4 rad.
+#[inline]
+fn look_atan2(y:f64,x:f64)->f32{
+    let (ax,ay)=(if x<0.0{-x}else{x},if y<0.0{-y}else{y});
+    if ax==0.0&&ay==0.0{return 0.0;}
+    let (mn,mx)=if ax<ay{(ax,ay)}else{(ay,ax)};
+    let t=mn/mx;let s=t*t;
+    let mut r=((-0.0464964749*s+0.15931422)*s-0.327622764)*s*t+t;
+    if ay>ax{r=1.57079637-r;}
+    if x<0.0{r=3.14159274-r;}
+    if y<0.0{r=-r;}
+    r as f32
+}
+
+/// A preferred target's unit by its id (main.js unitIdIndex: ids ascending,
+/// their slots; -2 a hole): its slot, -1 none.
+#[inline]
+unsafe fn id_slot(ids:*const i32,slots:*const i32,n:usize,id:i32)->i32{
+    let (mut lo,mut hi)=(0usize,n);
+    while lo<hi{let m=(lo+hi)/2;let v=*ids.add(m);if v<id{lo=m+1;}else{hi=m;}}
+    if lo<n&&*ids.add(lo)==id{let s=*slots.add(lo);if s>=0{return s;}}
+    -1
+}
+
+/// The due towers' turns (towersTick), one job on the simulation thread,
+/// from the prepare kernels' answers (tac.valid 1; the others do not act).
+/// A preferred target first (tac.pref; the tower row's tc.ptK kind: 1 a
+/// unit by id tc.ptV, 2 tower, 3 barrack, 4 spawner, 5 floor item at tile
+/// tc.ptV; as data_dynamic.js getTowerPreferredTargetInRange): gone, its
+/// owner's, or not visible to the tower's owner (vis.cover of the area at
+/// its tile): the preference cleared (tc.ptK 0, descriptor bit 24); out of
+/// the tower's reach (its area not among tac.areas of the query): the usual
+/// target. Then idle (tac.idle > 0): its cooldown that long; else its shot
+/// at the unit (tac.out: its slot) or structure (tac.sout: its tile, at the
+/// tile's centre; a floor item there its floor target) written into the
+/// projectile pool as projectile.js projectileFire does (the type's status
+/// duration and dps from its owner's stats: sta.sd / sta.sp by stat
+/// (owner, type, effective level); id (now & 1023) << 22 | tile: one shot a
+/// tower a step, unique among the shots in flight), its cooldown
+/// (tac.shotCd: Tower._cdUntil and st.tim), its angle (Tower.angle). The
+/// shots' tiles and angles (cnt[1]: the presentation's turrets), the first
+/// P[8] shots' indexes and targets (looks, ltgt: unit slot, tile; cnt[2]);
+/// cnt[3] shots not made (pool full).
+/// P: [0] towers, [1] now, [2] grid width, [3] tile, [4] the shots' range,
+/// [5] blast radius scale (area units to pixels), [6] types, [7] levels,
+/// [8] looks, [9] ids in the id index, [10] the cover's stride, [11]
+/// players covered.
+#[no_mangle]
+pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let (input,row,valid,sout,uout,idle,qx,qy,qo,qt)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<i32>(4),k.p::<i32>(5),k.p::<i32>(6),
+        k.p::<f32>(7),k.p::<f32>(8),k.p::<i32>(9),k.p::<i32>(10));
+    let (shots,shot_cd,level,damage,blast,radius)=(k.p::<i32>(11),k.p::<i32>(12),k.p::<i32>(13),k.p::<f64>(14),k.p::<f64>(15),k.p::<f64>(16));
+    let (ux,uy,code,tim,cdu,ang,stt_tt,brain,ssd,ssp)=(k.p::<i32>(17),k.p::<i32>(18),k.p::<u8>(20),k.p::<f64>(21),k.p::<f64>(22),k.p::<f32>(23),
+        k.p::<i32>(24),k.p::<u32>(25),k.p::<i32>(26),k.p::<f32>(27));
+    let (live,free,hdr)=(k.p::<i32>(28),k.p::<i32>(29),k.p::<i32>(30));
+    let (px,py,pvx,pvy,psx,psy,ppx,ppy,paim,plife,prange,pdmg)=(k.p::<f64>(31),k.p::<f64>(32),k.p::<f64>(33),k.p::<f64>(34),k.p::<f64>(35),k.p::<f64>(36),
+        k.p::<f32>(37),k.p::<f32>(38),k.p::<f32>(39),k.p::<i32>(40),k.p::<f64>(41),k.p::<f64>(42));
+    let (plvl,pown,pty,ptt,pshots,pbd,pbr,pft,psd,psp,pid,pev,parg)=(k.p::<i32>(43),k.p::<i8>(44),k.p::<u8>(45),k.p::<i16>(46),k.p::<i32>(47),k.p::<f64>(48),
+        k.p::<f64>(49),k.p::<i32>(50),k.p::<i32>(51),k.p::<f32>(52),k.p::<i32>(53),k.p::<i32>(54),k.p::<i32>(55));
+    let (ltgt,ftile,fang,looks,cnt)=(k.p::<i32>(56),k.p::<i32>(57),k.p::<f32>(58),k.p::<i32>(59),k.p::<i32>(60));
+    let (pref,ptk,ptv,uids,uslots,udead,uown,sown,sval,cover,agrid,qoff,areas)=(k.p::<i32>(61),k.p::<i8>(62),k.p::<i32>(63),k.p::<i32>(64),k.p::<i32>(65),k.p::<u8>(66),
+        k.p::<i8>(67),k.p::<i32>(68),k.p::<f64>(69),k.p::<i32>(70),k.p::<i32>(71),k.p::<i32>(72),k.p::<i32>(73));
+    let n=k.i(0).max(0) as usize;let now=k.f(1);let w=k.i(2).max(1);let tile=k.f(3);let range=k.f(4);let rscale=k.f(5);
+    let nt=k.i(6);let nl=k.i(7);let nlook=k.i(8).max(0) as usize;let nid=k.i(9).max(0) as usize;let cstride=k.i(10).max(0) as usize;let ncov=k.i(11);
+    let (mut nf,mut nk,mut drop)=(0usize,0usize,0i32);
+    let mut nlive=*hdr as usize;let mut nfree=*hdr.add(1) as usize;let live0=nlive as i32;
+    let tick=(now as i64 & 1023) as i32;
+    for q in 0..n{
+        if *valid.add(q)!=1{continue;}
+        let (t,r)=(*input.add(q),*row.add(q) as usize);
+        let own=*qo.add(q);
+        // Its target: (unit slot or -1, tile or -1, x, y).
+        let mut pick:(i32,i32,f64,f64)=(-1,-1,0.0,0.0);
+        if *pref.add(q)!=0{
+            let kind=*ptk.add(r) as i32;let v=*ptv.add(r);
+            // (slot, tile, x, y, the tile it stands on)
+            let mut found:(i32,i32,f64,f64,i32)=(-1,-1,0.0,0.0,-1);
+            if kind==1{
+                let s=if uids.is_null(){-1}else{id_slot(uids,uslots,nid,v)};
+                if s>=0&&*udead.add(s as usize)==0&&*uown.add(s as usize) as i32!=own{
+                    let x=*ux.add(s as usize) as f64*0.125;let y=*uy.add(s as usize) as f64*0.125;
+                    let gx=floor(x/tile) as i32;let gy=floor(y/tile) as i32;
+                    if gx>=0&&gx<w&&gy>=0&&gy*w+gx<k.i(12){found=(s,-1,x,y,gy*w+gx);}
+                }
+            }else if kind>=2&&kind<=5&&v>=0&&v<k.i(12){
+                let want=[0x22u8,0x33,0x44,0x55][(kind-2) as usize];let tu=v as usize;
+                if *code.add(tu)==want&&*sval.add(tu)>0.0&&*sown.add(tu)!=own{let gx=v%w;let gy=v/w;found=(-1,v,gx as f64*tile+tile*0.5,gy as f64*tile+tile*0.5,v);}
+            }
+            let at=found.4;
+            let ar=if at>=0{*agrid.add(at as usize)}else{-1};
+            let seen=ar>=0&&own>=0&&own<ncov&&!cover.is_null()&&*cover.add(own as usize*cstride+ar as usize)>0;
+            if !seen{*ptk.add(r)=0;*brain.add(t as usize)&=!(1u32<<24);}
+            else{
+                let mut inr=false;
+                for i in *qoff.add(q*2)..*qoff.add(q*2+1){if *areas.add(i as usize)==ar{inr=true;break;}}
+                if inr{pick=(found.0,found.1,found.2,found.3);}
+            }
+        }
+        if pick.0<0&&pick.1<0{
+            let id=*idle.add(q);
+            if id>0{let until=now+id as f64;*cdu.add(r)=until;*tim.add(t as usize)=until;continue;}
+            let s_out=*sout.add(q);let u_out=*uout.add(q);
+            if u_out>=0{pick=(u_out,-1,*ux.add(u_out as usize) as f64*0.125,*uy.add(u_out as usize) as f64*0.125);}
+            else if s_out>=0{let gx=s_out%w;let gy=s_out/w;pick=(-1,s_out,gx as f64*tile+tile*0.5,gy as f64*tile+tile*0.5);}
+            else{continue;}
+        }
+        let (tx,ty)=(pick.2,pick.3);
+        let ft=if pick.1>=0&&*code.add(pick.1 as usize)==0x55{pick.1}else{-1};
+        let x=*qx.add(q) as f64;let y=*qy.add(q) as f64;let dx=tx-x;let dy=ty-y;
+        let until=now+*shot_cd.add(q) as f64;*cdu.add(r)=until;*tim.add(t as usize)=until;
+        let a=look_atan2(dy,dx);*ang.add(r)=a;
+        *ftile.add(nf)=t;*fang.add(nf)=a;nf+=1;
+        if nk<nlook{*looks.add(nk)=q as i32;*ltgt.add(2*nk)=pick.0;*ltgt.add(2*nk+1)=pick.1;nk+=1;}
+        if nfree==0{drop+=1;continue;}
+        nfree-=1;let s=*free.add(nfree) as usize;*live.add(nlive)=s as i32;nlive+=1;
+        let len=sqrt(dx*dx+dy*dy);
+        *px.add(s)=x;*py.add(s)=y;*psx.add(s)=x;*psy.add(s)=y;*ppx.add(s)=x as f32;*ppy.add(s)=y as f32;*paim.add(s)=len as f32;
+        if len>0.0{*pvx.add(s)=dx/len*8.0;*pvy.add(s)=dy/len*8.0;}else{*pvx.add(s)=8.0;*pvy.add(s)=0.0;}
+        *plife.add(s)=100;*prange.add(s)=range;*pdmg.add(s)=*damage.add(q);
+        let lvl=*level.add(q);*plvl.add(s)=lvl;*pown.add(s)=own as i8;*pty.add(s)=*qt.add(q) as u8;
+        let sh=*shots.add(q);*pshots.add(s)=if sh>1{sh}else{1};
+        let bd=*blast.add(q);let br=*radius.add(q);
+        let blast_on=bd>0.0&&br>0.0;*pbd.add(s)=if blast_on{bd}else{0.0};*pbr.add(s)=if blast_on{br*rscale}else{0.0};
+        *pft.add(s)=ft;
+        let typ=(*brain.add(t as usize)&65535) as i32-1;
+        *ptt.add(s)=if typ>=0&&typ<nt{*stt_tt.add(typ as usize) as i16}else{-1};
+        let lv=lvl.max(1).min(nl-1);
+        if typ>=0&&typ<nt{let stat=(((own+1)*nt+typ)*nl+lv) as usize;*psd.add(s)=*ssd.add(stat);*psp.add(s)=*ssp.add(stat);}else{*psd.add(s)=0;*psp.add(s)=-1.0;}
+        *pid.add(s)=(tick<<22)|t;*pev.add(s)=0;*parg.add(s)=-1;
+    }
+    *hdr.add(2)=(*hdr.add(2)).wrapping_add(nlive as i32-live0);
+    *hdr=nlive as i32;*hdr.add(1)=nfree as i32;*hdr.add(3)+=drop;
+    *cnt=0;*cnt.add(1)=nf as i32;*cnt.add(2)=nk as i32;*cnt.add(3)=drop;
 }

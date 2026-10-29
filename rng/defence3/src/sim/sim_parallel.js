@@ -1552,7 +1552,6 @@ const _simTowerScanW=_simWK(['tac.x','tac.y','tac.meta','sep.eslot','ix.start','
 const SIM_KERNEL_TOWER_STRUCT = 104;
 const _simTowerStructW = _simWK(['st.code','st.own','st.uc','st.val','mv.scls','vis.cellOff','vis.cells',
     'tac.qx','tac.qy','tac.owner','tac.off','tac.areas','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
-const SIM_KERNEL_TOWER_ORDER=105;
 const SIM_KERNEL_TOWER_COARSE=106;
 const SIM_KERNEL_STATIONARY_AREAS=109,SIM_KERNEL_TOWER_PREPARE=110,SIM_KERNEL_STATIONARY_NEED=111;
 const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
@@ -1561,24 +1560,28 @@ const _simWorkerSpawnersW=_simWK(['ev.sorted','unit.isWk','unit.wkIx','unit.wbTy
     'wb.sites','wb.count','wb.any','st.brain','st.own','unit.workerTransferCooldown','unit.wsKind']);
 SIM_KERNELS[SIM_KERNEL_WORKER_SITES]=function(R,P,chunk){_simRust(_simWorkerSitesW,P,chunk,'k_worker_sites','WORKER_SITES');};
 SIM_KERNELS[SIM_KERNEL_WORKER_SPAWNERS]=function(R,P,chunk){_simRust(_simWorkerSpawnersW,P,chunk,'k_worker_spawners','WORKER_SPAWNERS');};
-// Projectile flight (projectile.js _projectilesAdvanceNative; wasm/src/proj.rs k_proj_flight).
-const SIM_KERNEL_PROJ_FLIGHT=114;
-const _simProjFlightW=_simWK(['pj.x','pj.y','pj.vx','pj.vy','pj.life','pj.sx','pj.sy','pj.range','pj.own','pj.ft','ix.stamp','ix.start','ix.cnt','sep.eslot',
-    'unit.x','unit.y','unit.r','unit.dead','unit.live','unit.owner','?ix.complex','st.code','st.own','st.val','st.brain','pj.ev','pj.arg','pj.ox','pj.oy','pj.px','pj.py','pj.ol','pj.pl']);
+// Projectiles (projectile.js projectilesAdvance; wasm/src/proj.rs): the
+// pool's flight, and the reach of the blasts of the shots that hit a unit.
+const SIM_KERNEL_PROJ_FLIGHT=114,SIM_KERNEL_PROJ_BLAST=118;
+const _simProjFlightW=_simWK(['pj.live','pj.x','pj.y','pj.vx','pj.vy','pj.life','pj.sx','pj.sy','pj.range','pj.own','pj.ft','ix.stamp','ix.start','ix.cnt','sep.eslot',
+    'unit.x','unit.y','unit.r','unit.dead','unit.live','unit.owner','?ix.complex','st.code','st.own','st.val','pj.ev','pj.arg','pj.px','pj.py']);
 SIM_KERNELS[SIM_KERNEL_PROJ_FLIGHT]=function(R,P,chunk){_simRust(_simProjFlightW,P,chunk,'k_proj_flight','PROJ_FLIGHT');};
-const _simStationaryAreasW=_simWK(['area.off','area.nb','area.bounds','sta.off','?sta.ids','sta.box','sta.meta','sta.need']);
-const _simStationaryNeedW=_simWK(['st.code','st.own','st.brain','vis.areaGrid','sta.maxRange','sta.need']);
+const _simProjBlastW=_simWK(['pj.uev','pj.x','pj.y','pj.bd','pj.br','pj.own','pj.ty','ix.stamp','ix.start','ix.cnt','sep.eslot',
+    'unit.live','unit.dead','unit.owner','unit.x','unit.y','pj.bsum']);
+SIM_KERNELS[SIM_KERNEL_PROJ_BLAST]=function(R,P,chunk){_simRust(_simProjBlastW,P,chunk,'k_proj_blast','PROJ_BLAST');};
+// (The reach table being made: stb.*, tower.js _reachArray; the one in use sta.*.)
+const _simStationaryAreasW=_simWK(['area.off','area.nb','area.bounds','stb.off','?stb.ids','stb.box','stb.meta','stb.need']);
+const _simStationaryNeedW=_simWK(['st.code','st.own','st.brain','vis.areaGrid','sta.maxRange','stb.need']);
 SIM_KERNELS[SIM_KERNEL_STATIONARY_NEED]=function(R,P,chunk){_simRust(_simStationaryNeedW,P,chunk,'k_stationary_need','STATIONARY_NEED');};
 const _simTowerPrepareW=_simWK(['tac.input','st.code','st.own','st.uc','st.val','st.tim','st.brain',
     'sta.range','sta.cd','sta.kind','vis.areaGrid','sta.off','sta.box',
     'tac.qx','tac.qy','tac.owner','tac.type','tac.base','tac.tile','tac.off','tac.boxes','tac.valid',
-    'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','sta.need']);
+    'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','sta.need',
+    'st.rrow','tc.x','tc.y','tc.range','tc.cd','tc.dmg','tc.blast','tc.radius','tc.lvl','tac.pref','tac.ext']);
 SIM_KERNELS[SIM_KERNEL_STATIONARY_AREAS]=function(R,P,chunk){_simRust(_simStationaryAreasW,P,chunk,'k_stationary_areas','STATIONARY_AREAS');};
 SIM_KERNELS[SIM_KERNEL_TOWER_PREPARE]=function(R,P,chunk){_simRust(_simTowerPrepareW,P,chunk,'k_tower_prepare','TOWER_PREPARE');};
 const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct','?tac.off','?tac.count','?tac.valid']);
 SIM_KERNELS[SIM_KERNEL_TOWER_COARSE]=function(R,P,chunk){_simRust(_simTowerCoarseW,P,chunk,'k_tower_coarse','TOWER_COARSE');};
-const _simTowerOrderW=_simWK(['tac.sortKeys','tac.sortOrder','tac.sortTmp']);
-SIM_KERNELS[SIM_KERNEL_TOWER_ORDER]=function(R,P,chunk){_simRust(_simTowerOrderW,P,chunk,'k_tower_order','TOWER_ORDER');};
 SIM_KERNELS[SIM_KERNEL_TOWER_STRUCT] = function(R,P,chunk){_simRust(_simTowerStructW,P,chunk,'k_tower_struct','TOWER_STRUCT');};
 SIM_KERNELS[SIM_KERNEL_TOWER_PACK]=function(R,P,chunk){_simRust(_simTowerPackW,P,chunk,'k_tower_pack','TOWER_PACK');};
 SIM_KERNELS[SIM_KERNEL_TOWER_SCAN]=function(R,P,chunk){_simRust(_simTowerScanW,P,chunk,'k_tower_scan','TOWER_SCAN');};
@@ -1586,6 +1589,33 @@ const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 
     'unit.sepLayer', 'unit.tuS', 'unit.tuId', 'unit.tbT', 'unit.acqB', 'unit.fatF', 'unit.fLsX', 'unit.fLsY', 'unit.commandState', 'unit.mvOn', 'unit.amGx', 'unit.amGy',
     'unit.mvTgX', 'unit.mvTgY', 'unit.rkF', 'unit.rtEnd', 'unit.nvProf', 'unit.pathIndex', 'unit.nvPK', 'unit.mvCD', 'unit.mvNavLD', 'unit.mvPath']);
 SIM_KERNELS[SIM_KERNEL_ORDER_MOVE] = function (R, P, chunk) { _simRust(_simOrderMoveW, P, chunk, 'k_order_move', 'ORDER_MOVE'); };
+// The order queue's admission and take (main.js _queueGroupMoveOrder,
+// _orderTake; wasm/src/ord.rs): one job, on the simulation thread.
+const SIM_KERNEL_ORDER_ADMIT = 115, SIM_KERNEL_ORDER_TAKE = 116;
+const _simOrderAdmitW = _simWK(['q.ids', 'um.ids', 'um.slots', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.ordSq', 'q.out', 'q.out2', 'q.loose', 'q.eseq', 'q.edl', 'q.eds', 'q.cnt']);
+const _simOrderTakeW = _simWK(['ord.ring', 'unit.ordSq', 'unit.isWk', 'unit.holdF', 'unit.id', 'ord.slots', 'q.out2', 'q.cnt']);
+SIM_KERNELS[SIM_KERNEL_ORDER_ADMIT] = function (R, P, chunk) { _simRust(_simOrderAdmitW, P, chunk, 'k_order_admit', 'ORDER_ADMIT'); };
+SIM_KERNELS[SIM_KERNEL_ORDER_TAKE] = function (R, P, chunk) { _simRust(_simOrderTakeW, P, chunk, 'k_order_take', 'ORDER_TAKE'); };
+// An order's ids or a rally's tile keys from their wire form (main.js
+// _idsDecode; ord.rs k_ids_decode): one job, on the simulation thread.
+const SIM_KERNEL_IDS_DECODE = 117;
+const _simIdsDecodeW = _simWK(['q.bytes', 'q.ids', 'q.cnt']);
+SIM_KERNELS[SIM_KERNEL_IDS_DECODE] = function (R, P, chunk) { _simRust(_simIdsDecodeW, P, chunk, 'k_ids_decode', 'IDS_DECODE'); };
+// A Rust kernel on this thread over heap arrays given directly (their
+// addresses its arguments, in order; null: 0), P its parameters: for arrays
+// no helper reads (a name binding is what reaches the helpers).
+function simRustDirect(fn, arrays, P) {
+    const I = _simWasmArgI;
+    if (I === null || _simWasmX === null || _simHeapPtrOf === null) throw new Error(fn + ': no wasm kernels on this thread');
+    for (let i = 0; i < arrays.length; i++) {
+        const a = arrays[i], p = a ? _simHeapPtrOf(a) : 0;
+        if (a && !(p >= 0)) throw new Error(fn + ': argument ' + i + ' not in the wasm heap');
+        I[SIM_RUST_W0 + i] = a ? _simWEnc(p) : 0;
+    }
+    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
+    _simWasmArgF.set(P.length > 64 ? P.subarray(0, 64) : P);
+    _simWasmX[fn](_simWasmArgsW, 0);
+}
 // Adjacency groups on a helper lane (things_utils.js adjacencyLaneStep):
 // from the signature grid's snapshot (adj.sig: an id per operational
 // structure's (owner, type) signature, -1 none), the groups (4-connected,
@@ -1600,8 +1630,20 @@ SIM_KERNELS[SIM_KERNEL_ORDER_MOVE] = function (R, P, chunk) { _simRust(_simOrder
 // adj.wk its stamps, kept from run to run). Rust: k.rs k_adj_flood.
 const SIM_KERNEL_ADJ_FLOOD = 64;
 const _simAdjFloodW = _simWK(['adj.sig', 'adj.seed', 'adj.cloud', 'adj.ag', 'adj.coff', 'adj.ctile', 'adj.mul', 'adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.oarea',
-    'adj.oact', 'adj.ocnt', 'adj.wk']);
+    'adj.oact', 'adj.ocnt', 'adj.wk', '?adj.scnt', '?adj.cls4', '?adj.ccnt']);
 SIM_KERNELS[SIM_KERNEL_ADJ_FLOOD] = function (R, P, chunk) { _simRust(_simAdjFloodW, P, chunk, 'k_adj_flood', 'ADJ_FLOOD'); };
+// The flood's members applied to their rows at its commit (things_utils.js
+// adjacencyLaneStep; ord.rs k_adj_apply): P[1] members a job.
+const SIM_KERNEL_ADJ_APPLY = 119;
+const _simAdjApplyW = _simWK(['adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.sig', '?adj.none', 'st.stab', 'st.rrow', 'st.uc', 'st.brain', 'st.val',
+    'adj.rml', 'stt.mxe', 'stt.vis', 'stt.atk', 'adj.ev', 'adj.evn', 'adj.ctab', 'st.code', 'st.own', 'adj.tykey', 'adj.rlv', 'adj.bl']);
+SIM_KERNELS[SIM_KERNEL_ADJ_APPLY] = function (R, P, chunk) { _simRust(_simAdjApplyW, P, chunk, 'k_adj_apply', 'ADJ_APPLY'); };
+// The adjacency post (things_utils.js _adjacencyLanePost; ord.rs k_adj_post):
+// P[1] 256-tile blocks a job.
+const SIM_KERNEL_ADJ_POST = 120;
+const _simAdjPostW = _simWK(['st.code', 'st.own', 'st.uc', 'st.brain', 'st.stab', 'st.rrow', 'st.val', 'adj.ctab', 'adj.sig', 'adj.dflag', 'adj.dblk', 'adj.seed',
+    'adj.scnt', 'adj.tyf', 'adj.cls4', 'adj.ccnt', 'adj.pflag']);
+SIM_KERNELS[SIM_KERNEL_ADJ_POST] = function (R, P, chunk) { _simRust(_simAdjPostW, P, chunk, 'k_adj_post', 'ADJ_POST'); };
 
 // The worker search tier (worker.js workerSearchTierStep).
 // SIM_KERNEL_WS_SELECT (the post, every slot chunk of P[1]): a registered
@@ -1745,7 +1787,8 @@ const SIM_KERNEL_SNAP_MERGE = 65;
 const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id', 'ix.slots', 'unit.owner', 'unit.vx', 'unit.vy', 'unit.energy', 'unit.commandState',
     'unit.attackTimer', 'unit.attackFlash', 'unit.stTh', 'unit.stPo', 'unit.stBu', 'unit.stFr', 'unit.stWe', 'unit.stSa', 'unit.stWa',
     'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
-    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS', 'unit.stIx']);
+    'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS', 'unit.stIx',
+    'unit.wkS', 'unit.wkT', 'unit.wkR', 'unit.wkN', 'wk.ttTerm']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
 const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
 SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };
@@ -1924,13 +1967,17 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
 const SIM_KERNEL_HITS = 60;
 const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '?mv.hitt', '?mv.hitc', '?-' , 'unit.atkSty', 'unit.atkWatch', 'unit.owner', 'unit.id',
     'unit.hAcc', 'unit.hTouch', 'hit.rsty', 'hit.rbd', 'hit.rpd', 'hit.rwk', 'hit.tlist', 'hit.plist', 'hit.cnt', '?unit.atkN', 'unit.statRow', 'eff.hot', '?occ.offsets', '?unit.x', '?unit.y',
-    'unit.hSx']);
+    'unit.hSx', 'hit.rdu',
+    // (The step's shots that hit a unit: projectile.js, k.rs shot_hit.)
+    '?pj.uev', '?pj.arg', '?pj.dmg', '?pj.ty', '?pj.lvl', '?pj.sd', '?pj.sp', '?pj.shots', '?pj.id', '?pj.own', '?pj.x', '?pj.y', '?pj.bd', '?pj.br',
+    '?pj.tfl', '?unit.upT', '?ix.stamp', '?ix.start', '?ix.cnt', '?sep.eslot', '?unit.live', '?unit.dead', '?unit.x', '?unit.y']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).
 const SIM_KERNEL_HITS_APPLY = 66;
 const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'hit.rsty', 'hit.rbd', 'hit.rpd', 'unit.energy', 'unit.dead', 'unit.owner', 'unit.stIx',
-    'unit.stBu', 'unit.stBd', 'unit.stWe', 'unit.stFr', 'unit.stPo', 'unit.stPd', 'hit.shr', 'hit.rwk', 'unit.stWa', 'unit.wTeam', 'hit.wlist', 'hit.cnt', 'st.hdr', 'st.free', 'unit.hSx']);
+    'unit.stBu', 'unit.stBd', 'unit.stWe', 'unit.stFr', 'unit.stPo', 'unit.stPd', 'hit.shr', 'hit.rwk', 'unit.stWa', 'unit.wTeam', 'hit.wlist', 'hit.cnt', 'st.hdr', 'st.free', 'unit.hSx',
+    'unit.stSa', 'hit.rdu']);
 SIM_KERNELS[SIM_KERNEL_HITS_APPLY] = function (R, P, chunk) { _simRust(_simHitsApplyW, P, chunk, 'k_hits_apply', 'HITS_APPLY'); };
 
 const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', '?-', 'unit.cbTick', '?-', 'unit.cbRangeS']);

@@ -1,6 +1,6 @@
-// Waiting unit orders superseded by later ones (main.js _actionRecordArrival,
-// _actionKeepLatest): ten big move orders of every unit over the action
-// budget (ctrl clicks), a stop of a few of them and a rally in between: the
+// Unit orders superseded by later ones (main.js order queue stamps,
+// _actionRecordArrival, _actionKeepLatest): ten big move orders of every unit
+// (ctrl clicks), a stop of a few of them and a rally in between: the
 // later orders win (every unit carries the tenth order's target, the stopped
 // ones stand), the waiting superseded orders pass by within a tick or two;
 // a snapshot taken while they wait, restored on two peers, gives equal state
@@ -26,17 +26,20 @@ const r = JSON.parse(a.eval(`JSON.stringify((() => {
     processActions(acts, 0);
     const waiting = _actionBacklog.length, live = [..._actLive.values()].filter(v => v.live > 0).length;
     __scratch.saved = JSON.stringify(snapEncodeState());
-    let ticks = 0;
-    while (_actionBacklog.length && ticks < 40) { gameTick(); ticks++; }
+    let ticks = 0, drain = 0;
+    while ((_actionBacklog.length || _orderQueue.length) && ticks < 40) { gameTick(); currentTick++; ticks++; if (_orderQueue.length) drain = ticks + 1; }
     for (let t = 0; t < 4; t++) gameTick();
     const tenth = 40 + 9 * 8, last = ids.slice(20).map(id => getUnitById(id)).filter(u => u && !u.dead);
     const onTenth = last.filter(u => u.targetPos && Math.floor(u.targetPos.x / TILE) === tenth).length;
     const stopped = ids.slice(10, 20).map(id => getUnitById(id)).filter(u => u && !u.dead && u.commandState === CMD_IDLE).length;
     const first = ids.slice(0, 10).map(id => getUnitById(id)).filter(u => u && !u.dead && u.targetPos && Math.floor(u.targetPos.x / TILE) === tenth).length;
-    return { waiting, live, ticks, units: last.length, onTenth, stopped, first };
+    return { waiting, live, ticks, drain, units: last.length, onTenth, stopped, first };
 })())`));
 console.log(JSON.stringify(r));
-assert.ok(r.waiting > 50, 'most of the orders waited: ' + r.waiting);
+// (Move orders go to the order queue at once, not the action backlog; the
+// queue applies each within ORDER_DRAIN_STEPS.)
+assert.ok(r.waiting <= 2, 'move orders did not wait in the action backlog: ' + r.waiting);
+assert.ok(r.drain <= a.eval('ORDER_DRAIN_STEPS'), 'the order queue drained by its deadline: ' + r.drain);
 assert.ok(r.live <= Math.ceil(4000 / 100) + 2, 'only the latest orders have units left to them: ' + r.live);
 assert.ok(r.ticks <= 3, 'the superseded waiting orders passed by within a few ticks: ' + r.ticks);
 assert.equal(r.onTenth, r.units, 'every unit carries the tenth order');

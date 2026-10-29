@@ -33,6 +33,7 @@ mod acq_sample;
 mod tower;
 mod worker_brain;
 mod proj;
+mod ord;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

@@ -26,7 +26,7 @@ const NON_FINITE = `(() => {
     for (const u of units) check('u' + u.id, u, ['x', 'y', 'energy', 'maxEnergy', 'vx', 'vy', 'attackTimer', 'stackCount', 'effectiveLevel']);
     for (const b of [...towers, ...barracks, ...collectorSpawners]) check(b.type + '@' + b.gx + ',' + b.gy, b, ['energy', 'maxEnergy', 'level', 'stacks', 'spawnTimer', 'cd']);
     players.forEach((p, i) => check('P' + i, p, ['energy', 'astar', 'popCount']));
-    for (const p of projectiles) check('proj', p, ['x', 'y', 'vx', 'vy', 'dmg']);
+    for (const p of projSnapshotRecords()) check('proj', p, ['x', 'y', 'vx', 'vy', 'dmg']);
     return JSON.stringify(bad.slice(0, 10));
 })()`;
 

@@ -79,19 +79,20 @@ assert.ok(sp.ticks >= 1 && sp.ticks < 40, 'its rest ran within a few ticks');
 assert.equal(sp.ordered, sp.n, 'every unit of the order got it');
 assert.ok(sp.once, 'once each, in the order of its ids');
 console.log('PASS: actions over a tick\'s budget wait in order, run within ' + r.ticks + ' ticks, and travel in snapshots; a big attack order splits (' + sp.later + ' of ' + sp.n + ' units later)');
+// A rally order goes whole when it comes, whatever the budget left or the
+// backlog waiting (column writes): tile keys and coordinates alike.
 const rally = JSON.parse(a.eval(`JSON.stringify((() => {
     resetOrderQueue();
-    const coords = []; for (let i = 0; i < 5000; i++) coords.push(i % 100, Math.floor(i / 100));
-    const got = [], real = processAction;
-    processAction = a => { if (a.action === 'setRallyMany') got.push(...a.coords); };
-    _actionBudgetLeft = 2;
-    processActions([{ action: 'setRallyMany', coords, targetX: 100, targetY: 200 }], 0);
-    const first = got.length / 2, saved = actionBacklogSnapshot(), marks = actionEarlySnapshot();
-    resetOrderQueue(); actionBacklogRestore(saved); actionEarlyRestore(marks);
-    actionBacklogTick();
-    processAction = real;
-    return { first, all: got.length / 2, ordered: got.every((v, i) => v === coords[i]), waiting: _actionBacklog.length };
+    const keys = []; for (let i = 0; i < 5000; i++) keys.push(Math.floor(i / 100) * GRID_W + i % 100);
+    const got = [], real = _rallySetTiles;
+    _rallySetTiles = (x, p) => { const k = []; if (x.tkz) actionIdsForEach(x.tkz, 1e9, v => k.push(v)); else for (let i = 0; i < x.coords.length; i += 2) k.push(x.coords[i + 1] * GRID_W + x.coords[i]); got.push(k); };
+    _actionBudgetLeft = 0;
+    _actionBacklog.push([0, { action: 'hold', unitIds: [1, 2, 3] }, -5]);
+    processActions([{ action: 'setRallyMany', tkz: actionIdsEncode(keys), targetX: 100, targetY: 200 }, { action: 'setRallyMany', coords: [3, 4], targetX: 1, targetY: 2 }], 0);
+    _rallySetTiles = real;
+    const waiting = _actionBacklog.length; resetOrderQueue();
+    return { calls: got.length, all: got[0].length, ordered: got[0].every((v, i) => v === keys[i]), coords: got[1], waiting };
 })())`));
-assert.deepEqual(rally, { first: 100, all: 5000, ordered: true, waiting: 0 }, 'rallies respect remaining budget and restore their remainder without loss');
-console.log('PASS: bounded rally commit and backlog restore');
+assert.deepEqual(rally, { calls: 2, all: 5000, ordered: true, coords: [4 * a.eval("GRID_W") + 3], waiting: 1 }, 'rallies apply whole on arrival, ahead of a waiting backlog');
+console.log('PASS: rally orders apply whole on arrival');
 process.exit(0);

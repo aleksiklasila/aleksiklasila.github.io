@@ -2515,3 +2515,364 @@ Marker fallback scans, selection/input work and the info panel also remain.
 The browser's first sandbox launch failed with access-denied errors; successful
 browser runs used the approved unsandboxed retry. No further mixed runs were
 started after the user prioritized rally-specific testing.
+
+### 2026-10-29 — mass commands: rally on arrival, order queue kernels, memory budget menu
+
+Goal (user): a select-all ctrl click (hundreds of thousands of units and
+buildings) must take hold within a few ticks without tick spikes; no paced
+submissions or per-tick unit budgets; kernels (wasm32, SIMD, SoA) instead of
+JS paths and fallbacks; tables allocated at match start, never grown in play.
+
+Scene: `tests/chaos-spikes.bench.cjs --units=1000000 --structures=250000
+--rally-mix --helpers=11 --dk=1 --kernels --burst-every=100000 --mass-at=30`
+(new options: `--mass-at` issues the page's exact mass command, every unit and
+rally building of team 0, three appended ctrl points two steps apart, in wire
+form; `--rally-mix` makes most dense structures rally buildings; rows record
+`mass`: backlog ids, queued units, buildings whose rally is not yet the last
+click's). Selected: 285k units (92k workers), 72k rally buildings.
+Evidence: `tests/test-runs/mass-command-20261029/`.
+
+Changes:
+- Rally: one `setRallyMany` a point, its buildings as ascending tile keys
+  (`tkz`, delta varints, ~1-2 bytes a building; `src/utils/id_codec.js`, the
+  codec moved there, loaded by page, worker and assign_worker). The split and
+  encoding run on `assign_worker.js` (`rallyAssignTiles`), answers queued as
+  they come (no 512-chunk `setTimeout` pacing: that was the 48 s). The
+  simulation applies a rally whole on arrival (`_rallySetTiles`: row columns,
+  rally fields are nullable Float64 `N` columns now), never budgeted or
+  backlogged; presentation rally cells written directly (`simPresentRally`).
+  Pending rally markers: a typed per-tile table allocated at setup.
+- Move orders skip the action backlog (no arrival-mark passes) and go to the
+  order queue at once; every queued order is applied within
+  `ORDER_DRAIN_STEPS` (4) steps (`ORDER_NOW` 4096: small orders at once); the
+  per-tick unit budgets are gone.
+- Order queue kernels (`wasm/src/ord.rs`): `k_order_admit` merge-joins the
+  order's sorted ids with the units in id order (SIMD skip-ahead), stamps
+  `ordSq`, supersedes earlier entries (live/sum deltas), splits kernel units
+  from workers; `k_order_take` takes an entry's next live slots from the ring
+  straight into `k_order_move`'s list. Entries hold slots in `ord.ring`
+  (sized from the settings, compacted when full; remapped on unit
+  compaction); snapshots carry ids in ring order.
+- Slot columns instead of id-keyed tables (ids grow without bound): `ordSq`
+  (latest queued order), `actMk` (arrival marks), `idStp` (duplicate stamps);
+  per-tile rally marks removed (rallies never wait). Move ids decode from
+  `uidz` straight into the kernel scratch.
+- Workers' move orders: the order fields by `_ordClearFast` (columns), only
+  their task release in JS (`_ordWorkerManual`); the flow column branch takes
+  `MANUAL_MOVE` workers.
+- First-click JIT: `actionSanitizeWarm` warms admission and rally decoding on
+  the match's own shapes (first click 280 -> ~50 ms of admission).
+- Menu: one static population dropdown (2^3 .. 2^20 per player), power-of-two
+  map sizes (16 .. 2048); the building limit (largest power of two) and the
+  reservations are derived at the match's start from one 4 GiB budget
+  (`data_static.js`: ~900 B a unit, ~1300 B a structure, ~400 B a tile, half
+  of the rest for structures; units capped at 8 a tile, structures at the
+  tiles; `memoryBudgetPop` lowers a pop that does not fit). The HUD shows the
+  derived values. Probe: `tests/pop-limit-menu.browser.cjs` (Edge).
+- Rules revisions 46 (rally) and 47 (queue kernels, slot stamps). wasm32 is
+  the only default build (wasm64 legacy).
+
+Measurements so far (same scene, serial):
+
+| | HEAD (0dd3b18) | rally + deadline (JS) | + warm |
+| --- | ---: | ---: | ---: |
+| buildings' rally done | step 49 (19 after click 1) | click tick | click tick |
+| all units ordered | > step 52 (164k left) | step 37 | step 37 |
+| click tick ms | 423 | 711-767 | 569 |
+| drain ticks: order ms | 8-42 | 98-131 | 30-104 |
+| steady p50/p95/max ms | 291/423/472 | 313/449/767 | 313/487/569 |
+
+Kernel-queue measurements: pending (next entry). Remaining: workers' task
+release (JS, objects: `_clearWorkerTarget`, task memory) is most of the drain
+ticks' order cost; it needs worker task state in columns to become a kernel.
+
+General direction (user, 2026-10-29): convert JavaScript to Rust/wasm wherever
+it makes sense, with the usual treatment (kernels, SIMD, SoA, quantized
+columns, helper jobs, static tables), measuring first. Candidates noticed:
+`src/game/pathfinding.js` (A*, path budgets, regions, group routes: object
+JS; its own phases <1% in this scene, A* hides inside worker AI and event
+fallbacks, not separately timed yet), the workers' order release, sanitize
+for the remaining unit actions.
+
+Status at the end of the session (2026-10-29):
+- Fixed: worker-failure (queue buffers not in the restarted heap), MP divergences from the id join (units are swap-removed, not id-ordered: now a sorted id index, unitIdIndex), retired units dropped from queued orders at the retire pass (orderQueueUnitGone), digest drift when a targeted structure row expires (_sKeepTile / _simHEnc _hgx). Regression suite: 464/482 before these fixes; re-run pending. Passing after fixes: sim-worker-failure, multiplayer-stale-loading, multiplayer-patch, multiplayer-corruption-fuzz, action/order/rally tests, load-world, collector-farms, action-ids-codec.
+- Open: multiplayer-soak fails on HEAD too (reloaded guest: a unit whose workerTarget is a gone structure decodes from the snapshot without its tile, so its digest differs; snapshot encode of gone refs, utils_snapshot.js _snapE ~1296, needs the kept tile). Kernel-queue benchmark of the 1M/250k mass command not yet run; worker task release still JS.
+
+## 2026-10-29 (continued): serial work off the main thread, batch 1
+
+Plan, rules and the measured inventory of serial main-thread work:
+`MAIN_THREAD_SERIAL_PLAN.md` (tool: `tests/profile-serial-share.cjs` on a
+`--profile` run: JavaScript self time per tick phase is serial; at ~370k
+units ~200 of ~294 ms a tick).
+
+- multiplayer-soak fixed: a gone structure's kept tile travels in snapshots
+  (`_goneTile`, data_state.js); later superseded for workers' targets (below).
+- Full regression suite before this batch: 482/482 (both modes).
+- Rules 48: queued orders list units in id order (workers among the others).
+- Batch 1a: an order's ids and a rally's tile keys decoded by a kernel
+  (`k_ids_decode`, ord.rs; bytes by TextEncoder.encodeInto into the heap,
+  sorted in Rust; the action cost's count too); rallies applied by
+  `k_rally_tiles` over the rally classes' tables (`_ST.rtab/rrow`: each
+  tile's class and row; `simRustDirect` calls a kernel on heap arrays
+  without bindings). Structure table number/flag columns live in the wasm
+  heap (`_sColAlloc`; `structTablesRehome` after a worker restart).
+- Batch 1b (rules 49): a worker's task is columns (`wkS` packed state code,
+  target-type code, target kind, material bits; `wkT` target tile or unit
+  id; `wkR`, `wkN`), hashed by `k_snap_units` itself, snapshotted raw
+  (`_wkTgt`), read back through the world (a gone target reads null on
+  every peer). No JS digest terms for them.
+
+Measured (same scene, serial; `tests/test-runs/mass-command-20261029/`):
+
+| run | steady mean ms | click tick | last drain tick | click processActions |
+| --- | ---: | ---: | ---: | ---: |
+| kernels (before) | 306 | 448 | 385 (runQueuedOrders 115) | 43 |
+| 1a | - | 490 | 336 | 17 |
+| 1b | 284 (worker search 31 -> 22) | 411 | 341 (76) | - |
+
+Next: the workers' move-order kernel (task release: reservations as a heap
+table, work versions, role-memory clear; flow arm in the kernel; then no
+drain), then deaths, statuses, hits, the worker brain.
+- Batch 1c (rules 50): workers' move orders by `k_order_workers` (ord.rs,
+  on the simulation thread, direct call): their task released (work version
+  bump, reservation id table `workerReservedTiles` Int32 with heap region
+  counts, the work site grid's dirty list a heap list `_wswResvList`), state
+  MANUAL_MOVE, flow armed; two passes (per-profile counts, then apply) with
+  each profile's destination worked out once in JS; role memory cleared at
+  its first use (`rmClr`, unit.js `_unitRmApply`); pending ways flagged
+  (`mvPP`) for a JS fix-up. Route fields `_routeSegEnd`, `_navReady`,
+  `_awaitGroupPath`, `_idleFailVer` are heap columns (were sparse JS maps);
+  the path windows' free list is a heap stack (`unit.mvFree`). Move, attack
+  and rally orders no longer bump every work version of the player.
+  Measured: queued orders 76-115 -> 8-18 ms a tick, click processActions 13 ms,
+  steady mean 274 ms (max 328). The click tick's remaining extra is the
+  worker search tier's own every-4-ticks cost (58-104 ms, serial JS), not the
+  order: batch 4.
+- Rule (user): no JS arrays/objects for simulation state, growing ones least
+  of all; heap typed tables sized at match start, kernels; GC pauses = spikes.
+- Batch 2 (deaths), in progress, not yet measured (user: convert in one go,
+  sanity checks only, full perf and regression runs once no legacy JS holds
+  things back): a removed unit lets go of its slot at its removal's tick
+  (main.js compactRemovedUnits), no copy of its values: the object keeps a
+  `SimUnitGone` record (id, owner, last position; prototype dead, energy 0).
+  Pending-path units are a heap tick wheel (pathfinding.js: `ppDue`,
+  `ppNext`, `ppPrev` unit columns, `_ppHead` buckets; relinked after a
+  compaction, unlinked when a slot is let go); no Set/Map/list pools.
+  Sanity: event-route-batch, order-fast, snapshot-pooled-structure,
+  multiplayer-snapshot pass. Still JS holders of unit objects: the worker
+  conflict index and healers' candidate lists (inside the worker AI: to wasm
+  with the worker brain), the units list and id map.
+- Batch 4 step 2 (worker brain): the collectors' target groups are built by
+  `k_ws_group` (ord.rs, direct call) from the per-tile structure table `_ST`
+  (code, owner, under construction, value, the stationary descriptor's type
+  id), in tile order: sites as tile lists (`wsg{id}.tile`, kinds in `st`),
+  spawners in tile order, bucket-sorted on typed arrays (`qgx..` -> `pgx..`,
+  spawner id = its tile). No object lists (G.objs/G.types/spawnerObjs gone):
+  the take resolves its results' tiles (`_wsSiteTarget`), completion
+  publication checks by tile. Rebuilt when the tile table's version changes.
+  Drops are not searched (none are made in play). `structTablesRehome`
+  moves every `_ST` array into a restarted worker's heap. Sanity: worker,
+  collector, healer, builder, research, salvager tests pass (2 updated for
+  tile lists: worker-completion-publication).
+- Batch 3 (structure statuses): `k_struct_status` (ord.rs, direct call, a
+  table at a time: towers, floor items, barracks, spawners) ticks every
+  structure in the world with a status running or no energy once a step:
+  timers by simDk, tick damage, shrine income as per-owner fixed-point sums
+  (integers), the watch's end (visibility cover), the energy-less listed;
+  main.js removes them (floor items in tile order, towers/barracks/spawners
+  from their lists' ends). The two Sets of structures, their sorted copies,
+  the 512th-a-tick guard pass and every per-structure status tick are gone
+  (barracks/spawners ticked at their spawn phase before: every step now).
+  Damage flashes from statuses on buildings are not recorded (visual).
+  Sanity: 21 status/tower/spawner/structure tests, multiplayer-snapshot and
+  multiplayer-patch pass.
+- Structure hits (`k_struct_hits`, ord.rs, direct call): the movement
+  kernel's attacks on structures, sorted by attacker id in Rust, applied in
+  that order to the structure standing at the tile (`_ST.stab`: its status
+  class, `_ST.rrow` its row, both per tile): status as applyStatusEffect
+  with no source type (durations from the attacker's level, tick damage from
+  the hit's), immunity per structure type id (table from isEffectImmune of
+  the type, made as types appear), a scout's watch (atkWatch), damage, shrine
+  income (per-owner integer sums), energy and its tile copy; JS then only
+  plays the first 256 hits' looks, the watches' vision cover and destroys
+  (hit order). Pitfall hit: statRow is Int16 (read as i32: garbage rows, out
+  of bounds), atkN is u8. Sanity: 19 hit/combat/tower/structure tests,
+  multiplayer-snapshot and -patch pass.
+- Batch 5 step 1 (projectiles), rules revision 51: the shots are a heap pool
+  (projectile.js; pj.* columns by slot, 2^17 slots allocated once, live
+  list, free stack, counts and the next shot id in pj.hdr): no Projectile
+  objects, no per-step copy in and out of the kernel. A step:
+  k_proj_flight (helpers, writes the shots in place), k_proj_resolve (spent
+  slots freed, hit lists), k_proj_struct_hits (the structure hit of
+  k_struct_hits, shared as ord.rs SCtx::hit, in shot-id order); unit hits go
+  into k_hits as a third job kind (shot_hit: type statuses with their
+  durations and tick damage, resistances and tower immunity from a per-type
+  flags table; the blast over the unit index, its reach counted first by
+  k_proj_blast so the record room never depends on thread timing). Melee
+  and shot hits share hit_one (explicit timers per status, hit.rdu; sand on
+  units). Nothing depends on a shot's slot: sums, shot-id order, a hash
+  that is a sum (k_proj_hash), snapshot records in id order. The page's
+  projectile views have their own draw prototype. Behaviour: a shot's unit
+  hit lands after the movement kernel (before it earlier), a shot at a unit
+  already dead that step is spent, custom-position structures are hit at
+  their tile's centre, sand statuses from shots. Removed:
+  projectile-structure-query.test (the JS query is gone); new
+  projectile-pool.test (fire, hits, all six statuses, structure and floor
+  hits, slot-free hash, restore). Sanity: 17 tower/hit/combat/structure/
+  status tests, multiplayer-snapshot, -patch, -extremes, local-visual-
+  snapshot, sim-frame-replica (now compares the pool with the page's views)
+  pass. Measured (1M units / 250k structures, --rally-mix --helpers=11
+  --dk=1 --kernels, steady ticks 20-59, ~17k shots in flight, max 25k, none
+  dropped; tests/test-runs/projectile-pool-20261029/scene.json vs
+  mass-command-20261029/b1d.json): projectilesAdvance 14.9 -> 3.8 ms
+  (flight kernel 1.7), unitHitsResolve 21.2 -> 12.8 ms; steady mean 287 ->
+  224 ms, p95 389 -> 406 (the baseline predates batches 2-3: their phases,
+  simUnitStateCollect 24 -> 0.1 and spawnerStructuresTick 14.3 -> 1.6, are
+  in that difference too).
+- Found, not fixed (worker code, batch 4 step 4): multiplayer-corruption-
+  fuzz fails in the full run ("guest2 was repaired too"), the same with no
+  shots fired at all: after workerCargo on a collector, that guest's repair
+  does not hold and its region by a salvager/healer diverges again patch
+  after patch (each kind alone passes). Suspects: the JS worker conflict
+  index and healers' candidate lists, not carried or rebuilt by a patch.
+- Batch 5 step 2 (towers), rules revision 52: no JavaScript tower turns.
+  k_tower_due scans the tower table's rows for the due ones (no JS wheel,
+  no sort: shot ids are (tick & 1023) << 22 | tile); the prepare kernels
+  answer every tower (custom stats/position from per-row heap columns tc.*;
+  a reach past the table's uses the table's and asks for a deeper one;
+  ownerless floor items take their cell's owner in the tile table);
+  k_tower_fire (direct) takes the turns: preferred targets (now the row
+  columns _ptK / _ptV; unit by id through unitIdIndex, structures by tile,
+  cleared when gone or unseen by vis.cover, reach by the query's areas),
+  idle cooldowns, shots into the projectile pool, cooldowns, angles (the
+  presentation by tile slot). The stationary reach table is
+  double-buffered (built into stb.*, switched when made); the match's first
+  is made at once (414 ms at 1M/250k, in the match-start loading steps).
+  Deleted: the legacy prepare, Tower.shoot/act/update and the JS structure
+  searches, _towerApplyPrepared, the tile-order kernel, SIM_TOWER_* flags
+  (unit per-instance resistance overrides are no longer seen by towers:
+  tests only); tests tower-simd, tower-building-target,
+  stationary-brain-preparation (kernel vs scalar); new
+  tower-kernel-cases.test (preferred structure and unit, custom damage,
+  cleared preference). Found on the way: with no units left the target
+  kernels never ran (they required the unit index's slot map). Sanity: 21
+  tower/structure/combat/status/MP tests, projectile-pool, multiplayer-
+  snapshot, -patch, sim-frame-replica pass.
+  Measured (same 1M/250k scene, steady 20-59, ~2.2k due towers a step,
+  110.6k shots in 60 steps vs 111.0k before; tests/test-runs/
+  projectile-pool-20261029/towers.json vs scene.json): towersTick 14.5 ->
+  7.3 ms (kernels 4.8, of it k_tower_pack 2.9: every listed unit each
+  step), steady mean 224 -> 199 ms, p95 406 -> 318, max 414 -> 364.
+- Batch 4 step 3, first part (worker search tier), rules revision 53. By the
+  profile (1M/250k scene, inclusive ms a tick): search tier 18.2 (takes
+  8.8: collector exclusivity 4.3, builder/healer nearest spawner 4.3;
+  collector groups 5.3, all of it k_ws_group scanning every map tile twice
+  per group), unit events 11.0 (updateWorkerAI 4.9).
+  - The worker conflict index (JS Map/Set of unit objects, rebuilt from
+    every unit) is gone: a target's tile is exclusive by the reservation
+    table alone (every target with a tile is reserved there; a healer's
+    moving patient is reserved where it stood when taken: a second healer
+    may take it after it moved). Manual assignment releases the table's
+    holder.
+  - Nearest spawner: a heap index of spawner tiles by (type, owner) in tile
+    order (ord.rs k_spawner_index, from the spawner tables' rows when
+    spawners come or go; reset at a restore; an answer of another type or
+    owner rebuilds it once) and k_spawner_nearest (least Manhattan, then
+    row, column, live energy and built). The JS per-type/owner lists, scan
+    tables and near caches are gone. closest-spawner-cache.test compares
+    it with a plain scan (6000 queries).
+  - The collectors' groups walk a sorted candidate list (k_ws_candidates:
+    floor-item and spawner rows plus the mines, LSD radix sort) instead of
+    the whole map; completion publication finds a structure's rows by tile
+    (binary search of the groups' tile-ordered lists; no WeakMap notes).
+  - Deleted worker-target-index.test (JS index internals).
+  Measured (profiled runs, steady 20-59; tests/test-runs/projectile-pool-
+  20261029/workers2.json vs towers-profile.json): search tier 17.9 -> 10.1
+  ms (its first-cycle spike 180 -> 5 ms), takes 8.8 -> 2.5, exclusivity
+  4.3 -> 0.09; steady mean 217 -> 212, p95 377 -> 292, max 396 -> 298.
+  Left in the worker brain: updateWorkerAI on worker events (5.2 ms: the
+  trips), the work-site grid sweep (_wswStep 3.2 ms: flags from object
+  fields, spawn queues and research levels not yet columns), the groups'
+  JS bucket loops, the research-spawner object lists
+  (_getWorkerSpawnersByType('research')), healers' candidate lists.
+- Rule (user): integer-key sorts are LSD radix sorts by default.
+- Batch 2 continued (deaths), rules revision 54: what a removed unit holds is
+  let go by `k_unit_gone` (ord.rs, direct call, over the retire list's slots):
+  spatial chunk / type-block / 8x8-block counts, occupancy cells (occ_release),
+  visibility registration, index columns, worker work version and reservation
+  (always freed now, also for a returning worker), upkeep bin, queued-order
+  slots listed, population per owner, path window, statRow / movement flags.
+  The detach of such a unit (simUnitStateDetachGone) no longer clears its JS
+  fields (the slot's next unit starts from the defaults). Death sounds: the
+  first 16 a tick. Pitfall hit: the per-radius counters overlapped owner 0's
+  population counter (occupancy-grid caught it).
+- Towers, barracks and spawners out of energy: the status kernel's list
+  (tile order) instead of scanning all 90k barracks and 47k spawners in JS
+  whenever one ran out (~1 ms a tick).
+  Measured (1M/250k, profiled, steady 20-59; tests/test-runs/unit-gone-20261029/
+  gone1.json vs workers2.json): deaths ~14 -> ~7 ms (kernel 2.2, JS 4.7),
+  steady mean 212 -> 206 ms, p95 292 -> 253, max 298 -> 274.
+  JS left in deaths (4.7 ms): the units list swap-remove and the sorted id
+  index (_uix: binary search, periodic O(n) hole compaction), the id page map,
+  and per death a SimUnitGone object, u._us/_si writes, owners[] null, the
+  freeLater and worker-record free lists as JS arrays. All of it is the units
+  list and id index being JS arrays of objects: to go with the slot list +
+  heap id index (plan, batch 2 table).
+  Sanity: unit-retirement, occupancy-grid, shared-spatial-determinism/-order,
+  worker-walk, worker-brain-spawners, worker-completion-publication,
+  order-worker-budget, area-worker-search, order-fast, event-route-batch,
+  collector-farms, multiplayer-snapshot, -patch, -worker-lost, 6 structure /
+  status tests pass.
+- Adjacency (in progress of the convert-all batch; not yet measured): no
+  per-tick cap (ADJ_APPLY_PER_TICK = 600 is gone) and no JavaScript
+  fallback. Post: `k_adj_post` (ord.rs, helpers, 256-tile blocks) makes the
+  whole signature grid from the per-tile structure table (signature =
+  stationary type << 8 | owner: no interned JS strings), takes every dirty
+  tile (the dirty set's flags/blocks are heap arrays; no takeFirst cap) and
+  the cloud portals; the flood job compacts them and pairs the portals. Commit:
+  `k_adj_apply` (helpers) applies every member in one pass over its row:
+  stacks, levels, upgrade start (upgrademaxEnergy is a column now), stacking,
+  stat-entry tokens (mTok in the heap), descriptor effective level, energy
+  clamp; maxEnergy overrides are a heap column (SOverrideColumn) and object
+  overrides are mirrored (_ovMx, _ovVs); per-batch tables by (owner row,
+  stationary type, level). JavaScript gets only events of systems not yet
+  converted (work sites, traps, vision cover, lasers). The synchronous
+  recompute runs the same kernels (the JS flood and _adjApplyMember are
+  deleted). MAX_THING_LEVEL capped at 63 (THING_LEVEL_CAP: the descriptor's
+  6 bits). To do in the test phase: adjacency-lane-carry needs a JS
+  reference copy of the old recompute as its oracle; adjacency-dirty-set
+  tested takeFirst (gone).
+  Adjacency measured (1M/250k, profiled, steady 20-59; unit-gone-20261029/
+  adj2.json vs gone1.json): adjacencyLaneStep 11.9 -> 1.0 ms a tick, steady
+  mean 206 -> 184 ms, p95 253 -> 217, max 274 -> 219. Pitfall hit first
+  (adj1.json): per-batch tables filled through calculateItemStats rebuilt
+  the player stat maps (research bumps the stats version nearly every
+  batch): 30 s commit ticks. Now the apply kernel reads static building
+  stat tables (statTablesStatic: stt.mxe / stt.vis / stt.atk by key x
+  level x research level, from PRECOMPUTED_STATS_MAP, made once a stat map)
+  and small per-player arrays (adj.rlv research levels, adj.bl boost
+  levels, adj.rml researched maximum level; remade on the stats version).
+  adjacency-lane-carry now checks the kernels against the old JavaScript
+  recompute (tests/adjacency-reference.js, from git HEAD): 11,490
+  buildings equal, signatures group alike.
+  Next (user): the whole stat system as static [level][research level]
+  tables read by kernels (per-player maps and their rebuilds go).
+  Static-table version (adj3.json): adjacencyLaneStep 0.86 ms mean, 8.7 max;
+  steady mean 188 ms, p95 222, max 234 (within run-to-run spread of adj2).
+- Unit index prebuild: SPATIAL_INDEX_DELTA off by default. The delta build's
+  apply / owner stages are single jobs; the next tick waited 13.7 ms for it
+  at 1M/250k in battle, 6.1 ms for the parallel merge build (unprofiled,
+  steady mean 181 -> 171 ms, p95 221 -> 215; delta.json vs nodelta.json).
+  The bench takes PRE=<js> (run after setup) for such A/B switches.
+- Remaining serial JS by system (1M/250k, 2026-10-29 evening), what each needs:
+  - worker trips (unitEventsRun ~10 ms), structure destroy in hits/projectiles
+    (~5 ms), spawner ticks, visibility (updateAllPlayerVisibility ~6 ms):
+    the JS world model (grid[y][x] cell objects: 157 sites in 21 files, tile
+    entity grids, structure lists) as heap tables first.
+  - effective levels (~4 ms): already a kernel; left is the JS flag loop over
+    the share and units with new levels (per-unit preComputed objects) and the
+    EFF_BEHIND_PER_TICK cap: needs unit stats as static table rows.
+  - path regions (~4 ms): the portal signature over the cloud cache each tick
+    and JS floods after splits: labels from the heap wall grid (_simMoveWall)
+    by a kernel, portals from the structure table (k_adj_post has them).
+  - vision cover hold (~3 ms), worker search tier leftovers (~6 ms).

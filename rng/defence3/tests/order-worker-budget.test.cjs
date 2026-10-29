@@ -1,4 +1,9 @@
 'use strict';
+// Worker move orders through the order queue's kernels (main.js
+// _orderAdmit / _orderTake, wasm ord.rs): every selected worker gets the order
+// once (the workers' order kernel, k_order_workers: their task let go,
+// MANUAL_MOVE, moving to the order's tile); a small order (ORDER_NOW units or
+// fewer) at once.
 const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'64','cfg-map-type':'arena','cfg-max-pop':'20000'}});
 const i=world.spawn('worker-order-budget',{simWorker:false});
@@ -7,23 +12,19 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  const ids=[];
  for(let k=0;k<240;k++){
    const u=new Unit('healer_unit',0,(5+k%20)*TILE+16,(5+Math.floor(k/20))*TILE+16);
-   if(u.dead)throw Error('fixture');u.workerType='healer';u.workerState='IDLE';units.push(u);updateUnitSpatial(u);ids.push(u.id);
+   if(u.dead)throw Error('fixture');u.workerType='healer';u.workerState='IDLE';units.push(u);unitSlotMapPushed(u);updateUnitSpatial(u);ids.push(u.id);
  }
- if(ids.some(id=>!_unitByIdMap().get(id).workerType))throw Error('expected workers');
- ORDER_KERNEL=true;ORDER_UNITS_PER_TICK_ALL=160;ORDER_UNITS_PER_PLAYER_TICK=160;ORDER_UNITS_PER_ROUND=40;
  resetOrderQueue();
- const applied=[],perTick=[];
- _issueGroupMoveOrder=function(a){for(const id of a.unitIds)applied.push(id);return a.unitIds.length;};
- _queueGroupMoveOrder(sanitizeAction({action:'move',unitIds:ids,targetX:400,targetY:400}),0,CMD_MOVING);
- for(let tick=0;_orderQueue.length&&tick<20;tick++){
-   const before=applied.length;runQueuedOrders();perTick.push(applied.length-before);
-   if(_orderAllLeft<0||_orderBudgetOf(0)<0)throw Error('worker batch overshot budget');
-   currentTick++;_refillOrderBudget();
- }
+ const run=(n,perTick)=>{
+   _queueGroupMoveOrder(sanitizeAction({action:'move',unitIds:ids.slice(0,n),targetX:400,targetY:400}),0,CMD_MOVING);
+   for(let tick=0;_orderQueue.length&&tick<20;tick++){const b=simOrderStats.units;runQueuedOrders();perTick.push(simOrderStats.units-b);currentTick++;}
+   return ids.slice(0,n).filter(id=>{const u=getUnitById(id);return u&&u.workerState==='MANUAL_MOVE'&&u.commandState===CMD_MOVING&&u.targetPos&&u.workerTarget===null;});
+ };
+ const small=[],got=run(240,small);
  if(_orderQueue.length)throw Error('orders did not drain');
- return {ids,applied,perTick};
+ return {ids,got,small,now:ORDER_NOW,steps:ORDER_DRAIN_STEPS};
 })())`));
-assert.deepEqual(result.applied,result.ids,'all selected workers receive the order once, in order');
-assert.deepEqual(result.perTick,[40,40,40,40,40,40],'slow work is bounded before dispatch');
+assert.deepEqual(result.got,result.ids,'every selected worker takes the order: MANUAL_MOVE, moving, its task let go');
+assert.deepEqual(result.small,[240],'a small order applies at once');
 assert.deepEqual(i.errors.map(String),[]);
-console.log('PASS: worker orders stay within per-tick budgets and drain without losses');
+console.log('PASS: worker orders through the queue kernels: every worker once, a small one at once');

@@ -18,16 +18,12 @@ const cp = require('node:child_process');
 const crypto = require('node:crypto');
 
 const here = __dirname;
-// With neither --wasm64 nor --wasm32: both builds, the memory64 one (the
-// default everywhere: browsers and the Node 24+ tests) first, then the legacy
-// 32-bit one, with the same other arguments (one built alone fell behind).
+// With neither --wasm64 nor --wasm32: the 32-bit build, the one browsers and
+// the tests run (the match's memory is one 4 GiB budget). The memory64 build
+// is legacy (~25% slower): only with --wasm64.
 if (!process.argv.includes('--wasm64') && !process.argv.includes('--wasm32')) {
-    if (process.argv.some(a => a.startsWith('--out='))) { console.error('--out= needs --wasm64 or --wasm32'); process.exit(2); }
-    for (const flag of ['--wasm64', '--wasm32']) {
-        const r = cp.spawnSync(process.execPath, [__filename, flag, ...process.argv.slice(2)], { stdio: 'inherit' });
-        if (r.status !== 0) process.exit(r.status || 1);
-    }
-    process.exit(0);
+    const r = cp.spawnSync(process.execPath, [__filename, '--wasm32', ...process.argv.slice(2)], { stdio: 'inherit' });
+    process.exit(r.status === 0 ? 0 : (r.status || 1));
 }
 // --wasm64: the memory64 build (the heap past 4 GiB: millions of units), for
 // browsers, into src/sim/sim_wasm64_bin.js. Needs the nightly toolchain with

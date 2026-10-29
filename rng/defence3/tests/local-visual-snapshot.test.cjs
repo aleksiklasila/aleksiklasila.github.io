@@ -14,23 +14,24 @@ const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
     const { host, guests } = await H.startHostedMatch(world, { guests: 1 });
     const guest = guests[0];
 
-    // A projectile in flight, restored on the guest from the host's snapshot.
+    // A projectile in flight (the pool's, projectile.js), restored on the
+    // guest from the host's snapshot.
     host.eval(`(() => {
         const src = towers[0] || barracks[0] || collectorSpawners[0];
-        const p = new Projectile(40, 16 + 32 * 3, { x: 400, y: 16 + 32 * 3 }, 'arrow', 7, 1, src, 300);
-        projectiles.push(p);
-        p.update();
-        p.prevX = p.x - 8; p.prevY = p.y - 1;
+        projectileFire(40, 16 + 32 * 3, { x: 400, y: 16 + 32 * 3 }, 'arrow', 7, 1, src, 300);
+        projectilesAdvance();
     })()`);
     guest.scratch.text = host.eval('JSON.stringify(snapEncodeState())');
     for (const k of ['prevX', 'prevY', '_spatialKey', 'textCanvas', '_damageFlashUntil', '_historyGhost']) assert.ok(host.eval(`SNAP_SKIP_KEYS.has(${JSON.stringify(k)})`), k + ' stays local');
     guest.eval('snapDecodeState(JSON.parse(__scratch.text))');
-    const restored = JSON.parse(guest.eval(`(() => { const p = projectiles[projectiles.length - 1]; return JSON.stringify({ proto: Object.getPrototypeOf(p) === Projectile.prototype, dmg: p.dmg, px: p.prevX === p.x, py: p.prevY === p.y }); })()`));
-    assert.deepEqual(restored, { proto: true, dmg: 7, px: true, py: true });
+    const restored = JSON.parse(guest.eval(`(() => { const r = projSnapshotRecords(), p = r[r.length - 1], s = _pj.live[_pj.hdr[0] - 1]; return JSON.stringify({ n: r.length, dmg: p.dmg, px: _pj.a.px[s] === _pj.a.x[s], py: _pj.a.py[s] === _pj.a.y[s] }); })()`));
+    assert.deepEqual(restored, { n: host.eval('projCount()'), dmg: 7, px: true, py: true });
+    assert.equal(guest.eval('projHash()'), host.eval('projHash()'));
 
     // Exact movement and expiry after the round trip.
-    const step = inst => inst.eval(`(() => { const p = projectiles[projectiles.length - 1]; const alive = p.update(); return JSON.stringify([alive, p.x, p.y, p.life, p.vx, p.vy, p.dmg, p.sourceOwner]); })()`);
+    const step = inst => inst.eval(`(() => { projectilesAdvance(); return JSON.stringify(projSnapshotRecords()); })()`);
     for (let tick = 0; tick < 45; tick++) assert.equal(step(guest), step(host), 'projectile step ' + tick);
+    assert.equal(guest.eval('projCount()'), 0, 'the shot ran out of range');
 
     // Units keep every gameplay field; spatial bookkeeping is rebuilt.
     const unitFields = inst => inst.eval(`(() => { const u = units.find(u => !u.dead); return JSON.stringify([u.id, u.energy, u.x, u.y, u.unitType, u.owner, typeof u._spatialKey]); })()`);

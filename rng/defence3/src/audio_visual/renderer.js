@@ -214,7 +214,6 @@ function getDamageFlashColor(target, sourceOwner = null) {
 function recordDamageVisual(target, amount, sourceOwner = null) {
     if (!target) return;
     // (A building's or floor item's energy may have run out: see gameTick.)
-    if (typeof Unit === 'undefined' || !(target instanceof Unit)) thingStatusWake(target);
     let dmg = Math.max(0, Number(amount) || 0);
     if (dmg <= 0.01) return;
     let maxEnergy = Math.max(1, Number(target.maxEnergy) || Number(target.preComputed && target.preComputed.maxEnergy) || 0);
@@ -2499,7 +2498,26 @@ function buildScaleFrameData(flat2d, view) {
 // Pending feedback belongs to the commanded entities, never to a click
 // history. It supersedes their old destination until the displayed state
 // includes the command's tick. Authoritative orders then own the markers.
-const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new Map();
+// (A building's by its tile key: a Map's get / set / delete / clear / size
+// over a stamp a tile, typed: a ctrl click on 250k buildings filled a Map of
+// 250k entries. A clear moves the stamps' base: no pass.)
+class _TilePending {
+    constructor() { this.t = null; this.base = 0; this.list = []; this.last = undefined; this.size = 0; }
+    get(key) { if (!this.size) return undefined; const i = this.t[key] - this.base - 1; return i >= 0 && i < this.list.length ? this.list[i] : undefined; }
+    // (Its table for the match's map: made at the match's setup, resetOrderMarkers.)
+    alloc() { const n = GRID_W * GRID_H; if (!this.t || this.t.length !== n) this.t = new Int32Array(n); else this.t.fill(0); this.base = 0; this.list = []; this.last = undefined; this.size = 0; }
+    set(key, p) {
+        if (!this.t || this.t.length !== GRID_W * GRID_H) this.alloc();
+        if (!(key >= 0 && key < this.t.length)) return this;
+        if (this.get(key) === undefined) this.size++;
+        if (p !== this.last) { this.list.push(p); this.last = p; }
+        this.t[key] = this.base + this.list.length;
+        return this;
+    }
+    delete(key) { if (this.get(key) === undefined) return false; this.t[key] = 0; this.size--; return true; }
+    clear() { this.base += this.list.length; this.list = []; this.last = undefined; this.size = 0; }
+}
+const _pendingUnitOrderMarkers = new Map(), _pendingRallyMarkers = new _TilePending();
 // A big order's one marker (its units share the target) until the frames
 // show the order: per unit, a move of a million selected units filled a Map
 // of a million entries, and each frame looked every selected unit up in it
@@ -2576,6 +2594,7 @@ function _rallyCoverOf(ent) {
     return null;
 }
 function resetOrderMarkers() {
+    _pendingRallyMarkers.alloc();
     _pendingRallyCovers.length = 0; _rallyCoverOpen = null;
     _orderPings.length = 0;
     _pendingUnitOrderMarkers.clear(); _pendingRallyMarkers.clear(); _pendingCommandMarkers.length = 0;
@@ -2603,9 +2622,13 @@ function noteOrderMarker(a, tick = currentTick) {
     if (rally) {
         if (_rallyCoverOpen) _rallyCoverOpen.tick = Math.max(_rallyCoverOpen.tick, tick);
         else {
-            const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
             // (Keyed by tile index: a ctrl click on 190k buildings made a string a building.)
-            for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i + 1] * GRID_W + coords[i], pending);
+            if (a._keys) for (let i = 0; i < a._keys.length; i++) _pendingRallyMarkers.set(a._keys[i], pending);
+            else if (typeof a.tkz === 'string') actionIdsForEach(a.tkz, GRID_W * GRID_H, key => { _pendingRallyMarkers.set(key, pending); });
+            else {
+                const coords = a.action === 'setRally' ? [a.gx, a.gy] : a.coords || [];
+                for (let i = 0; i + 1 < coords.length; i += 2) _pendingRallyMarkers.set(coords[i + 1] * GRID_W + coords[i], pending);
+            }
         }
     } else if ((a.unitIds || []).length > ORDER_PENDING_PER_UNIT_MAX) { if (target) _pendingCommandMarkers.push(pending); }
     else for (const id of a.unitIds || []) _pendingUnitOrderMarkers.set(id, pending);
@@ -7446,47 +7469,48 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
         target.watchedByTeam = teamId;
         if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target);
     }
-    if (typeof Unit === 'undefined' || !(target instanceof Unit)) thingStatusWake(target);
     return true;
 }
 
-// Buildings and floor items whose statuses are running or whose energy may
-// have run out (the tick's status loop looks at these only, in row-major
-// order): added by status effects and damage, and by gameTick's sweep of a
-// TICK_RATE-th of the items a tick; made anew from every item on every peer
-// at a resync (thingStatusRebuild). An extra member changes nothing.
-let _thingStatusActive = new Set();
-// Buildings that tick their own statuses in their update (towers, barracks,
-// spawners: thingStatusTickSelf), while something may run: the same hooks
-// add them, a tick with nothing left removes them, a resync makes it anew
-// (an extra member changes nothing either).
-let _thingStatusSelf = new Set();
-function thingStatusWake(e) { _thingStatusActive.add(e); _thingStatusSelf.add(e); }
-function thingStatusTickSelf(e) {
-    if (!_thingStatusSelf.has(e)) return false;
-    const gone = tickStatusEffects(e);
-    if (!thingStatusPending(e)) _thingStatusSelf.delete(e);
-    return gone;
+// Structures' statuses: ticked once a step by a kernel over every table
+// that has them (ord.rs k_struct_status; structStatusTick): timers, tick
+// damage, shrine income, the watch's end; the structures it found without
+// energy are removed after it, in their lists' order. (No sets of
+// structures, no tick of their own.)
+const STRUCT_STATUS_CLASSES = () => [typeof Tower !== 'undefined' ? Tower : null, FloorItem, typeof Barrack !== 'undefined' ? Barrack : null,
+    ...structRallyClasses().slice(1)];
+const _stsP = new Float64Array(4);
+let _stsOut = null;
+function structStatusTick() {
+    const out = { floor: null, dead: null };
+    const owners = Math.max(1, players.length);
+    if (!_stsOut || !simHeapHas(_stsOut.cnt) || _stsOut.shrine.length < owners) _stsOut = { cnt: simSharedArray(Int32Array, 4), shrine: simSharedArray(Float64Array, Math.max(16, owners)), died: null, wend: null };
+    const O = _stsOut, P = _stsP;
+    O.shrine.fill(0);
+    for (const C of STRUCT_STATUS_CLASSES()) {
+        const T = C ? _sTables.get(C) : null;
+        if (!T || !T.n) continue;
+        if (!_sColsInHeap(T)) _sTableGrow(T, T.cap);
+        if (!O.died || O.died.length < T.cap) { O.died = simSharedArray(Int32Array, T.cap); O.wend = simSharedArray(Int32Array, T.cap); }
+        P[0] = T.n; P[1] = simDk; P[2] = RESOURCE_FIXED_POINT_SCALE; P[3] = owners;
+        simRustDirect('k_struct_status', [T.c__stT, T.c_burning, T.c_burnTickDamage, T.c_poisoned, T.c_poisonTickDamage, T.c_frozen, T.c_iceTickDamage,
+            T.c_wet, T.c_sandy, T.c_watched, T.c_watchedByTeam, T.c__en, T.c__ow, O.cnt, O.died, O.wend, O.shrine], P);
+        for (let i = 0, n = O.cnt[1]; i < n; i++) { const e = T.rowObj[O.wend[i]]; if (e && typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(e); }
+        const nd = O.cnt[0];
+        if (!nd) continue;
+        if (C === FloorItem) { const L = out.floor || (out.floor = []); for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[i]]; if (e) L.push(e); } }
+        else { const L = out.dead || (out.dead = []); for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[i]]; if (e) L.push(e); } }
+    }
+    for (let o = 0; o < owners; o++) if (O.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += O.shrine[o]; }
+    if (out.floor) out.floor.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+    // (Towers, barracks, spawners: in tile order too; few a tick.)
+    if (out.dead) out.dead.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
+    return out;
 }
-function thingStatusDone(e) { _thingStatusActive.delete(e); }
+// (Whether a structure has something running: tests and the interface.)
 function thingStatusPending(e) {
     return e.burning > 0 || e.poisoned > 0 || e.frozen > 0 || e.wet > 0 || e.sandy > 0 || e.watched > 0 || (e.energy !== undefined && e.energy <= 0);
 }
-// The members in row-major order (a copy: the loop removes some).
-function thingStatusDue() {
-    if (_thingStatusActive.size === 0) return _NO_THINGS;
-    const out = Array.from(_thingStatusActive);
-    out.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
-    return out;
-}
-const _NO_THINGS = Object.freeze([]);
-function thingStatusRebuild() {
-    _thingStatusActive = new Set();
-    for (const item of getCellItemsRowMajor()) if (thingStatusPending(item)) _thingStatusActive.add(item);
-    _thingStatusSelf = new Set();
-    for (const list of [towers, barracks, collectorSpawners]) for (const e of list) if (e) { ensureStatusState(e); if (thingStatusPending(e)) _thingStatusSelf.add(e); }
-}
-
 function tickStatusEffects(target) {
     if (!target) return false;
     ensureStatusState(target);

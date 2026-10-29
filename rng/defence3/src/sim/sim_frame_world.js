@@ -179,30 +179,39 @@ const SIM_PROJ_SPEC = simTableSpec({
     i16: ['type', 'owner', 'life'],
     u8: ['alive']
 });
-const _simProjSlots = new SimSlots('_pslot');
+// The shots are the pool's slots (projectile.js), a table slot a pool
+// slot, its serial the shot's id; version: the order's (simProjOrderChanged).
+const _simProjPres = { stamp: new Int32Array(0), tick: 0, version: 0, last: null };
+function simProjPresReset() { const S = _simProjPres; S.stamp = new Int32Array(0); S.last = null; S.version++; }
+function simProjOrderChanged(order, n) {
+    const S = _simProjPres;
+    let last = S.last, changed = !last || last.length !== n;
+    if (!changed) for (let k = 0; k < n; k++) if (last[k] !== order[k]) { changed = true; break; }
+    if (changed) { S.last = order.slice(0, n); S.version++; }
+}
+// The shots in flight into table F (n slots): returns how many.
+function simProjFill(F, n) {
+    const S = _simProjPres, tick = ++S.tick;
+    if (S.stamp.length < n) { const st = new Int32Array(Math.max(1024, n * 2)); st.set(S.stamp); S.stamp = st; }
+    const stamp = S.stamp, order = F.order;
+    let j = 0;
+    projForEach((s, A) => {
+        stamp[s] = tick; order[j++] = s;
+        F.alive[s] = 1; F.serial[s] = A.id[s];
+        F.x[s] = A.x[s]; F.y[s] = A.y[s]; F.px[s] = A.px[s]; F.py[s] = A.py[s];
+        F.vx[s] = A.vx[s]; F.vy[s] = A.vy[s]; F.sx[s] = A.sx[s]; F.sy[s] = A.sy[s]; F.aim[s] = A.aim[s];
+        F.type[s] = _simFrameCode(projTypeName(A.tt[s])); F.owner[s] = A.own[s];
+        F.life[s] = Math.max(-32000, Math.min(32000, A.life[s]));
+    });
+    for (let s = 0; s < n; s++) if (stamp[s] !== tick) F.alive[s] = 0;
+    simProjOrderChanged(order, j);
+    return j;
+}
 function simFrameEncodeProjectiles() {
-    let S = _simProjSlots, tick = ++S.tick, list = projectiles;
-    for (let p of list) if (p) S.slotOf(p);
-    let n = S.owner.length, cap = Math.max(64, n);
-    let buf = _simFrameAcquire(cap * SIM_PROJ_SPEC.slotBytes);
-    let F = simTableViews(SIM_PROJ_SPEC, buf, cap);
-    let order = F.order, j = 0;
-    for (let p of list) {
-        if (!p) continue;
-        let s = p._pslot;
-        S.stamp[s] = tick;
-        order[j++] = s;
-        F.alive[s] = 1; F.serial[s] = S.serials[s];
-        F.x[s] = p.x; F.y[s] = p.y;
-        F.px[s] = Number.isFinite(p.prevX) ? p.prevX : p.x; F.py[s] = Number.isFinite(p.prevY) ? p.prevY : p.y;
-        F.vx[s] = Number(p.vx) || 0; F.vy[s] = Number(p.vy) || 0;
-        F.sx[s] = Number(p.startX) || 0; F.sy[s] = Number(p.startY) || 0; F.aim[s] = Number(p.aimDist) || 0;
-        F.type[s] = _simFrameCode(p.type); F.owner[s] = Number.isFinite(p.sourceOwner) ? p.sourceOwner : -1;
-        F.life[s] = Math.max(-32000, Math.min(32000, Number(p.life) || 0));
-    }
-    S.sweep(tick, F);
-    S.orderChanged(order, j);
-    return { buf, cap, n, count: j, mver: S.version };
+    const n = _pj.hw, cap = Math.max(64, n);
+    const buf = _simFrameAcquire(cap * SIM_PROJ_SPEC.slotBytes), F = simTableViews(SIM_PROJ_SPEC, buf, cap);
+    const j = simProjFill(F, n);
+    return { buf, cap, n, count: j, mver: _simProjPres.version };
 }
 
 // ---- state: players, globals, changed cells ----
@@ -632,6 +641,13 @@ const _PAGE_PROJ_ACCESSORS = {
     _frameView: { value: true }
 };
 function _pageProjCol(v, k) { let s = v._s; return s >= 0 ? _pageTables.p[k][s] : (v._last ? v._last[k] : 0); }
+// (The 2D renderer draws each.)
+const _PAGE_PROJ_BASE = {
+    draw(ctx) {
+        ctx.fillStyle = BASE_CARD_TYPES[this.type] ? BASE_CARD_TYPES[this.type].color : '#fff';
+        ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, 6.28); ctx.fill();
+    }
+};
 let _pageProjProto = null;
 function pageApplyProjectiles(table, c, shown) {
     let F = simTableViews(SIM_PROJ_SPEC, table.buf, table.cap);
@@ -646,7 +662,7 @@ function pageApplyProjectiles(table, c, shown) {
             F.py[s] = old.py[s] + (old.y[s] - old.py[s]) * shown;
         }
     }
-    if (!_pageProjProto) _pageProjProto = Object.create(Projectile.prototype, _PAGE_PROJ_ACCESSORS);
+    if (!_pageProjProto) _pageProjProto = Object.create(_PAGE_PROJ_BASE, _PAGE_PROJ_ACCESSORS);
     if (table.mver !== c.projMver || !old) {
         let list = new Array(table.count);
         for (let k = 0; k < table.count; k++) {

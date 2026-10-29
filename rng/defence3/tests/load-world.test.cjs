@@ -24,9 +24,10 @@ for (const millions of [2, 4, 8]) {
     imported.eval("document.getElementById('starting-resources-popup').classList.add('hidden');");
     imported.eval(`applyMainMenuSettingsSnapshot(${JSON.stringify(settingsFor(millions * 1000000))});`);
     assert.equal(imported.eval('getStartingResourcesTotalSpawnCount()'), millions * 500000, 'real settings import preserves per-team units');
-    assert.equal(imported.eval('CONFIG_MAX_POP'), millions * 500000, '4M/8M settings are not clamped by the input max attribute');
+    // (The menu's choices: powers of two up to 2^20 a player, the nearest; map sizes the same.)
+    assert.equal(imported.eval('CONFIG_MAX_POP'), Math.min(2 ** 20, 2 ** Math.round(Math.log2(millions * 500000))), 'an import takes the nearest population choice');
     assert.equal(imported.eval("getStartingSpawnCount('unit:king',1)"), 1);
-    assert.equal(imported.eval('GRID_W'), 1000);
+    assert.equal(imported.eval('GRID_W'), 1024, 'and the nearest map size');
     assert.deepEqual(imported.errors, []);
 }
 

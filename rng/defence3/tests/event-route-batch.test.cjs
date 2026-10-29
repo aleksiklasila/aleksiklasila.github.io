@@ -21,7 +21,7 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  const capture=u=>({pending:u._pendingPathTarget&&{...u._pendingPathTarget},path:u.path,index:u.pathIndex,
   fallback:u.pathIsFallbackAstar,key:u._routeKey,retry:u._astarBudgetRetryTick,h:u._us.hObj[u._si],
   cols:['nvPK','mvOn','mvCD','mvPF','rkF'].map(k=>u._us[k][u._si]),
-  requests:_navSub.req.slice(),entries:[..._navSub.map],due:[..._pendingPathDue].map(([t,a])=>[t,a.map(u=>u.id)]),pendingIds:[..._pendingPathUnits].map(u=>u.id)});
+  requests:_navSub.req.slice(),entries:[..._navSub.map],due:u._us.ppDue[u._si],pending:pendingPathWaiting()});
  for(let round=0;round<4;round++){
   gameTime=100+round*20;
   for(let j=0;j<n;j++){
@@ -49,7 +49,7 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    const reset=()=>{u.path=initial.path;u.pathIndex=initial.index;u._pendingPathTarget=initial.pending&&{...initial.pending};u.pathIsFallbackAstar=initial.fallback;
     u._astarBudgetRetryTick=initial.retry;u._routeKey=initial.key;C.mvOn[s]=initial.on;C.mvCD[s]=initial.cd;C.hObj[s]=initial.h;
     if(missingView)C.jr__path.clear(s);
-    _navSubReset();_pendingPathUnits=new Set();_pendingPathDue=new Map();};
+    _navSubReset();C.ppDue.fill(-1);_ppHeads().fill(-1);_ppCount=0;};
    reset();_unitNoWay(u);const expected=JSON.stringify(capture(u));
    reset();const used=_unitNoWayCommit(u,C,s,key,comp,_simHTerm(_UH_PFA,true));
    if(!used)_unitNoWay(u);else fast++;

@@ -705,6 +705,24 @@ function ensureDefaultEditableRuntimeConfigSnapshot() {
     defaultEditableRuntimeConfigSnapshot = cloneJsValue(createEditableRuntimeConfigSnapshot());
 }
 
+// A saved value that is no choice of a numeric select (an older export's map
+// size or population): its nearest choice, by ratio.
+function _nearestNumericOption(el, value) {
+    const v = Number(value);
+    if (!(v > 0)) return null;
+    let best = null;
+    for (const o of el.options) { const n = Number(o.value); if (n > 0 && (best === null || Math.abs(Math.log2(n / v)) < Math.abs(Math.log2(Number(best) / v)))) best = o.value; }
+    return best;
+}
+
+// (A numeric select set to a value, or its nearest choice.)
+function _setNumericSelect(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const near = el.tagName === 'SELECT' && el.options && ![...el.options].some(o => o.value === String(value)) ? _nearestNumericOption(el, value) : null;
+    el.value = near !== null ? near : String(value);
+}
+
 function syncMainMenuFromRuntimeConfig() {
     let setValue = (id, value) => {
         let el = document.getElementById(id);
@@ -712,7 +730,7 @@ function syncMainMenuFromRuntimeConfig() {
         el.value = String(value);
     };
 
-    setValue('cfg-mapsize', GRID_W);
+    _setNumericSelect('cfg-mapsize', GRID_W);
     setValue('cfg-mine-density', RESOURCE_MINE_DENSITY);
     setValue('cfg-gold-count', GOLD_MINE_COUNT);
     setValue('cfg-gold-min', GOLD_MINE_MIN);
@@ -721,8 +739,7 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-astar-mine-min', ASTAR_MINE_MIN);
     setValue('cfg-astar-mine-max', ASTAR_MINE_MAX);
     syncResourceAbundanceFromRuntime();
-    setValue('cfg-max-pop', CONFIG_MAX_POP);
-    setValue('cfg-max-buildings', CONFIG_MAX_BUILDINGS);
+    _setNumericSelect('cfg-max-pop', CONFIG_MAX_POP);
     setValue('cfg-starting-energy', STARTING_MONEY);
     setValue('cfg-starting-astar', STARTING_ASTAR);
     setValue('cfg-map-type', MAP_TYPE);
@@ -787,7 +804,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
         teamVisibilityHistory = cfg.MAP_VISIBILITY === 'history';
     }
     if (Number.isFinite(Number(cfg.CONFIG_MAX_POP))) CONFIG_MAX_POP = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_POP)));
-    if (Number.isFinite(Number(cfg.CONFIG_MAX_BUILDINGS))) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(Number(cfg.CONFIG_MAX_BUILDINGS)));
+    if (Number.isFinite(Number(cfg.CONFIG_MAX_BUILDINGS))) CONFIG_MAX_BUILDINGS = Math.max(0, Math.floor(Number(cfg.CONFIG_MAX_BUILDINGS)));
 
     let nextTickRate = Number(cfg.TICK_RATE);
     let nextPipelineDelay = Number(cfg.LOCKSTEP_PIPELINE_MIN);
@@ -819,7 +836,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(prog.RESEARCH_COST_EXP))) RESEARCH_COST_EXP = Math.max(1, Number(prog.RESEARCH_COST_EXP));
     if (Number.isFinite(Number(prog.RESEARCH_WORK_EXP))) RESEARCH_WORK_EXP = Math.max(1, Number(prog.RESEARCH_WORK_EXP));
     if (Number.isFinite(Number(prog.RESEARCH_WORK_BASE))) RESEARCH_WORK_BASE = Math.max(1, Math.floor(Number(prog.RESEARCH_WORK_BASE)));
-    if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL)));
+    if (Number.isFinite(Number(prog.MAX_THING_LEVEL))) MAX_THING_LEVEL = Math.min(THING_LEVEL_CAP, Math.max(1, Math.floor(Number(prog.MAX_THING_LEVEL))));
     if (Number.isFinite(Number(prog.MAX_RESEARCH_LEVEL))) MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(Number(prog.MAX_RESEARCH_LEVEL)));
     // Backward compatibility for older config payloads.
 
@@ -1050,7 +1067,8 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.GAME_MODE = getString('cfg-gamemode', cfg.GAME_MODE);
     cfg.MAP_VISIBILITY = getString('cfg-full-vis', cfg.MAP_VISIBILITY);
     cfg.CONFIG_MAX_POP = Math.max(1, Math.floor(getNumber('cfg-max-pop', cfg.CONFIG_MAX_POP)));
-    cfg.CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(getNumber('cfg-max-buildings', cfg.CONFIG_MAX_BUILDINGS || CONFIG_MAX_BUILDINGS)));
+    // (No menu control: the population's budget, 0; a config's own value kept.)
+    cfg.CONFIG_MAX_BUILDINGS = Math.max(0, Math.floor(Number(cfg.CONFIG_MAX_BUILDINGS) || 0));
     cfg.TICK_RATE = Math.max(5, Math.floor(getNumber('cfg-tick-rate', cfg.TICK_RATE)));
     cfg.LOCKSTEP_PIPELINE_MIN = Math.max(0, Math.floor(getNumber('cfg-pipeline-delay', cfg.LOCKSTEP_PIPELINE_MIN)));
     cfg.THING_STATS_RECALC_INTERVAL_SECONDS = Math.max(0.05, Math.min(600, getNumber('cfg-thing-stats-seconds', cfg.THING_STATS_RECALC_INTERVAL_SECONDS)));
@@ -1060,7 +1078,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK = Math.max(256, Math.min(500000, Math.floor(getNumber('cfg-astar-iter-budget-per-player', cfg.ASTAR_ITER_BUDGET_PER_PLAYER_TICK))));
     cfg.WORKER_AI_TICK_DELAY = Math.max(1, Math.min(60, Math.floor(getNumber('cfg-worker-ai-tick-delay', cfg.WORKER_AI_TICK_DELAY))));
 
-    snapshot.progression.MAX_THING_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL)));
+    snapshot.progression.MAX_THING_LEVEL = Math.min(THING_LEVEL_CAP, Math.max(1, Math.floor(getNumber('cfg-max-thing-level', snapshot.progression.MAX_THING_LEVEL))));
     snapshot.progression.MAX_RESEARCH_LEVEL = Math.max(1, Math.floor(getNumber('cfg-max-research-level', snapshot.progression.MAX_RESEARCH_LEVEL)));
 
     return snapshot;
@@ -1157,7 +1175,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
         let el = document.getElementById(id);
         if (!el || !el.matches(MAIN_MENU_SETTING_CONTROL_SELECTOR) || el.type === 'file') return;
         if (isCheck || el.type === 'checkbox') el.checked = !!value;
-        else if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === String(value))) return;
+        else if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === String(value))) { const near = _nearestNumericOption(el, value); if (near === null) return; el.value = near; }
         else el.value = String(value);
         changed.push(el);
     };
@@ -1175,7 +1193,7 @@ function applyMainMenuSettingsSnapshot(rawData) {
 
     let importedMaxThingLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-thing-level') || {}).value) || MAX_THING_LEVEL));
     let importedMaxResearchLevel = Math.max(1, Math.floor(Number((document.getElementById('cfg-max-research-level') || {}).value) || MAX_RESEARCH_LEVEL));
-    MAX_THING_LEVEL = importedMaxThingLevel;
+    MAX_THING_LEVEL = Math.min(THING_LEVEL_CAP, importedMaxThingLevel);
     MAX_RESEARCH_LEVEL = importedMaxResearchLevel;
     startingResourcesConfig = normalizeStartingResourcesConfig(data.startingResources || makeDefaultStartingResourcesConfig());
     refreshStartingResourcesPreviewPrecomputedStats();
@@ -1397,41 +1415,7 @@ function resolveTowerPreferredTarget(tower) {
     return null;
 }
 
-function _isTowerPreferredTargetVisibleToOwner(tower, target) {
-    if (!tower || !target) return false;
-    let gx = Number.isFinite(target.gx) ? Math.floor(Number(target.gx)) : Math.floor((Number(target.x) || 0) / TILE);
-    let gy = Number.isFinite(target.gy) ? Math.floor(Number(target.gy)) : Math.floor((Number(target.y) || 0) / TILE);
-    return isGameplayTargetVisibleToPlayer(tower.owner, gx, gy);
-}
-
-function _isTowerPreferredTargetWithinRange(tower, target, rangeArea) {
-    if (!tower || !target) return false;
-    let maxAreaDistance = Math.max(0, Math.floor(Number(rangeArea) || 0));
-    return isWorldTargetWithinAreaRange(tower.x, tower.y, target.x, target.y, maxAreaDistance);
-}
-
-function getTowerPreferredTargetInRange(tower, rangeArea) {
-    if (!tower) return null;
-    let pt = tower.preferredTarget;
-    if (!pt || pt.dead || (pt.energy !== undefined && pt.energy <= 0) || (pt.owner !== undefined && pt.owner === tower.owner)) {
-        pt = resolveTowerPreferredTarget(tower);
-    }
-    if (!pt) {
-        tower.preferredTarget = null;
-        tower.preferredTargetSpec = null;
-        return null;
-    }
-    if (!_isTowerPreferredTargetVisibleToOwner(tower, pt)) {
-        tower.preferredTarget = null;
-        tower.preferredTargetSpec = null;
-        return null;
-    }
-    if (!_isTowerPreferredTargetWithinRange(tower, pt, rangeArea)) return null;
-    tower.preferredTarget = pt;
-    if (!tower.preferredTargetSpec) tower.preferredTargetSpec = getTowerTargetSpecFromEntity(pt);
-    return pt;
-}
-
+// (A preferred target in reach, in sight: the kernel's, tower.rs k_tower_fire.)
 function resolveTowerPreferredTargetVisual(tower) {
     if (!tower) return null;
     let spec = normalizeTowerTargetSpec(tower.preferredTargetSpec);

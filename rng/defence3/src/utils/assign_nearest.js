@@ -86,3 +86,20 @@ function assignNearestXY(xs, ys, has, pts) {
     }
     return pick;
 }
+
+// A rally order's split (main.js applyRallyTargets, assign_worker.js): per
+// point its buildings' tile keys, ascending, and their wire form
+// (id_codec.js actionIdsEncode). keys, xs, ys, has: per building.
+// -> { keys: [Int32Array a point], tkz: [string a point] }
+function rallyAssignTiles(keys, xs, ys, has, points) {
+    const k = points.length, n = keys.length;
+    const pick = k > 1 ? assignNearestXY(xs, ys, has, points) : null;
+    const count = new Int32Array(k), at = new Int32Array(k);
+    if (pick) for (let i = 0; i < n; i++) count[pick[i]]++;
+    else count[0] = n;
+    const out = [];
+    for (let j = 0; j < k; j++) out.push(new Int32Array(count[j]));
+    for (let i = 0; i < n; i++) { const j = pick ? pick[i] : 0; out[j][at[j]++] = keys[i]; }
+    for (const b of out) b.sort();
+    return { keys: out, tkz: out.map(b => actionIdsEncode(b)) };
+}

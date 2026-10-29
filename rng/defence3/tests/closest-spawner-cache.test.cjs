@@ -1,8 +1,8 @@
-// The nearest working spawner (worker.js _findClosestSpawner) through its
-// per-tile cache of the nearest few (_spawnerNearOf) equals the plain scan
+// The nearest working spawner (worker.js _findClosestSpawner: the spawner
+// index and ord.rs k_spawner_nearest) equals the plain scan
 // (by tile distance, then row, column, id), over many queries from the same
 // and other tiles while spawners stop and start working (energy, under
-// construction) and new ones are placed (a new list, a new cache).
+// construction) and new ones are placed (a new index).
 //   node tests/closest-spawner-cache.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -55,12 +55,11 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         if (!want) nulls++;
         if (got !== want) bad = 'query ' + q + ' at ' + tx + ',' + ty + ' owner ' + u.owner + ': ' + (got && got.gx + ',' + got.gy) + ' vs ' + (want && want.gx + ',' + want.gy);
     }
-    const T = _spawnerScanTable(_ownedSpawnersOfType(type, 0));
-    return { checks, bad, nulls, cachedTiles: T.near ? T.near.size : 0, spawners: _getWorkerSpawnersByType(type).length };
+    return { checks, bad, nulls, spawners: _getWorkerSpawnersByType(type).length };
 })())`));
 console.log(JSON.stringify(r));
 assert.equal(r.bad, '', r.bad);
-assert.ok(r.checks >= 6000 && r.cachedTiles > 0 && r.spawners > 100, 'exercised');
+assert.ok(r.checks >= 6000 && r.spawners > 100, 'exercised');
 assert.deepEqual(inst.errors, []);
-console.log('PASS: the cached nearest spawner equals the plain scan over ' + r.checks + ' queries (' + r.cachedTiles + ' tiles cached, ' + r.spawners + ' spawners)');
+console.log('PASS: the nearest spawner by the kernel equals the plain scan over ' + r.checks + ' queries (' + r.spawners + ' spawners)');
 process.exit(0);

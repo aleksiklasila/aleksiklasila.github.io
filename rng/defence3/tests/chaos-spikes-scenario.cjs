@@ -181,7 +181,9 @@ function chaosSetup(o) {
             else if(district===3)key=home?'healer_spawner':barrackKeys[(bx+by+gx+gy)%barrackKeys.length];
             else if(district===4)key=home?'salvager':towerKeys[(gx+gy)%towerKeys.length];
             else if(district===5)key=home?'builder_spawner':towerKeys[(gx+gy)%towerKeys.length];
-            else key=towerKeys[(gx+gy+bx)%towerKeys.length];
+            // (rallyMix: those districts barracks, so most structures are rally
+            // buildings: a player's select-all of ~250k of them.)
+            else key=o.rallyMix?barrackKeys[(gx+gy+bx)%barrackKeys.length]:towerKeys[(gx+gy+bx)%towerKeys.length];
             const site=district===5&&!home;
             const e=place(gx,gy,key,p,!site);
             if(!e)continue;

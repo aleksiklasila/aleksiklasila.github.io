@@ -166,6 +166,16 @@ function simPresentTowerAngle(t) {
     const v = Math.fround(Number(t.angle) || 0);
     if (A[s] !== v) { A[s] = v; p.angleDirty = true; }
 }
+// The turrets that turned this step (tower.js towersTick: k_tower_fire's
+// tiles and angles), by the tile's slot.
+function simPresentTowerAngles(tiles, angles, n) {
+    const p = _simPresentation, A = p ? p.angles : null, TS = p ? p.tileSlot : null;
+    if (!A || !TS) return;
+    for (let i = 0; i < n; i++) {
+        const s = TS[tiles[i]];
+        if (s >= 0 && s < A.length && A[s] !== angles[i]) { A[s] = angles[i]; p.angleDirty = true; }
+    }
+}
 // Per tile, the slot of the structure (towers, barracks, spawners, cell
 // items) the table shows there, -1 none: a tile whose structure went is
 // cleared by it.
@@ -197,6 +207,23 @@ function simPresentTileDirty(gx, gy) {
     if (!_simPresentation || !(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
     if (_simPresentDirtyTiles.length < 65536) _simPresentDirtyTiles.push((gy | 0) * GRID_W + (gx | 0));
 }
+// A rally order's building (main.js _rallySetTiles): its rally cells of the
+// shown table (and the one being filled) written at once, its row not rewritten
+// (a bulk rally of 250k buildings as dirty tiles: a full row each, ~0.5 s).
+function simPresentRally(e, x, y, id) {
+    const p = _simPresentation, s = e._sslot;
+    if (!p || s === undefined || _simStructSlots.owner[s] !== e) return;
+    const on = x === x && y === y;
+    _simPresentRallyCells(p.structures, s, on, x, y, id);
+    _simPresentRallyCells(p.structuresNext, s, on, x, y, id);
+    p.rallyDirty = true;
+}
+function _simPresentRallyCells(F, s, on, x, y, id) {
+    if (!F || s >= F.cap) return;
+    F.rallyX[s] = on ? x : 0; F.rallyY[s] = on ? y : 0; F.rallyTargetId[s] = id === id ? id : -1;
+    F.flags[s] = on ? F.flags[s] | SIM_SF_RALLY : F.flags[s] & ~SIM_SF_RALLY;
+    F.orderTick[s] = currentTick;
+}
 function _simPresentStructureChanges(p) {
     let F = p.structures;
     if (!F || typeof tileEntityChangesSince !== 'function') return;
@@ -205,9 +232,12 @@ function _simPresentStructureChanges(p) {
         const d = _simPresentDirtyTiles; _simPresentDirtyTiles = [];
         tiles = tiles && tiles.length ? [...new Set([...tiles, ...d])] : [...new Set(d)];
     }
-    if (!tiles || !tiles.length) return;
+    const rally = p.rallyDirty === true;
+    p.rallyDirty = false;
+    if ((!tiles || !tiles.length) && !rally) return;
+    if (!tiles) tiles = [];
     const S = _simStructSlots, T = _simPresentTileSlots(p);
-    let count = Math.min(F.cap, p.structCount | 0), wrote = false;
+    let count = Math.min(F.cap, p.structCount | 0), wrote = rally;
     for (const t of tiles) {
         const gx = t % GRID_W, gy = (t - gx) / GRID_W;
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
@@ -307,31 +337,16 @@ function simPresentationReturn(buf) {
 }
 
 function* simPresentationProjectiles() {
-    const p=_simPresentation, S=_simProjSlots, stamp=++S.tick, list=projectiles;
-    let i=0;
-    for(const e of list) {if(e) S.slotOf(e);if((++i&127)===0) yield;}
+    const p=_simPresentation, n=_pj.hw;
     let F=p.projectiles;
-    if(!F || F.cap<S.owner.length) {
-        const cap=Math.max(64,Math.ceil(S.owner.length*1.25/64)*64);
+    if(!F || F.cap<n) {
+        const cap=Math.max(64,Math.ceil(n*1.25/64)*64);
         F=p.projectiles=simTableViews(SIM_PROJ_SPEC,new SharedArrayBuffer(cap*SIM_PROJ_SPEC.slotBytes),cap);
     }
-    let j=0;
-    for(const e of list) {
-        if(!e || S.owner[e._pslot]!==e) continue;
-        const s=e._pslot;S.stamp[s]=stamp;F.order[j++]=s;
-        F.alive[s]=1;F.serial[s]=S.serials[s];F.x[s]=e.x;F.y[s]=e.y;
-        F.px[s]=Number.isFinite(e.prevX)?e.prevX:e.x;F.py[s]=Number.isFinite(e.prevY)?e.prevY:e.y;
-        F.vx[s]=Number(e.vx)||0;F.vy[s]=Number(e.vy)||0;F.sx[s]=Number(e.startX)||0;F.sy[s]=Number(e.startY)||0;
-        F.aim[s]=Number(e.aimDist)||0;F.type[s]=_simFrameCode(e.type);F.owner[s]=Number.isFinite(e.sourceOwner)?e.sourceOwner:-1;
-        F.life[s]=Math.max(-32000,Math.min(32000,Number(e.life)||0));
-        if((j&63)===0) yield;
-    }
-    for(let s=0;s<S.owner.length;s++) {
-        if(S.stamp[s]!==stamp) {F.alive[s]=0;const e=S.owner[s];if(e){e._pslot=undefined;S.owner[s]=null;S.free.push(s);S.version++;}}
-        if((s&511)===511) yield;
-    }
-    S.orderChanged(F.order,j);simPresentationBind();
-    p.worker.postMessage({type:'projectiles',table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version},revision:++p.revision});
+    yield;
+    const j=simProjFill(F,n);
+    simPresentationBind();
+    p.worker.postMessage({type:'projectiles',table:{buf:F.buf,cap:F.cap,n,count:j,mver:_simProjPres.version},revision:++p.revision});
 }
 
 // (A value changed: the slot's next mark, unit.pvAt, so frames by changes

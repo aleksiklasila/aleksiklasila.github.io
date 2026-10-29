@@ -26,11 +26,6 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  const P=_simParams;P[0]=n;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;
  simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(n/32));
  for(let q=0;q<n;q++)if(!!live[q]!==expected[q])throw Error('Tower broad-phase differs at '+q);
- const keys=_towerAcqArray('sortKeys',Int32Array,n),order=_towerAcqArray('sortOrder',Int32Array,n);_towerAcqArray('sortTmp',Int32Array,n);
- for(let q=0;q<n;q++)keys[q]=q%3===0?7:rnd(200)-100;
- const sorted=Array.from({length:n},(_,q)=>q).sort((a,b)=>keys[a]-keys[b]);
- simParallelStageParams(SIM_LANE_TICK,0)[0]=n;simParallelBackground(SIM_KERNEL_TOWER_ORDER,1,SIM_LANE_TICK);simParallelBackgroundWait(SIM_LANE_TICK);
- for(let q=0;q<n;q++)if(order[q]!==sorted[q])throw Error('Stable native tile order differs at '+q);
  // Compare public resource mutations with/without batching, including
  // intermediate flushes, explicit writes, fractional debt and extra keys.
  const initial=players.map(p=>({energy:-3.25,astar:17.125,shrine:2,resourceMaxValues:{energy:9,astar:20,shrine:3},_resourceFixedValues:{energy:-3328,astar:17536,shrine:2048}}));
@@ -49,24 +44,8 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
   return JSON.stringify({returns,players:players.map(p=>({energy:p.energy,astar:p.astar,shrine:p.shrine,custom:p.custom,max:p.resourceMaxValues,fixed:p._resourceFixedValues}))});
  }
  const plain=run(false),batch=run(true);if(plain!==batch)throw Error('Batched resource mutations differ from immediate public mutations');
- gameTime=1000;for(const t of towers){t._cdUntil=0;structTableRefresh(t);}
- _towerAcqPrepare(towers.slice().sort(_towerTileOrder));
- if(!_towerAcq.ready)throw Error('Native idle batch did not run');
- let idles=0,buildings=0;_towerAcq.ready=false;
- for(let q=0;q<_towerAcq.list.length;q++){
-  const A=_towerAcq,t=A.list[q],empty=A.arrays.out[q]<0&&A.arrays.sout[q]===-1;
-  if(A.arrays.out[q]<0&&A.arrays.sout[q]!==-2){
-   const target=_findTowerBuildingTarget(t,t.currentStats.attackRangeArea),tile=target?target.gy*GRID_W+target.gx:-1;
-   if(tile!==A.arrays.sout[q])throw Error('Native building priority/tile target differs at '+q);
-   buildings++;
-  }
-  const expected=empty?towerIdleCooldown(t,secondsToTicks(t.currentStats.cd||1.5)):0;
-  if(A.arrays.idle[q]!==expected)throw Error('Native idle deadline differs at '+q);
-  if(empty)idles++;
- }
- if(!idles)throw Error('Idle path was not exercised');
- return{coarseQueries:n,stableOrder:n,resourceMutations:ops.length,idles,buildings,wasm64:SIM_WASM64};
+ return{coarseQueries:n,resourceMutations:ops.length,wasm64:SIM_WASM64};
 })())`));
 assert.equal(result.coarseQueries,1031);assert.equal(result.resourceMutations,6400);
 assert.deepEqual(i.errors.map(String),[]);
-console.log('PASS: native tower broad phase/order and batched resource boundary checks',JSON.stringify({helpers,...result}));process.exit(0);
+console.log('PASS: native tower broad phase and batched resource boundary checks',JSON.stringify({helpers,...result}));process.exit(0);

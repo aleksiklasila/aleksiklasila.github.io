@@ -199,347 +199,34 @@ function _getCanonicalAreaCellsById(areaId, fallbackArea = null) {
     return area.cells.filter(cp => cp && Number.isFinite(cp.x) && Number.isFinite(cp.y));
 }
 
-function _getAdjacencySignatureAt(gx, gy) {
-    if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
-    let ref = getTileEntityRef(gx, gy);
-    if (!ref || !_isOperationalAdjacencyEntity(ref)) return null;
-    if (ref instanceof Tower) {
-        if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_WALL) return null;
-        let owner = Number.isFinite(ref.owner) ? ref.owner : grid[gy][gx].owner;
-        if (!Number.isFinite(owner) || owner < 0) return null;
-        let type = String(ref.type || '');
-        if (!type) return null;
-        return {
-            obj: ref,
-            isTower: true,
-            owner,
-            type,
-            unitType: '',
-            sigKey: `T|${owner}|${type}`
-        };
-    }
-
-    if (getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE) return null;
-    let owner = Number.isFinite(ref.owner) ? ref.owner : (grid[gy] && grid[gy][gx] ? grid[gy][gx].owner : -1);
-    if (!Number.isFinite(owner) || owner < 0) return null;
-    let type = String(ref.type || '');
-    if (!type) return null;
-    let unitType = type === 'barrack' ? String(ref.unitType || 'norm') : '';
-    return {
-        obj: ref,
-        isTower: false,
-        owner,
-        type,
-        unitType,
-        sigKey: `I|${owner}|${type}|${unitType}`
-    };
-}
-
-// Portals (cloud towers) join path regions; spawners are route targets.
-function _adjacencyObjAffectsPaths(obj) {
-    if (obj instanceof Tower) return !!(obj.baseStats && obj.baseStats.isCloud);
-    return obj instanceof CollectorSpawner || obj instanceof AstarSpawner || obj instanceof SalvagerSpawner
-        || obj instanceof BuilderSpawner || obj instanceof HealerSpawner || obj instanceof ResearchSpawner;
-}
-
+// Adjacency now (outside a match's ticks: placements before the start,
+// tools, a test with the lane off): the lane's post and commit at once, the
+// flood on this thread.
 function _runAdjacencyRecalculation() {
     if (!_adjacencyNeedsRecalc) return;
-    if (!_adjacencyDirtyAll && _adjacencyDirtyTiles.size <= 0) {
-        _adjacencyNeedsRecalc = false;
-        _adjacencyPassiveRefreshMode = false;
-        return;
-    }
-
-    let passiveRefresh = !!_adjacencyPassiveRefreshMode;
-    // (Many dirty tiles: the first ADJACENCY_TILES_PER_TICK by tile index
-    // now, the rest on the next ticks; only a forced recalculation does every
-    // structure at once.)
-    let runFull = _adjacencyDirtyAll;
-    let dirtyKeys = null;
-    if (!runFull) dirtyKeys = _adjacencyDirtyTiles.takeFirst(ADJACENCY_TILES_PER_TICK);
-    // (Each touched area's state before: the whole list only for a full run.)
-    let prevAreaActive = runFull ? areas.map(a => !!(a && a.active)) : null, prevActive = new Map();
-    let areaVisualsChanged = false;
-    let touchedAreaIds = new Set();
-    let seeds = [];
-    let seedKeySet = new Set();
-
-    let touchesPathTopology = false;
-    let pushSeedAt = (gx, gy) => {
-        let sig = _getAdjacencySignatureAt(gx, gy);
-        if (!sig || !sig.obj || !Number.isFinite(sig.obj.gx) || !Number.isFinite(sig.obj.gy)) return;
-        if (!touchesPathTopology && _adjacencyObjAffectsPaths(sig.obj)) touchesPathTopology = true;
-        let key = _adjTileKey(sig.obj.gx, sig.obj.gy);
-        if (seedKeySet.has(key)) return;
-        seedKeySet.add(key);
-        seeds.push(sig.obj);
-    };
-
-    if (runFull) {
-        for (let i = 0; i < areas.length; i++) touchedAreaIds.add(i);
-        for (let ent of _activeTileEntities) {
-            if (!ent || !Number.isFinite(ent.gx) || !Number.isFinite(ent.gy)) continue;
-            pushSeedAt(ent.gx, ent.gy);
-        }
-    } else {
-        for (let key of dirtyKeys) {
-            let gx = key % GRID_W;
-            let gy = Math.floor(key / GRID_W);
-            if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
-            let cell = grid[gy] && grid[gy][gx];
-            if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) touchedAreaIds.add(cell.areaId);
-            for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                    pushSeedAt(gx + dx, gy + dy);
-                }
-            }
-        }
-    }
-
-    if (runFull) {
-        for (let a of areas) if (a) a.active = false;
-    } else {
-        for (let aId of touchedAreaIds) {
-            let a = getAreaById(aId);
-            if (a) { prevActive.set(aId, !!a.active); a.active = false; }
-        }
-    }
-
-    const areaSignatureCache = new Map();
-    const getAreaSignatureKey = (aId) => {
-        try {
-            if (areaSignatureCache.has(aId)) return areaSignatureCache.get(aId);
-            let area = getAreaById(aId);
-            let areaCells = _getCanonicalAreaCellsById(aId, area);
-            if (!area || areaCells.length <= 0) {
-                areaSignatureCache.set(aId, null);
-                return null;
-            }
-            let firstKey = null;
-            for (let cp of areaCells) {
-                let cx = cp?.x;
-                let cy = cp?.y;
-                if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-                    areaSignatureCache.set(aId, null);
-                    return null;
-                }
-                let sig = _getAdjacencySignatureAt(cx, cy);
-                if (!sig) {
-                    areaSignatureCache.set(aId, null);
-                    return null;
-                }
-                if (firstKey === null) firstKey = sig.sigKey;
-                else if (firstKey !== sig.sigKey) {
-                    areaSignatureCache.set(aId, null);
-                    return null;
-                }
-            }
-            areaSignatureCache.set(aId, firstKey);
-            return firstKey;
-        } catch {
-            areaSignatureCache.set(aId, null);
-            return null;
-        }
-    };
-
-    let visited = new Set();
-    let dirs4 = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-
-    for (let seed of seeds) {
-        if (!seed || !Number.isFinite(seed.gx) || !Number.isFinite(seed.gy)) continue;
-        let rootSig = _getAdjacencySignatureAt(seed.gx, seed.gy);
-        if (!rootSig) continue;
-        let rootKey = _adjTileKey(seed.gx, seed.gy);
-        if (visited.has(rootKey)) continue;
-
-        let queue = [{ x: seed.gx, y: seed.gy }];
-        let qHead = 0;
-        let group = [];
-        let touchedAreas = new Set();
-
-        const enqueueMatchingCell = (tx, ty) => {
-            if (tx < 0 || tx >= GRID_W || ty < 0 || ty >= GRID_H) return;
-            let key = _adjTileKey(tx, ty);
-            if (visited.has(key)) return;
-            let sig = _getAdjacencySignatureAt(tx, ty);
-            if (!sig || sig.sigKey !== rootSig.sigKey) return;
-            visited.add(key);
-            queue.push({ x: tx, y: ty });
-            group.push(sig.obj);
-            let cell = grid[ty] && grid[ty][tx];
-            if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) {
-                touchedAreas.add(cell.areaId);
-                touchedAreaIds.add(cell.areaId);
-            }
-        };
-
-        enqueueMatchingCell(seed.gx, seed.gy);
-
-        while (qHead < queue.length) {
-            let cur = queue[qHead++];
-            for (let d of dirs4) {
-                let nx = cur.x + d[0], ny = cur.y + d[1];
-                enqueueMatchingCell(nx, ny);
-
-                let cloud = getTowerAtTile(nx, ny);
-                if (!cloud || cloud.owner !== rootSig.owner || !_isOperationalAdjacencyEntity(cloud) || !(cloud.baseStats && cloud.baseStats.isCloud)) continue;
-                let partner = getPairedCloudTower(cloud, rootSig.owner);
-                let endpoints = [cloud];
-                if (partner) endpoints.push(partner);
-                for (let ep of endpoints) {
-                    for (let d2 of dirs4) {
-                        enqueueMatchingCell(ep.gx + d2[0], ep.gy + d2[1]);
-                    }
-                }
-            }
-        }
-
-        if (group.length <= 0) continue;
-
-        let areaMult = 1;
-        for (let aId of touchedAreas) {
-            let area = getAreaById(aId);
-            if (!area) continue;
-            let areaSig = getAreaSignatureKey(aId);
-            if (areaSig !== rootSig.sigKey) continue;
-            let power = (area.multiplierLevel || 0) + 1;
-            let areaCellCount = _getCanonicalAreaCellsById(aId, area).length;
-            areaMult *= detPow(Math.max(1, areaCellCount), power);
-        }
-
-        let groupSize = group.length;
-        for (let obj of group) {
-            _adjApplyMember(obj, groupSize, areaMult, passiveRefresh);
-        }
-    }
-    for (let aId of touchedAreaIds) {
-        let a = getAreaById(aId);
-        if (!a) continue;
-        let nextActive = !!getAreaSignatureKey(aId);
-        if (!passiveRefresh && !nextActive && a.multiplierLevel > 0) {
-            a.multiplierLevel = 0;
-            areaVisualsChanged = true;
-        }
-        const wasActive = prevAreaActive ? !!prevAreaActive[aId] : (prevActive.has(aId) ? prevActive.get(aId) : !!a.active);
-        if (wasActive !== nextActive) areaVisualsChanged = true;
-        a.active = nextActive;
-    }
-
-    if (areaVisualsChanged) dirtyAreas = true;
-
-    // Paths and routes only change when walkability does (placements,
-    // removals and mines bump on their own) or when a portal or spawner may
-    // have come into service: a finished barrack or turret keeps every
-    // path cache.
-    if (runFull || touchesPathTopology) _bumpPathTopologyVersion();
-    if (runFull) _adjacencyDirtyTiles.clear();
-    _adjacencyNeedsRecalc = _adjacencyDirtyTiles.size > 0;
-    _adjacencyDirtyAll = false;
-    _adjacencyLastRecalcTick = gameTime;
-    _adjacencyPassiveRefreshMode = false;
+    if (typeof simParallelRun !== 'function' || typeof _simWasmX === 'undefined' || !_simWasmX) return;
+    // (A post takes every dirty tile.)
+    _adjacencyLanePost(true);
+    _adjacencyLaneCommit();
 }
-
-// One member of an adjacency group: its stacks, levels, upgrade/stacking
-// state and stats from the group's size and area multiplier.
-function _adjApplyMember(obj, groupSize, areaMult, passiveRefresh) {
-    const priorLevel=obj.effectiveLevel, priorPotential=obj.potentialEffectiveLevel, priorUpgrade=obj.isUpgrading, priorGroup=obj.effectiveGroupSize, priorArea=obj.effectiveAreaMult;
-    let nextStacks = getThingStackedStacks(obj);
-    let nextManualStacks = getThingManualStacks(obj);
-    let actualStacks = nextStacks || 1;
-    let nextEffectiveStacks = actualStacks * groupSize * areaMult;
-    let nextPotentialStacks = Math.max(actualStacks, nextManualStacks) * groupSize * areaMult;
-    let nextPotentialLevel = stackCountToLevel(nextPotentialStacks);
-    let nextEffectiveLevel = stackCountToLevel(nextEffectiveStacks);
-    let nextIsUpgrading = !!obj.isUpgrading;
-
-    if (!passiveRefresh) {
-        if (nextEffectiveLevel < Math.max(1, Math.floor(Number(obj.effectiveLevel) || 1))) {
-            nextIsUpgrading = false;
-        }
-
-        if (!isAutoUpgradeEnabled(obj) && nextIsUpgrading) {
-            nextIsUpgrading = false;
-        }
-    }
-
-    // Passive area refresh should only affect adjacency-derived values.
-    if (!passiveRefresh) {
-        obj.stacks = nextStacks;
-        obj.manualStacks = nextManualStacks;
-    }
-    obj.effectiveStacks = nextEffectiveStacks;
-    obj.potentialEffectiveLevel = nextPotentialLevel;
-    // (An upgrade may come due: the workers' sites; a trap's status strength.)
-    if (obj.effectiveLevel !== nextEffectiveLevel && typeof workSiteDirty === 'function') workSiteDirty(obj.gx, obj.gy);
-    if (obj.effectiveLevel !== nextEffectiveLevel && typeof simTrapDirty === 'function') simTrapDirty(obj.gx, obj.gy);
-    obj.effectiveLevel = nextEffectiveLevel;
-    if (!passiveRefresh) obj.isUpgrading = nextIsUpgrading;
-
-    let baseLevel = getThingBaseLevel(obj);
-    let researchedMaxLevel = getThingResearchedMaxLevel(obj);
-    let maxAutoUpgradeLevel = Math.min(obj.effectiveLevel, researchedMaxLevel);
-    if (!passiveRefresh && baseLevel < maxAutoUpgradeLevel && !obj.underConstruction && !obj.isUpgrading && isAutoUpgradeEnabled(obj)) {
-        beginUpgradeProgress(obj, baseLevel + 1);
-    }
-
-    if (!passiveRefresh) {
-        if (!obj.underConstruction && !obj.isUpgrading) {
-            // Only set isStacking if there are remaining stacks AND they won't exceed max level
-            if (getThingRemainingStacks(obj) > 0 && isAutoStackEnabled(obj)) {
-                let nextStackLevel = stackCountToLevel(getThingStackedStacks(obj) + 1);
-                let maxLevel = getThingResearchedMaxLevel(obj);
-                obj.isStacking = nextStackLevel <= maxLevel;
-            } else {
-                obj.isStacking = false;
-            }
-            if (!obj.isStacking) obj.stackingWorkDone = 0;
-        } else if (obj.isUpgrading) {
-            obj.isStacking = false;
-        }
-    }
-
-    obj.effectiveGroupSize = groupSize;
-    obj.effectiveAreaMult = areaMult;
-    // Shared rows already reflect these inputs. Only state/visual effects
-    // need an event when the group's actual levels or upgrade state change.
-    if (priorLevel === obj.effectiveLevel && priorPotential === nextPotentialLevel
-        && priorUpgrade === obj.isUpgrading && priorGroup === groupSize && priorArea === areaMult) return;
-    if (obj.updateStats) obj.updateStats();
-    else {
-        const energy=Number(obj.energy);
-        obj.energy=Math.max(1,Math.min(obj.maxEnergy,Number.isFinite(energy)?energy:obj.maxEnergy));
-        updateItemTextCache(obj);
-        if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(obj);
-    }
-}
-const ADJACENCY_TILES_PER_TICK = 1200 * 8;
 const ADJACENCY_BATCH_TICKS = 8;
 
 // ---- Adjacency on a helper lane (BRAIN_OFF_MAIN_THREAD_PLAN.md) ----
 // The main thread keeps a signature grid current (O(1) per dirty tile at
 // the post), posts the flood (SIM_KERNEL_ADJ_FLOOD) every
 // ADJACENCY_BATCH_TICKS ticks at phase 3 and takes the last post's result
-// then: its groups' members are applied (_adjApplyMember) at most
-// ADJ_APPLY_PER_TICK a tick, in order; areas' active flags at once. Every
-// peer posts, commits and applies on the same ticks; a resync drops it all
-// and marks every tile (adjacencyLaneReset).
+// then: all its groups' members applied to their rows by one parallel
+// kernel (SIM_KERNEL_ADJ_APPLY, ord.rs k_adj_apply: levels, upgrades,
+// stacking, energy, the stat entries and descriptors), the JavaScript only
+// its events (work sites, traps, vision registrations, lasers); areas'
+// active flags at once. Every peer posts and
+// commits on the same ticks; a resync drops it all and marks every tile
+// (adjacencyLaneReset).
 let ADJACENCY_LANE = true;
 const ADJ_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
-// (Each member's stats are made again: ~8 us each, 2000 were 15-20 ms on
-// the ticks after a big group changed. What a batch has not applied by the
-// next goes on after it.)
-const ADJ_APPLY_PER_TICK = 600;
-const _adjL = { sig: null, sigIds: new Map(), posted: false, passive: false, paths: false, outs: 0, queue: null, qHead: 0, qLen: 0, coff: null, ctile: null, cfor: null, mul: null };
-function _adjSigCode(gx, gy) {
-    const sig = _getAdjacencySignatureAt(gx, gy);
-    if (!sig) return -1;
-    let id = _adjL.sigIds.get(sig.sigKey);
-    // (Ids: owner in the low byte, then a per-signature index; the same on
-    // every peer: interned in the order signatures are first met, which is
-    // the same ticks' same tiles everywhere.)
-    if (id === undefined) { id = ((_adjL.sigIds.size + 1) << 8) | (sig.owner & 255); _adjL.sigIds.set(sig.sigKey, id); }
-    return id;
-}
+// (Members a job of the apply kernel.)
+const ADJ_APPLY_PER_JOB = 8192;
+const _adjL = { posted: false, passive: false, paths: false, outs: 0, coff: null, ctile: null, cfor: null, mul: null, tabs: null };
 function _adjArr(name, Type, n) {
     let a = _simParReg[name];
     if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, simReserveCap(Math.max(1, n), 64)); simParallelBind(name, a); simHeapFree(old); }
@@ -547,52 +234,138 @@ function _adjArr(name, Type, n) {
 }
 function adjacencyLaneReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(ADJ_LANE);
-    _adjL.posted = false; _adjL.qLen = 0; _adjL.qHead = 0; _adjL.cfor = null;
+    _adjL.posted = false; _adjL.cfor = null;
     _adjacencyDirtyAll = true; _adjacencyNeedsRecalc = true;
 }
-// Every tick: the apply queue; on the batch tick, the commit and the post.
-function adjacencyLaneStep() {
-    const L = _adjL;
-    if (L.queue && L.qHead < L.qLen) {
-        const Qt = L.queue.t, Qs = L.queue.s, Qm = L.queue.m, Qg = L.queue.g, end = Math.min(L.qLen, L.qHead + ADJ_APPLY_PER_TICK);
-        for (let i = L.qHead; i < end; i++) {
-            const t = Qt[i], gx = t % GRID_W, gy = (t - gx) / GRID_W, obj = getTileEntityRef(gx, gy);
-            // (Still that structure, with the group's signature.)
-            if (!obj || L.sig[t] !== Qg[i] || obj.gx !== gx || obj.gy !== gy) continue;
-            _adjApplyMember(obj, Qs[i], Qm[i], L.queue.passive);
+// Static building stat tables (data_dynamic.js PRECOMPUTED_STATS_MAP: per
+// building key, level and research level; made once a stat map, never in
+// play): stt.mxe the maximum energy (floored, at least 1; NaN none), stt.vis
+// / stt.atk the vision and attack range in area steps (-1 none), at
+// [(key * L1 + level) * R1 + research level]. Keys in _statKeyIds order.
+const _statKeyIds = new Map();
+function statKeyId(key) { let k = _statKeyIds.get(key); if (k === undefined) { k = _statKeyIds.size; _statKeyIds.set(key, k); } return k; }
+const _stt = { map: null, nk: 0, L1: 0, R1: 0 };
+function statTablesStatic() {
+    const M = PRECOMPUTED_STATS_MAP && PRECOMPUTED_STATS_MAP.building;
+    for (const key in M) statKeyId(key);
+    const nk = _statKeyIds.size, L1 = MAX_THING_LEVEL + 1, R1 = MAX_RESEARCH_LEVEL + 1;
+    if (_stt.map === M && _stt.nk === nk && _stt.L1 === L1 && _stt.R1 === R1 && simHeapHas(_stt.mxe)) return _stt;
+    const n = Math.max(1, nk * L1 * R1);
+    const mxe = _adjArr('stt.mxe', Float64Array, n), vis = _adjArr('stt.vis', Int32Array, n), atk = _adjArr('stt.atk', Int32Array, n);
+    mxe.fill(NaN); vis.fill(-1); atk.fill(-1);
+    for (const [key, kb] of _statKeyIds) {
+        const levels = (M && M[key]) || [];
+        for (let lv = 1; lv < L1; lv++) {
+            const e = levels[lv] || {};
+            for (let r = 0; r < R1; r++) {
+                const i = (kb * L1 + lv) * R1 + r;
+                // (As _getBuildingPlayerPrecomputedEntryObject makes them.)
+                const me = Number(e.maxEnergy ? e.maxEnergy[r] : NaN);
+                mxe[i] = Number.isFinite(me) ? Math.fround(Math.max(1, Math.floor(me))) : NaN;
+                vis[i] = e.visionRange ? areaSteps(e.visionRange[r]) : -1;
+                atk[i] = e.attackRange ? areaSteps(e.attackRange[r]) : -1;
+            }
         }
-        L.qHead = end;
     }
+    Object.assign(_stt, { map: M, nk, L1, R1, mxe, vis, atk });
+    return _stt;
+}
+// Per owner row (0 none, 1 + the player) and building key: research levels
+// of maxEnergy, visionRange, attackRange (adj.rlv, three a pair), boost
+// levels of the boosted stats (adj.bl: data_dynamic.js _statBoostLevels as
+// levels, boostStepLevels), the researched maximum level (adj.rml:
+// getThingResearchedMaxLevel). Small arrays, made again when research or a
+// boost changes (the stats version), the players or the keys.
+function _adjPlayerStats(S) {
+    const np = players.length + 1, nk = S.nk;
+    const ver = _precomputedStatsVersion + '|' + np + '|' + nk + '|' + (typeof gameStarted !== 'undefined' && gameStarted ? 1 : 0);
+    const X = _adjL.ps;
+    if (X && X.ver === ver && simHeapHas(X.rml)) return X;
+    const n = Math.max(1, np * nk);
+    const P = { ver, np, rml: _adjArr('adj.rml', Int32Array, n), rlv: _adjArr('adj.rlv', Int32Array, 3 * n), bl: _adjArr('adj.bl', Int32Array, n) };
+    const MAXR = Math.max(1, MAX_RESEARCH_LEVEL), MAXL = Math.max(1, MAX_THING_LEVEL);
+    P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 3 * nk); P.bl.fill(0, 0, nk);
+    for (let o = 0; o < np - 1; o++) for (const [key, kb] of _statKeyIds) {
+        const i = (o + 1) * nk + kb;
+        const researched = Math.max(0, Math.floor(getPlayerResearchLevel(o, 'building', key, 'maxLevel') || 0));
+        P.rml[i] = Math.max(1, Math.min(MAXL, 1 + Math.round(researched * (MAXL - 1) / MAXR)));
+        P.rlv[3 * i] = getPlayerResearchLevel(o, 'building', key, 'maxEnergy');
+        P.rlv[3 * i + 1] = getPlayerResearchLevel(o, 'building', key, 'visionRange');
+        P.rlv[3 * i + 2] = getPlayerResearchLevel(o, 'building', key, 'attackRange');
+        P.bl[i] = boostStepLevels(_statBoostLevels(o, 'building', key, 'visionRange'));
+    }
+    return (_adjL.ps = P);
+}
+// Per stationary type its building key's id (adj.tykey; -1 none).
+function _adjTypeKeys() {
+    const n = _stationaryTypes.length, L = _adjL;
+    if (L.tyk && L.tykN === n && simHeapHas(L.tyk)) return n;
+    const K = L.tyk = _adjArr('adj.tykey', Int32Array, Math.max(1, n));
+    for (let ty = 0; ty < n; ty++) {
+        const raw = _stationaryTypes[ty];
+        let key = _sBuildingStatKeys.get(raw);
+        if (key === undefined) { key = normalizeBuildingResearchKey(raw); _sBuildingStatKeys.set(raw, key); }
+        const k = _normalizePlayerPrecomputedBuildingKey(key);
+        K[ty] = _statKeyIds.has(k) ? _statKeyIds.get(k) : -1;
+    }
+    L.tykN = n;
+    return n;
+}
+// The columns of the apply kernel's classes (ord.rs ADJ_COLS a class), as
+// pointer words in adj.ctab (a class without a table: zeros, never met).
+const _ADJ_CTAB_COLS = ['gx', 'gy', 'stacks', 'manualStacks', 'effectiveStacks', 'level', 'effectiveLevel', 'potentialEffectiveLevel', 'isStacking', 'stackingWorkDone',
+    'autoUpgradeEnabled', 'isUpgrading', 'effectiveGroupSize', 'effectiveAreaMult', 'autoStackEnabled', '_ow', '_en', '_vsGen', '_vsR', '$tok', 'upgrademaxEnergy',
+    '_mxOv', '_ovMx', '_ovVs', '$mxn'];
+function _adjApplyClasses(CT) {
+    const classes = STRUCT_STATUS_CLASSES(), W = _ADJ_CTAB_COLS.length;
+    for (let c = 0; c < 9; c++) {
+        const C = classes[c], T = C ? _sTables.get(C) : null;
+        if (!T || !T.n) { CT.fill(0, c * W, c * W + W); continue; }
+        if (!_sColsInHeap(T) || !simHeapHas(T.mTok)) _sTableGrow(T, T.cap);
+        if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; }
+        for (let j = 0; j < W; j++) {
+            const k = _ADJ_CTAB_COLS[j], a = k === '$tok' ? T.mTok : k === '$mxn' ? T.mxOvN : T['c_' + k];
+            CT[c * W + j] = _simWEnc(_simHeapPtrOf(a));
+        }
+    }
+}
+// The flood's no members applied (k_adj_apply on the helpers), then its events
+// in member order.
+function _adjApplyRun(no, passive) {
+    const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), R = _simParReg;
+    const CT = _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length), jobs = Math.ceil(no / ADJ_APPLY_PER_JOB);
+    const ev = _adjArr('adj.ev', Int32Array, 4 * no), evn = _adjArr('adj.evn', Int32Array, 16 * jobs);
+    for (const k of ['code', 'own', 'stab', 'rrow', 'uc', 'brain', 'val']) simParallelBind('st.' + k, _ST[k]);
+    _adjApplyClasses(CT);
+    const laser = _stationaryTypeIds.get('laser'), vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+    const P = _simParams;
+    P[0] = no; P[1] = ADJ_APPLY_PER_JOB; P[2] = passive ? 1 : 0; P[3] = GRID_W; P[4] = MAX_THING_LEVEL; P[5] = S.nk; P[6] = X.np; P[7] = 0;
+    P[8] = vis ? 1 : 0; P[9] = vis ? _visCover.gen : 0; P[10] = laser === undefined ? -1 : laser; P[11] = S.L1; P[12] = ST_OWNER_NONE; P[13] = NT; P[14] = S.R1;
+    simParallelRun(SIM_KERNEL_ADJ_APPLY, jobs);
+    const OT = R['adj.otile'], classes = STRUCT_STATUS_CLASSES();
+    for (let j = 0; j < jobs; j++) for (let q = 0, n = evn[j * 16], b = j * ADJ_APPLY_PER_JOB; q < n; q++) {
+        const e = 4 * (b + q), T = _sTables.get(classes[ev[e]]), obj = T ? T.rowObj[ev[e + 1]] : null, flags = ev[e + 2], i = ev[e + 3];
+        if (!obj) continue;
+        if (flags & 2) { const t = OT[i], gx = t % GRID_W, gy = (t - gx) / GRID_W; workSiteDirty(gx, gy); simTrapDirty(gx, gy); }
+        if (flags & 16) visCoverOnBuildingChanged(obj);
+        if ((flags & 32) && obj.laserCheck) obj.laserCheck();
+    }
+}
+// On the batch tick: the last post's commit, then the next post.
+function adjacencyLaneStep() {
     if (!simStepCrosses(-3, ADJACENCY_BATCH_TICKS)) return;
-    // The last post's result.
+    _adjacencyLaneCommit();
+    _adjacencyLanePost(false);
+}
+// The last post's result (the flood's members applied, the areas' flags).
+function _adjacencyLaneCommit() {
+    const L = _adjL;
     if (L.posted) {
-        simParallelBackgroundWait(ADJ_LANE);
+        if (!L.sync) simParallelBackgroundWait(ADJ_LANE);
         L.posted = false;
         const R = _simParReg, CNT = R['adj.ocnt'], no = CNT[0], na = CNT[2];
         const OT = R['adj.otile'], OG = R['adj.ogrp'], GS = R['adj.gsize'], GM = R['adj.gmul'], OA = R['adj.oarea'], OACT = R['adj.oact'];
-        // (Members the last batch has not applied yet: after this batch's,
-        // those of tiles it does not have (it supersedes the rest). A passive
-        // batch's are dropped by an active one and the other way round: one
-        // mode a queue.)
-        const P0 = L.queue, keep = P0 && P0.passive === L.passive ? L.qLen - L.qHead : 0, cap = no + keep;
-        const Q = L.queue = (!P0 || P0.t.length < cap || keep > 0)
-            ? { t: new Int32Array(simReserveCap(cap, 1024)), s: new Int32Array(simReserveCap(cap, 1024)), m: new Float64Array(simReserveCap(cap, 1024)), g: new Int32Array(simReserveCap(cap, 1024)), passive: false }
-            : P0;
-        const SN = R['adj.sig'];
-        for (let i = 0; i < no; i++) { const g = OG[i], t = OT[i]; Q.t[i] = t; Q.s[i] = GS[g]; Q.m[i] = GM[g]; Q.g[i] = SN[t]; }
-        let len = no;
-        if (keep > 0) {
-            const N = GRID_W * GRID_H;
-            if (!L.inNew || L.inNew.length !== N) { L.inNew = new Int32Array(N); L.inNewStamp = 0; }
-            const stamp = ++L.inNewStamp;
-            for (let i = 0; i < no; i++) L.inNew[OT[i]] = stamp;
-            for (let i = L.qHead; i < L.qLen; i++) {
-                const t = P0.t[i];
-                if (L.inNew[t] === stamp) continue;
-                Q.t[len] = t; Q.s[len] = P0.s[i]; Q.m[len] = P0.m[i]; Q.g[len] = P0.g[i]; len++;
-            }
-        }
-        Q.passive = L.passive; L.qHead = 0; L.qLen = len;
+        if (no > 0) _adjApplyRun(no, L.passive);
         let changed = false;
         for (let i = 0; i < na; i++) {
             const a = getAreaById(OA[i]);
@@ -605,41 +378,13 @@ function adjacencyLaneStep() {
         if (changed) dirtyAreas = true;
         if (L.paths) _bumpPathTopologyVersion();
     }
+}
+// The next post: the dirty tiles' signatures, the flood on the lane (sync:
+// run now on this thread).
+function _adjacencyLanePost(sync) {
+    const L = _adjL;
     if (!_adjacencyNeedsRecalc) return;
-    // The post: the signature grid brought up to date for the dirty tiles
-    // (all of them after a reset), then its snapshot and the seeds.
-    const N = GRID_W * GRID_H;
-    if (!L.sig || L.sig.length !== N) { L.sig = new Int32Array(N).fill(-1); _adjacencyDirtyAll = true; }
-    const all = _adjacencyDirtyAll;
-    let seeds;
-    if (all) {
-        // (Only tiles holding a structure have a signature: those, in tile
-        // order, as a pass over every tile would meet them (the ids are
-        // interned in that order); the pass itself when a structure is not
-        // at its own tile. Every tile was ~150 ms at 600x600.)
-        const ts = [];
-        let own = true;
-        for (const ent of _activeTileEntities) {
-            if (!ent || !Number.isFinite(ent.gx) || !Number.isFinite(ent.gy) || ent.gx < 0 || ent.gy < 0 || ent.gx >= GRID_W || ent.gy >= GRID_H || getTileEntityRef(ent.gx, ent.gy) !== ent) { own = false; break; }
-            ts.push(ent.gy * GRID_W + ent.gx);
-        }
-        if (own) {
-            ts.sort((a, b) => a - b);
-            L.sig.fill(-1);
-            for (let i = 0; i < ts.length; i++) { const t = ts[i], gx = t % GRID_W; L.sig[t] = _adjSigCode(gx, (t - gx) / GRID_W); }
-        } else for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) L.sig[gy * GRID_W + gx] = _adjSigCode(gx, gy);
-        seeds = [];
-        for (const ent of _activeTileEntities) if (ent && Number.isFinite(ent.gx) && Number.isFinite(ent.gy)) seeds.push(ent.gy * GRID_W + ent.gx);
-        _adjacencyDirtyTiles.clear();
-    } else {
-        seeds = _adjacencyDirtyTiles.takeFirst(ADJACENCY_TILES_PER_TICK);
-    }
-    let paths = all;
-    for (const key of seeds) {
-        const gx = key % GRID_W, gy = (key - gx) / GRID_W;
-        if (!all) L.sig[key] = _adjSigCode(gx, gy);
-        if (!paths) { const ref = getTileEntityRef(gx, gy); if (ref && _adjacencyObjAffectsPaths(ref)) paths = true; }
-    }
+    const N = GRID_W * GRID_H, all = _adjacencyDirtyAll, blocks = (N + 255) >> 8;
     // The area tables (when the layout changed: rare): each area's tiles
     // made by the kernel from the area grid (adj.ag) when the layout's
     // version is new. (The page's pass over its areas' cell lists, cold
@@ -651,17 +396,25 @@ function adjacencyLaneStep() {
         L.mul = _adjArr('adj.mul', Int32Array, A);
         for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
     }
-    // Paired cloud portals.
-    const cl = [];
-    for (const t of towers) if (t && t.baseStats && t.baseStats.isCloud && _isOperationalAdjacencyEntity(t)) {
-        const p = typeof getPairedCloudTower === 'function' ? getPairedCloudTower(t, t.owner) : null;
-        cl.push(t.gy * GRID_W + t.gx, p ? p.gy * GRID_W + p.gx : -1, t.owner & 255);
-    }
-    _adjArr('adj.sig', Int32Array, N).set(L.sig);
-    const SD = _adjArr('adj.seed', Int32Array, seeds.length);
-    for (let i = 0; i < seeds.length; i++) SD[i] = seeds[i];
-    const CLA = _adjArr('adj.cloud', Int32Array, cl.length);
-    for (let i = 0; i < cl.length; i++) CLA[i] = cl[i];
+    // (The lane is shared (the units' cover): its job finished before its
+    // arrays and params are written, else a pending stage of it runs with these.)
+    simParallelBackgroundWait(ADJ_LANE);
+    // The signature grid, the seeds (every structure, or the dirty tiles: all
+    // of them, their flags cleared) and the cloud portals by the post kernel
+    // (ord.rs k_adj_post) on the helpers.
+    _adjacencyDirtyTiles.room(N);
+    simParallelBind('adj.dflag', _adjacencyDirtyTiles.flag); simParallelBind('adj.dblk', _adjacencyDirtyTiles.blk);
+    for (const k of ['code', 'own', 'uc', 'brain', 'stab', 'rrow', 'val']) simParallelBind('st.' + k, _ST[k]);
+    _adjArr('adj.sig', Int32Array, N); _adjArr('adj.seed', Int32Array, blocks * 256); _adjArr('adj.scnt', Int32Array, blocks);
+    _adjArr('adj.cls4', Int32Array, 4 * blocks * 256); _adjArr('adj.ccnt', Int32Array, blocks); _adjArr('adj.cloud', Int32Array, 3 * blocks * 256);
+    _adjApplyClasses(_adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length));
+    const TF = _adjTypeFlags(), jobs = Math.ceil(blocks / ADJ_POST_BLOCKS_PER_JOB), PF = _adjArr('adj.pflag', Int32Array, 16 * jobs);
+    const P = _simParams;
+    P[0] = blocks; P[1] = ADJ_POST_BLOCKS_PER_JOB; P[2] = N; P[3] = all ? 1 : 0; P[4] = ST_OWNER_NONE; P[5] = TF.n;
+    simParallelRun(SIM_KERNEL_ADJ_POST, jobs);
+    if (!all) _adjacencyDirtyTiles.takenAll(); else _adjacencyDirtyTiles.clear();
+    let paths = all;
+    for (let q = 0; q < jobs && !paths; q++) if (PF[q * 16]) paths = true;
     // (A new area grid: the kernel's cells by area made again.)
     const AG = _spatialAreaGridFlat();
     if (L.agFor !== AG) { L.agFor = AG; L.layoutVer = (L.layoutVer | 0) + 1; }
@@ -670,16 +423,31 @@ function adjacencyLaneStep() {
     _adjArr('adj.otile', Int32Array, N); _adjArr('adj.ogrp', Int32Array, N); _adjArr('adj.gsize', Int32Array, N); _adjArr('adj.gmul', Float64Array, N);
     _adjArr('adj.oarea', Int32Array, Math.max(1, A)); _adjArr('adj.oact', Uint8Array, Math.max(1, A)); _adjArr('adj.ocnt', Int32Array, 4);
     _adjArr('adj.wk', Int32Array, 8 + 4 * N + 4 * Math.max(1, A));
-    // (The lane is shared (the units' cover): its job finished before its
-    // params are written, else a pending stage of it runs with these.)
-    simParallelBackgroundWait(ADJ_LANE);
     const B = _simBgParamsByLane[ADJ_LANE];
-    B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[2] = seeds.length; B[3] = cl.length / 3; B[4] = A; B[5] = L.layoutVer;
-    simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
-    L.posted = true; L.passive = !!_adjacencyPassiveRefreshMode; L.paths = paths;
+    B.fill(0); B[0] = GRID_W; B[1] = GRID_H; B[4] = A; B[5] = L.layoutVer; B[6] = blocks;
+    if (sync) { for (let q = 0; q < 8; q++) P[q] = B[q]; simParallelRun(SIM_KERNEL_ADJ_FLOOD, 1); }
+    else simParallelBackground(SIM_KERNEL_ADJ_FLOOD, 1, ADJ_LANE);
+    L.posted = true; L.sync = !!sync; L.passive = !!_adjacencyPassiveRefreshMode; L.paths = paths;
     _adjacencyNeedsRecalc = _adjacencyDirtyTiles.size > 0;
     _adjacencyDirtyAll = false; _adjacencyPassiveRefreshMode = false;
     _adjacencyLastRecalcTick = gameTime;
+}
+// Blocks of 256 tiles a job of the post kernel.
+const ADJ_POST_BLOCKS_PER_JOB = 64;
+// Per stationary type (data_state.js _stationaryTypes): bit 0 a cloud portal,
+// bit 1 its structures change paths (clouds, spawners), its pair id + 1 in
+// bits 8.. (adj.tyf; made again as types appear).
+function _adjTypeFlags() {
+    const n = _stationaryTypes.length, L = _adjL;
+    if (L.tyf && L.tyfN === n && simHeapHas(L.tyf)) return { n };
+    const F = L.tyf = _adjArr('adj.tyf', Int32Array, Math.max(1, n));
+    for (let ty = 0; ty < n; ty++) {
+        const b = BASE_CARD_TYPES[_stationaryTypes[ty]], cloud = !!(b && b.isCloud);
+        const pair = cloud && b.pairId !== undefined && b.pairId !== null ? (Number(b.pairId) | 0) : -1;
+        F[ty] = (cloud ? 3 : 0) | ((pair + 1) << 8);
+    }
+    L.tyfN = n;
+    return { n };
 }
 
 function recalculateAdjacency(forceFull = false, options = null) {
@@ -1796,7 +1564,7 @@ function refreshThingProgressState(item) {
         let builderTypeIndex = _workerTypeToLoadIndex('builder');
         let tileIndex = Math.floor(item.gy) * GRID_W + Math.floor(item.gx);
         let slotIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT + builderTypeIndex;
-        let reservedUnit = workerReservedTiles[slotIndex];
+        let reservedUnit = workerReservedAt(slotIndex);
         if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
         workerReservedSet(slotIndex, null);
     }
@@ -2085,7 +1853,7 @@ function markConstructionComplete(item) {
     if (typeof simTrapDirty === 'function' && Number.isFinite(item.gx)) simTrapDirty(item.gx, item.gy);
     if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
     if (typeof spawnerProductionChanged === 'function' && Array.isArray(item.spawnQueue)) spawnerProductionChanged(item);
-    if (typeof Tower === 'function' && item instanceof Tower) { towerSchedule(item); item.laserCheck(); }
+    if (typeof Tower === 'function' && item instanceof Tower) item.laserCheck();
 }
 
 function isAutoUpgradeEnabled(item) {

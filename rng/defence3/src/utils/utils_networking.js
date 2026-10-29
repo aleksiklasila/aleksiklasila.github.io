@@ -1636,7 +1636,8 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         teamVisibilityHistory = !!data.cfg.teamHistory;
         gameMode = data.cfg.gameMode || 'destroy';
         CONFIG_MAX_POP = Math.max(1, Math.floor(data.cfg.maxPop || 200));
-        if (data.cfg.maxBuildings) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(data.cfg.maxBuildings));
+        // (The host's, 0 too: derived from the population, the same on every peer.)
+        CONFIG_MAX_BUILDINGS = Math.max(0, Math.floor(Number(data.cfg.maxBuildings) || 0));
         STARTING_MONEY = Math.max(0, Math.floor(data.cfg.startingMoney || 2000));
         STARTING_ASTAR = Math.max(0, Number(data.cfg.startingAstar) || 9000);
         SHRINES_ENABLED = data.cfg.shrines === undefined ? true : !!data.cfg.shrines;
@@ -3310,6 +3311,7 @@ function resetWorldState() {
     towers = [];
     units = [];
     projectiles = [];
+    if (typeof projPoolClear === 'function') projPoolClear();
     particles = [];
     if (typeof clearCombatFx === 'function') clearCombatFx();
     barracks = [];
@@ -4195,7 +4197,8 @@ function readConfigFromMenu() {
     teamVisibilityHistory = document.getElementById('cfg-full-vis').value === 'history';
     gameMode = document.getElementById('cfg-gamemode').value || 'destroy';
     CONFIG_MAX_POP = Math.max(1, Math.floor(parseInt(document.getElementById('cfg-max-pop').value) || 200));
-    { let el = document.getElementById('cfg-max-buildings'); if (el) CONFIG_MAX_BUILDINGS = Math.max(1, Math.floor(parseInt(el.value) || CONFIG_MAX_BUILDINGS)); }
+    // (The menu's: from the population's memory budget, data_static.js configuredMaxBuildings.)
+    CONFIG_MAX_BUILDINGS = 0;
     STARTING_MONEY = readResource('cfg-starting-energy', 2000);
     STARTING_ASTAR = readResource('cfg-starting-astar', STARTING_ASTAR, false);
     { let el = document.getElementById('cfg-shrines'); if (el) SHRINES_ENABLED = !!el.checked; }

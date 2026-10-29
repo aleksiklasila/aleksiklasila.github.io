@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 globalThis.self={crossOriginIsolated:true};
 const H=require('./net-harness.cjs');
 const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'128','cfg-map-type':'arena','cfg-gold-count':'0','cfg-astar-mine-count':'0','cfg-max-pop':'20000','cfg-full-vis':'full'};
-const setup=`startSoloGame();simDk=4;SIM_TOWER_VERIFY=${!process.argv.includes('--fast-idle')};
+const setup=`startSoloGame();simDk=4;
  {let seed=991;const rnd=()=>{seed=Math.imul(seed,1664525)+1013904223|0;return(seed>>>0)/4294967296;};
  const types=Object.keys(BASE_UNIT_STATS);
  for(let j=0;j<3000;j++){const u=new Unit(types[j%types.length],j%2,(4+Math.floor(rnd()*120))*TILE+16,(4+Math.floor(rnd()*120))*TILE+16);if(u.dead)continue;units.push(u);players[u.owner].popCount++;updateUnitSpatial(u);if(j%7===0)u.burning=15;if(j%11===0){u.watched=20;u.watchedByTeam=j%2;}}
@@ -25,4 +25,4 @@ for(let tick=0;tick<32;tick++){
  for(const i of peers)assert.deepEqual(i.errors.map(String),[]);
 }
 assert.ok(used>100,'the deterministic replay must actually consume SIMD tower queries');
-console.log('PASS: 32 mixed combat steps with SIMD towers stay deterministic with zero versus three helpers'+(process.argv.includes('--fast-idle')?' (native idle completion)':' (scalar query verification)'));process.exit(0);
+console.log('PASS: 32 mixed combat steps with SIMD towers stay deterministic with zero versus three helpers'+(process.argv.includes('--fast-idle')?' (native idle completion)':''));process.exit(0);

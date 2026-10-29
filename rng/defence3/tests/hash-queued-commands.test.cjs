@@ -33,8 +33,10 @@ const H = require('./net-harness.cjs');
         out.added = g() === h0;
         _actionBacklog = [];
         // The queue of move orders.
-        // (Ids alone: the queue holds ids; it is emptied before any tick.)
-        const mine = [9001, 9002, 9003, 9004, 9005, 9006];
+        // (Six of the player's units: the queue takes real units of the player
+        // only; it is emptied before any tick.)
+        const mine = [];
+        for (let k = 0; k < 6; k++) { const u = new Unit('norm', localPlayerId, (10 + k) * TILE + 16, 10 * TILE + 16); units.push(u); unitSlotMapPushed(u); updateUnitSpatial(u); mine.push(u.id); }
         out.mine = mine.length;
         const q0 = orderQueueChecksum();
         _queueGroupMoveOrder({ action: 'move', unitIds: mine, targetX: 640, targetY: 640 }, localPlayerId, CMD_MOVING);
@@ -50,9 +52,8 @@ const H = require('./net-harness.cjs');
         _queueGroupMoveOrder({ action: 'move', unitIds: mine, targetX: 640, targetY: 640 }, localPlayerId, CMD_MOVING);
         _queueGroupMoveOrder({ action: 'attackMove', unitIds: mine.slice(0, 2), targetX: 320, targetY: 320 }, localPlayerId, CMD_ATTACK_MOVING);
         _dropQueuedOrderUnits(new Set([mine[2]]), localPlayerId);
-        const e = _orderQueue[0], T = _unitOrderSeqOf(localPlayerId);
         // (One unit applied, as runQueuedOrders does.)
-        for (; e.next < e.ids.length; e.next++) { const id = e.ids[e.next]; if (_orderStampGet(T, id) === e.seq) { _orderStampSet(T, id, 0); e.live--; e.sum = (e.sum - _orderIdH(id)) | 0; e.next++; break; } }
+        _orderTake(_orderQueue[0], 1);
         const before = orderQueueChecksum(), snap = orderQueueSnapshot();
         orderQueueRestore(snap);
         out.restored = orderQueueChecksum() === before;

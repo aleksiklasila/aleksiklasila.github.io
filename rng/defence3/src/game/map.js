@@ -7,7 +7,7 @@ function initGrid() {
     grid = [];
     areaIdGrid = [];
     initDroppedItemGrid();
-    workerReservedTiles = new Array(Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT)).fill(null);
+    workerReservedTiles = workerReservedTable();
     for (let y = 0; y < GRID_H; y++) {
         let row = [];
         let areaRow = new Int32Array(GRID_W).fill(-1);

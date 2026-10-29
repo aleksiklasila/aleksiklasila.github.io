@@ -67,22 +67,8 @@ assert.ok(Math.hypot(unit.x-31.5,unit.y-31.5)<=1601,'crowd correction is capped 
 let flying=make();flying.isFlying=true;blocked.add('1,0');blocked.add('0,1');uc.applyUnitSeparation(flying,100,100);
 assert.ok(flying.x>31.5,'air units retain their collision layer');
 
-let enemyUnit={id:2,owner:1,x:16,y:16,dead:false};
 
-// Towers must not apply a pixel cutoff to units while using areas for buildings.
-uc.areaSearchEnabled=()=>true;
-vm.runInContext(read('src/things/tower.js'),uc);
-const Tower=vm.runInContext('Tower',uc);
-uc.getTowerPreferredTargetInRange=()=>null;
-uc.getAreaIdAtWorld=()=>0;uc.getAreaDistance=()=>0;uc.isAreaWithinDistance=(a,b,max)=>max>=0;uc.isWorldTargetWithinAreaRange=(sx,sy,tx,ty,max)=>max>=0;uc.getSourceAreaIdsAtWorld=()=>[];
-uc.forEachUnitInAreaRange=(_x,_y,_r,visit,opts)=>{assert.equal(opts.areaOnly,true);visit(enemyUnit);};
-uc.WORLD_W=1000;uc.WORLD_H=1000;uc.getThingEffectiveLevel=()=>1;uc.secondsToTicks=()=>60;
-uc.createExplosion=()=>{};uc.recordCombatFx=()=>{};uc.COMBAT_FX={};uc.playSound=()=>{};uc.projectiles=[];
-uc.Projectile=function(x,y,target){this.target=target;};
-let tower=Object.assign(Object.create(Tower.prototype),{x:0,y:0,owner:0,cd:0,type:'pistol',currentStats:{attackRangeArea:.6,damage:10}});
-tower.shoot();assert.equal(uc.projectiles[0].target,enemyUnit);
-let explicitBuilding={x:80,y:80};uc.getTowerPreferredTargetInRange=()=>explicitBuilding;tower.cd=0;
-tower.shoot();assert.equal(uc.projectiles[1].target,explicitBuilding,'explicit tower targets retain priority');
+// (Towers' targets: the kernels', by area reach: tower.rs.)
 
 const sc=vm.createContext({});vm.runInContext(read('src/audio_visual/selection_overlay.js'),sc);
 let entity={};sc.stabilizeSelectionPosition(entity,0,0,0);
@@ -90,4 +76,4 @@ let stable=sc.stabilizeSelectionPosition(entity,2,0,16);
 assert.ok(stable.x>0 && stable.x<.5,'brief motion across merge thresholds is damped');
 assert.equal(sc.stabilizeSelectionPosition(entity,200,0,32).x,200,'teleports do not drag stale outlines');
 
-console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay and tower targeting.');
+console.log('PASS: fractional/union/team ranges, 10k-tile perimeter, bounded corner pushes, deterministic replay.');

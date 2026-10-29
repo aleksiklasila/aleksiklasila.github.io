@@ -65,15 +65,83 @@ const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // unit's accessors; a detached unit's in its _det), each set summed into
 // the slot's digest (hObj: see _simHTerm), so the hash kernel reads one
 // column for all of them.
-const SIM_UNIT_OBJ_FIELDS = ['holdPosition',
-    'workerTarget', 'workerTargetType', 'carryingValue', '_workerReservedTileIndex', 'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial',
-    '_astarBudgetRetryTick', '_scoutTarget', 'workerType'];
+const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'carryingValue', '_astarBudgetRetryTick', '_scoutTarget', 'workerType'];
+// A worker's task: columns (wkS, wkT, wkR, wkN; unit.js accessors), hashed by
+// the hash kernel itself (k_snap_units), written by kernels too (the move
+// order's release). wkS: bits 0-4 workerState (SIM_WS_NAMES), 5-9
+// workerTargetType (simWttCode: its hash term in wk.ttTerm), 10-12 the
+// target's kind (SIM_WT_*), 13-18 builder / healer / researcherHasMaterial
+// (two bits each: 0 undefined, 1 false, 2 true). wkT: the target's tile
+// (gy * GRID_W + gx) or unit id. wkR: _workerReservedTileIndex, wkN:
+// _workerNextIdleRetargetTick (SIM_WK_UNDEF undefined, SIM_WK_NULL null).
+const SIM_UNIT_WK_FIELDS = ['workerState', 'workerTarget', 'workerTargetType', '_workerReservedTileIndex', '_workerNextIdleRetargetTick',
+    'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial'];
+// Route and worker fields an order kernel writes (ord.rs): heap columns
+// (SIM_MOVE_COLUMNS), [field, column, default], behind unit.js accessors.
+const SIM_UNIT_KCOL_FIELDS = [['_routeSegEnd', 'rsEnd', -1], ['_navReady', 'navRdy', 0], ['_awaitGroupPath', 'agWait', 0], ['_idleFailVer', 'idleFV', -1]];
+const SIM_WS_NAMES = [undefined, 'IDLE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'RETURNING_FOR_GOLD', 'MOVING_TO_BUILD',
+    'BUILDING_IN_PLACE', 'MOVING_TO_HEAL', 'HEALING', 'MOVING_TO_RESEARCH', 'RESEARCHING', 'MANUAL_MOVE', null];
+const SIM_WS_CODE = new Map(SIM_WS_NAMES.map((v, i) => [v, i]));
+const SIM_WS_IDLE = 1, SIM_WS_MANUAL = 13;
+function simWsCode(v) { const c = SIM_WS_CODE.get(v); if (c === undefined) throw new Error('unknown worker state ' + v); return c; }
+// Target kinds: 0 undefined, 1 null, 2 the tile's grid item, 3 its tile
+// entity (mines), 4 its dropped item, 5 a unit (wkT its id).
+const SIM_WT_UNDEF = 0, SIM_WT_NULL = 1, SIM_WT_ITEM = 2, SIM_WT_TILE = 3, SIM_WT_DROP = 4, SIM_WT_UNIT = 5;
+const SIM_WK_UNDEF = -2147483648, SIM_WK_NULL = -2147483647;
+// (Target types: interned in first-seen order, peer-local codes; the hash
+// reads each code's term, the same on every peer: wk.ttTerm.)
+const _simWttNames = [undefined, null], _simWttCodes = new Map([[undefined, 0], [null, 1]]);
+let _simWttTerm = null;
+function simWttCode(v) {
+    let c = _simWttCodes.get(v);
+    if (c !== undefined) return c;
+    if (typeof v !== 'string' || _simWttNames.length >= 32) throw new Error('worker target type ' + v + ' not codable');
+    c = _simWttNames.length; _simWttNames.push(v); _simWttCodes.set(v, c);
+    if (_simWttTerm) _simWttTerm[c] = _simHStr(v);
+    return c;
+}
+function simWttTerms() {
+    if (_simWttTerm && (typeof simHeapHas !== 'function' || simHeapHas(_simWttTerm))) return _simWttTerm;
+    _simWttTerm = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, 32) : new Int32Array(32);
+    for (let c = 0; c < _simWttNames.length; c++) _simWttTerm[c] = c === 0 ? SIM_H_UNDEF : c === 1 ? SIM_H_NULL : _simHStr(_simWttNames[c]);
+    if (typeof simParallelBind === 'function') simParallelBind('wk.ttTerm', _simWttTerm);
+    return _simWttTerm;
+}
+// A target's kind and word (wkT), as the setter stores it.
+function simWtEncode(v) {
+    if (v === undefined) return [SIM_WT_UNDEF, 0];
+    if (v === null) return [SIM_WT_NULL, 0];
+    if (v instanceof Unit) return [SIM_WT_UNIT, v.id | 0];
+    const gx = v.gx, gy = v.gy;
+    if (Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
+        const t = gy * GRID_W + gx;
+        if (tileEntityRef[gy] && tileEntityRef[gy][gx] === v) return [SIM_WT_TILE, t];
+        if (grid[gy] && grid[gy][gx] && grid[gy][gx].item === v) return [SIM_WT_ITEM, t];
+        if (droppedItemGrid[gy] && droppedItemGrid[gy][gx] === v) return [SIM_WT_DROP, t];
+    }
+    // (Not in the world: gone, as the getter would read it.)
+    return [SIM_WT_NULL, 0];
+}
+// The object a target's kind and word stand for now (null: gone).
+function simWtDecode(k, t) {
+    if (k === SIM_WT_UNDEF) return undefined;
+    if (k === SIM_WT_NULL) return null;
+    if (k === SIM_WT_UNIT) { const u = getUnitById(t); return u && !u.dead ? u : null; }
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W;
+    if (k === SIM_WT_TILE) return (tileEntityRef[gy] && tileEntityRef[gy][gx]) || null;
+    if (k === SIM_WT_ITEM) return (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
+    return (droppedItemGrid[gy] && droppedItemGrid[gy][gx]) || null;
+}
 // (Statements a field's setter runs too, with c the columns, s the slot, v
 // the value: columns kept from it.)
 const SIM_UNIT_OBJ_DEFAULTS = {};
 const SIM_UNIT_OBJ_HOOKS = { workerType: 'c.isWk[s] = v ? 1 : 0; if (v) { const w=simUnitWk(c,s); c.wbType[w]=v==="collector"?1:v==="astar_collector"?2:v==="salvager"?3:v==="builder"?4:v==="healer"?5:v==="researcher"?6:0; c.wbTick[w]=-1; } else if(c.wkIx[s]>0)c.wbType[c.wkIx[s]]=0;', holdPosition: 'c.holdF[s] = v ? 1 : 0;' };
 const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'targetPos', '_routeKey', 'targetUnit', 'forcedAttackTarget', '_attackMoveGx', '_attackMoveGy', 'pathIsFallbackAstar', '_pendingPathTarget', 'workerState', '_workerNextIdleRetargetTick', 'dead', '_navLastD', '_floorTile', '_sepMoved', '_statsBehind', '_forcedTargetLastSeenX', '_forcedTargetLastSeenY',
-    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS,
+    '_builderLastWatchX', '_builderLastWatchY', '_builderLastMoveTick', '_routeEnd', 'watchedByTeam', ...SIM_UNIT_OBJ_FIELDS, ...SIM_UNIT_WK_FIELDS.filter(k => k !== 'workerState' && k !== '_workerNextIdleRetargetTick' && k !== 'workerTarget'),
+    ...SIM_UNIT_KCOL_FIELDS.map(f => f[0]),
+    // (The worker's target as its columns hold it, wkT * 8 + kind: read
+    // back through the world it is null once gone, the columns not.)
+    '_wkTgt',
     // (Damage not reported yet: unit.js _dotPending.)
     '_dotPending', '_laserPending', '_laserBeam',
     // (Its effective tables, as it has them: computed at its last stats
@@ -85,7 +153,7 @@ const SIM_UNIT_EXTRA_ACCESSORS = ['path', 'targetBuilding', 'targetPos', '_route
 // the unit type (set once, read everywhere: a plain field; a wrong type
 // shows in its stats at once) nor the path (set on every re-route; where it
 // leads shows in the position, velocity and pathIndex columns).
-const SIM_HASH_DIGEST_FIELDS = [...SIM_UNIT_OBJ_FIELDS, '_pendingPathTarget', 'pathIsFallbackAstar', 'workerState', '_workerNextIdleRetargetTick'];
+const SIM_HASH_DIGEST_FIELDS = [...SIM_UNIT_OBJ_FIELDS, '_pendingPathTarget', 'pathIsFallbackAstar'];
 
 // ---- The digest ----
 // A field's term: (its key ^ the value's word) * M, summed mod 2^32 (the
@@ -123,6 +191,8 @@ function _simHEnc(v) {
             if (v === null) return SIM_H_NULL;
             if (v instanceof Unit) return v.id | 0;
             if (typeof v.gx === 'number') return -16 - ((v.gy | 0) * 65536 + (v.gx | 0));
+            // (A structure gone since: the tile it had, data_state.js _sKeepTile.)
+            if (typeof v._hgx === 'number') return -16 - ((v._hgy | 0) * 65536 + (v._hgx | 0));
             if (typeof v.x === 'number') { _simHF32[0] = v.x; _simHF32[1] = v.y; return Math.imul(_simHU32[0] ^ 0x27d4eb2d, 16777619) ^ _simHU32[1]; }
             return SIM_H_OBJ;
     }
@@ -186,6 +256,18 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvFloor', Int32Array, 1], ['mvPath', Int32Array, 1],
     // Parked idle workers (mvOn 2): the tick their Unit.update next does anything.
     ['mvWake', Int32Array, 1],
+    // A worker's task (SIM_UNIT_WK_FIELDS).
+    ['wkS', Uint32Array, 1], ['wkT', Int32Array, 1], ['wkR', Int32Array, 1], ['wkN', Int32Array, 1],
+    // (SIM_UNIT_KCOL_FIELDS.)
+    ['rsEnd', Int32Array, 1], ['navRdy', Int32Array, 1], ['agWait', Int32Array, 1], ['idleFV', Int32Array, 1],
+    // A pending way (bit 1: pathIsFallbackAstar, 2: a _pendingPathTarget):
+    // kept by their setters, so a kernel sees which units have one. A role
+    // memory clear pending (the tick it was ordered + 1, 0 none: unit.js
+    // _unitRmApply, at its first use).
+    ['mvPP', Uint8Array, 1], ['rmClr', Int32Array, 1],
+    // Waiting for a deferred way (pathfinding.js, the pending wheel): the tick
+    // it is due (-1 none), its bucket's next and previous slots.
+    ['ppDue', Int32Array, 1], ['ppNext', Int32Array, 1], ['ppPrev', Int32Array, 1],
     // Flow mode (mvFlags 64): the flow slot and its generation, and the
     // destination tile. Stats kept current for orders that arm units
     // without reading them (see simMoveStatsChanged).
@@ -385,7 +467,14 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['hAcc', Int32Array, 1], ['hTouch', Uint8Array, 1], ['hSx', Int32Array, 1],
     // Unit.watchedByTeam (-1 none: the hits kernel sets it with the watch)
     // and, for a scout, the watch its swoop gives (ticks; atkDmg's twin).
-    ['wTeam', Int8Array, 1], ['atkWatch', Int32Array, 1]];
+    ['wTeam', Int8Array, 1], ['atkWatch', Int32Array, 1],
+    // Order bookkeeping, per slot (allocated with the slots at the match's
+    // start, zeroed with a slot; never by unit id, ids grow without bound):
+    // its latest queued move order (the entry's seq, 0 none: main.js order
+    // queue), its latest waiting unit action's arrival mark (+1, 0 none:
+    // _actionRecordArrival), and an action's duplicate stamp (peer-local
+    // scratch: _actionCleanIds). Peer-local numbering: never hashed.
+    ['ordSq', Int32Array, 1], ['actMk', Int32Array, 1], ['idStp', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 // Worker records: the worker columns are a pool with a record a worker (a
@@ -545,24 +634,23 @@ function simUnitStUsed() { const S = _simUnitState, T = S && S.st; return T && T
 // fields'). [name, kind, default, in the snapshot].
 const SIM_UNIT_JS_FIELDS = [
     ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
-    ['_fpTile', 'i', -1, true], ['_fpIdx', 'i', -1, true], ['_fpVer', 'i', -1, true], ['_routeSegEnd', 'i', -1, true], ['_navReady', 'i', 0, true],
-    ['_awaitGroupPath', 'i', 0, true], ['_pendingDueStamp', 'i', -1, true], ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
+    ['_fpTile', 'i', -1, true], ['_fpIdx', 'i', -1, true], ['_fpVer', 'i', -1, true], ['_pendingDueStamp', 'i', -1, true], ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
     ['_okNodeVer', 'i', 0, true], ['_statsVer', 'i', -1, true], ['_damageFlashStart', 'i', 0, true],
     // (Its frame slot: sim_frame.js _simRenderSlotOf; every unit has one.)
     ['_rslot', 'i', -1, false],
-    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true], ['_idleFailVer', 'i', -1, true], ['_idleFailUntil', 'i', 0, true],
+    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true], ['_idleFailUntil', 'i', 0, true],
     ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
     ['unitType', 'r', undefined, true], ['preComputedBase', 'r', null, true], ['basePreComputed', 'r', null, true], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
     ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
     // (Backing fields of accessors with their own logic: unit.js.)
-    ['_path', 'r', null, false], ['_ws', 'r', undefined, false], ['_wnr', 'r', undefined, false], 
+    ['_path', 'r', null, false],
     ['_pfa', 'r', undefined, false], ['_ppt', 'r', undefined, false]];
 const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, f: Float32Array, d: Float64Array, u: Float32Array };
 // Path/failure caches are JS-only and usually unset in large armies. Keep
 // their default implicit; allocating fourteen dense Int32 columns costs
 // 224 MB at four million slots before a single path has used them.
-const SIM_UNIT_SPARSE_JS_FIELDS=new Set(['_fpTile','_fpIdx','_fpVer','_routeSegEnd','_navReady','_awaitGroupPath',
-    '_pendingDueStamp','_okTile','_okVer','_okNodeTile','_okNodeVer','_idleFailVer','_idleFailUntil','_effectiveStatsStamp']);
+const SIM_UNIT_SPARSE_JS_FIELDS=new Set(['_fpTile','_fpIdx','_fpVer',
+    '_pendingDueStamp','_okTile','_okVer','_okNodeTile','_okNodeVer','_idleFailUntil','_effectiveStatsStamp']);
 class SimSparseIntColumn {
     constructor(length,def){this.length=length;this.def=def|0;this.pages=new Array(Math.ceil(length/1024));this.counts=new Uint16Array(this.pages.length);this.activePages=0;}
     get(s){if(!Number.isInteger(s)||s<0||s>=this.length)return undefined;const p=this.pages[s>>>10];return p?p[s&1023]:this.def;}
@@ -1007,6 +1095,13 @@ function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * (cap >= 10
 // address space (and the system's commit charge) in any match; past it, the
 // growth, allocated ahead.
 const SIM_UNIT_RESERVE_BYTES = 512 << 20;
+// (The budget's: what the map and the rest of the simulation leave of the
+// 4 GiB, data_static.js; the menu offers only populations that fit. Without
+// the budget (a tool loading this file alone): SIM_UNIT_RESERVE_BYTES.)
+function _simUnitReserveBytes(tiles) {
+    if (typeof MEMORY_BUDGET_BYTES !== 'number' || !Number.isFinite(tiles)) return SIM_UNIT_RESERVE_BYTES;
+    return Math.max(SIM_UNIT_RESERVE_BYTES, MEMORY_BUDGET_BYTES - MEMORY_BASE_BYTES - tiles * MEMORY_TILE_BYTES);
+}
 let _simUnitBytesPerSlotCache = 0;
 function _simUnitBytesPerSlot() {
     if (!_simUnitBytesPerSlotCache) {
@@ -1029,8 +1124,9 @@ function simUnitPopulationSlots() {
     // player, a commit of the system's memory per match; past that, the
     // growth allocated ahead, as past SIM_UNIT_RESERVE_BYTES.)
     const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' && GRID_W > 0 && GRID_H > 0 ? GRID_W * GRID_H : Infinity;
-    return Math.min(want, tiles * SIM_UNIT_RESERVE_PER_TILE, Math.floor(SIM_UNIT_RESERVE_BYTES / _simUnitBytesPerSlot()));
+    return Math.min(want, tiles * SIM_UNIT_RESERVE_PER_TILE, Math.floor(_simUnitReserveBytes(tiles) / _simUnitBytesPerSlot()));
 }
+// (data_static.js MEMORY_UNITS_PER_TILE, the budget's: that file loads after this one.)
 const SIM_UNIT_RESERVE_PER_TILE = 8;
 // Past the reservation (the fallback): the next size's columns allocated
 // ahead (simUnitStatePrepareStep, from gameTick: once the slots pass
@@ -1147,7 +1243,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
         S.sepKey = sepKey; S.sepLayer = sepLayer; S.columns.sepKey = sepKey;
         simParallelBind('unit.sepKey', sepKey); simParallelBind('unit.sepLayer', sepLayer);
         S.cap = cap;
-        if (!S.pathPool) { S.pathPool = { next: 0, free: [], cap: 0, held: { array: null } }; S.columns.mvNodes = simHeapArray(Int32Array, 1); S.pathPool.held.array = S.columns.mvNodes; if (_simPathPoolsGone) _simPathPoolsGone.register(S.pathPool, S.pathPool.held); simParallelBind('unit.mvNodes', S.columns.mvNodes); }
+        if (!S.pathPool) { S.pathPool = { next: 0, fs: _simPathFreeStack(null, 64), cap: 0, held: { array: null } }; S.columns.mvNodes = simHeapArray(Int32Array, 1); S.pathPool.held.array = S.columns.mvNodes; if (_simPathPoolsGone) _simPathPoolsGone.register(S.pathPool, S.pathPool.held); simParallelBind('unit.mvNodes', S.columns.mvNodes); }
         _simUnitColumnsHeld(S);
         for (const a of old) simHeapFree(a);
     } finally { if (typeof simParallelBindFlush === 'function') simParallelBindFlush(); }
@@ -1179,6 +1275,9 @@ function _simUnitSlotStart(S, s, u) {
     for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
     S.columns.mvPath[s] = -1;
+    S.columns.wkS[s] = 0; S.columns.wkT[s] = 0; S.columns.wkR[s] = SIM_WK_UNDEF; S.columns.wkN[s] = SIM_WK_UNDEF;
+    for (const [, k, d] of SIM_UNIT_KCOL_FIELDS) S.columns[k][s] = d;
+    S.columns.ppDue[s] = -1;
     S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
     // (Tick-stamped answers of the slot's last unit are not this one's.)
     S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
@@ -1199,40 +1298,23 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.mvPF[s] = 0;
 }
 
-// Removed units may still be attack targets, selected, or referenced in a
-// snapshot. Detach their values before reusing the slot; stale object references
-// must never read or overwrite a newly spawned unit.
-let _simDetValues = null;
+// A removed unit lets go of its slot at its removal's tick (main.js
+// compactRemovedUnits): no copy of its values. The simulation refers to units
+// by slot and id; an object still held reads its id, owner and last position
+// and, from SimUnitGone's prototype, dead with no energy (anything else
+// undefined; writes stay on its record).
+function SimUnitGone(id, owner, x, y) { this.id = id; this.owner = owner; this.x = x; this.y = y; }
+SimUnitGone.prototype.dead = true;
+SimUnitGone.prototype.energy = 0;
 // (A slot's object fields unset; on detach the references let go.)
 const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '.clear(s);').join(' '));
-function _simDetValuesCtor() {
-    const body = SIM_UNIT_ACCESSOR_COLUMNS.map(k => 'this.' + k + ' = ' + (k in SIM_UNIT_ST_FIELD ? 'C.' + SIM_UNIT_ST_FIELD[k] + '[C.stIx[s]]' : 'C.' + k + '[s]') + (SIM_UNIT_POS_COLUMNS.has(k) ? ' * ' + SIM_POS_INV : '') + ';').join(' ')
-        + ' ' + SIM_UNIT_OBJ_FIELDS.map(k => 'this.' + k + ' = C.oc_' + k + '.get(s);').join(' ') + ' this._routeEnd = C.rtEnd[s]; this.watchedByTeam = C.wTeam[s];'
-        + ' this.dead = C.dead[s] === 1; this._navLastD = C.mvNavLD[s]; this._floorTile = C.mvFloor[s]; this._sepMoved = C.sepMov[s] & 1;'
-        + ' this._statsBehind = false; this._forcedTargetLastSeenX = null; this._forcedTargetLastSeenY = null;'
-        + ' { const w = C.wkIx[s], a = C.wkWx[w], b = C.wkWy[w], m = C.wkLmt[w]; this._builderLastWatchX = a === a ? a : undefined; this._builderLastWatchY = b === b ? b : undefined; this._builderLastMoveTick = m === -2147483648 ? undefined : m; }'
-        + ' this._dotPending = C.stAc[C.stIx[s]]; this._laserPending = C.lzAcc[s]; this._laserBeam = C.lzBeam[s];'
-        + ' this.r = C.r[s]; this.collisionR = C.collisionR[s];'
-        + SIM_UNIT_JS_FIELDS.map(([k, kind]) => ' this.' + k + ' = ' + (kind === 'b' ? 'C.j_' + k + '[s] === 1' : kind === 'u' ? '(C.j_' + k + '[s] === C.j_' + k + '[s] ? C.j_' + k + '[s] : undefined)' : kind === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(k) ? 'C.' + _simJsName(k, kind) + '.get(s)' : 'C.' + _simJsName(k, kind) + '[s]') + ';').join('');
-    return new Function('C', 's', body);
-}
 function simUnitStateDetach(S, s) {
     const u = S.owners[s];
     if (!u) return;
-    // Its values move to one plain object the accessors fall back to (a
-    // property definition per column made releasing many units slow; one
-    // constructor: one shape, no dictionary transitions per key).
-    // (Its row's tables as its own.)
-    const statTable = S.columns.statRow[s] >= 0 && typeof _effRowObj !== 'undefined' ? _effRowObj[S.columns.statRow[s]] : null;
-    S.columns.statRow[s] = -1;
-    const values = new (_simDetValues || (_simDetValues = _simDetValuesCtor()))(S.columns, s);
-    // (Its order's references, resolved while its slot is still its: the accessors read the columns.)
-    values.targetUnit = u.targetUnit; values.targetBuilding = u.targetBuilding; values.forcedAttackTarget = u.forcedAttackTarget;
-    values._attackMoveGx = u._attackMoveGx; values._attackMoveGy = u._attackMoveGy; values.targetPos = u.targetPos; values._routeKey = u._routeKey;
-    if (statTable) { values._pc = statTable; values._pce = statTable; }
-    values._statsBehind = typeof _unitStatsBehind === 'function' ? _unitStatsBehind(u, S.columns.esVer[s]) : false;
-    { const lx = S.columns.fLsX[s], ly = S.columns.fLsY[s]; values._forcedTargetLastSeenX = lx === lx ? lx : null; values._forcedTargetLastSeenY = ly === ly ? ly : null; }
-    u._det = values;
+    const C = S.columns;
+    C.statRow[s] = -1;
+    if (C.ppDue[s] >= 0 && typeof pendingPathUnlink === 'function') pendingPathUnlink(C, s);
+    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s] * SIM_POS_INV, C.y[s] * SIM_POS_INV);
     _simJsRelease(S.columns, s);
     // (Its path window back to the pool: the slot's next unit starts with none;
     // its worker record too.)
@@ -1245,6 +1327,20 @@ function simUnitStateDetach(S, s) {
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
     // (Reused from the next unit index rebuild on: its entries name units
     // by slot for the rest of the tick, see simUnitStateReleaseFreed.)
+    S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
+}
+// A unit the retire pass removed (main.js; the gone kernel already let go of
+// its index entry, path window, statRow and movement flags): its slot let go
+// without clearing its JavaScript fields, which the slot's next unit starts
+// from the defaults anyway (_simUnitSlotStart); until then they hold their
+// references.
+function simUnitStateDetachGone(S, s) {
+    const u = S.owners[s], C = S.columns;
+    if (C.ppDue[s] >= 0) pendingPathUnlink(C, s);
+    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s] * SIM_POS_INV, C.y[s] * SIM_POS_INV);
+    if (C.wkIx[s] > 0) _simWkRelease(S, s);
+    if (C.stIx[s] > 0) _simStRelease(S, s);
+    u._us = null; u._si = -1;
     S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
 }
 
@@ -1351,6 +1447,8 @@ function simUnitStateCompact(force = false) {
         const t = C.tuS[s];
         if (t >= 0) C.tuS[s] = t < n0 ? map[t] : -1;
     }
+    // (The order queue's slots too: main.js orderQueueRemapSlots.)
+    if (typeof orderQueueRemapSlots === 'function') orderQueueRemapSlots(map);
     // The rest (removed, not yet collected): detached from the old state.
     for (let s = 0; s < n0; s++) if (S.owners[s] && map[s] < 0) simUnitStateDetach(S, s);
     _simUnitPrepFree(S);
@@ -1363,6 +1461,8 @@ function simUnitStateCompact(force = false) {
     simParallelBind('unit.sepKey', N.sepKey); simParallelBind('unit.sepLayer', N.sepLayer);
     if (typeof simParallelBindFlush === 'function') simParallelBindFlush();
     if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
+    // (The pending wheel's links named the old slots.)
+    if (typeof pendingPathRelink === 'function') pendingPathRelink();
     return true;
 }
 
@@ -1426,6 +1526,7 @@ function simUnitStateKeys(u) {
     if (u._stT !== undefined && typeof structTableKeys === 'function') return structTableKeys(u, keys);
     if (u._us || u._det) for (const k of SIM_UNIT_ACCESSOR_COLUMNS) keys.push(k);
     // (Its JavaScript fields and radii: accessors over columns, as before own fields.)
+    if (u._us && u._us.rmClr[u._si] !== 0) _unitRmApply(u);
     if ((u._us || u._det) && u instanceof Unit) { keys.push('r', 'collisionR'); for (const k of SIM_UNIT_JS_SNAPSHOT_KEYS) keys.push(k); for (const k of SIM_UNIT_MOVE_SNAPSHOT_KEYS) keys.push(k); }
     if (u instanceof Unit) for (const k of SIM_UNIT_EXTRA_ACCESSORS) if (!Object.prototype.hasOwnProperty.call(u, k)) keys.push(k);
     // (Its role memory's fields that hold something: unit.js UNIT_ROLE_FIELDS.)
@@ -1450,24 +1551,34 @@ function simPhaseList(len, min = 8192) {
     return _simPhaseList;
 }
 
+// The path windows' free handles: a heap stack ([0] how many, the handles
+// from 1; unit.mvFree: order kernels push the windows they release), as many
+// as the pool holds.
+function _simPathFreeStack(old, cap) {
+    const fs = simHeapArray(Int32Array, cap + 1);
+    if (old) { const n = Math.min(old[0], cap); fs.set(old.subarray(0, n + 1)); fs[0] = n; simHeapFree(old); }
+    simParallelBind('unit.mvFree', fs);
+    return fs;
+}
 // Explicit paths alone own a window. Flow movers keep only a -1 handle.
 function simUnitPathWindow(c, s) {
     const S = _simUnitState;
     if (!S || S.columns !== c) throw new Error('path window belongs to retired state');
     const P = S.pathPool;
     let h = c.mvPath[s];
-    if (h < 0) { h = P.free.length ? P.free.pop() : P.next++; c.mvPath[s] = h; }
+    if (h < 0) { const F = P.fs; h = F[0] > 0 ? F[F[0]--] : P.next++; c.mvPath[s] = h; }
     if (h >= P.cap) {
         const cap = Math.max(64, Math.ceil((h + 1) * 1.125 / 64) * 64), old = c.mvNodes;
         c.mvNodes = simHeapArray(Int32Array, cap * SIM_MOVE_WINDOW);
         c.mvNodes.set(old); P.cap = cap; P.held.array = c.mvNodes;
+        P.fs = _simPathFreeStack(P.fs, cap);
         simParallelBind('unit.mvNodes', c.mvNodes); simHeapFree(old); _simUnitColumnsHeld(S);
     }
     return h * SIM_MOVE_WINDOW;
 }
 function simUnitPathRelease(c, s) {
     const S = _simUnitState;
-    if (S && S.columns === c && S.pathPool && c.mvPath[s] >= 0) { S.pathPool.free.push(c.mvPath[s]); c.mvPath[s] = -1; }
+    if (S && S.columns === c && S.pathPool && c.mvPath[s] >= 0) { const F = S.pathPool.fs; F[++F[0]] = c.mvPath[s]; c.mvPath[s] = -1; }
 }
 
 const _simPathPoolsGone = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry(h => { if (SIM_HEAP_GC_FREE & 2) simHeapFree(h.array); }) : null;
@@ -1502,7 +1613,7 @@ function simMemoryStats() {
     }
     return { slots: S ? S.owners.length : 0, capacity: S ? S.cap : 0,
         bytesPerSlot: Object.values(SIM_UNIT_SCHEMA).reduce((n, e) => n + e.bytes, 5),
-        pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.free.length : 0,
+        pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.fs[0] : 0,
         statusRecords: simUnitStUsed(), statusCap: S && S.st ? S.st.cap : 0,
         boundBytes: groups, heap: typeof simHeapStats === 'function' ? simHeapStats() : null };
 }

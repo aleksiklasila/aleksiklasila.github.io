@@ -384,7 +384,11 @@ function _spatialPrebuildFullStages(X, n, nChunks, ep, uj, base, masks) {
 // The index by its changes: on when the last one was a parallel build with
 // its slots' listing recorded (X.ixd.ok). (Every build lists a chunk's units
 // by id: SIM_KERNEL_INDEX_IDSORT, SPATIAL_IDSORT_PER entries a job.)
-let SPATIAL_INDEX_DELTA = true;
+// Off (2026-10-29): its apply and owner stages are single jobs; at 1M units
+// in battle the parallel merge build left the next tick waiting 6 ms instead
+// of 14 (steady mean 181 -> 171 ms; tests/test-runs/unit-gone-20261029/
+// delta.json, nodelta.json).
+let SPATIAL_INDEX_DELTA = false;
 // A long step can move a large part of an army at once. The delta build's
 // insert sort and owner refresh are serial, stalling the entire helper
 // chain on those ticks. Use the parallel merge when movement is widespread;
