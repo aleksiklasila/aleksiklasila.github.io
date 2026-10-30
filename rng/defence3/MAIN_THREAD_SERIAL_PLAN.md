@@ -485,3 +485,33 @@ benchmark pass):
    (0.4), adjacency lane commit (0.4), status pre-pass glue (0.4),
    _simMoveChargeSteps (0.5), spawner ticks' tileEntityChangesSince.
 Presentation stays JavaScript (sounds, damage looks, alerts, text caches).
+
+### Stage U: units by slot only (design, 2026-10-30)
+
+Measured JS it removes (base2, steps 38-59): the retire pass's reads and
+swap-removes (_gameTickBody 1.2 ms, compactRemovedUnits 1.9, id map 0.3,
+detach 0.3) and spawning's object work (processGlobalSpawnerQueue 3.4).
+The `units` list: ~400 references in 34 files; the page (renderer, hud,
+audio: ~170) and the simulation share the name and, without the worker,
+the list itself.
+
+Design:
+- The simulation's unit order is the id table (main.js _uix: ids ascending,
+  slots, holes -2, squeezed by k_uix_remove): the order every peer has
+  without any history (a restore rebuilds it from ids), replacing the
+  swap-remove order. `ix.slots` becomes _uix.slots (holes skipped by the
+  kernels that read it: they already skip slot < 0).
+- Deaths: one kernel over the dead column (retire kernel + k_unit_gone +
+  k_uix_remove fused): the gone kernel's list, the death sound / king flags
+  as columns, holes in the id table; JS only for presentation (the first
+  UNIT_DEATH_SOUNDS sounds) and the objects' detach (SimUnitGone: until
+  units have no objects in the simulation).
+- Births: the id table appended by the spawn kernel; the object made
+  lazily (owners[s] filled when JS first asks for the unit: unitAt(s)).
+- `units` for the simulation's JS: an iterator over the id table
+  (forEachUnit(fn), unitCount(), unitAtIndex(i)); the page keeps its own
+  list (sim_frame / sim_client already hold the page's view of units).
+- Snapshot / hash order: by id (was the list order): rules revision bump.
+Steps: (1) the id table as the order (ix.slots from it), strided passes
+by id-table row; (2) retire as a kernel, the list kept only as a page view;
+(3) simulation sites to the iterator; (4) lazy objects for births.

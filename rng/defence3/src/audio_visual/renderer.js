@@ -5968,12 +5968,30 @@ function _visCoverUnitsCommit() {
     if (C.uStage !== 2 || C.uGen !== C.gen) { C.uStage = 0; return; }
     simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
     C.uStage = 0;
-    const A = C.areaCount, D = C.udiff, PL = C.uplus, MI = C.uminus;
-    for (let p = 0; p < C.players; p++) {
-        const cover = C.cover[p], rows = C.visual[p], base = p * A;
-        for (let i = 0, e = D[2 * p + 1]; i < e; i++) { const a = MI[base + i]; if (--cover[a] === 0) { C.visible[p][a] = 0; if (rows) _visCoverPaintArea(rows, a, false); } }
-        for (let i = 0, e = D[2 * p]; i < e; i++) { const a = PL[base + i]; if (++cover[a] === 1) { C.visible[p][a] = 1; if (rows) _visCoverPaintArea(rows, a, true); } }
-    }
+    // (wasm/src/nfs.rs k_vis_commit: counts, visible bytes, the visual rows' tiles.)
+    const np = C.players, VT = _visCoverVT(np), csr = _visAreaTiles();
+    // (Rows outside the heap: dropped, made again from the cover when asked for: _visCoverRows.)
+    for (let p = 0; p < np; p++) { const rows = C.visual[p]; if (rows && !(rows._flat && simHeapHas(rows._flat))) C.visual[p] = null; VT[p] = C.visual[p] ? _simWEnc(_simHeapPtrOf(C.visual[p]._flat)) : 0; }
+    const P = _visCommitP;
+    P[0] = C.areaCount; P[1] = np; P[2] = C.coverStride; P[3] = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
+    simRustDirect('k_vis_commit', [C.udiff, C.uplus, C.uminus, C.coverFlat, C.visibleFlat, VT, csr.off, csr.tiles], P);
+}
+const _visCommitP = new Float64Array(4);
+let _visVT = null;
+function _visCoverVT(np) { if (!_visVT || _visVT.length < np || !simHeapHas(_visVT)) _visVT = simSharedArray(Int32Array, Math.max(16, np)); return _visVT; }
+// Each area's tiles (y * GRID_W + x) as offsets and a list in the heap, made
+// again when the areas are (gridCellsByArea replaced or resized).
+const _visAreaCsr = { for: null, n: -1, off: null, tiles: null };
+function _visAreaTiles() {
+    const Z = _visAreaCsr, G = gridCellsByArea;
+    if (Z.for === G && Z.n === G.length && simHeapHas(Z.off)) return Z;
+    let total = 0;
+    for (let a = 0; a < G.length; a++) if (G[a]) total += G[a].length;
+    Z.off = simSharedArray(Int32Array, G.length + 1); Z.tiles = simSharedArray(Int32Array, Math.max(1, total));
+    let w = 0;
+    for (let a = 0; a < G.length; a++) { Z.off[a] = w; const L = G[a]; if (L) for (const c of L) if (c) Z.tiles[w++] = c.y * GRID_W + c.x; }
+    Z.off[G.length] = w; Z.for = G; Z.n = G.length;
+    return Z;
 }
 
 function _visCoverActive() {

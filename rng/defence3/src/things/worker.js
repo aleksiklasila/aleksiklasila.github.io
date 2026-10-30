@@ -2660,12 +2660,12 @@ function _hcArr(name, Type, n) {
 function _hcPost(ownerCount, cap) {
     simParallelBackgroundWait(HC_LANE);
     const S = _simUnitState, c = S.columns, n = S.owners.length;
-    _hcArr('hc.e', Float32Array, n).set(c.energy.subarray(0, n));
-    _hcArr('hc.m', Float32Array, n).set(c.maxE.subarray(0, n));
-    _hcArr('hc.o', Int16Array, n).set(c.owner.subarray(0, n));
-    _hcArr('hc.id', Int32Array, n).set(c.id.subarray(0, n));
-    _hcArr('hc.l', Uint8Array, n).set(c.live.subarray(0, n));
-    _hcArr('hc.d', Uint8Array, n).set(c.dead.subarray(0, n));
+    // (The columns as they are now, copied on the helpers in one job.)
+    const cp = [_hcArr('hc.e', Float32Array, n), c.energy, _hcArr('hc.m', Float32Array, n), c.maxE, _hcArr('hc.o', Int16Array, n), c.owner,
+        _hcArr('hc.id', Int32Array, n), c.id, _hcArr('hc.l', Uint8Array, n), c.live, _hcArr('hc.d', Uint8Array, n), c.dead];
+    for (let i = 1; i < cp.length; i += 2) cp[i] = cp[i].subarray(0, n);
+    for (let i = 0; i < cp.length; i += 2) cp[i] = cp[i].subarray(0, n);
+    if (typeof simParallelCopyHeap === 'function') simParallelCopyHeap(cp); else for (let i = 0; i < cp.length; i += 2) cp[i].set(cp[i + 1]);
     const chunks = Math.max(1, Math.ceil(n / HC_CHUNK));
     _hcArr('hc.res', Int32Array, chunks * ownerCount * cap); _hcArr('hc.rat', Float32Array, chunks * ownerCount * cap);
     const P = _simBgParamsByLane[HC_LANE];

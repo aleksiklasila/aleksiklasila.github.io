@@ -3403,3 +3403,28 @@ batch (1M/250k mixed chaos, 0.5 ms sampling, steps 38-59):
   _pathRegionTileSet, _pathRegionJoinedAround. Tests: path-regions-
   incremental (same rebuild counts), path-regions-portals, nav-* wall
   tests, worker-walk, chaos-scenario-determinism (0/0/3 helpers) pass.
+- Destination fields by key: the pools' JS Maps (byKey) are open-addressing
+  tables in the heap (flownav.js _navHt*, key / slot + 1 pairs, the same hash
+  as Rust); the staggered sweep's marks and the cycle end's drops are
+  kernels (wasm/src/nfs.rs k_nav_sweep_mark / k_nav_sweep_drop; drops in
+  slot order now, was the Map's insertion order: deterministic either way).
+  navFieldsLive(F) counts a pool's fields. tests/nav-field-sweep.test.cjs
+  rewritten to drive the kernels in a game instance against the Map
+  reference; nav-field-sweep.bench.cjs (timed the deleted JS) removed.
+- Snapshot copies to the helpers: the healer candidates' six column copies
+  (_hcPost) and the acquisition tier's hostile / structure / cover copies
+  (_acqPost) go through one simParallelCopyHeap each.
+- Visibility cover commit (renderer.js _visCoverUnitsCommit) as nfs.rs
+  k_vis_commit: counts, visible bytes and the visual rows' tiles (an area ->
+  tiles table in the heap, _visAreaTiles); rows outside the heap are dropped
+  and made again from the cover when asked for.
+- Movement charges' per-chunk sums (k_charge_sum) and the status pre-pass's
+  shrine shares per owner (k_owner_sum) as kernels.
+- Left as JavaScript on purpose: the adjacency commit's area loop (areas are
+  plain objects cloned into snapshots; making active / multiplierLevel
+  columns changes the snapshot format: ~0.4 ms, later), the hits' looks
+  (presentation).
+Tests: nav-field-sweep, nav-atlas, nav-background, nav-rows,
+nav-shared-build, visibility-buildings / shared-source / source-mask /
+range-collision, shrine, status-expiry-records, chaos-scenario-determinism
+(0/0/3 helpers) pass.

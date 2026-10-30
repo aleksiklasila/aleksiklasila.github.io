@@ -51,7 +51,7 @@ function carve(type) {
         const r = JSON.parse(inst.eval(`JSON.stringify((() => {
             const nav = navEnsure(NAV_PROFILE_GROUND), W = GRID_W, H = GRID_H, wall = nav.wall, A = nav.atlas;
             if (!A) return { err: 'no atlas' };
-            const fields0 = _navFields.pools.map(F => F.byKey.size);
+            const fields0 = _navFields.pools.map(F => navFieldsLive(F));
             let seed = 99;
             const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
             const open = [];
@@ -88,7 +88,7 @@ function carve(type) {
             }
             return { W, open: open.length, parts: nav.np, levels: A.L, nodes: A.nodes, poolEntries: A.poolEntries, walks, arrived, loops, stuck, unreachable,
                 meanDetour: +(sum / Math.max(1, arrived)).toFixed(3), worstDetour: +worst.toFixed(3), bad,
-                fieldsMade: _navFields.pools.map((F, i) => F.byKey.size - fields0[i]) };
+                fieldsMade: _navFields.pools.map((F, i) => navFieldsLive(F) - fields0[i]) };
         })())`));
         console.log(`${type} ${size} (${built} walls, atlas+build ${buildMs} ms): ` + JSON.stringify(r));
         assert.ok(!r.err, r.err);

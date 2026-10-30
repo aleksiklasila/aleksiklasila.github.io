@@ -647,7 +647,34 @@ const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 128, NAV_WIDE_BASE = 1 << 22;
 // (rowSrc: a slot holding each row made under the installed builds, by row
 // key: the destination's part (rows depend on that alone, see _navFieldRow);
 // rowKeyOf: each slot's.)
-function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, byKey: new Map(), free: [], pending: [], seen: null, rowSrc: new Map(), rowKeyOf: null }; }
+function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, ht: null, free: [], pending: [], seen: null, rowSrc: new Map(), rowKeyOf: null }; }
+// A pool's fields by key (profile * 2^24 + dest): an open-addressing table in
+// the heap (F.ht: key, slot + 1 pairs, 0 empty; linear probing; a power of
+// two of pairs, at least twice the slots), the sweep's kernel's too
+// (wasm/src/nfs.rs, the same hash). Live fields: meta[s * NAV_FIELD_META] >= 0.
+function _navHtHash(key, mask) { return (Math.imul(key, 0x9E3779B1) >>> 0) & mask; }
+function _navHtFit(F) {
+    let n = 64;
+    while (n < F.cap * 2) n *= 2;
+    if (F.ht && F.ht.length === n * 2 && simHeapHas(F.ht)) return;
+    const old = F.ht;
+    F.ht = simSharedArray(Int32Array, n * 2); F.ht.fill(0);
+    if (old) { for (let i = 0; i < old.length; i += 2) if (old[i + 1]) _navHtPut(F, old[i], old[i + 1] - 1); simHeapFree(old); }
+}
+// (A pool's live fields.)
+function navFieldsLive(F) { let n = 0; if (F.meta) for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) n++; return n; }
+function _navHtSlot(F, key) {
+    const T = F.ht;
+    if (!T) return -1;
+    const mask = (T.length >> 1) - 1;
+    for (let h = _navHtHash(key, mask); ; h = (h + 1) & mask) { const v = T[2 * h + 1]; if (v === 0) return -1; if (T[2 * h] === key) return v - 1; }
+}
+function _navHtPut(F, key, s) {
+    const T = F.ht, mask = (T.length >> 1) - 1;
+    let h = _navHtHash(key, mask);
+    while (T[2 * h + 1] !== 0) h = (h + 1) & mask;
+    T[2 * h] = key; T[2 * h + 1] = s + 1;
+}
 const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1, hdr: null };
 // A rebuild's window (NAV_SWAP_TICKS ticks, _navJobStep): the next build
 // made but not installed; every live field made over it in the background
@@ -667,7 +694,7 @@ function _navPoolEnsure(F, C) {
     _navFieldsLaneWait();
     const J = _navFieldsJob.slots;
     if (J) { const keep = []; for (let i = 0; i < J.length; i += 3) if (J[i] !== F) keep.push(J[i], J[i + 1], J[i + 2]); _navFieldsJob.slots = keep.length ? keep : null; }
-    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; F.byKey = new Map(); F.free = []; F.pending = []; F.seen = null; F.remake = null;
+    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; if (F.ht) simHeapFree(F.ht); F.ht = null; F.free = []; F.pending = []; F.seen = null; F.remake = null;
     F.rowSrc = new Map(); F.rowKeyOf = null;
     _navFieldsGrow(F, F.wide ? 64 : 1024);
     return F;
@@ -679,7 +706,7 @@ function _navFieldsGrow(F, cap) {
     // (The fields' job finished first: its slots copied whole; taken at the
     // next flush as always.)
     _navFieldsLaneWait();
-    const size = F.span * F.span, pool = simHeapArrayAuto(Uint16Array, cap * size), meta = simHeapArrayAuto(Int32Array, cap * NAV_FIELD_META), seen = new Int32Array(cap);
+    const size = F.span * F.span, pool = simHeapArrayAuto(Uint16Array, cap * size), meta = simSharedArray(Int32Array, cap * NAV_FIELD_META), seen = simSharedArray(Int32Array, cap);
     const rows = simHeapArrayAuto(Uint8Array, Math.max(1, cap * F.rowW));
     const rowKeyOf = new Float64Array(cap).fill(-1);
     // (The heap arrays in one parallel copy: ~100 MB of rows at 32k slots.)
@@ -690,6 +717,7 @@ function _navFieldsGrow(F, cap) {
     F.rowKeyOf = rowKeyOf;
     for (let s = cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
     F.pool = pool; F.meta = meta; F.seen = seen; F.cap = cap; F.rows = rows;
+    _navHtFit(F);
     const w = F.wide ? 1 : 0;
     simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta); simParallelBind('nav.frows.' + w, rows);
     _navFieldsHeader();
@@ -743,8 +771,8 @@ function navFieldRequest(profile, dest, wide = false) {
     // (On the atlas: no field, the same id for every destination.)
     if (NAV_ATLAS && nav.atlas && nav.atlas.header) return NAV_ATLAS_FID;
     const F = _navPoolEnsure(_navFields.pools[wide ? 1 : 0], nav.C), key = _navFieldKey(profile, dest);
-    let s = F.byKey.get(key);
-    if (s === undefined) {
+    let s = _navHtSlot(F, key);
+    if (s < 0) {
         if (!F.free.length) _navFieldsGrow(F, F.cap * 2);
         s = F.free.pop();
         const { C, cw, W, H } = nav, c = _navClusterOf(dest, W, C, cw), cx = c % cw, cy = (c - cx) / cw, m = s * NAV_FIELD_META;
@@ -752,7 +780,7 @@ function navFieldRequest(profile, dest, wide = false) {
         const ex = Math.min(W, (cx + (wide ? 2 : 1)) * C), ey = Math.min(H, (cy + (wide ? 2 : 1)) * C);
         F.meta[m] = profile; F.meta[m + 1] = dest; F.meta[m + 2] = bx; F.meta[m + 3] = by; F.meta[m + 4] = ex - bx; F.meta[m + 5] = ey - by;
         F.meta[m + 6]++; F.meta[m + 7] = 0;
-        F.byKey.set(key, s);
+        _navHtPut(F, key, s);
         F.pending.push(s);
         // (Kept this sweep cycle; after it, while a unit's route or path
         // leads to it: navFieldsSweepStep. Asking again marks nothing, or
@@ -865,10 +893,11 @@ function _navGrowSwap() {
         if (!F.pool || F.C !== G.C || F.rowW !== G.rowW || G.cap <= F.cap) continue;
         if (G.copyAtSwap) { G.pool.set(F.pool); G.rows.set(F.rows); }
         if (!any) { simParallelBindBatch(); any = true; }
-        const meta = simHeapArrayAuto(Int32Array, G.cap * NAV_FIELD_META), seen = new Int32Array(G.cap), rowKeyOf = new Float64Array(G.cap).fill(-1);
+        const meta = simSharedArray(Int32Array, G.cap * NAV_FIELD_META), seen = simSharedArray(Int32Array, G.cap), rowKeyOf = new Float64Array(G.cap).fill(-1);
         meta.set(F.meta); seen.set(F.seen); rowKeyOf.set(F.rowKeyOf);
         for (let s = G.cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
         F.pool = G.pool; F.rows = G.rows; F.meta = meta; F.seen = seen; F.rowKeyOf = rowKeyOf; F.cap = G.cap;
+        _navHtFit(F);
         simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.fmeta.' + w, F.meta); simParallelBind('nav.frows.' + w, F.rows);
     }
     if (!any) return;
@@ -999,8 +1028,8 @@ SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
 // marked in the cycle are dropped. (Memory only: a route's field is never
 // dropped while it is followed.)
 function _navFieldMark(profile, dest, wide, mark) {
-    const F = _navFields.pools[wide ? 1 : 0], s = F.byKey.get(_navFieldKey(profile, dest));
-    if (s !== undefined) F.seen[s] = mark;
+    const F = _navFields.pools[wide ? 1 : 0], s = _navHtSlot(F, _navFieldKey(profile, dest));
+    if (s >= 0) F.seen[s] = mark;
 }
 function navFieldsSweepStep() {
     const step = NAV_FIELD_SWEEP_TICKS;
@@ -1018,42 +1047,36 @@ function navFieldsSweepStep() {
     }
 }
 function _navFieldsSweepSlice(k, step, mark, count = 1) {
-    // (From the slots' columns: a unit's route field (rtEnd, nvProf, its
-    // route key in oc__routeKey) and its path's last flow node's (nvPK, the
-    // path setter's). No unit object is read.)
-    // (By the units list's order, the same on every peer, through the slot
-    // map: by slot, which units a cycle visits, and so which fields it
-    // drops, depended on each peer's slot layout (a restore, a join).)
+    // (From the slots' columns, by the units list's order through the slot
+    // map (by slot, which fields a cycle drops would depend on each peer's
+    // slot layout): wasm/src/nfs.rs k_nav_sweep_mark.)
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     const slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
-    if (S && slots) {
-        const C = S.columns, LIVE = C.live, DEAD = C.dead, RE = C.rtEnd, PR = C.nvProf, PK = C.nvPK, RK = C.rkF, n = units.length;
-        const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
-        // Adjacent base-tick shares touch adjacent entries. Visit them together
-        // so a long adaptive step reads each cache line once, while retaining
-        // the same shares and the cycle boundary's field-expiry decisions.
-        for (let base = k; base < n; base += step) for (let i = base, end = Math.min(n, base + count); i < end; i++) {
-            const s = slots[i];
-            if (!(s >= 0) || !LIVE[s] || DEAD[s]) continue;
-            const e = RE[s];
-            if (e >= 0 && RK[s] === 1) { const sl = Fw.byKey.get(PR[s] * 16777216 + e); if (sl !== undefined) Fw.seen[sl] = mark; }
-            const pk = PK[s];
-            if (pk >= 0) { const F = (pk & 1) ? Fw : Fn, sl = F.byKey.get(pk >> 1); if (sl !== undefined) F.seen[sl] = mark; }
-        }
-    }
+    const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
+    if (!S || !slots || !Fn.ht || !Fw.ht) return;
+    const C = S.columns, P = _navSweepP;
+    P[0] = k; P[1] = step; P[2] = count; P[3] = units.length; P[4] = mark; P[5] = Fn.ht.length >> 1; P[6] = Fw.ht.length >> 1;
+    simRustDirect('k_nav_sweep_mark', [slots, C.live, C.dead, C.rtEnd, C.rkF, C.nvProf, C.nvPK, Fn.ht, Fn.seen, Fw.ht, Fw.seen], P);
 }
+const _navSweepP = new Float64Array(8);
+let _navDropList = null, _navDropHdr = null;
 function _navFieldsSweepEnd(k, step, mark) {
     // (In a rebuild's window no slot is let go (the next build's batches
     // keep theirs): the drop waits a cycle, the marks of both kept.)
     if (_navNext.nav) return;
     for (const F of _navFields.pools) {
-        if (!F.pool) continue;
-        for (const [key, s] of F.byKey) {
-            if (F.seen[s] >= mark) continue;
-            F.byKey.delete(key); F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s);
+        if (!F.pool || !F.ht) continue;
+        if (!_navDropList || _navDropList.length < F.cap || !simHeapHas(_navDropList)) _navDropList = simSharedArray(Int32Array, Math.max(1024, F.cap));
+        if (!_navDropHdr || !simHeapHas(_navDropHdr)) _navDropHdr = simSharedArray(Int32Array, 2);
+        const P = _navSweepP;
+        P[0] = F.cap; P[1] = F.ht.length >> 1; P[2] = mark; P[3] = NAV_FIELD_META;
+        simRustDirect('k_nav_sweep_drop', [F.ht, F.meta, F.seen, _navDropList, _navDropHdr], P);
+        for (let i = 0, nd = _navDropHdr[0]; i < nd; i++) {
+            const s = _navDropList[i];
+            F.free.push(s);
             if (F.rowKeyOf && F.rowSrc.get(F.rowKeyOf[s]) === s) F.rowSrc.delete(F.rowKeyOf[s]);
         }
-        F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META] >= 0);
+        if (_navDropHdr[0] > 0) F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META] >= 0);
     }
     _navFields.seenCycle++;
 }
@@ -1069,8 +1092,7 @@ function _navFieldsRemakeAll() {
         if (!F.pool) continue;
         F.rowSrc = new Map();
         const all = [];
-        for (const s of F.byKey.values()) all.push(s);
-        all.sort((a, b) => a - b);
+        for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) all.push(s);
         F.remake = all; F.remakePos = 0;
     }
 }
@@ -1451,9 +1473,9 @@ function navReset() {
     _navGrow[0] = _navGrow[1] = null;
     if (_navNext.nav) _navNextDrop();
     for (const F of _navFields.pools) {
-        if (F.meta) for (const s of F.byKey.values()) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
+        if (F.meta) for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
         F.rowSrc = new Map();
-        F.byKey = new Map(); F.pending = []; F.remake = null;
+        if (F.ht) F.ht.fill(0); F.pending = []; F.remake = null;
     }
     _navFields.flushedTick = -1;
     _nav = new Array(NAV_PROFILES).fill(null);
@@ -1635,8 +1657,8 @@ function navProfileOf(u) {
 function navPath(profile, gx, gy, dest, maxLen) {
     const nav = _nav[profile];
     if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return null;
-    const W = GRID_W, F = _navFields.pools[1], s = F && F.byKey ? F.byKey.get(_navFieldKey(profile, dest)) : undefined;
-    const did = NAV_ATLAS && nav.atlas && nav.atlas.header ? NAV_ATLAS_FID : s === undefined ? -1 : NAV_WIDE_BASE + s;
+    const W = GRID_W, F = _navFields.pools[1], s = F && F.ht ? _navHtSlot(F, _navFieldKey(profile, dest)) : -1;
+    const did = NAV_ATLAS && nav.atlas && nav.atlas.header ? NAV_ATLAS_FID : s < 0 ? -1 : NAV_WIDE_BASE + s;
     let t = gy * W + gx;
     const path = [{ x: gx, y: gy }];
     while (t !== dest && path.length < maxLen) {

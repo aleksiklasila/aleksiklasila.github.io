@@ -45,6 +45,7 @@ mod jobs;
 mod wsw;
 mod wai;
 mod tch;
+mod nfs;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

@@ -1587,6 +1587,8 @@ function statusDotAccReset() {
     if (typeof simUnitStDropPending === 'function') simUnitStDropPending();
 }
 let _statusCounts = null, _statusList = null;
+let _statusShrSum = null;
+const _statusShrP = new Float64Array(2);
 function statusPrepassRun() {
     const S = _simUnitState, n = S ? S.owners.length : 0;
     if (!S || n === 0 || units.length === 0) return;
@@ -1605,11 +1607,13 @@ function statusPrepassRun() {
     P[5] = NO; P[6] = RESOURCE_FIXED_POINT_SCALE; P[7] = STATUS_LOOKS_PER_JOB;
     simParallelRun(SIM_KERNEL_STATUS, chunks);
     {
-        const SHR = _statusShr;
-        for (let j = 0, e = chunks * NO; j < e; j++) {
-            const v = SHR[j];
+        // (The shares per owner: wasm/src/nfs.rs k_owner_sum.)
+        if (!_statusShrSum || _statusShrSum.length < NO || !simHeapHas(_statusShrSum)) _statusShrSum = simSharedArray(Float64Array, Math.max(16, NO));
+        _statusShrP[0] = chunks; _statusShrP[1] = NO;
+        simRustDirect('k_owner_sum', [_statusShr, _statusShrSum], _statusShrP);
+        for (let o = 0; o < NO; o++) {
+            const v = _statusShrSum[o];
             if (!v) continue;
-            const o = j % NO;
             if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
             _shrinePendingFixed[o] += v;
         }
@@ -3101,16 +3105,13 @@ function _simMoveSepListed(chunks, per) {
 // it: mvBlk): the kernel's sums per chunk and owner into the pending spend,
 // per owner and unit type into the usage log.
 function _simMoveChargeSteps(chunks, NP, NT, names) {
-    const FIX = _simMoveChFix, USE = _simMoveChUse, W = NP + 1;
-    let fix = null, used = null;
-    // (Only the chunks that charged anything: the flag after their sums.)
-    for (let k = 0; k < chunks; k++) {
-        if (FIX[k * W + NP] === 0) continue;
-        fix ||= new Float64Array(NP); used ||= new Float64Array(NP * NT);
-        for (let pid = 0; pid < NP; pid++) fix[pid] += FIX[k * W + pid];
-        for (let i = 0, o = k * NP * NT; i < NP * NT; i++) used[i] += USE[o + i];
-    }
-    if (!fix) return;
+    // (The chunks' sums: wasm/src/nfs.rs k_charge_sum.)
+    const Z = _simChSum;
+    if (!Z.fix || Z.fix.length < NP || Z.use.length < NP * NT || !simHeapHas(Z.fix)) { Z.fix = simSharedArray(Float64Array, Math.max(16, NP)); Z.use = simSharedArray(Float64Array, Math.max(64, NP * NT)); Z.hdr = simSharedArray(Int32Array, 2); }
+    Z.P[0] = chunks; Z.P[1] = NP; Z.P[2] = NT;
+    simRustDirect('k_charge_sum', [_simMoveChFix, _simMoveChUse, Z.fix, Z.use, Z.hdr], Z.P);
+    if (!Z.hdr[0]) return;
+    const fix = Z.fix, used = Z.use;
     for (let pid = 0; pid < NP; pid++) {
         if (fix[pid]) _pendingMovementAstarFixed[pid] = (_pendingMovementAstarFixed[pid] || 0) + fix[pid];
         for (let ti = 0; ti < NT; ti++) {
@@ -3119,6 +3120,7 @@ function _simMoveChargeSteps(chunks, NP, NT, names) {
         }
     }
 }
+const _simChSum = { fix: null, use: null, hdr: null, P: new Float64Array(3) };
 let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
 // The movement kernel's shared flow looks (mv.rs LOOKC_ENTRIES entries of 16
 // words): keyed by what a look depends on, among them the navigation build
@@ -3316,12 +3318,13 @@ function _acqPost() {
     simParallelBind('acq.esL', _sxESlot); simParallelBind('acq.omL', _combatScanOwnerMask);
     _acqOwnArray('acq.rs', Int32Array, nc); _acqOwnArray('acq.rc', Int32Array, nc); _acqOwnArray('acq.rst', Int32Array, nc);
     _acqOwnArray('acq.om', Uint8Array, nc); _acqOwnArray('acq.es', Int32Array, simReserveCap(ne));
-    _acqOwnArray('acq.hs', Int32Array, _simMoveHostile.length).set(_simMoveHostile);
-    if (_simMoveHostStruct) _acqOwnArray('acq.hss', Int32Array, _simMoveHostStruct.length).set(_simMoveHostStruct);
-    _acqArray('acq.sown', Int8Array, GRID_W * GRID_H).set(_simMoveStruct.subarray(0, GRID_W * GRID_H));
-    _acqArray('acq.scls', Int8Array, GRID_W * GRID_H).set(_simStructCls.subarray(0, GRID_W * GRID_H));
+    // (The copies in one job on the helpers.)
+    const NT = GRID_W * GRID_H, cp = [_acqOwnArray('acq.hs', Int32Array, _simMoveHostile.length).subarray(0, _simMoveHostile.length), _simMoveHostile];
+    if (_simMoveHostStruct) cp.push(_acqOwnArray('acq.hss', Int32Array, _simMoveHostStruct.length).subarray(0, _simMoveHostStruct.length), _simMoveHostStruct);
+    cp.push(_acqArray('acq.sown', Int8Array, NT).subarray(0, NT), _simMoveStruct.subarray(0, NT), _acqArray('acq.scls', Int8Array, NT).subarray(0, NT), _simStructCls.subarray(0, NT));
     const cov = _acqArray('acq.cover', Uint8Array, Math.max(1, np * A));
-    for (let p = 0; p < np; p++) cov.set(C.visible[p].subarray(0, A), p * A);
+    for (let p = 0; p < np; p++) cp.push(cov.subarray(p * A, p * A + A), C.visible[p].subarray(0, A));
+    simParallelCopyHeap(cp);
     simParallelBind('acq.agrid', _spatialAreaGridFlat());
     // First the owners per chunk transposed (SIM_KERNEL_ACQ_OMT: the Rust
     // scan reads a ring's columns as runs), then the scan. (Each stage's
