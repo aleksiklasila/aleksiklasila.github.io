@@ -3366,3 +3366,40 @@ path-regions-incremental, heap-grow-ahead, helper-heap-binding pass. Mixed
 chaos deterministic replay matches all 65 hashes with 0, 0 and 3 helpers,
 including after the portal reuse change. No Rust ABI change or rebuild needed.
 
+
+# JS -> wasm conversions, continued (2026-10-30, later session)
+
+User: convert the remaining JavaScript first; full testing and benchmarks
+after (no TPS measuring between conversions). Baseline profile before this
+batch (1M/250k mixed chaos, 0.5 ms sampling, steps 38-59):
+`tests/test-runs/conv-20261030b/base2.json` (+ .cpuprofile): main thread
+~103 ms wasm, ~40 ms JavaScript, ~9 ms waits a tick; the JavaScript is flat
+(largest: deaths' bookkeeping ~3.7 ms, structure destroys' object side
+~2.5, effective levels ~3.1, spawning ~3.4, tile wall changes ~3).
+
+- Effective levels: units catching up with new stat tables (flags 5/6,
+  after every research) no longer get object writes in JavaScript. Their
+  base tables are a row (new movement column `bsRow`, Int16; rows
+  `_effBRowObj`, per base entry `eff.bRow`, noted by `_effBaseNote`, reset
+  past 32k rows with every holder keeping its object), and `maxEnergy` is
+  stored in the heap column `jMaxE` (SIM_UNIT_JS_COL_ALIAS); k_eff_units
+  writes both. Unit's preComputedBase / basePreComputed read the row
+  (setting either makes both the unit's own). `_effBaseIndex` no longer
+  allocates. Tests: eff-behind-kernel, shared-stat-rows, storage-abi,
+  research-queue, multiplayer-snapshot pass.
+- Tile changes (walls, walk-class walls, step costs, block change counts,
+  navigation diff counts) as one batch kernel: wasm/src/tch.rs
+  k_tile_changes over a queue (t * 2 + kind) flushed at once outside the
+  unit pass and at its end inside it (unit.js simTileChangesFlush; the
+  destroy batch flushes once). Deleted: navClassTileChanged,
+  navWallChanged, _navDiffChanged, stepCostsChanged, _simMoveWallBlk9Add,
+  the JS wall / class queues. `_navDiff` and `_stepCost` live in the heap.
+  Units on new walls are still pushed off in JavaScript (_simWallPushOut).
+- Path regions' tile hook as a kernel: tch.rs k_reg_tiles (the union-find
+  join / split check / windowed search of pathRegionsTileChanged, per kept
+  label set), run at the same flush. Behaviour change: inside the unit pass
+  the labels now follow wall changes at the pass's end (as the movement
+  walls do), not at once. Deleted: pathRegionsTileChanged,
+  _pathRegionTileSet, _pathRegionJoinedAround. Tests: path-regions-
+  incremental (same rebuild counts), path-regions-portals, nav-* wall
+  tests, worker-walk, chaos-scenario-determinism (0/0/3 helpers) pass.

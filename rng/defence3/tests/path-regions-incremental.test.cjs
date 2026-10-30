@@ -1,5 +1,5 @@
 // Path region labels kept as walls change (pathfinding.js
-// pathRegionsTileChanged: opened tiles join regions, closed ones split only
+// pathRegionsTilesRun / wasm k_reg_tiles: opened tiles join regions, closed ones split only
 // after a fresh build) give the same partition of tiles as a fresh build,
 // after every change of a random sequence (towers placed in open ground,
 // corridors cut and reopened, rooms sealed).

@@ -44,6 +44,7 @@ mod uix;
 mod jobs;
 mod wsw;
 mod wai;
+mod tch;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

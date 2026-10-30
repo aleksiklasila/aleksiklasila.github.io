@@ -1132,6 +1132,16 @@ for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS
     const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
+// Its base stat tables: its base row's (unit.bsRow >= 0, which the
+// effective-level kernel gives a unit catching up with its stat tables, see
+// things_utils.js _effBRowObj), else its own fields. Setting either one makes
+// both its own (the row's object kept in the other).
+for (const k of ['preComputedBase', 'basePreComputed']) {
+    const own = 'jr_' + k, other = 'jr_' + (k === 'preComputedBase' ? 'basePreComputed' : 'preComputedBase');
+    const get = new Function('return function () { const c = this._us; if (c) { const r = c.bsRow[this._si]; return r >= 0 ? _effBRowObj[r] : c.' + own + '.get(this._si); } return this._det ? this._det.' + k + ' : undefined; };')();
+    const set = new Function('k', 'return function (v) { const c = this._us; if (c) { const s = this._si, r = c.bsRow[s]; if (r >= 0) { c.' + other + '.set(s, _effBRowObj[r]); c.bsRow[s] = -1; } c.' + own + '.set(s, v); } else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
+}
 // The movement columns that are state (SIM_UNIT_MOVE_SNAPSHOT_KEYS: the step
 // carries), for snapshots.
 for (const k of (typeof SIM_UNIT_MOVE_SNAPSHOT_KEYS !== 'undefined' ? SIM_UNIT_MOVE_SNAPSHOT_KEYS : [])) {
@@ -2453,7 +2463,7 @@ let _simMoveWallVer = 0;
 // During the unit pass the wall table stands still (the kernel and every
 // Unit.update see the walls of the pass's start): tile type changes are
 // applied at its end, in order. (Holds and chases check _simMoveWallQNear.)
-let _simMoveWallQ = [];
+
 // The tiles changed so far this pass (stamped with the pass's number): a
 // kernel hold or chase at its turn stands unless one is within a tile of
 // where the unit started or ended up. Its decisions read the walls of the
@@ -2465,7 +2475,7 @@ let _simMoveWallQT = null, _simMoveWallQGen = 0;
 function _simMoveWallQMark(gx, gy) {
     const n = GRID_W * GRID_H;
     if (!_simMoveWallQT || _simMoveWallQT.length !== n) { _simMoveWallQT = new Uint8Array(n); _simMoveWallQGen = 0; }
-    if (_simMoveWallQ.length === 2) { if (++_simMoveWallQGen > 255) { _simMoveWallQT.fill(0); _simMoveWallQGen = 1; } }
+    if (_simMoveWallQN === 1) { if (++_simMoveWallQGen > 255) { _simMoveWallQT.fill(0); _simMoveWallQGen = 1; } }
     if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simMoveWallQT[gy * GRID_W + gx] = _simMoveWallQGen;
 }
 let _simMoveWallQKept = 0;
@@ -2485,49 +2495,64 @@ function _simMoveWallQNear(c, s) {
     return false;
 }
 function simMoveWallsDeferEnd() {
-    if (_simMoveWallQ.length) {
-        const q = _simMoveWallQ;
-        _simMoveWallQ = [];
-        for (let i = 0; i < q.length; i += 2) simMoveTileTypeChanged(q[i], q[i + 1]);
-    }
-    if (_simClassQ.length) {
-        const q = _simClassQ;
-        _simClassQ = [];
-        for (let i = 0; i < q.length; i++) _simMoveClassTileChanged(q[i]);
-    }
+    _simMoveWallQN = 0;
+    simTileChangesFlush();
 }
-// Tile entities changed during the pass: the walk classes' walls (see
-// navClassTileChanged) follow at its end, as the walls do.
-let _simClassQ = [];
-// The walk classes' walls at tile k (flownav.js), and when any changed the
-// wall versions the cached look-aheads check (as a wall change).
+// Tile changes for the walk tables (the ground walls, step costs, walk
+// classes' walls, the navigation's diff counts): queued as t * 2 + kind (0
+// its cell type, 1 its tile entity only), applied in a batch by
+// wasm/src/tch.rs k_tile_changes in their order: during the unit pass at its
+// end (the pass sees the walls of its start), else at once
+// (simTileChangesFlush). Tiles that became walls push their units off.
+const _tch = { list: null, n: 0, hdr: null, nw: null, tabN: null, tabC: null, P: new Float64Array(10) };
+function _tchAdd(t, kind) {
+    const T = _tch;
+    if (!T.list || T.n >= T.list.length || !simHeapHas(T.list)) {
+        const a = simSharedArray(Int32Array, Math.max(4096, T.n * 2));
+        if (T.list) a.set(T.list.subarray(0, T.n));
+        T.list = a;
+    }
+    T.list[T.n++] = t * 2 + kind;
+}
+function simTileChangesFlush() {
+    if (_unitPassOn) return;
+    const T = _tch, n = T.n;
+    if (n === 0) return;
+    T.n = 0;
+    // (The path regions' labels: pathfinding.js.)
+    pathRegionsTilesRun(T.list, n);
+    if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H || !_simMoveWallBlk || !simHeapHas(_simMoveWall) || !simHeapHas(_simMoveWallBlk)) { _simMoveWallDirty = true; return; }
+    if (!T.hdr || !simHeapHas(T.hdr)) { T.hdr = simSharedArray(Int32Array, 4); T.tabN = simSharedArray(Int32Array, 32); T.tabC = simSharedArray(Int32Array, 32); }
+    if (!T.nw || T.nw.length < n || !simHeapHas(T.nw)) T.nw = simSharedArray(Int32Array, Math.max(1024, n * 2));
+    const diff = navTileTables(T.tabN, T.tabC);
+    const sc = typeof _stepCost !== 'undefined' && _stepCost && _stepCost.length === GRID_W * GRID_H ? _stepCost : null, scOk = !!sc && simHeapHas(sc);
+    const b9 = _simMoveWallBlk9 && simHeapHas(_simMoveWallBlk9) ? _simMoveWallBlk9 : null;
+    if (!simHeapHas(_ST.code)) structTablesRehome();
+    const P = T.P;
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TYPE_WALL; P[4] = NAV_PROFILES; P[5] = NAV_PROFILE_COLLECT; P[6] = NAV_PROFILE_BUILD0;
+    P[7] = _simMoveWallBlkW; P[8] = 0x66; P[9] = 0x77;
+    simRustDirect('k_tile_changes', [T.list, cellType, _simMoveWall, _simMoveWallBlk, b9, scOk ? sc : null, diff, T.tabN, T.tabC, _ST.code, _ST.own, _ST.val, T.hdr, T.nw], P);
+    _simMoveWallVer = (_simMoveWallVer + T.hdr[0]) | 0;
+    if (sc && !scOk) stepCostsReset();
+    if (_simMoveWallBlk9 && !b9) _simMoveWallBlk9All();
+    if (navTileTablesRedo()) { _simMoveWallDirty = true; return; }
+    // (A new wall: whoever stands there steps off it.)
+    for (let i = 0, m = T.hdr[1]; i < m; i++) { const t = T.nw[i], gx = t % GRID_W; _simWallPushOut(gx, (t - gx) / GRID_W); }
+}
+// The walk classes' walls at tile k (its tile entity changed).
 function _simMoveClassTileChanged(k) {
-    if (typeof navClassTileChanged !== 'function' || !navClassTileChanged(k)) return;
-    const gx = k % GRID_W, gy = (k - gx) / GRID_W;
-    _simMoveWallVer = (_simMoveWallVer + 1) | 0;
-    if (_simMoveWallBlk) { _simMoveWallBlk[(gy >> 3) * _simMoveWallBlkW + (gx >> 3)]++; _simMoveWallBlk9Add(gx >> 3, gy >> 3); }
+    if (!(k >= 0 && k < GRID_W * GRID_H)) return;
+    _tchAdd(k, 1);
+    simTileChangesFlush();
 }
-function simMoveTileTypeChanged(gx, gy) {
-    // (The path regions follow the grid at once: pathfinding.js.)
-    if (typeof pathRegionsTileChanged === 'function') pathRegionsTileChanged(gx, gy);
+// Tile (gx, gy)'s cell type changed. (hold: the caller flushes, a batch's.)
+let _simMoveWallQN = 0;
+function simMoveTileTypeChanged(gx, gy, hold = false) {
+    if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
     if (typeof laserWallChanged === 'function') laserWallChanged(gx, gy);
-    if (_unitPassOn) { _simMoveWallQ.push(gx, gy); _simMoveWallQMark(gx, gy); return; }
-    if (typeof stepCostsChanged === 'function') stepCostsChanged(gx, gy);
-    if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H) { _simMoveWallDirty = true; return; }
-    const row = grid[gy], cell = row ? row[gx] : null;
-    if (gx >= 0 && gx < GRID_W && cell) {
-        const w = cell.type === TYPE_WALL ? 1 : 0, k = gy * GRID_W + gx;
-        if (_simMoveWall[k] !== w) {
-            const was = _simMoveWall[k];
-            _simMoveWall[k] = w; _simMoveWallVer = (_simMoveWallVer + 1) | 0;
-            if (_simMoveWallBlk) { _simMoveWallBlk[(gy >> 3) * _simMoveWallBlkW + (gx >> 3)]++; _simMoveWallBlk9Add(gx >> 3, gy >> 3); }
-            if (typeof navWallChanged === 'function') navWallChanged(k, was, w);
-            // (A new wall: whoever stands there steps off it.)
-            if (w === 1) _simWallPushOut(gx, gy);
-        }
-        // (The walk classes' walls: also when only its tile entity changed.)
-        _simMoveClassTileChanged(k);
-    }
+    _tchAdd(gy * GRID_W + gx, 0);
+    if (_unitPassOn) { _simMoveWallQN++; _simMoveWallQMark(gx, gy); return; }
+    if (!hold) simTileChangesFlush();
 }
 // Per 8x8 block, the sum of its 3x3 blocks' wall change counts (simWallKey's
 // value, the kernel's one read: simWallKey9).
@@ -2536,11 +2561,6 @@ function _simMoveWallBlk9All() {
     const W = _simMoveWallBlkW, H = (GRID_H + 7) >> 3, B = _simMoveWallBlk;
     if (!_simMoveWallBlk9 || _simMoveWallBlk9.length !== B.length) { _simMoveWallBlk9 = simHeapArrayAuto(Int32Array, B.length); simParallelBind('mv.wallBlk9', _simMoveWallBlk9); }
     for (let by = 0; by < H; by++) for (let bx = 0; bx < W; bx++) _simMoveWallBlk9[by * W + bx] = simWallKey(B, W, H, bx * 8, by * 8, 0);
-}
-function _simMoveWallBlk9Add(bx, by) {
-    const W = _simMoveWallBlkW, H = (GRID_H + 7) >> 3, A = _simMoveWallBlk9;
-    if (!A) return;
-    for (let y = by - 1; y <= by + 1; y++) for (let x = bx - 1; x <= bx + 1; x++) if (x >= 0 && y >= 0 && x < W && y < H) A[y * W + x] = (A[y * W + x] + 1) | 0;
 }
 function simMoveWallsDirty() { _simMoveWallDirty = true; if (typeof stepCostsReset === 'function') stepCostsReset(); if (typeof pathRegionsReset === 'function') pathRegionsReset(); }
 // The wall table, current (1: grid type TYPE_WALL).
@@ -2595,7 +2615,7 @@ function simMoveTileEntityChanged(gx, gy) {
     if (_simMoveStruct) _simMoveStructDirty.push(gy * GRID_W + gx);
     // (The walk classes' walls: a builder's own buildings, active mines; at
     // the unit pass's end when in it, as the walls.)
-    if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) { if (_unitPassOn) _simClassQ.push(gy * GRID_W + gx); else _simMoveClassTileChanged(gy * GRID_W + gx); }
+    if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simMoveClassTileChanged(gy * GRID_W + gx);
 }
 function _simMoveStructCode(gx, gy) {
     const e = getTileEntityRef(gx, gy);

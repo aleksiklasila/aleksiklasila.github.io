@@ -555,7 +555,28 @@ function _effRowsReset() {
 // the tables and maxEnergy, flags 5 and 6): after a research ~700 units a
 // tick at 105k took the full path (~4 us each, of a ~4.5 ms step).
 const EFF_BASE_NONE = -2147483648;
-let _effBase = { dims: '', ver: null, rad: null, maxE: null, maxE64: null, obj: [] };
+let _effBase = { dims: '', ver: null, rad: null, maxE: null, maxE64: null, obj: [], row: null };
+// Base rows: the base tables objects units hold by row (unit.bsRow, Unit's
+// preComputedBase / basePreComputed), one per (base entry, version) noted;
+// eff.bRow per base entry its current one (-1 none). The kernel gives a unit
+// that catches up with its stat tables its entry's row.
+let _effBRowObj = [];
+const EFF_BROW_MAX = 1 << 15;
+// Every base row dropped (too many): each unit holding one keeps its object as its own.
+function _effBRowsReset() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S) {
+        const c = S.columns, n = S.owners.length;
+        for (let s = 0; s < n; s++) {
+            const r = c.bsRow[s];
+            if (r < 0) continue;
+            const o = _effBRowObj[r];
+            c.bsRow[s] = -1; c.jr_preComputedBase.set(s, o); c.jr_basePreComputed.set(s, o);
+        }
+    }
+    _effBRowObj = [];
+    if (_effBase.row) _effBase.row.fill(-1);
+}
 function _effBaseLookup() {
     const dims = _effDimsRefresh(), B = _effBase;
     if (B.dims !== dims || !B.ver) {
@@ -564,7 +585,8 @@ function _effBaseLookup() {
         B.ver = simSharedArray(Int32Array, n); B.ver.fill(EFF_BASE_NONE);
         B.rad = simSharedArray(Int32Array, n); B.maxE = simSharedArray(Float32Array, n);
         B.maxE64 = new Float64Array(n); B.obj = new Array(n).fill(null); B.dims = dims;
-        simParallelBind('eff.bVer', B.ver); simParallelBind('eff.bRad', B.rad); simParallelBind('eff.bMaxE', B.maxE);
+        B.row = simSharedArray(Int32Array, n); B.row.fill(-1);
+        simParallelBind('eff.bVer', B.ver); simParallelBind('eff.bRad', B.rad); simParallelBind('eff.bMaxE', B.maxE); simParallelBind('eff.bRow', B.row);
     }
     return B;
 }
@@ -573,9 +595,11 @@ function _effBaseClear() {
     if (!B.ver) return;
     B.ver.fill(EFF_BASE_NONE);
     B.obj.fill(null);
+    B.row.fill(-1);
 }
 function _effBaseIndex(o, ty, bl) {
-    const [NP, NT, L1] = _effRowDims();
+    _effDimsRefresh();
+    const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
     if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1) || bl !== Math.floor(bl)) return -1;
     return (o * NT + ty) * L1 + bl;
 }
@@ -591,6 +615,10 @@ function _effBaseNote(u) {
     if (!Number.isFinite(mx) || Number(u.maxEnergy) !== mx) return;
     const B = _effBaseLookup(), i = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
     if (i < 0) return;
+    if (!(B.obj[i] === b && B.row[i] >= 0 && _effBRowObj[B.row[i]] === b)) {
+        if (_effBRowObj.length >= EFF_BROW_MAX) _effBRowsReset();
+        B.row[i] = _effBRowObj.length; _effBRowObj.push(b);
+    }
     B.obj[i] = b; B.maxE64[i] = mx; B.maxE[i] = mx; B.rad[i] = c.esRad[s]; B.ver[i] = ver;
 }
 // Off: units behind their tables take the full path, as before (tests:
@@ -789,13 +817,7 @@ function recalculateUnitEffectiveLevel() {
                 const i = phase + j * step, u = units[i];
                 if (f === 5 || f === 6) {
                     // (Behind its tables, taken in the kernel from its base entry
-                    // and row: the base tables and maxEnergy, as its full path
-                    // sets them.)
-                    const s = slots[i], B = _effBase, bi = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
-                    const b = B.obj[bi];
-                    u.preComputedBase = b;
-                    u.basePreComputed = b;
-                    u.maxEnergy = B.maxE64[bi];
+                    // and row: its base row and maxEnergy written there.)
                     _effBehindInKernel++;
                 } else if (f === 1) {
                     // (The kernel set its stacks and levels.)
@@ -1259,8 +1281,10 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
         if (u) u._workerReservedTileIndex = -1;
         workerReservedSet(slot, null);
     }
-    for (let i = 0; i < m; i++) { const t = D.tiles[i]; if (_unitPassOn) _simClassQ.push(t); else _simMoveClassTileChanged(t); }
-    for (let i = 0, nw = H[0]; i < nw; i++) { const t = D.walls[i], gx = t % GRID_W; simMoveTileTypeChanged(gx, (t - gx) / GRID_W); }
+    // (The walk tables in one batch: unit.js simTileChangesFlush.)
+    for (let i = 0; i < m; i++) _tchAdd(D.tiles[i], 1);
+    for (let i = 0, nw = H[0]; i < nw; i++) { const t = D.walls[i], gx = t % GRID_W; simMoveTileTypeChanged(gx, (t - gx) / GRID_W, true); }
+    simTileChangesFlush();
     for (let i = 0; i < m; i++) {
         const e = objs[i], t = D.tiles[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
         objs[i] = null;

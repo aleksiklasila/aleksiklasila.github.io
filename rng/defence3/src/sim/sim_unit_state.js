@@ -417,6 +417,10 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['esVer', Int32Array, 1],
     // Its effective stat tables' row (things_utils.js _effRowAttach; -1: its own).
     ['statRow', Int16Array, 1],
+    // Its base stat tables' row (things_utils.js _effBRowObj; -1: its own,
+    // the preComputedBase / basePreComputed fields'), and its maxEnergy field
+    // (SIM_UNIT_JS_COL_ALIAS): both written by SIM_KERNEL_EFF_UNITS.
+    ['bsRow', Int16Array, 1], ['jMaxE', Float32Array, 1],
     // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8).
@@ -715,7 +719,9 @@ class SimSparseIntColumn {
 }
 function _simSparseIntGrow(old,cap,def,used){const a=new SimSparseIntColumn(cap,def);if(old)a.copyFrom(old,0,Math.min(used,cap),0);return a;}
 function _simSparseIntCopy(old,cap,def,runs){const a=new SimSparseIntColumn(cap,def);for(let j=0;j<runs.length;j+=3)a.copyFrom(old,runs[j+1],runs[j+2],runs[j]);return a;}
-const _simJsName = (k, kind) => (kind === 'r' ? 'jr_' : 'j_') + k;
+// (JavaScript fields kept in a movement column of the heap: the kernels write them.)
+const SIM_UNIT_JS_COL_ALIAS = { maxEnergy: 'jMaxE' };
+const _simJsName = (k, kind) => SIM_UNIT_JS_COL_ALIAS[k] || (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
 // Slot s's fields at their defaults (straight-line, as _simSlotZeroFn).
@@ -1268,6 +1274,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
         // memory; references as the object fields'.)
         for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
             const nm = _simJsName(k, kind);
+            if (SIM_UNIT_JS_COL_ALIAS[k]) continue;
             if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap, def, SIM_SHARED_REF_FIELDS.has(k)); continue; }
             if (SIM_UNIT_SPARSE_JS_FIELDS.has(k)) {S.columns[nm]=_simSparseIntGrow(S.columns[nm],cap,def,used);continue;}
             const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap);
@@ -1297,7 +1304,7 @@ const _simSlotDesc = { value: null, writable: true };
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1;
+    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1; S.columns.bsRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN;
     // (No status record; one for its damage not reported yet, a restore's.)
     if (S.columns.stIx[s] > 0) _simStRelease(S, s);
@@ -1351,7 +1358,7 @@ function simUnitStateDetach(S, s) {
     const u = S.owners[s];
     if (!u) return;
     const C = S.columns;
-    C.statRow[s] = -1;
+    C.statRow[s] = -1; C.bsRow[s] = -1;
     if (C.ppDue[s] >= 0 && typeof pendingPathUnlink === 'function') pendingPathUnlink(C, s);
     u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s] * SIM_POS_INV, C.y[s] * SIM_POS_INV);
     _simJsRelease(S.columns, s);
@@ -1472,6 +1479,7 @@ function simUnitStateCompact(force = false) {
     for (const k of SIM_UNIT_COLUMNS) _simCopyRuns(old[k], C[k], runs, 1);
     for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
         const nm = _simJsName(k, kind);
+        if (SIM_UNIT_JS_COL_ALIAS[k]) continue;
         if (kind === 'r') C[nm] = _simRefCopy(old[nm], cap, runs);
         else if (SIM_UNIT_SPARSE_JS_FIELDS.has(k)) C[nm]=_simSparseIntCopy(old[nm],cap,def,runs);
         else { C[nm] = new _SIM_JS_TYPED[kind](cap); _simCopyRuns(old[nm], C[nm], runs, 1); }

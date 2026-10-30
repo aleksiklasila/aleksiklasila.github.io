@@ -1072,7 +1072,7 @@ function _getCloudTowerFast(gx, gy, owner) {
 // the start's whole region (often over several ticks of budget), it goes
 // straight to the region's tile nearest the target (see findPathAStar).
 // The plain labels (no portals) are kept as walls change
-// (pathRegionsTileChanged): a tile opened joins the regions around it; a
+// (pathRegionsTilesRun, at the tile changes' flush): a tile opened joins the regions around it; a
 // tile closed is left out, and only when its open neighbours are not
 // joined around it (the ring of tiles around it, then a search in a window
 // around it) are the labels made again. An owner with live portals gets
@@ -1209,106 +1209,70 @@ function _pathRegionsOwner(R, key, plain, old) {
     for (const [tk, l] of extra) L[tk] = _pathRegionFind(E, l);
     return E;
 }
-// The ring of 8 tiles around a tile, in order (each 4-adjacent to the next).
-const _PATH_REGION_RING = [0, -1, 1, -1, 1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1];
-// A closed tile's open 4-neighbours still joined by a way around it within a
-// window of PATH_REGION_LOCAL_RADIUS tiles (a breadth-first search from one
-// of them until it met the others): else the labels are made again.
+// A closed tile's open 4-neighbours stay joined when a way around it within a
+// window of PATH_REGION_LOCAL_RADIUS tiles joins them (k_reg_tiles); else the labels are made again.
 const PATH_REGION_LOCAL_RADIUS = 24;
-let _pathRegionStamp = null, _pathRegionStampNow = 0, _pathRegionQ = null;
-function _pathRegionJoinedAround(L, gx, gy) {
-    const W = GRID_W, H = GRID_H, n = W * H, r = PATH_REGION_LOCAL_RADIUS;
-    if (!_pathRegionStamp || _pathRegionStamp.length !== n) { _pathRegionStamp = new Int32Array(n); _pathRegionStampNow = 0; }
-    if (++_pathRegionStampNow >= 0x7fffffff) { _pathRegionStamp.fill(0); _pathRegionStampNow = 1; }
-    const S = _pathRegionStamp, now = _pathRegionStampNow, side = 2 * r + 1;
-    if (!_pathRegionQ || _pathRegionQ.length < side * side) _pathRegionQ = new Int32Array(side * side);
-    const Q = _pathRegionQ, x0 = Math.max(0, gx - r), y0 = Math.max(0, gy - r), x1 = Math.min(W - 1, gx + r), y1 = Math.min(H - 1, gy + r);
-    const t = gy * W + gx;
-    let want = 0, start = -1;
-    const nb = [gx > 0 ? t - 1 : -1, gx < W - 1 ? t + 1 : -1, gy > 0 ? t - W : -1, gy < H - 1 ? t + W : -1];
-    // (Targets stamped now - 1 would collide with the last search: a stamp
-    // of their own, -now.)
-    for (const k of nb) if (k >= 0 && L[k] >= 0) { if (start < 0) start = k; else { S[k] = -now; want++; } }
-    if (start < 0 || want === 0) return true;
-    let head = 0, tail = 0;
-    S[start] = now; Q[tail++] = start;
-    while (head < tail) {
-        const k = Q[head++], x = k % W, y = (k / W) | 0;
-        for (let d = 0; d < 4; d++) {
-            const nx = d === 0 ? x - 1 : d === 1 ? x + 1 : x, ny = d === 2 ? y - 1 : d === 3 ? y + 1 : y;
-            if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
-            const m = ny * W + nx;
-            if (S[m] === now || L[m] < 0) continue;
-            if (S[m] === -now && --want === 0) return true;
-            S[m] = now; Q[tail++] = m;
+// The listed tiles' cell types changed (unit.js simTileChangesFlush, t * 2 +
+// kind, kind 0 the cell type): the kept labels follow, the plain ones and
+// each owner's (a tile with one of its portals on it: that owner's made again
+// from the plain ones), in one kernel (wasm/src/tch.rs k_reg_tiles).
+const _regT = { sets: null, out: null, hdr: null, stamp: null, q: null, P: new Float64Array(6), live: [] };
+function pathRegionsTilesRun(L, n) {
+    const R = _pathRegions, A = R.arrays, W = GRID_W, H = GRID_H, N = W * H;
+    const wall = A && A.wallFor === grid && A.wall.length === N && simHeapHas(A.wall) ? A.wall : null;
+    const keep = R.byOwner.size > 0 && R.grid === grid && R.w === W && R.h === H;
+    if (!wall && !keep) return;
+    let opens = 0;
+    for (let i = 0; i < n; i++) if ((L[i] & 1) === 0) opens++;
+    if (opens === 0) return;
+    const T = _regT, live = T.live;
+    live.length = 0;
+    if (keep) {
+        R.nearest.clear();
+        for (const E of R.byOwner.values()) {
+            if (E.dirty) continue;
+            if (E.key >= 0 && _cloudTileCache && _cloudTileCache.size) {
+                let hit = false;
+                for (let i = 0; i < n && !hit; i++) if ((L[i] & 1) === 0 && _cloudTileCache.has(L[i] >> 1)) hit = true;
+                if (hit) { E.dirty = true; continue; }
+            }
+            // (Room for a new region per opened tile, parents in the heap.)
+            if (E.parent.length < E.next + opens || !simHeapHas(E.parent)) {
+                const P = simSharedArray(Int32Array, Math.max(E.parent.length, E.next + opens + 65536));
+                P.set(E.parent.subarray(0, Math.min(E.parent.length, P.length)));
+                if (A && E.parent === A.par) { A.par = P; simParallelBind('reg.par', P); }
+                E.parent = P;
+            }
+            if (!simHeapHas(E.labels)) { E.dirty = true; continue; }
+            live.push(E);
         }
     }
-    return false;
-}
-// A tile's wall changed (simMoveTileTypeChanged, as the grid changes): the
-// kept labels follow, the plain ones and each owner's (a tile with a
-// portal on it: that owner's made again from the plain ones).
-function pathRegionsTileChanged(gx, gy) {
-    const R = _pathRegions;
-    const W = GRID_W, row = grid[gy], cell = row ? row[gx] : null;
-    if (!cell || gx < 0 || gx >= W) return;
-    const t = gy * W + gx, open = cell.type !== TYPE_WALL;
-    if (R.arrays && R.arrays.wallFor === grid && R.arrays.wall.length === W * GRID_H) R.arrays.wall[t] = open ? 0 : 1;
-    if (!R.byOwner.size || R.grid !== grid || R.w !== GRID_W || R.h !== GRID_H) return;
-    R.nearest.clear();
-    for (const E of R.byOwner.values()) {
-        if (E.dirty) continue;
-        if (E.key >= 0 && _cloudTileCache && _cloudTileCache.has(t)) { E.dirty = true; continue; }
-        _pathRegionTileSet(E, gx, gy, open);
+    const ns = live.length;
+    if (!T.hdr || !simHeapHas(T.hdr)) { T.hdr = simSharedArray(Int32Array, 2); T.sets = T.out = null; }
+    if (!T.sets || T.sets.length < ns * 4 || !simHeapHas(T.sets)) { T.sets = simSharedArray(Int32Array, Math.max(64, ns * 8)); T.out = simSharedArray(Int32Array, Math.max(48, ns * 6)); }
+    if (!T.stamp || T.stamp.length !== N || !simHeapHas(T.stamp)) { T.stamp = simSharedArray(Int32Array, N); T.hdr[0] = 0; }
+    const side = 2 * PATH_REGION_LOCAL_RADIUS + 1;
+    if (!T.q || T.q.length < side * side || !simHeapHas(T.q)) T.q = simSharedArray(Int32Array, side * side);
+    for (let e = 0; e < ns; e++) {
+        const E = live[e];
+        T.sets[e * 4] = _simWEnc(_simHeapPtrOf(E.labels)); T.sets[e * 4 + 1] = _simWEnc(_simHeapPtrOf(E.parent));
+        T.sets[e * 4 + 2] = E.parent.length; T.sets[e * 4 + 3] = E.next;
     }
-}
-function _pathRegionTileSet(E, gx, gy, open) {
-    const W = GRID_W, H = GRID_H, t = gy * W + gx, L = E.labels;
-    if (open === (L[t] >= 0)) return;
-    if (open) {
-        let root = -1;
-        for (let i = 0; i < 4; i++) {
-            const k = i === 0 ? (gx > 0 ? t - 1 : -1) : i === 1 ? (gx < W - 1 ? t + 1 : -1) : i === 2 ? (gy > 0 ? t - W : -1) : (gy < H - 1 ? t + W : -1);
-            if (k < 0 || L[k] < 0) continue;
-            const r = _pathRegionFind(E, L[k]);
-            if (root < 0) root = r;
-            else if (r !== root) { if (r < root) { E.parent[root] = r; root = r; } else E.parent[r] = root; E.canon = true; }
-        }
-        if (root < 0) {
-            root = E.next++;
-            if (root >= E.parent.length) { const P = new Int32Array(E.parent.length * 2); P.set(E.parent); for (let i = E.parent.length; i < P.length; i++) P[i] = i; E.parent = P; }
-            E.parent[root] = root;
-        }
-        L[t] = root;
-    } else {
-        L[t] = -1;
-        // Its open 4-neighbours stay joined when one run of open tiles
-        // around it holds them all, or a way around it in a window joins
-        // them; else the labels are made again.
-        let n4 = 0, firstClosed = -1;
-        const ring = _pathRegionRingScratch;
-        for (let i = 0; i < 8; i++) {
-            const x = gx + _PATH_REGION_RING[2 * i], y = gy + _PATH_REGION_RING[2 * i + 1];
-            const o = x >= 0 && y >= 0 && x < W && y < H && L[y * W + x] >= 0;
-            ring[i] = o ? 1 : 0;
-            if (o && (i & 1) === 0) n4++;
-            if (!o && firstClosed < 0) firstClosed = i;
-        }
-        if (n4 <= 1 || firstClosed < 0) return;
-        let runs = 0, has4 = false;
-        for (let k = 1; k <= 8; k++) {
-            const i = (firstClosed + k) % 8;
-            if (ring[i]) { if ((i & 1) === 0) has4 = true; }
-            else { if (has4) runs++; has4 = false; }
-        }
-        if (runs > 1 && !_pathRegionJoinedAround(L, gx, gy)) E.dirty = true;
+    const P = T.P;
+    P[0] = n; P[1] = W; P[2] = H; P[3] = TYPE_WALL; P[4] = ns; P[5] = PATH_REGION_LOCAL_RADIUS;
+    simRustDirect('k_reg_tiles', [L, cellType, wall, T.sets, T.out, T.stamp, T.q, T.hdr], P);
+    for (let e = 0; e < ns; e++) {
+        const E = live[e];
+        E.next = T.out[e * 3];
+        if (T.out[e * 3 + 1]) E.dirty = true;
+        if (T.out[e * 3 + 2]) E.canon = true;
     }
+    live.length = 0;
 }
-const _pathRegionRingScratch = new Uint8Array(8);
 // Grid tiles set without the hook (a restore): made again at next use.
 function pathRegionsReset() { _pathRegions.byOwner = new Map(); _pathRegions.nearest = new Map(); if (_pathRegions.arrays) _pathRegions.arrays.wallFor = null; }
 // The kernels' arrays (heap, made once a map size; bound once): the wall copy
-// (kept by pathRegionsTileChanged; made from the grid when missing), plain
+// (kept by pathRegionsTilesRun; made from the grid when missing), plain
 // labels and parents (room for the tile hook's new regions), the queue.
 const PATH_REGION_BANDS = 64, PATH_REGION_TILES_PER_JOB = 65536;
 function _pathRegionArrays(R, n) {
@@ -2140,7 +2104,7 @@ function _airWallTable() {
 // middle of corridors and hug walls only where there is no other way.
 let _stepCost = null, _stepCostWall = null;
 function stepCostTable(wall) {
-    if (!_stepCost || _stepCost.length !== wall.length) { _stepCost = new Uint8Array(wall.length); _stepCostWall = wall; }
+    if (!_stepCost || _stepCost.length !== wall.length) { _stepCost = simSharedArray(Uint8Array, wall.length); _stepCostWall = wall; }
     return _stepCost;
 }
 // A tile's step cost (0 in the table: not yet known).
@@ -2156,11 +2120,6 @@ function _stepCostAt(table, wall, t) {
     }
     table[t] = c;
     return c;
-}
-// The walls changed at a tile: the costs around it are worked out again.
-function stepCostsChanged(gx, gy) {
-    if (!_stepCost) return;
-    for (let y = gy - 2; y <= gy + 2; y++) for (let x = gx - 2; x <= gx + 2; x++) if (x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) _stepCost[y * GRID_W + x] = 0;
 }
 function stepCostsReset() { if (_stepCost) _stepCost.fill(0); }
 

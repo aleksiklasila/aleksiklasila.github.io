@@ -1482,7 +1482,9 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     // (Base entries: units behind their stat tables, P[23].)
     '?eff.bVer', '?eff.bRad', '?eff.bMaxE', '?area.nb', '?eff.bcnt',
     // (68: its status record, for unit.stWa.)
-    'unit.stIx']);
+    'unit.stIx',
+    // (69-71: a unit taken behind: its base row and maxEnergy field.)
+    'unit.bsRow', '?eff.bRow', 'unit.jMaxE']);
 // The effective levels' counts: the units of each lane (owner, type) in each area, a snapshot (things_utils.js _effAreaHistEnsure).
 const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist']);
 SIM_KERNELS[SIM_KERNEL_EFF_AREA_HIST] = function (R, P, chunk) { _simRust(_simEffAreaHistW, P, chunk, 'k_eff_area_hist', 'EFF_AREA_HIST'); };

@@ -457,3 +457,31 @@ Left, in order:
 - WORKER_EVENTS_PER_TICK (only declined events count against it now).
 - Check: research deposits 0 in prof36's window at 1M (HEAD 10-36).
 - Tests: collector-farms (vm test of deleted JS) to rewrite as a match test.
+
+### Serial JS left after the tile-change batch (2026-10-30, base2 profile)
+
+Done this session: effective-level catch-up (base rows, jMaxE), tile
+changes (tch.rs k_tile_changes), path regions' tile hook (k_reg_tiles).
+Left, by stage (each to be converted whole, then the full test and
+benchmark pass):
+
+1. Units by slot only (the `units` array of objects goes; ~160 sites:
+   snapshot / hash order, strided passes by index, the retire pass's
+   swap-removes, the id map, SimUnitGone per death, spawning's object
+   construction). Unblocks: deaths' bookkeeping (~3.7 ms), spawning as a
+   kernel (~3.4 ms: _simUnitSlotStart, path templates, slot map pushes),
+   effective levels' strided share by slot.
+2. W4: structure object lists (towers / barracks / collectorSpawners) as
+   table views; then structDestroyTiles' object side (structListRemove,
+   structRowDetach, getTileEntityRef: ~2.5 ms) and construction
+   completions (markConstructionComplete: derived stats, brain, work
+   sites, upkeep, visibility, adjacency request: ~2.6 ms) as table
+   operations with presentation events.
+3. Pathfinding.js: A*, pending ways (_tryUpgradeAstarFallbackPath, MANUAL
+   MOVE), nearest walkable, the wall push-out (_simWallPushOut via
+   forEachUnitInRange), nearestTileInPathRegion.
+4. Small items: healer candidates' post (_hcPost 0.5), acquisition post
+   (_acqPost 0.4), nav field sweep slices (0.6), visibility cover paint
+   (0.4), adjacency lane commit (0.4), status pre-pass glue (0.4),
+   _simMoveChargeSteps (0.5), spawner ticks' tileEntityChangesSince.
+Presentation stays JavaScript (sounds, damage looks, alerts, text caches).

@@ -1112,7 +1112,7 @@ function navWallTable(profile) {
 // A class profile's walls: the ground's, but for the tiles its units may
 // walk over (canUnitOccupyTile): active mines for collectors, the player's
 // own buildings for its builders. Kept per tile as walls and tile entities
-// change (navClassTileChanged: from simMoveTileTypeChanged and
+// change (wasm/src/tch.rs k_tile_changes: from simMoveTileTypeChanged and
 // simMoveTileEntityChanged, deferred through the unit pass as the walls
 // are), made whole when missing or the grid was replaced. Bound as
 // 'mv.cwall.<profile>' (the movement kernel's walls for its units). A pure
@@ -1137,24 +1137,6 @@ function _navClassWalls(profile) {
     _navClassWall[profile] = w;
     if (typeof simParallelBind === 'function') simParallelBind('mv.cwall.' + profile, w);
     return w;
-}
-// Tile t's wall or tile entity changed: the class walls there. True when
-// any changed.
-function navClassTileChanged(t) {
-    const ground = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null;
-    if (_navClassGrid !== grid || !ground || !(t >= 0 && t < ground.length)) return false;
-    const x = t % GRID_W, y = (t - x) / GRID_W;
-    let changed = false;
-    for (let p = NAV_PROFILE_COLLECT; p < NAV_PROFILES; p++) {
-        const w = _navClassWall[p];
-        if (!w || w.length !== ground.length) continue;
-        const v = ground[t] && !_navClassPass(p, x, y) ? 1 : 0;
-        if (w[t] === v) continue;
-        const was = w[t];
-        w[t] = v; changed = true;
-        _navDiffChanged(p, t, was, v);
-    }
-    return changed;
 }
 // The ground walls were made whole again: the class walls too.
 function navClassReset() {
@@ -1739,7 +1721,8 @@ const NAV_ATLAS_TABLES_STEP = 10;
 let _navJob = null;
 // Per profile: tiles whose walls differ from those of its newest build (the
 // one being made, else the installed one). (The air's never change.)
-const _navDiff = new Int32Array(NAV_PROFILES);
+// (In the wasm heap once it is up: the tile changes' kernel keeps them, see navTileTables.)
+let _navDiff = new Int32Array(NAV_PROFILES);
 // The profile the last job built (the next is looked for after it).
 let _navLastJobProfile = -1;
 function _navNewestWalls(p) { return _navJob && _navJob.profile === p && _navJob.b ? _navJob.b.wall : (_nav[p] ? _nav[p].wall : null); }
@@ -1753,14 +1736,33 @@ function _navWallDiffReset(p = NAV_PROFILE_GROUND) {
     if (d === null) { d = 0; for (let i = 0; i < w.length; i++) if (w[i] !== live[i]) d++; }
     _navDiff[p] = d;
 }
-function _navDiffChanged(p, t, was, now) {
-    const w = _navNewestWalls(p);
-    if (!w || t < 0 || t >= w.length) return;
-    if (was !== w[t]) _navDiff[p]--;
-    if (now !== w[t]) _navDiff[p]++;
+// For the tile changes' kernel (unit.js simTileChangesRun, wasm/src/tch.rs):
+// the diff counts (heap), per profile its newest build's walls (tabN) and
+// its class walls (tabC) as encoded addresses, 0 none. Arrays outside the
+// heap are listed (made whole after the batch: navTileTablesRedo).
+const _navTileRedo = { count: [], cls: [] };
+function navTileTables(tabN, tabC) {
+    if (!simHeapHas(_navDiff)) { const a = simSharedArray(Int32Array, NAV_PROFILES); a.set(_navDiff); _navDiff = a; }
+    const R = _navTileRedo, ground = typeof _simMoveWall !== 'undefined' ? _simMoveWall : null, classOk = _navClassGrid === grid && !!ground;
+    R.count.length = 0; R.cls.length = 0;
+    for (let p = 0; p < NAV_PROFILES; p++) {
+        const w = p === NAV_PROFILE_AIR ? null : _navNewestWalls(p);
+        tabN[p] = 0;
+        if (w) { if (simHeapHas(w)) tabN[p] = _simWEnc(_simHeapPtrOf(w)); else R.count.push(p); }
+        tabC[p] = 0;
+        const c = p >= NAV_PROFILE_COLLECT && classOk ? _navClassWall[p] : null;
+        if (c && c.length === ground.length) { if (simHeapHas(c)) tabC[p] = _simWEnc(_simHeapPtrOf(c)); else R.cls.push(p); }
+    }
+    return _navDiff;
 }
-// A ground wall tile changed from `was` to `now` (simMoveTileTypeChanged).
-function navWallChanged(t, was, now) { _navDiffChanged(NAV_PROFILE_GROUND, t, was, now); }
+// After the batch: class walls outside the heap made again from the world
+// (true: the ground's wall versions must move on), counts outside recounted.
+function navTileTablesRedo() {
+    const R = _navTileRedo;
+    for (const p of R.cls) { _navClassWall[p] = null; _navWallDiffReset(p); }
+    for (const p of R.count) _navWallDiffReset(p);
+    return R.cls.length > 0;
+}
 function navTick() {
     _navFreeTick();
     // (The map's first builds at its first tick, not at the first order:

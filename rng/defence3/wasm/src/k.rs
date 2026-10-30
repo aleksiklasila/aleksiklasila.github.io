@@ -2140,7 +2140,9 @@ pub unsafe extern "C" fn k_eff_area_hist(a: u32, chunk: i32) {
 /// unit.effectiveStacks, unit.effectiveLevel, unit._lastAppliedEffectiveLevel,
 /// unit.x, unit.y, unit.owner, spatial.types, eff.flag, ?unit.upT,
 /// ?unit.upB, ?upk.h, ?eff.tver, unit.esVer (... the row arrays, 22-62),
-/// ?eff.bVer, ?eff.bRad, ?eff.bMaxE.
+/// ?eff.bVer, ?eff.bRad, ?eff.bMaxE (63-65), ?area.nb, ?eff.bcnt, unit.stIx,
+/// unit.bsRow, ?eff.bRow, unit.jMaxE (69-71: a unit taken behind gets its
+/// base entry's row and maxEnergy).
 /// P: [0] entries, [1] per job, [2] step, [3] phase, [4] chunk px, [5]/[6]
 /// chunks wide/high, [7] stride per block, [8] types, [9] players, [10] max
 /// level, [11] stamp, [12]/[13] upkeep, [14] types per version row, [15]/[16]
@@ -2237,6 +2239,12 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
                     s(fl, j, 2);
                     continue;
                 }
+                // (Its base row: none (the rows were dropped), the JavaScript's.)
+                let bro = k.p::<i32>(70);
+                if bro.is_null() || g(bro, bi) < 0 {
+                    s(fl, j, 2);
+                    continue;
+                }
                 behind = Some((cur, bi));
                 r = g(k.p::<i32>(64), bi);
             }
@@ -2316,6 +2324,9 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
             s(ev, q, cur);
             s(rad, q, r as u8);
             s(last, q, el as i8);
+            // (Its base tables by row and its maxEnergy field, as its full path sets them.)
+            s(k.p::<i16>(69), q, g(k.p::<i32>(70), bi) as i16);
+            s(k.p::<f32>(71), q, g(k.p::<f32>(65), bi));
             fv = if vis { 6 } else { 5 };
         }
         s(esk, q, effs);
