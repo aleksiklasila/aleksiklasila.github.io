@@ -1015,8 +1015,16 @@ function _makeCloudPairKey(pairId, owner) {
 const _cloudSet = new Set();
 function cloudTowerToggle(t) {
     if (_cloudTileCacheList !== towers) return;
-    if (t._li >= 0 && towers[t._li] === t) _cloudSet.add(t); else _cloudSet.delete(t);
+    // (A member while it holds its tile: the list is the table's view.)
+    if (t._stT >= 0 && !t.dead) _cloudSet.add(t); else _cloudSet.delete(t);
     _cloudTablesMake();
+}
+// Whether owner has a live cloud tower of this type (the cloud set, not a
+// walk of every tower).
+function cloudTowerOwned(owner, type) {
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
+    for (const t of _cloudSet) if (t.owner === owner && t.type === type && t.energy > 0) return true;
+    return false;
 }
 function _rebuildCloudTileCache() {
     _cloudSet.clear();

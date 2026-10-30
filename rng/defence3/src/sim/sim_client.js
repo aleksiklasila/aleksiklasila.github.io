@@ -53,7 +53,7 @@ const simClientAheadEnabled = (() => { try { return new URLSearchParams(location
 // The current units' frame (sim_frame.js views) while `units` is its list.
 function simClientCurrentUnitVis() {
     let c = _simClient;
-    return c && c.active && c.frameUnits === units && _pageFrame ? _pageFrame : null;
+    return c && c.active && c.frameUnits !== null && c.frameUnits === _unitsPageView && _pageFrame ? _pageFrame : null;
 }
 
 // Test hook: called with each tick once its result is applied.
@@ -317,6 +317,7 @@ function _simClientStartFailed(reason) {
     if (!c || !c.active) return;
     c.failed = 'start: ' + reason;
     c.active = false;
+    structListsSetView(null); unitsSetView(null);
     _simClientRestoreSettle(c, false);
     _simAutoSync(c);
     console.warn('[sim worker] could not start the match (' + reason + '); this match runs on the page');
@@ -364,6 +365,7 @@ function _simClientWorkerLost(reason) {
     console.error('[sim worker] lost during the match (' + reason + ')');
     c.failed = 'lost: ' + reason;
     c.active = false;
+    structListsSetView(null); unitsSetView(null);
     c.epoch++;
     try { c.worker.terminate(); } catch { }
     const lost = new Error('the simulation worker was lost');
@@ -944,7 +946,7 @@ function _simClientResetUnits() {
     let bufs = pageResetWorldTables(c);
     if (_pageFrame) { bufs.push(_pageFrame.buf); _pageFrame = null; }
     _simClientReturnBufs(bufs);
-    units = [];
+    unitsSetView([]);
     simUnitStateReset();
     if (typeof initSpatialHash === 'function') initSpatialHash();
     if (c) { c.frameUnits = null; c.mver = -1; c.watchKey = ''; }
@@ -1101,8 +1103,8 @@ function _simClientApplyFrame(frame, shown) {
         // (Its px, py rewritten here: not what the worker marked.)
         F.dirty = null;
     }
-    if (frame.mver !== c.mver || c.frameUnits !== units) {
-        let list = old && c.frameUnits === units ? _simClientUpdateStableSlots(F, old) : null;
+    if (frame.mver !== c.mver || c.frameUnits !== _unitsPageView) {
+        let list = old && c.frameUnits === _unitsPageView ? _simClientUpdateStableSlots(F, old) : null;
         if (!list) {
             let stamp = ++_pageViewStamp, order = F.order, ids = F.id;
             list = new Array(frame.count);
@@ -1128,7 +1130,7 @@ function _simClientApplyFrame(frame, shown) {
                 selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
             }
         }
-        units = list;
+        unitsSetView(list);
         c.frameUnits = list;
         c.mver = frame.mver;
     }

@@ -317,12 +317,14 @@ pub unsafe extern "C" fn k_retire_plan(a: u32, _chunk: i32) {
 #[no_mangle]
 pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (list, tab, sk, sly) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u32>(2), k.p::<u8>(3));
+    let (list, tab, sk, sly, defs) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u32>(2), k.p::<u8>(3), k.p::<f64>(4));
     let (j0, j1) = super::k::job_range(chunk, k.i(1), k.i(0));
     let nc = k.i(2).max(0) as usize;
     let absent = k.i(3) as u32;
+    // (No list: the slots P[4] + j, a growth's new range.)
+    let from = k.i(4);
     for j in j0..j1 {
-        let q = g(list, j);
+        let q = if list.is_null() { from + j as i32 } else { g(list, j) };
         if q < 0 {
             continue;
         }
@@ -330,7 +332,20 @@ pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
         for c in 0..nc {
             let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
             let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
-            core::ptr::write_bytes(base.add(q * per * bytes), 0, per * bytes);
+            let at = base.add(q * per * bytes);
+            core::ptr::write_bytes(at, 0, per * bytes);
+            // A fresh slot's value other than zero (its first element):
+            // defs[2c] 1 an integer, 2 an f32, 3 an f64; defs[2c + 1] it.
+            if defs.is_null() { continue; }
+            let (kind, v) = (g(defs, 2 * c) as i32, g(defs, 2 * c + 1));
+            match (kind, bytes) {
+                (1, 1) => *at = v as i64 as u8,
+                (1, 2) => *(at as *mut u16) = v as i64 as u16,
+                (1, 4) => *(at as *mut u32) = v as i64 as u32,
+                (2, 4) => *(at as *mut f32) = v as f32,
+                (3, 8) => *(at as *mut f64) = v,
+                _ => {}
+            }
         }
         s(sk, q, absent);
         s(sly, q, 0);

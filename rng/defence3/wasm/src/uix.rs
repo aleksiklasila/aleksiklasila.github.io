@@ -14,7 +14,8 @@ unsafe fn s<T>(p: *mut T, i: usize, v: T) {
 }
 
 /// k_uix_remove. Arrays: [0] ids, [1] slots, [2] the removed ids (P[0] of
-/// them), [3] header in/out ([0] entries, [1] holes).
+/// them), [3] header in/out ([0] entries, [1] holes). P[1] 1: every hole
+/// squeezed out now (main.js unitRows: the rows the passes read).
 #[no_mangle]
 pub unsafe extern "C" fn k_uix_remove(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -34,7 +35,7 @@ pub unsafe extern "C" fn k_uix_remove(a: u32, _chunk: i32) {
             holes += 1;
         }
     }
-    if holes as usize * 4 > n {
+    if holes as usize * 4 > n || (k.i(1) != 0 && holes > 0) {
         let mut w = 0usize;
         for r in 0..n {
             let sl = g(slots, r);

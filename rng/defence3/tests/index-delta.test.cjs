@@ -12,7 +12,8 @@ for (const [map, seed] of [['arena', 3], ['islands', 7], ['crossroads', 11]]) {
     const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '80', 'cfg-map-type': map } });
     const inst = world.spawn('ixd' + map, { simWorker: false });
     inst.eval('startSoloGame();');
-    inst.eval('SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0;');
+    // (The build by changes is off by default since 2026-10-29: on here, the build under test.)
+    inst.eval('SPATIAL_PARALLEL_MIN_UNITS = 0; SEPARATION_SLOT_MIN_UNITS = 0; SPATIAL_INDEX_DELTA = true;');
     const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         let s = ${seed};
         const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };

@@ -572,3 +572,38 @@ Shape:
 Order: (1) structure lists by tile with iterators; (2) structure derived
 stats as tables, completions and destroys as kernels; (3) unit iterators
 over the id table; (4) unit views on demand, births and deaths as kernels.
+
+### Stage E status (2026-10-30, session 3)
+
+Done (details: OPTIMIZATION_PROGRESS.md "Stage E conversions"):
+- (1) Structure lists by tile: towers / barracks / collectorSpawners are
+  views of the structure table in tile order (structListView; lexical
+  Proxies), no list maintenance on placement or destroy.
+- (2, part) Destroys: rows retired and _stT cleared in dst.rs; no object
+  per tile in JavaScript. Completions / upgrades / stacks / progress state /
+  begin upgrade: wai.rs p_* on the class columns (builders' pass; mode 2 for
+  JavaScript callers: structProgressOps). Their other hooks are JS
+  (structCompleteHooks: wall sync, work-site marks, trap / upkeep marks,
+  spawner production, laser check, label).
+- Births: fresh slots' non-zero defaults written by k_slot_zero (released
+  slots) and a growth's fill (simSlotDefaults); _simUnitSlotStart writes only
+  the unit's own values; one level scaling per birth (Unit's level argument).
+
+Left, in order:
+- (2, rest) Completion hooks as heap marks drained by their kernels:
+  work-site built (workSiteBuilt's group searches), upkeep dirty list
+  (_upkB.dirty: JS array), trap marks (already heap), wall sync (tch queue),
+  spawner production (barrack.js queue JS), laser check (tower.js).
+  Derived stats' remaining JS: _sThingStatEntry objects (PRECOMPUTED maps) as
+  table rows; _sDerivedReconcile's override maps.
+- (3) Units by the id table: the simulation's `units` list (~195 sites) as an
+  iterator over _uix; then the retire pass without list swap-removes.
+- (4) Births / deaths as kernels: Unit objects made on demand (owners[] read
+  as "live" by many passes: switch them to the live column first), the
+  detach (SimUnitGone) replaced by a kept-slot expiry like structures' rows.
+- Pathfinding.js (A*, pending ways, MANUAL_MOVE, the player's builder
+  assignments: worker.js _builderAssignTarget / _getBuilderWorkTargetAt and
+  the JS builder search functions they use).
+- Presentation on the simulation thread (recordDamageVisual,
+  markControlGroupsDamaged, alerts: ~2.5 ms at 1M) as heap event lists the
+  page drains.

@@ -3308,14 +3308,12 @@ function resetWorldState() {
     // the last match's end, and the rematch stood at tick 0, over.)
     gameOver = false;
     winner = -1;
-    towers = [];
-    units = [];
+    structListsReplaced();
+    unitsReplaced([]);
     projectiles = [];
     if (typeof projPoolClear === 'function') projPoolClear();
     particles = [];
     if (typeof clearCombatFx === 'function') clearCombatFx();
-    barracks = [];
-    collectorSpawners = [];
     collectors = [];
     droppedItems = [];
     droppedItemGrid = [];

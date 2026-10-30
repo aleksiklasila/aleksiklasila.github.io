@@ -12,60 +12,69 @@ function functionSource(source, name) {
     return source.slice(start, end < 0 ? undefined : end) + '\n';
 }
 
-// Compare indexed occupancy against the original exhaustive fallback, including
-// reservation changes between searches within the same simulation tick.
+// Worker target picks (worker.js _pickDistributedWorkerCandidate): a target
+// is exclusive by its reservation slot alone (every live worker's target is
+// reserved; a dead holder's slot reads free). Against a reference that finds
+// each slot's holder by scanning the units; the pick itself walks no unit
+// list. Reservations change between searches within a tick.
 let visits = 0;
-const allUnits = [];
+const allUnits = [], byId = new Map();
 const wc = vm.createContext({
     TILE: 32, GRID_W: 80, GRID_H: 64, RESOURCE_COLLECTOR_UNIT_KEYS: ['collector', 'astar_collector'],
-    units: { *[Symbol.iterator]() { for (const u of allUnits) { visits++; yield u; } } }
+    units: { *[Symbol.iterator]() { for (const u of allUnits) { visits++; yield u; } } },
+    getUnitById: id => byId.get(id) || null
 });
 vm.runInContext(worker, wc);
+vm.runInContext('workerReservedTiles = workerReservedTable();', wc);
 const referencePick = vm.runInContext('(' + functionSource(worker, '_pickDistributedWorkerCandidate')
     .replace('_canAssignWorkerTargetExclusive(u, c.target, targetType, conflictCache)', 'referenceExclusive(u, c.target, targetType)') + ')', wc);
+const slotOf = (t, type) => wc._getWorkerReservationSlotIndex(t, type);
+const RT = () => vm.runInContext('workerReservedTiles', wc);
 wc.referenceExclusive = (u, target, type) => {
     if (u.workerTarget === target && (type === null || u.workerTargetType === type)) return true;
-    const reserved = wc._getReservedWorkerForTarget(target, u.workerType);
-    if (reserved) return reserved === u || reserved.owner !== u.owner || reserved.workerType !== u.workerType;
-    const tile = wc._getWorkerTargetTileIndex(target);
-    if (tile < 0) return true;
-    for (const other of wc.units) {
-        if (other !== u && !other.dead && other.owner === u.owner && other.workerType === u.workerType
-            && other.workerTarget && wc._getWorkerTargetTileIndex(other.workerTarget) === tile) return false;
-    }
-    return true;
+    const s = slotOf(target, u.workerType);
+    if (s < 0) return true;
+    let holder = null;
+    for (const o of allUnits) if (o.id === RT()[s] && !o.dead) holder = o;
+    if (!holder) return true;
+    return holder === u || holder.owner !== u.owner || holder.workerType !== u.workerType;
 };
+const reserve = (u, t) => { const s = slotOf(t, u.workerType); if (s >= 0 && !(RT()[s] > 0)) wc.workerReservedSet(s, u); };
+const release = (u, t) => { const s = slotOf(t, u.workerType); if (s >= 0 && RT()[s] === u.id) wc.workerReservedSet(s, null); };
 const candidates = Array.from({ length: 600 }, (_, i) => ({
     target: { gx: i % 80, gy: Math.floor(i / 80), id: i, x: i % 80 * 32, y: Math.floor(i / 80) * 32 },
     targetType: i % 3 ? null : 'queue', dist: (i * 23) % 700
 }));
-for (let i = 0; i < 1200; i++) allUnits.push({
-    id: i + 2, owner: i % 3, workerType: ['builder', 'healer', 'researcher'][Math.floor(i / 3) % 3],
-    dead: i % 19 === 0, workerTarget: i % 7 === 0 ? null : candidates[i % candidates.length].target
-});
+for (let i = 0; i < 1200; i++) {
+    const u = { id: i + 2, owner: i % 3, workerType: ['builder', 'healer', 'researcher'][Math.floor(i / 3) % 3],
+        dead: i % 19 === 0, workerTarget: i % 7 === 0 ? null : candidates[(i * 7) % candidates.length].target };
+    allUnits.push(u); byId.set(u.id, u);
+    if (!u.dead && u.workerTarget) reserve(u, u.workerTarget);
+}
 const searching = { id: 1, owner: 0, workerType: 'builder' };
-visits = 0;
+byId.set(1, searching);
 const expected = referencePick(searching, candidates);
-const oldVisits = visits;
 visits = 0;
 assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), expected);
-assert.equal(visits, 1200, 'only one unit-list traversal per candidate search');
-assert.ok(oldVisits > 1200 * 100, 'fixture exercises the original nested scans');
-visits = 0;
 for (let i = 0; i < 20; i++) assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), expected);
-assert.equal(visits, 0, 'subsequent searches reuse the live tile index');
+assert.equal(visits, 0, 'the pick walks no unit list');
 for (let i = 0; i < 40; i++) {
     searching.owner = i % 3;
     searching.workerType = ['builder', 'healer', 'researcher'][i % 3];
     searching.workerTarget = i % 2 ? candidates[i].target : null;
     searching.workerTargetType = candidates[i].targetType;
-    allUnits[i].dead = !allUnits[i].dead;
-    allUnits[i + 1].workerTarget = candidates[599 - i].target;
+    const a = allUnits[i];
+    a.dead = !a.dead;
+    if (!a.dead && a.workerTarget) reserve(a, a.workerTarget);
+    const b = allUnits[i + 1];
+    if (b.workerTarget) release(b, b.workerTarget);
+    b.workerTarget = candidates[599 - i].target;
+    if (!b.dead) reserve(b, b.workerTarget);
     wc._invalidateWorkerTargetLoadCache();
-    // Some slots are reserved, including dead, same-team and opposing workers.
-    wc.reserving = allUnits[i + 2]; wc.reservedTarget = candidates[i + 5].target;
-    vm.runInContext('workerReservedTiles[_getWorkerReservationSlotIndex(reservedTarget, reserving.workerType)] = reserving;', wc);
-    assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), referencePick(searching, candidates));
+    // A slot taken by another worker (same team or not).
+    const c = allUnits[i + 2], s = slotOf(candidates[i + 5].target, c.workerType);
+    if (s >= 0) wc.workerReservedSet(s, c);
+    assert.equal(wc._pickDistributedWorkerCandidate(searching, candidates), referencePick(searching, candidates), 'pick ' + i);
 }
 
 // Reference: a deliberately redundant tile union, and both propagation
@@ -191,4 +200,4 @@ assert.equal(renderPanels(panels)[0], attackFrame[0], 'attack direction does not
 assert.equal(rasterizations, 1500, 'attacks cause no rasterization');
 for (let frame = 0; frame < 4; frame++) renderPanels(panels.slice(0, 10));
 assert.equal(vm.runInContext('renderer3dExact2DTextureCache.size', tc), 1024, 'inactive panels return to the normal cache budget');
-console.log(`PASS: worker search visits ${oldVisits} -> 1200; 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.`);
+console.log(`PASS: worker target picks by reservation (no unit list walked, 41 searches against the scan reference); 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.`);

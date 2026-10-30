@@ -37,7 +37,8 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const replacement = new Unit('norm', 0, rx, 300); units.push(replacement);
     if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
     for(const [name,value]of cacheValues){
-        if(retired[name]!==value)fail('sparse cache detach '+name);
+        // (Detached: its id, owner and last position only, the rest undefined: SimUnitGone.)
+        if(retired[name]!==undefined)fail('sparse cache detach '+name);
         const def=SIM_UNIT_JS_FIELDS.find(e=>e[0]===name)[2];
         if(replacement[name]!==def)fail('sparse cache reused default '+name);
         retired[name]=value+100;

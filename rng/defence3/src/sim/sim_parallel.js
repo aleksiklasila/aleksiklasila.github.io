@@ -1620,7 +1620,7 @@ function simRustDirect(fn, arrays, P) {
     if (I === null || _simWasmX === null || _simHeapPtrOf === null) throw new Error(fn + ': no wasm kernels on this thread');
     for (let i = 0; i < arrays.length; i++) {
         const a = arrays[i], p = a ? _simHeapPtrOf(a) : 0;
-        if (a && !(p >= 0)) throw new Error(fn + ': argument ' + i + ' not in the wasm heap');
+        if (a && !(p >= 0)) throw new Error(fn + ': missing heap arrays (argument ' + i + ' not in the wasm heap)');
         I[SIM_RUST_W0 + i] = a ? _simWEnc(p) : 0;
     }
     I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
@@ -1763,7 +1763,7 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 // Slots let go this tick back to a fresh slot's state (sim_unit_state.js
 // simUnitStateReleaseFreed; wasm/src/nfs.rs k_slot_zero).
 const SIM_KERNEL_SLOT_ZERO = 128;
-const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer']);
+const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
 SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZeroW, P, chunk, 'k_slot_zero', 'SLOT_ZERO'); };
 
 // The units the movement kernel left to the main thread this tick (unit.js

@@ -76,7 +76,6 @@ const OUT_BUILT: i32 = 12;
 const OUT_SOUND_BUILD: i32 = 13;
 // (A candidate's start, _isBuilderWorkTarget's side effect: b 0 stacking
 // (refreshThingProgressState), 1 an upgrade (beginUpgradeProgress).)
-const OUT_BUILD_START: i32 = 14;
 // Worker record types (unit.wbType).
 const WB_COLLECTOR: u8 = 1;
 const WB_ASTAR: u8 = 2;
@@ -127,6 +126,7 @@ const CT_QON: usize = 3;
 const CT_QN: usize = 4;
 const CT_QREQ: usize = 5;
 const CT_QPAID: usize = 6;
+const CT_UC: usize = 7;
 
 struct W {
     list: *mut i32, out: *mut i32, cnt: *mut i32,
@@ -165,7 +165,7 @@ struct W {
     cfg_ix: [i32; 2], five_s: i32, area_search: bool,
     heal_type: i32, heal_base_dps: f64, heal_cd: i32, blocked_ticks: i32, pass_on: bool, tt_queue: u32, tt_unit: u32,
     ntypes: i32, nkeys: i32, snp: i32, sl1: usize, sr1: usize, build_type: i32, build_base_dps: f64, build_cd: i32, recheck: i32, stuck: i32,
-    mode: i32, tk: usize, hm: i32, ws_ticks: i32,
+    mode: i32, tk: usize, hm: i32, ws_ticks: i32, bld_li: i32,
 }
 
 impl W {
@@ -205,7 +205,7 @@ impl W {
             heal_type: k.i(55), heal_base_dps: k.f(56), heal_cd: k.i(57), blocked_ticks: k.i(58), pass_on: k.i(59) != 0, tt_queue: k.i(60) as u32, tt_unit: k.i(61) as u32,
             ntypes: k.i(62), nkeys: k.i(63), snp: k.i(64), sl1: k.i(65).max(1) as usize, sr1: k.i(66).max(1) as usize, build_type: k.i(67), build_base_dps: k.f(68), build_cd: k.i(69),
             recheck: k.i(70), stuck: k.i(71),
-            mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75),
+            mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
         }
     }
 }
@@ -223,6 +223,12 @@ pub unsafe extern "C" fn k_worker_ai(a: u32, _chunk: i32) {
             let i = g(w.list, j);
             if i < 0 { continue; }
             c.take_one(i as usize);
+        }
+    } else if w.mode == 2 {
+        // Structures' progress (things_utils.js structProgressOps): (tile, op, value) triples.
+        for j in 0..w.n {
+            let (t, op, v) = (g(w.list, j * 3), g(w.list, j * 3 + 1), g(w.list, j * 3 + 2));
+            c.p_op(t, op, v);
         }
     } else {
         for i in 0..w.n {
@@ -1165,17 +1171,11 @@ impl<'a> Ctx<'a> {
         if !uc && self.af(c, r, 11) != 2 && self.af(c, r, 8) != 2 && !self.b_repair(t, c, r, o) {
             if self.b_stack_cand(t, c, r, o) {
                 self.ac_set::<u8>(c, r, 8, 2);
-                self.emit(OUT_BUILD_START, t, 0, 0);
+                self.p_refresh(t, c, r, o);
+                self.p_tok(t, c, r);
             } else if self.b_upgrade_cand(t, c, r, o) {
                 let (base, _) = self.b_levels(c, r);
-                if base + 1 <= self.b_rmax(t, o) {
-                    let m = self.b_mxe(t, o, base + 1);
-                    let tm = js_max(1.0, floor(if m == m && m != 0.0 { m } else { self.b_maxe(t, c, r, o) }));
-                    self.ac_set::<u8>(c, r, 11, 2); self.ac_set::<u8>(c, r, 8, 1); self.ac_set::<f64>(c, r, 20, tm);
-                    let e = self.b_energy(t);
-                    self.b_energy_set(t, c, r, js_min(if e == e && e >= 1.0 { e } else { 1.0 }, tm));
-                    self.emit(OUT_BUILD_START, t, 1, base + 1);
-                }
+                self.p_begin(t, c, r, o, base + 1);
             }
         }
         if !uc && self.af(c, r, 11) != 2 && self.af(c, r, 8) != 2 && !self.b_repair(t, c, r, o) { return false; }
@@ -1282,12 +1282,13 @@ impl<'a> Ctx<'a> {
             let vis = self.b_maxe(t, c, r, o);
             let ue = if vis > 0.0 { if up == up && up > 0.0 { js_min(up, vis) } else { vis } } else { up };
             let req = js_max(1.0, floor(if ue == ue && ue > 0.0 { ue } else { 1.0 }));
-            if req != vis { self.emit(OUT_BUILT, t, 3, req as i32); }
+            if req != vis { self.p_maxe_set(t, c, r, o, req); }
             let e = round3(js_min(req, self.b_energy(t) + dps));
             self.b_energy_set(t, c, r, e);
             if e >= req {
                 // (Built: markConstructionComplete and the rest after the pass; no longer a site now.)
                 s(w.stuc, t as usize, 0);
+                self.p_complete(t, c, r, o);
                 self.emit(OUT_BUILT, t, 0, 0);
                 self.b_remember(q, t);
                 return (true, false);
@@ -1305,6 +1306,7 @@ impl<'a> Ctx<'a> {
             if e >= req {
                 // (Upgraded: its level, stacks and the rest after the pass.)
                 self.ac_set::<u8>(c, r, 11, 1);
+                self.p_upgraded(t, c, r, o, base + 1);
                 self.emit(OUT_BUILT, t, 1, base + 1);
                 return (true, false);
             }
@@ -1327,6 +1329,8 @@ impl<'a> Ctx<'a> {
             if any != 0 { self.ac_set::<i32>(c, r, 2, stacked); }
             let more = manual - stacked > 0 && stack_level(stacked + 1, w.maxl) <= rmax;
             if !more { self.ac_set::<u8>(c, r, 8, 1); self.ac_set::<f64>(c, r, 9, 0.0); }
+            self.p_refresh(t, c, r, o);
+            self.p_tok(t, c, r);
             self.emit(OUT_BUILT, t, 2, any);
             return (true, more);
         }
@@ -1337,6 +1341,128 @@ impl<'a> Ctx<'a> {
             return (true, self.b_repair(t, c, r, o));
         }
         (false, true)
+    }
+    // ---- Structures' progress (things_utils.js): the state the JavaScript's
+    // setters and refreshThingProgressState kept, on the class columns ----
+    /// One op (mode 2, structProgressOps): 0 construction done, 1 upgraded to
+    /// level v, 2 stacked (the state again), 3 maxEnergy to v, 4 the progress
+    /// state again, 5 an upgrade to level v begun.
+    unsafe fn p_op(&mut self, t: i32, op: i32, v: i32) {
+        let (c, r) = match self.brow(t) { Some(x) => x, None => return };
+        let o = g(self.w.stown, t as usize);
+        match op {
+            0 => self.p_complete(t, c, r, o),
+            1 => self.p_upgraded(t, c, r, o, v),
+            2 | 4 => { self.p_refresh(t, c, r, o); self.p_tok(t, c, r); }
+            3 => self.p_maxe_set(t, c, r, o, v as f64),
+            5 => self.p_begin(t, c, r, o, v),
+            _ => {}
+        }
+    }
+    /// The derived stats' tokens (_sDerivedReconcile) and the descriptor's
+    /// levels (stationaryBrainChanged): made again at their next read.
+    unsafe fn p_tok(&self, t: i32, c: usize, r: usize) {
+        let p = waddr(g(self.w.ajtab, c * AJ_W + 19) as u32) as *mut i32;
+        if !p.is_null() { s(p, r * 3, 0); s(p, r * 3 + 1, 0); s(p, r * 3 + 2, 0); }
+        let b = g(self.w.stbrain, t as usize);
+        if b & 65535 == 0 { return; }
+        let (base, eff) = self.b_levels(c, r);
+        let keep = (b & 65535) | (b & (1 << 24)) | (b & (1 << 25)) | if eff > 63 { 1 << 25 } else { 0 };
+        s(self.w.stbrain, t as usize, keep | (base.min(255) << 16) | (eff.min(63) << 26));
+    }
+    /// A level column (Int8, -128 unset) at least 1.
+    unsafe fn p_lv1(&self, c: usize, r: usize, j: usize) {
+        let v = self.ac::<i8>(c, r, j).unwrap_or(-128);
+        if v == -128 || v < 1 { self.ac_set::<i8>(c, r, j, 1); }
+    }
+    /// markConstructionComplete's state (its hooks: the JavaScript's).
+    unsafe fn p_complete(&mut self, t: i32, c: usize, r: usize, o: i32) {
+        s(self.w.stuc, t as usize, 0);
+        let uc = self.ccol::<u8>(t as usize, CT_UC);
+        if !uc.is_null() { s(uc, r, 1); }
+        self.p_lv1(c, r, 5); self.p_lv1(c, r, 6); self.p_lv1(c, r, 7);
+        self.p_refresh(t, c, r, o);
+        self.p_tok(t, c, r);
+    }
+    /// An upgrade done (worker.js _waiBuilt kind 1): level v, the stacks it needs.
+    unsafe fn p_upgraded(&mut self, t: i32, c: usize, r: usize, o: i32, v: i32) {
+        let (ps, pm) = self.b_stacks(c, r);
+        let left = (pm - ps).max(0);
+        self.ac_set::<i8>(c, r, 5, v as i8);
+        // (getRequiredStacksForLevel: 2^(level - 1).)
+        let need = 1i32 << (v.max(1).min(self.w.maxl).max(1) - 1).min(30);
+        let st = ps.max(need);
+        self.ac_set::<i32>(c, r, 2, st);
+        self.ac_set::<i32>(c, r, 3, pm.max(st + left));
+        self.ac_set::<u8>(c, r, 11, 1);
+        self.ac_set::<f64>(c, r, 20, 0.0);
+        self.p_refresh(t, c, r, o);
+        self.p_tok(t, c, r);
+    }
+    /// refreshThingProgressState.
+    unsafe fn p_refresh(&mut self, t: i32, c: usize, r: usize, o: i32) {
+        let w = self.w;
+        let (stacked, manual) = self.b_stacks(c, r);
+        self.ac_set::<i32>(c, r, 2, stacked);
+        self.ac_set::<i32>(c, r, 3, manual);
+        let wd = self.ac::<f64>(c, r, 9).unwrap_or(f64::NAN);
+        if !(wd.is_finite() && wd >= 0.0) { self.ac_set::<f64>(c, r, 9, 0.0); }
+        let pending = manual - stacked > 0;
+        if g(w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 { self.ac_set::<u8>(c, r, 8, 1); return; }
+        let (base, eff) = self.b_levels(c, r);
+        let rmax = self.b_rmax(t, o);
+        if base < eff.min(rmax) && self.af(c, r, 10) != 1 {
+            self.p_begin(t, c, r, o, base + 1);
+            self.ac_set::<u8>(c, r, 8, 1);
+            return;
+        }
+        let stacking = pending && self.af(c, r, 14) != 1 && stack_level(stacked + 1, w.maxl) <= rmax;
+        self.ac_set::<u8>(c, r, 8, if stacking { 2 } else { 1 });
+        if stacking { return; }
+        self.ac_set::<f64>(c, r, 9, 0.0);
+        if self.af(c, r, 11) == 2 { return; }
+        // (Nothing to build: the builders' reservation of it let go.)
+        let slot = t * w.nt + w.bld_li;
+        if w.bld_li < 0 || slot < 0 || slot >= w.nres { return; }
+        let id = g(w.resv, slot as usize);
+        if id <= 0 { return; }
+        let sl = self.slot_of(id);
+        if sl >= 0 { s(w.wkr, sl as usize, -1); }
+        self.resv_set(slot, 0);
+    }
+    /// beginUpgradeProgress.
+    unsafe fn p_begin(&mut self, t: i32, c: usize, r: usize, o: i32, lvl: i32) {
+        let target = lvl.max(0).min(self.w.maxl).max(1);
+        if target > self.b_rmax(t, o) { return; }
+        let m = self.b_mxe(t, o, lvl);
+        let tm = js_max(1.0, floor(if m == m && m != 0.0 { m } else { self.b_maxe(t, c, r, o) }));
+        self.ac_set::<u8>(c, r, 11, 2); self.ac_set::<u8>(c, r, 8, 1); self.ac_set::<f64>(c, r, 20, tm);
+        self.p_maxe_set(t, c, r, o, tm);
+        let e = self.b_energy(t);
+        self.b_energy_set(t, c, r, js_min(if e == e && e >= 1.0 { e } else { 1.0 }, tm));
+    }
+    /// The maxEnergy setter (_sDerivedSet): an override (_mxOv and its count)
+    /// unless v is what its tables say.
+    unsafe fn p_maxe_set(&self, t: i32, c: usize, r: usize, o: i32, v: f64) {
+        let normal = self.p_maxe_normal(t, c, r, o);
+        let old = self.ac::<f64>(c, r, 21).unwrap_or(f64::NAN);
+        let cnt = waddr(g(self.w.ajtab, c * AJ_W + 24) as u32) as *mut i32;
+        if v != v || v == normal {
+            if old == old { self.ac_set::<f64>(c, r, 21, f64::NAN); if !cnt.is_null() { s(cnt, 0, g(cnt, 0) - 1); } }
+        } else {
+            if old != old && !cnt.is_null() { s(cnt, 0, g(cnt, 0) + 1); }
+            self.ac_set::<f64>(c, r, 21, v);
+        }
+    }
+    /// The maxEnergy getter without its override (_sDerivedValue).
+    unsafe fn p_maxe_normal(&self, t: i32, c: usize, r: usize, o: i32) -> f64 {
+        let um = self.ac::<f64>(c, r, 20).unwrap_or(f64::NAN);
+        if self.af(c, r, 11) == 2 && um > 0.0 { return js_max(1.0, floor(um)); }
+        let ovmx = self.ac::<f64>(c, r, 22).unwrap_or(f64::NAN);
+        if ovmx == ovmx { return js_max(1.0, floor(if ovmx != 0.0 { ovmx } else { 1.0 })); }
+        let (base, _) = self.b_levels(c, r);
+        let m = self.b_mxe(t, o, base);
+        js_max(1.0, floor(if m == m && m != 0.0 { m } else { 1.0 }))
     }
     /// The builder's branch of updateWorkerAI.
     unsafe fn builder(&mut self, q: usize, heavy: bool) {

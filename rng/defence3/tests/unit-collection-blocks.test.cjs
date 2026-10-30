@@ -15,7 +15,7 @@ const result=inst.eval(`(() => {
     const before=dead.map(u=>[u.id,u.x,u.y,u.energy]);
     for(const u of dead)u.dead=true;
     for(let t=1;t<=64;t++){gameTime=t*${dk};simUnitStateCollect();}
-    const detached=dead.every((u,i)=>!u._us&&u.dead&&u.id===before[i][0]&&u.x===before[i][1]&&u.y===before[i][2]&&u.energy===before[i][3]);
+    const detached=dead.every((u,i)=>!u._us&&u.dead&&u.id===before[i][0]&&u.x===before[i][1]&&u.y===before[i][2]&&u.energy===0);
     const kept=live.every(u=>u._us&&!u.dead);
     simUnitStateReleaseFreed();
     for(let i=0;i<dead.length;i++){const u=new Unit('norm',1,200,200);units.push(u);}

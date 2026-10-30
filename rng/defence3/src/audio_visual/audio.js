@@ -125,14 +125,24 @@ function _controlGroupHas(list, x) {
     return m.set.has(x);
 }
 
+// (The groups left to mark this tick, a bit each: once every group with
+// members is marked, a damaged unit asks nothing; thousands a tick in a
+// battle each walked the nine groups.)
+const _CG_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+let _cgTick = -1, _cgOpen = 0;
 function markControlGroupsDamaged(unit, isKing) {
     if (!unit) return;
     const until = gameTime + CONTROL_GROUP_ALERT_TICKS;
+    if (_cgTick !== gameTime) {
+        _cgTick = gameTime; _cgOpen = 0;
+        for (let n = 1; n <= 9; n++) { const grp = getControlGroupSnapshot(_CG_KEYS[n - 1]); if (grp && (grp.units.length || grp.entities.length)) _cgOpen |= 1 << n; }
+    }
+    if (_cgOpen === 0 && !isKing) return;
     for (let n = 1; n <= 9; n++) {
-        let key = String(n);
+        let key = _CG_KEYS[n - 1];
         // (Marked this tick already: nothing a membership test could add.)
         let st0 = controlGroupAlertState[key];
-        if (st0 && st0.damageUntil >= until && (!isKing || st0.kingUntil >= until)) continue;
+        if (st0 && st0.damageUntil >= until && (!isKing || st0.kingUntil >= until)) { _cgOpen &= ~(1 << n); continue; }
         let grp = getControlGroupSnapshot(key);
         if (!grp) continue;
         if (grp.units.length === 0 && grp.entities.length === 0) continue;
@@ -140,6 +150,7 @@ function markControlGroupsDamaged(unit, isKing) {
         let st = ensureControlGroupAlertState(key);
         st.damageUntil = Math.max(st.damageUntil, until);
         if (isKing) st.kingUntil = Math.max(st.kingUntil, until);
+        if (!isKing) _cgOpen &= ~(1 << n);
     }
 }
 

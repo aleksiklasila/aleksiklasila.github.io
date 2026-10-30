@@ -3478,3 +3478,121 @@ range-collision, shrine, status-expiry-records, chaos-scenario-determinism
   has (fails on HEAD's sources too; to fix with the test pass).
 Tests: construction-walk-driveby, floor-trap-kernel, adjacency-lane-carry,
 storage-abi, chaos-scenario-determinism (0/0/3) pass.
+
+## Regression pass (2026-10-30, mode 0): 18 failures, fixing all
+Results: tests/test-runs/conv-20261030b/reg-mode0.json. Fixed (each re-run passes):
+heap-full-reserve, spatial-index-empty, unit-hidden-class (slot map / retire
+counts / cell columns kept in the heap; simRustDirect says "missing heap
+arrays"), pathfinding-routing (vm stand-ins), unit-collection-blocks and
+shared-unit-state (detached units read dead / no energy / only id, owner,
+position: tests updated), adjacency-dirty-set (takenAll), index-delta
+(SPATIAL_INDEX_DELTA on in the test), unit-animations (kernel sound table),
+laser-links-incremental (heap beam tables), collector-farms (rewritten as a
+match test against the worker kernel), battle-performance (reservation
+invariant), multiplayer-patch: two real desyncs fixed:
+ - k_proj_struct_hits ran P[0] = 256 stale hit entries (projectile.js
+   _projStructHits never set its count): extra hits that differed by peer.
+ - stationary type ids by first appearance (differed after a restore):
+   seeded in a fixed order (data_state.js _stationaryTypesSeed).
+ - worker memory references to shells without a tile yet during a decode:
+   set again at the decode's end (unit.js _wmDecoded).
+Still failing (to continue): multiplayer-host-migration (the reloaded host
+diverges ~50-100 ticks after rejoining: unit 1 registered in the search tier
+(wsKind 3, wkIdle 1) on it, RETURNING_FOR_GOLD on the others; reservations
+equal; first hash part "globals". wsFail now cleared at the tier reset on
+every peer; wkIdle and other per-slot tier state not in snapshots are the
+next suspects; probes: scratchpad hm_probe / hashdiff), multiplayer-
+corruption-fuzz, multiplayer-scale-interactions, sim-worker-failure
+(SIM_KERNEL_VIS_SEED_STRUCTS before the structure table is in the heap).
+Then: mode-1 (SIM_WORKER=1) suite, then the 1M/250k benchmark.
+
+# Stage E conversions (2026-10-30, session 3)
+
+User: convert Stage E and the remaining JavaScript first; regression,
+multiplayer fixes and benchmarks only after (a regression run started
+mid-conversion was stopped on request). Baseline profile before this batch:
+`tests/test-runs/stage-e-20261030/cur.json` (1M/250k mixed chaos, steps
+38-59: ~185 ms a tick sampled, ~110 wasm; of the JS, ~19 ms is the main
+thread waiting in simParallelRun, not serial work).
+
+- Structure destroys: dst.rs k_struct_destroy retires the rows itself (the
+  class tables' retire queues ret / rt / rp / rn and their head words qhdr
+  are heap columns now, data_state.js _sTableOf / _sTableGrow), writes
+  _stT = -1, hands back (class code, row) and the destroyed tiles (deadOnly:
+  val <= 0 in the kernel). JavaScript: the cells' _item, tile-change queue,
+  walls, cloud / laser towers' toggles, presentation (from the tile, no
+  object). No getTileEntityRef, structRowDetach or list removal per tile.
+- Stage E step 1: towers / barracks / collectorSpawners are views of the
+  per-tile structure table in tile order (data_state.js structListView over
+  _activeTileEntities.tileList(), refilled when the kind's membership version
+  moved: structTableSet and the destroy batch bump it); the names are Proxies
+  (lexical bindings: the harness and the browser both see them) standing for
+  the current view array; whole-list assignments became structListsReplaced()
+  (reset, restore); the page of a simulation worker keeps its own view lists
+  (structListsSetView). Deleted: structListPush / structListRemove, the `_li`
+  column. isTeamAliveByAssets reads the table's per-owner count
+  (playerStructureCount), a cloud placement check the cloud set
+  (pathfinding.js cloudTowerOwned): no list walk per tick. Order change: the
+  lists are in tile order (was placement order with swap-removes) on every
+  peer whatever the history; hashes already sorted by tile.
+- Stage E step 2 (completions): construction done, upgrade done, stack made,
+  site maxEnergy, refreshThingProgressState and beginUpgradeProgress are
+  kernel functions on the class columns (wai.rs p_complete / p_upgraded /
+  p_refresh / p_begin / p_maxe_set, p_tok: the derived-stat tokens and the
+  descriptor word's levels), run inside the builders' pass where they happen
+  (not after it) and from JavaScript through the worker kernel's mode 2
+  (things_utils.js structProgressOps). The JS versions of those functions are
+  wrappers; the completion's other hooks (wall sync, work sites, traps,
+  upkeep, spawner production, laser check, label) stay JS
+  (structCompleteHooks). Behaviour change: a builder's start / completion is
+  visible to later events of the same pass (was: after the pass).
+- getTileEntityRef: the class table by class code from an array (was a Map).
+- sim-worker-failure: SIM_KERNEL_VIS_SEED_STRUCTS ran before the structure
+  table was in the heap on a page whose worker failed (rehomed first).
+Tests (sanity only): structure-table, structure-row-*, building-limit,
+laser-links, visibility-buildings, worker-brain-spawners, builder-research-
+resume, construction-walk-driveby, collector-farms, worker-walk,
+work-site-flags, adjacency-lane-carry, chaos-scenario-determinism pass.
+- Stage E step 3 (units by the id table): main.js _uix (ids ascending,
+  slots; heap) is the units' store and order: unitAdded (births, splits,
+  restores), unitRemoved, holes from the retire kernel's k_uix_remove
+  squeezed by unitRows() (P[1] force) before a pass reads the rows.
+  `units` (data_state.js) is a lexical Proxy: its length the count (no
+  view made), elements / iteration through unitsView() (objects by row,
+  made again when the table changed); push / pop / splice / length = n act
+  on the table; whole-list assignments are unitsReplaced (reset, restore:
+  _uixFromList) and unitsSetView (the page of a simulation worker). The
+  kernels' ix.slots is the table's slots (_unitSlotMapEnsure); the retire
+  pass moves no list. Caches that keyed on the units array's identity use
+  the table's epoch (simUnitStateCollect, the ids' map). Order change: the
+  simulation's unit order is id order (was insertion with swap-removes).
+  At 200k units no per-tick pass makes the view (the effective levels'
+  stride reads rows: unitAtRow).
+- Births: fresh slots' defaults also after a compaction (its new state's
+  free slots were zero: a new unit there had cmT / cwTick / hObj 0 on one
+  peer only: an MP hash mismatch). Never default live / tmOn on free slots.
+  The Unit constructor's prepare(u) runs the role setup (worker config,
+  starter defaults) before its one level scaling, as the old order had it.
+- Bug fixed (pre-existing, found here): tfx.rs k_tile_effects read the
+  Int16 upT column as i32; trap statuses applied only while the next slot's
+  type index was 0 (fresh slots' default -1 exposed it: no trap applied).
+Tests (sanity): worker-walk, spatial-index-empty, solo-snapshot,
+unit-retirement, multiplayer-snapshot, multiplayer-features, floor-trap-
+kernel, chaos-scenario-determinism, structure-table, laser-links,
+collector-farms, storage-abi pass; mode 1: multiplayer-snapshot,
+structure-table, sim-frame-replica, unit-retirement, chaos-scenario-
+determinism pass.
+- Retire pass as its own function (_unitRetirePass; pendingPathsTick too:
+  phases for the bench). The removed units' id-table entries are marked by
+  their rows (the retire kernel's order gives them), no binary search per
+  death (_unitByIdRemovedRows; deleted _unitByIdRemovedSlots).
+- Slot reset kernel (k_slot_zero, SIM_KERNEL_SLOT_ZERO): jobs of n / 64
+  slots (were 256: a slot touches ~225 columns' cache lines, one helper
+  took ~6 ms at 2,500 deaths a tick; the wall time was one job's).
+- Salvage destroys of a worker pass in one destroy batch (waiOutEvents).
+Measured (1M/250k mixed chaos, steps 38-59, unprofiled, ph3.json, before the
+last three items): tick ~172 ms; _unitRetirePass 4.8 (gone kernel 1.9, id
+removals 0.9), births 3.3, waiOutEvents 2.5, structDestroyTiles 2.3,
+pendingPathsTick 1.2, slot reset 6.8 (kernel). Profiled (cur2.json): JS left
+per phase: movement glue 9.5 (mostly helper waits), tick body 9, unit events
+7.4, hits 5.4, projectiles 3.1, towers 3.0 (waits), births 2.7.

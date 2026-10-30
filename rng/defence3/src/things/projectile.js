@@ -136,6 +136,8 @@ function projectilesAdvance() {
 // The step's hits on structures and floor targets (ord.rs k_proj_struct_hits).
 function _projStructHits(n) {
     const P = _pj, A = P.a, R = P.P;
+    // (The step's n hits: the list holds stale slots past them, which differ by peer.)
+    R[0] = n;
     const K = _structHitsRun('k_proj_struct_hits', [P.sev, 'keys', A.id, A.dmg, A.ty, A.lvl, A.own, A.sd, A.sp, A.shots, A.arg, null, null, null], R, n);
     if (!K) return;
     _structHitsAfter(K, (s, tb, dmg) => { const own = A.own[s]; pushHostileDamageAlert(tb, dmg, own); recordDamageVisual(tb, dmg, own); });

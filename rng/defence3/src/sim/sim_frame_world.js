@@ -590,7 +590,7 @@ function pageApplyStructures(table, c) {
         c.structMver = table.mver;
         c.structGrid = grid;
         _pageTables.s = F;
-        towers = lists[0]; barracks = lists[1]; collectorSpawners = lists[2];
+        structListsSetView([lists[0], lists[1], lists[2]]);
         goldMines.length = 0; for (let m of lists[4]) goldMines.push(m);
         astarMines.length = 0; for (let m of lists[5]) astarMines.push(m);
         // The tile index and the cells' items.
@@ -791,6 +791,8 @@ function pageResetWorldTables(c) {
     if (_pageTables.s) bufs.push(_pageTables.s.buf);
     if (_pageTables.p) bufs.push(_pageTables.p.buf);
     _pageTables.s = null; _pageTables.p = null;
+    // (The structure lists the table's views again: the page's own world.)
+    if (typeof structListsSetView === 'function') structListsSetView(null);
     if (c) { c.structViews = []; c.structMver = -1; c.projMver = -1; c.detailedStructs = []; }
     return bufs;
 }

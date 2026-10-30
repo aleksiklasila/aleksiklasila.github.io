@@ -18,7 +18,12 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     // (Built as construction ends: a tower's tile a wall from then, structureWallSync.)
     const built = (e, lvl) => { e.underConstruction = false; structureWallSync(e); e.buildProgress = 1; e.stacks = e.effectiveStacks = getRequiredStacksForLevel(lvl); e.level = e.effectiveLevel = e.potentialEffectiveLevel = lvl; e.updateStats(); e.energy = e.maxEnergy; };
     const sig = () => _laserTowerList().map(t => t.gx + ',' + t.gy + ':' + (t.connectedLasers || []).map(o => o.gx + ',' + o.gy).join(' ')).join('|');
-    const mapSig = () => _laserMap.beams.map(b => b.a.gx + ',' + b.a.gy + '-' + b.b.gx + ',' + b.b.gy + ':' + b.dmg.toFixed(4) + ':' + b.structs.map(e => e.gx + ',' + e.gy).join(';')).join('|');
+    // (The beam map: heap tables (tower.js _laserEnsure; laser.rs), each live
+    // beam its two lasers' tiles, owner and damage; order-free, as the beams'
+    // places differ between kept and remade maps. The structures on a beam's
+    // tiles are the tile effects' pass's, each tick.)
+    const mapSig = () => { const M = _laserMap, out = []; for (let b = 0, n = M.hdr[1]; b < n; b++) if (M.blive[b]) out.push(Math.min(M.ba[b], M.bb[b]) + '-' + Math.max(M.ba[b], M.bb[b]) + ':' + M.bown[b] + ':' + M.bdmg[b].toFixed(4)); return out.sort().join('|'); };
+    const beamCount = () => { const M = _laserMap; let n = 0; for (let b = 0, e = M.hdr[1]; b < e; b++) if (M.blive[b]) n++; return n; };
     // Rows and columns of lasers, with gaps for other things.
     const lasers = [];
     for (let k = 0; k < 160; k++) {
@@ -45,7 +50,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         const inc = sig(), incMap = mapSig();
         recalculateLaserConnections(); _laserMap.stale = true; laserBeamsTick();
         const full = sig(), fullMap = mapSig();
-        checks++; beamsSeen += _laserMap.beams.length;
+        checks++; beamsSeen += beamCount();
         if (inc !== full) bad = 'tick ' + tick + ': links differ';
         else if (incMap !== fullMap) bad = 'tick ' + tick + ': beam map differs';
     }

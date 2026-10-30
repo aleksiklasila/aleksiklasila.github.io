@@ -1,6 +1,6 @@
 // The adjacency's dirty tiles (_AdjDirtySet, data_state.js) against a Set
 // and a sort, as _runAdjacencyRecalculation took them before: random adds,
-// deletes and takes; the tiles taken (lowest first), the size, membership,
+// deletes and takes (every flag, as the post kernel takes them); the tiles taken (ascending), the size, membership,
 // iteration (ascending) and the state hash's order-free sum agree.
 // Usage: node tests/adjacency-dirty-set.test.cjs
 const fs = require('fs'), vm = require('vm'), path = require('path'), assert = require('node:assert/strict');
@@ -19,8 +19,8 @@ for (let step = 0; step < 200000; step++) {
     const op = rnd(100), N = ctx.GRID_W * ctx.GRID_H;
     if (op < 60) { const k = rnd(N); D.add(k); R.add(k); }
     else if (op < 75) { const k = rnd(N); assert.equal(D.delete(k), R.delete(k)); }
-    else if (op < 76) { const max = 1 + rnd(400); const ref = Array.from(R).sort((a, b) => a - b).slice(0, max); for (const k of ref) R.delete(k);
-        assert.deepEqual(Array.from(D.takeFirst(max)), ref, 'taken lowest first'); takes++; }
+    // (A post: the kernel takes every flag, ascending, and clears them; the counts follow: takenAll.)
+    else if (op < 76) { assert.deepEqual(Array.from(D), Array.from(R).sort((a, b) => a - b), 'taken ascending'); D.flag.fill(0); D.blk.fill(0); D.takenAll(); R.clear(); takes++; }
     else if (op < 77 && rnd(50) === 0) { D.clear(); R.clear(); }
     else { const k = rnd(N); assert.equal(D.has(k), R.has(k)); }
     assert.equal(D.size, R.size);

@@ -1256,6 +1256,8 @@ function getTeamDisplayColor(pid) {
 
 function isTeamAliveByAssets(pid) {
     if (resignedTeams.has(pid)) return false;
+    // (The structure table's count of the team's structures, floor items too.)
+    if (_ST.n === GRID_W * GRID_H && _ST.ctab) return playerStructureCount(pid) > 0;
     for (let t of towers) if (t.owner === pid) return true;
     for (let b of barracks) if (b.owner === pid) return true;
     for (let s of collectorSpawners) if (s.owner === pid) return true;
@@ -1268,22 +1270,21 @@ function isTeamAliveByAssets(pid) {
 }
 
 function eliminateTeamAssets(pid) {
-    for (let i = units.length - 1; i >= 0; i--) {
-        let u = units[i];
+    // (A copy of the view: the removals change it.)
+    for (const u of units.slice()) {
         if (u.owner !== pid) continue;
         u.dead = true;
         removeUnitSpatial(u);
         selectedUnits = selectedUnits.filter(su => su !== u);
-        units.splice(i, 1); unitSlotMapInvalidate(); if (typeof unitByIdRemoved === 'function') unitByIdRemoved(u);
+        unitRemoved(u);
     }
     players[pid].popCount = 0;
     _bumpPathTopologyVersion();
 
-    for (let i = towers.length - 1; i >= 0; i--) {
-        let t = towers[i];
+    // (The lists are views of the table: copies, the clears change them.)
+    for (let t of towers.slice()) {
         if (t.owner !== pid) continue;
-        towers.splice(i, 1); towerJoinedOrLeft(t);
-        clearTileEntity(t.gx, t.gy, t);
+        clearTileEntity(t.gx, t.gy, t); towerJoinedOrLeft(t);
         if (grid[t.gy] && grid[t.gy][t.gx]) {
             grid[t.gy][t.gx].type = TYPE_FLOOR;
             grid[t.gy][t.gx].owner = -1;
@@ -1291,21 +1292,17 @@ function eliminateTeamAssets(pid) {
             _markCombinedBgTileDirty(t.gx, t.gy, 0, true);
         }
     }
-    for (let i = barracks.length - 1; i >= 0; i--) {
-        let b = barracks[i];
+    for (let b of barracks.slice()) {
         if (b.owner !== pid) continue;
-        barracks.splice(i, 1); barracksChanged();
-        clearTileEntity(b.gx, b.gy, b);
+        clearTileEntity(b.gx, b.gy, b); barracksChanged();
         if (grid[b.gy] && grid[b.gy][b.gx]) {
             grid[b.gy][b.gx].item = null;
             grid[b.gy][b.gx].owner = -1;
         }
     }
-    for (let i = collectorSpawners.length - 1; i >= 0; i--) {
-        let s = collectorSpawners[i];
+    for (let s of collectorSpawners.slice()) {
         if (s.owner !== pid) continue;
-        collectorSpawners.splice(i, 1); collectorSpawnersChanged();
-        clearTileEntity(s.gx, s.gy, s);
+        clearTileEntity(s.gx, s.gy, s); collectorSpawnersChanged();
         if (grid[s.gy] && grid[s.gy][s.gx]) {
             grid[s.gy][s.gx].item = null;
             grid[s.gy][s.gx].owner = -1;

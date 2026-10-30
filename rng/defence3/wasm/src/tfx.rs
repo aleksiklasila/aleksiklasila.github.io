@@ -70,7 +70,8 @@ pub unsafe extern "C" fn k_tile_effects(a: u32, _chunk: i32) {
     let (stamp, start, count, eslot) = (k.p::<i32>(U0), k.p::<i32>(U0 + 1), k.p::<i32>(U0 + 2), k.p::<i32>(U0 + 3));
     let (dead, uown, en, uid, lzf, acc, lb, ev, list) = (k.p::<u8>(U0 + 4), k.p::<i8>(U0 + 5), k.p::<f32>(U0 + 6), k.p::<i32>(U0 + 7), k.p::<u8>(U0 + 8),
         k.p::<f32>(U0 + 9), k.p::<i32>(U0 + 10), k.p::<u8>(U0 + 11), k.p::<i32>(U0 + 12));
-    let (upt, tres, stix, sthdr, stfree) = (k.p::<i32>(U0 + 13), k.p::<u8>(U0 + 14), k.p::<i32>(U0 + 15), k.p::<i32>(U0 + 16), k.p::<i32>(U0 + 17));
+    // (upT is an Int16 column: sim_unit_state.js SIM_MOVE_COLUMNS.)
+    let (upt, tres, stix, sthdr, stfree) = (k.p::<i16>(U0 + 13), k.p::<u8>(U0 + 14), k.p::<i32>(U0 + 15), k.p::<i32>(U0 + 16), k.p::<i32>(U0 + 17));
     let (stbu, stbd, stpo, stpd, stfr, stid, stwe, stsa, out) = (k.p::<u16>(U0 + 18), k.p::<f32>(U0 + 19), k.p::<u16>(U0 + 20), k.p::<f32>(U0 + 21),
         k.p::<u16>(U0 + 22), k.p::<f32>(U0 + 23), k.p::<u16>(U0 + 24), k.p::<u16>(U0 + 25), k.p::<i32>(U0 + 26));
     let (w, dk, tick, per, epoch) = (k.i(4).max(1) as usize, k.i(10).max(1), k.i(11), k.i(12).max(1), k.i(13));
@@ -97,7 +98,7 @@ pub unsafe extern "C" fn k_tile_effects(a: u32, _chunk: i32) {
             for e in e0..e1 {
                 let q = g(eslot, e) as usize;
                 if g(dead, q) != 0 || g(uown, q) as i32 == o { continue; }
-                let ut = g(upt, q);
+                let ut = g(upt, q) as i32;
                 if ut < 0 || ut >= ntypes || (g(tres, ut as usize) >> (kind - 1)) & 1 != 0 { continue; }
                 let r0 = g(stix, q) as usize;
                 if !(g(tm, r0) < dv || (!dm.is_null() && g(dm, r0) < gd)) { continue; }

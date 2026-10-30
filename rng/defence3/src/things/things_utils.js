@@ -814,7 +814,7 @@ function recalculateUnitEffectiveLevel() {
             for (let j = 0; j < m; j++) {
                 const f = F[j];
                 if (f === 0 || f === 3 || f === 4) continue;
-                const i = phase + j * step, u = units[i];
+                const i = phase + j * step, u = unitAtRow(i);
                 if (f === 5 || f === 6) {
                     // (Behind its tables, taken in the kernel from its base entry
                     // and row: its base row and maxEnergy written there.)
@@ -836,8 +836,9 @@ function recalculateUnitEffectiveLevel() {
             }
         }
     } else {
+        unitRows();
         for (let i = phase; i < n; i += step) {
-            const u = units[i];
+            const u = unitAtRow(i);
             if (!u || u.dead || takenNow(u)) continue;
             if (!taken(u)) _effStatsFullUnit(u);
         }
@@ -982,7 +983,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         && !getTileEntityRef(gx, gy) && playerStructureCount(playerId) >= getPlayerStructureLimit()) return false;
 
     if (itemKey.startsWith('cloud_')) {
-        let hasSameCloud = towers.some(t => t.owner === playerId && t.type === itemKey && t.energy > 0);
+        let hasSameCloud = cloudTowerOwned(playerId, itemKey);
         if (hasSameCloud) return false;
     }
 
@@ -1051,8 +1052,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             t.buildEnabled = useDefaultBuild;
             t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
             t.updateTextCache();
-            structListPush(towers, t); towerJoinedOrLeft(t);
-            setTileEntity(gx, gy, itemKey, t);
+            setTileEntity(gx, gy, itemKey, t); towerJoinedOrLeft(t);
             placedNewStructure = true;
             placedNewWallStructure = true;
         }
@@ -1071,7 +1071,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             b.buildEnabled = useDefaultBuild;
             b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
             updateItemTextCache(b);
-            structListPush(barracks, b); barracksChanged();
+            barracksChanged();
             grid[gy][gx].item = b;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, b);
@@ -1090,7 +1090,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1109,7 +1109,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1128,7 +1128,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1148,7 +1148,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1167,7 +1167,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1186,7 +1186,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.buildEnabled = useDefaultBuild;
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
-            structListPush(collectorSpawners, s); collectorSpawnersChanged();
+            collectorSpawnersChanged();
             grid[gy][gx].item = s;
             grid[gy][gx].owner = playerId;
             setTileEntity(gx, gy, itemKey, s);
@@ -1220,15 +1220,16 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
 // out of energy. The tables' side (the per-tile structure table, cells, walls
 // becoming ground, adjacency marks, work versions, the journal, the movement
 // kernel's codes, trap marks) by one kernel over the batch (dst.rs
-// k_struct_destroy); here only the rows' objects (the lists, their rows),
-// the events of systems not yet kernels (walls, walk classes, reservations)
-// and presentation, then once a batch the versions and checks.
-const _dst = { cap: 0, tiles: null, hdr: null, walls: null, resv: null, ocnt: null, one: null, objs: [], P: new Float64Array(24) };
+// k_struct_destroy, which also retires the rows: _sRowQueueInsert, _stT);
+// here only the objects' lists (from the rows the kernel hands back), the
+// events of systems not yet kernels (walls, walk classes, reservations) and
+// presentation, then once a batch the versions and checks.
+const _dst = { cap: 0, tiles: null, inp: null, rows: null, hdr: null, walls: null, resv: null, ocnt: null, one: null, tabs: [], P: new Float64Array(32) };
 function _dstRoom(n) {
     const D = _dst;
     if (D.cap < n || !simHeapHas(D.tiles)) {
         const cap = Math.max(1024, n * 2);
-        D.tiles = simSharedArray(Int32Array, cap); D.walls = simSharedArray(Int32Array, cap);
+        D.tiles = simSharedArray(Int32Array, cap); D.inp = simSharedArray(Int32Array, cap); D.rows = simSharedArray(Int32Array, cap * 2); D.walls = simSharedArray(Int32Array, cap);
         D.resv = simSharedArray(Int32Array, cap * 2 * _WORKER_TARGET_LOAD_TYPE_COUNT);
         D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 64); D.one = simSharedArray(Int32Array, 1);
         D.cap = cap;
@@ -1239,34 +1240,38 @@ function _dstRoom(n) {
 // route or win changes.)
 function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     if (!(n > 0)) return 0;
-    const D = _dstRoom(n), objs = D.objs, T = _ST;
-    let m = 0, adj = false;
-    for (let i = 0; i < n; i++) {
-        const t = list[i], gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
-        if (!e || e._stMine || !(e._stT === t) || (deadOnly && !(e.energy <= 0))) continue;
-        if (e instanceof Tower || (BASE_CARD_TYPES[e.type] && BASE_CARD_TYPES[e.type].target === 'wall')) { if (structListRemove(towers, e) !== -1) towerJoinedOrLeft(e); adj = true; }
-        else if (e instanceof Barrack || e.type === 'barrack') { if (structListRemove(barracks, e) !== -1) barracksChanged(); adj = true; }
-        else if (isSpawnerEntity(e)) { if (structListRemove(collectorSpawners, e) !== -1) collectorSpawnersChanged(); }
-        // (Off its tile: a second entry of the list finds nothing.)
-        e._stT = -1; grid[gy][gx]._item = null;
-        D.tiles[m] = t; objs[m++] = e;
-    }
-    if (m === 0) return 0;
+    const D = _dstRoom(n), T = _ST;
+    if (T.n !== GRID_W * GRID_H || !T.ctab) return 0;
     if (!simHeapHas(T.code)) structTablesRehome();
+    let inp = list;
+    if (!simHeapHas(list)) { D.inp.set(list.subarray ? list.subarray(0, n) : list.slice(0, n)); inp = D.inp; }
     const AD = _adjacencyDirtyTiles; AD.room(GRID_W * GRID_H);
     const V = _workerWorkTable(), L = _teLogRoom();
     const mvOk = !!_simMoveStruct && !!_simMoveStructBlocks && _simMoveStructP === spatialUnitsComplexPlayerCount && _simMoveStructC === spatialBlockCols && _simMoveStructW === GRID_W && _simMoveStructH === GRID_H;
     const trapOk = !!_trap.dirty && simHeapHas(_trap.dirty);
     const P = D.P;
-    P[0] = m; P[1] = GRID_W; P[2] = GRID_H; P[3] = SNAP_REGION_TILES; P[4] = T.rw; P[5] = TYPE_WALL; P[6] = TYPE_FLOOR; P[7] = AD.flag.length;
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = SNAP_REGION_TILES; P[4] = T.rw; P[5] = TYPE_WALL; P[6] = TYPE_FLOOR; P[7] = AD.flag.length;
     P[8] = V.np; P[9] = _WORKER_WORK_TYPES.length; P[10] = V.rw; P[11] = V.rh; P[12] = WORKER_WORK_REGION_TILES; P[13] = _teLogEnd;
     P[14] = spatialUnitsComplexPlayerCount; P[15] = spatialBlockCols; P[16] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[17] = trapOk ? (_trap.all ? -1 : _trap.nd) : -1;
-    P[18] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[19] = m * _WORKER_TARGET_LOAD_TYPE_COUNT; P[20] = L.length; P[21] = trapOk ? _trap.dirty.length : 0;
+    P[18] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[19] = n * _WORKER_TARGET_LOAD_TYPE_COUNT; P[20] = L.length; P[21] = trapOk ? _trap.dirty.length : 0;
+    P[0] = n; P[22] = gameTime; P[23] = deadOnly ? 1 : 0; P[24] = _stAllCls.length;
     const resvOk = simHeapHas(workerReservedTiles) && workerReservedTiles.length === GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT;
-    simRustDirect('k_struct_destroy', [D.tiles, T.code, T.own, T.uc, T.val, T.tim, T.brain, T.rtab, T.stab, T.rrow, T.ctab, T.rcnt, T.cnt, cellType, cellOwner,
+    simRustDirect('k_struct_destroy', [inp, T.code, T.own, T.uc, T.val, T.tim, T.brain, T.rtab, T.stab, T.rrow, T.ctab, T.rcnt, T.cnt, cellType, cellOwner,
         AD.flag, AD.blk, V, L, mvOk ? _simMoveStruct : null, mvOk ? _simStructCls : null, mvOk ? _simMoveStructBlocks : null, trapOk ? _trap.dirty : null,
-        resvOk ? workerReservedTiles : null, D.hdr, D.walls, D.resv, D.ocnt], P);
-    const H = D.hdr;
+        resvOk ? workerReservedTiles : null, D.hdr, D.walls, D.resv, D.ocnt, D.rows, D.tiles, ..._dstClassArgs(D)], P);
+    const H = D.hdr, m = H[8];
+    if (m === 0) return 0;
+    structRowStats.retired += H[9];
+    // The lists are views of the table (structListView): their versions;
+    // a tower's cloud / laser lists by its object.
+    let adj = false, kinds = 0;
+    for (let i = 0; i < m; i++) {
+        const ct = D.rows[2 * i], k = _STL_KIND[ct], t = D.tiles[i], gx = t % GRID_W;
+        grid[(t - gx) / GRID_W][gx]._item = null;
+        if (k >= 0) { kinds |= 1 << k; adj = adj || k <= 1; }
+        if (k === 0) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
+    }
+    for (let k = 0; k < 3; k++) if (kinds & (1 << k)) _stlBump(k);
     // The batch's counters.
     _tileEntityVersion++;
     _teLogEnd = H[6]; _teLogBase = Math.max(0, _teLogEnd - L.length);
@@ -1286,13 +1291,12 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     for (let i = 0, nw = H[0]; i < nw; i++) { const t = D.walls[i], gx = t % GRID_W; simMoveTileTypeChanged(gx, (t - gx) / GRID_W, true); }
     simTileChangesFlush();
     for (let i = 0; i < m; i++) {
-        const e = objs[i], t = D.tiles[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
-        objs[i] = null;
-        structRowDetach(e);
-        _markCombinedBgTileDirty(gx, gy, 0, e instanceof Tower);
+        const t = D.tiles[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        _markCombinedBgTileDirty(gx, gy, 0, D.rows[2 * i] === 1);
         if (quiet) continue;
-        createExplosion(e.x, e.y, '#f44', 10);
-        playSound('building_destroyed', e.x, e.y);
+        const x = gx * TILE + TILE * 0.5, y = gy * TILE + TILE * 0.5;
+        createExplosion(x, y, '#f44', 10);
+        playSound('building_destroyed', x, y);
     }
     if (adj || quiet) recalculateAdjacency();
     if (quiet) return m;
@@ -1302,6 +1306,20 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     // was O(buildings) each.)
     if (typeof _inGameTick !== 'undefined' && _inGameTick) _winCheckDue = true; else checkWinCondition();
     return m;
+}
+// The class tables' retire queues and _stT columns (dst.rs: six arrays a
+// class, by ctab), in the heap; D.tabs[ctab] the table.
+function _dstClassArgs(D) {
+    structRallyClasses();
+    const out = [];
+    for (let j = 0; j < _stAllCls.length; j++) {
+        const T = _stAllCls[j] ? _sTables.get(_stAllCls[j]) : null;
+        D.tabs[j + 1] = T || null;
+        if (T && !_sColsInHeap(T)) _sTableGrow(T, T.cap);
+        const ok = T && simHeapHas(T.ret) && simHeapHas(T.qhdr) && simHeapHas(T.c__stT);
+        out.push(ok ? T.ret : null, ok ? T.rt : null, ok ? T.rp : null, ok ? T.rn : null, ok ? T.qhdr : null, ok ? T.c__stT : null);
+    }
+    return out;
 }
 // A list for callers that gather tiles (not the batch's own).
 let _dstExt = null;
@@ -1347,17 +1365,11 @@ function getThingResearchedMaxLevel(item) {
     return Math.max(1, Math.min(MAX_THING_LEVEL, 1 + Math.round(researchedLevel * (MAX_THING_LEVEL - 1) / Math.max(1, MAX_RESEARCH_LEVEL))));
 }
 
+// An upgrade to level nextLevel begun: the structures' progress kernel
+// (wai.rs p_begin: its flags, target maximum energy, energy).
 function beginUpgradeProgress(item, nextLevel) {
     if (!item) return;
-    let targetLevel = Math.max(1, clampThingLevel(Math.floor(Number(nextLevel) || 1)));
-    if (targetLevel > getThingResearchedMaxLevel(item)) return;
-    let targetmaxEnergy = Math.max(1, Math.floor(getUpgrademaxEnergy(item, nextLevel) || (item.maxEnergy || 1)));
-    item.isUpgrading = true;
-    item.isStacking = false;
-    item.upgrademaxEnergy = targetmaxEnergy;
-    item.maxEnergy = targetmaxEnergy;
-    if (!Number.isFinite(item.energy) || item.energy < 1) item.energy = 1;
-    item.energy = Math.min(item.energy, item.maxEnergy);
+    structProgressOps(item, 5, Math.floor(Number(nextLevel) || 1));
 }
 
 function getDisplayLevel(item) {
@@ -1419,45 +1431,24 @@ function getThingStackingEnergyCost(item) {
     return Math.max(1, Math.floor(baseEnergy));
 }
 
+// Its stacks, stacking or an upgrade begun, the builders' reservation of it
+// let go when nothing is left to build (wai.rs p_refresh).
 function refreshThingProgressState(item) {
     if (!item) return;
-
-    item.stacks = getThingStackedStacks(item);
-    item.manualStacks = getThingManualStacks(item);
-    if (!Number.isFinite(item.stackingWorkDone) || item.stackingWorkDone < 0) item.stackingWorkDone = 0;
-
-    let hasPendingStacks = getThingRemainingStacks(item) > 0;
-    if (item.underConstruction || item.isUpgrading) {
-        item.isStacking = false;
-        return;
-    }
-
-    let baseLevel = getThingBaseLevel(item);
-    let effLevel = getThingEffectiveLevel(item, baseLevel);
-    let researchedMaxLevel = getThingResearchedMaxLevel(item);
-    let maxAutoUpgradeLevel = Math.min(effLevel, researchedMaxLevel);
-    if (baseLevel < maxAutoUpgradeLevel && isAutoUpgradeEnabled(item)) {
-        beginUpgradeProgress(item, baseLevel + 1);
-        item.isStacking = false;
-        return;
-    }
-
-    item.isStacking = false;
-    if (hasPendingStacks && isAutoStackEnabled(item)) {
-        // Only stack if next stack level won't exceed max level
-        let nextStackLevel = stackCountToLevel(getThingStackedStacks(item) + 1);
-        let maxLevel = getThingResearchedMaxLevel(item);
-        item.isStacking = nextStackLevel <= maxLevel;
-    }
-    if (!item.isStacking) item.stackingWorkDone = 0;
-    if (!item.underConstruction && !item.isUpgrading && !item.isStacking && Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
-        let builderTypeIndex = _workerTypeToLoadIndex('builder');
-        let tileIndex = Math.floor(item.gy) * GRID_W + Math.floor(item.gx);
-        let slotIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT + builderTypeIndex;
-        let reservedUnit = workerReservedAt(slotIndex);
-        if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
-        workerReservedSet(slotIndex, null);
-    }
+    structProgressOps(item, 4, 0);
+}
+// Structure item's progress op (wai.rs p_op: 0 construction done, 1
+// upgraded to level v, 2 stacked, 3 maxEnergy v, 4 its state again, 5 an
+// upgrade to level v begun) on its class columns: the worker kernel's mode 2,
+// the same functions its builders use. Hooks of systems not yet tables are
+// the callers'.
+function structProgressOps(item, op, v) {
+    const t = item._stT;
+    if (!(t >= 0) || item._stMine) return;
+    const L = _waiArr('progOps', Int32Array, 3);
+    L[0] = t; L[1] = op; L[2] = v | 0;
+    playerResourceBatchBegin();
+    try { waiRun(L, 1, null, 2); } finally { playerResourceBatchEnd(); }
 }
 
 function addManualStackToThing(item, amount = 1) {
@@ -1724,16 +1715,19 @@ function structureWallSync(item) {
     if (typeof markLaserConnectionsDirty === 'function') markLaserConnectionsDirty(gx, gy);
 }
 
+// Construction done: its state by the progress kernel (wai.rs p_complete:
+// built, levels at least 1, its progress state), then the hooks.
 function markConstructionComplete(item) {
     if (!item) return;
-    item.underConstruction = false;
+    structProgressOps(item, 0, 0);
+    structCompleteHooks(item);
+}
+// What a completion tells the systems that are not tables yet (the worker
+// kernel's completions run these after its pass, worker.js _waiBuilt).
+function structCompleteHooks(item) {
     structureWallSync(item);
     // (Its hammer off at the next tick: presentation only.)
     if (typeof simPresentTileDirty === 'function') simPresentTileDirty(item.gx, item.gy);
-    if ((item.level || 0) < 1) item.level = 1;
-    if ((item.effectiveLevel || 0) < 1) item.effectiveLevel = 1;
-    if ((item.potentialEffectiveLevel || 0) < 1) item.potentialEffectiveLevel = 1;
-    refreshThingProgressState(item);
     if (item.updateTextCache) item.updateTextCache();
     else updateItemTextCache(item);
     // Built: it sees from now (visibility coverage).

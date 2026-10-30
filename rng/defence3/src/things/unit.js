@@ -329,7 +329,14 @@ let _tuPending = [];
 // Targets set during a decode (unit, target pairs): a new unit's shell has its
 // id only once its row is filled, so each is taken again at the decode's end.
 let _tuDecoded = [], _tbDecoded = [];
+// (Worker memory set during a decode to a structure whose shell had no tile
+// yet: set again at its end, unless a later row set another.)
+let _wmDecoded = [];
+function _unitWmDecodeLater(u, k, v) { if (typeof _snapDec !== 'undefined' && _snapDec !== null) _wmDecoded.push(u, k, v); }
 function simUnitTargetsDecoded() {
+    const wm = _wmDecoded;
+    _wmDecoded = [];
+    for (let i = 0; i < wm.length; i += 3) { const u = wm[i]; if (u._us && u[wm[i + 1]] === undefined) u[wm[i + 1]] = wm[i + 2]; }
     // (A structure's shell has its tile once its row is filled too.)
     const bl = _tbDecoded;
     _tbDecoded = [];
@@ -417,7 +424,10 @@ function _maxUnitCollisionRadius() {
 }
 
 class Unit {
-    constructor(unitType, owner, x, y) {
+    // (level: its stats' level from the start, one scaling: a spawn's queue
+    // level; prepare(unit): its role set up before that scaling, as a spawn's
+    // worker configuration was.)
+    constructor(unitType, owner, x, y, level = 1, prepare = null) {
         simUnitStateAllocate(this, x, y);
         this.id = nextUnitId++;
         this.unitType = unitType;
@@ -498,7 +508,8 @@ class Unit {
         // A snapshot restore writes every field itself (same order, so the
         // same layout) and indexes the unit afterwards.
         if (_snapUnitShellMode) return;
-        applyUnitLevelScaling(this, 1);
+        if (prepare) prepare(this);
+        applyUnitLevelScaling(this, level);
         this.energy = this.preComputedEffective ? this.preComputedEffective.maxEnergy : this.energy;
         if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && !occupancySpawn(this)) { this.dead = true; simUnitStateDetach(_simUnitState,this._si); return; }
         updateUnitSpatial(this);
@@ -1531,7 +1542,7 @@ for (const [k, col, kind] of (typeof SIM_WK_MEM !== 'undefined' ? SIM_WK_MEM : [
     const zeroDefault = col === 'wmFailU';
     const unset = zeroDefault ? 'x === 0' : kind === 'N' ? 'x !== x' : kind === 'Y' ? 'x <= 1' : 'x === 0';
     const get = new Function('D', `return function () { const c = this._us; if (c) { const w = c.wkIx[this._si]; return D('${kind}', w > 0 ? c.${col}[w] : ${kind === 'N' && !zeroDefault ? 'NaN' : '0'}); } return this._det ? this._det.${k} : undefined; };`)(_unitWmDecode);
-    const set = new Function('E', 'k', `return function (v) { const c = this._us; if (c) { const s = this._si, x = E('${kind}', v); let w = c.wkIx[s]; if (w <= 0) { if (${unset}) return; w = simUnitWk(c, s); if (w <= 0) return; } c.${col}[w] = x; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(_unitWmEncode, k);
+    const set = new Function('E', 'k', 'Q', `return function (v) { const c = this._us; if (c) { const s = this._si, x = E('${kind}', v); let w = c.wkIx[s]; ${kind === 'T' ? 'if (x === 0 && v) Q(this, k, v);' : ''} if (w <= 0) { if (${unset}) return; w = simUnitWk(c, s); if (w <= 0) return; } c.${col}[w] = x; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(_unitWmEncode, k, _unitWmDecodeLater);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
 // (The accessors' plain values in the digest: their keys.)
@@ -1798,7 +1809,7 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
             let template = source[i % source.length];
             let nu = spawnUnitNearUnit(template);
             if (!nu) continue;
-            units.push(nu); unitSlotMapPushed(nu);
+            unitAdded(nu);
             players[playerId].popCount++;
             survivors.push(nu);
         }

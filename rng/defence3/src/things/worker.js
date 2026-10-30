@@ -368,7 +368,8 @@ function workerSearchTierReset() {
     _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false;
     _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
     _wsw = null; _wswDirty = []; _wswResvRoom()[0] = 0;
-    if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
+    // (And the failed searches' counts, not in snapshots: a restoring peer starts from none, so every peer does.)
+    if (typeof _simUnitState !== 'undefined' && _simUnitState) { _simUnitState.columns.wsKind.fill(0); _simUnitState.columns.wsFail.fill(0); }
 }
 // Once a tick, before the unit pass: the commit, the grid's changes (while
 // no search runs: phases 1 after the commit, 2, 3 before the post), the post.
@@ -3513,11 +3514,11 @@ function applyWorkerRallyFromSpawner(u, spawner) {
 // "Stage D". Off: every worker event goes the JavaScript way.
 let WORKER_AI_WASM = true;
 const WAI_RS_W = 12, WAI_ES_W = 8, WAI_ES_SOURCES = ['research', 'salvage', 'collect', 'healer', 'builder'];
-const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13, WAI_OUT_BUILD_START = 14;
+const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13;
 const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work', 'gold_collected', 'astar_collected'];
 // The class columns the kernel reads (wai.ctab: per class of data_state.js
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
-const WAI_CTAB_COLS = ['markedForSalvage', 'stacks', 'level', 'queueEnabled', '_qN', '_qReq', '_qPaid', ''];
+const WAI_CTAB_COLS = ['markedForSalvage', 'stacks', 'level', 'queueEnabled', '_qN', '_qReq', '_qPaid', '_uc'];
 const _wai = { tver: '', P: new Float64Array(80), declined: 0 };
 function _waiArr(name, Type, n) {
     let a = _wai[name];
@@ -3566,7 +3567,8 @@ function _waiTables() {
     _wai.tver = key;
 }
 // The pass over the n worker events listed (slot * 8 + code, their order).
-function waiRun(list, n, take = null) {
+// (mode: 0 the events, 1 the tier's takes (take), 2 structures' progress ops: things_utils.js structProgressOps.)
+function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const S = _simUnitState, c = S.columns, np = players.length, P = _wai.P;
     _waiTables();
     // Research per owner: [active, required, done, cost, points, next queued,
@@ -3654,7 +3656,7 @@ function waiRun(list, n, take = null) {
     }
     P[62] = STY; P[63] = SS.nk; P[64] = SX.np; P[65] = SS.L1; P[66] = SS.R1; P[67] = sty('builder_spawner'); P[68] = Number(bld.builderDps) || 1;
     const R2 = _simParReg;
-    P[72] = take ? 1 : 0; P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
+    P[72] = mode; P[76] = _workerTypeToLoadIndex('builder'); P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
     P[69] = secondsToTicks(Math.max(0.01, Number(bld.transferCooldown) || 0.01)); P[70] = Math.max(120, Math.floor(TICK_RATE * 8)); P[71] = Math.max(60, Math.floor(TICK_RATE * 3));
     simRustDirect('k_worker_ai', [list, out, cnt,
         c.id, c.owner, c.x, c.y, c.dead, c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.commandState, c.pathIndex, c.nvPK,
@@ -3690,6 +3692,8 @@ function waiRun(list, n, take = null) {
 function waiOutEvents(m) {
     const S = _simUnitState, c = S.columns, owners = S.owners, out = _wai.out;
     _wai.declined = 0;
+    // (Salvaged structures: destroyed as one batch after the events, dst.rs.)
+    let ns = 0, salv = null;
     for (let i = 0; i < m; i++) {
         const code = out[i * 4], a = out[i * 4 + 1], b = out[i * 4 + 2];
         if (code === WAI_OUT_DECLINED) {
@@ -3703,7 +3707,7 @@ function waiOutEvents(m) {
             if (t && _noteAmbientSoundTick(t, 'research_tick', 12)) playSound('research_tick', t.x, t.y);
         } else if (code === WAI_OUT_RESEARCH_ADVANCE) tryAdvancePlayerResearchTask(a);
         else if (code === WAI_OUT_ARM) { const u = owners[a]; if (u && !u.dead) simMoveTryArm(u); }
-        else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e) destroyBuilding(e); }
+        else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e && e._stT >= 0) { if (!salv) salv = structDestroyList(m); salv[ns++] = e._stT; } }
         else if (code === WAI_OUT_SOUND_UNIT) { const u = owners[a]; if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
         else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
         else if (code === WAI_OUT_ASTAR_LOG) { const u = owners[a]; if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
@@ -3723,12 +3727,9 @@ function waiOutEvents(m) {
         }
         else if (code === WAI_OUT_BUILT) _waiBuilt(a, b, out[i * 4 + 3]);
         else if (code === WAI_OUT_SOUND_BUILD) { const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)); if (t && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y); }
-        else if (code === WAI_OUT_BUILD_START) {
-            const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W));
-            if (t) { if (b === 1) beginUpgradeProgress(t, out[i * 4 + 3]); else refreshThingProgressState(t); }
-        }
         else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners[a]; if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
     }
+    if (ns > 0) structDestroyTiles(salv, ns);
 }
 // The search tier's takes (worker.js _wsCommit): the n requests of the
 // order (indices into its result arrays), all in one pass (wai.rs
@@ -3766,34 +3767,23 @@ function _waiOwnStats(u, c, s) {
     const pc = u.preComputed || {}, o = w * SIM_WK_STATS_W;
     A[o] = Number(pc.builderDps) || 0; A[o + 1] = Number(pc.healerDps) || 0; A[o + 2] = Number(pc.researcherDps) || 0; A[o + 3] = Number(pc.gatherPerTrip) || 0; A[o + 4] = Number(pc.transferCooldownTicks) || 0;
 }
-// A builder's work done at tile t (wai.rs b_work): 0 built, 1 upgraded to
-// level v, 2 stacked (v: any), 3 its maxEnergy to v. What the kernel did not
-// write: the completions' JavaScript (things_utils.js), sounds, adjacency.
+// A builder's work done at tile t (wai.rs b_work, its state written there:
+// p_complete, p_upgraded, p_refresh): 0 built, 1 upgraded to level v, 2
+// stacked (v: any). The hooks of systems not yet tables, sounds, adjacency.
 function _waiBuilt(at, kind, v) {
     const t = getTileEntityRef(at % GRID_W, Math.floor(at / GRID_W));
     if (!t) return;
-    if (kind === 3) { t.maxEnergy = v; return; }
     if (kind === 0) {
-        // (Its progress state: markConstructionComplete's refreshThingProgressState.)
-        markConstructionComplete(t);
+        structCompleteHooks(t);
         if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
-    } else if (kind === 1) {
-        const prevStacked = getThingStackedStacks(t), prevManual = getThingManualStacks(t), left = Math.max(0, prevManual - prevStacked);
-        t.level = v;
-        if (typeof upkeepThingDirty === 'function') upkeepThingDirty(t);
-        t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(v));
-        t.manualStacks = Math.max(prevManual, t.stacks + left);
-        t.isUpgrading = false;
-        t.upgrademaxEnergy = 0;
-        refreshThingProgressState(t);
-        if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
-        if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
-    } else if (kind === 2) {
-        // (Its stacks as the kernel left them, through their setter: the derived tables.)
-        if (v) { t.stacks = t.stacks; if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t); }
-        refreshThingProgressState(t);
-        if (!v) return;
+        return;
     }
+    if (kind === 1) {
+        if (typeof upkeepThingDirty === 'function') upkeepThingDirty(t);
+        if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+    }
+    if (kind === 2 && !v) return;
+    if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
     _requestAdjacencyRecalcForThing(t, 1);
     recalculateAdjacency();
 }

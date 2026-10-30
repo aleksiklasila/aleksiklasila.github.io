@@ -223,17 +223,14 @@ function spawnQueuedUnitFromSpawner(spawner) {
 
     const front = spawnQueueFront(spawner), spawnInfo = { unitType: front.unitType, level: front.level };
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
-    let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+    let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16, spawnInfo.level, configureWorkerUnitFromType);
     if (u.dead) return false;
     spawnQueueShift(spawner);
     // The queue moved on: its next item may need healers' energy.
     if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
     if (typeof workSiteDirty === 'function') workSiteDirty(spawner.gx, spawner.gy);
-    configureWorkerUnitFromType(u);
-
-    applyUnitLevelScaling(u, spawnInfo.level);
     u.energy = u.maxEnergy;
-    units.push(u); unitSlotMapPushed(u);
+    unitAdded(u);
     players[owner].popCount++;
 
     // For worker units, rally is a direct move order that must be followed before auto-search resumes.
@@ -308,7 +305,7 @@ function spawnerReadyNoted(s) {
         e.splice(lo * 2, 0, s, order);
     }
     // (Stale entries pile up only behind an owner at its cap: compacted now and then.)
-    if (L.e.length - L.head > 4 * (barracks.length + collectorSpawners.length) + 64) _spawnReadyCompact(L);
+    if (L.e.length - L.head > 4 * structLiveRows(1, 2) + 64) _spawnReadyCompact(L);
 }
 function _spawnReadyCompact(L) {
     const e = [];

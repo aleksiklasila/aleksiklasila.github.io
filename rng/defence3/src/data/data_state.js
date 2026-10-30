@@ -803,7 +803,7 @@ function structTablesRehome() {
         a.set(was); T[k] = a;
     }
     for (const t of _sTables.values()) {
-        if (!_sColsInHeap(t) || (typeof _simHeapPtrOf === 'function' && t.mTok && !(_simHeapPtrOf(t.mTok) >= 0))) _sTableGrow(t, t.cap);
+        if (!_sColsInHeap(t) || (typeof _simHeapPtrOf === 'function' && ((t.mTok && !(_simHeapPtrOf(t.mTok) >= 0)) || (t.ret && !(_simHeapPtrOf(t.ret) >= 0))))) _sTableGrow(t, t.cap);
         if (t.mxOvN && typeof _simHeapPtrOf === 'function' && !(_simHeapPtrOf(t.mxOvN) >= 0)) { const a = _sColAlloc(Int32Array, 4); a.set(t.mxOvN); t.mxOvN = a; }
     }
 }
@@ -829,6 +829,9 @@ function structTableSet(gx, gy, prev, ref) {
     if (t < 0 || t >= n) return;
     if (prev && prev !== ref && prev._stT === t) prev._stT = -1;
     const joins = !!ref && typeof ref._stT === 'number' && !!ref._stCode;
+    // (A list's member joined or left: its view, structListView.)
+    { structRallyClasses(); const k0 = T.ctab && T.n === n ? _STL_KIND[T.ctab[t]] : -1, k1 = ref ? _STL_KIND[_stAllIx.get(ref.constructor) || 0] : -1;
+      if (prev !== ref || k0 !== k1) { if (k0 >= 0) _stlBump(k0); if (k1 >= 0 && k1 !== k0) _stlBump(k1); } }
     if (T.n !== n) {
         if (!joins) return;
         // Keep the authoritative structure SoA directly readable by kernels:
@@ -867,12 +870,25 @@ function _stWrite(ref, t) {
 // and override flags (2), effective level (6).
 // Published only on placement or field changes, never packed per tick. The
 // tile core above remains authoritative for life, owner and construction.
+// The types' ids are the same on every peer: seeded at the first structure
+// from the static definitions in their order (every card type, then a
+// barrack of every unit type); others (none expected) appended after. Ids
+// given in the order types first appeared differed on a peer that restored a
+// snapshot, and per-type tables then answered for other types (a poison
+// shot killed a barrack on one peer only).
 const _stationaryTypes = [], _stationaryTypeIds = new Map();
+function _stationaryTypesSeed() {
+    if (_stationaryTypes.length) return;
+    const add = raw => { if (raw && !_stationaryTypeIds.has(raw)) { _stationaryTypeIds.set(raw, _stationaryTypes.length); _stationaryTypes.push(raw); } };
+    if (typeof BASE_CARD_TYPES !== 'undefined' && BASE_CARD_TYPES) for (const k of Object.keys(BASE_CARD_TYPES)) add(k);
+    if (typeof BASE_UNIT_STATS !== 'undefined' && BASE_UNIT_STATS) for (const k of Object.keys(BASE_UNIT_STATS)) add('barrack_' + k);
+}
 function stationaryBrainChanged(e) {
     const tile = e._stT;
     if (!(tile >= 0) || !_ST.brain || e._stMine) return;
     const raw = e.type === 'barrack' ? 'barrack_' + e.unitType : e.type;
     if (!raw) { _ST.brain[tile] = 0; return; }
+    _stationaryTypesSeed();
     let type = _stationaryTypeIds.get(raw);
     if (type === undefined) { type = _stationaryTypes.length; _stationaryTypeIds.set(raw, type); _stationaryTypes.push(raw); }
     const T = _sTables.get(e.constructor), row = e._sr;
@@ -888,25 +904,68 @@ function stationaryBrainChanged(e) {
 function structTableRefresh(e) {
     if (e && e._stT >= 0 && _ST.n && _ST.code[e._stT] !== 0) _stWrite(e, e._stT);
 }
-// The structure lists (towers, barracks, collectorSpawners): an entry
-// removed in O(1), the last entry taking its place (indexOf and splice over
-// tens of thousands of spawners per destroyed building were ~1 ms a tick
-// under salvage). Each entry's place in e._li; a list replaced or spliced
-// elsewhere (a restore, a cleanup) is indexed again at its first removal
-// that finds a stale place. The order changes alike on every peer.
-function structListPush(list, e) { e._li = list.length; list.push(e); }
-function structListRemove(list, e) {
-    let i = e._li;
-    if (!(i >= 0 && i < list.length && list[i] === e)) {
-        for (let k = 0; k < list.length; k++) if (list[k]) list[k]._li = k;
-        i = e._li;
-        if (!(i >= 0 && i < list.length && list[i] === e)) return -1;
-    }
-    const last = list.pop();
-    if (last !== e) { list[i] = last; last._li = i; }
-    e._li = -1;
-    return i;
+// The structure lists (towers, barracks, collectorSpawners): views of the
+// per-tile structure table (Stage E), in tile order, the same on every peer
+// whatever the history. A kind's view is filled again from the occupied
+// tiles (reg.rs k_tile_occupied) when its membership version moved
+// (structTableSet, the destroy batch); the arrays stay the same objects
+// until a reset or a restore replaces the lists (callers key caches on
+// them). The page of a simulation worker holds its own lists of views
+// (structListsSetView). Kind of a class code (ctab): 0 towers, 1 barracks,
+// 2 spawners, -1 none.
+const _STL_KIND = [-1, 0, -1, 1, 2, 2, 2, 2, 2, 2, -1, -1];
+const _stl = { arr: [[], [], []], ver: [-1, -1, -1], view: null };
+function _stlVer(k) { return k === 0 ? towersVersion : k === 1 ? barracksVersion : collectorSpawnersVersion; }
+function _stlBump(k) { if (k === 0) towersVersion++; else if (k === 1) barracksVersion++; else if (k === 2) collectorSpawnersVersion++; }
+function structListView(k) {
+    const L = _stl;
+    if (L.view !== null) return L.view[k];
+    if (L.ver[0] !== towersVersion || L.ver[1] !== barracksVersion || L.ver[2] !== collectorSpawnersVersion) _stlFill();
+    return L.arr[k];
 }
+function _stlFill() {
+    const L = _stl, T = _ST, A = L.arr;
+    structRowStats.listFills = (structRowStats.listFills | 0) + 1;
+    A[0].length = 0; A[1].length = 0; A[2].length = 0;
+    L.ver[0] = towersVersion; L.ver[1] = barracksVersion; L.ver[2] = collectorSpawnersVersion;
+    if (T.n !== GRID_W * GRID_H || !T.ctab) return;
+    const n = _activeTileEntities.tileList(), Tl = _activeTileEntities._tiles, C = T.ctab, R = T.rrow;
+    for (let i = 0; i < n; i++) {
+        const t = Tl[i], c = C[t], k = _STL_KIND[c];
+        if (k === undefined || k < 0) continue;
+        const Tb = _stTabByCt[c] || _stTabOfCt(c), o = Tb && R[t] >= 0 ? Tb.rowObj[R[t]] : null;
+        if (o && o._stT === t) A[k].push(o);
+    }
+}
+// The lists replaced (a reset, a restore): the tables hold the members; the
+// versions tell the lists' caches (the cloud and laser lists too). On the
+// page of a simulation worker: its lists emptied (its views come again).
+function structListsReplaced() {
+    const L = _stl;
+    for (let k = 0; k < 3; k++) { if (L.view !== null) L.view[k] = []; else L.arr[k] = []; _stlBump(k); }
+    cloudTowersVersion++; laserTowersVersion++;
+}
+// towers, barracks, collectorSpawners: each the same object for the match's
+// code (a lexical binding), standing for the kind's current view array.
+function _stlProxy(k) {
+    return new Proxy([], {
+        get(_, key) { const a = structListView(k), v = a[key]; return typeof v === 'function' && key !== 'constructor' ? v.bind(a) : v; },
+        set(_, key, v) { structListView(k)[key] = v; return true; },
+        has(_, key) { return key in structListView(k); },
+        ownKeys() { return Reflect.ownKeys(structListView(k)); },
+        getOwnPropertyDescriptor(_, key) { const d = Reflect.getOwnPropertyDescriptor(structListView(k), key); if (d && key !== 'length') d.configurable = true; return d; },
+        deleteProperty(_, key) { return delete structListView(k)[key]; }
+    });
+}
+// The live structures of list kinds k0..k1 (their tables' rows held, not
+// retired): the lists' sizes without filling them.
+function structLiveRows(k0, k1) {
+    structRallyClasses();
+    let n = 0;
+    for (let c = 1; c < _STL_KIND.length; c++) { const k = _STL_KIND[c]; if (k < k0 || k > k1) continue; const Tb = _stTabByCt[c] || _stTabOfCt(c); if (Tb) n += Tb.n - Tb.nfree - Tb.qn; }
+    return n;
+}
+function structListsSetView(lists) { _stl.view = lists ? [lists[0] || [], lists[1] || [], lists[2] || []] : null; if (!lists) { _stl.arr = [[], [], []]; _stlBump(0); _stlBump(1); _stlBump(2); } }
 // ---- structure rows (ENTITY_TABLES_PLAN.md T1) ----
 // A structure's fields are columns of its class's table, the object only its
 // row (_sr): ~0.4 KB a structure instead of ~1.5 KB of object, properties
@@ -923,13 +982,13 @@ function structListRemove(list, e) {
 // structure's object may still be read); the tables start over with it
 // (structTableReset). Lists from a census of chaos matches
 // (.claude/struct_field_census.cjs).
-const _STF_BUILDING = 'i:_stT i:_li c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stacks i:manualStacks i:effectiveStacks c:level c:effectiveLevel '
+const _STF_BUILDING = 'i:_stT c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stacks i:manualStacks i:effectiveStacks c:level c:effectiveLevel '
     + 'c:potentialEffectiveLevel b:isStacking n:stackingWorkDone n:maxEnergy b:markedForSalvage b:autoUpgradeEnabled b:buildEnabled b:isUpgrading '
     + 'i:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
     + 'r:preComputedPotential i:burning f:burnTickDamage i:poisoned f:poisonTickDamage i:frozen f:iceTickDamage i:wet i:sandy i:watched c:watchedByTeam '
     + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:upgrademaxEnergy n:_mxOv n:_ovMx c:_ovVs';
 const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
-const _STF_MINE = 'i:_stT i:_li n:_mv s:gx s:gy n:x n:y';
+const _STF_MINE = 'i:_stT n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
     Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
@@ -1039,8 +1098,14 @@ function _sTableOf(C) {
     const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
     const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
     const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
-    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, nfree: 0, qh: -1, qt: -1, qn: 0, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && f.name !== '_li' && !_S_OV_COLS.has(f.name)).map(f => f.name) };
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), cap: 0, n: 0, nfree: 0, qhdr: null, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && !_S_OV_COLS.has(f.name)).map(f => f.name) };
     for (const f of fields) T[f.col] = null;
+    // (The retire queue's head, tail and length: heap words the destroy kernel
+    // writes, dst.rs k_struct_destroy.)
+    T.qhdr = _sColAlloc(Int32Array, 4); T.qhdr[0] = -1; T.qhdr[1] = -1;
+    Object.defineProperty(T, 'qh', { get() { return this.qhdr[0]; }, set(v) { this.qhdr[0] = v; } });
+    Object.defineProperty(T, 'qt', { get() { return this.qhdr[1]; }, set(v) { this.qhdr[1] = v; } });
+    Object.defineProperty(T, 'qn', { get() { return this.qhdr[2]; }, set(v) { this.qhdr[2] = v; } });
     _sTables.set(C, T);
     _sTableGrow(T, 1024);
     if (T.unique.maxEnergy && T.c__mxOv !== undefined) T.unique.maxEnergy = new SOverrideColumn(T);
@@ -1102,9 +1167,11 @@ function _sTableGrow(T, cap) {
     // retired (out of the world, its values still in the row), rt the tick it
     // retired, rp/rn the retire queue (oldest first), free the expired rows.)
     {
-        const n = T.n, obj = new Array(cap).fill(null), ret = new Uint8Array(cap), rt = new Int32Array(cap), rp = new Int32Array(cap), rn = new Int32Array(cap), free = new Int32Array(cap);
-        if (T.rowObj) { for (let i = 0; i < n; i++) obj[i] = T.rowObj[i]; ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); }
+        // (ret / rt / rp / rn in the heap: the destroy kernel retires rows.)
+        const n = T.n, obj = new Array(cap).fill(null), ret = _sColAlloc(Uint8Array, cap), rt = _sColAlloc(Int32Array, cap), rp = _sColAlloc(Int32Array, cap), rn = _sColAlloc(Int32Array, cap), free = new Int32Array(cap);
+        if (T.rowObj) { for (let i = 0; i < n; i++) obj[i] = T.rowObj[i]; ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); _sColFree(T.ret); _sColFree(T.rt); _sColFree(T.rp); _sColFree(T.rn); }
         T.rowObj = obj; T.ret = ret; T.rt = rt; T.rp = rp; T.rn = rn; T.freeRows = free;
+        { const q = _sColAlloc(Int32Array, 4); q.set(T.qhdr); _sColFree(T.qhdr); T.qhdr = q; }
     }
     T.cap = cap;
 }
@@ -1120,7 +1187,7 @@ function _sTableGrow(T, cap) {
 const STRUCT_ROW_KEEP_TICKS = 200;
 // (What a structure whose row expired reads: out of the world, no energy.
 // Writes to it go to a sink nobody reads.)
-const _S_GONE = Object.freeze(Object.assign(Object.create(null), { _stT: -1, _li: -1, _en: 0, _ow: -1, _uc: false, _mv: 0, _spt: 0 }));
+const _S_GONE = Object.freeze(Object.assign(Object.create(null), { _stT: -1, _en: 0, _ow: -1, _uc: false, _mv: 0, _spt: 0 }));
 const _sGoneSink = Object.create(null);
 // (Not enumerable: _sdet is no snapshot key, see _sTableKeys.)
 // (Its tile kept on the object, hidden (_hgx, _hgy): a unit's digest term of
@@ -1307,7 +1374,6 @@ function _sTableKeys(e) {
 function structTableInit(o) {
     _sRowTake(o);
     o._stT = -1;
-    o._li = -1;
     if (o._stMine) o._mv = 0;
     else { o._ow = -1; o._uc = false; o._en = 0; if (o._stTimer) o._spt = 0; }
 }
@@ -1706,10 +1772,22 @@ function getTileEntityRef(gx, gy) {
     const T = _ST, t = gy * GRID_W + gx;
     if (T.n === GRID_W * GRID_H && T.ctab) {
         const c = T.ctab[t];
-        if (c !== 0) { const Tb = _sTables.get(_stAllCls[c - 1]), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null; if (o && o._stT === t) return o; }
+        if (c !== 0) { const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null; if (o && o._stT === t) return o; }
     }
     if (!tileEntityRef || !tileEntityRef[gy]) return null;
     return tileEntityRef[gy][gx] || null;
+}
+// The class table of a per-tile class code (ctab: 1 + the index in
+// _stAllCls), kept once made (tables are never dropped).
+const _stTabByCt = [];
+function _stTabOfCt(c) { structRallyClasses(); const Tb = _sTables.get(_stAllCls[c - 1]); if (Tb) _stTabByCt[c] = Tb; return Tb || null; }
+// The structure at tile t of the table (no bounds or grid fallback: the
+// kernels' tile lists).
+function structAtTile(t) {
+    const T = _ST, c = T.ctab ? T.ctab[t] : 0;
+    if (c === 0) return null;
+    const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null;
+    return o && o._stT === t ? o : null;
 }
 function _teGrids() {
     if (tileEntityRef && tileEntityRef.length === GRID_H) return;
@@ -1790,7 +1868,8 @@ function hasActiveResourceMineAt(resourceKey, gx, gy) {
 let rng = null; // shared PRNG
 let gameSeed = 0;
 
-let towers = [];
+// (The structure lists: views of the table, structListView.)
+const towers = _stlProxy(0), barracks = _stlProxy(1), collectorSpawners = _stlProxy(2);
 // Bumped whenever a tower joins or leaves towers.
 let towersVersion = 0;
 function towersChanged() { towersVersion++; }
@@ -1800,14 +1879,44 @@ let cloudTowersVersion = 0;
 function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) { cloudTowersVersion++; if (typeof cloudTowerToggle === 'function') cloudTowerToggle(t); } if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
 // Bumped when a laser tower joins or leaves towers (the laser links' list).
 let laserTowersVersion = 0;
-let units = [];
+// The units: the id table's view (main.js _uix, unitsView), one object for
+// the match's code standing for it; its length the count, without making the
+// view. Whole-list assignments are calls: unitsReplaced (a reset, a restore),
+// unitsSetView (the page of a simulation worker: its frame's views).
+let _unitsPageView = null;
+// (push / pop / splice / length = n on the table: units added and removed
+// through it, unitAdded / unitRemoved; reordering is no operation on it.)
+const _UNITS_EDIT = {
+    push: (...a) => { for (const u of a) unitAdded(u); return unitCount(); },
+    pop: () => { const v = unitsView(), u = v[v.length - 1]; if (u) unitRemoved(u); return u; },
+    splice: (i, k, ...a) => { const v = unitsView().slice(), out = v.splice(i, k === undefined ? v.length : k); for (const u of out) unitRemoved(u); for (const u of a) unitAdded(u); return out; }
+};
+const _UNITS_FIXED = new Set(['shift', 'unshift', 'sort', 'reverse', 'fill', 'copyWithin']);
+const units = new Proxy([], {
+    get(_, key) {
+        const pv = _unitsPageView;
+        if (key === 'length') return pv !== null ? pv.length : unitCount();
+        if (pv === null && typeof key === 'string' && Object.hasOwn(_UNITS_EDIT, key)) return _UNITS_EDIT[key];
+        if (pv === null && _UNITS_FIXED.has(key)) throw new Error('units.' + String(key) + ': the units are the id table, in id order');
+        const a = pv !== null ? pv : unitsView(), v = a[key];
+        return typeof v === 'function' && key !== 'constructor' ? v.bind(a) : v;
+    },
+    set(_, key, v) {
+        if (_unitsPageView !== null) { _unitsPageView[key] = v; return true; }
+        if (key === 'length') { const w = unitsView().slice(v); for (const u of w) unitRemoved(u); return true; }
+        throw new Error('units[' + String(key) + '] =: the units are the id table');
+    },
+    has(_, key) { return key in (_unitsPageView !== null ? _unitsPageView : unitsView()); },
+    ownKeys() { return Reflect.ownKeys(_unitsPageView !== null ? _unitsPageView : unitsView()); },
+    getOwnPropertyDescriptor(_, key) { const d = Reflect.getOwnPropertyDescriptor(_unitsPageView !== null ? _unitsPageView : unitsView(), key); if (d && key !== 'length') d.configurable = true; return d; }
+});
+function unitsReplaced(list) { if (_unitsPageView !== null) { _unitsPageView = Array.isArray(list) ? list : []; return; } _uixFromList(list === units ? unitsView().slice() : list || []); }
+function unitsSetView(list) { _unitsPageView = list ? list : null; }
 let projectiles = [];
 let particles = [];
-let barracks = [];
 // Bumped whenever a barrack joins or leaves barracks.
 let barracksVersion = 0;
 function barracksChanged() { barracksVersion++; }
-let collectorSpawners = [];
 // Bumped whenever a spawner joins or leaves collectorSpawners (indexes of
 // it are kept until then).
 let collectorSpawnersVersion = 0;

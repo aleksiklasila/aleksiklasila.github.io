@@ -777,29 +777,65 @@ function simUnitStateReleaseFreed() {
     for (let i = 0; i < n; i++) { const s = L[i]; _simSlabFree(sl, s); if (zeroed) sl.used[s >> 5] &= ~(1 << (s & 31)); }
     L.length = 0;
 }
+// A fresh slot's column values other than zero (its first element for a
+// strided column). Written wherever a slot becomes fresh: k_slot_zero for
+// the released ones, a growth's new range, the JavaScript zeroing of a reused
+// one; a unit taking a slot writes only its own values (_simUnitSlotStart).
+// (Not live or tmOn: a free slot reads as none to the passes over slots.)
+let _simSlotDefs = null;
+function simSlotDefaults() {
+    if (_simSlotDefs) return _simSlotDefs;
+    const d = { mvNav: -1, mvNavLD: -1, mvFloor: -1, esVer: -1, statRow: -1, bsRow: -1, fLsX: NaN, fLsY: NaN, mvPath: -1,
+        wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, mvCD: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
+        cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1 };
+    for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
+    for (const k in SIM_SPATIAL_DEFAULTS) d[k] = SIM_SPATIAL_DEFAULTS[k];
+    for (const [, k, v] of SIM_UNIT_KCOL_FIELDS) d[k] = v;
+    const known = new Set([...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0])]);
+    for (const k of Object.keys(d)) { if (!known.has(k)) throw new Error('slot default for an unknown column: ' + k); if (Object.is(d[k], 0)) delete d[k]; }
+    return _simSlotDefs = d;
+}
+// A column's default as k_slot_zero's word pair (kind, value): 0 none, 1 an
+// integer, 2 an f32, 3 an f64.
+function _simSlotDefWord(a, v) { return v === undefined ? [0, 0] : a instanceof Float64Array ? [3, v] : a instanceof Float32Array ? [2, v] : [1, v]; }
 // The unit columns as a table for k_slot_zero (address, bytes, elements a
-// slot), made again when the columns were (a growth, a compaction).
-const _slz = { S: null, cap: -1, tab: null, n: 0, list: null };
-function _simSlotZeroRun(S, L, n) {
+// slot; defaults), made again when the columns were (a growth, a compaction).
+const _slz = { S: null, cap: -1, tab: null, defs: null, n: 0, list: null };
+function _simSlotZeroTable(S) {
     const Z = _slz;
-    if (Z.S !== S || Z.cap !== S.cap || !simHeapHas(Z.tab)) {
-        const cols = [];
-        for (const k of SIM_UNIT_COLUMNS) cols.push([S.columns[k], 1]);
-        for (const [k, , per] of SIM_MOVE_COLUMNS) cols.push([S.columns[k], per]);
-        if (cols.some(([a]) => !a || !simHeapHas(a))) return false;
-        Z.tab = simSharedArray(Int32Array, cols.length * 3);
-        cols.forEach(([a, per], i) => { Z.tab[3 * i] = _simWEnc(_simHeapPtrOf(a)); Z.tab[3 * i + 1] = a.BYTES_PER_ELEMENT; Z.tab[3 * i + 2] = per; });
+    if (Z.S !== S || Z.cap !== S.cap || !simHeapHas(Z.tab) || !simHeapHas(Z.defs)) {
+        const cols = [], D = simSlotDefaults();
+        for (const k of SIM_UNIT_COLUMNS) cols.push([S.columns[k], 1, D[k]]);
+        for (const [k, , per] of SIM_MOVE_COLUMNS) cols.push([S.columns[k], per, D[k]]);
+        if (cols.some(([a]) => !a || !simHeapHas(a))) return null;
+        Z.tab = simSharedArray(Int32Array, cols.length * 3); Z.defs = simSharedArray(Float64Array, cols.length * 2);
+        cols.forEach(([a, per, v], i) => { Z.tab[3 * i] = _simWEnc(_simHeapPtrOf(a)); Z.tab[3 * i + 1] = a.BYTES_PER_ELEMENT; Z.tab[3 * i + 2] = per; const w = _simSlotDefWord(a, v); Z.defs[2 * i] = w[0]; Z.defs[2 * i + 1] = w[1]; });
         Z.S = S; Z.cap = S.cap; Z.n = cols.length;
-        simParallelBind('slz.tab', Z.tab);
     }
-    if (!simHeapHas(S.sepKey) || !simHeapHas(S.sepLayer)) return false;
-    if (!Z.list || Z.list.length < n || !simHeapHas(Z.list)) { Z.list = simSharedArray(Int32Array, Math.max(4096, n * 2)); simParallelBind('slz.list', Z.list); }
+    if (!simHeapHas(S.sepKey) || !simHeapHas(S.sepLayer)) return null;
+    simParallelBind('slz.tab', Z.tab); simParallelBind('slz.defs', Z.defs); simParallelBind('unit.sepKey', S.sepKey); simParallelBind('unit.sepLayer', S.sepLayer);
+    return Z;
+}
+function _simSlotZeroRun(S, L, n) {
+    const Z = _simSlotZeroTable(S);
+    if (!Z) return false;
+    if (!Z.list || Z.list.length < n || !simHeapHas(Z.list)) Z.list = simSharedArray(Int32Array, Math.max(4096, n * 2));
     for (let i = 0; i < n; i++) Z.list[i] = L[i];
-    simParallelBind('slz.tab', Z.tab); simParallelBind('unit.sepKey', S.sepKey); simParallelBind('unit.sepLayer', S.sepLayer);
+    simParallelBind('slz.list', Z.list);
     const P = _simParams;
-    P[0] = n; P[1] = 256; P[2] = Z.n; P[3] = SIM_SEP_ABSENT;
-    simParallelRun(SIM_KERNEL_SLOT_ZERO, Math.ceil(n / 256));
+    // (Small jobs: a slot touches every column (~225 cache lines), 256 a job
+    // left one helper ~6 ms of misses at 2,500 deaths a tick.)
+    const per = Math.max(16, Math.ceil(n / 64));
+    P[0] = n; P[1] = per; P[2] = Z.n; P[3] = SIM_SEP_ABSENT; P[4] = 0;
+    simParallelRun(SIM_KERNEL_SLOT_ZERO, Math.ceil(n / per));
     return true;
+}
+// Slots [from, to) made fresh (a growth's new range: zero there): the
+// defaults, one native fill a column.
+function _simSlotFreshRange(S, from, to) {
+    if (!(to > from)) return;
+    const D = simSlotDefaults(), C = S.columns;
+    for (const k in D) { const per = C[k].length / Math.max(1, S.cap); if (per === 1) C[k].fill(D[k], from, to); else for (let s = from; s < to; s++) C[k][s * per] = D[k]; }
 }
 
 // The columns live in the wasm heap (simHeapArray: the Rust kernels read
@@ -1079,6 +1115,9 @@ function _simSlotZeroFn() {
     const body = [];
     for (const k of SIM_UNIT_COLUMNS) body.push('C.' + k + '[s] = 0;');
     for (const [k, , per] of SIM_MOVE_COLUMNS) body.push(per === 1 ? 'C.' + k + '[s] = 0;' : 'C.' + k + '.fill(0, s * ' + per + ', s * ' + per + ' + ' + per + ');');
+    // (A fresh slot's defaults: simSlotDefaults.)
+    const D = simSlotDefaults(), per = new Map(SIM_MOVE_COLUMNS.map(c => [c[0], c[2]]));
+    for (const k in D) body.push('C.' + k + '[s' + (per.get(k) > 1 ? ' * ' + per.get(k) : '') + '] = ' + (Number.isNaN(D[k]) ? 'NaN' : String(D[k])) + ';');
     return new Function('C', 's', body.join('\n'));
 }
 // References use pages only where values differ from their column default.
@@ -1324,6 +1363,8 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
         _simUnitColumnsHeld(S);
         for (const a of old) simHeapFree(a);
     } finally { if (typeof simParallelBindFlush === 'function') simParallelBindFlush(); }
+    // (Past the slots in use: fresh slots, simSlotDefaults.)
+    _simSlotFreshRange(S, used, cap);
     // (The worker records' pool with the first columns: record 0, the
     // defaults, read by every other unit.)
     if (!(_simWkPool(S).cap > 0)) _simWkGrow(S, 4096);
@@ -1332,49 +1373,35 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
 }
 // Slot s taken by unit u: its defaults, and u's accessors pointed at it.
 const _simSlotDesc = { value: null, writable: true };
+// (The slot is fresh: zero and simSlotDefaults' values, by k_slot_zero, a
+// growth or simUnitStateAllocate's zeroing. Only the unit's own values here.)
 function _simUnitSlotStart(S, s, u) {
     S.sepKey[s] = SIM_SEP_ABSENT;
-    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
-    S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1; S.columns.bsRow[s] = -1;
-    S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN;
-    // (The tick-start copy's, which its pass writes for every slot, the free ones too: as a fresh slot's.)
+    if (typeof u._lzp === 'number') S.columns.lzAcc[s] = u._lzp;
+    if (typeof u._lzb === 'number') S.columns.lzBeam[s] = u._lzb;
+    // (The tick-start copy, which its pass writes for every slot, the free ones too: as a fresh slot's.)
     S.columns.sepD0[s] = 0; S.columns.sepR0[s] = 0; S.columns.sepL0[s] = 0;
     // (No status record; one for its damage not reported yet, a restore's.)
     if (S.columns.stIx[s] > 0) _simStRelease(S, s);
     if (typeof u._dtp === 'number' && u._dtp !== 0) S.columns.stAc[_simStTake(S, s)] = u._dtp;
     // (A worker record for a worker, or a unit carrying a builder's watch.)
-    S.columns.wkIx[s] = 0;
     if (u.workerType || typeof u._bwx === 'number' || typeof u._bwy === 'number' || typeof u._bmt === 'number') {
         const w = _simWkTake(S, s);
         if (typeof u._bwx === 'number') S.columns.wkWx[w] = u._bwx;
         if (typeof u._bwy === 'number') S.columns.wkWy[w] = u._bwy;
         if (typeof u._bmt === 'number' && u._bmt === Math.floor(u._bmt)) S.columns.wkLmt[w] = u._bmt;
     }
-    for (const k of SIM_UNIT_LEVEL_COLUMNS) S.columns[k][s] = NaN;
-    for (const k in SIM_SPATIAL_DEFAULTS) S.columns[k][s] = SIM_SPATIAL_DEFAULTS[k];
     S.owners[s] = u;
-    S.columns.mvPath[s] = -1;
-    S.columns.wkS[s] = 0; S.columns.wkT[s] = 0; S.columns.wkR[s] = SIM_WK_UNDEF; S.columns.wkN[s] = SIM_WK_UNDEF;
-    for (const [, k, d] of SIM_UNIT_KCOL_FIELDS) S.columns[k][s] = d;
-    S.columns.ppDue[s] = -1;
-    S.columns.live[s] = 1; S.columns.maxE[s] = Number(u.maxEnergy); S.columns.spMvOwn[s] = 0; S.columns.mvBlk[s] = 0; S.columns.mvCD[s] = -1; S.columns.wsKind[s] = 0;
-    // (Tick-stamped answers of the slot's last unit are not this one's.)
-    S.columns.acqB[s] = 0; S.columns.cmMode[s] = 0; S.columns.cmT[s] = -1; S.columns.cmTId[s] = 0; S.columns.isWk[s] = u.workerType ? 1 : 0;
-    S.columns.rkF[s] = 0; S.columns.mvTgX[s] = NaN; S.columns.mvTgY[s] = NaN;
-    S.columns.tuS[s] = -1; S.columns.tuId[s] = 0; S.columns.fatF[s] = 0; S.columns.amGx[s] = -1; S.columns.amGy[s] = -1; S.columns.tbT[s] = -1;
-    S.columns.cbTick[s] = -1; S.columns.cwTick[s] = -1; S.columns.upT[s] = -1; S.columns.upB[s] = -1;
-    // (Its object fields unset: their digest that of none.)
+    S.columns.live[s] = 1; S.columns.tmOn[s] = 1;
+    S.columns.maxE[s] = Number(u.maxEnergy);
+    if (u.workerType) S.columns.isWk[s] = 1;
+    // (Its object fields unset: their digest that of none, simSlotDefaults' hObj.)
     _simUnitObjClear(S.columns, s);
-    S.columns.hObj[s] = _simHDigest0();
-    S.columns.rtEnd[s] = -1; S.columns.nvProf[s] = 0; S.columns.nvPK[s] = -1; S.columns.wkIdle[s] = 0; S.columns.wsFail[s] = 0;
-    S.columns.hAcc[s] = 0; S.columns.hTouch[s] = 0; S.columns.hSx[s] = 0;
-    S.columns.wTeam[s] = -1; S.columns.atkWatch[s] = 0;
     // (Its JavaScript fields at their defaults; the object holds only its
     // slot: its columns, slot, detached values and role memory.)
     _simJsDefaults(S.columns, s);
     // (One descriptor reused: five objects a unit were made for these four.)
     const d = _simSlotDesc; d.value = S.columns; Object.defineProperty(u, '_us', d); d.value = s; Object.defineProperty(u, '_si', d); d.value = null; Object.defineProperty(u, '_det', d); Object.defineProperty(u, '_rm', d); d.value = null;
-    S.columns.mvPF[s] = 0;
 }
 
 // A removed unit lets go of its slot at its removal's tick (main.js
@@ -1465,14 +1492,14 @@ function simUnitStateCompact(force = false) {
         const sl = S.sl;
         let same = sl.layout === 1 && sl.nfree < SIM_SLAB && S.owners.length - sl.nfree === live;
         if (!same && live === S.owners.length) { same = true; for (let i = 0; i < units.length && same; i++) same = units[i]._si === i; }
-        if (same) { S.unitsRef = units; if (sl.layout !== 1) _simSlabFromLive(S, live); return false; }
+        if (same) { S.unitsRef = _simUnitsEpoch(); if (sl.layout !== 1) _simSlabFromLive(S, live); return false; }
     }
     if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
     // (Less when the heap has no room for that: the live units' slots.)
     const least = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
     const cap = _simUnitCapThatFits(want, least);
-    const N = { cap, owners: [], sl: null, columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: units, held: null };
+    const N = { cap, owners: [], sl: null, columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: _simUnitsEpoch(), held: null };
     const C = N.columns;
     N.pathPool = S.pathPool; C.mvNodes = old.mvNodes;
     // (The worker records stay: wkIx is copied with the columns.)
@@ -1534,6 +1561,8 @@ function simUnitStateCompact(force = false) {
     _simUnitPrepFree(S);
     _simSlabFromLive(N, ns, true);
     _simUnitState = N;
+    // (Past the live units: fresh slots, simSlotDefaults.)
+    _simSlotFreshRange(N, ns, cap);
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, C[k]);
     for (const [k] of SIM_MOVE_COLUMNS) simParallelBind('unit.' + k, C[k]);
@@ -1559,6 +1588,8 @@ function _simCopyRuns(a, b, runs, per) {
 // path marks the unit dead, and each tick checks 1/SIM_UNIT_COLLECT_SLICES
 // of the slots (a dead unit keeps its values, detached, for any reference
 // still holding it).
+// (The units list replaced: the id table's epoch, main.js _uix.)
+function _simUnitsEpoch() { return typeof _uix !== 'undefined' ? _uix.epoch : 0; }
 const SIM_UNIT_COLLECT_SLICES = 64;
 const SIM_UNIT_COLLECT_BLOCK = 1024;
 function simUnitStateCollect(all = false) {
@@ -1567,8 +1598,8 @@ function simUnitStateCollect(all = false) {
     const owners = S.owners;
     // The units array was replaced (a new match, a restore): every slot whose
     // unit is not in it is released at once (they need not be dead).
-    if (S.unitsRef !== units) {
-        S.unitsRef = units;
+    if (S.unitsRef !== _simUnitsEpoch()) {
+        S.unitsRef = _simUnitsEpoch();
         if (++S.epoch === 0xffffffff) { S.stamp.fill(0); S.epoch = 1; }
         for (let i = 0; i < units.length; i++) {
             const u = units[i];

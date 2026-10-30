@@ -5888,6 +5888,8 @@ function _visCoverUnitsAlloc() {
 // structure table, its rows' watch and custom vision, the static stat tables.
 function _visCoverStructSeeds(A, np, stamp) {
     if (!_ST.code || typeof statTablesStatic !== 'function') return;
+    // (Tables made before the heap was up: a page whose worker failed.)
+    if (!simHeapHas(_ST.code)) structTablesRehome();
     const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), N = GRID_W * GRID_H, blocks = (N + 255) >> 8;
     _adjApplyClasses(_adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length));
     for (const k of ['code', 'own', 'uc', 'val', 'brain', 'stab', 'rrow']) simParallelBind('st.' + k, _ST[k]);

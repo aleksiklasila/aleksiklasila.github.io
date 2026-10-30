@@ -40,7 +40,15 @@ const ST_OWNER_NONE: i32 = 0x7ff9;
 /// Header: [0] walls, [1] adjacency flags set, [2] their digest's change,
 /// [3] the lowest set (or -1), [4] the work checksum's change, [5] trap marks
 /// now (-1: past the room, all), [6] journal end, [7] reservations listed,
-/// [8] tiles destroyed.
+/// [8] tiles destroyed, [9] rows retired.
+///
+/// Rows (the class tables', data_state.js _sTableOf): out [28] (class code
+/// (ctab), row) pairs and [29] the tiles destroyed, in the list's order; per
+/// class j < P[24] (ctab j + 1): [30 + 6j] ret, [31 + 6j] rt, [32 + 6j] rp,
+/// [33 + 6j] rn (the retire queue), [34 + 6j] its header (head, tail,
+/// length), [35 + 6j] the _stT column. A destroyed structure's row retires
+/// at tick P[22] (_sRowQueueInsert) and its _stT becomes -1. P[23] 1: only
+/// those out of energy (val <= 0).
 #[no_mangle]
 pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -66,6 +74,9 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
     let mut nd = k.i(17);
     let tdn = k.i(21);
     let (rpt, rroom) = (k.i(18).max(0), k.i(19).max(0));
+    let (rows, dtl) = (k.p::<i32>(28), k.p::<i32>(29));
+    let (tick, dead_only, ncls) = (k.i(22), k.i(23) != 0, k.i(24).max(0));
+    let mut nret = 0i32;
     let (mut nw, mut na, mut asum, mut amin, mut wsum, mut nr, mut nk) = (0usize, 0i32, 0i32, -1i32, 0i32, 0i32, 0i32);
     for o in 0..64 {
         s(ocnt, o, 0);
@@ -80,6 +91,44 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
         // (Mines are never destroyed here; an empty tile was destroyed already.)
         if g(ctab, tu) == 0 || c >= 0x66 {
             continue;
+        }
+        if dead_only && !(g(val, tu) <= 0.0) {
+            continue;
+        }
+        // Its row: retired (kept readable till its expiry), off its tile.
+        let (ct, row) = (g(ctab, tu) as i32, g(rrow, tu));
+        if !rows.is_null() {
+            s(rows, (nk * 2) as usize, ct);
+            s(rows, (nk * 2 + 1) as usize, row);
+        }
+        if !dtl.is_null() {
+            s(dtl, nk as usize, t);
+        }
+        let j = ct - 1;
+        if row >= 0 && j < ncls && k.raw(30 + 6 * j as usize) != 0 {
+            let b = 30 + 6 * j as usize;
+            let (ret, rtk, rp, rn, qh) = (k.p::<u8>(b), k.p::<i32>(b + 1), k.p::<i32>(b + 2), k.p::<i32>(b + 3), k.p::<i32>(b + 4));
+            let st = k.p::<i32>(b + 5);
+            let r = row as usize;
+            if g(ret, r) == 0 {
+                // (In tick order from the tail: _sRowQueueInsert.)
+                let mut p = g(qh, 1);
+                while p >= 0 && g(rtk, p as usize) > tick {
+                    p = g(rp, p as usize);
+                }
+                let nx = if p < 0 { g(qh, 0) } else { g(rn, p as usize) };
+                s(rp, r, p);
+                s(rn, r, nx);
+                if p < 0 { s(qh, 0, row); } else { s(rn, p as usize, row); }
+                if nx < 0 { s(qh, 1, row); } else { s(rp, nx as usize, row); }
+                s(ret, r, 1);
+                s(rtk, r, tick);
+                s(qh, 2, g(qh, 2) + 1);
+                nret += 1;
+            }
+            if !st.is_null() {
+                s(st, r, -1);
+            }
         }
         nk += 1;
         let (gx, gy) = (irem(t, w), idiv(t, w));
@@ -180,4 +229,5 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
     s(hdr, 6, tend as i32);
     s(hdr, 7, nr);
     s(hdr, 8, nk);
+    s(hdr, 9, nret);
 }

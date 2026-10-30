@@ -13,10 +13,16 @@ function world(w = 160, h = 100, code = source) {
     const c = vm.createContext({
         GRID_W: w, GRID_H: h, TYPE_WALL: 1, gameTime: 1, window: {}, performance,
         ASTAR_MAX_ITERS_LIMIT: 18000, _collectorCanWalk: () => false,
+        // (The heap helpers as plain memory: no wasm in this library check.)
+        simSharedArray: (T, n) => new T(n), simHeapHas: () => true, simHeapFree: () => {},
         _normalizeOwnerId: owner => owner == null ? -1 : owner,
         towers: [], grid: Array.from({ length: h }, () => Array.from({ length: w }, () => ({ type: 0 })))
     });
     vm.runInContext(read('src/utils/utils_common.js') + '\nlet pathfindBudget = 0;' + constants + '\n' + code, c);
+    // (Region labels without the kernels: one region of every open tile, so
+    // the search never takes the other-region shortcut here; pathfinding.js
+    // getPathRegions and its kernels: tests/path-regions-*.test.cjs.)
+    c.getPathRegions = () => { const L = new Int32Array(w * h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) L[y * w + x] = c.grid[y][x].type === 1 ? -1 : 0; return L; };
     c.nodes = 0;
     c._tryConsumeAstarNodeBudget = () => { c.nodes++; return true; };
     return c;

@@ -145,101 +145,126 @@ function _blockLocalShuffledOrder(sorted, seed, out = null) {
     return order;
 }
 
-function _buildDeterministicUnitUpdateOrderForTick() {
-    return _blockLocalShuffledOrder(units, ((gameTime + 1) * 1664525) + ((units.length + 1) * 1013904223));
-}
-
-// The same order as _buildDeterministicUnitUpdateOrderForTick, visited in
-// place (no per-tick array of every unit).
-// Slot of each unit in `units`, by index, kept in step where the array
-// changes (pushes, the dead-unit compaction) and rebuilt when it is not:
-// the update pass skips units the movement kernel already moved without
-// reading their objects. A stale entry only costs a read (Unit.update
-// checks its own slot too).
-// (ver: counts every change of the list it follows, for the prebuilt
-// unit index's check.)
-const _unitSlotMap = { ref: null, len: -1, slots: new Int32Array(0), ver: 0 };
-function _unitSlotMapEnsure() {
-    const M = _unitSlotMap, n = units.length;
-    if (M.ref === units && M.len === n) return M.slots;
-    // (Shared: the index kernels read it.)
-    // (In the wasm heap: Rust kernels read it.)
-    if (M.slots.length < n) { const old = M.slots; M.slots = simHeapArray(Int32Array, simReserveCap(n)); if (old.length) simHeapFree(old); }
-    for (let i = 0; i < n; i++) { const u = units[i]; M.slots[i] = u && u._us ? u._si : -1; }
-    M.ref = units; M.len = n; M.ver++;
-    return M.slots;
-}
-// After units.push(u).
-function unitSlotMapPushed(u) {
-    if (typeof unitByIdAdded === 'function') unitByIdAdded(u);
-    const M = _unitSlotMap;
-    if (M.ref !== units || M.len !== units.length - 1) return;
-    if (M.slots.length < units.length) { const a = simHeapArray(Int32Array, simReserveCap(units.length)); a.set(M.slots); if (M.slots.length) simHeapFree(M.slots); M.slots = a; }
-    M.slots[M.len++] = u && u._us ? u._si : -1;
-    M.ver++;
-}
-// The units by id, ascending, with their slots (wasm heap: the order kernels
-// join an order's sorted ids with it, ord.rs k_order_admit). Not the units
-// array's order: deaths swap-remove from that. A new unit is appended (ids
-// only rise); a removed one leaves a hole (slot -2), squeezed out once holes
-// are a quarter; slot -1: a unit outside the columns. Made again in full only
-// when the list is another (a restore) or ids came out of order; the slots
-// read again when they moved (unitSlotMapInvalidate: a compaction).
-const _uix = { for: null, ids: new Int32Array(0), slots: new Int32Array(0), n: 0, holes: 0, slotsOld: true };
+// The simulation's units (Stage E, step 3): the id table _uix, ids
+// ascending with their slots (wasm heap: the kernels walk it as ix.slots,
+// the order kernels join an order's sorted ids with it, ord.rs
+// k_order_admit), the order every peer has without any history. A new unit
+// is appended (ids only rise; one out of order is put in its place); a
+// removed one leaves a hole (slot -2), squeezed out before the next pass
+// reads the rows (unitRows); slot -1: a unit outside the columns (in loose).
+// `units` is its view (data_state.js: the objects by row, made when read;
+// its length the count, without making it). ver counts every change (the
+// prebuilt spatial index's check: _unitSlotMap is the table); epoch every
+// replacement (a reset, a restore).
+const _uix = { ids: new Int32Array(0), slots: new Int32Array(0), n: 0, holes: 0, ver: 0, epoch: 0, loose: new Map(), ref: null, view: [], viewVer: -1 };
+const _unitSlotMap = _uix;
 function _uixRoom(n) {
-    if (_uix.ids.length >= n) return;
+    const inHeap = typeof simHeapHas !== 'function' || simHeapHas(_uix.ids);
+    if (_uix.ids.length >= n && _uix.ids.length && inHeap) return;
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, cap = simReserveCap(Math.max(n, S ? S.cap : 0));
     const ids = simHeapArray(Int32Array, cap), slots = simHeapArray(Int32Array, cap);
     ids.set(_uix.ids.subarray(0, _uix.n)); slots.set(_uix.slots.subarray(0, _uix.n));
-    if (_uix.ids.length) { simHeapFree(_uix.ids); simHeapFree(_uix.slots); }
+    if (_uix.ids.length && inHeap) { simHeapFree(_uix.ids); simHeapFree(_uix.slots); }
     _uix.ids = ids; _uix.slots = slots;
 }
-const _uixSlotOf = u => u && u._us && u._si >= 0 ? u._si : -1;
-function _uixRebuild() {
-    const n = units.length, ord = new Int32Array(n);
-    _uixRoom(n);
-    for (let i = 0; i < n; i++) ord[i] = i;
-    let sorted = true;
-    for (let i = 1; i < n && sorted; i++) if (!(units[i].id > units[i - 1].id)) sorted = false;
-    if (!sorted) ord.sort((a, b) => units[a].id - units[b].id);
-    for (let k = 0; k < n; k++) { const u = units[ord[k]]; _uix.ids[k] = u.id; _uix.slots[k] = _uixSlotOf(u); }
-    _uix.n = n; _uix.holes = 0; _uix.for = units; _uix.slotsOld = false;
+const _uixSlotOf = u => u && typeof _simUnitState !== 'undefined' && _simUnitState && u._us === _simUnitState.columns && u._si >= 0 ? u._si : -1;
+// The table made from a list of units (a reset, a restore, tools): by id.
+function _uixFromList(list) {
+    const a = [];
+    for (let i = 0; i < list.length; i++) { const u = list[i]; if (u) a.push(u); }
+    a.sort((x, y) => x.id - y.id);
+    _uixRoom(a.length);
+    _uix.loose.clear();
+    for (let k = 0; k < a.length; k++) { const u = a[k], s = _uixSlotOf(u); _uix.ids[k] = u.id; _uix.slots[k] = s; if (s < 0) _uix.loose.set(u.id, u); }
+    _uix.n = a.length; _uix.holes = 0; _uix.ver++; _uix.epoch++;
+    _unitById.stale = true; _unitByIdFor = -1;
 }
-// (The index's position of an id, -1 none.)
+// (The table's row of an id, -1 none.)
 function _uixFind(id) {
     let lo = 0, hi = _uix.n;
     const A = _uix.ids;
     while (lo < hi) { const m = (lo + hi) >> 1; if (A[m] < id) lo = m + 1; else hi = m; }
     return lo < _uix.n && A[lo] === id ? lo : -1;
 }
-function _uixAdded(u) {
-    if (_uix.for !== units || !u) return;
-    if (_uix.n && !(u.id > _uix.ids[_uix.n - 1])) { _uix.for = null; return; }
+// A new unit (a birth, a split, a restored one).
+function unitAdded(u) {
+    if (!u) return;
+    const s = _uixSlotOf(u);
     _uixRoom(_uix.n + 1);
-    _uix.ids[_uix.n] = u.id; _uix.slots[_uix.n] = _uixSlotOf(u); _uix.n++;
-}
-function _uixRemoved(u) {
-    if (_uix.for !== units || !u) return;
-    const k = _uixFind(u.id);
-    if (k < 0 || _uix.slots[k] === -2) return;
-    _uix.slots[k] = -2;
-    if (++_uix.holes * 4 > _uix.n) {
-        let w = 0;
-        for (let r = 0; r < _uix.n; r++) if (_uix.slots[r] !== -2) { _uix.ids[w] = _uix.ids[r]; _uix.slots[w] = _uix.slots[r]; w++; }
-        _uix.n = w; _uix.holes = 0;
+    let r = _uix.n;
+    if (r && !(u.id > _uix.ids[r - 1])) {
+        // (Out of order: in its place.)
+        let lo = 0, hi = r;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (_uix.ids[m] < u.id) lo = m + 1; else hi = m; }
+        if (lo < r && _uix.ids[lo] === u.id) { if (_uix.slots[lo] === -2) _uix.holes--; _uix.slots[lo] = s; if (s < 0) _uix.loose.set(u.id, u); _uix.ver++; unitByIdAdded(u); return; }
+        _uix.ids.copyWithin(lo + 1, lo, r); _uix.slots.copyWithin(lo + 1, lo, r);
+        r = lo;
     }
+    _uix.ids[r] = u.id; _uix.slots[r] = s; _uix.n++; _uix.ver++;
+    if (s < 0) _uix.loose.set(u.id, u);
+    unitByIdAdded(u);
 }
-function unitIdIndex() {
-    // (A unit put into the list another way (tools, tests): made again, as _unitByIdMap.)
-    if (_uix.for !== units || _uix.n - _uix.holes !== units.length) _uixRebuild();
-    else if (_uix.slotsOld) {
-        const map = _unitByIdMap();
-        for (let k = 0; k < _uix.n; k++) if (_uix.slots[k] !== -2) { const u = map.get(_uix.ids[k]); _uix.slots[k] = u === undefined ? -2 : _uixSlotOf(u); }
-        _uix.slotsOld = false;
+// (Compatibility name of the births' call: they add through unitAdded.)
+function unitSlotMapPushed(u) { unitAdded(u); }
+// A unit removed outside the retire pass (a team's assets eliminated).
+function unitRemoved(u) {
+    if (!u) return;
+    const k = _uixFind(u.id);
+    if (k >= 0 && _uix.slots[k] !== -2) { _uix.slots[k] = -2; _uix.holes++; _uix.loose.delete(u.id); _uix.ver++; }
+    unitByIdRemoved(u);
+}
+// The rows without holes (ids ascending, slots): what the passes read.
+const _uixSqP = new Float64Array(2);
+function unitRows() {
+    _uixRoom(Math.max(1, _uix.n));
+    if (_uix.holes > 0) {
+        if (typeof _simWasmX !== 'undefined' && _simWasmX !== null && simHeapHas(_uix.ids) && simHeapHas(_uixHdrRoom())) {
+            _uixHdr[0] = _uix.n; _uixHdr[1] = _uix.holes; _uixSqP[0] = 0; _uixSqP[1] = 1;
+            simRustDirect('k_uix_remove', [_uix.ids, _uix.slots, _uixHdrRoom(), _uixHdr], _uixSqP);
+            _uix.n = _uixHdr[0]; _uix.holes = _uixHdr[1];
+        } else {
+            let w = 0;
+            for (let r = 0; r < _uix.n; r++) if (_uix.slots[r] !== -2) { _uix.ids[w] = _uix.ids[r]; _uix.slots[w] = _uix.slots[r]; w++; }
+            _uix.n = w; _uix.holes = 0;
+        }
+        _uix.ver++;
     }
     return _uix;
 }
-function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; _uix.slotsOld = true; _unitById.stale = true; }
+// The units' count (no view made).
+function unitCount() { return _uix.n - _uix.holes; }
+// The unit at row r of unitRows() (null: none).
+function unitAtRow(r) {
+    const s = _uix.slots[r];
+    if (s >= 0) return _simUnitState.owners[s];
+    return s === -1 ? _uix.loose.get(_uix.ids[r]) || null : null;
+}
+// `units` as an array: the objects by row, made again when the table changed.
+function unitsView() {
+    if (_uix.viewVer === _uix.ver) return _uix.view;
+    unitRows();
+    const n = _uix.n, v = _uix.view;
+    v.length = n;
+    let w = 0;
+    for (let r = 0; r < n; r++) { const u = unitAtRow(r); if (u) v[w++] = u; }
+    v.length = w;
+    _uix.viewVer = _uix.ver;
+    return v;
+}
+// The slot of each unit by row (the rows without holes): the kernels' ix.slots.
+function _unitSlotMapEnsure() { return unitRows().slots; }
+function unitIdIndex() { return unitRows(); }
+// Slots moved (a compaction made a new state): read again from the units,
+// as the view held them before.
+function unitSlotMapInvalidate() {
+    const v = _uix.viewVer === _uix.ver ? _uix.view : null;
+    if (v) { _uix.loose.clear(); for (let r = 0; r < v.length; r++) { const u = v[r], s = _uixSlotOf(u); _uix.ids[r] = u.id; _uix.slots[r] = s; if (s < 0) _uix.loose.set(u.id, u); } _uix.n = v.length; _uix.holes = 0; }
+    else _uixFromList(_uix.view);
+    _uix.ver++;
+    _unitById.stale = true;
+}
+_uix.ref = units;
+function _uixHdrRoom() { if (!_uixHdr || !simHeapHas(_uixHdr)) _uixHdr = simSharedArray(Int32Array, 2); return _uixHdr; }
 
 // Buildings: the same order scheme, seeded per building type.
 const _buildingOrderOut = new Map();
@@ -568,7 +593,7 @@ function unitRetirePrepare() {
     const blocks = Math.ceil(Math.max(n, ns) / UNIT_RETIRE_BLOCK);
     // (The tick's shared phase list: sim_unit_state.js simPhaseList.)
     _unitRetireList = typeof simPhaseList === 'function' ? simPhaseList(blocks * UNIT_RETIRE_BLOCK, 1024) : (_unitRetireList.length < blocks * UNIT_RETIRE_BLOCK ? new Int32Array(blocks * UNIT_RETIRE_BLOCK) : _unitRetireList);
-    if (_unitRetireCounts.length < blocks) { _unitRetireCounts = simSharedArray(Int32Array, Math.max(16, blocks * 2)); simParallelBind('retire.count', _unitRetireCounts); }
+    if (_unitRetireCounts.length < blocks || (typeof simHeapHas === 'function' && !simHeapHas(_unitRetireCounts))) { _unitRetireCounts = simSharedArray(Int32Array, Math.max(16, blocks * 2)); simParallelBind('retire.count', _unitRetireCounts); }
     if (S) {
         simParallelBind('ix.slots', _unitSlotMapEnsure());
         const P = _simParams;
@@ -662,6 +687,106 @@ function gameTick() {
 const THING_STATUS_GUARD_TICKS = 512;
 // (Projectiles: projectile.js projectilesAdvance, the pool's step.)
 
+// The retire pass (the tick's dead units out), its own function for the
+// phase timings; true when a king died.
+function _unitRetirePass(retireBlocks) {
+    // Dead units are processed in the same order as ever and removed in one
+    // pass afterwards. With the unit columns the decisions are a kernel's
+    // (wasm/src/nfs.rs k_retire_plan: the dead in the retire order, the gone
+    // list, the death sounds, a king's death), no unit object read; the
+    // units without a slot are the JavaScript's. No list moves: the units
+    // are the id table (its holes squeezed by unitRows).
+    const DS = _simUnitState;
+    let kingDied = false;
+    if (DS) {
+        const R = _retirePlan(retireBlocks, DS), H = R.hdr, ORD = R.ord, owners = DS.owners;
+        const G = _unitGoneRoom(Math.max(1, H[1]));
+        G.list.set(R.gone.subarray(0, H[1]));
+        let sounds = H[2];
+        for (let k = 0; k < sounds; k++) { const u = owners[R.snd[k]]; if (u) playSound('unit_death', u.x, u.y, u.unitType); }
+        kingDied = H[3] === 1;
+        // (The order, without the units without a slot that are not dead; those that are, as before.)
+        // (Their rows: holes in the id table, marked by row, no id search.)
+        const rmSl = R.sl, rmRow = R.idx, loose = R.loose;
+        let nr = 0, ns = 0;
+        loose.length = 0;
+        for (let k = 0, no = H[0]; k < no; k++) {
+            const i = ORD[2 * k], s = ORD[2 * k + 1];
+            if (s >= 0) { rmRow[nr++] = i; rmSl[ns++] = s; continue; }
+            const u = unitAtRow(i);
+            if (!u || !u.dead) continue;
+            rmRow[nr++] = i; loose.push(u);
+            if (u._removedNow) { upkeepUnitGone(u); continue; }
+            if (sounds < UNIT_DEATH_SOUNDS && !u.workerState && !u.isKing) { sounds++; playSound('unit_death', u.x, u.y, u.unitType); }
+            if (u.isKing) kingDied = true;
+            upkeepUnitGone(u);
+            _clearWorkerTarget(u);
+            removeUnitSpatial(u);
+            players[u.owner].popCount--;
+        }
+        if (H[1] > 0) _unitGoneRun(G, H[1], DS);
+        if (nr > 0) {
+            // (Only when the selection has something: a removed unit in it.)
+            if (selectedUnits.length) {
+                const sel = _selectionSet();
+                let gone = null;
+                for (let k = 0; k < ns; k++) { const u = owners[rmSl[k]]; if (u && sel.has(u)) (gone || (gone = new Set())).add(u); }
+                for (const u of loose) if (sel.has(u)) (gone || (gone = new Set())).add(u);
+                if (gone) selectedUnits = selectedUnits.filter(su => !gone.has(su));
+            }
+            // (By id: the table's entries, then the ids' index, by slot: uix.rs;
+            // no list to move, the units are the id table.)
+            _unitByIdRemovedRows(rmRow, nr, rmSl, ns, loose);
+            // (Detached now, at its removal's tick on every peer: no sweep later.)
+            for (let k = 0; k < ns; k++) { const s = rmSl[k]; if (owners[s]) simUnitStateDetachGone(DS, s); }
+        }
+    } else {
+        const removedUnits = [], selSet = selectedUnits.length ? _selectionSet() : null;
+        let removedSet = null, sounds = 0;
+        for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
+            const i = _unitRetireList[b * UNIT_RETIRE_BLOCK + j], u = units[i];
+            if (!u.dead) continue;
+            removedUnits.push(u); if (selSet !== null && selSet.has(u)) (removedSet || (removedSet = new Set())).add(u);
+            if (u._removedNow) { upkeepUnitGone(u); continue; }
+            if (sounds < UNIT_DEATH_SOUNDS && !u.workerState && !u.isKing) { sounds++; playSound('unit_death', u.x, u.y, u.unitType); }
+            if (u.isKing) kingDied = true;
+            upkeepUnitGone(u);
+            _clearWorkerTarget(u);
+            removeUnitSpatial(u);
+            players[u.owner].popCount--;
+        }
+        if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
+        for (const u of removedUnits) unitRemoved(u);
+    }
+    return kingDied;
+}
+// Units waiting for their way: those due this tick (see _gameTickBody).
+function pendingPathsTick() {
+    if (pendingPathWaiting() > 0) {
+        let waiting = takeDuePendingPathUnits(gameTime);
+        const pendingBuckets = _pendingPathBuckets;
+        for (let i = 0; i < waiting.length; i++) {
+            const u = waiting[i];
+            let src = u._pendingPathTarget && u._pendingPathTarget.src;
+            let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
+            pendingBuckets[srcTier].push(u);
+        }
+
+        for (let srcTier = 0; srcTier <= 4; srcTier++) {
+            const bucket = pendingBuckets[srcTier];
+            for (let i = 0; i < bucket.length; i++) {
+                const u = bucket[i];
+                if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
+            }
+            pendingBuckets[srcTier].length = 0;
+        }
+        for (let i = 0; i < waiting.length; i++) {
+            const u = waiting[i];
+            if (!u.dead && u._pendingPathTarget) schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
+        }
+        waiting.length = 0;
+    }
+}
 function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
     // next tick's action budget.)
@@ -670,6 +795,8 @@ function _gameTickBody() {
     gameTime += simDk;
     // (The wasm heap's clock: freed arrays are reused some ticks later.)
     if (typeof simHeapTick === 'function') simHeapTick();
+    // (The grid's cell columns in the heap: made before it was there, they move in now.)
+    if (typeof cellColumnsRehome === 'function') cellColumnsRehome();
     // (Destroyed structures' rows past their keep: back to the pool, see STRUCT_ROW_KEEP_TICKS.)
     if (typeof structRowsExpire === 'function') structRowsExpire();
     // (The unit columns' next size allocated ahead, a share a tick.)
@@ -723,30 +850,7 @@ function _gameTickBody() {
     // source priority: O(1) each (_tryUpgradeAstarFallbackPath). Only the
     // units due this tick are visited; those still waiting afterwards are
     // scheduled again.
-    if (pendingPathWaiting() > 0) {
-        let waiting = takeDuePendingPathUnits(gameTime);
-        const pendingBuckets = _pendingPathBuckets;
-        for (let i = 0; i < waiting.length; i++) {
-            const u = waiting[i];
-            let src = u._pendingPathTarget && u._pendingPathTarget.src;
-            let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
-            pendingBuckets[srcTier].push(u);
-        }
-
-        for (let srcTier = 0; srcTier <= 4; srcTier++) {
-            const bucket = pendingBuckets[srcTier];
-            for (let i = 0; i < bucket.length; i++) {
-                const u = bucket[i];
-                if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
-            }
-            pendingBuckets[srcTier].length = 0;
-        }
-        for (let i = 0; i < waiting.length; i++) {
-            const u = waiting[i];
-            if (!u.dead && u._pendingPathTarget) schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
-        }
-        waiting.length = 0;
-    }
+    pendingPathsTick();
 
     flushPendingMovementAstarSpend();
     resourceTick();
@@ -792,84 +896,7 @@ function _gameTickBody() {
     visCoverHoldEnd();
     const retireBlocks = unitRetirePrepare();
 
-    // Dead units are processed in the same order as ever and removed in one
-    // pass afterwards. With the unit columns the decisions are a kernel's
-    // (wasm/src/nfs.rs k_retire_plan: the dead in the retire order, the gone
-    // list, the death sounds, a king's death), no unit object read; the
-    // units without a slot are the JavaScript's. The compaction moves
-    // references (swap-remove, highest index first: the order recorded).
-    const DS = _simUnitState;
-    let kingDied = false;
-    if (DS) {
-        const R = _retirePlan(retireBlocks, DS), H = R.hdr, ORD = R.ord, owners = DS.owners;
-        const G = _unitGoneRoom(Math.max(1, H[1]));
-        G.list.set(R.gone.subarray(0, H[1]));
-        let sounds = H[2];
-        for (let k = 0; k < sounds; k++) { const u = owners[R.snd[k]]; if (u) playSound('unit_death', u.x, u.y, u.unitType); }
-        kingDied = H[3] === 1;
-        // (The order, without the units without a slot that are not dead; those that are, as before.)
-        const rmIdx = R.idx, rmSl = R.sl, loose = R.loose;
-        let nr = 0, ns = 0;
-        loose.length = 0;
-        for (let k = 0, no = H[0]; k < no; k++) {
-            const i = ORD[2 * k], s = ORD[2 * k + 1];
-            if (s >= 0) { rmIdx[nr++] = i; rmSl[ns++] = s; continue; }
-            const u = units[i];
-            if (!u || !u.dead) continue;
-            rmIdx[nr++] = i; loose.push(u);
-            if (u._removedNow) { upkeepUnitGone(u); continue; }
-            if (sounds < UNIT_DEATH_SOUNDS && !u.workerState && !u.isKing) { sounds++; playSound('unit_death', u.x, u.y, u.unitType); }
-            if (u.isKing) kingDied = true;
-            upkeepUnitGone(u);
-            _clearWorkerTarget(u);
-            removeUnitSpatial(u);
-            players[u.owner].popCount--;
-        }
-        if (H[1] > 0) _unitGoneRun(G, H[1], DS);
-        if (nr > 0) {
-            // (Only when the selection has something: a removed unit in it.)
-            if (selectedUnits.length) {
-                const sel = _selectionSet();
-                let gone = null;
-                for (let k = 0; k < ns; k++) { const u = owners[rmSl[k]]; if (u && sel.has(u)) (gone || (gone = new Set())).add(u); }
-                for (const u of loose) if (sel.has(u)) (gone || (gone = new Set())).add(u);
-                if (gone) selectedUnits = selectedUnits.filter(su => !gone.has(su));
-            }
-            const M = _unitSlotMap, keep = M.ref === units && M.len === units.length, ms = M.slots;
-            let n = units.length;
-            for (let k = 0; k < nr; k++) {
-                const i = rmIdx[k];
-                n--;
-                if (i !== n) { units[i] = units[n]; if (keep) ms[i] = ms[n]; }
-            }
-            units.length = n;
-            if (keep) { M.len = n; M.ver++; }
-            // (By id: the table's entries, then the ids' index, by slot: uix.rs.)
-            _unitByIdRemovedSlots(rmSl, ns, loose);
-            // (Detached now, at its removal's tick on every peer: no sweep later.)
-            for (let k = 0; k < ns; k++) { const s = rmSl[k]; if (owners[s]) simUnitStateDetachGone(DS, s); }
-        }
-    } else {
-        const removedIndices = [], removedUnits = [], selSet = selectedUnits.length ? _selectionSet() : null;
-        let removedSet = null, sounds = 0;
-        for (let b = retireBlocks - 1; b >= 0; b--) for (let j = _unitRetireCounts[b] - 1; j >= 0; j--) {
-            const i = _unitRetireList[b * UNIT_RETIRE_BLOCK + j], u = units[i];
-            if (!u.dead) continue;
-            removedIndices.push(i); removedUnits.push(u); if (selSet !== null && selSet.has(u)) (removedSet || (removedSet = new Set())).add(u);
-            if (u._removedNow) { upkeepUnitGone(u); continue; }
-            if (sounds < UNIT_DEATH_SOUNDS && !u.workerState && !u.isKing) { sounds++; playSound('unit_death', u.x, u.y, u.unitType); }
-            if (u.isKing) kingDied = true;
-            upkeepUnitGone(u);
-            _clearWorkerTarget(u);
-            removeUnitSpatial(u);
-            players[u.owner].popCount--;
-        }
-        let n = units.length;
-        for (let k = 0; k < removedIndices.length; k++) { const i = removedIndices[k]; n--; if (i !== n) units[i] = units[n]; }
-        units.length = n;
-        if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
-        _unitByIdRemovedMany(removedUnits);
-    }
+    const kingDied = _unitRetirePass(retireBlocks);
     if (kingDied) { checkWinCondition(); if (gameOver) return; }
     simUnitStateCollect();
     runUnitSeparationPass();
@@ -950,7 +977,7 @@ function _gameTickBody() {
     if (typeof spatialIndexPrebuild === 'function') spatialIndexPrebuild();
     // (The units by id, made after a match's first tick or a restore, not at
     // the first big order: a peer-local lookup, kept up to date from then.)
-    if (_unitByIdFor !== units) _unitByIdMap();
+    if (_unitByIdFor !== _uix.epoch) _unitByIdMap();
 }
 
 // ============================================================
@@ -3470,7 +3497,7 @@ class UnitIdIndex {
 }
 let _uidDel = null, _uidOut = null;
 const _uidP = new Float64Array(2);
-let _unitById = new UnitIdIndex(), _unitByIdFor = null;
+let _unitById = new UnitIdIndex(), _unitByIdFor = -1;
 function _unitByIdMap() {
     // (The page beside a simulation worker: its units are the frame's views,
     // kept by id as frames come. A map made here was made again after every
@@ -3478,17 +3505,17 @@ function _unitByIdMap() {
     if (typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis()) return _pageUnitsById;
     // (Kept as units are added and retired; a unit put into the list another
     // way (tools, tests) shows as a size that does not match: made again.)
-    if (_unitByIdFor !== units || _unitById.size !== units.length) {
+    if (_unitByIdFor !== _uix.epoch || _unitById.size !== unitCount()) {
         _unitById.dispose(); _unitById = new UnitIdIndex();
-        for (let i = 0; i < units.length; i++) { const u = units[i]; if (u) _unitById.set(u.id, u); }
-        _unitByIdFor = units;
+        const v = unitsView();
+        for (let i = 0; i < v.length; i++) { const u = v[i]; if (u) _unitById.set(u.id, u); }
+        _unitByIdFor = _uix.epoch;
     }
     return _unitById;
 }
-function unitByIdAdded(u) { if (_unitByIdFor === units && u) _unitById.set(u.id, u); _uixAdded(u); }
-// Many removed at once (the retire pass): the ids' index in one kernel call.
-const _uixRmP = new Float64Array(2);
-let _uixRm = null, _uixHdr = null;
+function unitByIdAdded(u) { if (_unitByIdFor === _uix.epoch && u) _unitById.set(u.id, u); }
+// (The id table's squeeze header: unitRows.)
+let _uixHdr = null;
 // The selection as a set, made again when the selection is another array or
 // its length changed (the retire pass asks whether a removed unit was in it).
 let _selSetOf = null, _selSetLen = -1, _selSetV = null;
@@ -3496,38 +3523,18 @@ function _selectionSet() {
     if (_selSetOf !== selectedUnits || _selSetLen !== selectedUnits.length) { _selSetV = new Set(selectedUnits); _selSetOf = selectedUnits; _selSetLen = selectedUnits.length; }
     return _selSetV;
 }
-function _unitByIdRemovedMany(list) {
-    const m = list.length;
-    if (_unitByIdFor === units) _unitById.deleteMany(list);
-    if (_uix.for !== units || !m) return;
-    if (typeof _simWasmX === 'undefined' || _simWasmX === null || !simHeapHas(_uix.ids)) { for (let k = 0; k < m; k++) _uixRemoved(list[k]); return; }
-    if (!_uixRm || _uixRm.length < m || !simHeapHas(_uixRm)) _uixRm = simSharedArray(Int32Array, Math.max(1024, m * 2));
-    if (!_uixHdr || !simHeapHas(_uixHdr)) _uixHdr = simSharedArray(Int32Array, 2);
-    let w = 0;
-    for (let k = 0; k < m; k++) if (list[k]) _uixRm[w++] = list[k].id;
-    _uixHdr[0] = _uix.n; _uixHdr[1] = _uix.holes; _uixRmP[0] = w;
-    simRustDirect('k_uix_remove', [_uix.ids, _uix.slots, _uixRm, _uixHdr], _uixRmP);
-    _uix.n = _uixHdr[0]; _uix.holes = _uixHdr[1];
+// The retire pass's removed units by their rows of the id table (as
+// unitRows gave them to the retire kernels) and slots: holes at the rows;
+// the ids' map by slot (uix.rs k_uid_delete).
+function _unitByIdRemovedRows(rows, nr, sl, m, loose) {
+    if (_unitByIdFor === _uix.epoch) _unitById.deleteSlots(sl, m, loose);
+    for (const u of loose) _uix.loose.delete(u.id);
+    const SL = _uix.slots;
+    let h = 0;
+    for (let k = 0; k < nr; k++) { const r = rows[k]; if (SL[r] !== -2) { SL[r] = -2; h++; } }
+    if (h) { _uix.holes += h; _uix.ver++; }
 }
-// The retire pass's removed units by slot (sl[0..m): their ids still in
-// the id column) and those without a slot (loose): the id table's entries
-// (uix.rs k_uid_delete) and the ids' index (k_uix_remove), no object read.
-function _unitByIdRemovedSlots(sl, m, loose) {
-    const S = _simUnitState, ids = S.columns.id;
-    if (_unitByIdFor === units) _unitById.deleteSlots(sl, m, loose);
-    if (_uix.for !== units || !(m + loose.length)) return;
-    const w0 = m + loose.length;
-    if (!_uixRm || _uixRm.length < w0 || !simHeapHas(_uixRm)) _uixRm = simSharedArray(Int32Array, Math.max(1024, w0 * 2));
-    if (!_uixHdr || !simHeapHas(_uixHdr)) _uixHdr = simSharedArray(Int32Array, 2);
-    let w = 0;
-    for (let k = 0; k < m; k++) _uixRm[w++] = ids[sl[k]];
-    for (const u of loose) _uixRm[w++] = u.id;
-    if (!simHeapHas(_uix.ids)) { for (let k = 0; k < w; k++) { const r = _uixFind(_uixRm[k]); if (r >= 0 && _uix.slots[r] !== -2) { _uix.slots[r] = -2; _uix.holes++; } } return; }
-    _uixHdr[0] = _uix.n; _uixHdr[1] = _uix.holes; _uixRmP[0] = w;
-    simRustDirect('k_uix_remove', [_uix.ids, _uix.slots, _uixRm, _uixHdr], _uixRmP);
-    _uix.n = _uixHdr[0]; _uix.holes = _uixHdr[1];
-}
-function unitByIdRemoved(u) { if (_unitByIdFor === units && u && _unitById.get(u.id) === u) _unitById.delete(u.id); _uixRemoved(u); }
+function unitByIdRemoved(u) { if (_unitByIdFor === _uix.epoch && u && _unitById.get(u.id) === u) _unitById.delete(u.id); }
 function getUnitById(id) {
     const u = _unitByIdMap().get(id);
     return u === undefined ? null : u;
@@ -5666,15 +5673,13 @@ function startGame() {
         let u = null, tries = rejected < Math.max(256, (starterUnitCountByTeam[pid] || 0) >> 6) ? 8 : 1;
         for (let k = 0; k < tries; k++) {
             let spawnTile = getNextStarterUnitSpawnTile(pid, origin, unitType);
-            u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy);
+            u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy, Math.max(1, clampThingLevel(level || 1)), applyWorkerDefaults);
             if (!u.dead) break;
             starterRejectedByTeam[pid] = ++rejected;
         }
         if (u.dead) return null;
-        applyWorkerDefaults(u);
-        applyUnitLevelScaling(u, Math.max(1, clampThingLevel(level || 1)));
         u.energy = u.preComputed.maxEnergy;
-        units.push(u); unitSlotMapPushed(u);
+        unitAdded(u);
         players[pid].popCount++;
         return u;
     };

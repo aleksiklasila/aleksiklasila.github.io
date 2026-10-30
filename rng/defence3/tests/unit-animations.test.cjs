@@ -57,7 +57,12 @@ for (const weaponCue of ['weapon_sword', 'weapon_axe', 'weapon_hammer', 'weapon_
 }
 // (The kernels' attacks sound where their hits are applied: unitHitsResolve.)
 assert.match(unit, /playSound\(sty >= 1 && sty <= 4 \|\| a\.attackStyle === 'laser' \? 'attack_cast' : 'attack_swing', ax, ay, a\.unitType\)/);
-assert.match(worker, /playSound\(u\.workerType === 'astar_collector' \? 'astar_work' : 'collector_work'/);
-assert.match(worker, /playSound\('salvager_work'/);
+// (Workers' sounds: the worker kernel's sound events, wasm/src/wai.rs
+// OUT_SOUND_UNIT, played by worker.js through WAI_UNIT_SOUNDS.)
+const wai = read('wasm/src/wai.rs');
+assert.match(worker, /const WAI_UNIT_SOUNDS = \[null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work'/);
+assert.match(worker, /playSound\(WAI_UNIT_SOUNDS\[/);
+assert.match(wai, /if rz == 1 \{ SND_ASTAR_WORK \} else \{ SND_COLLECTOR_WORK \}/);
+assert.match(wai, /OUT_SOUND_UNIT, q as i32, 0, SND_SALVAGER_WORK/);
 
 console.log('PASS: 3D profession/attack animations and their shared audio cues are wired.');

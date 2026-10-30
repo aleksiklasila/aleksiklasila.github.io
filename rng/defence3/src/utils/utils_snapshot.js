@@ -265,7 +265,7 @@ function _snapFloorItems() {
 
 function _snapListEntities(list) {
     switch (list) {
-        case 'u': return units;
+        case 'u': return _unitsPageView !== null ? _unitsPageView : unitsView();
         case 't': return towers;
         case 'b': return barracks;
         case 's': return collectorSpawners;
@@ -2337,10 +2337,9 @@ function snapDecodeState(S, options = null) {
         for (let list of SNAP_LISTS) if (list !== 'P') fill(list);
 
         // 3. Lists and globals.
-        units = finals.u;
-        towers = finals.t;
-        barracks = finals.b;
-        collectorSpawners = finals.s;
+        unitsReplaced(finals.u);
+        // (The structure lists are the table's views: the restored ones tabled.)
+        structListsReplaced();
         if (finals.g !== goldMines) { let a = finals.g.slice(); goldMines.length = 0; for (let m of a) goldMines.push(m); }
         if (finals.a !== astarMines) { let a = finals.a.slice(); astarMines.length = 0; for (let m of a) astarMines.push(m); }
         projSnapshotLoad(finals.p);

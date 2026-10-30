@@ -357,7 +357,7 @@ function applySoloScene(scene) {
         const u = new Unit(r[0],r[1],r[2]*TILE,r[3]*TILE);
         configureWorkerUnitFromType(u); u.baseLevel = r[5]; u.stackCount = r[6]; applyUnitLevelScaling(u,r[5]);
         u.energy = r[4]; u.holdPosition = !!r[8];
-        units.push(u); unitSlotMapPushed(u); players[u.owner].popCount++;
+        unitAdded(u); players[u.owner].popCount++;
         if (r[7] && !u.holdPosition) {
             const key = u.owner + ':' + r[7].join(':'), group = groups.get(key);
             if (group) group.unitIds.push(u.id);
