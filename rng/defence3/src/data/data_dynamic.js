@@ -3019,17 +3019,32 @@ function getPlayerResearchTask(playerId) {
     return ensurePlayerResearchQueueState(playerId).researchTask;
 }
 
+// Every player's working labs, counted in one pass and kept while nothing
+// they depend on can have changed: the same tick (game time), no structure
+// placed or removed (the tile entity version and epoch: restores bump them),
+// the worker buildings' list the same. (A lab's energy reaches 0 only by
+// damage, and one destroyed leaves its tile; a site starts at 1.) A pass over
+// every lab for every research order: ~29k labs, 540 ms over the 22 command
+// bursts of the chaos benchmark, ~25 ms a burst tick.
+const _researchLabCount = { tick: NaN, ver: -1, epoch: -1, sv: -1, counts: new Int32Array(16) };
 function getResearchQueueCapacityForPlayer(playerId) {
-    let labs = 0;
-    // (The labs alone, from the worker buildings' index by type: a pass over
-    // every worker building was ~0.4 ms with 4k of them, at every research
-    // order.)
-    const list = typeof _getWorkerSpawnersByType === 'function' ? _getWorkerSpawnersByType('research') : collectorSpawners;
-    for (let s of list) {
-        if (!s || s.type !== 'research' || s.owner !== playerId || s.energy <= 0) continue;
-        labs++;
+    const C = _researchLabCount, tick = typeof gameTime === 'number' ? gameTime : NaN;
+    const ver = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1, epoch = typeof _tileEntityEpoch === 'number' ? _tileEntityEpoch : -1;
+    const sv = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1;
+    if (!(C.tick === tick && C.ver === ver && C.epoch === epoch && C.sv === sv)) {
+        C.counts.fill(0);
+        // (The labs alone, from the worker buildings' index by type.)
+        const list = typeof _getWorkerSpawnersByType === 'function' ? _getWorkerSpawnersByType('research') : collectorSpawners;
+        for (let s of list) {
+            if (!s || s.type !== 'research' || s.energy <= 0) continue;
+            const o = s.owner;
+            if (o >= 0 && o < C.counts.length) C.counts[o]++;
+            else if (Number.isInteger(o) && o >= 0) { const g = new Int32Array(o + 16); g.set(C.counts); C.counts = g; C.counts[o]++; }
+        }
+        C.tick = tick; C.ver = ver; C.epoch = epoch; C.sv = sv;
     }
-    return Math.max(0, labs * 20);
+    const o = Number(playerId);
+    return Number.isInteger(o) && o >= 0 && o < C.counts.length ? C.counts[o] * 20 : 0;
 }
 
 function getPlayerResearchQueueTotalLength(playerId) {

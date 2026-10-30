@@ -570,7 +570,7 @@ function _simWkGrow(S, cap) {
     const W = _simWkPool(S), C = S.columns;
     // (A job in flight may read the old records: done first, as at a
     // compaction. Growth is rare: by half, and reserved at a start.)
-    if (W.cap > 0 && typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
+    if (W.cap > 0 && typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     try {
         for (const [k, Type] of SIM_UNIT_WK_SIDE) {
@@ -631,7 +631,7 @@ function simUnitStSettle() {
 }
 function _simStGrow(S, cap) {
     const T = _simStPool(S), C = S.columns;
-    if (T.cap > 0 && typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
+    if (T.cap > 0 && typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     try {
         if (!T.hdr) { T.hdr = simHeapArrayAuto(Int32Array, 8); T.hdr[1] = 1; simParallelBind('st.hdr', T.hdr); }
@@ -1494,7 +1494,7 @@ function simUnitStateCompact(force = false) {
         if (!same && live === S.owners.length) { same = true; for (let i = 0; i < units.length && same; i++) same = units[i]._si === i; }
         if (same) { S.unitsRef = _simUnitsEpoch(); if (sl.layout !== 1) _simSlabFromLive(S, live); return false; }
     }
-    if (typeof simParallelBackgroundWait === 'function' && typeof SIM_PAR_BG_LANES === 'number') for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) simParallelBackgroundWait(lane);
+    if (typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
     const old = S.columns, n0 = S.owners.length, map = new Int32Array(n0).fill(-1);
     // (Less when the heap has no room for that: the live units' slots.)
     const least = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);

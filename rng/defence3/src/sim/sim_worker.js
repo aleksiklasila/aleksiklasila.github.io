@@ -106,8 +106,11 @@ self.Event = self.Event || class { constructor(type) { this.type = type; } };
 self.Peer = class { constructor() { throw new Error('no network in the simulation worker'); } };
 
 function _simPost(msg, transfer) { self.postMessage(msg, transfer || []); }
-function _simError(where, err) {
-    _simPost({ type: 'error', where, message: String(err && err.message || err), stack: String(err && err.stack || '') });
+function _simError(where, err, tick) {
+    const m = { type: 'error', where, message: String(err && err.message || err), stack: String(err && err.stack || '') };
+    // (A tick's failure names its tick: the page's recovery, resyncNoteTickFailed.)
+    if (Number.isFinite(tick)) m.tick = tick;
+    _simPost(m);
 }
 
 // ---- side effects the page replays (sounds, flashes, alerts, particles, fx) ----
@@ -374,7 +377,7 @@ function _simAutoStep() {
             s++;
             const dk = Math.max(1, Math.min(SIM_DK_MAX, arm.dk | 0 || 1));
             const bundle = buildEmptyTickBundle(s, arm.participants, dk);
-            const msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: arm.d, pace: arm.pace, l: arm.peers, auto: 1 };
+            const msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: arm.d, pace: arm.pace, q: arm.q, l: arm.peers, auto: 1 };
             _simSealed.set(s, { actions: [], flush: false, dk });
             _simNetBroadcast(msg);
             A.sealed++;
@@ -660,10 +663,10 @@ function _simTick(msg) {
         let teamId = teams[(firstTeam + k) % teams.length];
         let acts = actions.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
-            try { processActions(acts, teamId); } catch (err) { _simError('actions', err); }
+            try { processActions(acts, teamId); } catch (err) { _simError('actions', err, msg.tick); }
         }
     }
-    try { gameTick(); } catch (err) { _simError('gameTick', err); }
+    try { gameTick(); } catch (err) { _simError('gameTick', err, msg.tick); }
     if (typeof simPresentTickEnd === 'function') simPresentTickEnd();
     let tick = currentTick;
     currentTick++;

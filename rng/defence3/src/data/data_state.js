@@ -1202,8 +1202,20 @@ const _sGoneSink = Object.create(null);
 // it as a target (sim_unit_state.js _simHEnc) the same as while it was
 // there; a row that expired read no tile, and the digest moved off its
 // fields. Read before the row is cleared.)
-function _sKeepTile(o, to = o) { const gx = o.gx, gy = o.gy; if (typeof gx === 'number') { Object.defineProperty(to, '_hgx', { value: gx, writable: true, configurable: true, enumerable: false }); Object.defineProperty(to, '_hgy', { value: gy, writable: true, configurable: true, enumerable: false }); } }
-function _sSetGone(o) { o._sr = -1; Object.defineProperty(o, '_sdet', { value: _S_GONE, writable: true, configurable: true, enumerable: false }); }
+// (Hidden properties a structure has from its construction, structTableInit:
+// set by plain writes then; defined (a shape change, ~3 us each) only on an
+// object made some other way.)
+const _sHas = Object.prototype.hasOwnProperty;
+function _sKeepTile(o, to = o) {
+    const gx = o.gx, gy = o.gy;
+    if (typeof gx !== 'number') return;
+    if (_sHas.call(to, '_hgx')) { to._hgx = gx; to._hgy = gy; return; }
+    Object.defineProperty(to, '_hgx', { value: gx, writable: true, configurable: true, enumerable: false }); Object.defineProperty(to, '_hgy', { value: gy, writable: true, configurable: true, enumerable: false });
+}
+function _sSetGone(o) { o._sr = -1; if (_sHas.call(o, '_sdet')) o._sdet = _S_GONE; else Object.defineProperty(o, '_sdet', { value: _S_GONE, writable: true, configurable: true, enumerable: false }); }
+// A structure's hidden properties, at its construction, in one go (one
+// shape for every structure of a class).
+const _S_HIDDEN = { _sr: { value: -1, writable: true, configurable: true }, _sdet: { value: undefined, writable: true, configurable: true }, _hgx: { value: undefined, writable: true, configurable: true }, _hgy: { value: undefined, writable: true, configurable: true } };
 let structRowStats = { retired: 0, expired: 0, grown: 0 };
 function _sRowQueueUnlink(T, r) {
     const p = T.rp[r], n = T.rn[r];
@@ -1253,9 +1265,82 @@ function _sRowFree(T, r) {
     T.rowObj[r] = null;
     T.freeRows[T.nfree++] = r;
 }
-// Once a tick: rows retired STRUCT_ROW_KEEP_TICKS ago expire.
+// Once a tick: rows retired STRUCT_ROW_KEEP_TICKS ago expire. A destroy wave
+// expires together 200 ticks later (22k rows in one tick of the chaos
+// benchmark: 328 ms at ~15 us a row, a field at a time per row with three
+// shape changes each): now each table's due rows are unlinked and marked
+// gone one by one, then cleared a column at a time (one column's loop over
+// the rows), the same values and free order as _sRowExpire.
+let _sExpireRows = new Int32Array(1024);
 function structRowsExpire() {
-    for (const T of _sTables.values()) while (T.qn > 0 && gameTime - T.rt[T.qh] >= STRUCT_ROW_KEEP_TICKS) _sRowExpire(T, T.qh);
+    for (const T of _sTables.values()) {
+        if (!(T.qn > 0) || gameTime - T.rt[T.qh] < STRUCT_ROW_KEEP_TICKS) continue;
+        let n = 0;
+        // (The tile from its columns, as the gx/gy accessors read them
+        // (-32768: unset); objects made by structTableInit have the hidden
+        // properties: plain writes. Others: _sKeepTile/_sSetGone.)
+        // (The queue's head popped with its arrays in locals: the table is
+        // a dictionary-mode object (a property per column), each of its
+        // property accesses a hash lookup: ~0.6 us a pop through
+        // _sRowQueueUnlink. Same links as it leaves.)
+        const GX = T.c_gx, GY = T.c_gy, rt = T.rt, rn = T.rn, rp = T.rp, ret = T.ret, obj = T.rowObj, t0 = gameTime;
+        let qh = T.qh, qn = T.qn, R = _sExpireRows;
+        while (qn > 0 && t0 - rt[qh] >= STRUCT_ROW_KEEP_TICKS) {
+            const r = qh, o = obj[r], nx = rn[r];
+            qh = nx; if (nx >= 0) rp[nx] = -1;
+            ret[r] = 0; qn--;
+            if (o) {
+                if (GX && _sHas.call(o, '_hgx')) {
+                    const gx = GX[r];
+                    if (gx !== -32768) { const gy = GY[r]; o._hgx = gx; o._hgy = gy === -32768 ? undefined : gy; }
+                    o._sr = -1; o._sdet = _S_GONE;
+                } else { _sKeepTile(o); _sSetGone(o); }
+            }
+            if (n === R.length) { const g = new Int32Array(n * 2); g.set(R); R = _sExpireRows = g; }
+            R[n++] = r;
+        }
+        T.qh = qh; T.qn = qn; if (qh < 0) T.qt = -1;
+        structRowStats.expired += n;
+        _sRowsFree(T, R, n);
+    }
+}
+// _sRowFree for rows R[0 .. n), a column at a time: the rows sorted (a
+// copy, LSD radix) into runs of consecutive rows, each column cleared run by
+// run with its native fill. (A store loop shared by every column type was
+// megamorphic, ~50 ns a store: 60 ms for 20k rows of ~57 fields.) The free
+// stack takes them in R's order, as _sRowFree one by one would.
+let _sRunA = new Int32Array(1024), _sRunB = new Int32Array(1024), _sRunS = new Int32Array(1024), _sRunE = new Int32Array(1024);
+const _sRunCnt = new Int32Array(256);
+function _sRowRuns(R, n) {
+    if (_sRunA.length < n) { const m = Math.max(n, _sRunA.length * 2); _sRunA = new Int32Array(m); _sRunB = new Int32Array(m); _sRunS = new Int32Array(m); _sRunE = new Int32Array(m); }
+    let a = _sRunA, b = _sRunB, max = 0;
+    for (let i = 0; i < n; i++) { const r = R[i]; a[i] = r; if (r > max) max = r; }
+    const C = _sRunCnt;
+    for (let sh = 0; sh < 32 && (max >>> sh) > 0; sh += 8) {
+        C.fill(0);
+        for (let i = 0; i < n; i++) C[(a[i] >>> sh) & 255]++;
+        for (let k = 0, t = 0; k < 256; k++) { const c = C[k]; C[k] = t; t += c; }
+        for (let i = 0; i < n; i++) { const v = a[i]; b[C[(v >>> sh) & 255]++] = v; }
+        const t = a; a = b; b = t;
+    }
+    let m = 0;
+    for (let i = 0; i < n;) { const s0 = a[i]; let e = s0 + 1; i++; while (i < n && a[i] <= e) { if (a[i] === e) e++; i++; } _sRunS[m] = s0; _sRunE[m] = e; m++; }
+    return m;
+}
+function _sRowsFree(T, R, n) {
+    if (!(n > 0)) return;
+    for (const name of T.derived) { const m = T.unique[name]; if (m.size) for (let i = 0; i < n; i++) m.delete(R[i]); }
+    const runs = _sRowRuns(R, n), RS = _sRunS, RE = _sRunE;
+    for (const f of T.fields) {
+        const a = T[f.col];
+        if (f.shared) { for (let i = 0; i < n; i++) a.set(R[i], undefined); continue; }
+        const nk = f.kind === 'r' ? null : _S_NUM_KINDS[f.kind], v = f.kind === 'r' ? undefined : nk ? nk[1] : 0;
+        for (let j = 0; j < runs; j++) a.fill(v, RS[j], RE[j]);
+    }
+    const tok = T.mTok, ent = T.mEnt, obj = T.rowObj;
+    for (let j = 0; j < runs; j++) { const s0 = RS[j], e = RE[j]; tok.fill(0, s0 * 3, e * 3); ent.fill(undefined, s0 * 3, e * 3); obj.fill(null, s0, e); }
+    const free = T.freeRows;
+    for (let i = 0; i < n; i++) free[T.nfree++] = R[i];
 }
 // A row for structure o (its class's table; none: its fields stay its own).
 function _sRowTake(o) {
@@ -1268,7 +1353,7 @@ function _sRowTake(o) {
     let r;
     if (T.nfree === 0 && T.n >= T.cap) { _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); structRowStats.grown++; }
     r = T.nfree > 0 ? T.freeRows[--T.nfree] : T.n++;
-    Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
+    if (_sHas.call(o, '_sr')) o._sr = r; else Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
     T.rowObj[r] = o;
     return true;
 }
@@ -1380,6 +1465,7 @@ function _sTableKeys(e) {
 // First thing in a structure's constructor (and a restore's shell): its
 // row, then its backing fields, in one order.
 function structTableInit(o) {
+    if (!_sHas.call(o, '_sr')) Object.defineProperties(o, _S_HIDDEN);
     _sRowTake(o);
     o._stT = -1;
     if (o._stMine) o._mv = 0;

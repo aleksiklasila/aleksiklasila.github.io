@@ -734,7 +734,10 @@ function _simClientOnMessage(msg) {
             // on the page.
             let err = new Error(msg.message);
             err.stack = msg.stack || err.stack;
-            if (msg.where === 'gameTick' || msg.where === 'actions') reportRuntimeError(msg.where === 'gameTick' ? 'tick' : 'actions', err);
+            if (msg.where === 'gameTick' || msg.where === 'actions') {
+                reportRuntimeError(msg.where === 'gameTick' ? 'tick' : 'actions', err);
+                if (Number.isFinite(msg.tick) && typeof resyncNoteTickFailed === 'function') resyncNoteTickFailed(msg.tick, msg.where);
+            }
             else console.error('[sim worker]', msg.where, msg.message, msg.stack);
             break;
         }

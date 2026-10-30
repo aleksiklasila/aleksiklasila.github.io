@@ -52,8 +52,21 @@ const SIM_PAR_BG_CAP = 113, SIM_PAR_BG_RUN = 114;
 // the helpers busy with the tiers before it.)
 const SIM_PAR_BG_FIRST = 128, SIM_PAR_BG_RUSH_AT = 5;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
-// forever): the simulation thread throws at its next wait.
+// forever): the simulation thread throws at its next wait. (Foreground jobs
+// only: background lanes have their own flags, SIM_PAR_BG_ERR.)
 const SIM_PAR_ERR = 112;
+// A background lane's chunk threw, on any thread (per lane, at
+// SIM_PAR_BG_ERR + lane): the chunk counts as done, the chain's remaining
+// chunks and stages are skipped (counted done, not run: no stage consumes a
+// failed one's output), and the simulation thread throws at the lane's wait,
+// once the lane is drained and closed (no reader outlives the job, and its
+// memory's retirement sees it finished). Before (audit 2026-10-30, B): a
+// failure on the simulation thread left its chunk uncounted and the stage's
+// other chunks running on helpers after the job was already unlisted; a
+// helper's failure shared the foreground flag, so a foreground job's check
+// could take it and the background wait then reported success.
+const SIM_PAR_BG_ERR = 129;
+const _simBgErrObj = new Array(SIM_PAR_BG_LANES).fill(null);
 function _simParCheckErr(ctl) {
     if (Atomics.load(ctl, SIM_PAR_ERR) !== 0) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw new Error('a simulation helper kernel failed (see the helper log)'); }
 }
@@ -1151,16 +1164,21 @@ function simParallelRun(kernel, total) {
     Atomics.store(ctl, SIM_PAR_NEXT, 0);
     Atomics.add(ctl, SIM_PAR_GEN, 1);
     Atomics.notify(ctl, SIM_PAR_GEN);
+    // (A chunk that throws here counts as done, as on a helper, and the
+    // error waits until every helper has left the job: thrown at once, the
+    // caller went on while helpers still wrote its outputs.)
+    let failed = null;
     _simParRunning++;
     try {
         for (;;) {
             let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
             if (c >= total) break;
-            fn(_simParReg, _simParams, c);
+            if (!failed) { try { fn(_simParReg, _simParams, c); } catch (err) { failed = err; } }
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
     for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
+    if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
 }
 
@@ -1266,10 +1284,18 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
         const v = Atomics.add(ctl, b + SIM_PAR_BG_NEXT, 1), c = v & 0xFFFFFF;
         if ((v >>> 24) !== id || c >= total) return 0;
         const kw = Atomics.load(ctl, b + SIM_PAR_BG_KERNEL);
-        _simParRunning++;
-        try { SIM_KERNELS[kw & 0xFFFF](_simParReg, paramsByStage[kw >>> 16], c); }
-        catch (err) { if (typeof _simPool !== 'undefined' && _simPool) throw err; _simHelperLogFail('background kernel ' + (kw & 0xFFFF) + ' (registry ' + registryVersion + ', required ' + Atomics.load(ctl, b + SIM_PAR_BG_REGVER) + ')', err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
-        finally { _simParRunning--; }
+        // (After a failure in this chain: skipped, counted done.)
+        if (Atomics.load(ctl, SIM_PAR_BG_ERR + lane) === 0) {
+            _simParRunning++;
+            try { SIM_KERNELS[kw & 0xFFFF](_simParReg, paramsByStage[kw >>> 16], c); }
+            catch (err) {
+                const onSim = typeof _simPool !== 'undefined' && !!_simPool;
+                if (onSim) { if (!_simBgErrObj[lane]) _simBgErrObj[lane] = err; }
+                else _simHelperLogFail('background kernel ' + (kw & 0xFFFF) + ' (registry ' + registryVersion + ', required ' + Atomics.load(ctl, b + SIM_PAR_BG_REGVER) + ')', err);
+                Atomics.store(ctl, SIM_PAR_BG_ERR + lane, 1);
+            }
+            finally { _simParRunning--; }
+        }
         out = 1;
         if (Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1) + 1 === total) {
             if (st + 1 < n) {
@@ -1311,7 +1337,24 @@ function simParallelBackgroundWait(lane = 1) {
     }
     // (Closed until the lane's next job: late claims leave at once.)
     _simBgClose(ctl, b, 0);
-    _simParCheckErr(ctl);
+    _simBgCheckErr(ctl, lane);
+}
+// The lane's chain failed somewhere: cleared (the next chain runs), thrown.
+function _simBgCheckErr(ctl, lane) {
+    if (Atomics.load(ctl, SIM_PAR_BG_ERR + lane) === 0) return;
+    const err = _simBgErrObj[lane];
+    _simBgErrObj[lane] = null;
+    Atomics.store(ctl, SIM_PAR_BG_ERR + lane, 0);
+    throw err || new Error('a simulation helper background kernel failed on lane ' + lane + ' (see the helper log)');
+}
+// Every lane waited for (all drained, none left running), whatever fails:
+// the first failure is thrown after the last lane. (A loop of single waits
+// stopped at a failing lane and left the later ones running while the caller
+// went on to move their memory.)
+function simParallelBackgroundWaitAll() {
+    let first = null;
+    for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) { try { simParallelBackgroundWait(lane); } catch (err) { if (!first) first = err; } }
+    if (first) throw first;
 }
 function simParallelBackgroundPending(lane = 1) { return !!_simBg[lane]; }
 // Rushes a bulk lane (lane), or none (-1): see SIM_PAR_BG_FIRST. Where chunks
@@ -1335,7 +1378,9 @@ function simParallelBackgroundWaitStage(lane, stage) {
     if (k < 0) return;
     const views = _simBgStageParams[lane];
     if (J.sync) {
-        for (let i = J.ran | 0; i <= k; i++) { const fn = SIM_KERNELS[J.stages[i][0]], P = views[J.slots[i]]; for (let c = 0; c < J.stages[i][1]; c++) fn(_simParReg, P, c); }
+        // (A failure ends the chain: its later stages never run, as with helpers.)
+        try { for (let i = J.ran | 0; i <= k; i++) { const fn = SIM_KERNELS[J.stages[i][0]], P = views[J.slots[i]]; for (let c = 0; c < J.stages[i][1]; c++) fn(_simParReg, P, c); } }
+        catch (err) { _simBg[lane] = null; throw err; }
         J.ran = Math.max(J.ran | 0, k + 1);
         return;
     }
@@ -1352,6 +1397,8 @@ function simParallelBackgroundWaitStage(lane, stage) {
         const d = Atomics.load(ctl, b + SIM_PAR_BG_DONE);
         Atomics.wait(ctl, b + SIM_PAR_BG_DONE, d, 1);
     }
+    // (A failed stage: the whole chain drained (the rest skipped) and thrown.)
+    if (Atomics.load(ctl, SIM_PAR_BG_ERR + lane) !== 0) simParallelBackgroundWait(lane);
 }
 // Whether the lane's job is complete (without waiting or taking chunks):
 // for jobs whose result may be collected early.

@@ -824,6 +824,10 @@ function _gameTickBody() {
     // (A step of several base ticks: their slices, the second's tick when
     // it is one of them.)
     let upKeepThisTick = simStepPhases(TICK_RATE).includes(0);
+    // (How many seconds' boundaries the step crossed: below 20 TPS a step of
+    // SIM_DK_MAX base ticks spans several seconds, and each owes its upkeep;
+    // once a step charged a fifth of it at 5 TPS: audit 2026-10-30, D.)
+    const upKeepSeconds = Math.floor(gameTime / TICK_RATE) - Math.floor((gameTime - simDk) / TICK_RATE);
     _upKeepAccum = null;
 
     let floorChanged = false;
@@ -952,7 +956,7 @@ function _gameTickBody() {
         for (let pid = 0; pid < upKeepBreakdown.length; pid++) {
             let totalPerSecond = Number(upKeepBreakdown[pid].total) || 0;
             if (!(totalPerSecond > 0)) continue;
-            addPlayerResource(pid, 'energy', -totalPerSecond);
+            addPlayerResource(pid, 'energy', -(upKeepSeconds > 1 ? totalPerSecond * upKeepSeconds : totalPerSecond));
         }
     }
     // The tick's damage into the shrines, and their drain (see shrineTick).
@@ -4680,6 +4684,11 @@ function _rallyKernel(tkz) {
     if (!ST || !ST.rtab) return;
     const n = _idsDecode(tkz, Q.ids.length, true, false);
     if (!n) return;
+    _rallyKernelRun(n);
+}
+// The kernel over the n tile keys in the order queue's ids (Q.ids).
+function _rallyKernelRun(n) {
+    const R = _rallyAt, Q = orderQueueReserve(), ST = _ST;
     // (A heap made since (a restarted worker's): the tables moved into it.)
     if (!simHeapHas(ST.rtab)) structTablesRehome();
     const arrays = [Q.ids, ST.rtab, ST.rrow, Q.keysOut, Q.cnt];
@@ -4700,7 +4709,17 @@ function _rallySetTiles(a, playerId) {
     if (typeof a.tkz === 'string') _rallyKernel(a.tkz);
     else {
         const c = a.action === 'setRally' ? [a.gx, a.gy] : (a.coords || []);
-        for (let k = 0; k + 1 < c.length; k += 2) if (c[k] >= 0 && c[k + 1] >= 0 && c[k] < GRID_W && c[k + 1] < GRID_H) _rallySetTile(c[k + 1] * GRID_W + c[k]);
+        // (Many coordinates: their tile keys through the kernel, as tkz's are.
+        // One building at a time through the table object's columns (a hash
+        // lookup each: the table is in dictionary mode) cost ~7 ms in the
+        // chaos benchmark's command bursts.)
+        const Q = c.length >= 64 && typeof _ST !== 'undefined' && _ST && _ST.rtab ? orderQueueReserve() : null;
+        if (Q && (c.length >> 1) <= Q.ids.length) {
+            const ids = Q.ids;
+            let n = 0;
+            for (let k = 0; k + 1 < c.length; k += 2) if (c[k] >= 0 && c[k + 1] >= 0 && c[k] < GRID_W && c[k + 1] < GRID_H) ids[n++] = c[k + 1] * GRID_W + c[k];
+            if (n) _rallyKernelRun(n);
+        } else for (let k = 0; k + 1 < c.length; k += 2) if (c[k] >= 0 && c[k + 1] >= 0 && c[k] < GRID_W && c[k + 1] < GRID_H) _rallySetTile(c[k + 1] * GRID_W + c[k]);
     }
     R.C = null; R.T = null;
     return R.n;
@@ -6669,7 +6688,7 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     // (The simulation worker holds it from now on, and sends it to the
     // guests' workers: its ticks run whatever the pages are doing.)
     if (typeof simClientNoteSealed === 'function') {
-        let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay, pace: netSimulationTickMs() };
+        let msg = netHostCtlStamp({ type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1 });
         if (missing) msg.l = missing;
         simClientNoteSealed(t, { msg });
     }
@@ -6719,7 +6738,7 @@ function lockstepAutoInfo() {
     if (!isHost) return { role: 'guest', tickMs, host: String(wsHostId || '') };
     let ids = getActiveMatchPeerIds(), setup = computeTeamSetupFromLobby();
     return {
-        role: 'host', tickMs, d: netMatchInputDelay, pace: tickMs, dk,
+        role: 'host', tickMs, d: netMatchInputDelay, pace: tickMs, q: netHostCtlVersion(netMatchInputDelay, tickMs), dk,
         participants: ids.map(pid => [pid, pid === myPeerId ? localPlayerId : Math.floor(Number(setup.teamByPeer[pid]) || 0)]),
         peers: connections.filter(c => c && c.peer).map(c => String(c.peer)).sort()
     };
@@ -6802,6 +6821,35 @@ function lockstepAdoptAutoTick(tick, dueAbs) {
     waitingForRemoteSince = 0;
 }
 
+// Host: the match's input delay and pace as its messages carry them, with
+// their version (q): one more each time either changes. Guests take them
+// from a message no older than the newest version seen (_guestCtlFresh):
+// the channel is unordered and resends, the bundles' copies and the
+// worker's own seals (its values as armed) come late, and applied as they
+// came an old one put back a stale delay or pace (audit 2026-10-30, E).
+const _netHostCtl = { d: NaN, pace: NaN, v: 0 };
+function netHostCtlVersion(d, pace) {
+    if (d !== _netHostCtl.d || pace !== _netHostCtl.pace) { _netHostCtl.d = d; _netHostCtl.pace = pace; _netHostCtl.v++; }
+    return _netHostCtl.v;
+}
+function netHostCtlStamp(msg) {
+    const d = netMatchInputDelay, pace = netSimulationTickMs();
+    msg.d = d; msg.pace = pace; msg.q = netHostCtlVersion(d, pace);
+    return msg;
+}
+// Guest: whether a host message's delay and pace are current (q no older
+// than the newest seen from this host in this match; a new host or match
+// counts anew; a message without q, from an older host, is taken).
+let _guestCtl = { host: '', match: '', q: 0 };
+function _guestCtlFresh(q) {
+    const host = String(wsHostId || ''), match = String(matchStartSessionId || '');
+    if (_guestCtl.host !== host || _guestCtl.match !== match) _guestCtl = { host, match, q: 0 };
+    if (!Number.isFinite(q)) return true;
+    if (q < _guestCtl.q) { netCounters.staleCtlDropped = (netCounters.staleCtlDropped | 0) + 1; return false; }
+    _guestCtl.q = q;
+    return true;
+}
+
 function sendHostBundle(tick, force = false) {
     if (!isHost) return;
     let t = Math.floor(Number(tick));
@@ -6809,7 +6857,7 @@ function sendHostBundle(tick, force = false) {
     if (!bundle) return;
     if (!force && lockstepLastBundleSentAtByTick[t]) return;
     lockstepLastBundleSentAtByTick[t] = performance.now();
-    let msg = { type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1, d: netMatchInputDelay, pace: netSimulationTickMs() };
+    let msg = netHostCtlStamp({ type: 'TICK_BUNDLE', w: packTickBundleForWire(bundle), c: 1 });
     // Whose packet this tick was sealed without (they lengthen their lead).
     let late = lockstepHostLateByTick[t];
     if (late && late.size > 0) msg.l = Array.from(late);
@@ -6904,8 +6952,10 @@ function handleIncomingTickBundle(conn, data) {
     // (Another match's: dropped, its hashes too.)
     if (!data || !netMatchTagOk(data.w ? data.w.m : data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
     if (data && data.h) resyncGuestReceiveHashes(data.h);
-    if (data && Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
-    if (data && Number.isFinite(data.pace) && data.pace >= TICK_MS) netMatchTickMs = data.pace;
+    if (_guestCtlFresh(Number(data.q))) {
+        if (Number.isFinite(data.d)) netMatchInputDelay = Math.max(0, Math.min(NET_MAX_INPUT_DELAY_TICKS, Math.floor(data.d)));
+        if (Number.isFinite(data.pace) && data.pace >= TICK_MS) netMatchTickMs = data.pace;
+    }
     if (data && Array.isArray(data.l) && myPeerId && data.l.includes(myPeerId) && !data.auto) netNoteOwnPacketLate();
     let bundle = data && data.bundle ? data.bundle : unpackTickBundleFromWire(data && data.w);
     if (!bundle || typeof bundle !== 'object') return;
@@ -7581,7 +7631,7 @@ function runOneTick() {
         let teamId = teams[(firstTeam + k) % teams.length];
         let acts = allActs.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
-            try { processActions(acts, teamId); } catch (err) { reportRuntimeError('actions', err); }
+            try { processActions(acts, teamId); } catch (err) { reportRuntimeError('actions', err); resyncNoteTickFailed(processedTick, 'actions'); }
         }
     }
 
@@ -7600,7 +7650,9 @@ function runOneTick() {
     // A bug in one tick must not stop the game (or, in multiplayer, everyone
     // waiting on this peer). The tick still completes: a deterministic error
     // happens identically on every peer, anything else shows up in the state
-    // hash and is repaired by a resync.
+    // hash and is repaired by a resync. A guest's failed tick (part of it ran)
+    // asks for a full repair at once (resyncNoteTickFailed), not only when a
+    // hash shows it.
     if (inWorker) {
         // The worker runs it; the page applies the result when it comes
         // (sim_client.js), including the per-tick page work below. (One the
@@ -7609,7 +7661,7 @@ function runOneTick() {
         else simClientRunTick(processedTick, allActs, teams, flushTick, stepDk);
     } else {
         simDk = stepDk;
-        try { gameTick(); } catch (err) { reportRuntimeError('tick', err); }
+        try { gameTick(); } catch (err) { reportRuntimeError('tick', err); resyncNoteTickFailed(processedTick, 'gameTick'); }
         netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
         if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick, stepDk);
 

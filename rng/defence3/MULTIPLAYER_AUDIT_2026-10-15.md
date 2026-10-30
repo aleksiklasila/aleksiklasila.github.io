@@ -13,7 +13,10 @@ teams and rematches under delayed messages), 2026-10-16; 40 found in a
 real-browser run (three Edge tabs). Findings 42-49 came from a sixth audit
 (fault injection in the harness: replayed and delayed messages, slow
 decodes, disconnects while loading, host loss after a false end; page and
-worker), 2026-10-17.
+worker), 2026-10-17. Findings 50-54 came from a seventh, read-only audit
+(deltatick and helper interactions, failure paths, pacing), 2026-10-30: each
+checked against the source here, reproduced by a new test that fails on the
+old code, and fixed.
 
 | # | Pri | Finding | Where | Status |
 |---|---|---|---|---|
@@ -66,6 +69,11 @@ worker), 2026-10-17.
 | 47 | P1 | A disconnect while loading leaves the match at tick 0 for good: two guests, one ready, the other disconnects; the host dropped it but never started the countdown, and its start timeout waited on, nobody left unready (worker case still stuck after 610 s). | `utils_networking.js` `_handleConnectionClosed`, `_armMatchStartReadyTimeout` | fixed |
 | 48 | P1 | A false local game over blocks recovery after host loss: migration took the guest's unconfirmed `gameOver` as final. A divergence giving a false victory, then the host lost: the guest stood at tick 6 after 90 s and 25 reconnect attempts; also when another guest became the host (page and worker). | `utils_host_migration.js` | fixed |
 | 49 | P3 | The harness's simulation worker had no event-target API: the newer UI scripts the worker loads with the game's (`hover_text.js`) threw at load, so worker-mode suites failed before testing anything (a real worker's scope has `addEventListener`). | `tests/net-harness.cjs` | fixed |
+| 50 | P1 | A step of more base ticks than the worker search cycle (simDk > 4) wrote the work site grid while the search posted last step still read it: the step's earlier base ticks ran `_wswStep` before the cycle's `_wsOrder` joined the search. Fast helpers read the old grid, slow ones or none (the search runs at the wait) the new one, so assignments could differ by helper timing. 144 grid writes during an in-flight search in 168 ticks of mixed step sizes. | `worker.js` `workerSearchTierStep` | fixed |
+| 51 | P1 | A failed background chunk left different states by thread: on the simulation thread it was rethrown uncounted (the stage's other chunks kept running on helpers after the job was unlisted, so heap retirement took its memory as free); on a helper it set the foreground error flag, which a foreground job in between took (the background wait then reported success); the next stage ran on the failed one's output. Foreground jobs likewise returned at the simulation thread's throw while helpers still wrote. Loops waiting every lane stopped at the first failing one. | `sim_parallel.js` `_simBgClaim`, `simParallelBackgroundWait(Stage)`, `simParallelRun`; `sim_unit_state.js` | fixed |
+| 52 | P2 | A tick that threw part way counted as healthy (page and worker): only a hash mismatch, if the half-run tick showed in one, led to a repair, and then a partial patch. | `sim_worker.js` `_simTick`, `main.js` runOneTick, `utils_resync.js` | fixed (guest); host: logged only |
+| 53 | P2 | Upkeep was deducted once a step: below 20 TPS a step of SIM_DK_MAX (20) base ticks spans several seconds (100 charged instead of 330 over 33 s at 5 TPS). Not a desync. Research drain and boost checks read accumulated state and lose nothing. | `main.js` gameTick upkeep | fixed |
+| 54 | P3 | Old host messages overwrote the guest's input delay and pace: `d` and `pace` were applied from every bundle as it came, before any freshness check; the channel is unordered, and resends, copies and the host worker's own seals (values as armed) come late. Lag or controller oscillation, no state divergence. | `main.js` `handleIncomingTickBundle`, `sim_worker.js` auto seals | fixed |
 
 ## Fixes
 
@@ -403,6 +411,60 @@ fields.
     the match ended).
 49. The harness's simulation worker scope has `addEventListener` /
     `removeEventListener` (idle), as a worker's global scope has.
+
+50. When a step covers more base ticks than the search cycle and a search
+    is in flight, it is joined before the step's first grid write
+    (`workerSearchTierStep`); results are still taken at the same base
+    ticks. The join was going to happen in the same call anyway (the
+    cycle's order), so no tick waits more than before. Test:
+    `tests/worker-search-deltatick.test.cjs` (step sizes 1-20, 1->20->1,
+    3->8->5, ...; every phase offset; `--helpers=N` for real helpers).
+51. Per-lane error flags (`SIM_PAR_BG_ERR` + lane). A failed chunk counts
+    as done on every thread; the chain's remaining chunks and stages are
+    skipped (counted, not run); the wait drains and closes the lane, then
+    throws (the simulation thread's own error object when it failed there).
+    A stage wait on a failed chain drains it and throws. Foreground: a chunk
+    failing on the simulation thread counts, and the error is thrown after
+    every helper left the job. `simParallelBackgroundWaitAll` drains every
+    lane before throwing the first error (the three memory-move paths in
+    `sim_unit_state.js`). Cost: one atomic load per background chunk. Test:
+    `tests/background-failure.test.cjs` (0, 1, 7 real helpers; failures on
+    the simulation thread, a helper, either; a foreground job between; stage
+    wait; foreground failure).
+52. `resyncNoteTickFailed` (page tick; worker tick through the error
+    message's tick): counted (`netCounters.tickFailures`). The host puts a
+    marker for each of its failed ticks in its hash stream (`-1 - tick`,
+    before that tick's sum; older guests skip negative ticks). A guest whose
+    tick failed where the host's did not asks for a full repair
+    (`forceFull`) once the host's sum for that tick or later has come; failed
+    on both alike (a deterministic bug, identical partial state:
+    `multiplayer-desync-recovery` part 12) nothing is repaired and the
+    hashes compare as ever. At most one such request a minute. A host has
+    nothing to repair from: logged once a minute. Test:
+    `tests/multiplayer-tick-failure.test.cjs` (one failed guest tick: full
+    repair, agreement after; ~60 failing ticks on both peers: no repair
+    loop, the match goes on, agreement after; page and worker). (A first
+    version repaired every guest failure, shared or not: part 12 of the
+    desync suite caught it.)
+53. Upkeep times the seconds' boundaries the step crossed (0 or 1 at 20 TPS
+    and above: unchanged there). Test: `tests/upkeep-deltatick.test.cjs`
+    (5, 10, 20, 60, 120 TPS, steps of 1-20).
+54. Host messages carry `q`, a version that moves only when the delay or
+    pace changes (`netHostCtlVersion`; the worker's arm carries it, so its
+    seals have the version of their values); a guest takes `d`/`pace` only
+    from a message no older than the newest version seen from that host in
+    that match (`_guestCtlFresh`; no version: an older host, taken). Dropped
+    ones: `netCounters.staleCtlDropped`. Test: `tests/stale-pacing.test.cjs`.
+
+Not done from the 2026-10-30 audit (its sections 3-6, beyond 50-54): a host
+whose own ticks fail has no healthy source to repair from (counted and
+logged: containment, not recovery). The wider recovery matrix (blocked
+worker, failed snapshot encodes, host migration with in-flight helper work
+and mixed-dk bundles, lifecycle cancellation, stale page/helper/WASM
+combinations) was not re-audited here. Diagnostics that convert input-delay
+steps with TICK_MS (they understate the delay at adaptive steps) are
+unchanged, display only. The multiplayer deltatick test's host step
+override still does not drive the adaptive controller.
 
 Validation in the audit's session: snapshot, rematch, cross-engine math and
 real shared-memory worker tests passed; the full worker recovery suite was

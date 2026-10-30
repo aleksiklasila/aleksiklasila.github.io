@@ -26,7 +26,7 @@ console.log('PASS: all seven helpers receive the complete initial registry befor
 const claimCtx=vm.createContext({console,SharedArrayBuffer,Atomics,self:{crossOriginIsolated:true}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/sim/sim_parallel.js'),'utf8'),claimCtx);
 const claim=vm.runInContext(`(() => {
-    const ctl=new Int32Array(new SharedArrayBuffer(128*4)), chain=new Int32Array(49), params=[new Float64Array(64)];
+    const ctl=new Int32Array(new SharedArrayBuffer(SIM_PAR_CTL_WORDS*4)), chain=new Int32Array(49), params=[new Float64Array(64)];
     const b=SIM_PAR_BG_BASE;
     chain[0]=1; ctl[b+SIM_PAR_BG_ID]=0; ctl[b+SIM_PAR_BG_TOTAL]=1; ctl[b+SIM_PAR_BG_REGVER]=5;
     let calls=0; SIM_KERNELS[0]=()=>{calls++;};

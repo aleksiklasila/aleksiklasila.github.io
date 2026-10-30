@@ -378,6 +378,14 @@ function workerSearchTierStep() {
     _wsStepTick = gameTime;
     // (Each base tick of the step in turn: one cycle's phases at most, the
     // sweep's parts of all of them.)
+    // A step of more base ticks than a cycle runs the grid's steps of its
+    // earlier base ticks before this cycle's order (the last search's join):
+    // the search posted last step still reads the grid then. It is finished
+    // first (its result is taken at the same base ticks as before), so it
+    // reads the grid as posted on every peer: with fast helpers it was done
+    // before these writes, with slow ones or none it read them (audit
+    // 2026-10-30, A). (This step's own order waited for it anyway.)
+    if (simDk > WS_TICKS && _wsPosted) simParallelBackgroundWait(WS_LANE);
     for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
         const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
         if (cycle && ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();

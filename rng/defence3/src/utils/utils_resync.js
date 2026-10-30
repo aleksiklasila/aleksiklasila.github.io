@@ -84,7 +84,12 @@ function resyncResetState() {
         joining: false, joinTick: -1, joinGen: 0, awaitingLive: false, liveFromTick: -1, heldActions: [], heldFinal: [], liveSentAt: 0,
         // (The newest repair id seen, and the host it came from: see
         // _resyncGuestFreshId.)
-        maxId: 0, idHost: ''
+        maxId: 0, idHost: '',
+        // (Ticks that threw here, and when the last one asked for a repair: resyncNoteTickFailed.)
+        tickFailures: 0, failRepairAt: -Infinity,
+        // (Its failed ticks waiting for the host's word on them; the host's
+        // failed ticks heard of; the newest host hash's tick.)
+        pendingFails: [], hostFails: [], hostHashTick: -1
     };
     snapResetHashHistory();
 }
@@ -101,6 +106,9 @@ function resyncNoteRestored(tick) {
     resyncGuest.patch = null;
     resyncGuest.waitSince = 0;
     resyncGuest.divergedAt = -1;
+    resyncGuest.pendingFails.length = 0;
+    resyncGuest.hostFails.length = 0;
+    resyncGuest.hostHashTick = -1;
     lockstepExpectedStateHashByTick = {};
     lockstepLocalStateHashByTick = {};
     snapResetHashHistory();
@@ -160,14 +168,20 @@ function resyncHostFlushHashes(now = performance.now()) {
 }
 
 // Guest: host sums arrived.
+// (An entry of a negative tick, -1 - t: the host's tick t failed; it comes
+// before t's own sum: resyncNoteTickFailed. Older guests skip it.)
 function resyncGuestReceiveHashes(h) {
     if (isHost || !Array.isArray(h)) return;
+    const g = resyncGuest;
     for (let i = 0; i + 1 < h.length; i += 2) {
         let t = Math.floor(Number(h[i]));
-        if (!Number.isFinite(t) || t < 0) continue;
+        if (!Number.isFinite(t)) continue;
+        if (t < 0) { g.hostFails.push(-1 - t); if (g.hostFails.length > 64) g.hostFails.shift(); continue; }
         lockstepExpectedStateHashByTick[t] = h[i + 1] >>> 0;
+        if (t > g.hostHashTick) g.hostHashTick = t;
         resyncGuestCompare(t);
     }
+    if (g.pendingFails.length) _resyncGuestSettleFails();
 }
 
 function resyncGuestCompare(t) {
@@ -231,6 +245,55 @@ function resyncGuestRequest(tick, now, from = tick) {
     try {
         hostConn.send({ type: 'RESYNC_REQUEST', tick, from, at: currentTick, rotation, full, id: g.requestId, m: matchStartSessionId || undefined });
     } catch { }
+}
+
+// A tick that threw part way (gameTick or its commands; page or worker): its
+// state may be half updated anywhere, also where hashes look late or never
+// (derived caches, tier lanes). The host tells its guests which of its own
+// ticks failed (a marker in its hash stream, before that tick's sum). A
+// guest whose tick failed where the host's did not asks for a full repair
+// (as after a mismatch) as soon as it knows: the host's sum for that tick or
+// a later one came without the marker. Failed on both alike (a deterministic
+// bug: identical partial state), there is nothing to repair from, and the
+// hashes still compare as ever. At most one such request a
+// RESYNC_GLOBAL_MIN_INTERVAL_MS. The host has no one to repair from:
+// counted and logged. (Before: a guest's failed tick counted as healthy and
+// only a hash mismatch, if any, led to a repair: audit 2026-10-30, C.)
+function resyncNoteTickFailed(tick, where) {
+    const t = Math.floor(Number(tick) || 0);
+    netCounters.tickFailures = (netCounters.tickFailures | 0) + 1;
+    netCounters.lastTickFailure = t;
+    if (!isMultiplayer || !gameStarted || gameOver) return;
+    const g = resyncGuest, now = performance.now();
+    g.tickFailures++;
+    if (isHost) {
+        _resyncHostHashQueue.push(-1 - t, 0);
+        if (now - g.failRepairAt >= RESYNC_GLOBAL_MIN_INTERVAL_MS) { g.failRepairAt = now; logLockstepWarning('A tick failed on the host (no repair source)', { tick, where, failures: g.tickFailures }); }
+        return;
+    }
+    if (g.pendingFails.length < 64) g.pendingFails.push(t);
+    _resyncGuestSettleFails(where);
+}
+// Guest: its failed ticks the host's word has come for (its sum for that
+// tick or later): failed there too, nothing to do; not, a full repair.
+function _resyncGuestSettleFails(where = '') {
+    const g = resyncGuest, P = g.pendingFails;
+    let own = -1;
+    for (let i = P.length - 1; i >= 0; i--) {
+        const t = P[i];
+        if (g.hostHashTick < t) continue;
+        P.splice(i, 1);
+        if (!g.hostFails.includes(t) && (own < 0 || t < own)) own = t;
+    }
+    if (own < 0) return;
+    const now = performance.now();
+    if (lockstepStrictDebugMode || g.joining || now - g.failRepairAt < RESYNC_GLOBAL_MIN_INTERVAL_MS) return;
+    g.failRepairAt = now;
+    logLockstepWarning('A tick failed here only; asking for a full repair', { tick: own, where, failures: g.tickFailures });
+    g.forceFull = true;
+    const t = Math.max(own, g.graceTick);
+    if (g.divergedAt < 0 || t < g.divergedAt) g.divergedAt = t;
+    resyncGuestMaybeRequest(now);
 }
 
 // A repair message's id is current: not older than one already seen from

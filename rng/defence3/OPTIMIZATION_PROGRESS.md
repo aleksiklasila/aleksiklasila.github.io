@@ -3632,3 +3632,77 @@ Probes: tests/_probe_cf.cjs (corruption fuzz with the host's differing
 regions per request and a region's per-tick hash inputs), tests/_probe_hm.cjs
 (host migration: every worker's columns, _ST / work site grid digests by
 tick), tests/_probe_rj.cjs (one instance: flush-only vs restored, alike).
+
+## 2026-10-30: multiplayer audit fixes, then chaos dk=1 spikes (structure expiry, command bursts)
+
+Multiplayer audit (findings 50-54 in MULTIPLAYER_AUDIT_2026-10-15.md, a test
+each that fails on the old code): work site grid writes during an in-flight
+worker search at simDk > 4 (worker.js), background/foreground job failures
+(per-lane error flags, drain before throw, dependent stages skipped:
+sim_parallel.js), failed ticks (a guest repairs when its tick failed and the
+host's did not: utils_resync.js resyncNoteTickFailed, host failure markers in
+the hash stream), upkeep per elapsed second below 20 TPS (main.js), stale
+input delay / pace from late host messages (version q). Regressions: 490/492
+both modes (the 2 fixed and re-run), then all 84 multiplayer runs.
+
+Benchmark (serial, nothing else running): `node --max-old-space-size=8192
+tests/chaos-spikes.bench.cjs --units=1000000 --structures=250000 --ticks=240
+--helpers=11 --dk=1 --kernels --system-metrics`. The population falls from
+958k to ~290k by step 50 (combat; 289k-435k over the steady window, same in
+every run below). Raw rows: tests/test-runs/chaos-spikes/audit-20261030-*.json.
+
+| run | steady mean | p95 | p99 | max | >1.5x median | burst mean | normal mean | processActions (bursts) |
+|---|---|---|---|---|---|---|---|---|
+| dk1, start of session (audit-20261030-dk1) | 185 | 271 | 335 | 565 | 20 | 281 | 175 | 94 |
+| dk1, after both fixes (audit-20261030-dk1-c) | 174 | 233 | 255 | 281 | 4 | 224 | 168 | 50 |
+| dk20, after both fixes (audit-20261030-dk20-c) | 364 | 444 | 508 | 536 | 1 | 450 | 354 | 96 |
+
+(ms per step; dk20 steps advance 20 base ticks, ~240k units.)
+
+1. Step 200 spike (565 ms, 328 ms of it structRowsExpire): the structures
+   destroyed in the opening battle keep their rows STRUCT_ROW_KEEP_TICKS (200)
+   ticks, then 22k rows expired in one tick at ~15 us each. data_state.js:
+   - The hidden properties (_sr, _sdet, _hgx, _hgy) are defined once at
+     construction (structTableInit, one defineProperties) and written plainly
+     at expiry: three shape changes a row before.
+   - A table's due rows are popped with its arrays in locals (the table object
+     is in dictionary mode, a property per column: ~0.6 us a pop through
+     _sRowQueueUnlink), then cleared a column at a time: the rows radix
+     sorted into runs, each column's runs by its native fill (one store loop
+     for every column type was megamorphic, ~50 ns a store). Free order kept.
+   - Isolated (scratch expire-bench, 20k farms/spawners/labs/barracks
+     destroyed at once, every cleared row checked): 11.9 -> 0.7 us a row
+     (0.9 shuffled), 250 ms -> 13 ms. Placement costs ~1.5 us more a
+     structure (the defineProperties moved there: 360 -> 390 ms for 20k).
+   - In the benchmark: step 200 565 -> 290 ms (profiled run), the expiry 328
+     -> 55 ms (2.5 us a row there: heavier tables than the bench's).
+2. Command bursts (every 10 steps, +100 ms; profiled, 22 bursts, ~92 ms of
+   processActions each; tool: a self-time-under-a-function pass over the
+   .cpuprofile):
+   - getResearchQueueCapacityForPlayer, 540 ms of the 2 s: every
+     queueResearch counted all ~29k labs. Now every player's count once,
+     kept while the tick, the tile entity version/epoch (restores bump them)
+     and the worker buildings' list are the same (data_dynamic.js).
+   - setRallyMany by coords (the chaos commands' form): one building at a
+     time through the table object's columns (_rallySetTile, ~7 ms a burst).
+     From 32 buildings the tile keys go through k_rally_tiles as tkz rallies
+     do (main.js _rallyKernelRun). As for tkz, buildings without a table row
+     are not written (none in normal play).
+   - processActions on bursts 94 -> 50 ms.
+   Tests: 28/28 rally / research / order / multiplayer-determinism runs, both
+   modes; 40/40 structure / snapshot runs after (1).
+
+### Remaining (2026-10-30)
+- Steady cost: simMoveRun ~78 ms a tick at ~290k units (kernel 8 ~34 ms, the
+  four kernel 89 stages ~38 ms), processGlobalSpawnerQueue ~19 ms (serial
+  JS, up to 66), unitEventsRun ~15 ms. Far from 50 ms a tick.
+- Command bursts still +56 ms: _actionCleanIds and _actionRecordArrival
+  (a hash lookup per unit id, ~15 ms a burst) and processAction's own work;
+  candidates for a kernel (ids -> slots, stamp dedupe).
+- Structure expiry 55 ms for a 22k wave in the real tick (2.5 us a row):
+  the per-object writes and derived maps on full tables.
+- destroyBuilding ~10 us a structure (20k: ~210 ms) and placement ~20 us:
+  a destroy wave inside a tick pays it.
+- The structure tables grew 11 times in this fixture (structRowStats.grown):
+  against the static memory budget rule.
+- dk20 steps: 364 ms mean, processActions 96 ms on bursts.
