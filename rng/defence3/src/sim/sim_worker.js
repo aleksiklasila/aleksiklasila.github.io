@@ -609,7 +609,7 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
     // (The worker search tier's parts.)
-    '_wsPost', '_wsOrder', '_wsCommit', '_wsTakeSome', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent'];
+    '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
 function _simTraceInstall() {
     for (const name of SIM_TRACE_FNS) {

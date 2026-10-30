@@ -3176,3 +3176,193 @@ drain), then deaths, statuses, hits, the worker brain.
   JavaScript on the order ticks 30-34: 12.8 -> 1.3 ms. Session total (prof30
   -> prof35): steady mean 196 -> 138 ms, p95 259 -> 168, max 307 -> 175.
   Inventory of what is left: MAIN_THREAD_SERIAL_PLAN.md, "Serial JS left".
+- Stage D (the worker state machine as a kernel) started (2026-10-30; plan
+  MAIN_THREAD_SERIAL_PLAN.md "Stage D"). Measured first (worker-sm-20261030/
+  ev1.json, --event-metrics): ~112 worker events a tick, none held by
+  WORKER_EVENTS_PER_TICK, 3.9 ms of JavaScript a tick under _unitWorkerEvent.
+  D1 (worker state as columns): the workers' role memory (spawners, pins,
+  mines, queue commits, last work sites, trip costs, recheck ticks: ~45
+  fields, objects by reference) and carryingValue are worker-record columns
+  now (sim_unit_state.js SIM_WK_MEM: targets as wkT's tile * 8 + kind, types
+  shared, a column's first name its snapshot key; unit.js accessors by the
+  old names; the collector memory object is a view of them). carryingValue
+  left the object digest: the hash kernel takes it from the record (k.rs
+  k_snap_units term 36). The order kernel clears a worker's task memory
+  itself (ord.rs wm_clear); the pending role-memory clear (rmClr,
+  _unitRmApply) is gone.
+  D2/D3 started: wasm/src/wai.rs k_worker_ai, one serial pass over the
+  tick's worker events after the others (unit.js unitEventsRun lists them;
+  floor items first, as before), in their order: the event glue
+  (_unitWorkerEvent: AI, command sync, way end, a second look when the way
+  just ended, arming: flow arm on the atlas, work and idle parks with the
+  idle search's version and backoff), reservations with their region counts
+  and sums and the work grid's marks, work versions and their checksum, the
+  idle search schedule (shouldRunWorkerIdleRetarget, _workerWorkHash), the
+  search tier's registration (wsRegister + _wsWait), payments appended to the
+  resource batch's heap rows, the energy log as per-tick sums. Out events
+  (worker.js waiOutEvents, in order): sounds, the research queue's advance,
+  arming off the atlas or with its own stats, and the events of types not
+  converted yet (their JavaScript, unchanged). Stats from the effective rows
+  (eff.hot words 11-15: builder / healer / researcher dps, gather a trip,
+  transfer cooldown ticks); per owner and level tables for the research
+  building's efficiency and dps and the workers' search ranges (worker.js
+  _waiTables, by the stat tables' version). _idleFailUntil is a worker
+  record column now (wmFailU). The transfer cooldown is a Uint16 timer with
+  tmOn (as its setter).
+  Researchers converted (their JavaScript gone: updateWorkerAI's branch,
+  _researcherDeposit). Rule change: a research building with no active task
+  starts the queue's next one at once for the pass (its words), the queue's
+  own advance (tryAdvancePlayerResearchTask) after the pass. The benches
+  count research deposits from the kernel (_wai.researchDeposits).
+  Tests: worker-walk, builder-research-resume, research-queue (multiplayer,
+  fuzz seeds in sync), research-rebase-partial, building-research-keys,
+  work-snapshot, multiplayer-snapshot, solo-snapshot, worker-brain-spawners,
+  worker-completion-publication, worker-created-start, chaos-scenario-
+  determinism (0 and 3 helpers) pass.
+  Salvagers converted (updateWorkerAI's branch gone): marked and owned
+  (their reservation's holder alive by the id table), the refund (price by
+  stationary type, stacks from the class tables, the salvager's level), the
+  destroy as an out event (destroyBuilding after the pass), the trip back to
+  the worker brain's nearest yard of the tick (a stale answer: none), the
+  payment and log. Per profile walls (builders and salvagers walk their
+  owner's class walls) and atlas bits for every profile; class columns by
+  table (wai.ctab, WAI_CTAB_COLS). Tests: worker-walk, worker-brain-spawners,
+  work-snapshot, multiplayer-scenarios, multiplayer-ran-once, research-queue
+  pass.
+  Collectors (energy and A*), healers and builders converted too: every
+  worker type's branch of updateWorkerAI is gone; it keeps only MANUAL_MOVE
+  (declined events: manual moves, pending ways, shooters). Collectors: pins,
+  gather (farm multiplier tables per owner / resource / level; mine takes as
+  out events: the value, an emptied mine to ground), returns to the
+  preferred or nearest dropoff (the worker brain, now run for any number of
+  events), deposits on the batch rows (A* log as an out event). Healers:
+  queue commits and pins, queue payment in the class columns (production and
+  ready order as an out event), unit heals by the id table (energy and maxE
+  columns, positions x0/y0 in the pass), trips to healer spawners. Builders:
+  the watchdog and recheck, sites / upgrades / stacking / repairs from the
+  class columns and the static stat tables (as k_wsw_set), candidates'
+  starts and completions as out events (things_utils.js's completions),
+  BUILDING_IN_PLACE's trickle, gold trips. Worker memory columns for all
+  types; workers without a shared stat row get their own stat words before
+  the pass (_waiOwnStats: a joining peer's restored units have none, which
+  diverged multiplayer-snapshot). The unit id table is made when missing.
+  simRustDirect now copies P's whole length into the argument block's 512
+  doubles (was the first 64: params past them were dropped silently, which
+  broke the collectors' and builders' params twice); a P longer than the
+  block throws. waiStepUnit(u): one worker's event through the kernel
+  (tests). worker-walk's mine cluster uses GoldMine / AstarMine (plain
+  objects are not in the structure tables).
+  Measured (prof36, 1M/250k, profiled, steps 38-59): the pass 0.3 ms
+  JavaScript + 1.2 ms wasm a tick; declined events' JavaScript 0.2 ms; out
+  events 4.8 ms (mostly construction completions: the builders now finish
+  ~1,300 sites in 22 ticks where HEAD's ~21; healers paid ~950 spawns where
+  HEAD's ~28: HEAD's workers sat parked mid-task in this scene, e.g. 8k
+  salvagers MOVING_TO without a way). Steady mean 132 ms, p95 202 (prof35
+  138 / 168), not comparable as gameplay: the scene's work changed a lot.
+  Open: research deposits 0 in that window (HEAD 10-36): check researchers
+  at scale; collector-farms (vm test of the deleted JavaScript) to rewrite
+  as a match test. Tests: worker-walk, worker-approach-occupancy (now through
+  waiStepUnit), builder-research-resume, worker-fallback-upgrade,
+  worker-completion-publication, worker-created-start, worker-brain-spawners,
+  research-queue, research-rebase-partial, building-research-keys,
+  multiplayer-snapshot, multiplayer-scenarios, multiplayer-ran-once,
+  multiplayer-worker-lost, work-snapshot, solo-snapshot, area-worker-search,
+  order-worker-budget, chaos-scenario-determinism (0 / 3 helpers) pass.
+# Memory investigation (2026-10-30)
+
+Continued the failed 1M mixed-worker run. Raw measurements and the modified
+files' pre-change copies are in `tests/test-runs/memory-20261030/`.
+
+Found and fixed:
+
+- `simUnitPopulationSlots` had effectively replaced its 512 MiB speculative
+  column budget with almost the entire 4 GiB match budget. Slot-sized scratch
+  then multiplied the unused reservation. Restore the 512 MiB limit;
+  `simUnitStateReserve` still allocates all required starting/restore slots.
+- Every combat unit's constructor assigned `_idleFailUntil = 0`, allocating
+  a full worker record because its new column default was NaN. Make zero the
+  implicit and initialized default of that timer. Nonzero and explicitly
+  undefined values still round-trip. Combat units no longer take worker rows.
+- `navAtlasHeader` validated addresses after storing them in signed Int32
+  words. Valid addresses above 2 GiB looked negative, disabling atlases and
+  allocating large destination-field fallback pools. Validate the original
+  heap addresses, then encode the ABI words. Invalid/outside-heap arrays are
+  still rejected. All five in-use profiles retain their atlases in the
+  million-unit run; destination-field storage stays at 11.625 MiB.
+- Portal-signature invalidation discarded both per-owner path-region arrays
+  rather than using the existing rebuild-in-place path. Allocation attribution
+  showed 181.5 MiB there by step 239, although only two owners needed buffers.
+  Mark entries dirty and reuse their labels/parents. Random portal/wall edits
+  still produce the reference connectivity partitions.
+- Cap percentage-based speculative WASM growth/headroom at 64 MiB. Explicit
+  expected allocations and twice the recent largest allocation can still
+  request more. The helper-growth regression retains zero main-thread grows.
+
+Added `--memory-stats` to the chaos benchmark, worker record counts to
+`simMemoryStats`, and RSS/external/ArrayBuffer metrics to `--system-metrics`.
+These distinguish WASM capacity, live allocator bytes, and whole-process RSS.
+
+Serial mixed-chaos measurements (1,000,004 starting units, 250,000 structures,
+1000x1000, 11 helpers, dk=1, rally mix, mass order at step 30):
+
+| Run | Completed ticks | Peak live WASM MiB | WASM capacity MiB | Final live MiB |
+| --- | ---: | ---: | ---: | ---: |
+| `baseline.json.jsonl` (allocation attribution) | 14, then helper failure | 3724 | 4096 | 3091 |
+| `reduced.json` (reservation, worker records, atlas fix) | 240 | 2006 | 2560 | 1964 |
+| `final.json` (also portal buffer reuse) | 240 | 1896 | 2349 | 1855 |
+| `bounded-growth.json` (all changes) | 240 | 1896 | 2018 | 1855 |
+
+The final implementation cuts peak live allocation by 49.1% and WASM
+capacity by 50.7%, completing a longer run without the baseline's exhaustion.
+Near one million survivors (step 2: 959,181 units) it holds 1,809 MiB live in
+a 1,954 MiB heap. This is **not** a 1 GiB total-process result: RSS is 2,554
+MiB then and peaks at 2,888 MiB, including the harness, JS objects, helper
+threads and other buffers. The mixed fixture is also not a sustained-million
+population test: steady measured population is 241,720–435,245; steady births
+10,112, deaths 205,490. Whole-run work: 10,468 births (10,396 army), 145
+research deposits, 6,968 energy and 6,147 A* deposits, 4,174 construction
+completions, 23,135 structures destroyed. Work/population match before and
+after the portal/headroom changes exactly.
+
+Final steady wall p95/p99/max: 195.2 / 237.3 / 473.7 ms; 0 ticks over 500 ms,
+8 over 1.5x median. Before the headroom cap: 202.6 / 254.7 / 431.0 ms, also
+0 over 500 ms. These single runs do not establish a TPS improvement.
+The worst final tick is step 200: previous / slow / next / nearby normal
+wall times 107.9 / 473.7 / 125.3 / 112.7 ms (steps 199/200/201/203, all
+without player bursts). `structRowsExpire` expands from 0.012 to 339.9 ms;
+movement stays 66.1 / 64.3 ms. GC overlap is 8.1 ms on the slow tick.
+This is phase attribution only, not a new CPU-profile investigation; the
+structure-expiry hitch remains outside this memory change's scope.
+
+Remaining costs: 1,204,224 reserved unit slots, 475 schema bytes/slot;
+unit-bound arrays including side records total 614.8 MiB. Navigation bindings
+144.1 MiB, acquisition 110.9, adjacency 70.0, movement scratch 64.3, lasers
+49.9, stationary reach 44.2 MiB. These are binding groups, not an exhaustive
+allocation inventory (some memory is unbound or in JS). Further reductions
+toward 1 GiB require smaller unit/scratch representations and less retained
+JS state, beyond correcting the allocation mistakes above.
+
+Secondary combat fixture (`combat-million.json`): 1,000,000 starting units,
+31,251 towers, 1000x1000, 11 helpers, dk=1, 20 warmup + 60 measured ticks.
+Setup is 844 MiB live / 998 MiB capacity; gameplay reaches 1,514 MiB live /
+1,638 MiB capacity. Final RSS 1,988 MiB, JS heap 422 MiB. Actual measured
+population 746,674–964,852 (final 746,674), no worker economy; occupancy audit
+passes with zero position mismatches. p95/p99/max tick time 144.1 / 200.4 /
+200.4 ms, no measured ticks over 500 ms. Raw rows retained. The older
+checkerboard fixture's empty starters failed startup with unbound stationary
+tables; it now explicitly starts one king and house per team, as its existing
+comment intended, and only invokes `updateStats` on entities implementing it.
+This is a secondary measurement, not a historical checkerboard timing A/B.
+
+Reproduce the final mixed run:
+
+```powershell
+node --max-old-space-size=8192 tests/chaos-spikes.bench.cjs --units=1000000 --structures=250000 --rally-mix --helpers=11 --dk=1 --kernels --system-metrics --memory-stats --burst-every=100000 --mass-at=30 --ticks=240 --out=tests/test-runs/memory-20261030/bounded-growth.json
+```
+
+Validation: memory-allocation-regressions, heap-full-reserve, storage-abi,
+worker-walk, work-snapshot, multiplayer-snapshot, nav-atlas, path-regions-portals,
+path-regions-incremental, heap-grow-ahead, helper-heap-binding pass. Mixed
+chaos deterministic replay matches all 65 hashes with 0, 0 and 3 helpers,
+including after the portal reuse change. No Rust ABI change or rebuild needed.
+

@@ -4424,10 +4424,11 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     const arrays = [Q.out2, W.out, W.fix, W.cnt, W.pd,
         c.owner, c.dead, c.isWk, c.holdF, c.spEpoch, c.x, c.y, S.sepLayer, S.sepKey, c.id,
         c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.commandState, c.mvOn, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.agWait, c.mvPP, c.mvPF,
-        c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.rmClr, c.wkIdle, c.wsKind, c.wkIx, c.wbType,
+        c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, null, c.wkIdle, c.wsKind, c.wkIx, c.wbType,
         c.rkF, c.rtEnd, c.nvProf, c.navRdy, c.pathIndex, c.nvPK, c.mvPath, S.pathPool.fs, c.mvCD, c.rsEnd, c.mvNavLD,
         c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
-        workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots, W.tt];
+        workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots, W.tt,
+        c.wmPin, c.wmPinTy, c.wmWx, c.wmWy, c.wmWgx, c.wmWgy, c.wmWty, c.wmSp, c.wmDrop, c.wmMine, c.wmMineTy, c.wmQc, c.wmQr, c.wmQp, c.wmTrip, c.wmTw, c.wmReady, c.wmMan];
     P.fill(0);
     P[1] = n; P[2] = playerId; P[3] = spatialEpoch; P[4] = gameTime; P[5] = targetGx * TILE + 16; P[6] = targetGy * TILE + 16;
     P[7] = GRID_W; P[8] = TILE; P[9] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[10] = SNAP_REGION_TILES; P[11] = Math.ceil(GRID_W / SNAP_REGION_TILES);

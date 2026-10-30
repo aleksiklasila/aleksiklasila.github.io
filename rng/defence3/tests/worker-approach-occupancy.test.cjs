@@ -22,12 +22,12 @@ const r=i.eval(`(()=>{
  const worker=add('healer_unit',10.5,10.5),ally=add('norm',11.5,10.5);ally.energy=1;
  worker.workerState='MOVING_TO_HEAL';worker.workerTarget=ally;worker.workerTargetType='unit';worker.healerHasMaterial=true;
  worker.path=[{x:11,y:10}];worker.pathIndex=0;worker.commandState=CMD_MOVING;
- gameTime=(128-worker.id%128)%128;updateWorkerAI(worker);
+ gameTime=(128-worker.id%128)%128;waiStepUnit(worker);
  const healed=ally.energy>1;
  const b=new Barrack(11,11,0,'norm');barracks.push(b);setTileEntity(11,11,'barrack',b);
  b.spawnQueue=[{unitType:'norm',level:1,energyPaid:0}];const front=getQueuedSpawnInfo(b.spawnQueue[0],'norm',1,0);b.spawnQueue[0]=front;
  worker.workerTransferCooldown=0;worker.workerState='MOVING_TO_HEAL';worker.workerTarget=b;worker.workerTargetType='queue';worker.healerHasMaterial=true;
- worker.path=[{x:11,y:11}];worker.pathIndex=0;worker.commandState=CMD_MOVING;updateWorkerAI(worker);
+ worker.path=[{x:11,y:11}];worker.pathIndex=0;worker.commandState=CMD_MOVING;waiStepUnit(worker);
  return {healed,paid:getQueuedSpawnInfo(b.spawnQueue[0],'norm',1,0).energyPaid};
 })()`);
 assert(r.healed,'healer works beside an occupied ally before path completion');assert(r.paid>0,'healer pays a queue beside its occupied endpoint');assert.deepEqual(i.errors,[]);

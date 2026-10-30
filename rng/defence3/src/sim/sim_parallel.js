@@ -1564,7 +1564,8 @@ const SIM_KERNEL_TOWER_COARSE=106;
 const SIM_KERNEL_STATIONARY_AREAS=109,SIM_KERNEL_TOWER_PREPARE=110,SIM_KERNEL_STATIONARY_NEED=111;
 const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
 const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any']);
-const _simWorkerSpawnersW=_simWK(['ev.sorted','unit.isWk','unit.wkIx','unit.wbType','unit.wbTick','unit.wbSpawner','unit.x','unit.y','unit.owner',
+// (wb.list: the slots asked for, slot * 8 + code: the tick's events, or the search tier's takes.)
+const _simWorkerSpawnersW=_simWK(['wb.list','unit.isWk','unit.wkIx','unit.wbType','unit.wbTick','unit.wbSpawner','unit.x','unit.y','unit.owner',
     'wb.sites','wb.count','wb.any','st.brain','st.own','unit.workerTransferCooldown','unit.wsKind']);
 SIM_KERNELS[SIM_KERNEL_WORKER_SITES]=function(R,P,chunk){_simRust(_simWorkerSitesW,P,chunk,'k_worker_sites','WORKER_SITES');};
 SIM_KERNELS[SIM_KERNEL_WORKER_SPAWNERS]=function(R,P,chunk){_simRust(_simWorkerSpawnersW,P,chunk,'k_worker_spawners','WORKER_SPAWNERS');};
@@ -1621,7 +1622,9 @@ function simRustDirect(fn, arrays, P) {
         I[SIM_RUST_W0 + i] = a ? _simWEnc(p) : 0;
     }
     I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
-    _simWasmArgF.set(P.length > 64 ? P.subarray(0, 64) : P);
+    // (P: up to the argument block's 512 doubles, sim_wasm.js _simWasmArgF; only P's own length is copied.)
+    if (P.length > _simWasmArgF.length) throw new Error(fn + ': ' + P.length + ' params, the block holds ' + _simWasmArgF.length);
+    _simWasmArgF.set(P);
     _simWasmX[fn](_simWasmArgsW, 0);
 }
 // Adjacency groups on a helper lane (things_utils.js adjacencyLaneStep):
@@ -1808,7 +1811,7 @@ const _simSnapW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'unit.id
     'unit.attackTimer', 'unit.attackFlash', 'unit.stTh', 'unit.stPo', 'unit.stBu', 'unit.stFr', 'unit.stWe', 'unit.stSa', 'unit.stWa',
     'unit.workerTransferCooldown', 'unit.stackCount', 'unit.unitLevel', 'unit.effectiveStacks', 'unit.effectiveLevel', 'unit.pathIndex', 'unit.hObj',
     'snap.pr', 'snap.ph', 'snap.nl', 'snap.nlh', 'snap.nu', 'snap.cc', 'snap.ord', 'unit.wTeam', 'unit.tuId', 'unit.fatF', 'unit.amGx', 'unit.amGy', 'unit.tbT', 'unit.rkF', 'unit.mvTgX', 'unit.mvTgY', 'unit.tuS', 'unit.stIx',
-    'unit.wkS', 'unit.wkT', 'unit.wkR', 'unit.wkN', 'wk.ttTerm']);
+    'unit.wkS', 'unit.wkT', 'unit.wkR', 'unit.wkN', 'wk.ttTerm', 'unit.wkIx', 'unit.wmCarry']);
 SIM_KERNELS[SIM_KERNEL_SNAP_REGION] = function (R, P, chunk) { _simRust(_simSnapW, P, chunk, 'k_snap_units', 'SNAP_REGION'); };
 const _simSnapMergeW = _simWK(['snap.pr', 'snap.ph', 'snap.cc', 'snap.racc', 'snap.rstamp', 'snap.rlist', 'snap.pout', 'snap.pres']);
 SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapMergeW, P, chunk, 'k_snap_merge', 'SNAP_MERGE'); };

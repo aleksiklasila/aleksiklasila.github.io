@@ -374,3 +374,86 @@ on steps 38-59 (profile-serial-share.cjs), what each needs:
 - Caps still in place: WORKER_EVENTS_PER_TICK, SPAWNS_PER_TICK (go with the
   worker trips and spawning as kernels).
 Next: W4 (the structure lists as table views), then the worker trips.
+
+## Stage D: the worker state machine as a kernel (started 2026-10-30)
+
+User (2026-10-30): convert all of it, the order does not matter.
+
+Measured first (ev1.json, 1M/250k, --event-metrics, steady 38-59): ~112
+worker events a tick, none parked by WORKER_EVENTS_PER_TICK; JavaScript
+under _unitWorkerEvent 3.9 ms a tick (~35 us an event), no hot spot: the
+state machine's branches, object getters (getTileEntityRef, stat getters,
+role memory), reservations, path objects. Per (type, state) a tick:
+healer MOVING_TO_HEAL 22, salvager MOVING_TO 13 / RETURNING 12, builder
+RETURNING_FOR_GOLD 12 / MOVING_TO_BUILD 10, healer RETURNING_FOR_GOLD 10,
+collectors MOVING_TO 17 / RETURNING 7, researcher IDLE 8 /
+MOVING_TO_RESEARCH 7, astar_collector MANUAL_MOVE 6, idle ones the rest.
+
+What the machine touches (inventory):
+- The worker's own state: wkS / wkT / wkR / wkN (columns already), the
+  transfer cooldown, commandState, pathIndex, the path (one flow node: nvPK;
+  mvOn / mvCD / mvPath released at a set), targetPos, _pendingPathTarget
+  (manual moves), carryingValue and workerType (per-slot JS arrays today),
+  ~45 role memory fields (UNIT_ROLE_FIELDS: object references to spawners,
+  mines, queue targets; last work sites; trip costs; recheck ticks).
+- Structures by tile: _ST (code, owner, uc, energy) and the class tables'
+  heap columns (level, stacks, isUpgrading, isStacking, stackingWorkDone,
+  markedForSalvage, queue columns, buildEnabled...), max energy from the
+  static stat tables (as k_wsw_set reads them).
+- Reservations (workerReservedTiles: slot = tile * types + type, with the
+  per-region counts and sums for the hash, and the work grid's marks),
+  the work versions (workerWorkChanged, _workerWorkHash: in mv.rs already
+  for parked idle workers).
+- Payments: playerResourceBatch rows (heap deltas reduced by
+  resource_reduce), recordEnergyDelta (the HUD log: per tick sums are the
+  same to its window rates), research points per owner and the active
+  task (workRequired, workDone, cost), spawn queue payments.
+- Searches: the tier (wsRegister: columns), its takes (_wsCommit /
+  _wsTakeSome call the find functions), nearest spawners (worker brain
+  kernel, _spawnerNearest), the healers' damaged candidates.
+- Rare transitions with JavaScript consequences: construction / upgrade /
+  stack done (derived stats, adjacency, text cache), salvage (destroy),
+  mine emptied (ground, nav), spawner ready order, research task advance.
+- Presentation: sounds (local owner), ambient sound ticks.
+
+Design: wai.rs k_worker_ai, one serial wasm pass (main thread) over the
+tick's worker events in their order (mutual effects: reservations,
+structure energy, queue payments, payments), after the non-worker events.
+State in heap columns; targets and spawners as tiles; payments appended to
+the batch rows' heap deltas; out events (a heap list: code, slot, tile,
+value) for the rare transitions and presentation, applied by JavaScript
+in their order after the pass. The tier's takes call the same kernel for
+their units (mode take). No JavaScript twin: each worker type's JS goes as
+its kernel lands.
+
+Stages:
+D1. Worker state as columns: workerType code, carry, the role memory of
+    workers as worker-record columns (spawners, pins, mines, queue commit
+    as tiles; positions f32; ticks i32); the accessors decode for the
+    JavaScript left (snapshots by name keep working).
+D2. Kernel infrastructure: the pass, path set (flow node), reservation set
+    and clear with their counts and sums, work versions, idle retarget
+    schedule, tier registration, payments, out events, the arm-again step.
+D3. Types in turn, JavaScript deleted as each lands: researcher, salvager,
+    collectors, healer, builder, manual move; then WORKER_EVENTS_PER_TICK
+    goes.
+
+### Stage D status (2026-10-30, end of session)
+
+Every worker type's state machine is the kernel's (wai.rs k_worker_ai):
+researchers, salvagers, collectors, healers, builders; updateWorkerAI keeps
+MANUAL_MOVE only. Glue: unit.js unitEventsRun lists worker events,
+worker.js waiRun / waiOutEvents. Measured (prof36): the pass 1.5 ms a tick
+(0.3 JS), out events 4.8 ms JS.
+
+Left, in order:
+- Out events that are state, as batch kernels (dst.rs's way): construction
+  / upgrade / stack completions (markConstructionComplete and the rest: 4.8
+  ms in prof36), mine depletion, queue production and ready order, salvage
+  destroys into structDestroyTiles' list. Presentation (sounds, logs) stays.
+- MANUAL_MOVE and pending ways (orders' resolution; pathfinding.js).
+- The search tier's takes (_wsTakeSome -> the find functions with their
+  results) into the kernel (a take mode), then the find functions' JS goes.
+- WORKER_EVENTS_PER_TICK (only declined events count against it now).
+- Check: research deposits 0 in prof36's window at 1M (HEAD 10-36).
+- Tests: collector-farms (vm test of deleted JS) to rewrite as a match test.

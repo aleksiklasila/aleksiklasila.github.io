@@ -5643,7 +5643,8 @@ fn snap_order_mix(i: i32, id: i32) -> i32 {
 /// unit.workerTransferCooldown, unit.stackCount, unit.unitLevel,
 /// unit.effectiveStacks, unit.effectiveLevel, unit.pathIndex, unit.hObj,
 /// snap.pr, snap.ph, snap.nl, snap.nlh, snap.nu, snap.cc, snap.ord, ...,
-/// unit.wkS, unit.wkT, unit.wkR, unit.wkN, wk.ttTerm (45..49).
+/// unit.wkS, unit.wkT, unit.wkR, unit.wkN, wk.ttTerm (45..49), unit.wkIx,
+/// unit.wmCarry (50, 51).
 /// P: [0] units, [1] per job, [2] region size in pixels, [3] first
 /// position, [4] end, [9] regions.
 #[no_mangle]
@@ -5666,6 +5667,8 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
     // (A worker's task: sim_unit_state.js SIM_UNIT_WK_FIELDS; the target
     // type by its term, wk.ttTerm, its code being each peer's own.)
     let (wks, wkt, wkr, wkn, ttt) = (k.p::<u32>(45), k.p::<i32>(46), k.p::<i32>(47), k.p::<i32>(48), k.p::<i32>(49));
+    // (What a worker carries: its record's wmCarry, by unit.wkIx; NaN none.)
+    let (wix, wcar) = (k.p::<i32>(50), k.p::<f64>(51));
     let n = k.i(0).max(0) as usize;
     let per = k.i(1).max(0) as usize;
     let its = (1.0 / (k.f(2) * 8.0)) as f32;
@@ -5840,6 +5843,8 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
         mix!(33, g32!(wkt));
         mix!(34, g32!(wkr));
         mix!(35, g32!(wkn));
+        let carry = |q: usize| -> i32 { let w = g(wix, q); if w <= 0 { return 0; } let c = g(wcar, w as usize); if c == c { (c * 1024.0) as i64 as i32 } else { 0x7fc00000 } };
+        mix!(36, i32x4(carry(q0), carry(q1), carry(q2), carry(q3)));
         // (Seeded by id, then finished; the regions from the positions.)
         let ids = g32!(uid);
         let mut hh = i32x4_add(v128_xor(i32x4_mul(ids, i32x4_splat(7919)), i32x4_splat(0x11)), h);

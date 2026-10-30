@@ -67,34 +67,7 @@ let _unitPassOn = false;
 // kernel does not move (no output: its way's end, a wake, idle): its AI.
 const UNIT_EV_FLOOR = 1, UNIT_EV_NOWAY = 2, UNIT_EV_WAITED = 3, UNIT_EV_SPATIAL = 4, UNIT_EV_CHECK = 5;
 const UNIT_EVENTS_PER_JOB = 8192, UNIT_DEAD_PER_JOB = 4096;
-// Worker events a tick (a worker with its way done, or idle: an arrival, a
-// payment, a delivery, a new way: 15-30 us of AI each): at most this many,
-// in the events' order (by a hash of the tick and the unit's id: who waits
-// changes every tick); the others stand a tick and come again. Workers on
-// their way are never held back (no stutter). The brains may lag; the tick
-// may not: a chaos scenario's 13k workers a team made 300-500 events a tick
-// (7-12 ms).
-const WORKER_EVENTS_PER_TICK = 240;
-// (A step of several base ticks: their budget, the events a second as at one
-// a step. The events left: a worker arriving within its event takes one too.)
-let _workerEventsLeft = Infinity;
-function _isWorkerEvent(u) {
-    const ws = u.workerState;
-    if (!ws) return false;
-    if (ws === 'IDLE') return true;
-    const p = u.path;
-    return !p || u.pathIndex >= p.length;
-}
-// A worker event past the tick's budget (the q-th): parked (the movement
-// kernel stands it) until the tick its turn comes.
-function _simParkEventWait(u, q) {
-    const c = u._us;
-    if (!c || u.holdPosition) return;
-    const s = u._si;
-    if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    c.mvWake[s] = gameTime + 1 + Math.floor(q / WORKER_EVENTS_PER_TICK); c.mvFlags[s] = 0; c.mvReach[s] = 0;
-    c.mvOn[s] = 2;
-}
+// (Worker events: all of them every tick, the worker kernel's pass, no cap.)
 // The events' order: a hash of the tick and the id (21 bits), then the id:
 // the same on every peer (slots are each peer's own).
 function _unitEvOrderKey(t, id) {
@@ -150,23 +123,28 @@ function unitEventsRun() {
         }
         const trueTerm = _simHTerm(_UH_PFA, true);
         if(typeof workerBrainsCollect==='function')workerBrainsCollect();
-        _workerEventsLeft = WORKER_EVENTS_PER_TICK * simDk;
-        let over = 0;
         playerResourceBatchBegin();
         try {
+            // (Workers: the worker kernel's pass after the others, worker.js waiRun.)
+            const wai = typeof waiAvailable === 'function' && waiAvailable();
+            const WL = wai ? _waiArr('list', Int32Array, j) : null;
+            let wn = 0;
             for (let i = 0; i < j; i++) {
                 const ent = E[i], s = ent >> 3, u = owners[s];
                 if (!u || u.dead) continue;
                 // (Where it stood, for its interpolation, unless the kernel moved it.)
                 if (c.mvOut[s] === 0) { c.prevX[s] = c.x[s]; c.prevY[s] = c.y[s]; }
-                if (u.workerState && c.mvOut[s] === 0 && _isWorkerEvent(u)) {
-                    if (_workerEventsLeft <= 0) { _simParkEventWait(u, over++); continue; }
-                    _workerEventsLeft--;
+                if (wai && u.workerState) {
+                    if ((ent & 7) === UNIT_EV_FLOOR && _unitFloorEvent(u)) continue;
+                    if (c.statRow[s] < 0) _waiOwnStats(u, c, s);
+                    WL[wn++] = ent;
+                    continue;
                 }
                 if (routes && routes[i * 2] >= 0 && !u.workerState && _unitNoWayCommit(u, c, s, routes[i * 2], routes[i * 2 + 1], trueTerm)) continue;
                 _unitEvent(u, c, s, ent & 7);
             }
-        } finally { playerResourceBatchEnd(); _workerEventsLeft = Infinity; if(typeof workerBrainsEnd==='function')workerBrainsEnd(); }
+            if (wn > 0) waiOutEvents(waiRun(WL, wn));
+        } finally { playerResourceBatchEnd(); if(typeof workerBrainsEnd==='function')workerBrainsEnd(); }
     }
     // (Those whose energy ran out: dead now.)
     P[0] = ns; P[1] = UNIT_DEAD_PER_JOB;
@@ -274,8 +252,7 @@ function _unitWorkerEvent(u, c, s, code) {
     // (A worker whose way ends here: its arrival is its AI's at once, below.)
     const wkLeft = u.workerState && u.path ? u.path.length - u.pathIndex : 0;
     if (!moved && u.commandState === CMD_MOVING) _unitWorkerWayEnd(u, code);
-    if (wkLeft > 0 && u.workerState && !u.dead && !(u.path && u.pathIndex < u.path.length) && _workerEventsLeft > 0) {
-        _workerEventsLeft--;
+    if (wkLeft > 0 && u.workerState && !u.dead && !(u.path && u.pathIndex < u.path.length)) {
         updateWorkerAI(u);
         _workerSyncCommand(u);
     }
@@ -1125,30 +1102,14 @@ class Unit {
 // worker's heap at 2M units). Now prototype accessors over one object of
 // them all (one shape), made at the first value set; undefined until then,
 // as before. In the snapshot by name (simUnitStateKeys).
-const UNIT_ROLE_FIELDS = ['_resourceCollectorMemory', '_collectorPinnedTarget', '_collectorPinnedTargetType', '_collectorLastGatherX',
-    '_collectorLastGatherY', '_collectorLastGatherGx', '_collectorLastGatherGy', '_collectorLastGatherType', '_collectorNextSpawner',
-    '_collectorLastDropoffSpawner', '_lastMineTarget', '_astarLastGatherX', '_astarLastGatherY', '_astarLastGatherGx', '_astarLastGatherGy',
-    '_astarPinnedTarget', '_astarPinnedTargetType', '_astarNextSpawner', '_astarLastMineTarget', '_astarLastMineTargetType', '_lastIdleStateTime',
-    '_builderNextRecheckTick', '_healerQueueCommitTarget', '_healerQueueCommitRequired', '_healerQueueCommitMaxPaid', '_astarLastChargedTick',
-    '_astarLastChargedFromKey', '_astarLastChargedToKey', '_astarBudgetBlockedUntil', '_manualMoveIssuedTick', '_builderLastWorkX',
-    '_builderLastWorkY', '_builderLastWorkGx', '_builderLastWorkGy', '_builderSpawnerTarget', '_healerPinnedQueueTarget', '_healerLastWorkX',
-    '_healerLastWorkY', '_healerLastWorkGx', '_healerLastWorkGy', '_healerSpawnerTarget', '_healerQueueTripCost', '_researchSpawnerTarget',
-    '_researcherTripWork', '_researcherTripCost', '_researcherMaterialReadyTick', '_energyBlockedUntil', '_nextScoutRetargetTick',
-    '_levelTextLabel', '_collectorLastMoveTick', '_collectorNextRecheckTick', '_healerLastMoveTick', '_healerNextRecheckTick',
-    '_researchLastMoveTick', '_researchNextRecheckTick', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
+// (A worker's memory is its worker record's columns: SIM_WK_MEM, below.)
+const UNIT_ROLE_FIELDS = ['_astarLastChargedTick', '_astarLastChargedFromKey', '_astarLastChargedToKey', '_astarBudgetBlockedUntil',
+    '_nextScoutRetargetTick', '_levelTextLabel', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
 // (Every field takes any kind of value from the start: see _makeUnitFieldsMutable.)
 const _UnitRoleMem = new Function(UNIT_ROLE_FIELDS.map(k => 'this.' + k + ' = 1; this.' + k + ' = _UNIT_FIELD_WIDEN; this.' + k + ' = 0.5; this.' + k + ' = undefined;').join(' '));
-// (A role memory clear an order kernel left pending, rmClr: made at its
-// first use, the same values the clear made at once would leave.)
-function _unitRmApply(u) {
-    const c = u._us, s = u._si, t = c.rmClr[s] - 1;
-    c.rmClr[s] = 0;
-    clearWorkerRoleMemory(u);
-    u._manualMoveIssuedTick = t;
-}
 for (const k of UNIT_ROLE_FIELDS) {
-    const get = new Function('return function () { const c = this._us; if (c && c.rmClr[this._si] !== 0) _unitRmApply(this); const m = this._rm; return m ? m.' + k + ' : undefined; };')();
-    const set = new Function('M', 'return function (v) { const c = this._us; if (c && c.rmClr[this._si] !== 0) _unitRmApply(this); let m = this._rm; if (!m) { if (v === undefined) return; m = new M();'
+    const get = new Function('return function () { const m = this._rm; return m ? m.' + k + ' : undefined; };')();
+    const set = new Function('M', 'return function (v) { let m = this._rm; if (!m) { if (v === undefined) return; m = new M();'
         + " if (this._rm === null) this._rm = m; else Object.defineProperty(this, '_rm', { value: m, writable: true, configurable: true }); } m." + k + ' = v; };')(_UnitRoleMem);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
@@ -1540,6 +1501,28 @@ for (const k of (typeof SIM_UNIT_OBJ_FIELDS !== 'undefined' ? SIM_UNIT_OBJ_FIELD
     const hook = (typeof SIM_UNIT_OBJ_HOOKS !== 'undefined' && SIM_UNIT_OBJ_HOOKS[k]) || '';
     const set = new Function('k', 'T', `return function (v) { const c = this._us; if (c) { const s = this._si, a = c.oc_${k}, o = a.set(s,v); ${hook} if (o !== v) c.hObj[s] = (c.hObj[s] + T(${key}, v) - T(${key}, o)) | 0; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(k, _simHTerm);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true });
+}
+// A worker's memory (sim_unit_state.js SIM_WK_MEM): its worker record's
+// columns, by name; no record and an unset value: none taken. Without a
+// slot: a plain field, as the object fields.
+function _unitWmDecode(kind, x) {
+    if (kind === 'N') return x === x ? x : undefined;
+    if (kind === 'Y') return _simWttNames[x];
+    return x === 0 ? undefined : simWtDecode(x & 7, (x - (x & 7)) / 8);
+}
+function _unitWmEncode(kind, v) {
+    if (kind === 'N') return v === undefined || v === null ? NaN : Number(v);
+    if (kind === 'Y') return simWttCode(v === undefined ? undefined : v);
+    if (v === undefined || v === null) return 0;
+    const [k, t] = simWtEncode(v);
+    return k === SIM_WT_NULL || k === SIM_WT_UNDEF ? 0 : t * 8 + k;
+}
+for (const [k, col, kind] of (typeof SIM_WK_MEM !== 'undefined' ? SIM_WK_MEM : [])) {
+    const zeroDefault = col === 'wmFailU';
+    const unset = zeroDefault ? 'x === 0' : kind === 'N' ? 'x !== x' : kind === 'Y' ? 'x <= 1' : 'x === 0';
+    const get = new Function('D', `return function () { const c = this._us; if (c) { const w = c.wkIx[this._si]; return D('${kind}', w > 0 ? c.${col}[w] : ${kind === 'N' && !zeroDefault ? 'NaN' : '0'}); } return this._det ? this._det.${k} : undefined; };`)(_unitWmDecode);
+    const set = new Function('E', 'k', `return function (v) { const c = this._us; if (c) { const s = this._si, x = E('${kind}', v); let w = c.wkIx[s]; if (w <= 0) { if (${unset}) return; w = simUnitWk(c, s); if (w <= 0) return; } c.${col}[w] = x; } else if (this._det) this._det.${k} = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };`)(_unitWmEncode, k);
+    Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
 // (The accessors' plain values in the digest: their keys.)
 // (Guarded as the loops above: tests load unit.js without sim_unit_state.js.)

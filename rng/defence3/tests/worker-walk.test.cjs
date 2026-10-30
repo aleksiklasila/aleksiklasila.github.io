@@ -177,8 +177,8 @@ const data = require(path.join(__dirname, 'oneofall.json'));
             world.atNextSafeTick(`(() => { const cx = ${cl[0]}, cy = ${cl[1]};
                 for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
                     const gx = cx + dx, gy = cy + dy, x = gx * TILE + 16, y = gy * TILE + 16;
-                    if (dx === 0 && dy === 0) { const m = { gx, gy, gold: 5000, maxGold: 5000, x, y }; goldMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m); }
-                    else { const m = { gx, gy, astar: 5000, maxAstar: 5000, x, y }; astarMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m); }
+                    if (dx === 0 && dy === 0) { const m = Object.assign(new GoldMine(), { gx, gy, gold: 5000, maxGold: 5000, x, y }); goldMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m); }
+                    else { const m = Object.assign(new AstarMine(), { gx, gy, astar: 5000, maxAstar: 5000, x, y }); astarMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m); }
                     grid[gy][gx].type = TYPE_WALL; simMoveTileTypeChanged(gx, gy);
                 } })()`);
             for (let k = 0; k < 40 && q(`!getGoldMineAt(${cl[0]}, ${cl[1]})`); k++) await world.run(250);

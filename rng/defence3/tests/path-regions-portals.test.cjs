@@ -54,7 +54,11 @@ for (const [map, seed] of [['arena', 5], ['islands', 9], ['crossroads', 13]]) {
         let checks = 0, portals = 0, bad = '';
         const check = why => {
             for (const owner of [0, 1]) {
+                const previous = _pathRegions.byOwner.get(owner);
                 const kept = getPathRegions(owner), d = same(kept, fresh(owner));
+                const current = _pathRegions.byOwner.get(owner);
+                if (previous && current && previous.labels !== current.labels) throw Error('Portal invalidation replaced reusable labels');
+                if (previous && current && previous.parent.length === current.parent.length && previous.parent !== current.parent) throw Error('Portal invalidation replaced reusable parents');
                 checks++;
                 if (d && !bad) bad = why + ' owner ' + owner + ': ' + d;
             }

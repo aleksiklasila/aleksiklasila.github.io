@@ -4,27 +4,8 @@
 // adds its trip's work (its rate times the building's efficiency) to its
 // player's researchPoints every transfer cooldown, paying energy at the
 // active task's cost per work, while the pool does not already cover that
-// task; researchDrainTick moves the pool into the research queue every
-// RESEARCH_DRAIN_TICKS.
-function _researcherDeposit(u, target, owner) {
-    if (!u || !target) return false;
-    const task = getPlayerResearchTask(owner);
-    if (!task || !_researchNeedsPoints(owner, task)) return false;
-    const required = Math.max(0, Number(task.workRequired) || 0), cost = Math.max(0, Number(task.cost) || 0);
-    const fallback = Math.max(1, Math.round(Number((BASE_UNIT_STATS.researcher_unit || {}).researcherDps) || 1));
-    const dps = Number((u.preComputed && u.preComputed.researcherDps) || 0) || target.getResearcherDps() || fallback;
-    const work = Math.max(0.1, dps * getResearchBuildingEfficiency(target));
-    const tripCost = required > 0 ? work * cost / required : 0;
-    if (tripCost > 0) {
-        addPlayerResource(owner, 'energy', -tripCost);
-        recordEnergyDelta(owner, 'research', -tripCost);
-    }
-    const p = players[owner];
-    p.researchPoints = (Number(p.researchPoints) || 0) + work;
-    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('researcher', u);
-    if (target.owner === localPlayerId && _noteAmbientSoundTick(target, 'research_tick', 12)) playSound('research_tick', target.x, target.y);
-    return true;
-}
+// task (wasm/src/wai.rs research_deposit); researchDrainTick moves the pool
+// into the research queue every RESEARCH_DRAIN_TICKS.
 // Whether the active task still needs points beyond the pool's.
 function _researchNeedsPoints(owner, task) {
     const p = players[owner];
@@ -190,632 +171,14 @@ function updateWorkerAI(u) {
     }
 
     if (isResourceCollectorWorkerType(u.workerType)) {
-        _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi);
+        // (Collectors: the worker kernel's, wasm/src/wai.rs.)
         return;
     } else if (u.workerType === 'salvager') {
-        if (u.workerState === 'IDLE') {
-            if (_wsRegistered(u)) return;
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-            _salvagerFindTarget(u, myGx, myGy);
-        } else if (u.workerState === 'MOVING_TO') {
-            if (!u.workerTarget || !u.workerTarget.markedForSalvage || !_workerOwnsReservedTarget(u)) {
-                _clearWorkerTarget(u, 'target_no_work');
-                _clearWorkerAutoRoute(u);
-                _salvagerFindTarget(u, myGx, myGy);
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                if (_workerHasPendingAutoRouteToTarget(u)) return;
-                let inSalvageRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
-                if (inSalvageRange) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let tKey = u.workerTarget.type === 'barrack' ? 'barrack_' + u.workerTarget.unitType : u.workerTarget.type;
-                    let p = BASE_CARD_TYPES[tKey]; let refund = Math.floor((p ? p.price : 0) * (u.workerTarget.stacks || 1) * 0.1);
-                    u.carryingValue = refund * getUnitBaseLevel(u);
-                    if (owner === localPlayerId) playSound('salvager_work', u.x, u.y);
-                    destroyBuilding(u.workerTarget);
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
-                    _clearWorkerTarget(u, 'target_missing'); u.workerState = 'RETURNING'; _workerReturnPath(u);
-                } else {
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let canWalk = (nx, ny) => nx === u.workerTarget.gx && ny === u.workerTarget.gy;
-                    u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, null, true);
-                    if (u.path) {
-                        u.pathIndex = 0;
-                        u.commandState = CMD_MOVING;
-                    } else {
-                        _clearWorkerTarget(u, 'target_missing');
-                        _clearWorkerAutoRoute(u);
-                        _salvagerFindTarget(u, myGx, myGy);
-                    }
-                }
-            }
-        } else if (u.workerState === 'RETURNING') {
-            if (!u.path || u.pathIndex >= u.path.length) {
-                if (u.carryingValue > 0) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let closest = _findClosestSpawner(u, 'salvager');
-                    addPlayerResource(owner, 'energy', u.carryingValue);
-                    recordEnergyDelta(owner, 'salvage', u.carryingValue);
-                    u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('salvager', u);
-                    if (owner === localPlayerId) playSound('salvage_collected', u.x, u.y);
-                }
-                u.carryingValue = 0;
-                if (!canRunHeavyAi) return;
-                _salvagerFindTarget(u, myGx, myGy);
-            }
-        }
-    } else if (u.workerType === 'builder') {
-        // Long-period watchdog: builders that stop making movement progress
-        // should periodically re-evaluate work instead of waiting forever.
-        // Sampled on its own cadence (BUILDER_WATCH_TICKS, a multiple of the
-        // move checks; a parked builder wakes for it): how often the AI
-        // happens to run otherwise must not change what it measures.
-        let movedSinceLast = false;
-        if (!Number.isFinite(u._builderLastWatchX) || !Number.isFinite(u._builderLastWatchY)) {
-            u._builderLastWatchX = u.x;
-            u._builderLastWatchY = u.y;
-            u._builderLastMoveTick = gameTime;
-        } else if (simStepCrosses(u.id | 0, BUILDER_WATCH_TICKS)) {
-            movedSinceLast = detHypot(u.x - u._builderLastWatchX, u.y - u._builderLastWatchY) >= 2;
-            u._builderLastWatchX = u.x;
-            u._builderLastWatchY = u.y;
-            if (movedSinceLast) u._builderLastMoveTick = gameTime;
-        }
-
-        let builderRecheckInterval = Math.max(120, Math.floor(TICK_RATE * 8));
-        let builderStuckTicks = Math.max(60, Math.floor(TICK_RATE * 3));
-        if (!Number.isFinite(u._builderNextRecheckTick)) u._builderNextRecheckTick = gameTime + builderRecheckInterval;
-        if (!Number.isFinite(u._builderLastMoveTick)) u._builderLastMoveTick = gameTime;
-
-        // (An idle builder without a target searches by the work versions
-        // and its backoff, below; this recheck is for a stuck one.)
-        if (u.workerState === 'IDLE' && u.workerTarget && gameTime >= u._builderNextRecheckTick) {
-            u._builderNextRecheckTick = gameTime + builderRecheckInterval;
-            let stuckTooLong = (gameTime - u._builderLastMoveTick) >= builderStuckTicks;
-            if (stuckTooLong) {
-                // Drop stale route/spawner reservation and find a fresh task.
-                u.path = null;
-                u.pathIndex = 0;
-                u._builderSpawnerTarget = null;
-                _clearWorkerTarget(u);
-                _builderFindTarget(u, myGx, myGy);
-            }
-        }
-
-        if (u.workerState === 'IDLE') {
-            if (_wsRegistered(u)) return;
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-            _builderFindTarget(u, myGx, myGy);
-        } else if (u.workerState === 'MOVING_TO_BUILD') {
-            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
-                // Building finished (maybe by another builder), find next
-                _builderRememberWorkSite(u);
-                _clearWorkerTarget(u);
-                _builderFindTarget(u, myGx, myGy);
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let inBuildRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
-                if (!inBuildRange) {
-                    // If displaced while en route, re-path back to the same target.
-                    let canWalk = _builderCanWalk(u.owner);
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'builder');
-                    u.pathIndex = 0;
-                    u.commandState = CMD_MOVING;
-                    return;
-                }
-                if (inBuildRange) {
-                    if (!u.builderHasMaterial) {
-                        let route = _workerSpawnerRoute(u, 'builder_spawner', _builderCanWalk(u.owner), canRunHeavyAi);
-                        let tripCost = getBuilderTripGoldCost(u);
-                        if (route) {
-                            u.workerState = 'RETURNING_FOR_GOLD';
-                            u.path = route.path;
-                            u.pathIndex = 0; u.commandState = CMD_MOVING;
-                            u._builderSpawnerTarget = route.spawner;
-                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                            return;
-                        } else {
-                            if (u.workerTransferCooldown <= 0) {
-                                // No route available: buy material on-site and keep full builder throughput.
-                                addPlayerResource(owner, 'energy', -tripCost);
-                                recordEnergyDelta(owner, 'builder', -tripCost);
-                                u.builderHasMaterial = true;
-                                u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-                            }
-                            u.workerState = 'BUILDING_IN_PLACE';
-                            return;
-                        }
-                    }
-                    if (u.workerTransferCooldown > 0) return;
-                    // Add Energy to building
-                    let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || 1;
-                    let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
-                    let t = u.workerTarget;
-                    let didWork = false;
-                    if (t.underConstruction) {
-                        let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
-                        t.maxEnergy = requiredEnergy;
-                        t.energy = Math.round(Math.min(requiredEnergy, t.energy + dps) * 1000) / 1000;
-                        didWork = true;
-                        if (t.energy >= requiredEnergy) {
-                            markConstructionComplete(t);
-                            refreshThingProgressState(t);
-                            if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
-                            _requestAdjacencyRecalcForThing(t, 1);
-                            recalculateAdjacency();
-                            _builderRememberWorkSite(u, t);
-                            if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                                _clearWorkerTarget(u);
-                                _builderFindTarget(u, myGx, myGy);
-                            }
-                        }
-                    } else if (t.isUpgrading) {
-                        let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
-                        t.upgrademaxEnergy = requiredEnergy;
-                        t.maxEnergy = requiredEnergy;
-                        t.energy = Math.round(Math.min(requiredEnergy, t.energy + dps) * 1000) / 1000;
-                        didWork = true;
-                        if (t.energy >= requiredEnergy) {
-                            let prevStacked = getThingStackedStacks(t);
-                            let prevManual = getThingManualStacks(t);
-                            let remainingBeforeUpgrade = Math.max(0, prevManual - prevStacked);
-                            let nextLevel = getThingBaseLevel(t) + 1;
-                            t.level = nextLevel;
-                            if (typeof upkeepThingDirty === 'function') upkeepThingDirty(t);
-                            t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(nextLevel));
-                            t.manualStacks = Math.max(prevManual, t.stacks + remainingBeforeUpgrade);
-
-                            t.isUpgrading = false;
-                            t.upgrademaxEnergy = 0;
-                            refreshThingProgressState(t);
-                            if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
-                            if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
-                            _requestAdjacencyRecalcForThing(t, 1);
-                            recalculateAdjacency();
-                            if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                                _builderRememberWorkSite(u, t);
-                                _clearWorkerTarget(u);
-                                _builderFindTarget(u, myGx, myGy);
-                            }
-                        }
-                    } else if (t.isStacking) {
-                        let stackCost = getThingStackingEnergyCost(t);
-                        t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + dps;
-                        didWork = true;
-
-                        let stackedAny = false;
-                        while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
-                            // Don't stack if it would exceed researched max level
-                            let nextStackLevel = stackCountToLevel(getThingStackedStacks(t) + 1);
-                            let maxLevel = getThingResearchedMaxLevel(t);
-                            if (nextStackLevel > maxLevel) break;
-                            
-                            t.stackingWorkDone -= stackCost;
-                            t.stacks = getThingStackedStacks(t) + 1;
-                            stackedAny = true;
-                        }
-                        if (stackedAny) {
-                            if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
-                            _requestAdjacencyRecalcForThing(t, 1);
-                            recalculateAdjacency();
-                        }
-                        refreshThingProgressState(t);
-                        if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                            _builderRememberWorkSite(u, t);
-                            _clearWorkerTarget(u);
-                            _builderFindTarget(u, myGx, myGy);
-                        }
-                    } else if (_isBuilderRepairTarget(t)) {
-                        t.energy = Math.round(Math.min(t.maxEnergy, t.energy + dps) * 1000) / 1000;
-                        didWork = true;
-                        if (!_isBuilderRepairTarget(t)) {
-                            _builderRememberWorkSite(u, t);
-                            _clearWorkerTarget(u);
-                            _builderFindTarget(u, myGx, myGy);
-                        }
-                    }
-
-                    if (didWork) {
-                        u.builderHasMaterial = false;
-                        u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-                        if (t.owner === localPlayerId && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y);
-                    }
-
-                    if (u.workerTarget) {
-                        // Not done yet - loop back to spawner for more gold, then come back
-                        let route = _workerSpawnerRoute(u, 'builder_spawner', _builderCanWalk(u.owner), canRunHeavyAi);
-                        let tripCost = getBuilderTripGoldCost(u);
-                        if (route) {
-                            u.workerState = 'RETURNING_FOR_GOLD';
-                            u.path = route.path;
-                            u.pathIndex = 0; u.commandState = CMD_MOVING;
-                            u._builderSpawnerTarget = route.spawner;
-                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                        } else {
-                            // No spawner or no energy, just keep building for free (but slower)
-                            u.workerState = 'BUILDING_IN_PLACE';
-                        }
-                    }
-                }
-            }
-        } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-            // Safeguard: if we're actively moving to spawner with a valid path, stay in this state.
-            if (u.path && u.pathIndex < u.path.length) {
-                return;
-            }
-            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
-                _builderRememberWorkSite(u);
-                _clearWorkerTarget(u);
-                _builderFindTarget(u, myGx, myGy);
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let spawner = u._builderSpawnerTarget || _findClosestBuilderSpawner(u);
-                let atSpawner = !spawner || _isWorkerWithinTileInteractionRange(u, spawner, 1);
-                if (atSpawner) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let tripCost = getBuilderTripGoldCost(u);
-                    if (spawner) {
-                        addPlayerResource(owner, 'energy', -tripCost);
-                        recordEnergyDelta(owner, 'builder', -tripCost);
-                        u.builderHasMaterial = true;
-                        u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-                    } else {
-                        u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
-                    }
-                    u._builderSpawnerTarget = null;
-                    u.workerState = 'MOVING_TO_BUILD';
-                    let canWalk = _builderCanWalk(u.owner);
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, 'builder');
-                    u.pathIndex = 0; u.commandState = CMD_MOVING;
-                } else {
-                    let route = _workerSpawnerRoute(u, 'builder_spawner', _builderCanWalk(u.owner), canRunHeavyAi);
-                    if (route) {
-                        u._builderSpawnerTarget = route.spawner;
-                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                        u.path = route.path;
-                        u.pathIndex = 0;
-                        u.commandState = CMD_MOVING;
-                    } else {
-                        // If no valid material route exists, keep contributing on-site.
-                        u._builderSpawnerTarget = null;
-                        u.workerState = 'BUILDING_IN_PLACE';
-                        u.commandState = CMD_IDLE;
-                    }
-                }
-            }
-        } else if (u.workerState === 'BUILDING_IN_PLACE') {
-            // Build in place. Prefer full builder throughput when enough energy is available.
-            if (!_isBuilderWorkTarget(u.workerTarget, owner)) {
-                _builderRememberWorkSite(u);
-                _clearWorkerTarget(u);
-                _builderFindTarget(u, myGx, myGy);
-                return;
-            }
-
-            if (!u.builderHasMaterial && u.workerTransferCooldown <= 0) {
-                let tripCost = getBuilderTripGoldCost(u);
-                addPlayerResource(owner, 'energy', -tripCost);
-                recordEnergyDelta(owner, 'builder', -tripCost);
-                u.builderHasMaterial = true;
-                u.workerTransferCooldown = getBuilderTransferCooldownTicks(u);
-            }
-
-            let baseBuild = Number((BASE_UNIT_STATS[u.unitType] || {}).builderDps) || 1;
-            let dps = Number((u.preComputed && u.preComputed.builderDps) || 0) || baseBuild;
-            let buildStep = 0;
-            if (u.builderHasMaterial) {
-                buildStep = dps;
-            } else if (simStepCrosses(0, 20)) {
-                // Last-resort slow trickle when no full material transfer is possible.
-                addPlayerResource(owner, 'energy', -1);
-                recordEnergyDelta(owner, 'builder', -1);
-                buildStep = 1;
-            }
-
-            if (buildStep > 0) {
-                let t = u.workerTarget;
-                if (t.underConstruction) {
-                    let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
-                    t.maxEnergy = requiredEnergy;
-                    t.energy = Math.round(Math.min(requiredEnergy, t.energy + buildStep) * 1000) / 1000;
-                    if (t.energy >= requiredEnergy) {
-                        markConstructionComplete(t);
-                        refreshThingProgressState(t);
-                        if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
-                        _requestAdjacencyRecalcForThing(t, 1);
-                        recalculateAdjacency();
-                        _builderRememberWorkSite(u, t);
-                        if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                            _clearWorkerTarget(u);
-                            _builderFindTarget(u, myGx, myGy);
-                        }
-                    }
-                } else if (t.isUpgrading) {
-                    let requiredEnergy = _getBuilderProgressRequiredEnergy(t);
-                    t.upgrademaxEnergy = requiredEnergy;
-                    t.maxEnergy = requiredEnergy;
-                    t.energy = Math.round(Math.min(requiredEnergy, t.energy + buildStep) * 1000) / 1000;
-                    if (t.energy >= requiredEnergy) {
-                        let prevStacked = getThingStackedStacks(t);
-                        let prevManual = getThingManualStacks(t);
-                        let remainingBeforeUpgrade = Math.max(0, prevManual - prevStacked);
-                        let nextLevel = getThingBaseLevel(t) + 1;
-                        t.level = nextLevel;
-                        if (typeof upkeepThingDirty === 'function') upkeepThingDirty(t);
-                        t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(nextLevel));
-                        t.manualStacks = Math.max(prevManual, t.stacks + remainingBeforeUpgrade);
-
-                        t.isUpgrading = false;
-                        t.upgrademaxEnergy = 0;
-                        refreshThingProgressState(t);
-                        if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
-                        if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
-                        _requestAdjacencyRecalcForThing(t, 1);
-                        recalculateAdjacency();
-                        if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                            _builderRememberWorkSite(u, t);
-                            _clearWorkerTarget(u);
-                            _builderFindTarget(u, myGx, myGy);
-                        }
-                    }
-                } else if (t.isStacking) {
-                    let stackCost = getThingStackingEnergyCost(t);
-                    t.stackingWorkDone = Math.max(0, Number(t.stackingWorkDone) || 0) + buildStep;
-                    let stackedAny = false;
-                    while (t.stackingWorkDone >= stackCost && getThingRemainingStacks(t) > 0) {
-                        // Don't stack if it would exceed researched max level
-                        let nextStackLevel = stackCountToLevel(getThingStackedStacks(t) + 1);
-                        let maxLevel = getThingResearchedMaxLevel(t);
-                        if (nextStackLevel > maxLevel) break;
-                        
-                        t.stackingWorkDone -= stackCost;
-                        t.stacks = getThingStackedStacks(t) + 1;
-                        stackedAny = true;
-                    }
-                    if (stackedAny) {
-                        if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
-                        _requestAdjacencyRecalcForThing(t, 1);
-                        recalculateAdjacency();
-                    }
-                    refreshThingProgressState(t);
-                    if (!t.underConstruction && !t.isUpgrading && !t.isStacking) {
-                        _builderRememberWorkSite(u, t);
-                        _clearWorkerTarget(u);
-                        _builderFindTarget(u, myGx, myGy);
-                    }
-                } else if (_isBuilderRepairTarget(t)) {
-                    t.energy = Math.round(Math.min(t.maxEnergy, t.energy + buildStep) * 1000) / 1000;
-                    if (!_isBuilderRepairTarget(t)) {
-                        _builderRememberWorkSite(u, t);
-                        _clearWorkerTarget(u);
-                        _builderFindTarget(u, myGx, myGy);
-                    }
-                }
-                if (u.builderHasMaterial) u.builderHasMaterial = false;
-                if (t.owner === localPlayerId && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y);
-            }
-            // Check if energy became available - switch back to gold trips
-            let route = _workerSpawnerRoute(u, 'builder_spawner', _builderCanWalk(u.owner), canRunHeavyAi);
-            if (route && u.workerTarget) {
-                u.workerState = 'RETURNING_FOR_GOLD';
-                u.path = route.path;
-                u.pathIndex = 0; u.commandState = CMD_MOVING;
-                u._builderSpawnerTarget = route.spawner;
-                            u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-            }
-        }
-    } else if (u.workerType === 'healer') {
-        if (u.workerState === 'IDLE') {
-            if (!_workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy)) return;
-        } else if (u.workerState === 'MOVING_TO_HEAL') {
-            let targetIsQueue = (u.workerTargetType === 'queue');
-            if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
-                if (targetIsQueue) _clearHealerQueueCommit(u);
-                _clearWorkerTarget(u, 'target_no_work');
-                if (!_workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy)) {
-                    u.workerState = 'IDLE';
-                    u.commandState = CMD_IDLE;
-                }
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let tx = _thingTickX(u.workerTarget), ty = _thingTickY(u.workerTarget);
-                let inHealRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
-                if (!inHealRange) {
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let targetGx = Math.floor(tx / TILE), targetGy = Math.floor(ty / TILE);
-                    u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
-                    u.pathIndex = 0;
-                    u.commandState = CMD_MOVING;
-                    return;
-                }
-                if (!u.healerHasMaterial) {
-                    let route = _workerSpawnerRoute(u, 'healer_spawner', null, canRunHeavyAi);
-                    if (route) {
-                        u.workerState = 'RETURNING_FOR_GOLD';
-                        u.path = route.path;
-                        u.pathIndex = 0; u.commandState = CMD_MOVING;
-                        u._healerSpawnerTarget = route.spawner;
-                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                    } else {
-                        u.workerState = 'IDLE';
-                        u.commandState = CMD_IDLE;
-                    }
-                    return;
-                }
-                if (u.workerTransferCooldown > 0) return;
-
-                if (targetIsQueue) {
-                    let sp = u.workerTarget;
-                    let front = spawnQueueFront(sp);
-                    let didWork = false;
-                    let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1))));
-
-                    if (front && front.energyPaid < front.energyRequired) {
-                        spawnQueuePay(sp, healWork);
-                        didWork = true;
-                    }
-                    if (didWork && typeof spawnerProductionChanged === 'function') spawnerProductionChanged(sp);
-
-                    if (didWork) {
-                        u.healerHasMaterial = false;
-                        u._healerQueueTripCost = 0;
-                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
-                        if (sp.owner === localPlayerId && _noteAmbientSoundTick(sp, 'heal_tick', 12)) playSound('heal_tick', sp.x, sp.y);
-                    }
-
-                    let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
-                    front = spawnQueueFront(sp);
-                    if (front && sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
-                        sp._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-                        if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
-                    }
-
-                    if (!_isHealerQueueTarget(sp, owner)) {
-                        _clearWorkerTarget(u, 'target_no_work');
-                        if (!_workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy)) {
-                            u.workerState = 'IDLE';
-                            u.commandState = CMD_IDLE;
-                        }
-                        return;
-                    }
-
-                    let route = _workerSpawnerRoute(u, 'healer_spawner', null, canRunHeavyAi);
-                    let tripCost = _getHealerQueueTripCost(u, sp);
-                    if (route && tripCost > 0) {
-                        u.workerState = 'RETURNING_FOR_GOLD';
-                        u.path = route.path;
-                        u.pathIndex = 0; u.commandState = CMD_MOVING;
-                        u._healerSpawnerTarget = route.spawner;
-                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                        u._healerQueueTripCost = tripCost;
-                    } else {
-                        u.workerState = 'IDLE';
-                        u.commandState = CMD_IDLE;
-                    }
-                    return;
-                }
-
-                u.workerState = 'HEALING';
-                let baseHeal = Number((BASE_UNIT_STATS[u.unitType] || {}).healerDps) || 1;
-                let dps = Number((u.preComputed && u.preComputed.healerDps) || 0) || baseHeal;
-                u.workerTarget.energy = Math.min(u.workerTarget.maxEnergy, u.workerTarget.energy + dps);
-                u.healerHasMaterial = false;
-                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
-                if (u.workerTarget.owner === localPlayerId && _noteAmbientSoundTick(u.workerTarget, 'heal_tick', 12)) playSound('heal_tick', u.workerTarget.x, u.workerTarget.y);
-
-                if (!_isHealerTargetUnit(u.workerTarget, owner)) {
-                    _clearWorkerTarget(u, 'target_no_work');
-                    if (!_workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy)) {
-                        u.workerState = 'IDLE';
-                        u.commandState = CMD_IDLE;
-                    }
-                    return;
-                }
-
-                let route = _workerSpawnerRoute(u, 'healer_spawner', null, canRunHeavyAi);
-                if (route) {
-                    u.workerState = 'RETURNING_FOR_GOLD';
-                    u.path = route.path;
-                    u.pathIndex = 0; u.commandState = CMD_MOVING;
-                    u._healerSpawnerTarget = route.spawner;
-                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                } else {
-                    u.workerState = 'IDLE';
-                    u.commandState = CMD_IDLE;
-                }
-            }
-        } else if (u.workerState === 'RETURNING_FOR_GOLD') {
-            // Safeguard: if we're actively moving to spawner with a valid path, stay in this state.
-            if (u.path && u.pathIndex < u.path.length) {
-                return;
-            }
-            let targetIsQueue = (u.workerTargetType === 'queue');
-            if (targetIsQueue ? !_isHealerQueueTarget(u.workerTarget, owner) : !_isHealerTargetUnit(u.workerTarget, owner)) {
-                if (targetIsQueue) _clearHealerQueueCommit(u);
-                _clearWorkerTarget(u, 'target_no_work');
-                u._healerQueueTripCost = 0;
-                if (!_workerRunHealerRetargetIfDue(u, canRunHeavyAi, myGx, myGy)) {
-                    u.workerState = 'IDLE';
-                    u.commandState = CMD_IDLE;
-                }
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let spawner = u._healerSpawnerTarget || _findClosestHealerSpawner(u);
-                let atSpawner = !spawner || _isWorkerWithinTileInteractionRange(u, spawner, 1);
-                if (atSpawner) {
-                    if (u.workerTransferCooldown > 0) return;
-                    let tripCost = targetIsQueue ? _getHealerQueueTripCost(u, u.workerTarget) : 1;
-                    if (spawner && tripCost > 0) {
-                        addPlayerResource(owner, 'energy', -tripCost);
-                        recordEnergyDelta(owner, 'healer', -tripCost);
-                        u.healerHasMaterial = true;
-                        u._healerQueueTripCost = targetIsQueue ? tripCost : 0;
-                        u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks('healer', u);
-                    } else if (tripCost > 0) {
-                        u._energyBlockedUntil = gameTime + _getEnergyBlockedGlyphTicks();
-                    }
-                    u._healerSpawnerTarget = null;
-                    u.workerState = 'MOVING_TO_HEAL';
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    let targetGx = Math.floor(_thingTickX(u.workerTarget) / TILE), targetGy = Math.floor(_thingTickY(u.workerTarget) / TILE);
-                    u.path = _requestWorkerPath(u, startGx, startGy, targetGx, targetGy, null, null);
-                    u.pathIndex = 0; u.commandState = CMD_MOVING;
-                } else {
-                    let route = _workerSpawnerRoute(u, 'healer_spawner', null, canRunHeavyAi);
-                    if (route) {
-                        u._healerSpawnerTarget = route.spawner;
-                        u.targetPos = route.spawner ? { x: route.spawner.gx * TILE + 16, y: route.spawner.gy * TILE + 16 } : null;
-                        u.path = route.path;
-                        u.pathIndex = 0;
-                        u.commandState = CMD_MOVING;
-                    } else {
-                        u._healerSpawnerTarget = null;
-                        u.workerState = 'IDLE';
-                        u.commandState = CMD_IDLE;
-                    }
-                }
-            }
-        } else if (u.workerState === 'HEALING') {
-            u.workerState = 'MOVING_TO_HEAL';
-        }
-    } else if (u.workerType === 'researcher') {
-        if (u.workerState === 'IDLE') {
-            if (_wsRegistered(u)) return;
-            if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-            _researcherSearch(u);
-        } else if (u.workerState === 'MOVING_TO_RESEARCH' || u.workerState === 'RESEARCHING' || u.workerState === 'RETURNING_FOR_GOLD') {
-            // (Researchers carry nothing: an older material trip goes back to
-            // its research building.)
-            if (u.workerState !== 'MOVING_TO_RESEARCH') { u.workerState = 'MOVING_TO_RESEARCH'; u.path = null; u.pathIndex = 0; }
-            if (!_isResearcherTargetBuilding(u.workerTarget, owner)) {
-                _clearWorkerTarget(u, 'target_no_work');
-                u.workerState = 'IDLE';
-                u.commandState = CMD_IDLE;
-                return;
-            }
-            if (!u.path || u.pathIndex >= u.path.length) {
-                let target = u.workerTarget;
-                if (!_isWorkerWithinTileInteractionRange(u, target, 1)) {
-                    let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                    u.path = _requestWorkerPath(u, startGx, startGy, target.gx, target.gy, null, null);
-                    u.pathIndex = 0;
-                    u.commandState = CMD_MOVING;
-                    return;
-                }
-                // At its research building: a deposit every cooldown.
-                if (u.workerTransferCooldown > 0) return;
-                _researcherDeposit(u, target, owner);
-                u.commandState = CMD_IDLE;
-            }
-        }
+        // (Salvagers: the worker kernel's, wasm/src/wai.rs.)
     }
+    // (Builders: the worker kernel's, wasm/src/wai.rs.)
+    // (Healers: the worker kernel's, wasm/src/wai.rs.)
+    // (Researchers: the worker kernel's, wasm/src/wai.rs.)
 }
 
 function _getResourceCollectorMineArray(resourceCfg) {
@@ -950,9 +313,10 @@ function _getMineIndicesNear(mineArray, wx, wy, radiusPx) {
 // WS_LANE, SIM_KERNEL_WS_SCAN) over typed tables of the sites (the
 // collectors' site groups; the work site grid; healers' damaged units) while
 // the ticks go on: the post at phase WS_POST_PHASE, the commit two ticks
-// later, which hands each worker that found something its result (by unit
-// id: _wsTakeNow, the sites still valid, the first exclusive one, O(K)); a
-// worker that found nothing costs the tick nothing. Every peer posts and
+// later, which hands every worker that found something its result at once
+// (wasm/src/wai.rs take_one: the sites still valid, the first exclusive one,
+// O(K) each; no share a tick, no cap); a worker that found nothing costs the
+// tick nothing. Every peer posts and
 // commits at the same ticks; a resync drops it all (and the registry) on
 // every peer.
 const WS_TICKS = 4, WS_POST_PHASE = 3, WS_K = 6, WS_RETRY = 20, WS_SEL_CHUNK = 4096;
@@ -968,17 +332,7 @@ const WS_WAITING = Object.freeze({ wsWaiting: true });
 // (_wsCur: the result of the take being made, { s: slot, id, kind, stamp,
 // res, units }; a Map by slot set and emptied around each take was ~1.5 ms
 // a tick of lookups.)
-let _wsPosted = null, _wsCur = null, _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false, _wsPending = null;
-// (The commit's takes are spread over this many ticks, at most WS_TAKE_MAX a
-// tick, by cost (WS_TAKE_HEAL_COST a healer's, 1 the others'): each runs its
-// worker's JS (~15-20 us: its target taken, its way asked for; a healer's
-// ~75 us: its nearest healer building, its sites checked), and a round after
-// thousands of workers registered at once (a base's healers, builders after
-// a wave of placements) took 30-50 ms a tick for three ticks. Takes left at
-// the next post go on: that post is skipped (_wsSkipped), the one after it
-// selects the workers it would have, see _wsPost. ~11 ms a tick at most.)
-const WS_TAKE_TICKS = 3, WS_TAKE_MAX = 600, WS_TAKE_HEAL_COST = 4;
-let _wsSkipped = 0;
+let _wsPosted = null, _wsCur = null, _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false;
 const _wsGroups = new Map();
 function _wsAvailable() { return typeof SIM_KERNEL_WS_SCAN === 'number' && typeof simParallelBackground === 'function' && typeof _simUnitState !== 'undefined' && !!_simUnitState; }
 function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] !== 0 && _wsAvailable(); }
@@ -1011,7 +365,7 @@ function _wsWait(u) {
 }
 function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
-    _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false; _wsPending = null; _wsSkipped = 0;
+    _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false;
     _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
     _wsw = null; _wswDirty = []; _wswResvRoom()[0] = 0;
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.wsKind.fill(0);
@@ -1027,7 +381,6 @@ function workerSearchTierStep() {
         const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
         if (cycle && ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
         if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
-        else if (cycle && _wsPending) _wsTakeSome();
         // (Past WSW_SLOW_UNITS units the sweep takes only every WSW_SLOW-th cycle's slices, each
         // visiting the next ones: the same coverage WSW_SLOW times slower. Stateless: by the tick.)
         const wswSlow = units.length >= WSW_SLOW_UNITS ? WSW_SLOW : 1, wswCycle = Math.floor(b / WS_TICKS);
@@ -1340,12 +693,8 @@ function _wsArr(name, Type, n) {
     return a;
 }
 function _wsPost() {
-    // (The last commit's takes not all made (WS_TAKE_MAX): they go on, no
-    // post over their arrays this time. The same on every peer.)
-    if (_wsPending && _wsPending.pos < _wsPending.found.length) { _wsSkipped++; return; }
     simParallelBackgroundWait(WS_LANE);
     _wsPosted = null;
-    _wsPending = null;
     const S = _simUnitState;
     if (!S) return;
     const n = S.owners.length;
@@ -1353,12 +702,10 @@ function _wsPost() {
     const CH = WS_SEL_CHUNK, chunks = Math.ceil(n / CH);
     const CNT = _wsArr('ws.rcnt', Int32Array, chunks), PRE = _wsArr('ws.rpre', Int32Array, chunks + 1);
     const P = _simParams;
-    // (Workers registered since the last post made: a skipped post's too,
-    // P[3]; the retry slots as wide.)
+    // (Workers registered since the last post made, P[3]; the retry slots as wide.)
     // (Steps of more base ticks than a cycle (simDk) post once a step: its
     // base ticks.)
-    const win = Math.max(WS_TICKS, simDk) * (1 + Math.min(_wsSkipped, 15));
-    _wsSkipped = 0;
+    const win = Math.max(WS_TICKS, simDk);
     // (P[6]: how many times over a search that keeps finding nothing waits;
     // 8x the retry (160 ticks), 32x from WS_BACKOFF_MANY units: ~630k idle
     // workers at 2M searched ~4k a tick for nothing.)
@@ -1440,65 +787,17 @@ function _wsOrder() {
     simParallelBackground(SIM_KERNEL_WS_ORDER, 1, WS_LANE);
     J.ordered = true;
 }
-// A worker's take of its result (its type's search function, which finds
-// the result: wsTake).
-function _wsTakeNow(u) {
-    const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE), wt = u.workerType;
-    if (isResourceCollectorWorkerType(wt)) { const cfg = _getResourceCollectorConfigForUnit(u); if (cfg) _resourceCollectorFindTarget(u, gx, gy, cfg); }
-    else if (wt === 'builder') _builderFindTarget(u, gx, gy);
-    else if (wt === 'salvager') _salvagerFindTarget(u, gx, gy);
-    else if (wt === 'healer') _healerFindTarget(u, gx, gy);
-    else if (wt === 'researcher') _researcherSearch(u);
-}
+// The commit: every request that found something takes its result now, in
+// the order's order, in the worker kernel (worker.js waiTake).
 function _wsCommit() {
     if (!_wsPosted || !_wsPosted.ordered) return;
     simParallelBackgroundWait(WS_LANE);
     const J = _wsPosted;
     _wsPosted = null;
-    const S = _simUnitState;
-    if (!S) return;
+    if (!_simUnitState) return;
     _wsCommitTick = gameTime;
-    // Constant-time publication. All ordering work happened on the tier;
-    // each reply is checked live when its scheduled share is consumed.
-    const found = _simParReg['ws.order'].subarray(0, _simParReg['ws.orderCount'][0]);
-    if (!found.length) return;
-    // The takes: a share a tick, this one and the next WS_TAKE_TICKS - 1
-    // (the last before the next post), in id order.
-    _wsPending = { J, found, pos: 0, end: gameTime + WS_TAKE_TICKS - 1 };
-    _wsTakeSome();
-}
-function _wsTakeSome() {
-    const Q = _wsPending, S = _simUnitState;
-    if (!Q || !S) { _wsPending = null; return; }
-    const J = Q.J, c = S.columns, owners = S.owners, R = _simParReg, K = WS_K;
-    const OUT = R['ws.res'], OSC = R['ws.score'], UOUT = R['ws.ures'], RS = R['ws.rslot'], RID = R['ws.rid'], RWT = R['ws.rwt'], RK = R['ws.rkind'], RG = R['ws.rgrp'], RO = R['ws.rowner'];
-    // (Its share, at most WS_TAKE_MAX a tick: what the cap leaves by the next
-    // post is dropped there, see _wsPost.)
-    const found = Q.found, share = Math.ceil((found.length - Q.pos) / Math.max(1, Q.end - gameTime + 1));
-    const end = Math.min(found.length, Q.pos + share);
-    _wsInCommit = true;
-    try {
-        for (let cost = 0; Q.pos < end && cost < WS_TAKE_MAX; Q.pos++) {
-            const i = found[Q.pos];
-            const s = RS[i], u = owners[s], kind = RK[i], o0 = i * K, res = [];
-            cost += kind === WSR_HEAL ? WS_TAKE_HEAL_COST : 1;
-            if (!u || u.dead || (u.id | 0) !== RID[i] || c.wsKind[s] !== kind || c.wsT[c.wkIx[s]] !== RWT[i]) continue;
-            if (kind === WSR_COLLECT) {
-                const G = J.groups[RG[i]];
-                if (!G) continue;
-                for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; const t = _wsSiteTarget(G, x); if (t) res.push({ target: t, targetType: G.st[x] === 1 ? G.cfg.mineTileType : G.cfg.farmKey, dist: OSC[o0 + k] }); }
-            } else for (let k = 0; k < K; k++) { const x = OUT[o0 + k]; if (x < 0) break; res.push({ site: x, dist: OSC[o0 + k] }); }
-            let units = null;
-            if (kind === WSR_HEAL) { units = []; const L = J.heal[RO[i]] || []; for (let k = 0; k < 3; k++) { const q = UOUT[i * 3 + k]; if (q >= 0 && L[q]) units.push(L[q]); } }
-            _wsCur = { s, id: u.id, kind: kind === WSR_COLLECT ? WS_COLLECT : WS_GRID, stamp: _wsCommitTick, res, units };
-            _wsTakeNow(u);
-            _wsCur = null;
-            // (Still searching: nothing it could take; its next searches
-            // further apart.)
-            if (c.wsKind[s] !== 0) { if (c.wsFail[s] < 255) c.wsFail[s]++; } else c.wsFail[s] = 0;
-        }
-    } finally { _wsInCommit = false; }
-    if (Q.pos >= found.length) _wsPending = null;
+    const n = _simParReg['ws.orderCount'][0];
+    if (n > 0) waiTake(J, _simParReg['ws.order'], n);
 }
 
 function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
@@ -1613,133 +912,6 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     }
     u.workerState = 'IDLE';
     u.commandState = CMD_IDLE;
-}
-
-function _updateResourceCollectorAI(u, owner, myGx, myGy, canRunHeavyAi) {
-    let resourceCfg = _getResourceCollectorConfigForUnit(u);
-    if (!resourceCfg) return;
-    let mem = _getResourceCollectorMemory(u);
-    if (u.workerState === 'IDLE') {
-        if (!u._lastIdleStateTime || u.workerState !== 'IDLE') u._lastIdleStateTime = gameTime;
-        // (Registered: the tier hands it its work.)
-        if (_wsRegistered(u)) return;
-        if (!shouldRunWorkerIdleRetarget(u, canRunHeavyAi)) return;
-        _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
-        return;
-    }
-    if (u.workerState === 'MOVING_TO' || u.workerState === 'MOVING_TO_ASTAR') {
-        u._lastIdleStateTime = 0;
-        if (!u.workerTarget || !_workerOwnsReservedTarget(u)) {
-            _clearWorkerTarget(u, 'target_missing');
-            _clearWorkerAutoRoute(u);
-            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
-            return;
-        }
-        if (!_isResourceCollectorTargetValid(u.workerTarget, u.workerTargetType, owner, resourceCfg)) {
-            _clearWorkerTarget(u, 'target_no_work');
-            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
-            return;
-        }
-        if (!u.path || u.pathIndex >= u.path.length) {
-            if (_workerHasPendingAutoRouteToTarget(u)) return;
-            let inGatherRange = _isWorkerWithinTileInteractionRange(u, u.workerTarget, 1);
-            if (inGatherRange) {
-                if (u.workerTransferCooldown > 0) return;
-                if (u.workerTargetType === 'drop') {
-                    u.carryingValue = u.workerTarget.value;
-                    removeDroppedItem(u.workerTarget);
-                } else {
-                    let gatherPerTrip = _resourceCollectorGetGatherPerTrip(u, owner);
-                    if (u.workerTargetType === resourceCfg.farmKey) {
-                        let farmLvl = getThingBaseLevel(u.workerTarget, stackCountToLevel(u.workerTarget.stacks || 1));
-                        let mult = getBuildingStatForOwner(owner, resourceCfg.farmKey, farmLvl, 'multiplier');
-                        if (!Number.isFinite(mult) || mult <= 0) mult = Math.max(1, farmLvl);
-                        u.carryingValue = Math.floor(Math.max(1, gatherPerTrip * mult));
-                    } else {
-                        // Floor extract to integer — float gatherPerTrip (from level-scaling Math.pow)
-                        // would leave a fractional mine value; Math.floor in the digest would then diverge
-                        // between clients if their accumulated floats differ even slightly.
-                        let extract = Math.floor(Math.min(gatherPerTrip, Math.max(0, Number(u.workerTarget[resourceCfg.mineStatKey]) || 0)));
-                        u.workerTarget[resourceCfg.mineStatKey] -= extract;
-                        u.carryingValue = extract;
-                        // Keep static/background mine visuals in sync as mine values change.
-                        let mine = u.workerTarget;
-                        _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
-                        dirtyGrid = true;
-                        if (u.workerTarget[resourceCfg.mineStatKey] <= 0) {
-                            grid[mine.gy][mine.gx].type = TYPE_FLOOR;
-                            simMoveTileTypeChanged(mine.gx, mine.gy);
-                            _bumpPathTopologyVersion();
-                            let mineArray = _getResourceCollectorMineArray(resourceCfg);
-                            let idx = mineArray ? mineArray.indexOf(mine) : -1;
-                            if (idx >= 0) mineArray.splice(idx, 1);
-                            clearTileEntity(mine.gx, mine.gy, mine);
-                            _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
-                            dirtyGrid = true;
-                        }
-                    }
-                }
-                if (owner === localPlayerId && u.workerTargetType !== 'drop') {
-                    playSound(u.workerType === 'astar_collector' ? 'astar_work' : 'collector_work', u.x, u.y);
-                }
-                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks(u.workerType, u);
-                _rememberResourceCollectorGatherSite(u, u.workerTarget, u.workerTargetType, resourceCfg);
-                mem.lastMineTarget = (u.workerTargetType === resourceCfg.mineTileType) ? u.workerTarget : null;
-                mem.lastMineTargetType = (u.workerTargetType === resourceCfg.mineTileType) ? u.workerTargetType : null;
-                if (resourceCfg.stockpileKey === 'energy') u._lastMineTarget = mem.lastMineTarget;
-                else if (resourceCfg.stockpileKey === 'astar') {
-                    u._astarLastMineTarget = mem.lastMineTarget;
-                    u._astarLastMineTargetType = mem.lastMineTargetType;
-                }
-                if (u.workerTargetType === 'drop') _clearWorkerTarget(u, 'target_missing');
-                u.workerState = 'RETURNING';
-                _workerReturnPath(u);
-            } else {
-                let startGx = Math.floor(u.x / TILE), startGy = Math.floor(u.y / TILE);
-                let canWalk = u.workerTargetType === resourceCfg.mineTileType ? _resourceCollectorCanWalk : null;
-                u.path = _requestWorkerPath(u, startGx, startGy, u.workerTarget.gx, u.workerTarget.gy, canWalk, resourceCfg.collectorUnitKey, true);
-                if (u.path) {
-                    u.pathIndex = 0;
-                    u.commandState = CMD_MOVING;
-                } else {
-                    _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
-                }
-            }
-        }
-        return;
-    }
-    if (u.workerState === 'RETURNING' || u.workerState === 'RETURNING_ASTAR') {
-        if (!u.path || u.pathIndex >= u.path.length) {
-            let dropoff = _getResourceCollectorPreferredSpawner(u, resourceCfg.collectorBuildingKey) || _findClosestSpawner(u, resourceCfg.collectorBuildingKey);
-            let isAtDropoff = !!dropoff && _isWorkerWithinTileInteractionRange(u, dropoff, 1);
-            if (isAtDropoff && dropoff) {
-                _setResourceCollectorLastDropoffSpawner(u, dropoff);
-                _setResourceCollectorNextSpawner(u, dropoff);
-            }
-            if (u.carryingValue > 0 && !isAtDropoff) {
-                _workerReturnPath(u);
-                return;
-            }
-            if (u.carryingValue > 0 && isAtDropoff) {
-                if (u.workerTransferCooldown > 0) return;
-                _depositResourceCollectorPayload(u, owner, resourceCfg);
-                u.workerTransferCooldown = getWorkerTypeTransferCooldownTicks(u.workerType, u);
-            }
-            u.carryingValue = 0;
-            if (!canRunHeavyAi) return;
-            if (_isResourceCollectorTargetValid(u.workerTarget, u.workerTargetType, owner, resourceCfg) && _workerOwnsReservedTarget(u)) {
-                _resourceCollectorAssignTarget(u, u.workerTarget, u.workerTargetType, resourceCfg);
-                return;
-            }
-            mem.lastMineTarget = null;
-            mem.lastMineTargetType = null;
-            u._lastMineTarget = null;
-            u._astarLastMineTarget = null;
-            u._astarLastMineTargetType = null;
-            _clearWorkerTarget(u, 'target_no_work');
-            _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg);
-        }
-    }
 }
 
 function _getResourceCollectorConfigForUnit(u) {
@@ -2233,24 +1405,24 @@ function getResourceCollectorConfigByWorkerType(workerType) {
     return getResourceTypeByCollectorUnit(workerType);
 }
 
+// A collector's memory: a view of its worker record's columns (sim_unit_state.js
+// SIM_WK_MEM; the energy and A* names share them).
+class _CollectorMemView {
+    constructor(u) { this.u = u; }
+    get pinnedTarget() { return this.u._collectorPinnedTarget; } set pinnedTarget(v) { this.u._collectorPinnedTarget = v; }
+    get pinnedTargetType() { return this.u._collectorPinnedTargetType; } set pinnedTargetType(v) { this.u._collectorPinnedTargetType = v; }
+    get lastGatherX() { return this.u._collectorLastGatherX; } set lastGatherX(v) { this.u._collectorLastGatherX = v; }
+    get lastGatherY() { return this.u._collectorLastGatherY; } set lastGatherY(v) { this.u._collectorLastGatherY = v; }
+    get lastGatherGx() { return this.u._collectorLastGatherGx; } set lastGatherGx(v) { this.u._collectorLastGatherGx = v; }
+    get lastGatherGy() { return this.u._collectorLastGatherGy; } set lastGatherGy(v) { this.u._collectorLastGatherGy = v; }
+    get lastGatherType() { return this.u._collectorLastGatherType; } set lastGatherType(v) { this.u._collectorLastGatherType = v; }
+    get nextSpawner() { return this.u._collectorNextSpawner; } set nextSpawner(v) { this.u._collectorNextSpawner = v; }
+    get lastDropoffSpawner() { return this.u._collectorLastDropoffSpawner; } set lastDropoffSpawner(v) { this.u._collectorLastDropoffSpawner = v; }
+    get lastMineTarget() { return this.u._lastMineTarget; } set lastMineTarget(v) { this.u._lastMineTarget = v; }
+    get lastMineTargetType() { return this.u._astarLastMineTargetType; } set lastMineTargetType(v) { this.u._astarLastMineTargetType = v; }
+}
 function _getResourceCollectorMemory(u) {
-    if (!u) return null;
-    if (!u._resourceCollectorMemory || typeof u._resourceCollectorMemory !== 'object') {
-        u._resourceCollectorMemory = {
-            pinnedTarget: null,
-            pinnedTargetType: null,
-            lastGatherX: null,
-            lastGatherY: null,
-            lastGatherGx: null,
-            lastGatherGy: null,
-            lastGatherType: null,
-            nextSpawner: null,
-            lastDropoffSpawner: null,
-            lastMineTarget: null,
-            lastMineTargetType: null,
-        };
-    }
-    return u._resourceCollectorMemory;
+    return u ? new _CollectorMemView(u) : null;
 }
 
 function _setResourceCollectorNextSpawner(u, spawner) {
@@ -3992,10 +3164,13 @@ function _workerBrainArray(name,Type,n){
     const B=_workerBrain,old=B.arrays[name];if(old&&old.length>=n)return old;
     const a=B.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(n,1),256));simParallelBind('wb.'+name,a);if(old)simHeapFree(old);return a;
 }
-function workerBrainsPrepare(n,defer=false){
+// (list: slot * 8 + code entries, the first n: the tick's events by default.)
+function workerBrainsPrepare(n,defer=false,list=null){
+    simParallelBind('wb.list',list||_unitEvSort.sorted);
     if(_workerBrain.pending)workerBrainsCollect();
     const B=_workerBrain;B.active=false;B.tick=-1;B.prepared=0;B.used=0;B.misses=0;
-    if(!WORKER_BRAIN_WASM||n<64||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.free.length<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
+    // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
+    if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.free.length<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
     const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
     _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);
     for(const key of ['code','own','uc','val','brain'])simParallelBind('st.'+key,_ST[key]);
@@ -4326,4 +3501,317 @@ function applyWorkerRallyFromSpawner(u, spawner) {
     }
 
     return false;
+}
+
+// ---- The worker state machine as a kernel (wasm/src/wai.rs k_worker_ai) ----
+// The tick's worker events, after the others (unit.js unitEventsRun): one
+// serial pass in their order over the columns, the structure tables, the
+// reservations and work versions, payments into the resource batch's rows;
+// then its out events here in their order: sounds, the research queue's
+// advance, arming off the atlas, and the events of the worker types it does
+// not take yet (their JavaScript, as before). MAIN_THREAD_SERIAL_PLAN.md
+// "Stage D". Off: every worker event goes the JavaScript way.
+let WORKER_AI_WASM = true;
+const WAI_RS_W = 12, WAI_ES_W = 8, WAI_ES_SOURCES = ['research', 'salvage', 'collect', 'healer', 'builder'];
+const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13, WAI_OUT_BUILD_START = 14;
+const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work', 'gold_collected', 'astar_collected'];
+// The class columns the kernel reads (wai.ctab: per class of data_state.js
+// _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
+const WAI_CTAB_COLS = ['markedForSalvage', 'stacks', 'level', 'queueEnabled', '_qN', '_qReq', '_qPaid', ''];
+const _wai = { tver: '', P: new Float64Array(80), declined: 0 };
+function _waiArr(name, Type, n) {
+    let a = _wai[name];
+    if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFree(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
+    return a;
+}
+// (The batch's rows for every player: payments go into them.)
+function _waiRowsReady() {
+    if (!_resourceBatchActive) return false;
+    for (let o = 0; o < players.length; o++) { const r = _resourceBatchRows[o]; if (!r || r.player !== players[o] || !simHeapHas(r.deltas)) return false; }
+    return true;
+}
+function waiAvailable() {
+    return WORKER_AI_WASM && typeof _simWasmX !== 'undefined' && !!_simWasmX && typeof _simWasmX.k_worker_ai === 'function' && _wsAvailable()
+        && !!_ST.ctab && simHeapHas(_ST.ctab) && !!_effHot && _waiRowsReady();
+}
+// Per owner and level: the research building's efficiency and researcher
+// dps (getResearchBuildingEfficiency, getResearcherDps); per owner, worker
+// record type and level the search range (_getWorkerAutoSearchDistancePx,
+// _getWorkerAutoSearchDistanceArea). Made again when the stat tables change.
+const _WAI_WB_TYPES = ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'];
+function _waiTables() {
+    const np = players.length, L1 = MAX_THING_LEVEL + 1, key = _precomputedStatsVersion + ':' + np + ':' + L1;
+    if (_wai.tver === key && simHeapHas(_wai.teff)) return;
+    const teff = _waiArr('teff', Float64Array, np * L1), tdps = _waiArr('tdps', Float64Array, np * L1);
+    const tspx = _waiArr('tspx', Float64Array, np * 8 * L1), tsak = _waiArr('tsak', Float64Array, np * 8 * L1);
+    const tt = _waiArr('ttab', Int32Array, 8);
+    // (Per owner, resource (energy, A*) and level: a farm's multiplier, collector-ai's.)
+    const tfarm = _waiArr('tfarm', Float64Array, np * 2 * L1);
+    for (let o = 0; o < np; o++) for (let l = 0; l < L1; l++) {
+        teff[o * L1 + l] = getResearchBuildingEfficiency({ type: 'research', level: l, owner: o });
+        for (let rz = 0; rz < 2; rz++) {
+            const cfg = RESOURCE_TYPE_LIST[rz];
+            let m = getBuildingStatForOwner(o, cfg.farmKey, Math.max(1, l), 'multiplier');
+            if (!Number.isFinite(m) || m <= 0) m = Math.max(1, l);
+            tfarm[(o * 2 + rz) * L1 + l] = m;
+        }
+        const d = getUnitStatForOwner(o, 'researcher_unit', Math.max(1, l), 'researcherDps');
+        tdps[o * L1 + l] = Math.max(1, Math.round(Number.isFinite(d) ? d : 1));
+        for (let wb = 1; wb < _WAI_WB_TYPES.length; wb++) {
+            const u = { owner: o, unitType: getWorkerUnitTypeFromWorkerType(_WAI_WB_TYPES[wb]), effectiveLevel: l }, i = (o * 8 + wb) * L1 + l;
+            tspx[i] = _getWorkerAutoSearchDistancePx(u); tsak[i] = _getWorkerAutoSearchDistanceArea(u);
+        }
+    }
+    _WAI_WB_TYPES.forEach((t, i) => { tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
+    _wai.tver = key;
+}
+// The pass over the n worker events listed (slot * 8 + code, their order).
+function waiRun(list, n, take = null) {
+    const S = _simUnitState, c = S.columns, np = players.length, P = _wai.P;
+    _waiTables();
+    // Research per owner: [active, required, done, cost, points, next queued,
+    // its required, done, cost] (wai.rs research_deposit's words).
+    const rs = _waiArr('rs', Float64Array, np * WAI_RS_W);
+    rs.fill(0, 0, np * WAI_RS_W);
+    for (let o = 0; o < np; o++) {
+        const b = o * WAI_RS_W, task = getPlayerResearchTask(o);
+        rs[b + 4] = Number(players[o] && players[o].researchPoints) || 0;
+        if (task) { rs[b] = 1; rs[b + 1] = Number(task.workRequired) || 0; rs[b + 2] = Number(task.workDone) || 0; rs[b + 3] = Number(task.cost) || 0; continue; }
+        for (const q of getPlayerResearchQueue(o)) {
+            const t = _normalizeResearchTaskForOwner(q, o);
+            if (!t) continue;
+            rs[b + 5] = 1; rs[b + 6] = Number(t.workRequired) || 0; rs[b + 7] = Number(t.workDone) || 0; rs[b + 8] = Number(t.cost) || 0;
+            break;
+        }
+    }
+    // Payments: the batch rows' deltas (room for two a worker), their counts and sums.
+    const payt = _waiArr('payt', Int32Array, np * 4), payl = _waiArr('payl', Float64Array, np * 2);
+    for (let o = 0; o < np; o++) {
+        const r = _resourceBatchRows[o];
+        if ((r.n + 2 * n + 2) * 2 > r.deltas.length) { const old = r.deltas; r.deltas = simSharedArray(Float64Array, Math.max(old.length * 2, (r.n + 2 * n + 2) * 4)); r.deltas.set(old); simHeapFree(old); }
+        payt[o * 4] = _simWEnc(_simHeapPtrOf(r.deltas)); payt[o * 4 + 1] = r.deltas.length >> 1; payt[o * 4 + 2] = r.n;
+        payl[o * 2] = r.logical[0]; payl[o * 2 + 1] = r.logical[1];
+    }
+    const es = _waiArr('es', Float64Array, np * WAI_ES_W);
+    es.fill(0, 0, np * WAI_ES_W);
+    const out = _waiArr('out', Int32Array, n * 8 + 64), cnt = _waiArr('cnt', Int32Array, 8);
+    cnt.fill(0, 0, 8);
+    const V = _workerWorkTable();
+    if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
+    const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
+    const wsl = _wsw ? _wswResvRoom() : null;
+    structRallyClasses();
+    const RT = typeof ResearchSpawner !== 'undefined' ? _sTables.get(ResearchSpawner) : null, rcol = k => RT && RT.n && simHeapHas(RT['c_' + k]) ? RT['c_' + k] : null;
+    let atlas = 0;
+    for (let p = 0; p < NAV_PROFILES; p++) { const nav = _nav[p]; if (NAV_ATLAS && nav && nav.atlas && nav.atlas.header) atlas |= 1 << p; }
+    // (Every profile's walls, as navApproachTile reads them.)
+    const cwall = _waiArr('cwall', Int32Array, NAV_PROFILES);
+    for (let p = 0; p < NAV_PROFILES; p++) { const a = navWallTable(p); cwall[p] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
+    const CW = WAI_CTAB_COLS.length, ctab = _waiArr('ctab', Int32Array, (_stAllCls.length + 1) * CW);
+    ctab.fill(0, 0, (_stAllCls.length + 1) * CW);
+    _stAllCls.forEach((C, i) => {
+        const T = C ? _sTables.get(C) : null;
+        for (let j = 0; j < CW; j++) { const a = T && T.n && WAI_CTAB_COLS[j] ? T['c_' + WAI_CTAB_COLS[j]] : null; ctab[(i + 1) * CW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
+    });
+    // (Prices by stationary type: a salvage's refund.)
+    const nty = _stationaryTypes.length, price = _waiArr('price', Float64Array, nty + 1);
+    for (let i = 0; i < nty; i++) { const p = BASE_CARD_TYPES[_stationaryTypes[i]]; price[i] = p ? Number(p.price) || 0 : 0; }
+    // (The id table, made from the units list when none yet: unit targets and reservation holders by id.)
+    if (!_unitById._ok()) _unitById._refill();
+    const idt = _unitById._ok() && simHeapHas(_unitById.t) ? _unitById.t : null;
+    const salv = BASE_UNIT_STATS.salvager_unit || {};
+    const base = BASE_UNIT_STATS.researcher_unit || {};
+    P.fill(0);
+    P[0] = n; P[1] = gameTime; P[2] = simDk; P[3] = GRID_W; P[4] = GRID_H; P[5] = TILE; P[6] = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
+    P[7] = getWorkerIdleRetargetTicks(); P[8] = getWorkerIdleSearchTicks(); P[9] = WORKER_IDLE_BACKOFF_SECONDS * TICK_RATE;
+    P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = SNAP_REGION_TILES; P[12] = Math.ceil(GRID_W / SNAP_REGION_TILES);
+    P[13] = _WORKER_WORK_TYPES.length; P[14] = V.rw; P[15] = V.rh; P[16] = V.np; P[17] = WORKER_WORK_REGION_TILES;
+    P[18] = spatialEpoch; P[19] = SIM_SEP_ABSENT; P[20] = atlas; P[21] = localPlayerId; P[22] = _stAllIx.get(ResearchSpawner) || 0;
+    P[23] = MAX_THING_LEVEL + 1; P[24] = MAX_THING_LEVEL; P[25] = n * 2 + 16; P[26] = workerReservedTiles.length; P[27] = V.length;
+    P[28] = wsl ? wsl.length : 0; P[29] = np; P[30] = RESOURCE_FIXED_POINT_SCALE; P[31] = simWttCode('research');
+    P[32] = Math.max(1, Math.round(Number(base.researcherDps) || 1)); P[33] = secondsToTicks(Math.max(0.01, Number(base.transferCooldown) || 0.01));
+    P[34] = idt ? idt.length : 1; P[35] = _stationaryTypeIds.has('salvager') ? _stationaryTypeIds.get('salvager') + 1 : -1;
+    P[36] = secondsToTicks(Math.max(0.01, Number(salv.transferCooldown) || 0.01)); P[37] = nty;
+    // (Per resource, RESOURCE_TYPE_LIST's first two: energy, A*.)
+    // (Stationary types as the structure table's descriptor holds them: id + 1.)
+    const sty = k => _stationaryTypeIds.has(k) ? _stationaryTypeIds.get(k) + 1 : -1, RL = RESOURCE_TYPE_LIST;
+    P[38] = simWttCode(RL[0].mineTileType); P[39] = simWttCode(RL[1].mineTileType); P[40] = simWttCode(RL[0].farmKey); P[41] = simWttCode(RL[1].farmKey); P[42] = simWttCode('drop');
+    P[43] = sty(RL[0].farmKey); P[44] = sty(RL[1].farmKey); P[45] = sty(RL[0].collectorBuildingKey); P[46] = sty(RL[1].collectorBuildingKey);
+    P[47] = 0x66; P[48] = 0x77;
+    for (let rz = 0; rz < 2; rz++) { const b = BASE_UNIT_STATS[RL[rz].collectorUnitKey] || {}; P[49 + rz] = secondsToTicks(Math.max(0.01, Number(b.transferCooldown) || 0.01)); P[51 + rz] = rz; }
+    P[53] = secondsToTicks(5); P[54] = areaSearchEnabled() ? 1 : 0;
+    const heal = BASE_UNIT_STATS.healer_unit || {};
+    P[55] = sty('healer_spawner'); P[56] = Number(heal.healerDps) || 1; P[57] = secondsToTicks(Math.max(0.01, Number(heal.transferCooldown) || 0.01));
+    P[58] = _getEnergyBlockedGlyphTicks(); P[59] = _unitPassOn ? 1 : 0; P[60] = simWttCode('queue'); P[61] = simWttCode('unit');
+    // (Builders: the structures' build columns, adj.ctab and wsw.ctab, and the static stat tables, as k_wsw_set reads them.)
+    const SS = statTablesStatic(), SX = _adjPlayerStats(SS), STY = _adjTypeKeys(), SR = _simParReg, bld = BASE_UNIT_STATS.builder_unit || {};
+    const ACT = _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length);
+    _adjApplyClasses(ACT);
+    const WCT = _adjArr('wsw.ctab', Int32Array, 9 * _WSW_CTAB_COLS.length), SCL = STRUCT_STATUS_CLASSES(), WW = _WSW_CTAB_COLS.length;
+    for (let k = 0; k < 9; k++) {
+        const T = SCL[k] ? _sTables.get(SCL[k]) : null;
+        for (let j = 0; j < WW; j++) { const a = T && T.n ? T['c_' + _WSW_CTAB_COLS[j]] : null; WCT[k * WW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
+    }
+    P[62] = STY; P[63] = SS.nk; P[64] = SX.np; P[65] = SS.L1; P[66] = SS.R1; P[67] = sty('builder_spawner'); P[68] = Number(bld.builderDps) || 1;
+    const R2 = _simParReg;
+    P[72] = take ? 1 : 0; P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
+    P[69] = secondsToTicks(Math.max(0.01, Number(bld.transferCooldown) || 0.01)); P[70] = Math.max(120, Math.floor(TICK_RATE * 8)); P[71] = Math.max(60, Math.floor(TICK_RATE * 3));
+    simRustDirect('k_worker_ai', [list, out, cnt,
+        c.id, c.owner, c.x, c.y, c.dead, c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.commandState, c.pathIndex, c.nvPK,
+        c.mvOn, c.mvCD, c.mvPath, S.pathPool.fs, c.mvOut, c.wsKind, c.wkIdle, S.sepKey, c.spEpoch, c.workerTransferCooldown, c.mvTgX, c.mvTgY, c.mvNavLD, c.statRow, c.effectiveLevel, c.wkIx,
+        c.wbType, c.mvWake, c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
+        c.wkType, c.wkD, c.wkOx, c.wkOy, c.wkTwice, c.wkFail, c.wkUntil, c.wkSched,
+        c.wsT, c.wsCfg, c.wsOU, c.wsOx, c.wsOy, c.wsR, c.wsAx, c.wsAy, c.wsAk, c.wsNeed, c.wsJid, c.wsCur, c.wsMy, c.wsFail,
+        c.wmSp, c.wmFailU, c.holdF, c.mvPP, _effHot,
+        _ST.ctab, _ST.rrow, _ST.own, _ST.uc, _ST.val, rcol('markedForSalvage'), rcol('autoResearchEnabled'), rcol('level'), rcol('stacks'),
+        navWallTable(NAV_PROFILE_GROUND), workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, _wai.ttab,
+        rs, _wai.teff, _wai.tdps, _wai.tspx, _wai.tsak, payt, payl, es, navWallTable(NAV_PROFILE_AIR), S.sepLayer, c.tmOn,
+        cwall, ctab, price, c.unitLevel, idt, _ST.brain, c.wbTick, c.wbSpawner, c.wmCarry,
+        c.wmPin, c.wmPinTy, c.wmWx, c.wmWy, c.wmWgx, c.wmWgy, c.wmWty, c.wmDrop, c.wmMine, c.wmMineTy, c.wmIdle, _wai.tfarm, _ST.code,
+        c.wmQc, c.wmQr, c.wmQp, c.wmTrip, c.wmBlk, c.energy, c.maxE, c.x0, c.y0,
+        _ST.stab, ACT, WCT, SR['adj.tykey'], SR['adj.rml'], SS.mxe, SR['adj.rlv'], c.wkWx, c.wkWy, c.wkLmt, c.wmRe, _wai.ownStats,
+        take ? R2['ws.rslot'] : null, take ? R2['ws.rid'] : null, take ? R2['ws.rkind'] : null, take ? R2['ws.rwt'] : null, take ? R2['ws.rgrp'] : null,
+        take ? R2['ws.res'] : null, take ? R2['ws.score'] : null, take ? R2['ws.ures'] : null, take ? _wai.gtab : null, take ? _wai.hid : null], P);
+    if (cnt[1]) throw new Error('k_worker_ai: out of room (payments or out events)');
+    // Its writes the JavaScript keeps beside the tables.
+    for (let o = 0; o < np; o++) {
+        const r = _resourceBatchRows[o];
+        r.n = payt[o * 4 + 2]; r.logical[0] = payl[o * 2]; r.logical[1] = payl[o * 2 + 1];
+        if (players[o]) players[o].researchPoints = rs[o * WAI_RS_W + 4];
+        for (let k = 0; k < WAI_ES_SOURCES.length; k++) { const v = es[o * WAI_ES_W + k]; if (v) recordEnergyDelta(o, WAI_ES_SOURCES[k], v); }
+    }
+    _wai.researchDeposits = (_wai.researchDeposits || 0) + cnt[4];
+    _wai.collectorDeposits = (_wai.collectorDeposits || 0) + cnt[5]; _wai.astarDeposits = (_wai.astarDeposits || 0) + cnt[6];
+    if (cnt[2]) V.sum = (V.sum + cnt[2]) | 0;
+    if (cnt[3]) _wsw = null;
+    return cnt[0];
+}
+// Its out events, in their order (unit.js unitEventsRun, after the pass).
+function waiOutEvents(m) {
+    const S = _simUnitState, c = S.columns, owners = S.owners, out = _wai.out;
+    _wai.declined = 0;
+    for (let i = 0; i < m; i++) {
+        const code = out[i * 4], a = out[i * 4 + 1], b = out[i * 4 + 2];
+        if (code === WAI_OUT_DECLINED) {
+            const u = owners[a];
+            if (!u || u.dead) continue;
+            _wai.declined++;
+            // (Its floor was looked at before the pass.)
+            _unitWorkerEvent(u, c, a, b);
+        } else if (code === WAI_OUT_SOUND_RESEARCH) {
+            const t = getTileEntityRef(b % GRID_W, Math.floor(b / GRID_W));
+            if (t && _noteAmbientSoundTick(t, 'research_tick', 12)) playSound('research_tick', t.x, t.y);
+        } else if (code === WAI_OUT_RESEARCH_ADVANCE) tryAdvancePlayerResearchTask(a);
+        else if (code === WAI_OUT_ARM) { const u = owners[a]; if (u && !u.dead) simMoveTryArm(u); }
+        else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e) destroyBuilding(e); }
+        else if (code === WAI_OUT_SOUND_UNIT) { const u = owners[a]; if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
+        else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
+        else if (code === WAI_OUT_ASTAR_LOG) { const u = owners[a]; if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
+        else if (code === WAI_OUT_QUEUE_PAID) {
+            // (A healer paid its front, or found it paid: its production, and a ready order once paid and timed.)
+            const sp = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W));
+            if (!sp) continue;
+            if (b && typeof spawnerProductionChanged === 'function') spawnerProductionChanged(sp);
+            const cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1)), front = spawnQueueFront(sp);
+            if (front && sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
+                sp._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+                if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
+            }
+        } else if (code === WAI_OUT_SOUND_HEAL) {
+            const t = a >= 0 ? getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)) : owners[b];
+            if (t && _noteAmbientSoundTick(t, 'heal_tick', 12)) playSound('heal_tick', t.x, t.y);
+        }
+        else if (code === WAI_OUT_BUILT) _waiBuilt(a, b, out[i * 4 + 3]);
+        else if (code === WAI_OUT_SOUND_BUILD) { const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)); if (t && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y); }
+        else if (code === WAI_OUT_BUILD_START) {
+            const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W));
+            if (t) { if (b === 1) beginUpgradeProgress(t, out[i * 4 + 3]); else refreshThingProgressState(t); }
+        }
+        else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners[a]; if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
+    }
+}
+// The search tier's takes (worker.js _wsCommit): the n requests of the
+// order (indices into its result arrays), all in one pass (wai.rs
+// take_one). The collectors' groups' arrays and the healers' damaged units
+// (by id) for the kernel.
+function waiTake(J, order, n) {
+    const L = _waiArr('takeList', Int32Array, n);
+    L.set(order.subarray(0, n));
+    const gt = _waiArr('gtab', Int32Array, 32);
+    gt.fill(0, 0, 32);
+    J.groups.forEach((G, k) => { if (G && k < 16 && simHeapHas(G.tile) && simHeapHas(G.st)) { gt[k * 2] = _simWEnc(_simHeapPtrOf(G.tile)); gt[k * 2 + 1] = _simWEnc(_simHeapPtrOf(G.st)); } });
+    const HM = HEALER_DAMAGED_CANDIDATE_LIMIT, np = J.heal.length, hid = _waiArr('hid', Int32Array, Math.max(1, np) * HM);
+    hid.fill(0, 0, Math.max(1, np) * HM);
+    for (let o = 0; o < np; o++) { const Lh = J.heal[o] || []; for (let q = 0; q < Lh.length && q < HM; q++) hid[o * HM + q] = Lh[q] && !Lh[q].dead ? Lh[q].id | 0 : 0; }
+    // (Their nearest spawners: the worker brain over their slots; and their own stat words, without a row.)
+    const RS = _simParReg['ws.rslot'], E = _waiArr('takeSlots', Int32Array, n), S = _simUnitState, c = S.columns;
+    for (let i = 0; i < n; i++) { const q = RS[L[i]]; E[i] = q >= 0 ? q * 8 : -8; if (q >= 0 && c.statRow[q] < 0 && S.owners[q]) _waiOwnStats(S.owners[q], c, q); }
+    workerBrainsPrepare(n, false, E);
+    playerResourceBatchBegin();
+    try { if (waiAvailable()) waiOutEvents(waiRun(L, n, J)); } finally { playerResourceBatchEnd(); workerBrainsEnd(); }
+}
+// One worker's event through the kernel, alone (tests: the tick runs its events as a list).
+function waiStepUnit(u, code = 0) {
+    const c = u && u._us;
+    if (!c) return;
+    const L = _waiArr('list1', Int32Array, 1);
+    L[0] = u._si * 8 + code;
+    playerResourceBatchBegin();
+    try { if (waiAvailable()) waiOutEvents(waiRun(L, 1)); } finally { playerResourceBatchEnd(); }
+}
+// A worker with its own stat tables (no shared row: a restored one, a custom one): its words for the pass (wai.rs hot).
+function _waiOwnStats(u, c, s) {
+    const w = c.wkIx[s], A = _waiArr('ownStats', Float32Array, (_simUnitState.wk.cap + 1) * SIM_WK_STATS_W);
+    if (!(w > 0)) return;
+    const pc = u.preComputed || {}, o = w * SIM_WK_STATS_W;
+    A[o] = Number(pc.builderDps) || 0; A[o + 1] = Number(pc.healerDps) || 0; A[o + 2] = Number(pc.researcherDps) || 0; A[o + 3] = Number(pc.gatherPerTrip) || 0; A[o + 4] = Number(pc.transferCooldownTicks) || 0;
+}
+// A builder's work done at tile t (wai.rs b_work): 0 built, 1 upgraded to
+// level v, 2 stacked (v: any), 3 its maxEnergy to v. What the kernel did not
+// write: the completions' JavaScript (things_utils.js), sounds, adjacency.
+function _waiBuilt(at, kind, v) {
+    const t = getTileEntityRef(at % GRID_W, Math.floor(at / GRID_W));
+    if (!t) return;
+    if (kind === 3) { t.maxEnergy = v; return; }
+    if (kind === 0) {
+        markConstructionComplete(t);
+        refreshThingProgressState(t);
+        if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
+    } else if (kind === 1) {
+        const prevStacked = getThingStackedStacks(t), prevManual = getThingManualStacks(t), left = Math.max(0, prevManual - prevStacked);
+        t.level = v;
+        if (typeof upkeepThingDirty === 'function') upkeepThingDirty(t);
+        t.stacks = Math.max(prevStacked, getRequiredStacksForLevel(v));
+        t.manualStacks = Math.max(prevManual, t.stacks + left);
+        t.isUpgrading = false;
+        t.upgrademaxEnergy = 0;
+        refreshThingProgressState(t);
+        if (t.owner === localPlayerId) playSound('upgrade_complete', t.x, t.y);
+        if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+    } else if (kind === 2) {
+        // (Its stacks as the kernel left them, through their setter: the derived tables.)
+        if (v) { t.stacks = t.stacks; if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t); }
+        refreshThingProgressState(t);
+        if (!v) return;
+    }
+    _requestAdjacencyRecalcForThing(t, 1);
+    recalculateAdjacency();
+}
+// A collector took `ex` from the mine at tile t (its resource cfg): the
+// mine's value, its look, and an emptied mine gone to ground.
+function _waiMineTaken(t, cfg, ex) {
+    const mine = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
+    if (!mine || !cfg || !(Number.isFinite(mine[cfg.mineStatKey]))) return;
+    mine[cfg.mineStatKey] -= ex;
+    _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
+    dirtyGrid = true;
+    if (mine[cfg.mineStatKey] <= 0) {
+        grid[mine.gy][mine.gx].type = TYPE_FLOOR;
+        simMoveTileTypeChanged(mine.gx, mine.gy);
+        _bumpPathTopologyVersion();
+        const mineArray = _getResourceCollectorMineArray(cfg), idx = mineArray ? mineArray.indexOf(mine) : -1;
+        if (idx >= 0) mineArray.splice(idx, 1);
+        clearTileEntity(mine.gx, mine.gy, mine);
+        _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
+    }
 }

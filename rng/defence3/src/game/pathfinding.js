@@ -1114,7 +1114,10 @@ function getPathRegions(owner) {
         R.portalSig = portalSig;
         R.portalOwners = new Set();
         for (let t of _cloudTileCache.values()) if (t.energy > 0 && !t.underConstruction) R.portalOwners.add(t.owner);
-        for (const k of [...R.byOwner.keys()]) if (k >= 0) R.byOwner.delete(k);
+        // Rebuild in the owner's existing arrays. Dropping the entry here
+        // discarded two map-sized buffers on every portal change (about
+        // 8 MiB per owner at 1000x1000), awaiting JS GC to return wasm memory.
+        for (const [k, entry] of R.byOwner) if (k >= 0) entry.dirty = true;
         R.nearest = new Map();
     }
     let key = owner === null || owner === undefined ? -1 : owner;

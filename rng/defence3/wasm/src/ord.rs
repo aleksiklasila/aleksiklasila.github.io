@@ -274,10 +274,32 @@ fn work_mix(i: i32) -> i32 {
 /// reservation it holds (wk.resv; its region's count and sum when kept,
 /// the work site grid's list); its state MANUAL_MOVE (13), target and type
 /// null, its type's material false, reservation -1, next search now, idle
-/// failure -1, its role memory's clear pending (rmClr: the tick + 1). The
+/// failure -1, its task memory cleared (wm_clear; arg 36 unused). The
 /// route: rkF, rtEnd, nvProf, navRdy, the path index 0 and its window back
 /// (unit.mvFree), nvPK (-1 at the destination), rsEnd, mvNavLD -1, flow armed
 /// (unit.js simFlowArm: a worker the player sent, mvWk 2).
+/// A worker's task memory cleared (worker record wr, its record type wb:
+/// unit.wbType), its manual move's tick `man`. Arrays from word `at`: the
+/// worker memory columns (sim_unit_state.js SIM_WK_MEM) wmPin, wmPinTy,
+/// wmWx, wmWy, wmWgx, wmWgy, wmWty, wmSp, wmDrop, wmMine, wmMineTy, wmQc,
+/// wmQr, wmQp, wmTrip, wmTw, wmReady, wmMan. Each type's own (the others
+/// are unset for it): collectors their pin, gather site, spawners, mine;
+/// builders the work site and spawner; healers the pin, queue commit (0s),
+/// work site, spawner, trip cost 0; researchers the spawner and trip (0s).
+pub unsafe fn wm_clear(k: &K, at: usize, wr: usize, wb: i32, man: f64) {
+    let t = |j: usize| k.p::<i32>(at + j);
+    let y = |j: usize| k.p::<u8>(at + j);
+    let n = |j: usize| k.p::<f64>(at + j);
+    let site = || { for j in 2..6 { s(n(j), wr, f64::NAN); } };
+    match wb {
+        1 | 2 => { s(t(0), wr, 0); s(y(1), wr, 0); site(); s(y(6), wr, 0); s(t(7), wr, 0); s(t(8), wr, 0); s(t(9), wr, 0); s(y(10), wr, 0); }
+        4 => { site(); s(t(7), wr, 0); }
+        5 => { s(t(0), wr, 0); s(t(11), wr, 0); s(n(12), wr, 0.0); s(n(13), wr, 0.0); site(); s(t(7), wr, 0); s(n(14), wr, 0.0); }
+        6 => { s(t(7), wr, 0); s(n(14), wr, 0.0); s(n(15), wr, 0.0); s(n(16), wr, 0.0); }
+        _ => {}
+    }
+    s(n(17), wr, man);
+}
 #[no_mangle]
 pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -287,7 +309,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
     let (tus, tuid, tbt, acqb, fatf, lsx, lsy, cmdc, on, amgx, amgy, tgx, tgy) = (k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<u8>(18),
         k.p::<u8>(19), k.p::<f32>(20), k.p::<f32>(21), k.p::<u8>(22), k.p::<u8>(23), k.p::<i16>(24), k.p::<i16>(25), k.p::<f32>(26), k.p::<f32>(27));
     let (agw, mvpp, mvpf) = (k.p::<i32>(28), k.p::<u8>(29), k.p::<u8>(30));
-    let (wks, wkt, wkr, wkn, idlefv, rmclr, wkidle, wskind, wkix, wbtype) = (k.p::<u32>(31), k.p::<i32>(32), k.p::<i32>(33), k.p::<i32>(34),
+    let (wks, wkt, wkr, wkn, idlefv, _rmclr, wkidle, wskind, wkix, wbtype) = (k.p::<u32>(31), k.p::<i32>(32), k.p::<i32>(33), k.p::<i32>(34),
         k.p::<i32>(35), k.p::<i32>(36), k.p::<u8>(37), k.p::<u8>(38), k.p::<i32>(39), k.p::<u8>(40));
     let (rkf, rte, nvp, navrdy, pidx, nvpk, mpath, mfree, mcd, rsend, nld) = (k.p::<u8>(41), k.p::<i32>(42), k.p::<i8>(43), k.p::<i32>(44),
         k.p::<i32>(45), k.p::<i32>(46), k.p::<i32>(47), k.p::<i32>(48), k.p::<i32>(49), k.p::<i32>(50), k.p::<f32>(51));
@@ -390,7 +412,10 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         s(wkr, q, -1);
         if g(wkn, q) != now { s(on, q, 0); s(wkn, q, now); }
         s(idlefv, q, -1);
-        s(rmclr, q, now + 1);
+        // Its task memory cleared (worker.js clearWorkerTaskMemoryForFreeRetarget),
+        // the order's tick kept (_manualMoveIssuedTick).
+        let wr = g(wkix, q);
+        if wr > 0 { wm_clear(&k, 71, wr as usize, wb as i32, now as f64); }
         // Its route (_issueFlowOrder): the destination's flow.
         let tl = tile_of(q);
         let at = tl == dest;

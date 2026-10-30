@@ -645,6 +645,11 @@ function _effRowWrite(r, u, pc, ver) {
     // One cache line per shared level/stat row. Rust can broadcast a
     // row for equal SIMD lanes instead of streaming per-unit copies.
     _effHot.set([R.rSpd[r], R.rCost[r], R.rChs[r], R.rCb[r], R.rCd[r], R.rDmg[r], R.rVis[r], R.rRD[r], R.rRA[r], R.rRK[r], R.rVsA[r]], r * EFF_HOT_WIDTH);
+    // (A worker's, wai.rs: builderDps, healerDps, researcherDps,
+    // gatherPerTrip, transferCooldownTicks.)
+    const h = r * EFF_HOT_WIDTH;
+    _effHot[h + 11] = Number(pc.builderDps) || 0; _effHot[h + 12] = Number(pc.healerDps) || 0; _effHot[h + 13] = Number(pc.researcherDps) || 0;
+    _effHot[h + 14] = Number(pc.gatherPerTrip) || 0; _effHot[h + 15] = Number(pc.transferCooldownTicks) || 0;
 }
 function effSharedTablesChanged(owner, unitType) {
     const levels = PRECOMPUTED_STATS_MAP_PLAYER[owner]?.unit?.[unitType];

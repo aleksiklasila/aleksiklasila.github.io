@@ -332,20 +332,17 @@ function _spawnReadyValid(s) {
     const front = spawnQueueFront(s);
     return front.energyPaid >= front.energyRequired;
 }
-// (A unit made is ~20 us (its object, slot, stats, way to the rally point):
-// 2048 a tick were 40 ms when thousands of barracks came ready together.
-// 256 a tick: 5000 units a second; the rest the next ticks, in ready order.)
-const SPAWNS_PER_TICK = 256;
 function processGlobalSpawnerQueue() {
     // The ready spawners in ready order across owners (each owner's list is
-    // sorted; owners at their population cap are passed over whole), up to
-    // SPAWNS_PER_TICK spawns a tick; a spawner ready again after spawning
-    // goes to the end (a new order), as ever.
+    // sorted; owners at their population cap are passed over whole), every
+    // ready one (no cap a tick); a spawner ready again after spawning goes to
+    // the end (a new order: the next tick's), as ever.
     const R = _spawnReady || _spawnReadyBuild();
     let spawned = 0;
     const blocked = [];
-    const most = SPAWNS_PER_TICK * simDk;
-    while (spawned < most && blocked.length < 64) {
+    // (Those ready now: one spawn each this tick, its next front the next tick.)
+    const again = [];
+    while (blocked.length < 64) {
         let best = null, bestOrder = Infinity;
         for (const [o, L] of R.byOwner) {
             if (L.head >= L.e.length) continue;
@@ -373,8 +370,9 @@ function processGlobalSpawnerQueue() {
         if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
         spawned++;
         // Its next front, if paid already: ready again (a new order).
-        if (spawned < most && _spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
+        if (_spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) again.push(s);
     }
+    for (const s of again) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     for (const s of blocked) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
 }
 

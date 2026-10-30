@@ -65,7 +65,7 @@ const SIM_UNIT_MIRROR_COLUMNS = ['r', 'collisionR'];
 // unit's accessors; a detached unit's in its _det), each set summed into
 // the slot's digest (hObj: see _simHTerm), so the hash kernel reads one
 // column for all of them.
-const SIM_UNIT_OBJ_FIELDS = ['holdPosition', 'carryingValue', '_astarBudgetRetryTick', '_scoutTarget', 'workerType'];
+const SIM_UNIT_OBJ_FIELDS = ['holdPosition', '_astarBudgetRetryTick', '_scoutTarget', 'workerType'];
 // A worker's task: columns (wkS, wkT, wkR, wkN; unit.js accessors), hashed by
 // the hash kernel itself (k_snap_units), written by kernels too (the move
 // order's release). wkS: bits 0-4 workerState (SIM_WS_NAMES), 5-9
@@ -261,10 +261,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (SIM_UNIT_KCOL_FIELDS.)
     ['rsEnd', Int32Array, 1], ['navRdy', Int32Array, 1], ['agWait', Int32Array, 1], ['idleFV', Int32Array, 1],
     // A pending way (bit 1: pathIsFallbackAstar, 2: a _pendingPathTarget):
-    // kept by their setters, so a kernel sees which units have one. A role
-    // memory clear pending (the tick it was ordered + 1, 0 none: unit.js
-    // _unitRmApply, at its first use).
-    ['mvPP', Uint8Array, 1], ['rmClr', Int32Array, 1],
+    // kept by their setters, so a kernel sees which units have one.
+    ['mvPP', Uint8Array, 1],
     // Waiting for a deferred way (pathfinding.js, the pending wheel): the tick
     // it is due (-1 none), its bucket's next and previous slots.
     ['ppDue', Int32Array, 1], ['ppNext', Int32Array, 1], ['ppPrev', Int32Array, 1],
@@ -457,7 +455,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // stats count idle workers from columns).
     ['wkIdle', Uint8Array, 1],
     // Its worker search's takes in a row that found nothing it could have
-    // (worker.js _wsTakeSome; the search tier backs off: k_ws_select).
+    // (wai.rs take_one; the search tier backs off: k_ws_select).
     ['wsFail', Uint8Array, 1],
     // The tick's hits on it (SIM_KERNEL_HITS, cleared by HITS_APPLY): their
     // damage in 1/16ths, whether listed, and its status sub-record + 1 (0
@@ -499,7 +497,46 @@ const SIM_UNIT_WK_SIDE = [['wkType', Int32Array], ['wkD', Int32Array], ['wkOx', 
     ['wsCfg', Int8Array], ['wsT', Int32Array], ['wsOU', Int32Array], ['wsOx', Float32Array], ['wsOy', Float32Array], ['wsR', Float32Array],
     ['wsAx', Float32Array], ['wsAy', Float32Array], ['wsAk', Int8Array], ['wsNeed', Int32Array], ['wsJid', Int32Array], ['wsCur', Int32Array], ['wsMy', Int32Array],
     ['wbType', Uint8Array], ['wbTick', Int32Array], ['wbSpawner', Int32Array]];
+// A worker's memory (was the role memory's objects: unit.js accessors by
+// these names, the kernels read the columns): [name, column, kind]. Kinds:
+// 'T' a target (wkT's form: tile * 8 + SIM_WT_* kind, 0 none: structures,
+// mines, drops by their tile), 'N' a number (Float64, NaN unset), 'Y' a
+// target type (simWttCode). A worker is of one type, so the types share
+// columns (a builder's last work site is a collector's last gather site);
+// the first name of a column is its snapshot key.
+const SIM_WK_MEM = [
+    ['_collectorPinnedTarget', 'wmPin', 'T'], ['_astarPinnedTarget', 'wmPin', 'T'], ['_healerPinnedQueueTarget', 'wmPin', 'T'],
+    ['_collectorPinnedTargetType', 'wmPinTy', 'Y'], ['_astarPinnedTargetType', 'wmPinTy', 'Y'],
+    ['_collectorLastGatherX', 'wmWx', 'N'], ['_astarLastGatherX', 'wmWx', 'N'], ['_builderLastWorkX', 'wmWx', 'N'], ['_healerLastWorkX', 'wmWx', 'N'],
+    ['_collectorLastGatherY', 'wmWy', 'N'], ['_astarLastGatherY', 'wmWy', 'N'], ['_builderLastWorkY', 'wmWy', 'N'], ['_healerLastWorkY', 'wmWy', 'N'],
+    ['_collectorLastGatherGx', 'wmWgx', 'N'], ['_astarLastGatherGx', 'wmWgx', 'N'], ['_builderLastWorkGx', 'wmWgx', 'N'], ['_healerLastWorkGx', 'wmWgx', 'N'],
+    ['_collectorLastGatherGy', 'wmWgy', 'N'], ['_astarLastGatherGy', 'wmWgy', 'N'], ['_builderLastWorkGy', 'wmWgy', 'N'], ['_healerLastWorkGy', 'wmWgy', 'N'],
+    ['_collectorLastGatherType', 'wmWty', 'Y'],
+    ['_collectorNextSpawner', 'wmSp', 'T'], ['_astarNextSpawner', 'wmSp', 'T'], ['_builderSpawnerTarget', 'wmSp', 'T'], ['_healerSpawnerTarget', 'wmSp', 'T'], ['_researchSpawnerTarget', 'wmSp', 'T'],
+    ['_collectorLastDropoffSpawner', 'wmDrop', 'T'],
+    ['_lastMineTarget', 'wmMine', 'T'], ['_astarLastMineTarget', 'wmMine', 'T'], ['_astarLastMineTargetType', 'wmMineTy', 'Y'],
+    ['_healerQueueCommitTarget', 'wmQc', 'T'], ['_healerQueueCommitRequired', 'wmQr', 'N'], ['_healerQueueCommitMaxPaid', 'wmQp', 'N'],
+    ['_healerQueueTripCost', 'wmTrip', 'N'], ['_researcherTripCost', 'wmTrip', 'N'], ['_researcherTripWork', 'wmTw', 'N'], ['_researcherMaterialReadyTick', 'wmReady', 'N'],
+    ['_energyBlockedUntil', 'wmBlk', 'N'], ['_manualMoveIssuedTick', 'wmMan', 'N'], ['_lastIdleStateTime', 'wmIdle', 'N'],
+    ['_builderNextRecheckTick', 'wmRe', 'N'], ['_collectorNextRecheckTick', 'wmRe', 'N'], ['_healerNextRecheckTick', 'wmRe', 'N'], ['_researchNextRecheckTick', 'wmRe', 'N'],
+    ['_collectorLastMoveTick', 'wmMv', 'N'], ['_healerLastMoveTick', 'wmMv', 'N'], ['_researchLastMoveTick', 'wmMv', 'N'],
+    // (What it carries: a collector's gather, a salvager's refund.)
+    ['carryingValue', 'wmCarry', 'N'],
+    // (Its last idle search's backoff end: workerIdleBackoff.)
+    ['_idleFailUntil', 'wmFailU', 'N']];
+const _SIM_WK_MEM_TYPES = { T: Int32Array, N: Float64Array, Y: Uint8Array };
+const SIM_WK_MEM_COLS = [...new Map(SIM_WK_MEM.map(([k, col, kind]) => [col, [k, col, kind]])).values()];
+// (Snapshot keys: a column's first name.)
+const SIM_WK_MEM_KEYS = SIM_WK_MEM.filter(([k, col]) => SIM_WK_MEM.find(e => e[1] === col)[0] === k);
+SIM_UNIT_WK_SIDE.push(...SIM_WK_MEM_COLS.map(([, col, kind]) => [col, _SIM_WK_MEM_TYPES[kind]]));
+// (A worker with its own stat tables (no shared row): its worker words, eight a record (wai.rs hot): builderDps,
+// healerDps, researcherDps, gatherPerTrip, transferCooldownTicks. worker.js _waiOwnStats, before each pass.)
+const SIM_WK_STATS_W = 8;
 const SIM_WK_DEFAULTS = { wkWx: NaN, wkWy: NaN, wkLmt: -2147483648, wbTick: -1, wbSpawner: -2 };
+for (const [, col, kind] of SIM_WK_MEM_COLS) if (kind === 'N') SIM_WK_DEFAULTS[col] = NaN;
+// Every unit initializes this timer to zero. That is also the no-record
+// value; initializing a combat unit must not allocate a worker record.
+SIM_WK_DEFAULTS.wmFailU = 0;
 const _simWkInit = new Function('C', 'i', SIM_UNIT_WK_SIDE.map(([k]) => 'C.' + k + '[i] = ' + (k in SIM_WK_DEFAULTS ? String(SIM_WK_DEFAULTS[k]) : '0') + ';').join(' '));
 function _simWkPool(S) { return S.wk || (S.wk = { cap: 0, used: 1, free: [] }); }
 // Slot s's worker record (columns c), taken now when it has none: before a
@@ -638,7 +675,7 @@ const SIM_UNIT_JS_FIELDS = [
     ['_okNodeVer', 'i', 0, true], ['_statsVer', 'i', -1, true], ['_damageFlashStart', 'i', 0, true],
     // (Its frame slot: sim_frame.js _simRenderSlotOf; every unit has one.)
     ['_rslot', 'i', -1, false],
-    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true], ['_idleFailUntil', 'i', 0, true],
+    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true],
     ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
     ['unitType', 'r', undefined, true], ['preComputedBase', 'r', null, true], ['basePreComputed', 'r', null, true], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
     ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
@@ -650,7 +687,7 @@ const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, f: Float32Array, d: Float6
 // their default implicit; allocating fourteen dense Int32 columns costs
 // 224 MB at four million slots before a single path has used them.
 const SIM_UNIT_SPARSE_JS_FIELDS=new Set(['_fpTile','_fpIdx','_fpVer',
-    '_pendingDueStamp','_okTile','_okVer','_okNodeTile','_okNodeVer','_idleFailUntil','_effectiveStatsStamp']);
+    '_pendingDueStamp','_okTile','_okVer','_okNodeTile','_okNodeVer','_effectiveStatsStamp']);
 class SimSparseIntColumn {
     constructor(length,def){this.length=length;this.def=def|0;this.pages=new Array(Math.ceil(length/1024));this.counts=new Uint16Array(this.pages.length);this.activePages=0;}
     get(s){if(!Number.isInteger(s)||s<0||s>=this.length)return undefined;const p=this.pages[s>>>10];return p?p[s&1023]:this.def;}
@@ -1086,21 +1123,23 @@ function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * (cap >= 10
 // The slots a match's population needs, reserved at its start, at a whole
 // restore and at a compaction: every player's configured maximum
 // population, and room for units that died this tick (their slots come back
-// the next). Growth is then a fallback. (Reserved columns cost address space,
-// not memory: the kernels touch the slots in use, and the heap's memory is
-// committed at its first write. Growing by half held old and new columns at
-// once, and each growth was a spike.) At most SIM_UNIT_RESERVE_BYTES of
-// columns (~800k slots): the lobby's default is 200k a player, and eight
+// the next), within a speculative byte budget. Required live slots are
+// always allocated. Even unwritten reserved columns consume wasm address
+// space, and slot-sized scratch may commit that capacity too. Growing by
+// half held old and new columns at once, and each growth was a spike.
+// At most SIM_UNIT_RESERVE_BYTES of speculative columns: the lobby's
+// default is 200k a player, and eight
 // players' 1.6M slots would hold a quarter of the wasm heap's 4 GB of
 // address space (and the system's commit charge) in any match; past it, the
 // growth, allocated ahead.
 const SIM_UNIT_RESERVE_BYTES = 512 << 20;
-// (The budget's: what the map and the rest of the simulation leave of the
-// 4 GiB, data_static.js; the menu offers only populations that fit. Without
-// the budget (a tool loading this file alone): SIM_UNIT_RESERVE_BYTES.)
+// The population limit and the speculative allocation budget are separate.
 function _simUnitReserveBytes(tiles) {
-    if (typeof MEMORY_BUDGET_BYTES !== 'number' || !Number.isFinite(tiles)) return SIM_UNIT_RESERVE_BYTES;
-    return Math.max(SIM_UNIT_RESERVE_BYTES, MEMORY_BUDGET_BYTES - MEMORY_BASE_BYTES - tiles * MEMORY_TILE_BYTES);
+    // This is speculative capacity, not the whole match's memory budget.
+    // Required starting/restore slots are reserved independently, even above
+    // this limit. Spending all remaining memory here also multiplies every
+    // slot-sized scratch array before the population ever needs those slots.
+    return SIM_UNIT_RESERVE_BYTES;
 }
 let _simUnitBytesPerSlotCache = 0;
 function _simUnitBytesPerSlot() {
@@ -1526,11 +1565,13 @@ function simUnitStateKeys(u) {
     if (u._stT !== undefined && typeof structTableKeys === 'function') return structTableKeys(u, keys);
     if (u._us || u._det) for (const k of SIM_UNIT_ACCESSOR_COLUMNS) keys.push(k);
     // (Its JavaScript fields and radii: accessors over columns, as before own fields.)
-    if (u._us && u._us.rmClr[u._si] !== 0) _unitRmApply(u);
     if ((u._us || u._det) && u instanceof Unit) { keys.push('r', 'collisionR'); for (const k of SIM_UNIT_JS_SNAPSHOT_KEYS) keys.push(k); for (const k of SIM_UNIT_MOVE_SNAPSHOT_KEYS) keys.push(k); }
     if (u instanceof Unit) for (const k of SIM_UNIT_EXTRA_ACCESSORS) if (!Object.prototype.hasOwnProperty.call(u, k)) keys.push(k);
     // (Its role memory's fields that hold something: unit.js UNIT_ROLE_FIELDS.)
     if (u._rm && typeof UNIT_ROLE_FIELDS !== 'undefined') for (const k of UNIT_ROLE_FIELDS) if (u._rm[k] !== undefined) keys.push(k);
+    // (Its worker memory's columns that hold something, a column by its first name.)
+    const c = u._us, w = c ? c.wkIx[u._si] : 0;
+    if (w > 0) for (const [k, col, kind] of SIM_WK_MEM_KEYS) { const x = c[col][w]; if (kind === 'N' ? x === x : kind === 'Y' ? x > 0 : x !== 0) keys.push(k); }
     return keys;
 }
 
@@ -1615,6 +1656,7 @@ function simMemoryStats() {
         bytesPerSlot: Object.values(SIM_UNIT_SCHEMA).reduce((n, e) => n + e.bytes, 5),
         pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.fs[0] : 0,
         statusRecords: simUnitStUsed(), statusCap: S && S.st ? S.st.cap : 0,
+        workerRecords: S && S.wk ? S.wk.used - 1 - S.wk.free.length : 0, workerCap: S && S.wk ? S.wk.cap : 0,
         boundBytes: groups, heap: typeof simHeapStats === 'function' ? simHeapStats() : null };
 }
 

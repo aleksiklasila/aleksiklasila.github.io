@@ -6,16 +6,14 @@ const source = fs.readFileSync(path.join(__dirname,'../src/things/barrack.js'),'
 // to the Barrack class).
 // (With the spawn queue functions: a mock's array queue answers them too.)
 const optimized=source.slice(source.indexOf('// ---- Spawn queues ----'),source.indexOf('function _shouldWaitForConstruction'))+source.slice(source.indexOf('let _spawnReady = null;'),source.indexOf('\nclass Barrack'));
-// (The scheduler's spawns a tick: barrack.js SPAWNS_PER_TICK.)
-const LIMIT=Number((/const SPAWNS_PER_TICK = (\d+)/.exec(source)||[])[1]);
-assert.ok(LIMIT>0,'SPAWNS_PER_TICK found');
 // Exhaustive scheduler retained as a behavioral oracle: a spawner is ready
 // once its payment gave it an order (no scan assigns orders); the smallest
 // order among owners below their cap spawns, a failed spawn ends the tick, a
-// paid next front is ready again with a new order, at most LIMIT a tick.
+// paid next front is ready again with a new order after the tick (every
+// ready spawner spawns once a tick: no cap).
 const reference=`function processGlobalSpawnerQueue() {
- let guard=0; const blocked=[];
- while(guard<${LIMIT} && blocked.length<64) {
+ let guard=0; const blocked=[], again=[];
+ while(blocked.length<64) {
   let chosen=null, order=Infinity;
   for(const s of [...barracks,...collectorSpawners]) {
    if(!s || blocked.includes(s) || s.energy<=0 || s.underConstruction || !isQueueEnabled(s) || !s.spawnQueue.length) continue;
@@ -29,11 +27,12 @@ const reference=`function processGlobalSpawnerQueue() {
   if(!spawnQueuedUnitFromSpawner(chosen)) {blocked.push(chosen);continue;}
   guard++;
   const s=chosen;
-  if(guard<${LIMIT} && s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
+  if(s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
    const f=getQueuedSpawnInfo(s.spawnQueue[0]);
-   if(f.energyPaid>=f.energyRequired && !Number.isFinite(s._spawnReadyOrder)) s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
+   if(f.energyPaid>=f.energyRequired && !Number.isFinite(s._spawnReadyOrder)) again.push(s);
   }
  }
+ for(const s of again)s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
  for(const s of blocked)s._spawnReadyOrder=globalSpawnerReadyOrderCounter++;
 }`;
 function make(code, data) {
@@ -75,8 +74,8 @@ for(let i=0;i<120;i++) {
 }
 const data=fixture(1000,true), a=make(optimized,data), b=make(reference,data);
 a.run(); b.run(); assert.deepEqual(a.result(),b.result());
-assert.ok(a.checks()<=3000,'readiness checks '+a.checks()); assert.ok(b.checks()>LIMIT*500,'the exhaustive reference checks '+b.checks());
-console.log(`PASS: 120 scheduler replays; ready orders from payments, full queues, caps, failures and the ${LIMIT} limit; 1000 ready buildings: ${b.checks()} -> ${a.checks()} readiness checks.`);
+assert.ok(a.checks()<=3000,'readiness checks '+a.checks()); assert.ok(b.checks()>a.checks()*10,'the exhaustive reference checks '+b.checks());
+console.log(`PASS: 120 scheduler replays; ready orders from payments, full queues, caps and failures, no limit a tick; 1000 ready buildings: ${b.checks()} -> ${a.checks()} readiness checks.`);
 const jammed=make(optimized,{caps:[100,100],fail:0,buildings:[0,1].map(id=>({id,owner:id,energy:1,enabled:true,underConstruction:false,_spawnReadyOrder:id+1,spawnQueue:[{energyRequired:2,energyPaid:2}]}))});
 jammed.run();assert.deepEqual(jammed.result().events,[1],'blocked first exit must not starve another owner');
 assert.equal(jammed.result().buildings[0].spawnQueue.length,1,'blocked production retains payment and queue');

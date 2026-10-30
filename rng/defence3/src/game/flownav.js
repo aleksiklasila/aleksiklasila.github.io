@@ -559,13 +559,17 @@ function navAtlasFinish(A) {
 }
 // The header the kernels read (atlas.rs Atl): sizes, the arrays' addresses.
 function navAtlasHeader(A, nodePart, nodeBase) {
+    // Validate byte addresses before storing them in signed ABI words:
+    // valid wasm32 addresses in the upper 2 GiB have a negative Int32 value.
+    for (const a of [A.bm, A.bc, A.cb, A.co, A.ct, A.anc, A.cip, A.cin, A.rco, A.rc, A.dn, nodePart, A.cn, A.didx, nodeBase]) {
+        if (!(_simHeapPtrOf(a) > 0)) return null;
+    }
     const h = _navArr(Int32Array, 24), ptr = a => _simWEnc(_simHeapPtrOf(a));
     h[0] = A.L; h[1] = A.C; h[2] = A.cw; h[3] = A.bw; h[4] = A.np;
     h[5] = ptr(A.bm); h[6] = ptr(A.bc); h[7] = ptr(A.cb); h[8] = ptr(A.co); h[9] = ptr(A.ct); h[10] = ptr(A.anc); h[11] = ptr(A.cip);
     h[12] = ptr(A.cin); h[13] = ptr(A.rco); h[14] = ptr(A.rc); h[15] = ptr(A.dn); h[16] = ptr(nodePart); h[17] = ptr(A.cn);
     h[18] = ptr(A.didx); h[19] = ptr(nodeBase);
     h[20] = A.clearPrefix ? ptr(A.clearPrefix) : 0;
-    for (let i = 5; i <= 19; i++) if (!(h[i] > 0)) return null;
     return h;
 }
 // The next tile from t toward dest on profile p's atlas (-1 none): the
@@ -1761,7 +1765,9 @@ function navTick() {
     _navFreeTick();
     // (The map's first builds at its first tick, not at the first order:
     // on a big map that build takes long.)
-    if (!_nav[NAV_PROFILE_GROUND]) { for (const p of _navProfilesInUse()) navEnsure(p); return; }
+    // (Every profile in use, not only the ground's: the worker kernel sets ways on
+    // them without asking for their builds, wai.rs path_to.)
+    { let made = false; for (const p of _navProfilesInUse()) if (!_nav[p]) { navEnsure(p); made = true; } if (made) return; }
     if (!_navJob) {
         // The next profile whose walls changed, round the profiles from the
         // last one built: none waits long behind another's changes.

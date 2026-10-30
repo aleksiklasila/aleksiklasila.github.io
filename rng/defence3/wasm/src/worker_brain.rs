@@ -82,11 +82,8 @@ pub unsafe extern "C" fn k_worker_spawners(a:u32,chunk:i32){
     let x=k.p::<i32>(6);let y=k.p::<i32>(7);let owner=k.p::<i8>(8);let any=k.p::<i32>(11);
     let w=k.i(3).max(1);let h=k.i(4);let cols=k.i(5).max(1);let rows=(h+7)/8;
     for q in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
-        let s=(*events.add(q as usize)>>3) as usize;if *wk.add(s)==0 {continue;}
+        let e=*events.add(q as usize);if e<0 {continue;}let s=(e>>3) as usize;if *wk.add(s)==0 {continue;}
         let rec=*wi.add(s);if rec<=0 {continue;}let rec=rec as usize;*tick.add(rec)=-1;
-        // These brains cannot consume a return-site decision in this pass:
-        // their transfer timer is running, or the work-search tier owns them.
-        if *k.p::<u16>(14).add(s)>0||*k.p::<u8>(15).add(s)!=0 {continue;}
         let kind=*wt.add(rec) as i32-1;let own=*owner.add(s) as i32;
         if kind<0||kind>=6||own<0||own>=k.i(6){continue;}
         let ux=floor(*x.add(s) as f64/k.f(8)) as i32;let uy=floor(*y.add(s) as f64/k.f(8)) as i32;

@@ -34,6 +34,9 @@ const SIM_HEAP_PAD = 64;
 // and only once no name binds it.
 const SIM_HEAP_FREE_TICKS = 2;
 const SIM_HEAP_PAGE = 65536;
+// Bound speculative growth on large heaps. Actual announced allocations
+// and twice the recent largest take can still request more headroom.
+const SIM_HEAP_GROW_HEADROOM = 64 * 1024 * 1024;
 // 4 GiB under wasm32; 16 GiB with the memory64 build (SIM_WASM64).
 let SIM_HEAP_MAX_PAGES = 65536;
 // The 32-bit build (sim_wasm_bin.js) is the default everywhere (browsers and
@@ -228,7 +231,7 @@ function _simHeapTake(bytes) {
         const cur = have / SIM_HEAP_PAGE, need = Math.ceil((end - have) / SIM_HEAP_PAGE);
         if (cur + need > SIM_HEAP_MAX_PAGES) return -1;
         // (In steps of an eighth, at least 16 MB: growing is a commit.)
-        const step = Math.min(SIM_HEAP_MAX_PAGES - cur, Math.max(need, Math.ceil(cur / 8), 256));
+        const step = Math.min(SIM_HEAP_MAX_PAGES - cur, Math.max(need, Math.min(Math.ceil(cur / 8), SIM_HEAP_GROW_HEADROOM / SIM_HEAP_PAGE), 256));
         try { _simWasmGrow(H.memory, step); } catch (err) { try { _simWasmGrow(H.memory, need); } catch (err2) { return -1; } }
     }
     H.top = end;
@@ -252,13 +255,13 @@ function _simHeapGrowAhead() {
     // takes of late: a small heap's eighth (a small map's match, whose units'
     // reservation is small) was less than one of them, and the next grew
     // the memory on this thread.)
-    const want = Math.max(have / 8, expect, 2 * (H.takeMax || 0));
+    const want = Math.max(Math.min(have / 8, SIM_HEAP_GROW_HEADROOM), expect, 2 * (H.takeMax || 0));
     if (have - H.top >= want || typeof SIM_KERNEL_HEAP_GROW !== 'number' || typeof _simPool === 'undefined' || !_simPool || _simParRunning) return;
     // (Nothing waits for the growth lane: its job taken back here once done,
     // else it would stay pending, and no growth be posted again.)
     if (simParallelBackgroundPending(SIM_LANE_GROW)) { if (!simParallelBackgroundDone(SIM_LANE_GROW)) return; simParallelBackgroundWait(SIM_LANE_GROW); }
     const cur = have / SIM_HEAP_PAGE, short = Math.ceil((want - (have - H.top)) / SIM_HEAP_PAGE);
-    const target = Math.min(SIM_HEAP_MAX_PAGES, cur + Math.max(256, Math.ceil(cur / 8), short));
+    const target = Math.min(SIM_HEAP_MAX_PAGES, cur + Math.max(256, Math.min(Math.ceil(cur / 8), SIM_HEAP_GROW_HEADROOM / SIM_HEAP_PAGE), short));
     if (target <= cur) return;
     const B = _simBgParamsByLane[SIM_LANE_GROW];
     B.fill(0); B[0] = target;

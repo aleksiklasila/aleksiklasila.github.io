@@ -113,7 +113,9 @@ if(referenceCollect)inst.eval(`simUnitStateCollect=function(all=false){
     for(let s=all?0:gameTime%step;s<owners.length;s+=step){if(DEAD[s]!==1)continue;const u=owners[s];
         if(u&&u._us===S.columns&&u._si===s)simUnitStateDetach(S,s);else if(u&&u.dead)simUnitStateDetach(S,s);}
 };`);
-inst.eval(`startingResourcesConfig = normalizeStartingResourcesConfig({spawnCounts:{},researchLevels:{}});
+// Explicit minimal starters: an empty fixture leaves the stationary tables
+// unbound during startup adjacency. Keep the kings/buildings promised below.
+inst.eval(`startingResourcesConfig = normalizeStartingResourcesConfig({spawnCounts:{'unit:king':{1:1},'building:house':{1:1}},researchLevels:{}});
     applyMainMenuControlsToRuntimeState(); startSoloGame();
     // Keep the starting kings/buildings for ordinary victory/population rules.
     // Every occupied block: two small hostile groups and two hostile towers.
@@ -133,7 +135,7 @@ inst.eval(`startingResourcesConfig = normalizeStartingResourcesConfig({spawnCoun
                 if (!getTileEntityRef(tx, ty)) placeBuilding(tx,ty,types[b % types.length],owner,
                     {silent:true,ignorePlacementRules:true});
                 const tower = getTileEntityRef(tx,ty);
-                if (tower) { tower.energy=tower.maxEnergy; markConstructionComplete(tower); tower.updateStats(); }
+                if (tower) { tower.energy=tower.maxEnergy; markConstructionComplete(tower); if (typeof tower.updateStats === 'function') tower.updateStats(); }
                 for (let j=0; j<${group} && added<${count}; j++) {
                     const x=${packed}?(gx*TILE+8+(j%8)*16):(gx + owner*2 + .25 + (j%8)*.18)*TILE;
                     const y=${packed}?(gy*TILE+8+(owner*4+Math.floor(j/8))*16):(gy + 1.25 + Math.floor(j/8)*.18)*TILE;

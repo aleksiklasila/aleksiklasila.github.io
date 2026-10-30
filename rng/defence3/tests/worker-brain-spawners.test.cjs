@@ -51,7 +51,8 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
   if(q%157===0)u._us.wsKind[u._si]=1;
  }
  gameTime++;compare();
- for(const u of workers)if((u.workerTransferCooldown>0||u._us.wsKind[u._si])&&u._us.wbTick[u._us.wkIx[u._si]]===gameTime)throw Error('Cooling or tier-owned brain did unnecessary search work');
+ // (Cooling and tier-registered workers are answered too: the worker kernel takes their nearest spawners, wai.rs brain_spawner.)
+ for(const u of workers)if((u.workerTransferCooldown>0||u._us.wsKind[u._si])&&u._us.wbTick[u._us.wkIx[u._si]]!==gameTime)throw Error('Cooling or tier-owned worker not answered');
  return{helpers:${helpers},checks,used:_workerBrain.used,bytes:Object.values(_workerBrain.arrays).reduce((n,a)=>n+a.byteLength,0),recordBytes:9*_simUnitState.wk.cap};
 })())`));
 assert.ok(result.checks>4000);assert.deepEqual(i.errors.map(String),[]);

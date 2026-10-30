@@ -75,9 +75,12 @@ console.log('Setup',JSON.stringify(setupSummary));
 if(process.env.PRE)inst.eval(process.env.PRE);
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
- const spawn=spawnQueuedUnitFromSpawner,research=_researcherDeposit,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
+ const spawn=spawnQueuedUnitFromSpawner,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
  spawnQueuedUnitFromSpawner=function(s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
- _researcherDeposit=function(){const r=research.apply(this,arguments);if(r)__scratch.work.researchDeposits++;return r;};
+ // (Research deposits: the worker kernel counts them, worker.js _wai.researchDeposits.)
+ // (A source without the kernel, an A/B baseline: its JavaScript deposit.)
+ if(typeof waiRun==='function'){const run=waiRun;waiRun=function(){const was=[_wai.researchDeposits||0,_wai.collectorDeposits||0,_wai.astarDeposits||0];const r=run.apply(this,arguments);__scratch.work.researchDeposits+=(_wai.researchDeposits||0)-was[0];__scratch.work.collectorDeposits+=(_wai.collectorDeposits||0)-was[1];__scratch.work.astarDeposits+=(_wai.astarDeposits||0)-was[2];return r;};}
+ else if(typeof _researcherDeposit==='function'){const research=_researcherDeposit;_researcherDeposit=function(){const r=research.apply(this,arguments);if(r)__scratch.work.researchDeposits++;return r;};}
  _depositResourceCollectorPayload=function(u,o,c){if(u.carryingValue>0&&c)__scratch.work[c.stockpileKey==='astar'?'astarDeposits':'collectorDeposits']++;return deposit.apply(this,arguments);};
  markConstructionComplete=function(t){if(t.underConstruction)__scratch.work.constructionCompleted++;return complete.apply(this,arguments);};
  destroyBuilding=function(){__scratch.work.destroyedStructures++;return destroy.apply(this,arguments);};
@@ -150,10 +153,9 @@ const profileHelpers=process.argv.includes('--helper-profile');
 // Diagnostic only: distinguish event volume from cost per event. Do not use
 // these wrappers in acceptance timing runs (they add per-event overhead).
 if(eventMetrics)inst.eval(`{
- const event=_unitEvent,ai=updateWorkerAI,park=_simParkEventWait;
+ const event=_unitEvent,ai=updateWorkerAI;
  _unitEvent=function(u,c,s,code){const m=__scratch.events;m.codes[code]=(m.codes[code]||0)+1;m[u.workerState?'workerEvents':'combatEvents']++;return event.apply(this,arguments);};
  updateWorkerAI=function(u){const m=__scratch.events,key=u.workerType+':'+u.workerState;m.ai[key]=(m.ai[key]||0)+1;const before=u.workerState;try{return ai.apply(this,arguments);}finally{if(u.workerState!==before){const k=key+'>'+u.workerState;m.transitions[k]=(m.transitions[k]||0)+1;}}};
- _simParkEventWait=function(){__scratch.events.budgetParked++;return park.apply(this,arguments);};
  if(typeof _unitNoWayCommit==='function'){
   const commit=_unitNoWayCommit;
   _unitNoWayCommit=function(){const r=commit.apply(this,arguments);if(r){const m=__scratch.events;m.codes[2]=(m.codes[2]||0)+1;m.combatEvents++;m.fastRoutes=(m.fastRoutes||0)+1;}return r;};
@@ -203,6 +205,9 @@ for(let i=0;i<ticks;i++){
  const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  // (ROWX=<js>: a diagnostic value per tick, outside the timing.)
  if(process.env.ROWX)row.x=inst.eval(process.env.ROWX);
+ if(process.argv.includes('--memory-stats'))row.memory=inst.eval(`({ ...simMemoryStats(),
+  navProfiles:_nav.map(n=>n?{atlas:!!n.atlas?.header,nodes:n.nodeTile.length}:null),
+  navFieldBytes:_navFields.pools.reduce((n,f)=>n+(f.pool?.byteLength||0)+(f.rows?.byteLength||0),0) })`);
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
  row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed,native:!!_towerAcq.native,prepared:_towerAcq.lastPrepared||0})`);
  row.workerBrain=inst.eval(`typeof _workerBrain==='undefined'?null:({prepared:_workerBrain.prepared,used:_workerBrain.used,misses:_workerBrain.misses,bytes:Object.values(_workerBrain.arrays).reduce((n,a)=>n+a.byteLength,0),recordBytes:_simUnitState?.wk?9*_simUnitState.wk.cap:0})`);
@@ -212,7 +217,7 @@ for(let i=0;i<ticks;i++){
  if(eventMetrics)row.events=inst.eval('__scratch.events');
  if(massAt>0&&i>=massAt-1){row.mass=inst.eval(MASS_PENDING);if(massClick>=0)row.mass.click=massClick;}
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
- if(metrics){row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=require('node:v8').getHeapStatistics().used_heap_size/1048576;row.freeMB=require('node:os').freemem()/1048576;}
+ if(metrics){const m=process.memoryUsage();row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=m.heapUsed/1048576;row.rssMB=m.rss/1048576;row.externalMB=m.external/1048576;row.arrayBuffersMB=m.arrayBuffers/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and
  // work states rather than assuming that a spawned worker is doing useful work.
  if(i%10===0||i===ticks-1)row.activity=inst.eval(`(()=>{const roles={};for(let j=0;j<units.length;j++){const u=units[j];if(u.dead||!u.workerType)continue;const r=roles[u.workerType]||(roles[u.workerType]={total:0,targeted:0,carrying:0,coolingDown:0,states:{}});r.total++;if(u.workerTarget)r.targeted++;if(u.workerTransferCooldown>0)r.coolingDown++;if(u.carryingValue>0||u.healerHasMaterial)r.carrying++;const s=u.workerState||'NONE';r.states[s]=(r.states[s]||0)+1;}return {roles,researchQueued:[0,1].map(p=>getPlayerResearchQueueTotalLength(p)),pop:[0,1].map(p=>({count:players[p].popCount,cap:getPlayerPopCap(p)}))};})()`);
