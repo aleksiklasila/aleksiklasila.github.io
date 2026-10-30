@@ -244,3 +244,95 @@ pub unsafe extern "C" fn k_owner_sum(a: u32, _chunk: i32) {
         }
     }
 }
+
+/// The retire pass's decisions (main.js _gameTickBody, after the retire
+/// kernel's lists): the listed units in its order (blocks from the last,
+/// each from its last entry), from the columns: a slotted unit not dead
+/// passed over; a dead one into the order out (index, slot) and the gone
+/// list (its slot, ~slot when removed already: removeUnitNow); its death
+/// sound (the first P[3] of units neither removed, workers nor kings) and
+/// whether a king died; an entry without a slot into the order with slot
+/// -1 (the JavaScript decides). Arrays: [0] retire list, [1] counts per
+/// block, [2] the slot map (by list index), [3] unit.dead, [4] unit.jRmNow,
+/// [5] unit.wkS, [6] unit.spType, [7] order out (pairs), [8] gone out, [9]
+/// sounds out (slots), [10] hdr out ([0] order pairs, [1] gone, [2] sounds,
+/// [3] a king died). P: [0] blocks, [1] block size, [2] the king's spatial
+/// type (-1 none), [3] sounds at most.
+#[no_mangle]
+pub unsafe extern "C" fn k_retire_plan(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, cnt, sl, dead, rm, wks, spt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<u8>(4), k.p::<u32>(5), k.p::<i16>(6));
+    let (ord, gone, snd, hdr) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
+    let (blocks, bs, king, maxs) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2), k.i(3).max(0) as usize);
+    let (mut no, mut ng, mut ns, mut kd) = (0usize, 0usize, 0usize, 0i32);
+    for b in (0..blocks).rev() {
+        let c = g(cnt, b).max(0) as usize;
+        for j in (0..c).rev() {
+            let i = g(list, b * bs + j);
+            let q = g(sl, i as usize);
+            if q < 0 {
+                s(ord, 2 * no, i);
+                s(ord, 2 * no + 1, -1);
+                no += 1;
+                continue;
+            }
+            let qu = q as usize;
+            if g(dead, qu) == 0 {
+                continue;
+            }
+            s(ord, 2 * no, i);
+            s(ord, 2 * no + 1, q);
+            no += 1;
+            if g(rm, qu) != 0 {
+                s(gone, ng, !q);
+                ng += 1;
+                continue;
+            }
+            let ws = g(wks, qu) & 31;
+            let is_king = king >= 0 && g(spt, qu) as i32 == king;
+            if ns < maxs && (ws == 0 || ws == 14) && !is_king {
+                s(snd, ns, q);
+                ns += 1;
+            }
+            if is_king {
+                kd = 1;
+            }
+            s(gone, ng, q);
+            ng += 1;
+        }
+    }
+    s(hdr, 0, no as i32);
+    s(hdr, 1, ng as i32);
+    s(hdr, 2, ns as i32);
+    s(hdr, 3, kd);
+}
+
+/// SIM_KERNEL_SLOT_ZERO (sim_unit_state.js simUnitStateReleaseFreed): the
+/// slots let go this tick back to a fresh slot's state before any unit takes
+/// one (every unit column zero, sepKey absent, sepLayer zero), so taking a
+/// slot needs no clearing. Arrays: [0] slz.list (slots), [1] slz.tab (per
+/// column: encoded address, bytes an element, elements a slot), [2]
+/// unit.sepKey, [3] unit.sepLayer. P: [0] slots, [1] per job, [2] columns,
+/// [3] SIM_SEP_ABSENT.
+#[no_mangle]
+pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, tab, sk, sly) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u32>(2), k.p::<u8>(3));
+    let (j0, j1) = super::k::job_range(chunk, k.i(1), k.i(0));
+    let nc = k.i(2).max(0) as usize;
+    let absent = k.i(3) as u32;
+    for j in j0..j1 {
+        let q = g(list, j);
+        if q < 0 {
+            continue;
+        }
+        let q = q as usize;
+        for c in 0..nc {
+            let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
+            let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
+            core::ptr::write_bytes(base.add(q * per * bytes), 0, per * bytes);
+        }
+        s(sk, q, absent);
+        s(sly, q, 0);
+    }
+}

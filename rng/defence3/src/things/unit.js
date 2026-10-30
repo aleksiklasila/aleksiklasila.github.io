@@ -213,7 +213,7 @@ function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
     const cached = c.jr__path.get(s);
     if (cached && cached.length > 1) return false;
     const decoded = key >> 1, profile = Math.floor(decoded / 16777216), dest = decoded % 16777216;
-    if (profile !== (c.j_isFlying[s] ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND)) return false;
+    if (profile !== (c.jFly[s] ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND)) return false;
     let pt = c.jr__ppt.get(s), h = c.hObj[s];
     if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
     else {
@@ -2189,6 +2189,31 @@ function _simWallPushOut(gx, gy) {
     }
 }
 
+// The units on tiles that just became walls (list[0..n)): found by
+// wasm/src/tch.rs k_wall_units (forEachUnitInRange's candidates, each tile's
+// in id order), each pushed to the nearest tile it may stand on.
+const _wpo = { out: null, hdr: null, P: new Float64Array(8) };
+function _simWallPushOutTiles(list, n) {
+    const S = _simUnitState;
+    if (!S || !units.length || !_sxOwners()) { for (let i = 0; i < n; i++) { const t = list[i], gx = t % GRID_W; _simWallPushOut(gx, (t - gx) / GRID_W); } return; }
+    spatialIndexEnsure();
+    const Z = _wpo, C = S.columns;
+    if (!Z.hdr || !simHeapHas(Z.hdr)) Z.hdr = simSharedArray(Int32Array, 2);
+    for (let room = Math.max(1024, n * 16); ; room *= 4) {
+        if (!Z.out || Z.out.length < room * 2 || !simHeapHas(Z.out)) Z.out = simSharedArray(Int32Array, room * 2);
+        const P = Z.P;
+        P[0] = n; P[1] = GRID_W; P[2] = TILE; P[3] = CHUNK_SIZE * TILE; P[4] = CHUNKS_W; P[5] = CHUNKS_H; P[6] = _sxEpoch; P[7] = Z.out.length >> 1;
+        simRustDirect('k_wall_units', [list, _sxStamp, _sxStart, _sxCount, _sxESlot, C.x, C.y, C.dead, C.jFly, C.id, Z.out, Z.hdr], P);
+        if (Z.hdr[0] < (Z.out.length >> 1)) break;
+    }
+    for (let i = 0, m = Z.hdr[0]; i < m; i++) {
+        const u = S.owners[Z.out[2 * i + 1]];
+        if (!u) continue;
+        pushUnitOutOfBlockedTile(u);
+        u.x = _quantizeUnitWorldCoord(u.x); u.y = _quantizeUnitWorldCoord(u.y);
+        updateUnitSpatial(u);
+    }
+}
 // An idle combat unit with nothing in reach parks too: the kernel checks its
 // floor and its aggro box (hostile units or structures there: back to
 // Unit.update, which engages) each tick, and wakes it every
@@ -2541,7 +2566,7 @@ function simTileChangesFlush() {
     if (_simMoveWallBlk9 && !b9) _simMoveWallBlk9All();
     if (navTileTablesRedo()) { _simMoveWallDirty = true; return; }
     // (A new wall: whoever stands there steps off it.)
-    for (let i = 0, m = T.hdr[1]; i < m; i++) { const t = T.nw[i], gx = t % GRID_W; _simWallPushOut(gx, (t - gx) / GRID_W); }
+    if (T.hdr[1] > 0) _simWallPushOutTiles(T.nw, T.hdr[1]);
 }
 // The walk classes' walls at tile k (its tile entity changed).
 function _simMoveClassTileChanged(k) {

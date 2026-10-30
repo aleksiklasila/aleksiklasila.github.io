@@ -420,7 +420,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // Its base stat tables' row (things_utils.js _effBRowObj; -1: its own,
     // the preComputedBase / basePreComputed fields'), and its maxEnergy field
     // (SIM_UNIT_JS_COL_ALIAS): both written by SIM_KERNEL_EFF_UNITS.
-    ['bsRow', Int16Array, 1], ['jMaxE', Float32Array, 1],
+    ['bsRow', Int16Array, 1], ['jMaxE', Float32Array, 1], ['jRmNow', Uint8Array, 1], ['jFly', Uint8Array, 1],
     // Unit._forcedTargetLastSeenX/Y (NaN: null): a forced target's last seen
     // position, which the movement kernel writes for forced holds and chases
     // (mvFlags 8).
@@ -720,7 +720,7 @@ class SimSparseIntColumn {
 function _simSparseIntGrow(old,cap,def,used){const a=new SimSparseIntColumn(cap,def);if(old)a.copyFrom(old,0,Math.min(used,cap),0);return a;}
 function _simSparseIntCopy(old,cap,def,runs){const a=new SimSparseIntColumn(cap,def);for(let j=0;j<runs.length;j+=3)a.copyFrom(old,runs[j+1],runs[j+2],runs[j]);return a;}
 // (JavaScript fields kept in a movement column of the heap: the kernels write them.)
-const SIM_UNIT_JS_COL_ALIAS = { maxEnergy: 'jMaxE' };
+const SIM_UNIT_JS_COL_ALIAS = { maxEnergy: 'jMaxE', _removedNow: 'jRmNow', isFlying: 'jFly' };
 const _simJsName = (k, kind) => SIM_UNIT_JS_COL_ALIAS[k] || (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
@@ -766,9 +766,40 @@ function _simUnitColumnsObject() {
 function simUnitStateReleaseFreed() {
     const S = _simUnitState;
     if (!S || !S.freeLater || !S.freeLater.length) return;
-    const sl = S.sl;
-    for (const s of S.freeLater) _simSlabFree(sl, s);
-    S.freeLater.length = 0;
+    const sl = S.sl, L = S.freeLater, n = L.length, C = S.columns;
+    // (Back to a fresh slot's state on the helpers, in one job: taking one
+    // then clears nothing. A status record still held let go first.)
+    let zeroed = false;
+    if (typeof SIM_KERNEL_SLOT_ZERO === 'number' && typeof _simWasmX !== 'undefined' && _simWasmX !== null) {
+        for (let i = 0; i < n; i++) { const s = L[i]; if (C.stIx[s] > 0) _simStRelease(S, s); }
+        zeroed = _simSlotZeroRun(S, L, n);
+    }
+    for (let i = 0; i < n; i++) { const s = L[i]; _simSlabFree(sl, s); if (zeroed) sl.used[s >> 5] &= ~(1 << (s & 31)); }
+    L.length = 0;
+}
+// The unit columns as a table for k_slot_zero (address, bytes, elements a
+// slot), made again when the columns were (a growth, a compaction).
+const _slz = { S: null, cap: -1, tab: null, n: 0, list: null };
+function _simSlotZeroRun(S, L, n) {
+    const Z = _slz;
+    if (Z.S !== S || Z.cap !== S.cap || !simHeapHas(Z.tab)) {
+        const cols = [];
+        for (const k of SIM_UNIT_COLUMNS) cols.push([S.columns[k], 1]);
+        for (const [k, , per] of SIM_MOVE_COLUMNS) cols.push([S.columns[k], per]);
+        if (cols.some(([a]) => !a || !simHeapHas(a))) return false;
+        Z.tab = simSharedArray(Int32Array, cols.length * 3);
+        cols.forEach(([a, per], i) => { Z.tab[3 * i] = _simWEnc(_simHeapPtrOf(a)); Z.tab[3 * i + 1] = a.BYTES_PER_ELEMENT; Z.tab[3 * i + 2] = per; });
+        Z.S = S; Z.cap = S.cap; Z.n = cols.length;
+        simParallelBind('slz.tab', Z.tab);
+    }
+    if (!simHeapHas(S.sepKey) || !simHeapHas(S.sepLayer)) return false;
+    if (!Z.list || Z.list.length < n || !simHeapHas(Z.list)) { Z.list = simSharedArray(Int32Array, Math.max(4096, n * 2)); simParallelBind('slz.list', Z.list); }
+    for (let i = 0; i < n; i++) Z.list[i] = L[i];
+    simParallelBind('slz.tab', Z.tab); simParallelBind('unit.sepKey', S.sepKey); simParallelBind('unit.sepLayer', S.sepLayer);
+    const P = _simParams;
+    P[0] = n; P[1] = 256; P[2] = Z.n; P[3] = SIM_SEP_ABSENT;
+    simParallelRun(SIM_KERNEL_SLOT_ZERO, Math.ceil(n / 256));
+    return true;
 }
 
 // The columns live in the wasm heap (simHeapArray: the Rust kernels read
@@ -1306,6 +1337,8 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.mvWk[s] = 0; S.columns.dead[s] = 0; S.columns.mvNav[s * SIM_NAV_STRIDE] = -1; S.columns.mvNavLD[s] = -1; S.columns.mvFloor[s] = -1; S.columns.sepMov[s] = 0;
     S.columns.esOk[s] = 0; S.columns.esTaken[s] = 0; S.columns.tmOn[s] = 1; S.columns.lzAcc[s] = typeof u._lzp === 'number' ? u._lzp : 0; S.columns.lzBeam[s] = typeof u._lzb === 'number' ? u._lzb : 0; S.columns.sepCx[s] = 0; S.columns.sepIv[s] = 0; S.columns.sepCv[s] = 0; S.columns.esVer[s] = -1; S.columns.statRow[s] = -1; S.columns.bsRow[s] = -1;
     S.columns.fLsX[s] = NaN; S.columns.fLsY[s] = NaN;
+    // (The tick-start copy's, which its pass writes for every slot, the free ones too: as a fresh slot's.)
+    S.columns.sepD0[s] = 0; S.columns.sepR0[s] = 0; S.columns.sepL0[s] = 0;
     // (No status record; one for its damage not reported yet, a restore's.)
     if (S.columns.stIx[s] > 0) _simStRelease(S, s);
     if (typeof u._dtp === 'number' && u._dtp !== 0) S.columns.stAc[_simStTake(S, s)] = u._dtp;

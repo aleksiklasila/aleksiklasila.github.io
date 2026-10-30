@@ -1760,6 +1760,11 @@ SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) { _simRust(_simWsOrder
 // backwards, preserving death/bounty/win-condition ordering exactly.
 const _simRetireW = _simWK(['ix.slots', 'unit.dead', 'unit.mvOut', 'retire.list', 'retire.count']);
 SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simRetireW, P, chunk, 'k_unit_retire', 'UNIT_RETIRE'); };
+// Slots let go this tick back to a fresh slot's state (sim_unit_state.js
+// simUnitStateReleaseFreed; wasm/src/nfs.rs k_slot_zero).
+const SIM_KERNEL_SLOT_ZERO = 128;
+const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer']);
+SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZeroW, P, chunk, 'k_slot_zero', 'SLOT_ZERO'); };
 
 // The units the movement kernel left to the main thread this tick (unit.js
 // unitEventsRun): per slot chunk of P[1], the live units with an event

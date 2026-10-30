@@ -96,6 +96,8 @@ fn pxf(v: i32) -> f32 {
 }
 
 #[inline(always)]
+pub(crate) fn job_range(chunk: i32, per: i32, n: i32) -> (usize, usize) { job(chunk, per, n) }
+#[inline(always)]
 fn job(chunk: i32, per: i32, n: i32) -> (usize, usize) {
     let a = (chunk.max(0) as i64 * per.max(0) as i64).min(n.max(0) as i64) as usize;
     let b = (a as i64 + per.max(0) as i64).min(n.max(0) as i64) as usize;

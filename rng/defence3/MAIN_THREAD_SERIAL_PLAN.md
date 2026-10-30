@@ -515,3 +515,60 @@ Design:
 Steps: (1) the id table as the order (ix.slots from it), strided passes
 by id-table row; (2) retire as a kernel, the list kept only as a page view;
 (3) simulation sites to the iterator; (4) lazy objects for births.
+Stage U progress (2026-10-30): step 2 done as far as the list allows
+(nfs.rs k_retire_plan; JS keeps the list moves, selection, detach). Lazy
+detach rejected (owners[] is read as "live" by many passes). Spawning
+(barrack.js spawnQueuedUnitFromSpawner: Unit construction, worker config,
+level scaling, rally templates as JS path arrays) needs units without
+objects first. Simulation-side `units` sites: 195 lines (76 index / length
+uses), list in this session's notes: main.js (upkeep pass, slot map, uix,
+retire, actions, snapshot order), things_utils (effective levels' stride),
+unit.js (separation sizes, stats passes), worker.js (healer scan fallback,
+wsw slow), chunk.js (spatial index build by list index), flownav (sweep
+count, two passes), pathfinding (pending reschedule), player.js (kill-king
+check: units.some), sim_unit_state (compaction), snapshots.
+Next steps in order: (3a) the spatial index build and the strided passes
+take the id table (_uix) as their order instead of the list index; (3b)
+the remaining simulation sites through forEachUnit / unitAtIndex; (3c) the
+list kept only for the page; (4) births without objects (owners[s] made on
+first JS use), then spawning as a kernel with the rally templates as flow
+targets (no path arrays).
+Re-prioritised (2026-10-30, after the slot-zero kernel): the Unit object
+itself is cheap; the structure side is the larger JS. Next: W4 + the
+structure derived-stat machinery as tables (construction / upgrade / stack
+completions: markConstructionComplete, refreshThingProgressState,
+_sDerivedReconcile -> stationaryBrainChanged, workSiteBuilt, upkeep, laser
+checks; destroys' structListRemove / structRowDetach), then Stage U's
+ordering steps, then pathfinding.js.
+
+## Stage E: entities without per-entity JS objects in the simulation (plan)
+
+Why: after the 2026-10-30 conversions the simulation thread's remaining
+JavaScript is mostly per-event object bookkeeping, a few microseconds an
+event: unit deaths (list moves, detach with a SimUnitGone each), births
+(Unit construction, worker config, level scaling, rally path arrays),
+structure destroys (structListRemove, structRowDetach, tile lookups) and
+completions (setters feeding derived-stat tokens, brain words, work-site
+groups, upkeep, laser links). Kernels cannot take these over while the
+state they finish in is a JavaScript object and object lists.
+
+Shape:
+- Simulation identities are slots (units) and tiles / rows (structures).
+  Objects become views made on demand for the JavaScript that still wants
+  them (the page, tools, tests, the remaining JS systems), cached per slot
+  / row and generation (a stale view reads "gone" by generation, no detach
+  copy).
+- Lists: units by the id table (_uix: ids ascending, slots, holes), the
+  structure lists by tile order (the occupied-tile list, TileEntitySet);
+  per-class counts as columns. ~400 + ~145 simulation sites move to
+  iterators (forEachUnit, forEachTower / barrack / spawner by tile).
+- Hooks as dirty marks in heap lists (upkeep, traps, work sites, laser
+  links, presentation tiles) that their kernels drain; derived structure
+  stats from the static stat tables (stt.*, adj.*) plus per-row override
+  columns, no token objects.
+- Births / deaths / destroys / completions as batch kernels writing those
+  columns and marks; JavaScript only for presentation events.
+- Snapshot and hash order by id / tile (a rules revision).
+Order: (1) structure lists by tile with iterators; (2) structure derived
+stats as tables, completions and destroys as kernels; (3) unit iterators
+over the id table; (4) unit views on demand, births and deaths as kernels.

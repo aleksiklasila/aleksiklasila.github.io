@@ -3428,3 +3428,53 @@ Tests: nav-field-sweep, nav-atlas, nav-background, nav-rows,
 nav-shared-build, visibility-buildings / shared-source / source-mask /
 range-collision, shrine, status-expiry-records, chaos-scenario-determinism
 (0/0/3 helpers) pass.
+- Stage U, step 2 (retire pass): the per-death decisions are a kernel
+  (nfs.rs k_retire_plan, after the retire kernel's lists, in their order):
+  the gone list (slot, ~slot for removeUnitNow's), the death sounds (the
+  first UNIT_DEATH_SOUNDS non-worker, non-king deaths: wkS, spType) and a
+  king's death (spType = the king's spatial type; an own isKing override is
+  no longer seen by the retire pass). `_removedNow` is the heap column
+  jRmNow (SIM_UNIT_JS_COL_ALIAS). JavaScript keeps the list moves (units /
+  slot map swap-removes, no object read), the selection check (only with a
+  selection), the units without a slot, and the detach (SimUnitGone). The id
+  table and the ids' index take the removed by slot
+  (UnitIdIndex.deleteSlots, _unitByIdRemovedSlots). Not done: lazy detach
+  (dead units would stay in owners[], which many passes read as live).
+  Tests: unit-retirement, multiplayer-snapshot, worker-walk,
+  multiplayer-features (kill-king victory on every peer),
+  chaos-scenario-determinism (0/0/3 helpers) pass.
+- Slot zeroing off the spawn path: slots let go this tick are reset to a
+  fresh slot's state in one parallel job when they are released (start of
+  the next tick, simUnitStateReleaseFreed -> SIM_KERNEL_SLOT_ZERO, nfs.rs
+  k_slot_zero over a column table: every unit and movement column zero,
+  sepKey absent, sepLayer zero) and marked unused, so taking one clears
+  nothing (the generated _simSlotZero over ~225 columns was 0.49 ms a tick
+  of the Unit constructor's 1.67 in base2). Status records still held are
+  let go before. The tick-start copy (sepD0 / sepR0 / sepL0) writes free
+  slots too: cleared when a slot is taken. Checked: freed slots read all
+  zero (but that copy) and unused before reuse; unit-retirement,
+  storage-abi, multiplayer-snapshot, chaos-scenario-determinism pass.
+- Spawning, measured in base2 (hundreds of births a tick in steps 38-59):
+  the Unit object itself is cheap (constructor self 0.14 ms); the cost was
+  column initialisation (above), level scaling 0.18, the queue's front
+  stat lookup 0.49 (spawnQueueShift -> getUnitStatForOwner), rally
+  templates ~0.3. So Stage U's "births without objects" is worth less than
+  planned; the structure side (completions, destroys) is the larger JS.
+- Wall push-out as a kernel: units on tiles that just became walls (1.37 ms
+  a tick in base2 under unitPassEnd: a forEachUnitInRange per new wall)
+  found by tch.rs k_wall_units over the spatial index (the same candidate
+  chunks, stamps, ranges and tests, each tile's in id order); JavaScript
+  pushes only those found (pushUnitOutOfBlockedTile). isFlying is the heap
+  column jFly (alias); _unitNoWayCommit read the old j_isFlying column
+  directly (fixed).
+- Construction completions: the second refreshThingProgressState after
+  markConstructionComplete (which already ran it) dropped. The rest of the
+  completion stays JavaScript for now: the level / construction setters
+  feed the derived-stat tokens, brain words, work-site groups, upkeep and
+  laser links; a kernel must replicate all of them (planned with the
+  structure object model, W4).
+- Pre-existing failure noticed: tests/laser-links-incremental.test.cjs
+  reads _laserMap.beams, which the committed laser kernel code no longer
+  has (fails on HEAD's sources too; to fix with the test pass).
+Tests: construction-walk-driveby, floor-trap-kernel, adjacency-lane-carry,
+storage-abi, chaos-scenario-determinism (0/0/3) pass.

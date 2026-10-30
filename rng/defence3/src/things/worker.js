@@ -3774,8 +3774,8 @@ function _waiBuilt(at, kind, v) {
     if (!t) return;
     if (kind === 3) { t.maxEnergy = v; return; }
     if (kind === 0) {
+        // (Its progress state: markConstructionComplete's refreshThingProgressState.)
         markConstructionComplete(t);
-        refreshThingProgressState(t);
         if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
     } else if (kind === 1) {
         const prevStacked = getThingStackedStacks(t), prevManual = getThingManualStacks(t), left = Math.max(0, prevManual - prevStacked);

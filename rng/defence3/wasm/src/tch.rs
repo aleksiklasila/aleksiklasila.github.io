@@ -300,3 +300,76 @@ pub unsafe extern "C" fn k_reg_tiles(a: u32, _chunk: i32) {
     }
     s(hdr, 0, now);
 }
+
+/// The units standing on tiles that just became walls (unit.js
+/// simTileChangesFlush; forEachUnitInRange's candidates of a 1.5 tile range
+/// around each tile's centre, as it finds them: the index's chunks within the
+/// range plus a tile, stamped this epoch, nearest point within the range;
+/// alive), those not flying whose tile it is, each tile's in id order.
+/// Arrays: [0] tiles, [1] chunk stamps, [2] starts, [3] counts, [4] entry
+/// slots, [5] unit.x, [6] unit.y (eighths of a pixel), [7] unit.dead, [8]
+/// unit.jFly, [9] unit.id, [10] out (tile, slot pairs), [11] hdr out ([0]
+/// pairs). P: [0] tiles, [1] W, [2] TILE, [3] chunk px, [4] / [5] chunks
+/// wide / high, [6] epoch, [7] out room (pairs).
+#[no_mangle]
+pub unsafe extern "C" fn k_wall_units(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (tl, stamp, start, cnt, es) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
+    let (ux, uy, dead, fly, id) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<u8>(7), k.p::<u8>(8), k.p::<i32>(9));
+    let (out, hdr) = (k.p::<i32>(10), k.p::<i32>(11));
+    let n = k.i(0).max(0) as usize;
+    let w = k.i(1).max(1);
+    let tile = k.f(2);
+    let cws = k.f(3);
+    let (cw, ch, ep) = (k.i(4), k.i(5), k.i(6));
+    let room = k.i(7).max(0) as usize;
+    let r = tile * 1.5;
+    let scan = r + tile;
+    let r2 = r * r;
+    let mut no = 0usize;
+    for i in 0..n {
+        let t = g(tl, i);
+        if t < 0 { continue; }
+        let gy = idiv(t, w);
+        let gx = t - gy * w;
+        let (wx, wy) = (gx as f64 * tile + tile / 2.0, gy as f64 * tile + tile / 2.0);
+        let min_cx = (floor((wx - scan) / cws) as i32).max(0);
+        let max_cx = (floor((wx + scan) / cws) as i32).min(cw - 1);
+        let min_cy = (floor((wy - scan) / cws) as i32).max(0);
+        let max_cy = (floor((wy + scan) / cws) as i32).min(ch - 1);
+        let first = no;
+        for cy in min_cy..=max_cy {
+            for cx in min_cx..=max_cx {
+                let ck = (cy * cw + cx) as usize;
+                if g(stamp, ck) != ep { continue; }
+                let (mx, my) = (cx as f64 * cws, cy as f64 * cws);
+                let nx = if wx < mx { mx } else if wx > mx + cws { mx + cws } else { wx };
+                let ny = if wy < my { my } else if wy > my + cws { my + cws } else { wy };
+                if (wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > r2 { continue; }
+                let k0 = g(start, ck);
+                for e in k0..k0 + g(cnt, ck) {
+                    let q = g(es, e as usize);
+                    if q < 0 { continue; }
+                    let q = q as usize;
+                    if g(dead, q) != 0 || g(fly, q) != 0 { continue; }
+                    let (x, y) = (g(ux, q) as f64 * 0.125, g(uy, q) as f64 * 0.125);
+                    let (dx, dy) = (x - wx, y - wy);
+                    if dx * dx + dy * dy > r2 { continue; }
+                    if floor(x / tile) as i32 != gx || floor(y / tile) as i32 != gy { continue; }
+                    if no >= room { continue; }
+                    // (In id order: insertion among this tile's.)
+                    let mut j = no;
+                    while j > first && g(id, g(out, 2 * (j - 1) + 1) as usize) > g(id, q) {
+                        s(out, 2 * j, g(out, 2 * (j - 1)));
+                        s(out, 2 * j + 1, g(out, 2 * (j - 1) + 1));
+                        j -= 1;
+                    }
+                    s(out, 2 * j, t);
+                    s(out, 2 * j + 1, q as i32);
+                    no += 1;
+                }
+            }
+        }
+    }
+    s(hdr, 0, no as i32);
+}
