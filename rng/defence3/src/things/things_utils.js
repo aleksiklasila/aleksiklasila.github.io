@@ -237,6 +237,8 @@ function _adjacencyLanePost(sync) {
     // (ord.rs k_adj_post) on the helpers.
     _adjacencyDirtyTiles.room(N);
     simParallelBind('adj.dflag', _adjacencyDirtyTiles.flag); simParallelBind('adj.dblk', _adjacencyDirtyTiles.blk);
+    // (A match without structures yet: no structure made the table.)
+    structTableEnsure();
     for (const k of ['code', 'own', 'uc', 'brain', 'stab', 'rrow', 'val']) simParallelBind('st.' + k, _ST[k]);
     // (Seeds as offsets in their 256-tile block; portals a list sized by the
     // towers' table, the second half the flood's sort scratch.)
@@ -1307,8 +1309,8 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     if (typeof _inGameTick !== 'undefined' && _inGameTick) _winCheckDue = true; else checkWinCondition();
     return m;
 }
-// The class tables' retire queues and _stT columns (dst.rs: six arrays a
-// class, by ctab), in the heap; D.tabs[ctab] the table.
+// The class tables' retire queues, _stT and energy columns (dst.rs: seven
+// arrays a class, by ctab), in the heap; D.tabs[ctab] the table.
 function _dstClassArgs(D) {
     structRallyClasses();
     const out = [];
@@ -1317,7 +1319,7 @@ function _dstClassArgs(D) {
         D.tabs[j + 1] = T || null;
         if (T && !_sColsInHeap(T)) _sTableGrow(T, T.cap);
         const ok = T && simHeapHas(T.ret) && simHeapHas(T.qhdr) && simHeapHas(T.c__stT);
-        out.push(ok ? T.ret : null, ok ? T.rt : null, ok ? T.rp : null, ok ? T.rn : null, ok ? T.qhdr : null, ok ? T.c__stT : null);
+        out.push(ok ? T.ret : null, ok ? T.rt : null, ok ? T.rp : null, ok ? T.rn : null, ok ? T.qhdr : null, ok ? T.c__stT : null, ok && T.c__en && simHeapHas(T.c__en) ? T.c__en : null);
     }
     return out;
 }

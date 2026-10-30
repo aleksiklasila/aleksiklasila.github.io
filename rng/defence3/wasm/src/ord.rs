@@ -508,14 +508,18 @@ pub unsafe extern "C" fn k_ws_group(a: u32, _chunk: i32) {
 /// i32::MIN, Float32 / Float64 NaN, Int8 -128.
 /// Arrays: _stT, burning, burnTickDamage, poisoned, poisonTickDamage,
 /// frozen, iceTickDamage, wet, sandy, watched, watchedByTeam, _en, _ow, cnt,
-/// died, wend, shrine (f64 per owner, P[3] of them). P: [0] rows, [1] base
-/// ticks, [2] fixed-point scale, [3] owners.
+/// died, wend, shrine (f64 per owner, P[3] of them), st.val (the per-tile
+/// energy copy, by _stT: written with _en, as every energy writer does; a
+/// lagging copy was hashed and read by kernels, and a patch refreshed it on
+/// one peer only). P: [0] rows, [1] base ticks, [2] fixed-point scale, [3]
+/// owners.
 #[no_mangle]
 pub unsafe extern "C" fn k_struct_status(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (stt, burn, btd, pois, ptd, froz, itd, wet, sandy, wat) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<f32>(2), k.p::<i32>(3), k.p::<f32>(4),
         k.p::<i32>(5), k.p::<f32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9));
     let (wteam, en, ow, cnt, died, wend, shrine) = (k.p::<i8>(10), k.p::<f64>(11), k.p::<i8>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<f64>(16));
+    let stval = k.p::<f64>(17);
     let (n, dk, scale, nown) = (k.i(0).max(0) as usize, k.i(1).max(1), k.f(2), k.i(3).max(0));
     let (mut nd, mut nw) = (0usize, 0usize);
     const UNSET: i32 = i32::MIN;
@@ -566,7 +570,10 @@ pub unsafe extern "C" fn k_struct_status(a: u32, _chunk: i32) {
         if e <= 0.0 { e = 0.0; s(died, nd, r as i32); nd += 1; }
         s(burn, r, b); s(pois, r, p); s(froz, r, f); s(wet, r, w); s(sandy, r, sd); s(wat, r, t);
         s(btd, r, bd); s(ptd, r, pdm); s(itd, r, id); s(wteam, r, team as i8);
-        if e0 == e0 { s(en, r, e); }
+        if e0 == e0 {
+            s(en, r, e);
+            if !stval.is_null() { s(stval, g(stt, r) as usize, e); }
+        }
     }
     s(cnt, 0, nd as i32); s(cnt, 1, nw as i32);
 }

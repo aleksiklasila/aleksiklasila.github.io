@@ -1622,6 +1622,11 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
     if (hostTeams.length && !activeTeamIds.includes(localPlayerId)) localPlayerId = activeTeamIds[0];
     isMultiplayer = true;
     if (data.cfg) {
+        // Kept: a guest that becomes the host (migration) sends it to the
+        // players that join later. Without it a joiner made its grid at the
+        // page's map size (80x80) and only then took the match's size from the
+        // snapshot: its cells' columns read other tiles (areas, owners).
+        matchStartConfig = data.cfg;
         let cfgGridW = Math.max(8, Math.floor(Number(data.cfg.gridW) || 80));
         let cfgGridH = Math.max(8, Math.floor(Number((data.cfg.gridH !== undefined ? data.cfg.gridH : data.cfg.gridW)) || cfgGridW));
         GRID_W = cfgGridW;

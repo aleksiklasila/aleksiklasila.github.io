@@ -607,3 +607,50 @@ Left, in order:
 - Presentation on the simulation thread (recordDamageVisual,
   markControlGroupsDamaged, alerts: ~2.5 ms at 1M) as heap event lists the
   page drains.
+
+## Paused (2026-10-30): where the conversion stands, to come back to
+
+User: stabilize here (fix every failing test), come back to the rest later;
+the costs below depend on the scenario, so measure again in the scenario
+that matters before picking the next item.
+
+Done in this plan by now: Stages A-D, Stage E steps 1-3 (structure lists as
+table views, destroys and completions in kernels, units as the id table),
+slot defaults in the reset kernel. Details: OPTIMIZATION_PROGRESS.md
+("Stage E conversions").
+
+Measured on ONE scene only: 1M units / 250k structures mixed chaos
+(tests/chaos-spikes.bench.cjs --units=1000000 --structures=250000
+--rally-mix --helpers=11 --dk=1 --kernels --burst-every=100000 --mass-at=30
+--ticks=60), steps 38-59 (~350k units alive, ~2,500 deaths and ~40 births a
+tick, thousands of structure destroys early, then fewer). Runs:
+tests/test-runs/stage-e-20261030/ (cur = session start, cur2 = after step 3,
+both profiled; ph3 = unprofiled with SUBPHASES phase timings).
+- Tick: ~185 ms (cur, profiled) -> ~177 (cur2, profiled); ~172 unprofiled.
+- JavaScript left a tick (cur2 / ph3): movement and tower glue ~12 (mostly
+  the main thread waiting for helpers: parallel balance, not serial JS),
+  retire pass 4.8 (gone kernel 1.9; since then: id removals by row, slot
+  reset jobs smaller), births 2.7, worker out events 2.5 (spawner
+  production 0.6, completions' hooks 0.6, salvage destroys: batched since),
+  structure destroys 2.3 (kernel included), damage looks / alerts ~2-3,
+  pending paths 1.2, adjacency commit 1.4.
+Scenario dependence: deaths, births, destroys, completions and pending paths
+scale with events, not with counts; a siege, a rally-heavy match or 8 teams
+weigh them differently. Re-measure (profile-serial-share.cjs; SUBPHASES=
+for phase timings) in the target scene before choosing.
+
+Left, in rough order of value (re-check against a new profile):
+1. Stage E step 4: births / deaths without per-unit JS objects (unit views
+   on demand; the detach copy replaced by a kept-slot expiry like structure
+   rows; owners[] read as "live" by many passes: move those to the live
+   column first). Births: Unit constructor setters writing defaults the
+   fresh slot already has (~0.6 ms), rally templates.
+2. Spawner production and the spawn-ready list as heap tables (barrack.js
+   updateSpawnerProductionProgress, spawnerReadyNoted: JS arrays of objects).
+3. Completion hooks as heap marks (work-site groups, upkeep dirty list, wall
+   sync via the tile-change queue, laser check).
+4. Presentation as a heap event list (worker mode posts arrays per event;
+   page mode runs recordDamageVisual / alerts on the simulation thread).
+5. pathfinding.js: pending ways, A*, MANUAL_MOVE, the player's builder
+   assignments; paths as heap data instead of JS arrays.
+6. Helper balance in the movement kernel (the largest "JS" bucket is waits).

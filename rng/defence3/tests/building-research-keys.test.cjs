@@ -12,14 +12,15 @@ function run(layout){
   const floor=Object.assign(new FloorItem(),{gx:10,gy:8,type:'lava',owner:0,level:3,effectiveLevel:3,underConstruction:false});objects.push(floor);
   const read=()=>objects.map(e=>{const st=e.preComputedBase;return [e.maxEnergy,st.damage,st.visionRange,e.spawnCooldown,e.damage,st.burnDps];});
   const before=read(), levels=ensurePlayerResearchLevels(0);
-  const saved=[towers,barracks,collectorSpawners,units,getCellItemsRowMajor,recalculateAdjacency];
+  const saved=[getCellItemsRowMajor,recalculateAdjacency];
   const unavailable=new Proxy([],{get(){throw Error('instance scan while publishing shared building stats');}});
-  towers=barracks=collectorSpawners=units=unavailable;getCellItemsRowMajor=()=>{throw Error('floor scan');};recalculateAdjacency=()=>{throw Error('numeric research triggered adjacency refresh');};
+  // (The lists are views: a list of the stand-in for each, through their view hooks.)
+  structListsSetView([unavailable,unavailable,unavailable]);unitsSetView(unavailable);getCellItemsRowMajor=()=>{throw Error('floor scan');};recalculateAdjacency=()=>{throw Error('numeric research triggered adjacency refresh');};
   try{
    for(const [key,stat] of [['pistol','damage'],['pistol','visionRange'],['pistol','attackRange'],['pistol','cd'],['barrack_norm','spawnCd'],['lava','burnDps']]){
     applyResearchCompletion(0,{kind:'building',key,statKey:stat});
    }
-  }finally{[towers,barracks,collectorSpawners,units,getCellItemsRowMajor,recalculateAdjacency]=saved;}
+  }finally{structListsSetView(null);unitsSetView(null);[getCellItemsRowMajor,recalculateAdjacency]=saved;}
   const after=read(), absent=[];
   for(const e of objects){const T=_sTables.get(e.constructor);for(const k of ['maxEnergy','preComputedBase','preComputedEffective','preComputed','preComputedPotential','currentStats','baseStats','damage','spawnCooldown','x','y'])if(T.fields.some(f=>f.name===k))absent.push(e.constructor.name+'.'+k);}
   floor.effectiveLevel=5;const floorEffective=floor.damage===calculateItemStats('lava',5,0).damage;floor.effectiveLevel=3;

@@ -15,12 +15,13 @@ const result=inst.eval(`(()=>{
  const before=_effHot[r*EFF_HOT_WIDTH], rows=_effRowN;
  const levels=ensurePlayerResearchLevels(0),id=makeResearchLevelId('unit','norm','speed');
  levels[id]=(levels[id]||0)+1;
- const saved=units,owners=_simUnitState.owners;
+ const owners=_simUnitState.owners;
  // The stat publication must not enumerate or inspect instances.
  const unavailable=new Proxy([],{get(){throw Error('instance scan during table publication');}});
- units=unavailable;_simUnitState.owners=unavailable;
+ // (units is a view: the stand-in through its view hook.)
+ unitsSetView(unavailable);_simUnitState.owners=unavailable;
  try {applyUnitResearchUpgradeToExistingUnits(0,'norm','speed');}
- finally {units=saved;_simUnitState.owners=owners;}
+ finally {unitsSetView(null);_simUnitState.owners=owners;}
  const after=_effHot[r*EFF_HOT_WIDTH],pc=u.preComputed.speed;
  const sameHandle=c.statRow[s]===r,cacheRemoved=!Object.hasOwn(c,'mvSpd');
  for(const v of group)_effStatsFullUnit(v);

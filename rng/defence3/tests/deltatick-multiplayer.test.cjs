@@ -49,6 +49,14 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '40', 'cfg-map-type
     guests[0].evalSim(`(() => { const u = units.find(u => !u.dead && !u.isKing); u.energy = Math.max(1, u.energy - 3); u.x += 7; })()`);
     const ok = await world.runUntil(() => guests[0].patchesApplied + guests[0].snapshotsApplied > before && !guests[0].eval('lockstepResyncPauseActive'), 20000, 20);
     assert.ok(ok, 'the diverged guest was repaired');
+    // (Divergence that spread from the corrupted unit after the guest asked
+    // shows in a later rotation and is patched too, utils_resync.js: the
+    // match is compared from when the repairs settled.)
+    for (let k = 0; k < 6; k++) {
+        const n = guests[0].patchesApplied + guests[0].snapshotsApplied;
+        await world.run(3000);
+        if (guests[0].patchesApplied + guests[0].snapshotsApplied === n && !guests[0].eval('lockstepResyncPauseActive') && !guests[0].eval('resyncGuest.outstanding')) break;
+    }
     const from = Number(host.eval('currentTick'));
     if (process.env.DK_DEBUG) {
         const dump = i => JSON.parse(i.evalSim('JSON.stringify({ t: currentTick, u: units.filter(u => !u.dead).map(u => [u.id, u.atkL, u.wtcL, +(+u.attackTimer).toFixed(3), u.workerTransferCooldown]) })'));

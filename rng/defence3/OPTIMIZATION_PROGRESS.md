@@ -3596,3 +3596,39 @@ removals 0.9), births 3.3, waiOutEvents 2.5, structDestroyTiles 2.3,
 pendingPathsTick 1.2, slot reset 6.8 (kernel). Profiled (cur2.json): JS left
 per phase: movement glue 9.5 (mostly helper waits), tick body 9, unit events
 7.4, hits 5.4, projectiles 3.1, towers 3.0 (waits), births 2.7.
+
+# Stabilization after Stage E (2026-10-30)
+
+User: fix every failing test before converting more (MAIN_THREAD_SERIAL_PLAN.md
+"Paused"). Fixes:
+- Per-tile energy copy (_ST.val) lagging the class tables' _en: ord.rs
+  k_struct_status (burn / poison / ice damage) wrote _en only. Every peer
+  lagged alike until a patch wrote energy through the setter on one guest:
+  that region's hash (the core sweep reads val) then differed every ~40
+  ticks and patches could not fix it (val is not snapshot state). Kernels
+  read val too (tower due, worker groups, nearest spawner, laser lines). The
+  kernel now writes val by _stT. Same cause as dst.rs k_struct_destroy's
+  dead-only test (now the class table's energy column). Found with the
+  corruption fuzz (multiplayer-corruption-fuzz: buildingLevel on a guest,
+  repaired; the rng kind's patch count then saw that guest repaired again).
+- Host migration: matchStartConfig (map size and settings) was set only on
+  the host that started the match; a guest that took over sent joiners a
+  match without cfg, so a reloaded player made its grid at the page's 80x80
+  and took the 20x20 size from the snapshot after: its cell columns (area,
+  type, owner) read other tiles; the work site grid's areas differed and a
+  worker search committed differently ~45 ticks after the join. Guests keep
+  the cfg of their match start (utils_networking.js).
+- Eight-team start: the first adjacency pass ran before any structure made
+  the per-tile table (guests of a match without structures yet): data_state.js
+  structTableEnsure (the sizing, also used by structTableSet).
+- Tests updated for units / structure lists as views (unitsSetView,
+  structListsSetView, structLiveRows): shared-stat-rows, research-menu,
+  spawner-queue-performance, nav-field-sweep, building-research-keys;
+  deltatick-multiplayer compares from when the repairs settled.
+Results: mode 0 236/241 before these, the 5 then fixed (targeted re-run
+18/18: tests/reg-20261030-m0-targeted.json); corruption fuzz also with
+SNAP_KERNEL_MIN=0. Mode 1 (SIM_WORKER=1): 241/241 (tests/reg-20261030-m1.json).
+Probes: tests/_probe_cf.cjs (corruption fuzz with the host's differing
+regions per request and a region's per-tick hash inputs), tests/_probe_hm.cjs
+(host migration: every worker's columns, _ST / work site grid digests by
+tick), tests/_probe_rj.cjs (one instance: flush-only vs restored, alike).

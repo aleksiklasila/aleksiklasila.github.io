@@ -7294,7 +7294,8 @@ function structStatusTick() {
         if (!O.died || O.died.length < T.cap) { O.died = simSharedArray(Int32Array, T.cap); O.wend = simSharedArray(Int32Array, T.cap); }
         P[0] = T.n; P[1] = simDk; P[2] = RESOURCE_FIXED_POINT_SCALE; P[3] = owners;
         simRustDirect('k_struct_status', [T.c__stT, T.c_burning, T.c_burnTickDamage, T.c_poisoned, T.c_poisonTickDamage, T.c_frozen, T.c_iceTickDamage,
-            T.c_wet, T.c_sandy, T.c_watched, T.c_watchedByTeam, T.c__en, T.c__ow, O.cnt, O.died, O.wend, O.shrine], P);
+            T.c_wet, T.c_sandy, T.c_watched, T.c_watchedByTeam, T.c__en, T.c__ow, O.cnt, O.died, O.wend, O.shrine,
+            _ST.val && simHeapHas(_ST.val) ? _ST.val : null], P);
         for (let i = 0, n = O.cnt[1]; i < n; i++) { const e = T.rowObj[O.wend[i]]; if (e && typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(e); }
         const nd = O.cnt[0];
         if (!nd) continue;

@@ -823,6 +823,20 @@ function structRallyClasses() {
     _stAllIx = new Map(); _stAllCls.forEach((C, i) => { if (C) _stAllIx.set(C, i + 1); });
     return _stRallyCls;
 }
+// The per-tile table sized to the map (made at the first entity joining, or
+// by a pass that reads it before any did: the first adjacency pass of a
+// match without structures yet). Keep the authoritative structure SoA
+// directly readable by kernels: no per-tick object walk or full-grid mirror
+// for tower queries.
+function structTableEnsure() {
+    const T = _ST, n = GRID_W * GRID_H;
+    if (T.n === n) return;
+    const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
+    T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n); T.brain = alloc(Int32Array, n);
+    T.rtab = alloc(Uint8Array, n); T.stab = alloc(Uint8Array, n); T.rrow = alloc(Int32Array, n); T.rrow.fill(-1); T.ctab = alloc(Uint8Array, n);
+    T.cnt = alloc(Uint8Array, n);
+    T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = alloc(Uint8Array, T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
+}
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
 function structTableSet(gx, gy, prev, ref) {
     const t = gy * GRID_W + gx, T = _ST, n = GRID_W * GRID_H;
@@ -834,13 +848,7 @@ function structTableSet(gx, gy, prev, ref) {
       if (prev !== ref || k0 !== k1) { if (k0 >= 0) _stlBump(k0); if (k1 >= 0 && k1 !== k0) _stlBump(k1); } }
     if (T.n !== n) {
         if (!joins) return;
-        // Keep the authoritative structure SoA directly readable by kernels:
-        // no per-tick object walk or full-grid mirror for tower queries.
-        const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
-        T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n); T.brain = alloc(Int32Array, n);
-        T.rtab = alloc(Uint8Array, n); T.stab = alloc(Uint8Array, n); T.rrow = alloc(Int32Array, n); T.rrow.fill(-1); T.ctab = alloc(Uint8Array, n);
-        T.cnt = alloc(Uint8Array, n);
-        T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = alloc(Uint8Array, T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
+        structTableEnsure();
     }
     _stClear(t);
     if (ref && ref._sr >= 0) {

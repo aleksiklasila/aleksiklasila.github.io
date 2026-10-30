@@ -44,11 +44,12 @@ const ST_OWNER_NONE: i32 = 0x7ff9;
 ///
 /// Rows (the class tables', data_state.js _sTableOf): out [28] (class code
 /// (ctab), row) pairs and [29] the tiles destroyed, in the list's order; per
-/// class j < P[24] (ctab j + 1): [30 + 6j] ret, [31 + 6j] rt, [32 + 6j] rp,
-/// [33 + 6j] rn (the retire queue), [34 + 6j] its header (head, tail,
-/// length), [35 + 6j] the _stT column. A destroyed structure's row retires
-/// at tick P[22] (_sRowQueueInsert) and its _stT becomes -1. P[23] 1: only
-/// those out of energy (val <= 0).
+/// class j < P[24] (ctab j + 1): [30 + 7j] ret, [31 + 7j] rt, [32 + 7j] rp,
+/// [33 + 7j] rn (the retire queue), [34 + 7j] its header (head, tail,
+/// length), [35 + 7j] the _stT column, [36 + 7j] the energy column (_en).
+/// A destroyed structure's row retires at tick P[22] (_sRowQueueInsert) and
+/// its _stT becomes -1. P[23] 1: only those out of energy (the row's _en <=
+/// 0, as the energy getter reads it; the per-tile val may lag it).
 #[no_mangle]
 pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -92,11 +93,16 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
         if g(ctab, tu) == 0 || c >= 0x66 {
             continue;
         }
-        if dead_only && !(g(val, tu) <= 0.0) {
-            continue;
-        }
         // Its row: retired (kept readable till its expiry), off its tile.
         let (ct, row) = (g(ctab, tu) as i32, g(rrow, tu));
+        if dead_only {
+            let j = (ct - 1) as usize;
+            let enp = if row >= 0 && (ct - 1) < ncls { k.p::<f64>(36 + 7 * j) } else { core::ptr::null_mut() };
+            let e = if enp.is_null() { g(val, tu) } else { g(enp, row as usize) };
+            if !(e <= 0.0) {
+                continue;
+            }
+        }
         if !rows.is_null() {
             s(rows, (nk * 2) as usize, ct);
             s(rows, (nk * 2 + 1) as usize, row);
@@ -105,8 +111,8 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
             s(dtl, nk as usize, t);
         }
         let j = ct - 1;
-        if row >= 0 && j < ncls && k.raw(30 + 6 * j as usize) != 0 {
-            let b = 30 + 6 * j as usize;
+        if row >= 0 && j < ncls && k.raw(30 + 7 * j as usize) != 0 {
+            let b = 30 + 7 * j as usize;
             let (ret, rtk, rp, rn, qh) = (k.p::<u8>(b), k.p::<i32>(b + 1), k.p::<i32>(b + 2), k.p::<i32>(b + 3), k.p::<i32>(b + 4));
             let st = k.p::<i32>(b + 5);
             let r = row as usize;

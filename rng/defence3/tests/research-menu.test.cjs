@@ -28,10 +28,10 @@ const server = http.createServer((req, res) => {
         const result = await browser.evFn(() => {
             const check = (condition, message) => { if (!condition) throw Error(message); };
             // Unselected frame views have state but no path/target details.
-            const savedUnits = units;
             const savedUpdate = updateInfoPanel;
             updateInfoPanel = () => {};
-            units = [
+            // (units is a view: frame views set through its hook.)
+            unitsSetView([
                 { id: 1, owner: 0, unitType: 'collector', workerType: 'collector', workerState: 'IDLE' },
                 { id: 2, owner: 0, unitType: 'collector', workerType: 'collector', workerState: 'MOVING' },
                 { id: 3, owner: 0, unitType: 'collector', workerType: 'collector', workerState: 'GATHERING' },
@@ -40,7 +40,7 @@ const server = http.createServer((req, res) => {
                 { id: 6, owner: 0, unitType: 'norm', commandState: CMD_IDLE + 1 },
                 { id: 7, owner: 0, unitType: 'norm', commandState: CMD_IDLE + 1, holdPosition: true },
                 { id: 8, owner: 0, unitType: 'collector', workerType: 'collector', workerState: 'IDLE', dead: true }
-            ];
+            ]);
             selectInfoPanelPlayerRoster('units', 'total', 'idle', 0);
             check(selectedUnits.map(u => u.id).join(',') === '1,5,7', 'Idle must exclude working, moving, dead and enemy units');
             selectInfoPanelPlayerRoster('units', 'collector', 'idle', 0);
@@ -48,7 +48,7 @@ const server = http.createServer((req, res) => {
             units[0].workerState = 'MOVING';
             selectInfoPanelPlayerRoster('units', 'collector', 'idle', 0);
             check(selectedUnits.length === 0, 'zero idle must clear the previous selection');
-            units = savedUnits;
+            unitsSetView(null);
             updateInfoPanel = savedUpdate;
             const labView = { _s: -1, _last: { flags: SIM_SF_RESEARCHING } };
             Object.defineProperty(labView, 'isResearching', _PAGE_STRUCT_ACCESSORS.isResearching);

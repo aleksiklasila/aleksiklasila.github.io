@@ -42,6 +42,8 @@ function make(code, data) {
  let globalSpawnerReadyOrderCounter=100000, checks=0, events=[];
  const simDk=1, localPlayerId=0, isQueueEnabled=s=>s.enabled, getThingBaseLevel=()=>1, getSpawnerFallbackUnitType=()=> 'norm';
  const getQueuedSpawnInfo=f=>{checks++;return f;}, getPlayerPopCap=owner=>caps[owner];
+ // (Live barracks and spawners: the structure tables' count, data_state.js.)
+ const structLiveRows=()=>barracks.length+collectorSpawners.length;
  const spawnQueuedUnitFromSpawner=s=>{
    if(s.id===fail) return false;
    events.push(s.id); players[s.owner].popCount++; s.spawnQueue.shift(); s._spawnReadyOrder=undefined; return true;

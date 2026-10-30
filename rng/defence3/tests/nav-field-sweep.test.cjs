@@ -12,7 +12,7 @@ const inst = world.spawn('navsweep', { simWorker: false });
 inst.eval('startSoloGame(); gameTick();');
 const out = JSON.parse(inst.eval(`JSON.stringify((() => {
     const res = [];
-    const keepPools = _navFields.pools.slice(), keepCycle = _navFields.seenCycle, keepS = _simUnitState, keepUnits = units, keepMap = _unitSlotMapEnsure, keepPh = simStepPhases;
+    const keepPools = _navFields.pools.slice(), keepCycle = _navFields.seenCycle, keepS = _simUnitState, keepMap = _unitSlotMapEnsure, keepPh = simStepPhases;
     try {
         for (const n of [0, 1, 127, 129, 1027]) for (const dk of [1, 4, 20, 127, 128]) for (const offset of [0, 7, 119, 127]) {
             const step = NAV_FIELD_SWEEP_TICKS, ns = n + 13, C = {};
@@ -44,7 +44,7 @@ const out = JSON.parse(inst.eval(`JSON.stringify((() => {
                 if (k === step - 1) { for (const p of ref) for (const [key, s] of p.byKey) if (p.seen[s] < mark) p.byKey.delete(key); cycle++; }
             }
             _navFields.pools[0] = pools[0]; _navFields.pools[1] = pools[1]; _navFields.seenCycle = 0;
-            _simUnitState = { columns: C }; units = { length: n }; _unitSlotMapEnsure = () => slots; simStepPhases = () => phases;
+            _simUnitState = { columns: C }; unitsSetView({ length: n }); _unitSlotMapEnsure = () => slots; simStepPhases = () => phases;
             navFieldsSweepStep();
             let bad = _navFields.seenCycle !== cycle ? 'cycle' : '';
             for (let w = 0; w < 2 && !bad; w++) {
@@ -60,7 +60,7 @@ const out = JSON.parse(inst.eval(`JSON.stringify((() => {
         }
     } finally {
         _navFields.pools[0] = keepPools[0]; _navFields.pools[1] = keepPools[1]; _navFields.seenCycle = keepCycle;
-        _simUnitState = keepS; units = keepUnits; _unitSlotMapEnsure = keepMap; simStepPhases = keepPh;
+        _simUnitState = keepS; unitsSetView(null); _unitSlotMapEnsure = keepMap; simStepPhases = keepPh;
     }
     return res.filter(Boolean);
 })())`));
