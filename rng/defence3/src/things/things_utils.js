@@ -3,183 +3,14 @@
 // ============================================================
 // ADJACENCY & LASER CONNECTIONS
 // ============================================================
-// Laser links: two lasers of one owner in the same row or column, 1 to
-// min(effective levels) tiles apart, no wall between (other towers do not
-// block). Each tower's partners are in tile order (_laserTowerList). Lasers of a
-// line are only compared with the next ones along it within reach, so a
-// recompute is O(lasers log lasers + links), not O(towers^2).
-const _laserLines = new Map();
-// A change at a tile (a tower placed or removed, a laser's level) can only
-// change the links of the lines through it: its row and its column, every
-// owner's. Those alone are worked out again (_laserLinksIncremental), each
-// laser's row and column partners kept apart (_lzRow, _lzCol) and merged in
-// tile order; everything (a restore, the map's first) the full way. A
-// battle placed or lost a tower every tick, and every one recomputed every
-// laser's links (2-10 ms with 800 lasers). The beam map is made again only
-// when some link changed.
-const _laserDirtyRows = new Set(), _laserDirtyCols = new Set();
-let _laserDirtyAll = true;
-function recalculateLaserConnections(full = true) {
-    if (!full && !_laserDirtyAll && (_laserDirtyRows.size || _laserDirtyCols.size)) { _laserLinksIncremental(); return; }
-    _laserLinksDirty = false; _laserDirtyAll = false; _laserDirtyRows.clear(); _laserDirtyCols.clear();
-    // (The beam map follows: tower.js laserBeamsTick.)
-    if (typeof laserMapDirty === 'function') laserMapDirty();
-    const lines = _laserLines, partners = [];
-    lines.clear();
-    for (const t of _laserTowerList()) { t._lzRow = []; t._lzCol = []; }
-    // (The laser towers, in towers order: listed again only when one joins
-    // or leaves; another structure's change walks them alone, not every
-    // tower.)
-    const L = _laserTowerList();
-    const towers = L;
-    for (let i = 0; i < towers.length; i++) {
-        const t = towers[i];
-        t.connectedLasers = []; t._laserLinkLevel = t.effectiveLevel;
-        // (Lines by owner and row/column: string keys, owners may be anything.)
-        const kc = 'c' + t.owner + ':' + t.gx, kr = 'r' + t.owner + ':' + t.gy;
-        let a = lines.get(kc); if (!a) lines.set(kc, a = []); a.push(i);
-        let b = lines.get(kr); if (!b) lines.set(kr, b = []); b.push(i);
-    }
-    for (const [key, list] of lines) {
-        if (list.length < 2) continue;
-        const col = key[0] === 'c';
-        list.sort((x, y) => (col ? towers[x].gy - towers[y].gy : towers[x].gx - towers[y].gx) || x - y);
-        // (A laser without a numeric level links at any distance: the
-        // minimum of the levels is NaN, never exceeded.)
-        let anyNaN = false;
-        for (let k = 0; k < list.length && !anyNaN; k++) anyNaN = !(towers[list[k]].effectiveLevel >= -Infinity);
-        for (let a = 0; a < list.length; a++) {
-            const t1 = towers[list[a]], c1 = col ? t1.gy : t1.gx, l1 = t1.effectiveLevel;
-            for (let b = a + 1; b < list.length; b++) {
-                const t2 = towers[list[b]], dist = (col ? t2.gy : t2.gx) - c1, gap = dist - 1;
-                // (Further ones are further: past t1's level none can link.)
-                if (gap > l1 && !anyNaN) break;
-                if (gap < 1) continue;
-                const limit = Math.min(l1, t2.effectiveLevel);
-                if (gap > limit) continue;
-                let blocked = false;
-                if (col) { for (let y = c1 + 1; y < c1 + dist && !blocked; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true; }
-                else { const row = grid[t1.gy]; for (let x = c1 + 1; x < c1 + dist && !blocked; x++) if (row[x].type === TYPE_WALL) blocked = true; }
-                if (blocked) continue;
-                partners.push(list[a], list[b]);
-                const sideA = col ? towers[list[a]]._lzCol : towers[list[a]]._lzRow, sideB = col ? towers[list[b]]._lzCol : towers[list[b]]._lzRow;
-                sideA.push(towers[list[b]]); sideB.push(towers[list[a]]);
-            }
-        }
-    }
-    if (!partners.length) return;
-    // Each tower's partners in the laser list's (tile) order.
-    const byTower = new Map();
-    for (let k = 0; k < partners.length; k += 2) {
-        const i = partners[k], j = partners[k + 1];
-        let a = byTower.get(i); if (!a) byTower.set(i, a = []); a.push(j);
-        let b = byTower.get(j); if (!b) byTower.set(j, b = []); b.push(i);
-    }
-    for (const [i, list] of byTower) {
-        list.sort((x, y) => x - y);
-        const out = towers[i].connectedLasers;
-        for (const j of list) out.push(towers[j]);
-    }
-}
-// The links of one line (lasers of one owner in one row or column, in tile
-// order): each pair's partners, the same tests as the full recompute.
-function _laserLinePairs(list, col, onPair) {
-    let anyNaN = false;
-    for (let k = 0; k < list.length && !anyNaN; k++) anyNaN = !(list[k].effectiveLevel >= -Infinity);
-    for (let a = 0; a < list.length; a++) {
-        const t1 = list[a], c1 = col ? t1.gy : t1.gx, l1 = t1.effectiveLevel;
-        for (let b = a + 1; b < list.length; b++) {
-            const t2 = list[b], dist = (col ? t2.gy : t2.gx) - c1, gap = dist - 1;
-            if (gap > l1 && !anyNaN) break;
-            if (gap < 1) continue;
-            const limit = Math.min(l1, t2.effectiveLevel);
-            if (gap > limit) continue;
-            let blocked = false;
-            if (col) { for (let y = c1 + 1; y < c1 + dist && !blocked; y++) if (grid[y][t1.gx].type === TYPE_WALL) blocked = true; }
-            else { const row = grid[t1.gy]; for (let x = c1 + 1; x < c1 + dist && !blocked; x++) if (row[x].type === TYPE_WALL) blocked = true; }
-            if (blocked) continue;
-            onPair(t1, t2);
-        }
-    }
-}
-function _laserLinksIncremental() {
-    _laserLinksDirty = false;
-    const rows = _laserDirtyRows, cols = _laserDirtyCols, L = _laserTowerList();
-    // The lines through the dirty rows and columns, every owner's; their
-    // lasers in tile order (the laser list's).
-    const rowLines = new Map(), colLines = new Map(), touched = new Set();
-    for (const t of L) {
-        if (!t._lzRow) { t._lzRow = []; t._lzCol = []; }
-        if (rows.has(t.gy)) { const k = t.owner + ':' + t.gy; let a = rowLines.get(k); if (!a) rowLines.set(k, a = []); a.push(t); }
-        if (cols.has(t.gx)) { const k = t.owner + ':' + t.gx; let a = colLines.get(k); if (!a) colLines.set(k, a = []); a.push(t); }
-    }
-    rows.clear(); cols.clear();
-    let changed = false;
-    const redo = (lines, col) => {
-        for (const list of lines.values()) {
-            if (col) list.sort((x, y) => x.gy - y.gy);
-            const next = new Map();
-            for (const t of list) next.set(t, []);
-            _laserLinePairs(list, col, (a, b) => { next.get(a).push(b); next.get(b).push(a); });
-            for (const t of list) {
-                const was = col ? t._lzCol : t._lzRow, now = next.get(t);
-                t._laserLinkLevel = t.effectiveLevel;
-                if (was.length === now.length && was.every((x, i) => x === now[i])) continue;
-                if (col) t._lzCol = now; else t._lzRow = now;
-                touched.add(t); changed = true;
-            }
-        }
-    };
-    redo(rowLines, false); redo(colLines, true);
-    // A laser gone: its partners lose it (it was in one of their lines,
-    // which its tile dirtied: done above). Each touched laser's links: its
-    // row and column partners in tile order.
-    for (const t of touched) {
-        const m = t._lzRow.concat(t._lzCol);
-        m.sort((x, y) => _laserTileKey(x) - _laserTileKey(y));
-        t.connectedLasers = m;
-    }
-    if (changed && typeof laserMapDirty === 'function') laserMapDirty();
-}
-// The laser towers in tile order (gy * GRID_W + gx: the same on every peer
-// whatever the towers' order, which removals change, structListRemove): kept
-// as lasers join and leave (laserListToggle, from towerJoinedOrLeft), made
-// again from towers when that list was replaced (a restore) or the grid's
-// width changed (a filter over every tower, cold objects, on each tower
-// change was ~2 ms a tick in battle).
-let _laserListRef = null, _laserListW = -1, _laserList = [];
-function _laserTileKey(t) { return t.gy * GRID_W + t.gx; }
-function _laserListAt(t) {
-    const L = _laserList, k = _laserTileKey(t);
-    let lo = 0, hi = L.length;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (_laserTileKey(L[m]) < k) lo = m + 1; else hi = m; }
-    return lo;
-}
-function laserListToggle(t) {
-    if (_laserListRef !== towers || _laserListW !== GRID_W) return;
-    const i = _laserListAt(t), L = _laserList;
-    if (i < L.length && L[i] === t) L.splice(i, 1);
-    else if (i < L.length && _laserTileKey(L[i]) === _laserTileKey(t)) L[i] = t;
-    else L.splice(i, 0, t);
-}
-function _laserTowerList() {
-    if (_laserListRef !== towers || _laserListW !== GRID_W) {
-        _laserList = towers.filter(t => t.type === 'laser').sort((a, b) => _laserTileKey(a) - _laserTileKey(b));
-        _laserListRef = towers; _laserListW = GRID_W;
-    }
-    return _laserList;
-}
-// Structures placed or removed: the links are made again before they are
-// next used (a laser's update, the end of the tick: ensureLaserConnections),
-// once however many changed. Restores recompute at once.
-let _laserLinksDirty = false;
-// (At a tile: its row and column; without one: everything.)
-function markLaserConnectionsDirty(gx, gy) {
-    _laserLinksDirty = true;
-    if (Number.isFinite(gx) && Number.isFinite(gy)) { _laserDirtyRows.add(gy); _laserDirtyCols.add(gx); }
-    else _laserDirtyAll = true;
-}
-function ensureLaserConnections() { if (_laserLinksDirty) recalculateLaserConnections(false); }
+// Laser links and beams: made every tick from the world by the kernels
+// (tower.js laserBeamsTick, laser.rs). These hooks of the JavaScript that
+// changed them are no-ops now.
+function recalculateLaserConnections() { if (typeof laserMapDirty === 'function') laserMapDirty(); }
+function markLaserConnectionsDirty() {}
+function ensureLaserConnections() {}
+function laserListToggle(t) { if (typeof laserLinesTouch === 'function') laserLinesTouch(t, true); }
+function _laserTowerList() { const out = []; for (const t of towers) if (t.type === 'laser') out.push(t); return out; }
 
 function _isOperationalAdjacencyEntity(obj) {
     if (!obj) return false;
@@ -251,8 +82,8 @@ function statTablesStatic() {
     const nk = _statKeyIds.size, L1 = MAX_THING_LEVEL + 1, R1 = MAX_RESEARCH_LEVEL + 1;
     if (_stt.map === M && _stt.nk === nk && _stt.L1 === L1 && _stt.R1 === R1 && simHeapHas(_stt.mxe)) return _stt;
     const n = Math.max(1, nk * L1 * R1);
-    const mxe = _adjArr('stt.mxe', Float64Array, n), vis = _adjArr('stt.vis', Int32Array, n), atk = _adjArr('stt.atk', Int32Array, n);
-    mxe.fill(NaN); vis.fill(-1); atk.fill(-1);
+    const mxe = _adjArr('stt.mxe', Float64Array, n), vis = _adjArr('stt.vis', Int32Array, n), atk = _adjArr('stt.atk', Int32Array, n), dmg = _adjArr('stt.dmg', Float32Array, n);
+    mxe.fill(NaN); vis.fill(-1); atk.fill(-1); dmg.fill(NaN);
     for (const [key, kb] of _statKeyIds) {
         const levels = (M && M[key]) || [];
         for (let lv = 1; lv < L1; lv++) {
@@ -264,14 +95,15 @@ function statTablesStatic() {
                 mxe[i] = Number.isFinite(me) ? Math.fround(Math.max(1, Math.floor(me))) : NaN;
                 vis[i] = e.visionRange ? areaSteps(e.visionRange[r]) : -1;
                 atk[i] = e.attackRange ? areaSteps(e.attackRange[r]) : -1;
+                dmg[i] = e.damage ? Math.fround(Number(e.damage[r])) : NaN;
             }
         }
     }
-    Object.assign(_stt, { map: M, nk, L1, R1, mxe, vis, atk });
+    Object.assign(_stt, { map: M, nk, L1, R1, mxe, vis, atk, dmg });
     return _stt;
 }
 // Per owner row (0 none, 1 + the player) and building key: research levels
-// of maxEnergy, visionRange, attackRange (adj.rlv, three a pair), boost
+// of maxEnergy, visionRange, attackRange, damage (adj.rlv, four a pair), boost
 // levels of the boosted stats (adj.bl: data_dynamic.js _statBoostLevels as
 // levels, boostStepLevels), the researched maximum level (adj.rml:
 // getThingResearchedMaxLevel). Small arrays, made again when research or a
@@ -282,16 +114,17 @@ function _adjPlayerStats(S) {
     const X = _adjL.ps;
     if (X && X.ver === ver && simHeapHas(X.rml)) return X;
     const n = Math.max(1, np * nk);
-    const P = { ver, np, rml: _adjArr('adj.rml', Int32Array, n), rlv: _adjArr('adj.rlv', Int32Array, 3 * n), bl: _adjArr('adj.bl', Int32Array, n) };
+    const P = { ver, np, rml: _adjArr('adj.rml', Int32Array, n), rlv: _adjArr('adj.rlv', Int32Array, 4 * n), bl: _adjArr('adj.bl', Int32Array, n) };
     const MAXR = Math.max(1, MAX_RESEARCH_LEVEL), MAXL = Math.max(1, MAX_THING_LEVEL);
-    P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 3 * nk); P.bl.fill(0, 0, nk);
+    P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 4 * nk); P.bl.fill(0, 0, nk);
     for (let o = 0; o < np - 1; o++) for (const [key, kb] of _statKeyIds) {
         const i = (o + 1) * nk + kb;
         const researched = Math.max(0, Math.floor(getPlayerResearchLevel(o, 'building', key, 'maxLevel') || 0));
         P.rml[i] = Math.max(1, Math.min(MAXL, 1 + Math.round(researched * (MAXL - 1) / MAXR)));
-        P.rlv[3 * i] = getPlayerResearchLevel(o, 'building', key, 'maxEnergy');
-        P.rlv[3 * i + 1] = getPlayerResearchLevel(o, 'building', key, 'visionRange');
-        P.rlv[3 * i + 2] = getPlayerResearchLevel(o, 'building', key, 'attackRange');
+        P.rlv[4 * i] = getPlayerResearchLevel(o, 'building', key, 'maxEnergy');
+        P.rlv[4 * i + 1] = getPlayerResearchLevel(o, 'building', key, 'visionRange');
+        P.rlv[4 * i + 2] = getPlayerResearchLevel(o, 'building', key, 'attackRange');
+        P.rlv[4 * i + 3] = getPlayerResearchLevel(o, 'building', key, 'damage');
         P.bl[i] = boostStepLevels(_statBoostLevels(o, 'building', key, 'visionRange'));
     }
     return (_adjL.ps = P);
@@ -315,7 +148,7 @@ function _adjTypeKeys() {
 // pointer words in adj.ctab (a class without a table: zeros, never met).
 const _ADJ_CTAB_COLS = ['gx', 'gy', 'stacks', 'manualStacks', 'effectiveStacks', 'level', 'effectiveLevel', 'potentialEffectiveLevel', 'isStacking', 'stackingWorkDone',
     'autoUpgradeEnabled', 'isUpgrading', 'effectiveGroupSize', 'effectiveAreaMult', 'autoStackEnabled', '_ow', '_en', '_vsGen', '_vsR', '$tok', 'upgrademaxEnergy',
-    '_mxOv', '_ovMx', '_ovVs', '$mxn'];
+    '_mxOv', '_ovMx', '_ovVs', '$mxn', 'watched', 'watchedByTeam'];
 function _adjApplyClasses(CT) {
     const classes = STRUCT_STATUS_CLASSES(), W = _ADJ_CTAB_COLS.length;
     for (let c = 0; c < 9; c++) {
@@ -405,13 +238,20 @@ function _adjacencyLanePost(sync) {
     _adjacencyDirtyTiles.room(N);
     simParallelBind('adj.dflag', _adjacencyDirtyTiles.flag); simParallelBind('adj.dblk', _adjacencyDirtyTiles.blk);
     for (const k of ['code', 'own', 'uc', 'brain', 'stab', 'rrow', 'val']) simParallelBind('st.' + k, _ST[k]);
-    _adjArr('adj.sig', Int32Array, N); _adjArr('adj.seed', Int32Array, blocks * 256); _adjArr('adj.scnt', Int32Array, blocks);
-    _adjArr('adj.cls4', Int32Array, 4 * blocks * 256); _adjArr('adj.ccnt', Int32Array, blocks); _adjArr('adj.cloud', Int32Array, 3 * blocks * 256);
+    // (Seeds as offsets in their 256-tile block; portals a list sized by the
+    // towers' table, the second half the flood's sort scratch.)
+    const Tw = typeof Tower !== 'undefined' ? _sTables.get(Tower) : null, ccap = Math.max(64, Tw ? Tw.cap : 64);
+    _adjArr('adj.sig', Int32Array, N); _adjArr('adj.seed8', Uint8Array, blocks * 256); _adjArr('adj.scnt', Int32Array, blocks);
+    _adjArr('adj.cls4', Int32Array, 8 * ccap); _adjArr('adj.cloud', Int32Array, 3 * ccap);
+    const CC = _adjArr('adj.ccnt', Int32Array, 4); CC[0] = 0;
     _adjApplyClasses(_adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length));
     const TF = _adjTypeFlags(), jobs = Math.ceil(blocks / ADJ_POST_BLOCKS_PER_JOB), PF = _adjArr('adj.pflag', Int32Array, 16 * jobs);
     const P = _simParams;
-    P[0] = blocks; P[1] = ADJ_POST_BLOCKS_PER_JOB; P[2] = N; P[3] = all ? 1 : 0; P[4] = ST_OWNER_NONE; P[5] = TF.n;
+    P[0] = blocks; P[1] = ADJ_POST_BLOCKS_PER_JOB; P[2] = N; P[3] = all ? 1 : 0; P[4] = ST_OWNER_NONE; P[5] = TF.n; P[6] = ccap;
     simParallelRun(SIM_KERNEL_ADJ_POST, jobs);
+    if (CC[0] > ccap) CC[0] = ccap;
+    // (The flood's seeds, dense: room for as many as the blocks hold.)
+    { const SC = _simParReg['adj.scnt']; let ns = 0; for (let b = 0; b < blocks; b++) ns += SC[b]; _adjArr('adj.seed', Int32Array, Math.max(1, ns)); }
     if (!all) _adjacencyDirtyTiles.takenAll(); else _adjacencyDirtyTiles.clear();
     let paths = all;
     for (let q = 0; q < jobs && !paths; q++) if (PF[q * 16]) paths = true;
@@ -474,17 +314,6 @@ function getUnitEffectiveStatsRecalcTicks() {
 
 function getUnitCollisionRecalcTicks() {
     return Math.max(1, Math.min(240, Math.floor(Number(UNIT_COLLISION_RECALC_TICKS) || 1)));
-}
-
-// Selected things refresh stats sooner so the info panel stays live (single
-// player only). A large selection is spread over a few ticks, about 32
-// refreshes per tick, instead of refreshing a whole army every tick.
-const SELECTION_STATS_REFRESH_PER_TICK = 32;
-function _isSelectionStatsRefreshDue(item, selectionSize) {
-    if (selectionSize <= SELECTION_STATS_REFRESH_PER_TICK) return true;
-    let every = Math.min(10, Math.ceil(selectionSize / SELECTION_STATS_REFRESH_PER_TICK));
-    let seed = Number.isFinite(item.id) ? Math.floor(item.id) : (Math.floor(Number(item.gx) || 0) * 7 + Math.floor(Number(item.gy) || 0));
-    return simStepCrosses(seed, every);
 }
 
 // (A new unit has its stats from creation: applyUnitLevelScaling gives it
@@ -884,16 +713,15 @@ function _effStatsFullUnit(u) {
 }
 
 // Units' effective level: the strided share of the units (1/intervalTicks
-// of them a tick, by index; a new unit has its turn like the others) and, in
-// single player, the selection. The strided share runs in the kernels from the columns
+// of them a tick, by index; a new unit has its turn like the others; the
+// selection too, as in multiplayer: no per-tick pass over it). The strided
+// share runs in the kernels from the columns
 // (SIM_KERNEL_EFF_UNITS: stacks, levels, nearby counts); only units whose
 // effective level changed (their effective tables), and units the columns
 // cannot answer for, are touched as objects, in the share's order.
-let _effFlags = null, _effBCnt = null;
+let _effFlags = null;
 function recalculateUnitEffectiveLevel() {
     let intervalTicks = getUnitEffectiveStatsRecalcTicks();
-    let selectedSet = null;
-    if ((!isMultiplayer || !gameStarted) && selectedUnits && selectedUnits.length > 0) selectedSet = new Set(selectedUnits);
     let tick = Math.max(0, Math.floor(Number(gameTime) || 0));
     let stamp = ++_effectiveStatsStamp;
     // (Changed stat tables: each unit behind takes them at its refresh, see
@@ -907,11 +735,12 @@ function recalculateUnitEffectiveLevel() {
         u._effectiveStatsStamp = stamp;
         return false;
     };
-    // The strided share. (Units behind their stat tables (a research done:
-    // every unit of the type) take the slow full path: at most
-    // EFF_BEHIND_PER_TICK a tick, in index order; the rest at their next
-    // turn, behind until then. Both paths count the same units.)
-    let behindLeft = EFF_BEHIND_PER_TICK;
+    // The strided share. Units behind their stat tables (a research done:
+    // every unit of the type) are taken in the kernel from their (owner, type,
+    // base level)'s base entry and their new level's row; the first of a key
+    // without them this tick takes the full path, which makes both, and the
+    // kernel runs again for the rest (no cap: the whole share this tick; which
+    // path takes one decides nothing).
     const behindNow = u => { const c = u._us; return !!c && c.esVer[u._si] !== _unitStatsVerOf(u); };
     const takenNow = u => { const c = u._us; return c ? c.esTaken[u._si] === stamp : u._effectiveStatsStamp === stamp; };
     let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
@@ -930,91 +759,68 @@ function recalculateUnitEffectiveLevel() {
         // (Stat rows: the kernel gives a unit of a new level its row.)
         _effRowLookup(); _effRowGrow(1);
         P[18] = _effRowN; P[19] = SIM_MOVE_BOX_STEPS;
-        // (A unit of a new row is registered in the visibility cover by the
-        // kernel (_visCoverSyncUnit from its columns): the cover's generation
-        // and players; -1: the cover is not kept now (nothing to do).)
-        const VC = typeof _visCover !== 'undefined' ? _visCover : null, vcOn = !!VC && VC.syncedTick >= 0 && VC.adm === areaDistanceMatrix;
-        P[20] = vcOn ? VC.gen : -1; P[21] = vcOn ? VC.players : 0; P[22] = SIM_SEP_ABSENT;
+        // (-1: no per-unit cover registration; units' sight is the vision kernels' (vis.rs).)
+        P[20] = -1; P[21] = 0; P[22] = SIM_SEP_ABSENT;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
-        // (Units behind their tables in the kernel only when all of the
-        // share's fit the tick's cap: then which path takes one decides
-        // nothing, peer to peer (base entries and rows are this peer's own,
-        // made as it goes). Counted over: no entries yet, or another owner.)
-        // The first EFF_BEHIND_PER_TICK units behind their tables, in the share's order, are taken this tick: those before
-        // behindLimit (a position in the share, the same on every peer). The kernel takes those it has the base entry
-        // and row for, the rest are done as objects below; which path takes one decides nothing. The others wait for their next turn.
-        let behindLimit = m;
-        {
-            if (EFF_BEHIND_IN_KERNEL) _effBaseLookup();
-            // (Counted in the kernel, a job at a time (P[24] 1); only the job the cap falls in is walked here.)
-            const jobs = Math.ceil(m / 64);
-            if (!_effBCnt || _effBCnt.length < jobs) { _effBCnt = simSharedArray(Int32Array, Math.max(1024, jobs * 2)); simParallelBind('eff.bcnt', _effBCnt); }
-            P[24] = 1;
-            simParallelRun(SIM_KERNEL_EFF_UNITS, jobs);
-            P[24] = 0;
-            const BC = _effBCnt;
-            let acc = 0;
-            for (let jb = 0; jb < jobs; jb++) {
-                const cn = BC[jb];
-                if (acc + cn <= behindLeft) { acc += cn; continue; }
-                const OK = c.esOk, EV = c.esVer, OW = c.owner, ET = c.esType, TV = _unitStatsVer, NV = UNIT_STATS_VER_TYPES;
-                for (let j = jb * 64, e = Math.min(m, j + 64); j < e; j++) {
-                    const s = slots[phase + j * step];
-                    if (s >= 0 && (!OK[s] || EV[s] !== TV[OW[s] * NV + ET[s]]) && ++acc > behindLeft) { behindLimit = j; break; }
-                }
-                break;
-            }
-        }
-        P[23] = EFF_BEHIND_IN_KERNEL ? behindLimit : 0;
+        _effBaseLookup();
+        // (Off: the full path for every unit behind, the tests' reference.)
+        P[23] = EFF_BEHIND_IN_KERNEL ? m : 0; P[24] = 0;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0; P[17] = UK && _simParReg['upk.h'] ? _simParReg['upk.h'].length : 0;
+        _effPSave.set(P.subarray(0, 32));
         simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 64));
-        const F = _effFlags;
-        for (let j = 0; j < m; j++) {
-            const f = F[j];
-            if (f === 0 || f === 3) continue;
-            const i = phase + j * step, u = units[i];
-            if (f === 4) {
-                // (Its row taken in the kernel, another vision range.)
-                if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u);
-            } else if (f === 5 || f === 6) {
-                // (Behind its tables, taken in the kernel from its base entry
-                // and row: the base tables and maxEnergy, as its full path
-                // sets them; 6: another vision range.)
-                const s = slots[i], B = _effBase, bi = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
-                const b = B.obj[bi];
-                u.preComputedBase = b;
-                u.basePreComputed = b;
-                u.maxEnergy = B.maxE64[bi];
-                _effBehindInKernel++;
-                if (f === 6 && typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u);
-            } else if (f === 1) {
-                // (The kernel set its stacks and levels.)
-                const s = slots[i], lvl = c.effectiveLevel[s];
-                applyUnitEffectiveScaling(u, lvl);
-                c._lastAppliedEffectiveLevel[s] = lvl;
-            } else if (u && !u.dead && !takenNow(u)) {
-                if (j >= behindLimit && behindNow(u)) continue;
-                if (!taken(u)) _effStatsFullUnit(u);
+        // (Keys whose entry the full path made this tick: _effKeySeen, by stamp.)
+        const NK = _effDimNP * _effDimNT * _effDimL1;
+        if (!_effKeySeen || _effKeySeen.length < NK) _effKeySeen = new Int32Array(Math.max(64, NK));
+        let again = false;
+        for (let pass = 0; pass < 2; pass++) {
+            // (The full path ran kernels of its own (the shared parameters) and made rows.)
+            if (pass === 1) { if (!again) break; P.set(_effPSave); _effRowGrow(1); P[18] = _effRowN; simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 64)); }
+            const F = _effFlags;
+            for (let j = 0; j < m; j++) {
+                const f = F[j];
+                if (f === 0 || f === 3 || f === 4) continue;
+                const i = phase + j * step, u = units[i];
+                if (f === 5 || f === 6) {
+                    // (Behind its tables, taken in the kernel from its base entry
+                    // and row: the base tables and maxEnergy, as its full path
+                    // sets them.)
+                    const s = slots[i], B = _effBase, bi = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
+                    const b = B.obj[bi];
+                    u.preComputedBase = b;
+                    u.basePreComputed = b;
+                    u.maxEnergy = B.maxE64[bi];
+                    _effBehindInKernel++;
+                } else if (f === 1) {
+                    // (The kernel set its stacks and levels.)
+                    const s = slots[i], lvl = c.effectiveLevel[s];
+                    applyUnitEffectiveScaling(u, lvl);
+                    c._lastAppliedEffectiveLevel[s] = lvl;
+                } else if (u && !u.dead && !takenNow(u)) {
+                    // (Behind, its key's entry made by another this tick: the kernel's again.)
+                    if (pass === 0 && behindNow(u)) {
+                        const s = slots[i], bi = s >= 0 ? _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]) : -1;
+                        if (bi >= 0 && _effKeySeen[bi] === stamp) { again = true; continue; }
+                        if (bi >= 0) _effKeySeen[bi] = stamp;
+                    }
+                    if (!taken(u)) _effStatsFullUnit(u);
+                }
             }
         }
     } else {
         for (let i = phase; i < n; i += step) {
             const u = units[i];
             if (!u || u.dead || takenNow(u)) continue;
-            if (behindNow(u)) { if (behindLeft <= 0) continue; behindLeft--; }
             if (!taken(u)) _effStatsFullUnit(u);
         }
     }
-    // The selection (single player only: never local timing in multiplayer).
-    if (selectedSet) for (let u of selectedSet) if (_isSelectionStatsRefreshDue(u, selectedSet.size) && !taken(u)) _effStatsFullUnit(u);
 }
 // From this many units the strided share runs in the kernels (tests lower
 // it; both ways give the same state).
 let EFF_STATS_KERNEL_MIN_UNITS = 2048;
-// Units behind their stat tables refreshed per tick at most (see above).
-let EFF_BEHIND_PER_TICK = 1500;
+let _effKeySeen = null;
+const _effPSave = new Float64Array(32);
 
 // ============================================================
 // BUILDING PLACEMENT & DESTRUCTION
@@ -1382,48 +1188,103 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     return true;
 }
 
-function destroyBuilding(building) {
-    let buildingType = String((building && building.type) || '');
-    let typeDef = BASE_CARD_TYPES[buildingType] || null;
-    let isWallTargetType = !!(typeDef && typeDef.target === 'wall');
-
-    if (building instanceof Tower || (building.constructor && building.constructor.name === 'Tower') || isWallTargetType) {
-        if (structListRemove(towers, building) !== -1) towerJoinedOrLeft(building);
-        clearTileEntity(building.gx, building.gy, building);
-        grid[building.gy][building.gx].type = TYPE_FLOOR;
-        grid[building.gy][building.gx].owner = -1;
-        simMoveTileTypeChanged(building.gx, building.gy);
-        _markCombinedBgTileDirty(building.gx, building.gy, 0, true);
-        recalculateAdjacency();
-        markLaserConnectionsDirty(building.gx, building.gy);
-    } else if (building instanceof Barrack || (building.type === 'barrack')) {
-        if (structListRemove(barracks, building) !== -1) barracksChanged();
-        clearTileEntity(building.gx, building.gy, building);
-        grid[building.gy][building.gx].item = null;
-        grid[building.gy][building.gx].owner = -1;
-        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
-        recalculateAdjacency();
-    } else if (building instanceof CollectorSpawner || building instanceof AstarSpawner || building instanceof SalvagerSpawner || building instanceof BuilderSpawner || building instanceof HealerSpawner || building instanceof ResearchSpawner) {
-        if (structListRemove(collectorSpawners, building) !== -1) collectorSpawnersChanged();
-        clearTileEntity(building.gx, building.gy, building);
-        grid[building.gy][building.gx].item = null;
-        grid[building.gy][building.gx].owner = -1;
-        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
-    } else if (building.type) {
-        // Floor item
-        clearTileEntity(building.gx, building.gy, building);
-        grid[building.gy][building.gx].item = null;
-        grid[building.gy][building.gx].owner = -1;
-        _markCombinedBgTileDirty(building.gx, building.gy, 0, false);
+// Structures destroyed (world model W5): the tiles in list[0..n) (a heap
+// Int32Array: the hit kernels' dead lists), in its order; deadOnly: only those
+// out of energy. The tables' side (the per-tile structure table, cells, walls
+// becoming ground, adjacency marks, work versions, the journal, the movement
+// kernel's codes, trap marks) by one kernel over the batch (dst.rs
+// k_struct_destroy); here only the rows' objects (the lists, their rows),
+// the events of systems not yet kernels (walls, walk classes, reservations)
+// and presentation, then once a batch the versions and checks.
+const _dst = { cap: 0, tiles: null, hdr: null, walls: null, resv: null, ocnt: null, one: null, objs: [], P: new Float64Array(24) };
+function _dstRoom(n) {
+    const D = _dst;
+    if (D.cap < n || !simHeapHas(D.tiles)) {
+        const cap = Math.max(1024, n * 2);
+        D.tiles = simSharedArray(Int32Array, cap); D.walls = simSharedArray(Int32Array, cap);
+        D.resv = simSharedArray(Int32Array, cap * 2 * _WORKER_TARGET_LOAD_TYPE_COUNT);
+        D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 64); D.one = simSharedArray(Int32Array, 1);
+        D.cap = cap;
     }
+    return D;
+}
+// (quiet: floor items cleared, the status tick's: no explosion or sound, no
+// route or win changes.)
+function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
+    if (!(n > 0)) return 0;
+    const D = _dstRoom(n), objs = D.objs, T = _ST;
+    let m = 0, adj = false;
+    for (let i = 0; i < n; i++) {
+        const t = list[i], gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
+        if (!e || e._stMine || !(e._stT === t) || (deadOnly && !(e.energy <= 0))) continue;
+        if (e instanceof Tower || (BASE_CARD_TYPES[e.type] && BASE_CARD_TYPES[e.type].target === 'wall')) { if (structListRemove(towers, e) !== -1) towerJoinedOrLeft(e); adj = true; }
+        else if (e instanceof Barrack || e.type === 'barrack') { if (structListRemove(barracks, e) !== -1) barracksChanged(); adj = true; }
+        else if (isSpawnerEntity(e)) { if (structListRemove(collectorSpawners, e) !== -1) collectorSpawnersChanged(); }
+        // (Off its tile: a second entry of the list finds nothing.)
+        e._stT = -1; grid[gy][gx]._item = null;
+        D.tiles[m] = t; objs[m++] = e;
+    }
+    if (m === 0) return 0;
+    if (!simHeapHas(T.code)) structTablesRehome();
+    const AD = _adjacencyDirtyTiles; AD.room(GRID_W * GRID_H);
+    const V = _workerWorkTable(), L = _teLogRoom();
+    const mvOk = !!_simMoveStruct && !!_simMoveStructBlocks && _simMoveStructP === spatialUnitsComplexPlayerCount && _simMoveStructC === spatialBlockCols && _simMoveStructW === GRID_W && _simMoveStructH === GRID_H;
+    const trapOk = !!_trap.dirty && simHeapHas(_trap.dirty);
+    const P = D.P;
+    P[0] = m; P[1] = GRID_W; P[2] = GRID_H; P[3] = SNAP_REGION_TILES; P[4] = T.rw; P[5] = TYPE_WALL; P[6] = TYPE_FLOOR; P[7] = AD.flag.length;
+    P[8] = V.np; P[9] = _WORKER_WORK_TYPES.length; P[10] = V.rw; P[11] = V.rh; P[12] = WORKER_WORK_REGION_TILES; P[13] = _teLogEnd;
+    P[14] = spatialUnitsComplexPlayerCount; P[15] = spatialBlockCols; P[16] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[17] = trapOk ? (_trap.all ? -1 : _trap.nd) : -1;
+    P[18] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[19] = m * _WORKER_TARGET_LOAD_TYPE_COUNT; P[20] = L.length; P[21] = trapOk ? _trap.dirty.length : 0;
+    const resvOk = simHeapHas(workerReservedTiles) && workerReservedTiles.length === GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT;
+    simRustDirect('k_struct_destroy', [D.tiles, T.code, T.own, T.uc, T.val, T.tim, T.brain, T.rtab, T.stab, T.rrow, T.ctab, T.rcnt, T.cnt, cellType, cellOwner,
+        AD.flag, AD.blk, V, L, mvOk ? _simMoveStruct : null, mvOk ? _simStructCls : null, mvOk ? _simMoveStructBlocks : null, trapOk ? _trap.dirty : null,
+        resvOk ? workerReservedTiles : null, D.hdr, D.walls, D.resv, D.ocnt], P);
+    const H = D.hdr;
+    // The batch's counters.
+    _tileEntityVersion++;
+    _teLogEnd = H[6]; _teLogBase = Math.max(0, _teLogEnd - L.length);
+    V.sum = (V.sum + H[4]) | 0;
+    if (H[1] > 0) { if (AD.n === 0 || H[3] < AD.min) AD.min = H[3]; AD.n += H[1]; AD.sum = (AD.sum + H[2]) | 0; }
+    _adjacencyNeedsRecalc = true;
+    if (trapOk) { if (H[5] < 0) _trap.all = true; else _trap.nd = H[5]; }
+    for (let o = 0; o < 64; o++) if (D.ocnt[o]) structCountByOwner[o] += D.ocnt[o];
+    // Events of the systems that are not tables yet.
+    for (let r = 0, nr = H[7]; r < nr; r++) {
+        const slot = D.resv[r * 2], u = workerReservedAt(slot);
+        if (u) u._workerReservedTileIndex = -1;
+        workerReservedSet(slot, null);
+    }
+    for (let i = 0; i < m; i++) { const t = D.tiles[i]; if (_unitPassOn) _simClassQ.push(t); else _simMoveClassTileChanged(t); }
+    for (let i = 0, nw = H[0]; i < nw; i++) { const t = D.walls[i], gx = t % GRID_W; simMoveTileTypeChanged(gx, (t - gx) / GRID_W); }
+    for (let i = 0; i < m; i++) {
+        const e = objs[i], t = D.tiles[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        objs[i] = null;
+        structRowDetach(e);
+        _markCombinedBgTileDirty(gx, gy, 0, e instanceof Tower);
+        if (quiet) continue;
+        createExplosion(e.x, e.y, '#f44', 10);
+        playSound('building_destroyed', e.x, e.y);
+    }
+    if (adj || quiet) recalculateAdjacency();
+    if (quiet) return m;
     // A freed tile: walls, builder passage and routes change.
     _bumpPathTopologyVersion();
-    visCoverOnBuildingChanged(building);
-    createExplosion(building.x, building.y, '#f44', 10);
-    playSound('building_destroyed', building.x, building.y);
     // (Once a tick, at its end: a scan of the assets per destroyed building
     // was O(buildings) each.)
     if (typeof _inGameTick !== 'undefined' && _inGameTick) _winCheckDue = true; else checkWinCondition();
+    return m;
+}
+// A list for callers that gather tiles (not the batch's own).
+let _dstExt = null;
+function structDestroyList(n) {
+    if (!_dstExt || _dstExt.length < n || !simHeapHas(_dstExt)) _dstExt = simSharedArray(Int32Array, Math.max(256, n * 2));
+    return _dstExt;
+}
+function destroyBuilding(building) {
+    if (!building || !(building._stT >= 0)) return;
+    const D = _dstRoom(1);
+    D.one[0] = building._stT;
+    structDestroyTiles(D.one, 1);
 }
 let _winCheckDue = false;
 
@@ -1852,7 +1713,7 @@ function markConstructionComplete(item) {
     // (A trap working from now: the movement kernel's trap table.)
     if (typeof simTrapDirty === 'function' && Number.isFinite(item.gx)) simTrapDirty(item.gx, item.gy);
     if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
-    if (typeof spawnerProductionChanged === 'function' && Array.isArray(item.spawnQueue)) spawnerProductionChanged(item);
+    if (typeof spawnerProductionChanged === 'function' && hasSpawnQueue(item)) spawnerProductionChanged(item);
     if (typeof Tower === 'function' && item instanceof Tower) item.laserCheck();
 }
 

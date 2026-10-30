@@ -121,9 +121,9 @@ function _simWriteStructure(F, s, e, kind, tick) {
     F.mstacks[s] = Number.isFinite(e.manualStacks) ? e.manualStacks : -1;
     F.estacks[s] = Number.isFinite(e.effectiveStacks) ? e.effectiveStacks : -1;
     F.stackCount[s] = Number.isFinite(e.stackCount) ? e.stackCount : -1;
-    let q = e.spawnQueue;
-    F.qlen[s] = Array.isArray(q) ? q.length : 0;
-    F.qtype[s] = Array.isArray(q) && q.length && q[0] ? _simFrameCode(typeof q[0] === 'object' ? q[0].unitType : q[0]) : 0;
+    const qn = typeof spawnQueueCount === 'function' ? spawnQueueCount(e) : 0;
+    F.qlen[s] = qn;
+    F.qtype[s] = qn > 0 ? _simFrameCode(spawnQueueUnitType(e)) : 0;
     F.laser[s] = Number(e.laserState) || 0;
     F.watchedBy[s] = Number.isFinite(e.watchedByTeam) ? e.watchedByTeam : -1;
     let flash = Number(e.attackFlash) || 0;

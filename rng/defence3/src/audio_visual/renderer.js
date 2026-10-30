@@ -451,7 +451,7 @@ let _staticReuseHit = false;
 // Structures whose activity effects play every frame (_pushStructureActivity).
 function _structureHasActivity(entity) {
     if (!entity || entity.underConstruction) return false;
-    return entity.type === 'house' || entity.type === 'research' || !!(entity.spawnQueue && entity.spawnQueue.length);
+    return entity.type === 'house' || entity.type === 'research' || spawnQueueCount(entity) > 0;
 }
 
 function _pin3DPanelToStatic(panel, version) {
@@ -531,7 +531,7 @@ function get3DExact2DVisualSignature(entity, isUnit = false) {
     // are drawn empty then, which says "queued, not being made". Keyed by
     // progress alone, nothing queued and queued at 0% were one picture: the
     // one without the bar, until progress first moved.)
-    let queued = !isUnit && entity.spawnQueue && entity.spawnQueue.length > 0 && entity.spawnCooldown > 0;
+    let queued = !isUnit && spawnQueueCount(entity) > 0 && entity.spawnCooldown > 0;
     values[n++] = queued ? 1 + quantize3DExactRatio(entity.spawnTimer, Number(entity.spawnCooldown) || 0) : 0;
     values[n++] = researchTask && researchTask.workRequired > 0 ? 1 + quantize3DExactRatio(researchTask.workDone, Number(researchTask.workRequired) || 0) : 0;
     values[n++] = Math.round((Number(entity.angle) || 0) * 128);
@@ -1635,7 +1635,7 @@ function _unit3DFlightHeight(u, activity) {
 function _pushStructureActivity(objects, entity, flat2d) {
     if (flat2d || entity.underConstruction) return;
     let type = entity.type;
-    if (type !== 'house' && type !== 'research' && !(entity.spawnQueue && entity.spawnQueue.length)) return;
+    if (type !== 'house' && type !== 'research' && !(spawnQueueCount(entity) > 0)) return;
     let o = objects[objects.length - 1];
     // Workshops are open yards: activity rises from among their back features.
     let roof = type === 'house' ? .63 : .5;
@@ -3599,7 +3599,7 @@ function build3DFrameData(flat2d = false) {
         let spawner2DTexture = get3DExact2DTexture(s);
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
-        if (!spawner2DTexture && !s.underConstruction && s.spawnQueue && s.spawnQueue.length > 0 && s.spawnCooldown > 0) {
+        if (!spawner2DTexture && !s.underConstruction && spawnQueueCount(s) > 0 && s.spawnCooldown > 0) {
             spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
         if (!spawner2DTexture && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
@@ -3647,7 +3647,7 @@ function build3DFrameData(flat2d = false) {
         let barrack2DTexture = get3DExact2DTexture(b);
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
-        if (!barrack2DTexture && !b.underConstruction && b.spawnQueue && b.spawnQueue.length > 0 && b.spawnCooldown > 0) {
+        if (!barrack2DTexture && !b.underConstruction && spawnQueueCount(b) > 0 && b.spawnCooldown > 0) {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
         let barrackStatus = barrack2DTexture ? null : get3DBuildingTextureStatus(b, barrackExtraBars);
@@ -5738,17 +5738,10 @@ function _buildVisibilitySourceLists() {
 // hooks, sweeps and recomputes and resets together, so all keep the same
 // coverage.
 const VIS_COVER_MAX_STEPS = 63;
-// Source counts per (player, area, steps) below this live in a typed array;
-// longer ranges (a few buildings) in a map.
-const VIS_COVER_DENSE_STEPS = 8;
 const _visCover = {
     gen: 1, adm: null, areaCount: 0, players: 0,
     cover: [],         // [player] Int32Array(areaCount): covering entries
     coverFlat: null, coverStride: 0, // (cover's one array, areaCount a player)
-    steps: [],         // [player] Int8Array(areaCount): the area's range as a source (steps), -1 none
-    dense: null,       // Int32Array((player * areaCount + area) * DENSE + steps): sources
-    sparse: new Map(), // same key * 64 + steps, for steps >= DENSE
-    list: [],          // registered buildings
     syncedTick: -1,
     visual: [],        // [player] rows kept in step with the cover, made on request
     // Units' part (_visCoverUnitsStep), for generation uGen, all shared
@@ -5785,26 +5778,8 @@ function _visCoverEnsure() {
     C.visibleFlat = simHeapArray(Uint8Array, n * flatA);
     C.visible = Array.from({ length: n }, (_, p) => C.visibleFlat.subarray(p * flatA, p * flatA + flatA));
     C.coverStride = flatA;
-    C.steps = Array.from({ length: n }, () => new Int8Array(A).fill(-1));
-    C.dense = new Int32Array(n * A * VIS_COVER_DENSE_STEPS);
-    C.sparse = new Map();
-    C.list = [];
     C.visual = [];
     C.syncedTick = -1;
-}
-
-// Areas `fromSteps`..`toSteps` steps from `area` enter (delta 1) or leave
-// (-1) the player's cover.
-function _visCoverApplyRing(p, area, fromSteps, toSteps, delta) {
-    let C = _visCover, cover = C.cover[p], rows = C.visual[p];
-    for (let d = fromSteps; d <= toSteps; d++) {
-        let ring = getAreaIdsAtDistance(area, d);
-        for (let i = 0; i < ring.length; i++) {
-            let a = ring[i], before = cover[a], after = before + delta;
-            cover[a] = after; C.visible[p][a] = after > 0 ? 1 : 0;
-            if (rows && (before > 0) !== (after > 0)) _visCoverPaintArea(rows, a, after > 0);
-        }
-    }
 }
 
 // Visual rows: a covered area is fully lit (light saturates at the
@@ -5816,43 +5791,6 @@ function _visCoverPaintArea(rows, area, lit) {
     for (let c of cells) if (c) rows[c.y][c.x] = v;
 }
 
-function _visCoverCount(p, area, steps) {
-    let C = _visCover, pa = p * C.areaCount + area;
-    return steps < VIS_COVER_DENSE_STEPS ? C.dense[pa * VIS_COVER_DENSE_STEPS + steps] : (C.sparse.get(pa * 64 + steps) || 0);
-}
-
-function _visCoverAdd(p, area, steps, delta) {
-    let C = _visCover;
-    if (!(area >= 0 && area < C.areaCount) || !_areaById[area]) return;
-    let pa = p * C.areaCount + area, c;
-    if (steps < VIS_COVER_DENSE_STEPS) {
-        c = C.dense[pa * VIS_COVER_DENSE_STEPS + steps] += delta;
-    } else {
-        let key = pa * 64 + steps;
-        c = (C.sparse.get(key) || 0) + delta;
-        if (c > 0) C.sparse.set(key, c); else C.sparse.delete(key);
-    }
-    let stepsArr = C.steps[p], old = stepsArr[area], next = old;
-    if (delta > 0 && steps > old) next = steps;
-    else if (delta < 0 && c <= 0 && steps === old) {
-        next = -1;
-        for (let h = steps - 1; h >= 0; h--) if (_visCoverCount(p, area, h) > 0) { next = h; break; }
-    }
-    if (next === old) return;
-    stepsArr[area] = next;
-    if (next > old) _visCoverApplyRing(p, area, old + 1, next, 1);
-    else _visCoverApplyRing(p, area, next + 1, old, -1);
-}
-
-function _visCoverApply(e, delta) {
-    let steps = e._vsR, id = e._vsListId, areas = id >= 0 ? _sourceAreaListById[id] : null;
-    if (steps < 0 || !areas) return;
-    for (let i = 0; i < areas.length; i++) {
-        if (e._vsP1 >= 0) _visCoverAdd(e._vsP1, areas[i], steps, delta);
-        if (e._vsP2 >= 0) _visCoverAdd(e._vsP2, areas[i], steps, delta);
-    }
-}
-
 // Which of the 3x3 zones of its tile a coordinate pair is in: the zone and
 // the tile decide which tiles the +-0.3 tile window covers.
 function visWindowZone(wx, wy) {
@@ -5860,197 +5798,24 @@ function visWindowZone(wx, wy) {
     return (rx < .3 ? 0 : rx < .7 ? 1 : 2) * 3 + (ry < .3 ? 0 : ry < .7 ? 1 : 2);
 }
 
-// The sweeps are a safety net behind the hooks (every change is applied
-// where it happens): buildings over 1024 ticks, units over 512 (a share of
-// each a tick, by list position: the same on every peer; at 64/256 they
-// cost ~1.5 ms a tick with 200k units and 35k buildings; at 128 the
-// buildings of a 4M scene ~100 ms a tick: each one's range is a stat table
-// lookup).
-const VIS_COVER_SWEEP_TICKS = 1024;
-// Units' parameters (their range mostly: level and research changes).
-const VIS_COVER_UNIT_SWEEP_TICKS = 512;
-const VIS_COVER_SLOW_UNITS = 250000, VIS_COVER_SLOW = 4;
 
-// Brings one source's registration up to date with the world (a unit: its
-// parameters, _visCoverSyncUnit). Buildings are live while on their tile,
-// alive and built. A building ranges from the areas under its +-0.3 tile
-// window (as ranges are drawn), identified by its tile and zone (`area`).
-function _visCoverSync(e, isUnit) {
-    if (isUnit) { _visCoverSyncUnit(e); return; }
-    let C = _visCover;
-    let known = e._vsGen === C.gen;
-    let steps = -1, p1 = -1, p2 = -1, area = -1, owner = e.owner, wx = e.x, wy = e.y;
-    let gx = e.gx, gy = e.gy;
-    let cell = grid[gy] && grid[gy][gx];
-    let onTile = !!cell && getTileEntityRef(gx, gy) === e;
-    if (onTile && cell.item === e) { owner = cell.owner; wx = gx * TILE + TILE * 0.5; wy = gy * TILE + TILE * 0.5; }
-    let active = onTile && e.energy > 0 && !e.underConstruction && Number.isFinite(wx) && Number.isFinite(wy);
-    if (active) area = (gy * GRID_W + gx) * 9 + visWindowZone(wx, wy);
-    if (active && area >= 0) {
-        let range = getEntityEffectiveVisibilityRangeArea(e);
-        // (Whole steps; 0 is its own area.)
-        if (range >= 0) {
-            steps = areaSteps(range);
-            let o = Math.floor(Number(owner));
-            p1 = o >= 0 && o < C.players ? o : -1;
-            if (e.watched > 0) {
-                let w = Math.floor(Number(e.watchedByTeam));
-                if (w >= 0 && w < C.players && w !== p1) p2 = w;
-            }
-            if (p1 < 0 && p2 < 0) steps = -1;
-        }
-    }
-    if (steps < 0) area = -1;
-    if (known && e._vsR === steps && e._vsA === area && e._vsP1 === p1 && e._vsP2 === p2) return;
-    if (!known && steps < 0) return;
-    // Areas as the id of their shared list (see getSourceAreaListIdAtWorld).
-    let listId = steps >= 0 ? getSourceAreaListIdAtWorld(wx, wy) : -1;
-    // A new window zone often covers the same areas: only the key changes.
-    if (known && listId === e._vsListId && e._vsR === steps && e._vsP1 === p1 && e._vsP2 === p2) { e._vsA = area; return; }
-    if (known) _visCoverApply(e, -1);
-    else C.list.push(e);
-    e._vsGen = C.gen;
-    e._vsR = steps; e._vsA = area; e._vsP1 = p1; e._vsP2 = p2;
-    e._vsListId = listId;
-    _visCoverApply(e, 1);
-}
+// Sources change the cover only through its runs (the units' and the
+// buildings' sight from the columns and the structure table: kernels):
+// these hooks of the JavaScript that registered them are no-ops now.
+function visCoverHoldBegin() {}
+function visCoverHoldEnd() {}
+function visCoverHoldReset() {}
+function visCoverOnUnitSpatialChanged() {}
+function visCoverOnBuildingChanged() {}
+function visCoverOnEntityChanged() {}
+function visCoverSlotWindow() { return true; }
 
-// A unit's parameters as a source (unit state columns: vsGen this
-// generation, vsR steps or -1 none, vsP1 its player, vsP2 a watching team,
-// vsA 1 while alive and indexed): where it stands is read by the
-// recompute, so a move needs nothing here.
-function _visCoverSyncUnit(e) {
-    const C = _visCover;
-    // Applied shared stat rows already hold the exact integer sight steps.
-    // Avoid walking the entity/stat accessors on the staggered unit sweep.
-    const c=e._us,s=e._si,row=c?c.statRow[s]:-1;
-    if(row>=0&&typeof _effRowCols!=='undefined'&&_effRowCols.rVsA){
-        const range=_effRowCols.rVsA[row];
-        if(range>=-1){
-            const active=c.dead[s]===0&&c.sepKey[s]!==SIM_SEP_ABSENT;
-            let steps=-1,p1=-1,p2=-1;
-            if(active&&range>=0){
-                steps=range;const owner=c.owner[s];p1=owner>=0&&owner<C.players?owner:-1;
-                const watch=c.wTeam[s];if(c.stWa[c.stIx[s]]>0&&watch>=0&&watch<C.players&&watch!==p1)p2=watch;
-                if(p1<0&&p2<0)steps=-1;
-            }
-            c.vsGen[s]=C.gen;c.vsR[s]=steps;c.vsP1[s]=p1;c.vsP2[s]=p2;c.vsA[s]=active?1:0;
-            return;
-        }
-    }
-    let steps = -1, p1 = -1, p2 = -1;
-    const active = !e.dead && e._spatialKey !== undefined;
-    if (active) {
-        const range = getEntityEffectiveVisibilityRangeArea(e);
-        if (range >= 0) {
-            steps = areaSteps(range);
-            const o = Math.floor(Number(e.owner));
-            p1 = o >= 0 && o < C.players ? o : -1;
-            if (e.watched > 0) {
-                const w = Math.floor(Number(e.watchedByTeam));
-                if (w >= 0 && w < C.players && w !== p1) p2 = w;
-            }
-            if (p1 < 0 && p2 < 0) steps = -1;
-        }
-    }
-    e._vsGen = C.gen; e._vsR = steps; e._vsP1 = p1; e._vsP2 = p2; e._vsA = active ? 1 : 0;
-}
-
-// A unit's window moved (slot `s` of the unit state columns `c`): nothing
-// to do once its parameters are registered this generation. False when it
-// must go through visCoverOnUnitSpatialChanged.
-function visCoverSlotWindow(c, s) {
-    const C = _visCover;
-    return C.syncedTick < 0 || C.adm !== areaDistanceMatrix || c.vsGen[s] === C.gen;
-}
-
-// Hooks (simulation code only).
-// During the unit phase of a tick (the status pre-pass to the hits) the
-// coverage stands still: every unit decides by what was seen at its start,
-// whoever moved first (and the kernels, which run before the pass, decide
-// as Unit.update would). Buildings' changes wait in _visCoverHeld until it
-// ends (units' cover changes only at the recompute).
-let _visCoverHold = false;
-const _visCoverHeld = new Map();
-function visCoverHoldBegin() { _visCoverHold = true; }
-function visCoverHoldEnd() {
-    _visCoverHold = false;
-    if (_visCoverHeld.size === 0) return;
-    for (const [e, isUnit] of _visCoverHeld) {
-        if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) break;
-        _visCoverSync(e, isUnit);
-    }
-    _visCoverHeld.clear();
-}
-function visCoverHoldReset() { _visCoverHold = false; _visCoverHeld.clear(); }
-// A unit joined or left the index, changed owner, or its watchers changed.
-function visCoverOnUnitSpatialChanged(u) {
-    if (_visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
-    _visCoverSyncUnit(u);
-}
-function visCoverOnBuildingChanged(e) {
-    if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
-    if (_visCoverHold) { _visCoverHeld.set(e, false); return; }
-    _visCoverSync(e, false);
-}
-// Any source whose range, watcher or state changed (unit or building).
-function visCoverOnEntityChanged(e) {
-    if (!e || _visCover.syncedTick < 0 || _visCover.adm !== areaDistanceMatrix) return;
-    if (e instanceof Unit) { _visCoverSyncUnit(e); return; }
-    if (_visCoverHold) { _visCoverHeld.set(e, false); return; }
-    _visCoverSync(e, false);
-}
-
-// Per tick: a staggered sweep (1/VIS_COVER_SWEEP_TICKS of the sources:
-// ranges, and a guard for the hooks: removal, tile entities set or
-// cleared, watch start and end, construction), then the units' cover
-// recomputed. After a reset every source is registered at once; every peer
-// resets on the same tick (clearGameplayVisibilityCache).
+// Per tick: the cover's run (units and buildings, kernels; at once after a
+// reset, every peer resets on the same tick: clearGameplayVisibilityCache).
 function syncVisibilityCoverage() {
     _visCoverEnsure();
-    let C = _visCover;
-    let full = C.syncedTick < 0;
-    // (The slices of the step's base ticks: simStepPhases.)
-    // (Past VIS_COVER_SLOW_UNITS units the safety-net sweeps go VIS_COVER_SLOW
-    // times slower: they are O(sources) a period, ~55 ms a step of 20 base
-    // ticks at 2.3M units; the hooks apply every change where it happens.
-    // units.length is the same on every peer.)
-    const slow = units.length >= VIS_COVER_SLOW_UNITS ? VIS_COVER_SLOW : 1, sweepT = VIS_COVER_SWEEP_TICKS * slow, unitT = VIS_COVER_UNIT_SWEEP_TICKS * slow;
-    const ks = full ? [0] : simStepPhases(sweepT), step = full ? 1 : sweepT;
-    for (const i0 of full ? [0] : simStepPhases(unitT)) for (let i = i0, n = units.length, us = full ? 1 : unitT; i < n; i += us) {
-        let u = units[i];
-        if (u) _visCoverSync(u, true);
-    }
-    let items = _getVisibilityFloorItemCandidates();
-    let list = C.list;
-    for (const k of ks) {
-    for (let list of [towers, barracks, collectorSpawners]) for (let i = k; i < list.length; i += step) {
-        if (list[i]) _visCoverSync(list[i], false);
-    }
-    // (Barracks and spawners are cell items too: their lists' turn above.)
-    for (let i = k; i < items.length; i += step) { const e = items[i]; if (!_isProducerStructure(e)) _visCoverSync(e, false); }
-    // Registered buildings no longer in the world, on the same stagger; the
-    // list is compacted once per cycle. (Those still on their tile have
-    // their lists' turn: synced twice a cycle, ~600 calls a tick of 40k
-    // buildings, otherwise.)
-    for (let i = k; i < list.length; i += step) {
-        let e = list[i];
-        if (e._vsGen === C.gen && getTileEntityRef(e.gx, e.gy) !== e) _visCoverSync(e, false);
-    }
-    }
-    if (full || ks.includes(0)) {
-        let w = 0;
-        for (let i = 0; i < list.length; i++) {
-            let e = list[i];
-            if (e._vsGen === C.gen && e._vsR >= 0) list[w++] = e;
-            else e._vsGen = 0;
-        }
-        list.length = w;
-    }
+    const C = _visCover, full = C.syncedTick < 0;
     C.syncedTick = gameTime;
-    // Units' cover: a tier below the tick (SIM_LANE_T5, see
-    // _visCoverUnitsStep); at once after a reset, then the tick's step as
-    // usual (whenever the reset's first query came: the steps go by tick).
     if (full) _visCoverUnitsNow();
     _visCoverUnitsStep();
 }
@@ -6119,6 +5884,17 @@ function _visCoverUnitsAlloc() {
     C.ustamp = 0; C.uGen = C.gen; C.uStage = 0;
 }
 // Phase 0: the snapshot and the seeds.
+// Buildings' sight seeds (vis.rs k_vis_seed_structs, on the helpers): the
+// structure table, its rows' watch and custom vision, the static stat tables.
+function _visCoverStructSeeds(A, np, stamp) {
+    if (!_ST.code || typeof statTablesStatic !== 'function') return;
+    const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), N = GRID_W * GRID_H, blocks = (N + 255) >> 8;
+    _adjApplyClasses(_adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length));
+    for (const k of ['code', 'own', 'uc', 'val', 'brain', 'stab', 'rrow']) simParallelBind('st.' + k, _ST[k]);
+    const P = _simParams;
+    P[0] = blocks; P[1] = 64; P[2] = N; P[3] = A; P[4] = np; P[5] = stamp; P[6] = S.nk; P[7] = S.L1; P[8] = S.R1; P[9] = NT; P[10] = MAX_THING_LEVEL;
+    simParallelRun(SIM_KERNEL_VIS_SEED_STRUCTS, Math.ceil(blocks / 64));
+}
 function _visCoverUnitsPost() {
     const C = _visCover, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     _visCoverUnitsAlloc();
@@ -6133,7 +5909,8 @@ function _visCoverUnitsPost() {
     }
     if (n > 0) {
         const P = _simParams;
-        P[0] = n; P[1] = 8192; P[2] = C.gen; P[3] = SIM_SEP_ABSENT; P[4] = TILE; P[5] = GRID_W; P[6] = GRID_H;
+        if (typeof _effRowCols !== 'undefined' && _effRowCols && _effRowCols.rVsA) simParallelBind('eff.rVsA', _effRowCols.rVsA);
+        P[0] = n; P[1] = 8192; P[2] = np; P[3] = SIM_SEP_ABSENT; P[4] = TILE; P[5] = GRID_W; P[6] = GRID_H;
         simParallelRun(SIM_KERNEL_VIS_SNAP, Math.ceil(n / 8192));
     }
     // The layout as of now (its arrays are its own: see above).
@@ -6150,6 +5927,9 @@ function _visCoverUnitsPost() {
     }
     if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
     C.ucnt.fill(0);
+    // Buildings' seeds now, from the structure table as it is at this tick
+    // (vis.rs k_vis_seed_structs; the units' come with the chain below).
+    _visCoverStructSeeds(A, np, C.ustamp);
     // The seeds, then the spread, as one chain (the spread no longer posted
     // at phase 2: that waited there for the seeds on the simulation thread).
     // (Each stage's params written whole.)

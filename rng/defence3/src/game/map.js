@@ -3,20 +3,63 @@
 // ============================================================
 // GRID & MAP INITIALIZATION
 // ============================================================
+// Cells: per-tile columns (wasm heap where it is up: kernels read them), the
+// grid's cells views over them (grid[y][x].type, .owner, .areaId read and
+// write the columns; .item comes from the structure table on a tabled tile,
+// .droppedItem is the view's own). (MAIN_THREAD_SERIAL_PLAN.md, world model.)
+let cellType = new Uint8Array(0), cellOwner = new Int8Array(0), cellArea = new Int32Array(0);
+class GridCell {
+    constructor(t) { this.t = t; this._item = null; this.droppedItem = null; }
+    // Its item: a tabled tile's from the structure table (the structure there
+    // when it is not a tower or a mine: world model W3); else its own field
+    // (the page's views; a cleared tile).
+    get item() {
+        const T = _ST, t = this.t;
+        if (T.ctab && T.n === cellType.length && T.ctab[t] !== 0) { const e = getTileEntityRef(t % GRID_W, (t / GRID_W) | 0); return e && !e._stMine && e._stCode !== 0x22 ? e : null; }
+        return this._item;
+    }
+    set item(v) { this._item = v; }
+    get type() { return cellType[this.t]; }
+    set type(v) { cellType[this.t] = v; }
+    get owner() { return cellOwner[this.t]; }
+    set owner(v) { cellOwner[this.t] = v; }
+    get areaId() { return cellArea[this.t]; }
+    set areaId(v) { cellArea[this.t] = v; }
+    // (A plain record of its values: copies, snapshots of a cell.)
+    toJSON() { return { type: this.type, item: this.item, owner: this.owner, areaId: this.areaId, droppedItem: this.droppedItem }; }
+}
+function _cellColumn(T, n, name) {
+    const heap = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null;
+    const a = heap ? simSharedArray(T, n) : new T(n);
+    if (heap && typeof simParallelBind === 'function') simParallelBind(name, a);
+    return a;
+}
 function initGrid() {
     grid = [];
     areaIdGrid = [];
     initDroppedItemGrid();
     workerReservedTiles = workerReservedTable();
+    const n = GRID_W * GRID_H;
+    if (typeof simHeapHas === 'function') for (const a of [cellType, cellOwner, cellArea]) if (a.length && simHeapHas(a)) simHeapFree(a);
+    cellType = _cellColumn(Uint8Array, n, 'cell.type'); cellOwner = _cellColumn(Int8Array, n, 'cell.owner'); cellArea = _cellColumn(Int32Array, n, 'cell.area');
+    if (TYPE_FLOOR !== 0) cellType.fill(TYPE_FLOOR);
+    cellOwner.fill(-1); cellArea.fill(-1);
     for (let y = 0; y < GRID_H; y++) {
         let row = [];
         let areaRow = new Int32Array(GRID_W).fill(-1);
-        for (let x = 0; x < GRID_W; x++) {
-            row.push({ type: TYPE_FLOOR, item: null, owner: -1, areaId: -1, droppedItem: null });
-        }
+        for (let x = 0; x < GRID_W; x++) row.push(new GridCell(y * GRID_W + x));
         grid.push(row);
         areaIdGrid.push(areaRow);
     }
+}
+// After a worker restart (a new heap): the cell columns moved into it.
+function cellColumnsRehome() {
+    if (typeof simHeapHas !== 'function') return;
+    const n = cellType.length;
+    if (!n || simHeapHas(cellType)) return;
+    const t = _cellColumn(Uint8Array, n, 'cell.type'), o = _cellColumn(Int8Array, n, 'cell.owner'), a = _cellColumn(Int32Array, n, 'cell.area');
+    t.set(cellType); o.set(cellOwner); a.set(cellArea);
+    cellType = t; cellOwner = o; cellArea = a;
 }
 
 function generateAreas() {

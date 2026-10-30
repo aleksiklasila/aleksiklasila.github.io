@@ -4,7 +4,8 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname,'../src/things/barrack.js'),'utf8');
 // The ready list and the scheduler (barrack.js: from the ready list's state
 // to the Barrack class).
-const optimized=source.slice(source.indexOf('let _spawnReady = null;'),source.indexOf('\nclass Barrack'));
+// (With the spawn queue functions: a mock's array queue answers them too.)
+const optimized=source.slice(source.indexOf('// ---- Spawn queues ----'),source.indexOf('function _shouldWaitForConstruction'))+source.slice(source.indexOf('let _spawnReady = null;'),source.indexOf('\nclass Barrack'));
 // (The scheduler's spawns a tick: barrack.js SPAWNS_PER_TICK.)
 const LIMIT=Number((/const SPAWNS_PER_TICK = (\d+)/.exec(source)||[])[1]);
 assert.ok(LIMIT>0,'SPAWNS_PER_TICK found');

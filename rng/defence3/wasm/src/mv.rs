@@ -150,7 +150,7 @@ const W_SPE: usize = 113;
 const W_SPO: usize = 114;
 const W_SPT: usize = 115;
 const W_SPTY: usize = 116;
-const W_VSG: usize = 117;
+// (117: unit.vsGen, no longer read: the cover is the vision kernels' now.)
 const W_MVO: usize = 118;
 const W_MVN: usize = 119;
 const W_MVW: usize = 120;
@@ -456,7 +456,6 @@ struct Mv {
     spo: *const I8I32,
     spt: *mut i32,
     spty: *const i16,
-    vsg: *const i32,
     mvo: *mut i32,
     mvn: *mut i32,
     mvw: *mut i8,
@@ -790,7 +789,6 @@ impl Mv {
             spo: p!(W_SPO),
             spt: p!(W_SPT),
             spty: p!(W_SPTY),
-            vsg: p!(W_VSG),
             mvo: p!(W_MVO),
             mvn: p!(W_MVN),
             mvw: p!(W_MVW),
@@ -918,6 +916,10 @@ unsafe fn floor_hit(m: &Mv, s: usize, tl: i32) -> bool {
     let tu = tl as usize;
     let k = rd(m.trk, tu);
     if k == 0 {
+        return false;
+    }
+    // (Traps 1-5: the tile effects' pass, tfx.rs, every tick; a mine: Unit.update.)
+    if k <= 5 {
         return false;
     }
     if k > 5 {
@@ -5752,8 +5754,6 @@ struct Epi {
     absent: f64,
     boxsteps: i32,
     epoch: i32,
-    vis_gen: i32,
-    vis_all: i32,
     cwn: i32,
     csz: i32,
     np: i32,
@@ -5770,7 +5770,7 @@ struct Epi {
 /// No epilogue (the occupancy's first stage: the second runs it).
 #[inline(always)]
 fn epi_none() -> Epi {
-    Epi { absent: 0.0, boxsteps: 0, epoch: 0, vis_gen: 0, vis_all: 0, cwn: 0, csz: 0, np: 0, nt: 0, scale: 0.0, f0: 0, u0: 0, pb: 0, cnt: 0, ne: 0, on: false, push: false }
+    Epi { absent: 0.0, boxsteps: 0, epoch: 0, cwn: 0, csz: 0, np: 0, nt: 0, scale: 0.0, f0: 0, u0: 0, pb: 0, cnt: 0, ne: 0, on: false, push: false }
 }
 /// The chunk's charge sums cleared; the separation's pushes when P[54] 1.
 #[inline(always)]
@@ -5798,8 +5798,6 @@ unsafe fn epi_begin(m: &Mv, f: *const f64, chunk: i32, b0: usize, end: usize) ->
         absent: rd(f, 15),
         boxsteps: to_i32(rd(f, 17)),
         epoch: to_i32(rd(f, 40)),
-        vis_gen: to_i32(rd(f, 41)),
-        vis_all: to_i32(rd(f, 42)),
         cwn: to_i32(rd(f, 34)),
         csz: to_i32(rd(f, 36)),
         np,
@@ -5864,7 +5862,7 @@ unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
         let gy = if !(gyf >= 0.0) { 0 } else if gyf >= h as f64 { h - 1 } else { gyf as i32 };
         let tt = gy * w + gx;
         let sep = rd(m.sep, s);
-        if rd(m.spe, s) == e.epoch && rd(m.spo, s) == rd(m.own, s) && sep as f64 != e.absent && (e.vis_all != 0 || rd(m.vsg, s) == e.vis_gen) {
+        if rd(m.spe, s) == e.epoch && rd(m.spo, s) == rd(m.own, s) && sep as f64 != e.absent {
             if tt != rd(m.spt, s) {
                 let key = if e.csz == 1 { tt } else { idiv(gy, e.csz) * e.cwn + idiv(gx, e.csz) };
                 if sep as f64 != key as f64 {

@@ -115,7 +115,7 @@ function simWtEncode(v) {
     const gx = v.gx, gy = v.gy;
     if (Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
         const t = gy * GRID_W + gx;
-        if (tileEntityRef[gy] && tileEntityRef[gy][gx] === v) return [SIM_WT_TILE, t];
+        if (getTileEntityRef(gx, gy) === v) return [SIM_WT_TILE, t];
         if (grid[gy] && grid[gy][gx] && grid[gy][gx].item === v) return [SIM_WT_ITEM, t];
         if (droppedItemGrid[gy] && droppedItemGrid[gy][gx] === v) return [SIM_WT_DROP, t];
     }
@@ -128,7 +128,7 @@ function simWtDecode(k, t) {
     if (k === SIM_WT_NULL) return null;
     if (k === SIM_WT_UNIT) { const u = getUnitById(t); return u && !u.dead ? u : null; }
     const gx = t % GRID_W, gy = (t - gx) / GRID_W;
-    if (k === SIM_WT_TILE) return (tileEntityRef[gy] && tileEntityRef[gy][gx]) || null;
+    if (k === SIM_WT_TILE) return getTileEntityRef(gx, gy);
     if (k === SIM_WT_ITEM) return (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
     return (droppedItemGrid[gy] && droppedItemGrid[gy][gx]) || null;
 }

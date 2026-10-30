@@ -289,3 +289,88 @@ decode kernel reading it there (no strings, no second pass, no garbage).
 | 5 (projectiles) | done: heap pool, no objects; hits through k_hits / k_proj_struct_hits; rules revision 51 | projectilesAdvance 14.9 -> 3.8 ms, unitHitsResolve 21.2 -> 12.8 ms (1M/250k scene) |
 | 5 (towers) | done: due scan, turns, preferred and custom in kernels; no JS turns; rules revision 52 | towersTick 14.5 -> 7.3 ms; steady mean 224 -> 199 ms, p95 406 -> 318 (1M/250k scene) |
 | 4 (search tier) | conflict index gone, spawner index + nearest kernel, groups from a candidate list; trips (updateWorkerAI), work-site sweep left | search tier 17.9 -> 10.1 ms, takes 8.8 -> 2.5 ms (1M/250k scene) |
+
+## World model as heap tables (plan, 2026-10-29)
+
+The worker trips, structure destruction (hits, projectiles, salvagers,
+statuses), spawner ticks and visibility all go through the JavaScript world
+model: grid[y][x] cell objects ({type, item, owner, areaId, droppedItem}),
+tileEntityType / tileEntityRef grids, _activeTileEntities (a Set), and the
+towers / barracks / collectorSpawners lists of objects. Sites (2026-10-29):
+cell .item 154 in 19 files, wall tests 37, the lists ~150, tile entity
+lookups ~90, _activeTileEntities 48. Stages, each complete before the next:
+
+A. Cells as heap columns: cell type (u8), owner (i8), area (i32) per tile;
+   grid[y][x] a view whose accessors read and write them (the API stays for
+   the JavaScript not yet converted, as unit objects are views of their
+   slots). A cell's item and tile entity: the per-tile structure table _ST
+   (code, stab/rrow: class and row, rowObj) instead of reference grids. The
+   region wall copy, mv.wall and the nav walls then read one column.
+B. Structure lists as table rows: iteration by the tables' rows (kernels
+   for anything scaling), structListPush/Remove and the object lists gone;
+   _activeTileEntities from the tables.
+C. Place / destroy as table operations: a destroy kernel over a batch of
+   tiles (the tile table, cell columns, walls and their versions, adjacency
+   dirty flags, laser dirty, counts, win check counts), events for systems
+   still JavaScript (render dirty, effects, sounds: presentation events).
+D. The worker trips as brain kernels over the worker columns (targets are
+   tiles; payments as per-owner fixed-point sums; spawner queues and research
+   tasks as columns first).
+
+### World model, steps as built (2026-10-30)
+
+Stage A is done (cell columns, GridCell views). The rest, each finished
+before the next:
+
+W1. Tile entities from the structure tables: per tile its table (_ST.ctab,
+    1 + the table index, every tabled class incl. mines) beside st.rrow;
+    getTileEntityRef = that table's rowObj[row]; getTileEntityType from st.code.
+    The tileEntityRef / tileEntityType grids go (their ~30 direct reads use
+    the getters); setTileEntity / clearTileEntity write only the tables, the
+    journal and the hooks.
+W2. _activeTileEntities (a Set, insertion order) goes: tile-order iteration
+    over the per-tile table (a kernel-made list of occupied tiles, cached by
+    _tileEntityVersion), so every consumer sees the same order on every peer.
+W3. cell.item derived on the simulation side from the per-tile table (a
+    non-tower, non-mine structure at the tile); the page keeps its own field.
+W4. The towers / barracks / collectorSpawners lists: consumers over the
+    tables' dense rows (order-free) or tile order (where order decides);
+    the object lists go from the simulation.
+W5. Place / destroy as kernels over batches of tiles (the tables, cell
+    columns, walls with their versions and hooks as heap events, reservations,
+    work versions, adjacency marks, the journal); JavaScript only for
+    presentation events and the rows' objects.
+    Destroy, done first (2026-10-30, W5a): structDestroyTiles (things_utils.js)
+    over a tile list (the hit kernels' dead lists, the status tick's dead,
+    destroyBuilding as a list of one), dst.rs k_struct_destroy for the tables'
+    side (per-tile structure table with region and owner counts, cell owner,
+    walls to ground, adjacency marks, work versions, the journal as a fixed
+    heap ring, mv.struct codes and block counts, trap marks; reservations and
+    wall tiles listed); JavaScript per tile: the object lists (W4), its row,
+    walk-class and wall events (nav, path regions: not kernels yet) and
+    presentation; versions, adjacency request, path topology and the win
+    check once a batch. Left: placement as a kernel; floor items cleared by
+    the status tick still go through clearTileEntity.
+
+### Serial JS left (1M/250k scene, prof35, 2026-10-30)
+
+Steady mean 138 ms (was 196 at the session start), p95 168. JavaScript a tick
+on steps 38-59 (profile-serial-share.cjs), what each needs:
+- unitHitsResolve 7.2: presentation looks (sounds, attack and damage looks,
+  alerts: JS events, fine), the destroyed structures' object work
+  (structListRemove: W4; structRowDetach, getTileEntityRef).
+- unitEventsRun 6.9: the worker trips (updateWorkerAI, _unitWorkerEvent),
+  no-way commits, nav requests; ~2 ms of it waits for kernels. Needs the
+  worker state machine as kernels (stage D): targets as tiles, payments as
+  per-owner sums, research tasks as columns (spawn queues are columns now).
+- _gameTickBody 4.0: the retire loop's per-death reads and
+  compactRemovedUnits (swap-removes in the units array, a SimUnitGone per
+  death): goes with the units array (units by slot only).
+- simMoveRun 5.1: mostly Atomics.wait tails (load balance), simHeapHas
+  checks 0.6.
+- recalculateUnitEffectiveLevel 2.8, projectilesAdvance 2.1 (stat getters on
+  structures hit), towersTick 1.6 (waits), workerSearchTierStep 1.3 (13 ->
+  1.3 on order ticks after k_wsw_set).
+- Caps still in place: WORKER_EVENTS_PER_TICK, SPAWNS_PER_TICK (go with the
+  worker trips and spawning as kernels).
+Next: W4 (the structure lists as table views), then the worker trips.

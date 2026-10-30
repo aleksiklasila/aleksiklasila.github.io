@@ -1097,6 +1097,7 @@ const _SIM_MOVE_WATL = 430, _SIM_MOVE_WSEP = 448, _SIM_MOVE_NSEP = 6;
 let _simMoveWFill = -1, _simMoveWArgs = 0;
 // Fills the argument block for a movement kernel's Rust twin; false: the
 // JavaScript kernel runs (no wasm, or an array not in the heap).
+let _simMoveWTail = -1, _simMoveWTailCtl = null, _simMoveWTailArgs = null;
 function _simMoveWasm(R, P) {
     if (!_simWasmOk(R) || _simWasmArgI === null) return false;
     const A = _simWPtrs(_simMoveW);
@@ -1116,6 +1117,10 @@ function _simMoveWasm(R, P) {
         _simMoveWFill = _simMoveW.binds; _simMoveWArgs = _simWasmArgs;
     }
     _simWasmArgF.set(P);
+    // (Words 456-475, made again only when a binding changed: refilled for every
+    // chunk, their heap lookups were ~0.5 ms a tick.)
+    if (_simMoveWTail === _simParBinds && _simMoveWTailCtl === _simUnitCtlOn && _simMoveWTailArgs === _simWasmArgs) return true;
+    _simMoveWTail = _simParBinds; _simMoveWTailCtl = _simUnitCtlOn; _simMoveWTailArgs = _simWasmArgs;
     const traffic=R['traffic.config'];
     _simWasmArgI[456]=traffic?_simWEnc(traffic.byteOffset):0;
     // (Word 458: unit.rtEnd, the occupancy swap's crowd test, mv.rs traffic_swap.)
@@ -1489,7 +1494,7 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUni
 // key vt.key = steps | (vsP1 + 1) << 8 | (vsP2 + 1) << 16 (its player and a
 // watching team), else -1.
 // P: [0] slots, [1] per job, [2] coverage generation, [3] SIM_SEP_ABSENT.
-const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.vsGen', 'unit.vsR', 'unit.vsP1', 'unit.vsP2', 'vt.p', '?-', 'vt.key']);
+const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.statRow', '?eff.rVsA', 'unit.owner', 'unit.wTeam', 'vt.p', 'unit.stIx', 'vt.key', 'unit.stWa']);
 SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnapW, P, chunk, 'k_vis_snap', 'VIS_SNAP'); };
 
 // Units' visibility seeds (renderer.js _visCoverUnits): every unit of the
@@ -1501,12 +1506,15 @@ SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnap
 // player * A, vis.ucnt[player] entries, in no particular order).
 // P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [6] areas, [7]
 // players, [8] stamp.
-const _simVisSeedW = [false, true].map(live => _simWK([live ? 'unit.x' : 'vt.p', live ? 'unit.y' : '?-', live ? '?vt.key' : 'vt.key', 'vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.agrid',
-    'unit.vsGen', 'unit.dead', 'unit.sepKey', 'unit.vsR', 'unit.vsP1', 'unit.vsP2']));
-SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeedW[P[9] === 1 ? 1 : 0], P, chunk, 'k_vis_seed', 'VIS_SEED'); };
+const _simVisSeedW = _simWK(['vt.p', '?-', 'vt.key', 'vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.agrid']);
+SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeedW, P, chunk, 'k_vis_seed', 'VIS_SEED'); };
+// Buildings' sight seeds (renderer.js _visCoverStructSeeds; vis.rs).
+const SIM_KERNEL_VIS_SEED_STRUCTS = 127;
+const _simVisSeedStructsW = _simWK(['st.code', 'st.own', 'st.uc', 'st.val', 'st.brain', 'st.stab', 'st.rrow', 'vt.agrid', 'vis.useed', 'vis.ulist', 'vis.ucnt',
+    'adj.ctab', 'adj.tykey', 'adj.rlv', 'adj.bl', 'stt.vis', 'stt.atk']);
+SIM_KERNELS[SIM_KERNEL_VIS_SEED_STRUCTS] = function (R, P, chunk) { _simRust(_simVisSeedStructsW, P, chunk, 'k_vis_seed_structs', 'VIS_SEED_STRUCTS'); };
 // Laser beams on units (tower.js laserBeamsTick): a unit on a tile of a
-// beam (lz.head: per tile the first entry, lz.next / lz.beam: the tile's
-// entries) of another owner (lz.bown) takes its damage (lz.bdmg, per tick)
+// beam (lz.tb: per tile four beam slots, laser.rs k_laser_lines) of another owner (lz.bown) takes its damage (lz.bdmg, per tick)
 // unless immune to towers (lzFlags 1); laser resistant (2) it lights the
 // beam only. Each beam that lit marks lz.hit. The damage comes off its
 // energy now (dead at none left); its record (flash, shrines, alert, a
@@ -1515,7 +1523,7 @@ SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeed
 // P: [0] slots, [1] per job, [2] TILE, [3]/[4] grid, [5] tick, [6] report
 // period, [7] SIM_SEP_ABSENT.
 const _simLaserHitsW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.owner', 'unit.energy', 'unit.id', 'unit.lzFlags', 'unit.lzAcc', 'unit.lzBeam', 'unit.lzEv',
-    'lz.head', 'lz.next', 'lz.beam', 'lz.bown', 'lz.bdmg', 'lz.hit', 'lz.count', '?lz.list']);
+    'lz.tb', '?-', '?-', 'lz.bown', 'lz.bdmg', 'lz.hit', 'lz.count', '?lz.list']);
 SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaserHitsW, P, chunk, 'k_laser_hits', 'LASER_HITS'); };
 
 // The combat brain (a helper lane, chained after the acquisition scan; see
@@ -1630,7 +1638,7 @@ function simRustDirect(fn, arrays, P) {
 // adj.wk its stamps, kept from run to run). Rust: k.rs k_adj_flood.
 const SIM_KERNEL_ADJ_FLOOD = 64;
 const _simAdjFloodW = _simWK(['adj.sig', 'adj.seed', 'adj.cloud', 'adj.ag', 'adj.coff', 'adj.ctile', 'adj.mul', 'adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.oarea',
-    'adj.oact', 'adj.ocnt', 'adj.wk', '?adj.scnt', '?adj.cls4', '?adj.ccnt']);
+    'adj.oact', 'adj.ocnt', 'adj.wk', '?adj.scnt', '?adj.cls4', '?adj.ccnt', '?adj.seed8']);
 SIM_KERNELS[SIM_KERNEL_ADJ_FLOOD] = function (R, P, chunk) { _simRust(_simAdjFloodW, P, chunk, 'k_adj_flood', 'ADJ_FLOOD'); };
 // The flood's members applied to their rows at its commit (things_utils.js
 // adjacencyLaneStep; ord.rs k_adj_apply): P[1] members a job.
@@ -1638,10 +1646,22 @@ const SIM_KERNEL_ADJ_APPLY = 119;
 const _simAdjApplyW = _simWK(['adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.sig', '?adj.none', 'st.stab', 'st.rrow', 'st.uc', 'st.brain', 'st.val',
     'adj.rml', 'stt.mxe', 'stt.vis', 'stt.atk', 'adj.ev', 'adj.evn', 'adj.ctab', 'st.code', 'st.own', 'adj.tykey', 'adj.rlv', 'adj.bl']);
 SIM_KERNELS[SIM_KERNEL_ADJ_APPLY] = function (R, P, chunk) { _simRust(_simAdjApplyW, P, chunk, 'k_adj_apply', 'ADJ_APPLY'); };
+// Path regions (pathfinding.js _pathRegionsPlain / _pathRegionsOwner; reg.rs):
+// a band of rows a job (LOCAL), the band edges joined (MERGE, one job), the
+// labels made canonical (FINAL), an owner's parents (IDENT) and labels (OWNER).
+const SIM_KERNEL_REG_LOCAL = 121, SIM_KERNEL_REG_MERGE = 122, SIM_KERNEL_REG_FINAL = 123, SIM_KERNEL_REG_IDENT = 124, SIM_KERNEL_REG_OWNER = 125;
+const _simRegW = _simWK(['reg.wall', 'reg.lab', 'reg.par', 'reg.q', '?reg.opar', '?reg.olab']);
+const _simRegOwnW = _simWK(['?reg.wall', 'reg.lab', 'reg.par', '?reg.q', 'reg.opar', '?reg.olab']);
+SIM_KERNELS[SIM_KERNEL_REG_LOCAL] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_local', 'REG_LOCAL'); };
+SIM_KERNELS[SIM_KERNEL_REG_MERGE] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_merge', 'REG_MERGE'); };
+SIM_KERNELS[SIM_KERNEL_REG_FINAL] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_final', 'REG_FINAL'); };
+SIM_KERNELS[SIM_KERNEL_REG_IDENT] = function (R, P, chunk) { _simRust(_simRegOwnW, P, chunk, 'k_reg_ident', 'REG_IDENT'); };
+const _simRegOwnerW = _simWK(['?reg.wall', 'reg.lab', 'reg.par', '?reg.q', 'reg.opar', 'reg.olab']);
+SIM_KERNELS[SIM_KERNEL_REG_OWNER] = function (R, P, chunk) { _simRust(_simRegOwnerW, P, chunk, 'k_reg_owner', 'REG_OWNER'); };
 // The adjacency post (things_utils.js _adjacencyLanePost; ord.rs k_adj_post):
 // P[1] 256-tile blocks a job.
 const SIM_KERNEL_ADJ_POST = 120;
-const _simAdjPostW = _simWK(['st.code', 'st.own', 'st.uc', 'st.brain', 'st.stab', 'st.rrow', 'st.val', 'adj.ctab', 'adj.sig', 'adj.dflag', 'adj.dblk', 'adj.seed',
+const _simAdjPostW = _simWK(['st.code', 'st.own', 'st.uc', 'st.brain', 'st.stab', 'st.rrow', 'st.val', 'adj.ctab', 'adj.sig', 'adj.dflag', 'adj.dblk', 'adj.seed8',
     'adj.scnt', 'adj.tyf', 'adj.cls4', 'adj.ccnt', 'adj.pflag']);
 SIM_KERNELS[SIM_KERNEL_ADJ_POST] = function (R, P, chunk) { _simRust(_simAdjPostW, P, chunk, 'k_adj_post', 'ADJ_POST'); };
 

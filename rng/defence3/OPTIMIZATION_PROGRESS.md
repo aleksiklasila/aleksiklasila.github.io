@@ -2876,3 +2876,303 @@ drain), then deaths, statuses, hits, the worker brain.
     and JS floods after splits: labels from the heap wall grid (_simMoveWall)
     by a kernel, portals from the structure table (k_adj_post has them).
   - vision cover hold (~3 ms), worker search tier leftovers (~6 ms).
+- Path regions in kernels (wasm/src/reg.rs): the plain labels by a parallel
+  labelling of a heap wall copy (bands of rows flooded on the helpers,
+  joined at band edges in one small job, made canonical in parallel: each
+  region labelled by its lowest tile, whatever the bands); an owner's labels
+  through its portal joins by parallel kernels (identity parents, then each
+  tile's plain and owner root); the portal signature by a kernel over a heap
+  list of cloud tiles reading the structure table (was a JS walk every
+  tick). The wall copy follows pathRegionsTileChanged (made from the grid on
+  a reset). The incremental tile hook stays JavaScript (O(1) a tile, a local
+  search on closures). Labels are tile indices now: the nearest-tile cache
+  key changed. path-regions-incremental and -portals pass.
+  Measured (1M/250k, unprofiled, steady 20-59; reg1.json vs nodelta.json):
+  pathRegionsWarm 3.4 -> 2.8 ms, steady mean 171 -> 162 ms, p95 215 -> 188,
+  max 220 -> 193 (part of it run-to-run spread). What is left in
+  pathRegionsWarm is not profiled yet.
+- World model stage A (MAIN_THREAD_SERIAL_PLAN.md): cell type, owner and area
+  are per-tile columns (map.js cellType / cellOwner / cellArea; heap arrays
+  cell.type / cell.owner / cell.area where the heap is up, moved by
+  structTablesRehome after a worker restart); grid[y][x] is a GridCell view
+  over them (item / droppedItem still its own fields). Sanity:
+  path-regions-incremental, multiplayer-snapshot, unit-retirement,
+  adjacency-lane-carry, occupancy-grid pass. Found for stage B: structure
+  rows are laid out per peer, so the object lists cannot simply become row
+  iteration where order matters (tile order, or order-free consumers).
+  clearTileEntity per destroyed structure: 8 reservation slots each looked
+  up through getUnitById, the tile entity Set, render/journal notes, walls.
+- Structure lists, per-tick consumers by the profile (1M/250k): researchAdvanceTick
+  1.5 ms, laser links 1.3, _ownedStructureBuckets 1.0; the rest are input,
+  placement checks and rare events. Research buildings' researchTask and
+  isResearching are derived from the player's task now (no table fields, no
+  walk over all spawners writing the task into each when it changes; the
+  page's views keep their own). Research tests (5) and multiplayer-snapshot
+  pass. Choice (user): order-free consumers over the tables' dense rows (SoA,
+  SIMD), tile order only where order changes the result.
+  The per-building writes of the research task are deleted everywhere (the
+  action, the worker's research search, the building's update and its
+  production refresh, the constructor). Left: the frame encoder sends each
+  research building's task progress (resDone / resReq) to the page per
+  structure; it should be once per player (page side, with presentation).
+  _ownedStructureBuckets (1 ms) and the other object bucket lists
+  (_structureBuckets, _forEachWorkInTileBox, _ownedQueueSpawners, research
+  spawner lists) belong to the worker searches: to go with the worker brain
+  conversion (searches as kernel scans over _ST and the structure tables,
+  then the trips).
+- Lasers in kernels (wasm/src/laser.rs), made every tick from the world (a
+  pure function of laser tiles, owners, levels and walls; no dirty tracking):
+  k_laser_scan (helpers) lists the lasers in tile order from the per-tile
+  table, k_laser_build walks each laser's row and column over cellType for
+  its partners and makes the beams (tile order, so the per-tile beam lists and
+  float damage sums are alike on every peer) and their tiles' lists,
+  k_laser_structs hits structures on beam tiles through SCtx::hit (one hit
+  path; shrine, looks, destroys as the other hit kernels), k_laser_report
+  turns the units' beam damage records into shrine income (first 64 looks to
+  JS). connectedLasers is derived (laserPartnersOf); a laser's beam damage
+  is its _lzDmg column (laserCheck; refreshed on a stats version change).
+  Deleted: the JS link computation (string-keyed line maps, per-tower
+  arrays, dirty rows/columns), the towers.filter for lasers each second.
+  laser-links rewritten: kernel vs all-pairs reference in a real match, 60
+  random layouts, 3286 lasers, 473 links equal. laser-activation,
+  multiplayer-snapshot, structure-row-reuse, sim-frame-replica pass.
+  Lasers, follow-up: the profile (laser1.json) showed 6.5 ms a tick: links
+  rebuilt every tick, and lasers with no effectiveLevel linked at any reach
+  (as the JS did: NaN limits), walking to the next wall. Now rebuilt only
+  when a structure, wall, laser level/damage/construction (laserCheck) or
+  the stat tables changed, and an unset effective level falls back to the
+  level, else 1 (getThingEffectiveLevel; a behaviour fix). laser-links
+  reference updated alike; both laser tests pass.
+- Visibility cover in kernels: buildings' sight seeded with the units' run
+  from the structure table (vis.rs k_vis_seed_structs, helpers, at the post:
+  steps from the static stat tables at the descriptor's effective level,
+  research and boosts, or the custom vision mirror _ovVs; owner and a
+  watching team from the row); units' sight keys made in k_vis_snap from
+  their stat rows (eff.rVsA), owner, wTeam and watch timer. Deleted: the
+  buildings' registration (per-(player, area, steps) dense/sparse counts,
+  rings over the area graph, the registered list, the hold queue), the JS
+  sweeps over every building and every unit (1/512 a tick), the unit sight
+  columns' use (vsGen/vsR/vsP1/vsP2/vsA are no longer read), the seed's
+  live path. Hooks are no-ops. Behaviour: a building's sight follows within
+  two cover periods (8 ticks) as units' does, no longer at once.
+  New test visibility-buildings; visibility-shared-source rewritten for the
+  snapshot keys; 5 visibility tests, team-watch-effects, local-visual-
+  snapshot, multiplayer-snapshot and -patch pass.
+  Lasers, second follow-up (user: beams only change with lasers or their
+  levels): the links are rebuilt only on laser events (placed / removed:
+  laserListToggle; level, damage, construction: laserCheck), the stat
+  tables, or a wall set or cleared on a tile a laser's walk looked at in
+  the last build (lz.walk stamps, laserWallChanged from
+  simMoveTileTypeChanged); otherwise no scan and no build, only the beams'
+  damage each tick. The scan (when it runs) compares 16 tile codes a SIMD
+  op. laser-links also checks wall-only changes now (647 links equal).
+  Visibility measured (vis2.json, unprofiled, same game state as reg1):
+  updateAllPlayerVisibility 5.1 -> 2.7 ms, visCoverHoldEnd 2.9 -> 0, steady
+  mean 162 -> 164 (lasers still rebuilt every tick in that run: 5 ms).
+- Tile effects (user: traps and lasers are the same thing: tile-based effects
+  on hostile units standing there, tick-based, tables updated by events): one
+  pass a tick, tfx.rs k_tile_effects, over the effect tiles and the units the
+  per-tile unit index lists on them (O(effect tiles + victims), independent
+  of the unit count): trap tiles (tfx.traps) give their status (timer and
+  tick damage raised to the trap's; every tick now, was on entering and once
+  a second in the movement kernel, whose floor_hit keeps only mines), beam
+  spans in canonical order give their damage to units (reports for shrine
+  income, k_laser_report) and to structures (SCtx::hit), lasers lit by
+  their beams. Laser links kept by lines (laser.rs k_laser_lines): per-row and
+  per-column laser lists, each laser's partners and the beams it started;
+  only lines marked by events (laser placed / removed / level /
+  construction, a wall on a tile a laser's walk looked at) are worked again;
+  no map scans. Beam damage every tick from the static stat tables
+  (k_laser_dmg: stt.dmg by base level, damage research, boosts; custom
+  towers tc.dmg), beams sorted by tile with an LSD radix sort. Trap tiles
+  from the structure table by kernel on events (k_trap_tiles: kind by
+  stationary type, level from the descriptor; the list in the heap), the
+  status record room by kernel (k_trap_bound). Deleted: the per-tick
+  all-units laser kernel use, per-tile beam lists, the JS trap refresh and
+  chunk map. Left JS: the trap strength table (event: research done), the
+  destroys (world model), looks and sounds.
+  Measured (tfx1.json vs vis2.json, unprofiled): laserBeamsTick (lasers and
+  traps now) 5.0 -> 0.78 ms; steady mean 164 -> 168 (spread). Tests:
+  laser-links, laser-activation, floor-trap-kernel, floor-target,
+  status-expiry-records, tower-kernel-cases, projectile-pool,
+  multiplayer-snapshot pass.
+- World model W1 (MAIN_THREAD_SERIAL_PLAN.md): tile entities come from the
+  structure tables: per tile its table (_ST.ctab, every tabled class incl.
+  mines) beside st.rrow; getTileEntityRef reads the table's row object,
+  getTileEntityType derives from the code (mines) or the structure's key.
+  The tileEntityRef / tileEntityType grids are lazy and hold only structures
+  outside the tables (the page's views): none on the simulation side (two
+  1M-entry arrays of references less for the GC to trace). All direct grid
+  reads use the getters (struct classes and codes, snapshot refs and tile
+  sets, worker targets, rally presentation). Sanity: 11 tests pass
+  (multiplayer-snapshot, structure rows, worker-walk, lasers, adjacency,
+  towers, sim-frame-replica, traps, farms).
+- World model W2: _activeTileEntities is a TileEntitySet view: the tabled
+  structures and mines in tile order from the per-tile table (reg.rs
+  k_tile_occupied, SIMD over st.ctab, made again when the tile entities
+  changed; the page without kernels: a plain pass), then the untabled (the
+  page's views) kept in a Set; has() checks the tile. Iteration order is tile
+  order now (was insertion order): the same on every peer, restored or not.
+  Sanity: sim-frame-replica, local-visual-snapshot, multiplayer-snapshot and
+  -patch, worker-walk and 9 more pass.
+- Memory check (user: wasm32, 4 GiB): per-tile arrays added this session at
+  2000x2000 (4M tiles). Fixed the large ones: the adjacency post's portal
+  buffers were 256 slots a block (adj.cls4 64 MB + adj.cloud 48 MB): now a
+  list sized by the towers' table, appended atomically, sorted by tile in
+  the flood (radix); seeds as u8 offsets per block (adj.seed8, 4 MB; the
+  dense list sized by the count); path region parents N + 64k (were 2N);
+  the occupied-tile list sized by the structure rows; the trap tile index
+  removed (linear removal on the rare trap removal). Left at a few bytes a
+  tile: cell columns (24 MB; cellArea duplicates areaIdGrid's 16 MB of JS
+  rows: to share), path regions ~52 MB (+32 MB per owner with portals),
+  the laser tile-to-slot map (16 MB, to become a tower column), ctab 4 MB,
+  laser walk marks 4 MB. To test: adjacency through cloud portals (no test
+  covers it).
+- World model W3: cell.item on a tabled tile comes from the structure table
+  (the structure there when not a tower or a mine); the view's own field only
+  for untabled tiles (the page's views, a cleared tile). Sanity: 10 tests
+  pass (multiplayer-snapshot and -patch, workers, traps, farms, the page
+  replica, targeting, floor targets). Measured W1-W3 together (wm1.json vs
+  tfx1.json, unprofiled): steady mean 168 -> 165 ms, p95 190 -> 199 (spread),
+  no phase worse. Next: W4 (the structure lists as table rows), W5 (place /
+  destroy kernels).
+- Spatial index re-tiling back in the movement kernel (2026-10-30). Profile
+  (prof30.json, 1M/250k, steady 38-59): spatialSlotUpdate 10.3 ms and
+  spatialCountsDeferEnd 8.3 ms of serial JS a tick. Cause: the epilogue
+  (mv.rs epi_slot) re-tiled a unit itself only when its vision-cover
+  generation matched (unit.vsGen == P[41]) or the cover was off (P[42]);
+  since the cover went to the vision kernels nothing writes vsGen, so every
+  tile change was listed to JavaScript (spatialSlotUpdate per unit and a
+  deferred count entry each). The condition, P[41]/P[42], Epi.vis_* and the
+  vsg binding (word 117 unused now) are gone; spatialSlotMove no longer calls
+  the no-op cover hooks. Measured (prof31.json vs prof30.json, profiled):
+  both functions gone from the profile, steady mean 196 -> 187 ms, p95
+  259 -> 223, max 307 -> 228.
+  Note: simParallelRun self time (10.8 ms under simMoveRun) is the
+  simulation thread in Atomics.wait for the helpers' last chunks (step,
+  move and four occupancy phase jobs, each with a tail): load balance, not
+  JavaScript to convert. Remaining serial JS (prof31): unitHitsResolve 10.4
+  (structure destroys, W5), unitEventsRun 9.4, workerSearchTierStep 6.6,
+  recalculateUnitEffectiveLevel 5.2, compactRemovedUnits 2.7 +
+  unitByIdRemoved 1.8 (units list and JS id index), _gameTickBody self 3.4.
+  Caps still to remove: WORKER_EVENTS_PER_TICK, SPAWNS_PER_TICK,
+  EFF_BEHIND_PER_TICK.
+- World model W5a: structure destruction as a batch kernel. Measured first
+  (prof31 journal deltas): every 4th tick ~1,600 structures die together and
+  unitHitsResolve went 7 -> 25 ms (~12 us of JavaScript a destroy: lists,
+  clearTileEntity hooks, structTableSet, path topology and adjacency requests
+  per structure). Now structDestroyTiles(list, n) (things_utils.js) takes the
+  hit kernels' dead lists, the status tick's dead and floor items (quiet:
+  no explosion, sound or route change, as before) and destroyBuilding (a
+  list of one); dst.rs k_struct_destroy does the tables' side in one pass in
+  list order: per-tile structure table (region and per-owner counts too; rcnt
+  and cnt are heap columns now), cell owner, wall cells to ground (listed),
+  adjacency marks (3x3), work versions and their checksum change, the tile
+  journal (a fixed TE_LOG_CAP heap ring now), mv.struct codes / classes /
+  block counts, trap marks; reservations at the tiles listed. JavaScript per
+  structure: the object lists (until W4), _stT and the view's item, its row,
+  walk-class and wall events (nav, path regions), presentation; versions,
+  adjacency request, path topology and win check once a batch.
+  Measured (prof32 vs prof31, profiled): unitHitsResolve JS 10.4 -> 7.5 ms a
+  tick; on the destroy ticks 17-31 -> 12-26 ms; steady mean 186.6 -> 183.4
+  (p95/max worse from one helper-kernel outlier at step 29, spatialIndexRebuild
+  67 ms: not this path). Left per destroy: getTileEntityRef, the stat getter
+  behind baseStats in towerJoinedOrLeft (_sDerivedValue), navClassTileChanged,
+  structRowDetach. Tests: structure-table, -row-reuse, -row-expiry-snapshot,
+  building-limit, laser-links, adjacency-lane-carry, visibility-buildings,
+  worker-walk, worker-brain-spawners, work-snapshot, floor-trap-kernel,
+  floor-target, status-expiry-records, chaos-scenario-determinism (0/3
+  helpers), multiplayer-snapshot pass.
+- Effective levels: no cap, no selection pass (2026-10-30). EFF_BEHIND_PER_TICK
+  (1,500 units behind their stat tables a tick, the rest a turn later) is
+  gone with its counting kernel run: the whole share is taken each tick; a
+  unit behind whose (owner, type, base level) has no base entry yet takes the
+  full path once per key (that makes the entry and its row), and the kernel
+  runs again for the rest of the share (parameters restored, rows counted
+  again). The single-player selection refresh (new Set(selectedUnits) and a
+  pass over it every tick: 185k units after the bench's mass command) is
+  removed: the selection follows the share as in multiplayer. The eff kernel
+  no longer registers units in the retired cover columns (P[20] -1: vsGen /
+  vsR are not read; the kernel and full paths wrote them differently, which
+  eff-behind-kernel caught). Measured path counts (effcount.json): 0-47 units
+  a tick through the JavaScript paths; the step's time is the kernels and
+  the selection pass. Tests: eff-behind-kernel, research-queue, -rebase-
+  partial, building-research-keys, 7 visibility tests, team-watch-effects,
+  chaos-scenario-determinism, multiplayer-snapshot pass.
+- Unit id index as a heap hash table (main.js UnitIdIndex): unit slots by a
+  hash of the id (linear probing, backward-shift deletes, ids read from the id
+  column so a reused slot is passed over), at least twice the slots, made
+  again when it fills or the slots move (relayout, restore: unitSlotMap-
+  Invalidate marks it stale); slotless units (page views, hand-made test
+  units) in a Map. The JS pages of 1024 references (traced by the GC) are
+  gone. unit-id-index rewritten (Map path, slot path with reuse, deaths and
+  a relayout against a reference).
+- Worker search tier: _wsGroupBuild's counting sorts (sites into buckets,
+  spawners into bucket order with per-owner counts) and _wsNearField's set
+  hashes and its comparison sort (spawners by (gy, gx, id): tile order, one a
+  tile, so the kernel's own order) are wsb.rs k_ws_buckets.
+  Measured this batch (prof33 vs prof32, profiled, steady 20-59): mean
+  183.4 -> 147.3 ms, p95 245 -> 187, max 315 -> 198 (sampled 161 -> 137 ms a
+  tick on 38-59); recalculateUnitEffectiveLevel out of the top phases.
+  Tests: area-search-range, area-worker-search, collector-farms, worker-*
+  (6), order-worker-budget, multiplayer-worker-lost, order-fast, unit-
+  retirement, slot-locality, pending-damage-restore, multiplayer-late-carry-
+  restore, chaos-scenario-determinism pass.
+- Unit removal: the ids' index (_uix) marks the retire pass's removed units in
+  one call (uix.rs k_uix_remove: binary searches and the squeeze of holes in
+  wasm; was a JS binary search per death). compactRemovedUnits no longer
+  filters the whole selection every tick with deaths: only when a removed
+  unit was selected (a set of the selection, made again when it changes).
+- Cloud tower tables (pathfinding.js) kept by the clouds' joins and leaves
+  (cloudTowerToggle from towerJoinedOrLeft), in tile order (pairs too: the
+  same on every peer whatever the history); a walk of every tower (through
+  the baseStats getter) only when the towers list is another. Was a walk of
+  ~80k towers at every cloud join or leave (_pathRegionPortalSignature 1.3 ms
+  a tick on average).
+- occupancyJobs: each phase's blocks heaviest first by jobs.rs k_occ_jobs (a
+  counting sort on the count's power of two; the order is load balance only)
+  and the empty blocks' outputs cleared there; was a JS loop over every
+  block and a typed-array sort each tick.
+- Spawn queues as table columns (barrack.js): _qN the count, _qLv / _qReq /
+  _qPaid the front's level, cost and payment (only the front is ever paid).
+  Rule change: an entry takes the building's base level and that level's
+  cost when it becomes the front (was: those of when it was queued). API:
+  spawnQueueCount / Front / Pay / Push / Shift, hasSpawnQueue; a failed
+  spawn no longer shifts and unshifts. spawnQueue on the objects is the
+  interface's copy (getter) and takes arrays (setter: snapshots, scenes);
+  the page's views keep their arrays. The frame encoder, renderer and
+  digests read the count. Tests: spawner-queue-performance (slice includes
+  the queue API now), starting-spawn-limits, work-snapshot, solo-snapshot,
+  solo-scene-download, worker-brain-spawners, worker-approach-occupancy,
+  worker-walk, closest-spawner-cache, chaos-scenario-determinism,
+  multiplayer-snapshot, occupancy-grid, path-regions-portals / -incremental,
+  unit-retirement, unit-id-index, order-fast pass.
+- Unit id table deletes in one call (uix.rs k_uid_delete, backward shift as
+  UnitIdIndex.delete): the retire pass's removed units with a slot.
+- Work site grid from the tables (wsw.rs k_wsw_set, 2026-10-30): per tile the
+  owned structure's work flags (build: construction, upgrade, stacking,
+  repair below the maximum energy, stack candidate, upgrade due; salvage;
+  queue: built, alive, queue on, front not paid; research, auto research),
+  owner, area (cell.area) and reservation bits (reserver alive: the id table
+  and the dead column), the per-block and per-owner counts (W.oc in the heap
+  now), for a list of tiles: the journal's, the marked ones and the sweep's
+  share, which is now every structure in tile order once in WSW_SWEEP steps
+  (from the occupied-tile list, TileEntitySet.tileList; was the owners'
+  structure buckets); mode 1: reservation bits only (changed reservation
+  slots, the collectors' sites in turn). Maximum energy and researched
+  maximum level from k_adj_apply's static stat tables; per class columns in
+  adj.ctab and the new wsw.ctab (salvage mark, build / queue / auto research
+  switches, the queue columns). Deleted: _wswFlagsOf, _wswResvOf, _wswSet,
+  _wswResMax. workSiteFlagsOf(e) for tests. New test work-site-flags: 7,729
+  structures in every state equal the JavaScript flags of git HEAD
+  (tests/work-site-reference.js), counts too. builder-research-resume now
+  places its tower and asks workSiteFlagsOf.
+- _simMoveWasm: argument words 456-475 (traffic, rtEnd, controller columns,
+  occupancy records) refilled only when a binding changed (_simParBinds), not
+  for every chunk (their heap lookups were ~0.5 ms a tick). Words below 512 are
+  the movement kernels' alone (the others start at SIM_RUST_W0 = 512).
+  Measured the work site grid batch (prof35 vs prof34, profiled): steady mean
+  141.7 -> 138.2 ms, p95 178 -> 168, max 191 -> 175; workerSearchTierStep
+  JavaScript on the order ticks 30-34: 12.8 -> 1.3 ms. Session total (prof30
+  -> prof35): steady mean 196 -> 138 ms, p95 259 -> 168, max 307 -> 175.
+  Inventory of what is left: MAIN_THREAD_SERIAL_PLAN.md, "Serial JS left".

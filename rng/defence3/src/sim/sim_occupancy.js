@@ -112,24 +112,16 @@ function occupancyPrepareMovement() {
 // (chFix, W a chunk), its cross-block swaps and stats, and the traffic
 // inputs all at once (each job cleared its own block's). The order within a
 // phase decides nothing: its blocks touch disjoint cells.
+const _occJobsP=new Float64Array(4);
 function occupancyJobs(postc,sexc,chFix,W){
     const O=_occ,C=O.config,bw=C[5],bh=C[6],jobs=bw*bh,F=O.offsets,k=SIM_OCCUPANCY_XSWAP_STRIDE;
-    if(!O.jobs||O.jobs.length<jobs+8){if(O.jobs)simHeapFree(O.jobs);O.jobs=simHeapArray(Int32Array,jobs+8);O.jobKeys=new Float64Array(jobs);}
+    if(!O.jobs||O.jobs.length<jobs+8){if(O.jobs)simHeapFree(O.jobs);O.jobs=simHeapArray(Int32Array,jobs+8);}
     simParallelBind('occ.jobs',O.jobs);
-    const J=O.jobs,K=O.jobKeys;
+    const J=O.jobs;
     O.stats.fill(0,0,jobs*16);
-    let n=8;
-    for(let p=0;p<4;p++){
-        let m=0;J[p]=n-8;
-        for(let by=p>>1;by<bh;by+=2)for(let bx=p&1;bx<bw;bx+=2){
-            const j=by*bw+bx,c=F[j+1]-F[j];
-            if(c>0){K[m++]=(16777216-Math.min(c,16777215))*65536+j;continue;}
-            postc[j]=0;if(sexc)sexc[j]=0;if(chFix)chFix[j*W+W-1]=0;O.xswap[j*k]=0;
-        }
-        const S=K.subarray(0,m);S.sort();
-        for(let i=0;i<m;i++)J[n+i]=S[i]%65536;
-        J[4+p]=m;n+=m;
-    }
+    // (Each phase's blocks with units, heaviest first; the empty ones' outputs cleared: jobs.rs.)
+    const P=_occJobsP;P[0]=bw;P[1]=bh;P[2]=W;P[3]=k;
+    simRustDirect('k_occ_jobs',[F,J,postc,sexc,chFix,O.xswap],P);
     if(_traffic)for(const key of ['workX','workY','workLoss'])_traffic[key].fill(0);
     return J;
 }

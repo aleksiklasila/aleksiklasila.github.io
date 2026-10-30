@@ -1313,15 +1313,15 @@ function _snapRootRef(v) {
     }
     let gx = v.gx, gy = v.gy;
     if (typeof gx === 'number' && typeof gy === 'number' && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
-        if (v instanceof Tower) return tileEntityRef[gy][gx] === v ? '~t' + gx + ',' + gy : null;
+        if (v instanceof Tower) return getTileEntityRef(gx, gy) === v ? '~t' + gx + ',' + gy : null;
         let cell = grid[gy][gx];
         if (v instanceof Barrack) return cell.item === v ? '~b' + gx + ',' + gy : null;
         if (isSpawnerEntity(v)) return cell.item === v ? '~s' + gx + ',' + gy : null;
         {
             if (cell.item === v) return '~f' + gx + ',' + gy;
             if (droppedItemGrid[gy] && droppedItemGrid[gy][gx] === v) return '~d' + gx + ',' + gy;
-            if (tileEntityRef[gy][gx] === v) {
-                let type = tileEntityType[gy][gx];
+            if (getTileEntityRef(gx, gy) === v) {
+                let type = getTileEntityType(gx, gy);
                 if (type === TILE_ENTITY_GOLDMINE) return '~g' + gx + ',' + gy;
                 if (type === TILE_ENTITY_ASTARMINE) return '~a' + gx + ',' + gy;
             }
@@ -1834,12 +1834,12 @@ function _snapEntityAtTile(list, gx, gy) {
     if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return undefined;
     let e;
     switch (list) {
-        case 't': e = tileEntityRef[gy][gx]; return e instanceof Tower ? e : undefined;
+        case 't': e = getTileEntityRef(gx, gy); return e instanceof Tower ? e : undefined;
         case 'b': e = grid[gy][gx].item; return e instanceof Barrack ? e : undefined;
         case 's': e = grid[gy][gx].item; return isSpawnerEntity(e) ? e : undefined;
         case 'f': e = grid[gy][gx].item; return (e && !_snapIsBuilding(e)) ? e : undefined;
-        case 'g': return tileEntityType[gy][gx] === TILE_ENTITY_GOLDMINE ? (tileEntityRef[gy][gx] || undefined) : undefined;
-        case 'a': return tileEntityType[gy][gx] === TILE_ENTITY_ASTARMINE ? (tileEntityRef[gy][gx] || undefined) : undefined;
+        case 'g': return getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
+        case 'a': return getTileEntityType(gx, gy) === TILE_ENTITY_ASTARMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
         case 'd': e = droppedItemGrid[gy] && droppedItemGrid[gy][gx]; return e || undefined;
     }
     return undefined;
@@ -2062,19 +2062,19 @@ function _snapEnsureStatMaps() {
 // reservations and mark adjacency dirty, which the snapshot restores itself.
 function _snapSetTile(gx, gy, type, ref) {
     if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return;
-    let row = tileEntityRef[gy];
-    if (!row) return;
-    let prev = row[gx];
+    let prev = getTileEntityRef(gx, gy);
     let nextType = type || TILE_ENTITY_NONE, nextRef = ref || null;
     // Unchanged (entity, type and owner): the indexes built on the tile
     // entities stay valid (a patch re-sets every building it carries).
     let owners = _snapTileOwners.length === GRID_W * GRID_H ? _snapTileOwners : (_snapTileOwners = new Int32Array(GRID_W * GRID_H).fill(-9));
     let ownerNow = nextRef && Number.isFinite(nextRef.owner) ? nextRef.owner : -8;
-    if (prev === nextRef && tileEntityType[gy][gx] === nextType && owners[gy * GRID_W + gx] === ownerNow) return;
+    if (prev === nextRef && getTileEntityType(gx, gy) === nextType && owners[gy * GRID_W + gx] === ownerNow) return;
     if (prev && prev !== ref) _activeTileEntities.delete(prev);
     if (typeof structTableSet === 'function') structTableSet(gx, gy, prev, nextRef);
-    tileEntityType[gy][gx] = nextType;
-    row[gx] = nextRef;
+    // (Not tabled: the grids, as setTileEntity.)
+    const tabled = !!nextRef && _ST.n === GRID_W * GRID_H && _ST.ctab && _ST.ctab[gy * GRID_W + gx] !== 0;
+    if (!tabled && nextRef) { _teGrids(); tileEntityType[gy][gx] = nextType; tileEntityRef[gy][gx] = nextRef; }
+    else if (tileEntityRef) { tileEntityType[gy][gx] = TILE_ENTITY_NONE; tileEntityRef[gy][gx] = null; }
     if (ref) _activeTileEntities.add(ref);
     owners[gy * GRID_W + gx] = ownerNow;
     _tileEntityVersion++;

@@ -2779,37 +2779,40 @@ fn round_half_up(v: f64) -> f64 {
 // VISIBILITY COVER OF UNITS (renderer.js _visCoverUnits)
 // =====================================================================
 
-/// A unit's sight key: steps | (player + 1) << 8 | (watching team + 1) << 16,
-/// or -1 (not registered this generation, dead, absent, no range).
-#[inline(always)]
-unsafe fn vis_key(vg: *const i32, dead: *const u8, sk: *const u32, vr: *const i8, v1: *const i8, v2: *const i8, q: usize, gen: i32, absent: u32) -> i32 {
-    let r = g(vr, q) as i32;
-    if g(vg, q) != gen || g(dead, q) != 0 || g(sk, q) == absent || r < 0 {
-        -1
-    } else {
-        (r & 63) | ((g(v1, q) as i32 + 1) << 8) | ((g(v2, q) as i32 + 1) << 16)
-    }
-}
-
-/// SIM_KERNEL_VIS_SNAP: per slot its position (vt.x, vt.y) and sight key
-/// (vt.key). Arrays: unit.x, unit.y, unit.dead, unit.sepKey, unit.vsGen,
-/// unit.vsR, unit.vsP1, unit.vsP2, vt.x, vt.y, vt.key.
-/// P: [0] slots, [1] per job, [2] coverage generation, [3] absent key.
+/// SIM_KERNEL_VIS_SNAP: per slot its position (vt.p: its tile and where in
+/// it) and sight key (vt.key): steps | (player + 1) << 8 | (watching team +
+/// 1) << 16, or -1 (dead, absent, no stat row or range): the steps its stat
+/// row's (eff.rVsA, renderer.js _visCoverSyncUnit), its owner, a watching
+/// team (wTeam while its watch timer runs, stWa by its status record stIx)
+/// other than its owner. Arrays: unit.x, unit.y, unit.dead, unit.sepKey,
+/// unit.statRow, eff.rVsA, unit.owner, unit.wTeam, vt.p, unit.stIx, vt.key,
+/// unit.stWa. P: [0] slots, [1] per job, [2] players, [3] absent key, [4]
+/// TILE, [5] / [6] grid.
 #[no_mangle]
 pub unsafe extern "C" fn k_vis_snap(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
-    let (xs, ys, dead, sk, vg, vr, v1, v2) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u32>(3), k.p::<i32>(4), k.p::<i8>(5), k.p::<i8>(6), k.p::<i8>(7));
-    // (vt.p: its tile and where in it, vis_tile_of; one word for the position's two.)
-    let (tp, key) = (k.p::<i32>(8), k.p::<i32>(10));
-    let gen = k.i(2);
+    let (xs, ys, dead, sk, srow, rvsa, own, wteam) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u32>(3), k.p::<i16>(4), k.p::<i8>(5), k.p::<i8>(6), k.p::<i8>(7));
+    let (tp, stix, key, stwa) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<u16>(11));
+    let np = k.i(2);
     let absent = k.f(3) as u32;
     let itile = (1.0 / (k.f(4) * 8.0)) as f32;
     let (w, h) = (k.i(5), k.i(6));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for q in s0..s1 {
         s(tp, q, vis_tile_of(g(xs, q), g(ys, q), itile, w, h));
-        s(key, q, vis_key(vg, dead, sk, vr, v1, v2, q, gen, absent));
+        let r = g(srow, q) as i32;
+        let st = if r >= 0 && !rvsa.is_null() { g(rvsa, r as usize) as i32 } else { -1 };
+        let mut kv = -1;
+        if g(dead, q) == 0 && g(sk, q) != absent && st >= 0 {
+            let o = g(own, q) as i32;
+            let p1 = if o >= 0 && o < np { o } else { -1 };
+            let mut p2 = -1;
+            let ix = g(stix, q);
+            if ix > 0 && g(stwa, ix as usize) > 0 { let t = g(wteam, q) as i32; if t >= 0 && t < np && t != p1 { p2 = t; } }
+            if p1 >= 0 || p2 >= 0 { kv = (st & 63) | ((p1 + 1) << 8) | ((p2 + 1) << 16); }
+        }
+        s(key, q, kv);
     }
 }
 
@@ -2838,7 +2841,7 @@ fn vis_tile_of(x: i32, y: i32, itile: f32, w: i32, h: i32) -> i32 {
 /// An area's seed for player p: the most steps this stamp (atomic max of
 /// stamp << 6 | steps); its first mark this stamp lists it.
 #[inline(always)]
-unsafe fn vis_seed(seed: *mut i32, list: *mut i32, cnt: *mut i32, p: usize, base: usize, ar: usize, val: i32, stamp: i32) {
+pub(crate) unsafe fn vis_seed(seed: *mut i32, list: *mut i32, cnt: *mut i32, p: usize, base: usize, ar: usize, val: i32, stamp: i32) {
     let cell = &*(seed.add(base + ar) as *const core::sync::atomic::AtomicI32);
     let mut cur = cell.load(core::sync::atomic::Ordering::Relaxed);
     while cur < val {
@@ -2856,32 +2859,26 @@ unsafe fn vis_seed(seed: *mut i32, list: *mut i32, cnt: *mut i32, p: usize, base
     }
 }
 
-/// SIM_KERNEL_VIS_SEED: every unit with a sight key marks the areas under
-/// its +-0.3 tile window for its player and a watching team (vis.useed,
-/// listed in vis.ulist from player * A, vis.ucnt[player] of them). P[9] 1:
-/// from the live columns (the key worked out here), else the snapshot.
-/// Arrays: x (unit.x or vt.x), y, vt.key, vis.useed, vis.ulist, vis.ucnt,
-/// vt.agrid, unit.vsGen, unit.dead, unit.sepKey, unit.vsR, unit.vsP1,
-/// unit.vsP2. P: [0] slots, [1] per job, [2] tile, [3]/[4] grid, [6] areas,
-/// [7] players, [8] stamp, [9] live, [10] generation, [11] absent key.
+/// SIM_KERNEL_VIS_SEED: every unit of the snapshot with a sight key marks the
+/// areas under its +-0.3 tile window for its player and a watching team
+/// (vis.useed, listed in vis.ulist from player * A, vis.ucnt[player] of
+/// them). Arrays: vt.p, -, vt.key, vis.useed, vis.ulist, vis.ucnt, vt.agrid.
+/// P: [0] slots, [1] per job, [2] tile, [3]/[4] grid, [6] areas, [7]
+/// players, [8] stamp.
 #[no_mangle]
 pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (xs, ys, keyp, seed, list, cnt, ag) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
-    let (vg, dead, sk, vr, v1, v2) = (k.p::<i32>(7), k.p::<u8>(8), k.p::<u32>(9), k.p::<i8>(10), k.p::<i8>(11), k.p::<i8>(12));
-    let itile = (1.0 / (k.f(2) * 8.0)) as f32;
+    let _ = ys;
     let (w, h, na, np, stamp) = (k.i(3), k.i(4), k.i(6), k.i(7), k.i(8));
-    let live = k.i(9) == 1;
-    let (gen, absent) = (k.i(10), k.f(11) as u32);
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for q in s0..s1 {
-        let key = if live { vis_key(vg, dead, sk, vr, v1, v2, q, gen, absent) } else { g(keyp, q) };
+        let key = g(keyp, q);
         if key < 0 {
             continue;
         }
-        // (Live: from the units' positions; else the snapshot's vt.p, as vis_tile_of made it.)
-        let tp = if live { vis_tile_of(g(xs, q), g(ys, q), itile, w, h) } else { g(xs, q) };
+        let tp = g(xs, q);
         if tp < 0 {
             continue;
         }
@@ -4552,7 +4549,8 @@ pub unsafe extern "C" fn k_laser_hits(a: u32, chunk: i32) {
     let k = K::new(a);
     let (xs, ys, dead, sep, own, en, uid) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u32>(3), k.p::<i8>(4), k.p::<f32>(5), k.p::<i32>(6));
     let (lzf, acc, lb, ev) = (k.p::<u8>(7), k.p::<f32>(8), k.p::<i32>(9), k.p::<u8>(10));
-    let (head, next, beam, bown, bdmg, hit, cnt) = (k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<f32>(15), k.p::<u8>(16), k.p::<i32>(17));
+    // (lz.tb: the beams over each tile, four slots: laser.rs k_laser_lines.)
+    let (tb, bown, bdmg, hit, cnt) = (k.p::<i32>(11), k.p::<i32>(14), k.p::<f32>(15), k.p::<u8>(16), k.p::<i32>(17));
     // (lz.list: the job's reporting slots from its first slot on, in slot order.)
     let list = k.p::<i32>(18);
     let itile = (1.0 / (k.f(2) * 8.0)) as f32;
@@ -4573,8 +4571,8 @@ pub unsafe extern "C" fn k_laser_hits(a: u32, chunk: i32) {
         if gx < 0 || gy < 0 || gx >= w || gy >= h {
             continue;
         }
-        let mut e = g(head, (gy * w + gx) as usize);
-        if e < 0 {
+        let tb4 = 4 * (gy * w + gx) as usize;
+        if g(tb, tb4) < 0 && g(tb, tb4 + 1) < 0 && g(tb, tb4 + 2) < 0 && g(tb, tb4 + 3) < 0 {
             continue;
         }
         let fl = g(lzf, q);
@@ -4584,9 +4582,12 @@ pub unsafe extern "C" fn k_laser_hits(a: u32, chunk: i32) {
         let ow = g(own, q) as i32;
         let mut dmg = 0f32;
         let mut last = -1i32;
-        while e >= 0 {
-            let b = g(beam, e as usize) as usize;
-            e = g(next, e as usize);
+        for kk in 0..4 {
+            let bv = g(tb, tb4 + kk);
+            if bv < 0 {
+                continue;
+            }
+            let b = bv as usize;
             if g(bown, b) == ow {
                 continue;
             }
@@ -4654,17 +4655,24 @@ pub unsafe extern "C" fn k_adj_flood(a: u32, _chunk: i32) {
     // the pair and owner, in tile order). adj.ocnt[3]: the seeds.)
     let nb = k.i(6).max(0) as usize;
     if nb > 0 {
-        let (scnt, cls4, ccnt) = (k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17));
+        let (scnt, cls4, ccnt, seed8) = (k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<u8>(18));
         ns = 0;
         for b in 0..nb {
-            for q in 0..g(scnt, b).max(0) as usize { s(seed, ns, g(seed, b * 256 + q)); ns += 1; }
+            for q in 0..g(scnt, b).max(0) as usize { s(seed, ns, (b * 256) as i32 + g(seed8, b * 256 + q) as i32); ns += 1; }
         }
-        let mut m = 0usize;
-        for b in 0..nb {
-            for q in 0..g(ccnt, b).max(0) as usize {
-                let (sb, db) = (4 * (b * 256 + q), 4 * m);
-                for j in 0..4 { s(cls4, db + j, g(cls4, sb + j)); }
-                m += 1;
+        // (The portals, appended by the post's jobs in any order: into tile
+        // order, an LSD radix sort of 8-bit passes over the tile, the second
+        // half of adj.cls4 its scratch.)
+        let m = g(ccnt, 0).max(0) as usize;
+        {
+            let (mut src, mut dst) = (cls4, cls4.add(4 * m));
+            for pass in 0..4 {
+                let shift = pass * 8;
+                let mut c = [0usize; 257];
+                for i in 0..m { c[((g(src, 4 * i) as u32 >> shift) & 255) as usize + 1] += 1; }
+                for i in 0..256 { c[i + 1] += c[i]; }
+                for i in 0..m { let bk = ((g(src, 4 * i) as u32 >> shift) & 255) as usize; let o = c[bk]; for j in 0..4 { s(dst, 4 * o + j, g(src, 4 * i + j)); } c[bk] += 1; }
+                core::mem::swap(&mut src, &mut dst);
             }
         }
         for i in 0..m {

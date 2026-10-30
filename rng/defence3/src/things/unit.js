@@ -1306,7 +1306,7 @@ function _structImmuneTable() {
 // A structure hit kernel over the structure tables: head its first 14
 // arrays ('keys': its sort scratch), P its params (the common ones set here), room for `cap` hits.
 // The kernel's lists in the returned record (null: no structure tables).
-function _structHitsRun(fn, head, P, cap) {
+function _structHitsRun(fn, head, P, cap, tail = null) {
     const ST = _ST;
     if (!ST.stab) return null;
     if (!simHeapHas(ST.code)) structTablesRehome();
@@ -1330,6 +1330,7 @@ function _structHitsRun(fn, head, P, cap) {
     for (let j = 0; j < 9; j++) { const T = cls[j] ? _sTables.get(cls[j]) : null; args.push(T ? T.c__ow : null); }
     while (args.length < 140) args.push(null);
     args.push(K.dead, K.looks, K.watch, K.shrine);
+    if (tail) for (const a of tail) args.push(a);
     P[2] = SIM_STRUCT_HIT_LOOKS; P[3] = NO; P[5] = TICK_RATE; P[6] = MAX_THING_LEVEL; P[7] = ST.n; P[8] = imm.length; P[9] = RESOURCE_FIXED_POINT_SCALE;
     simRustDirect(fn, args, P);
     for (let o = 0; o < NO; o++) if (K.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += K.shrine[o]; }
@@ -1341,7 +1342,7 @@ function _structHitsAfter(K, look) {
     const at = t => { const gx = t % GRID_W; return getTileEntityRef(gx, (t - gx) / GRID_W); };
     for (let i = 0, n = K.cnt[1]; i < n; i++) { const tb = at(K.looks[3 * i + 1]); if (tb) look(K.looks[3 * i], tb, K.looks[3 * i + 2] / 1024); }
     if (typeof visCoverOnEntityChanged === 'function') for (let i = 0, n = K.cnt[2]; i < n; i++) { const tb = at(K.watch[i]); if (tb) visCoverOnEntityChanged(tb); }
-    for (let i = 0, n = K.cnt[0]; i < n; i++) { const tb = at(K.dead[i]); if (tb && tb.energy <= 0) destroyBuilding(tb); }
+    structDestroyTiles(K.dead, K.cnt[0], true);
 }
 function _structHitsApply(KC, HC, HA, HT, CH) {
     const S = _simUnitState, C = S.columns, owners = S.owners;
@@ -2526,6 +2527,7 @@ function _simMoveClassTileChanged(k) {
 function simMoveTileTypeChanged(gx, gy) {
     // (The path regions follow the grid at once: pathfinding.js.)
     if (typeof pathRegionsTileChanged === 'function') pathRegionsTileChanged(gx, gy);
+    if (typeof laserWallChanged === 'function') laserWallChanged(gx, gy);
     if (_unitPassOn) { _simMoveWallQ.push(gx, gy); _simMoveWallQMark(gx, gy); return; }
     if (typeof stepCostsChanged === 'function') stepCostsChanged(gx, gy);
     if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H) { _simMoveWallDirty = true; return; }
@@ -2595,10 +2597,8 @@ let _simStructCls = null;
 // _findAutoStructureTarget takes them in (cloud towers with the turrets;
 // the drive-by look ranks them with the buildings).
 function _simStructClass(gx, gy) {
-    const refs = tileEntityRef[gy], e = refs ? refs[gx] : null;
-    if (!e) return 0;
-    const type = tileEntityType[gy][gx];
-    if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) return 0;
+    const e = getTileEntityRef(gx, gy);
+    if (!e || e._stMine) return 0;
     if (e instanceof Tower) return String(e.type || '').startsWith('cloud') ? 5 : 1;
     if (e instanceof Barrack || isSpawnerEntity(e)) return 3;
     const cell = grid[gy] && grid[gy][gx];
@@ -2615,10 +2615,8 @@ function simMoveTileEntityChanged(gx, gy) {
     if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) { if (_unitPassOn) _simClassQ.push(gy * GRID_W + gx); else _simMoveClassTileChanged(gy * GRID_W + gx); }
 }
 function _simMoveStructCode(gx, gy) {
-    const refs = tileEntityRef[gy], e = refs ? refs[gx] : null;
-    if (!e) return -1;
-    const type = tileEntityType[gy][gx];
-    if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) return -1;
+    const e = getTileEntityRef(gx, gy);
+    if (!e || e._stMine) return -1;
     const cell = grid[gy] && grid[gy][gx];
     const cellOwner = cell && cell.item === e ? cell.owner : e.owner;
     return Number.isInteger(e.owner) && e.owner >= 0 && e.owner === cellOwner && e.owner < 127 ? e.owner : -2;
@@ -2644,7 +2642,6 @@ function _simMoveStructs() {
             const code = _simMoveStructCode(gx, gy);
             _simMoveStruct[t] = code; _simStructCls[t] = _simStructClass(gx, gy);
             if (code !== -1) _simMoveStructCount(t, code, 1);
-            if (_simStructCls[t] === 2) _simTrapRefresh(t);
         }
         _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; _simMoveStructDirty.length = 0;
         return;
@@ -2654,7 +2651,7 @@ function _simMoveStructs() {
         const t = dirty[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
         const old = _simMoveStruct[t], code = _simMoveStructCode(gx, gy);
         _simStructCls[t] = _simStructClass(gx, gy);
-        _simTrapRefresh(t);
+        simTrapDirty(gx, gy);
         if (old === code) continue;
         if (old !== -1) _simMoveStructCount(t, old, -1);
         if (code !== -1) _simMoveStructCount(t, code, 1);
@@ -2675,65 +2672,60 @@ function _simMoveStructs() {
 // rebuilt (simTrapResearchDone): no trap tile is visited then. Per unit type
 // its resistances (mv.tres by simUnitTypeIndex, bit kind - 1).
 let _simTrapK = null, _simTrapL = null, _simTrapT = null, _simTrapTG = null, _simTrapRes = null, _simTrapResN = 0;
-const _simTrapDirtyQ = [], _simTrapOwnersDirty = new Set();
+const _simTrapOwnersDirty = new Set();
 let _simTrapTPlayers = 0, _simTrapTLevels = 0;
 const SIM_TRAP_KIND = { lava: [1, 'fire'], poison_puddle: [2, 'poison'], ice_patch: [3, 'ice'], water_puddle: [4, 'water'], sand: [5, 'sand'], mine: [6, ''] };
 const SIM_TRAP_TYPE_OF = [null, 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand'];
 const SIM_TRAP_STAT = [null, ['burnDuration', 'burnDps'], ['poisonDuration', 'poisonDps'], ['freezeDuration', 'freezeDps'], ['wetDuration', null], ['sandDuration', null]];
+// The trap tiles (tfx.rs k_trap_tiles, from the per-tile structure table):
+// their kinds and levels (mv.trapK / mv.trapL), the list of kinds 1-5
+// (tfx.traps; any order: a trap's status is the
+// larger of the old and its own) the tile effects' pass walks; the tiles to
+// look at again (tfx.dirty: construction's end, level changes, placements,
+// removals: simTrapDirty; all after a reset); per stationary type its trap
+// kind (tfx.tkind).
+const _trap = { dirty: null, nd: 0, all: true, list: null, idx: null, hdr: null, tkind: null, tkindN: -1 };
 function _simTrapAlloc() {
     const N = GRID_W * GRID_H;
     if (!_simTrapK || _simTrapK.length !== N) {
         _simTrapK = simHeapArrayAuto(Uint8Array, N); _simTrapL = simHeapArrayAuto(Uint8Array, N);
         simParallelBind('mv.trapK', _simTrapK); simParallelBind('mv.trapL', _simTrapL);
+        _trap.list = simHeapArrayAuto(Int32Array, 65536);
+        _trap.dirty = simHeapArrayAuto(Int32Array, 65536); _trap.hdr = simHeapArrayAuto(Int32Array, 4);
     }
     _simTrapK.fill(0); _simTrapL.fill(0);
-    _simTrapChunks.clear();
+    _trap.hdr[0] = 0; _trap.hdr[1] = _trap.list.length; _trap.hdr[2] = 0; _trap.nd = 0; _trap.all = true;
     _simTrapOwnersDirty.add(-1);
 }
-// The chunks with a trap the kernel applies (kinds 1-5), and how many such
-// tiles each has: the units around them are the most that take a status
-// record in the movement kernel (_simTrapUnitsBound).
-const _simTrapChunks = new Map();
-let _simTrapNbStamp = null, _simTrapNbEpoch = 0;
-function _simTrapChunkOf(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W; return CHUNK_SIZE === 1 ? t : Math.floor(gy / CHUNK_SIZE) * CHUNKS_W + Math.floor(gx / CHUNK_SIZE); }
-// Units in the chunks with a trap and those beside them (a unit meets its
-// floor where it stood at the tick's start, or a tile on after the
-// occupancy's swaps and pushes): from the spatial counts, O(trap chunks).
+// Units on the trap tiles (this tick's index): the most that take a status
+// record in the tile effects' pass (tfx.rs k_trap_bound).
 function _simTrapUnitsBound() {
-    if (!_simTrapK || !SIM_TRAP_KERNEL || !_simTrapChunks.size || !spatialUnitsComplex) return 0;
-    const nch = CHUNKS_W * CHUNKS_H, C = spatialUnitsComplex, st = spatialUnitsComplexStridePerChunk, np = spatialUnitsComplexPlayerCount;
-    if (!_simTrapNbStamp || _simTrapNbStamp.length !== nch) { _simTrapNbStamp = new Int32Array(nch); _simTrapNbEpoch = 0; }
-    if (++_simTrapNbEpoch === 0x7fffffff) { _simTrapNbStamp.fill(0); _simTrapNbEpoch = 1; }
-    const M = _simTrapNbStamp, ep = _simTrapNbEpoch;
-    let n = 0;
-    for (const c of _simTrapChunks.keys()) {
-        const cx = c % CHUNKS_W, cy = (c - cx) / CHUNKS_W;
-        for (let y = Math.max(0, cy - 1); y <= Math.min(CHUNKS_H - 1, cy + 1); y++) for (let x = Math.max(0, cx - 1); x <= Math.min(CHUNKS_W - 1, cx + 1); x++) {
-            const k = y * CHUNKS_W + x;
-            if (M[k] === ep) continue;
-            M[k] = ep;
-            for (let o = 0, b = k * st; o < np; o++) n += C[b + o];
-        }
-    }
-    return n;
+    if (!_simTrapK || !_trap.hdr || !_trap.hdr[0] || !_sxBySlot || !_sxPar) return 0;
+    const P = _trapP;
+    P[0] = _trap.hdr[0]; P[1] = _sxEpoch;
+    simRustDirect('k_trap_bound', [_trap.list, _sxPar.stamp, _sxPar.cnt, _trap.hdr], P);
+    return _trap.hdr[3];
 }
-function simTrapDirty(gx, gy) { if (_simTrapK && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simTrapDirtyQ.push(gy * GRID_W + gx); }
+const _trapP = new Float64Array(8);
+function simTrapDirty(gx, gy) {
+    if (!_simTrapK || !(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
+    if (_trap.nd < _trap.dirty.length) _trap.dirty[_trap.nd++] = gy * GRID_W + gx; else _trap.all = true;
+}
 function simTrapResearchDone(owner) { _simTrapOwnersDirty.add(Number.isInteger(owner) ? owner : -1); }
-function _simTrapRefresh(t) {
-    if (!_simTrapK) return;
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, cell = grid[gy] && grid[gy][gx], item = cell ? cell.item : null;
-    let k = 0, l = 0;
-    const spec = item && !item.underConstruction ? SIM_TRAP_KIND[item.type] : null;
-    if (spec && tileEntityRef[gy] && tileEntityRef[gy][gx] === item) {
-        k = spec[0];
-        l = Math.max(1, Math.min(255, clampThingLevel(getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1)) || 1)));
-    }
-    const was = _simTrapK[t];
-    if ((was >= 1 && was <= 5) !== (k >= 1 && k <= 5)) {
-        const c = _simTrapChunkOf(t), m = (_simTrapChunks.get(c) || 0) + (k >= 1 && k <= 5 ? 1 : -1);
-        if (m > 0) _simTrapChunks.set(c, m); else _simTrapChunks.delete(c);
-    }
-    _simTrapK[t] = k; _simTrapL[t] = l;
+// Per stationary type its trap kind (made again as types appear).
+function _simTrapKinds() {
+    const n = _stationaryTypes.length;
+    if (_trap.tkind && _trap.tkindN === n && simHeapHas(_trap.tkind)) return _trap.tkind;
+    const K = _trap.tkind = simHeapArrayAuto(Uint8Array, Math.max(64, n));
+    for (let ty = 0; ty < n; ty++) { const s = SIM_TRAP_KIND[_stationaryTypes[ty]]; K[ty] = s ? s[0] : 0; }
+    _trap.tkindN = n;
+    return K;
+}
+// The trap tiles and tables for the tile effects' pass (null: none kept).
+function simTrapTiles() {
+    if (!_simTrapK || !_trap.list) return null;
+    _simTrapStep();
+    return { n: _trap.hdr[0], list: _trap.list, k: _simTrapK, l: _simTrapL, t: _simTrapT, tg: _simTrapTG, tres: _simTrapRes, players: _simTrapTPlayers, levels: _simTrapTLevels, types: _simTrapResN };
 }
 // One owner's strengths: kinds 1-5 at every level, from its precomputed
 // stats map (the entries applyStatusEffect reads), the defaults where a stat
@@ -2760,9 +2752,19 @@ function _simTrapStep() {
     if (!_simTrapK) return;
     if (!SIM_TRAP_KERNEL) { simParallelBind('mv.trapK', null); return; }
     if (_simParReg['mv.trapK'] !== _simTrapK) simParallelBind('mv.trapK', _simTrapK);
-    const q = _simTrapDirtyQ;
-    for (let i = 0; i < q.length; i++) _simTrapRefresh(q[i]);
-    q.length = 0;
+    // The tiles to look at again (all after a reset; the list grown and all
+    // again when it had no room).
+    for (let guard = 0; guard < 8 && (_trap.nd > 0 || _trap.all) && _ST.code; guard++) {
+        const P = _trapP;
+        P[0] = _trap.nd; P[1] = _stationaryTypes.length; P[2] = GRID_W * GRID_H; P[3] = _trap.all ? 1 : 0;
+        if (_trap.all) { _simTrapK.fill(0); _simTrapL.fill(0); _trap.hdr[0] = 0; }
+        simRustDirect('k_trap_tiles', [_trap.dirty, _ST.code, _ST.uc, _ST.brain, _simTrapKinds(), _simTrapK, _simTrapL, null, _trap.list, _trap.hdr], P);
+        _trap.nd = 0; _trap.all = false;
+        if (_trap.hdr[2]) {
+            const L = simHeapArrayAuto(Int32Array, _trap.list.length * 2); L.set(_trap.list); simHeapFree(_trap.list); _trap.list = L;
+            _trap.hdr[1] = L.length; _trap.hdr[2] = 0; _trap.all = true;
+        }
+    }
     // The strength table (all owners when its size changed or after a reset).
     const NP = Math.max(1, players.length), L = Math.min(255, MAX_THING_LEVEL + 1);
     if (!_simTrapT || _simTrapTPlayers !== NP || _simTrapTLevels !== L) {
@@ -2973,8 +2975,7 @@ function simMoveRun() {
         for (let pid = 0; pid < NPa; pid++) _simMoveRem[pid] = _astarAtPassStart ? (_astarAtPassStart[pid] ?? 0) : _getPlayerAstarBudgetRemaining(pid) + _fromFixedResourceUnits(_pendingMovementAstarFixed[pid] || 0);
         if (!_simMoveChFix || _simMoveChFix.length < chunks * (NPa + 1)) { _simMoveChFix = simHeapArrayAuto(Float64Array, Math.max(64, chunks * (NPa + 1) * 2)); simParallelBind('mv.chFix', _simMoveChFix); }
         if (!_simMoveChUse || _simMoveChUse.length < chunks * NPa * NT) { _simMoveChUse = simHeapArrayAuto(Float64Array, Math.max(256, chunks * NPa * NT * 2)); simParallelBind('mv.chUse', _simMoveChUse); }
-        const V = typeof _visCover !== 'undefined' ? _visCover : null;
-        P[40] = spatialEpoch; P[41] = V ? V.gen : 0; P[42] = !V || V.syncedTick < 0 || V.adm !== areaDistanceMatrix ? 1 : 0;
+        P[40] = spatialEpoch;
         P[43] = NPa; P[44] = NT; P[45] = RESOURCE_FIXED_POINT_SCALE;
     P[55] = _simTrapResN; P[56] = _simTrapTLevels; P[57] = _simTrapTPlayers;
     }

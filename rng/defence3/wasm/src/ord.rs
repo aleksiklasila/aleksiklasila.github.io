@@ -582,36 +582,37 @@ pub(crate) struct SHit {
     pub team: i8,
     pub look: i32,
 }
-struct SCtx {
+pub(crate) struct SCtx {
     stab: *mut u8, rrow: *mut i32, stval: *mut f64, brain: *mut i32, imm: *mut u8,
     dead_l: *mut i32, look_l: *mut i32, watch_l: *mut i32, shrine: *mut f64,
     nimm: i32, nown: i32, tiles: i32, looks: usize, scale: f64,
     nd: usize, nl: usize, nw: usize,
 }
 impl SCtx {
-    unsafe fn new(k: &K) -> SCtx {
+    pub(crate) unsafe fn new(k: &K) -> SCtx {
         SCtx { stab: k.p::<u8>(14), rrow: k.p::<i32>(15), stval: k.p::<f64>(16), brain: k.p::<i32>(17), imm: k.p::<u8>(18),
             dead_l: k.p::<i32>(OUT0), look_l: k.p::<i32>(OUT0 + 1), watch_l: k.p::<i32>(OUT0 + 2), shrine: k.p::<f64>(OUT0 + 3),
             looks: k.i(2).max(0) as usize, nown: k.i(3).max(0), tiles: k.i(7).max(0), nimm: k.i(8).max(0), scale: k.f(9), nd: 0, nl: 0, nw: 0 }
     }
-    unsafe fn done(&self, k: &K) {
+    pub(crate) unsafe fn done(&self, k: &K) {
         let cnt = k.p::<i32>(19);
         s(cnt, 0, self.nd as i32); s(cnt, 1, self.nl as i32); s(cnt, 2, self.nw as i32);
     }
-    unsafe fn hit(&mut self, k: &K, h: &SHit) {
+    /// (True: it hit a structure with energy at its tile.)
+    pub(crate) unsafe fn hit(&mut self, k: &K, h: &SHit) -> bool {
         const UNSET: i32 = i32::MIN;
         let t = h.t;
-        if t < 0 || t >= self.tiles { return; }
+        if t < 0 || t >= self.tiles { return false; }
         let tu = t as usize;
         let cls = g(self.stab, tu) as usize;
-        if cls == 0 || cls > 9 { return; }
+        if cls == 0 || cls > 9 { return false; }
         let b = CLS0 + CLSW * (cls - 1);
         let (en, stt) = (k.p::<f64>(b), k.p::<i32>(b + 1));
         let r = g(self.rrow, tu);
-        if r < 0 { return; }
+        if r < 0 { return false; }
         let r = r as usize;
         let before = g(en, r);
-        if !(before > 0.0) || g(stt, r) != t { return; }
+        if !(before > 0.0) || g(stt, r) != t { return false; }
         let ty = (g(self.brain, tu) & 0xffff) as usize;
         let im = if ty > 0 && (ty as i32) < self.nimm { g(self.imm, ty) as u32 } else { 0 };
         let fx = h.fx & !im;
@@ -646,6 +647,7 @@ impl SCtx {
             self.nl += 1;
         }
         if e <= 0.0 { s(self.dead_l, self.nd, t); self.nd += 1; }
+        true
     }
 }
 
@@ -1048,7 +1050,8 @@ fn stack_level(x: f64, max: i32) -> i32 {
 /// (Int32, three a row), upgrademaxEnergy, the maxEnergy override _mxOv, the
 /// preComputedBase override's maxEnergy _ovMx (Float64, NaN none), the
 /// preComputedEffective override's vision steps _ovVs (Int8, -128 none), the
-/// table's count of maxEnergy overrides (an Int32 word). Flags: 0 unset, 1
+/// table's count of maxEnergy overrides (an Int32 word), watched (Int32),
+/// watchedByTeam (Int8; the visibility seed reads them). Flags: 0 unset, 1
 /// false, 2 true; Int32 unset i32::MIN, Int8 -128, Float64 NaN.
 const ADJ_CLASSES: usize = 9;
 
@@ -1058,10 +1061,10 @@ fn job(chunk: i32, per: i32, n: i32) -> (usize, usize) {
     let b = (a as i64 + per.max(0) as i64).min(n.max(0) as i64) as usize;
     (a, b)
 }
-const ADJ_COLS: usize = 25;
+const ADJ_COLS: usize = 27;
 
 #[inline(always)]
-unsafe fn col<T>(tab: *const i32, c: usize, j: usize) -> *mut T {
+pub(crate) unsafe fn col<T>(tab: *const i32, c: usize, j: usize) -> *mut T {
     waddr(*tab.add(c * ADJ_COLS + j) as u32) as *mut T
 }
 
@@ -1175,7 +1178,7 @@ pub unsafe extern "C" fn k_adj_apply(a: u32, chunk: i32) {
         // attackRange; boost levels; researched maximum level.)
         let otx = if typed { (oi * nt + kb) as usize } else { 0 };
         let rmax = if typed { g(rml, otx) } else { maxl };
-        let (rme, rvi, rat, blv) = if typed { (g(rlv, 3 * otx) as usize, g(rlv, 3 * otx + 1) as usize, g(rlv, 3 * otx + 2) as usize, g(bl, otx)) } else { (0, 0, 0, 0) };
+        let (rme, rvi, rat, blv) = if typed { (g(rlv, 4 * otx) as usize, g(rlv, 4 * otx + 1) as usize, g(rlv, 4 * otx + 2) as usize, g(bl, otx)) } else { (0, 0, 0, 0) };
         let mx_at = |lvl: i32| -> f64 { g(smxe, ((kb as usize * l1) + lvl.max(1).min(maxl) as usize) * r1 + rme) };
         let vis_at = |lvl: i32| -> i32 {
             let lv = (if blv > 0 { (lvl.max(1) + blv).min(maxl) } else { lvl.max(1).min(maxl) }) as usize;
@@ -1283,23 +1286,25 @@ unsafe fn adj_sig(code: *const u8, own: *const i32, uc: *const u8, brain: *const
 /// P[1] 256-tile blocks a job): per block, every tile's signature into
 /// adj.sig (adj_sig); the seeds (P[3] all: every tile with a structure;
 /// else the dirty tiles, adj.dflag, their flags and adj.dblk counts cleared)
-/// at adj.seed[block * 256..], adj.scnt[block] of them; the operational cloud
-/// portals (a tower, st.stab 1, whose type is a cloud: adj.tyf bit 0; its
-/// pair id + 1 in bits 8..) at adj.cls4[4 * (block * 256)..] (tile, owner,
-/// pair id, alive: energy > 0), adj.ccnt[block] of them; adj.pflag[job * 16]
+/// as offsets in the block (u8) at adj.seed8[block * 256..], adj.scnt[block]
+/// of them; the operational cloud portals (a tower, st.stab 1, whose type is
+/// a cloud: adj.tyf bit 0; its pair id + 1 in bits 8..) appended to adj.cls4
+/// (tile, owner, pair id, alive: energy > 0; room P[6], adj.ccnt[0] their
+/// count, cleared before; any order: the flood sorts them); adj.pflag[job * 16]
 /// 1 when a seed holds a spawner or a cloud (paths change: adj.tyf bit 1 or
 /// st.stab 4..9). Arrays: st.code, st.own, st.uc, st.brain, st.stab,
-/// st.rrow, st.val, adj.ctab, adj.sig, adj.dflag, adj.dblk, adj.seed,
+/// st.rrow, st.val, adj.ctab, adj.sig, adj.dflag, adj.dblk, adj.seed8,
 /// adj.scnt, adj.tyf, adj.cls4, adj.ccnt, adj.pflag. P: [0] blocks, [1]
-/// blocks a job, [2] tiles, [3] all, [4] ST_OWNER_NONE, [5] types.
+/// blocks a job, [2] tiles, [3] all, [4] ST_OWNER_NONE, [5] types, [6]
+/// portal room.
 #[no_mangle]
 pub unsafe extern "C" fn k_adj_post(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (code, own, uc, brain, stab, rrow, val) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<i32>(5), k.p::<f64>(6));
     let tab = k.p::<i32>(7) as *const i32;
-    let (sig, dflag, dblk, seed, scnt, tyf, cls4, ccnt, pflag) = (k.p::<i32>(8), k.p::<u8>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12),
+    let (sig, dflag, dblk, seed, scnt, tyf, cls4, ccnt, pflag) = (k.p::<i32>(8), k.p::<u8>(9), k.p::<i32>(10), k.p::<u8>(11), k.p::<i32>(12),
         k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<i32>(16));
-    let (n, all, none, nt) = (k.i(2).max(0) as usize, k.i(3) != 0, k.i(4), k.i(5));
+    let (n, all, none, nt, ccap) = (k.i(2).max(0) as usize, k.i(3) != 0, k.i(4), k.i(5), k.i(6));
     let (b0, b1) = job(chunk, k.i(1), k.i(0));
     let mut paths = 0;
     for b in b0..b1 {
@@ -1315,17 +1320,22 @@ pub unsafe extern "C" fn k_adj_post(a: u32, chunk: i32) {
             let tf = if ty >= 0 && ty < nt { g(tyf, ty as usize) } else { 0 };
             let is_seed = if all { cd != 0 } else if dirty_block && g(dflag, t) != 0 { s(dflag, t, 0); true } else { false };
             if is_seed {
-                s(seed, b * 256 + ns, t as i32); ns += 1;
+                s(seed, b * 256 + ns, (t - b * 256) as u8); ns += 1;
                 if (c >= 4 && c as usize <= ADJ_CLASSES) || (c == 1 && tf & 2 != 0) { paths = 1; }
             }
             if c == 1 && tf & 1 != 0 && sg >= 0 {
-                let e = 4 * (b * 256 + nc);
-                s(cls4, e, t as i32); s(cls4, e + 1, g(own, t)); s(cls4, e + 2, (tf >> 8) - 1); s(cls4, e + 3, (g(val, t) > 0.0) as i32);
+                // (Appended, any order: the flood sorts them by tile.)
+                let at = (*(ccnt as *const core::sync::atomic::AtomicI32)).fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if at < ccap {
+                    let e = 4 * at as usize;
+                    s(cls4, e, t as i32); s(cls4, e + 1, g(own, t)); s(cls4, e + 2, (tf >> 8) - 1); s(cls4, e + 3, (g(val, t) > 0.0) as i32);
+                }
                 nc += 1;
             }
         }
         if dirty_block { s(dblk, b, 0); }
-        s(scnt, b, ns as i32); s(ccnt, b, nc as i32);
+        s(scnt, b, ns as i32);
+        let _ = nc;
     }
     s(pflag, chunk.max(0) as usize * 16, paths);
 }

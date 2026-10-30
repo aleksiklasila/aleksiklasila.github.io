@@ -30,7 +30,51 @@ const TILE_ENTITY_GOLDMINE = 'goldmine';
 const TILE_ENTITY_ASTARMINE = 'astarmine';
 let tileEntityType = []; // 2D lookup [y][x] -> string type
 let tileEntityRef = [];  // 2D lookup [y][x] -> entity reference
-let _activeTileEntities = new Set();
+// The tile entities: the tabled structures and mines in tile order (from the
+// per-tile table, W2), then any outside the tables (the page's views, kept
+// here). A new one a new lookup (initTileEntityLookup): its identity tells
+// the indexes the world was replaced.
+class TileEntitySet {
+    constructor() { this._loose = new Set(); this._ver = -1; this._tver = -1; this._list = null; this._tiles = null; this._cnt = null; }
+    // (Tabled at its tile: the table holds it.)
+    _tabled(e) { return !!e && _ST.n === GRID_W * GRID_H && !!_ST.ctab && e._stT >= 0 && getTileEntityRef(e.gx, e.gy) === e; }
+    add(e) { if (e && !this._tabled(e)) this._loose.add(e); return this; }
+    delete(e) { return this._loose.delete(e); }
+    has(e) { return !!e && (this._loose.has(e) || this._tabled(e)); }
+    get size() { return this._tabledList().length + this._loose.size; }
+    // The tabled ones' tiles in tile order (reg.rs k_tile_occupied: this._tiles,
+    // how many returned), made again when the tile entities changed.
+    tileList() {
+        const N = GRID_W * GRID_H;
+        if (_ST.n !== N || !_ST.ctab) return 0;
+        if (this._tver === _tileEntityVersion && this._tiles) return this._cnt[0];
+        // (Room: every tabled row at most, no more than the tiles.)
+        let rows = 0;
+        for (const T of _sTables.values()) rows += T.cap;
+        const room = Math.min(N, Math.max(1024, rows)), mk = (n) => typeof simSharedArray === 'function' ? simSharedArray(Int32Array, n) : new Int32Array(n);
+        if (!this._tiles || this._tiles.length < room) { this._tiles = mk(room); this._cnt = mk(4); }
+        // (The page's world, no kernels on its thread: a plain pass.)
+        if (typeof _simWasmX !== 'undefined' && _simWasmX !== null && simHeapHas(_ST.ctab) && simHeapHas(this._tiles) && simHeapHas(this._cnt)) { _teP[0] = N; _teP[1] = this._tiles.length; simRustDirect('k_tile_occupied', [_ST.ctab, this._tiles, this._cnt], _teP); }
+        else { const C = _ST.ctab, Tl = this._tiles, cap = Tl.length; let m = 0; for (let t = 0; t < N && m < cap; t++) if (C[t] !== 0) Tl[m++] = t; this._cnt[0] = m; }
+        this._tver = _tileEntityVersion;
+        return this._cnt[0];
+    }
+    // The tabled ones in tile order (their objects), made again when the tile entities changed.
+    _tabledList() {
+        const N = GRID_W * GRID_H;
+        if (_ST.n !== N || !_ST.ctab) return _NO_TILE_ENTITIES;
+        if (this._ver === _tileEntityVersion && this._list) return this._list;
+        const n = this.tileList(), out = new Array(n), Tl = this._tiles;
+        let w = 0;
+        for (let i = 0; i < n; i++) { const t = Tl[i], gx = t % GRID_W, e = getTileEntityRef(gx, (t - gx) / GRID_W); if (e) out[w++] = e; }
+        out.length = w;
+        this._list = out; this._ver = _tileEntityVersion;
+        return out;
+    }
+    *[Symbol.iterator]() { yield* this._tabledList(); yield* this._loose; }
+}
+const _NO_TILE_ENTITIES = Object.freeze([]), _teP = new Float64Array(2);
+let _activeTileEntities = new TileEntitySet();
 let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
 // Tiles whose adjacency is to be worked out again (the adjacency post kernel
 // takes them all at a batch, ord.rs k_adj_post): a flag per tile, their count, the lowest flagged tile (nothing below it is flagged)
@@ -743,17 +787,19 @@ function structTableReset() {
     T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
     T.mineRegN = 0; if (T.mineSum) { T.mineSum.fill(0); T.mineRc.fill(0); T.mineRegAt.fill(0); }
     structCountByOwner.fill(0);
-    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rtab = T.stab = T.rrow = T.rcnt = T.cnt = null; }
-    else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rtab.fill(0); T.stab.fill(0); T.rrow.fill(-1); T.rcnt.fill(0); }
+    if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rtab = T.stab = T.rrow = T.ctab = T.rcnt = T.cnt = null; }
+    else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rtab.fill(0); T.stab.fill(0); T.rrow.fill(-1); T.ctab.fill(0); T.rcnt.fill(0); }
 }
 function _stRegion(t) { const gx = t % GRID_W, gy = (t - gx) / GRID_W, rt = SNAP_REGION_TILES; return Math.floor(gy / rt) * _ST.rw + Math.floor(gx / rt); }
-function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } if (T.cnt[t]) _stOwnCount(t, -1); T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; T.brain[t] = 0; T.rtab[t] = 0; T.stab[t] = 0; T.rrow[t] = -1; }
+function _stClear(t) { const T = _ST; if (T.code[t] !== 0) { T.rcnt[_stRegion(t)]--; if (T.code[t] >= 0x66) _stMineDel(t); } if (T.cnt[t]) _stOwnCount(t, -1); T.code[t] = 0; T.own[t] = 0; T.uc[t] = 0; T.val[t] = 0; T.tim[t] = 0; T.brain[t] = 0; T.rtab[t] = 0; T.stab[t] = 0; T.rrow[t] = -1; T.ctab[t] = 0; }
 // The per-tile rally index and every table's columns into the current wasm
 // heap (a restarted worker's heap is new; the kernels read only it).
 function structTablesRehome() {
+    if (typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    _teLogRoom();
     const T = _ST;
-    if (T.code && typeof simSharedArray === 'function') for (const k of ['code', 'own', 'uc', 'val', 'tim', 'brain', 'rtab', 'stab', 'rrow']) {
-        const was = T[k], a = simSharedArray(was.constructor, T.n);
+    if (T.code && typeof simSharedArray === 'function') for (const k of ['code', 'own', 'uc', 'val', 'tim', 'brain', 'rtab', 'stab', 'rrow', 'ctab', 'cnt', 'rcnt']) {
+        const was = T[k], a = simSharedArray(was.constructor, was.length);
         a.set(was); T[k] = a;
     }
     for (const t of _sTables.values()) {
@@ -763,7 +809,7 @@ function structTablesRehome() {
 }
 // The rally structures' classes (their tables' rally fields: the rally kernel's,
 // ord.rs RALLY_TABLES of them, in this order).
-let _stRallyCls = null, _stRallyIx = null, _stStatusIx = null;
+let _stRallyCls = null, _stRallyIx = null, _stStatusIx = null, _stAllCls = null, _stAllIx = null;
 function structRallyClasses() {
     if (_stRallyCls) return _stRallyCls;
     _stRallyCls = [typeof Barrack !== 'undefined' ? Barrack : null, typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
@@ -772,6 +818,9 @@ function structRallyClasses() {
     _stRallyIx = new Map(); _stRallyCls.forEach((C, i) => { if (C) _stRallyIx.set(C, i + 1); });
     // (The status classes: renderer.js STRUCT_STATUS_CLASSES, the per-tile stab.)
     _stStatusIx = new Map(); [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls].forEach((C, i) => { if (C) _stStatusIx.set(C, i + 1); });
+    // (Every tabled class, mines too: the per-tile ctab, getTileEntityRef.)
+    _stAllCls = [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls, typeof GoldMine !== 'undefined' ? GoldMine : null, typeof AstarMine !== 'undefined' ? AstarMine : null];
+    _stAllIx = new Map(); _stAllCls.forEach((C, i) => { if (C) _stAllIx.set(C, i + 1); });
     return _stRallyCls;
 }
 // Tile (gx, gy) held `prev` and now holds `ref` (null: nothing).
@@ -786,15 +835,16 @@ function structTableSet(gx, gy, prev, ref) {
         // no per-tick object walk or full-grid mirror for tower queries.
         const alloc = (Type, count) => typeof simSharedArray === 'function' ? simSharedArray(Type, count) : new Type(count);
         T.n = n; T.code = alloc(Uint8Array, n); T.own = alloc(Int32Array, n); T.uc = alloc(Uint8Array, n); T.val = alloc(Float64Array, n); T.tim = alloc(Float64Array, n); T.brain = alloc(Int32Array, n);
-        T.rtab = alloc(Uint8Array, n); T.stab = alloc(Uint8Array, n); T.rrow = alloc(Int32Array, n); T.rrow.fill(-1);
-        T.cnt = new Uint8Array(n);
-        T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = new Uint8Array(T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
+        T.rtab = alloc(Uint8Array, n); T.stab = alloc(Uint8Array, n); T.rrow = alloc(Int32Array, n); T.rrow.fill(-1); T.ctab = alloc(Uint8Array, n);
+        T.cnt = alloc(Uint8Array, n);
+        T.rw = Math.ceil(GRID_W / SNAP_REGION_TILES); T.rcnt = alloc(Uint8Array, T.rw * Math.ceil(GRID_H / SNAP_REGION_TILES));
     }
     _stClear(t);
     if (ref && ref._sr >= 0) {
         structRallyClasses(); T.rrow[t] = ref._sr;
         const j = _stRallyIx.get(ref.constructor); if (j) T.rtab[t] = j;
         const k = _stStatusIx.get(ref.constructor); if (k) T.stab[t] = k;
+        const c = _stAllIx.get(ref.constructor); if (c) T.ctab[t] = c;
     }
     if (!joins) return;
     // (An entity moved to another tile leaves its old one.)
@@ -878,14 +928,14 @@ const _STF_BUILDING = 'i:_stT i:_li c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i
     + 'i:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
     + 'r:preComputedPotential i:burning f:burnTickDamage i:poisoned f:poisonTickDamage i:frozen f:iceTickDamage i:wet i:sandy i:watched c:watchedByTeam '
     + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:upgrademaxEnergy n:_mxOv n:_ovMx c:_ovVs';
-const _STF_SPAWNER = 'n:_spt b:queueEnabled r:spawnQueue N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
+const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'i:_stT i:_li n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
-    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle r:connectedLasers c:laserState n:laserTimer r:_laserLinkLevel c:_ptK i:_ptV r:_lzRow r:_lzCol',
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
     CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
     BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
-    ResearchSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER + ' b:autoResearchEnabled r:researchTask b:isResearching',
+    ResearchSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER + ' b:autoResearchEnabled',
     FloorItem: _STF_BUILDING + ' n:damage',
     GoldMine: _STF_MINE + ' n:maxGold', AstarMine: _STF_MINE + ' n:maxAstar'
 };
@@ -965,8 +1015,9 @@ function _sDerivedReconcile(T,e) {
     for(const name of T.derived){const map=T.unique[name];if(!map.size)continue;const v=map.get(e._sr);if(v!==undefined&&Object.is(v,_sDerivedValue(e,name))){map.delete(e._sr);_sOvSync(T,e._sr,name);}}
     stationaryBrainChanged(e);
 }
-// Override columns (not snapshot keys: the derived names are).
-const _S_OV_COLS = new Set(['_mxOv', '_ovMx', '_ovVs']);
+// Override columns (not snapshot keys: the derived names are) and the
+// lasers' derived beam inputs (laserCheck makes them again).
+const _S_OV_COLS = new Set(['_mxOv', '_ovMx', '_ovVs', '_lzLv', '_lzUc']);
 // The maxEnergy overrides of a table, as a Map of row -> value over the heap
 // column _mxOv (NaN none) and a heap count word (T.mxOvN[0]): the adjacency
 // kernel reads and clears them (ord.rs k_adj_apply).
@@ -1317,9 +1368,10 @@ function structTableKeys(e, keys) {
 
 function initTileEntityLookup() {
     structTableReset();
-    tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
-    tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
-    _activeTileEntities = new Set();
+    // (The grids hold only structures outside the tables (the page's views):
+    // made at the first such one.)
+    tileEntityType = null; tileEntityRef = null;
+    _activeTileEntities = new TileEntitySet();
     _tileEntityVersion++;
     tileEntityIndexesReset();
     requestAdjacencyRecalc();
@@ -1333,14 +1385,21 @@ function initTileEntityLookup() {
 // tile order, so they are the same on every peer whatever the history.
 const TE_LOG_CAP = 262144;
 let _teLog = new Uint32Array(0), _teLogBase = 0, _teLogEnd = 0, _tileEntityEpoch = 1;
+// (A rolling suffix of TE_LOG_CAP entries, in the wasm heap where it is up:
+// the destroy kernel appends to it, dst.rs. Dropping the entire log at
+// capacity also invalidated current readers, forcing all structure/work-site
+// indexes to rebuild on the same tick.)
+function _teLogRoom() {
+    const heap = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null;
+    if (_teLog.length === TE_LOG_CAP && (!heap || simHeapHas(_teLog))) return _teLog;
+    const next = heap ? simSharedArray(Uint32Array, TE_LOG_CAP) : new Uint32Array(TE_LOG_CAP);
+    // (Entries keep their places: the ring's length is the same once full size.)
+    if (_teLog.length === TE_LOG_CAP) next.set(_teLog); else for (let i = _teLogBase; i < _teLogEnd; i++) next[i & (TE_LOG_CAP - 1)] = _teLog[i & (_teLog.length - 1)];
+    _teLog = next;
+    return next;
+}
 function noteTileEntityChanged(gx, gy) {
-    // Grow small worlds on demand, then retain a bounded rolling suffix.
-    // Dropping the entire log at capacity also invalidated current readers,
-    // forcing all structure/work-site indexes to rebuild on the same tick.
-    if (_teLog.length < TE_LOG_CAP && _teLogEnd === _teLog.length) {
-        const next = new Uint32Array(Math.min(TE_LOG_CAP, Math.max(256, _teLog.length * 2)));
-        next.set(_teLog); _teLog = next;
-    }
+    if (_teLog.length !== TE_LOG_CAP) _teLogRoom();
     _teLog[_teLogEnd & (_teLog.length - 1)] = gy * GRID_W + gx;
     _teLogEnd++;
     _teLogBase = Math.max(0, _teLogEnd - _teLog.length);
@@ -1471,10 +1530,9 @@ let _structuresByAreaCells = null;
 const _structuresByAreaCursor = { epoch: -1, pos: 0 };
 // The structure on tile t for getStructuresByArea (not a mine), or null.
 function _structureAtTile(t) {
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, refs = tileEntityRef[gy], e = refs ? refs[gx] : null;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
     if (!e || e.gx !== gx || e.gy !== gy) return null;
-    const type = tileEntityType[gy][gx];
-    return type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE ? null : e;
+    return e._stMine ? null : e;
 }
 function getStructuresByArea() {
     const same = _structuresByArea && _structuresByAreaSet === _activeTileEntities && _structuresByAreaCells === gridCellsByArea;
@@ -1493,10 +1551,8 @@ function getStructuresByArea() {
     if (!same) tileEntityChangesSince(_structuresByAreaCursor);
     let byArea = new Array(gridCellsByArea.length);
     for (let e of _activeTileEntities) {
-        let gx = e.gx, gy = e.gy, refs = tileEntityRef[gy];
-        if (!refs || refs[gx] !== e) continue;
-        let type = tileEntityType[gy][gx];
-        if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) continue;
+        let gx = e.gx, gy = e.gy;
+        if (getTileEntityRef(gx, gy) !== e || e._stMine) continue;
         let area = getAreaIdAtTile(gx, gy);
         if (area < 0) continue;
         (byArea[area] || (byArea[area] = [])).push(e);
@@ -1525,10 +1581,8 @@ function _getHostileStructureSat(owner) {
     let stride = GRID_W + 1;
     let sat = entry && entry.sat.length === stride * (GRID_H + 1) ? entry.sat.fill(0) : new Int32Array(stride * (GRID_H + 1));
     for (let e of _activeTileEntities) {
-        let gx = e.gx, gy = e.gy, refs = tileEntityRef[gy];
-        if (!refs || refs[gx] !== e) continue;
-        let type = tileEntityType[gy][gx];
-        if (type === TILE_ENTITY_GOLDMINE || type === TILE_ENTITY_ASTARMINE) continue;
+        let gx = e.gx, gy = e.gy;
+        if (getTileEntityRef(gx, gy) !== e || e._stMine) continue;
         let cell = grid[gy] && grid[gy][gx];
         let cellOwner = cell && cell.item === e ? cell.owner : e.owner;
         if (!(e.owner === owner && cellOwner === owner)) sat[(gy + 1) * stride + gx + 1]++;
@@ -1583,14 +1637,15 @@ function findCellItemRowStart(list, gy) {
 
 function setTileEntity(gx, gy, type, ref) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
-    if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
-    let prevRef = tileEntityRef[gy][gx];
+    let prevRef = getTileEntityRef(gx, gy);
     if (prevRef && prevRef !== ref) _activeTileEntities.delete(prevRef);
     // (A removed structure placed again takes a row.)
     if (ref && ref._sr !== undefined) structRowAttach(ref);
     structTableSet(gx, gy, prevRef, ref || null);
-    tileEntityType[gy][gx] = type || TILE_ENTITY_NONE;
-    tileEntityRef[gy][gx] = ref || null;
+    // (Not tabled (the page's views): the grids.)
+    const tabled = !!ref && _ST.n === GRID_W * GRID_H && _ST.ctab && _ST.ctab[gy * GRID_W + gx] !== 0;
+    if (!tabled && ref) { _teGrids(); tileEntityType[gy][gx] = type || TILE_ENTITY_NONE; tileEntityRef[gy][gx] = ref; }
+    else if (tileEntityRef) { tileEntityType[gy][gx] = TILE_ENTITY_NONE; tileEntityRef[gy][gx] = null; }
     if (ref) _activeTileEntities.add(ref);
     _tileEntityVersion++;
     noteTileEntityChanged(gx, gy);
@@ -1606,16 +1661,14 @@ function setTileEntity(gx, gy, type, ref) {
 
 function clearTileEntity(gx, gy, expectedRef = null) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return;
-    if (!tileEntityType[gy] || !tileEntityRef[gy]) return;
-    if (expectedRef && tileEntityRef[gy][gx] !== expectedRef) return;
-    let prevRef = tileEntityRef[gy][gx];
+    let prevRef = getTileEntityRef(gx, gy);
+    if (expectedRef && prevRef !== expectedRef) return;
     if (prevRef) _activeTileEntities.delete(prevRef);
     structTableSet(gx, gy, prevRef, null);
     _tileEntityVersion++;
     noteTileEntityChanged(gx, gy);
     if (prevRef && typeof workerWorkChanged === 'function') workerWorkChanged(Number.isFinite(prevRef.owner) ? prevRef.owner : -1, null, gx, gy);
-    tileEntityType[gy][gx] = TILE_ENTITY_NONE;
-    tileEntityRef[gy][gx] = null;
+    if (tileEntityRef) { tileEntityType[gy][gx] = TILE_ENTITY_NONE; tileEntityRef[gy][gx] = null; }
     // (After the clear: the walk classes' walls read the tile as it is now.)
     if (typeof simMoveTileEntityChanged === 'function') simMoveTileEntityChanged(gx, gy);
     if (prevRef && typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(prevRef);
@@ -1631,16 +1684,37 @@ function clearTileEntity(gx, gy, expectedRef = null) {
     if (prevRef) structRowDetach(prevRef);
 }
 
+// A tile's entity type: a mine's from its code, a structure's key (its
+// stationary type); the grids' for what is not tabled.
 function getTileEntityType(gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return TILE_ENTITY_NONE;
-    if (!tileEntityType[gy]) return TILE_ENTITY_NONE;
+    const T = _ST, t = gy * GRID_W + gx;
+    if (T.n === GRID_W * GRID_H && T.ctab && T.ctab[t] !== 0) {
+        const c = T.code[t];
+        if (c === 0x66) return TILE_ENTITY_GOLDMINE;
+        if (c === 0x77) return TILE_ENTITY_ASTARMINE;
+        const e = getTileEntityRef(gx, gy);
+        return e ? (e.type === 'barrack' ? 'barrack_' + e.unitType : e.type) || TILE_ENTITY_NONE : TILE_ENTITY_NONE;
+    }
+    if (!tileEntityType || !tileEntityType[gy]) return TILE_ENTITY_NONE;
     return tileEntityType[gy][gx] || TILE_ENTITY_NONE;
 }
-
+// The structure or mine standing at a tile: its table's row (the per-tile
+// ctab and rrow); the grids' for what is not tabled (the page's views).
 function getTileEntityRef(gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
-    if (!tileEntityRef[gy]) return null;
+    const T = _ST, t = gy * GRID_W + gx;
+    if (T.n === GRID_W * GRID_H && T.ctab) {
+        const c = T.ctab[t];
+        if (c !== 0) { const Tb = _sTables.get(_stAllCls[c - 1]), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null; if (o && o._stT === t) return o; }
+    }
+    if (!tileEntityRef || !tileEntityRef[gy]) return null;
     return tileEntityRef[gy][gx] || null;
+}
+function _teGrids() {
+    if (tileEntityRef && tileEntityRef.length === GRID_H) return;
+    tileEntityType = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(TILE_ENTITY_NONE));
+    tileEntityRef = Array.from({ length: GRID_H }, () => Array(GRID_W).fill(null));
 }
 
 function getGoldMineAt(gx, gy) {
@@ -1723,7 +1797,7 @@ function towersChanged() { towersVersion++; }
 // Bumped when a cloud tower joins or leaves towers (pathfinding.js keeps
 // its cloud tables by it: other towers falling in a battle leave them).
 let cloudTowersVersion = 0;
-function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) cloudTowersVersion++; if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
+function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) { cloudTowersVersion++; if (typeof cloudTowerToggle === 'function') cloudTowerToggle(t); } if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
 // Bumped when a laser tower joins or leaves towers (the laser links' list).
 let laserTowersVersion = 0;
 let units = [];

@@ -61,6 +61,70 @@ function getSpawnerFallbackUnitType(spawner) {
     return 'norm';
 }
 
+// ---- Spawn queues ----
+// A barrack's or spawner's queue is a count and its front's state, columns of
+// its table row (_qN; _qLv the front's level, _qReq its energy cost, _qPaid
+// what healers paid of it): no arrays or entry objects. An entry becomes the
+// front with the building's base level and that level's cost then (not those
+// of when it was queued). The page's structure views keep arrays (their
+// spawnQueue), and so does spawnQueue on these objects for the interface: a
+// copy made when read, its setter (snapshots, scenes) taking the count and
+// the front.
+function spawnQueueCount(e) {
+    if (!e) return 0;
+    const n = e._qN;
+    if (n !== undefined) return n | 0;
+    const q = e.spawnQueue;
+    return Array.isArray(q) ? q.length : 0;
+}
+function hasSpawnQueue(e) { return !!e && (e._qN !== undefined || Array.isArray(e.spawnQueue)); }
+function spawnQueueUnitType(s) {
+    if (s.type === 'barrack') return s.unitType || 'norm';
+    return (typeof getSpawnedUnitTypeForBuildingKey === 'function' && getSpawnedUnitTypeForBuildingKey(s.type)) || getSpawnerFallbackUnitType(s);
+}
+function _spawnQueueFrontNew(s) {
+    const lvl = Math.max(1, getThingBaseLevel(s) || 1), c = getUnitStatForOwner(Number.isFinite(s.owner) ? s.owner : localPlayerId, spawnQueueUnitType(s), lvl, 'energy');
+    s._qLv = lvl; s._qReq = Math.max(1, Math.floor(Number.isFinite(c) ? c : 1)); s._qPaid = 0;
+}
+function spawnQueuePush(s, n = 1) {
+    if (!(n > 0)) return;
+    if (!(s._qN > 0)) { s._qN = 0; _spawnQueueFrontNew(s); }
+    s._qN += n;
+}
+function spawnQueueShift(s) {
+    if (!(s._qN > 0)) return;
+    s._qN--;
+    if (s._qN > 0) _spawnQueueFrontNew(s); else { s._qLv = 0; s._qReq = 0; s._qPaid = 0; }
+}
+// The front (null: none) as a record reused by the next call; a page view's
+// from its array.
+const _sqFront = { unitType: '', level: 1, energyRequired: 1, energyPaid: 0 };
+function spawnQueueFront(s) {
+    if (!(spawnQueueCount(s) > 0)) return null;
+    if (s._qN === undefined) return getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), s.owner);
+    const F = _sqFront;
+    F.unitType = spawnQueueUnitType(s); F.level = s._qLv; F.energyRequired = s._qReq; F.energyPaid = s._qPaid;
+    return F;
+}
+function spawnQueuePay(s, amount) { s._qPaid = Math.min(s._qReq, s._qPaid + amount); }
+const _SPAWN_QUEUE_PROP = {
+    get() {
+        const n = this._qN | 0;
+        if (!(n > 0)) return [];
+        const ty = spawnQueueUnitType(this), q = [{ unitType: ty, level: this._qLv, energyRequired: this._qReq, energyPaid: this._qPaid }];
+        for (let i = 1; i < n; i++) q.push(ty);
+        return q;
+    },
+    set(v) {
+        const n = Array.isArray(v) ? v.length : 0;
+        this._qN = n;
+        if (!n) { this._qLv = 0; this._qReq = 0; this._qPaid = 0; return; }
+        const f = getQueuedSpawnInfo(v[0], spawnQueueUnitType(this), getThingBaseLevel(this), this.owner);
+        this._qLv = f.level; this._qReq = f.energyRequired; this._qPaid = f.energyPaid;
+    },
+    configurable: true
+};
+
 function _shouldWaitForConstruction(self) {
     if (!self || !self.underConstruction) return false;
     let targetEnergy = Number(getUpgrademaxEnergy(self, 1));
@@ -95,20 +159,14 @@ function spawnerCooldownTicks(s) {
 // front is paid, its ready order (barracks and spawners have no tick of
 // their own: spawnerStructuresTick).
 function spawnerProductionChanged(s) {
-    if (!s || !Array.isArray(s.spawnQueue) || !(s.energy > 0) || s.underConstruction) return;
+    if (!s || !hasSpawnQueue(s) || !(s.energy > 0) || s.underConstruction) return;
 
     const had = Number.isFinite(s._spawnReadyOrder);
-    if (s.spawnQueue.length > 0) updateSpawnerProductionProgress(s);
+    if (spawnQueueCount(s) > 0) updateSpawnerProductionProgress(s);
     else { s.spawnTimer = 0; s._spawnReadyOrder = undefined; }
     // (Ready already: listed again, its entry may have been passed while it
     // could not spawn.)
     if (had && Number.isFinite(s._spawnReadyOrder)) spawnerReadyNoted(s);
-    // (A research building shows its player's task: built now, say.)
-    if (s.type === 'research') {
-        const task = getPlayerResearchTask(s.owner) || null;
-        s.researchTask = task;
-        s.isResearching = !!(task && !s.isUpgrading && isAutoResearchEnabled(s) && (task.workDone || 0) < task.workRequired);
-    }
 }
 // A tick of the barracks and spawners: the players' research moves on.
 function spawnerStructuresTick() {
@@ -116,10 +174,8 @@ function spawnerStructuresTick() {
     researchAdvanceTick();
 }
 // Each player's research moves on once a tick while it has a research
-// building (built, alive: the buildings' bins); the research buildings show
-// its task, set where the task changes (and anew on every peer after a
-// resync: spawnerReadyReset).
-let _researchTaskSeen = [];
+// building (built, alive: the buildings' bins); the buildings read its task
+// (ResearchSpawner.researchTask, derived).
 function researchAdvanceTick() {
     const B = typeof _upkBuildingsStep === 'function' ? _upkBuildingsStep() : null;
     if (!B) return;
@@ -129,14 +185,7 @@ function researchAdvanceTick() {
     for (let o = 0; o < np && o < 31; o++) {
         if (!(has & (1 << o))) continue;
         _researchAdvancedTick[o] = gameTime;
-        const task = tryAdvancePlayerResearchTask(o) || null;
-        if (_researchTaskSeen[o] === task) continue;
-        _researchTaskSeen[o] = task;
-        for (const s of collectorSpawners) {
-            if (!s || s.type !== 'research' || s.owner !== o) continue;
-            s.researchTask = task;
-            s.isResearching = !!(task && !s.isUpgrading && isAutoResearchEnabled(s) && (task.workDone || 0) < task.workRequired);
-        }
+        tryAdvancePlayerResearchTask(o);
     }
 }
 // The empty part of a production or research bar. A bar is drawn whenever
@@ -146,16 +195,12 @@ function researchAdvanceTick() {
 const QUEUE_BAR_TRACK = '#6a6a6a';
 function updateSpawnerProductionProgress(spawner) {
     if (!spawner) return;
-    if (!Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) {
+    if (!(spawnQueueCount(spawner) > 0)) {
         spawner.spawnTimer = 0;
         spawner._spawnReadyOrder = undefined;
         return;
     }
-    let owner = Number.isFinite(spawner.owner) ? spawner.owner : localPlayerId;
-    let effLvl = getThingBaseLevel(spawner);
-    let fallbackType = getSpawnerFallbackUnitType(spawner);
-    let front = getQueuedSpawnInfo(spawner.spawnQueue[0], fallbackType, effLvl, owner);
-    spawner.spawnQueue[0] = front;
+    let front = spawnQueueFront(spawner);
 
     let cooldown = Math.max(1, Math.round(spawner.spawnCooldown || 1));
 
@@ -170,24 +215,20 @@ function updateSpawnerProductionProgress(spawner) {
 }
 
 function spawnQueuedUnitFromSpawner(spawner) {
-    if (!spawner || !Array.isArray(spawner.spawnQueue) || spawner.spawnQueue.length <= 0) return false;
+    if (!spawner || !(spawnQueueCount(spawner) > 0)) return false;
     if (spawner.energy <= 0 || spawner.underConstruction) return false;
     if (!isQueueEnabled(spawner)) return false;
     let owner = spawner.owner;
     if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
 
-    let effLvl = getThingBaseLevel(spawner);
-    let fallbackType = getSpawnerFallbackUnitType(spawner);
-    if (!fallbackType) return false;
-
-    let queued = spawner.spawnQueue.shift();
+    const front = spawnQueueFront(spawner), spawnInfo = { unitType: front.unitType, level: front.level };
+    let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
+    let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
+    if (u.dead) return false;
+    spawnQueueShift(spawner);
     // The queue moved on: its next item may need healers' energy.
     if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
     if (typeof workSiteDirty === 'function') workSiteDirty(spawner.gx, spawner.gy);
-    let spawnInfo = getQueuedSpawnInfo(queued, fallbackType, effLvl, owner);
-    let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
-    let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16);
-    if (u.dead) { spawner.spawnQueue.unshift(queued); return false; }
     configureWorkerUnitFromType(u);
 
     applyUnitLevelScaling(u, spawnInfo.level);
@@ -250,7 +291,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
 // removed) is dropped when reached. Made anew from the spawners on every
 // peer after a resync (spawnerReadyReset).
 let _spawnReady = null;
-function spawnerReadyReset() { _spawnReady = null; _researchTaskSeen = []; }
+function spawnerReadyReset() { _spawnReady = null; }
 // After s._spawnReadyOrder was assigned.
 function spawnerReadyNoted(s) {
     const R = _spawnReady;
@@ -286,10 +327,9 @@ function _spawnReadyBuild() {
 // its queue enabled and its front paid.
 function _spawnReadyValid(s) {
     if (!s || s.energy <= 0 || s.underConstruction || !isQueueEnabled(s)) return false;
-    if (!Array.isArray(s.spawnQueue) || s.spawnQueue.length <= 0) return false;
+    if (!(spawnQueueCount(s) > 0)) return false;
     if (typeof getTileEntityRef === 'function' && getTileEntityRef(s.gx, s.gy) !== s) return false;
-    const owner = Number.isFinite(s.owner) ? s.owner : localPlayerId;
-    const front = getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), owner);
+    const front = spawnQueueFront(s);
     return front.energyPaid >= front.energyRequired;
 }
 // (A unit made is ~20 us (its object, slot, stats, way to the rally point):
@@ -352,7 +392,7 @@ class Barrack {
         this.stackingWorkDone = 0;
         this.spawnTimer = 0;
 
-        this.spawnQueue = []; // queue of unit types to spawn
+        this._qN = 0; // queued units (the front: _qLv, _qReq, _qPaid)
         this.rallyX = null; this.rallyY = null; // rally point in world coords
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
@@ -375,7 +415,7 @@ class Barrack {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else {
             this.spawnTimer = 0;
@@ -402,7 +442,7 @@ class Barrack {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 14, 24, 3);
         } else {
             // Spawn progress (only show when queue has items)
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 let bw = 24, bh = 3, bx = this.x - bw / 2, by = this.y + 12;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(bx, by, bw, bh);
@@ -423,7 +463,7 @@ if (typeof structTableAccessors === 'function') structTableAccessors(Barrack, 0x
 // (its update moves research on). (Its spawn cooldown is worked
 // out again by its next update, once something is queued.)
 function spawnerQuiet(b) {
-    return b.type !== 'research' && !!b.spawnQueue && b.spawnQueue.length === 0 && !(b.spawnTimer > 0) && b._spawnReadyOrder === undefined
+    return b.type !== 'research' && hasSpawnQueue(b) && spawnQueueCount(b) === 0 && !(b.spawnTimer > 0) && b._spawnReadyOrder === undefined
         && b.energy > 0 && !thingStatusPending(b);
 }
 
@@ -460,7 +500,7 @@ class CollectorSpawner {
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
-        this.spawnQueue = []; this.spawnTimer = 0;
+        this._qN = 0; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
 
         updateItemTextCache(this);
@@ -474,7 +514,7 @@ class CollectorSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
@@ -488,7 +528,7 @@ class CollectorSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -519,7 +559,7 @@ class AstarSpawner {
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
-        this.spawnQueue = []; this.spawnTimer = 0;
+        this._qN = 0; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
 
         updateItemTextCache(this);
@@ -533,7 +573,7 @@ class AstarSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
@@ -547,7 +587,7 @@ class AstarSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -578,7 +618,7 @@ class SalvagerSpawner {
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
-        this.spawnQueue = []; this.spawnTimer = 0;
+        this._qN = 0; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
 
         updateItemTextCache(this);
@@ -592,7 +632,7 @@ class SalvagerSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
@@ -606,7 +646,7 @@ class SalvagerSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -638,7 +678,7 @@ class BuilderSpawner {
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
-        this.spawnQueue = []; this.spawnTimer = 0;
+        this._qN = 0; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
 
         updateItemTextCache(this);
@@ -659,7 +699,7 @@ class BuilderSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
@@ -673,7 +713,7 @@ class BuilderSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -705,7 +745,7 @@ class HealerSpawner {
         this.autoUpgradeEnabled = true;
         this.buildEnabled = true;
         this.queueEnabled = true;
-        this.spawnQueue = []; this.spawnTimer = 0;
+        this._qN = 0; this.spawnTimer = 0;
         this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
 
         updateItemTextCache(this);
@@ -725,7 +765,7 @@ class HealerSpawner {
         if (this.energy <= 0) return;
         if (_shouldWaitForConstruction(this)) return;
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else { this.spawnTimer = 0; this._spawnReadyOrder = undefined; }
     }
@@ -739,7 +779,7 @@ class HealerSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -765,7 +805,7 @@ class ResearchSpawner {
         this.stackingWorkDone = 0;
         this.spawnTimer = 0;
 
-        this.spawnQueue = [];
+        this._qN = 0;
         this.rallyX = null; this.rallyY = null;
         this.rallyTargetUnitId = null;
         let stats = calculateItemStats('research', this.level, this.owner);
@@ -777,8 +817,6 @@ class ResearchSpawner {
         this.buildEnabled = true;
         this.queueEnabled = true;
         this.autoResearchEnabled = true;
-        this.researchTask = null;
-        this.isResearching = false;
         updateItemTextCache(this);
     }
 
@@ -800,7 +838,7 @@ class ResearchSpawner {
         if (_shouldWaitForConstruction(this)) return;
 
 
-        if (this.spawnQueue.length > 0) {
+        if (spawnQueueCount(this) > 0) {
             updateSpawnerProductionProgress(this);
         } else {
             this.spawnTimer = 0;
@@ -812,13 +850,6 @@ class ResearchSpawner {
         let task;
         if (_researchAdvancedTick[this.owner] === gameTime) task = getPlayerResearchTask(this.owner);
         else { _researchAdvancedTick[this.owner] = gameTime; task = tryAdvancePlayerResearchTask(this.owner); }
-        this.researchTask = task || null;
-        this.isResearching = !!(
-            task
-            && !this.isUpgrading
-            && isAutoResearchEnabled(this)
-            && (task.workDone || 0) < task.workRequired
-        );
     }
 
     draw(ctx) {
@@ -831,7 +862,7 @@ class ResearchSpawner {
         if (this.underConstruction) {
             drawBuildingEnergyProgressBar(ctx, this, this.x, this.y + 10, 24, 3);
         } else {
-            if (this.spawnQueue.length > 0 && this.spawnCooldown > 0) {
+            if (spawnQueueCount(this) > 0 && this.spawnCooldown > 0) {
                 let pct = this.spawnTimer / this.spawnCooldown;
                 ctx.fillStyle = QUEUE_BAR_TRACK; ctx.fillRect(this.x - 12, this.y + 6, 24, 3);
                 ctx.fillStyle = pct > 0.8 ? '#4f4' : '#fa0'; ctx.fillRect(this.x - 12, this.y + 6, 24 * pct, 3);
@@ -848,6 +879,13 @@ class ResearchSpawner {
     }
 }
 if (typeof structTableAccessors === 'function') structTableAccessors(ResearchSpawner, 0x44);
+// Its player's research task and whether it works on it: derived (the task
+// is the player's; nothing is written into each research building when it
+// changes). Writes are ignored. (The page's views define their own.)
+Object.defineProperties(ResearchSpawner.prototype, {
+    researchTask: { configurable: true, get() { const p = this.owner >= 0 ? players[this.owner] : null; return (p && p.researchTask) || null; }, set(v) {} },
+    isResearching: { configurable: true, get() { const t = this.researchTask; return !!(t && !this.isUpgrading && isAutoResearchEnabled(this) && (t.workDone || 0) < t.workRequired); }, set(v) {} },
+});
 
 function _makeSpawnerRallyTemplateKey(spawner, startGx, startGy, endGx, endGy, unit) {
     let movementProfile = _resolveMovementProfile(!!(unit && unit.isFlying), getPathCanWalkForUnit(unit), null) || 'dynamic';
@@ -882,3 +920,5 @@ function _setSpawnerRallyTemplatePath(cacheKey, path) {
     });
     _trimPathCacheIfNeeded(sharedSpawnerRallyTemplateCache, SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES);
 }
+// (The interface's copy of a queue: see spawnQueueCount.)
+for (const C of [Barrack, CollectorSpawner, AstarSpawner, SalvagerSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner]) Object.defineProperty(C.prototype, 'spawnQueue', _SPAWN_QUEUE_PROP);

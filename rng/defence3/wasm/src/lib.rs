@@ -34,6 +34,15 @@ mod tower;
 mod worker_brain;
 mod proj;
 mod ord;
+mod reg;
+mod laser;
+mod vis;
+mod tfx;
+mod dst;
+mod wsb;
+mod uix;
+mod jobs;
+mod wsw;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

@@ -239,7 +239,7 @@ function unitIdIndex() {
     }
     return _uix;
 }
-function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; _uix.slotsOld = true; }
+function unitSlotMapInvalidate() { _unitSlotMap.ref = null; _unitSlotMap.ver++; _uix.slotsOld = true; _unitById.stale = true; }
 
 // Buildings: the same order scheme, seeded per building type.
 const _buildingOrderOut = new Map();
@@ -559,7 +559,7 @@ function _accumulateUpKeepForThing(breakdowns, thing, isUnit) {
 // with the other cross-tick caches at a resync, on every peer.
 let _upKeepAccum = null;
 // The laser towers the buzzer sound looks at (see _gameTickBody).
-let _laserSoundList = null;
+
 
 const UNIT_RETIRE_BLOCK = 8192;
 let _unitRetireList = new Int32Array(0), _unitRetireCounts = new Int32Array(0);
@@ -690,15 +690,8 @@ function _gameTickBody() {
         // then those it found without energy: floor items cleared from their
         // tiles, towers, barracks and spawners destroyed (tile order).
         const st = structStatusTick();
-        if (st.floor) for (const item of st.floor) {
-            const cell = grid[item.gy][item.gx];
-            if (cell.item !== item) continue;
-            clearTileEntity(item.gx, item.gy, item);
-            cell.item = null;
-            cell.owner = -1;
-            floorChanged = true;
-        }
-        if (st.dead) for (const e of st.dead) if (e.energy <= 0) destroyBuilding(e);
+        if (st.floor && st.floor.length) { const L = structDestroyList(st.floor.length); let n = 0; for (const e of st.floor) if (e._stT >= 0) L[n++] = e._stT; if (structDestroyTiles(L, n, false, true) > 0) floorChanged = true; }
+        if (st.dead && st.dead.length) { const L = structDestroyList(st.dead.length); let n = 0; for (const e of st.dead) if (e._stT >= 0) L[n++] = e._stT; structDestroyTiles(L, n, true); }
     }
     if (floorChanged) {
         _minimapStaticDirty = true;
@@ -788,7 +781,8 @@ function _gameTickBody() {
     // which in big fights (hundreds of deaths a tick) cost most of the tick.
     // Dead units are found in the dead column (through the slot map, no
     // object reads) and marked by index; the compaction moves references.
-    const removedIndices = [], removedUnits = [], removedSet = selectedUnits.length ? new Set() : null;
+    const removedIndices = [], removedUnits = [], selSet = selectedUnits.length ? _selectionSet() : null;
+    let removedSet = null;
     const DS = _simUnitState, dslots = DS ? _unitSlotMapEnsure() : null, DEAD = DS ? DS.columns.dead : null, downers = DS ? DS.owners : null;
     let compactRemovedUnits = () => {
         if (!removedIndices.length) return;
@@ -805,8 +799,10 @@ function _gameTickBody() {
         }
         units.length = n;
         if (keep) { M.len = n; M.ver++; }
+        // (Only when a removed unit was selected: not a pass over the selection a tick.)
         if (removedSet) selectedUnits = selectedUnits.filter(su => !removedSet.has(su));
-        for (let k = 0; k < removedIndices.length; k++) unitByIdRemoved(removedUnits[k]);
+        // (By id: the table's entries, then the ids' index in one call: uix.rs.)
+        _unitByIdRemovedMany(removedUnits);
         // (Detached now, at its removal's tick on every peer: no sweep later.)
         const S = _simUnitState;
         if (S) for (let k = 0; k < removedUnits.length; k++) { const u = removedUnits[k]; if (u._us === S.columns && S.owners[u._si] === u) simUnitStateDetachGone(S, u._si); }
@@ -822,7 +818,7 @@ function _gameTickBody() {
         let u = units[i];
         const si = dslots ? dslots[i] : -1, slotted = si >= 0 && downers[si] === u;
         if (slotted ? DEAD[si] === 0 : !u.dead) continue;
-        removedIndices.push(i); removedUnits.push(u); if (removedSet) removedSet.add(u);
+        removedIndices.push(i); removedUnits.push(u); if (selSet !== null && selSet.has(u)) (removedSet || (removedSet = new Set())).add(u);
         if (u._removedNow) {
             // Removed by removeUnitNow (spatial and population already done).
             if (slotted) G.list[ng++] = ~si; else upkeepUnitGone(u);
@@ -864,15 +860,17 @@ function _gameTickBody() {
 
     // Laser buzzer sound control (presentation): the active laser nearest
     // the camera, from the laser towers (listed again every TICK_RATE ticks).
-    if (!_laserSoundList || simStepCrosses(0, TICK_RATE)) _laserSoundList = towers.filter(t => t.type === 'laser');
     {
+        // (The beams that hit this tick: laser.rs, lz.hit; their first lasers.)
         let anyLaserActive = false, laserSoundX = 0, laserSoundY = 0, bestLaserDist2 = Infinity;
         const cameraCx = camera.x + viewW / camera.zoom / 2, cameraCy = camera.y + viewH / camera.zoom / 2;
-        for (const t of _laserSoundList) {
-            if (t.laserState !== 1 || t.underConstruction || t.dead) continue;
+        const LM = typeof _laserMap !== 'undefined' ? _laserMap : null, BA = _simParReg['lz.ba'];
+        for (let b = 0, nb = LM ? LM.nb : 0; b < nb; b++) {
+            if (!LM.hit[b]) continue;
             anyLaserActive = true;
-            const dx = t.x - cameraCx, dy = t.y - cameraCy, dist2 = dx * dx + dy * dy;
-            if (dist2 < bestLaserDist2) { bestLaserDist2 = dist2; laserSoundX = t.x; laserSoundY = t.y; }
+            const tl = BA[b], gx = tl % GRID_W, x = gx * TILE + TILE / 2, y = ((tl - gx) / GRID_W) * TILE + TILE / 2;
+            const dx = x - cameraCx, dy = y - cameraCy, dist2 = dx * dx + dy * dy;
+            if (dist2 < bestLaserDist2) { bestLaserDist2 = dist2; laserSoundX = x; laserSoundY = y; }
         }
         if (anyLaserActive) startLaserSound(laserSoundX, laserSoundY);
         else stopLaserSound();
@@ -3315,36 +3313,117 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // removed: the dead-unit pass, eliminateTeamAssets) and made anew when the
 // list is replaced (a new match, a restore). It may still hold a unit that
 // died (callers skip dead ones), never one of another list.
-// IDs are mostly consecutive. A hash-table entry for every unit costs far
-// more than a reference in a small page (and growing a multi-million-entry
-// Map temporarily keeps both tables). Empty pages are released on death;
-// widely separated IDs allocate only their own pages.
+// The table: unit slots in the wasm heap by a hash of their id (linear
+// probing; an entry is a slot, its id the slot's id column, so a slot taken
+// by another unit since is passed over), sized a power of two, at least twice
+// the slots, made again when it fills (entries a slot's later unit left
+// behind are dropped then). No objects: the GC traces none of it. Units
+// without a slot (the page's views, units tests made by hand) in a Map.
 class UnitIdIndex {
-    constructor() { this.pages = new Map(); this.size = 0; this.lastKey = NaN; this.lastPage = undefined; }
+    constructor() { this.t = null; this.mask = 0; this.used = 0; this.size = 0; this.S = null; this.stale = false; this.loose = new Map(); }
+    static _h(id) { return Math.imul(id | 0, 2654435761) >>> 0; }
+    _ok() {
+        const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+        if (this.t !== null && (this.stale || this.S !== S || (typeof simHeapHas === 'function' && !simHeapHas(this.t)))) this._refill();
+        return this.t !== null;
+    }
+    // (Slots moved (a relayout), another state (a restore), a new heap: made
+    // again from the units list, the slotted ones.)
+    _refill() {
+        this.stale = false;
+        const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+        this.dispose();
+        if (!S) return;
+        this.S = S; this._make();
+        for (let i = 0; i < units.length; i++) { const u = units[i]; if (u && u._us === S.columns && u._si >= 0 && this._at(u.id) < 0) this._put(u.id, u._si); }
+    }
+    // Removed units (the retire pass, their slots and ids still theirs): those
+    // with a slot out of the table in one kernel call (uix.rs k_uid_delete).
+    deleteMany(list) {
+        const m = list.length, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+        if (!m) return;
+        const kern = this._ok() && S && typeof _simWasmX !== 'undefined' && _simWasmX !== null && simHeapHas(this.t) && simHeapHas(S.columns.id);
+        if (!kern) { for (let k = 0; k < m; k++) { const u = list[k]; if (u && this.get(u.id) === u) this.delete(u.id); } return; }
+        if (!_uidDel || _uidDel.length < m || !simHeapHas(_uidDel)) { _uidDel = simSharedArray(Int32Array, Math.max(1024, m * 2)); _uidOut = simSharedArray(Int32Array, 2); }
+        let w = 0;
+        for (let k = 0; k < m; k++) {
+            const u = list[k];
+            if (!u) continue;
+            if (u._us === S.columns && u._si >= 0) _uidDel[w++] = u._si;
+            else if (this.loose.size && this.loose.get(u.id) === u) { this.loose.delete(u.id); this.size--; }
+        }
+        if (!w) return;
+        _uidP[0] = w; _uidP[1] = this.t.length;
+        simRustDirect('k_uid_delete', [this.t, S.columns.id, _uidDel, _uidOut], _uidP);
+        this.used -= _uidOut[0]; this.size -= _uidOut[0];
+    }
+    dispose() { if (this.t && typeof simHeapHas === 'function' && simHeapHas(this.t)) simHeapFree(this.t); this.t = null; this.used = 0; }
+    // (Made again for the current slots: room for twice them.)
+    _make(extra = 0) {
+        const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, old = this.t, oldS = this.S;
+        let cap = 1024;
+        while (cap < 2 * Math.max(S ? S.cap : 0, this.size + extra + 1)) cap *= 2;
+        const t = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null ? simSharedArray(Int32Array, cap) : new Int32Array(cap);
+        t.fill(-1);
+        this.t = t; this.mask = cap - 1; this.used = 0; this.S = S;
+        if (old && oldS === S && S) { const C = S.columns; for (let i = 0; i < old.length; i++) { const sl = old[i]; if (sl >= 0 && S.owners[sl] && S.owners[sl]._si === sl && this._at(C.id[sl]) < 0) this._put(C.id[sl], sl); } }
+        if (old && typeof simHeapHas === 'function' && simHeapHas(old)) simHeapFree(old);
+    }
+    _put(id, sl) {
+        const t = this.t, m = this.mask;
+        let h = UnitIdIndex._h(id) & m;
+        while (t[h] !== -1) h = (h + 1) & m;
+        t[h] = sl; this.used++;
+    }
+    // (The place holding id's slot, -1 none.)
+    _at(id) {
+        if (this.t === null) return -1;
+        const t = this.t, m = this.mask, C = this.S.columns;
+        let h = UnitIdIndex._h(id) & m;
+        for (let sl; (sl = t[h]) !== -1; h = (h + 1) & m) if (C.id[sl] === id && this.S.owners[sl]) return h;
+        return -1;
+    }
     get(id) {
-        if (!Number.isSafeInteger(id)) return undefined;
-        const key = Math.floor(id / 1024);
-        const page = key === this.lastKey ? this.lastPage : (this.lastPage = this.pages.get(this.lastKey = key));
-        return page ? page.values[id - key * 1024] : undefined;
+        if (this._ok()) { const h = this._at(id); if (h >= 0) return this.S.owners[this.t[h]]; }
+        return this.loose.size ? this.loose.get(id) : undefined;
     }
     set(id, unit) {
-        const key = Math.floor(id / 1024), offset = id - key * 1024;
-        let page = key === this.lastKey ? this.lastPage : this.pages.get(key);
-        if (!page) { page = { values: new Array(1024).fill(undefined), count: 0 }; this.pages.set(key, page); }
-        this.lastKey = key; this.lastPage = page;
-        if (page.values[offset] === undefined) { page.count++; this.size++; }
-        page.values[offset] = unit;
+        const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+        if (S && unit && unit._us === S.columns && unit._si >= 0) {
+            if (!this._ok() || (this.used + 1) * 2 > this.t.length) this._make(1);
+            if (this._at(id) >= 0) return this;
+            this._put(id, unit._si); this.size++;
+            return this;
+        }
+        if (!this.loose.has(id)) this.size++;
+        this.loose.set(id, unit);
         return this;
     }
     delete(id) {
-        if (!Number.isSafeInteger(id)) return false;
-        const key = Math.floor(id / 1024), page = this.pages.get(key), offset = id - key * 1024;
-        if (!page || page.values[offset] === undefined) return false;
-        page.values[offset] = undefined; this.size--;
-        if (--page.count === 0) { this.pages.delete(key); if (this.lastKey === key) this.lastPage = undefined; }
-        return true;
+        if (this._ok()) {
+            let h = this._at(id);
+            if (h >= 0) {
+                // (Backward shift: the entries after it that hash at or before
+                // its place move up, no tombstones.)
+                const t = this.t, m = this.mask, C = this.S.columns;
+                let j = h;
+                for (;;) {
+                    j = (j + 1) & m;
+                    const sl = t[j];
+                    if (sl === -1) break;
+                    const k = UnitIdIndex._h(C.id[sl]) & m;
+                    if ((j > h && (k <= h || k > j)) || (j < h && k <= h && k > j)) { t[h] = sl; h = j; }
+                }
+                t[h] = -1; this.used--; this.size--;
+                return true;
+            }
+        }
+        if (this.loose.delete(id)) { this.size--; return true; }
+        return false;
     }
 }
+let _uidDel = null, _uidOut = null;
+const _uidP = new Float64Array(2);
 let _unitById = new UnitIdIndex(), _unitByIdFor = null;
 function _unitByIdMap() {
     // (The page beside a simulation worker: its units are the frame's views,
@@ -3354,13 +3433,36 @@ function _unitByIdMap() {
     // (Kept as units are added and retired; a unit put into the list another
     // way (tools, tests) shows as a size that does not match: made again.)
     if (_unitByIdFor !== units || _unitById.size !== units.length) {
-        _unitById = new UnitIdIndex();
+        _unitById.dispose(); _unitById = new UnitIdIndex();
         for (let i = 0; i < units.length; i++) { const u = units[i]; if (u) _unitById.set(u.id, u); }
         _unitByIdFor = units;
     }
     return _unitById;
 }
 function unitByIdAdded(u) { if (_unitByIdFor === units && u) _unitById.set(u.id, u); _uixAdded(u); }
+// Many removed at once (the retire pass): the ids' index in one kernel call.
+const _uixRmP = new Float64Array(2);
+let _uixRm = null, _uixHdr = null;
+// The selection as a set, made again when the selection is another array or
+// its length changed (the retire pass asks whether a removed unit was in it).
+let _selSetOf = null, _selSetLen = -1, _selSetV = null;
+function _selectionSet() {
+    if (_selSetOf !== selectedUnits || _selSetLen !== selectedUnits.length) { _selSetV = new Set(selectedUnits); _selSetOf = selectedUnits; _selSetLen = selectedUnits.length; }
+    return _selSetV;
+}
+function _unitByIdRemovedMany(list) {
+    const m = list.length;
+    if (_unitByIdFor === units) _unitById.deleteMany(list);
+    if (_uix.for !== units || !m) return;
+    if (typeof _simWasmX === 'undefined' || _simWasmX === null || !simHeapHas(_uix.ids)) { for (let k = 0; k < m; k++) _uixRemoved(list[k]); return; }
+    if (!_uixRm || _uixRm.length < m || !simHeapHas(_uixRm)) _uixRm = simSharedArray(Int32Array, Math.max(1024, m * 2));
+    if (!_uixHdr || !simHeapHas(_uixHdr)) _uixHdr = simSharedArray(Int32Array, 2);
+    let w = 0;
+    for (let k = 0; k < m; k++) if (list[k]) _uixRm[w++] = list[k].id;
+    _uixHdr[0] = _uix.n; _uixHdr[1] = _uix.holes; _uixRmP[0] = w;
+    simRustDirect('k_uix_remove', [_uix.ids, _uix.slots, _uixRm, _uixHdr], _uixRmP);
+    _uix.n = _uixHdr[0]; _uix.holes = _uixHdr[1];
+}
 function unitByIdRemoved(u) { if (_unitByIdFor === units && u && _unitById.get(u.id) === u) _unitById.delete(u.id); _uixRemoved(u); }
 function getUnitById(id) {
     const u = _unitByIdMap().get(id);
@@ -4476,7 +4578,7 @@ const _rallyAt = { p: -1, x: NaN, y: NaN, tid: NaN, C: null, ok: false, T: null,
 function _rallySetTile(key) {
     const R = _rallyAt;
     if (!(key >= 0 && key < GRID_W * GRID_H)) return;
-    const gx = key % GRID_W, gy = (key - gx) / GRID_W, row = tileEntityRef[gy], b = row ? row[gx] : null;
+    const gx = key % GRID_W, gy = (key - gx) / GRID_W, b = getTileEntityRef(gx, gy);
     if (!b) return;
     // (Barrack or spawner: by its class, looked up once a class.)
     if (b.constructor !== R.C) { R.C = b.constructor; R.ok = (b instanceof Barrack) || isSpawnerEntity(b); R.T = R.ok && typeof _sTables !== 'undefined' ? _sTables.get(R.C) || null : null; }
@@ -4515,7 +4617,7 @@ function _rallyKernel(tkz) {
     simRustDirect('k_rally_tiles', arrays, P);
     const m = Q.cnt[6];
     R.n += m;
-    if (R.present) for (let i = 0; i < m; i++) { const t = Q.keysOut[i], gx = t % GRID_W; simPresentRally(tileEntityRef[(t - gx) / GRID_W][gx], R.x, R.y, R.tid); }
+    if (R.present) for (let i = 0; i < m; i++) { const t = Q.keysOut[i], gx = t % GRID_W; simPresentRally(getTileEntityRef(gx, (t - gx) / GRID_W), R.x, R.y, R.tid); }
 }
 function _rallySetTiles(a, playerId) {
     const R = _rallyAt;
@@ -4607,11 +4709,7 @@ function processAction(a, playerId) {
             if (!(b && b.owner === playerId)) b = null;
             if (b && b.energy > 0 && !b.underConstruction) {
                 let count = Math.max(1, Math.floor(a.count || 1));
-                for (let i = 0; i < count; i++) {
-                    if (b.spawnQueue.length >= 20) break;
-                    let queuedLevel = getThingBaseLevel(b);
-                    b.spawnQueue.push(getQueuedSpawnInfo({ unitType: b.unitType, level: queuedLevel }, b.unitType, queuedLevel, playerId));
-                }
+                spawnQueuePush(b, Math.max(0, Math.min(count, 20 - spawnQueueCount(b))));
                 if (typeof workSiteDirty === 'function') workSiteDirty(b.gx, b.gy);
                 spawnerProductionChanged(b);
             }
@@ -4620,19 +4718,7 @@ function processAction(a, playerId) {
             if (!(s && s.owner === playerId)) s = null;
             if (s && s.energy > 0 && !s.underConstruction) {
                 let count = Math.max(1, Math.floor(a.count || 1));
-                for (let i = 0; i < count; i++) {
-                    if (s.spawnQueue.length >= 10) break;
-                    let queuedLevel = getThingBaseLevel(s);
-                    let queuedType = getSpawnedUnitTypeForBuildingKey(s.type)
-                        || (s.type === 'builder_spawner'
-                            ? 'builder_unit'
-                            : s.type === 'healer_spawner'
-                                ? 'healer_unit'
-                                : s.type === 'research'
-                                    ? 'researcher_unit'
-                                    : 'salvager_unit');
-                    s.spawnQueue.push(getQueuedSpawnInfo({ unitType: queuedType, level: queuedLevel }, queuedType, queuedLevel, playerId));
-                }
+                spawnQueuePush(s, Math.max(0, Math.min(count, 10 - spawnQueueCount(s))));
                 if (typeof workSiteDirty === 'function') workSiteDirty(s.gx, s.gy);
                 spawnerProductionChanged(s);
             }
@@ -4777,10 +4863,7 @@ function processAction(a, playerId) {
             if (!(b && b.owner === playerId)) b = null;
             if (b) {
                 let count = Math.max(1, Math.floor(a.count || 1));
-                for (let i = 0; i < count; i++) {
-                    if (b.spawnQueue.length <= 0) break;
-                    b.spawnQueue.shift();
-                }
+                for (let i = 0; i < count && spawnQueueCount(b) > 0; i++) spawnQueueShift(b);
                 spawnerProductionChanged(b);
             }
         } else if (a.action === 'dequeueWorker') {
@@ -4788,10 +4871,7 @@ function processAction(a, playerId) {
             if (!(s && s.owner === playerId)) s = null;
             if (s) {
                 let count = Math.max(1, Math.floor(a.count || 1));
-                for (let i = 0; i < count; i++) {
-                    if (s.spawnQueue.length <= 0) break;
-                    s.spawnQueue.shift();
-                }
+                for (let i = 0; i < count && spawnQueueCount(s) > 0; i++) spawnQueueShift(s);
                 spawnerProductionChanged(s);
             }
         } else if (a.action === 'dequeueResearch') {
@@ -4945,16 +5025,8 @@ function processAction(a, playerId) {
             let target = getSpawnerAtTile(a.gx, a.gy);
             if (!(target && target.owner === playerId && target.type === 'research')) target = null;
             if (target) {
+                // (Its task and whether it researches: derived from the player's queue.)
                 target.autoResearchEnabled = !!a.enabled;
-                if (target.autoResearchEnabled) {
-                    let task = getPlayerResearchTask(playerId);
-                    target.researchTask = task || null;
-                    if (!target.isUpgrading && task && task.workDone < task.workRequired) {
-                        target.isResearching = true;
-                    }
-                } else {
-                    target.isResearching = false;
-                }
             }
         } else if (a.action === 'setBoost') {
             // A thing's energy or ★ boost (data_dynamic.js BOOSTS).
@@ -6924,7 +6996,7 @@ function computeLockstepStateHashFast(tick, partsOut = null) {
         for (let b of sorted) {
             mixInt(int(b.gx)); mixInt(int(b.gy)); mixInt(int(b.owner)); mixStr(b[kindKey]);
             mixInt(Math.floor(Number(b.level) || 1)); mixNum(q3(b.energy));
-            if (kindKey !== 'type' || list !== towers) mixInt(Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0);
+            if (kindKey !== 'type' || list !== towers) mixInt(spawnQueueCount(b));
             mixInt(b.underConstruction ? 1 : 0); mixInt(b.isUpgrading ? 1 : 0);
             mixInt(Math.max(0, int(b.watched))); mixInt(watchedTeam(b));
         }
@@ -7017,7 +7089,7 @@ function computeLockstepStateDigest(tick) {
                 unitType: String(b.unitType || ''),
                 level: Math.floor(Number(b.level) || 1),
                 energy: quantizeLockstepNumber(b.energy),
-                queueLen: Array.isArray(b.spawnQueue) ? b.spawnQueue.length : 0,
+                queueLen: spawnQueueCount(b),
                 underConstruction: !!b.underConstruction,
                 isUpgrading: !!b.isUpgrading,
                 watched: Math.max(0, Math.floor(Number(b.watched) || 0)),
@@ -7033,7 +7105,7 @@ function computeLockstepStateDigest(tick) {
                 type: String(s.type || ''),
                 level: Math.floor(Number(s.level) || 1),
                 energy: quantizeLockstepNumber(s.energy),
-                queueLen: Array.isArray(s.spawnQueue) ? s.spawnQueue.length : 0,
+                queueLen: spawnQueueCount(s),
                 underConstruction: !!s.underConstruction,
                 isUpgrading: !!s.isUpgrading,
                 watched: Math.max(0, Math.floor(Number(s.watched) || 0)),

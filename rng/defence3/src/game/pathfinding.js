@@ -1007,26 +1007,42 @@ function _makeCloudPairKey(pairId, owner) {
     return String(pairId) + '|' + String(owner);
 }
 
+// The cloud towers (a set kept by their joins and leaves: cloudTowerToggle),
+// and the tables made from them in tile order (the same on every peer
+// whatever the history): by tile, by (pair id, owner), the tiles for the
+// portal signature kernel. A whole walk of the towers only when the list is
+// another (a restore, a new match).
+const _cloudSet = new Set();
+function cloudTowerToggle(t) {
+    if (_cloudTileCacheList !== towers) return;
+    if (t._li >= 0 && towers[t._li] === t) _cloudSet.add(t); else _cloudSet.delete(t);
+    _cloudTablesMake();
+}
 function _rebuildCloudTileCache() {
+    _cloudSet.clear();
+    for (let t of towers) if (t.baseStats && t.baseStats.isCloud) _cloudSet.add(t);
+    _cloudTablesMake();
+}
+function _cloudTablesMake() {
+    const list = [..._cloudSet].sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));
     let m = new Map();
     let pairIndex = new Map();
-    for (let t of towers) {
-        if (t.baseStats && t.baseStats.isCloud) {
-            m.set(t.gy * GRID_W + t.gx, t);
-            let pairId = t.baseStats.pairId;
-            if (pairId !== undefined && pairId !== null) {
-                let key = _makeCloudPairKey(pairId, t.owner);
-                let list = pairIndex.get(key);
-                if (!list) {
-                    list = [];
-                    pairIndex.set(key, list);
-                }
-                list.push(t);
-            }
+    for (const t of list) {
+        m.set(t.gy * GRID_W + t.gx, t);
+        let pairId = t.baseStats.pairId;
+        if (pairId !== undefined && pairId !== null) {
+            let key = _makeCloudPairKey(pairId, t.owner);
+            let l = pairIndex.get(key);
+            if (!l) pairIndex.set(key, l = []);
+            l.push(t);
         }
     }
     _cloudTileCache = m;
     _cloudPairIndexCache = pairIndex;
+    const CL = _cloudTileList && _cloudTileList.length >= m.size && simHeapHas(_cloudTileList) ? _cloudTileList : (_cloudTileList = simSharedArray(Int32Array, Math.max(64, m.size * 2)));
+    let ci = 0;
+    for (const key of m.keys()) CL[ci++] = key;
+    _cloudTileN = ci;
     _cloudTileCacheVer = _cloudTowersVersion(); _cloudTileCacheList = towers;
 }
 // Whether the cloud tables are those of the towers list as it is: they hold
@@ -1035,7 +1051,7 @@ function _rebuildCloudTileCache() {
 // a restore makes a new list). (They were rebuilt at every path topology
 // change: a mine depleted or a building placed or lost anywhere walked all
 // the towers, ~20k, at the next lookup, several times a tick in a battle.)
-let _cloudTileCacheList = null;
+let _cloudTileCacheList = null, _cloudTileList = null, _cloudTileN = 0;
 function _cloudTowersVersion() { return typeof cloudTowersVersion === 'number' ? cloudTowersVersion : 0; }
 function _cloudTablesCurrent() { return _cloudTileCacheVer === _cloudTowersVersion() && _cloudTileCacheList === towers; }
 
@@ -1068,11 +1084,16 @@ function _getCloudTowerFast(gx, gy, owner) {
 // live portals share the plain labels (key -1).
 let _pathRegions = { w: 0, h: 0, grid: null, portalSig: 0, portalOwners: new Set(), byOwner: new Map(), nearest: new Map(), rebuilds: 0 };
 
+const _regSigP = new Float64Array(2);
+let _regSig = null;
 function _pathRegionPortalSignature() {
     if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
-    let sig = 0;
-    for (let [key, t] of _cloudTileCache) if (t.energy > 0 && !t.underConstruction) sig = (Math.imul(sig ^ (key + 1), 16777619) + (t.owner + 3)) | 0;
-    return sig;
+    if (!_cloudTileN || !_ST.val) return 0;
+    if (!_regSig || !simHeapHas(_regSig)) _regSig = simSharedArray(Int32Array, 4);
+    _regSigP[0] = _cloudTileN;
+    // (reg.rs k_reg_portal_sig: alive and built portals, tile and owner.)
+    simRustDirect('k_reg_portal_sig', [_cloudTileList, _ST.val, _ST.uc, _ST.own, _regSig], _regSigP);
+    return _regSig[0];
 }
 function _pathRegionFind(E, a) {
     const P = E.parent;
@@ -1109,6 +1130,15 @@ function getPathRegions(owner) {
 // (Regions joined since: every label its region's root.)
 function _pathRegionsCanon(E) {
     if (!E.canon) return;
+    const A = _pathRegions.arrays;
+    // (The plain labels on the helpers, reg.rs k_reg_final.)
+    if (A && E.labels === A.lab && E.parent === A.par) {
+        _pathRegionArrays(_pathRegions, A.n);
+        const P = _simParams; P[0] = A.n; P[1] = PATH_REGION_TILES_PER_JOB;
+        simParallelRun(SIM_KERNEL_REG_FINAL, Math.ceil(A.n / PATH_REGION_TILES_PER_JOB));
+        E.canon = false;
+        return;
+    }
     const L = E.labels;
     for (let i = 0; i < L.length; i++) if (L[i] >= 0) L[i] = _pathRegionFind(E, L[i]);
     E.canon = false;
@@ -1120,28 +1150,17 @@ function _pathRegionsPlain(R) {
     if (E && E.dirty) { R.byOwner.delete(-1); E = null; }
     if (E) { _pathRegionsCanon(E); return E; }
     R.rebuilds++;
-    let w = GRID_W, h = GRID_H, n = w * h;
-    let labels = new Int32Array(n).fill(-1);
-    let walk = new Uint8Array(n);
-    for (let y = 0; y < h; y++) {
-        let row = grid[y];
-        for (let x = 0; x < w; x++) if (row[x].type !== TYPE_WALL) walk[y * w + x] = 1;
-    }
-    let q = new Int32Array(n), next = 0;
-    for (let i = 0; i < n; i++) {
-        if (!walk[i] || labels[i] >= 0) continue;
-        let id = next++, head = 0, tail = 0;
-        labels[i] = id; q[tail++] = i;
-        while (head < tail) {
-            let k = q[head++], x = k % w, y = (k / w) | 0;
-            if (x > 0 && walk[k - 1] && labels[k - 1] < 0) { labels[k - 1] = id; q[tail++] = k - 1; }
-            if (x < w - 1 && walk[k + 1] && labels[k + 1] < 0) { labels[k + 1] = id; q[tail++] = k + 1; }
-            if (y > 0 && walk[k - w] && labels[k - w] < 0) { labels[k - w] = id; q[tail++] = k - w; }
-            if (y < h - 1 && walk[k + w] && labels[k + w] < 0) { labels[k + w] = id; q[tail++] = k + w; }
-        }
-    }
-    E = { key: -1, labels, parent: new Int32Array(Math.max(64, next * 2)), next, canon: false, dirty: false };
-    for (let i = 0; i < E.parent.length; i++) E.parent[i] = i;
+    // (reg.rs: bands of rows flooded on the helpers, joined at their edges,
+    // labels canonical: each region its lowest tile. New regions made by the
+    // tile hook take ids from n on.)
+    const w = GRID_W, h = GRID_H, n = w * h, A = _pathRegionArrays(R, n);
+    const P = _simParams, rows = Math.max(1, Math.ceil(h / PATH_REGION_BANDS));
+    P[0] = w; P[1] = h; P[2] = rows;
+    simParallelRun(SIM_KERNEL_REG_LOCAL, Math.ceil(h / rows));
+    simParallelRun(SIM_KERNEL_REG_MERGE, 1);
+    P[0] = n; P[1] = PATH_REGION_TILES_PER_JOB;
+    simParallelRun(SIM_KERNEL_REG_FINAL, Math.ceil(n / PATH_REGION_TILES_PER_JOB));
+    E = { key: -1, labels: A.lab, parent: A.par, next: n, canon: false, dirty: false };
     R.byOwner.set(-1, E);
     return E;
 }
@@ -1150,12 +1169,20 @@ function _pathRegionsPlain(R) {
 // neighbours and their pair; each plain region then labelled by its root.
 function _pathRegionsOwner(R, key, plain, old) {
     const PL = plain.labels, n = PL.length, w = GRID_W, h = GRID_H, M = plain.next;
+    // (A portal tile, a wall in the plain labels, is labelled by its own tile:
+    // never a plain region's id, which is a walkable tile's or n and up.)
     const extra = new Map();
-    let more = 0;
-    for (let [tk, t] of _cloudTileCache) if (t.owner === key && t.energy > 0 && !t.underConstruction && PL[tk] < 0) extra.set(tk, M + more++);
-    const E = { key, labels: old && old.labels.length === n ? old.labels : new Int32Array(n), parent: new Int32Array(Math.max(64, (M + more) * 2)), next: M + more, canon: false, dirty: false };
-    for (let i = 0; i < E.parent.length; i++) E.parent[i] = i;
-    const label = k => { const l = PL[k]; if (l >= 0) return l; const e = extra.get(k); return e === undefined ? -1 : e; };
+    for (let [tk, t] of _cloudTileCache) if (t.owner === key && t.energy > 0 && !t.underConstruction && PL[tk] < 0) extra.set(tk, tk);
+    const A = _pathRegionArrays(R, n), size = Math.max(plain.parent.length, M + 1);
+    if (!simHeapHas(plain.parent)) { const p = simSharedArray(Int32Array, plain.parent.length); p.set(plain.parent); plain.parent = A.par = p; simParallelBind('reg.par', p); }
+    const labels = old && old.labels.length === n && simHeapHas(old.labels) ? old.labels : simSharedArray(Int32Array, n);
+    const op = old && old.parent.length >= size && simHeapHas(old.parent) ? old.parent : simSharedArray(Int32Array, size);
+    simParallelBind('reg.opar', op); simParallelBind('reg.olab', labels); simParallelBind('reg.lab', PL);
+    const P = _simParams;
+    P[0] = size; P[1] = PATH_REGION_TILES_PER_JOB;
+    simParallelRun(SIM_KERNEL_REG_IDENT, Math.ceil(size / PATH_REGION_TILES_PER_JOB));
+    const E = { key, labels, parent: op, next: M, canon: false, dirty: false };
+    const label = k => { const l = PL[k]; if (l >= 0) return _pathRegionFind(plain, l); const e = extra.get(k); return e === undefined ? -1 : e; };
     const join = (a, b) => { const ra = _pathRegionFind(E, a), rb = _pathRegionFind(E, b); if (ra !== rb) E.parent[Math.max(ra, rb)] = Math.min(ra, rb); };
     for (const [tk, l] of extra) {
         const x = tk % w, y = (tk / w) | 0;
@@ -1171,10 +1198,11 @@ function _pathRegionsOwner(R, key, plain, old) {
         let a = label(tk), b = label(partner.gy * w + partner.gx);
         if (a >= 0 && b >= 0) join(a, b);
     }
-    const map = new Int32Array(M);
-    for (let l = 0; l < M; l++) map[l] = _pathRegionFind(E, l);
+    // (reg.rs k_reg_owner: each tile's plain root, then its owner root.)
+    P[0] = n; P[1] = PATH_REGION_TILES_PER_JOB;
+    simParallelRun(SIM_KERNEL_REG_OWNER, Math.ceil(n / PATH_REGION_TILES_PER_JOB));
+    simParallelBind('reg.lab', R.arrays.lab);
     const L = E.labels;
-    for (let i = 0; i < n; i++) { const l = PL[i]; L[i] = l >= 0 ? map[l] : -1; }
     for (const [tk, l] of extra) L[tk] = _pathRegionFind(E, l);
     return E;
 }
@@ -1219,10 +1247,11 @@ function _pathRegionJoinedAround(L, gx, gy) {
 // portal on it: that owner's made again from the plain ones).
 function pathRegionsTileChanged(gx, gy) {
     const R = _pathRegions;
-    if (!R.byOwner.size || R.grid !== grid || R.w !== GRID_W || R.h !== GRID_H) return;
     const W = GRID_W, row = grid[gy], cell = row ? row[gx] : null;
     if (!cell || gx < 0 || gx >= W) return;
     const t = gy * W + gx, open = cell.type !== TYPE_WALL;
+    if (R.arrays && R.arrays.wallFor === grid && R.arrays.wall.length === W * GRID_H) R.arrays.wall[t] = open ? 0 : 1;
+    if (!R.byOwner.size || R.grid !== grid || R.w !== GRID_W || R.h !== GRID_H) return;
     R.nearest.clear();
     for (const E of R.byOwner.values()) {
         if (E.dirty) continue;
@@ -1245,6 +1274,7 @@ function _pathRegionTileSet(E, gx, gy, open) {
         if (root < 0) {
             root = E.next++;
             if (root >= E.parent.length) { const P = new Int32Array(E.parent.length * 2); P.set(E.parent); for (let i = E.parent.length; i < P.length; i++) P[i] = i; E.parent = P; }
+            E.parent[root] = root;
         }
         L[t] = root;
     } else {
@@ -1273,7 +1303,25 @@ function _pathRegionTileSet(E, gx, gy, open) {
 }
 const _pathRegionRingScratch = new Uint8Array(8);
 // Grid tiles set without the hook (a restore): made again at next use.
-function pathRegionsReset() { _pathRegions.byOwner = new Map(); _pathRegions.nearest = new Map(); }
+function pathRegionsReset() { _pathRegions.byOwner = new Map(); _pathRegions.nearest = new Map(); if (_pathRegions.arrays) _pathRegions.arrays.wallFor = null; }
+// The kernels' arrays (heap, made once a map size; bound once): the wall copy
+// (kept by pathRegionsTileChanged; made from the grid when missing), plain
+// labels and parents (room for the tile hook's new regions), the queue.
+const PATH_REGION_BANDS = 64, PATH_REGION_TILES_PER_JOB = 65536;
+function _pathRegionArrays(R, n) {
+    let A = R.arrays;
+    if (!A || A.n !== n || !simHeapHas(A.lab)) {
+        A = R.arrays = { n, wall: simSharedArray(Uint8Array, n), lab: simSharedArray(Int32Array, n), par: simSharedArray(Int32Array, n + 65536), q: simSharedArray(Int32Array, n), wallFor: null };
+        simParallelBind('reg.q', A.q);
+    }
+    if (A.wallFor !== grid) {
+        const w = GRID_W, h = GRID_H, W = A.wall;
+        for (let y = 0; y < h; y++) { const row = grid[y]; for (let x = 0; x < w; x++) W[y * w + x] = row[x].type === TYPE_WALL ? 1 : 0; }
+        A.wallFor = grid;
+    }
+    simParallelBind('reg.wall', A.wall); simParallelBind('reg.lab', A.lab); simParallelBind('reg.par', A.par);
+    return A;
+}
 // The plain labels, made ahead (a match's first tick, after a restore): not
 // at the first order.
 // (Then the owners with live portals, one a tick.)
@@ -1288,7 +1336,9 @@ function pathRegionsWarm() {
 // the reachable stand-in for a target outside the region. Cached.
 function nearestTileInPathRegion(owner, labels, region, ex, ey) {
     let R = _pathRegions;
-    let key = ((owner === null || owner === undefined ? -1 : owner) + 2) * 1e9 + region * 1e5 + ey * GRID_W + ex;
+    // (Regions are tile indices or above, up to twice the tiles: exact in a double.)
+    const NN = GRID_W * GRID_H;
+    let key = (((owner === null || owner === undefined ? -1 : owner) + 2) * (2 * NN + 65) + region) * NN + ey * GRID_W + ex;
     let hit = R.nearest.get(key);
     if (hit !== undefined) return hit;
     let w = GRID_W, best = -1, bestD = Infinity;

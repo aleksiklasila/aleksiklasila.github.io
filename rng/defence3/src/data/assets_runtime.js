@@ -463,9 +463,9 @@ function _getAssetAnimationNameForEntity(entity) {
         else if (entity.commandState === CMD_MOVING || entity.vx || entity.vy) preferred = 'move';
     } else if (entity.type === 'research') {
         if (entity.isResearching) preferred = 'work';
-        else if (Array.isArray(entity.spawnQueue) && entity.spawnQueue.length > 0) preferred = 'spawn';
+        else if (spawnQueueCount(entity) > 0) preferred = 'spawn';
     } else if (entity.type === 'barrack' || entity.type === 'spawner' || entity.type === 'astar_spawner' || entity.type === 'salvager' || entity.type === 'builder_spawner' || entity.type === 'healer_spawner') {
-        if (Array.isArray(entity.spawnQueue) && entity.spawnQueue.length > 0) preferred = 'spawn';
+        if (spawnQueueCount(entity) > 0) preferred = 'spawn';
     } else if (entity.type && BASE_CARD_TYPES && BASE_CARD_TYPES[entity.type] && BASE_CARD_TYPES[entity.type].target === 'wall') {
         if (entity.laserState === 1 || entity.cd > 0) preferred = 'attack';
     }

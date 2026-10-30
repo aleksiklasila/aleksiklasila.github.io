@@ -122,7 +122,6 @@ function spatialSlotMove(c, s, gx, gy, tile) {
     const row = areaIdGrid[gy], area = row ? row[gx] : -1;
     c.spArea[s] = area >= 0 ? area : -1;
     c.spTile[s] = tile;
-    if (!visCoverSlotWindow(c, s)) visCoverOnUnitSpatialChanged(_simUnitState.owners[s]);
 }
 function _spatialCountSlot(c, s, chunkKey, owner, delta) {
     _spatialCountAdd(chunkKey, owner, c.spType[s], delta);
@@ -213,7 +212,6 @@ function _moveUnitSpatial(u, gx, gy, tile) {
     u._spatialEpoch = spatialEpoch;
     simUnitSetSepKey(u, chunkKey, u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0));
     simMoveDisarm(u);
-    visCoverOnUnitSpatialChanged(u);
 }
 
 function removeUnitSpatial(u) {
@@ -227,7 +225,6 @@ function removeUnitSpatial(u) {
     u._spatialEpoch = 0;
     simUnitSetSepKey(u, SIM_SEP_ABSENT, 0);
     simMoveDisarm(u);
-    if (indexed) visCoverOnUnitSpatialChanged(u);
 }
 
 // The area layout was rebuilt (new area buckets): every indexed unit joins

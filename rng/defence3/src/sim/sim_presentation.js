@@ -243,7 +243,7 @@ function _simPresentStructureChanges(p) {
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
         const cell = grid[gy] && grid[gy][gx];
         // (A floor item is its tile's entity and its cell's item: kind 3; a mine, none here.)
-        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : Array.isArray(e.spawnQueue) ? 2 : cell && cell.item === e ? 3 : -1;
+        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : hasSpawnQueue(e) ? 2 : cell && cell.item === e ? 3 : -1;
         else if (cell && cell.item) { e = cell.item; kind = 3; }
         if (kind < 0) e = null;
         // The structure shown on this tile is gone (destroyed, salvaged, or

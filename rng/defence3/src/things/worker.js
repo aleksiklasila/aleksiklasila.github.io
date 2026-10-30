@@ -652,17 +652,14 @@ function updateWorkerAI(u) {
 
                 if (targetIsQueue) {
                     let sp = u.workerTarget;
-                    let fallbackType = getSpawnerFallbackUnitType(sp);
-                    let effLvl = getThingBaseLevel(sp);
-                    let front = getQueuedSpawnInfo(sp.spawnQueue[0], fallbackType, effLvl, owner);
+                    let front = spawnQueueFront(sp);
                     let didWork = false;
                     let healWork = Math.max(1, Math.floor(Number(u._healerQueueTripCost) || Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1))));
 
-                    if (front.energyPaid < front.energyRequired) {
-                        front.energyPaid = Math.min(front.energyRequired, front.energyPaid + healWork);
+                    if (front && front.energyPaid < front.energyRequired) {
+                        spawnQueuePay(sp, healWork);
                         didWork = true;
                     }
-                    sp.spawnQueue[0] = front;
                     if (didWork && typeof spawnerProductionChanged === 'function') spawnerProductionChanged(sp);
 
                     if (didWork) {
@@ -673,7 +670,8 @@ function updateWorkerAI(u) {
                     }
 
                     let cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1));
-                    if (sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
+                    front = spawnQueueFront(sp);
+                    if (front && sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
                         sp._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
                         if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
                     }
@@ -1071,7 +1069,6 @@ function _wswResvRoom() {
     return _wswResvList;
 }
 function _wswResvMark(slot) { const L = _wswResvList || _wswResvRoom(), n = L[0]; if (n + 1 < L.length) { L[n + 1] = slot; L[0] = n + 1; } else _wsw = null; }
-const _wswResMax = new Map();
 // Rosters include unfinished buildings. Completion only publishes the first
 // search batch allowed to use the existing row, never a roster rebuild.
 let _wsPostEpoch = 0;
@@ -1102,119 +1099,95 @@ function workSiteBuilt(item) {
         if (k >= 0) { const q = G.arrays.qp[k]; if (Atomics.load(G.arrays.pready, q) === WS_NOT_BUILT) { Atomics.store(G.arrays.pready, q, _wsPostEpoch + 1); G.nfEligibilityDirty = true; } }
     }
 }
-// (As _isBuilderWorkTarget without its side effect, and the others' tests;
-// the common cases first: no upgrade due while the effective level is not
-// above the level.)
-function _wswFlagsOf(e, o) {
-    let f = 0;
-    if (e.markedForSalvage) { if (getTileEntityRef(e.gx, e.gy) === e) f |= WSW_SALVAGE; }
-    else if (e.underConstruction) { if (e.buildEnabled !== false) f |= WSW_BUILD; }
-    else if (e.isUpgrading || e.isStacking) f |= WSW_BUILD;
-    else if (e.energy > 0 && e.energy < e.maxEnergy) f |= WSW_BUILD;
-    else if (_isBuilderStackCandidate(e)) f |= WSW_BUILD;
-    else if (e.autoUpgradeEnabled !== false && !(e.effectiveLevel <= e.level)) {
-        // (_isBuilderUpgradeCandidate, the researched level once a step per
-        // owner and building.)
-        const base = getThingBaseLevel(e, stackCountToLevel(e.stacks || 1)), eff = getThingEffectiveLevel(e, base);
-        if (eff > base) {
-            const k = o + ':' + getThingResearchBuildingKey(e);
-            let rmax = _wswResMax.get(k);
-            if (rmax === undefined) _wswResMax.set(k, rmax = getThingResearchedMaxLevel(e));
-            if (Math.min(eff, rmax) > base) f |= WSW_BUILD;
-        }
-    }
-    const q = e.spawnQueue;
-    if (q && q.length > 0 && _isHealerQueueTarget(e, o)) f |= WSW_QUEUE;
-    if (e.type === 'research' && !e.markedForSalvage && e.energy > 0 && !e.underConstruction) { f |= WSW_RESEARCH; if (isAutoResearchEnabled(e)) f |= WSW_AUTORES; }
-    return f;
-}
-function _wswResvOf(W, t) {
-    const NT = Math.min(8, _WORKER_TARGET_LOAD_TYPE_COUNT), base = t * _WORKER_TARGET_LOAD_TYPE_COUNT;
-    let rv = 0;
-    for (let i = 0; i < NT; i++) { const r = workerReservedAt(base + i); if (r && !r.dead) rv |= 1 << i; }
-    return rv;
-}
 // u's type's reservation bit (0: none), and the tile it holds reserved (-1).
 function _wsResvBit(u) { const i = _workerTypeToLoadIndex(u.workerType); return i >= 0 && i < 8 ? 1 << i : 0; }
 function _wsMyTile(u) {
     const slot = Number.isFinite(u._workerReservedTileIndex) ? Math.floor(u._workerReservedTileIndex) : -1;
     return slot >= 0 ? Math.floor(slot / _WORKER_TARGET_LOAD_TYPE_COUNT) : -1;
 }
-// Tile t's entries from its owned structure e (or none).
-function _wswSet(W, t, e) {
-    let f = 0, o = -1;
-    if (e) { o = e.owner | 0; f = _wswFlagsOf(e, o); }
-    const f0 = W.flags[t], o0 = W.own[t];
-    // (No work, as before: nothing else to keep.)
-    if (!f && !f0 && o === o0) return;
-    if (f0 !== f || o0 !== o) {
-        const gx = t % W.w, b = (((t - gx) / W.w >> 3) * W.bw + (gx >> 3)) * 8;
-        for (let i = 0; i < WSW_NBITS; i++) {
-            const m = 1 << i;
-            if (f0 & m) { W.cnt[b + i]--; if (o0 >= 0 && o0 < WSW_MAXOWN) W.oc[o0 * 8 + i]--; }
-            if (f & m) { W.cnt[b + i]++; if (o >= 0 && o < WSW_MAXOWN) W.oc[o * 8 + i]++; }
-        }
-        W.flags[t] = f; W.own[t] = o;
+// The grid's entries for a list of tiles (wsw.rs k_wsw_set: each tile's owned
+// structure's work flags, owner, area and reservation bits, the counts; mode 1
+// only the reservation bits), from the structure tables, the id table and the
+// static stat tables (k_adj_apply's: research, maximum energy).
+const _WSW_CTAB_COLS = ['markedForSalvage', 'buildEnabled', 'queueEnabled', '_qN', '_qReq', '_qPaid', 'autoResearchEnabled'];
+const _wswP = new Float64Array(16);
+let _wswList = null;
+function _wswTiles(n) { if (!_wswList || _wswList.length < n || !simHeapHas(_wswList)) _wswList = simSharedArray(Int32Array, Math.max(4096, n * 2)); return _wswList; }
+function _wswRun(W, list, n, mode) {
+    if (!(n > 0)) return;
+    if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
+    if (!_ST.stab) return;
+    const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), R = _simParReg;
+    const CT = _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length);
+    _adjApplyClasses(CT);
+    const WC = _adjArr('wsw.ctab', Int32Array, 9 * _WSW_CTAB_COLS.length), classes = STRUCT_STATUS_CLASSES(), w = _WSW_CTAB_COLS.length;
+    for (let c = 0; c < 9; c++) {
+        const T = classes[c] ? _sTables.get(classes[c]) : null;
+        for (let j = 0; j < w; j++) { const a = T && T.n ? T['c_' + _WSW_CTAB_COLS[j]] : null; WC[c * w + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
     }
-    W.area[t] = f ? (Number.isFinite(e.areaId) ? Math.floor(e.areaId) : getAreaIdAtTile(e.gx, e.gy)) : -1;
-    // (A site's reservations again: a reserver that died since.)
-    if (f) W.resv[t] = _wswResvOf(W, t);
+    const U = typeof _simUnitState !== 'undefined' ? _simUnitState : null, idt = U && _unitById._ok() && simHeapHas(_unitById.t) ? _unitById.t : null;
+    const rtype = _stationaryTypeIds.get('research'), P = _wswP;
+    P[0] = n; P[1] = GRID_W; P[2] = MAX_THING_LEVEL; P[3] = NT; P[4] = S.nk; P[5] = X.np; P[6] = S.L1; P[7] = S.R1; P[8] = W.bw; P[9] = WSW_MAXOWN;
+    P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = idt ? idt.length : 1; P[12] = mode; P[13] = rtype === undefined ? 0 : rtype + 1;
+    simRustDirect('k_wsw_set', [list, _ST.stab, _ST.rrow, _ST.uc, _ST.brain, CT, WC, R['adj.tykey'], R['adj.rml'], S.mxe, R['adj.rlv'],
+        W.flags, W.own, W.area, W.resv, W.cnt, W.oc, cellArea, simHeapHas(workerReservedTiles) ? workerReservedTiles : null,
+        idt, idt && U ? U.columns.id : null, idt && U ? U.columns.dead : null], P);
+}
+// A structure's work flags now (its tile through the kernel; tests).
+function workSiteFlagsOf(e) {
+    if (!_wsw) _wswStep(0, false);
+    const t = e.gy * GRID_W + e.gx, L = _wswTiles(1);
+    L[0] = t; _wswRun(_wsw, L, 1, 0);
+    return _wsw.flags[t];
 }
 function _wswBuild() {
     const n = GRID_W * GRID_H, bw = Math.ceil(GRID_W / 8), bh = Math.ceil(GRID_H / 8);
     const W = _wsw = { w: GRID_W, h: GRID_H, n, bw, bh, set: _activeTileEntities, areaFor: areaIdGrid, resvFor: workerReservedTiles,
         flags: simSharedArray(Uint8Array, n), own: simSharedArray(Int8Array, n), area: simSharedArray(Int32Array, n), resv: simSharedArray(Uint8Array, n),
-        cnt: simSharedArray(Int32Array, bw * bh * 8), oc: new Int32Array(WSW_MAXOWN * 8), cursor: { epoch: -1, pos: 0 } };
+        cnt: simSharedArray(Int32Array, bw * bh * 8), oc: simSharedArray(Int32Array, WSW_MAXOWN * 8), cursor: { epoch: -1, pos: 0 } };
     W.own.fill(-1); W.area.fill(-1);
     for (const k of ['flags', 'own', 'area', 'resv', 'cnt']) simParallelBind('wsw.' + k, W[k]);
     tileEntityChangesSince(W.cursor);
     _wswDirty = []; _wswResvRoom()[0] = 0;
-    // Every live reservation, then every owned structure.
-    const R = workerReservedTiles, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
-    for (let slot = 0; slot < R.length; slot++) { const r = R[slot] ? workerReservedAt(slot) : null; if (r && !r.dead) { const i = slot % NT; if (i < 8) W.resv[(slot - i) / NT] |= 1 << i; } }
-    for (const e of _activeTileEntities) {
-        if (!e || !(e.gx >= 0 && e.gy >= 0 && e.gx < GRID_W && e.gy < GRID_H)) continue;
-        const t = e.gy * GRID_W + e.gx, x = _ownedStructureAtTile(t);
-        if (x) _wswSet(W, t, x);
-    }
+    // Every live reservation (mines and drops too), then every structure.
+    const RS = workerReservedTiles, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
+    for (let slot = 0; slot < RS.length; slot++) { const r = RS[slot] ? workerReservedAt(slot) : null; if (r && !r.dead) { const i = slot % NT; if (i < 8) W.resv[(slot - i) / NT] |= 1 << i; } }
+    const m = _activeTileEntities.tileList();
+    _wswRun(W, _activeTileEntities._tiles, m, 0);
 }
 // One step: the grid made (first, or after its sources were replaced), the
-// journal's and marked tiles, reservations, and the sweep's share.
+// journal's and marked tiles, reservations, and the sweep's share (every
+// structure in tile order once in WSW_SWEEP steps).
 function _wswStep(step, sweepOn = true) {
     if (typeof _activeTileEntities === 'undefined' || typeof tileEntityChangesSince !== 'function') return;
-    _wswResMax.clear();
     let W = _wsw;
     if (!W || W.w !== GRID_W || W.h !== GRID_H || W.set !== _activeTileEntities || W.areaFor !== areaIdGrid || W.resvFor !== workerReservedTiles) { _wswBuild(); return; }
     const ch = tileEntityChangesSince(W.cursor);
     if (ch === null) { _wswBuild(); return; }
-    for (let i = 0; i < ch.length; i++) _wswSet(W, ch[i], _ownedStructureAtTile(ch[i]));
-    if (_wswDirty.length) { const d = _wswDirty; _wswDirty = []; for (let i = 0; i < d.length; i++) _wswSet(W, d[i], _ownedStructureAtTile(d[i])); }
-    const RL = _wswResvRoom();
-    if (RL[0]) {
-        const n = RL[0], NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
-        RL[0] = 0;
-        for (let i = 1; i <= n; i++) { const t = Math.floor(RL[i] / NT); if (t < W.n) W.resv[t] = _wswResvOf(W, t); }
-    }
-    if (!sweepOn) return;
-    // The sweep: every owner's structure buckets k = step (mod WSW_SWEEP).
-    const np = Math.max(1, Math.floor(Number(players && players.length) || 0));
-    for (let o = 0; o < np; o++) {
-        const buckets = _ownedStructureBuckets(o);
-        if (!buckets) continue;
-        for (let k = step; k < buckets.length; k += WSW_SWEEP) {
-            const list = buckets[k];
-            if (list) for (let i = 0; i < list.length; i++) { const e = list[i]; _wswSet(W, e.gy * GRID_W + e.gx, e); }
-        }
-    }
-    // The collectors' sites' reservations again, in turn (a reserver that
-    // died since).
-    for (const G of _wsGroups.values()) {
+    const d = _wswDirty, occ = sweepOn ? _activeTileEntities.tileList() : 0, sw = occ > step ? Math.ceil((occ - step) / WSW_SWEEP) : 0;
+    const L = _wswTiles(ch.length + d.length + sw), OT = _activeTileEntities._tiles;
+    let n = 0;
+    for (let i = 0; i < ch.length; i++) L[n++] = ch[i];
+    for (let i = 0; i < d.length; i++) L[n++] = d[i];
+    _wswDirty = [];
+    for (let i = step; i < occ; i += WSW_SWEEP) L[n++] = OT[i];
+    _wswRun(W, L, n, 0);
+    // Reservations changed since the last step; the collectors' sites', in turn (a reserver that died since).
+    const RL = _wswResvRoom(), NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
+    let groups = 0;
+    if (sweepOn) for (const G of _wsGroups.values()) groups += G.n > step ? Math.ceil((G.n - step) / WSW_SWEEP) : 0;
+    const L2 = _wswTiles(RL[0] + groups);
+    let m = 0;
+    for (let i = 1; i <= RL[0]; i++) { const t = Math.floor(RL[i] / NT); if (t < W.n) L2[m++] = t; }
+    RL[0] = 0;
+    if (sweepOn) for (const G of _wsGroups.values()) {
         const SX = G.arrays.sx, SY = G.arrays.sy;
         for (let s = step; s < G.n; s += WSW_SWEEP) {
             const gx = Math.floor(SX[s] / TILE), gy = Math.floor(SY[s] / TILE);
-            if (gx >= 0 && gy >= 0 && gx < W.w && gy < W.h) W.resv[gy * W.w + gx] = _wswResvOf(W, gy * W.w + gx);
+            if (gx >= 0 && gy >= 0 && gx < W.w && gy < W.h) L2[m++] = gy * W.w + gx;
         }
     }
+    _wswRun(W, L2, m, 1);
 }
 // Whether owner has sites of a kind (as of the grid's last step; without
 // the grid: yes).
@@ -1294,35 +1267,20 @@ function _wsGroupBuild(G, cfg) {
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
     const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, cap);
     arr('abc', Int32Array, nb); arr('abi', Int32Array, cap);
-    BC.fill(0, 0, nb);
-    const bk = i => Math.max(0, Math.min(brows - 1, Math.floor(SY[i] / TILE / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(SX[i] / TILE / WS_BUCKET)));
-    for (let i = 0; i < cap; i++) BC[bk(i)]++;
-    let fill = 0;
-    for (let b = 0; b < nb; b++) { BS[b] = fill; fill += BC[b]; BC[b] = 0; }
-    for (let i = 0; i < cap; i++) { const b = bk(i); BI[BS[b] + BC[b]++] = i; }
     const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
     const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np), PR = arr('pready', Int32Array, np);
     // (A spawner's place: tile order (the q arrays) to bucket order (the p arrays), for workSiteBuilt.)
     const QP = arr('qp', Int32Array, np);
-    // The spawners sorted by the bucket of their tile (the kernel finds an owner's
+    // The sites by bucket (bs a bucket's first, bc its count, bi the sites); the
+    // spawners sorted by the bucket of their tile (the kernel finds an owner's
     // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
-    // its count, then (16) the count of each owner's.
-    const meta = arr('meta', Int32Array, 5 + 2 * nb + 32);
-    meta.fill(0, 0, 5 + 2 * nb + 32);
-    // (meta[5 + 2 nb + 16 + owner]: the owner's slot in the nearest-spawner field, -1 none.)
-    for (let o = 0; o < 16; o++) meta[5 + 2 * nb + 16 + o] = -1;
-    const sb = arr('sbk', Int32Array, np);
-    for (let q = 0; q < np; q++) {
-        sb[q] = Math.max(0, Math.min(brows - 1, Math.floor(QGY[q] / WS_BUCKET))) * bcols + Math.max(0, Math.min(bcols - 1, Math.floor(QGX[q] / WS_BUCKET)));
-        meta[6 + 2 * sb[q]]++;
-        if (QO[q] >= 0 && QO[q] < 16) meta[5 + 2 * nb + QO[q]]++;
-    }
-    for (let b = 0, at = 0; b < nb; b++) { meta[5 + 2 * b] = at; at += meta[6 + 2 * b]; meta[6 + 2 * b] = 0; }
-    for (let k = 0; k < np; k++) {
-        const b = sb[k], q = meta[5 + 2 * b] + meta[6 + 2 * b]++;
-        PGX[q] = QGX[k]; PGY[q] = QGY[k]; PO[q] = QO[k]; PID[q] = QID[k]; PX[q] = QX[k]; PY[q] = QY[k]; PR[q] = QR[k]; QP[k] = q;
-    }
-    meta[0] = cap; meta[1] = np; meta[2] = 1; meta[3] = bcols; meta[4] = brows;
+    // its count, then (16) the count of each owner's; (meta[5 + 2 nb + 16 + owner]:
+    // the owner's slot in the nearest-spawner field, -1 none). Counting sorts: wsb.rs.
+    const meta = arr('meta', Int32Array, 5 + 2 * nb + 32), sb = arr('sbk', Int32Array, np);
+    // (And the near field's: rk / ro the spawners' tile order and back, hs the set's hashes.)
+    const RK = arr('rk', Int32Array, np), RO = arr('ro', Int32Array, np), HS = arr('hs', Int32Array, 2);
+    P[0] = cap; P[1] = np; P[2] = bcols; P[3] = brows; P[4] = TILE; P[5] = WS_BUCKET;
+    simRustDirect('k_ws_buckets', [SX, SY, BS, BC, BI, QGX, QGY, QO, QID, QX, QY, QR, PGX, PGY, PO, PID, PX, PY, PR, QP, sb, meta, RK, RO, HS], P);
     G.np = np;
     _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta);
     G.n = cap;
@@ -1330,7 +1288,7 @@ function _wsGroupBuild(G, cfg) {
 // A group's site i: its object (null: gone since the post) and its type name.
 function _wsSiteTarget(g, i) {
     const t = g.tile[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
-    return g.st[i] === 1 ? (tileEntityRef[gy] && tileEntityRef[gy][gx]) || null : (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
+    return g.st[i] === 1 ? getTileEntityRef(gx, gy) : (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
 }
 // Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
 // at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
@@ -1342,12 +1300,8 @@ let WS_NEARFIELD = true;
 function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
     G.nfBuild = false; G.nfList = [];
     if (!WS_NEARFIELD || !(np > 0 && np <= 65535)) { G.nfSetKey = null; return; }
-    let h1 = 0, h2 = 0x9e3779b9 | 0;
-    for (let p = 0; p < np; p++) {
-        const o = PO[p];
-        const hh = Math.imul(((PGX[p] * 73856093) ^ (PGY[p] * 19349663) ^ (PID[p] * 83492791) ^ ((o + 16) * 2654435761)) | 0, 0x85ebca6b);
-        h1 = (h1 + hh) | 0; h2 = Math.imul(h2 ^ hh, 0x01000193);
-    }
+    // (The set's hashes: wsb.rs k_ws_buckets.)
+    const h1 = G.arrays.hs[0], h2 = G.arrays.hs[1];
     const owners = [];
     for (let o = 0; o < 16; o++) if (meta[5 + 2 * nb + o] > 0) owners.push(o);
     const ownersKey = owners.join(','), setKey = np + ':' + h1 + ':' + GRID_W + 'x' + GRID_H, ordKey = setKey + ':' + h2;
@@ -1358,13 +1312,7 @@ function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
     const need = fieldOwners.length * tiles;
     let NF = G.arrays.nf, fresh = false;
     if (!NF || NF.length < need) { NF = G.arrays.nf = simSharedArray(Uint32Array, need); simParallelBind(pre + 'nf', NF); fresh = true; }
-    const rk0 = G.arrays.rk, ro0 = G.arrays.ro, RK = arr('rk', Int32Array, np), RO = arr('ro', Int32Array, np);
-    if (G.nfOrdKey !== ordKey || RK !== rk0 || RO !== ro0) {
-        const idx = new Int32Array(np);
-        for (let q = 0; q < np; q++) idx[q] = q;
-        idx.sort((x, y) => (PGY[x] - PGY[y]) || (PGX[x] - PGX[y]) || (PID[x] - PID[y]));
-        for (let r = 0; r < np; r++) { RK[r] = idx[r]; RO[idx[r]] = r; }
-    }
+    // (rk / ro, the spawners by (gy, gx): tile order, one a tile: the kernel's.)
     const fkey = fieldOwners.join(',');
     G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey || !!G.nfEligibilityDirty;
     G.nfEligibilityDirty = false;
@@ -2181,7 +2129,7 @@ function _hasUnderConstructionOrUpgradingAt(nx, ny) {
 // check the ones around them live (_isBuilderWorkTarget).
 const _ownedStructIndex = { cursor: { epoch: -1, pos: 0 }, set: null, w: 0, h: 0, cols: 0, rows: 0, byOwner: new Map(), at: new Map() };
 function _ownedStructureAtTile(t) {
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, refs = tileEntityRef[gy], e = refs ? refs[gx] : null;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
     return e && e.gx === gx && e.gy === gy && Number.isFinite(e.owner) ? e : null;
 }
 function _ownedStructureBuckets(owner) {
@@ -3264,26 +3212,22 @@ function _isHealerQueueTarget(target, owner) {
     if (!target || target.owner !== owner) return false;
     if (target.energy <= 0 || target.underConstruction) return false;
     if (!isQueueEnabled(target)) return false;
-    if (!Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return false;
-    let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingBaseLevel(target);
-    let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+    if (!(spawnQueueCount(target) > 0)) return false;
+    let front = spawnQueueFront(target);
     return front.energyPaid < front.energyRequired;
 }
 
 function _isHealerQueueAnchorTarget(target, owner) {
     if (!target || target.owner !== owner) return false;
     if (target.underConstruction) return false;
-    return Array.isArray(target.spawnQueue);
+    return hasSpawnQueue(target);
 }
 
 function _getHealerQueueTripCost(u, target) {
-    if (!u || !target || !Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) return 0;
+    if (!u || !target || !(spawnQueueCount(target) > 0)) return 0;
     if (!isQueueEnabled(target)) return 0;
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
-    let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingBaseLevel(target);
-    let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+    let front = spawnQueueFront(target);
     let remaining = Math.max(0, Math.floor((front.energyRequired || 0) - (front.energyPaid || 0)));
     if (remaining <= 0) return 0;
     let healWork = Math.max(1, Math.round(Number((u.preComputed && u.preComputed.healerDps) || 1)));
@@ -3317,7 +3261,7 @@ function _getHealerQueueTargetNear(worldX, worldY, owner, radius = 22, requireNe
     let bestDist = radius;
     let consider = (s) => {
         if (!s || s.owner !== owner || s.underConstruction) return;
-        if (!Array.isArray(s.spawnQueue)) return;
+        if (!hasSpawnQueue(s)) return;
         if (requireNeedsWork && !isQueueEnabled(s)) return;
         if (requireNeedsWork && !_isHealerQueueTarget(s, owner)) return;
         let d = detHypot(s.x - worldX, s.y - worldY);
@@ -3348,14 +3292,12 @@ function _clearHealerQueueCommit(u) {
 }
 
 function _setHealerQueueCommit(u, target) {
-    if (!u || !target || !Array.isArray(target.spawnQueue) || target.spawnQueue.length <= 0) {
+    if (!u || !target || !(spawnQueueCount(target) > 0)) {
         _clearHealerQueueCommit(u);
         return;
     }
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
-    let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingBaseLevel(target);
-    let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+    let front = spawnQueueFront(target);
     u._healerQueueCommitTarget = target;
     u._healerQueueCommitRequired = Math.max(1, Math.floor(Number(front.energyRequired) || 1));
     u._healerQueueCommitMaxPaid = Math.max(0, Math.floor(Number(front.energyPaid) || 0));
@@ -3371,9 +3313,7 @@ function _getHealerCommittedQueueTarget(u) {
     }
 
     let owner = Number.isFinite(u.owner) ? u.owner : localPlayerId;
-    let fallbackType = getSpawnerFallbackUnitType(target);
-    let effLvl = getThingBaseLevel(target);
-    let front = getQueuedSpawnInfo(target.spawnQueue[0], fallbackType, effLvl, owner);
+    let front = spawnQueueFront(target);
     let paid = Math.max(0, Math.floor(Number(front.energyPaid) || 0));
     let required = Math.max(1, Math.floor(Number(u._healerQueueCommitRequired) || 1));
     u._healerQueueCommitMaxPaid = Math.max(Math.floor(Number(u._healerQueueCommitMaxPaid) || 0), paid);
@@ -3447,7 +3387,6 @@ function _isResearcherTargetBuilding(target, owner, readOnly = false) {
         if (!isAutoResearchEnabled(target)) return false;
         if (readOnly) return true;
         task = tryAdvancePlayerResearchTask(owner);
-        target.researchTask = task || null;
     }
     return _researchNeedsPoints(owner, task);
 }
