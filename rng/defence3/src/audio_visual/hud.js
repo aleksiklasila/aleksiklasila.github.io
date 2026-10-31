@@ -140,13 +140,22 @@ function _renderHudResource(el, cacheKey, owner, resourceKey, glyph, glyphColor,
     if (!Number.isFinite(numericValue)) numericValue = 0;
     let flooredValue = Math.floor(numericValue);
     let valueColor = _getHudResourceValueColor(owner, resourceKey, flooredValue);
-    let html = `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`
-        + (glyphHtml || `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" style="color:${glyphColor};user-select:none">${glyph}</span>`)
-        + extraHtml + rateHtml;
-    if (_hudCache[cacheKey] !== html) {
-        _hudCache[cacheKey] = html;
-        el.innerHTML = html;
+    const parts = [
+        `<span class="hud-res-value" style="color:${valueColor}" title="${formatBigNumber(flooredValue)}">${formatCompactNumber(flooredValue)}</span>`,
+        glyphHtml || `<span class="hud-resource-glyph-btn" data-resource-key="${resourceKey}" style="color:${glyphColor};user-select:none">${glyph}</span>`,
+        extraHtml, rateHtml
+    ];
+    // Updating a resource must not replace a shrine button between mouse-down
+    // and mouse-up: the browser would discard that click.
+    if (!el._resourceCells) {
+        el.innerHTML = parts.map(html => `<span class="hud-resource-cell">${html}</span>`).join('');
+        el._resourceCells = el.querySelectorAll('.hud-resource-cell');
+    } else {
+        parts.forEach((html, i) => {
+            if (el._resourceHtml[i] !== html) el._resourceCells[i].innerHTML = html;
+        });
     }
+    el._resourceHtml = parts;
 }
 
 function _normalizeOwnerId(owner) {
@@ -1418,64 +1427,36 @@ function _hudIsolationText() {
     return ' / 1 thread';
 }
 
-// Pop: current / house capacity / max population.
-// Current pop is grey until it nears the max (orange from 80%, red from 95%).
-// House capacity is judged against the current pop: green while units can
-// still be produced, orange when almost full, red when houses block growth;
-// green again once houses reach the max. The max is green until reached.
-function _renderHudPop(pop, houseCap, maxPop) {
-    let key = `${pop}/${houseCap}/${maxPop}`;
-    if (_hudCache.popText === key) return;
-    _hudCache.popText = key;
-    let el = _hudEls.pop;
-    let popCls = pop >= maxPop * 0.95 ? 'pop-bad' : pop >= maxPop * 0.8 ? 'pop-warn' : 'pop-cur';
-    let housesMaxed = houseCap >= maxPop;
-    let free = houseCap - pop;
-    let capCls = housesMaxed ? 'pop-good' : free <= 0 ? 'pop-bad' : free < Math.max(5, pop * 0.1) ? 'pop-warn' : 'pop-good';
-    let maxCls = pop >= maxPop ? 'pop-bad' : 'pop-good';
-    let lines = [`Population: ${pop} units`, `Houses provide: ${houseCap}`, `Max population: ${maxPop}`, ''];
-    if (pop >= maxPop) lines.push('Max population reached: no new units until some are lost.');
-    else if (free <= 0) {
-        lines.push(pop > houseCap
-            ? `Over the house capacity by ${pop - houseCap}: no new units until you build or upgrade houses.`
-            : 'Houses are full: build more houses or upgrade houses to produce more units.');
-        lines.push(`Up to ${maxPop - houseCap} more capacity can still come from houses.`);
-    } else if (housesMaxed) lines.push(`Room for ${maxPop - pop} more units. Houses already cover the max population.`);
-    else {
-        lines.push(`Room for ${free} more units before houses are full.`);
-        if (capCls === 'pop-warn') lines.push('Almost full: build or upgrade houses soon.');
-    }
+// Percent of the match limit; hover shows current / house capacity / max.
+// Keep the current-count warning thresholds for the percentage colors.
+function _renderHudCapacity(el, percent, cls, label, counts) {
     if (!el._tip) {
-        // (The label and the numbers: two cells of the stack's lines.)
-        el.innerHTML = `<span class="pop-label">Pop</span><span class="pop-nums"><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span>`
-            + `<span class="pop-sep">/</span><span class="pop-n"></span></span><span class="lf-tip" role="tooltip"></span>`;
-        el._nums = el.querySelectorAll('.pop-n');
+        const glyph = label === 'Pop' ? '🧍' : '🏠';
+        el.innerHTML = '<span class="pop-nums pop-n"></span><span class="pop-label" aria-hidden="true">' + glyph + '</span><span class="lf-tip" role="tooltip"></span>';
+        el._value = el.querySelector('.pop-n');
         el._tip = el.querySelector('.lf-tip');
     }
-    let vals = [[pop, popCls], [houseCap, capCls], [maxPop, maxCls]];
-    vals.forEach(([v, cls], i) => { el._nums[i].textContent = String(v); el._nums[i].className = 'pop-n ' + cls; });
-    el._tip.textContent = lines.join('\n');
+    el._value.textContent = percent + '%';
+    el._value.className = 'pop-nums pop-n ' + cls;
+    el.setAttribute('aria-label', label + ' ' + percent + '%');
+    el._tip.textContent = counts.join(' / ');
 }
 
-// Structures held against the building limit (getPlayerStructureLimit): no
-// houses, the match's Max Buildings within its structure memory per player.
+function _renderHudPop(pop, houseCap, maxPop) {
+    const key = pop + '/' + houseCap + '/' + maxPop;
+    if (_hudCache.popText === key) return;
+    _hudCache.popText = key;
+    const cls = pop >= maxPop * 0.95 ? 'pop-bad' : pop >= maxPop * 0.8 ? 'pop-warn' : 'pop-cur';
+    _renderHudCapacity(_hudEls.pop, maxPop > 0 ? Math.round(pop / maxPop * 100) : 0, cls, 'Pop', [pop, houseCap, maxPop]);
+}
+
+// Structures held against the building limit (houses excluded).
 function _renderHudBuilds(count, limit) {
     const key = count + '/' + limit;
     if (_hudCache.buildsText === key) return;
     _hudCache.buildsText = key;
-    const el = _hudEls.builds;
-    if (!el._tip) {
-        el.innerHTML = '<span class="pop-label">Bld</span><span class="pop-nums"><span class="pop-n"></span><span class="pop-sep">/</span><span class="pop-n"></span></span><span class="lf-tip" role="tooltip"></span>';
-        el._nums = el.querySelectorAll('.pop-n');
-        el._tip = el.querySelector('.lf-tip');
-    }
-    const full = count >= limit, cls = full ? 'pop-bad' : count >= limit * 0.9 ? 'pop-warn' : 'pop-cur';
-    el._nums[0].textContent = String(count); el._nums[0].className = 'pop-n ' + cls;
-    el._nums[1].textContent = String(limit); el._nums[1].className = 'pop-n ' + (full ? 'pop-bad' : 'pop-good');
-    const lines = ['Buildings: ' + count + ' structures (buildings, towers, floor items, construction sites)', 'Max buildings: ' + limit, ''];
-    lines.push(full ? 'Building limit reached: no new structures until some are destroyed or salvaged. Upgrading and stacking still work.' : 'Room for ' + (limit - count) + ' more structures.');
-    lines.push("The limit is the match's Max Buildings, no more than its structure memory holds per player.");
-    el._tip.textContent = lines.join('\n');
+    const cls = count >= limit ? 'pop-bad' : count >= limit * 0.9 ? 'pop-warn' : 'pop-cur';
+    _renderHudCapacity(_hudEls.builds, limit > 0 ? Math.round(count / limit * 100) : 0, cls, 'Bld', [count, limit]);
 }
 
 // Online: the command delay. Pending orders and connection details are in

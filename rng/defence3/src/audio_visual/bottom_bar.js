@@ -589,8 +589,11 @@ function _bbRenderResearch(now) {
     for (let a of ahead) aheadCount += a.delta;
     aheadCount = Math.max(0, Math.min(aheadCount, cap - tasks.length));
     let sig = parts.join('|') + `#${cap}#${caret}#${openIndex}#${ahead.map(a => a.key + '/' + a.statKey + '/' + a.delta).join(',')}`;
-    let labelHtml = `<span class="bb-lcap">Research</span><span class="bb-lcount">${tasks.length + aheadCount}<span class="bb-per">/${cap}</span></span>`;
+    const count = tasks.length + aheadCount;
+    const percent = cap > 0 ? Math.round(count / cap * 100) : 0;
+    let labelHtml = `<span class="bb-lcount">${percent}%</span><span class="bb-lcap" aria-hidden="true" style="color:#aef;font-weight:bold">R</span><span class="lf-tip" role="tooltip">${count} / ${cap}</span>`;
     if (els.researchLabel.innerHTML !== labelHtml) els.researchLabel.innerHTML = labelHtml;
+    els.researchLabel.setAttribute('aria-label', `Research ${percent}%`);
     if (sig === bb.researchSig) return;
     bb.researchSig = sig;
 

@@ -283,6 +283,7 @@
         /* Left panel footer: as tall as #bottom-bar (2px border + 107px), four
            lines: energy, star, shrine, population. */
         #left-footer {
+            --lf-columns: 6.5ch 1.3em 1fr 6ch 1.5em;
             flex-shrink: 0;
             margin-top: auto;
             height: 109px;
@@ -312,7 +313,7 @@
            buttons: one grid, so the rows line up. */
         .lf-stack {
             display: grid;
-            grid-template-columns: 6.5ch 1.3em 1fr 6ch auto;
+            grid-template-columns: var(--lf-columns);
             flex: 1;
             column-gap: 3px;
             align-items: baseline;
@@ -322,25 +323,28 @@
         }
 
         .lf-stack .hud-energy, .lf-stack .hud-astar, .lf-stack .hud-shrine { display: contents; }
-        /* Population and research: a line each under the resources, the
-           label where their values and glyphs are, the numbers after it. */
+        .hud-resource-cell { display: contents; }
+        /* Share the resource value/glyph slots; the middle column absorbs
+           spare width so changing percentages cannot move either pair. */
         .lf-pop {
             position: relative;
             display: grid;
-            grid-template-columns: max-content 1fr;
+            grid-template-columns: var(--lf-columns);
             grid-auto-rows: 19px;
-            /* (.lf-row's gap is for its columns: no space between the two lines.) */
             row-gap: 0;
-            column-gap: 6px;
-            justify-content: start;
+            column-gap: 3px;
             align-items: baseline;
             font-size: 14px;
             line-height: 19px;
         }
-        .lf-pop #hud-pop, .lf-pop #hud-builds, .lf-pop #bb-research-label { display: contents; }
-        .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { grid-column: 1; text-align: right; color: #8a949c; font-weight: normal; font-size: 12px; }
-        .lf-pop .pop-nums, .lf-pop #bb-research-label .bb-lcount { grid-column: 2; text-align: left; font-size: 13px; line-height: 19px; white-space: nowrap; letter-spacing: -0.2px; }
-        .lf-pop .pop-label, .lf-pop #bb-research-label .bb-lcap { line-height: 19px; }
+        .lf-pop .hud-pop { display: grid; grid-template-columns: subgrid; align-items: baseline; min-width: 0; font-variant-numeric: tabular-nums; }
+        .lf-pop #hud-pop { grid-column: 1 / 3; grid-row: 1; }
+        .lf-pop #hud-builds { grid-column: 4 / 6; grid-row: 1; }
+        .lf-pop .pop-label { grid-column: 2; text-align: center; font-size: 14px; }
+        .lf-pop .pop-nums { grid-column: 1; text-align: right; font-size: 14px; line-height: 19px; }
+        .lf-pop #bb-research-label { grid-column: 1 / 3; grid-row: 2; grid-template-columns: subgrid; font-size: 14px; line-height: 19px; }
+        .lf-pop #bb-research-label .bb-lcap { grid-column: 2; text-align: center; font-size: 14px; line-height: 19px; letter-spacing: normal; }
+        .lf-pop #bb-research-label .bb-lcount { grid-column: 1; text-align: right; font-size: 14px; line-height: 19px; }
         .lf-drain { display: inline-flex; gap: 2px; align-items: center; align-self: center; }
         .lf-drain-arrow { font-size: 12px; line-height: 12px; padding: 0 1px; color: #888; background: transparent; }
         .lf-stack .bb-lv { text-align: right; }
