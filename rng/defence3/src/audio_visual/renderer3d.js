@@ -217,13 +217,24 @@
             const tile = !key.startsWith('unit_') && !key.startsWith('projectile_')
                 && !key.startsWith('particle') && !key.startsWith('dropped_');
             const size = exact || (tile ? 1 : 0);
-            const light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
+            const historyTile = tile && o.historyGhost;
+            let light = o.historyGhost ? o.lightLevel * .65 : o.lightLevel;
+            if (historyTile) {
+                // Match the baked history tiles' fog curve. Raw light (.14
+                // in remembered areas) made close-up panels nearly black.
+                const level = Math.max(0, Math.min(1, o.lightLevel));
+                const fade = Math.max(0, Math.min(1, (level - .14) / .6));
+                const memoryShade = .55 + .45 * fade * fade * (3 - 2 * fade);
+                light = (1 - Math.pow(1 - level, 1.3) * .42) * memoryShade;
+            }
             // (2.5D: a textured sprite tinted with its owner's colour; the
             // shader keeps only the sprite's shape and shading. Mines keep theirs.)
             const team = source && typeof renderTeamColorsOnly !== 'undefined' && renderTeamColorsOnly && o.tint && !key.includes('mine');
-            const color = source && !team ? null : hexToRgb(o.tint);
+            // History lighting is applied here once, including team-colour
+            // panels; their cached tint has already been darkened on the CPU.
+            const color = source && !team ? null : hexToRgb(historyTile ? o.baseTint || o.tint : o.tint);
             this.push(o.x, o.z + (exact ? source._flatOffsetZ || 0 : 0), size || o.scaleX, size || o.scaleZ,
-                source && !team ? light : color[0] * (team ? light : 1), source && !team ? light : color[1] * (team ? light : 1), source && !team ? light : color[2] * (team ? light : 1),
+                source && !team ? light : color[0] * (team || historyTile ? light : 1), source && !team ? light : color[1] * (team || historyTile ? light : 1), source && !team ? light : color[2] * (team || historyTile ? light : 1),
                 o.alpha * (o.pickSource?._r3dDetailBlend ?? 1), exact || tile ? 0 : -(o.rotationY || 0), source);
         }
     }

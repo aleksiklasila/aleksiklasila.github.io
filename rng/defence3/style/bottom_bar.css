@@ -58,7 +58,9 @@ body.app-fullscreen #bottom-bar { display: none; }
 .bb-rate {
     position: absolute; right: 0; font-size: 8px; line-height: 9px; font-weight: bold; white-space: nowrap;
     font-variant-numeric: tabular-nums; letter-spacing: -0.3px; pointer-events: none;
-    text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000;
+    /* Hard offsets, not blurred: blurred shadows on ~800 spans cost ~75 ms of
+       raster whenever the rates changed, stalling the camera slide. */
+    text-shadow: 1px 0 #000, -1px 0 #000, 0 1px #000, 0 -1px #000;
 }
 .bb-rate-e { top: 0; }
 .bb-rate-a { bottom: 0; }

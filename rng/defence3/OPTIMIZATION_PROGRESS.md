@@ -3706,3 +3706,17 @@ every run below). Raw rows: tests/test-runs/chaos-spikes/audit-20261030-*.json.
 - The structure tables grew 11 times in this fixture (structRowStats.grown):
   against the static memory budget rule.
 - dk20 steps: 364 ms mean, processActions 96 ms on bursts.
+
+### 2026-10-31 — steady camera pauses in the supplied history scene
+
+- Traced `tests/defence3-scene-2026-10-31T13-31-34-674Z.gz` in Edge at its restored camera/graphics settings (2D, Team + history, 796 units, 5,541 structure rows). Raw camera data, CPU profile and browser timeline are under `tests/test-runs/camera-steady-20261031/`.
+- Baseline: repeated 50–100 ms browser tasks; a research queue refresh parsed/replaced roughly 3,000 DOM nodes, with ~21–28 ms JavaScript followed by layout, paint and raster work. The first trace had no slide-margin exhaustion, so the larger-margin theory did not explain these pauses.
+- Reverted the enlarged camera overscan and the moving-camera pixel-snap exception. Research queue rendering now reconciles tiles by task identity and updates progress, costs, indexes, tooltips and active state in place, including after completion/reordering. Empty slots are retained.
+- No post-change run: user requested immediate changes and will verify manually. Browser commit/raster stalls and residual camera behavior remain unverified; no simulation TPS or multiplayer improvement is claimed.
+
+### 2026-10-31 (later) — camera stalls traced to bottom-bar rate text shadows
+
+- Method: `tests/camera-steady-trace.cjs` (now 3 s held W/S; `EXTRA_CSS`, `HEADED=1` env) on the supplied scene, Edge. Browser timeline showed 50–110 ms main-thread tasks every ~250 ms with no JS inside: the main thread waited on a 75 ms raster task. Bisecting with injected CSS: hiding `#bottom-bar` or `.bb-rate` removed all stalls; hiding panels/HUD/research did not.
+- Cause: `.bb-rate` had three blurred `text-shadow`s on ~800 spans, re-rastered whenever rates changed (BB_REFRESH_MS 250).
+- Fix: hard-offset 1 px outline shadows; tile rate updates also keep the thumbnail `<img>` element (`_bbPatchThingBody`).
+- Held-key frame gaps: p95 16.7 ms unchanged, max 108 -> 50 ms, long tasks (>50 ms) 11 -> 0. A few 25–50 ms gaps at the 250 ms cadence remain. Raw: tests/test-runs/camera-steady-20261031/{after3s,fix2}.json.

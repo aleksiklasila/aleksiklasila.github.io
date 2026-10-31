@@ -560,8 +560,20 @@ function _bbRenderThings() {
         if (el.className !== p.cls) el.className = p.cls;
         if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
         if (el._bbBoost !== p.boost) { el.firstElementChild.outerHTML = p.boost; el._bbBoost = p.boost; }
-        if (el._bbBody !== p.body) { el.lastElementChild.innerHTML = p.body; el._bbBody = p.body; }
+        if (el._bbBody !== p.body) { _bbPatchThingBody(el.lastElementChild, p.body); el._bbBody = p.body; }
     }
+}
+
+// Replace a tile's rates but keep its thumbnail element. A new <img> with a
+// data: URL is decoded again at raster time: with a few hundred tiles every
+// quarter second, that blocked the compositor for ~75 ms and stuttered the
+// camera slide.
+function _bbPatchThingBody(body, html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    const fresh = tpl.content.firstElementChild, old = body.firstElementChild;
+    if (old && fresh && old.tagName === 'IMG' && fresh.tagName === 'IMG' && old.getAttribute('src') === fresh.getAttribute('src')) fresh.replaceWith(old);
+    body.replaceChildren(...tpl.content.childNodes);
 }
 
 function _bbResearchOrderSig(tasks) {
@@ -597,26 +609,49 @@ function _bbRenderResearch(now) {
     if (sig === bb.researchSig) return;
     bb.researchSig = sig;
 
-    let html = '';
+    // Preserve queue tiles across progress updates and completed tasks. A
+    // full innerHTML replacement of a long queue made the browser relayout
+    // and raster thousands of nodes, interrupting even steady camera pans.
+    const slots = [];
     for (let i = 0; i < tasks.length; i++) {
-        if (i === caret) html += `<div class="bb-caret"></div>`;
-        html += _bbTaskHtml(tasks[i], i, i === openIndex);
+        if (i === caret) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
+        slots.push({ key: 'task:' + owner + ':' + _bbTaskKey(tasks[i]), task: tasks[i], index: i, open: i === openIndex });
     }
-    if (caret >= tasks.length) html += `<div class="bb-caret"></div>`;
+    if (caret >= tasks.length) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
     let aheadLeft = aheadCount;
     for (let a of ahead) for (let n = 0; n < a.delta && aheadLeft > 0; n++, aheadLeft--) {
         let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
-        html += `<div class="bb-slot bb-ahead${a.kind === 'unit' ? ' bb-unit' : ''}" title="Ordered: on its way"><img src="${getItemThumbnail(a.key, 20)}" width="20" height="20" alt="" draggable="false"><span class="bb-task-stat">${_bbStatAbbrHtml(a.statKey, stat ? stat.label : a.statKey)}</span></div>`;
+        slots.push({ key: `ahead:${a.kind}:${a.key}:${a.statKey}:${n}`,
+            html: `<div class="bb-slot bb-ahead${a.kind === 'unit' ? ' bb-unit' : ''}" title="Ordered: on its way"><img src="${getItemThumbnail(a.key, 20)}" width="20" height="20" alt="" draggable="false"><span class="bb-task-stat">${_bbStatAbbrHtml(a.statKey, stat ? stat.label : a.statKey)}</span></div>` });
     }
     let empty = Math.min(BB_MAX_EMPTY_SLOTS, Math.max(0, cap - tasks.length - aheadCount));
-    for (let i = 0; i < empty; i++) html += `<div class="bb-slot"></div>`;
+    for (let i = 0; i < empty; i++) slots.push({ key: 'empty:' + i, html: '<div class="bb-slot"></div>' });
     if (cap <= 0 && tasks.length <= 0) {
-        html += `<div class="bb-empty-msg">No research lab. Build one to research upgrades.</div>`;
+        slots.push({ key: 'no-lab', html: '<div class="bb-empty-msg">No research lab. Build one to research upgrades.</div>' });
     }
-    els.research.innerHTML = html;
+    const keep = new Set(slots.map(slot => slot.key));
+    const existing = new Map();
+    for (const el of Array.from(els.research.children)) {
+        if (keep.has(el._bbResearchKey)) existing.set(el._bbResearchKey, el);
+        else el.remove();
+    }
+    let cursor = els.research.firstElementChild;
+    for (const slot of slots) {
+        let el = existing.get(slot.key);
+        if (!el) {
+            const holder = document.createElement('div');
+            holder.innerHTML = slot.task ? _bbTaskHtml(slot.task, slot.index, slot.open) : slot.html;
+            el = holder.firstElementChild;
+            el._bbResearchKey = slot.key;
+        } else if (slot.task) {
+            _bbPatchResearchTask(el, slot.task, slot.index, slot.open);
+        }
+        if (el !== cursor) els.research.insertBefore(el, cursor);
+        cursor = el.nextElementSibling;
+    }
 }
 
-function _bbTaskHtml(t, index, open) {
+function _bbTaskPresentation(t, index, open) {
     let thing = getResearchThing(t.kind, t.key);
     let stat = getResearchStatEntry(t.kind, t.key, t.statKey);
     let statLabel = stat ? stat.label : t.statKey;
@@ -629,6 +664,30 @@ function _bbTaskHtml(t, index, open) {
         + `Energy left: ${formatBigNumber(left, 0)} of ${formatBigNumber(cost, 0)} (${Math.floor(pct * 100)}%)\n`
         + `Click: details · Hold + drag: reorder`;
     let cls = 'bb-task' + (active ? ' bb-active' : '') + (t.kind === 'unit' ? ' bb-unit' : '') + (open ? ' bb-open' : '');
+    return { cls, title, active, pct, left, statLabel };
+}
+
+function _bbPatchResearchTask(el, t, index, open) {
+    const p = _bbTaskPresentation(t, index, open);
+    if (el.className !== p.cls) el.className = p.cls;
+    if (el.dataset.index !== String(index)) el.dataset.index = String(index);
+    if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
+    const progress = el._bbProgress || (el._bbProgress = el.querySelector('.bb-task-progress > div'));
+    const height = (p.pct * 100).toFixed(1) + '%';
+    if (progress.style.height !== height) progress.style.height = height;
+    const cost = el._bbCost || (el._bbCost = el.querySelector('.bb-task-cost'));
+    const text = '⚡' + _bbFmtInt(Math.ceil(p.left));
+    if (cost.textContent !== text) cost.textContent = text;
+    const arrow = el.querySelector('.bb-task-arrow');
+    if (p.active && !arrow) {
+        const next = document.createElement('span');
+        next.className = 'bb-task-arrow'; next.textContent = '◀';
+        el.insertBefore(next, el.firstElementChild.nextElementSibling);
+    } else if (!p.active && arrow) arrow.remove();
+}
+
+function _bbTaskHtml(t, index, open) {
+    const { cls, title, active, pct, left, statLabel } = _bbTaskPresentation(t, index, open);
     let html = `<div class="${cls}" data-index="${index}" title="${_bbEscape(title)}">`;
     html += `<div class="bb-task-progress"><div style="height:${(pct * 100).toFixed(1)}%"></div></div>`;
     if (active) html += `<span class="bb-task-arrow">◀</span>`;

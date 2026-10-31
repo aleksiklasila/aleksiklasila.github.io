@@ -5246,11 +5246,11 @@ function initCameraSpeedControl() {
         saveUiSettingsToStorage();
     });
 }
-// A key pressed (or the direction changed): full speed at once, from the
-// moment of the key, so the very next frame has moved by the whole time since
-// (eased in, the first frames moved a few px and the camera felt late). Keys
-// released: eased out over CAMERA_PAN_EASE_MS, a short glide to a stop.
+// Start promptly from rest, but ease velocity through direction changes.
+// Both rendered frames and the compositor slide integrate this same curve.
+// Releasing every key keeps the shorter glide to a stop.
 const CAMERA_PAN_START_EASE_MS = 0;
+const CAMERA_PAN_TURN_EASE_MS = 45;
 // A press from rest counts from this much before the key (at most from the
 // last drawn frame): the first frame after the key, and the slide at once,
 // show a whole step, however shortly before that frame the key came. (At its
@@ -5335,13 +5335,15 @@ function noteCameraPanInput(time) {
     if (target.x === last.x && target.y === last.y) return;
     let t = Number.isFinite(time) && time > 0 ? Math.min(time, performance.now()) : performance.now();
     if (last.x === 0 && last.y === 0 && _cameraPanVel.x === 0 && _cameraPanVel.y === 0) t -= CAMERA_PAN_HEAD_START_MS;
+    // Never rewrite motion already drawn, or reorder delayed key events.
+    t = Math.max(t, _cameraFrameTime, _cameraPanInputs.length ? _cameraPanInputs[_cameraPanInputs.length - 1].t : 0);
     _cameraPanInputs.push({ t, x: target.x, y: target.y });
     if (typeof refreshCameraSlideForInput === 'function') refreshCameraSlideForInput();
 }
 
 // Pan motion over `sec` seconds from time t0 (ms): velocity (v0x, v0y) eases
-// toward the target (tx, ty) with time constant CAMERA_PAN_EASE_MS (none
-// toward a moving target: CAMERA_PAN_START_EASE_MS), and the
+// toward the target (tx, ty), easing turns and stops but starting promptly
+// from rest. The
 // target switches at each input's time. Returns the distance moved (world
 // px) and the velocity and target at the end. Inputs from before t0 already
 // apply at t0.
@@ -5350,7 +5352,9 @@ function cameraPanTravel(v0x, v0y, tx, ty, t0, sec, inputs) {
     let step = to => {
         let s = (to - t) / 1000;
         if (!(s > 0)) return;
-        let tau = (tx !== 0 || ty !== 0 ? CAMERA_PAN_START_EASE_MS : CAMERA_PAN_EASE_MS) / 1000;
+        let tau = (tx !== 0 || ty !== 0
+            ? vx !== 0 || vy !== 0 ? CAMERA_PAN_TURN_EASE_MS : CAMERA_PAN_START_EASE_MS
+            : CAMERA_PAN_EASE_MS) / 1000;
         if (!(tau > 0)) { x += tx * s; y += ty * s; vx = tx; vy = ty; t = to; return; }
         let k = Math.exp(-s / tau);
         x += tx * s + (vx - tx) * (1 - k) * tau;
@@ -5361,7 +5365,7 @@ function cameraPanTravel(v0x, v0y, tx, ty, t0, sec, inputs) {
     };
     for (let input of inputs) {
         if (input.t > t) {
-            if (input.t >= end) break;
+            if (input.t > end) break;
             step(input.t);
         }
         tx = input.x; ty = input.y;
@@ -5399,16 +5403,22 @@ function updateCamera(frameTime) {
     // cameraPanTravel), so every frame moves by exactly its share of time.
     let vel = _cameraPanVel;
     let inputs = _cameraPanInputs;
-    _cameraPanInputs = [];
+    // An input handled before this callback can still be newer than its RAF
+    // timestamp. Keep it for the next frame and for the compositor forecast.
+    _cameraPanInputs = inputs.filter(input => input.t > t);
     if (dt > 0) {
         let r = cameraPanTravel(vel.x, vel.y, _cameraPanTarget.x, _cameraPanTarget.y, t - dt, dt / 1000, inputs);
         camera.x += r.x;
         camera.y += r.y;
         vel.x = r.vx;
         vel.y = r.vy;
+        _cameraPanTarget.x = r.tx;
+        _cameraPanTarget.y = r.ty;
     }
     // The keys held now (zoom or 3D rotation may also have changed the speed).
-    let target = getCameraPanTargetVelocity();
+    // Do not apply future key states retroactively to this frame. With no
+    // pending events, refresh the target for zoom/speed/orbit changes too.
+    let target = _cameraPanInputs.length ? _cameraPanTarget : getCameraPanTargetVelocity();
     _cameraPanTarget.x = target.x;
     _cameraPanTarget.y = target.y;
     if (Math.abs(vel.x) < 1 && target.x === 0) vel.x = 0;
