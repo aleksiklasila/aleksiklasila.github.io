@@ -2515,7 +2515,8 @@ function initInput() {
     });
 
     gameArea.addEventListener('wheel', (e) => {
-        if (!gameStarted || gameOver || !Number.isFinite(e.deltaY) || e.deltaY === 0) return;
+        // Postgame spectating keeps the camera active after the match ends.
+        if (!gameStarted || (gameOver && spectateMode === 'none') || !Number.isFinite(e.deltaY) || e.deltaY === 0) return;
         e.preventDefault();
         let minZoom = getMinCameraZoom();
         let from = _cameraZoomAnim ? _cameraZoomAnim.target : camera.zoom;
