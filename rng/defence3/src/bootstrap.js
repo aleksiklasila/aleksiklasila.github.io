@@ -2,6 +2,7 @@
 // ============================================================
 window.addEventListener('load', () => {
     loadUiSettingsFromStorage();
+    initCameraSpeedControl();
     Jukebox.init();
     if (!ensureRenderContextsInitialized()) return;
     invalidateStaticLayerCache();

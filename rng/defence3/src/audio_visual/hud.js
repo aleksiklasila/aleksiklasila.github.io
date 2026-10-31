@@ -1427,7 +1427,7 @@ function _hudIsolationText() {
     return ' / 1 thread';
 }
 
-// Percent of the match limit; hover shows current / house capacity / max.
+// Percent of available capacity; hover shows current / house capacity / max.
 // Keep the current-count warning thresholds for the percentage colors.
 function _renderHudCapacity(el, percent, cls, label, counts) {
     if (!el._tip) {
@@ -1447,7 +1447,7 @@ function _renderHudPop(pop, houseCap, maxPop) {
     if (_hudCache.popText === key) return;
     _hudCache.popText = key;
     const cls = pop >= maxPop * 0.95 ? 'pop-bad' : pop >= maxPop * 0.8 ? 'pop-warn' : 'pop-cur';
-    _renderHudCapacity(_hudEls.pop, maxPop > 0 ? Math.round(pop / maxPop * 100) : 0, cls, 'Pop', [pop, houseCap, maxPop]);
+    _renderHudCapacity(_hudEls.pop, houseCap > 0 ? Math.round(pop / houseCap * 100) : 0, cls, 'Pop', [pop, houseCap, maxPop]);
 }
 
 // Structures held against the building limit (houses excluded).

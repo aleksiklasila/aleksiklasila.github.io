@@ -67,8 +67,8 @@
                         <select id="cfg-mapsize">
                             <option value="16">Tiny (16x16)</option>
                             <option value="32">Small (32x32)</option>
-                            <option value="64" selected>Medium (64x64)</option>
-                            <option value="128">Large (128x128)</option>
+                            <option value="64">Medium (64x64)</option>
+                            <option value="128" selected>Large (128x128)</option>
                             <option value="256">Huge (256x256)</option>
                             <option value="512">Giant (512x512)</option>
                             <option value="1024">Colossal (1024x1024)</option>
@@ -80,8 +80,8 @@
                         <select id="cfg-map-type">
                             <option value="random">Random</option>
                             <option value="arena">Arena</option>
-                            <option value="island" selected>Island</option>
-                            <option value="islands">Islands</option>
+                            <option value="island">Island</option>
+                            <option value="islands" selected>Islands</option>
                             <option value="solar_system">Solar System</option>
                             <option value="crossroads">Crossroads</option>
                         </select>
@@ -96,7 +96,7 @@
                             <option value="32">32</option>
                             <option value="64">64</option>
                             <option value="128">128</option>
-                            <option value="256" selected>256</option>
+                            <option value="256">256</option>
                             <option value="512">512</option>
                             <option value="1024">1,024</option>
                             <option value="2048">2,048</option>
@@ -105,7 +105,7 @@
                             <option value="16384">16,384</option>
                             <option value="32768">32,768</option>
                             <option value="65536">65,536</option>
-                            <option value="131072">131,072</option>
+                            <option value="131072" selected>131,072</option>
                             <option value="262144">262,144</option>
                             <option value="524288">524,288</option>
                             <option value="1048576">1,048,576</option>
@@ -145,11 +145,11 @@
                         <select id="cfg-mine-density" style="width:72px" title="Target percentage of map tiles used by mines, shared between energy and ★. Terrain and spawn clearances can reduce coverage.">
                             <option value="0">0%</option>
                             <option value="5">5%</option>
-                            <option value="10" selected>10%</option>
+                            <option value="10">10%</option>
                             <option value="15">15%</option>
                             <option value="20">20%</option>
                             <option value="25">25%</option>
-                            <option value="30">30%</option>
+                            <option value="30" selected>30%</option>
                             <option value="35">35%</option>
                             <option value="40">40%</option>
                             <option value="45">45%</option>
@@ -301,6 +301,10 @@
         <div class="hud-left">
             <span class="hud-fps" id="hud-fps">0 FPS</span>
             <button id="btn-export-snapshot" type="button" class="hud-btn" style="display:none" title="Download the current solo game as a snapshot JSON file">Export Snapshot</button>
+            <span id="camera-speed-control" class="count-control" title="WASD / arrow-key camera speed" data-label-side="after" style="--position:33.3333%">
+                <input id="camera-speed" class="count-slider" type="range" min="0.1" max="1" step="0.1" value="0.4" aria-label="Camera movement speed" aria-valuetext="0.4×">
+                <span class="count-min">0.1×</span><output for="camera-speed">0.4× 📷</output><span class="count-max">1.0×</span>
+            </span>
         </div>
         <span class="hud-time" id="hud-time">0:00</span>
         <div class="hud-right">

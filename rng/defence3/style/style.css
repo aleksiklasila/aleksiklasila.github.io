@@ -232,6 +232,7 @@
         }
 
         .hud-right { justify-content: flex-end; }
+        #camera-speed-control { flex: 0 0 160px; margin-left: auto; }
 
         .hud-fps {
             color: #6d7780;

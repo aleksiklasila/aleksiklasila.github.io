@@ -6,11 +6,11 @@
 // ============================================================
 let MINIMAP_SIZE = 160;
 let TILE = 32;
-let GRID_W = 80, GRID_H = 80;
+let GRID_W = 128, GRID_H = 128;
 let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
 
 // Gold mine config (adjustable from menu)
-let RESOURCE_MINE_DENSITY = 10; // combined target coverage of map tiles, in percent
+let RESOURCE_MINE_DENSITY = 30; // combined target coverage of map tiles, in percent
 let GOLD_MINE_COUNT = 18;  // total mine tiles distributed across veins
 let GOLD_MINE_MIN = 500;
 let GOLD_MINE_MAX = 1500;
@@ -25,9 +25,9 @@ let STARTING_ASTAR = 9000;
 // and ★ (see shrineTick). Off: it still counts damage taken, but cannot be
 // drained (no drain buttons, no shrine research).
 let SHRINES_ENABLED = true;
-let MAP_TYPE = 'random';
+let MAP_TYPE = 'islands';
 let TYPE_FLOOR = 0, TYPE_WALL = 1;
-let CONFIG_MAX_POP = 256;
+let CONFIG_MAX_POP = 131072;
 // Structures a player may hold at once (towers, buildings, floor items, sites):
 // 0, the menu's: what the memory budget leaves for the population
 // (memoryBudgetBuildings); a number given (an editable config, a fixture):

@@ -276,7 +276,7 @@ function commitCountBar(input) {
 function bindCountBarEvents() {
     if (countBarEventsBound || typeof document === 'undefined' || !document.addEventListener) return;
     countBarEventsBound = true;
-    const isSlider = el => el && el.matches && el.matches('.count-slider');
+    const isSlider = el => el && el.matches && el.matches('.count-slider[data-count-spec]');
     const release = () => { activeCountBar = null; };
     document.addEventListener('pointerover', ev => {
         countCtrlHeld = ev.ctrlKey || ev.shiftKey;
@@ -365,7 +365,7 @@ function bindCountBarEvents() {
 
 function syncCountSliderValues(root) {
     if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('.count-slider').forEach(input => {
+    root.querySelectorAll('.count-slider[data-count-spec]').forEach(input => {
         if (input !== activeCountBar) {
             input.value = input.getAttribute('value');
             positionCountSliderLabel(input);

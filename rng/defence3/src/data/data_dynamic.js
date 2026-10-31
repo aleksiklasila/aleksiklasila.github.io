@@ -563,7 +563,7 @@ function deriveResourceAbundance(value, width, height = width, density = 10) {
 
 function normalizeResourceMineDensity(value) {
     const number = String(value ?? '').trim() === '' ? NaN : Number(value);
-    return Number.isFinite(number) ? Math.max(0, Math.min(95, number)) : 10;
+    return Number.isFinite(number) ? Math.max(0, Math.min(95, number)) : 30;
 }
 
 function _resourceReserveLabel(amount) {

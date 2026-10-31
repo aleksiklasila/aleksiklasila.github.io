@@ -5218,6 +5218,33 @@ function getMinCameraZoom() {
 // out over a few frames. Wheel zoom: 1.2x per notch, eased toward the
 // target around the cursor.
 const CAMERA_PAN_SPEED = 1440;
+let cameraPanSpeedMultiplier = 0.4;
+
+function initCameraSpeedControl() {
+    const input = document.getElementById('camera-speed');
+    if (!input) return;
+    const control = input.parentElement;
+    const output = control.querySelector('output');
+    const sync = () => {
+        input.value = String(cameraPanSpeedMultiplier);
+        const text = cameraPanSpeedMultiplier.toFixed(1) + '×';
+        output.textContent = text + ' 📷';
+        input.setAttribute('aria-valuetext', text);
+        const position = (cameraPanSpeedMultiplier - 0.1) / 0.9 * 100;
+        control.style.setProperty('--position', position + '%');
+        control.dataset.labelSide = position < 40 ? 'after' : 'before';
+        control.dataset.edge = cameraPanSpeedMultiplier <= 0.1 ? 'min' : cameraPanSpeedMultiplier >= 1 ? 'max' : '';
+    };
+    sync();
+    input.addEventListener('input', () => {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        cameraPanSpeedMultiplier = Math.max(0.1, Math.min(1, Math.round(value * 10) / 10));
+        sync();
+        noteCameraPanInput();
+        saveUiSettingsToStorage();
+    });
+}
 // A key pressed (or the direction changed): full speed at once, from the
 // moment of the key, so the very next frame has moved by the whole time since
 // (eased in, the first frames moved a few px and the camera felt late). Keys
@@ -5291,7 +5318,7 @@ function getCameraPanTargetVelocity() {
         if (right) moveX += 1;
     }
     let moveLen = detHypot(moveX, moveY);
-    let speed = CAMERA_PAN_SPEED / camera.zoom;
+    let speed = CAMERA_PAN_SPEED * cameraPanSpeedMultiplier / camera.zoom;
     return { x: moveLen > 0 ? moveX / moveLen * speed : 0, y: moveLen > 0 ? moveY / moveLen * speed : 0 };
 }
 
