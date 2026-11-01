@@ -1077,8 +1077,8 @@ function build3DOverlayData(bounds, alpha) {
     // every structure a frame); a pending salvage press at once.
     const siteSeen = (t) => !(t.gx < bounds.minGx - 1 || t.gx > bounds.maxGx + 1 || t.gy < bounds.minGy - 1 || t.gy > bounds.maxGy + 1)
         && (fullVisibility || (visibilityGrid[t.gy] && visibilityGrid[t.gy][t.gx] > 0));
-    for (let t of _salvageMarksShown()) if (siteSeen(t)) pushSiteMark(t.gx, t.gy, 1);
-    for (let t of _siteMarkLists().build) if (siteSeen(t) && !t.markedForSalvage) pushSiteMark(t.gx, t.gy, 2);
+    // (As GPU instances, renderer3d drawSiteMarksGpu: made once a tick, not a mark a frame.)
+    overlays.siteMarkInst = siteMarkInstances();
 
     return overlays;
 }
@@ -3021,6 +3021,59 @@ function _siteMarkLists() {
     }
     return C;
 }
+// The 3D view's marks as instances (x, z, kind: 1 cross, 2 hammer; renderer3d
+// drawSiteMarksGpu draws them all in one call, depth tested on the GPU): one
+// typed pass over the frame's structure table a tick, again only when the
+// tick, the table, the visibility mode or a pending salvage press changes.
+// (Was a projection, a depth read and a drawImage a mark a frame on the
+// overlay canvas: 8 of 26 s of the page at 1M units / 287k structures.)
+const _siteMarkGpu = { tick: -1, table: null, full: null, ahead: -1, at: 0, data: new Float32Array(3 * 1024), n: 0, version: 0 };
+function siteMarkInstances() {
+    const G = _siteMarkGpu, F = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    const ahead = _salvageShownAhead.size, at = ahead ? performance.now() : 0;
+    // (A pending press: its expiry checked every 100 ms.)
+    if (G.tick === gameTime && G.table === F && G.full === fullVisibility && G.ahead === ahead && (!ahead || at - G.at < 100)) return G;
+    G.tick = gameTime; G.table = F; G.full = fullVisibility; G.ahead = ahead; G.at = at; G.version++;
+    let n = 0, D = G.data;
+    const put = (gx, gy, kind) => {
+        if (!fullVisibility && !(visibilityGrid[gy] && visibilityGrid[gy][gx] > 0)) return;
+        if (n * 3 + 3 > D.length) { const d = new Float32Array(D.length * 2); d.set(D); D = G.data = d; }
+        D[n * 3] = gx + 0.5; D[n * 3 + 1] = gy + 0.5; D[n * 3 + 2] = kind; n++;
+    };
+    const now = ahead ? performance.now() : 0, seen = ahead ? new Set() : null;
+    // (A press shown ahead of the frame: noteSalvageShown.)
+    const salvage = (gx, gy, marked) => {
+        if (!ahead) return marked;
+        const t = gy * GRID_W + gx, o = _salvageShownAhead.get(t);
+        if (!o) return marked;
+        seen.add(t);
+        if (now - o.at > SALVAGE_SHOWN_MS || o.on === marked) { _salvageShownAhead.delete(t); return marked; }
+        return o.on;
+    };
+    if (F && F.gx) {
+        const N = Math.min(F.n, F.cap), alive = F.alive, flags = F.flags, kind = F.kind, GX = F.gx, GY = F.gy;
+        for (let s = 0; s < N; s++) {
+            // (Pressed but not yet flagged: the loop after this one.)
+            const f = flags[s];
+            if (!(f & (SIM_SF_SALVAGE | SIM_SF_UC)) || alive[s] !== 1 || kind[s] > 3) continue;
+            const gx = GX[s], gy = GY[s], marked = salvage(gx, gy, (f & SIM_SF_SALVAGE) !== 0);
+            if (marked) put(gx, gy, 1); else if (f & SIM_SF_UC) put(gx, gy, 2);
+        }
+    } else {
+        // (The simulation on this thread: its objects.)
+        const C = _siteMarkLists();
+        for (const t of C.salvage) if (salvage(t.gx, t.gy, true)) put(t.gx, t.gy, 1);
+        for (const t of C.build) if (!t.markedForSalvage && !salvage(t.gx, t.gy, false)) put(t.gx, t.gy, 2);
+    }
+    if (ahead) for (const [t, o] of _salvageShownAhead) {
+        if (seen.has(t)) continue;
+        if (!o.on || now - o.at > SALVAGE_SHOWN_MS) { _salvageShownAhead.delete(t); continue; }
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W;
+        if (getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] && grid[gy][gx].item)) put(gx, gy, 1);
+    }
+    G.n = n;
+    return G;
+}
 // Salvage marks the player just set or cleared, shown at once (the order's
 // answer comes ticks later): by tile, until the frame says the same or
 // SALVAGE_SHOWN_MS passed (an order that came to nothing: the old look).
@@ -4847,6 +4900,8 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
         _minimapStaticTilePx = tilePx;
     }
 
+    // (Beside the simulation worker: from the frame's structure table, pixels written.)
+    if (_minimapStaticFromTable(scale, tilePx)) { _minimapStaticDirty = false; _minimapStaticTiles.clear(); return; }
     let c = _minimapStaticCtx;
     c.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
     c.fillStyle = '#111';
@@ -4927,6 +4982,67 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
     _minimapStaticTiles.clear();
 }
 
+// The static layer from the frame's structure table (kind 0 tower, 1
+// barrack, 2 spawner, 3 cell item, 4/5 mines), in the canvas path's order and
+// colours: towers, barracks and spawners in their owner's colour, cell items
+// at 30% over that, mines with something left; one typed pass a kind group
+// and one putImageData. (The canvas path: a fillRect a structure and a pass
+// over every grid cell through its getters, ~130 ms at 287k structures,
+// redone whenever more than 4096 tiles changed between minimap draws.)
+let _minimapImage = null;
+const _minimapOwnerRgb = new Map();
+function _minimapRgb(color) {
+    let v = _minimapOwnerRgb.get(color);
+    if (v !== undefined) return v;
+    const c = _minimapStaticCtx;
+    c.fillStyle = '#000'; c.fillStyle = color;
+    const s = String(c.fillStyle), m = /^#([0-9a-f]{6})$/i.exec(s);
+    v = m ? parseInt(m[1], 16) : 0xc8ced8;
+    _minimapOwnerRgb.set(color, v);
+    return v;
+}
+function _minimapStaticFromTable(scale, tilePx) {
+    const F = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    if (!F || !F.kind || !F.gx || !_minimapStaticCtx) return false;
+    const S = MINIMAP_SIZE;
+    if (!_minimapImage || _minimapImage.width !== S || _minimapImage.height !== S) _minimapImage = _minimapStaticCtx.createImageData(S, S);
+    const px = new Uint32Array(_minimapImage.data.buffer);
+    // (Little-endian RGBA bytes: 0xAABBGGRR.)
+    const abgr = (rgb, a = 255) => ((a << 24) | ((rgb & 0xff) << 16) | (rgb & 0xff00) | (rgb >> 16 & 0xff)) >>> 0;
+    px.fill(abgr(0x111111));
+    const N = Math.min(F.n, F.cap), alive = F.alive, kind = F.kind, owner = F.owner, GX = F.gx, GY = F.gy, amount = F.amount;
+    const minW = Math.max(1, Math.round(tilePx));
+    // (A tile's pixel rect as the canvas path rounds it, into R.)
+    const R = new Int32Array(4);
+    const rect = (gx, gy) => {
+        let l = Math.round(gx * scale), r = Math.round((gx + 1) * scale), t = Math.round(gy * scale), b = Math.round((gy + 1) * scale);
+        if (r <= l) r = l + minW;
+        if (b <= t) b = t + minW;
+        R[0] = Math.max(0, l); R[1] = Math.max(0, t); R[2] = Math.min(S, r); R[3] = Math.min(S, b);
+    };
+    const fill = (gx, gy, v) => { rect(gx, gy); for (let y = R[1]; y < R[3]; y++) px.fill(v, y * S + R[0], y * S + R[2]); };
+    const ownerCol = [];
+    const colOf = o => { let v = ownerCol[o + 1]; if (v === undefined) v = ownerCol[o + 1] = _minimapRgb(get3DRenderOwnerColor(o >= 0 ? o : -1)); return v; };
+    for (let s = 0; s < N; s++) if (alive[s] === 1 && kind[s] <= 2) fill(GX[s], GY[s], abgr(colOf(owner[s])));
+    // (Cell items over that at 30%: '#rrggbb4d'.)
+    const A = 0x4d / 255;
+    for (let s = 0; s < N; s++) {
+        if (alive[s] !== 1 || kind[s] !== 3 || owner[s] < 0) continue;
+        const c = colOf(owner[s]), cr = c >> 16 & 0xff, cg = c >> 8 & 0xff, cb = c & 0xff;
+        rect(GX[s], GY[s]);
+        for (let y = R[1]; y < R[3]; y++) for (let o = y * S + R[0], e = y * S + R[2]; o < e; o++) {
+            const p = px[o], r = p & 0xff, g = p >> 8 & 0xff, b = p >> 16 & 0xff;
+            px[o] = ((255 << 24) | (Math.round(b + (cb - b) * A) << 16) | (Math.round(g + (cg - g) * A) << 8) | Math.round(r + (cr - r) * A)) >>> 0;
+        }
+    }
+    const gold = abgr(0xffdd00), astar = abgr(0x888888);
+    for (let s = 0; s < N; s++) {
+        const k = kind[s];
+        if ((k === 4 || k === 5) && alive[s] === 1 && amount && amount[s] > 0) fill(GX[s], GY[s], k === 4 ? gold : astar);
+    }
+    _minimapStaticCtx.putImageData(_minimapImage, 0, 0);
+    return true;
+}
 // Structures that came or went: their minimap pixels redrawn alone (at the
 // minimap's next draw), not the whole static layer (a pass over every
 // structure and tile: ~70 ms at 100k buildings, at every change of a build
@@ -4941,7 +5057,10 @@ function minimapStaticTileChanged(gx, gy) {
 function _minimapStaticTilesDrain() {
     const T = _minimapStaticTiles;
     if (!T.size) return;
-    if (!_minimapStaticCanvas || _minimapStaticDirty || T.size > 4096) { T.clear(); if (_minimapStaticCanvas && !_minimapStaticDirty) { _minimapStaticDirty = true; commitStaticCaches(true, 'minimap'); } return; }
+    // (Beside the simulation worker the whole layer from the table costs about
+    // what a few dozen tiles do here: it is made again for any change.)
+    const fromTable = typeof _pageTables !== 'undefined' && _pageTables && _pageTables.s && _pageTables.s.gx;
+    if (!_minimapStaticCanvas || _minimapStaticDirty || T.size > 4096 || fromTable) { T.clear(); if (_minimapStaticCanvas && !_minimapStaticDirty) { _minimapStaticDirty = true; commitStaticCaches(true, 'minimap'); } return; }
     const c = _minimapStaticCtx, scale = _minimapStaticScale, W = GRID_W, H = GRID_H;
     const ownerColor = o => typeof get3DRenderOwnerColor === 'function' ? get3DRenderOwnerColor(o) : '#c8ced8';
     // Pixel rects of the changed tiles (as the layer rounds them), merged by pixel.

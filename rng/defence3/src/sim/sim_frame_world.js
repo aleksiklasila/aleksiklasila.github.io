@@ -686,11 +686,14 @@ function _pageResolveRefs(v) {
     for (let k in v) v[k] = _pageResolveRefs(v[k]);
     return v;
 }
+function _pageBoostSig(p) { try { return JSON.stringify([p.boosts || null, p.boostOn || null]); } catch { return ''; } }
 function pageApplyState(st) {
     if (!st) return;
     if (typeof st.upkeep === 'string' && typeof _upKeepRateByPlayer !== 'undefined') { try { _upKeepRateByPlayer = JSON.parse(st.upkeep); } catch { } }
     if (st.players) {
-        let sigBefore = players.map((_, pid) => typeof _snapStatMapSignature === 'function' ? _snapStatMapSignature(pid) : '');
+        // (What the stat tables follow: each player's research levels, kept
+        // as they were, and its boosts; compared after the apply.)
+        const before = players.map(p => p && typeof p === 'object' ? { lv: Object.assign({}, p.researchLevels || null), boost: _pageBoostSig(p) } : null);
         for (let i = 0; i < st.players.length; i++) {
             let p = _pageResolveRefs(st.players[i]);
             if (players[i] && typeof players[i] === 'object') {
@@ -699,10 +702,25 @@ function pageApplyState(st) {
             } else players[i] = p;
         }
         players.length = st.players.length;
-        // Stat tables follow research.
-        for (let pid = 0; pid < players.length; pid++) {
-            let sig = typeof _snapStatMapSignature === 'function' ? _snapStatMapSignature(pid) : '';
-            if (sig !== sigBefore[pid] && typeof rebuildPrecomputedStatsMapPlayer === 'function') rebuildPrecomputedStatsMapPlayer(pid);
+        // Stat tables follow research: a finished research level remakes
+        // that one stat's rows (rebuildPrecomputedStatsMapPlayerThingStat, as
+        // the simulation does at the completion); boosts, a new player or a
+        // big change (a restore) the player's whole table. (The whole table
+        // at every level was ~3.5 of 26 s of the page in a research-heavy
+        // 1M-unit match.)
+        if (typeof rebuildPrecomputedStatsMapPlayer === 'function') for (let pid = 0; pid < players.length; pid++) {
+            const p = players[pid], b = before[pid];
+            if (!p || typeof p !== 'object') continue;
+            if (!b || b.boost !== _pageBoostSig(p)) { rebuildPrecomputedStatsMapPlayer(pid); continue; }
+            const lv = p.researchLevels || {}, changed = [];
+            for (const id in lv) if (lv[id] !== b.lv[id]) changed.push(id);
+            for (const id in b.lv) if (!(id in lv)) changed.push(id);
+            if (!changed.length) continue;
+            if (changed.length > 32) { rebuildPrecomputedStatsMapPlayer(pid); continue; }
+            for (const id of changed) {
+                const a = id.indexOf(':'), z = id.lastIndexOf(':');
+                if (a > 0 && z > a) rebuildPrecomputedStatsMapPlayerThingStat(pid, id.slice(0, a), id.slice(a + 1, z), id.slice(z + 1));
+            }
         }
     }
     let g = st.globals;

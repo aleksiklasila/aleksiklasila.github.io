@@ -5738,7 +5738,7 @@ function startGame() {
         let u = null, tries = rejected < Math.max(256, (starterUnitCountByTeam[pid] || 0) >> 6) ? 8 : 1;
         for (let k = 0; k < tries; k++) {
             let spawnTile = getNextStarterUnitSpawnTile(pid, origin, unitType);
-            u = new Unit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy, Math.max(1, clampThingLevel(level || 1)), applyWorkerDefaults);
+            u = simSpawnUnit(unitType, pid, spawnTile.gx * TILE + 16 + spawnTile.ox, spawnTile.gy * TILE + 16 + spawnTile.oy, Math.max(1, clampThingLevel(level || 1)), applyWorkerDefaults);
             if (!u.dead) break;
             starterRejectedByTeam[pid] = ++rejected;
         }

@@ -214,6 +214,8 @@ function updateSpawnerProductionProgress(spawner) {
     }
 }
 
+// (A spawner's rally path from its exit: spawnQueuedUnitFromSpawner. Weak: no property on the structure.)
+const _spawnerRallyTpl = new WeakMap();
 function spawnQueuedUnitFromSpawner(spawner) {
     if (!spawner || !(spawnQueueCount(spawner) > 0)) return false;
     if (spawner.energy <= 0 || spawner.underConstruction) return false;
@@ -223,7 +225,7 @@ function spawnQueuedUnitFromSpawner(spawner) {
 
     const front = spawnQueueFront(spawner), spawnInfo = { unitType: front.unitType, level: front.level };
     let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
-    let u = new Unit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16, spawnInfo.level, configureWorkerUnitFromType);
+    let u = simSpawnUnit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16, spawnInfo.level, configureWorkerUnitFromType);
     if (u.dead) return false;
     spawnQueueShift(spawner);
     // The queue moved on: its next item may need healers' energy.
@@ -248,11 +250,17 @@ function spawnQueuedUnitFromSpawner(spawner) {
         let rallyPath = null;
         if (_canUsePathfindRequestBudget(u.owner, u)) {
             _consumePathfindRequestBudget(u.owner, u);
-            let rallyCacheKey = _makeSpawnerRallyTemplateKey(spawner, spawnPos.x, spawnPos.y, rgx, rgy, u);
-            rallyPath = _getSpawnerRallyTemplatePath(rallyCacheKey);
+            // (The spawner's own: its exit, its rally tile and the unit's
+            // movement profile as of the path topology's version, for
+            // SPAWNER_RALLY_TEMPLATE_TTL_TICKS. Was a shared map by a ten-part
+            // string key made each spawn: ~1.1k spawns a tick in a big match.)
+            const canWalk = getPathCanWalkForUnit(u), prof = _resolveMovementProfile(!!u.isFlying, canWalk, null) || 'dynamic';
+            let T = _spawnerRallyTpl.get(spawner);
+            if (T && T.sx === spawnPos.x && T.sy === spawnPos.y && T.ex === rgx && T.ey === rgy && T.prof === prof && T.version === pathTopologyVersion
+                && !(gameTime - T.tick > SPAWNER_RALLY_TEMPLATE_TTL_TICKS)) rallyPath = T.path;
             if (!rallyPath) {
-                rallyPath = _findPathForUnitTagged('spawner_rally', u, spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, getPathCanWalkForUnit(u), u.owner);
-                _setSpawnerRallyTemplatePath(rallyCacheKey, rallyPath);
+                rallyPath = _findPathForUnitTagged('spawner_rally', u, spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, canWalk, u.owner);
+                _spawnerRallyTpl.set(spawner, { sx: spawnPos.x, sy: spawnPos.y, ex: rgx, ey: rgy, prof, version: pathTopologyVersion, tick: gameTime, path: rallyPath });
             }
         }
 

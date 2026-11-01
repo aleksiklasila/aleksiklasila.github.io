@@ -545,7 +545,10 @@ function _effRowsReset() {
     }
     _effRowObj = []; _effRowMeta = []; _effRowN = 0;
     if (_effRowLk) _effRowLk.fill(-1);
+    _effRowEpoch++;
 }
+// (Bumped when the rows are made anew: a row index kept elsewhere, unit.js _spawnStatTemplates, is void then.)
+let _effRowEpoch = 0;
 // ---- Base entries ----
 // Per (owner, spatial type, base level): the base tables a unit of them has
 // after its full path at the (owner, type) stat tables' version eff.bVer (the

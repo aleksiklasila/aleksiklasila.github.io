@@ -735,6 +735,8 @@ let _frameUnitSummaries = new Map();
 const FRAME_SUMMARY_SLICE = 100000, FRAME_SUMMARY_EVERY_MS = 250, FRAME_SUMMARY_OWNERS = 10;
 const _frameSummary = { running: false, next: 0, strings: 0, counts: null, done: null, doneStrings: 0, at: -Infinity, version: 0, byOwner: new Map() };
 function frameUnitSummaryStep() {
+    // (The packer thread counts them: info_panel_static.js infoPackUnitSummary.)
+    if (typeof infoPackUnitSummary === 'function' && infoPackUnitSummary(localPlayerId)) { _frameSummary.running = false; return; }
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null, S = _frameSummary;
     if (!F || F.count <= FRAME_SUMMARY_SLICE) { S.running = false; S.done = null; return; }
     const strings = _pageFrameStrings.length;
@@ -764,6 +766,9 @@ function _frameSummarySlice(F, counts, strings, idleCode, from, to) {
 function getFrameUnitSummary(owner) {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (!F) return null;
+    // (Beside the simulation worker: the packer thread's counts.)
+    const packed = typeof infoPackUnitSummary === 'function' ? infoPackUnitSummary(owner) : null;
+    if (packed) return packed;
     // (An army: the counts made a slice a frame, when there are any yet.)
     const S = _frameSummary;
     if (F.count > FRAME_SUMMARY_SLICE && S.done && owner + 1 >= 0 && owner + 1 < FRAME_SUMMARY_OWNERS) {
@@ -800,6 +805,9 @@ let _frameBuildingSummaries = new Map();
 function getFrameBuildingSummary(owner) {
     const F=typeof _pageTables==='undefined'?null:_pageTables.s;
     if(!F?.kind) return null;
+    // (Beside the simulation worker: the packer thread's counts.)
+    const packed=typeof infoPackBuildingSummary==='function'?infoPackBuildingSummary(owner):null;
+    if(packed)return packed;
     const previous=_frameBuildingSummaries.get(owner);
     if(previous?.frame===F&&previous.grid===grid&&previous.version===_tileEntityVersion)return previous.value;
     const groups=new Map(),stats=new Map();let total=0,idle=0;
@@ -5552,22 +5560,6 @@ function renderResearchGroupInfo(group) {
     return html;
 }
 
-// A research group's queue (the toggle, its tasks when open) and research
-// rows: the block info_panel_static.js keeps as markup, patched in place.
-function renderResearchGroupQueueBlock(items) {
-    const group = infoGroupRenderView(items), e = group[0];
-    const queueScope = `group:${e.owner}`, queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
-    const totalQueue = getResearchQueueTotalLength(e), queueCap = getResearchQueueCapacityForPlayer(e.owner);
-    let html = `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
-    html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
-    html += `<span>Queue</span><span>${queueOpen ? '▾' : '▸'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
-    html += `</div>`;
-    if (queueOpen) html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">${renderQueuedResearchTasksForGroup(group)}</div>`;
-    html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">${renderResearchThingRowsForPanel(e.owner, queueScope, group)}</div>`;
-    html += `</div>`;
-    return html;
-}
-
 function bindResearchPopupControls(container) {
     if (!container || container.dataset.boundResearchPopup === '1') return;
     container.dataset.boundResearchPopup = '1';
@@ -6045,7 +6037,6 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     if (!panelOverride && typeof infoPanelStaticActive === 'function' && infoPanelStaticActive()) {
         _infoPanelDropGoneEntities();
         selectionCompactDead();
-        _ipsResearchBinder = bindInfoPanelSectionControls;
         infoPanelStaticRender(panel);
         if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
@@ -6924,6 +6915,12 @@ function refreshResearchStatMatrixPopupText() {
     } catch {
         renderMatrixGridToPopup(null, 'Unable to build matrix');
     }
+}
+
+// (A research stat's matrix: the research rows' M buttons. Lost in 07e4451, every caller then threw.)
+function openResearchStatMatrixPopup(kind, key, statKey, fromLevel, toLevel) {
+    researchStatMatrixPopupPayload = { kind, key, statKey, fromLevel, toLevel };
+    setResearchStatMatrixPopupOpen(true);
 }
 
 function setResearchStatMatrixPopupOpen(open) {

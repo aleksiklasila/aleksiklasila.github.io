@@ -46,6 +46,55 @@ function init(m) {
     X = exp; mem = w.memory;
     setStats(P.stats);
     self.postMessage({ type: 'ready' });
+    summaryLoop();
+}
+
+// ---- every player's counts by type (hud.js getFrameUnitSummary /
+// getFrameBuildingSummary: the bottom bar, the player status) ----
+// Units by (owner, type): how many and how many idle, from the frame's
+// columns; structures by (owner, tower | barrack | other, type) the same from
+// the structure table. Posted every SUMMARY_EVERY_MS (the page made them a
+// slice a frame: ~0.5 s of every 15 at 1M units, and one pass over every
+// structure a frame for the buildings).
+//   page <- sum {units: Uint32Array [((owner + 1) * n + type) * 2 + idle?], structs: Uint32Array [(((owner + 1) * 3 + class) * n + type) * 2 + idle?], n, owners}
+const SUMMARY_EVERY_MS = 250, SUMMARY_OWNERS = 10, SF_IDLE_NOT = 1 | 2 | 8, SF_RESEARCHING = 262144, CMD_IDLE = 0;
+function summaryLoop() {
+    try { summarize(); } catch (err) { self.postMessage({ type: 'error', message: String(err && err.stack || err) }); }
+    setTimeout(summaryLoop, SUMMARY_EVERY_MS);
+}
+function summarize() {
+    const n = strings.length, O = SUMMARY_OWNERS, idleCode = strings.indexOf('IDLE');
+    const uc = new Uint32Array(O * n * 2), sc = new Uint32Array(O * 3 * n * 2);
+    const F = frame;
+    if (F && F.id && F.owner && F.type && F.energy) {
+        const ID = F.id, OW = F.owner, T = F.type, E = F.energy, FL = F.flags, W = F.wtype, WS = F.wstate, CM = F.cmd, len = ID.length;
+        for (let s = 0; s < len; s++) {
+            if (ID[s] < 0 || !(E[s] > 0)) continue;
+            const o = OW[s] + 1, t = T[s];
+            if (o < 0 || o >= O || t >= n) continue;
+            const k = (o * n + t) * 2;
+            uc[k]++;
+            if ((FL[s] & 8) || (W && W[s] ? (WS && WS[s] === idleCode) : (CM && CM[s] === CMD_IDLE))) uc[k + 1]++;
+        }
+    }
+    const buf = mem ? mem.buffer : null, hdr = buf && P ? new Uint32Array(buf, P.at.hdr, 4) : null;
+    const base = hdr ? Atomics.load(hdr, 0) : 0, cap = hdr ? Atomics.load(hdr, 1) : 0;
+    if (base > 0 && cap > 0) {
+        const c = tableCols(base, cap);
+        const alive = new Uint8Array(buf, c.alive, cap), kind = new Int16Array(buf, c.kind, cap), owner = new Int16Array(buf, c.owner, cap), type = new Int16Array(buf, c.type, cap), utype = new Int16Array(buf, c.utype, cap);
+        const en = new Float32Array(buf, c.energy, cap), fl = new Int32Array(buf, c.flags, cap), ql = new Int16Array(buf, c.qlen, cap);
+        for (let s = 0; s < cap; s++) {
+            if (alive[s] !== 1) continue;
+            const k = kind[s], f = fl[s];
+            if (k > 3 || !(en[s] > 0 || (f & 1))) continue;
+            const o = owner[s] + 1, t = k === 1 ? utype[s] : type[s];
+            if (o < 0 || o >= O || t < 0 || t >= n) continue;
+            const q = (((o * 3) + (k === 0 ? 0 : k === 1 ? 1 : 2)) * n + t) * 2;
+            sc[q]++;
+            if (!(f & SF_IDLE_NOT) && !ql[s] && !(f & SF_RESEARCHING)) sc[q + 1]++;
+        }
+    }
+    self.postMessage({ type: 'sum', units: uc, structs: sc, n, owners: O }, [uc.buffer, sc.buffer]);
 }
 function setStats(dir) {
     stats.clear();

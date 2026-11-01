@@ -1143,6 +1143,17 @@ for (const [k, kind] of (typeof SIM_UNIT_JS_FIELDS !== 'undefined' ? SIM_UNIT_JS
     const set = new Function('k', 'return function (v) { const c = this._us; if (c) ' + write + '; else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
+// Its type: the type index (unit.upT, sim_unit_state.js simUnitTypeIndex) read
+// as its name; no column of its own (it was a second copy of the type, as a
+// string reference a unit). Setting it moves its upkeep bin too.
+Object.defineProperty(Unit.prototype, 'unitType', { configurable: true, enumerable: false,
+    get() { const c = this._us; if (c) { const t = c.upT[this._si]; return t >= 0 ? _simUnitTypeNames[t] : undefined; } return this._det ? this._det.unitType : undefined; },
+    set(v) {
+        const c = this._us;
+        if (c) { const t = v === undefined || v === null ? -1 : simUnitTypeIndex(v); if (c.upT[this._si] !== t) { c.upT[this._si] = t; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } }
+        else if (this._det) this._det.unitType = v;
+        else Object.defineProperty(this, 'unitType', { value: v, writable: true, enumerable: true, configurable: true });
+    } });
 // Its base stat tables: its base row's (unit.bsRow >= 0, which the
 // effective-level kernel gives a unit catching up with its stat tables, see
 // things_utils.js _effBRowObj), else its own fields. Setting either one makes
@@ -1710,6 +1721,92 @@ function removeUnitNow(u, adjustPop = true) {
     if (adjustPop && players[u.owner]) players[u.owner].popCount = Math.max(0, (players[u.owner].popCount || 0) - 1);
 }
 
+// A new unit: its slot and the columns of its own values, nothing else (the
+// slot holds every other column at its default already: zeroed,
+// simSlotDefaults, _simJsDefaults). The object is only the slot's handle
+// (its own fields are _us, _si, _det, _rm: the same layout as a
+// constructed unit's). The Unit constructor wrote ~100 fields through their
+// setters, 81 of them the values the slot held: ~68 us a spawn at 1.1k
+// spawns a tick on the 1M-unit chaos scene.
+function simSpawnUnit(unitType, owner, x, y, level = 1, prepare = null) {
+    if (!_unitFieldsMutable || !SIM_SPAWN_DIRECT) return new Unit(unitType, owner, x, y, level, prepare);
+    const u = Object.create(Unit.prototype);
+    simUnitStateAllocate(u, x, y);
+    const C = u._us, s = u._si, def = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
+    // (A unit made outside a tick (an action's, a restore's): the prebuilt
+    // unit index no longer holds, as the constructor's dead setter told it.)
+    if (typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
+    const px = Math.round(x * 8), py = Math.round(y * 8);
+    C.id[s] = nextUnitId++;
+    C.owner[s] = owner;
+    u.unitType = unitType;
+    C.x[s] = px; C.y[s] = py; C.prevX[s] = px; C.prevY[s] = py; C.x0[s] = px; C.y0[s] = py;
+    C.upT[s] = simUnitTypeIndex(unitType);
+    C.energy[s] = Math.max(1, Math.floor(Number(def.energy) || 1));
+    u.r = def.r;
+    u.collisionR = Number.isFinite(def.collisionR) ? def.collisionR : def.r;
+    C.unitLevel[s] = 1; C.stackCount[s] = 1; C.effectiveStacks[s] = 1; C.effectiveLevel[s] = 1; C.baseLevel[s] = 1;
+    // (No target: a slot that held no unit yet can hold a kernel's target
+    // values (found by a two-peer chaos run: the host's units differed from
+    // the restored guests'); the constructor's targetUnit / targetBuilding /
+    // targetPos writes cleared them.)
+    C.tuS[s] = -1; C.tuId[s] = 0; C.tbT[s] = -1; C.acqB[s] = 0; C.mvTgX[s] = NaN; C.mvTgY[s] = NaN;
+    if (prepare) prepare(u);
+    // Its stats: the columns the level scaling writes, the same for every
+    // unit of its owner, type and level at the same stat tables (its row,
+    // the movement kernel's values of it, its tables' references): made by
+    // the full path for the first, copied for the rest (_spawnStats; a
+    // worker's record is not among them: the level scaling writes none of it).
+    if (SPAWN_STAT_TEMPLATES) _spawnStats(u, C, s, owner, unitType, level);
+    else applyUnitLevelScaling(u, level);
+    C.energy[s] = u.preComputedEffective ? u.preComputedEffective.maxEnergy : C.energy[s];
+    if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(u);
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && !occupancySpawn(u)) { u.dead = true; simUnitStateDetach(_simUnitState, s); return u; }
+    updateUnitSpatial(u);
+    return u;
+}
+
+// The stat columns of a new unit by (owner, type, level): what
+// applyUnitLevelScaling wrote on a fresh slot, as one straight-line write.
+// Void when the (owner, type) tables' version (a research of that type: its
+// values) or the effective rows (_effRowEpoch: their indices) changed. (Not
+// on every stat rebuild, _precomputedStatsVersion: a research of any type
+// finishes almost every tick in a big match; it only makes the shared
+// effective tables' clones anew, with the same values.) (upB: the upkeep bins, refreshed by
+// the caller; the shared rows the first one noted stay.)
+let SPAWN_STAT_TEMPLATES = true;
+// (false: every new unit by the Unit constructor, as before simSpawnUnit: an A/B switch.)
+let SIM_SPAWN_DIRECT = true;
+// (By a number: ((owner * 2 + worker) * types + type index) * 64 + level; no key strings made a spawn.)
+const _spawnStatTemplates = new Map();
+const _SPAWN_STAT_SKIP = new Set(['upB', 'energy']);
+function _spawnStats(u, C, s, owner, unitType, level) {
+    const lvl = Math.max(1, Math.floor(level || 1)), ver = typeof _unitStatsVerOf === 'function' ? _unitStatsVerOf(u) : 0, epoch = typeof _effRowEpoch === 'number' ? _effRowEpoch : 0;
+    const key = (((owner + 1) * 2 + (u.workerType ? 1 : 0)) * 4096 + C.upT[s]) * 64 + Math.min(63, lvl);
+    let T = _spawnStatTemplates.get(key);
+    if (T && T.ver === ver && T.epoch === epoch && T.C === C && T.lvl === lvl) { T.write(C, s, T.refs); return; }
+    // (The first of its key at these tables: the full path, its writes noted.)
+    const names = Object.keys(C), before = new Array(names.length);
+    for (let i = 0; i < names.length; i++) { const c = C[names[i]]; before[i] = !c ? undefined : ArrayBuffer.isView(c) ? (c.length === S_CAP_OF(C) ? c[s] : undefined) : typeof c.get === 'function' ? c.get(s) : undefined; }
+    applyUnitLevelScaling(u, lvl);
+    const body = [], refs = [];
+    for (let i = 0; i < names.length; i++) {
+        const k = names[i], c = C[k];
+        if (!c || _SPAWN_STAT_SKIP.has(k)) continue;
+        if (ArrayBuffer.isView(c)) {
+            if (c.length !== S_CAP_OF(C)) continue;
+            const v = c[s];
+            if (!Object.is(v, before[i])) body.push('C.' + k + '[s] = ' + (Object.is(v, -0) ? '-0' : Number.isNaN(v) ? 'NaN' : String(v)) + ';');
+        } else if (typeof c.get === 'function') {
+            const v = c.get(s);
+            if (!Object.is(v, before[i])) { body.push('C.' + k + '.set(s, R[' + refs.length + ']);'); refs.push(v); }
+        }
+    }
+    _spawnStatTemplates.set(key, { ver, epoch, lvl, C, refs, write: new Function('C', 's', 'R', body.join('\n')) });
+}
+// (The slot count of the unit columns: per-slot columns are this long, those of other strides not.)
+function S_CAP_OF(C) { return _simUnitState.cap; }
+
 function configureWorkerUnitFromType(u) {
     if (!u) return;
     let resourceCollectorCfg = getResourceTypeByCollectorUnit(u.unitType);
@@ -1754,7 +1851,7 @@ function spawnUnitNearUnit(templateUnit) {
     if (!templateUnit.isFlying) {
         spawnTile = findNearestWalkable(spawnTile.x, spawnTile.y, baseGx, baseGy);
     }
-    let nu = new Unit(templateUnit.unitType, templateUnit.owner, spawnTile.x * TILE + 16, spawnTile.y * TILE + 16);
+    let nu = simSpawnUnit(templateUnit.unitType, templateUnit.owner, spawnTile.x * TILE + 16, spawnTile.y * TILE + 16);
     configureWorkerUnitFromType(nu);
     return nu;
 }

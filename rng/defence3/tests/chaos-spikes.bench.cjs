@@ -71,6 +71,21 @@ const setup=JSON.parse(inst.eval(`JSON.stringify(${chaos.setup(options)})`));
 assert.deepEqual(setup.errors,[]);
 const {upgradeAreas,...setupSummary}=setup;
 console.log('Setup',JSON.stringify(setupSummary));
+// --export-scene=file.gz: the set-up match as a portable scene (the menu's Load,
+// tests/perf-fuzz.cjs and tests/select-all-spike-probe.cjs read it), after
+// --export-ticks=N steps (default 10, so workers have jobs and queues run), then exit.
+const exportScene=process.argv.find(a=>a.startsWith('--export-scene='))?.slice(15);
+if(exportScene){
+ for(let i=0;i<num('export-ticks',10);i++)inst.eval('gameTick()');
+ const parts=inst.eval(`(()=>{const settings=createMainMenuSettingsSnapshot();settings.editableConfig=serializeEditableRuntimeConfigForTransport();
+  return soloGameSnapshotJsonParts(buildSoloGameSnapshotParts({createdAt:new Date().toISOString(),settings,player:0,teamColors:{...teamColorById},
+   camera:{x:GRID_W/2,y:GRID_H/2,zoom:camera.zoom}}));})()`);
+ const zlib=require('node:zlib'),gz=zlib.createGzip({level:6}),file=fs.createWriteStream(path.resolve(exportScene));
+ gz.pipe(file);for(const p of parts)gz.write(p);gz.end();
+ await new Promise(r=>file.on('close',r));
+ console.log('scene',exportScene,(fs.statSync(exportScene).size/1048576).toFixed(1),'MB, units',inst.eval('units.filter(u=>!u.dead).length'));
+ process.exit(0);
+}
 // (PRE=<js>: run in the instance after setup, before the measured ticks: A/B switches.)
 if(process.env.PRE)inst.eval(process.env.PRE);
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);

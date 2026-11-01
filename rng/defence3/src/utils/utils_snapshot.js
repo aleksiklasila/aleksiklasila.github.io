@@ -2123,6 +2123,9 @@ function snapDecodeState(S, options = null) {
     let partial = !!S.partial;
     let pool = S.pool || [];
     let statSignaturesBefore = players.map((_, pid) => _snapStatMapSignature(pid));
+    // (A spawn's stat columns copied from before this restore would name its
+    // rows and tables as they were: unit.js _spawnStats makes them anew.)
+    if (typeof _spawnStatTemplates !== 'undefined') _spawnStatTemplates.clear();
     _snapDec = {
         byRef: new Map(), pool, poolMemo: new Array(pool.length), statMemo: new Map(), statMapReady: false,
         statSignaturesBefore, missingRefs: 0, statMapsRebuilt: 0, lazyIndex: {}, finals: null,

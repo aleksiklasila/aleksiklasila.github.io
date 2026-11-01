@@ -4160,7 +4160,7 @@
             for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
         }
         prewarmPrograms() {
-            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources()]) {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources(), () => this.ensureSiteMarkResources()]) {
                 try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
             }
         }
@@ -4501,6 +4501,106 @@
             overlays.groundLinesRendered = true;
         }
 
+        // Salvage crosses and construction hammers (renderer.js
+        // siteMarkInstances: x, z, kind an instance): one instanced draw, the
+        // instances uploaded only when the list changed. As the overlay
+        // canvas drew them: over the structure's top (lift 0.72), half a tile
+        // wide held to 6-26 px, hidden only by what is in front of that point
+        // (the depth test with isOverlayPointVisible's bias), not by its own model.
+        ensureSiteMarkResources() {
+            const gl = this.gl;
+            if (this.siteMarkProgram) return;
+            this.siteMarkProgram = createProgram(gl, `#version 300 es
+                precision highp float;
+                layout(location=0) in vec3 aMark;
+                uniform mat4 uViewProjection;
+                uniform vec2 uViewport;
+                out vec2 vUv;
+                vec2 px(vec4 c) { return (c.xy / c.w * .5 + .5) * uViewport; }
+                void main() {
+                    vec4 c = uViewProjection * vec4(aMark.x, .72, aMark.y, 1.);
+                    vec4 cx = uViewProjection * vec4(aMark.x + 1., .72, aMark.y, 1.);
+                    vec4 cz = uViewProjection * vec4(aMark.x, .72, aMark.y + 1., 1.);
+                    if (c.w <= 0. || c.z < -c.w || c.z > c.w) { gl_Position = vec4(2., 2., 2., 1.); vUv = vec2(0.); return; }
+                    vec2 p = px(c);
+                    float ppt = max(cx.w > 0. ? length(px(cx) - p) : 0., cz.w > 0. ? length(px(cz) - p) : 0.);
+                    float size = floor(clamp(ppt * .48, 6., 26.) + .5);
+                    vec2 corner = vec2(float(gl_VertexID % 2), float(gl_VertexID / 2));
+                    // (Screen y grows up here: the sprite's top at p.y + .75 size, as the canvas drew it.)
+                    vec2 q = floor(p + .5) + vec2((corner.x - .5) * size, (.75 - corner.y) * size);
+                    gl_Position = vec4(q / uViewport * 2. - 1., c.z / c.w - .0024, 1.);
+                    vUv = vec2((corner.x + (aMark.z > 1.5 ? 1. : 0.)) * .5, corner.y);
+                }
+            `, `#version 300 es
+                precision highp float;
+                uniform sampler2D uSprites;
+                in vec2 vUv;
+                layout(location=0) out vec4 outColor;
+                void main() {
+                    vec4 t = texture(uSprites, vUv);
+                    if (t.a < .02) discard;
+                    outColor = t;
+                }
+            `);
+            this.siteMarkU = { vp: gl.getUniformLocation(this.siteMarkProgram, 'uViewProjection'), viewport: gl.getUniformLocation(this.siteMarkProgram, 'uViewport'), sprites: gl.getUniformLocation(this.siteMarkProgram, 'uSprites') };
+            this.siteMarkVao = gl.createVertexArray();
+            this.siteMarkBuffer = gl.createBuffer();
+            this.siteMarkCap = 0; this.siteMarkVersion = -1; this.siteMarkCount = 0;
+            gl.bindVertexArray(this.siteMarkVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.siteMarkBuffer);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
+            gl.vertexAttribDivisor(0, 1);
+            gl.bindVertexArray(null);
+            // (The two sprites side by side: cross, hammer.)
+            const atlas = document.createElement('canvas'); atlas.width = 128; atlas.height = 64;
+            const g = atlas.getContext('2d');
+            g.drawImage(Defence3Renderer3D.siteMarkSprite(1), 0, 0); g.drawImage(Defence3Renderer3D.siteMarkSprite(2), 64, 0);
+            this.siteMarkTexture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, this.siteMarkTexture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
+        drawSiteMarksGpu(overlays) {
+            const M = overlays && overlays.siteMarkInst;
+            if (!M || !M.n) return;
+            const gl = this.gl;
+            this.ensureSiteMarkResources();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.siteMarkBuffer);
+            if (this.siteMarkVersion !== M.version) {
+                const need = M.n * 3;
+                // (Grown to the next power of two: rarely made again.)
+                if (need > this.siteMarkCap) { let cap = 3072; while (cap < need) cap *= 2; this.siteMarkCap = cap; gl.bufferData(gl.ARRAY_BUFFER, cap * 4, gl.DYNAMIC_DRAW); }
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, M.data, 0, need);
+                this.siteMarkVersion = M.version; this.siteMarkCount = M.n;
+            }
+            gl.useProgram(this.siteMarkProgram);
+            gl.bindVertexArray(this.siteMarkVao);
+            gl.uniformMatrix4fv(this.siteMarkU.vp, false, this.tmpViewProjection);
+            // (The projection's own width in CSS px, as the ground lines use: sizes in CSS px.)
+            gl.uniform2f(this.siteMarkU.viewport, this.cssWidth, this.cssHeight);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.siteMarkTexture);
+            gl.uniform1i(this.siteMarkU.sprites, 0);
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.siteMarkCount);
+            gl.drawBuffers(this.sceneDrawBuffers);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            gl.bindVertexArray(null);
+        }
+
         drawOverlay(overlays, ctx) {
             if (!ctx || !overlays) return;
             ctx.save();
@@ -4712,7 +4812,7 @@
                 ctx.fillRect(x, y, Math.round(width * pct), height);
             }
 
-            this.drawSiteMarks(overlays.siteMarks, ctx);
+            // (Site marks: on the GPU, drawSiteMarksGpu.)
 
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
@@ -7912,6 +8012,7 @@
                 this.drawRangeVisibility(overlays);
                 this.drawSelectionMask(overlays, snapshot);
                 this.drawGroundOverlays(overlays);
+                this.drawSiteMarksGpu(overlays);
                 this.resolveScene();
                 // Glyphs have no model depth to shade: skip SSAO/shadow/outline
                 // passes. Keep the user's color grading and antialiasing.
@@ -7933,6 +8034,7 @@
                 this.drawRangeVisibility(snapshot.overlays);
                 this.drawSelectionMask(snapshot.overlays, snapshot);
                 this.drawGroundOverlays(snapshot.overlays);
+                this.drawSiteMarksGpu(snapshot.overlays);
                 this.resolveScene();
                 this.presentSceneToCanvas(true);
                 this.trimTopTextures();
@@ -8094,6 +8196,7 @@
             this.drawRangeVisibility(overlays);
             this.drawSelectionMask(overlays, snapshot);
             this.drawGroundOverlays(overlays);
+            this.drawSiteMarksGpu(overlays);
             let postNeedsDepth = !!(this.postProcess && this.graphicsOptions && this.postProcess.needsDepth(this.graphicsOptions, false));
             this.resolveScene(needsOverlayDepth || postNeedsDepth);
             if (needsOverlayDepth) this.captureOverlayDepthFrame();

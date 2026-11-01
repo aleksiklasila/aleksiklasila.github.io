@@ -354,7 +354,7 @@ function applySoloScene(scene) {
     const groups = new Map();
     for (const r of rows('units')) {
         if (slotPlan !== null) simUnitStateWantSlot(slotPlan[planAt++]);
-        const u = new Unit(r[0],r[1],r[2]*TILE,r[3]*TILE);
+        const u = simSpawnUnit(r[0],r[1],r[2]*TILE,r[3]*TILE);
         configureWorkerUnitFromType(u); u.baseLevel = r[5]; u.stackCount = r[6]; applyUnitLevelScaling(u,r[5]);
         u.energy = r[4]; u.holdPosition = !!r[8];
         unitAdded(u); players[u.owner].popCount++;

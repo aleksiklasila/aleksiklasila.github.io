@@ -7,11 +7,10 @@
 // (info_pack_worker.js: the selection binned and summed from the
 // structure table and stat tables in the wasm heap and the frame's unit
 // columns, all shared memory): the page formats and writes them, nothing
-// else. Still markup in a block of its own: a research group's queue and
-// research rows, the player status with nothing selected.
+// else. The research block and the player status: info_research_static.js.
 
 // ---- the packer ----
-const INFO_PACK_URL = './src/audio_visual/info_pack_worker.js?v=20261101-b';
+const INFO_PACK_URL = './src/audio_visual/info_pack_worker.js?v=20261101-f';
 // state: 0 off, 1 asked, 2 ready, -1 none (no simulation worker: the in-page
 // simulation draws the old panel, see infoPanelStaticActive).
 const _ipk = { state: 0, worker: null, seq: 0, rows: null, rowsSeq: -1, ms: 0, sent: null };
@@ -40,12 +39,53 @@ function _infoPackMsg(m) {
     if (m.type === 'ready') { _ipk.state = 2; _infoPanelNudge(); }
     else if (m.type === 'error') console.warn('[info pack]', m.message);
     else if (m.type === 'box') _infoPackBoxDone(m);
+    else if (m.type === 'sum') { _ipkSum.units = m.units; _ipkSum.structs = m.structs; _ipkSum.n = m.n; _ipkSum.owners = m.owners; _ipkSum.version++; _ipkSum.byOwner.clear(); }
     else if (m.type === 'ids' && m.seq === _ipk.seq) _infoPackIds(m);
     else if (m.type === 'out' && m.seq === _ipk.seq) {
         _ipk.rows = m.rows; _ipk.texts = m.texts; _ipk.rowsSeq = m.seq; _ipk.ms = m.ms;
         // (Written at once: a few hundred text nodes at most.)
         if (_ips.panel && _ips.active) _ipsApply(_ips.panel);
     }
+}
+// Every player's counts by type from the packer (info_pack_worker.js
+// summarize, every 250 ms): hud.js getFrameUnitSummary / getFrameBuildingSummary
+// read them through infoPackUnitSummary / infoPackBuildingSummary.
+const _ipkSum = { units: null, structs: null, n: 0, owners: 0, version: 0, byOwner: new Map() };
+function _ipkSumReady(owner) { return _ipk.state === 2 && _ipkSum.units !== null && owner + 1 >= 0 && owner + 1 < _ipkSum.owners; }
+// owner -> Map(unit type -> {label, total, idle}), or null (no counts yet).
+function infoPackUnitSummary(owner) {
+    if (!_ipkSumReady(owner)) return null;
+    const S = _ipkSum, key = 'u' + owner;
+    let groups = S.byOwner.get(key);
+    if (groups) return groups;
+    groups = new Map();
+    const strings = _pageFrameStrings, n = S.n, U = S.units, base = (owner + 1) * n * 2;
+    for (let t = 0; t < n; t++) if (U[base + t * 2]) { const k = strings[t] || 'other'; groups.set(k, { label: _prettyUnitTypeLabel(k), total: U[base + t * 2], idle: U[base + t * 2 + 1] }); }
+    S.byOwner.set(key, groups);
+    return groups;
+}
+// owner -> {groups (tower:<type>, barrack:<unit type>, <type>), stats (barrack_<unit type>, <type>), total, idle}, or null.
+function infoPackBuildingSummary(owner) {
+    if (!_ipkSumReady(owner)) return null;
+    const S = _ipkSum, key = 'b' + owner;
+    let v = S.byOwner.get(key);
+    if (v) return v;
+    const strings = _pageFrameStrings, n = S.n, C = S.structs, groups = new Map(), stats = new Map();
+    let total = 0, idle = 0;
+    for (let cls = 0; cls < 3; cls++) {
+        const base = ((owner + 1) * 3 + cls) * n * 2;
+        for (let t = 0; t < n; t++) {
+            const a = C[base + t * 2];
+            if (!a) continue;
+            const b = C[base + t * 2 + 1], type = strings[t] || '', statsKey = cls === 1 ? 'barrack_' + type : type, gk = cls === 1 ? 'barrack:' + type : cls === 0 ? 'tower:' + type : type || 'unknown';
+            let g = groups.get(gk); if (!g) groups.set(gk, g = { label: getBuildingDisplayName(statsKey), total: 0, idle: 0 });
+            let st = stats.get(statsKey); if (!st) stats.set(statsKey, st = { total: 0, idle: 0 });
+            g.total += a; g.idle += b; st.total += a; st.idle += b; total += a; idle += b;
+        }
+    }
+    v = { groups, stats, total, idle };
+    S.byOwner.set(key, v);
+    return v;
 }
 function _infoPanelNudge() { if (typeof _infoPanelNextRefreshAt !== 'undefined') _infoPanelNextRefreshAt = 0; }
 // What the packer reads changed: the selection's slots (made when it
@@ -60,7 +100,7 @@ function _infoPackSync() {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (F && F.buf !== S.frame) {
         S.frame = F.buf;
-        w.postMessage({ type: 'frame', cols: { type: F.type, owner: F.owner, blevel: F.blevel, level: F.level, flags: F.flags, energy: F.energy, maxEnergy: F.maxEnergy, wtype: F.wtype, x: F.x, y: F.y, px: F.px, py: F.py, id: F.id } });
+        w.postMessage({ type: 'frame', cols: { type: F.type, owner: F.owner, blevel: F.blevel, level: F.level, flags: F.flags, energy: F.energy, maxEnergy: F.maxEnergy, wtype: F.wtype, wstate: F.wstate, cmd: F.cmd, x: F.x, y: F.y, px: F.px, py: F.py, id: F.id } });
     }
     const ents = selectedEntities, us = selectedUnits;
     if (S.ents === ents && S.entsLen === ents.length && S.units === us && S.unitsLen === us.length) return;
@@ -255,7 +295,8 @@ function infoPanelMatchStart() {
     cat.groups.forEach((g, i) => { g.i = i; g.rows = _ipsRowsOf(g); cat.wire.groups[i].rowIds = g.rows.map(r => r.id); });
     panel.innerHTML = _ipsMarkup(cat);
     _ips.panel = panel; _ips.active = false;
-    _ips.status = panel.querySelector('.ips-status'); _ips.statusRec = null;
+    _ips.status = panel.querySelector('.ips-status');
+    if (typeof infoStatusStaticMake === 'function') infoStatusStaticMake(_ips.status);
     _ips.bar = panel.querySelector('.ips-bar'); _ips.sum = panel.querySelector('.ips-sum');
     _ips.sumT = panel.querySelector('.ips-sum-t'); _ips.sumV = panel.querySelector('.ips-sum-v');
     _ips.toggles = [...panel.querySelectorAll('.subgroup-toggle')].map(el => ({ el, img: el.querySelector('img'), n: el.querySelector('.ips-n'), box: el.querySelector('.sg-icon-box') }));
@@ -279,7 +320,8 @@ function infoPanelMatchStart() {
         S.q = el.querySelector('.ips-q');
         if (S.q) { S.qCost = S.q.querySelector('.count-cost'); S.qCtl = S.q.querySelector('.count-control'); S.qIn = S.q.querySelector('input'); S.qOut = S.q.querySelector('output'); S.qMax = S.q.querySelector('.count-max'); }
         S.p = el.querySelector('.ips-p'); if (S.p) { S.pf = S.p.querySelector('.ips-pf'); S.pt = S.p.querySelector('.ips-pt'); }
-        S.research = el.querySelector('.ips-research'); S.researchRec = null;
+        S.research = el.querySelector('.ips-research');
+        if (S.research && typeof infoResearchStaticMake === 'function') infoResearchStaticMake(S.research);
         S.b = el.querySelector('.ips-b');
         for (const p of el.querySelectorAll('[data-b]')) { S.btn[p.dataset.b] = p; p._h = true; }
         for (const x of [S.mixed, S.q, S.p, S.research, S.b]) if (x) x._h = x.hidden;
@@ -392,9 +434,8 @@ function _ipsApply(panel) {
     const R = _ipk.rows, cat = _ips.cat;
     const totalSel = selectedEntities.length + selectedUnits.length;
     if (totalSel === 0) {
-        const html = buildInfoPanelPlayerStatusHtml() || '';
-        _ipsShow(_ips.status, !!html);
-        if (html) { const before = _ips.statusRec; _ips.statusRec = _ipsLegacy(_ips.status, _ips.statusRec, html, null); if (_ips.statusRec !== before) bindInfoPanelPlayerStatusControls(_ips.status); }
+        const html = infoStatusStaticWrite();
+        _ipsShow(_ips.status, html);
         _ipsShow(_ips.bar, false); _ipsShow(_ips.sum, false);
         for (const S of _ips.secs) if (S.shown) { S.el.classList.add('ips-off'); S.shown = false; }
         for (const T of _ips.toggles) _ipsShow(T.el, false);
@@ -477,11 +518,10 @@ function _ipsGroup(S, g, R, o, n, X) {
             _ipsText(S.pt, X.ptext);
         }
     }
-    // A research group's queue and research rows (still markup): from its
-    // standing lab, its labs counted by the packer.
+    // A research group's queue and research rows: from its standing lab, its labs counted by the packer.
     if (S.research) {
         _ipsShow(S.research, local);
-        if (local && own) { const labs = [own]; labs._n = Math.round(R[o + IPF.ready]); S.researchRec = _ipsLegacy(S.research, S.researchRec, renderResearchGroupQueueBlock(labs), _ipsResearchBinder); }
+        if (local && own) infoResearchStaticWrite(own, Math.round(R[o + IPF.ready]));
     }
     if (S.b) {
         _ipsShow(S.b, local);
@@ -511,19 +551,6 @@ function _ipsUnitButtons(S, g, R, o, n) {
     _ipsCss(B.hold, _ipsPillCss('hold', h === 0)); _ipsText(B.hold, `🚶 ${h === 0 ? 'ON' : h === count ? 'OFF' : 'MIXED'}`);
     for (const k of ['x2', 'd2']) { _ipsShow(B[k], true); _ipsAttr(B[k], 'data-ids', ref); }
 }
-// The research block's controls: the old binder (updateInfoPanel's, by class), set by it.
-let _ipsResearchBinder = null;
-// Markup of its own in a block, patched in place when its structure is the
-// same, made again when not (the research block, the player status).
-function _ipsLegacy(host, rec, html, bind) {
-    if (rec && rec.html === html && rec.element === host) return rec;
-    if (rec && rec.element === host && ((typeof patchInfoPanelResearchQueue === 'function' && patchInfoPanelResearchQueue(rec, html, bind)) || patchInfoPanelText(rec, html))) { rec.html = html; return rec; }
-    host.innerHTML = html;
-    const out = { html, element: host, ...indexInfoPanelText(host, html) };
-    if (bind) bind(host);
-    return out;
-}
-
 // ---- a far view's box selection, in the packer (renderer.js get3DBoxSelection) ----
 // (true: asked; main.js boxSelectionApply takes the result, a few ms later.
 // No packer (the in-page simulation): the page's own pass.)

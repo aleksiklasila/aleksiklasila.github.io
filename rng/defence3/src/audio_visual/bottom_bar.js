@@ -347,6 +347,8 @@ function _bbEnsureDom() {
         thingsLabel: document.getElementById('bb-things-label'),
     };
     bar.addEventListener('pointerdown', _bbOnPointerDown);
+    // (Before the document's hover text takes the title: hover_text.js.)
+    bb.els.research.addEventListener('pointerover', _bbResearchHover);
     bar.addEventListener('contextmenu', ev => ev.preventDefault());
     // Vertical wheel scrolls the rows sideways.
     for (let row of [bb.els.things, bb.els.research]) {
@@ -632,7 +634,7 @@ function _bbRenderResearch(now) {
     const slots = [];
     for (let i = 0; i < tasks.length; i++) {
         if (i === caret) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
-        slots.push({ key: 'task:' + owner + ':' + _bbTaskKey(tasks[i]), task: tasks[i], index: i, open: i === openIndex });
+        slots.push({ key: 'task:' + owner + ':' + _bbTaskKey(tasks[i]), task: tasks[i], index: i, open: i === openIndex, draw: parts[i] + (i === 0 ? '/a' : '') + (i === openIndex ? '/o' : '') });
     }
     if (caret >= tasks.length) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
     let aheadLeft = aheadCount;
@@ -660,8 +662,17 @@ function _bbRenderResearch(now) {
             holder.innerHTML = slot.task ? _bbTaskHtml(slot.task, slot.index, slot.open) : slot.html;
             el = holder.firstElementChild;
             el._bbResearchKey = slot.key;
+            el._bbDrawn = slot.draw; el._bbIdx = slot.index;
         } else if (slot.task) {
-            _bbPatchResearchTask(el, slot.task, slot.index, slot.open);
+            // (Only a tile whose stat, level, progress, cost, active or open
+            // state changed is drawn again: the active task's progress
+            // changes every tick, the rest of a long queue does not, and a
+            // finished task only moves the rest one place (their index; the
+            // hover text that names it is written when hovered,
+            // _bbResearchHover). Patching every tile was ~1 s of 26 at a
+            // 1.6k-task queue.)
+            if (el._bbIdx !== slot.index) { el.dataset.index = String(slot.index); el._bbIdx = slot.index; el._bbTitleStale = true; }
+            if (el._bbDrawn !== slot.draw) { _bbPatchResearchTask(el, slot.task, slot.index, slot.open); el._bbDrawn = slot.draw; }
         }
         if (el !== cursor) els.research.insertBefore(el, cursor);
         cursor = el.nextElementSibling;
@@ -684,11 +695,22 @@ function _bbTaskPresentation(t, index, open) {
     return { cls, title, active, pct, left, statLabel };
 }
 
+// A task tile's hover text, written when the pointer comes onto it (its
+// place in the queue changes with every finished task).
+function _bbResearchHover(ev) {
+    const el = ev.target instanceof Element ? ev.target.closest('.bb-task') : null;
+    if (!el || !el._bbTitleStale) return;
+    const tasks = _bbOrderedTasks(localPlayerId), i = Number(el.dataset.index), t = tasks[i];
+    el._bbTitleStale = false;
+    if (t) el.setAttribute('title', _bbTaskPresentation(t, i, el.classList.contains('bb-open')).title);
+}
 function _bbPatchResearchTask(el, t, index, open) {
     const p = _bbTaskPresentation(t, index, open);
     if (el.className !== p.cls) el.className = p.cls;
     if (el.dataset.index !== String(index)) el.dataset.index = String(index);
-    if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
+    el._bbIdx = index;
+    if (el.matches(':hover')) { if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title); el._bbTitleStale = false; }
+    else el._bbTitleStale = true;
     const progress = el._bbProgress || (el._bbProgress = el.querySelector('.bb-task-progress > div'));
     const height = (p.pct * 100).toFixed(1) + '%';
     if (progress.style.height !== height) progress.style.height = height;

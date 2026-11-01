@@ -225,10 +225,12 @@ function simHashRand(a, b, c = 0) {
     h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
-// Unit types by first sight (peer-local indices: only ever mapped back to
-// the type's name).
+// Unit types by index: BASE_UNIT_STATS' order first (the same on every
+// peer), then any other name by first sight. A unit's type is this index
+// (unit.upT); Unit.unitType reads it as its name (unit.js).
 const _simUnitTypeNames = [], _simUnitTypeIdx = new Map();
 function simUnitTypeIndex(type) {
+    if (_simUnitTypeNames.length === 0 && typeof BASE_UNIT_STATS !== 'undefined') for (const k of Object.keys(BASE_UNIT_STATS)) { _simUnitTypeIdx.set(k, _simUnitTypeNames.length); _simUnitTypeNames.push(k); }
     let i = _simUnitTypeIdx.get(type);
     if (i === undefined) { i = _simUnitTypeNames.length; if (i >= 32767) return -1; _simUnitTypeNames.push(type); _simUnitTypeIdx.set(type, i); }
     return i;
@@ -681,7 +683,7 @@ const SIM_UNIT_JS_FIELDS = [
     ['_rslot', 'i', -1, false],
     ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true],
     ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
-    ['unitType', 'r', undefined, true], ['preComputedBase', 'r', null, true], ['basePreComputed', 'r', null, true], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
+    ['preComputedBase', 'r', null, true], ['basePreComputed', 'r', null, true], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
     ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
     // (Backing fields of accessors with their own logic: unit.js.)
     ['_path', 'r', null, false],
@@ -729,7 +731,8 @@ const _simJsDefaults = new Function('C', 's', SIM_UNIT_JS_FIELDS.map(([k, kind, 
 // Reference fields let go (a detach: the slot's next unit starts at the
 // defaults anyway; the references would keep paths and targets alive).
 const _simJsRelease = new Function('C', 's', SIM_UNIT_JS_FIELDS.filter(e => e[1] === 'r'||SIM_UNIT_SPARSE_JS_FIELDS.has(e[0])).map(([k,kind]) => 'C.'+_simJsName(k,kind)+'.clear(s);').join(' '));
-const SIM_UNIT_JS_SNAPSHOT_KEYS = SIM_UNIT_JS_FIELDS.filter(e => e[3]).map(e => e[0]);
+// (unitType among them, where it stood: no column of its own, the type index upT, unit.js.)
+const SIM_UNIT_JS_SNAPSHOT_KEYS = (() => { const k = SIM_UNIT_JS_FIELDS.filter(e => e[3]).map(e => e[0]); k.splice(k.indexOf('maxEnergy') + 1, 0, 'unitType'); return k; })();
 // Movement columns that are state (a snapshot's, behind accessors: unit.js).
 const SIM_UNIT_MOVE_SNAPSHOT_KEYS = ['atkL', 'wtcL'];
 let _simUnitState = null;
@@ -916,7 +919,7 @@ function _simSlabKeys(sl) {
     sl.cur = new Int32Array(sl.nk).fill(-1); sl.holes = new Array(sl.nk).fill(null);
 }
 function _simSlabNew() {
-    const sl = { kw: 0, kh: 0, nk: 0, gw: 0, gh: 0, nfree: 0, slabs: 0, pushes: 0, cur: null, holes: null, any: [], empty: [], bits: new Uint32Array(0), used: new Uint32Array(0), sfree: new Uint8Array(0), home: new Int32Array(0), want: -1, plan0: -1, layout: 0 };
+    const sl = { kw: 0, kh: 0, nk: 0, gw: 0, gh: 0, nfree: 0, slabs: 0, pushes: 0, cur: null, holes: null, any: [], empty: [], bits: new Uint32Array(0), used: new Uint32Array(0), ever: new Uint32Array(0), sfree: new Uint8Array(0), home: new Int32Array(0), want: -1, plan0: -1, layout: 0 };
     _simSlabKeys(sl);
     return sl;
 }
@@ -929,9 +932,9 @@ function _simSlabKey(sl, x, y) {
 function _simSlabReserve(sl, slabs) {
     if (sl.sfree.length >= slabs) return;
     const n = Math.max(slabs, Math.ceil(sl.sfree.length * 1.5), 64);
-    const sfree = new Uint8Array(n), home = new Int32Array(n).fill(-1), bits = new Uint32Array(n * 2), used = new Uint32Array(n * 2);
-    sfree.set(sl.sfree); home.set(sl.home); bits.set(sl.bits); used.set(sl.used);
-    sl.sfree = sfree; sl.home = home; sl.bits = bits; sl.used = used;
+    const sfree = new Uint8Array(n), home = new Int32Array(n).fill(-1), bits = new Uint32Array(n * 2), used = new Uint32Array(n * 2), ever = new Uint32Array(n * 2);
+    sfree.set(sl.sfree); home.set(sl.home); bits.set(sl.bits); used.set(sl.used); ever.set(sl.ever);
+    sl.sfree = sfree; sl.home = home; sl.bits = bits; sl.used = used; sl.ever = ever;
 }
 // A new slab (its 64 slots free, never used) at the end of the owners.
 function _simSlabFresh(S, sl) {
@@ -1075,7 +1078,7 @@ function _simSlabFromLive(S, ns, sorted = false) {
     while (o.length < slabs * SIM_SLAB) o.push(null);
     _simSlabReserve(sl, slabs);
     sl.slabs = slabs;
-    for (let s = 0; s < ns; s++) sl.used[s >> 5] |= 1 << (s & 31);
+    for (let s = 0; s < ns; s++) { sl.used[s >> 5] |= 1 << (s & 31); sl.ever[s >> 5] |= 1 << (s & 31); }
     for (let slab = 0; slab < slabs; slab++) {
         const a = slab * SIM_SLAB, live = Math.min(SIM_SLAB, ns - a);
         for (let s = a + live; s < a + SIM_SLAB; s++) sl.bits[s >> 5] |= 1 << (s & 31);
@@ -1097,6 +1100,10 @@ function simUnitStateAllocate(u, x, y) {
     // (Never used: its columns are as a new slot's, nothing to clear.)
     const reused = (sl.used[s >> 5] & (1 << (s & 31))) !== 0;
     sl.used[s >> 5] |= 1 << (s & 31);
+    // (Held a unit ever: its JavaScript fields and object fields may hold that
+    // unit's values, k_slot_zero (a released slot) resets neither.)
+    const ever = (sl.ever[s >> 5] & (1 << (s & 31))) !== 0;
+    sl.ever[s >> 5] |= 1 << (s & 31);
     // (Grown by half, in whole 4096-slot steps: doubling left up to half of
     // ~850 bytes a slot unused, 1M slots for 600k units.)
     if (s >= S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap), Math.ceil((s + 1) / 4096) * 4096);
@@ -1106,7 +1113,7 @@ function simUnitStateAllocate(u, x, y) {
     // the peer's history, a restore's above all, so a leftover there made
     // peers diverge).
     if (reused) { _simStRelease(S, s); (_simSlotZero || (_simSlotZero = _simSlotZeroFn()))(S.columns, s); S.sepLayer[s] = 0; }
-    _simUnitSlotStart(S, s, u);
+    _simUnitSlotStart(S, s, u, reused || ever);
 }
 // (One straight-line function over every column: a fill call per column was
 // ~10 us a unit.)
@@ -1347,8 +1354,12 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
             if (SIM_UNIT_JS_COL_ALIAS[k]) continue;
             if (kind === 'r') { S.columns[nm] = _simRefGrow(S.columns[nm], cap, def, SIM_SHARED_REF_FIELDS.has(k)); continue; }
             if (SIM_UNIT_SPARSE_JS_FIELDS.has(k)) {S.columns[nm]=_simSparseIntGrow(S.columns[nm],cap,def,used);continue;}
-            const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap);
-            if (was) a.set(was.subarray(0, Math.min(was.length, used, cap)));
+            const was = S.columns[nm], a = new _SIM_JS_TYPED[kind](cap), keep = was ? Math.min(was.length, used, cap) : 0;
+            if (was) a.set(was.subarray(0, keep));
+            // (The slots past those: at the field's default now, so a new
+            // unit there writes none of them, _simUnitSlotStart.)
+            const d = _simJsDefault(kind, def);
+            if (!Object.is(d, 0)) a.fill(d, keep);
             S.columns[nm] = a;
         }
         const stamp = new Uint32Array(cap);
@@ -1375,7 +1386,7 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
 const _simSlotDesc = { value: null, writable: true };
 // (The slot is fresh: zero and simSlotDefaults' values, by k_slot_zero, a
 // growth or simUnitStateAllocate's zeroing. Only the unit's own values here.)
-function _simUnitSlotStart(S, s, u) {
+function _simUnitSlotStart(S, s, u, held = true) {
     S.sepKey[s] = SIM_SEP_ABSENT;
     if (typeof u._lzp === 'number') S.columns.lzAcc[s] = u._lzp;
     if (typeof u._lzb === 'number') S.columns.lzBeam[s] = u._lzb;
@@ -1395,11 +1406,13 @@ function _simUnitSlotStart(S, s, u) {
     S.columns.live[s] = 1; S.columns.tmOn[s] = 1;
     S.columns.maxE[s] = Number(u.maxEnergy);
     if (u.workerType) S.columns.isWk[s] = 1;
-    // (Its object fields unset: their digest that of none, simSlotDefaults' hObj.)
-    _simUnitObjClear(S.columns, s);
-    // (Its JavaScript fields at their defaults; the object holds only its
-    // slot: its columns, slot, detached values and role memory.)
-    _simJsDefaults(S.columns, s);
+    // (Its object fields unset: their digest that of none, simSlotDefaults'
+    // hObj; its JavaScript fields at their defaults. A slot never used holds
+    // both already (empty reference pages; typed fields filled with their
+    // defaults when grown): only one that held a unit is reset, ~6 us a
+    // spawn. (Not the used bit: a released slot zeroed by k_slot_zero is
+    // unused again, its JavaScript fields still its last unit's.)
+    if (held) { _simUnitObjClear(S.columns, s); _simJsDefaults(S.columns, s); }
     // (One descriptor reused: five objects a unit were made for these four.)
     const d = _simSlotDesc; d.value = S.columns; Object.defineProperty(u, '_us', d); d.value = s; Object.defineProperty(u, '_si', d); d.value = null; Object.defineProperty(u, '_det', d); Object.defineProperty(u, '_rm', d); d.value = null;
 }
