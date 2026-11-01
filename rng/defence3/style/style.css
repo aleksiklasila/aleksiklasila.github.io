@@ -1259,6 +1259,7 @@
            rendering kept, so showing it again is no new layout. */
         .ips { content-visibility: auto; contain-intrinsic-size: auto 320px; }
         .ips.ips-off { content-visibility: hidden; contain-intrinsic-size: 0px 0px; overflow: hidden; height: 0; }
+        .ips.ips-warm { content-visibility: visible; }
         .ips-small { font-size: 10px; }
         .ips-strike { text-decoration: line-through; }
 

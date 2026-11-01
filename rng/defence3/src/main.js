@@ -2419,10 +2419,10 @@ function initInput() {
                     let newUnits = [];
                     let newEntities = [];
                     let projectedSlots = null, projectedSlotCount = 0;
-                    // (A far view in 3D: the packer thread projects every unit and
-                    // structure (info_panel_static.js infoPackBoxSelect); its slots
-                    // come back a few ms later to boxSelectionApply.)
-                    if (renderDimensionMode === '3d' && selectionBoxScreen && typeof infoPackBoxSelect === 'function' && infoPackBoxSelect(selectionBoxScreen, e.shiftKey)) {
+                    // (The packer thread finds every unit and structure in the
+                    // box, 3D or 2D (info_panel_static.js infoPackBoxSelect); its
+                    // slots come back a few ms later to boxSelectionApply.)
+                    if (typeof infoPackBoxSelect === 'function' && infoPackBoxSelect(selectionBoxScreen, e.shiftKey, { sx, sy, ex, ey })) {
                         selectionBox = null;
                         selectionBoxScreen = null;
                         return;

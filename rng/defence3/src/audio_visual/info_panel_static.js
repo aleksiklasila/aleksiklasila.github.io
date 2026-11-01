@@ -40,6 +40,7 @@ function _infoPackMsg(m) {
     if (m.type === 'ready') { _ipk.state = 2; _infoPanelNudge(); }
     else if (m.type === 'error') console.warn('[info pack]', m.message);
     else if (m.type === 'box') _infoPackBoxDone(m);
+    else if (m.type === 'ids' && m.seq === _ipk.seq) _infoPackIds(m);
     else if (m.type === 'out' && m.seq === _ipk.seq) {
         _ipk.rows = m.rows; _ipk.texts = m.texts; _ipk.rowsSeq = m.seq; _ipk.ms = m.ms;
         // (Written at once: a few hundred text nodes at most.)
@@ -113,7 +114,7 @@ function _ipsCatalogue() {
     const wire = { groups: groups.map(g => ({ key: g.key, kind: g.kind, type: g.type, utype: g.utype, statKey: g.statKey, upkeepKey: g.upkeepKey, unitKey: g.unitKey, spawnKey: g.spawnKey, fx: g.fx,
             label: g.label, price: g.price, immune: g.immune, gold: g.gold, rowIds: null })),
         towers, spawners: Object.keys(IPS_SPAWNER_UNIT), maxLevel: MAX_THING_LEVEL, areaStepsMax: AREA_STEPS_MAX, areaUnit: AREA_UNIT_TILE_EQUIVALENT, tickRate: TICK_RATE,
-        localPlayer: localPlayerId, workStat: { builder: 'builderDps', healer: 'healerDps', researcher: 'researcherDps', collector: 'gatherPerTrip', astar_collector: 'gatherPerTrip' } };
+        idsChunk: typeof ACTION_MAX_UNIT_IDS === 'number' ? ACTION_MAX_UNIT_IDS : 20000, localPlayer: localPlayerId, workStat: { builder: 'builderDps', healer: 'healerDps', researcher: 'researcherDps', collector: 'gatherPerTrip', astar_collector: 'gatherPerTrip' } };
     return { groups, wire };
 }
 
@@ -286,6 +287,18 @@ function infoPanelMatchStart() {
         return S;
     });
     if (typeof bindCountBarEvents === 'function') bindCountBarEvents();
+    _ipsPrewarmLayout(panel);
+}
+// Every section laid out once, now, at the match's start: shown again later
+// (content-visibility: hidden keeps it) without a first layout in play.
+function _ipsPrewarmLayout(panel) {
+    const display = panel.style.display, visibility = panel.style.visibility;
+    panel.style.visibility = 'hidden'; panel.style.display = 'block';
+    for (const S of _ips.secs) { S.el.classList.add('ips-warm'); S.el.classList.remove('ips-off'); for (const k in S.rows) S.rows[k].row.hidden = false; }
+    void panel.offsetHeight;
+    for (const S of _ips.secs) { for (const k in S.rows) { S.rows[k].row.hidden = true; S.rows[k].row._h = true; } S.el.classList.add('ips-off'); S.el.classList.remove('ips-warm'); }
+    void panel.offsetHeight;
+    panel.style.display = display; panel.style.visibility = visibility;
 }
 // (A press restyles a pill itself, infoTogglePressed: what was written last is then unknown.)
 function _ipsForget(el) { el._a = null; el._t = undefined; el._css = undefined; }
@@ -512,21 +525,23 @@ function _ipsLegacy(host, rec, html, bind) {
 }
 
 // ---- a far view's box selection, in the packer (renderer.js get3DBoxSelection) ----
-// (true: asked; main.js boxSelectionApply takes the result. A near view, or
-// no packer: the page's own pass.)
+// (true: asked; main.js boxSelectionApply takes the result, a few ms later.
+// No packer (the in-page simulation): the page's own pass.)
 const _ipkBox = { id: 0, shift: false, pending: false };
-const INFO_BOX_FAR_UNITS = 20000;
-function infoPackBoxSelect(screenRect, shift) {
-    if (_ipk.state !== 2 || !screenRect || !renderer3dInstance) return false;
-    const UF = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-    if (!UF || UF.count <= INFO_BOX_FAR_UNITS) return false;
-    if (typeof renderer3dInstance.buildViewProjection === 'function') renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
-    const VP = renderer3dInstance.tmpViewProjection, W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight;
-    if (!VP || !(W > 0) || !(H > 0)) return false;
+function infoPackBoxSelect(screenRect, shift, worldRect) {
+    if (_ipk.state !== 2) return false;
+    let msg = null;
+    if (renderDimensionMode === '3d' && screenRect && renderer3dInstance) {
+        if (typeof renderer3dInstance.buildViewProjection === 'function') renderer3dInstance.buildViewProjection(get3DProjectionSnapshot());
+        const VP = renderer3dInstance.tmpViewProjection, W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight;
+        if (!VP || !(W > 0) || !(H > 0)) return false;
+        msg = { mode: '3d', vp: Array.from(VP), w: W, h: H, pad: renderer3dInstance.viewPad || 0,
+            rect: [Math.min(screenRect.sx, screenRect.ex), Math.min(screenRect.sy, screenRect.ey), Math.max(screenRect.sx, screenRect.ex), Math.max(screenRect.sy, screenRect.ey)] };
+    } else if (worldRect) msg = { mode: '2d', rect: [worldRect.sx, worldRect.sy, worldRect.ex, worldRect.ey] };
+    if (!msg) return false;
     _infoPackSync();
-    const rect = [Math.min(screenRect.sx, screenRect.ex), Math.min(screenRect.sy, screenRect.ey), Math.max(screenRect.sx, screenRect.ex), Math.max(screenRect.sy, screenRect.ey)];
     _ipkBox.id++; _ipkBox.shift = !!shift; _ipkBox.pending = true;
-    _ipk.worker.postMessage({ type: 'box', id: _ipkBox.id, vp: Array.from(VP), alpha: tickAlpha, w: W, h: H, pad: renderer3dInstance.viewPad || 0, rect, me: localPlayerId, tile: TILE });
+    _ipk.worker.postMessage(Object.assign({ type: 'box', id: _ipkBox.id, alpha: tickAlpha, me: localPlayerId, tile: TILE }, msg));
     return true;
 }
 function _infoPackBoxDone(m) {
@@ -546,3 +561,23 @@ function _infoPackBoxDone(m) {
     }
     if (typeof boxSelectionApply === 'function') boxSelectionApply(units, entities, slots, k, _ipkBox.shift);
 }
+
+// ---- a selection's order ids, from the packer (made when it changed) ----
+// (hud.js _slotUnitIds takes them for the selection they were made for;
+// worker.js _queueLocalAction takes their wire strings: no encoding of
+// 200k ids on the click.)
+const _ipkIds = { sel: null, len: -1, all: null, combat: null, workers: null };
+const _ipkIdsZ = new WeakMap();
+function _infoPackIds(m) {
+    const S = _ipk.sent;
+    _ipkIds.sel = S.units; _ipkIds.len = S.unitsLen;
+    const keep = (ids, z) => { const a = Array.from(ids); if (z) _ipkIdsZ.set(a, z); return a; };
+    _ipkIds.all = keep(m.all, m.allZ); _ipkIds.combat = keep(m.combat, m.combatZ); _ipkIds.workers = keep(m.workers, m.workersZ);
+}
+// The packer's ids for kind (0 all, 1 combat, 2 workers) of the selection now, or null.
+function infoPackSelectionIds(kind) {
+    if (_ipkIds.sel !== selectedUnits || _ipkIds.len !== selectedUnits.length) return null;
+    return kind === 0 ? _ipkIds.all : kind === 1 ? _ipkIds.combat : _ipkIds.workers;
+}
+// The wire string of piece k (ACTION_MAX_UNIT_IDS ids each) of ids, or null.
+function infoPackIdsWire(ids, k = 0) { const z = _ipkIdsZ.get(ids); return z ? z[k] || null : null; }

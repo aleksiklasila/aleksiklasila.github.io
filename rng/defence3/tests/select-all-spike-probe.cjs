@@ -43,10 +43,11 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
         const canvasBox = await page.evaluate(() => { const c = document.querySelector('canvas'); const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
         // Zoomed out (real wheel input over the map).
         await page.mouse.move(canvasBox.x + canvasBox.w / 2, canvasBox.y + canvasBox.h / 2);
-        for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, 400); await sleep(30); }
+        // (NEAR=1: the restored camera, a near view.)
+        if (!process.env.NEAR) for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, 400); await sleep(30); }
         await sleep(3000);
         const marks = [];
-        const mark = async label => { const m = await page.evaluate(l => { __sa.label = l; return { label: l, t: performance.now(), applied: simClientStats().appliedTick }; }, label); marks.push(m); return m; };
+        const mark = async label => { const m = await page.evaluate(l => { __sa.label = l; return { label: l, t: performance.now(), applied: simClientStats().appliedTick, fills: typeof _unitsPageFills === 'number' ? _unitsPageFills : -1 }; }, label); marks.push(m); return m; };
         const windows = [];
         const cdp = process.env.PROF ? await page.context().newCDPSession(page) : null;
         if (cdp) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 }); await cdp.send('Profiler.start'); }
@@ -96,6 +97,7 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
             summary.push({ w, frames: fr.length, gapP50: +pct(fr, .5).toFixed(1), gapP95: +pct(fr, .95).toFixed(1), gapMax: +Math.max(0, ...fr).toFixed(0),
                 over50: fr.filter(g => g > 50).length, tps: (() => { const i = marks.findIndex(m => m.label === w); const a = marks[i], b = marks[i + 1]; return b ? +((b.applied - a.applied) * 1000 / (b.t - a.t)).toFixed(1) : null; })(), longTaskMax: +Math.max(0, ...tasks).toFixed(0), panelMax: +Math.max(0, ...panel).toFixed(1), panelCalls: panel.length });
         }
+        console.log('units list fills per window', marks.map((m, i) => marks[i + 1] ? m.label + ':' + (marks[i + 1].fills - m.fills) : '').filter(Boolean).join(' '));
         console.table(summary);
         const fnRows = Object.entries(data.sa.fn).filter(([, o]) => o.max > 8).map(([k, o]) => ({ k, n: o.n, sum: +o.sum.toFixed(0), max: +o.max.toFixed(1) }));
         console.table(fnRows);

@@ -3529,6 +3529,9 @@ const _WORKER_KINDS_IN_ORDER = () => ['builder', ...RESOURCE_TYPE_LIST.map(c => 
 function _slotUnitIds(self, key, kind) {
     const X = selectionIndex();
     if (self[key] && self[key + 'V'] === X.version) return self[key];
+    // (Made by the packer thread when the selection changed: info_panel_static.js.)
+    const made = typeof infoPackSelectionIds === 'function' ? infoPackSelectionIds(kind) : null;
+    if (made) { self[key] = made; self[key + 'V'] = X.version; return made; }
     const F = X.framed && X.sel === selectedUnits ? simClientCurrentUnitVis() : null;
     const out = [];
     if (F) {

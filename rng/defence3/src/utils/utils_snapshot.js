@@ -265,7 +265,7 @@ function _snapFloorItems() {
 
 function _snapListEntities(list) {
     switch (list) {
-        case 'u': return _unitsPageView !== null ? _unitsPageView : unitsView();
+        case 'u': return _unitsPageView !== null ? _unitsPv() : unitsView();
         case 't': return towers;
         case 'b': return barracks;
         case 's': return collectorSpawners;

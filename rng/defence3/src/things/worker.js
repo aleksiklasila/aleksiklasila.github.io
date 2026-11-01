@@ -3296,7 +3296,11 @@ function _queueLocalAction(action) {
         noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));
     }
     if (action && Array.isArray(action.unitIds) && typeof ACTION_MAX_UNIT_IDS === 'number' && action.unitIds.length > ACTION_MAX_UNIT_IDS && ACTION_SPLIT_BY_UNITS.has(action.action)) {
-        for (let i = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS) queueAction({ ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
+        // (Each piece's wire string made already, when the selection's ids came from the packer thread.)
+        for (let i = 0, k = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS, k++) {
+            const z = typeof infoPackIdsWire === 'function' ? infoPackIdsWire(action.unitIds, k) : null;
+            queueAction(z ? { ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS), _uidzMade: z } : { ...action, unitIds: action.unitIds.slice(i, i + ACTION_MAX_UNIT_IDS) });
+        }
         return;
     }
     // Just joined and still catching up: sent once the host counts us in.
@@ -3314,9 +3318,11 @@ function _queueLocalAction(action) {
     // A long id list goes compactly (main.js actionIdsEncode; every peer,
     // this one too, decodes it when it processes the action).
     if (Array.isArray(finalAction.unitIds) && finalAction.unitIds.length >= 64 && typeof actionIdsEncode === 'function') {
-        const z = actionIdsEncode(finalAction.unitIds);
+        // (A selection's ids the packer thread encoded already: info_panel_static.js.)
+        const z = finalAction._uidzMade || (typeof infoPackIdsWire === 'function' && infoPackIdsWire(action.unitIds)) || actionIdsEncode(finalAction.unitIds);
         if (z !== null) { finalAction.uidz = z; delete finalAction.unitIds; }
     }
+    delete finalAction._uidzMade;
     localInputBuffer[tick].push(finalAction);
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.

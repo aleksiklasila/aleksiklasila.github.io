@@ -518,7 +518,7 @@ function _bbThingHtml(id, owned) {
     // (In parts: _bbRenderThings changes only the parts that changed, so the
     // tile and the slot under the mouse stay the same elements. Made anew
     // every quarter second, they lost and regained their hover: a flicker.)
-    return { id, cls, title, boost: _bbBoostHtml(info), body: _bbThingBodyHtml(info, rates, astarText) };
+    return { id, cls, title, boost: _bbBoostHtml(info), body: _bbThingBodyHtml(info, rates, astarText), key: info.key, rates, astarText };
 }
 function _bbThingBodyHtml(info, rates, astarText) {
     return `<img src="${getItemThumbnail(info.key, 20)}" width="20" height="20" alt="" draggable="false">`
@@ -560,10 +560,27 @@ function _bbRenderThings() {
         if (el.className !== p.cls) el.className = p.cls;
         if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
         if (el._bbBoost !== p.boost) { el.firstElementChild.outerHTML = p.boost; el._bbBoost = p.boost; }
-        if (el._bbBody !== p.body) { _bbPatchThingBody(el.lastElementChild, p.body); el._bbBody = p.body; }
+        if (el._bbBody !== p.body) { _bbWriteThingBody(el.lastElementChild, p); el._bbBody = p.body; }
     }
 }
 
+// A tile's rates written into its spans (text, class, colour): no markup
+// parsed or nodes replaced at a refresh (a template and replaceChildren per
+// changed tile was ~40 ms of a frame after a big selection was let go).
+function _bbWriteThingBody(body, p) {
+    const img = body.children[0], e = body.children[1], a = body.children[2];
+    if (!img || !e || !a || img.tagName !== 'IMG' || !e.firstChild || e.firstChild.nodeType !== 3 || !a.firstChild || a.firstChild.nodeType !== 3) { _bbPatchThingBody(body, p.body); return; }
+    const src = getItemThumbnail(p.key, 20);
+    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    const r = p.rates, et = _bbFmtRateShort(r.energy), ec = 'bb-rate bb-rate-e ' + _bbRateClass(r.energy), ecol = getDeltaRateColor(r.energy, 'energy');
+    if (e.firstChild.nodeValue !== et) e.firstChild.nodeValue = et;
+    if (e.className !== ec) e.className = ec;
+    if (e._col !== ecol) { e.style.color = ecol; e._col = ecol; }
+    const ac = 'bb-rate bb-rate-a ' + (r.astar === null ? 'bb-r0' : _bbRateClass(r.astar)), acol = r.astar === null ? '' : getDeltaRateColor(r.astar, 'astar');
+    if (a.firstChild.nodeValue !== p.astarText) a.firstChild.nodeValue = p.astarText;
+    if (a.className !== ac) a.className = ac;
+    if (a._col !== acol) { a.style.color = acol; a._col = acol; }
+}
 // Replace a tile's rates but keep its thumbnail element. A new <img> with a
 // data: URL is decoded again at raster time: with a few hundred tiles every
 // quarter second, that blocked the compositor for ~75 ms and stuttered the

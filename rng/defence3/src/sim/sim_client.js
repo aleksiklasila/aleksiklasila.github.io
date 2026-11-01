@@ -1000,16 +1000,20 @@ function _simClientUpdateStableSlots(F, old) {
     // Most membership changes are a few deaths/births in stable slots. Do
     // not stamp and revisit every PageUnit (and all its render-cache fields)
     // when the packed ID columns already identify exactly what changed.
-    const changed = [], n = Math.max(F.n, old.n);
+    const n = Math.max(F.n, old.n);
+    if (_simStableChanged.length < n) _simStableChanged = new Int32Array(Math.ceil(n * 1.25));
+    const changed = _simStableChanged;
+    let nc = 0;
     for (let s = 0; s < n; s++) {
         const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
         if (id === before) continue;
         // A restore can move an existing ID between slots. Leave it to the
         // general path, which preserves object identity across that remap.
-        if (id >= 0 && _pageUnitsById.has(id)) return null;
-        changed.push(s);
+        if (id >= 0 && _pageUnitsById.has(id)) return false;
+        changed[nc++] = s;
     }
-    for (const s of changed) {
+    for (let i = 0; i < nc; i++) {
+        const s = changed[i];
         const v = _pageSlotViews[s];
         if (v && !v.dead) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
         const id = s < F.n ? F.id[s] : -1;
@@ -1018,9 +1022,19 @@ function _simClientUpdateStableSlots(F, old) {
             _pageUnitsById.set(id, next); _pageSlotViews[s] = next;
         } else _pageSlotViews[s] = undefined;
     }
-    const list = new Array(F.count), order = F.order;
-    for (let k = 0; k < F.count; k++) list[k] = _pageSlotViews[order[k]];
-    return list;
+    return true;
+}
+let _simStableChanged = new Int32Array(0);
+// The page's units list: one array, filled from the current frame when
+// read (data_state.js units; a list of every unit at each membership change
+// was ~2-35 ms and its garbage, a few times a second in a fight).
+const _simPageUnitList = [];
+function _simPageUnitListFill() {
+    const F = _pageFrame, list = _simPageUnitList;
+    if (!F) { list.length = 0; return; }
+    const order = F.order, n = F.count;
+    list.length = n;
+    for (let k = 0; k < n; k++) list[k] = _pageSlotViews[order[k]];
 }
 // Keep the population loop separate from frame installation so V8 can
 // optimize it without the object/membership slow paths in that function.
@@ -1110,8 +1124,16 @@ function _simClientApplyFrame(frame, shown) {
         F.dirty = null;
     }
     if (frame.mver !== c.mver || c.frameUnits !== _unitsPageView) {
-        let list = old && c.frameUnits === _unitsPageView ? _simClientUpdateStableSlots(F, old) : null;
-        if (!list) {
+        let list = null;
+        if (old && c.frameUnits === _unitsPageView && _simClientUpdateStableSlots(F, old)) {
+            // (Filled when read, from the frame that is current then.)
+            list = _simPageUnitList;
+            unitsSetViewLazy(list, _simPageUnitListFill, frame.count);
+            c.frameUnits = list;
+            c.mver = frame.mver;
+        } else {
+            // (What the list held: its fill first, for the gone ones below.)
+            if (typeof _unitsPv === 'function' && _unitsPageView !== null) _unitsPv();
             let stamp = ++_pageViewStamp, order = F.order, ids = F.id;
             list = new Array(frame.count);
             for (let k = 0; k < frame.count; k++) {
@@ -1135,10 +1157,12 @@ function _simClientApplyFrame(frame, shown) {
             if (selectedUnits.length && selectedUnits.some(u => !(u instanceof PageUnit))) {
                 selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
             }
+            _simPageUnitList.length = list.length;
+            for (let k = 0; k < list.length; k++) _simPageUnitList[k] = list[k];
+            unitsSetView(_simPageUnitList);
+            c.frameUnits = _simPageUnitList;
+            c.mver = frame.mver;
         }
-        unitsSetView(list);
-        c.frameUnits = list;
-        c.mver = frame.mver;
     }
     _pageFrame = F;
     _pageFrameSerial++;

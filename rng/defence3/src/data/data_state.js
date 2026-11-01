@@ -1978,6 +1978,10 @@ let laserTowersVersion = 0;
 // view. Whole-list assignments are calls: unitsReplaced (a reset, a restore),
 // unitsSetView (the page of a simulation worker: its frame's views).
 let _unitsPageView = null;
+// (The page's list filled when read, not at every frame's membership change:
+// sim_client.js sets the filler and the count; units.length needs no fill.)
+let _unitsPageFill = null, _unitsPageCount = 0, _unitsPageFills = 0;
+function _unitsPv() { if (_unitsPageFill !== null) { const f = _unitsPageFill; _unitsPageFill = null; _unitsPageFills++; f(); } return _unitsPageView; }
 // (push / pop / splice / length = n on the table: units added and removed
 // through it, unitAdded / unitRemoved; reordering is no operation on it.)
 const _UNITS_EDIT = {
@@ -1988,7 +1992,8 @@ const _UNITS_EDIT = {
 const _UNITS_FIXED = new Set(['shift', 'unshift', 'sort', 'reverse', 'fill', 'copyWithin']);
 const units = new Proxy([], {
     get(_, key) {
-        const pv = _unitsPageView;
+        if (key === 'length' && _unitsPageFill !== null) return _unitsPageCount;
+        const pv = _unitsPageFill !== null ? _unitsPv() : _unitsPageView;
         if (key === 'length') return pv !== null ? pv.length : unitCount();
         if (pv === null && typeof key === 'string' && Object.hasOwn(_UNITS_EDIT, key)) return _UNITS_EDIT[key];
         if (pv === null && _UNITS_FIXED.has(key)) throw new Error('units.' + String(key) + ': the units are the id table, in id order');
@@ -1996,16 +2001,18 @@ const units = new Proxy([], {
         return typeof v === 'function' && key !== 'constructor' ? v.bind(a) : v;
     },
     set(_, key, v) {
-        if (_unitsPageView !== null) { _unitsPageView[key] = v; return true; }
+        if (_unitsPageView !== null) { _unitsPv()[key] = v; return true; }
         if (key === 'length') { const w = unitsView().slice(v); for (const u of w) unitRemoved(u); return true; }
         throw new Error('units[' + String(key) + '] =: the units are the id table');
     },
-    has(_, key) { return key in (_unitsPageView !== null ? _unitsPageView : unitsView()); },
-    ownKeys() { return Reflect.ownKeys(_unitsPageView !== null ? _unitsPageView : unitsView()); },
-    getOwnPropertyDescriptor(_, key) { const d = Reflect.getOwnPropertyDescriptor(_unitsPageView !== null ? _unitsPageView : unitsView(), key); if (d && key !== 'length') d.configurable = true; return d; }
+    has(_, key) { return key in (_unitsPageView !== null ? _unitsPv() : unitsView()); },
+    ownKeys() { return Reflect.ownKeys(_unitsPageView !== null ? _unitsPv() : unitsView()); },
+    getOwnPropertyDescriptor(_, key) { const d = Reflect.getOwnPropertyDescriptor(_unitsPageView !== null ? _unitsPv() : unitsView(), key); if (d && key !== 'length') d.configurable = true; return d; }
 });
-function unitsReplaced(list) { if (_unitsPageView !== null) { _unitsPageView = Array.isArray(list) ? list : []; return; } _uixFromList(list === units ? unitsView().slice() : list || []); }
-function unitsSetView(list) { _unitsPageView = list ? list : null; }
+function unitsReplaced(list) { if (_unitsPageView !== null) { _unitsPageFill = null; _unitsPageView = Array.isArray(list) ? list : []; return; } _uixFromList(list === units ? unitsView().slice() : list || []); }
+function unitsSetView(list) { _unitsPageView = list ? list : null; _unitsPageFill = null; }
+// The page's list, its fill for later (when read) and its length now.
+function unitsSetViewLazy(list, fill, count) { _unitsPageView = list; _unitsPageFill = fill; _unitsPageCount = count; }
 let projectiles = [];
 let particles = [];
 // Bumped whenever a barrack joins or leaves barracks.

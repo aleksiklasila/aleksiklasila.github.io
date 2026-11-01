@@ -11,7 +11,7 @@
 //   page -> init {pack, cat}; strings {list}; stats {dir}; sel {seq, sSlots,
 //   sSers, uSlots} (transferred); frame {cols}; local {player}
 //   page <- out {seq, rows (Float64Array, IPF_N a group), ms}
-importScripts('./info_pack_fields.js?v=20261101-b');
+importScripts('./info_pack_fields.js?v=20261101-b', '../utils/id_codec.js?v=20261101-b');
 let X = null, P = null, mem = null, cat = null, strings = [''], sel = null, frame = null, localPlayer = 0, timer = 0, busy = false;
 const INFO_PACK_EVERY_MS = 100;
 // Group lookups by string code (made again when the strings grow).
@@ -32,7 +32,7 @@ self.onmessage = ev => {
             sel = (m.sSlots && m.sSlots.length) || (m.uSlots && m.uSlots.length) ? m : null;
             // (In slot order, once a selection: the columns read in memory order.)
             if (sel) { if (sel.uSlots && sel.uSlots.length > 1) sel.uSlots = radixSort(sel.uSlots, null).a; if (sel.sSlots && sel.sSlots.length > 1) { const r = radixSort(sel.sSlots, sel.sSers); sel.sSlots = r.a; sel.sSers = r.b; } }
-            stop(); if (sel) run(); else self.postMessage({ type: 'out', seq: m.seq, rows: null, ms: 0 });
+            stop(); if (sel) { selectionIds(m.seq); run(); } else self.postMessage({ type: 'out', seq: m.seq, rows: null, ms: 0 });
         }
     } catch (err) { self.postMessage({ type: 'error', message: String(err && err.stack || err) }); }
 };
@@ -466,28 +466,56 @@ function groupText(g, R) {
     return out;
 }
 
-// ---- a box selection in a far view (renderer.js get3DBoxSelection's far
-// view: the ground point decides) ----
-// The player's units whose ground point is drawn inside the screen box, from
-// the frame's columns; the player's structures (and every mine, the page
-// checks those it sees) from the structure table, each at its kind's lift.
-// m: { id, vp (16), alpha, w, h, pad, rect [minX, minY, maxX, maxY], me, tile }.
-const BOX_LIFT = [0.18, 0.12, 0.14, 0.08, 0.06, 0.06];
+// ---- box selection (renderer.js get3DBoxSelection, main.js _ownUnitsInBox) ----
+// The player's units and structures (and every mine: the page checks those
+// it sees) inside the box. 3D: a thing counts when its ground point or its
+// top (its model's height above) is drawn inside the screen box, or the line
+// between them crosses it (a tall model up close); 2D: its point in the world
+// rectangle. m: { id, mode '3d' | '2d', vp (16), alpha, w, h, pad, rect
+// [minX, minY, maxX, maxY] (screen px; 2D: world px), me, tile }.
+const BOX_LIFT = [0.18, 0.12, 0.14, 0.08, 0.06, 0.06], BOX_TOP = [0.9, 0.7, 0.7, 0.2, 0.3, 0.3], UNIT_LIFT = 0.28, UNIT_TOP = 0.9;
+// (A segment p-q against the box, Liang-Barsky.)
+function segHitsBox(px, py, qx, qy, x0, y0, x1, y1) {
+    let t0 = 0, t1 = 1;
+    const dx = qx - px, dy = qy - py;
+    const P0 = -dx, P1 = dx, P2 = -dy, P3 = dy, Q0 = px - x0, Q1 = x1 - px, Q2 = py - y0, Q3 = y1 - py;
+    const clip = (p, q) => {
+        if (p === 0) return q >= 0;
+        const r = q / p;
+        if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+        return true;
+    };
+    return clip(P0, Q0) && clip(P1, Q1) && clip(P2, Q2) && clip(P3, Q3);
+}
 function boxSelect(m) {
-    const t0 = performance.now(), F = frame, VP = m.vp, it = 1 / m.tile, W = m.w, H = m.h, pad = m.pad, me = m.me;
+    const t0 = performance.now(), F = frame, it = 1 / m.tile, me = m.me, flat = m.mode === '2d';
     const minX = m.rect[0], minY = m.rect[1], maxX = m.rect[2], maxY = m.rect[3];
-    const m0 = VP[0], m1 = VP[1], m3 = VP[3], m4 = VP[4], m5 = VP[5], m7 = VP[7], m8 = VP[8], m9 = VP[9], m11 = VP[11], m12 = VP[12], m13 = VP[13], m15 = VP[15];
+    const VP = m.vp || [], W = m.w, H = m.h, pad = m.pad;
+    let sx = 0, sy = 0;
+    // (A world point at a lift on the screen, into sx, sy; false behind the eye.)
+    const proj = (wx, lift, wz) => {
+        const cw = VP[3] * wx + VP[7] * lift + VP[11] * wz + VP[15];
+        if (!(cw > 0)) return false;
+        sx = ((VP[0] * wx + VP[4] * lift + VP[8] * wz + VP[12]) / cw * 0.5 + 0.5) * W - pad;
+        sy = (1 - ((VP[1] * wx + VP[5] * lift + VP[9] * wz + VP[13]) / cw * 0.5 + 0.5)) * H - pad;
+        return true;
+    };
+    const inBox = (x, y) => x >= minX && x <= maxX && y >= minY && y <= maxY;
+    const hit3d = (wx, wz, lift, top) => {
+        const a = proj(wx, lift, wz), ax = sx, ay = sy;
+        if (a && inBox(ax, ay)) return true;
+        const b = proj(wx, top, wz), bx = sx, by = sy;
+        if (b && inBox(bx, by)) return true;
+        return a && b && segHitsBox(ax, ay, bx, by, minX, minY, maxX, maxY);
+    };
     let units = new Int32Array(0), nu = 0;
     if (F && F.x) {
-        const n = F.x.length, O = F.owner, ID = F.id, X = F.x, Y = F.y, PX = F.px, PY = F.py, a = m.alpha, lift = 0.28;
-        const c0 = m4 * lift + m12, c1 = m5 * lift + m13, c3 = m7 * lift + m15;
+        const n = F.x.length, O = F.owner, ID = F.id, X = F.x, Y = F.y, PX = F.px, PY = F.py, a = m.alpha;
         units = new Int32Array(n);
         for (let s = 0; s < n; s++) {
             if (O[s] !== me || ID[s] < 0) continue;
-            const wx = (PX[s] + (X[s] - PX[s]) * a) * it, wz = (PY[s] + (Y[s] - PY[s]) * a) * it, cw = m3 * wx + m11 * wz + c3;
-            if (!(cw > 0)) continue;
-            const px = ((m0 * wx + m8 * wz + c0) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m9 * wz + c1) / cw * 0.5 + 0.5)) * H - pad;
-            if (px >= minX && px <= maxX && py >= minY && py <= maxY) units[nu++] = s;
+            const ux = PX[s] + (X[s] - PX[s]) * a, uy = PY[s] + (Y[s] - PY[s]) * a;
+            if (flat ? inBox(ux, uy) : hit3d(ux * it, uy * it, UNIT_LIFT, UNIT_TOP)) units[nu++] = s;
         }
     }
     let structs = new Int32Array(0), ns = 0, mines = new Int32Array(0), nm = 0;
@@ -504,13 +532,33 @@ function boxSelect(m) {
             if (k > 5) continue;
             const mine = k === 4 || k === 5;
             if (!mine && (owner[s] !== me || (k <= 2 && !(en[s] > 0)))) continue;
-            const lift = BOX_LIFT[k], wx = X[s] * it, wz = Y[s] * it, cw = m3 * wx + m7 * lift + m11 * wz + m15;
-            if (!(cw > 0)) continue;
-            const px = ((m0 * wx + m4 * lift + m8 * wz + m12) / cw * 0.5 + 0.5) * W - pad, py = (1 - ((m1 * wx + m5 * lift + m9 * wz + m13) / cw * 0.5 + 0.5)) * H - pad;
-            if (!(px >= minX && px <= maxX && py >= minY && py <= maxY)) continue;
+            if (!(flat ? inBox(X[s], Y[s]) : hit3d(X[s] * it, Y[s] * it, BOX_LIFT[k], BOX_TOP[k]))) continue;
             if (mine) mines[nm++] = s; else structs[ns++] = s;
         }
     }
     const u = units.slice(0, nu), st = structs.slice(0, ns), mi = mines.slice(0, nm);
     self.postMessage({ type: 'box', id: m.id, units: u, structs: st, mines: mi, ms: performance.now() - t0 }, [u.buffer, st.buffer, mi.buffer]);
+}
+
+// ---- a selection's unit ids for orders (hud.js _slotUnitIds), made when it
+// changes: every live unit's, the combat units', the workers', and their
+// wire strings (id_codec.js actionIdsEncode; every peer decodes the same) ----
+function selectionIds(seq) {
+    if (!sel || !sel.uSlots || !frame || !frame.id) return;
+    const slots = sel.uSlots, ID = frame.id, WT = frame.wtype, EN = frame.energy, n = slots.length, cap = ID.length;
+    const all = new Int32Array(n), combat = new Int32Array(n), workers = new Int32Array(n);
+    let na = 0, nc = 0, nw = 0;
+    for (let i = 0; i < n; i++) {
+        const s = slots[i];
+        if (s < 0 || s >= cap) continue;
+        const id = ID[s];
+        if (id < 0 || !(EN[s] > 0)) continue;
+        all[na++] = id;
+        if (WT[s] === 0) combat[nc++] = id; else workers[nw++] = id;
+    }
+    const a = all.slice(0, na), c = combat.slice(0, nc), w = workers.slice(0, nw);
+    // (In the order split's pieces, worker.js _queueLocalAction: each piece's string.)
+    const chunk = cat.idsChunk || 20000;
+    const enc = x => { if (x.length < 64 || typeof actionIdsEncode !== 'function') return null; const out = []; for (let i = 0; i < x.length; i += chunk) { const p = x.subarray(i, i + chunk); out.push(p.length >= 64 ? actionIdsEncode(p) : null); } return out; };
+    self.postMessage({ type: 'ids', seq, all: a, combat: c, workers: w, allZ: enc(a), combatZ: enc(c), workersZ: enc(w) }, [a.buffer, c.buffer, w.buffer]);
 }
