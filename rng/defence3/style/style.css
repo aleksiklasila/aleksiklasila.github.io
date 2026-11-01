@@ -1251,6 +1251,17 @@
         }
 
         /* Plain labels start where button labels' text does (button + gap). */
+        /* The static group sections (info_panel_static.js): rows and buttons
+           shown or hidden, never remade. */
+        .ips[hidden], .ips [hidden], #info-panel > [hidden], #subgroup-bar > [hidden] { display: none !important; }
+        /* A group's section: laid out only while in the panel's view (its last
+           size kept for the scrollbar); off (not in the selection): no box, its
+           rendering kept, so showing it again is no new layout. */
+        .ips { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+        .ips.ips-off { content-visibility: hidden; contain-intrinsic-size: 0px 0px; overflow: hidden; height: 0; }
+        .ips-small { font-size: 10px; }
+        .ips-strike { text-decoration: line-through; }
+
         .info-label-plain {
             display: inline-block;
             padding-left: 21px;

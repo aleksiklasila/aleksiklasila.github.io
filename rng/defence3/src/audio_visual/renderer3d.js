@@ -4004,58 +4004,7 @@
             if (!S || !this.sceneTargetSize || (!S.units && !S.buildingCount)) return;
             const gl = this.gl, W = this.sceneTargetSize.width, H = this.sceneTargetSize.height;
             if (!W || !H) return;
-            if (!this.selMask) {
-                const pointVs = `#version 300 es
-                    precision highp float;
-                    layout(location=0) in float aX; layout(location=1) in float aZ;
-                    layout(location=2) in float aPX; layout(location=3) in float aPZ;
-                    layout(location=4) in float aRadius; layout(location=5) in float aOn;
-                    uniform mat4 uViewProjection;
-                    uniform float uAlpha, uTile, uScale, uFlat, uMinPx, uBox;
-                    out float vBox;
-                    void main() {
-                        vec2 p = mix(vec2(aPX, aPZ), vec2(aX, aZ), uAlpha) / uTile;
-                        if (aOn <= 0.) { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 1.; vBox = 0.; return; }
-                        gl_Position = uViewProjection * vec4(p.x, .02, p.y, 1.);
-                        float size = aRadius * 2. / uTile;
-                        gl_PointSize = clamp(max(uMinPx, size * uScale / (uFlat > .5 ? 1. : max(.01, gl_Position.w))), 1., 512.);
-                        vBox = uBox;
-                    }`;
-                const pointFs = `#version 300 es
-                    precision highp float;
-                    in float vBox;
-                    layout(location=0) out vec4 outColor;
-                    void main() {
-                        vec2 q = gl_PointCoord * 2. - 1.;
-                        if (vBox < .5 && dot(q, q) > 1.) discard;
-                        outColor = vec4(1.);
-                    }`;
-                const edgeVs = `#version 300 es
-                    void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
-                const edgeFs = `#version 300 es
-                    precision highp float;
-                    uniform sampler2D uMask;
-                    uniform vec4 uColor;
-                    uniform float uWidth;
-                    layout(location=0) out vec4 outColor;
-                    void main() {
-                        ivec2 c = ivec2(gl_FragCoord.xy), size = textureSize(uMask, 0);
-                        if (texelFetch(uMask, c, 0).r > .5) discard;
-                        float hit = 0.;
-                        for (int i = 0; i < 8; i++) {
-                            float a = float(i) * .7853982;
-                            ivec2 q = clamp(c + ivec2(round(vec2(cos(a), sin(a)) * uWidth)), ivec2(0), size - 1);
-                            hit = max(hit, texelFetch(uMask, q, 0).r);
-                        }
-                        if (hit <= .5) discard;
-                        outColor = uColor;
-                    }`;
-                const M = this.selMask = { point: createProgram(gl, pointVs, pointFs), edge: createProgram(gl, edgeVs, edgeFs), tex: createTexture(gl), fbo: gl.createFramebuffer(),
-                    unitVao: gl.createVertexArray(), unitBuf: gl.createBuffer(), maskBuf: gl.createBuffer(), bVao: gl.createVertexArray(), bBuf: gl.createBuffer(), edgeVao: gl.createVertexArray(),
-                    w: 0, h: 0, frame: null, maskVersion: -1, bVersion: -1, pu: {}, eu: {} };
-                for (const n of ['ViewProjection', 'Alpha', 'Tile', 'Scale', 'Flat', 'MinPx', 'Box']) M.pu[n] = gl.getUniformLocation(M.point, 'u' + n);
-                for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
-            }
+            this.ensureSelMaskResources();
             const M = this.selMask;
             if (M.w !== W || M.h !== H) {
                 gl.bindTexture(gl.TEXTURE_2D, M.tex);
@@ -4153,8 +4102,65 @@
         // Programs a first use would compile mid-match (a 50-120 ms stall each
         // on the page): made while the match loads (renderer.js
         // _maybePrewarm3DView), as those a hidden 3D frame does not reach.
+        // The selection outline's programs and targets (made while the match
+        // loads: prewarmPrograms; at the first big selection they were a
+        // ~30 ms shader compile in its frame).
+        ensureSelMaskResources() {
+            if (this.selMask) return;
+            const gl = this.gl;
+            const pointVs = `#version 300 es
+                precision highp float;
+                layout(location=0) in float aX; layout(location=1) in float aZ;
+                layout(location=2) in float aPX; layout(location=3) in float aPZ;
+                layout(location=4) in float aRadius; layout(location=5) in float aOn;
+                uniform mat4 uViewProjection;
+                uniform float uAlpha, uTile, uScale, uFlat, uMinPx, uBox;
+                out float vBox;
+                void main() {
+                    vec2 p = mix(vec2(aPX, aPZ), vec2(aX, aZ), uAlpha) / uTile;
+                    if (aOn <= 0.) { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 1.; vBox = 0.; return; }
+                    gl_Position = uViewProjection * vec4(p.x, .02, p.y, 1.);
+                    float size = aRadius * 2. / uTile;
+                    gl_PointSize = clamp(max(uMinPx, size * uScale / (uFlat > .5 ? 1. : max(.01, gl_Position.w))), 1., 512.);
+                    vBox = uBox;
+                }`;
+            const pointFs = `#version 300 es
+                precision highp float;
+                in float vBox;
+                layout(location=0) out vec4 outColor;
+                void main() {
+                    vec2 q = gl_PointCoord * 2. - 1.;
+                    if (vBox < .5 && dot(q, q) > 1.) discard;
+                    outColor = vec4(1.);
+                }`;
+            const edgeVs = `#version 300 es
+                void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+            const edgeFs = `#version 300 es
+                precision highp float;
+                uniform sampler2D uMask;
+                uniform vec4 uColor;
+                uniform float uWidth;
+                layout(location=0) out vec4 outColor;
+                void main() {
+                    ivec2 c = ivec2(gl_FragCoord.xy), size = textureSize(uMask, 0);
+                    if (texelFetch(uMask, c, 0).r > .5) discard;
+                    float hit = 0.;
+                    for (int i = 0; i < 8; i++) {
+                        float a = float(i) * .7853982;
+                        ivec2 q = clamp(c + ivec2(round(vec2(cos(a), sin(a)) * uWidth)), ivec2(0), size - 1);
+                        hit = max(hit, texelFetch(uMask, q, 0).r);
+                    }
+                    if (hit <= .5) discard;
+                    outColor = uColor;
+                }`;
+            const M = this.selMask = { point: createProgram(gl, pointVs, pointFs), edge: createProgram(gl, edgeVs, edgeFs), tex: createTexture(gl), fbo: gl.createFramebuffer(),
+                unitVao: gl.createVertexArray(), unitBuf: gl.createBuffer(), maskBuf: gl.createBuffer(), bVao: gl.createVertexArray(), bBuf: gl.createBuffer(), edgeVao: gl.createVertexArray(),
+                w: 0, h: 0, frame: null, maskVersion: -1, bVersion: -1, pu: {}, eu: {} };
+            for (const n of ['ViewProjection', 'Alpha', 'Tile', 'Scale', 'Flat', 'MinPx', 'Box']) M.pu[n] = gl.getUniformLocation(M.point, 'u' + n);
+            for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
+        }
         prewarmPrograms() {
-            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram()]) {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources()]) {
                 try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
             }
         }

@@ -103,10 +103,14 @@ function _refreshInfoPanelPeriodic(now) {
         _infoPanelRefreshAfterFrames = 0;
         _infoPanelNextRefreshAt = 0;
     }
+    // (Sections left by a refresh elsewhere, a click's: made from this frame.)
+    if (typeof _infoPanelPendingSections !== 'undefined' && _infoPanelPendingSections > 0) _infoPanelNextRefreshAt = 0;
     if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
     let started = performance.now();
     updateInfoPanel();
     let cost = performance.now() - started;
+    // (Sections still to make: the next frame's refresh makes more.)
+    if (typeof _infoPanelPendingSections !== 'undefined' && _infoPanelPendingSections > 0) { _infoPanelNextRefreshAt = 0; return; }
     // Smoothed, so one slow refresh (a garbage collection) does not stall it.
     _infoPanelRefreshCostMs += (cost - _infoPanelRefreshCostMs) * 0.3;
     _infoPanelNextRefreshAt = now + Math.min(INFO_PANEL_REFRESH_MAX_MS, Math.max(INFO_PANEL_REFRESH_MS, _infoPanelRefreshCostMs * 20));

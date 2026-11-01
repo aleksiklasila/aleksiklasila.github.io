@@ -2348,6 +2348,13 @@ function _normalizePlayerPrecomputedBuildingKey(buildingKey) {
 // Layout is selected before creating a match for controlled A/B benchmarks.
 let SIM_THING_STATS_LAYOUT='soa';
 const _thingStatTables=new Map(),_thingStatViews=new WeakSet(),_thingStatSchemas=new Map();
+// The tables' numbers in the simulation's wasm heap once it is up (the info
+// panel's packer thread reads them in place: sim_presentation.js
+// simInfoPackStatDir); plain arrays on the page and before it.
+let _thingStatDirVersion=0;
+function _thingStatHeapUp(){return typeof _simHeap!=='undefined'&&_simHeap.ready&&typeof simHeapArray==='function'&&typeof _simHeapPtrOf==='function'&&_simHeapPtrOf!==null;}
+function _thingStatInHeap(a){return _thingStatHeapUp()&&_simHeapPtrOf(a)>=0;}
+function _thingStatData(n){if(_thingStatHeapUp()){const a=simHeapArray(Float32Array,n);if(_simHeapPtrOf(a)>=0)return a;}return new Float32Array(n);}
 function _flatThingStatEntry(owner,kind,type,level,values) {
     const keys=Object.keys(values), signature=keys.join('|'), id=owner+'|'+kind+'|'+type;
     let schema=_thingStatSchemas.get(signature);
@@ -2362,8 +2369,11 @@ function _flatThingStatEntry(owner,kind,type,level,values) {
     const levels=MAX_THING_LEVEL+1,width=(keys.length+3)&~3;
     if(!t || t.layout!==SIM_THING_STATS_LAYOUT || t.schema!==schema){
         const soa=SIM_THING_STATS_LAYOUT==='soa';
-        t={schema,layout:SIM_THING_STATS_LAYOUT,width,levels,rowStride:soa?1:width,statStride:soa?levels:1,data:new Float32Array(levels*width),entries:[]};
-        t.data.fill(NaN);_thingStatTables.set(id,t);
+        t={schema,layout:SIM_THING_STATS_LAYOUT,width,levels,rowStride:soa?1:width,statStride:soa?levels:1,data:_thingStatData(levels*width),entries:[]};
+        t.data.fill(NaN);_thingStatTables.set(id,t);_thingStatDirVersion++;
+    } else if(!_thingStatInHeap(t.data)&&_thingStatHeapUp()){
+        // (Made before the heap was up: moved into it, the same numbers.)
+        const d=_thingStatData(t.data.length);d.set(t.data);t.data=d;_thingStatDirVersion++;
     }
     let entry=t.entries[level];
     if(!entry){entry={};Object.defineProperties(entry,{_flatStats:{value:t},_flatLevel:{value:level}});Object.defineProperties(entry,schema.descriptors);t.entries[level]=entry;_thingStatViews.add(entry);}

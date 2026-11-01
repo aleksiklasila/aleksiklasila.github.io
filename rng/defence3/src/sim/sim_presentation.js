@@ -195,10 +195,33 @@ function _simPresentTileSlots(p) {
 // buildings).
 function _simStructTableGrow(F, cap) {
     cap = Math.ceil(cap * 1.25 / 64) * 64;
-    const G = simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(cap * SIM_STRUCT_SPEC.slotBytes), cap);
+    const G = _simStructTableNew(cap);
     for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, 'order', ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8]) G[k].set(F[k]);
+    _simStructTableRetire(F);
     return G;
 }
+// A structure table of cap slots: a block of the wasm heap (the info
+// panel's packer reads it there with a kernel, info_pack_worker.js), a
+// SharedArrayBuffer only without the heap. A replaced one goes back to the
+// heap SIM_STRUCT_TABLE_RETIRE_MS later: the presentation worker and the
+// packer, outside the ticks, may still read it until they have the new one.
+const SIM_STRUCT_TABLE_RETIRE_MS = 5000;
+const _simStructTableRetired = [];
+function _simStructTableNew(cap) {
+    const bytes = cap * SIM_STRUCT_SPEC.slotBytes;
+    const heap = typeof _simHeap !== 'undefined' && _simHeap.ready && typeof simHeapArray === 'function' ? simHeapArray(Uint8Array, bytes) : null;
+    const inHeap = heap && _simHeapPtrOf !== null && _simHeapPtrOf(heap) >= 0;
+    const F = inHeap ? simTableViews(SIM_STRUCT_SPEC, heap.buffer, cap, heap.byteOffset) : simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(bytes), cap);
+    F.heap = inHeap ? heap : null;
+    return F;
+}
+function _simStructTableRetire(F) {
+    if (F && F.heap) _simStructTableRetired.push({ heap: F.heap, at: performance.now() });
+    const now = performance.now();
+    while (_simStructTableRetired.length && now - _simStructTableRetired[0].at > SIM_STRUCT_TABLE_RETIRE_MS) simHeapFree(_simStructTableRetired.shift().heap);
+}
+// (The message form of a table: its block of the buffer.)
+function _simStructTableMsg(F, extra) { return { buf: F.buf, off: F.off, bytes: F.bytes, cap: F.cap, ...extra }; }
 // Tiles whose structure changed in a way the tile journal does not see (a
 // salvage mark, a toggle, construction finished): shown at the next tick
 // too. Presentation only: nothing of the simulation reads it.
@@ -280,7 +303,9 @@ function _simPresentStructureChanges(p) {
     if (!wrote) return;
     p.structCount = count;
     _simPresentAngles(p, F);
-    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count,mver:S.version,angles:p.angles,angleRev:p.angleRev}, revision:++p.revision});
+    _simInfoPackTable(F);
+    simInfoPackStatDirCheck();
+    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count,mver:S.version,angles:p.angles,angleRev:p.angleRev}), revision:++p.revision});
 }
 
 function simPresentationPublish(tick) {
@@ -390,10 +415,14 @@ function* simPresentationMetadata() {
     const p = _simPresentation;
     // Metadata changes more slowly than positions. This scan never runs in
     // _simTick, has no Atomics.wait, and yields every small block of records.
-    const list = units;
+    // (The units' array itself, again after each yield: through the units
+    // proxy two trapped reads a unit were ~600 ms of this thread per 10 s
+    // at 390k units.)
+    const view = () => _unitsPageView !== null ? _unitsPageView : unitsView();
+    let list = view();
     for (let i=0;i<list.length;i++) {
         simPresentationWriteMetadata(list[i], p.meta);
-        if ((i & 127) === 127) yield;
+        if ((i & 127) === 127) { yield; list = view(); }
     }
     if (p.metaRev) Atomics.add(p.metaRev, 0, 1);
     simPresentationBind();
@@ -411,7 +440,7 @@ function* simPresentationMetadata() {
         // at the cycle's end: published before, half empty, every structure
         // not yet written looked gone for the frames meanwhile. The changes
         // of the ticks between go to both: _simPresentStructureChanges.)
-        F = simTableViews(SIM_STRUCT_SPEC, new SharedArrayBuffer(Math.ceil(cap * 1.25 / 64) * 64 * SIM_STRUCT_SPEC.slotBytes), Math.ceil(cap * 1.25 / 64) * 64);
+        F = _simStructTableNew(Math.ceil(cap * 1.25 / 64) * 64);
         if (p.structures) { p.structuresNext = F; fresh = true; } else p.structures = F;
     }
     let j=0;
@@ -439,10 +468,12 @@ function* simPresentationMetadata() {
     F = cur();
     S.orderChanged(F.order,j);
     simPresentationBind();
-    if (fresh) { p.structures = F; p.structuresNext = null; }
+    if (fresh) { _simStructTableRetire(p.structures); p.structures = F; p.structuresNext = null; }
     p.structCount = j;
     _simPresentAngles(p, F);
-    p.worker.postMessage({type:'structures', table:{buf:F.buf,cap:F.cap,n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev}, revision:++p.revision});
+    _simInfoPackTable(F);
+    simInfoPackStatDirCheck();
+    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev}), revision:++p.revision});
     // Grid data is not shared by the simulation yet. Publish its primitive
     // columns in small slices too; the reader computes the display delta.
     // (Only when a tile changed, or every few seconds: a million cells
@@ -488,4 +519,74 @@ function simPresentationPump() {
     } catch (err) { _simError('presentation metadata',err);done=true; }
     if (done) p.job=simPresentationMetadata();
     p.timer=setTimeout(simPresentationPump,done ? SIM_PRESENT_PUMP_REST_MS : 0);
+}
+
+// ---- the info panel's packer (src/audio_visual/info_pack_worker.js) ----
+// A thread of the page's that bins a selection's structures from the
+// structure table above with a kernel (info.rs k_info_bins). What it needs,
+// made once at its first request: the kernels' module and memory and a
+// stack (as a helper's), and heap blocks of its own: a header with where the
+// structure table is now ([0] its byte address (0: none in the heap), [1]
+// its slots, [2] a version), the selection's members (slot, serial, group), the bin table
+// and the bins. Nothing of the match reads them.
+const SIM_INFO_PACK_MEMBERS = 1 << 18, SIM_INFO_PACK_BINS = 8192, SIM_INFO_BIN_FIELDS = 21;
+let _simInfoPack = null;
+function simInfoPackPayload() {
+    // (Asked again at a new match: the same blocks, the directory and table now.)
+    if (_simInfoPack) { _simInfoPack.msg.stats = simInfoPackStatDir(); const p = _simPresentation; if (p && p.structures) { _simInfoPack.A.hdr[0] = 0; _simInfoPackTable(p.structures); } return _simInfoPack.msg; }
+    if (typeof simWasmHelperPayload !== 'function' || _simHeapPtrOf === null || !_simHeap.ready) return null;
+    const w = simWasmHelperPayload();
+    if (!w) return null;
+    const M = SIM_INFO_PACK_MEMBERS, B = SIM_INFO_PACK_BINS;
+    const A = { hdr: simHeapArray(Uint32Array, 4), slots: simHeapArray(Int32Array, M), sers: simHeapArray(Int32Array, M), groups: simHeapArray(Int32Array, M),
+        binOf: simHeapArray(Int32Array, M), table: simHeapArray(Int32Array, B * 2 * 3), bins: simHeapArray(Float64Array, B * SIM_INFO_BIN_FIELDS), out: simHeapArray(Int32Array, 4) };
+    const at = {};
+    for (const k in A) { const p = _simHeapPtrOf(A[k]); if (!(p >= 0)) return null; at[k] = p; }
+    _simInfoPack = { A, msg: { wasm: w, at, members: M, bins: B, tableEntries: B * 2, binFields: SIM_INFO_BIN_FIELDS, tile: TILE, stats: null,
+        spec: { f32: SIM_STRUCT_SPEC.f32, i32: SIM_STRUCT_SPEC.i32, i16: SIM_STRUCT_SPEC.i16, u8: SIM_STRUCT_SPEC.u8 } } };
+    const p = _simPresentation;
+    if (p && p.structures) _simInfoPackTable(p.structures);
+    _simInfoPack.msg.stats = simInfoPackStatDir();
+    return _simInfoPack.msg;
+}
+// The table the packer reads: the shown one (from its publication on).
+function _simInfoPackTable(F) {
+    const I = _simInfoPack;
+    if (!I || !F) return;
+    // (Byte addresses up to 4 GiB: unsigned; 0 none.)
+    const H = I.A.hdr, at = F.heap ? F.off : 0;
+    if (H[0] === at && H[1] === F.cap) return;
+    Atomics.store(H, 1, at > 0 ? F.cap : 0);
+    Atomics.store(H, 0, at);
+    Atomics.add(H, 2, 1);
+}
+// The stat tables (data_dynamic.js _flatThingStatEntry) as the packer reads
+// them in place: per owner, kind and key, the table's byte address, its
+// levels, strides and stat names (the columns). Made again when a table was
+// (re)made (_thingStatDirVersion); research rewrites the numbers in place.
+let _simInfoStatDirSent = -1;
+function simInfoPackStatDir() {
+    if (typeof _thingStatTables === 'undefined' || _simHeapPtrOf === null) return null;
+    // (Tables made before the heap was up: into it now, at the match's start.)
+    for (const t of _thingStatTables.values()) {
+        if (_simHeapPtrOf(t.data) >= 0) continue;
+        const d = simHeapArray(Float32Array, t.data.length);
+        if (_simHeapPtrOf(d) < 0) continue;
+        d.set(t.data); t.data = d; _thingStatDirVersion++;
+    }
+    const tables = [];
+    for (const [id, t] of _thingStatTables) {
+        const p = _simHeapPtrOf(t.data);
+        if (!(p >= 0)) continue;
+        const [owner, kind, key] = id.split('|');
+        tables.push({ owner: Number(owner), kind, key, at: p, levels: t.levels, rowStride: t.rowStride, statStride: t.statStride, cols: t.schema.keys });
+    }
+    _simInfoStatDirSent = _thingStatDirVersion;
+    return { version: _thingStatDirVersion, tables };
+}
+// (A table made again during play, a new schema: the packer's directory too.)
+function simInfoPackStatDirCheck() {
+    if (!_simInfoPack || typeof _thingStatDirVersion === 'undefined' || _thingStatDirVersion === _simInfoStatDirSent) return;
+    const dir = simInfoPackStatDir();
+    if (dir) _simPost({ type: 'infoPackStats', stats: dir });
 }

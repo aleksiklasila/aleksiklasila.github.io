@@ -217,6 +217,9 @@ self.onmessage = (ev) => {
             _simStreamClear(false);
             _simStart(msg);
             _simCtlPublish(currentTick - 1);
+        } else if (msg.type === 'infoPack') {
+            // (The info panel's packer thread: what it needs, sim_presentation.js.)
+            _simPost({ type: 'infoPack', pack: typeof simInfoPackPayload === 'function' ? simInfoPackPayload() : null });
         } else if (msg.type === 'presentationStop') {
             simPresentationStop();
         } else if (msg.type === 'tick') {

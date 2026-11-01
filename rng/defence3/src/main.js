@@ -2419,6 +2419,14 @@ function initInput() {
                     let newUnits = [];
                     let newEntities = [];
                     let projectedSlots = null, projectedSlotCount = 0;
+                    // (A far view in 3D: the packer thread projects every unit and
+                    // structure (info_panel_static.js infoPackBoxSelect); its slots
+                    // come back a few ms later to boxSelectionApply.)
+                    if (renderDimensionMode === '3d' && selectionBoxScreen && typeof infoPackBoxSelect === 'function' && infoPackBoxSelect(selectionBoxScreen, e.shiftKey)) {
+                        selectionBox = null;
+                        selectionBoxScreen = null;
+                        return;
+                    }
                     if (renderDimensionMode === '3d' && selectionBoxScreen) {
                         let projectedSelection = get3DBoxSelection(selectionBoxScreen);
                         newUnits = projectedSelection.units;
@@ -5907,6 +5915,8 @@ function startGame() {
     _tpsLastTime = _lastTickTime;
     startMainThreadLoops();
     prewarmItemThumbnails();
+    // (The info panel's elements: made now, not at the first selection.)
+    if (typeof infoPanelMatchStart === 'function') infoPanelMatchStart();
 }
 
 // Set while a start that a whole-world snapshot follows runs startGame (the
@@ -7731,3 +7741,27 @@ Object.assign(globalThis, {
     runOneTick,
     getPlayerUpKeepBreakdown: _getPlayerUpKeepBreakdown,
 });
+
+// A box selection's result from the packer thread (info_panel_static.js
+// _infoPackBoxDone): as the mouse-up's own box selection applies it.
+function boxSelectionApply(newUnits, newEntities, slots, slotCount, shift) {
+    let unchanged = false;
+    if (shift) {
+        let haveUnits = new Set(selectedUnits), haveEntities = new Set(selectedEntities);
+        for (let u of newUnits) { if (!haveUnits.has(u)) selectedUnits.push(u); }
+        for (let ent of newEntities) { if (!haveEntities.has(ent)) selectedEntities.push(ent); }
+    } else {
+        unchanged = selectedUnits.length === newUnits.length
+            && selectedEntities.length === newEntities.length
+            && selectedUnits.every((u, i) => u === newUnits[i])
+            && selectedEntities.every((e, i) => e === newEntities[i])
+            && !Object.values(activeSubGroups).some(value => value === false);
+        if (!unchanged) {
+            selectedUnits = newUnits;
+            selectedEntities = newEntities;
+            if (slots) selectionIndexAdopt(newUnits, slots, slotCount);
+        }
+    }
+    if (!unchanged) activeSubGroups = {};
+    requestInfoPanelRefreshAfterFrame();
+}

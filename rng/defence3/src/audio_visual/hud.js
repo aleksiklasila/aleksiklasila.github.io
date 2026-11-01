@@ -599,8 +599,12 @@ function buildInfoPanelAstarBudgetHtml(owner) {
         if (SHRINES_ENABLED) html += deltaRow('shrine', ev => ev.source === 'shrine', { thumbKey: 'shrine', isUnit: false }, '', 'shrine', 'buildings', true);
 
         let special = new Set(['king', 'collector', 'astar_collector', 'salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit']);
+        // (The owner's unit types from the frame's counts by owner and type:
+        // a pass over every unit here was ~3.5 ms each refresh at 390k.)
         let otherTypes = new Set();
-        for (let u of units) {
+        const summary = typeof getFrameUnitSummary === 'function' ? getFrameUnitSummary(owner) : null;
+        if (summary) { for (const [type, g] of summary) if (g.total > 0 && !special.has(type)) otherTypes.add(String(type || 'other')); }
+        else for (let u of units) {
             if (!u || u.dead || u.owner !== owner) continue;
             if (special.has(u.unitType)) continue;
             otherTypes.add(String(u.unitType || 'other'));
@@ -2302,6 +2306,10 @@ function _infoPanelBinRange(F, X, B, i0, i1, dense, sums) {
 // never makes anything: the layout is every group's section, always there.
 const INFO_PANEL_SECTION_BUDGET_MS = 4, INFO_PANEL_BG_BUDGET_MS = 2, INFO_UNIT_BINS_REFRESH_MS = 400, INFO_UNIT_BIN_CHUNK = 32768;
 const INFO_ENTITY_SWEEP_BIG = 4096, INFO_ENTITY_SWEEP_MS = 1000;
+// (Sections made per refresh, ms; the panel's others wait for the next
+// frames' refreshes: _infoPanelPendingSections.)
+const INFO_PANEL_BUILD_BUDGET_MS = 2, INFO_PANEL_BUILD_SLICED_MIN = 2048;
+let _infoPanelPendingSections = 0;
 const _infoSectionCache = new Map();
 let _infoSectionCacheSel = null, _infoEntitySweepAt = 0;
 const _infoEntityGroupsCache = { ref: null, len: -1, groups: null };
@@ -5541,6 +5549,22 @@ function renderResearchGroupInfo(group) {
     return html;
 }
 
+// A research group's queue (the toggle, its tasks when open) and research
+// rows: the block info_panel_static.js keeps as markup, patched in place.
+function renderResearchGroupQueueBlock(items) {
+    const group = infoGroupRenderView(items), e = group[0];
+    const queueScope = `group:${e.owner}`, queueOpen = isResearchQueuePanelOpen(e.owner, queueScope);
+    const totalQueue = getResearchQueueTotalLength(e), queueCap = getResearchQueueCapacityForPlayer(e.owner);
+    let html = `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">`;
+    html += `<div class="info-row info-research-queue-toggle" data-owner="${e.owner}" data-scope="${queueScope}" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">`;
+    html += `<span>Queue</span><span>${queueOpen ? '▾' : '▸'} ${formatInfoFraction(totalQueue, queueCap)}</span>`;
+    html += `</div>`;
+    if (queueOpen) html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">${renderQueuedResearchTasksForGroup(group)}</div>`;
+    html += `<div style="margin-top:4px;border-top:1px solid #333;padding-top:4px">${renderResearchThingRowsForPanel(e.owner, queueScope, group)}</div>`;
+    html += `</div>`;
+    return html;
+}
+
 function bindResearchPopupControls(container) {
     if (!container || container.dataset.boundResearchPopup === '1') return;
     container.dataset.boundResearchPopup = '1';
@@ -6011,6 +6035,19 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         updateIgnoreLevelButton();
         updateControlGroupBar();
     }
+    // The main panel of a match the simulation worker runs: static, its
+    // numbers from the packer thread (info_panel_static.js); nothing of the
+    // grouping below runs for it. The popups' panels and the in-page
+    // simulation's: as markup, below.
+    if (!panelOverride && typeof infoPanelStaticActive === 'function' && infoPanelStaticActive()) {
+        _infoPanelDropGoneEntities();
+        selectionCompactDead();
+        _ipsResearchBinder = bindInfoPanelSectionControls;
+        infoPanelStaticRender(panel);
+        if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
+        activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;
+        return;
+    }
 
     // Remove dead entities
     // (New arrays only when something went: what is kept per selection,
@@ -6116,6 +6153,11 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     let activeGroupCount = 0;
     // Which groups are made again this time (the rest keep their markup).
     const remake = panelOverride ? null : _infoPanelSectionsToRemake(panel, allGroups, subgroupState);
+    // (Sections made in this refresh stop at INFO_PANEL_BUILD_BUDGET_MS: the
+    // rest keep their last markup, or show their header until a refresh in
+    // the next frames makes them. A new selection of everything was one
+    // 400 ms frame of every group's section.)
+    let buildSpent = 0, pending = 0;
     for (let [key, grp] of allGroups) {
         if (subgroupState[key] === false) continue;
         activeGroupCount++;
@@ -6123,6 +6165,14 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         sectionKeys.push(key);
         const cachedSection = remake ? _infoSectionCache.get(key) : null;
         if (remake && cachedSection && !remake.has(key)) { html += cachedSection.html; continue; }
+        if (remake && buildSpent >= INFO_PANEL_BUILD_BUDGET_MS && totalSel > INFO_PANEL_BUILD_SLICED_MIN) {
+            // (A stale section waits for the next periodic refresh.)
+            if (cachedSection) { html += cachedSection.html; continue; }
+            pending++;
+            const n = infoGroupCount(grp);
+            html += `<div class="info-title">${n > 1 ? n + 'x ' : ''}${grp.label}</div><div class="info-row" style="color:#777">…</div><div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
+            continue;
+        }
         const sectionStart = html.length, sectionT0 = performance.now();
         _infoRenderGroupKey = key;
 
@@ -6174,8 +6224,12 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             }
         }
         html += `<div style="border-bottom:1px solid #333;margin:4px 0"></div>`;
-        if (remake) _infoSectionCache.set(key, { html: html.slice(sectionStart), at: performance.now(), cost: performance.now() - sectionT0 });
+        const sectionCost = performance.now() - sectionT0;
+        buildSpent += sectionCost;
+        if (remake) _infoSectionCache.set(key, { html: html.slice(sectionStart), at: performance.now(), cost: sectionCost });
     }
+    const wasFilling = _infoPanelPendingSections > 0;
+    if (!panelOverride) _infoPanelPendingSections = pending;
 
     sectionMarks.push(html.length);
     if (activeGroupCount === 0) {
@@ -6234,7 +6288,8 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
                 && !patchInfoPanelText(section, sectionHtml[i])) rebuildSections.push(i);
         }
         // Rebuilding most of the panel costs no more as one replacement.
-        if (rebuildSections && rebuildSections.length > 1 && rebuildSections.length * 2 > sectionHtml.length) rebuildSections = null;
+        // (Not while sections are being filled in: a few a refresh.)
+        if (rebuildSections && !wasFilling && rebuildSections.length > 1 && rebuildSections.length * 2 > sectionHtml.length) rebuildSections = null;
     }
     if (rebuildSections && rebuildSections.length === 0) {
         previousRender.html = html;

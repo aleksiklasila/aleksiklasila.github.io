@@ -22,8 +22,9 @@ function simTableSpec(cols) {
     spec.slotBytes = 4 * (spec.f32.length + spec.i32.length + 1) + 2 * spec.i16.length + spec.u8.length;
     return spec;
 }
-function simTableViews(spec, buf, cap) {
-    let f = { buf, cap }, off = 0;
+// (off: where the table starts in buf, a block of the wasm heap's memory.)
+function simTableViews(spec, buf, cap, at = 0) {
+    let f = { buf, cap, off: at, bytes: cap * spec.slotBytes }, off = at;
     for (let k of spec.f32) { f[k] = new Float32Array(buf, off, cap); off += 4 * cap; }
     for (let k of spec.i32) { f[k] = new Int32Array(buf, off, cap); off += 4 * cap; }
     f.order = new Int32Array(buf, off, cap); off += 4 * cap;
@@ -509,7 +510,7 @@ function _pageViewSlot(s, v) {
 // whose structure changed. Everything is made anew only for the first frame,
 // a new grid, or a change of most of the table.
 function pageApplyStructures(table, c) {
-    let F = simTableViews(SIM_STRUCT_SPEC, table.buf, table.cap);
+    let F = simTableViews(SIM_STRUCT_SPEC, table.buf, table.cap, table.off || 0);
     F.n = table.n;
     // (Turret angles live, not as the table was copied: sim_presentation.js
     // _simPresentAngles. angleRev moves when any turned.)

@@ -822,8 +822,10 @@ function draw() {
     if (indexBytes) world.units.renderBuckets = buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
     world.units.dirty = dirtyEnd(F, tick.n, cap * SIM_FRAME_SLOT_BYTES + indexBytes, D.seq, tick.tick);
     if(structure && structureRevision!==sentStructureRevision) {
-        const b=acquire(structure.buf.byteLength,'structures');
-        if(b) {new Uint8Array(b,0,structure.buf.byteLength).set(new Uint8Array(structure.buf));world.structures={...structure,buf:b};sentStructureRevision=structureRevision;}
+        // (Its block only: the table is in the wasm heap's memory.)
+        const bytes=structure.bytes||structure.buf.byteLength, off=structure.off||0;
+        const b=acquire(bytes,'structures');
+        if(b) {new Uint8Array(b,0,bytes).set(new Uint8Array(structure.buf,off,bytes));world.structures={...structure,buf:b,off:0,bytes};sentStructureRevision=structureRevision;}
     }
     if(projectiles && projectileRevision!==sentProjectileRevision) {
         const b=acquire(projectiles.buf.byteLength,'projectiles');

@@ -681,10 +681,13 @@ function _simClientOnMessage(msg) {
             if (msg.epoch === c.epoch && c.creating && c.creating.epoch === msg.epoch) _simClientCreated(c, msg);
             break;
         case 'started':
-            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; c.startText = null; _simClientRestoreSettle(c, true); }
+            if (msg.epoch === c.epoch) { c.startedEpoch = msg.epoch; c.startTimings = msg.timings || null; c.startText = null; _simClientRestoreSettle(c, true); if (typeof infoPackMatchStarted === 'function') infoPackMatchStarted(); }
             if (msg.world) { if (msg.epoch === c.epoch) _simClientApplyWorld(msg.world, 1); else _simClientReturnBufs(_simClientWorldBufs(msg.world)); }
             break;
         case 'ticked': _simClientApplyTick(msg); break;
+        // (The info panel's packer thread: what it needs, info_panel_static.js.)
+        case 'infoPack': if (typeof infoPackOnPayload === 'function') infoPackOnPayload(msg.pack); break;
+        case 'infoPackStats': if (typeof infoPackOnStats === 'function') infoPackOnStats(msg.stats); break;
         // (?simtrace=1: the worker's per-tick phase times, see sim_worker.js.)
         case 'trace': { const T = window.__simTrace || (window.__simTrace = []); for (const r of msg.rows || []) T.push(r); if (T.length > 6000) T.splice(0, T.length - 6000); break; }
         // The worker's own ticks (a stalled page): one it ran, one a host's
@@ -1156,6 +1159,14 @@ function _simClientApplyDetails(details) {
 }
 // The tiles the page draws (each frame's view): the worker shows the looks
 // of hits there first (unit.js simLookView); sent when it moved a few tiles.
+// The info panel's packer asks the simulation worker for what its thread
+// needs (sim_presentation.js simInfoPackPayload); false without a worker.
+function simClientInfoPackAsk() {
+    const c = _simClient;
+    if (!c || !c.worker || !c.shared) return false;
+    c.worker.postMessage({ type: 'infoPack' });
+    return true;
+}
 function simClientNoteView(minGx, minGy, maxGx, maxGy) {
     const c = _simClient;
     if (!c || !c.active || !c.worker) return;

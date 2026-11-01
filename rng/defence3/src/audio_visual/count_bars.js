@@ -137,7 +137,9 @@ function spawnBarOptions(coords, worker) {
 // (A big group's bar: its count from a sample of its producers, scaled
 // (infoGroupSample); its coordinates by token, not as JSON in the markup:
 // 190k producers were ~4 MB of attribute each time the panel was made.)
-const SPAWN_BAR_COORDS_INLINE_MAX = 512;
+// (Inline only for a few: a 272-barrack group's list was ~6 KB of the
+// panel's markup, a third of what a select-all parsed.)
+const SPAWN_BAR_COORDS_INLINE_MAX = 8;
 function _spawnSpecCoords(spec) {
     if (spec.coords) return spec.coords;
     return typeof infoCoordText === 'function' ? infoCoordText(spec.coordsRef).split(';').filter(Boolean).map(c => { const [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; }) : [];
