@@ -2971,6 +2971,35 @@ function getInfoPanelAnchorKey(el) {
     return getInfoPanelAnchorAttributeKey(el) + '|' + getInfoPanelAnchorText(el);
 }
 
+// A reorder click (research queue to top/bottom) moves the clicked item, and
+// the mouse anchor would follow it: the view scrolled away from the next item
+// to move. Keep the scroll position of the next rebuild instead.
+let infoPanelScrollLock = null;
+function lockInfoPanelScroll(btn) {
+    let el = btn.parentElement;
+    while (el && !(el.scrollHeight > el.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement;
+    infoPanelScrollLock = el ? { el, sel: el.id ? '#' + el.id : el.classList.length ? '.' + el.classList[0] : '', top: el.scrollTop, t: performance.now() } : null;
+}
+// (Held for a moment, not once: the reordered queue reaches the panel with the
+// simulation's reply, not with the click.)
+function applyInfoPanelScrollLock(panel) {
+    const lock = infoPanelScrollLock;
+    if (!lock) return false;
+    const now = performance.now();
+    if (now - lock.t > 1500 || (infoPanelLastManualScrollTsByEl.get(lock.el) || 0) > lock.t
+        || (infoPanelLastManualScrollTsByEl.get(panel) || 0) > lock.t) {
+        infoPanelScrollLock = null;
+        return false;
+    }
+    if (lock.el.isConnected && !panel.contains(lock.el) && lock.el !== panel) return false;
+    // (A rebuilt panel has new elements: the scroll pane again by its class.)
+    let el = lock.el.isConnected ? lock.el : lock.sel && (panel.matches(lock.sel) ? panel : panel.querySelector(lock.sel));
+    if (!el) return false;
+    lock.el = el;
+    el.scrollTop = lock.top;
+    return true;
+}
+
 function captureInfoPanelMouseAnchor(panel, onlyUnderMouse = false) {
     if (!panel) return null;
     let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
@@ -3028,6 +3057,7 @@ function getInfoPanelAnchorStableKey(el) {
 }
 
 function restoreInfoPanelMouseAnchor(panel, anchor) {
+    if (applyInfoPanelScrollLock(panel)) return;
     if (!panel || !anchor || !anchor.key) return;
     let lastManualTs = infoPanelLastManualScrollTsByEl.get(panel) || 0;
     if (performance.now() - lastManualTs < 250) return;
@@ -6341,6 +6371,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             if (fromActive) return;
             let queueLen = getPlayerResearchQueue(owner).length;
             if (fromIndex < 0 || fromIndex >= queueLen) return;
+            lockInfoPanelScroll(btn);
             queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex: 0, fromActive: false, toActive: false });
             refreshThisPanel();
         });
@@ -6360,6 +6391,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
             let toIndex = queueLen - 1;
             if (!fromActive && (fromIndex < 0 || fromIndex >= queueLen)) return;
             if (!fromActive && fromIndex === toIndex) return;
+            lockInfoPanelScroll(btn);
             queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex, fromActive, toActive: false });
             refreshThisPanel();
         });

@@ -3720,3 +3720,15 @@ every run below). Raw rows: tests/test-runs/chaos-spikes/audit-20261030-*.json.
 - Cause: `.bb-rate` had three blurred `text-shadow`s on ~800 spans, re-rastered whenever rates changed (BB_REFRESH_MS 250).
 - Fix: hard-offset 1 px outline shadows; tile rate updates also keep the thumbnail `<img>` element (`_bbPatchThingBody`).
 - Held-key frame gaps: p95 16.7 ms unchanged, max 108 -> 50 ms, long tasks (>50 ms) 11 -> 0. A few 25–50 ms gaps at the 250 ms cadence remain. Raw: tests/test-runs/camera-steady-20261031/{after3s,fix2}.json.
+- Follow-up: any `text-shadow` on `.bb-rate` still cost 25-50 ms raster per 250 ms refresh (`text-shadow:none` removed the hiccups). Replaced with `paint-order: stroke fill; -webkit-text-stroke: 2px #000`. Two held-key runs: max frame gap 20.6 / 20.8 ms, p95 10.6 ms, 0 long tasks (was 108 / 16.7 before the first fix). Raw: tests/test-runs/camera-steady-20261031/fix3.json.
+
+### 2026-10-31 (later) — scene 15-12-46 (392,624 units, 3D): GPU sync queries, lazy shaders
+
+- Baseline (same 12 s held W/S trace): 718 frames, frame gap p50 16.6 / p95 33.3 ms. The CPU profile had `getParameter` at 3.9 s self time, all in `drawUnitClaims` (`gl.getParameter(VIEWPORT)`): the first synchronous query waits for the whole queued GPU frame, so CPU and GPU ran in lockstep.
+- Fix: renderer3d keeps its own copy of viewport, framebuffer, clear colour, depth mask and blend function (wrapped setters); `drawUnitClaims` reads those. `getParameter` is gone from the profile. After: ~960–990 frames, gap p50 8.4–9.8 / p95 25 ms.
+- First camera move compiled the FX and range-visibility programs (~140 ms + 65 ms): a restored scene never goes through `_maybePrewarm3DView`. `render()` now prewarms once (and the claim program too). The first-move 140 ms frame is gone.
+- Remaining: frames of 25–33 ms with ~5 ms of JS; `(program)` (native wait) is ~half the profile, so these look GPU/present-bound at 392k units; `drawMinimap` 100+ ms on the first frame after restore. Raw: tests/test-runs/camera-steady-20261031/scene2*.json.
+
+### 2026-10-31 (later) — research queue "move to top" no longer scrolls the panel
+
+- The info panel's mouse anchor followed the clicked item to the top of the queue, so the view jumped. `lockInfoPanelScroll` (hud.js) records the scroll pane's position on the top/bottom reorder buttons and `restoreInfoPanelMouseAnchor` holds it for 1.5 s (dropped on manual scroll). Real-mouse test on the 13-31 scene (270-item queue, scrollTop 1500): three moves, scrollTop 1500/1500/1500; with the lock disabled 1500 -> 1433 -> 160.

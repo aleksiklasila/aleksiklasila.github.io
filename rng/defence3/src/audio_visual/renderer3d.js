@@ -2278,6 +2278,21 @@
             }
 
             let gl = this.gl;
+            // getParameter(BLEND_*) is a synchronous GPU-process round trip (about
+            // 10 ms a call while the GPU is busy). Passes that restore the blend
+            // function read it from here instead.
+            gl._blend = [gl.ONE, gl.ZERO, gl.ONE, gl.ZERO];
+            { const bf = gl.blendFunc, bfs = gl.blendFuncSeparate;
+                gl.blendFunc = function (s, d) { this._blend = [s, d, s, d]; return bf.call(this, s, d); };
+                gl.blendFuncSeparate = function (a, b, c, d) { this._blend = [a, b, c, d]; return bfs.call(this, a, b, c, d); }; }
+            // (Likewise VIEWPORT and the other state drawUnitClaims restores: the
+            // first getParameter waited for the whole queued GPU frame, ~25 ms.)
+            gl._viewport = [0, 0, this.canvas.width, this.canvas.height]; gl._clear = [0, 0, 0, 0]; gl._depthMask = true; gl._fb = null;
+            { const vp = gl.viewport, cc = gl.clearColor, dm = gl.depthMask, bfb = gl.bindFramebuffer;
+                gl.viewport = function (x, y, w, h) { this._viewport = [x, y, w, h]; return vp.call(this, x, y, w, h); };
+                gl.clearColor = function (r, g, b, a) { this._clear = [r, g, b, a]; return cc.call(this, r, g, b, a); };
+                gl.depthMask = function (m) { this._depthMask = !!m; return dm.call(this, m); };
+                gl.bindFramebuffer = function (t, f) { if (t === this.FRAMEBUFFER) this._fb = f; return bfb.call(this, t, f); }; }
             this.meshProgram = createProgram(gl, `#version 300 es
                 precision highp float;
                 layout(location = 0) in vec3 aPosition;
@@ -4139,7 +4154,7 @@
         // on the page): made while the match loads (renderer.js
         // _maybePrewarm3DView), as those a hidden 3D frame does not reach.
         prewarmPrograms() {
-            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources()]) {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram()]) {
                 try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
             }
         }
@@ -7693,7 +7708,7 @@
             const gl = this.gl, cellPx = Defence3Renderer3D.claimCellPx;
             if (!(cellPx > 0) || !F || F.n < Defence3Renderer3D.claimMinUnits || !this.ensureClaimProgram()) return null;
             // (Cells of the target being drawn: its viewport.)
-            const prevVp = gl.getParameter(gl.VIEWPORT), width = prevVp[2], height = prevVp[3];
+            const prevVp = gl._viewport, width = prevVp[2], height = prevVp[3];
             const cw = Math.max(1, Math.ceil(width / cellPx)), ch = Math.max(1, Math.ceil(height / cellPx));
             const K = this.claim || (this.claim = { tex: gl.createTexture(), sum: gl.createTexture(), fb: gl.createFramebuffer(), w: 0, h: 0,
                 float: !!gl.getExtension('EXT_color_buffer_float') && !!gl.getExtension('EXT_float_blend') });
@@ -7717,9 +7732,9 @@
                 gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, K.sum, 0);
                 K.w = cw; K.h = ch;
             }
-            const prevFb = gl.getParameter(gl.FRAMEBUFFER_BINDING), prevClear = gl.getParameter(gl.COLOR_CLEAR_VALUE);
-            const depthOn = gl.isEnabled(gl.DEPTH_TEST), blendOn = gl.isEnabled(gl.BLEND), depthMaskOn = gl.getParameter(gl.DEPTH_WRITEMASK);
-            const blendSrc = gl.getParameter(gl.BLEND_SRC_RGB), blendDst = gl.getParameter(gl.BLEND_DST_RGB), blendSrcA = gl.getParameter(gl.BLEND_SRC_ALPHA), blendDstA = gl.getParameter(gl.BLEND_DST_ALPHA);
+            const prevFb = gl._fb, prevClear = gl._clear;
+            const depthOn = gl.isEnabled(gl.DEPTH_TEST), blendOn = gl.isEnabled(gl.BLEND), depthMaskOn = gl._depthMask;
+            const [blendSrc, blendDst, blendSrcA, blendDstA] = gl._blend;
             gl.bindFramebuffer(gl.FRAMEBUFFER, K.fb);
             gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
             gl.viewport(0, 0, cw, ch);
@@ -7849,6 +7864,9 @@
 
         render(snapshot) {
             if (!this.enabled || !this.supported || !snapshot) return;
+            // (A scene restored without the match-load overlay never reached
+            // _maybePrewarm3DView: these compiled during the first camera move, 100+ ms.)
+            if (!this._programsPrewarmed) { this._programsPrewarmed = true; this.prewarmPrograms(); }
             this.updateWalkSurfaces(snapshot);
             this.resizeForSnapshot(snapshot);
             this.buildViewProjection(snapshot);
