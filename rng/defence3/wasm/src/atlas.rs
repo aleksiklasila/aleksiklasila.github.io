@@ -537,7 +537,17 @@ pub unsafe extern "C" fn k_atl_route(a: u32, chunk: i32) {
 // A look visits successive tiles of the same part toward the same target.
 // Only the local field changes: the cost beyond each exit stays constant.
 // Keep those costs on the look's stack, in exit order (including ties).
+/// Atl::exit's exits of a (source part, destination part) pair: its
+/// candidate exit nodes and their costs on (the cluster's exits of the source
+/// part toward the destination's ancestor: a function of the pair and the
+/// atlas alone), EXIT_CACHE_SETS of them by the pair's hash. One a movement
+/// job (mv.rs move_job), shared by its units: was one entry made anew for
+/// each unit's look, so nearly every exit was worked out again.
+pub const EXIT_CACHE_SETS: usize = 16;
 pub struct ExitCache {
+    sets: [ExitEntry; EXIT_CACHE_SETS],
+}
+struct ExitEntry {
     atlas: *const i32,
     sp: i32,
     dp: i32,
@@ -546,9 +556,17 @@ pub struct ExitCache {
     costs: [u32; 64],
 }
 impl ExitCache {
+    /// (All zero: an entry whose atlas is null holds nothing.)
     pub fn new() -> Self {
-        Self { atlas: core::ptr::null(), sp: -1, dp: -1, count: 0, nodes: [0; 64], costs: [0; 64] }
+        unsafe { core::mem::zeroed() }
     }
+    #[inline(always)]
+    unsafe fn entry(&mut self, sp: i32, dp: i32) -> *mut ExitEntry {
+        let h = (sp as u32).wrapping_mul(0x9e3779b1) ^ (dp as u32).wrapping_mul(0x85ebca77);
+        self.sets.as_mut_ptr().add(((h ^ (h >> 15)) as usize) & (EXIT_CACHE_SETS - 1))
+    }
+}
+impl ExitEntry {
     unsafe fn best(&self, fields: *const u16, o: usize, cc2: usize) -> i32 {
         let mut best = -1;
         let mut value = u32::MAX;
@@ -668,13 +686,13 @@ impl Atl {
         if sp == dp || sp < 0 || dp < 0 {
             return -1;
         }
-        if !self.exit_cache.is_null() {
-            let cache = &*self.exit_cache;
-            if cache.atlas == self.header && cache.sp == sp && cache.dp == dp {
-                return cache.best(fields, o, cc2);
+        let e: *mut ExitEntry = if self.exit_cache.is_null() { core::ptr::null_mut() } else { (*self.exit_cache).entry(sp, dp) };
+        if !e.is_null() {
+            if (*e).atlas == self.header && (*e).sp == sp && (*e).dp == dp {
+                return (*e).best(fields, o, cc2);
             }
-            (*self.exit_cache).atlas = core::ptr::null();
-            (*self.exit_cache).count = 0;
+            (*e).atlas = core::ptr::null();
+            (*e).count = 0;
         }
         let l = self.l;
         let (su, tu) = (sp as usize, dp as usize);
@@ -709,10 +727,10 @@ impl Atl {
             }
             let r = g(self.rc, base + x);
             if r == !0u32 { continue; }
-            if !self.exit_cache.is_null() {
+            if !e.is_null() {
                 if cache_count < 64 {
-                    *(*self.exit_cache).nodes.as_mut_ptr().add(cache_count) = i;
-                    *(*self.exit_cache).costs.as_mut_ptr().add(cache_count) = r;
+                    *(*e).nodes.as_mut_ptr().add(cache_count) = i;
+                    *(*e).costs.as_mut_ptr().add(cache_count) = r;
                 }
                 cache_count += 1;
             }
@@ -726,8 +744,8 @@ impl Atl {
                 best = i;
             }
         }
-        if !self.exit_cache.is_null() && cache_count <= 64 {
-            let cache = &mut *self.exit_cache;
+        if !e.is_null() && cache_count <= 64 {
+            let cache = &mut *e;
             cache.atlas = self.header; cache.sp = sp; cache.dp = dp; cache.count = cache_count;
         }
         best
@@ -807,6 +825,15 @@ pub unsafe extern "C" fn nav_atlas_step(h: u32, partl: u32, partb: u32, nt: u32,
 /// atlas): -1 none, at dest, or t a wall (the caller's step out).
 #[inline(never)]
 pub unsafe fn atlas_step(a: &Atl, pl: *const u16, pb: *const i32, nt: *const i32, np: *const i32, fields: *const u16, w: i32, t: i32, dest: i32) -> i32 {
+    atlas_step_h(a, pl, pb, nt, np, fields, w, t, dest, core::ptr::null_mut())
+}
+/// atlas_step along a run of steps toward one destination (mv.rs
+/// flow_look_calc's look-ahead): hint [source part, destination part, exit
+/// node] keeps the exit chosen for a pair while the steps stay in that pair
+/// (follows that exit's field), instead of choosing among the cluster's
+/// exits again at every step (Atl::exit: every exit's field read). The
+/// hint is the run's own, so a look depends only on where it starts.
+pub unsafe fn atlas_step_h(a: &Atl, pl: *const u16, pb: *const i32, nt: *const i32, np: *const i32, fields: *const u16, w: i32, t: i32, dest: i32, hint: *mut [i32; 3]) -> i32 {
     if t == dest || t < 0 || dest < 0 {
         return -1;
     }
@@ -830,7 +857,11 @@ pub unsafe fn atlas_step(a: &Atl, pl: *const u16, pb: *const i32, nt: *const i32
     let lx = x - ((x >> cs) << cs);
     let ly = y - ((y >> cs) << cs);
     let lo = ly as usize * c + lx as usize;
-    let node = a.exit(sp, dp, cf, lo, c * c, fields, np);
+    let node = if !hint.is_null() && (*hint)[0] == sp && (*hint)[1] == dp && (*hint)[2] >= 0 { (*hint)[2] } else {
+        let n = a.exit(sp, dp, cf, lo, c * c, fields, np);
+        if !hint.is_null() { *hint = [sp, dp, n]; }
+        n
+    };
     if node < 0 {
         return -1;
     }

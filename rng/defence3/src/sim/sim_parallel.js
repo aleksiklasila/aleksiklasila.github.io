@@ -50,7 +50,8 @@ const SIM_PAR_BG_CAP = 113, SIM_PAR_BG_RUN = 114;
 // once (simParallelBulkRush); -1 none. (The install made what was left on
 // the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
 // the helpers busy with the tiers before it.)
-const SIM_PAR_BG_FIRST = 128, SIM_PAR_BG_RUSH_AT = 5;
+// (6: SIM_PAR_BG_ORDER's first six, the search tier's lane among them.)
+const SIM_PAR_BG_FIRST = 128, SIM_PAR_BG_RUSH_AT = 6;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait. (Foreground jobs
 // only: background lanes have their own flags, SIM_PAR_BG_ERR.)
@@ -91,7 +92,8 @@ function _simParCheckErr(ctl) {
 // _simHeapGrowAhead), never waited for.
 const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
 const SIM_LANE_TRAFFIC = 12;
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+// (T1 right after the index: the worker search tier's scan, worker.js WS_LANE, is waited for one tick after its post.)
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -1072,7 +1074,8 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     // (94, 95: the status records' pool words and free stack, mv.rs floor_hit.)
     // (96, 97: the attackers' styles and each chunk's count of attacks with a status style, mv.rs hit_sty_count.)
     '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', 'st.hdr', 'st.free', '?unit.atkSty', '?mv.hitsc',
-    '?-', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
+    // (98: the 11x11 blocks' wall change sums, the shared looks' key: mv.rs W_WBLK81.)
+    '?mv.wallBlk81', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
     'unit.spType', 'unit.vsGen', 'unit.spMvOld', 'unit.spMvNew', 'unit.spMvOwn', 'unit.mvBlk', '?mv.astarRem', '?mv.chFix', '?mv.chUse', '?-' ,
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
@@ -1177,7 +1180,8 @@ function simParallelRun(kernel, total) {
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
-    for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
+    // (The helpers' last chunks: meanwhile background chunks, else wait.)
+    for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) { if (_simBgHelp(ctl, -1)) continue; Atomics.wait(ctl, SIM_PAR_DONE, d, 5); }
     if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
 }
@@ -1313,6 +1317,26 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
     }
     return out;
 }
+// A waiting simulation thread's work: a chunk of another pending chain, by
+// lane priority, of the lanes whose chunks are short (the tick's, the hash,
+// the index, the tiers, the traffic: not the navigation builds, heap growth
+// or long jobs, whose one chunk could keep the waiter well past its own
+// job's end). True when it ran one. (Their results are taken at their own
+// waits, whoever ran them.)
+const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
+// (false: waits only wait, an A/B switch.)
+let SIM_BG_HELP = true;
+function _simBgHelp(ctl, except) {
+    if (!SIM_BG_HELP) return false;
+    for (let i = 0; i < _SIM_BG_HELP_LANES.length; i++) {
+        const l = _SIM_BG_HELP_LANES[i];
+        if (l === except) continue;
+        const J = _simBg[l];
+        if (!J || J.sync) continue;
+        if (_simBgClaim(ctl, l, _simBgChain, _simBgStageParams[l]) === 1) return true;
+    }
+    return false;
+}
 function simParallelBackgroundWait(lane = 1) {
     const J = _simBg[lane];
     if (!J) return;
@@ -1332,6 +1356,8 @@ function simParallelBackgroundWait(lane = 1) {
         // Nothing to claim: the rest is running elsewhere (or a stage is
         // being opened).
         if (Atomics.load(ctl, b + SIM_PAR_BG_ID) === idLast && Atomics.load(ctl, b + SIM_PAR_BG_DONE) >= Atomics.load(ctl, b + SIM_PAR_BG_TOTAL)) break;
+        // (Meanwhile: another lane's chunk, work the helpers would do later anyway.)
+        if (_simBgHelp(ctl, lane)) continue;
         const d = Atomics.load(ctl, b + SIM_PAR_BG_DONE);
         Atomics.wait(ctl, b + SIM_PAR_BG_DONE, d, 1);
     }
@@ -1824,6 +1850,42 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 const SIM_KERNEL_SLOT_ZERO = 128;
 const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
 SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZeroW, P, chunk, 'k_slot_zero', 'SLOT_ZERO'); };
+// The worker AI's parallel pass (worker.js waiRun; wasm/src/wai.rs k_wai_decide):
+// a chunk of the events decided against the pass's start, its effects into
+// its lists (k_wai_apply writes them after, in order).
+const SIM_KERNEL_WAI_DECIDE = 131;
+const _simWaiDecideW = _simWK(['wai.args', 'wai.ai', 'wai.a64']);
+SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDecideW, P, chunk, 'k_wai_decide', 'WAI_DECIDE'); };
+// A direct-call kernel over the helpers (wasm/src/k.rs k_block, P[0] which
+// kernel): its arrays and params in one heap block (wasm K's layout:
+// addresses from word 512, params as doubles from byte 4096) that every
+// helper's kernel reads, so it needs no registered names; jobs chunks.
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3;
+const _simBlockW = _simWK(['blk.args']);
+SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
+let _simBlk = null, _simBlkF = null;
+function simRustParallel(sel, arrays, P, jobs) {
+    if (!_simBlk || !simHeapHas(_simBlk)) { _simBlk = simSharedArray(Int32Array, 2048); simParallelBind('blk.args', _simBlk); }
+    if (!_simBlkF || _simBlkF.buffer !== _simBlk.buffer) _simBlkF = new Float64Array(_simBlk.buffer, _simBlk.byteOffset + 4096, 512);
+    const B = _simBlk;
+    B.fill(0, 512, 1024);
+    for (let i = 0; i < arrays.length; i++) {
+        const a = arrays[i], p = a ? _simHeapPtrOf(a) : 0;
+        if (a && !(p >= 0)) throw new Error('simRustParallel: argument ' + i + ' not in the wasm heap');
+        B[512 + i] = a ? _simWEnc(p) : 0;
+    }
+    _simBlkF.fill(0); _simBlkF.set(P.length > 512 ? P.subarray(0, 512) : P);
+    _simParams[0] = sel;
+    simParallelRun(SIM_KERNEL_BLOCK, jobs);
+}
+// Spawner production over the rows (barrack.js spawnerProductionPass; wasm/src/spr.rs).
+const SIM_KERNEL_SPAWN_PROD = 133;
+const _simSpawnProdW = _simWK(['spr.cls', 'spr.jobs', 'st.brain', 'st.ctab', 'st.rrow', 'st.tim', 'spr.tab', 'spr.out', 'spr.cnt']);
+SIM_KERNELS[SIM_KERNEL_SPAWN_PROD] = function (R, P, chunk) { _simRust(_simSpawnProdW, P, chunk, 'k_spawn_prod', 'SPAWN_PROD'); };
+// A step's new units' columns (unit.js simSpawnBatchWrite; wasm/src/nfs.rs k_spawn_write).
+const SIM_KERNEL_SPAWN_WRITE = 130;
+const _simSpawnWriteW = _simWK(['spw.rows', 'slz.tab', 'spw.kind', 'spw.prog']);
+SIM_KERNELS[SIM_KERNEL_SPAWN_WRITE] = function (R, P, chunk) { _simRust(_simSpawnWriteW, P, chunk, 'k_spawn_write', 'SPAWN_WRITE'); };
 
 // The units the movement kernel left to the main thread this tick (unit.js
 // unitEventsRun): per slot chunk of P[1], the live units with an event
@@ -1837,6 +1899,10 @@ const _simEventRoutesW = _simWK(['ev.sorted','unit.nvPK','unit.pathIndex','unit.
     '?nav.1.meta','?nav.1.partL','?nav.1.partB','?nav.1.pcomp']);
 SIM_KERNELS[SIM_KERNEL_EVENT_ROUTES] = function(R,P,chunk){_simRust(_simEventRoutesW,P,chunk,'k_event_routes','EVENT_ROUTES');};
 SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS] = function (R, P, chunk) { _simRust(_simUnitEventsW, P, chunk, 'k_unit_events', 'UNIT_EVENTS'); };
+// The sorted events split: the worker kernel's into a list, the others' indices for the JavaScript (unit.js unitEventsRun; k.rs).
+const SIM_KERNEL_UNIT_EVENTS_SPLIT = 132;
+const _simUnitEventsSplitW = _simWK(['ev.sorted', 'unit.live', 'unit.dead', 'unit.mvOut', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.wkS', 'unit.statRow', 'ev.split', 'ev.splitCnt']);
+SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS_SPLIT] = function (R, P, chunk) { _simRust(_simUnitEventsSplitW, P, chunk, 'k_unit_events_split', 'UNIT_EVENTS_SPLIT'); };
 // After the events: live units whose energy ran out (damage over time, a
 // mine, a ram's recoil) are dead now, where they stood before this tick's
 // step. P: [0] slots, [1] per job.

@@ -1564,6 +1564,56 @@ pub unsafe extern "C" fn k_dead_mark(a: u32, chunk: i32) {
     }
 }
 
+/// SIM_KERNEL_BLOCK (sim_parallel.js simRustParallel): a direct-call
+/// kernel on the helpers, its arguments in one heap block (K's layout) that
+/// every helper reads: array [0] the block (blk.args), P[0] which kernel.
+#[no_mangle]
+pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let b = k.raw(0);
+    match k.i(0) {
+        1 => super::wsw::k_wsw_set(b, chunk),
+        2 => super::reg::k_reg_ident(b, chunk),
+        3 => super::reg::k_reg_owner(b, chunk),
+        _ => {}
+    }
+}
+
+/// SIM_KERNEL_UNIT_EVENTS_SPLIT (unit.js unitEventsRun): the sorted events
+/// (ev.sorted, P[0] of them) split, a chunk of P[1] a job: those of units
+/// gone or dead dropped; where a unit the movement kernel did not move stood
+/// (prevX, prevY = x, y); the worker kernel's (P[2]: it takes them; a
+/// worker's state, no floor event, a stats row) into the chunk's first half
+/// of ev.split as events, the others (the JavaScript's) into its second half
+/// as their index in the sorted list; how many at ev.splitCnt[chunk * 16],
+/// [+ 1]. Arrays: ev.sorted, unit.live, unit.dead, unit.mvOut, unit.x,
+/// unit.y, unit.prevX, unit.prevY, unit.wkS, unit.statRow, ev.split,
+/// ev.splitCnt. P: [0] events, [1] per job, [2] worker kernel on, [3] the
+/// last worker state code.
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_events_split(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ev, live, dead, out, x, y, px, py) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
+    let (wks, srow, split, cnt) = (k.p::<u32>(8), k.p::<i16>(9), k.p::<i32>(10), k.p::<i32>(11));
+    let per = k.i(1).max(1) as usize;
+    let (i0, i1) = job(chunk, per as i32, k.i(0));
+    let (wai, last) = (k.i(2) != 0, k.i(3).max(0) as u32);
+    let base = chunk.max(0) as usize * per * 2;
+    let (mut nw, mut nr) = (0usize, 0usize);
+    for i in i0..i1 {
+        let e = g(ev, i);
+        if e < 0 { continue; }
+        let q = (e >> 3) as usize;
+        if g(live, q) == 0 || g(dead, q) != 0 { continue; }
+        if g(out, q) == 0 { s(px, q, g(x, q)); s(py, q, g(y, q)); }
+        let st = g(wks, q) & 31;
+        if wai && st >= 1 && st <= last && (e & 7) != 1 && g(srow, q) >= 0 { s(split, base + nw, e); nw += 1; }
+        else { s(split, base + per + nr, i as i32); nr += 1; }
+    }
+    s(cnt, chunk as usize * 16, nw as i32);
+    s(cnt, chunk as usize * 16 + 1, nr as i32);
+}
+
 /// SIM_KERNEL_UNIT_EVENTS: per slot chunk of P[1], the live units (alive,
 /// with energy) the movement kernel left to the main thread this tick: an
 /// event (unit.mvEv, cleared here) or no output (a worker's: its AI), as
@@ -3973,6 +4023,63 @@ fn sqrtf(v: f32) -> f32 {
     f32x4_extract_lane::<0>(f32x4_sqrt(f32x4_splat(v)))
 }
 
+/// k_ws_nearfield's stages 1 (rows) and 2 (columns): job c is part c % P[59] of pair c / P[59].
+unsafe fn nearfield_part(k: &K, c: usize, mode: i32) {
+    let per = k.i(59).max(1) as usize;
+    let (pi, part) = (c / per, c % per);
+    if pi >= k.i(0).max(0) as usize { return; }
+    let (w, h) = (k.i(1).max(0) as usize, k.i(2).max(0) as usize);
+    let pair = k.i(3 + pi);
+    let (gid, owner) = ((pair >> 4) as usize, pair & 15);
+    if gid >= 8 || w == 0 || h == 0 { return; }
+    let gb = 30 + 14 * gid;
+    let meta = k.p::<i32>(gb);
+    let (nf, ro) = (k.p::<u32>(144 + gid), k.p::<i32>(160 + gid));
+    if meta.is_null() || nf.is_null() || ro.is_null() { return; }
+    let (np, nb) = (g(meta, 1).max(0) as usize, (g(meta, 3) * g(meta, 4)).max(0) as usize);
+    let slot = g(meta, 5 + 2 * nb + 16 + owner as usize);
+    if slot < 0 { return; }
+    let f = nf.add(slot as usize * w * h);
+    const STEP: u32 = 0x10000;
+    // (Saturating: none (all ones) stays none.)
+    let inc = |v: u32| -> u32 { v.min(u32::MAX - STEP) + STEP };
+    if mode == 1 {
+        let rows = k.i(61).max(1) as usize;
+        let (y0, y1) = ((part * rows).min(h), ((part + 1) * rows).min(h));
+        if y0 >= y1 { return; }
+        for i in y0 * w..y1 * w { s(f, i, u32::MAX); }
+        let (pgx, pgy, po) = (k.p::<i32>(gb + 5), k.p::<i32>(gb + 6), k.p::<i32>(gb + 7));
+        let pready = k.p::<i32>(176 + gid);
+        let epoch = k.i(63);
+        for q in 0..np {
+            let y = g(pgy, q);
+            if y < y0 as i32 || y >= y1 as i32 || g(po, q) != owner || !ws_ready(pready, q, epoch) { continue; }
+            let x = g(pgx, q);
+            if x < 0 || x as usize >= w { continue; }
+            let t = y as usize * w + x as usize;
+            let v = g(ro, q) as u32 & 0xffff;
+            if v < g(f, t) { s(f, t, v); }
+        }
+        for y in y0..y1 {
+            let r = f.add(y * w);
+            for x in 1..w { let v = g(r, x).min(inc(g(r, x - 1))); s(r, x, v); }
+            for x in (0..w - 1).rev() { let v = g(r, x).min(inc(g(r, x + 1))); s(r, x, v); }
+        }
+        return;
+    }
+    let cols = k.i(60).max(1) as usize;
+    let (x0, x1) = ((part * cols).min(w), ((part + 1) * cols).min(w));
+    if x0 >= x1 { return; }
+    for y in 1..h {
+        let (r, up) = (f.add(y * w), f.add((y - 1) * w));
+        for x in x0..x1 { let v = g(r, x).min(inc(g(up, x))); s(r, x, v); }
+    }
+    for y in (0..h - 1).rev() {
+        let (r, dn) = (f.add(y * w), f.add((y + 1) * w));
+        for x in x0..x1 { let v = g(r, x).min(inc(g(dn, x))); s(r, x, v); }
+    }
+}
+
 /// SIM_KERNEL_WS_NEARFIELD (a job a pair): for a collectors' group and an owner, every tile's nearest working
 /// spawner of that owner by tile steps (|dx| + |dy|), then the lower row, column, id: wsg<g>.nf at the owner's slot
 /// (meta[5 + 2 nb + 16 + owner]), a tile's value (steps << 16 | rank), rank the place of the spawner in the order by
@@ -3980,10 +4087,20 @@ fn sqrtf(v: f32) -> f32 {
 /// transform in the L1 metric, the keys carried: each source's shortest paths turn once, down then left, or
 /// right then up, so the two passes meet every one). P: [0] pairs, [1] width, [2] height, [3 + i] group * 16 + owner.
 /// The group's arrays as the scan's (30 + 14 g ...), nf 144 + g, rk 152 + g, ro 160 + g.
+/// P[62] 1 / 2: the same field in two stages of many jobs (P[59] jobs a pair):
+/// 1 a block of P[61] rows each (filled, seeded with the spawners there, then
+/// each row's left and right sweeps), 2 a block of P[60] columns each (down
+/// then up, row by row): the L1 transform is separable and the values' order
+/// (steps, then rank) is a plain minimum, so the same field.
 #[no_mangle]
 pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
+    let mode = k.i(62);
+    if mode == 1 || mode == 2 {
+        nearfield_part(&k, chunk.max(0) as usize, mode);
+        return;
+    }
     let c = chunk.max(0) as usize;
     if c >= k.i(0).max(0) as usize {
         return;
@@ -4055,7 +4172,7 @@ pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
     }
 }
 
-/// SIM_KERNEL_WS_ORDER (one job): the requests with a result, in id order
+/// SIM_KERNEL_WS_ORDER (one job): the requests with a result, in their order
 /// (ws.order, ws.orderCount[0]). Arrays: ws.rcnt, ws.rkind, ws.rid, ws.res,
 /// ws.ures, ws.order, ws.orderCount. P: [0] select chunks, [1] chunk size,
 /// [2] K, [3] the healer kind.
@@ -4075,38 +4192,10 @@ pub unsafe extern "C" fn k_ws_order(a: u32, _chunk: i32) {
             }
         }
     }
-    // (By id: a heapsort of the indices by their ids; ids are distinct.)
-    let key = |x: i32| -> i32 { g(id, x as usize) };
-    let sift = |root0: usize, end: usize| {
-        let mut root = root0;
-        loop {
-            let mut c = 2 * root + 1;
-            if c >= end {
-                break;
-            }
-            if c + 1 < end && key(g(out, c + 1)) > key(g(out, c)) {
-                c += 1;
-            }
-            if key(g(out, root)) >= key(g(out, c)) {
-                break;
-            }
-            core::ptr::swap(out.add(root), out.add(c));
-            root = c;
-        }
-    };
-    if n > 1 {
-        let mut i = n / 2;
-        while i > 0 {
-            i -= 1;
-            sift(i, n);
-        }
-        let mut end = n;
-        while end > 1 {
-            end -= 1;
-            core::ptr::swap(out, out.add(end));
-            sift(0, end);
-        }
-    }
+    // (In the requests' order: the worker kernel's parallel takes settle
+    // slots by the lowest id whatever the order, wai.rs k_wai_apply; was a
+    // heapsort by id, one serial job a post.)
+    let _ = id;
     s(oc, 0, n as i32);
 }
 

@@ -211,6 +211,8 @@ function researchAdvanceTick() {
 const QUEUE_BAR_TRACK = '#6a6a6a';
 function updateSpawnerProductionProgress(spawner) {
     if (!spawner) return;
+    // (The production pass does this for every spawner each step.)
+    if (_spProdOn()) return;
     if (!(spawnQueueCount(spawner) > 0)) {
         spawner.spawnTimer = 0;
         spawner._spawnReadyOrder = undefined;
@@ -232,24 +234,49 @@ function updateSpawnerProductionProgress(spawner) {
 
 // (A spawner's rally path from its exit: spawnQueuedUnitFromSpawner. Weak: no property on the structure.)
 const _spawnerRallyTpl = new WeakMap();
-function spawnQueuedUnitFromSpawner(spawner) {
+// A step's spawns are one batch (unit.js simSpawnBatchAdd/Write/Finish): the
+// scheduler (processGlobalSpawnerQueue) begins each in order (_spawnBegin:
+// its checks, its exit, its unit's slot and id), the batch's columns are
+// written at once, then each ends in the same order (_spawnEnd: the unit
+// finished (occupancy, spatial index), the queue moved on, the rally).
+// Exits by batch index (tile x, y).
+// (Room for a batch's spawns: unit.js SPB_CAP, which loads after this file.)
+const _spawnBatch = { ex: new Int32Array(2 * 16384), n: 0 };
+// A spawner's next unit begun: false when it may not spawn. Its owner's
+// population counts it at once (given back when it finds no room at its
+// exit): a step's spawns are decided before any is placed.
+function _spawnBegin(spawner) {
     if (!spawner || !(spawnQueueCount(spawner) > 0)) return false;
     if (spawner.energy <= 0 || spawner.underConstruction) return false;
     if (!isQueueEnabled(spawner)) return false;
-    let owner = spawner.owner;
+    const owner = spawner.owner;
     if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
-
-    const front = spawnQueueFront(spawner), spawnInfo = { unitType: front.unitType, level: front.level };
-    let spawnPos = findNearestWalkable(spawner.gx, spawner.gy);
-    let u = simSpawnUnit(spawnInfo.unitType, owner, spawnPos.x * TILE + 16, spawnPos.y * TILE + 16, spawnInfo.level, configureWorkerUnitFromType);
-    if (u.dead) return false;
-    spawnQueueShift(spawner);
+    const front = spawnQueueFront(spawner), unitType = front.unitType, level = front.level;
+    const p = findNearestWalkable(spawner.gx, spawner.gy), B = _spawnBatch, k = B.n++;
+    B.ex[2 * k] = p.x; B.ex[2 * k + 1] = p.y;
+    simSpawnBatchAdd(unitType, owner, p.x * TILE + 16, p.y * TILE + 16, level, configureWorkerUnitFromType);
+    players[owner].popCount++;
+    return true;
+}
+// One spawner's spawn alone (a batch of one): whether it spawned.
+function spawnQueuedUnitFromSpawner(spawner) {
+    if (_spawnBatch.n !== 0) throw new Error('spawnQueuedUnitFromSpawner during a spawn batch');
+    if (!_spawnBegin(spawner)) return false;
+    simSpawnBatchWrite();
+    const ok = _spawnEnd(0, spawner);
+    _spawnBatch.n = 0; simSpawnBatchClear();
+    return ok;
+}
+// The batch's spawn k (spawner's) ended: false when its unit found no room.
+function _spawnEnd(k, spawner) {
+    const u = simSpawnBatchFinish(k), owner = spawner.owner, spawnPos = { x: _spawnBatch.ex[2 * k], y: _spawnBatch.ex[2 * k + 1] };
+    if (u.dead) { players[owner].popCount--; return false; }
+    // (In the production pass: the queues move on together after the batch, spr.rs k_spawn_shift.)
+    if (_spp.on) _spShiftNote(spawner); else spawnQueueShift(spawner);
     // The queue moved on: its next item may need healers' energy.
     if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
     if (typeof workSiteDirty === 'function') workSiteDirty(spawner.gx, spawner.gy);
-    u.energy = u.maxEnergy;
     unitAdded(u);
-    players[owner].popCount++;
 
     // For worker units, rally is a direct move order that must be followed before auto-search resumes.
     if (u.workerType && typeof applyWorkerRallyFromSpawner === 'function') {
@@ -315,6 +342,7 @@ let _spawnReady = null;
 function spawnerReadyReset() { _spawnReady = null; }
 // After s._spawnReadyOrder was assigned.
 function spawnerReadyNoted(s) {
+    if (_spProdOn()) return;
     const R = _spawnReady;
     if (!R || !s || !Number.isFinite(s._spawnReadyOrder)) return;
     const o = Number.isFinite(s.owner) ? s.owner : -1;
@@ -353,46 +381,205 @@ function _spawnReadyValid(s) {
     const front = spawnQueueFront(s);
     return front.energyPaid >= front.energyRequired;
 }
+// An owner's first entry that may spawn now: its order (its list's head
+// moved past the stale ones), Infinity when none or the owner is at its
+// population cap.
+function _spawnHeadOrder(o, L) {
+    if (L.head >= L.e.length) return Infinity;
+    if (!(o >= 0 && players[o] && players[o].popCount < getPlayerPopCap(o))) return Infinity;
+    while (L.head < L.e.length) {
+        const s = L.e[L.head], order = L.e[L.head + 1];
+        if (s._spawnReadyOrder === order && _spawnReadyValid(s)) return order;
+        L.head += 2;
+    }
+    L.e = []; L.head = 0;
+    return Infinity;
+}
+// (Per owner taking part this tick: its list and its head's order. A spawn
+// changes only its own owner's head (that spawner, that owner's population):
+// the others' are found once a tick, not again for every spawn.)
+const _spawnPickL = [], _spawnPickO = [], _spawnPicked = [];
+// (The batch emptied.)
+function _spawnBatchDone() { _spawnBatch.n = 0; simSpawnBatchClear(); }
+let _spawnPickOrd = new Float64Array(64);
+// ---- production as table passes (TABLES_CONVERSION_PLAN.md S2; wasm/src/spr.rs) ----
+// Each step every barrack's and spawner's row is brought up to date on the
+// helpers (k_spawn_prod: its spawn timer from its front's payment, not ready
+// while unpaid, newly paid ones listed), the newly paid ones get ready orders
+// and the ready ones are taken by order within their owners' population
+// room (k_spawn_select), the queues of those that spawned move on together
+// (k_spawn_shift). Cooldowns and next costs by spawner type, owner and base
+// level in spr.tab (_spTabFill, for the keys the pass reports). Replaces the
+// per-payment and staggered updates and the per-owner ready lists.
+let SPAWN_PROD_WASM = true;
+const SPAWN_PROD_ROWS = 2048, SPAWN_PROD_TYPES = 256;
+const _spp = { on: false, cls: null, jobs: null, tab: null, out: null, cnt: null, sel: null, tmp: null, shift: null, ns: 0, np: -1, classes: null, ix: null, AP: new Float64Array(64), BP: new Float64Array(4) };
+function _spProdOn() {
+    return SPAWN_PROD_WASM && typeof _simWasmX !== 'undefined' && _simWasmX !== null && typeof _simWasmX.k_spawn_prod === 'function'
+        && typeof SIM_KERNEL_SPAWN_PROD === 'number' && _ST.n > 0 && simHeapHas(_ST.brain) && simHeapHas(_ST.tim) && simHeapHas(_ST.ctab) && simHeapHas(_ST.rrow);
+}
+function _spArr(name, Type, n) { let a = _spp[name]; if (!a || a.length < n || !simHeapHas(a)) a = _spp[name] = simSharedArray(Type, Math.max(64, n)); return a; }
+// The pass's arrays for the match (main.js simMatchReserve): spawner rows
+// at most the structure rows (B.structs), a batch's spawns at most SPB_CAP.
+function spawnerProductionReserve(B) {
+    const rows = Math.max(64, B.structs | 0), classes = 16, jobs = Math.ceil(rows / SPAWN_PROD_ROWS) + classes;
+    _spArr('cls', Int32Array, classes * 16); _spArr('jobs', Int32Array, jobs * 3);
+    _spArr('tab', Float64Array, (Math.max(1, B.players) + 1) * SPAWN_PROD_TYPES * 64 * 3); _spp.np = -1;
+    _spArr('out', Int32Array, jobs * SPAWN_PROD_ROWS * 5); _spArr('cnt', Int32Array, jobs * 16);
+    _spArr('sel', Int32Array, rows + 4); _spArr('tmp', Uint32Array, 5 * rows + 65536); _spArr('shift', Int32Array, SPB_CAP + 1);
+}
+const _SP_COLS = ['_stT', '_ow', '_en', '_uc', 'queueEnabled', '_qN', '_qLv', '_qReq', '_qPaid', '_spt', '_spawnReadyOrder'];
+function _spClasses() {
+    if (!_spp.classes) {
+        _spp.classes = [Barrack, CollectorSpawner, AstarSpawner, typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null,
+            typeof HealerSpawner !== 'undefined' ? HealerSpawner : null, typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null].filter(Boolean);
+        _spp.ix = new Map(_spp.classes.map((C, k) => [C, k]));
+    }
+    return _spp.classes;
+}
+// A spawner that spawned: its queue moves on after the batch.
+function _spShiftNote(s) {
+    const k = _spp.ix.get(s.constructor), L = _spp.shift;
+    if (k === undefined || !(s._sr >= 0) || !L || _spp.ns >= L.length) { spawnQueueShift(s); return; }
+    L[_spp.ns++] = (k << 24) | s._sr;
+}
+// The table entry of a key: the cooldown (barrack.js _spawnerCooldownTicksCompute) and the next unit's cost (_spawnQueueFrontNew) of its spawner type, owner and base level.
+function _spTabFill(tab, key, ver) {
+    const types = SPAWN_PROD_TYPES, lv = key % 64, ty = Math.floor(key / 64) % types, o = Math.floor(key / (64 * types)) - 1, raw = _stationaryTypes[ty];
+    let cd = NaN, cost = NaN;
+    if (raw) {
+        const isB = raw.startsWith('barrack_'), s = { type: isB ? 'barrack' : raw, unitType: isB ? raw.slice(8) : undefined, owner: o };
+        cd = _spawnerCooldownTicksCompute(s, lv);
+        cost = getUnitStatForOwner(o, spawnQueueUnitType(s), lv, 'energy');
+    }
+    tab[key * 3] = cd; tab[key * 3 + 1] = cost; tab[key * 3 + 2] = ver;
+}
+// The step's production; returns spr.sel ([0] count, then the tiles of the spawners to spawn, in order).
+function spawnerProductionPass() {
+    const S = _spp, CL = _spClasses();
+    if (globalSpawnerReadyOrderCounter > 1073741824) _spRebase(CL);
+    if (typeof structRallyClasses === 'function') structRallyClasses();
+    const cls = _spArr('cls', Int32Array, CL.length * 16);
+    const jobs = [];
+    CL.forEach((C, k) => {
+        const T = _sTables.get(C), b = k * 16;
+        cls.fill(0, b, b + 16);
+        if (!T || !(T.n > 0)) return;
+        const cols = _SP_COLS.map(f => T['c_' + f]);
+        if (cols.some(a => !a || !simHeapHas(a))) return;
+        cls[b] = T.n; cls[b + 1] = _stAllIx.get(C) || 0;
+        cols.forEach((a, j) => { cls[b + 2 + j] = _simWEnc(_simHeapPtrOf(a)); });
+        for (let r = 0; r < T.n; r += SPAWN_PROD_ROWS) jobs.push(k, r, Math.min(T.n, r + SPAWN_PROD_ROWS));
+    });
+    const J = jobs.length / 3, sel = _spArr('sel', Int32Array, 8);
+    if (J === 0) { sel[0] = 0; return sel; }
+    const JB = _spArr('jobs', Int32Array, jobs.length); JB.set(jobs);
+    const np1 = players.length + 1, tab = _spArr('tab', Float64Array, np1 * SPAWN_PROD_TYPES * 64 * 3);
+    if (S.np !== np1) { tab.fill(NaN); S.np = np1; }
+    const out = _spArr('out', Int32Array, J * SPAWN_PROD_ROWS * 5), cnt = _spArr('cnt', Int32Array, J * 16);
+    for (const [nm, a] of [['spr.cls', cls], ['spr.jobs', JB], ['st.brain', _ST.brain], ['st.ctab', _ST.ctab], ['st.rrow', _ST.rrow], ['st.tim', _ST.tim], ['spr.tab', tab], ['spr.out', out], ['spr.cnt', cnt]]) simParallelBind(nm, a);
+    const ver = _precomputedStatsVersion, P = _simParams;
+    // The table's missing or stale keys, then every row.
+    P[0] = J; P[1] = 0; P[2] = ver; P[3] = SPAWN_PROD_TYPES; P[4] = SPAWN_PROD_ROWS;
+    simParallelRun(SIM_KERNEL_SPAWN_PROD, J);
+    for (let j = 0; j < J; j++) { const b = j * SPAWN_PROD_ROWS * 5 + SPAWN_PROD_ROWS * 4; for (let i = 0, m = cnt[j * 16 + 2]; i < m; i++) { const key = out[b + i]; if (tab[key * 3 + 2] !== ver) _spTabFill(tab, key, ver); } }
+    P[0] = J; P[1] = 1; P[2] = ver; P[3] = SPAWN_PROD_TYPES; P[4] = SPAWN_PROD_ROWS;
+    simParallelRun(SIM_KERNEL_SPAWN_PROD, J);
+    let cap = 0;
+    for (let j = 0; j < J; j++) cap += cnt[j * 16] + cnt[j * 16 + 1];
+    const sl = _spArr('sel', Int32Array, cap + 4), tmp = _spArr('tmp', Uint32Array, 5 * Math.max(1, cap) + 65536), AP = S.AP;
+    AP.fill(0); AP[0] = J; AP[1] = SPAWN_PROD_ROWS; AP[2] = globalSpawnerReadyOrderCounter; AP[62] = Math.max(1, cap); AP[63] = Math.min(56, players.length);
+    for (let o = 0; o < players.length && o < 56; o++) AP[3 + o] = players[o] ? Math.max(0, getPlayerPopCap(o) - players[o].popCount) : 0;
+    simRustDirect('k_spawn_select', [cls, out, cnt, sl, tmp], AP);
+    const n = sl[0];
+    globalSpawnerReadyOrderCounter = sl[n + 1] + sl[n + 2] * 2147483648;
+    return sl;
+}
+// The ready orders (Int32 tickets) made small again: less the least held, the counter too (every peer alike: a whole step's state).
+function _spRebase(CL) {
+    let m = globalSpawnerReadyOrderCounter;
+    for (const C of CL) { const T = _sTables.get(C), a = T && T.c__spawnReadyOrder; if (a) for (let r = 0; r < T.n; r++) if (a[r] !== -2147483648 && a[r] < m) m = a[r]; }
+    for (const C of CL) { const T = _sTables.get(C), a = T && T.c__spawnReadyOrder; if (a) for (let r = 0; r < T.n; r++) if (a[r] !== -2147483648) a[r] -= m; }
+    globalSpawnerReadyOrderCounter -= m;
+}
+function _spShiftRun() {
+    const S = _spp;
+    if (S.ns > 0) { const BP = S.BP; BP[0] = S.ns; BP[1] = SPAWN_PROD_TYPES; simRustDirect('k_spawn_shift', [S.cls, S.shift, _ST.brain, S.tab], BP); }
+    S.ns = 0;
+}
 function processGlobalSpawnerQueue() {
+    if (_spProdOn()) { _processSpawnsByTables(); return; }
+    _spp.on = false;
+    _processGlobalSpawnerQueueJs();
+}
+// The production pass's spawns: its list in order, one batch.
+function _processSpawnsByTables() {
+    const S = _spp;
+    S.on = true; S.ns = 0;
+    const sel = spawnerProductionPass(), n = sel[0], blocked = [], picked = _spawnPicked;
+    // (In batches of at most SPB_CAP spawns, each written and ended before
+    // the next begins: the batch's buffers are the match's, made once.)
+    for (let i = 1; i <= n;) {
+        for (; i <= n && !(typeof simSpawnBatchFull === 'function' && simSpawnBatchFull()); i++) {
+            const t = sel[i], s = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
+            if (!s) continue;
+            if (!_spawnBegin(s)) { blocked.push(s); continue; }
+            s._spawnReadyOrder = undefined;
+            picked.push(s);
+        }
+        simSpawnBatchWrite();
+        // (Room for every spawner's shift first: _spShiftNote fills it.)
+        _spArr('shift', Int32Array, SPB_CAP + 1);
+        for (let k = 0; k < picked.length; k++) { const s = picked[k]; if (!_spawnEnd(k, s)) blocked.push(s); }
+        _spShiftRun();
+        picked.length = 0; _spawnBatchDone();
+    }
+    // (A full exit: its turn again behind those ready now, on a later step.)
+    for (const s of blocked) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+}
+function _processGlobalSpawnerQueueJs() {
     // The ready spawners in ready order across owners (each owner's list is
     // sorted; owners at their population cap are passed over whole), every
     // ready one (no cap a tick); a spawner ready again after spawning goes to
     // the end (a new order: the next tick's), as ever.
     const R = _spawnReady || _spawnReadyBuild();
-    let spawned = 0;
-    const blocked = [];
+    const Ls = _spawnPickL, Os = _spawnPickO;
+    let m = 0;
+    for (const [o, L] of R.byOwner) {
+        if (m >= _spawnPickOrd.length) { const g = new Float64Array(m * 2); g.set(_spawnPickOrd); _spawnPickOrd = g; }
+        Ls[m] = L; Os[m] = o; _spawnPickOrd[m] = _spawnHeadOrder(o, L); m++;
+    }
+    const ord = _spawnPickOrd;
+    const blocked = [], picked = _spawnPicked;
     // (Those ready now: one spawn each this tick, its next front the next tick.)
     const again = [];
-    while (blocked.length < 64) {
-        let best = null, bestOrder = Infinity;
-        for (const [o, L] of R.byOwner) {
-            if (L.head >= L.e.length) continue;
-            if (!(o >= 0 && players[o] && players[o].popCount < getPlayerPopCap(o))) continue;
-            // (Its first entry still valid.)
-            while (L.head < L.e.length) {
-                const s = L.e[L.head], order = L.e[L.head + 1];
-                if (s._spawnReadyOrder === order && _spawnReadyValid(s)) break;
-                L.head += 2;
-            }
-            if (L.head >= L.e.length) { L.e = []; L.head = 0; continue; }
-            const order = L.e[L.head + 1];
-            if (order < bestOrder) { bestOrder = order; best = L; }
-        }
-        if (!best) break;
-        const s = best.e[best.head];
-        if (!spawnQueuedUnitFromSpawner(s)) {
-            // A full occupancy footprint at one exit must not stop production
-            // at every other spawner. Retry it once on a later tick, in order.
-            best.head += 2;
-            blocked.push(s);
-            continue;
-        }
+    while (blocked.length < 64 && !(typeof simSpawnBatchFull === 'function' && simSpawnBatchFull())) {
+        let bi = -1, bestOrder = Infinity;
+        for (let i = 0; i < m; i++) if (ord[i] < bestOrder) { bestOrder = ord[i]; bi = i; }
+        if (bi < 0) break;
+        const best = Ls[bi], s = best.e[best.head];
         best.head += 2;
-        if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
-        spawned++;
+        if (!_spawnBegin(s)) blocked.push(s);
+        else {
+            // (Taken this tick: its other entries are stale.)
+            s._spawnReadyOrder = undefined;
+            picked.push(s);
+            if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
+        }
+        ord[bi] = _spawnHeadOrder(Os[bi], best);
+    }
+    for (let i = 0; i < m; i++) Ls[i] = null;
+    // The batch's units written, then each spawn ended in order. (A full
+    // occupancy footprint at one exit must not stop production at every
+    // other spawner: retried once on a later tick, in order.)
+    simSpawnBatchWrite();
+    for (let k = 0; k < picked.length; k++) {
+        const s = picked[k];
+        if (!_spawnEnd(k, s)) { blocked.push(s); continue; }
         // Its next front, if paid already: ready again (a new order).
         if (_spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) again.push(s);
     }
+    picked.length = 0; _spawnBatchDone();
     for (const s of again) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
     for (const s of blocked) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
 }

@@ -74,6 +74,8 @@ const OUT_SOUND_HEAL: i32 = 11;
 const OUT_BUILT: i32 = 12;
 // (builder_work at a structure, an ambient sound.)
 const OUT_SOUND_BUILD: i32 = 13;
+/// A mine emptied by a take (tile, resource): worker.js _waiMineGone.
+const OUT_MINE_GONE: i32 = 14;
 // (A candidate's start, _isBuilderWorkTarget's side effect: b 0 stacking
 // (refreshThingProgressState), 1 an upgrade (beginUpgradeProgress).)
 // Worker record types (unit.wbType).
@@ -166,6 +168,10 @@ struct W {
     heal_type: i32, heal_base_dps: f64, heal_cd: i32, blocked_ticks: i32, pass_on: bool, tt_queue: u32, tt_unit: u32,
     ntypes: i32, nkeys: i32, snp: i32, sl1: usize, sr1: usize, build_type: i32, build_base_dps: f64, build_cd: i32, recheck: i32, stuck: i32,
     mode: i32, tk: usize, hm: i32, ws_ticks: i32, bld_li: i32,
+    // The parallel pass's payments (per owner and lane, scaled: a sum the
+    // apply appends as one delta), the mines' region sums and their tiles'
+    // flags (data_state.js _ST.mineSum, mineAt: a take's term moves there).
+    psum: *mut f64, minesum: *mut i32, mineat: *mut i32,
 }
 
 impl W {
@@ -206,6 +212,7 @@ impl W {
             ntypes: k.i(62), nkeys: k.i(63), snp: k.i(64), sl1: k.i(65).max(1) as usize, sr1: k.i(66).max(1) as usize, build_type: k.i(67), build_base_dps: k.f(68), build_cd: k.i(69),
             recheck: k.i(70), stuck: k.i(71),
             mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
+            psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
         }
     }
 }
@@ -216,7 +223,7 @@ impl W {
 pub unsafe extern "C" fn k_worker_ai(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let w = W::new(&k);
-    let mut c = Ctx { w: &w, no: 0, vsum: 0, full: 0, take: -1 };
+    let mut c = Ctx { w: &w, no: 0, vsum: 0, full: 0, take: -1, px: core::ptr::null_mut() };
     if w.mode == 1 {
         // The tier's takes (worker.js _wsCommit): every found request, in its order.
         for j in 0..w.n {
@@ -249,11 +256,395 @@ struct Ctx<'a> {
     full: i32,
     // (The take being made: its request's index, -1 none.)
     take: i32,
+    // The parallel pass's chunk state (null: the serial pass, every write direct).
+    px: *mut Par,
+}
+
+// ---- The parallel pass (k_wai_decide, then k_wai_apply) ----
+// Events are decided on the helpers, a chunk of the list a job, against the
+// shared state as at the pass's start: an event's writes to shared tables
+// (structures, queues, research, another unit) go to its overlay (it reads
+// them back itself; no other event sees them), its additions (payments,
+// counters, work versions, research points) and reservation changes to its
+// chunk's lists, as do its out events, freed path windows and mine takes.
+// The apply (one job, the lists in chunk order = event order) writes them:
+// the out events and freed windows in order, the writes in order (the last
+// wins), the additions in order (the same sums whatever the chunking), the
+// mines' takes, the payments, then the reservations: per slot the holder
+// kept or the lowest id of those taking it (today's rule); the others go
+// idle (a take's request back for the next round: worker.js waiRun runs the
+// rounds, so ten sites and ten builders are matched in one step).
+const OV_MAX: usize = 64;
+const RV_MAX: usize = 16;
+pub const WP_HDR: usize = 16;
+const WP_OUT: usize = 8;
+const WP_FP: usize = 4;
+const WP_RV: usize = 4;
+const WP_MT: usize = 2;
+const WP_LG: usize = 12;
+const WP_AD: usize = 6;
+/// A chunk's words in wai.ai (Int32) and wai.a64 (64-bit): worker.js _waiArena sizes them alike.
+pub fn wp_i32(per: usize) -> usize { WP_HDR + per * (WP_OUT * 4 + WP_FP + WP_RV * 5 + WP_MT * 2) }
+pub fn wp_u64(per: usize) -> usize { per * (WP_LG * 3 + WP_AD * 3) }
+// (Header words: out, freed, reservation, mine, write, add counts, error, vsum, full.)
+const H_OUT: usize = 0; const H_FP: usize = 1; const H_RV: usize = 2; const H_MT: usize = 3; const H_LG: usize = 4; const H_AD: usize = 5;
+const H_ERR: usize = 6; const H_VSUM: usize = 7; const H_FULL: usize = 8;
+
+pub trait Bits: Copy { const SZ: u8; fn to_b(self) -> u64; fn from_b(b: u64) -> Self; }
+impl Bits for f64 { const SZ: u8 = 8; fn to_b(self) -> u64 { self.to_bits() } fn from_b(b: u64) -> f64 { f64::from_bits(b) } }
+impl Bits for f32 { const SZ: u8 = 4; fn to_b(self) -> u64 { self.to_bits() as u64 } fn from_b(b: u64) -> f32 { f32::from_bits(b as u32) } }
+impl Bits for i32 { const SZ: u8 = 4; fn to_b(self) -> u64 { self as u32 as u64 } fn from_b(b: u64) -> i32 { b as u32 as i32 } }
+impl Bits for u32 { const SZ: u8 = 4; fn to_b(self) -> u64 { self as u64 } fn from_b(b: u64) -> u32 { b as u32 } }
+impl Bits for i16 { const SZ: u8 = 2; fn to_b(self) -> u64 { self as u16 as u64 } fn from_b(b: u64) -> i16 { b as u16 as i16 } }
+impl Bits for u16 { const SZ: u8 = 2; fn to_b(self) -> u64 { self as u64 } fn from_b(b: u64) -> u16 { b as u16 } }
+impl Bits for i8 { const SZ: u8 = 1; fn to_b(self) -> u64 { self as u8 as u64 } fn from_b(b: u64) -> i8 { b as u8 as i8 } }
+impl Bits for u8 { const SZ: u8 = 1; fn to_b(self) -> u64 { self as u64 } fn from_b(b: u64) -> u8 { b as u8 } }
+
+struct Par {
+    hdr: *mut i32, out: *mut i32, fp: *mut i32, rv: *mut i32, mt: *mut i32, lg: *mut u64, ad: *mut u64, per: usize,
+    n_out: usize, n_fp: usize, n_rv: usize, n_mt: usize, n_lg: usize, n_ad: usize, err: i32,
+    ov_a: [u64; OV_MAX], ov_b: [u64; OV_MAX], ov_s: [u8; OV_MAX], ov_n: usize,
+    rv_s: [i32; RV_MAX], rv_f: [i32; RV_MAX], rv_v: [i32; RV_MAX], rv_n: usize,
+    q: i32, take: i32,
+}
+impl Par {
+    unsafe fn at(ai: *mut i32, a64: *mut u64, chunk: usize, per: usize) -> (*mut i32, *mut i32, *mut i32, *mut i32, *mut i32, *mut u64, *mut u64) {
+        let bi = ai.add(chunk * wp_i32(per));
+        let out = bi.add(WP_HDR);
+        let fp = out.add(per * WP_OUT * 4);
+        let rv = fp.add(per * WP_FP);
+        let mt = rv.add(per * WP_RV * 5);
+        let lg = a64.add(chunk * wp_u64(per));
+        let ad = lg.add(per * WP_LG * 3);
+        (bi, out, fp, rv, mt, lg, ad)
+    }
+    unsafe fn new(ai: *mut i32, a64: *mut u64, chunk: usize, per: usize) -> Par {
+        let (hdr, out, fp, rv, mt, lg, ad) = Par::at(ai, a64, chunk, per);
+        Par { hdr, out, fp, rv, mt, lg, ad, per, n_out: 0, n_fp: 0, n_rv: 0, n_mt: 0, n_lg: 0, n_ad: 0, err: 0,
+            ov_a: [0; OV_MAX], ov_b: [0; OV_MAX], ov_s: [0; OV_MAX], ov_n: 0, rv_s: [0; RV_MAX], rv_f: [0; RV_MAX], rv_v: [0; RV_MAX], rv_n: 0, q: 0, take: 0 }
+    }
+    unsafe fn push_ad(&mut self, a: u64, b: u64, kind: u64) {
+        if self.n_ad >= self.per * WP_AD { self.err |= 2; return; }
+        let p = self.ad.add(self.n_ad * 3);
+        s(p, 0, a); s(p, 1, b); s(p, 2, kind);
+        self.n_ad += 1;
+    }
+    /// The event's overlay into the chunk's lists (its end).
+    unsafe fn flush(&mut self, resv: *const i32) {
+        for k in 0..self.ov_n {
+            if self.n_lg >= self.per * WP_LG { self.err |= 4; break; }
+            let p = self.lg.add(self.n_lg * 3);
+            s(p, 0, (*self.ov_a.get_unchecked(k))); s(p, 1, (*self.ov_b.get_unchecked(k))); s(p, 2, (*self.ov_s.get_unchecked(k)) as u64);
+            self.n_lg += 1;
+        }
+        for k in 0..self.rv_n {
+            if (*self.rv_v.get_unchecked(k)) == (*self.rv_f.get_unchecked(k)) { continue; }
+            if self.n_rv >= self.per * WP_RV { self.err |= 8; break; }
+            let p = self.rv.add(self.n_rv * 5);
+            s(p, 0, (*self.rv_s.get_unchecked(k))); s(p, 1, (*self.rv_f.get_unchecked(k))); s(p, 2, (*self.rv_v.get_unchecked(k))); s(p, 3, self.q); s(p, 4, self.take);
+            self.n_rv += 1;
+        }
+        let _ = resv;
+        self.ov_n = 0; self.rv_n = 0;
+    }
+    unsafe fn header(&self, vsum: i32, full: i32) {
+        let h = self.hdr;
+        s(h, H_OUT, self.n_out as i32); s(h, H_FP, self.n_fp as i32); s(h, H_RV, self.n_rv as i32); s(h, H_MT, self.n_mt as i32);
+        s(h, H_LG, self.n_lg as i32); s(h, H_AD, self.n_ad as i32); s(h, H_ERR, self.err); s(h, H_VSUM, vsum); s(h, H_FULL, full);
+    }
+}
+
+/// SIM_KERNEL_WAI_DECIDE (worker.js waiRun): a chunk of the list (P[1]
+/// events a job) decided. Arrays: [0] wai.args (the arguments block
+/// k_worker_ai takes: its arrays and params), [1] wai.ai, [2] wai.a64 (the
+/// chunks' lists). P: [0] chunks, [1] per job.
+#[no_mangle]
+pub unsafe extern "C" fn k_wai_decide(a: u32, chunk: i32) {
+    let k0 = K::new(waddr(a) as *const i32);
+    let (blk, ai, a64) = (k0.p::<i32>(0), k0.p::<i32>(1), k0.p::<u64>(2));
+    let per = k0.i(1).max(1) as usize;
+    let k = K::new(blk as *const i32);
+    let w = W::new(&k);
+    let (j0, j1) = super::k::job_range(chunk, per as i32, w.n as i32);
+    let mut p = Par::new(ai, a64, chunk.max(0) as usize, per);
+    let mut c = Ctx { w: &w, no: 0, vsum: 0, full: 0, take: -1, px: &mut p as *mut Par };
+    for j in j0..j1 {
+        let e = g(w.list, j);
+        if e < 0 { continue; }
+        if w.mode == 1 {
+            let q = g(w.trs, e as usize);
+            (*c.px).q = q; (*c.px).take = e;
+            c.take_one(e as usize);
+        } else {
+            (*c.px).q = e >> 3; (*c.px).take = -1;
+            c.event((e >> 3) as usize, e & 7);
+        }
+        (*c.px).flush(w.resv);
+    }
+    let (vsum, full) = (c.vsum, c.full);
+    p.header(vsum, full);
+}
+
+/// The apply (worker.js waiRun, after k_wai_decide): the chunks' lists in
+/// order. Arrays: [0] wai.args, [1] wai.ai, [2] wai.a64, [3] the next
+/// round's requests ([0] count, then request indices). P: [0] chunks, [1]
+/// per job, [2] the out events so far (this round's follow).
+#[no_mangle]
+pub unsafe extern "C" fn k_wai_apply(a: u32, _chunk: i32) {
+    let k0 = K::new(waddr(a) as *const i32);
+    let (blk, ai, a64, redo) = (k0.p::<i32>(0), k0.p::<i32>(1), k0.p::<u64>(2), k0.p::<i32>(3));
+    let (chunks, per) = (k0.i(0).max(0) as usize, k0.i(1).max(1) as usize);
+    let k = K::new(blk as *const i32);
+    let w = W::new(&k);
+    let mut c = Ctx { w: &w, no: k0.i(2).max(0) as usize, vsum: 0, full: 0, take: -1, px: core::ptr::null_mut() };
+    let mut err = 0;
+    // Out events, freed path windows, writes, additions, mine takes: each in event order.
+    for ch in 0..chunks {
+        let (h, out, fp, _, mt, lg, ad) = Par::at(ai, a64, ch, per);
+        for i in 0..g(h, H_OUT).max(0) as usize { let p = out.add(i * 4); c.emit(g(p, 0), g(p, 1), g(p, 2), g(p, 3)); }
+        for i in 0..g(h, H_FP).max(0) as usize { let m = g(w.mfree, 0); s(w.mfree, (m + 1) as usize, g(fp, i)); s(w.mfree, 0, m + 1); }
+        for i in 0..g(h, H_LG).max(0) as usize {
+            let p = lg.add(i * 3);
+            let (ad0, b, sz) = (g(p, 0) as usize, g(p, 1), g(p, 2));
+            match sz { 8 => *(ad0 as *mut u64) = b, 4 => *(ad0 as *mut u32) = b as u32, 2 => *(ad0 as *mut u16) = b as u16, 1 => *(ad0 as *mut u8) = b as u8, _ => {} }
+        }
+        for i in 0..g(h, H_AD).max(0) as usize {
+            let p = ad.add(i * 3);
+            let (ad0, b, kind) = (g(p, 0) as usize, g(p, 1), g(p, 2));
+            if kind == 0 { let q = ad0 as *mut f64; *q = *q + f64::from_bits(b); } else { let q = ad0 as *mut i32; *q = (*q).wrapping_add(b as u32 as i32); }
+        }
+        for i in 0..g(h, H_MT).max(0) as usize { c.mine_apply(g(mt, i * 2), g(mt, i * 2 + 1) as f64); }
+        c.vsum = c.vsum.wrapping_add(g(h, H_VSUM));
+        if g(h, H_FULL) != 0 { c.full = 1; }
+        err |= g(h, H_ERR);
+    }
+    // Payments: one delta per owner and lane.
+    if !w.psum.is_null() {
+        for o in 0..w.np.max(0) as usize {
+            for lane in 0..2 {
+                let d = g(w.psum, o * 2 + lane);
+                if d != 0.0 { c.pay_scaled(o as i32, lane, d); s(w.psum, o * 2 + lane, 0.0); }
+            }
+        }
+    }
+    // Reservations: first the releases, then the takes (the lowest id wins).
+    let mut nr = 0usize;
+    if !redo.is_null() { s(redo, 0, 0); }
+    for pass in 0..2 {
+        for ch in 0..chunks {
+            let (h, _, _, rv, _, _, _) = Par::at(ai, a64, ch, per);
+            for i in 0..g(h, H_RV).max(0) as usize {
+                let p = rv.add(i * 5);
+                let (slot, fz, val) = (g(p, 0), g(p, 1), g(p, 2));
+                if slot < 0 || slot >= w.nres { continue; }
+                let su = slot as usize;
+                let cur = g(w.resv,su);
+                if pass == 0 {
+                    if val == 0 && cur == fz { s(w.resv,su, 0); }
+                } else if val > 0 {
+                    // (The holder as at the start, untouched: the taker passed the decide's checks; between takers the lowest id.)
+                    if cur <= 0 || cur == fz || val < cur { s(w.resv,su, val); }
+                }
+            }
+        }
+    }
+    // The losers (a take's request back for another round), the holders let go; the counts and change list.
+    for ch in 0..chunks {
+        let (h, _, _, rv, _, _, _) = Par::at(ai, a64, ch, per);
+        for i in 0..g(h, H_RV).max(0) as usize {
+            let p = rv.add(i * 5);
+            let (slot, fz, val, q, tk) = (g(p, 0), g(p, 1), g(p, 2), g(p, 3), g(p, 4));
+            if slot < 0 || slot >= w.nres { continue; }
+            // (A slot already counted is marked -holder - 1.)
+            let raw = g(w.resv,slot as usize);
+            let fin = if raw < 0 { -raw - 1 } else { raw };
+            if val > 0 && fin != val && q >= 0 {
+                c.lose(q as usize, slot);
+                if tk >= 0 && !redo.is_null() {
+                    let qu = q as usize;
+                    s(w.wskind, qu, g(w.trk, tk as usize) as u8);
+                    let r = c.rec(qu);
+                    if r > 0 { s(w.wst, r, g(w.trwt, tk as usize)); }
+                    nr += 1; s(redo, nr, tk); s(redo, 0, nr as i32);
+                }
+            }
+            // (The holder at the start no longer holds it: let go of it.)
+            if fz > 0 && raw >= 0 && fin != fz {
+                let hs = c.slot_of(fz);
+                if hs >= 0 && g(w.wkr, hs as usize) == slot { c.evict(hs as usize, slot); }
+            }
+            if raw >= 0 {
+                c.resv_count(slot, fz, fin);
+                s(w.resv,slot as usize, -fin - 1);
+            }
+        }
+    }
+    for ch in 0..chunks {
+        let (h, _, _, rv, _, _, _) = Par::at(ai, a64, ch, per);
+        for i in 0..g(h, H_RV).max(0) as usize {
+            let slot = g(rv.add(i * 5), 0);
+            if slot < 0 || slot >= w.nres { continue; }
+            let v = g(w.resv,slot as usize);
+            if v < 0 { s(w.resv,slot as usize, -v - 1); }
+        }
+    }
+    if err != 0 { s(w.cnt, 1, 1); s(w.cnt, 7, err); }
+    s(w.cnt, 0, c.no as i32);
+    s(w.cnt, 2, g(w.cnt, 2).wrapping_add(c.vsum));
+    if c.full != 0 { s(w.cnt, 3, 1); }
 }
 
 impl<'a> Ctx<'a> {
+    // ---- The parallel pass's reads and writes of shared state ----
+    /// A shared value: this event's own write when it made one, else the pass's start.
+    #[inline(always)]
+    unsafe fn rd<T: Bits>(&self, p: *mut T, i: usize) -> T {
+        if let Some(x) = self.px.as_ref() {
+            if x.ov_n > 0 {
+                let a = p.add(i) as usize as u64;
+                let mut k = x.ov_n;
+                while k > 0 { k -= 1; if (*x.ov_a.get_unchecked(k)) == a { return T::from_b((*x.ov_b.get_unchecked(k))); } }
+            }
+        }
+        g(p, i)
+    }
+    /// A shared write (the parallel pass: into the event's overlay, written by the apply).
+    #[inline(always)]
+    unsafe fn wr<T: Bits>(&self, p: *mut T, i: usize, v: T) {
+        match self.px.as_mut() {
+            None => s(p, i, v),
+            Some(x) => {
+                let a = p.add(i) as usize as u64;
+                for k in 0..x.ov_n { if (*x.ov_a.get_unchecked(k)) == a { *x.ov_b.get_unchecked_mut(k) = v.to_b(); return; } }
+                if x.ov_n >= OV_MAX { x.err |= 1; return; }
+                let n = x.ov_n;
+                *x.ov_a.get_unchecked_mut(n) = a; *x.ov_b.get_unchecked_mut(n) = v.to_b(); *x.ov_s.get_unchecked_mut(n) = T::SZ; x.ov_n = n + 1;
+            }
+        }
+    }
+    /// A shared sum (the parallel pass: added by the apply, in event order).
+    #[inline(always)]
+    unsafe fn add_f64(&self, p: *mut f64, i: usize, d: f64) {
+        match self.px.as_mut() { None => s(p, i, g(p, i) + d), Some(x) => x.push_ad(p.add(i) as usize as u64, d.to_bits(), 0) }
+    }
+    #[inline(always)]
+    unsafe fn add_i32(&self, p: *mut i32, i: usize, d: i32) {
+        match self.px.as_mut() { None => s(p, i, g(p, i).wrapping_add(d)), Some(x) => x.push_ad(p.add(i) as usize as u64, d as u32 as u64, 1) }
+    }
+    /// A reservation slot's holder (the parallel pass: this event's own change, else the pass's start).
+    #[inline(always)]
+    unsafe fn resv_get(&self, slot: usize) -> i32 {
+        if let Some(x) = self.px.as_ref() {
+            let mut k = x.rv_n;
+            while k > 0 { k -= 1; if (*x.rv_s.get_unchecked(k)) as usize == slot { return (*x.rv_v.get_unchecked(k)); } }
+        }
+        g(self.w.resv, slot)
+    }
+    /// A mine at tile t gave ex (its resource rz): its value less ex, its
+    /// region's sum term (data_state.js _stMineVal); emptied: gone (worker.js
+    /// _waiMineGone). A value not whole: the JavaScript's (_waiMineTaken).
+    unsafe fn mine_take(&mut self, t: i32, rz: i32, ex: f64) {
+        if let Some(x) = self.px.as_mut() {
+            if x.n_mt >= x.per * WP_MT { x.err |= 16; return; }
+            s(x.mt, x.n_mt * 2, t); s(x.mt, x.n_mt * 2 + 1, ex as i32);
+            x.n_mt += 1;
+            let _ = rz;
+            return;
+        }
+        self.mine_apply(t, ex);
+    }
+    unsafe fn mine_term(&self, t: usize) -> i32 {
+        let w = self.w;
+        let (gx, gy) = (irem(t as i32, w.gw), idiv(t as i32, w.gw));
+        let v = self.rd(w.stval, t);
+        let h = (gx.wrapping_mul(4099).wrapping_add(gy) ^ (g(w.stcode, t) as i32)) ^ 0x6d1;
+        let h = (h ^ (v as i32)).wrapping_mul(16777619);
+        (h ^ ((h as u32) >> 15) as i32).wrapping_mul(2246822519u32 as i32)
+    }
+    unsafe fn mine_apply(&mut self, t: i32, ex: f64) {
+        let w = self.w;
+        if t < 0 || t >= w.gw * w.gh { return; }
+        let tu = t as usize;
+        let rz = if g(w.stcode, tu) == w.mine_code[1] { 1 } else { 0 };
+        let v0 = self.rd(w.stval, tu);
+        let v1 = v0 - ex;
+        let whole = |v: f64| v == v && v >= -2147483648.0 && v <= 2147483647.0 && (v as i32) as f64 == v;
+        if w.minesum.is_null() || w.mineat.is_null() || !whole(v0) || !whole(v1) { self.emit(OUT_MINE, t, rz, ex as i32); return; }
+        if g(w.mineat, tu) != 0 {
+            let r = (idiv(idiv(t, w.gw), w.srt) * w.rcols + idiv(irem(t, w.gw), w.srt)) as usize;
+            let before = self.mine_term(tu);
+            self.wr(w.stval, tu, v1);
+            s(w.minesum, r, g(w.minesum, r).wrapping_sub(before).wrapping_add(self.mine_term(tu)));
+        } else { self.wr(w.stval, tu, v1); }
+        if v1 <= 0.0 { self.emit(OUT_MINE_GONE, t, rz, 0); }
+    }
+    /// Reservation slot's change (old to new holder): the region's count and sum, the change list.
+    unsafe fn resv_count(&mut self, slot: i32, old: i32, id: i32) {
+        let w = self.w;
+        if old == id { return; }
+        if !w.wswl.is_null() {
+            let m = g(w.wswl, 0);
+            if m + 1 < w.nwsw { s(w.wswl, (m + 1) as usize, slot); s(w.wswl, 0, m + 1); } else { self.full = 1; }
+        }
+        if !w.rcount.is_null() {
+            let t = idiv(slot, w.nt);
+            let rg = idiv(idiv(t, w.gw), w.srt) * w.rcols + idiv(irem(t, w.gw), w.srt);
+            if (old == 0) != (id == 0) { s(w.rcount, rg as usize, g(w.rcount, rg as usize) + if id != 0 { 1 } else { -1 }); }
+            s(w.rsum, rg as usize, g(w.rsum, rg as usize).wrapping_add(res_term(slot, id)).wrapping_sub(res_term(slot, old)));
+        }
+    }
+    /// A worker that took a slot another took (the apply): no target, idle.
+    unsafe fn lose(&mut self, q: usize, slot: i32) {
+        let w = self.w;
+        if g(w.dead, q) != 0 { return; }
+        if g(w.wkr, q) == slot {
+            let v = g(w.wks, q);
+            s(w.wks, q, (v & !((31 << 5) | (7 << 10))) | (1 << 5) | (WT_NULL << 10));
+            s(w.wkt, q, 0);
+            s(w.wkr, q, -1);
+        }
+        self.set_state(q, WS_IDLE);
+        self.set_cmd(q, CMD_IDLE);
+        self.clear_auto_route(q);
+    }
+    /// The holder of a slot it no longer holds (taken by a lower id, or let go by another): as _setWorkerTarget's eviction.
+    unsafe fn evict(&mut self, r: usize, slot: i32) {
+        let w = self.w;
+        if g(w.dead, r) != 0 { return; }
+        let v = g(w.wks, r);
+        s(w.wks, r, (v & !((31 << 5) | (7 << 10))) | (1 << 5) | (WT_NULL << 10));
+        s(w.wkt, r, 0);
+        let rst = self.st(r);
+        if rst == WS_MOVING_TO || rst == WS_MOVING_TO_ASTAR || rst == WS_IDLE {
+            self.set_state(r, WS_IDLE);
+            self.set_cmd(r, CMD_IDLE);
+            self.clear_auto_route(r);
+            if g(w.mvpp, r) != 0 { self.emit(OUT_CLEAR_ROUTE, r as i32, 0, 0); }
+        }
+        s(w.wkr, r, -1);
+        let _ = slot;
+    }
+    /// A payment's sum (already scaled) as one batch row.
+    unsafe fn pay_scaled(&mut self, o: i32, lane: usize, d: f64) {
+        let w = self.w;
+        let pb = o as usize * 4;
+        let (addr, cap, n) = (g(w.payt, pb) as u32, g(w.payt, pb + 1), g(w.payt, pb + 2));
+        if addr == 0 || n >= cap { s(w.cnt, 1, 1); return; }
+        let dl = waddr(addr) as *mut f64;
+        s(dl, n as usize * 2, if lane == 0 { d } else { 0.0 });
+        s(dl, n as usize * 2 + 1, if lane == 1 { d } else { 0.0 });
+        s(w.payt, pb + 2, n + 1);
+        s(w.payl, o as usize * 2 + lane, g(w.payl, o as usize * 2 + lane) + d);
+    }
     unsafe fn emit(&mut self, code: i32, a: i32, b: i32, v: i32) {
         let w = self.w;
+        if let Some(x) = self.px.as_mut() {
+            if x.n_out >= x.per * WP_OUT { x.err |= 32; return; }
+            let p = x.out.add(x.n_out * 4);
+            s(p, 0, code); s(p, 1, a); s(p, 2, b); s(p, 3, v);
+            x.n_out += 1;
+            return;
+        }
         if self.no >= w.outcap { s(w.cnt, 1, 1); return; }
         let at = self.no * 4;
         s(w.out, at, code); s(w.out, at + 1, a); s(w.out, at + 2, b); s(w.out, at + 3, v);
@@ -299,7 +690,14 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         s(w.nvpk, q, key);
         let h = g(w.mpath, q);
-        if h >= 0 { let m = g(w.mfree, 0); s(w.mfree, (m + 1) as usize, h); s(w.mfree, 0, m + 1); s(w.mpath, q, -1); }
+        if h >= 0 {
+            match self.px.as_mut() {
+                Some(x) if x.n_fp < x.per * WP_FP => { s(x.fp, x.n_fp, h); x.n_fp += 1; }
+                Some(x) => { x.err |= 64; }
+                None => { let m = g(w.mfree, 0); s(w.mfree, (m + 1) as usize, h); s(w.mfree, 0, m + 1); }
+            }
+            s(w.mpath, q, -1);
+        }
         s(w.on, q, 0);
         s(w.mcd, q, -1);
     }
@@ -378,6 +776,13 @@ impl<'a> Ctx<'a> {
     unsafe fn resv_set(&mut self, slot: i32, id: i32) {
         let w = self.w;
         if slot < 0 || slot >= w.nres { return; }
+        if let Some(x) = self.px.as_mut() {
+            for k in 0..x.rv_n { if (*x.rv_s.get_unchecked(k)) == slot { *x.rv_v.get_unchecked_mut(k) = id; return; } }
+            if x.rv_n >= RV_MAX { x.err |= 128; return; }
+            let n = x.rv_n;
+            *x.rv_s.get_unchecked_mut(n) = slot; *x.rv_f.get_unchecked_mut(n) = self.resv_get(slot as usize); *x.rv_v.get_unchecked_mut(n) = id; x.rv_n = n + 1;
+            return;
+        }
         let old = g(w.resv, slot as usize);
         s(w.resv, slot as usize, id);
         if old == id { return; }
@@ -400,7 +805,7 @@ impl<'a> Ctx<'a> {
         let mut i = self.vbase(o, ty);
         if gx >= 0 && gy >= 0 { i += 1 + (w.vrh - 1).min(idiv(gy, w.wrt)) * w.vrw + (w.vrw - 1).min(idiv(gx, w.wrt)); }
         if i < 0 || i >= w.nver { return; }
-        s(w.ver, i as usize, g(w.ver, i as usize).wrapping_add(1));
+        self.add_i32(w.ver, i as usize, 1);
         self.vsum = self.vsum.wrapping_add(work_mix(i));
     }
     /// _workerWorkHash (not a healer's, from one origin tile).
@@ -480,7 +885,7 @@ impl<'a> Ctx<'a> {
         if (kd == WT_NULL || (kd >= WT_ITEM && !has)) && ttc == 1 { return; }
         if has {
             let slot = g(w.wkr, q);
-            if slot >= 0 && slot < w.nres && g(w.resv, slot as usize) == g(w.id, q) { self.resv_set(slot, 0); }
+            if slot >= 0 && slot < w.nres && self.resv_get(slot as usize) == g(w.id, q) { self.resv_set(slot, 0); }
         }
         let v = g(w.wks, q);
         s(w.wks, q, (v & !((31 << 5) | (7 << 10))) | (1 << 5) | (WT_NULL << 10));
@@ -591,6 +996,7 @@ impl<'a> Ctx<'a> {
         if !(o >= 0 && o < w.np) { return; }
         let d = js_round(amount * w.scale);
         if d == 0.0 || d != d { return; }
+        if !self.px.is_null() && !w.psum.is_null() { self.add_f64(w.psum, o as usize * 2 + lane, d); return; }
         let pb = o as usize * 4;
         let (addr, cap, n) = (g(w.payt, pb) as u32, g(w.payt, pb + 1), g(w.payt, pb + 2));
         if addr == 0 || n >= cap { s(w.cnt, 1, 1); return; }
@@ -602,7 +1008,7 @@ impl<'a> Ctx<'a> {
     }
     unsafe fn energy_log(&self, o: i32, src: usize, d: f64) {
         let w = self.w;
-        if o >= 0 && o < w.np { let i = o as usize * ES_W + src; s(w.es, i, g(w.es, i) + d); }
+        if o >= 0 && o < w.np { self.add_f64(w.es, o as usize * ES_W + src, d); }
     }
     // ---- The movement kernel's arming (unit.js _unitArmAgain) ----
     unsafe fn arm_again(&mut self, q: usize) {
@@ -794,7 +1200,7 @@ impl<'a> Ctx<'a> {
         let li = g(w.ttab, self.wb(q) as usize) & 255;
         let slot = t * w.nt + li;
         if t < 0 || slot >= w.nres { return false; }
-        let id = g(w.resv, slot as usize);
+        let id = self.resv_get(slot as usize);
         if id <= 0 { return false; }
         if !self.alive(id) { self.resv_set(slot, 0); return false; }
         id == g(w.id, q)
@@ -808,7 +1214,7 @@ impl<'a> Ctx<'a> {
         let t = g(w.wbsp, r);
         if t < 0 { return -1; }
         let tu = t as usize;
-        if (g(w.stbrain, tu) & 65535) != stype || g(w.stown, tu) != g(w.own, q) as i32 || !(g(w.stval, tu) > 0.0) || g(w.stuc, tu) != 0 { return -1; }
+        if (self.rd(w.stbrain, tu) & 65535) != stype || g(w.stown, tu) != g(w.own, q) as i32 || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 { return -1; }
         t
     }
     /// getUnitBaseLevel (its unitLevel column).
@@ -838,7 +1244,7 @@ impl<'a> Ctx<'a> {
         let li = g(w.ttab, self.wb(q) as usize) & 255;
         let slot = t * w.nt + li;
         if t < 0 || slot >= w.nres { return false; }
-        let id = g(w.resv, slot as usize);
+        let id = self.resv_get(slot as usize);
         if id <= 0 { return true; }
         let sl = self.slot_of(id);
         if sl < 0 || g(w.dead, sl as usize) != 0 { self.resv_set(slot, 0); return true; }
@@ -855,13 +1261,14 @@ impl<'a> Ctx<'a> {
         let li = g(w.ttab, self.wb(q) as usize) & 255;
         let next = if t >= 0 && li >= 0 { t * w.nt + li } else { -1 };
         if next >= 0 && next < w.nres {
-            let rid = g(w.resv, next as usize);
+            let rid = self.resv_get(next as usize);
             let sl = self.slot_of(rid);
             if rid > 0 && sl >= 0 && sl as usize != q && g(w.dead, sl as usize) == 0 && g(w.own, sl as usize) == g(w.own, q) && self.wb(sl as usize) == self.wb(q) {
                 let r = sl as usize;
                 if rid <= my { return false; }
+                if self.px.is_null() {
                 let rs = g(w.wkr, r);
-                if rs >= 0 && rs < w.nres && g(w.resv, rs as usize) == rid { self.resv_set(rs, 0); }
+                if rs >= 0 && rs < w.nres && self.resv_get(rs as usize) == rid { self.resv_set(rs, 0); }
                 if self.target_tile(r) == t {
                     let v = g(w.wks, r);
                     s(w.wks, r, (v & !((31 << 5) | (7 << 10))) | (1 << 5) | (WT_NULL << 10));
@@ -875,11 +1282,12 @@ impl<'a> Ctx<'a> {
                     }
                 }
                 s(w.wkr, r, -1);
+                }
             }
         }
         if self.target_tile(q) >= 0 {
             let ps = g(w.wkr, q);
-            if ps >= 0 && ps < w.nres && g(w.resv, ps as usize) == my { self.resv_set(ps, 0); }
+            if ps >= 0 && ps < w.nres && self.resv_get(ps as usize) == my { self.resv_set(ps, 0); }
         }
         let v = g(w.wks, q);
         s(w.wks, q, (v & !((31 << 5) | (7 << 10))) | (tt << 5) | (kd << 10));
@@ -897,9 +1305,9 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         if t < 0 { return false; }
         let (tu, rz) = (t as usize, self.res(q));
-        if tt == w.tt_mine[rz] { return g(w.stcode, tu) == w.mine_code[rz] && g(w.stval, tu) > 0.0; }
+        if tt == w.tt_mine[rz] { return g(w.stcode, tu) == w.mine_code[rz] && self.rd(w.stval, tu) > 0.0; }
         if tt == w.tt_farm[rz] {
-            return g(w.ctab, tu) != 0 && (g(w.stbrain, tu) & 65535) == w.farm_type[rz] && g(w.stown, tu) == g(w.own, q) as i32 && g(w.stuc, tu) == 0 && g(w.stval, tu) > 0.0;
+            return g(w.ctab, tu) != 0 && (self.rd(w.stbrain, tu) & 65535) == w.farm_type[rz] && g(w.stown, tu) == g(w.own, q) as i32 && self.rd(w.stuc, tu) == 0 && self.rd(w.stval, tu) > 0.0;
         }
         false
     }
@@ -910,7 +1318,7 @@ impl<'a> Ctx<'a> {
         let t = word >> 3;
         if t < 0 || t >= w.gw * w.gh { return -1; }
         let tu = t as usize;
-        if g(w.ctab, tu) == 0 || (g(w.stbrain, tu) & 65535) != w.drop_type[self.res(q)] || g(w.stown, tu) != g(w.own, q) as i32 || !(g(w.stval, tu) > 0.0) || g(w.stuc, tu) != 0 { return -1; }
+        if g(w.ctab, tu) == 0 || (self.rd(w.stbrain, tu) & 65535) != w.drop_type[self.res(q)] || g(w.stown, tu) != g(w.own, q) as i32 || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 { return -1; }
         t
     }
     /// _rememberResourceCollectorGatherSite.
@@ -1014,19 +1422,19 @@ impl<'a> Ctx<'a> {
                 let tu = t as usize;
                 if tt == w.tt_farm[rz] {
                     // (The farm's level: its level, else its stacks'; its multiplier by owner and level.)
-                    let lv = { let p = self.ccol::<i8>(tu, CT_LEVEL); if p.is_null() { -128 } else { g(p, g(w.rrow, tu).max(0) as usize) as i32 } };
+                    let lv = { let p = self.ccol::<i8>(tu, CT_LEVEL); if p.is_null() { -128 } else { self.rd(p, g(w.rrow, tu).max(0) as usize) as i32 } };
                     let bl = if lv != -128 { lv.min(w.maxl).max(1) } else {
                         let p = self.ccol::<i32>(tu, CT_STACKS);
-                        let sk = if p.is_null() { i32::MIN } else { g(p, g(w.rrow, tu).max(0) as usize) };
+                        let sk = if p.is_null() { i32::MIN } else { self.rd(p, g(w.rrow, tu).max(0) as usize) };
                         if sk != i32::MIN { stack_level(sk, w.maxl) } else { 1 }
                     };
                     let mult = if o >= 0 && o < w.np { g(w.tfarm, ((o as usize * 2 + rz) * w.l1 as usize) + bl as usize) } else { bl as f64 };
                     s(w.wmcarry, r, floor(js_max(1.0, gather * mult)));
                 } else {
-                    let left = g(w.stval, tu);
+                    let left = self.rd(w.stval, tu);
                     let ex = floor(js_min(gather, js_max(0.0, left)));
                     s(w.wmcarry, r, ex);
-                    self.emit(OUT_MINE, t, rz as i32, ex as i32);
+                    self.mine_take(t, rz as i32, ex);
                 }
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, if rz == 1 { SND_ASTAR_WORK } else { SND_COLLECTOR_WORK }); }
                 self.set_cooldown(q, w.coll_cd[rz]);
@@ -1055,7 +1463,7 @@ impl<'a> Ctx<'a> {
                 if g(w.cool, q) > 0 { return; }
                 self.pay(o, rz, carry);
                 if rz == 0 { self.energy_log(o, ES_COLLECT, carry); } else { self.emit(OUT_ASTAR_LOG, q as i32, 0, carry as i32); }
-                s(w.cnt, 5 + rz, g(w.cnt, 5 + rz) + 1);
+                self.add_i32(w.cnt, 5 + rz, 1);
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, if rz == 1 { SND_ASTAR_COLLECTED } else { SND_GOLD_COLLECTED }); }
                 self.set_cooldown(q, w.coll_cd[rz]);
             }
@@ -1077,14 +1485,14 @@ impl<'a> Ctx<'a> {
         if c >= 1 && c <= 9 && r >= 0 { Some((c - 1, r as usize)) } else { None }
     }
     #[inline(always)]
-    unsafe fn ac<T: Copy>(&self, c: usize, r: usize, j: usize) -> Option<T> {
+    unsafe fn ac<T: Bits>(&self, c: usize, r: usize, j: usize) -> Option<T> {
         let p = waddr(g(self.w.ajtab, c * AJ_W + j) as u32) as *mut T;
-        if p.is_null() { None } else { Some(g(p, r)) }
+        if p.is_null() { None } else { Some(self.rd(p, r)) }
     }
     #[inline(always)]
-    unsafe fn ac_set<T>(&self, c: usize, r: usize, j: usize, v: T) {
+    unsafe fn ac_set<T: Bits>(&self, c: usize, r: usize, j: usize, v: T) {
         let p = waddr(g(self.w.ajtab, c * AJ_W + j) as u32) as *mut T;
-        if !p.is_null() { s(p, r, v); }
+        if !p.is_null() { self.wr(p, r, v); }
     }
     /// A flag column (Uint8: 0 unset, 1 false, 2 true).
     #[inline(always)]
@@ -1113,7 +1521,7 @@ impl<'a> Ctx<'a> {
     /// The stat tables' word for tile t's structure: its key's offset and its researched max level.
     unsafe fn b_key(&self, t: i32, o: i32) -> Option<(usize, i32)> {
         let w = self.w;
-        let ty = (g(w.stbrain, t as usize) & 65535) - 1;
+        let ty = (self.rd(w.stbrain, t as usize) & 65535) - 1;
         let oi = if o < 0 || o + 1 >= w.snp { 0 } else { o + 1 };
         let kb = if ty >= 0 && ty < w.ntypes { g(w.tykey, ty as usize) } else { -1 };
         if !(kb >= 0 && kb < w.nkeys) { return None; }
@@ -1142,25 +1550,25 @@ impl<'a> Ctx<'a> {
         if m == m { floor(m).max(1.0) } else { 1.0 }
     }
     #[inline(always)]
-    unsafe fn b_energy(&self, t: i32) -> f64 { g(self.w.stval, t as usize) }
-    unsafe fn b_energy_set(&self, t: i32, c: usize, r: usize, v: f64) { s(self.w.stval, t as usize, v); self.ac_set::<f64>(c, r, 16, v); }
+    unsafe fn b_energy(&self, t: i32) -> f64 { self.rd(self.w.stval, t as usize) }
+    unsafe fn b_energy_set(&self, t: i32, c: usize, r: usize, v: f64) { self.wr(self.w.stval, t as usize, v); self.ac_set::<f64>(c, r, 16, v); }
     /// Whether its watchdog samples (unit.js simMoveTryPark, mvFlags 4).
     #[inline(always)]
     unsafe fn watching(&self, q: usize) -> bool { let r = self.rec(q); let (x, y) = (g(self.w.wkwx, r), g(self.w.wkwy, r)); x == x && y == y }
     /// _isBuilderRepairTarget.
     unsafe fn b_repair(&self, t: i32, c: usize, r: usize, o: i32) -> bool {
         let (e, m) = (self.b_energy(t), self.b_maxe(t, c, r, o));
-        e.is_finite() && m.is_finite() && m > 0.0 && e > 0.0 && e < m && g(self.w.stuc, t as usize) == 0 && self.af(c, r, 11) != 2 && self.af(c, r, 8) != 2
+        e.is_finite() && m.is_finite() && m > 0.0 && e > 0.0 && e < m && self.rd(self.w.stuc, t as usize) == 0 && self.af(c, r, 11) != 2 && self.af(c, r, 8) != 2
     }
     /// _isBuilderStackCandidate.
     unsafe fn b_stack_cand(&self, t: i32, c: usize, r: usize, o: i32) -> bool {
-        if g(self.w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 || self.af(c, r, 8) == 2 || self.af(c, r, 14) == 1 { return false; }
+        if self.rd(self.w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 || self.af(c, r, 8) == 2 || self.af(c, r, 14) == 1 { return false; }
         let (stacked, manual) = self.b_stacks(c, r);
         manual - stacked > 0 && stack_level(stacked + 1, self.w.maxl) <= self.b_rmax(t, o)
     }
     /// _isBuilderUpgradeCandidate.
     unsafe fn b_upgrade_cand(&self, t: i32, c: usize, r: usize, o: i32) -> bool {
-        if g(self.w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 || self.af(c, r, 8) == 2 || self.af(c, r, 10) == 1 { return false; }
+        if self.rd(self.w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 || self.af(c, r, 8) == 2 || self.af(c, r, 10) == 1 { return false; }
         let (base, eff) = self.b_levels(c, r);
         eff > base && eff.min(self.b_rmax(t, o)) > base
     }
@@ -1170,7 +1578,7 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         let (c, r) = match self.brow(t) { Some(v) => v, None => return false };
         if g(w.stown, t as usize) != o || self.wf(c, r, 0) == 2 { return false; }
-        let uc = g(w.stuc, t as usize) != 0;
+        let uc = self.rd(w.stuc, t as usize) != 0;
         if !uc && self.af(c, r, 11) != 2 && self.af(c, r, 8) != 2 && !self.b_repair(t, c, r, o) {
             if self.b_stack_cand(t, c, r, o) {
                 self.ac_set::<u8>(c, r, 8, 2);
@@ -1279,7 +1687,7 @@ impl<'a> Ctx<'a> {
         let o = g(w.own, q) as i32;
         let (c, r) = match self.brow(t) { Some(v) => v, None => return (false, false) };
         let round3 = |v: f64| js_round(v * 1000.0) / 1000.0;
-        if g(w.stuc, t as usize) != 0 {
+        if self.rd(w.stuc, t as usize) != 0 {
             // _getBuilderProgressRequiredEnergy for a site.
             let up = self.b_mxe(t, o, 1);
             let vis = self.b_maxe(t, c, r, o);
@@ -1290,7 +1698,7 @@ impl<'a> Ctx<'a> {
             self.b_energy_set(t, c, r, e);
             if e >= req {
                 // (Built: markConstructionComplete and the rest after the pass; no longer a site now.)
-                s(w.stuc, t as usize, 0);
+                self.wr(w.stuc, t as usize, 0);
                 self.p_complete(t, c, r, o);
                 self.emit(OUT_BUILT, t, 0, 0);
                 self.b_remember(q, t);
@@ -1366,12 +1774,12 @@ impl<'a> Ctx<'a> {
     /// levels (stationaryBrainChanged): made again at their next read.
     unsafe fn p_tok(&self, t: i32, c: usize, r: usize) {
         let p = waddr(g(self.w.ajtab, c * AJ_W + 19) as u32) as *mut i32;
-        if !p.is_null() { s(p, r * 3, 0); s(p, r * 3 + 1, 0); s(p, r * 3 + 2, 0); }
-        let b = g(self.w.stbrain, t as usize);
+        if !p.is_null() { self.wr(p, r * 3, 0i32); self.wr(p, r * 3 + 1, 0i32); self.wr(p, r * 3 + 2, 0i32); }
+        let b = self.rd(self.w.stbrain, t as usize);
         if b & 65535 == 0 { return; }
         let (base, eff) = self.b_levels(c, r);
         let keep = (b & 65535) | (b & (1 << 24)) | (b & (1 << 25)) | if eff > 63 { 1 << 25 } else { 0 };
-        s(self.w.stbrain, t as usize, keep | (base.min(255) << 16) | (eff.min(63) << 26));
+        self.wr(self.w.stbrain, t as usize, keep | (base.min(255) << 16) | (eff.min(63) << 26));
     }
     /// A level column (Int8, -128 unset) at least 1.
     unsafe fn p_lv1(&self, c: usize, r: usize, j: usize) {
@@ -1380,9 +1788,9 @@ impl<'a> Ctx<'a> {
     }
     /// markConstructionComplete's state (its hooks: the JavaScript's).
     unsafe fn p_complete(&mut self, t: i32, c: usize, r: usize, o: i32) {
-        s(self.w.stuc, t as usize, 0);
+        self.wr(self.w.stuc, t as usize, 0);
         let uc = self.ccol::<u8>(t as usize, CT_UC);
-        if !uc.is_null() { s(uc, r, 1); }
+        if !uc.is_null() { self.wr(uc, r, 1u8); }
         self.p_lv1(c, r, 5); self.p_lv1(c, r, 6); self.p_lv1(c, r, 7);
         self.p_refresh(t, c, r, o);
         self.p_tok(t, c, r);
@@ -1411,7 +1819,7 @@ impl<'a> Ctx<'a> {
         let wd = self.ac::<f64>(c, r, 9).unwrap_or(f64::NAN);
         if !(wd.is_finite() && wd >= 0.0) { self.ac_set::<f64>(c, r, 9, 0.0); }
         let pending = manual - stacked > 0;
-        if g(w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 { self.ac_set::<u8>(c, r, 8, 1); return; }
+        if self.rd(w.stuc, t as usize) != 0 || self.af(c, r, 11) == 2 { self.ac_set::<u8>(c, r, 8, 1); return; }
         let (base, eff) = self.b_levels(c, r);
         let rmax = self.b_rmax(t, o);
         if base < eff.min(rmax) && self.af(c, r, 10) != 1 {
@@ -1427,10 +1835,10 @@ impl<'a> Ctx<'a> {
         // (Nothing to build: the builders' reservation of it let go.)
         let slot = t * w.nt + w.bld_li;
         if w.bld_li < 0 || slot < 0 || slot >= w.nres { return; }
-        let id = g(w.resv, slot as usize);
+        let id = self.resv_get(slot as usize);
         if id <= 0 { return; }
         let sl = self.slot_of(id);
-        if sl >= 0 { s(w.wkr, sl as usize, -1); }
+        if sl >= 0 && self.px.is_null() { s(w.wkr, sl as usize, -1); }
         self.resv_set(slot, 0);
     }
     /// beginUpgradeProgress.
@@ -1451,9 +1859,9 @@ impl<'a> Ctx<'a> {
         let old = self.ac::<f64>(c, r, 21).unwrap_or(f64::NAN);
         let cnt = waddr(g(self.w.ajtab, c * AJ_W + 24) as u32) as *mut i32;
         if v != v || v == normal {
-            if old == old { self.ac_set::<f64>(c, r, 21, f64::NAN); if !cnt.is_null() { s(cnt, 0, g(cnt, 0) - 1); } }
+            if old == old { self.ac_set::<f64>(c, r, 21, f64::NAN); if !cnt.is_null() { self.add_i32(cnt, 0, -1); } }
         } else {
-            if old != old && !cnt.is_null() { s(cnt, 0, g(cnt, 0) + 1); }
+            if old != old && !cnt.is_null() { self.add_i32(cnt, 0, 1); }
             self.ac_set::<f64>(c, r, 21, v);
         }
     }
@@ -1601,15 +2009,15 @@ impl<'a> Ctx<'a> {
         if sl < 0 { return false; }
         let su = sl as usize;
         if g(w.dead, su) != 0 || g(w.own, su) as i32 != o { return false; }
-        let (e, m) = (g(w.energy, su), g(w.maxe, su));
+        let (e, m) = (self.rd(w.energy, su), g(w.maxe, su));
         e == e && m == m && e.is_finite() && m.is_finite() && e > 0.0 && e < m
     }
     /// A structure's class column j at tile t (null: its class has none).
     #[inline(always)]
-    unsafe fn qcol<T: Copy>(&self, t: i32, j: usize) -> Option<T> {
+    unsafe fn qcol<T: Bits>(&self, t: i32, j: usize) -> Option<T> {
         if t < 0 { return None; }
         let p = self.ccol::<T>(t as usize, j);
-        if p.is_null() { None } else { Some(g(p, g(self.w.rrow, t as usize).max(0) as usize)) }
+        if p.is_null() { None } else { Some(self.rd(p, g(self.w.rrow, t as usize).max(0) as usize)) }
     }
     /// Its queue's count, required and paid (no queue: none).
     unsafe fn queue_of(&self, t: i32) -> Option<(i32, f64, f64)> {
@@ -1624,12 +2032,12 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         if t < 0 { return false; }
         let tu = t as usize;
-        if g(w.stown, tu) != o || !(g(w.stval, tu) > 0.0) || g(w.stuc, tu) != 0 || !self.queue_on(t) { return false; }
+        if g(w.stown, tu) != o || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 || !self.queue_on(t) { return false; }
         match self.queue_of(t) { Some((n, req, paid)) => n > 0 && paid < req, None => false }
     }
     /// _isHealerQueueAnchorTarget.
     unsafe fn heal_anchor_ok(&self, t: i32, o: i32) -> bool {
-        t >= 0 && g(self.w.stown, t as usize) == o && g(self.w.stuc, t as usize) == 0 && self.queue_of(t).is_some()
+        t >= 0 && g(self.w.stown, t as usize) == o && self.rd(self.w.stuc, t as usize) == 0 && self.queue_of(t).is_some()
     }
     #[inline(always)]
     unsafe fn heal_dps_round(&self, q: usize) -> f64 { let d = self.hot(q, 12); js_round(if d != 0.0 && d == d { d } else { 1.0 }) }
@@ -1822,7 +2230,7 @@ impl<'a> Ctx<'a> {
                 if let Some((n, req, paid)) = self.queue_of(tq) {
                     if n > 0 && paid < req {
                         let p = self.ccol::<f64>(tq as usize, CT_QPAID);
-                        s(p, g(w.rrow, tq as usize).max(0) as usize, js_min(req, paid + work));
+                        self.wr(p, g(w.rrow, tq as usize).max(0) as usize, js_min(req, paid + work));
                         did = true;
                     }
                 }
@@ -1849,7 +2257,7 @@ impl<'a> Ctx<'a> {
             let dps = if d != 0.0 && d == d { d } else { w.heal_base_dps };
             let su = tu as usize;
             let m = g(w.maxe, su) as f64;
-            s(w.energy, su, js_min(m, g(w.energy, su) as f64 + dps) as f32);
+            self.wr(w.energy, su, js_min(m, self.rd(w.energy, su) as f64 + dps) as f32);
             self.heal_material_set(q, false);
             self.set_cooldown(q, w.heal_cd);
             if g(w.own, su) as i32 == w.local { self.emit(OUT_SOUND_HEAL, -1, tu, 0); }
@@ -1908,7 +2316,7 @@ impl<'a> Ctx<'a> {
             self.salvager_find(q);
         } else if st == WS_MOVING_TO {
             let t = self.target_tile(q);
-            let marked = t >= 0 && { let m = self.ccol::<u8>(t as usize, CT_MARKED); !m.is_null() && g(m, g(w.rrow, t as usize).max(0) as usize) == 2 };
+            let marked = t >= 0 && { let m = self.ccol::<u8>(t as usize, CT_MARKED); !m.is_null() && self.rd(m, g(w.rrow, t as usize).max(0) as usize) == 2 };
             if !marked || !self.owns_reserved(q, t) {
                 self.clear_target(q, true);
                 self.clear_auto_route(q);
@@ -1921,9 +2329,9 @@ impl<'a> Ctx<'a> {
                 // The refund: a tenth of its price per stack, times the salvager's level.
                 let tu = t as usize;
                 // (The descriptor's type: the stationary type id + 1.)
-                let ty = (g(w.stbrain, tu) & 65535) - 1;
+                let ty = (self.rd(w.stbrain, tu) & 65535) - 1;
                 let price = if ty >= 0 && ty < w.nprice { g(w.price, ty as usize) } else { 0.0 };
-                let sk = { let p = self.ccol::<i32>(tu, CT_STACKS); if p.is_null() { i32::MIN } else { g(p, g(w.rrow, tu).max(0) as usize) } };
+                let sk = { let p = self.ccol::<i32>(tu, CT_STACKS); if p.is_null() { i32::MIN } else { self.rd(p, g(w.rrow, tu).max(0) as usize) } };
                 let stacks = if sk == i32::MIN || sk == 0 { 1.0 } else { sk as f64 };
                 let refund = floor(price * stacks * 0.1);
                 s(w.wmcarry, self.rec(q), refund * self.base_level(q) as f64);
@@ -2019,7 +2427,7 @@ impl<'a> Ctx<'a> {
             if t >= w.gw * w.gh || g(w.ctab, t as usize) == 0 || g(w.stown, t as usize) != o { continue; }
             let ok = match kind {
                 PICK_BUILD => self.b_valid(t, o),
-                PICK_SALVAGE => { let m = self.ccol::<u8>(t as usize, CT_MARKED); !m.is_null() && g(m, g(w.rrow, t as usize).max(0) as usize) == 2 }
+                PICK_SALVAGE => { let m = self.ccol::<u8>(t as usize, CT_MARKED); !m.is_null() && self.rd(m, g(w.rrow, t as usize).max(0) as usize) == 2 }
                 PICK_RESEARCH => self.research_valid(t, o),
                 _ => self.heal_queue_ok(t, o),
             };
@@ -2083,7 +2491,7 @@ impl<'a> Ctx<'a> {
         let li = g(w.ttab, self.wb(q) as usize) & 255;
         let slot = self.unit_tile(sl as usize) * w.nt + li;
         if slot < 0 || slot >= w.nres { return false; }
-        let id = g(w.resv, slot as usize);
+        let id = self.resv_get(slot as usize);
         if id <= 0 { return true; }
         let rs = self.slot_of(id);
         if rs < 0 || g(w.dead, rs as usize) != 0 { self.resv_set(slot, 0); return true; }
@@ -2100,13 +2508,14 @@ impl<'a> Ctx<'a> {
         let li = g(w.ttab, self.wb(q) as usize) & 255;
         let next = self.unit_tile(sl) * w.nt + li;
         if next >= 0 && next < w.nres {
-            let rid = g(w.resv, next as usize);
+            let rid = self.resv_get(next as usize);
             let rsl = self.slot_of(rid);
             if rid > 0 && rsl >= 0 && rsl as usize != q && g(w.dead, rsl as usize) == 0 && g(w.own, rsl as usize) == g(w.own, q) && self.wb(rsl as usize) == self.wb(q) {
                 let r = rsl as usize;
                 if rid <= my { return false; }
+                if self.px.is_null() {
                 let rs = g(w.wkr, r);
-                if rs >= 0 && rs < w.nres && g(w.resv, rs as usize) == rid { self.resv_set(rs, 0); }
+                if rs >= 0 && rs < w.nres && self.resv_get(rs as usize) == rid { self.resv_set(rs, 0); }
                 if self.tkind(r) == WT_UNIT && g(w.wkt, r) == tid {
                     let v = g(w.wks, r);
                     s(w.wks, r, (v & !((31 << 5) | (7 << 10))) | (1 << 5) | (WT_NULL << 10));
@@ -2115,11 +2524,12 @@ impl<'a> Ctx<'a> {
                     if rst == WS_MOVING_TO || rst == WS_MOVING_TO_ASTAR || rst == WS_IDLE { self.set_state(r, WS_IDLE); self.set_cmd(r, CMD_IDLE); self.clear_auto_route(r); }
                 }
                 s(w.wkr, r, -1);
+                }
             }
         }
         if self.target_tile(q) >= 0 || self.tkind(q) == WT_UNIT {
             let ps = g(w.wkr, q);
-            if ps >= 0 && ps < w.nres && g(w.resv, ps as usize) == my { self.resv_set(ps, 0); }
+            if ps >= 0 && ps < w.nres && self.resv_get(ps as usize) == my { self.resv_set(ps, 0); }
         }
         let v = g(w.wks, q);
         s(w.wks, q, (v & !((31 << 5) | (7 << 10))) | (w.tt_unit << 5) | (WT_UNIT << 10));
@@ -2196,17 +2606,17 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         if t < 0 || g(w.ctab, t as usize) != w.rcls { return false; }
         let tu = t as usize;
-        if g(w.stown, tu) != o || !(g(w.stval, tu) > 0.0) || g(w.stuc, tu) != 0 { return false; }
+        if g(w.stown, tu) != o || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 { return false; }
         let row = g(w.rrow, tu);
         if row < 0 || g(w.rmark, row as usize) == 2 { return false; }
         if !(o >= 0 && o < w.np) { return false; }
         let b = o as usize * RS_W;
-        if g(w.rs, b) == 0.0 {
+        if self.rd(w.rs, b) == 0.0 {
             if g(w.rauto, row as usize) == 1 { return false; }
-            if g(w.rs, b + 5) == 0.0 { return false; }
+            if self.rd(w.rs, b + 5) == 0.0 { return false; }
             // (The queue's next task, active from now: worker.js
             // tryAdvancePlayerResearchTask after the pass.)
-            s(w.rs, b, 1.0); s(w.rs, b + 1, g(w.rs, b + 6)); s(w.rs, b + 2, g(w.rs, b + 7)); s(w.rs, b + 3, g(w.rs, b + 8)); s(w.rs, b + 5, 0.0);
+            self.wr(w.rs, b, 1.0); self.wr(w.rs, b + 1, self.rd(w.rs, b + 6)); self.wr(w.rs, b + 2, self.rd(w.rs, b + 7)); self.wr(w.rs, b + 3, self.rd(w.rs, b + 8)); self.wr(w.rs, b + 5, 0.0);
             self.emit(OUT_RESEARCH_ADVANCE, o, 0, 0);
         }
         self.research_needs(o)
@@ -2214,15 +2624,15 @@ impl<'a> Ctx<'a> {
     unsafe fn research_needs(&self, o: i32) -> bool {
         let b = o as usize * RS_W;
         let w = self.w;
-        g(w.rs, b) != 0.0 && g(w.rs, b + 2) + g(w.rs, b + 4) < g(w.rs, b + 1)
+        self.rd(w.rs, b) != 0.0 && self.rd(w.rs, b + 2) + self.rd(w.rs, b + 4) < self.rd(w.rs, b + 1)
     }
     /// _researcherDeposit.
     unsafe fn research_deposit(&mut self, q: usize, t: i32, o: i32) {
         let w = self.w;
         if !(o >= 0 && o < w.np) || !self.research_needs(o) { return; }
         let b = o as usize * RS_W;
-        let req = g(w.rs, b + 1).max(0.0);
-        let cost = g(w.rs, b + 3).max(0.0);
+        let req = self.rd(w.rs, b + 1).max(0.0);
+        let cost = self.rd(w.rs, b + 3).max(0.0);
         let row = g(w.rrow, t as usize) as usize;
         // (getThingBaseLevel: its level, else its stacks' level.)
         let lv = g(w.rlevel, row) as i32;
@@ -2240,8 +2650,8 @@ impl<'a> Ctx<'a> {
             self.pay(o, 0, -trip);
             self.energy_log(o, ES_RESEARCH, -trip);
         }
-        s(w.rs, b + 4, g(w.rs, b + 4) + work);
-        s(w.cnt, 4, g(w.cnt, 4) + 1);
+        self.add_f64(w.rs, b + 4, work);
+        self.add_i32(w.cnt, 4, 1);
         self.set_cooldown(q, w.base_cd);
         if g(w.stown, t as usize) == w.local { self.emit(OUT_SOUND_RESEARCH, q as i32, t, 0); }
     }

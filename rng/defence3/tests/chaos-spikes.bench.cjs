@@ -90,8 +90,8 @@ if(exportScene){
 if(process.env.PRE){const r=inst.eval(process.env.PRE);if(r!==undefined)console.log(r);}
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
- const spawn=spawnQueuedUnitFromSpawner,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
- spawnQueuedUnitFromSpawner=function(s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
+ const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
+ _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
  // (Research deposits: the worker kernel counts them, worker.js _wai.researchDeposits.)
  // (A source without the kernel, an A/B baseline: its JavaScript deposit.)
  if(typeof waiRun==='function'){const run=waiRun;waiRun=function(){const was=[_wai.researchDeposits||0,_wai.collectorDeposits||0,_wai.astarDeposits||0];const r=run.apply(this,arguments);__scratch.work.researchDeposits+=(_wai.researchDeposits||0)-was[0];__scratch.work.collectorDeposits+=(_wai.collectorDeposits||0)-was[1];__scratch.work.astarDeposits+=(_wai.astarDeposits||0)-was[2];return r;};}

@@ -10,9 +10,11 @@ const optimized=source.slice(source.indexOf('// ---- Spawn queues ----'),source.
 // once its payment gave it an order (no scan assigns orders); the smallest
 // order among owners below their cap spawns, a failed spawn ends the tick, a
 // paid next front is ready again with a new order after the tick (every
-// ready spawner spawns once a tick: no cap).
+// ready spawner spawns once a tick: no cap). A step's spawns are one batch
+// (barrack.js _spawnBegin/_spawnEnd): a spawn that fails (no room at its
+// exit) still counts against its owner's cap for the rest of that tick.
 const reference=`function processGlobalSpawnerQueue() {
- let guard=0; const blocked=[], again=[];
+ let guard=0; const blocked=[], again=[], pend=[];
  while(blocked.length<64) {
   let chosen=null, order=Infinity;
   for(const s of [...barracks,...collectorSpawners]) {
@@ -20,11 +22,11 @@ const reference=`function processGlobalSpawnerQueue() {
    if(!Number.isFinite(s._spawnReadyOrder)) continue;
    const f=getQueuedSpawnInfo(s.spawnQueue[0]);
    if(f.energyPaid<f.energyRequired) continue;
-   if(!(players[s.owner].popCount<getPlayerPopCap(s.owner))) continue;
+   if(!(players[s.owner].popCount+(pend[s.owner]||0)<getPlayerPopCap(s.owner))) continue;
    if(s._spawnReadyOrder<order) {order=s._spawnReadyOrder;chosen=s;}
   }
   if(!chosen) break;
-  if(!spawnQueuedUnitFromSpawner(chosen)) {blocked.push(chosen);continue;}
+  if(!spawnQueuedUnitFromSpawner(chosen)) {blocked.push(chosen);pend[chosen.owner]=(pend[chosen.owner]||0)+1;continue;}
   guard++;
   const s=chosen;
   if(s.energy>0 && !s.underConstruction && isQueueEnabled(s) && s.spawnQueue.length) {
@@ -47,6 +49,13 @@ function make(code, data) {
  const spawnQueuedUnitFromSpawner=s=>{
    if(s.id===fail) return false;
    events.push(s.id); players[s.owner].popCount++; s.spawnQueue.shift(); s._spawnReadyOrder=undefined; return true;
+ };
+ // (The batch's two halves: the unit's columns between them, nothing here.)
+ const _spawnBatch={n:0}, simSpawnBatchWrite=()=>{}, simSpawnBatchClear=()=>{};
+ const _spawnBegin=s=>{players[s.owner].popCount++;return true;};
+ const _spawnEnd=(k,s)=>{
+   if(s.id===fail){players[s.owner].popCount--;return false;}
+   events.push(s.id); s.spawnQueue.shift(); s._spawnReadyOrder=undefined; return true;
  };
  ${code}
  return {run:processGlobalSpawnerQueue,result:()=>({events,players,buildings,counter:globalSpawnerReadyOrderCounter}),checks:()=>checks};

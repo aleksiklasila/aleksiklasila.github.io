@@ -2179,6 +2179,8 @@ function snapDecodeState(S, options = null) {
             // start into a fresh state is compact already and keeps these
             // columns instead of making a second set, 1.3 GB at 2M units.)
             if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, Math.ceil(rows.length * 1.125)));
+            // (And the ticks' work arrays for the match: main.js simMatchReserve.)
+            if (list === 'u' && !partial && typeof simMatchReserve === 'function') simMatchReserve();
             // (Their slots planned by block from the rows' positions, units of a block in neighbouring slots: sim_unit_state.js.)
             let unitSlots = null;
             if (list === 'u' && !partial && rows.length > 0 && typeof simUnitStatePlanSlots === 'function') {

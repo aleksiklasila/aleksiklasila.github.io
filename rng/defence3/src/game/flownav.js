@@ -1562,6 +1562,18 @@ function navPathReach(u, sx, sy, tx, ty) {
 // (profile, destination, component) until the next build.
 const NAV_SUB_TICKS = 2;
 const _navSub = { map: new Map(), req: [] };
+// The substitutes' request and result arrays for the match (main.js
+// startGame): room for one request a unit (units: the population the budget
+// holds), so none is made during play.
+function navSubReserve(units) {
+    // (The simulation's only: the page runs startGame too, without a heap.)
+    if (typeof simHeapHas !== 'function' || typeof simParallelBind !== 'function') return;
+    units = Math.max(1024, units | 0);
+    if (_navSub.list && _navSub.units === units && simHeapHas(_navSub.list)) return;
+    _navSub.units = units;
+    _navSub.list = simHeapArrayAuto(Int32Array, units * 3); simParallelBind('nav.sreq', _navSub.list);
+    _navSub.out = simHeapArrayAuto(Int32Array, units); simParallelBind('nav.sout', _navSub.out);
+}
 function _navSubReset() { _navSub.map = new Map(); _navSub.req = []; }
 function _navSubKey(profile, to, comp) { return (profile * 4194304 + comp) * 16777216 + to; }
 function navSubstituteRequest(profile, to, comp) {
@@ -1602,9 +1614,13 @@ function _navSubstitutesMake() {
     const req = _navSub.req;
     if (!req.length) return;
     _navSub.req = [];
-    const n = req.length / 3, list = simHeapArrayAuto(Int32Array, req.length), out = simHeapArrayAuto(Int32Array, n);
+    // (The arrays navSubReserve made at the match's start, bound once; one
+    // request a unit at most. New ones bound each flush made the helpers sit
+    // out this job and the next ones.)
+    const n = req.length / 3;
+    if (!_navSub.list || _navSub.list.length < req.length || !simHeapHas(_navSub.list)) navSubReserve(Math.max(n, _navSub.units || 0));
+    const list = _navSub.list, out = _navSub.out;
     list.set(req);
-    simParallelBind('nav.sreq', list); simParallelBind('nav.sout', out);
     const P = _simParams;
     P[0] = n; P[1] = 1;
     simParallelRun(SIM_KERNEL_NAV_SUBST, n);

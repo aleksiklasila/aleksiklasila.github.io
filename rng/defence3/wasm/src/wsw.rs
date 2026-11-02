@@ -74,7 +74,12 @@ unsafe fn resv_bits(t: usize, resv: *const i32, nt: usize, uidt: *const i32, uma
 /// [5] owner rows, [6] levels + 1, [7] research rows, [8] blocks a row, [9]
 /// owners counted (WSW_MAXOWN), [10] reservation slots a tile, [11] id table
 /// entries, [12] mode (0 flags, area and reservations; 1 reservations only),
-/// [13] the research building's stationary type + 1 (0 none).
+/// [13] the research building's stationary type + 1 (0 none), [14] phase:
+/// 0 all at once (one job), 1 on the helpers (k.rs k_block): each tile's
+/// flags, owner, area flag and reservation bits into [22..25] by its place in
+/// the list (mode 1: the reservation bits written at once: a tile's bits come
+/// from the tables, the same for a tile listed twice), 2 those written in the
+/// list's order with the counts (one job); [15] tiles a job (phase 1).
 #[no_mangle]
 pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -92,12 +97,35 @@ pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
     let umask = (k.i(11).max(1) as u32) - 1;
     let mode = k.i(12);
     let rtype = k.i(13);
-    for i in 0..n {
+    let phase = k.i(14);
+    let (tf, to, ta, tr) = (k.p::<u8>(22), k.p::<i8>(23), k.p::<u8>(24), k.p::<u8>(25));
+    let (i0, i1) = if phase == 1 { super::k::job_range(_chunk, k.i(15).max(1), n as i32) } else { (0, n) };
+    for i in i0..i1 {
         let t = g(tl, i);
         if t < 0 { continue; }
         let tu = t as usize;
         if mode == 1 {
-            s(wresv, tu, resv_bits(tu, resv, nt, uidt, umask, uid, udead));
+            if phase != 2 { s(wresv, tu, resv_bits(tu, resv, nt, uidt, umask, uid, udead)); }
+            continue;
+        }
+        if phase == 2 {
+            let (f, o, have) = (g(tf, i), g(to, i) as i32, g(ta, i) != 0);
+            let (f0, o0) = (g(wfl, tu), g(wown, tu) as i32);
+            if f == 0 && f0 == 0 && o == o0 { continue; }
+            if f0 != f || o0 != o {
+                let gx = irem(t, gw);
+                let b = ((idiv(t, gw) >> 3) * bw + (gx >> 3)) as usize * 8;
+                for bit in 0..WSW_NBITS {
+                    let m = 1u8 << bit;
+                    if f0 & m != 0 { s(wcnt, b + bit, g(wcnt, b + bit) - 1); if o0 >= 0 && o0 < nown { s(woc, o0 as usize * 8 + bit, g(woc, o0 as usize * 8 + bit) - 1); } }
+                    if f & m != 0 { s(wcnt, b + bit, g(wcnt, b + bit) + 1); if o >= 0 && o < nown { s(woc, o as usize * 8 + bit, g(woc, o as usize * 8 + bit) + 1); } }
+                }
+                s(wfl, tu, f);
+                s(wown, tu, o as i8);
+            }
+            let ar = g(carea, tu);
+            s(warea, tu, if f != 0 && have { if ar >= 0 { ar } else { -1 } } else { -1 });
+            if f != 0 { s(wresv, tu, g(tr, i)); }
             continue;
         }
         // The owned structure standing there (_ownedStructureAtTile): its row's tile is t, its owner set.
@@ -118,6 +146,11 @@ pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
                     f = flags_of(tab, wtab, c, r, tu, stuc, brain, tykey, rml, smxe, rlv, maxl, ntypes, nkeys, np, l1, r1, rtype, o);
                 }
             }
+        }
+        if phase == 1 {
+            s(tf, i, f); s(to, i, o as i8); s(ta, i, if have { 1 } else { 0 });
+            s(tr, i, if f != 0 { resv_bits(tu, resv, nt, uidt, umask, uid, udead) } else { 0 });
+            continue;
         }
         let (f0, o0) = (g(wfl, tu), g(wown, tu) as i32);
         if f == 0 && f0 == 0 && o == o0 {

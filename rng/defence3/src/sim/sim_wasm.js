@@ -24,6 +24,23 @@
 const SIM_HEAP_SITES = typeof globalThis !== 'undefined' && !!globalThis.SIM_HEAP_SITES_ON;
 const _simHeapSiteOf = new Map(), _simHeapSiteTotals = new Map(), _simHeapPeakSnaps = [];
 let _simHeapPeakSnapAt = 256 << 20;
+// Allocations during play (simHeapPlayMark: from the match's first tick):
+// every array is made at the match's start (the 4 GiB wasm32 budget), so
+// any counted here is a budget bug. sites: by call site when on
+// (simHeapPlayMark(true)), else counts only. grown: memory pages grown.
+const _simHeapPlay = { on: false, sites: null, n: 0, bytes: 0, grown: 0 };
+function simHeapPlayMark(sites = false) { const P = _simHeapPlay; P.on = true; P.n = 0; P.bytes = 0; P.grown = 0; P.sites = sites ? new Map() : null; }
+function simHeapPlayStats(top = 40) {
+    const P = _simHeapPlay, s = P.sites ? [...P.sites].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, top).map(([k, v]) => [v.n, Math.round(v.bytes / 1024), k]) : null;
+    return { on: P.on, n: P.n, kb: Math.round(P.bytes / 1024), grownMB: Math.round(P.grown / 1048576), sites: s };
+}
+function _simHeapPlayNote(bytes) {
+    const P = _simHeapPlay; P.n++; P.bytes += bytes;
+    if (P.sites === null) return;
+    // (Function names only: the same key in a browser and in the tests' vm.)
+    const st = String(new Error().stack).split('\n').slice(3, 9).map(l => l.trim().replace(/^at /, '').split(' (')[0]).filter(f => !/^(simSharedArray|simHeapArray|simHeapArrayAuto|_simHeapAllocAutoImpl)$/.test(f)).slice(0, 4).join(' < ');
+    const e = P.sites.get(st) || { n: 0, bytes: 0 }; e.n++; e.bytes += bytes; P.sites.set(st, e);
+}
 let SIM_WASM_ENABLED = true;
 const SIM_HEAP_ALIGN = 64;
 // Bytes past each array's end: the SIMD loops read whole vectors.
@@ -194,6 +211,7 @@ function _simHeapAllocImpl(Type, n, clear = true) {
     H.live += bytes; H.arrays++;
     if (H.live > H.peak) H.peak = H.live;
     if (SIM_HEAP_SITES) _simHeapSiteAlloc(ptr, bytes);
+    if (_simHeapPlay.on) _simHeapPlayNote(bytes);
     return arr;
 }
 // Diagnostics (off): the wasm heap's allocations by call site: bytes allocated, freed, and held now.
@@ -232,7 +250,9 @@ function _simHeapTake(bytes) {
         if (cur + need > SIM_HEAP_MAX_PAGES) return -1;
         // (In steps of an eighth, at least 16 MB: growing is a commit.)
         const step = Math.min(SIM_HEAP_MAX_PAGES - cur, Math.max(need, Math.min(Math.ceil(cur / 8), SIM_HEAP_GROW_HEADROOM / SIM_HEAP_PAGE), 256));
+        const had = H.memory.buffer.byteLength;
         try { _simWasmGrow(H.memory, step); } catch (err) { try { _simWasmGrow(H.memory, need); } catch (err2) { return -1; } }
+        if (_simHeapPlay.on) _simHeapPlay.grown += H.memory.buffer.byteLength - had;
     }
     H.top = end;
     H.fresh = Math.max(p, H.hw);

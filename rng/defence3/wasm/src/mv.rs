@@ -138,6 +138,10 @@ const W_CWN: usize = 101;
 const W_CWT: usize = 102;
 const W_CWD: usize = 103;
 const W_WBLK9: usize = 104;
+/// Per 8x8 block, its 11x11 blocks' wall change counts summed (+-5 blocks: at least 40 tiles) (unit.js
+/// _simMoveWallBlk81): what a shared look (flow_look_calc: up to 32 steps
+/// from its tile) can have read of the live walls.
+const W_WBLK81: usize = 98;
 const W_BASE: usize = 105;
 const W_WLEN: usize = 106;
 const W_PLEN: usize = 107;
@@ -295,6 +299,8 @@ struct NavP {
 struct Mv {
     area_only: bool,
     nav_step_cache: *mut AtlasStepEntry,
+    // (The job's atlas exits by part pair, shared by its units: flow_look_calc.)
+    nav_exit_cache: *mut crate::atlas::ExitCache,
     occ: *const super::occ::MoveGrid,
     traffic: *const i32,
     traffic_mode: i32,
@@ -444,6 +450,7 @@ struct Mv {
     cwt: *const i32,
     cwd: *const u16,
     wblk9: *const i32,
+    wblk81: *const i32,
     base: *const i32,
     wlen: *const u8,
     plen: *const i32,
@@ -636,6 +643,7 @@ impl Mv {
         Mv {
             area_only: rd(f,47)==1.0,
             nav_step_cache: core::ptr::null_mut(),
+            nav_exit_cache: core::ptr::null_mut(),
             occ: core::ptr::null(),
             traffic: p!(456),
             traffic_mode: {let c:*const i32=p!(456);if c.is_null(){0}else{*c}},
@@ -777,6 +785,7 @@ impl Mv {
             cwt: p!(W_CWT),
             cwd: p!(W_CWD),
             wblk9: p!(W_WBLK9),
+            wblk81: p!(W_WBLK81),
             base: p!(W_BASE),
             wlen: p!(W_WLEN),
             plen: p!(W_PLEN),
@@ -1366,6 +1375,28 @@ unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
     }
     first
 }
+/// A look-ahead's step (flow_look_calc): on the atlas with the run's exit
+/// hint (crate::atlas::atlas_step_h), not through the job's step cache (its
+/// entries are full choices; a look must not depend on which units its job
+/// ran first, looks are shared across threads); else nav_step.
+unsafe fn nav_step_run(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mut crate::atlas::ExitCache, hint: *mut [i32; 3]) -> i32 {
+    if t == dest {
+        return -1;
+    }
+    if !v.atl.is_null() {
+        if rd(v.pl, t as usize) == 0xFFFF {
+            return wall_step_out(v, tx, ty);
+        }
+        return match crate::atlas::Atl::from(v.atl) {
+            Some(mut a) => {
+                a.exit_cache = exit_cache;
+                crate::atlas::atlas_step_h(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest, hint)
+            },
+            None => -1,
+        };
+    }
+    nav_step(v, t, tx, ty, dest, exit_cache)
+}
 /// simNavStepXY.
 unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mut crate::atlas::ExitCache) -> i32 {
     if t == dest {
@@ -1603,8 +1634,8 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
             }
         }
     }
-    let mut exit_cache = crate::atlas::ExitCache::new();
-    let exit_cache = &mut exit_cache as *mut crate::atlas::ExitCache;
+    let mut own_cache = core::mem::MaybeUninit::<crate::atlas::ExitCache>::uninit();
+    let exit_cache = if !m.nav_exit_cache.is_null() { m.nav_exit_cache } else { core::ptr::write_bytes(own_cache.as_mut_ptr(), 0, 1); own_cache.as_mut_ptr() };
     let mut n1 = nav_step(v, tl, gx, gy, dk, exit_cache);
     if n1 < 0 {
         return 0;
@@ -1635,8 +1666,10 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
         let mut short = n1;
         let lim = if open { 32 } else { 2 };
         let mut k = 1;
+        // (The run's exit hint: atlas_step_h.)
+        let mut hint = [-1i32; 3];
         while k < lim {
-            let nx = nav_step(v, cur, cx, cy, dk, exit_cache);
+            let nx = nav_step_run(v, cur, cx, cy, dk, exit_cache, &mut hint);
             if nx < 0 || rd(wl, nx as usize) != 0 {
                 break;
             }
@@ -2548,9 +2581,12 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
     core::ptr::write_bytes(a.add(300) as *mut u8, 0, if spatial {4}else{(end-s0).max(0) as usize});
     let mut m = Mv::load(a);
     let mut step_cache = core::mem::MaybeUninit::<[AtlasStepEntry; ATLAS_STEP_CACHE_ENTRIES]>::uninit();
+    let mut exit_cache = core::mem::MaybeUninit::<crate::atlas::ExitCache>::uninit();
     if !spatial {
         m.nav_step_cache = step_cache.as_mut_ptr() as *mut AtlasStepEntry;
         core::ptr::write_bytes(m.nav_step_cache, 0, ATLAS_STEP_CACHE_ENTRIES);
+        m.nav_exit_cache = exit_cache.as_mut_ptr();
+        core::ptr::write_bytes(m.nav_exit_cache, 0, 1);
     }
     let f = (a as usize + 4096) as *const f64;
     let q = rd(f, 8);
@@ -4837,7 +4873,10 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     };
     let wv = if m.wblk9.is_null() { p.wver } else { rd(m.wblk9, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
     let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) < m.dk;
-    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, p.wver, if on_atl { 3 } else if wide { 2 } else { 1 });
+    // (The shared looks' wall key: the walls within their reach (32 steps and one tile: +-5 blocks), not every wall of the map:
+    // in a battle some wall changes every step, and every look was made again each step.)
+    let lwv = if m.wblk81.is_null() { p.wver } else { rd(m.wblk81, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
+    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, lwv, if on_atl { 3 } else if wide { 2 } else { 1 });
     if lk == 0 {
         // (No way: an event on its own tick of SIM_REROUTE_TICKS (the main
         // thread's pending target, a worker at its task done there), standing

@@ -194,7 +194,7 @@ function _simPresentTileSlots(p) {
 // next tick, not after the cycle that makes a bigger one (seconds at 100k
 // buildings).
 function _simStructTableGrow(F, cap) {
-    cap = Math.ceil(cap * 1.25 / 64) * 64;
+    cap = Math.ceil(Math.max(cap * 1.25, _simStructReserveCap) / 64) * 64;
     const G = _simStructTableNew(cap);
     for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, 'order', ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8]) G[k].set(F[k]);
     _simStructTableRetire(F);
@@ -206,6 +206,15 @@ function _simStructTableGrow(F, cap) {
 // heap SIM_STRUCT_TABLE_RETIRE_MS later: the presentation worker and the
 // packer, outside the ticks, may still read it until they have the new one.
 const SIM_STRUCT_TABLE_RETIRE_MS = 5000;
+// The tables' slots for the match (main.js simMatchReserve): every structure
+// row the match holds (B.structs), so the table made at the start is not
+// made again bigger during play.
+// (The first table made then too, taken by simPresentationMetadata.)
+let _simStructReserveCap = 0, _simStructReserved = null;
+function simPresentStructReserve(B) {
+    _simStructReserveCap = Math.ceil((Math.max(0, B.structs | 0) + 64) / 64) * 64;
+    if (!_simStructReserved || _simStructReserved.cap < _simStructReserveCap || (_simStructReserved.heap && !simHeapHas(_simStructReserved.heap))) _simStructReserved = _simStructTableNew(_simStructReserveCap);
+}
 const _simStructTableRetired = [];
 function _simStructTableNew(cap) {
     const bytes = cap * SIM_STRUCT_SPEC.slotBytes;
@@ -433,14 +442,16 @@ function* simPresentationMetadata() {
         if (e) { S.slotOf(e); n++; }
         if ((n & 127) === 127) yield;
     }
-    const cap = Math.max(64, S.owner.length);
+    const cap = Math.max(64, S.owner.length, _simStructReserveCap);
     let F = p.structures, fresh = false;
     if (!F || F.cap < cap) {
         // (A bigger table is filled beside the shown one and takes its place
         // at the cycle's end: published before, half empty, every structure
         // not yet written looked gone for the frames meanwhile. The changes
         // of the ticks between go to both: _simPresentStructureChanges.)
-        F = _simStructTableNew(Math.ceil(cap * 1.25 / 64) * 64);
+        const R = _simStructReserved;
+        if (R && R.cap >= cap && (!R.heap || simHeapHas(R.heap))) { F = R; _simStructReserved = null; }
+        else F = _simStructTableNew(Math.ceil((cap > _simStructReserveCap ? cap * 1.25 : cap) / 64) * 64);
         if (p.structures) { p.structuresNext = F; fresh = true; } else p.structures = F;
     }
     let j=0;

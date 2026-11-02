@@ -320,6 +320,8 @@ function _getMineIndicesNear(mineArray, wx, wy, radiusPx) {
 // commits at the same ticks; a resync drops it all (and the registry) on
 // every peer.
 const WS_TICKS = 4, WS_POST_PHASE = 3, WS_K = 6, WS_RETRY = 20, WS_SEL_CHUNK = 4096;
+// (A near field's column jobs: this many columns each.)
+const WS_NF_COLS = 64;
 const WS_BACKOFF_MANY = 1000000;
 const WS_LANE = typeof SIM_LANE_T1 === 'number' ? SIM_LANE_T1 : 4;
 const WS_COLLECT = 1, WS_GRID = 3;
@@ -491,10 +493,25 @@ function _wswRun(W, list, n, mode) {
     const rtype = _stationaryTypeIds.get('research'), P = _wswP;
     P[0] = n; P[1] = GRID_W; P[2] = MAX_THING_LEVEL; P[3] = NT; P[4] = S.nk; P[5] = X.np; P[6] = S.L1; P[7] = S.R1; P[8] = W.bw; P[9] = WSW_MAXOWN;
     P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = idt ? idt.length : 1; P[12] = mode; P[13] = rtype === undefined ? 0 : rtype + 1;
-    simRustDirect('k_wsw_set', [list, _ST.stab, _ST.rrow, _ST.uc, _ST.brain, CT, WC, R['adj.tykey'], R['adj.rml'], S.mxe, R['adj.rlv'],
+    const par = n >= WSW_PAR_MIN && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && !!_simPool;
+    const tmp = (k, Type) => { let a = _wswTmp[k]; if (!a || a.length < n || !simHeapHas(a)) a = _wswTmp[k] = simSharedArray(Type, Math.max(4096, n * 2)); return a; };
+    const A = [list, _ST.stab, _ST.rrow, _ST.uc, _ST.brain, CT, WC, R['adj.tykey'], R['adj.rml'], S.mxe, R['adj.rlv'],
         W.flags, W.own, W.area, W.resv, W.cnt, W.oc, cellArea, simHeapHas(workerReservedTiles) ? workerReservedTiles : null,
-        idt, idt && U ? U.columns.id : null, idt && U ? U.columns.dead : null], P);
+        idt, idt && U ? U.columns.id : null, idt && U ? U.columns.dead : null,
+        par ? tmp('f', Uint8Array) : null, par ? tmp('o', Int8Array) : null, par ? tmp('a', Uint8Array) : null, par ? tmp('r', Uint8Array) : null];
+    // (Many tiles: their flags on the helpers, then written in the list's order with the counts: k_wsw_set phases.)
+    if (par) {
+        P[14] = 1; P[15] = WSW_PAR_PER;
+        simRustParallel(SIM_BLOCK_WSW_SET, A, P, Math.ceil(n / WSW_PAR_PER));
+        if (mode !== 1) { P[14] = 2; simRustDirect('k_wsw_set', A, P); }
+        P[14] = 0;
+        return;
+    }
+    P[14] = 0;
+    simRustDirect('k_wsw_set', A, P);
 }
+// (The parallel sweep: from WSW_PAR_MIN tiles, WSW_PAR_PER a job; its temporaries by the list's place.)
+const WSW_PAR_MIN = 512, WSW_PAR_PER = 256, _wswTmp = {};
 // A structure's work flags now (its tile through the kernel; tests).
 function workSiteFlagsOf(e) {
     if (!_wsw) _wswStep(0, false);
@@ -762,13 +779,14 @@ function _wsPost() {
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
     CNT[0] = total; // Compact requests are one logical region for ordering.
     // Stage 2 scans after eligibility compaction and near-field preparation.
-    const Bp = _simBgStageParams[WS_LANE][2];
+    // (Stages: 0 eligibility, 1 and 2 the near fields' rows and columns, 3 the scan, 4 its list.)
+    const Bp = _simBgStageParams[WS_LANE][3];
     // The collectors' groups, per resource type.
     const groups = [], nfSeen = new Set(), nfPairs = [];
     for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
         const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { tile: G.arrays.tile, st: G.arrays.st, cfg: RESOURCE_TYPE_LIST[k] }; Bp[16 + k] = G.id;
         // (Fields to make again: a job a (group, owner), before the scan in this chain.)
-        if (G.nfBuild && !nfSeen.has(G.id)) { nfSeen.add(G.id); G.nfBuild = false; for (const o of G.nfList) if (nfPairs.length < 60) nfPairs.push(G.id * 16 + o); else { const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET); _simParReg['wsg' + G.id + '.meta'][5 + 2 * nb + 16 + o] = -1; } }
+        if (G.nfBuild && !nfSeen.has(G.id)) { nfSeen.add(G.id); G.nfBuild = false; for (const o of G.nfList) if (nfPairs.length < 56) nfPairs.push(G.id * 16 + o); else { const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET); _simParReg['wsg' + G.id + '.meta'][5 + 2 * nb + 16 + o] = -1; } }
     }
     // Per owner: its healers' damaged units (where they are now) and the
     // research its researchers serve.
@@ -796,17 +814,26 @@ function _wsPost() {
     Bp[56]=areaSearchEnabled()?1:0;
     Bp[57]=_wsPostEpoch;
     // Near fields use stage 1; stage 0 compacts the eligible bucket rows.
-    const Np = _simBgStageParams[WS_LANE][1];
-    Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
-    Np[63] = _wsPostEpoch;
-    for (let i = 0; i < nfPairs.length; i++) Np[3 + i] = nfPairs[i];
+    // (Each field in two stages of many jobs, k.rs k_ws_nearfield modes 1 and 2:
+    // a pair's field was one job, the scan's chain waited on its slowest.)
+    const nfRowJobs = Math.min(64, GRID_H), nfColJobs = Math.ceil(GRID_W / WS_NF_COLS), nfPer = Math.max(nfRowJobs, nfColJobs);
+    for (const [slot, mode] of [[1, 1], [2, 2]]) {
+        const Np = _simBgStageParams[WS_LANE][slot];
+        Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
+        Np[63] = _wsPostEpoch; Np[62] = mode; Np[61] = Math.ceil(GRID_H / nfRowJobs); Np[60] = WS_NF_COLS; Np[59] = nfPer;
+        for (let i = 0; i < nfPairs.length; i++) Np[3 + i] = nfPairs[i];
+    }
     const eligibleGroups = [...new Set(groups.map((g, i) => Bp[16 + i]))];
     const Ep = _simBgStageParams[WS_LANE][0]; Ep.fill(0);
     Ep[0] = eligibleGroups.length; Ep[1] = 128; Ep[2] = _wsPostEpoch;
     const bucketJobs = Math.ceil(Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET) / 128);
     Ep[3] = bucketJobs;
     for (let g = 0; g < eligibleGroups.length; g++) Ep[4 + g] = eligibleGroups[g];
-    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)]]);
+    // (Then the requests that found something listed, k.rs k_ws_order: one job in the same chain.)
+    _wsArr('ws.order', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
+    const Op = _simBgStageParams[WS_LANE][4]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
+    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
+        [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1]]);
     _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups
@@ -814,12 +841,9 @@ function _wsPost() {
 function _wsOrder() {
     const J = _wsPosted;
     if (!J || J.ordered) return;
-    simParallelBackgroundWait(WS_LANE);
-    _wsArr('ws.order', Int32Array, J.chunks * J.CH);
-    _wsArr('ws.orderCount', Int32Array, 1);
-    const P = _simBgParamsByLane[WS_LANE];
-    P[0] = J.chunks; P[1] = J.CH; P[2] = WS_K; P[3] = WSR_HEAL;
-    simParallelBackground(SIM_KERNEL_WS_ORDER, 1, WS_LANE);
+    // (The scan and its list, one chain posted with it: _wsPost; waited for at the commit, a tick later:
+    // nothing it reads changes before then (the groups' only change in place, workSiteBuilt, is published
+    // to a later batch; the grid's sweep skips this phase and runs after the commit).)
     J.ordered = true;
 }
 // The commit: every request that found something takes its result now, in
@@ -2689,8 +2713,16 @@ function healerCandidatesTierReset() {
 }
 function _hcArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n + (n >> 2))); simParallelBind(name, a); simHeapFree(old); }
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n)); simParallelBind(name, a); simHeapFree(old); }
     return a;
+}
+// The scan's arrays for the match (main.js simMatchReserve): every unit slot
+// (B.slots, reserved before), every player.
+function healerCandidatesReserve(B) {
+    const n = Math.max(1024, B.slots | 0), owners = Math.max(1, B.players | 0), cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0), chunks = Math.max(1, Math.ceil(n / HC_CHUNK));
+    _hcArr('hc.e', Float32Array, n); _hcArr('hc.m', Float32Array, n); _hcArr('hc.o', Int16Array, n); _hcArr('hc.id', Int32Array, n); _hcArr('hc.l', Uint8Array, n); _hcArr('hc.d', Uint8Array, n);
+    _hcArr('hc.res', Int32Array, chunks * owners * cap); _hcArr('hc.rat', Float32Array, chunks * owners * cap);
+    _hcArr('hc.best', Int32Array, owners * cap); _hcArr('hc.bestRat', Float32Array, owners * cap);
 }
 function _hcPost(ownerCount, cap) {
     simParallelBackgroundWait(HC_LANE);
@@ -3139,6 +3171,20 @@ function _forEachStructureInTileBox(list, x0, y0, x1, y1, fn) {
 // version); the spawner index's from the spawners' rows alone, when
 // spawners come or go. Not every tile of the map.
 const _wsCand = { all: { sig: -1 }, spawners: { sig: -1 }, P: new Float64Array(12) };
+// The candidates' and the spawner index's arrays for the match (main.js
+// simMatchReserve): a structure row's tile each at most (B.structs).
+function workerSitesReserve(B) {
+    const n = Math.max(1024, (B.structs | 0) + 1024);
+    for (const C of [_wsCand.all, _wsCand.spawners]) {
+        if (!C.tiles || C.tiles.length < n || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, n); C.tmp = simSharedArray(Int32Array, n); C.sig = -1; }
+        if (!C.cnt || !simHeapHas(C.cnt)) C.cnt = simSharedArray(Int32Array, 4);
+    }
+    // (Types: at most SPAWN_PROD_TYPES, barrack.js.)
+    const X = _spIdx, nb = Math.max(256, _stationaryTypes.length) * SPAWNER_OWNER_SLOTS;
+    if (!X.tiles || X.tiles.length < n || !simHeapHas(X.tiles)) { X.tiles = simSharedArray(Int32Array, n); X.sig = -1; }
+    if (!X.off || X.off.length < 2 * nb + 2 || !simHeapHas(X.off)) { X.off = simSharedArray(Int32Array, 2 * nb + 2); X.sig = -1; }
+    if (!X.out || !simHeapHas(X.out)) X.out = simSharedArray(Int32Array, 4);
+}
 function _wsCandidates(spawnersOnly = false) {
     const C = spawnersOnly ? _wsCand.spawners : _wsCand.all;
     const sig = spawnersOnly ? (typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : _tileEntityVersion) : _tileEntityVersion;
@@ -3200,9 +3246,15 @@ function _workerBrainArray(name,Type,n){
     const a=B.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(n,1),256));simParallelBind('wb.'+name,a);if(old)simHeapFree(old);return a;
 }
 // (list: slot * 8 + code entries, the first n: the tick's events by default.)
+// The brains' event list for the match (main.js startGame): one entry a unit
+// (units: the population the budget holds), so wb.list is made and bound once.
+function workerBrainReserve(units){if(typeof simHeapHas!=='function')return;_workerBrainArray('list',Int32Array,Math.max(1024,units|0));}
 function workerBrainsPrepare(n,defer=false,list=null){
-    simParallelBind('wb.list',list||_unitEvSort.sorted);
     if(_workerBrain.pending)workerBrainsCollect();
+    // (The slots copied into one list bound once (wb.list), not the caller's
+    // list bound: two callers' lists in turn made the helpers sit out the jobs
+    // after each binding.)
+    if(n>0){const src=list||_unitEvSort.sorted;_workerBrainArray('list',Int32Array,n).set(src.subarray(0,n));}
     const B=_workerBrain;B.active=false;B.tick=-1;B.prepared=0;B.used=0;B.misses=0;
     // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
     if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.free.length<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
@@ -3554,7 +3606,17 @@ function applyWorkerRallyFromSpawner(u, spawner) {
 // "Stage D". Off: every worker event goes the JavaScript way.
 let WORKER_AI_WASM = true;
 const WAI_RS_W = 12, WAI_ES_W = 8, WAI_ES_SOURCES = ['research', 'salvage', 'collect', 'healer', 'builder'];
-const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13;
+const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13, WAI_OUT_MINE_GONE = 14;
+// The worker AI's events and takes decided on the helpers (wai.rs k_wai_decide,
+// a chunk of WAI_DECIDE_PER a job) against the state as at the pass's start,
+// then applied in order (k_wai_apply: shared writes, sums, mines, payments,
+// reservations by the lowest id). false: the serial pass (k_worker_ai), an
+// A/B switch. Takes that lost their slot try their next site in another
+// round, up to WAI_TAKE_ROUNDS a step.
+let WAI_PARALLEL = true;
+const WAI_DECIDE_PER = 128, WAI_TAKE_ROUNDS = 16;
+// (A chunk's words in wai.ai and wai.a64: wai.rs wp_i32, wp_u64.)
+const _WAI_AI_W = per => 16 + per * 60, _WAI_A64_W = per => per * 54;
 const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work', 'gold_collected', 'astar_collected'];
 // The class columns the kernel reads (wai.ctab: per class of data_state.js
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
@@ -3636,8 +3698,12 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     }
     const es = _waiArr('es', Float64Array, np * WAI_ES_W);
     es.fill(0, 0, np * WAI_ES_W);
-    const out = _waiArr('out', Int32Array, n * 8 + 64), cnt = _waiArr('cnt', Int32Array, 8);
+    // (The parallel pass's room: up to 8 out events an event, over its rounds.)
+    const outCap = WAI_PARALLEL && mode !== 2 ? n * 8 + 256 : n * 2 + 16;
+    const out = _waiArr('out', Int32Array, outCap * 4), cnt = _waiArr('cnt', Int32Array, 8);
     cnt.fill(0, 0, 8);
+    const psum = _waiArr('psum', Float64Array, np * 2);
+    psum.fill(0, 0, np * 2);
     const V = _workerWorkTable();
     if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
     const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
@@ -3669,7 +3735,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = SNAP_REGION_TILES; P[12] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[13] = _WORKER_WORK_TYPES.length; P[14] = V.rw; P[15] = V.rh; P[16] = V.np; P[17] = WORKER_WORK_REGION_TILES;
     P[18] = spatialEpoch; P[19] = SIM_SEP_ABSENT; P[20] = atlas; P[21] = localPlayerId; P[22] = _stAllIx.get(ResearchSpawner) || 0;
-    P[23] = MAX_THING_LEVEL + 1; P[24] = MAX_THING_LEVEL; P[25] = n * 2 + 16; P[26] = workerReservedTiles.length; P[27] = V.length;
+    P[23] = MAX_THING_LEVEL + 1; P[24] = MAX_THING_LEVEL; P[25] = outCap; P[26] = workerReservedTiles.length; P[27] = V.length;
     P[28] = wsl ? wsl.length : 0; P[29] = np; P[30] = RESOURCE_FIXED_POINT_SCALE; P[31] = simWttCode('research');
     P[32] = Math.max(1, Math.round(Number(base.researcherDps) || 1)); P[33] = secondsToTicks(Math.max(0.01, Number(base.transferCooldown) || 0.01));
     P[34] = idt ? idt.length : 1; P[35] = _stationaryTypeIds.has('salvager') ? _stationaryTypeIds.get('salvager') + 1 : -1;
@@ -3698,7 +3764,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const R2 = _simParReg;
     P[72] = mode; P[76] = _workerTypeToLoadIndex('builder'); P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
     P[69] = secondsToTicks(Math.max(0.01, Number(bld.transferCooldown) || 0.01)); P[70] = Math.max(120, Math.floor(TICK_RATE * 8)); P[71] = Math.max(60, Math.floor(TICK_RATE * 3));
-    simRustDirect('k_worker_ai', [list, out, cnt,
+    const WA = [list, out, cnt,
         c.id, c.owner, c.x, c.y, c.dead, c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.commandState, c.pathIndex, c.nvPK,
         c.mvOn, c.mvCD, c.mvPath, S.pathPool.fs, c.mvOut, c.wsKind, c.wkIdle, S.sepKey, c.spEpoch, c.workerTransferCooldown, c.mvTgX, c.mvTgY, c.mvNavLD, c.statRow, c.effectiveLevel, c.wkIx,
         c.wbType, c.mvWake, c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
@@ -3713,8 +3779,11 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
         c.wmQc, c.wmQr, c.wmQp, c.wmTrip, c.wmBlk, c.energy, c.maxE, c.x0, c.y0,
         _ST.stab, ACT, WCT, SR['adj.tykey'], SR['adj.rml'], SS.mxe, SR['adj.rlv'], c.wkWx, c.wkWy, c.wkLmt, c.wmRe, _wai.ownStats,
         take ? R2['ws.rslot'] : null, take ? R2['ws.rid'] : null, take ? R2['ws.rkind'] : null, take ? R2['ws.rwt'] : null, take ? R2['ws.rgrp'] : null,
-        take ? R2['ws.res'] : null, take ? R2['ws.score'] : null, take ? R2['ws.ures'] : null, take ? _wai.gtab : null, take ? _wai.hid : null], P);
-    if (cnt[1]) throw new Error('k_worker_ai: out of room (payments or out events)');
+        take ? R2['ws.res'] : null, take ? R2['ws.score'] : null, take ? R2['ws.ures'] : null, take ? _wai.gtab : null, take ? _wai.hid : null,
+        psum, _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null, _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null];
+    if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);
+    else simRustDirect('k_worker_ai', WA, P);
+    if (cnt[1]) throw new Error('k_worker_ai: out of room (payments or out events)' + (cnt[7] ? ', the parallel pass\'s lists: ' + cnt[7] : ''));
     // Its writes the JavaScript keeps beside the tables.
     for (let o = 0; o < np; o++) {
         const r = _resourceBatchRows[o];
@@ -3750,8 +3819,11 @@ function waiOutEvents(m) {
         else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e && e._stT >= 0) { if (!salv) salv = structDestroyList(m); salv[ns++] = e._stT; } }
         else if (code === WAI_OUT_SOUND_UNIT) { const u = owners[a]; if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
         else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
+        else if (code === WAI_OUT_MINE_GONE) _waiMineGone(a, RESOURCE_TYPE_LIST[b]);
         else if (code === WAI_OUT_ASTAR_LOG) { const u = owners[a]; if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
         else if (code === WAI_OUT_QUEUE_PAID) {
+            // (The production pass brings every spawner up to date each step: barrack.js spawnerProductionPass.)
+            if (typeof _spProdOn === 'function' && _spProdOn()) continue;
             // (A healer paid its front, or found it paid: its production, and a ready order once paid and timed.)
             const sp = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W));
             if (!sp) continue;
@@ -3770,6 +3842,42 @@ function waiOutEvents(m) {
         else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners[a]; if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
     }
     if (ns > 0) structDestroyTiles(salv, ns);
+    if (_wai.adjDue) { _wai.adjDue = false; recalculateAdjacency(); }
+}
+// The parallel pass (WAI_PARALLEL): the kernel's arguments as one block in
+// the heap (wai.rs K's layout: array addresses from word 512, params as
+// doubles from byte 4096) that every helper's k_wai_decide reads; its
+// chunks' lists (wai.ai, wai.a64) kept between steps (bound once: a new
+// binding makes the helpers sit out a job); then k_wai_apply. Takes: the
+// losers of a slot try again in another round (their requests back).
+function _waiParallel(WA, P, n, mode, list) {
+    const B = _waiArr('args', Int32Array, 2048);
+    if (_wai.argsFor !== B) { _wai.argsF = new Float64Array(B.buffer, B.byteOffset + 4096, 512); _wai.argsFor = B; }
+    const F = _wai.argsF;
+    B.fill(0, 512, 1024);
+    for (let i = 0; i < WA.length; i++) {
+        const a = WA[i], p = a ? _simHeapPtrOf(a) : 0;
+        if (a && !(p >= 0)) throw new Error('waiRun: argument ' + i + ' not in the wasm heap');
+        B[512 + i] = a ? _simWEnc(p) : 0;
+    }
+    F.fill(0); F.set(P.length > 512 ? P.subarray(0, 512) : P);
+    const per = WAI_DECIDE_PER, redo = mode === 1 ? _waiArr('redo', Int32Array, n + 2) : null, AP = _wai.AP || (_wai.AP = new Float64Array(4));
+    let base = 0;
+    for (let round = 0; n > 0; round++) {
+        F[0] = n;
+        const chunks = Math.ceil(n / per);
+        const ai = _waiArr('ai', Int32Array, chunks * _WAI_AI_W(per)), a64 = _waiArr('a64', Float64Array, chunks * _WAI_A64_W(per));
+        simParallelBind('wai.args', B); simParallelBind('wai.ai', ai); simParallelBind('wai.a64', a64);
+        const SP = _simParams; SP[0] = chunks; SP[1] = per;
+        simParallelRun(SIM_KERNEL_WAI_DECIDE, chunks);
+        AP[0] = chunks; AP[1] = per; AP[2] = base;
+        simRustDirect('k_wai_apply', [B, ai, a64, redo], AP);
+        base = WA[2][0];
+        _wai.rounds = round + 1;
+        if (WA[2][1] || !redo || !(redo[0] > 0) || round + 1 >= WAI_TAKE_ROUNDS) break;
+        n = redo[0];
+        list.set(redo.subarray(1, 1 + n));
+    }
 }
 // The search tier's takes (worker.js _wsCommit): the n requests of the
 // order (indices into its result arrays), all in one pass (wai.rs
@@ -3825,7 +3933,8 @@ function _waiBuilt(at, kind, v) {
     if (kind === 2 && !v) return;
     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
     _requestAdjacencyRecalcForThing(t, 1);
-    recalculateAdjacency();
+    // (Recalculated once after the pass's events: waiOutEvents.)
+    _wai.adjDue = true;
 }
 // A collector took `ex` from the mine at tile t (its resource cfg): the
 // mine's value, its look, and an emptied mine gone to ground.
@@ -3835,7 +3944,16 @@ function _waiMineTaken(t, cfg, ex) {
     mine[cfg.mineStatKey] -= ex;
     _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
     dirtyGrid = true;
-    if (mine[cfg.mineStatKey] <= 0) {
+    if (mine[cfg.mineStatKey] <= 0) _waiMineGone(t, cfg);
+}
+// A mine emptied (its value already 0 or less: the worker kernel's take,
+// wai.rs mine_apply, or _waiMineTaken): floor again, out of the lists.
+function _waiMineGone(t, cfg) {
+    const mine = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
+    if (!mine || !cfg) return;
+    _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
+    dirtyGrid = true;
+    {
         grid[mine.gy][mine.gx].type = TYPE_FLOOR;
         simMoveTileTypeChanged(mine.gx, mine.gy);
         _bumpPathTopologyVersion();

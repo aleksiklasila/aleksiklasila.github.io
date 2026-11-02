@@ -60,8 +60,14 @@ const ADJ_APPLY_PER_JOB = 8192;
 const _adjL = { posted: false, passive: false, paths: false, outs: 0, coff: null, ctile: null, cfor: null, mul: null, tabs: null };
 function _adjArr(name, Type, n) {
     let a = _simParReg[name];
-    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, simReserveCap(Math.max(1, n), 64)); simParallelBind(name, a); simHeapFree(old); }
+    if (!a || a.constructor !== Type || a.length < n || !simHeapHas(a)) { const old = a; a = simHeapArray(Type, Math.max(64, n)); simParallelBind(name, a); simHeapFree(old); }
     return a;
+}
+// The apply's arrays for the match (main.js simMatchReserve): a member per
+// structure row at most (B.structs).
+function adjacencyReserve(B) {
+    const no = Math.max(1, B.structs | 0);
+    _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length); _adjArr('adj.ev', Int32Array, 4 * no); _adjArr('adj.evn', Int32Array, 16 * Math.ceil(no / ADJ_APPLY_PER_JOB));
 }
 function adjacencyLaneReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(ADJ_LANE);
@@ -514,6 +520,12 @@ function _effRowLookup() {
         simParallelBind('eff.rowOf', _effRowLk);
     }
     return _effRowLk;
+}
+// The rows for the match (main.js simMatchReserve): one for each entry of
+// the lookup (player, type, level, level) at most.
+function effRowsReserve() {
+    if (typeof spatialUnitsComplexUnitTypeCount === 'undefined' || !(spatialUnitsComplexUnitTypeCount > 0)) return;
+    _effRowGrow(_effRowLookup().length);
 }
 function _effRowGrow(n) {
     if (n <= _effRowCap) return;

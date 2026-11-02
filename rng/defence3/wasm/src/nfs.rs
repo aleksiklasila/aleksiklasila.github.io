@@ -307,6 +307,68 @@ pub unsafe extern "C" fn k_retire_plan(a: u32, _chunk: i32) {
     s(hdr, 3, kd);
 }
 
+/// A value written into a unit column as JavaScript's typed array store
+/// would: kind 2 an f32, 3 an f64, else an integer of the column's width
+/// (truncated, two's complement; not finite: 0).
+#[inline(always)]
+unsafe fn spawn_put(tab: *const i32, kind: *const i32, c: usize, q: usize, v: f64) {
+    let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
+    let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
+    let at = base.add(q * per * bytes);
+    let iv = if v.is_finite() { v as i64 } else { 0 };
+    match (g(kind, c), bytes) {
+        (2, 4) => *(at as *mut f32) = v as f32,
+        (3, 8) => *(at as *mut f64) = v,
+        (_, 1) => *at = iv as u8,
+        (_, 2) => *(at as *mut u16) = iv as u16,
+        (_, 4) => *(at as *mut u32) = iv as u32,
+        _ => {}
+    }
+}
+/// n program triples from triple `at` (column, source: below 0 the triple's
+/// value, else the row's value at that index; value) written to slot q.
+#[inline(always)]
+unsafe fn spawn_prog(prog: *const f64, at: usize, n: usize, row: *const f64, tab: *const i32, kind: *const i32, q: usize) {
+    for t in 0..n {
+        let e = prog.add((at + t) * 3);
+        let src = g(e, 1);
+        let v = if src < 0.0 { g(e, 2) } else { g(row, src as usize) };
+        spawn_put(tab, kind, g(e, 0) as usize, q, v);
+    }
+}
+
+/// SIM_KERNEL_SPAWN_WRITE (unit.js simSpawnBatchWrite): a step's new units'
+/// columns, a row each (their slots differ: any job order): the values every
+/// new unit gets (the core program), its stat template's (its own program),
+/// then its energy (the final program). At a million units every column of
+/// a slot is a cache miss: ~40 a spawn, spread over the helpers here. Arrays:
+/// [0] spw.rows (f64, P[2] a row: slot, its template's first triple, its
+/// triples (below 0: the row was written already), then the row's values),
+/// [1] slz.tab (per column: encoded address, bytes an element, elements a
+/// slot), [2] spw.kind (per column: 1 an integer, 2 an f32, 3 an f64), [3]
+/// spw.prog (f64 triples). P: [0] rows, [1] per job, [2] row stride, [3]
+/// core program's first triple, [4] its triples, [5] final program's first
+/// triple, [6] its triples.
+#[no_mangle]
+pub unsafe extern "C" fn k_spawn_write(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (rows, tab, kind, prog) = (k.p::<f64>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<f64>(3));
+    let (j0, j1) = super::k::job_range(chunk, k.i(1), k.i(0));
+    let w = k.i(2).max(1) as usize;
+    let (c0, cn, f0, fnn) = (k.i(3).max(0) as usize, k.i(4).max(0) as usize, k.i(5).max(0) as usize, k.i(6).max(0) as usize);
+    for j in j0..j1 {
+        let row = rows.add(j * w) as *const f64;
+        let pn = g(row, 2);
+        if pn < 0.0 {
+            continue;
+        }
+        let q = g(row, 0) as usize;
+        spawn_prog(prog, c0, cn, row, tab, kind, q);
+        spawn_prog(prog, g(row, 1) as usize, pn as usize, row, tab, kind, q);
+        spawn_prog(prog, f0, fnn, row, tab, kind, q);
+    }
+}
+
 /// SIM_KERNEL_SLOT_ZERO (sim_unit_state.js simUnitStateReleaseFreed): the
 /// slots let go this tick back to a fresh slot's state before any unit takes
 /// one (every unit column zero, sepKey absent, sepLayer zero), so taking a

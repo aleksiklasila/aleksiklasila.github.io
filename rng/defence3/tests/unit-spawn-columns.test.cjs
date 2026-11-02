@@ -4,7 +4,11 @@
 // type, at levels 1-6, workers configured as spawns are, each made both ways
 // at two open tiles of the same match; every column of the two slots
 // compared, except those that hold the position, the id and the spatial
-// index's place (they differ by construction).
+// index's place and its worker record's index (they differ by construction). The spawners' batch (unit.js
+// simSpawnBatchAdd/Write/Finish: the columns by the k_spawn_write kernel)
+// too: the first of a template key, copies of a template made in the same
+// batch and of an older one, each as the constructor's with energy =
+// maxEnergy (a spawner's).
 //   node tests/unit-spawn-columns.test.cjs
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
@@ -14,7 +18,7 @@ const H = require('./net-harness.cjs');
     host.eval('startSoloGame();');
     await world.run(1500);
     const out = JSON.parse(host.eval(`(() => {
-        const POS = new Set(['id', 'x', 'y', 'prevX', 'prevY', 'x0', 'y0', 'spTile', 'spArea', 'spEpoch', 'spKey', 'sepKey', 'spChunk', 'occX', 'occY', 'upB', 'cbTick', 'cbS']);
+        const POS = new Set(['id', 'x', 'y', 'prevX', 'prevY', 'x0', 'y0', 'spTile', 'spArea', 'spEpoch', 'spKey', 'sepKey', 'spChunk', 'occX', 'occY', 'upB', 'cbTick', 'cbS', 'wkIx']);
         const snap = (C, s) => {
             const o = {};
             for (const k of Object.keys(C)) {
@@ -27,31 +31,49 @@ const H = require('./net-harness.cjs');
         };
         // Two open tiles apart from everything (the same terrain, no neighbours).
         const open = [];
-        for (let gy = 2; gy < GRID_H - 2 && open.length < 600; gy += 3) for (let gx = 2; gx < GRID_W - 2 && open.length < 600; gx += 3) {
+        for (let gy = 2; gy < GRID_H - 2 && open.length < 3000; gy += 3) for (let gx = 2; gx < GRID_W - 2 && open.length < 3000; gx += 3) {
             const c = grid[gy] && grid[gy][gx];
             if (c && !c.item && c.type === 0 && !getTileEntityRef(gx, gy)) open.push([gx, gy]);
         }
-        const diffs = [], made = { n: 0 };
-        let k = 0;
+        const diffs = [], made = { n: 0, batch: 0, kernel: 0 };
+        // (The same tiles for every type and level: the last one's units
+        // removed first, their occupancy let go.)
+        let k = 0, prev = [];
         for (const type of Object.keys(BASE_UNIT_STATS)) for (let level = 1; level <= 6; level += 5) {
-            if (k + 2 >= open.length) break;
+            for (const u of prev) if (!u.dead) { occupancyRelease(u); removeUnitNow(u); }
+            k = 0;
             const [ax, ay] = open[k++], [bx, by] = open[k++], [cx, cy] = open[k++];
             const a = new Unit(type, 1, ax * TILE + 16, ay * TILE + 16, level, configureWorkerUnitFromType);
             const b = simSpawnUnit(type, 1, bx * TILE + 16, by * TILE + 16, level, configureWorkerUnitFromType);
             // (The second of its key: its stats copied, _spawnStats.)
             const b2 = simSpawnUnit(type, 1, cx * TILE + 16, cy * TILE + 16, level, configureWorkerUnitFromType);
+            prev = [a, b, b2];
             if (a.dead || b.dead || b2.dead) continue;
             made.n++;
             const A = snap(a._us, a._si), B = snap(b._us, b._si);
             const B2 = snap(b2._us, b2._si);
             for (const c of Object.keys(A)) { if (A[c] !== B[c]) diffs.push(type + ' L' + level + ' ' + c + ': ' + A[c] + ' vs ' + B[c]); if (A[c] !== B2[c]) diffs.push(type + ' L' + level + ' (copied) ' + c + ': ' + A[c] + ' vs ' + B2[c]); }
             if (Object.getOwnPropertyNames(a).join() !== Object.getOwnPropertyNames(b).join()) diffs.push(type + ': own fields ' + Object.getOwnPropertyNames(a) + ' vs ' + Object.getOwnPropertyNames(b));
+            // The batch: owner 2's first of its key (the full path), owner 2's second (its template made in this batch), owner 1's (an older template).
+            const at = () => { const [gx, gy] = open[k++]; return [gx * TILE + 16, gy * TILE + 16]; };
+            const r2 = new Unit(type, 2, ...at(), level, configureWorkerUnitFromType);
+            const n0 = _spb.n, d = [simSpawnBatchAdd(type, 2, ...at(), level, configureWorkerUnitFromType), simSpawnBatchAdd(type, 2, ...at(), level, configureWorkerUnitFromType), simSpawnBatchAdd(type, 1, ...at(), level, configureWorkerUnitFromType)];
+            for (let i = n0; i < _spb.n; i++) if (_spb.mode[i] === 0) made.kernel++;
+            simSpawnBatchWrite();
+            for (let i = n0; i < _spb.n; i++) simSpawnBatchFinish(i);
+            simSpawnBatchClear();
+            prev.push(r2, ...d);
+            if (r2.dead || d.some(u => u.dead)) continue;
+            r2.energy = r2.maxEnergy; a.energy = a.maxEnergy;
+            const R2 = snap(r2._us, r2._si), A1 = snap(a._us, a._si);
+            d.forEach((u, i) => { made.batch++; const W = i < 2 ? R2 : A1, D = snap(u._us, u._si); for (const c of Object.keys(W)) if (W[c] !== D[c]) diffs.push(type + ' L' + level + ' (batch ' + i + ') ' + c + ': ' + W[c] + ' vs ' + D[c]); });
         }
-        return JSON.stringify({ made: made.n, diffs: diffs.slice(0, 40), nDiffs: diffs.length });
+        return JSON.stringify({ open: open.length, grid: GRID_W + "x" + GRID_H, made: made.n, batch: made.batch, kernel: made.kernel, wasm: _simWasmX !== null, diffs: diffs.slice(0, 40), nDiffs: diffs.length });
     })()`));
-    console.log('pairs', out.made, 'differences', out.nDiffs);
+    console.log('open tiles', out.open, out.grid, 'pairs', out.made, 'batch units', out.batch, 'by the kernel', out.kernel, 'wasm', out.wasm, 'differences', out.nDiffs);
     for (const d of out.diffs) console.log('  ' + d);
     assert.ok(out.made >= 10, 'pairs made');
+    assert.ok(out.batch >= 30 && (!out.wasm || out.kernel >= 20), 'batch units made, the kernel writing most');
     assert.equal(out.nDiffs, 0, 'columns differ');
     console.log('ok: simSpawnUnit = the constructor, column by column');
     process.exit(0);

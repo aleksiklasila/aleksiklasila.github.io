@@ -35,8 +35,8 @@ const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(map),'cfg-map-typ
 const options={mode:'mega',layout:'mixed',teams:teamCount,seed,buildings:Math.max(30,Math.floor(map/3)),level:6,towerSites:Math.floor(map/4),collectorBuildings:Math.floor(map/6),structures,keepKings:true};
 const metrics=`__scratch.stressWork={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,placed:0,healerDeliveries:0,salvagerReturns:0,contestedPlacements:0};{
  __scratch.actionKinds={};const action=processAction;processAction=function(a,p){if(a?.netId)__scratch.actionKinds[a.action]=(__scratch.actionKinds[a.action]||0)+1;return action.apply(this,arguments);};
- const spawn=spawnQueuedUnitFromSpawner,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding,place=placeBuilding;
- spawnQueuedUnitFromSpawner=function(s){const r=spawn.apply(this,arguments);if(r){__scratch.stressWork.spawns++;if(s.type==='barrack')__scratch.stressWork.armySpawns++;}return r;};
+ const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding,place=placeBuilding;
+ _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.stressWork.spawns++;if(s.type==='barrack')__scratch.stressWork.armySpawns++;}return r;};
  // (Research deposits: the worker kernel counts them, worker.js _wai.researchDeposits.)
  {const run=waiRun;waiRun=function(){const was=_wai.researchDeposits||0;const r=run.apply(this,arguments);__scratch.stressWork.researchDeposits+=(_wai.researchDeposits||0)-was;return r;};}
  _depositResourceCollectorPayload=function(u,o,c){if(u.carryingValue>0&&c)__scratch.stressWork[c.stockpileKey==='astar'?'astarDeposits':'collectorDeposits']++;return deposit.apply(this,arguments);};

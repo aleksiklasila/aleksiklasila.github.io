@@ -1206,24 +1206,12 @@ function _simUnitNextCap(cap) { return Math.max(1024, Math.ceil(cap * (cap >= 10
 // The slots a match's population needs, reserved at its start, at a whole
 // restore and at a compaction: every player's configured maximum
 // population, and room for units that died this tick (their slots come back
-// the next), within a speculative byte budget. Required live slots are
-// always allocated. Even unwritten reserved columns consume wasm address
-// space, and slot-sized scratch may commit that capacity too. Growing by
-// half held old and new columns at once, and each growth was a spike.
-// At most SIM_UNIT_RESERVE_BYTES of speculative columns: the lobby's
-// default is 200k a player, and eight
-// players' 1.6M slots would hold a quarter of the wasm heap's 4 GB of
-// address space (and the system's commit charge) in any match; past it, the
-// growth, allocated ahead.
-const SIM_UNIT_RESERVE_BYTES = 512 << 20;
-// The population limit and the speculative allocation budget are separate.
-function _simUnitReserveBytes(tiles) {
-    // This is speculative capacity, not the whole match's memory budget.
-    // Required starting/restore slots are reserved independently, even above
-    // this limit. Spending all remaining memory here also multiplies every
-    // slot-sized scratch array before the population ever needs those slots.
-    return SIM_UNIT_RESERVE_BYTES;
-}
+// the next). All of it from the start: the population limit is the memory
+// budget's (data_static.js memoryBudgetPop, MEMORY_UNIT_BYTES a unit), and a
+// growth during play could find no room in the 4 GiB wasm32 heap (it held
+// old and new columns at once, and each was a spike). (Was at most 512 MB of
+// columns, the rest grown during play.)
+function _simUnitReserveBytes(tiles) { return Infinity; }
 let _simUnitBytesPerSlotCache = 0;
 function _simUnitBytesPerSlot() {
     if (!_simUnitBytesPerSlotCache) {

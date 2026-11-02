@@ -717,6 +717,8 @@ function _requestAdjacencyRecalcForThing(thing, pad = 1) {
 const _ST = { n: 0, code: null, own: null, uc: null, val: null, tim: null, brain: null, rtab: null, rrow: null, rcnt: null, rw: 0, mineArr: new Int32Array(64), mineN: 0, mineAt: null,
     mineSum: null, mineRc: null, mineRegArr: new Int32Array(64), mineRegN: 0, mineRegAt: null };
 // A mine's term in its region's sum (the state hash's, as it was per mine).
+// (A zeroed Int32 table in the wasm heap where there is one.)
+function _stHeapI32(n) { if (typeof simSharedArray !== 'function') return new Int32Array(n); const a = simSharedArray(Int32Array, n); a.fill(0); return a; }
 function _stMineTerm(t) {
     const T = _ST, gx = t % GRID_W, gy = (t - gx) / GRID_W, v = T.val[t];
     let h = ((Math.imul(gx, 4099) + gy) ^ T.code[t]) ^ 0x6d1;
@@ -725,11 +727,12 @@ function _stMineTerm(t) {
 }
 function _stMineRegions() {
     const T = _ST, nr = T.rcnt ? T.rcnt.length : 0;
-    if (!T.mineSum || T.mineSum.length !== nr) { T.mineSum = new Int32Array(nr); T.mineRc = new Int32Array(nr); T.mineRegAt = new Int32Array(nr); T.mineRegN = 0; }
+    // (The sums and the mines' tiles in the heap: the worker kernel's takes keep them, wai.rs mine_apply.)
+    if (!T.mineSum || T.mineSum.length !== nr) { T.mineSum = _stHeapI32(nr); T.mineRc = new Int32Array(nr); T.mineRegAt = new Int32Array(nr); T.mineRegN = 0; }
 }
 function _stMineAdd(t) {
     const T = _ST;
-    if (!T.mineAt || T.mineAt.length !== T.n) T.mineAt = new Int32Array(T.n);
+    if (!T.mineAt || T.mineAt.length !== T.n) T.mineAt = _stHeapI32(T.n);
     if (T.mineAt[t]) return;
     if (T.mineN === T.mineArr.length) { const a = new Int32Array(T.mineArr.length * 2); a.set(T.mineArr); T.mineArr = a; }
     T.mineArr[T.mineN] = t; T.mineAt[t] = ++T.mineN;
@@ -1000,7 +1003,7 @@ const _STF_BUILDING = 'i:_stT c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stack
     + 'i:effectiveGroupSize n:effectiveAreaMult r:preComputedBase r:preComputedEffective r:preComputed '
     + 'r:preComputedPotential i:burning f:burnTickDamage i:poisoned f:poisonTickDamage i:frozen f:iceTickDamage i:wet i:sandy i:watched c:watchedByTeam '
     + 'r:_levelTextLabel i:_vsGen c:_vsR c:_vsA c:_vsP1 c:_vsP2 i:_vsListId b:autoStackEnabled r:_ambientSoundTicks n:upgrademaxEnergy n:_mxOv n:_ovMx c:_ovVs';
-const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown r:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
+const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown i:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'i:_stT n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
     Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV',
@@ -1484,7 +1487,7 @@ function structTableAccessors(C, code, mineKey = null) {
     if (mineKey) {
         Object.defineProperty(P, '_stMine', { value: true, enumerable: false });
         Object.defineProperty(P, mineKey, { enumerable: true, configurable: true,
-            get() { return this._mv; },
+            get() { const t = this._stT; return t >= 0 && _ST.val ? _ST.val[t] : this._mv; },
             set(v) { this._mv = v; const t = this._stT; if (t >= 0) _stMineVal(t, Number(v)); } });
         return;
     }

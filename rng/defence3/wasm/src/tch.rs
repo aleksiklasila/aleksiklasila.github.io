@@ -43,6 +43,8 @@ pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
     let (diff, newest, cwt) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8));
     let (stcode, stown, stval) = (k.p::<u8>(9), k.p::<i32>(10), k.p::<f64>(11));
     let (hdr, nwl) = (k.p::<i32>(12), k.p::<i32>(13));
+    // (14: the 11x11 blocks' sums, unit.js _simMoveWallBlk81.)
+    let blk81 = k.p::<i32>(14);
     let n = k.i(0).max(0) as usize;
     let (w, h) = (k.i(1).max(0) as u32, k.i(2).max(0) as u32);
     let twall = k.i(3) as u8;
@@ -62,6 +64,14 @@ pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
                 for xx in bx.saturating_sub(1)..=(bx + 1).min(bw.saturating_sub(1)) {
                     let i = (yy * bw + xx) as usize;
                     s(blk9, i, g(blk9, i).wrapping_add(1));
+                }
+            }
+        }
+        if !blk81.is_null() {
+            for yy in by.saturating_sub(5)..=(by + 5).min(bh.saturating_sub(1)) {
+                for xx in bx.saturating_sub(5)..=(bx + 5).min(bw.saturating_sub(1)) {
+                    let i = (yy * bw + xx) as usize;
+                    s(blk81, i, g(blk81, i).wrapping_add(1));
                 }
             }
         }

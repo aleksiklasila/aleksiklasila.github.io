@@ -392,6 +392,13 @@ function _upKeepSecond() {
 let _upkPriceVer = -1, _upkUPrice = [], _upkBPrice = [];
 // The units' bins: per slot its bin (unit.upB), per bin how many (upk.h).
 let _upkU = null, _upkHist = null;
+// The bins' counts for the match (simMatchReserve): every unit type known
+// and room for 16 more, each player, each level.
+function upkeepReserve(B) {
+    const NT = Math.max(1, typeof _simUnitTypeNames !== 'undefined' ? _simUnitTypeNames.length : 0, typeof BASE_UNIT_STATS !== 'undefined' ? Object.keys(BASE_UNIT_STATS).length : 0) + 16;
+    const nh = Math.max(4096, NT * Math.max(1, B.players) * (MAX_THING_LEVEL + 1));
+    if (!_upkHist || _upkHist.length < nh || !simHeapHas(_upkHist)) { _upkHist = simSharedArray(Int32Array, nh); simParallelBind('upk.h', _upkHist); _upkU = null; }
+}
 function _upkUnitBin(U, c, s) {
     const ow = c.owner[s], t = c.upT[s];
     if (!(ow >= 0 && ow < U.np) || t < 0) return -1;
@@ -436,7 +443,7 @@ function _upkUnitsStep(np) {
     if (U && U.np === np && U.L1 === MAX_THING_LEVEL + 1 && U.cols === _simUnitState.columns) { U.NT = _simUnitTypeNames.length; return U; }
     // Made anew: every unit in its bin (SIM_KERNEL_UPKEEP on the helpers).
     const n = units.length, NT = Math.max(1, _simUnitTypeNames.length), L1 = MAX_THING_LEVEL + 1, nh = NT * np * L1;
-    if (!_upkHist || _upkHist.length < nh) { _upkHist = simSharedArray(Int32Array, Math.max(4096, nh * 2)); simParallelBind('upk.h', _upkHist); }
+    if (!_upkHist || _upkHist.length < nh) { _upkHist = simSharedArray(Int32Array, Math.max(4096, nh)); simParallelBind('upk.h', _upkHist); }
     _upkHist.fill(0);
     U = _upkU = { np, L1, NT, cnt: _upkHist, cols: _simUnitState.columns };
     if (n > 0) {
@@ -4367,6 +4374,26 @@ function _dropQueuedOrderUnits(idSet, playerId) {
 // oldest order applied whole when even that has no room).
 const ORDER_ENTRIES_MAX = 16384;
 let _oq = null;
+// Every work array the ticks use, made at the match's start (a new match,
+// a whole restore) at its bound from the match's settings: the population
+// the budget holds (units), the structure rows (structs), the map's tiles.
+// Nothing is allocated during play: the wasm32 heap has 4 GiB, and a growth
+// mid-match could find no room (sim_wasm.js simHeapPlayStats counts any).
+// The simulation's only (the page runs startGame too).
+function simMatchReserve() {
+    // (Where the ticks run: the wasm heap is up there; a page whose simulation
+    // runs in its worker has none, simWasmInit.)
+    if (typeof simWasmInit !== 'function' || !simWasmInit()) return;
+    const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
+    const tiles = GRID_W * GRID_H, B = {
+        units: memoryBudgetUnits(getConfiguredMaxPop(), teams, tiles), slots: typeof _simUnitState !== 'undefined' && _simUnitState ? _simUnitState.cap : 0,
+        structs: typeof structReserveRowsTotal === 'function' ? structReserveRowsTotal() : tiles, tiles, players: typeof players !== 'undefined' && players ? players.length : teams };
+    for (const f of [typeof navSubReserve === 'function' ? navSubReserve : null, typeof workerBrainReserve === 'function' ? workerBrainReserve : null,
+        typeof simSpawnBatchReserve === 'function' ? simSpawnBatchReserve : null, typeof simTileChangesReserve === 'function' ? simTileChangesReserve : null,
+        typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
+        typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
+        typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve]) if (f) f(B);
+}
 function orderQueueReserve() {
     const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
     const ring = 2 * memoryBudgetUnits(getConfiguredMaxPop(), teams, GRID_W * GRID_H) + 2 * ACTION_MAX_UNIT_IDS;
@@ -5806,6 +5833,9 @@ function startGame() {
             simUnitWkReserve(Math.min(workers, getConfiguredMaxPop()) * teams.length);
         }
     }
+    // (The ticks' work arrays for the whole match, sized by the slots just
+    // reserved: simMatchReserve.)
+    simMatchReserve();
     for (let pid of (startGameSkipStarters ? [] : teams)) {
         let pos = teamSpawnPos[pid];
         let spawnByThing = startingResourcesConfig.spawnCounts || {};

@@ -1188,10 +1188,13 @@ function _pathRegionsOwner(R, key, plain, old) {
     if (!simHeapHas(plain.parent)) { const p = simSharedArray(Int32Array, plain.parent.length); p.set(plain.parent); plain.parent = A.par = p; simParallelBind('reg.par', p); }
     const labels = old && old.labels.length === n && simHeapHas(old.labels) ? old.labels : simSharedArray(Int32Array, n);
     const op = old && old.parent.length >= size && simHeapHas(old.parent) ? old.parent : simSharedArray(Int32Array, size);
-    simParallelBind('reg.opar', op); simParallelBind('reg.olab', labels); simParallelBind('reg.lab', PL);
+    // (This owner's arrays through the block (sim_parallel.js simRustParallel),
+    // not bound by name for each owner in turn: a binding that changes makes
+    // the helpers sit out the jobs after it until they take its message.)
+    const RG = _simParReg, regArgs = [RG['reg.wall'] || null, PL, plain.parent, RG['reg.q'] || null, op, labels];
     const P = _simParams;
     P[0] = size; P[1] = PATH_REGION_TILES_PER_JOB;
-    simParallelRun(SIM_KERNEL_REG_IDENT, Math.ceil(size / PATH_REGION_TILES_PER_JOB));
+    simRustParallel(SIM_BLOCK_REG_IDENT, regArgs, P, Math.ceil(size / PATH_REGION_TILES_PER_JOB));
     const E = { key, labels, parent: op, next: M, canon: false, dirty: false };
     const label = k => { const l = PL[k]; if (l >= 0) return _pathRegionFind(plain, l); const e = extra.get(k); return e === undefined ? -1 : e; };
     const join = (a, b) => { const ra = _pathRegionFind(E, a), rb = _pathRegionFind(E, b); if (ra !== rb) E.parent[Math.max(ra, rb)] = Math.min(ra, rb); };
@@ -1211,8 +1214,7 @@ function _pathRegionsOwner(R, key, plain, old) {
     }
     // (reg.rs k_reg_owner: each tile's plain root, then its owner root.)
     P[0] = n; P[1] = PATH_REGION_TILES_PER_JOB;
-    simParallelRun(SIM_KERNEL_REG_OWNER, Math.ceil(n / PATH_REGION_TILES_PER_JOB));
-    simParallelBind('reg.lab', R.arrays.lab);
+    simRustParallel(SIM_BLOCK_REG_OWNER, regArgs, P, Math.ceil(n / PATH_REGION_TILES_PER_JOB));
     const L = E.labels;
     for (const [tk, l] of extra) L[tk] = _pathRegionFind(E, l);
     return E;
