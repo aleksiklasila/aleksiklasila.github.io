@@ -47,4 +47,5 @@ const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a.buf
     console.log('PASS: navigation background build ' + rows.join(', '));
     process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
-function NAV_TICKS() { return 200; }
+// (A rebuild starts NAV_FREE_TICKS after the last install: flownav.js navTick.)
+function NAV_TICKS() { return 300; }

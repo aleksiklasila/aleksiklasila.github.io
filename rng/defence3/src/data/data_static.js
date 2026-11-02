@@ -559,7 +559,7 @@ const THING_STATS = {
             trainingTime: {base: 14, level: {factor: 0.89, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
-    collector: { kind: "unit", color: "#aaa", vis: "star", isWorker: true, resourceKey: "energy", name: "⚡ Collector", description: "Resource worker. Gathers energy from energy mines and farms and refills the shared energy stockpile.", strength: "Harvests energy", weakness: "Unarmed and vulnerable to raiders",
+    collector: { kind: "unit", color: "#aaa", vis: "star", isWorker: true, isFlying: true, resourceKey: "energy", name: "⚡ Collector", description: "Resource worker. Gathers energy from energy mines and farms and refills the shared energy stockpile.", strength: "Harvests energy", weakness: "Unarmed and vulnerable to raiders",
         stats: {
             energy: {base: 15, level: {factor: 1.13, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
             atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},
@@ -580,7 +580,7 @@ const THING_STATS = {
             trainingTime: {base: 15, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
-    astar_collector: { kind: "unit", color: "#bbb", vis: "star", isWorker: true, resourceKey: "astar", name: "★ Collector", description: "Resource worker. Gathers ★ from gray ★ mines and farms and refills the shared ★ stockpile used by pathfinding.", strength: "Harvests astar", weakness: "Unarmed and vulnerable to raiders",
+    astar_collector: { kind: "unit", color: "#bbb", vis: "star", isWorker: true, isFlying: true, resourceKey: "astar", name: "★ Collector", description: "Resource worker. Gathers ★ from gray ★ mines and farms and refills the shared ★ stockpile used by pathfinding.", strength: "Harvests astar", weakness: "Unarmed and vulnerable to raiders",
         stats: {
             energy: {base: 15, level: {factor: 1.13, round: "floor", min: 1}, researchable: true, research: {factor: 2, direction: "increase"}, softCap: null, min: 1, round: "floor"},
             atk: {base: 0, level: {factor: 1, round: "round", min: 0}, researchable: false, research: {factor: 2, direction: "increase"}, softCap: null, min: 0},

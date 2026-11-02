@@ -2915,7 +2915,7 @@ function simTileChangesFlush() {
     const b81 = b9 && _simMoveWallBlk81 && simHeapHas(_simMoveWallBlk81) && _simMoveWallBlk81.length === b9.length ? _simMoveWallBlk81 : null;
     if (!simHeapHas(_ST.code)) structTablesRehome();
     const P = T.P;
-    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TYPE_WALL; P[4] = NAV_PROFILES; P[5] = NAV_PROFILE_COLLECT; P[6] = NAV_PROFILE_BUILD0;
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TYPE_WALL; P[4] = NAV_PROFILES; P[5] = NAV_PROFILE_BUILD; P[6] = NAV_PROFILE_BUILD;
     P[7] = _simMoveWallBlkW; P[8] = 0x66; P[9] = 0x77;
     simRustDirect('k_tile_changes', [T.list, cellType, _simMoveWall, _simMoveWallBlk, b9, scOk ? sc : null, diff, T.tabN, T.tabC, _ST.code, _ST.own, _ST.val, T.hdr, T.nw, b81], P);
     _simMoveWallVer = (_simMoveWallVer + T.hdr[0]) | 0;

@@ -1402,8 +1402,10 @@ function _hasOwnedTileEntityAt(owner, nx, ny) {
     return ref.owner === owner;
 }
 
+// (Every player's builders pass every structure: flownav.js _navClassPass, the builders' walk class.)
 function _canBuilderPassTile(owner, nx, ny) {
-    return _hasOwnedTileEntityAt(owner, nx, ny);
+    if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) return false;
+    return _navClassPass(NAV_PROFILE_BUILD, nx, ny);
 }
 
 const _builderCanWalkByOwner = new Map();
@@ -1413,7 +1415,7 @@ function _builderCanWalk(owner) {
     let cached = _builderCanWalkByOwner.get(o);
     if (cached) return cached;
     let fn = (nx, ny) => _canBuilderPassTile(o, nx, ny);
-    fn._pathProfileKey = `builder_${o}`;
+    fn._pathProfileKey = 'builder';
     _builderCanWalkByOwner.set(o, fn);
     return fn;
 }

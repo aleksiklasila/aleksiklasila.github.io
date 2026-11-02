@@ -2,8 +2,8 @@
 //! in order, what a change of its cell type or of its tile entity means for
 //! the walk tables: the ground walls (mv.wall) with their block change counts
 //! (mv.wallBlk, mv.wallBlk9), the step costs around it, the walk classes'
-//! walls (flownav.js navClassTileChanged: collectors pass active mines, a
-//! player's builders pass its own structures), and per navigation profile
+//! walls (flownav.js _navClassWalls: the builders pass every structure, a
+//! mine only while it has some left), and per navigation profile
 //! the count of tiles that differ from its newest build (flownav.js
 //! _navDiff). Tiles that became ground walls are listed (their units are
 //! pushed off them by the caller).
@@ -33,9 +33,9 @@ unsafe fn arr<T>(tab: *const i32, i: usize) -> *mut T {
 /// walls (encoded addresses, 0 none), [8] ?per profile its class walls (0
 /// none), [9] structure codes, [10] owners, [11] values, [12] hdr out ([0]
 /// wall version steps, [1] new walls listed), [13] new walls out.
-/// P: [0] n, [1] W, [2] H, [3] TYPE_WALL, [4] profiles, [5] the collectors'
-/// profile, [6] the first builders' profile, [7] blocks wide, [8]/[9] the
-/// gold and A* mines' codes.
+/// P: [0] n, [1] W, [2] H, [3] TYPE_WALL, [4] profiles, [5] the first class
+/// profile (the builders'), [7] blocks wide, [8]/[9] the gold and A* mines'
+/// codes.
 #[no_mangle]
 pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -49,7 +49,7 @@ pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
     let (w, h) = (k.i(1).max(0) as u32, k.i(2).max(0) as u32);
     let twall = k.i(3) as u8;
     let np = k.i(4).clamp(0, 32) as usize;
-    let (pcol, pb0) = (k.i(5).max(0) as usize, k.i(6).max(0) as usize);
+    let pcls = k.i(5).max(0) as usize;
     let bw = k.i(7).max(0) as u32;
     let bh = (h + 7) >> 3;
     let (mg, ma) = (k.i(8) as u8, k.i(9) as u8);
@@ -123,15 +123,15 @@ pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
         // The walk classes' walls there.
         let gw = g(wall, tu);
         let code = g(stcode, tu);
-        let mine_on = (code == mg || code == ma) && g(stval, tu) > 0.0;
-        let own = if code != 0 { g(stown, tu) } else { -1 };
+        let mine = code == mg || code == ma;
+        let pass = code != 0 && (!mine || g(stval, tu) > 0.0);
+        let _ = stown;
         let mut changed = false;
-        for p in pcol..np {
+        for p in pcls..np {
             let cw = arr::<u8>(cwt, p);
             if cw.is_null() {
                 continue;
             }
-            let pass = if p == pcol { mine_on } else { code != 0 && own == (p - pb0) as i32 };
             let v = if gw != 0 && !pass { 1u8 } else { 0u8 };
             let was = g(cw, tu);
             if was == v {

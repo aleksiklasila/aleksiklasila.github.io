@@ -726,11 +726,9 @@ impl<'a> Ctx<'a> {
     #[inline(always)]
     unsafe fn profile(&self, q: usize) -> i32 {
         if g(self.w.layer, q) == 1 { return 1; }
-        match self.wb(q) {
-            1 | 2 => 2,
-            3 | 4 => { let o = g(self.w.own, q) as i32; if (0..8).contains(&o) { 3 + o } else { 0 } }
-            _ => 0,
-        }
+        // (Arithmetic, not a match: a lookup table would be a data segment.)
+        let wb = self.wb(q);
+        (wb.wrapping_sub(1) < 4) as i32 * (1 + (wb >= 3) as i32)
     }
     /// navApproachTile on the profile's walls.
     unsafe fn approach(&self, p: i32, t: i32) -> i32 {

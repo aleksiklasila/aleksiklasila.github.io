@@ -229,8 +229,8 @@ pub unsafe extern "C" fn k_rally_tiles(a: u32, _chunk: i32) {
     s(cnt, 6, m as i32);
 }
 
-/// Navigation profiles (flownav.js NAV_PROFILES): ground, air, collectors,
-/// builders and salvagers by owner.
+/// Navigation profiles (flownav.js NAV_PROFILES: ground, air, builders and
+/// salvagers; collectors fly): room for more.
 const NAV_PROFILES: usize = 11;
 /// A worker's navigation profile (flownav.js navProfileOf): its layer (air),
 /// its worker record's type (unit.wbType: 1 collector, 2 astar collector, 3
@@ -238,11 +238,9 @@ const NAV_PROFILES: usize = 11;
 #[inline(always)]
 fn worker_profile(layer: u8, wb: u8, owner: i32) -> usize {
     if layer == 1 { return 1; }
-    match wb {
-        1 | 2 => 2,
-        3 | 4 => if (0..8).contains(&owner) { 3 + owner as usize } else { 0 },
-        _ => 0,
-    }
+    let _ = owner;
+    // (Arithmetic, not a match: a lookup table would be a data segment.)
+    (wb.wrapping_sub(1) < 4) as usize * (1 + (wb >= 3) as usize)
 }
 /// worker.js _workerResTerm: a reservation's share of its region's sum.
 #[inline(always)]

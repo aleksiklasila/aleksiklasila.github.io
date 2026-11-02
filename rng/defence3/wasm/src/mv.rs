@@ -1594,6 +1594,12 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     if *r == tl && *r.add(NV_D) == dk && *r.add(NV_G) == fgen && (!refresh || (*r.add(NV_V) == nav_ver && *r.add(NV_W) == wv)) {
         return 1;
     }
+    // (Nothing in the way to its destination, by the atlas's clear blocks:
+    // straight at it, without the shared looks: a step's look there was one
+    // tile, made and stored again at every tile (flyers: all of their way).)
+    if look_direct(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen) {
+        return 1;
+    }
     // (The shared looks: the field kind and the profile in one key word.)
     // (The walls it looks against: the profile's, else the air or ground
     // map: a flyer's bit.)
@@ -1615,24 +1621,36 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     }
     code
 }
+/// A straight look (no wall in the blocks between it and its destination,
+/// the atlas's clear rectangle; the live walls around it open): its next
+/// tile toward the destination, far the destination itself.
+#[inline(always)]
+unsafe fn look_direct(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> bool {
+    let (w, h) = (v.w, v.h);
+    if v.atl.is_null() || dk < 0 || dk >= w * h || tl == dk {
+        return false;
+    }
+    let dx=irem_f(dk,w);let dy=idiv(dk-dx,w);
+    if let Some(a)=crate::atlas::Atl::from(v.atl) {
+        if a.clear_rect(gx,gy,dx,dy) {
+            let n=if (dx-gx).abs()>=(dy-gy).abs(){tl+if dx>gx{1}else{-1}}
+                else{tl+if dy>gy{w}else{-w}};
+            // Live walls can be newer than this immutable atlas.
+            let nx=step_x(n,tl,gx,w);let ny=step_y(n,tl,gx,gy,w);
+            if open_block(wl,gx,gy,w,h) && open_block(wl,nx,ny,w,h) {
+                nv_put(m,s,tl,dk,nav_ver,wv,fgen,n,-1,dk,true);
+                return true;
+            }
+        }
+    }
+    false
+}
 /// The look itself (flow_look's miss).
 #[inline(never)]
 unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
     let (w, h) = (v.w, v.h);
-    if !v.atl.is_null() && dk>=0 && dk<w*h && tl!=dk {
-        let dx=irem_f(dk,w);let dy=idiv(dk-dx,w);
-        if let Some(a)=crate::atlas::Atl::from(v.atl) {
-            if a.clear_rect(gx,gy,dx,dy) {
-                let n=if (dx-gx).abs()>=(dy-gy).abs(){tl+if dx>gx{1}else{-1}}
-                    else{tl+if dy>gy{w}else{-w}};
-                // Live walls can be newer than this immutable atlas.
-                let nx=step_x(n,tl,gx,w);let ny=step_y(n,tl,gx,gy,w);
-                if open_block(wl,gx,gy,w,h) && open_block(wl,nx,ny,w,h) {
-                    nv_put(m,s,tl,dk,nav_ver,wv,fgen,n,-1,dk,true);
-                    return 1;
-                }
-            }
-        }
+    if look_direct(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen) {
+        return 1;
     }
     let mut own_cache = core::mem::MaybeUninit::<crate::atlas::ExitCache>::uninit();
     let exit_cache = if !m.nav_exit_cache.is_null() { m.nav_exit_cache } else { core::ptr::write_bytes(own_cache.as_mut_ptr(), 0, 1); own_cache.as_mut_ptr() };

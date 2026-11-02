@@ -4393,6 +4393,8 @@ function simMatchReserve() {
         typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
         typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
         typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve]) if (f) f(B);
+    // (The navigation's build slots: flownav.js navReserve.)
+    if (typeof navReserve === 'function') navReserve();
     // (The area index for range queries, per layout: unit.js areaRangeIndexEnsure.)
     if (typeof areaRangeIndexEnsure === 'function' && typeof areaNeighborIds !== 'undefined' && areaNeighborIds.length) areaRangeIndexEnsure();
 }

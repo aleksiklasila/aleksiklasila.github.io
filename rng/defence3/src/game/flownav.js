@@ -28,12 +28,12 @@
 
 const NAV_UNREACHED = 0xFFFF;
 const NAV_PROFILE_GROUND = 0, NAV_PROFILE_AIR = 1;
-// Walk classes (navProfileOf): units that may walk over more than the ground
-// allows (canUnitOccupyTile) have a navigation of their own: collectors over
-// active mines, a player's builders and salvagers over the player's own
-// buildings (_navClassWalls: their work is at those, in the middle of a base
-// too). (Up to NAV_BUILD_PLAYERS players; others' keep the ground's.)
-const NAV_PROFILE_COLLECT = 2, NAV_PROFILE_BUILD0 = 3, NAV_BUILD_PLAYERS = 8, NAV_PROFILES = NAV_PROFILE_BUILD0 + NAV_BUILD_PLAYERS;
+// The builders' walk class (navProfileOf): builders and salvagers of every
+// player walk over every structure (_navClassWalls: their work is at those,
+// in the middle of a base too): the ground's walls less the structures' (a
+// mined-out mine walls again). One navigation for all of them. Collectors
+// fly (data_static.js isFlying): the air's.
+const NAV_PROFILE_BUILD = 2, NAV_PROFILES = 3;
 
 // One build: { C, cw, ch, nc, W, H, profile,
 //   wall, cost: the walls it was made for (a copy) and their step costs,
@@ -54,12 +54,26 @@ const NAV_PROFILE_COLLECT = 2, NAV_PROFILE_BUILD0 = 3, NAV_BUILD_PLAYERS = 8, NA
 const SIM_KERNEL_NAV_LOCAL = 15, SIM_KERNEL_NAV_PARTS = 16, SIM_KERNEL_NAV_NODES = 57, SIM_KERNEL_NAV_GRAPH = 58;
 const NAV_NODES_PER_JOB = 16, NAV_GRAPH_PER_JOB = 256, NAV_LOCAL_PER_JOB = 32, NAV_COST_ROWS = 32;
 function navBuild(profile, wall, costs, W, H) {
-    const b = navBuildStart(profile, wall, !!costs, W, H);
+    try { return _navBuildAll(profile, wall, costs, W, H, true); }
+    catch (e) {
+        if (e !== _NAV_SLOT_FULL) throw e;
+        _navSlotFullNote(profile);
+        return _navBuildAll(profile, wall, costs, W, H, false);
+    }
+    finally { _navSlots.cur = null; }
+}
+function _navBuildAll(profile, wall, costs, W, H, slot) {
+    const b = navBuildStart(profile, wall, !!costs, W, H, slot);
     navBuildNodes(b);
     navBuildLocal(b);
     navBuildGraph(b);
     navBuildParts(b);
     return navBuildFinish(b);
+}
+// (A build too big for its slot: logged once.)
+function _navSlotFullNote(profile) {
+    _navSlots.dropped++;
+    if (!_navSlots.warned) { _navSlots.warned = true; console.warn('[nav] a build of profile ' + profile + ' needs more than its slot (' + (_navSlots.slots && _navSlots.slots[profile] ? _navSlots.slots[profile][0].a.length : 0) + ' bytes): dropped'); }
 }
 // Every array of a build and its atlas (navBuildStart .. navAtlasHeader) is
 // navigation's (_navOwned): given back once no build in use reaches it
@@ -71,10 +85,110 @@ const _navOwned = new Set(), _navFreeQ = [];
 const NAV_FREE_TICKS = 40, NAV_SWEEP_TICKS = 32;
 let _navFreeClock = 0;
 function _navArr(Type, n, clear = true) {
+    const S = _navSlots.cur;
+    if (S) {
+        const len = Math.max(1, n | 0), bytes = len * Type.BYTES_PER_ELEMENT, off = S.off;
+        if (off + bytes > S.a.length) throw _NAV_SLOT_FULL;
+        S.off = Math.ceil((off + bytes) / 64) * 64;
+        const v = simHeapView(S.a, Type, off, len);
+        if (clear) {
+            if (bytes >= (1 << 20) && typeof simParallelZeroHeap === 'function' && typeof _simHeapPtrOf === 'function' && _simHeapPtrOf(v) >= 0) simParallelZeroHeap(v.buffer, _simHeapPtrOf(v), bytes);
+            else v.fill(0);
+        }
+        return v;
+    }
     const a = simHeapArrayAuto(Type, n, clear);
     _navOwned.add(a);
     return a;
 }
+// ---- Build memory: fixed slots (navReserve) ----
+// Every array of a build and its atlas comes from a slot: one heap block,
+// made at the match's start (main.js simMatchReserve: navReserve) at the
+// most its profile's builds may take, never grown: the wasm32 heap's 4 GiB
+// is shared out at the start. Two slots a profile that rebuilds (the
+// installed build's and the next one's); one for the air's (its walls never
+// change). A build takes the slot no build of its profile in use holds
+// (navBuildStart waits for every background lane first: nothing reads a
+// replaced build by then). A
+// build that would need more than its slot is dropped (the installed one
+// kept, the same on every peer: _navJobStep); its profile is built again
+// once its walls change further. Without slots (no reserve: tests, the
+// page) builds take heap arrays as before.
+// Sizes: the ground's NAV_GROUND_BYTES_PER_TILE a tile (~2.4x the 1M-unit
+// chaos scene's ground build); the builders' their build at the start's
+// (terrain alone) with room for every mine run dry; the air's exact.
+const NAV_GROUND_BYTES_PER_TILE = 96;
+const _NAV_SLOT_FULL = { navSlotFull: true };
+const _navSlots = { slots: null, cur: null, W: -1, H: -1, lastInstall: -1e9, capped: [-1, -1, -1], dropped: 0, warned: false };
+// The bytes a build (with its atlas) may take on a W x H map with k exit
+// nodes and np parts: every _navArr of navBuild* and navAtlas*, each
+// rounded up to 64 bytes.
+function _navBuildBytes(W, H, k, np) {
+    const T = W * H, C = Math.max(W, H) > 512 ? 32 : 16, cw = Math.ceil(W / C), ch = Math.ceil(H / C), nc = cw * ch, NM = 2 * C, CC = C * C;
+    k = Math.min(Math.max(1, k), nc * NM); np = Math.min(Math.max(1, np), T);
+    let L = 0;
+    for (let span = 1; L < 16;) { span *= 4; L++; if (Math.ceil(cw / span) <= 1 && Math.ceil(ch / span) <= 1) break; }
+    const total = np * L, bw = Math.ceil(W / 8), bh = Math.ceil(H / 8), nb = bw * bh, pool = k * L * 16, nj = np * L;
+    const r = n => Math.ceil(Math.max(1, n) / 64) * 64 + 64;
+    return 3 * r(T) + r(2 * T) + r(4 * nc) + r(4 * nc * NM) + r(16 * nc)
+        + r(4 * (nc + 1)) + 3 * r(4 * k) + r(2 * k * CC)
+        + r(4 * (nc + 1)) + 2 * r(4 * np) + r(4 * k) + r(4 * (np + 1)) + r(4 * np)
+        + r(4 * (k + 1)) + 2 * r(4 * k * NM) + r(4 * Math.ceil(k / 8))
+        + r(8 * nb) + r(T) + r(2 * nb) + r(4 * nc) + 2 * r(8 * np) + r(4 * np) + r(2 * np) + r(4 * np * L) + r(2 * total) + r(4 * total) + r(4 * (total + 1))
+        + 2 * r(4 * k * L) + r(4 * total) + r(4 * pool) + r(12 * nj) + r(4 * (nc + 1)) + r(4 * nc * NM * 4) + r(4 * (bw + 1) * (bh + 1)) + r(96);
+}
+// The air's build: no walls, so its nodes and parts follow from the map.
+function _navAirBytes(W, H) { const C = Math.max(W, H) > 512 ? 32 : 16, nc = Math.ceil(W / C) * Math.ceil(H / C); return _navBuildBytes(W, H, 8 * nc, nc); }
+// The ground's slot: its share of the budget a tile, at most its largest build.
+function _navGroundBytes(W, H) { const C = Math.max(W, H) > 512 ? 32 : 16, nc = Math.ceil(W / C) * Math.ceil(H / C); return Math.min(NAV_GROUND_BYTES_PER_TILE * W * H, _navBuildBytes(W, H, nc * 2 * C, Math.ceil(W * H / 2) + nc)); }
+// The slots for this map (main.js simMatchReserve). The builders' build is
+// made once here to size theirs (its walls: terrain alone, and mines while
+// they have some left; each mine run dry adds at most 2 exit nodes and 3
+// parts).
+function navReserve() {
+    if (typeof simHeapHas !== 'function' || typeof GRID_W !== 'number' || !(GRID_W > 0)) return;
+    const S = _navSlots, W = GRID_W, H = GRID_H;
+    if (S.slots && S.W === W && S.H === H && S.slots.every(L => L.every(e => simHeapHas(e.a)))) return;
+    const prev = _navSlots.cur; S.cur = null;
+    let builder = _navGroundBytes(W, H);
+    try {
+        const b = navBuild(NAV_PROFILE_BUILD, navWallTable(NAV_PROFILE_BUILD), true, W, H);
+        // (A mine walled again adds exit nodes only on a cluster's border row
+        // or column (2 at most), parts anywhere (3 at most).)
+        let mines = 0, edge = 0;
+        for (const list of [typeof goldMines !== 'undefined' ? goldMines : null, typeof astarMines !== 'undefined' ? astarMines : null]) if (list) for (const m of list) {
+            if (!m) continue;
+            mines++;
+            const x = m.gx % b.C, y = m.gy % b.C;
+            if (x === 0 || y === 0 || x === b.C - 1 || y === b.C - 1) edge++;
+        }
+        builder = Math.ceil(_navBuildBytes(W, H, b.k + 2 * edge, b.np + 3 * mines) * 1.1);
+        // (The measuring build's arrays given back.)
+        for (const k in b) { const a = b[k]; if (a && ArrayBuffer.isView(a) && _navOwned.has(a)) { _navOwned.delete(a); if (typeof simHeapFreeAuto === 'function') simHeapFreeAuto(a); } }
+        if (b.atlas) for (const k in b.atlas) { const a = b.atlas[k]; if (a && ArrayBuffer.isView(a) && _navOwned.has(a)) { _navOwned.delete(a); if (typeof simHeapFreeAuto === 'function') simHeapFreeAuto(a); } }
+    } catch (e) { if (e !== _NAV_SLOT_FULL) throw e; }
+    const sizes = [];
+    sizes[NAV_PROFILE_GROUND] = [_navGroundBytes(W, H), _navGroundBytes(W, H)];
+    sizes[NAV_PROFILE_AIR] = [_navAirBytes(W, H)];
+    sizes[NAV_PROFILE_BUILD] = [builder, builder];
+    S.slots = sizes.map((L, p) => L.map((bytes, s) => ({ p, s, a: simSharedArray(Uint8Array, bytes), off: 0 })));
+    S.W = W; S.H = H; S.cur = prev;
+}
+// The slots' bytes in all (the memory budget: data_static.js).
+function navReserveBytes() { let n = 0; if (_navSlots.slots) for (const L of _navSlots.slots) for (const e of L) n += e.a.length; return n; }
+// The slot a new build of the profile takes (null: none, heap arrays).
+function _navSlotTake(profile) {
+    const S = _navSlots;
+    if (!S.slots || S.W !== GRID_W || S.H !== GRID_H || !S.slots[profile]) return null;
+    const held = new Set();
+    for (const b of _nav) if (b && b.slot) held.add(b.slot);
+    if (_navNext.nav && _navNext.nav.slot) held.add(_navNext.nav.slot);
+    if (_navJob) { if (_navJob.b && _navJob.b.slot) held.add(_navJob.b.slot); if (_navJob.next && _navJob.next.slot) held.add(_navJob.next.slot); }
+    for (const e of S.slots[profile]) if (!held.has(e) && simHeapHas(e.a)) { e.off = 0; return e; }
+    return null;
+}
+// The build's slot for its arrays from here (b: a build or its atlas).
+function _navUse(b) { _navSlots.cur = b && b.slot ? b.slot : null; }
 function _navReach(o, seen, out, depth) {
     if (!o || typeof o !== 'object' || depth > 5) return;
     if (ArrayBuffer.isView(o)) { out.add(o); return; }
@@ -103,11 +217,15 @@ function _navFreeTick() {
     if (i) _navFreeQ.splice(0, i);
 }
 // The walls (copied) and room for their step costs, bound for the kernels.
-function navBuildStart(profile, wallLive, withCosts, W, H) {
+function navBuildStart(profile, wallLive, withCosts, W, H, useSlot = true) {
     // (A build's background stage still running reads the names bound here.)
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
+    // (Its slot: navReserve.)
+    const slot = useSlot ? _navSlotTake(profile) : null;
+    _navSlots.cur = slot;
     const C = Math.max(W, H) > 512 ? 32 : 16;
-    const wall = _navArr(Uint8Array, W * H);
+    // (Not cleared: every tile set here.)
+    const wall = _navArr(Uint8Array, W * H, false);
     wall.set(wallLive.length === W * H ? wallLive : wallLive.subarray(0, W * H));
     const cost = withCosts ? _navArr(Uint8Array, W * H) : null, h = withCosts ? _navArr(Uint8Array, W * H) : null;
     const cw = Math.ceil(W / C), ch = Math.ceil(H / C), nc = cw * ch;
@@ -116,7 +234,7 @@ function navBuildStart(profile, wallLive, withCosts, W, H) {
     // border has at most C / 2 spans), and their count per border.)
     const NM = 2 * C, ns = _navArr(Int32Array, Math.max(1, nc * NM)), nsc = _navArr(Int32Array, Math.max(1, nc * 4));
     const bld = { profile, C, cw, ch, nc, W, H, k: 0, wall, cost, h, nodeBase: null, nodeTile: null, nodePair: null, fields: null,
-        adjStart: null, adjA: null, adjC: null, adjN: null, adjMax: null, B: 1, partL, partN, NM, ns, nsc };
+        adjStart: null, adjA: null, adjC: null, adjN: null, adjMax: null, B: 1, partL, partN, NM, ns, nsc, slot };
     simParallelBind('navb.wall', wall); simParallelBind('navb.cost', cost || _navNoCost); if (h) simParallelBind('navb.h', h);
     simParallelBind('navb.partL', partL); simParallelBind('navb.partN', partN);
     simParallelBind('navb.ns', ns); simParallelBind('navb.nsc', nsc);
@@ -167,6 +285,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_NODES] = function (R, P, chunk) { _simRust(_navNodesW
 // The nodes numbered cluster by cluster (nodeBase), each with the node
 // across its border (nodePair), and the storage of their local fields.
 function navBuildNodesFinish(b) {
+    _navUse(b);
     b.h = null;
     const { nc, cw, C, NM, ns, nsc } = b;
     const nodeBase = _navArr(Int32Array, nc + 1);
@@ -189,7 +308,8 @@ function navBuildNodesFinish(b) {
         }
     }
     // (Each node's field is preset by the kernel that makes it.)
-    const CC = C * C, fields = _navArr(Uint16Array, Math.max(1, k * CC));
+    // (Not cleared: a slot's memory is reused, and each node's field is written whole by the kernel that makes it.)
+    const CC = C * C, fields = _navArr(Uint16Array, Math.max(1, k * CC), false);
     const adjN = _navArr(Int32Array, Math.max(1, k));
     b.k = k; b.nodeBase = nodeBase; b.nodeTile = nodeTile; b.nodePair = nodePair; b.fields = fields; b.adjN = adjN;
     _navBuildBind(b);
@@ -270,6 +390,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_PARTS] = function (R, P, chunk) { _simRust(_navPartsW
 // by its first part) and each component's parts. O(clusters + nodes +
 // parts), at a build's end.
 function navBuildPartsFinish(b) {
+    _navUse(b);
     const { nc, k, nodeBase, nodeTile, nodePair, partL, partN } = b;
     const partBase = _navArr(Int32Array, nc + 1);
     let np = 0;
@@ -348,6 +469,7 @@ function navBuildGraph(b) {
 }
 // Each node's first edge (adjStart: the counts summed) and the edge arrays.
 function navBuildGraphAlloc(b) {
+    _navUse(b);
     _navBuildBind(b);
     const k = b.k, N = b.adjN, adjStart = _navArr(Int32Array, k + 1);
     let e = 0;
@@ -376,7 +498,7 @@ function navBuildFinish(b, atlas = true) {
     return { profile: b.profile, C: b.C, cs: 31 - Math.clz32(b.C), cw: b.cw, ch: b.ch, nc: b.nc, W: b.W, H: b.H, k: b.k,
         nodeBase: b.nodeBase, nodeTile: b.nodeTile, nodePair: b.nodePair, fields: b.fields, wall: b.wall, cost: b.cost,
         adjStart: b.adjStart, adjA: b.adjA, adjC: b.adjC, B: b.B,
-        partL: b.partL, partBase: b.partBase, np: b.np, nodePart: b.nodePart, partComp: b.partComp, partCluster: b.partCluster,
+        slot: b.slot, partL: b.partL, partBase: b.partBase, np: b.np, nodePart: b.nodePart, partComp: b.partComp, partCluster: b.partCluster,
         ncomp: b.ncomp, compStart: b.compStart, compParts: b.compParts,
         // (Its routing atlas: every destination by lookups.)
         atlas: atlas ? navAtlasBuild(b) : null };
@@ -417,6 +539,7 @@ function navAtlasBuild(b) {
 // (bg) a chain on the build's lane.
 function navAtlasStart(b, bg) {
     if (!NAV_ATLAS || !(b.np > 0) || typeof simParallelRun !== 'function') return null;
+    _navUse(b);
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
     const { W, H, C, cw, ch, nc, np, k, nodePair, nodePart, partCluster } = b;
     const bw = Math.ceil(W / 8), bh = Math.ceil(H / 8), nb = bw * bh;
@@ -510,13 +633,14 @@ function navAtlasStart(b, bg) {
         routeP(P);
         if (nj > 0) simParallelRun(SIM_KERNEL_ATL_ROUTE, nj);
     }
-    return { L, C, cw, bw, np, W, H, nc, bm, bc, cb, co: null, ct: null, cn, anc, cip, cin: cinA, rco, rc, dn, didx, nodes: total, poolEntries: pool, jobs: nj,
+    return { slot: b.slot, L, C, cw, bw, np, W, H, nc, bm, bc, cb, co: null, ct: null, cn, anc, cip, cin: cinA, rco, rc, dn, didx, nodes: total, poolEntries: pool, jobs: nj,
         nodePart, nodeBase: b.nodeBase, header: null, blockP };
 }
 // The clusters' tables (n x n entries each, from the block counts: after
 // navAtlasStart's kernels), now or (bg) on the build's lane.
 function navAtlasTables(A, bg) {
     if (!A) return;
+    _navUse(A);
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
     const { nc, cn } = A;
     const co = _navArr(Int32Array, nc + 1);
@@ -539,6 +663,7 @@ function navAtlasTables(A, bg) {
 // let go.
 function navAtlasFinish(A) {
     if (!A || !A.ct) return null;
+    _navUse(A);
     // Four reads certify an empty rectangle of 8x8 blocks. This belongs to
     // the shared immutable geometry (~63 KiB for a 1000x1000 map).
     const stride=A.bw+1,bh=(A.H+7)>>3;
@@ -682,10 +807,12 @@ const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 
 // sources, the same slots), the fields asked for meanwhile over both builds
 // (their jobs' second batches); at the window's end both installed at once
 // (_navNextInstall), the same tick on every peer: no tick makes them all.
-// (30: ~16k live ground fields at 80k units (workers' sites, rally points)
-// did not fit 10 on the lane's capped helpers: the install waited ~60 ms
-// for the rest. A build is ~150 ticks; units follow the old one meanwhile.)
-const NAV_SWAP_TICKS = 30;
+// (30 with destination fields: ~16k live ground fields at 80k units
+// (workers' sites, rally points) did not fit 10 on the lane's capped
+// helpers: the install waited ~60 ms for the rest. On the atlas (the
+// default: routes by lookups, no fields) the window holds the atlas's
+// stages alone: 4.)
+const NAV_SWAP_TICKS = NAV_ATLAS ? 4 : 30;
 const _navNext = { nav: null, rowW: 0, pools: [null, null], stages: null, spare: [null, null] };
 function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
 function _navPoolEnsure(F, C) {
@@ -696,9 +823,14 @@ function _navPoolEnsure(F, C) {
     if (J) { const keep = []; for (let i = 0; i < J.length; i += 3) if (J[i] !== F) keep.push(J[i], J[i + 1], J[i + 2]); _navFieldsJob.slots = keep.length ? keep : null; }
     F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; if (F.ht) simHeapFree(F.ht); F.ht = null; F.free = []; F.pending = []; F.seen = null; F.remake = null;
     F.rowSrc = new Map(); F.rowKeyOf = null;
-    _navFieldsGrow(F, F.wide ? 64 : 1024);
+    _navFieldsGrow(F, F.wide ? NAV_FIELDS_WIDE : NAV_FIELDS_NARROW);
     return F;
 }
+// The pools' slots, fixed (made once, never grown: the wasm32 heap's 4 GiB
+// is shared out at the match's start). Routes use the atlas (every
+// destination by lookups, no field): fields are its fallback; a request
+// with every slot in use gets none (-1: no way this tick, asked again).
+const NAV_FIELDS_NARROW = 4096, NAV_FIELDS_WIDE = 256, NAV_FIELDS_FIXED = true;
 function _navFieldsGrow(F, cap) {
     // (A growth on its way (_navGrowPlan): finished first, then grown no more
     // if that gave room.)
@@ -773,7 +905,7 @@ function navFieldRequest(profile, dest, wide = false) {
     const F = _navPoolEnsure(_navFields.pools[wide ? 1 : 0], nav.C), key = _navFieldKey(profile, dest);
     let s = _navHtSlot(F, key);
     if (s < 0) {
-        if (!F.free.length) _navFieldsGrow(F, F.cap * 2);
+        if (!F.free.length) return -1;
         s = F.free.pop();
         const { C, cw, W, H } = nav, c = _navClusterOf(dest, W, C, cw), cx = c % cw, cy = (c - cx) / cw, m = s * NAV_FIELD_META;
         const bx = wide ? Math.max(0, (cx - 1) * C) : cx * C, by = wide ? Math.max(0, (cy - 1) * C) : cy * C;
@@ -861,7 +993,8 @@ function _navGrowAllowed() {
     return !(J && gameTime + 1 - J.start >= NAV_STEP_STAGE);
 }
 function _navGrowPlan(lane) {
-    if (typeof simParallelCopyStage !== 'function' || !_navGrowAllowed()) return null;
+    // (The pools are fixed: NAV_FIELDS_NARROW / NAV_FIELDS_WIDE.)
+    if (NAV_FIELDS_FIXED || typeof simParallelCopyStage !== 'function' || !_navGrowAllowed()) return null;
     const pairs = [];
     for (let w = 0; w < 2; w++) {
         const F = _navFields.pools[w];
@@ -1142,8 +1275,12 @@ function navWallTable(profile) {
 const _navClassWall = new Array(NAV_PROFILES).fill(null);
 let _navClassGrid = null;
 function _navClassPass(profile, x, y) {
-    if (profile === NAV_PROFILE_COLLECT) return hasActiveGoldMineAt(x, y) || hasActiveAstarMineAt(x, y);
-    return _hasOwnedTileEntityAt(profile - NAV_PROFILE_BUILD0, x, y);
+    // (Any structure; a mine only while it has some left: tch.rs k_tile_changes, the same rule.)
+    const e = typeof getTileEntityRef === 'function' ? getTileEntityRef(x, y) : null;
+    if (!e) return false;
+    if (typeof GoldMine !== 'undefined' && e instanceof GoldMine) return hasActiveGoldMineAt(x, y);
+    if (typeof AstarMine !== 'undefined' && e instanceof AstarMine) return hasActiveAstarMineAt(x, y);
+    return true;
 }
 function _navClassWalls(profile) {
     const ground = simMoveWallGrid();
@@ -1154,8 +1291,8 @@ function _navClassWalls(profile) {
     w.set(ground);
     const W = GRID_W, H = GRID_H;
     const open = (gx, gy) => { if (gx >= 0 && gy >= 0 && gx < W && gy < H) { const t = gy * W + gx; if (w[t] && _navClassPass(profile, gx, gy)) w[t] = 0; } };
-    if (profile === NAV_PROFILE_COLLECT) { for (const list of [goldMines, astarMines]) for (const m of list || []) if (m) open(m.gx, m.gy); }
-    else for (const e of _activeTileEntities) if (e && e.owner === profile - NAV_PROFILE_BUILD0) open(e.gx, e.gy);
+    for (const e of _activeTileEntities) if (e) open(e.gx, e.gy);
+    for (const list of [goldMines, astarMines]) for (const m of list || []) if (m) open(m.gx, m.gy);
     _navClassWall[profile] = w;
     if (typeof simParallelBind === 'function') simParallelBind('mv.cwall.' + profile, w);
     return w;
@@ -1163,15 +1300,12 @@ function _navClassWalls(profile) {
 // The ground walls were made whole again: the class walls too.
 function navClassReset() {
     _navClassWall.fill(null);
-    for (let p = NAV_PROFILE_COLLECT; p < NAV_PROFILES; p++) if (_nav[p]) _navWallDiffReset(p);
+    for (let p = NAV_PROFILE_BUILD; p < NAV_PROFILES; p++) if (_nav[p]) _navWallDiffReset(p);
 }
-// The profiles a match uses: ground, air, collectors, every player's
-// builders (made at its first tick, see navTick).
-function _navProfilesInUse() {
-    const n = Math.min(NAV_BUILD_PLAYERS, typeof players !== 'undefined' && players ? players.length : 0), out = [NAV_PROFILE_GROUND, NAV_PROFILE_AIR, NAV_PROFILE_COLLECT];
-    for (let p = 0; p < n; p++) out.push(NAV_PROFILE_BUILD0 + p);
-    return out;
-}
+// The profiles a match uses: ground, air, builders (made at its first
+// tick, see navTick).
+const _NAV_PROFILES_ALL = [0, 1, 2];
+function _navProfilesInUse() { return _NAV_PROFILES_ALL; }
 
 // Installs a build as the current one for its profile (every peer at the
 // same tick). Destination fields of the old build are dropped.
@@ -1452,7 +1586,11 @@ function navEnsure(profile) {
 // keep one set of local fields, graph, components and atlas for them.
 // Each profile still owns its wrapper, sequence, version and destination
 // fields, and rebuilds independently when its live walls change.
+// (Off: every profile has its own slots (navReserve), so a shared build
+// saves no memory, and the comparison of walls ran on this thread.)
+let NAV_SHARE_BUILDS = false;
 function _navShareBuild(profile, wall) {
+    if (!NAV_SHARE_BUILDS) return null;
     const costs = profile !== NAV_PROFILE_AIR, seen = new Set();
     for (const b of _nav) {
         if (!b || b.W !== GRID_W || b.H !== GRID_H || !!b.cost !== costs || seen.has(b.wall)) continue;
@@ -1481,6 +1619,7 @@ function navReset() {
     _nav = new Array(NAV_PROFILES).fill(null);
     _navSeq = new Array(NAV_PROFILES).fill(0);
     _navJob = null; _navDiff.fill(0); _navLastJobProfile = -1;
+    _navSlots.cur = null; _navSlots.lastInstall = -1e9; _navSlots.capped.fill(-1);
     _navSweep();
     // (The class walls made again from the grid as it is now: a restore.)
     _navClassWall.fill(null); _navClassGrid = null;
@@ -1662,8 +1801,8 @@ function navProfileOf(u) {
     if (u.isFlying) return NAV_PROFILE_AIR;
     const wt = u.workerType;
     if (!wt) return NAV_PROFILE_GROUND;
-    if (wt === 'builder' || wt === 'salvager') { const o = u.owner; return o >= 0 && o < NAV_BUILD_PLAYERS ? NAV_PROFILE_BUILD0 + o : NAV_PROFILE_GROUND; }
-    return typeof isResourceCollectorWorkerType === 'function' && isResourceCollectorWorkerType(wt) ? NAV_PROFILE_COLLECT : NAV_PROFILE_GROUND;
+    if (wt === 'builder' || wt === 'salvager') return NAV_PROFILE_BUILD;
+    return NAV_PROFILE_GROUND;
 }
 // Up to maxLen tiles from (gx, gy) toward dest (the start first), as path
 // nodes; null when the navigation has no way from there. For the interface:
@@ -1744,18 +1883,21 @@ function navPathTo(u, tx, ty) {
 // build starts once the last is installed, when the walls differ from the
 // newest build's (_navWallDiff tiles: kept as walls change, and worked
 // out again after a restore, which rebuilds from the snapshot's walls).
-// (Long enough for the helpers to finish each background stage between the
-// tick's own jobs: a collect that waits would stall the tick.)
-const NAV_BUILD_SLICES = 64;
+// A build costs the same whatever changed (one building or a battle's
+// thousands): ~650 ms of helper time at 1000x1000, its stages 2 ticks
+// apart (a stage not done by then: the thread collecting it helps finish
+// it, the same results). Installed 12 ticks after its start (was ~164:
+// 80 s at 2 TPS).
+const NAV_BUILD_SLICES = 2;
 // The steps of a build (ticks after its start, _navJobStep): the costs and
 // nodes start, they are numbered and the local fields start, the graph's
 // edges and the parts start, the build is finished and staged, installed.
-const NAV_STEP_NODES = 1, NAV_STEP_LOCAL = 4, NAV_STEP_GRAPH = NAV_STEP_LOCAL + NAV_BUILD_SLICES + 1;
+const NAV_STEP_NODES = 1, NAV_STEP_LOCAL = 2, NAV_STEP_GRAPH = NAV_STEP_LOCAL + NAV_BUILD_SLICES + 1;
 const NAV_STEP_STAGE = NAV_STEP_GRAPH + NAV_BUILD_SLICES + 1, NAV_STEP_INSTALL = NAV_STEP_STAGE + NAV_SWAP_TICKS;
 const NAV_BUILD_TICKS = NAV_STEP_INSTALL + 1;
 // (The atlas's cluster tables: this many ticks into the window, its blocks
 // done by then.)
-const NAV_ATLAS_TABLES_STEP = 10;
+const NAV_ATLAS_TABLES_STEP = 2;
 let _navJob = null;
 // Per profile: tiles whose walls differ from those of its newest build (the
 // one being made, else the installed one). (The air's never change.)
@@ -1788,7 +1930,7 @@ function navTileTables(tabN, tabC) {
         tabN[p] = 0;
         if (w) { if (simHeapHas(w)) tabN[p] = _simWEnc(_simHeapPtrOf(w)); else R.count.push(p); }
         tabC[p] = 0;
-        const c = p >= NAV_PROFILE_COLLECT && classOk ? _navClassWall[p] : null;
+        const c = p >= NAV_PROFILE_BUILD && classOk ? _navClassWall[p] : null;
         if (c && c.length === ground.length) { if (simHeapHas(c)) tabC[p] = _simWEnc(_simHeapPtrOf(c)); else R.cls.push(p); }
     }
     return _navDiff;
@@ -1810,18 +1952,30 @@ function navTick() {
     { let made = false; for (const p of _navProfilesInUse()) if (!_nav[p]) { navEnsure(p); made = true; } if (made) return; }
     if (!_navJob) {
         // The next profile whose walls changed, round the profiles from the
-        // last one built: none waits long behind another's changes.
+        // last one built: none waits long behind another's changes. (Not one
+        // whose last build was too big for its slot until its walls change.)
         let p = -1;
         for (let k = 1; k <= NAV_PROFILES && p < 0; k++) {
             const q = (_navLastJobProfile + k + NAV_PROFILES) % NAV_PROFILES;
-            if (q !== NAV_PROFILE_AIR && _nav[q] && _navDiff[q] > 0) p = q;
+            if (q !== NAV_PROFILE_AIR && _nav[q] && _navDiff[q] > 0 && _navSlots.capped[q] !== _navDiff[q]) p = q;
         }
         if (p < 0) return;
         _navLastJobProfile = p;
-        _navJob = { profile: p, start: gameTime, step: 0, b: null, dests: null, destNew: null };
+        _navJob = { profile: p, start: gameTime, step: 0, b: null, dests: null, destNew: null, si: 0, calls: 0, nextAt: 0, gap: _navStageGap() };
     }
-    const J = _navJob, off = gameTime - J.start;
-    while (J.step <= off && _navJob === J) _navJobStep(J, J.step++);
+    const J = _navJob;
+    try { _navJobAdvance(J); }
+    catch (e) {
+        if (e !== _NAV_SLOT_FULL) throw e;
+        // (Too big for its slot: dropped, the installed build kept.)
+        _navSlotFullNote(J.profile);
+        if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
+        if (_navNext.nav) _navNextDrop();
+        _navSlots.capped[J.profile] = _navDiff[J.profile];
+        _navSlots.lastInstall = gameTime;
+        _navJob = null;
+    }
+    finally { _navSlots.cur = null; }
     _navRushCheck();
 }
 // The window's second half with its fields not made: the helpers take them
@@ -1845,6 +1999,23 @@ function _navRushCheck() {
 // simulation thread does O(clusters + nodes) at a step. The steps' ticks are
 // those of the build's start alone: when the helpers finish never changes
 // what any peer does (a collect waits, or runs what is left itself).
+// The build's stages by simulation step (one a step at most, J.gap steps
+// apart: the helpers finish a stage's background work meanwhile, so no
+// collect waits): a step is the same on every peer, whatever its ticks.
+// (Ticks were used before: with several ticks a step every stage of a
+// build fell in one or two steps, each collect waiting for the helpers.)
+const _NAV_STAGES = [0, NAV_STEP_NODES, NAV_STEP_LOCAL, NAV_STEP_GRAPH, NAV_STEP_STAGE, NAV_STEP_STAGE + NAV_ATLAS_TABLES_STEP, NAV_STEP_INSTALL];
+// (Steps of 3+ ticks are long enough for a stage's background work: 1 step
+// apart; else 2.)
+function _navStageGap() { return typeof simDk === 'number' && simDk >= 3 ? 1 : 2; }
+function _navJobAdvance(J) {
+    J.calls++;
+    if (J.calls < J.nextAt || J.si >= _NAV_STAGES.length) return;
+    const s = _NAV_STAGES[J.si++];
+    J.step = s + 1;
+    J.nextAt = J.calls + J.gap;
+    _navJobStep(J, s);
+}
 function _navJobStep(J, step) {
     if (step === 0) {
         const wall = navWallTable(J.profile);
@@ -1868,6 +2039,7 @@ function _navJobStep(J, step) {
         navAtlasTables(J.atl, true);
     } else if (step === NAV_STEP_INSTALL) {
         _navJob = null;
+        _navSlots.lastInstall = gameTime;
         if (J.atl) { navBuildCollect(); J.next.atlas = navAtlasFinish(J.atl); J.atl = null; }
         _navNextInstall(J.next);
     }
@@ -1889,8 +2061,8 @@ function navSnapshotState() {
         profiles.push({ p, built: diff(b.wall, live), seq: b.seq | 0 });
     }
     const J = _navJob && _navJob.b ? _navJob : null, g = profiles[0];
-    return { built: g.built, seq: g.seq, profiles, last: _navLastJobProfile,
-        job: J ? { profile: J.profile, start: J.start, step: J.step, walls: diff(J.b.wall, navWallTable(J.profile)) } : null };
+    return { built: g.built, seq: g.seq, profiles, last: _navLastJobProfile, inst: _navSlots.lastInstall, capped: _navSlots.capped.slice(),
+        job: J ? { profile: J.profile, start: J.start, step: J.step, si: J.si, calls: J.calls, nextAt: J.nextAt, gap: J.gap, walls: diff(J.b.wall, navWallTable(J.profile)) } : null };
 }
 // After a restore (the live walls restored): the same builds again.
 function navRestoreState(st) {
@@ -1909,18 +2081,39 @@ function navRestoreState(st) {
     // need it now.)
     navEnsure(NAV_PROFILE_AIR);
     _navLastJobProfile = Number.isFinite(st.last) ? st.last | 0 : -1;
+    _navSlots.lastInstall = Number.isFinite(st.inst) ? st.inst : -1e9;
+    if (Array.isArray(st.capped)) for (let p = 0; p < NAV_PROFILES; p++) _navSlots.capped[p] = Number.isFinite(st.capped[p]) ? st.capped[p] : -1;
     if (st.job && Number.isFinite(st.job.start)) {
         // Its stages up to now run at once (the same result as spread out).
         const p = Number.isFinite(st.job.profile) ? st.job.profile | 0 : NAV_PROFILE_GROUND;
-        const J = _navJob = { profile: p, start: st.job.start, step: 0, b: null, dests: null, destNew: null };
+        const J = _navJob = { profile: p, start: st.job.start, step: 0, b: null, dests: null, destNew: null, si: 1, calls: 0, nextAt: 0, gap: _navStageGap() };
         if (st.job.walls) {
             // (Steps below `step` ran on the snapshot's peer.)
             const upTo = Math.min(Number(st.job.step) || 1, NAV_STEP_INSTALL);
             const wall = walls(navWallTable(p), st.job.walls);
-            J.shared = _navShareBuild(p, wall);
-            J.b = J.shared || navBuildStart(p, wall, p !== NAV_PROFILE_AIR, GRID_W, GRID_H);
-            J.step = 1;
-            for (; J.step < upTo; J.step++) _navJobStep(J, J.step);
+            // (As on the snapshot's peer: a build too big for its slot dropped there too.)
+            try {
+                J.shared = _navShareBuild(p, wall);
+                J.b = J.shared || navBuildStart(p, wall, p !== NAV_PROFILE_AIR, GRID_W, GRID_H);
+                if (Number.isFinite(st.job.si)) {
+                    // (By stages: those the snapshot's peer ran, at once.)
+                    J.si = 1; J.gap = st.job.gap | 0 || 2;
+                    for (; J.si < st.job.si; J.si++) _navJobStep(J, _NAV_STAGES[J.si]);
+                    J.calls = st.job.calls | 0; J.nextAt = st.job.nextAt | 0; J.step = st.job.step | 0;
+                } else {
+                    J.step = 1;
+                    for (; J.step < upTo; J.step++) _navJobStep(J, J.step);
+                    // (An older snapshot, by ticks: its next stage the first not run.)
+                    J.si = _NAV_STAGES.findIndex(s => s >= J.step); if (J.si < 0) J.si = _NAV_STAGES.length;
+                }
+            } catch (e) {
+                if (e !== _NAV_SLOT_FULL) throw e;
+                _navSlotFullNote(p);
+                if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
+                if (_navNext.nav) _navNextDrop();
+                _navSlots.capped[p] = -2;
+                _navJob = null;
+            } finally { _navSlots.cur = null; }
         }
     }
     for (let p = 0; p < NAV_PROFILES; p++) if (_nav[p] && p !== NAV_PROFILE_AIR) _navWallDiffReset(p);
