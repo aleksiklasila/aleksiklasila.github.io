@@ -5866,7 +5866,7 @@ function startGame() {
     clampCamera();
 
     recalculateAdjacency();
-    dirtyGrid = true; dirtyAreas = true;
+    dirtyGrid = true; markAreasDirtyAll();
     gameStarted = true;
     const snapshotButton = document.getElementById('btn-export-snapshot');
     if (snapshotButton) snapshotButton.style.display = isMultiplayer ? 'none' : '';

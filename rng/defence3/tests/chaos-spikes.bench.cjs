@@ -87,7 +87,7 @@ if(exportScene){
  process.exit(0);
 }
 // (PRE=<js>: run in the instance after setup, before the measured ticks: A/B switches.)
-if(process.env.PRE)inst.eval(process.env.PRE);
+if(process.env.PRE){const r=inst.eval(process.env.PRE);if(r!==undefined)console.log(r);}
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
  const spawn=spawnQueuedUnitFromSpawner,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;

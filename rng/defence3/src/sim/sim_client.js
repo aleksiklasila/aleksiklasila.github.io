@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261025-st1';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261102-e';
 
 function _simClientCreate() {
     let c = {
@@ -1246,8 +1246,28 @@ function _simClientResolve(ref) {
     return getTileEntityRef(gx, gy) || (cell && cell.item) || null;
 }
 
+// (Packed by the worker: sim_worker.js _simEv. Decoded into one scratch
+// array; the handlers keep none of it.)
+const SIM_EV_OPS_PAGE = 's dhxpfEA';
+const _simEvScratch = [];
 function _simClientReplayEvents(events) {
-    for (let e of events) {
+    if (!events) return;
+    if (Array.isArray(events)) { for (const e of events) _simClientReplayOne(e); return; }
+    const f = events.f, s = events.s, e = _simEvScratch;
+    for (let i = 0; i + 1 < f.length;) {
+        const op = SIM_EV_OPS_PAGE[f[i]], argc = f[i + 1];
+        i += 2;
+        e.length = argc + 1; e[0] = op;
+        for (let k = 1; k <= argc; k++, i += 2) {
+            const t = f[i], v = f[i + 1];
+            e[k] = t === 0 ? v : t === 1 ? s[v] : t === 2 ? null : t === 4 ? ['u', v] : t === 5 ? ['b', Math.floor(v / 65536), v % 65536] : t === 6 ? v === 1 : undefined;
+        }
+        _simClientReplayOne(e);
+    }
+    if (events.x) for (const x of events.x) _simClientReplayOne(x);
+}
+function _simClientReplayOne(e) {
+    {
         switch (e[0]) {
             case 's': playSound(e[1], e[2], e[3], e[4]); break;
             case 'd': { let t = _simClientResolve(e[1]); if (t) recordDamageVisual(t, e[2], e[3] === null ? undefined : e[3]); break; }

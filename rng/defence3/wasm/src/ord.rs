@@ -451,19 +451,32 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
 /// [2] width, [3] mine code, [4] / [5] farm / spawner type + 1, [6] tile px,
 /// [7] not built, [8] no owner.
 #[no_mangle]
-pub unsafe extern "C" fn k_ws_group(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_ws_group(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (code, own, uc, val, brain, cnt) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<f64>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (sx, sy, st, so, sr, tl) = (k.p::<f32>(6), k.p::<f32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11));
     let (pgx, pgy, po, pid, px, py, pr) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<f32>(16), k.p::<f32>(17), k.p::<i32>(18));
     let (mode, n, w, mine, farm, spt, tile, nb, none) = (k.i(0), k.i(1).max(0) as usize, k.i(2).max(1), k.i(3) as u8, k.i(4), k.i(5), k.f(6) as f32, k.i(7), k.i(8));
-    let write = mode == 1;
-    let (mut ns, mut np) = (0usize, 0usize);
+    // Modes 0 / 1: count / write over every candidate (one call). Modes 2 / 3
+    // (a parallel job, SIM_KERNEL_WS_GROUP): the candidates of chunk `chunk`
+    // (P[10] a chunk); 2 counts its sites and spawners into cc[2 chunk],
+    // cc[2 chunk + 1]; 3 writes them from there (the caller made those the
+    // chunks' starts: the same output, in the same order, as one call).
+    let chunked = mode >= 2;
+    let write = mode == 1 || mode == 3;
+    let cc = k.p::<i32>(20);
+    let (mut ns, mut np) = if mode == 3 { (g(cc, chunk as usize * 2) as usize, g(cc, chunk as usize * 2 + 1) as usize) } else { (0usize, 0usize) };
     // (The candidate tiles, ascending (k_ws_candidates), when given: the same
     // sites in the same order as the whole map's.)
-    let (cand, ncand) = (k.p::<i32>(19), k.i(9).max(0) as usize);
+    let (cand, mut ncand) = (k.p::<i32>(19), k.i(9).max(0) as usize);
     let listed = !cand.is_null() && k.i(9) >= 0;
     let (mut t, mut ci) = (0usize, 0usize);
+    if chunked {
+        if !listed || cc.is_null() { return; }
+        let per = k.i(10).max(1) as usize;
+        ci = (chunk.max(0) as usize) * per;
+        ncand = ncand.min(ci + per);
+    }
     loop {
         if listed { if ci >= ncand { break; } t = g(cand, ci) as usize; ci += 1; if t >= n { continue; } }
         else { if t >= n { break; } if t + 16 <= n && !v128_any_true(v128_load(code.add(t) as *const v128)) { t += 16; continue; } }
@@ -493,6 +506,8 @@ pub unsafe extern "C" fn k_ws_group(a: u32, _chunk: i32) {
         }
         if !listed { t += 1; }
     }
+    if mode == 2 { s(cc, chunk as usize * 2, ns as i32); s(cc, chunk as usize * 2 + 1, np as i32); return; }
+    if mode == 3 { return; }
     s(cnt, 0, ns as i32); s(cnt, 1, np as i32);
 }
 

@@ -603,6 +603,8 @@ const WS_BUCKET = 8;
 // structure table by the kernel (ord.rs k_ws_group); then their buckets.
 // (Drops: none are made in play; old snapshots' are not searched for.)
 const _wsGP = new Float64Array(16);
+// (Candidates a job of the parallel group build, SIM_KERNEL_WS_GROUP.)
+const WS_GROUP_PER = 2048;
 let _wsGC = null;
 function _wsGroupBuild(G, cfg) {
     if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
@@ -618,14 +620,38 @@ function _wsGroupBuild(G, cfg) {
     cand.push(CAND.tiles);
     P[9] = CAND.n;
     C[0] = 0; C[1] = 0;
-    if (n && T.code) simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, ...cand], P);
-    const cap = C[0], np = C[1];
-    const SX = arr('sx', Float32Array, cap), SY = arr('sy', Float32Array, cap), ST = arr('st', Int32Array, cap), SO = arr('so', Int32Array, cap);
-    const SR = arr('sready', Int32Array, cap), TL = arr('tile', Int32Array, cap);
-    // (The spawners as the kernel lists them, in tile order; sorted into their buckets below.)
-    const QGX = arr('qgx', Int32Array, np), QGY = arr('qgy', Int32Array, np), QO = arr('qo', Int32Array, np), QID = arr('qid', Int32Array, np);
-    const QX = arr('qx', Float32Array, np), QY = arr('qy', Float32Array, np), QR = arr('qready', Int32Array, np);
-    if (n && T.code && (cap || np)) { P[0] = 1; simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR, CAND.tiles], P); }
+    // On the helpers (SIM_KERNEL_WS_GROUP): the candidates in jobs of
+    // WS_GROUP_PER, each counted, then written from its start (the same lists
+    // as one pass over them; a serial pass over ~115k structures was ~11 ms,
+    // made again at every post in a battle). The outputs are sized by the
+    // candidates and bound before the jobs (a binding just before a job
+    // leaves the helpers out of it).
+    let cap, np, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR;
+    const outs = room => {
+        SX = arr('sx', Float32Array, room); SY = arr('sy', Float32Array, room); ST = arr('st', Int32Array, room); SO = arr('so', Int32Array, room);
+        SR = arr('sready', Int32Array, room); TL = arr('tile', Int32Array, room);
+        QGX = arr('qgx', Int32Array, room); QGY = arr('qgy', Int32Array, room); QO = arr('qo', Int32Array, room); QID = arr('qid', Int32Array, room);
+        QX = arr('qx', Float32Array, room); QY = arr('qy', Float32Array, room); QR = arr('qready', Int32Array, room);
+    };
+    const jobs = Math.ceil(CAND.n / WS_GROUP_PER);
+    if (n && T.code && _simPool && typeof SIM_KERNEL_WS_GROUP === 'number' && jobs > 1) {
+        for (const k of ['code', 'own', 'uc', 'val', 'brain']) simParallelBind('st.' + k, T[k]);
+        simParallelBind('wsg.cand', CAND.tiles);
+        outs(CAND.n);
+        const CC = arr('cc', Int32Array, jobs * 2), Q = _simParams;
+        for (let i = 0; i < 10; i++) Q[i] = P[i];
+        Q[10] = WS_GROUP_PER; Q[11] = G.id;
+        Q[0] = 2; simParallelRun(SIM_KERNEL_WS_GROUP, jobs);
+        let a = 0, b = 0;
+        for (let j = 0; j < jobs; j++) { const x = CC[j * 2], y = CC[j * 2 + 1]; CC[j * 2] = a; CC[j * 2 + 1] = b; a += x; b += y; }
+        cap = a; np = b;
+        if (cap || np) { Q[0] = 3; simParallelRun(SIM_KERNEL_WS_GROUP, jobs); }
+    } else {
+        if (n && T.code) simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, ...cand], P);
+        cap = C[0]; np = C[1];
+        outs(Math.max(cap, np));
+        if (n && T.code && (cap || np)) { P[0] = 1; simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR, CAND.tiles], P); }
+    }
     const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
     const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, cap);
     arr('abc', Int32Array, nb); arr('abi', Int32Array, cap);

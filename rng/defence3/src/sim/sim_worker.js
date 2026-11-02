@@ -114,13 +114,59 @@ function _simError(where, err, tick) {
 }
 
 // ---- side effects the page replays (sounds, flashes, alerts, particles, fx) ----
-let _simEvents = [];
+// Packed into one Float64Array a tick, sent with its strings: [op, argc,
+// then argc (tag, value) pairs]. Tags: 0 number, 1 string (its index in the
+// tick's strings), 2 null, 3 undefined, 4 unit (id), 5 structure (gx * 65536
+// + gy), 6 boolean. An event with another value (an object) goes as an array
+// in `extra`. (Thousands of small arrays a tick were the worker's garbage and
+// most of its postMessage clone: ~260 KB of events a tick in a 1M-unit match.)
+// The page's decoder: sim_client.js _simClientReplayEvents.
+const SIM_EV_OPS = 's dhxpfEA';
+const _simEvents = { buf: new Float64Array(1 << 15), n: 0, strs: [], strIx: new Map(), extra: [] };
+function _simEvReset() { const E = _simEvents; E.n = 0; E.strs = []; E.strIx.clear(); E.extra = []; }
+function _simEvVal(E, v) {
+    const b = E.buf, n = E.n;
+    if (typeof v === 'number') { b[n] = 0; b[n + 1] = v; }
+    else if (typeof v === 'string') { let i = E.strIx.get(v); if (i === undefined) { i = E.strs.length; E.strs.push(v); E.strIx.set(v, i); } b[n] = 1; b[n + 1] = i; }
+    else if (v === null) { b[n] = 2; b[n + 1] = 0; }
+    else if (v === undefined) { b[n] = 3; b[n + 1] = 0; }
+    else if (typeof v === 'boolean') { b[n] = 6; b[n + 1] = v ? 1 : 0; }
+    else if (v instanceof Unit) { b[n] = 4; b[n + 1] = v.id; }
+    else if (typeof v === 'object' && typeof v.gx === 'number' && typeof v.gy === 'number' && v.gx >= 0 && v.gy >= 0 && v.gx < 65536 && v.gy < 65536) { b[n] = 5; b[n + 1] = v.gx * 65536 + v.gy; }
+    else return false;
+    E.n = n + 2;
+    return true;
+}
+// One event: its letter and up to 8 values (refs: a unit or a structure).
+function _simEv(op, argc, a0, a1, a2, a3, a4, a5, a6, a7) {
+    const E = _simEvents, start = E.n;
+    if (start + 2 + argc * 2 > E.buf.length) { const nb = new Float64Array(Math.max(E.buf.length * 2, start + 2 + argc * 2)); nb.set(E.buf.subarray(0, start)); E.buf = nb; }
+    E.buf[start] = SIM_EV_OPS.indexOf(op); E.buf[start + 1] = argc; E.n = start + 2;
+    const ok = (argc < 1 || _simEvVal(E, a0)) && (argc < 2 || _simEvVal(E, a1)) && (argc < 3 || _simEvVal(E, a2)) && (argc < 4 || _simEvVal(E, a3))
+        && (argc < 5 || _simEvVal(E, a4)) && (argc < 6 || _simEvVal(E, a5)) && (argc < 7 || _simEvVal(E, a6)) && (argc < 8 || _simEvVal(E, a7));
+    if (!ok) {
+        E.n = start;
+        const e = [op, a0, a1, a2, a3, a4, a5, a6, a7].slice(0, argc + 1);
+        for (let i = 1; i < e.length; i++) { const r = e[i] && typeof e[i] === 'object' && (e[i] instanceof Unit || (typeof e[i].gx === 'number' && typeof e[i].gy === 'number')) ? _simRef(e[i]) : null; if (r && (op === 'd' || op === 'h') && i === 1) e[i] = r; }
+        E.extra.push(e);
+    }
+}
+// The tick's events for the message (the buffer: a copy, transferred).
+function _simEvTake(transfer) {
+    const E = _simEvents;
+    const f = E.buf.slice(0, E.n);
+    transfer.push(f.buffer);
+    const out = { f, s: E.strs, x: E.extra };
+    _simEvReset();
+    return out;
+}
 // Set when the simulation's win check found this player defeated (and
 // cleared by a restore or patch that shows its team alive: reviewLocalDefeat).
 let _simLocalDefeat = '';
 // The teams the win check found out (for the page's roles, a host's).
 let _simDefeatedTeams = [];
 // An entity as the page finds it: ['u', id] or ['b', gx, gy].
+function _simIsRef(e) { return !!e && typeof e === 'object' && (e instanceof Unit || (typeof e.gx === 'number' && typeof e.gy === 'number')); }
 function _simRef(e) {
     if (!e || typeof e !== 'object') return null;
     if (e instanceof Unit) return ['u', e.id];
@@ -143,12 +189,12 @@ function _simStubUi() {
     self.reviewLocalDefeat = (alive = null) => { if (!gameStarted || gameOver) return; if (alive === null) alive = isTeamAliveNow(localPlayerId); _simLocalDefeat = alive ? '' : (_simLocalDefeat || 'defeated'); };
     self.noteTeamsDefeated = list => { _simDefeatedTeams = Array.isArray(list) ? list.slice() : []; };
     self.hostBroadcastMatchResult = () => { };
-    self._simRecordSound = (type, x, y, sub) => { _simEvents.push(['s', type, x, y, sub === undefined ? '' : sub]); };
-    self._simRecordDamage = (target, amount, owner) => { let r = _simRef(target); if (r) _simEvents.push(['d', r, amount, owner === undefined ? null : owner]); };
-    self._simRecordAlert = (target, dmg, owner) => { let r = _simRef(target); if (r) _simEvents.push(['h', r, dmg, owner]); };
-    self._simRecordExplosion = (x, y, c, n) => { _simEvents.push(['x', x, y, c, n]); };
-    self._simRecordDirected = (fx, fy, tx, ty, c, n) => { _simEvents.push(['p', fx, fy, tx, ty, c, n]); };
-    self._simRecordFx = (kind, x0, y0, x1, y1, style, src = 0, dst = 0) => { _simEvents.push(['f', kind, x0, y0, x1, y1, style === undefined ? null : style, src | 0, dst | 0]); };
+    self._simRecordSound = (type, x, y, sub) => { _simEv('s', 4, type, x, y, sub === undefined ? '' : sub); };
+    self._simRecordDamage = (target, amount, owner) => { if (_simIsRef(target)) _simEv('d', 3, target, amount, owner === undefined ? null : owner); };
+    self._simRecordAlert = (target, dmg, owner) => { if (_simIsRef(target)) _simEv('h', 3, target, dmg, owner); };
+    self._simRecordExplosion = (x, y, c, n) => { _simEv('x', 4, x, y, c, n); };
+    self._simRecordDirected = (fx, fy, tx, ty, c, n) => { _simEv('p', 6, fx, fy, tx, ty, c, n); };
+    self._simRecordFx = (kind, x0, y0, x1, y1, style, src = 0, dst = 0) => { _simEv('f', 8, kind, x0, y0, x1, y1, style === undefined ? null : style, src | 0, dst | 0); };
     for (let [name, rec] of [['playSound', '_simRecordSound'], ['recordDamageVisual', '_simRecordDamage'], ['pushHostileDamageAlert', '_simRecordAlert'],
         ['createExplosion', '_simRecordExplosion'], ['createDirectedParticles', '_simRecordDirected'], ['recordCombatFx', '_simRecordFx']]) {
         try { self.eval(name + ' = self.' + rec); } catch { }
@@ -182,7 +228,7 @@ function _simHelperUrl() {
     let url = new URL('sim_helper.js?v=20261025-st1', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261025-st1', 'sim_wasm_bin.js?v=20261025-st1', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261025-st1', '../game/flownav.js?v=20261025-st1'].map(f => {
+    let parts = ['sim_parallel.js?v=20261102-c', 'sim_wasm_bin.js?v=20261102-c', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261025-st1', '../game/flownav.js?v=20261025-st1'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -553,7 +599,7 @@ function _simStart(msg) {
     if (typeof _navProfilesInUse === 'function' && !_nav[NAV_PROFILE_GROUND]) for (const p of _navProfilesInUse()) navEnsure(p);
     T.nav = performance.now() - t4;
     _simStartTimings = T;
-    _simEvents = [];
+    _simEvReset();
     _simLocalDefeat = '';
     // (The last match's defeated teams went on in this one's frames: in a
     // rematch the host took its guests for spectators and left their
@@ -580,7 +626,7 @@ let _simStartTimings = null;
 // simulation: the page gets each tick's sums and keeps logs of its own).
 // (Per log, the last entry already sent.)
 let _simDeltaLast = { e: [], a: [] };
-function _simDeltaEvents(events) {
+function _simDeltaEvents() {
     if (typeof energyDeltaEventLogByPlayer === 'undefined' || typeof astarUsageEventLogByPlayer === 'undefined') return;
     for (const [tag, logs, last] of [['E', energyDeltaEventLogByPlayer, _simDeltaLast.e], ['A', astarUsageEventLogByPlayer, _simDeltaLast.a]]) {
         for (let pid = 0; pid < logs.length; pid++) {
@@ -597,8 +643,8 @@ function _simDeltaEvents(events) {
             }
             last[pid] = b[b.length - 1];
             for (const [key, d] of sums) {
-                if (tag === 'E') events.push(['E', pid, key, d]);
-                else { const cut = key.indexOf('|'); events.push(['A', pid, key.slice(0, cut), key.slice(cut + 1), d]); }
+                if (tag === 'E') _simEv('E', 3, pid, key, d);
+                else { const cut = key.indexOf('|'); _simEv('A', 4, pid, key.slice(0, cut), key.slice(cut + 1), d); }
             }
         }
     }
@@ -729,9 +775,8 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
         simPresentationPublish(tick);
         world = {state:simFrameEncodeState(false), details:simFrameDetails(), structureDetails:simFrameStructureDetails()};
     } else world = _simEncodeWorld(transfer);
-    _simDeltaEvents(_simEvents);
-    let events = _simEvents;
-    _simEvents = [];
+    _simDeltaEvents();
+    let events = _simEvTake(transfer);
     // The local player's raw visibility grid (computed here anyway): the
     // page uses it instead of computing its own. (A pooled buffer.)
     let sight = null, sightId = 0;
@@ -814,7 +859,7 @@ function _simRequestRun(msg) {
             if (msg.args.globals) for (let [name, value] of Object.entries(msg.args.globals)) self.eval(name + ' = ' + JSON.stringify(value));
             if (!applyAuthoritativeStateSnapshot(snap)) throw new Error('the snapshot was refused (another format or rules)');
             _simEpoch = msg.args.epoch;
-            _simEvents = [];
+            _simEvReset();
             _simLocalDefeat = '';
             _simDefeatedTeams = [];
             reviewLocalDefeat();

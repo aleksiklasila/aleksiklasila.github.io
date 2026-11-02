@@ -1374,7 +1374,7 @@ function applyAuthoritativeStateSnapshot(snapshot) {
     visibilityGridByPlayer = Array.from({ length: players.length }, () => []);
     updateVisibility(localPlayerId);
     dirtyGrid = true;
-    dirtyAreas = true;
+    markAreasDirtyAll();
     invalidateStaticLayerCache();
     pathfindBudget = 0;
     selectionBox = null;
@@ -3435,7 +3435,7 @@ function resetWorldState() {
     initSpatialHash();
     initGrid();
     dirtyGrid = true;
-    dirtyAreas = true;
+    markAreasDirtyAll();
     invalidateStaticLayerCache();
     setMatchLoadOverlay(false);
 }

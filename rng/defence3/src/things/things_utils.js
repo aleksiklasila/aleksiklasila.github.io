@@ -204,8 +204,8 @@ function _adjacencyLaneCommit() {
             const a = getAreaById(OA[i]);
             if (!a) continue;
             const next = OACT[i] === 1;
-            if (!L.passive && !next && a.multiplierLevel > 0) { a.multiplierLevel = 0; if (L.mul && OA[i] < L.mul.length) L.mul[OA[i]] = 0; changed = true; }
-            if (!!a.active !== next) changed = true;
+            if (!L.passive && !next && a.multiplierLevel > 0) { a.multiplierLevel = 0; if (L.mul && OA[i] < L.mul.length) L.mul[OA[i]] = 0; changed = true; markAreaDirtyId(a.id); }
+            else if (!!a.active !== next) { changed = true; markAreaDirtyId(a.id); }
             a.active = next;
         }
         if (changed) dirtyAreas = true;
@@ -1024,7 +1024,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         recordEnergyDelta(playerId, 'builder', -upgradeCost);
         area.multiplierLevel = (area.multiplierLevel || 0) + 1;
         if (_adjL.mul && area.id >= 0 && area.id < _adjL.mul.length) _adjL.mul[area.id] = area.multiplierLevel;
-        dirtyAreas = true;
+        markAreaDirtyId(area.id);
         _markCombinedBgAreaDirty(aId, 1);
         for (let cp of areaCells) {
             if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) continue;

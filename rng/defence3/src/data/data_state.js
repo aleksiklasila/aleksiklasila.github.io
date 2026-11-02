@@ -1,6 +1,11 @@
 // GLOBAL STATE
 // ============================================================
 let dirtyGrid = true, dirtyAreas = true;
+// The areas whose state changed since the page was last sent it (with
+// dirtyAreas), when known; all: a change elsewhere, every area is checked.
+const areaDirtyIds = { ids: new Int32Array(4096), n: 0, all: true };
+function markAreaDirtyId(id) { const D = areaDirtyIds; dirtyAreas = true; if (D.n < D.ids.length) D.ids[D.n++] = id; else D.all = true; }
+function markAreasDirtyAll() { dirtyAreas = true; areaDirtyIds.all = true; }
 let visibilityGrid = [];
 let visibilityGridByPlayer = Array.from({ length: 8 }, () => []);
 let visibilityVersion = 0;

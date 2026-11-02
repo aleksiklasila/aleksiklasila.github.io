@@ -2377,7 +2377,7 @@ function snapDecodeState(S, options = null) {
                 ar.active = !!entry[1];
                 ar.multiplierLevel = _snapD(entry[2]);
             }
-            for (let [ar, v] of was) if (v !== ar.active + ':' + ar.multiplierLevel) { dirtyAreas = true; if (typeof _markCombinedBgAreaDirty === 'function') _markCombinedBgAreaDirty(ar.id, 1); }
+            for (let [ar, v] of was) if (v !== ar.active + ':' + ar.multiplierLevel) { markAreasDirtyAll(); if (typeof _markCombinedBgAreaDirty === 'function') _markCombinedBgAreaDirty(ar.id, 1); }
         }
 
         // 4. Grid cells, tiles and indexes.

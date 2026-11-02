@@ -148,8 +148,24 @@ let globalSpawnerReadyOrderCounter = 1;
 // A spawner's production cooldown in ticks, as its type sets it.
 const _SPAWN_COOLDOWN_ARGS = { spawner: ['collector', 'spawner'], astar_spawner: ['astar_collector', 'astar_spawner'], salvager: ['salvager_unit', 'salvager'],
     builder_spawner: ['builder_unit', 'builder_spawner'], healer_spawner: ['healer_unit', 'healer_spawner'], research: ['researcher_unit', 'research'] };
+// (By the stat tables' version, the producing type (a barrack's unit type),
+// owner and base level: the same answer for every spawner of them; was ~1 us
+// a call, ~80k barracks and spawners on every presentation sweep.)
+const _spawnCdMemo = { ver: -1, byType: new Map() };
 function spawnerCooldownTicks(s) {
-    const lvl = getThingBaseLevel(s);
+    const lvl = getThingBaseLevel(s), M = _spawnCdMemo;
+    if (M.ver !== _precomputedStatsVersion) { M.ver = _precomputedStatsVersion; M.byType.clear(); }
+    const key = s.type === 'barrack' ? s.unitType : s.type, o = Number.isFinite(s.owner) ? s.owner : -1;
+    let row = M.byType.get(key);
+    if (row === undefined) M.byType.set(key, row = []);
+    const at = (o + 1) * 64 + (lvl & 63);
+    const was = row[at];
+    if (was !== undefined && lvl < 64 && o < 63) return was;
+    const v = _spawnerCooldownTicksCompute(s, lvl);
+    if (lvl < 64 && o < 63) row[at] = v;
+    return v;
+}
+function _spawnerCooldownTicksCompute(s, lvl) {
     if (s.type === 'barrack') return Math.round(getBarrackSpawnCooldown(s.unitType, lvl, s.owner, `barrack_${s.unitType}`) * TICK_RATE);
     const a = _SPAWN_COOLDOWN_ARGS[s.type];
     return a ? Math.round(getBarrackSpawnCooldown(a[0], lvl, s.owner, a[1]) * TICK_RATE) : Math.max(1, Math.round(s.spawnCooldown || 1));

@@ -228,11 +228,122 @@ function _simPlain(v, depth) {
     for (let k in v) { if (k[0] === '_' && k !== '_resourceFixedValues') continue; let x = _simPlain(v[k], depth + 1); if (x !== undefined) out[k] = x; }
     return out;
 }
-function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0, areas: null }; }
+function simFrameResetState() { _simStateLast = { globals: '', cellTypes: null, cellOwners: null, w: 0, h: 0, areas: null }; _simPlayerSent = []; }
+// Players' heavy fields as deltas: the research queue (~1,600 tasks a
+// player, ~300 KB a tick in a 1M-unit match) and research levels were
+// deep-copied and posted every tick, the worker's largest garbage source.
+// The queue changes nearly every tick there (tasks finish, the rest shift),
+// so it goes as {__qd: [k, j], tail}: drop k from the front, keep j, append
+// tail. Levels go as {__lvp: changed, __lvd: removed}. Keys that did not
+// change are listed in __same and kept by the page. The checks allocate
+// nothing: tasks by identity and their changing numbers, levels against a
+// copy of the last values sent.
+let _simPlayerSent = [];
+const _SIM_TASK_NUMS = ['fromLevel', 'toLevel', 'workDone', 'workRequired', 'cost'];
+// (Unrolled: keyed reads by a name from the list were ~400 ns a task.)
+function _simTaskSame(N, at, t) {
+    if (!t || typeof t !== 'object') return true;
+    const o = at * 5;
+    return Object.is(N[o], +t.fromLevel) && Object.is(N[o + 1], +t.toLevel) && Object.is(N[o + 2], +t.workDone) && Object.is(N[o + 3], +t.workRequired) && Object.is(N[o + 4], +t.cost);
+}
+function _simTaskStore(N, at, t) {
+    const o = at * 5;
+    N[o] = +t.fromLevel; N[o + 1] = +t.toLevel; N[o + 2] = +t.workDone; N[o + 3] = +t.workRequired; N[o + 4] = +t.cost;
+}
+// The queue's encoding: SAME, a delta, or (fresh) the whole of it.
+const _SIM_SAME = { same: true };
+function _simQueueEncode(C, q, fresh) {
+    const n = Array.isArray(q) ? q.length : -1, W = _SIM_TASK_NUMS.length;
+    let enc;
+    const had = !fresh && C.qLen >= 0;
+    if (n < 0) enc = C.qLen === n && !fresh ? _SIM_SAME : _simPlain(q, 1);
+    else if (!had) enc = _simPlain(q, 1);
+    else {
+        const R = C.qRefs, N = C.qNums, m = C.qLen;
+        let k = 0;
+        if (n > 0) { while (k < m && R[k] !== q[0]) k++; } else k = m;
+        // (Kept tasks whose numbers changed (a finished level moves the
+        // levels of the same stat's tasks behind it) go as patches: np,
+        // [index, the _SIM_TASK_NUMS values] each.)
+        let j = 0, np = null;
+        while (k + j < m && j < n && R[k + j] === q[j]) {
+            const t = q[j];
+            if (!_simTaskSame(N, k + j, t)) (np || (np = [])).push(j, +t.fromLevel, +t.toLevel, +t.workDone, +t.workRequired, +t.cost);
+            j++;
+        }
+        if (k === 0 && j === n && n === m && !np) enc = _SIM_SAME;
+        else {
+            const tail = new Array(n - j);
+            for (let i = j; i < n; i++) tail[i - j] = _simPlain(q[i], 2);
+            enc = { __qd: [k, j], tail };
+            if (np) enc.np = np;
+        }
+    }
+    if (n >= 0 && enc !== _SIM_SAME) {
+        if (!C.qRefs || C.qRefs.length < n) { const cap = Math.max(64, n * 2); C.qRefs = new Array(cap); C.qNums = new Float64Array(cap * W); }
+        const R = C.qRefs, N = C.qNums;
+        for (let i = 0; i < n; i++) {
+            const t = q[i]; R[i] = t;
+            if (t && typeof t === 'object') _simTaskStore(N, i, t);
+        }
+        for (let i = n; i < C.qLen; i++) R[i] = undefined;
+    }
+    C.qLen = n;
+    return enc;
+}
+// (Flat maps of numbers sent as their changed keys: the research levels and
+// multipliers, ~500 keys each, ~35 KB a tick of multipliers.)
+const _SIM_FLAT_KEYS = new Set(['researchLevels', 'researchMultipliers']);
+function _simLevelsEncode(C, lv, fresh) {
+    const plainOk = lv && typeof lv === 'object' && !Array.isArray(lv);
+    if (!plainOk) { C.lvPrev = null; return _simPlain(lv, 1); }
+    let prev = C.lvPrev, patch = null, dels = null, n = 0;
+    if (fresh || !prev) {
+        prev = C.lvPrev = Object.create(null); C.lvN = 0;
+        for (const k in lv) { const v = lv[k]; if (v !== null && typeof v === 'object') { C.lvPrev = null; return _simPlain(lv, 1); } prev[k] = v; C.lvN++; }
+        return _simPlain(lv, 1);
+    }
+    let added = 0;
+    for (const k in lv) {
+        const v = lv[k]; n++;
+        if (v !== null && typeof v === 'object') { C.lvPrev = null; return _simPlain(lv, 1); }
+        if (!(k in prev)) { added++; (patch || (patch = {}))[k] = v; prev[k] = v; }
+        else if (!Object.is(prev[k], v)) { (patch || (patch = {}))[k] = v; prev[k] = v; }
+    }
+    // (Keys gone: kept = old count - gone, and n = kept + added.)
+    if (C.lvN + added !== n) for (const k in prev) if (!(k in lv)) { (dels || (dels = [])).push(k); delete prev[k]; }
+    C.lvN = n;
+    if (!patch && !dels) return _SIM_SAME;
+    return { __lvp: patch || {}, __lvd: dels || [] };
+}
+function _simPlayerEncode(p, i) {
+    if (!p || typeof p !== 'object') return _simPlain(p, 0);
+    let C = _simPlayerSent[i];
+    const fresh = !C || C.obj !== p;
+    if (fresh) C = _simPlayerSent[i] = { obj: p, qLen: -2, qRefs: null, qNums: null, maps: {}, task: undefined, calls: 0 };
+    // (The flat maps change with a finished research, which changes the
+    // current task and the queue: checked then, else every 10th frame.)
+    const qEnc = 'researchQueue' in p ? _simQueueEncode(C, p.researchQueue, fresh) : undefined;
+    const due = ++C.calls % 10 === 0, flat = fresh || due || qEnc !== _SIM_SAME || C.task !== p.researchTask;
+    C.task = p.researchTask;
+    const out = {}, same = [];
+    for (const k in p) {
+        if (k[0] === '_' && k !== '_resourceFixedValues') continue;
+        const x = k === 'researchQueue' ? qEnc : _SIM_FLAT_KEYS.has(k) ? (flat ? _simLevelsEncode(C.maps[k] || (C.maps[k] = { lvPrev: null, lvN: 0 }), p[k], fresh) : _SIM_SAME) : _simPlain(p[k], 1);
+        if (x === _SIM_SAME) same.push(k);
+        else if (x !== undefined) out[k] = x;
+    }
+    if (same.length) out.__same = same;
+    return out;
+}
 function simFrameEncodeState(includeCells = true) {
-    let out = { players: players.map(p => _simPlain(p, 0)) };
+    let out = { players: players.map(_simPlayerEncode) };
+    if (_simPlayerSent.length > players.length) _simPlayerSent.length = players.length;
     // (Each player's upkeep a second, by thing: the HUD's energy rates. When it changed.)
-    if (typeof _upKeepRateByPlayer !== 'undefined') {
+    // (It is replaced once a second (_upKeepSecond) or resized: stringified
+    // only then, not each tick.)
+    if (typeof _upKeepRateByPlayer !== 'undefined' && (_simStateLast.ukObj !== _upKeepRateByPlayer || _simStateLast.ukLen !== _upKeepRateByPlayer.length)) {
+        _simStateLast.ukObj = _upKeepRateByPlayer; _simStateLast.ukLen = _upKeepRateByPlayer.length;
         let uk = JSON.stringify(_upKeepRateByPlayer);
         if (uk !== _simStateLast.upkeep) { _simStateLast.upkeep = uk; out.upkeep = uk; }
     }
@@ -240,12 +351,39 @@ function simFrameEncodeState(includeCells = true) {
     // simulation as areas turn on or off or level up; nothing in this
     // worker draws, so it is cleared here): a pass over every area and a
     // list of them each tick, on both threads, cost ~5 ms a tick on a big map.
-    if (dirtyAreas || !_simStateLast.areas || _simStateLast.areas.list !== areas) {
-        let areaState = [];
-        for (let ar of (areas || [])) if (ar && (ar.active || ar.multiplierLevel)) areaState.push([ar.id, ar.active ? 1 : 0, ar.multiplierLevel || 0]);
-        let key = areaState.join(';');
-        if (!_simStateLast.areas || _simStateLast.areas.key !== key || _simStateLast.areas.list !== areas) out.areas = areaState;
-        _simStateLast.areas = { key, list: areas };
+    // (A new area list goes whole, as out.areas: its active ones; then only
+    // the areas whose state changed, as out.areasD, against typed copies of
+    // the last state sent: dirtyAreas is set nearly every tick in a big
+    // match, and the whole list built and joined was ~1.4 ms a step.)
+    const LA = _simStateLast;
+    if (dirtyAreas || LA.areas !== areas) {
+        const A = areas || [], n = A.length, full = LA.areas !== areas;
+        if (full || !LA.aAct || LA.aAct.length < n) {
+            const a0 = LA.aAct, l0 = LA.aLvl;
+            LA.aAct = new Int8Array(Math.max(64, n * 2)); LA.aLvl = new Int32Array(Math.max(64, n * 2));
+            if (!full && a0) { LA.aAct.set(a0); LA.aLvl.set(l0); }
+        }
+        const act = LA.aAct, lvl = LA.aLvl;
+        let d = null;
+        const one = i => {
+            const ar = A[i];
+            if (!ar) return;
+            const a = ar.active ? 1 : 0, l = ar.multiplierLevel || 0;
+            if (full ? (a || l) : (a !== act[i] || l !== lvl[i])) (d || (d = [])).push([ar.id, a, l]);
+            act[i] = a; lvl[i] = l;
+        };
+        // (Just the areas the simulation marked, when it marked them all
+        // (areaDirtyIds; an area's position is its id): the adjacency lane
+        // sets dirtyAreas nearly every batch, for a few of ~16k areas.)
+        const D = typeof areaDirtyIds !== 'undefined' ? areaDirtyIds : null;
+        let listed = !full && D && !D.all && D.n > 0;
+        if (listed) for (let j = 0; j < D.n; j++) { const id = D.ids[j], ar = A[id]; if (!ar || ar.id !== id) { listed = false; break; } }
+        if (listed) for (let j = 0; j < D.n; j++) one(D.ids[j]);
+        else for (let i = 0; i < n; i++) one(i);
+        if (D) { D.n = 0; D.all = false; }
+        if (full) out.areas = d || [];
+        else if (d) out.areasD = d;
+        LA.areas = areas;
         dirtyAreas = false;
     }
     let g = { gameTime, gameOver: !!gameOver, winner, resigned: [...resignedTeams], teams: activeTeamIds,
@@ -695,9 +833,31 @@ function pageApplyState(st) {
         // as they were, and its boosts; compared after the apply.)
         const before = players.map(p => p && typeof p === 'object' ? { lv: Object.assign({}, p.researchLevels || null), boost: _pageBoostSig(p) } : null);
         for (let i = 0; i < st.players.length; i++) {
-            let p = _pageResolveRefs(st.players[i]);
+            let raw = st.players[i], same = raw && raw.__same;
+            if (same) delete raw.__same;
+            let p = _pageResolveRefs(raw);
+            // (The deltas of the research queue and levels: simFrameEncodeState.)
+            const cur = players[i] && typeof players[i] === 'object' ? players[i] : null;
+            const q = p && p.researchQueue;
+            if (q && q.__qd) {
+                const old = cur && Array.isArray(cur.researchQueue) ? cur.researchQueue : [];
+                const nq = old.slice(q.__qd[0], q.__qd[0] + q.__qd[1]);
+                const np = q.np, W = _SIM_TASK_NUMS.length;
+                if (np) for (let a = 0; a + W < np.length + 1; a += W + 1) {
+                    const t = nq[np[a]];
+                    if (t && typeof t === 'object') for (let w = 0; w < W; w++) { const key = _SIM_TASK_NUMS[w], v = np[a + 1 + w]; if (!(v !== v && t[key] === undefined)) t[key] = v; }
+                }
+                p.researchQueue = nq.concat(q.tail);
+            }
+            if (p) for (const key of _SIM_FLAT_KEYS) {
+                const lv = p[key];
+                if (!lv || !lv.__lvp) continue;
+                const next = Object.assign({}, cur && cur[key], lv.__lvp);
+                for (const k of lv.__lvd) delete next[k];
+                p[key] = next;
+            }
             if (players[i] && typeof players[i] === 'object') {
-                for (let k of Object.keys(players[i])) if (k[0] !== '_' && !(k in p)) delete players[i][k];
+                for (let k of Object.keys(players[i])) if (k[0] !== '_' && !(k in p) && !(same && same.includes(k))) delete players[i][k];
                 Object.assign(players[i], p);
             } else players[i] = p;
         }
@@ -746,6 +906,19 @@ function pageApplyState(st) {
         for (let ar of (areas || [])) {
             if (!ar) continue;
             let e = now.get(ar.id), active = !!(e && e[1]), level = e ? e[2] : 0;
+            if (ar.active !== active || (ar.multiplierLevel || 0) !== level) {
+                ar.active = active; ar.multiplierLevel = level; dirtyAreas = true;
+                if (typeof _markCombinedBgAreaDirty === 'function') _markCombinedBgAreaDirty(ar.id, 1);
+            }
+        }
+    }
+    // (The areas that changed since the last frame.)
+    if (st.areasD && areas) {
+        for (const e of st.areasD) {
+            let ar = areas[e[0]];
+            if (!ar || ar.id !== e[0]) ar = areas.find(a => a && a.id === e[0]);
+            if (!ar) continue;
+            const active = !!e[1], level = e[2];
             if (ar.active !== active || (ar.multiplierLevel || 0) !== level) {
                 ar.active = active; ar.multiplierLevel = level; dirtyAreas = true;
                 if (typeof _markCombinedBgAreaDirty === 'function') _markCombinedBgAreaDirty(ar.id, 1);

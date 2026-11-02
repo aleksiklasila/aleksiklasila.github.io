@@ -694,6 +694,7 @@ impl<'a> Ctx<'a> {
         s(w.on, q, 2);
     }
     // ---- The event (unit.js _unitWorkerEvent) ----
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn event(&mut self, q: usize, code: i32) {
         let w = self.w;
         if g(w.dead, q) != 0 { return; }
@@ -752,6 +753,7 @@ impl<'a> Ctx<'a> {
         }
     }
     /// _workerFinishApproachInRange.
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn finish_approach(&self, q: usize) {
         let w = self.w;
         let st = self.st(q);
@@ -979,6 +981,7 @@ impl<'a> Ctx<'a> {
         }
     }
     /// _updateResourceCollectorAI.
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn collector(&mut self, q: usize, heavy: bool) {
         let w = self.w;
         let st = self.st(q);
@@ -1465,6 +1468,7 @@ impl<'a> Ctx<'a> {
         js_max(1.0, floor(if m == m && m != 0.0 { m } else { 1.0 }))
     }
     /// The builder's branch of updateWorkerAI.
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn builder(&mut self, q: usize, heavy: bool) {
         let w = self.w;
         let st = self.st(q);
@@ -1780,6 +1784,7 @@ impl<'a> Ctx<'a> {
     #[inline(always)]
     unsafe fn heal_material_set(&self, q: usize, v: bool) { let x = g(self.w.wks, q); s(self.w.wks, q, (x & !(3 << 15)) | (if v { 2 } else { 1 } << 15)); }
     /// The healer's branch of updateWorkerAI.
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn healer(&mut self, q: usize, heavy: bool) {
         let w = self.w;
         let st = self.st(q);
@@ -1892,6 +1897,7 @@ impl<'a> Ctx<'a> {
         }
     }
     // ---- Salvagers ----
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn salvager(&mut self, q: usize, heavy: bool) {
         let w = self.w;
         let st = self.st(q);
@@ -2150,6 +2156,7 @@ impl<'a> Ctx<'a> {
         if cd > 0 { s(w.tmon, q, 1); }
     }
     // ---- Researchers ----
+    #[cfg_attr(feature = "prof", inline(never))]
     unsafe fn researcher(&mut self, q: usize, heavy: bool) {
         let w = self.w;
         let st = self.st(q);

@@ -1730,6 +1730,18 @@ const _simWsSelectW = _simWK(['unit.wsKind', 'unit.wsCfg', 'unit.wsT', 'unit.wsO
     '?ws.rslot', '?ws.rid', '?ws.rwt', '?ws.rkind', '?ws.rowner', '?ws.rox', '?ws.roy', '?ws.rux', '?ws.ruy', '?ws.rr', '?ws.rak', '?ws.rax', '?ws.ray', '?ws.rgrp',
     '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail', 'unit.wkIx']);
 SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSelectW, P, chunk, 'k_ws_select', 'WS_SELECT'); };
+// SIM_KERNEL_WS_GROUP (worker.js _wsGroupBuild): a collectors' group's sites
+// and spawners from the candidate structures, P[10] candidates a job: mode 2
+// counts a job's into wsg<id>.cc, mode 3 writes them from the starts the
+// caller made of those (ord.rs k_ws_group; P[11] the group's id: its arrays).
+const SIM_KERNEL_WS_GROUP = 129;
+const _simWsGroupKs = [];
+function _simWsGroupK(id) {
+    const p = 'wsg' + id + '.';
+    return _simWsGroupKs[id] || (_simWsGroupKs[id] = _simWK(['st.code', 'st.own', 'st.uc', 'st.val', 'st.brain', '?-',
+        ...['sx', 'sy', 'st', 'so', 'sready', 'tile', 'qgx', 'qgy', 'qo', 'qid', 'qx', 'qy', 'qready'].map(k => '?' + p + k), 'wsg.cand', p + 'cc']));
+}
+SIM_KERNELS[SIM_KERNEL_WS_GROUP] = function (R, P, chunk) { _simRust(_simWsGroupK(P[11] | 0), P, chunk, 'k_ws_group', 'WS_GROUP'); };
 // SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job over the selected ones:
 // request g the m-th of select chunk c, ws.rpre[c] <= g < ws.rpre[c + 1], at
 // c * P[12] + m): its K best sites, best first (then lower site): ws.res the
