@@ -20,13 +20,8 @@ let areas = [];
 let goldMines = []; // {gx, gy, gold, maxGold}
 let astarMines = []; // {gx, gy, astar, maxAstar}
 let areaNeighborIds = []; // [areaId] -> [neighborAreaId]
-let areaDistanceMatrix = []; // [areaId] -> Map(areaId -> steps) of the areas reached so far
-let areaIdsByDistance = []; // [areaId][distance] -> [areaId]
-let areaIdsWithinDistance = []; // [areaId][distance] -> [areaId]
 let areaIdGrid = []; // 2D lookup [y][x] -> areaId
 let gridCellsByArea = []; // [areaId] -> [{x,y}]
-let gridCellsByAreaDistance = []; // [areaId][distance] -> [{x,y}]
-let gridCellsWithinAreaDistance = []; // [areaId][distance] -> [{x,y}]
 let spatialUnitsByArea = []; // [areaId] -> [Unit]
 let droppedItemsByArea = []; // [areaId] -> [drop]
 
@@ -134,13 +129,8 @@ let _adjacencyPassiveRefreshMode = false;
 
 function resetAreaDistanceCaches() {
     areaNeighborIds = [];
-    areaDistanceMatrix = [];
-    areaIdsByDistance = [];
-    areaIdsWithinDistance = [];
     areaIdGrid = [];
     gridCellsByArea = [];
-    gridCellsByAreaDistance = [];
-    gridCellsWithinAreaDistance = [];
     spatialUnitsByArea = [];
     droppedItemsByArea = [];
 }
@@ -253,13 +243,7 @@ function rebuildAreaDistanceCachesFromAreas() {
 
 
     areaNeighborIds = new Array(areaCount);
-    areaDistanceMatrix = new Array(areaCount);
-    _areaBfsDone = new Array(areaCount);
-    areaIdsByDistance = new Array(areaCount);
-    areaIdsWithinDistance = new Array(areaCount);
     gridCellsByArea = new Array(areaCount);
-    gridCellsByAreaDistance = new Array(areaCount);
-    gridCellsWithinAreaDistance = new Array(areaCount);
     // A new layout: fresh buckets, every indexed unit in its tile's area.
     spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
     if (typeof rebuildUnitAreaBuckets === 'function') rebuildUnitAreaBuckets();
@@ -276,88 +260,84 @@ function rebuildAreaDistanceCachesFromAreas() {
         if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
         gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
     }
-    // Distance rows and the per-distance area/cell lists are built lazily per
-    // source area and distance (see _ensureAreaDistanceRow). Building every
-    // row eagerly, with cumulative cell copies per distance, took seconds on
-    // huge maps.
 }
 
-let _areaBfsDone = []; // [areaId] -> true once the BFS from it is exhausted
-
-// BFS over the area graph from one source, expanded one level at a time on
-// demand: range queries need only a few levels, and a full BFS per newly
-// visited area stalled large maps. Each level lists its areas by ascending
-// id, exactly as a complete BFS would, so results never depend on when (or
-// on which peer) a level was first requested. Unreached areas are absent.
-function _ensureAreaDistanceRow(source, depth = Infinity) {
-    if (!(source >= 0 && source < areaDistanceMatrix.length)) return null;
-    let row = areaDistanceMatrix[source];
-    if (row === null) return null;
-    if (row === undefined) {
-        if (!_areaById[source]) {
-            areaDistanceMatrix[source] = null;
-            areaIdsByDistance[source] = [];
-            areaIdsWithinDistance[source] = [];
-            gridCellsByAreaDistance[source] = [];
-            gridCellsWithinAreaDistance[source] = [];
-            return null;
-        }
-        // Sparse: a full row per source area (areas x areas in all) cost
-        // more to allocate than the few levels range queries expand.
-        row = new Map();
-        row.set(source, 0);
-        areaDistanceMatrix[source] = row;
-        areaIdsByDistance[source] = [[source]];
-        areaIdsWithinDistance[source] = [];
-        gridCellsByAreaDistance[source] = [];
-        gridCellsWithinAreaDistance[source] = [];
-        _areaBfsDone[source] = false;
-    }
-    let levels = areaIdsByDistance[source];
-    while (!_areaBfsDone[source] && levels.length - 1 < depth) {
-        let last = levels[levels.length - 1], distance = levels.length, next = [];
-        for (let current of last) {
-            let neighbors = areaNeighborIds[current];
-            if (!neighbors) continue;
-            for (let n of neighbors) {
-                if (row.has(n)) continue;
-                row.set(n, distance);
-                next.push(n);
-            }
-        }
-        if (next.length === 0) { _areaBfsDone[source] = true; break; }
-        next.sort((x, y) => x - y);
-        levels.push(next);
-    }
-    return row;
+// ---- range queries over the area graph (whole area steps) ----
+// Nothing kept per source or distance (no list grows with the game): on the
+// simulation thread the area index's kernel answers (wasm/src/arq.rs
+// k_arq_query, unit.js areaRangeIndexEnsure: made once per layout); where
+// there is none (the page's overlays, tests without kernels) a breadth-first
+// walk over this layout's adjacency as typed arrays (made once per layout).
+// _areaQuery's areas: _aq.out[0 .. count), nearest first.
+const _aq = { for: null, off: null, nb: null, stamp: null, out: null, ep: 0, src: null, kout: null, P: new Float64Array(8) };
+function _aqLayout() {
+    const Q = _aq, L = areaNeighborIds, A = L.length;
+    if (Q.for === L) return;
+    let total = 0;
+    for (let a = 0; a < A; a++) total += L[a] ? L[a].length : 0;
+    Q.off = new Int32Array(A + 1); Q.nb = new Int32Array(Math.max(1, total)); Q.stamp = new Int32Array(Math.max(1, A)); Q.out = new Int32Array(Math.max(1, A)); Q.ep = 0;
+    let k = 0;
+    for (let a = 0; a < A; a++) { Q.off[a] = k; const l = L[a]; if (l) for (let i = 0; i < l.length; i++) Q.nb[k++] = l[i]; }
+    Q.off[A] = k;
+    Q.for = L;
 }
-
-function _getAreaGridCellsAtDistance(source, dist) {
-    let cached = gridCellsByAreaDistance[source][dist];
-    if (cached) return cached;
-    let cells = [];
-    for (let targetAreaId of areaIdsByDistance[source][dist]) {
-        let targetArea = _areaById[targetAreaId];
-        if (!targetArea || !Array.isArray(targetArea.cells)) continue;
-        for (let cell of targetArea.cells) if (cell) cells.push(cell);
-    }
-    gridCellsByAreaDistance[source][dist] = cells;
-    return cells;
+// The kernel's way, when this thread has the index (its src/out heap arrays
+// made with the layout).
+function _aqKernel() {
+    if (typeof _arq === 'undefined' || typeof areaRangeIndexEnsure !== 'function' || typeof _simWasmX === 'undefined' || _simWasmX === null || typeof _simWasmX.k_arq_query !== 'function') return false;
+    if (!areaRangeIndexEnsure()) return false;
+    const Q = _aq, A = areaNeighborIds.length;
+    if (!Q.src || !simHeapHas(Q.src)) Q.src = simSharedArray(Int32Array, 16);
+    if (!Q.kout || Q.kout.length < A + 1 || !simHeapHas(Q.kout)) Q.kout = simSharedArray(Int32Array, A + 1);
+    return true;
 }
-
-// Cumulative lists (distance 0..dist, in distance order) built on demand.
-function _getAreaCumulative(source, dist, cache, atDistance) {
-    let cached = cache[dist];
-    if (cached) return cached;
-    let from = dist;
-    while (from > 0 && !cache[from - 1]) from--;
-    let list = from > 0 ? cache[from - 1] : [];
-    for (let d = from; d <= dist; d++) {
-        let part = atDistance(d);
-        list = part.length > 0 ? list.concat(part) : list.slice();
-        cache[d] = list;
+function _areaQuery(sources, distance) {
+    const Q = _aq, r = Math.max(0, Math.min(250, Math.floor(Number(distance) || 0)));
+    _aqLayout();
+    const A = areaNeighborIds.length;
+    if (_aqKernel()) {
+        let ns = 0;
+        for (let i = 0; i < sources.length && ns < 16; i++) { const s = sources[i]; if (s >= 0 && s < A) Q.src[ns++] = s; }
+        const P = Q.P; P[0] = 1; P[1] = ns; P[2] = 0; P[3] = r; P[4] = A;
+        simRustDirect('k_arq_query', [_arq.hdr, Q.src, Q.kout], P);
+        const n = Q.kout[0];
+        Q.out.set(Q.kout.subarray(1, 1 + n));
+        return n;
     }
-    return list;
+    // (Level by level; each level's areas by ascending id.)
+    const off = Q.off, nb = Q.nb, st = Q.stamp, out = Q.out;
+    if (++Q.ep >= 0x7fffffff) { st.fill(0); Q.ep = 1; }
+    const ep = Q.ep;
+    let n = 0;
+    for (let i = 0; i < sources.length; i++) { const s = sources[i]; if (s >= 0 && s < A && st[s] !== ep) { st[s] = ep; out[n++] = s; } }
+    out.subarray(0, n).sort();
+    let lo = 0;
+    for (let d = 1; d <= r && lo < n; d++) {
+        const hi = n;
+        for (let i = lo; i < hi; i++) { const a = out[i]; for (let e = off[a]; e < off[a + 1]; e++) { const c = nb[e]; if (st[c] !== ep) { st[c] = ep; out[n++] = c; } } }
+        out.subarray(hi, n).sort();
+        lo = hi;
+    }
+    return n;
+}
+// Whether any of targets is within maxDistance steps of any of sources.
+function _areaWithin(sources, targets, maxDistance) {
+    const r = Math.floor(Number(maxDistance));
+    if (!(r >= 0)) return false;
+    _aqLayout();
+    const A = areaNeighborIds.length;
+    if (_aqKernel()) {
+        const Q = _aq; let ns = 0, nt = 0;
+        for (let i = 0; i < sources.length && ns < 8; i++) { const s = sources[i]; if (s >= 0 && s < A) Q.src[ns++] = s; }
+        for (let i = 0; i < targets.length && nt < 8; i++) { const s = targets[i]; if (s >= 0 && s < A) Q.src[ns + nt++] = s; }
+        if (!ns || !nt) return false;
+        const P = Q.P; P[0] = 0; P[1] = ns; P[2] = nt; P[3] = r;
+        simRustDirect('k_arq_query', [_arq.hdr, Q.src, Q.kout], P);
+        return Q.kout[0] === 1;
+    }
+    const n = _areaQuery(sources, r), out = _aq.out;
+    for (let i = 0; i < n; i++) for (let j = 0; j < targets.length; j++) if (out[i] === targets[j]) return true;
+    return false;
 }
 
 function getAreaIdAtTile(gx, gy) {
@@ -439,11 +419,11 @@ function getSourceAreaListIdAtWorld(wx, wy) {
     const zx = rx < .3 ? 0 : rx < .7 ? 1 : 2, zy = ry < .3 ? 0 : ry < .7 ? 1 : 2;
     if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return _sourceAreaListIdOfWindow(gx - (zx === 0 ? 1 : 0), gx + (zx === 2 ? 1 : 0), gy - (zy === 0 ? 1 : 0), gy + (zy === 2 ? 1 : 0));
     let T = _sourceAreaZoneIds;
-    if (!T || _sourceAreaZoneGrid !== areaIdGrid || _sourceAreaZoneAdm !== areaDistanceMatrix || T.length !== GRID_W * GRID_H * 9) {
+    if (!T || _sourceAreaZoneGrid !== areaIdGrid || _sourceAreaZoneAdm !== areaNeighborIds || T.length !== GRID_W * GRID_H * 9) {
         // (Shared, for kernels.)
         if (T && T.length === GRID_W * GRID_H * 9) T.fill(0);
         else { T = _sourceAreaZoneIds = simSharedArray(Int32Array, GRID_W * GRID_H * 9); simParallelBind('vis.zoneIds', T); }
-        _sourceAreaZoneGrid = areaIdGrid; _sourceAreaZoneAdm = areaDistanceMatrix;
+        _sourceAreaZoneGrid = areaIdGrid; _sourceAreaZoneAdm = areaNeighborIds;
     }
     const k = (gy * GRID_W + gx) * 9 + zx * 3 + zy;
     let id = T[k] - 1;
@@ -484,35 +464,16 @@ function _sourceAreaListIdOfWindow(minX, maxX, minY, maxY) {
     return node.id;
 }
 
-// Union of the areas within `distance` of any source area, each once: the
-// first source's list in its order, then areas only the next ones add.
-// Two-area windows (units near an area border) are common: their unions are
-// cached per distance until the area caches are rebuilt.
-let _sourcePairUnions = new Map(), _sourcePairUnionsFor = null;
+// The areas within `distance` of any source area, each once, nearest first.
 function getAreaIdsWithinDistanceOfSources(sources, distance) {
-    if (sources.length === 1) return getAreaIdsWithinDistance(sources[0], distance);
-    let byPair = null, pairKey = 0;
-    if (sources.length === 2) {
-        if (_sourcePairUnionsFor !== areaIdsWithinDistance) { _sourcePairUnions = new Map(); _sourcePairUnionsFor = areaIdsWithinDistance; }
-        byPair = _sourcePairUnions.get(distance);
-        if (!byPair) _sourcePairUnions.set(distance, byPair = new Map());
-        pairKey = sources[0] * areaDistanceMatrix.length + sources[1];
-        let cached = byPair.get(pairKey);
-        if (cached) return cached;
-    }
-    let seen = new Set(), out = [];
-    for (let source of sources) for (let id of getAreaIdsWithinDistance(source, distance)) {
-        if (!seen.has(id)) { seen.add(id); out.push(id); }
-    }
-    if (byPair) byPair.set(pairKey, out);
-    return out;
+    const n = _areaQuery(sources, distance);
+    return Array.from(_aq.out.subarray(0, n));
 }
 
 function getGridCellsWithinDistanceOfSources(sources, distance) {
-    if (sources.length === 1) return getGridCellsWithinAreaDistance(sources[0], distance);
-    let cells = [];
-    for (let id of getAreaIdsWithinDistanceOfSources(sources, distance)) {
-        let areaCells = gridCellsByArea[id];
+    const n = _areaQuery(sources, distance), out = _aq.out, cells = [];
+    for (let i = 0; i < n; i++) {
+        let areaCells = gridCellsByArea[out[i]];
         if (areaCells) for (let cell of areaCells) if (cell) cells.push(cell);
     }
     return cells;
@@ -533,114 +494,67 @@ function isWorldTargetWithinAreaRange(sourceX, sourceY, targetX, targetY, maxDis
     return false;
 }
 
+// The steps from areaA to areaB (-1: not reached within 250).
 function getAreaDistance(areaA, areaB) {
-    let aId = Math.floor(Number(areaA));
-    let bId = Math.floor(Number(areaB));
-    if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length) return -1;
-    let row = _ensureAreaDistanceRow(aId, 0);
-    if (!row || bId >= areaDistanceMatrix.length) return -1;
-    while (!row.has(bId) && !_areaBfsDone[aId]) _ensureAreaDistanceRow(aId, areaIdsByDistance[aId].length);
-    let d = row.get(bId);
-    return d === undefined ? -1 : d;
+    const a = Math.floor(Number(areaA)), b = Math.floor(Number(areaB)), A = areaNeighborIds.length;
+    if (a < 0 || b < 0 || a >= A || b >= A) return -1;
+    if (a === b) return 0;
+    for (let d = 1; d <= 250; d *= 2) if (_areaWithin([a], [b], d)) {
+        let lo = (d >> 1) + 1, hi = d;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (_areaWithin([a], [b], m)) hi = m; else lo = m + 1; }
+        return lo;
+    }
+    return -1;
 }
 
-// Whether areaB is at most maxDistance steps from areaA. Equivalent to
-// 0 <= getAreaDistance(a, b) <= maxDistance, expanding only that far.
+// Whether areaB is at most maxDistance steps from areaA.
 function isAreaWithinDistance(areaA, areaB, maxDistance) {
-    let aId = Math.floor(Number(areaA));
-    let bId = Math.floor(Number(areaB));
-    if (aId < 0 || bId < 0 || aId >= areaDistanceMatrix.length || !(maxDistance >= 0)) return false;
-    let limit = Math.floor(maxDistance);
-    let row = _ensureAreaDistanceRow(aId, limit);
-    if (!row || bId >= areaDistanceMatrix.length) return false;
-    let d = row.get(bId);
-    return d !== undefined && d <= limit;
-}
-
-function getAreaIdsAtDistance(areaId, distance) {
-    let aId = Math.floor(Number(areaId));
-    let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!_ensureAreaDistanceRow(aId, dist)) return [];
-    let buckets = areaIdsByDistance[aId];
-    if (!buckets || !buckets[dist]) return [];
-    return buckets[dist];
+    const a = Math.floor(Number(areaA)), b = Math.floor(Number(areaB)), A = areaNeighborIds.length;
+    if (a < 0 || b < 0 || a >= A || b >= A || !(maxDistance >= 0)) return false;
+    return _areaWithin([a], [b], Math.floor(maxDistance));
 }
 
 function getAreaIdsWithinDistance(areaId, distance) {
-    let aId = Math.floor(Number(areaId));
-    let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!_ensureAreaDistanceRow(aId, dist)) return [];
-    let buckets = areaIdsByDistance[aId];
-    if (!buckets || buckets.length <= 0) return [];
-    if (dist >= buckets.length) dist = buckets.length - 1;
-    return _getAreaCumulative(aId, dist, areaIdsWithinDistance[aId], d => buckets[d]);
+    const a = Math.floor(Number(areaId));
+    if (!(a >= 0 && a < areaNeighborIds.length)) return [];
+    const n = _areaQuery([a], distance);
+    return Array.from(_aq.out.subarray(0, n));
 }
 
 // Tile bounding box [minGx, minGy, maxGx, maxGy] of every area within
-// `distance` steps of the source areas (cached per area and distance with
-// the distance rows): an O(1) bound for "anything hostile in range?" checks
-// before walking the areas themselves.
-let _areaRangeBoxes = null, _areaRangeBoxesFor = null;
-const _areaRangeBoxScratch = new Int32Array(4);
-// Per distance: 4 ints per area (min gx, min gy, max gx, max gy); an empty
-// box (max < 0) marks "not computed yet" (every area holds a tile).
-function _areaRangeBoxRow(dist) {
-    if (_areaRangeBoxesFor !== areaIdsWithinDistance) { _areaRangeBoxes = []; _areaRangeBoxesFor = areaIdsWithinDistance; }
-    let row = _areaRangeBoxes[dist];
-    if (!row || row.length !== _areaById.length * 4) {
-        row = _areaRangeBoxes[dist] = new Int32Array(_areaById.length * 4);
-        for (let i = 2; i < row.length; i += 4) { row[i] = -1; }
-    }
-    return row;
-}
+// `distance` steps of the source areas: a bound for "anything hostile in
+// range?" checks before walking the areas themselves. (The movement
+// kernels' table holds them for short ranges: unit.js simMoveAreaBoxRead.)
+const _areaRangeBoxScratch = new Int32Array(4), _areaRangeBoxOne = new Int32Array(4);
 function getAreaRangeTileBox(sources, distance) {
     let out = _areaRangeBoxScratch;
     out[0] = GRID_W; out[1] = GRID_H; out[2] = -1; out[3] = -1;
-    let dist = Math.max(0, Math.min(63, Math.floor(Number(distance) || 0)));
-    let row = _areaRangeBoxRow(dist);
+    const dist = Math.max(0, Math.min(63, Math.floor(Number(distance) || 0))), row = _areaRangeBoxOne;
     for (let k = 0; k < sources.length; k++) {
-        let aId = sources[k], o = aId * 4;
-        if (!(aId >= 0 && o < row.length)) continue;
-        // (The movement kernels' table, made for the whole layout on the
-        // helpers, holds the same boxes: unit.js simMoveAreaBoxRead.)
-        if (row[o + 2] < 0 && typeof simMoveAreaBoxRead === 'function') simMoveAreaBoxRead(aId, dist, row, o);
-        if (row[o + 2] < 0) {
+        const aId = sources[k];
+        if (!(aId >= 0 && aId < areaNeighborIds.length)) continue;
+        row[2] = -1;
+        if (typeof simMoveAreaBoxRead === 'function') simMoveAreaBoxRead(aId, dist, row, 0);
+        if (row[2] < 0) {
             let x0 = GRID_W, y0 = GRID_H, x1 = -1, y1 = -1;
-            for (let id of getAreaIdsWithinDistance(aId, dist)) {
-                let a = _areaById[id];
+            const n = _areaQuery([aId], dist), ids = _aq.out;
+            for (let i = 0; i < n; i++) {
+                const a = _areaById[ids[i]];
                 if (!a) continue;
                 if (a.minGx < x0) x0 = a.minGx;
                 if (a.minGy < y0) y0 = a.minGy;
                 if (a.maxGx > x1) x1 = a.maxGx;
                 if (a.maxGy > y1) y1 = a.maxGy;
             }
-            row[o] = x0; row[o + 1] = y0; row[o + 2] = x1; row[o + 3] = y1;
+            row[0] = x0; row[1] = y0; row[2] = x1; row[3] = y1;
             if (x1 < 0) continue;
         }
-        if (row[o] < out[0]) out[0] = row[o];
-        if (row[o + 1] < out[1]) out[1] = row[o + 1];
-        if (row[o + 2] > out[2]) out[2] = row[o + 2];
-        if (row[o + 3] > out[3]) out[3] = row[o + 3];
+        if (row[0] < out[0]) out[0] = row[0];
+        if (row[1] < out[1]) out[1] = row[1];
+        if (row[2] > out[2]) out[2] = row[2];
+        if (row[3] > out[3]) out[3] = row[3];
     }
     return out;
-}
-
-function getGridCellsAtAreaDistance(areaId, distance) {
-    let aId = Math.floor(Number(areaId));
-    let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!_ensureAreaDistanceRow(aId, dist)) return [];
-    if (!areaIdsByDistance[aId][dist]) return [];
-    return _getAreaGridCellsAtDistance(aId, dist);
-}
-
-function getGridCellsWithinAreaDistance(areaId, distance) {
-    let aId = Math.floor(Number(areaId));
-    let dist = Math.max(0, Math.floor(Number(distance) || 0));
-    if (!_ensureAreaDistanceRow(aId, dist)) return [];
-    let buckets = areaIdsByDistance[aId];
-    if (!buckets || buckets.length <= 0) return [];
-    if (dist >= buckets.length) dist = buckets.length - 1;
-    return _getAreaCumulative(aId, dist, gridCellsWithinAreaDistance[aId], d => _getAreaGridCellsAtDistance(aId, d));
 }
 
 function getDroppedItemsWithinAreaDistance(areaId, distance) {

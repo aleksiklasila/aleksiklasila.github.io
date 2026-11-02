@@ -916,6 +916,10 @@ SIM_KERNELS[SIM_KERNEL_SEP_PAIRS] = function (R, P, chunk) {
 
 // ---- the pool (simulation worker) ----
 let _simPool = null;
+// This thread's slot among the simulation's threads (0 this one, helper i
+// i + 1): the argument block's word 1002, a kernel's own context by it
+// (wasm/src/arq.rs).
+let _simThreadSlot = 0;
 
 // Starts the helpers (simulation worker, with shared memory and 3+ cores).
 function simParallelInit(helperUrl, maxHelpers = null) {
@@ -1048,7 +1052,7 @@ function _simRust(K, P, chunk, fn, name) {
     const I = _simWasmArgI;
     for (let i = 0; i < A.length; i++) I[SIM_RUST_W0 + i] = _simWEnc(A[i]);
     // (The thread's scratch: k.rs scratch().)
-    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
+    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords; I[1002] = _simThreadSlot;
     _simWasmArgF.set(P.length > 64 ? P.subarray(0, 64) : P);
     _simWasmX[fn](_simWasmArgsW, chunk);
 }
@@ -1447,6 +1451,7 @@ function simParallelHelperMain() {
         if (m.type === 'init') {
             ctl = m.ctl;
             _simParHelperParams = m.params;
+            _simThreadSlot = (m.index | 0) + 1;
             bgParams = m.bgParams;
             bgChain = m.bgChain;
             if (m.wasm && typeof simWasmHelperInit === 'function') simWasmHelperInit(m.wasm);
@@ -1616,7 +1621,7 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // [5]/[6] grid, [7] players, [8] areas, [9] CMD_ATTACKING.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?acq.aoff', '?acq.anb', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown']);
+    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.
@@ -1631,12 +1636,12 @@ const SIM_KERNEL_TOWER_PACK=102,SIM_KERNEL_TOWER_SCAN=103;
 const _simTowerPackW=_simWK(['sep.eslot','unit.x','unit.y','unit.dead','unit.owner','unit.upT','tac.flags','unit.stIx',
     'unit.stBu','unit.stWe','unit.stPo','unit.stFr','unit.stSa','unit.stWa','unit.wTeam','tac.x','tac.y','tac.meta']);
 const _simTowerScanW=_simWK(['tac.x','tac.y','tac.meta','sep.eslot','ix.start','ix.cnt','ix.stamp','vis.cellOff','vis.cells',
-    'tac.qx','tac.qy','tac.owner','tac.type','tac.off','tac.areas','tac.out']);
+    'tac.qx','tac.qy','tac.owner','tac.type','tac.off','arq.hdr','tac.out']);
 const SIM_KERNEL_TOWER_STRUCT = 104;
 const _simTowerStructW = _simWK(['st.code','st.own','st.uc','st.val','mv.scls','vis.cellOff','vis.cells',
-    'tac.qx','tac.qy','tac.owner','tac.off','tac.areas','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
+    'tac.qx','tac.qy','tac.owner','tac.off','arq.hdr','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
 const SIM_KERNEL_TOWER_COARSE=106;
-const SIM_KERNEL_STATIONARY_AREAS=109,SIM_KERNEL_TOWER_PREPARE=110,SIM_KERNEL_STATIONARY_NEED=111;
+const SIM_KERNEL_TOWER_PREPARE=110;
 const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
 const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any']);
 // (wb.list: the slots asked for, slot * 8 + code: the tick's events, or the search tier's takes.)
@@ -1653,18 +1658,13 @@ SIM_KERNELS[SIM_KERNEL_PROJ_FLIGHT]=function(R,P,chunk){_simRust(_simProjFlightW
 const _simProjBlastW=_simWK(['pj.uev','pj.x','pj.y','pj.bd','pj.br','pj.own','pj.ty','ix.stamp','ix.start','ix.cnt','sep.eslot',
     'unit.live','unit.dead','unit.owner','unit.x','unit.y','pj.bsum']);
 SIM_KERNELS[SIM_KERNEL_PROJ_BLAST]=function(R,P,chunk){_simRust(_simProjBlastW,P,chunk,'k_proj_blast','PROJ_BLAST');};
-// (The reach table being made: stb.*, tower.js _reachArray; the one in use sta.*.)
-const _simStationaryAreasW=_simWK(['area.off','area.nb','area.bounds','stb.off','?stb.ids','stb.box','stb.meta','stb.need']);
-const _simStationaryNeedW=_simWK(['st.code','st.own','st.brain','vis.areaGrid','sta.maxRange','stb.need']);
-SIM_KERNELS[SIM_KERNEL_STATIONARY_NEED]=function(R,P,chunk){_simRust(_simStationaryNeedW,P,chunk,'k_stationary_need','STATIONARY_NEED');};
 const _simTowerPrepareW=_simWK(['tac.input','st.code','st.own','st.uc','st.val','st.tim','st.brain',
-    'sta.range','sta.cd','sta.kind','vis.areaGrid','sta.off','sta.box',
+    'sta.range','sta.cd','sta.kind','vis.areaGrid','arq.hdr','?mv.areaBox',
     'tac.qx','tac.qy','tac.owner','tac.type','tac.base','tac.tile','tac.off','tac.boxes','tac.valid',
-    'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','sta.need',
+    'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','?mv.areaBoxOk',
     'st.rrow','tc.x','tc.y','tc.range','tc.cd','tc.dmg','tc.blast','tc.radius','tc.lvl','tac.pref','tac.ext']);
-SIM_KERNELS[SIM_KERNEL_STATIONARY_AREAS]=function(R,P,chunk){_simRust(_simStationaryAreasW,P,chunk,'k_stationary_areas','STATIONARY_AREAS');};
 SIM_KERNELS[SIM_KERNEL_TOWER_PREPARE]=function(R,P,chunk){_simRust(_simTowerPrepareW,P,chunk,'k_tower_prepare','TOWER_PREPARE');};
-const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct','?tac.off','?tac.count','?tac.valid']);
+const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct','?tac.off','?tac.count','?tac.valid','?mv.hostile']);
 SIM_KERNELS[SIM_KERNEL_TOWER_COARSE]=function(R,P,chunk){_simRust(_simTowerCoarseW,P,chunk,'k_tower_coarse','TOWER_COARSE');};
 SIM_KERNELS[SIM_KERNEL_TOWER_STRUCT] = function(R,P,chunk){_simRust(_simTowerStructW,P,chunk,'k_tower_struct','TOWER_STRUCT');};
 SIM_KERNELS[SIM_KERNEL_TOWER_PACK]=function(R,P,chunk){_simRust(_simTowerPackW,P,chunk,'k_tower_pack','TOWER_PACK');};
@@ -1696,7 +1696,7 @@ function simRustDirect(fn, arrays, P) {
         if (a && !(p >= 0)) throw new Error(fn + ': missing heap arrays (argument ' + i + ' not in the wasm heap)');
         I[SIM_RUST_W0 + i] = a ? _simWEnc(p) : 0;
     }
-    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords;
+    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords; I[1002] = _simThreadSlot;
     // (P: up to the argument block's 512 doubles, sim_wasm.js _simWasmArgF; only P's own length is copied.)
     if (P.length > _simWasmArgF.length) throw new Error(fn + ': ' + P.length + ' params, the block holds ' + _simWasmArgF.length);
     _simWasmArgF.set(P);

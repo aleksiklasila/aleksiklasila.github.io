@@ -28,6 +28,9 @@ const ctx = vm.createContext({
     isAreaWithinDistance: (a, b, max) => blockDistance(a, b) <= max,
     getAreaIdsWithinDistance: (a, max) => cellsByArea.map((_, i) => i).filter(i => blockDistance(a, i) <= max),
     getGridCellsWithinAreaDistance: (a, max) => cellsByArea.filter((_, i) => blockDistance(a, i) <= max).flat(),
+    // (data_state.js _areaQuery: the areas within max of any source, nearest first, then by id.)
+    _aq: { out: new Int32Array(8) },
+    _areaQuery(src, max) { const d = i => Math.min(...src.map(s => blockDistance(s, i))), ids = cellsByArea.map((_, i) => i).filter(i => d(i) <= max).sort((a, b) => d(a) - d(b) || a - b); ctx._aq.out.set(ids); return ids.length; },
     getTowerAtTile: (x, y) => tileTowers.get(y * W + x) || null,
     isGameplayTargetVisibleToPlayer: () => true,
     // Live structures by area, as the tile entity index provides them.
@@ -38,7 +41,7 @@ const ctx = vm.createContext({
         for (const t of tileTowers.values()) add(t);
         return byArea;
     },
-    gameTime: 0, areaIdsWithinDistance: [], areaDistanceMatrix: new Array(8),
+    gameTime: 0, areaNeighborIds: new Array(8),
     // (Only its identity is used: the source-area table's cache key.)
     areaIdGrid: [],
     // The O(1) pre-checks: never rule anything out here (the scans are under test).
@@ -58,7 +61,7 @@ assert.deepEqual([...ctx.getSourceAreaIdsAtWorld(1.9 * TILE, 1.9 * TILE)], [0, 1
 assert.equal(ctx.isWorldTargetWithinAreaRange(1.9 * TILE, 0.5 * TILE, 2.5 * TILE, 0.5 * TILE, 0), true, 'padded neighbour is in range');
 assert.equal(ctx.isWorldTargetWithinAreaRange(1.5 * TILE, 0.5 * TILE, 2.5 * TILE, 0.5 * TILE, 0), false);
 assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([0, 1], 0)], [0, 1]);
-assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([1, 0], 1)], [0, 1, 2, 5, 4], 'union keeps first-source order, each area once');
+assert.deepEqual([...ctx.getAreaIdsWithinDistanceOfSources([1, 0], 1)], [0, 1, 2, 4, 5], 'union nearest first, each area once');
 
 // (Structure priority within attack range is the combat brain's scan's: the
 // tier's choice, see performance-regressions _simAcqStructure.)

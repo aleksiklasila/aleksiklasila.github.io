@@ -176,7 +176,7 @@ function _adjApplyRun(no, passive) {
     const ev = _adjArr('adj.ev', Int32Array, 4 * no), evn = _adjArr('adj.evn', Int32Array, 16 * jobs);
     for (const k of ['code', 'own', 'stab', 'rrow', 'uc', 'brain', 'val']) simParallelBind('st.' + k, _ST[k]);
     _adjApplyClasses(CT);
-    const laser = _stationaryTypeIds.get('laser'), vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+    const laser = _stationaryTypeIds.get('laser'), vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaNeighborIds;
     const P = _simParams;
     P[0] = no; P[1] = ADJ_APPLY_PER_JOB; P[2] = passive ? 1 : 0; P[3] = GRID_W; P[4] = MAX_THING_LEVEL; P[5] = S.nk; P[6] = X.np; P[7] = 0;
     P[8] = vis ? 1 : 0; P[9] = vis ? _visCover.gen : 0; P[10] = laser === undefined ? -1 : laser; P[11] = S.L1; P[12] = ST_OWNER_NONE; P[13] = NT; P[14] = S.R1;

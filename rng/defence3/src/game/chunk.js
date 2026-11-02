@@ -297,7 +297,7 @@ function spatialIndexPrebuild() {
     // (Background readers of the current index finish first.)
     if (typeof acqTierIndexWait === 'function') acqTierIndexWait();
     const X = _sxPar, nChunks = CHUNKS_W * CHUNKS_H, players = spatialUnitsComplexPlayerCount;
-    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    const A = Math.max(areaNeighborIds ? areaNeighborIds.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
     if (X.nChunks !== nChunks || X.A < A || X.players !== players || X.cap < n || _sxESlot.length < n) return;
     const slots = _unitSlotMapEnsure();
     simParallelBind('ix.slots', slots); simParallelBind('ix.agrid', _spatialAreaGridFlat());
@@ -503,7 +503,7 @@ function spatialIndexRebuild() {
 }
 function _spatialIndexRebuildParallel() {
     const nChunks = CHUNKS_W * CHUNKS_H, n = units.length, players = spatialUnitsComplexPlayerCount;
-    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    const A = Math.max(areaNeighborIds ? areaNeighborIds.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
     let X = _sxPar;
     if (!X || X.nChunks !== nChunks || X.A < A || X.players !== players) {
         _sxParFree(X);
@@ -632,7 +632,7 @@ function _spatialIndexRebuildSerial() {
     if (_sxStamp.length !== nChunks) {
         _sxStamp = simSharedArray(Int32Array, nChunks); _sxStart = simSharedArray(Int32Array, nChunks); _sxCount = simSharedArray(Int32Array, nChunks); _sxFill = new Int32Array(nChunks);
     }
-    const A = Math.max(areaDistanceMatrix ? areaDistanceMatrix.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
+    const A = Math.max(areaNeighborIds ? areaNeighborIds.length : 0, Array.isArray(areas) ? areas.length : 0, 1);
     if (_sxAreaCap < A || _sxPlayers !== players) {
         _sxAreaCap = A; _sxPlayers = players;
         _sxAStamp = new Int32Array(A); _sxAStart = new Int32Array(A); _sxACount = new Int32Array(A); _sxAFill = new Int32Array(A);
@@ -710,74 +710,6 @@ function _spatialAreaGridFlat() {
 }
 
 function areaSearchEnabled() { return typeof SIM_ACQ_AREA_TARGETS!=='undefined'&&SIM_ACQ_AREA_TARGETS; }
-function forEachUnitInAreaRange(wx, wy, rangeAreaUnits, visitor, opts = null) {
-    if (typeof visitor !== 'function') return false;
-    let sources = getSourceAreaIdsAtWorld(wx, wy);
-    if (sources.length === 0) return false;
-    let numericRangeArea = Math.max(0, Number(rangeAreaUnits) || 0);
-    let maxDistance = Math.max(0, Math.ceil(numericRangeArea));
-    let maxRangePx = numericRangeArea * AREA_UNIT_TILE_EQUIVALENT * TILE;
-    let includeDead = !!(opts && opts.includeDead);
-    let predicate = (opts && typeof opts.predicate === 'function') ? opts.predicate : null;
-    let playerFilter = Number.isFinite(opts && opts.player) ? Math.floor(opts.player) : -1;
-    let enemyFilter = Number.isFinite(opts && opts.enemyOfPlayer) ? Math.floor(opts.enemyOfPlayer) : -1;
-    // Enemies only: no enemy unit in the tiles those areas cover (per-block
-    // counts), nothing to visit (O(1) before walking the areas).
-    if (enemyFilter >= 0 && !includeDead) {
-        let box = getAreaRangeTileBox(sources, maxDistance), cs = CHUNK_SIZE;
-        if (box[2] < 0 || !_regionMayHaveEnemyUnits(enemyFilter, Math.floor(box[0] / cs), Math.floor(box[1] / cs), Math.floor(box[2] / cs), Math.floor(box[3] / cs))) return false;
-    }
-    let unitTypeFilter = (opts && typeof opts.unitType === 'string' && opts.unitType.length > 0) ? opts.unitType : '';
-    let areaOnly = areaSearchEnabled() || !!(opts && opts.areaOnly);
-    // (As forEachUnitInRange's.)
-    let tickStart = !!(opts && opts.tickStart);
-    let areaIds = getAreaIdsWithinDistanceOfSources(sources, maxDistance);
-    if (!areaIds || areaIds.length <= 0) return false;
-    spatialIndexEnsure();
-    // Each area's tiles (in the area's cell order), each tile's units in
-    // units order (the unit index by tile).
-    const ep = _sxEpoch, own = _sxOwners(), list = own ? null : _sxList, ES = _sxESlot, ST = _sxStamp, SS = _sxStart, SC = _sxCount, cs = CHUNK_SIZE;
-    // Pure tower searches can reject dead/friendly slots before touching
-    // their objects. Mutating visitors keep live object access throughout.
-    const columns=own&&opts&&opts.readOnlyColumns?_simUnitState.columns:null;
-    for (let i = 0; i < areaIds.length; i++) {
-        let areaId = areaIds[i];
-        const cells = gridCellsByArea[areaId];
-        if (!cells) continue;
-        for (let ci = 0; ci < cells.length; ci++) {
-        const cell = cells[ci];
-        if (!cell) continue;
-        const ck = cs === 1 ? cell.y * GRID_W + cell.x : Math.floor(cell.y / cs) * CHUNKS_W + Math.floor(cell.x / cs);
-        if (ST[ck] !== ep) continue;
-        for (let k = SS[ck], k1 = k + SC[ck]; k < k1; k++) {
-            const s=own?ES[k]:-1;
-            if(columns){
-                if(!includeDead&&columns.dead[s]===1)continue;
-                if(playerFilter>=0&&columns.owner[s]!==playerFilter)continue;
-                if(enemyFilter>=0&&columns.owner[s]===enemyFilter)continue;
-            }
-            let u = own ? own[s] : list[k];
-            if (!u) continue;
-            if(!columns){
-                if(!includeDead&&u.dead)continue;
-                if(playerFilter>=0&&u.owner!==playerFilter)continue;
-                if(enemyFilter>=0&&u.owner===enemyFilter)continue;
-            }
-            if (unitTypeFilter && u.unitType !== unitTypeFilter) continue;
-            if (!areaOnly) {
-                let dx = (Number(tickStart ? _unitTickX(u) : u.x) || 0) - wx;
-                let dy = (Number(tickStart ? _unitTickY(u) : u.y) || 0) - wy;
-                let maxHitRangePx = maxRangePx + Math.max(0, Number(u.r) || 0);
-                if (dx * dx + dy * dy > maxHitRangePx * maxHitRangePx) continue;
-            }
-            if (predicate && !predicate(u)) continue;
-            if (visitor(u, areaId) === true) return true;
-        }
-        }
-    }
-    return false;
-}
-
 function forEachGridCellInAreaRange(wx, wy, rangeAreaUnits, visitor) {
     if (typeof visitor !== 'function') return false;
     let sources = getSourceAreaIdsAtWorld(wx, wy);

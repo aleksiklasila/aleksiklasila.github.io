@@ -178,77 +178,12 @@ function _towerAcqArray(name,Type,n){
     const a=T.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
     simParallelBind('tac.'+name,a);if(old)simHeapFree(old);return a;
 }
-// The stationary reach table: per area, the areas within each distance
-// (sta.off / sta.box / sta.ids, the prepare and scan kernels'), from the
-// layout and every tower's reach (sta.need, k_stationary_need). Two sets:
-// the one in use (bound sta.*) and the next, made on the build lane
-// (bound stb.*, k_stationary_need / k_stationary_areas) and switched to
-// when made: no tick waits for it, except the match's first (made at once:
-// nothing to use before it). Fixed positions make every turret in an
-// area/range reuse the same slice without packing or copying it.
-const _stationaryReach={sets:[{},{}],active:-1,bset:0,layout:null,depth:0,refresh:false,phase:0,blayout:null,bdepth:0,failed:false};
 const _stationaryStats={version:-1,types:0,players:0,levels:0,arrays:{},maxRange:0};
 let SIM_STATIONARY_BRAINS=true;
 function _stationaryArray(S,name,Type,n){
     const old=S.arrays[name];if(old&&old.length>=n)return old;
     const a=S.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
     simParallelBind('sta.'+name,a);if(old)simHeapFree(old);return a;
-}
-// An array of the set being made (bound stb.<name>).
-function _reachArray(name,Type,n){
-    const S=_stationaryReach,R=S.sets[S.bset],old=R[name];
-    if(old&&old.length>=n&&simHeapHas(old)){simParallelBind('stb.'+name,old);return old;}
-    const a=R[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
-    simParallelBind('stb.'+name,a);if(old&&simHeapHas(old))simHeapFree(old);return a;
-}
-// The set in use, bound for the kernels (tac.areas: its area lists).
-function _reachBindActive(){
-    const S=_stationaryReach;if(S.active<0)return null;
-    const A=S.sets[S.active];
-    for(const k of ['off','box','need'])simParallelBind('sta.'+k,A[k]);
-    simParallelBind('tac.areas',A.ids);
-    return A;
-}
-// The next set's making, a step (block: to its end, waiting on the lane).
-function _reachAdvance(block){
-    const S=_stationaryReach,lane=SIM_LANE_BUILD;
-    if(simParallelBackgroundPending(lane)){
-        // (Someone else's work on the lane: ours starts after it.)
-        if(!block&&(!S.phase||!simParallelBackgroundDone(lane)))return;
-        simParallelBackgroundWait(lane);
-    }
-    _simAreaCsr();const na=areaNeighborIds.length,dd=S.bdepth+1;
-    if(!na){S.phase=0;return;}
-    if(!S.phase){
-        _reachArray('off',Int32Array,na*(dd+1));_reachArray('box',Int32Array,na*dd*4);_reachArray('meta',Int32Array,16).fill(0);
-        _reachArray('need',Int32Array,na).fill(Math.min(3,S.bdepth));
-        _visibilityKernelAreas();for(const key of ['code','own','brain'])simParallelBind('st.'+key,_ST[key]);
-        const N=_simParams;N[0]=_ST.n;N[1]=4096;N[2]=_stationaryStats.types;N[3]=_stationaryStats.players;N[4]=S.bdepth;N[5]=na;
-        simParallelRun(SIM_KERNEL_STATIONARY_NEED,Math.ceil(_ST.n/4096));
-        // Thread-local BFS scratch holds two words per source area.
-        if(na*2>_simWasmScratchWords){if(!S.failed)console.error('stationary reach: '+na+' areas need more kernel scratch than '+_simWasmScratchWords+' words');S.failed=true;return;}
-        for(let stage=0;stage<2;stage++){
-            const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=na;P[1]=32;P[2]=dd;P[3]=stage?2:0;P[4]=16*1024*1024;
-        }
-        S.phase=1;simParallelBackgroundChain(lane,[[SIM_KERNEL_STATIONARY_AREAS,Math.ceil(na/32)],[SIM_KERNEL_STATIONARY_AREAS,1]],true);
-        if(!block)return;
-        simParallelBackgroundWait(lane);
-    }
-    if(S.phase===1){
-        if(simParallelBackgroundPending(lane)){if(!block&&!simParallelBackgroundDone(lane))return;simParallelBackgroundWait(lane);}
-        const total=S.sets[S.bset].meta[0];
-        if(total<0){if(!S.failed)console.error('stationary reach: more than 16M area entries at depth '+S.bdepth);S.failed=true;S.phase=0;return;}
-        _reachArray('ids',Int32Array,total);
-        const P=simParallelStageParams(lane,0);P.fill(0);P[0]=na;P[1]=32;P[2]=dd;P[3]=1;
-        S.phase=2;simParallelBackground(SIM_KERNEL_STATIONARY_AREAS,Math.ceil(na/32),lane);
-        if(!block)return;
-    }
-    if(S.phase===2){
-        if(simParallelBackgroundPending(lane)){if(!block&&!simParallelBackgroundDone(lane))return;simParallelBackgroundWait(lane);}
-        // Made: switched to (a flip), the other set the next one's.
-        S.active=S.bset;S.bset=1-S.active;S.layout=S.blayout;S.depth=S.bdepth;S.phase=0;
-        _reachBindActive();
-    }
 }
 // A tower type's shot status: its duration and dps stat keys (renderer.js _getEffectStatKey).
 const _TOWER_EFFECT_STATS={fire:['burnDuration','burnDps'],poison:['poisonDuration','poisonDps'],ice:['freezeDuration','freezeDps'],water:['wetDuration',null],sand_gun:['sandDuration',null],watch_tower:['watchDuration',null]};
@@ -284,22 +219,6 @@ function _stationaryStatsPrepare(){
     }
     S.version=_precomputedStatsVersion;S.types=nt;S.players=np;S.levels=nl;S.sources=PRECOMPUTED_STATS_MAP_PLAYER.slice(0,np);S.maxRange=Math.min(63,max);return S;
 }
-// Whether a table is there for this step (depth: the towers' reach), the
-// next one started or carried on when it should be deeper or newer.
-function _stationaryReachStep(depth){
-    const S=_stationaryReach;
-    const fresh=S.active>=0&&S.layout===areaNeighborIds;
-    if(S.phase)_reachAdvance(!fresh);
-    else if(!fresh||S.depth<depth||S.refresh){
-        S.refresh=false;S.blayout=areaNeighborIds;S.bdepth=Math.max(depth,fresh?S.depth:0);
-        _reachAdvance(!fresh);
-    }
-    // (Nothing to use yet: made at once.)
-    for(let k=0;k<4&&S.phase&&!(S.active>=0&&S.layout===areaNeighborIds);k++)_reachAdvance(true);
-    if(!(S.active>=0&&S.layout===areaNeighborIds))return false;
-    _reachBindActive();
-    return true;
-}
 // A tower with custom stats or position (data_state.js stationaryBrainChanged:
 // descriptor bit 25): its own values by its row (tc.*: the prepare kernel's
 // in place of the stat tables), written when its descriptor is.
@@ -323,14 +242,16 @@ function towerCustomWrite(t, row) {
     a.lvl[row] = getThingEffectiveLevel(t);
 }
 // The prepare kernels for the n due towers whose tiles are in tac.input
-// (rows in tac.row). False when there is no reach table (cannot be: it is
-// made at once when missing; a failure to make it is logged).
+// (rows in tac.row); their reach by the area index (unit.js
+// areaRangeIndexEnsure, wasm/src/arq.rs). False when there are no areas.
 function _towerAcqKernels(n){
     const T=_towerAcq,TT=_sTables.get(Tower);
     if(!_ST.n)return false;
     const stats=_stationaryStatsPrepare();
-    if(!_stationaryReachStep(stats.maxRange))return false;
+    if(!areaRangeIndexEnsure())return false;
     spatialIndexEnsure();_visibilityKernelAreas();_simMoveStructs();
+    // (The exact reach boxes, once made, and the hostile tables as they are now: the broad phase's.)
+    _simMoveAreaBoxes();_simMoveBuildHostile();
     for(const key of ['code','own','uc','val','tim','brain','rrow'])simParallelBind('st.'+key,_ST[key]);
     simParallelBind('mv.stblk',_simMoveStructBlocks);
     _towerCustomArrays(TT.cap);
@@ -343,11 +264,9 @@ function _towerAcqKernels(n){
     _towerAcqArray('count',Int32Array,Math.ceil(n/32)*16);
     const ext=_towerAcqArray('ext',Int32Array,Math.ceil(n/256));
     T.lastN=n;T.lastActive=0;T.lastPrepared=0;
-    const P=_simParams;P[0]=n;P[1]=256;P[2]=GRID_W;P[3]=_stationaryReach.depth+1;P[4]=stats.types;P[5]=stats.levels;P[6]=stats.players;P[7]=gameTime;P[8]=TILE;P[9]=_ST.n;P[10]=areaNeighborIds.length;P[11]=simDk;
+    const P=_simParams;P[0]=n;P[1]=256;P[2]=GRID_W;P[3]=SIM_MOVE_BOX_STEPS;P[4]=stats.types;P[5]=stats.levels;P[6]=stats.players;P[7]=gameTime;P[8]=TILE;P[9]=_ST.n;P[10]=areaNeighborIds.length;P[11]=simDk;
     simParallelRun(SIM_KERNEL_TOWER_PREPARE,Math.ceil(n/256));
-    // (A reach past the table's: the next table deeper.)
-    for(let c=0;c<Math.ceil(n/256);c++)if(ext[c]){_stationaryReach.refresh=true;break;}
-    P[0]=n;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;P[6]=1;
+    P[0]=n;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;P[6]=1;P[7]=spatialBlockRows;
     simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(n/32));
     for(let c=0;c<Math.ceil(n/32);c++){T.lastActive+=T.arrays.count[c*16];T.lastPrepared+=T.arrays.count[c*16+1];}
     // Empty broad-phase queries share the empty CSR slice. The kernel can
@@ -386,12 +305,12 @@ function towersTick() {
     if (typeof _visCoverReady === 'function') _visCoverReady();
     P[0] = n; P[1] = gameTime; P[2] = GRID_W; P[3] = TILE; P[4] = Math.max(WORLD_W, WORLD_H) * 2; P[5] = AREA_UNIT_TILE_EQUIVALENT * TILE;
     P[6] = stats.types; P[7] = stats.levels; P[8] = PROJ_LOOKS; P[9] = U.n; P[10] = V.coverFlat ? V.coverStride : 0; P[11] = V.coverFlat ? V.players : 0; P[12] = _ST.n;
-    const S = stats.arrays, R = _stationaryReach.sets[_stationaryReach.active];
+    const S = stats.arrays;
     simRustDirect('k_tower_fire', [input, rows, A.valid, A.base, A.sout, A.out, A.idle, A.qx, A.qy, A.owner, A.type, A.shots, A.shotCd, A.level, A.damage, A.blast, A.radius,
         C.x, C.y, C.id, _ST.code, _ST.tim, TT.c__cdUntil, TT.c_angle, S.tt, _ST.brain, S.sd, S.sp,
         PJ.live, PJ.free, PJ.hdr, J.x, J.y, J.vx, J.vy, J.sx, J.sy, J.px, J.py, J.aim, J.life, J.range, J.dmg, J.lvl, J.own, J.ty, J.tt, J.shots, J.bd, J.br, J.ft, J.sd, J.sp, J.id, J.ev, J.arg,
         ltgt, ftile, fang, looks, fc,
-        A.pref, TT.c__ptK, TT.c__ptV, U.ids, U.slots, C.dead, C.owner, _ST.own, _ST.val, V.coverFlat || null, _simParReg['vis.areaGrid'], A.off, R.ids], P);
+        A.pref, TT.c__ptK, TT.c__ptV, U.ids, U.slots, C.dead, C.owner, _ST.own, _ST.val, V.coverFlat || null, _simParReg['vis.areaGrid'], A.off, _arq.hdr], P);
     T.lastUsed = n;
     // The first shots' looks (presentation only).
     for (let i = 0, m = fc[2]; i < m; i++) {

@@ -6,103 +6,30 @@
 use super::*;
 use super::k::K;
 
-#[inline]
-unsafe fn stationary_sort(p:*mut i32,n:usize) {
-    // Raw-pointer heapsort avoids pulling slice-sort panic data into the
-    // shared-memory module (instantiations must have no data segments).
-    if n<2 {return;}
-    for root in (0..n/2).rev() {stationary_sift(p,root,n);}
-    for end in (1..n).rev() {core::ptr::swap(p,p.add(end));stationary_sift(p,0,end);}
-}
-#[inline]
-unsafe fn stationary_sift(p:*mut i32,mut root:usize,end:usize) {
-    loop {let mut child=root*2+1;if child>=end {return;}if child+1<end&&*p.add(child)<*p.add(child+1){child+=1;}if *p.add(root)>=*p.add(child){return;}core::ptr::swap(p.add(root),p.add(child));root=child;}
-}
-
-/// Common short-range rows everywhere, longer rows only where stationary
-/// entities can use them. This keeps rare watch/sniper ranges from expanding
-/// every area on a million-tile map. Max is independent of job scheduling.
-#[no_mangle]
-pub unsafe extern "C" fn k_stationary_need(a:u32,chunk:i32) {
-    use core::sync::atomic::{AtomicI32,Ordering};
-    let k=K::new(waddr(a) as *const i32);let code=k.p::<u8>(0);let own=k.p::<i32>(1);let brain=k.p::<u32>(2);let grid=k.p::<i32>(3);let ranges=k.p::<i32>(4);let need=k.p::<AtomicI32>(5);
-    for t in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
-        let t=t as usize;if *code.add(t)!=0x22 {continue;}
-        let ty=(*brain.add(t)&65535) as i32-1;let o=*own.add(t);let ar=*grid.add(t);
-        if ty<0||ty>=k.i(2)||o< -1||o>=k.i(3)||ar<0||ar>=k.i(5) {continue;}
-        let r=(*ranges.add(((o+1)*k.i(2)+ty) as usize)).min(k.i(4));
-        (*need.add(ar as usize)).fetch_max(r,Ordering::Relaxed);
-    }
-}
-
-/// Layout-derived stationary reach tables. Each source is independent. A
-/// source's BFS layers are sorted by area id, matching the existing query
-/// visiting order (and therefore exact-distance unit ties). Counts/prefixes
-/// and filling are separate background stages; no per-turret list copies.
-#[no_mangle]
-pub unsafe extern "C" fn k_stationary_areas(a:u32,chunk:i32) {
-    let arg=waddr(a) as *const i32;let k=K::new(arg);
-    let na=k.i(0) as usize;let dd=k.i(2) as usize;let mode=k.i(3);
-    let off=k.p::<i32>(0);let nb=k.p::<i32>(1);let bounds=k.p::<i32>(2);
-    let offsets=k.p::<i32>(3);let ids=k.p::<i32>(4);let boxes=k.p::<i32>(5);let meta=k.p::<i32>(6);let need=k.p::<i32>(7);
-    if mode==2 {
-        let mut sum=0i64;
-        for source in 0..na {
-            let row=offsets.add(source*(dd+1));let count=*row.add(dd);
-            *row=sum.min(i32::MAX as i64) as i32;
-            for d in 1..=dd {*row.add(d)=(*row.add(d) as i64+sum).min(i32::MAX as i64) as i32;}
-            sum+=count as i64;
-        }
-        *meta.add(1)=sum.min(i32::MAX as i64) as i32;
-        *meta=if sum>k.i(4) as i64 {-1}else{sum as i32};return;
-    }
-    let sc=waddr(*arg.add(1000) as u32) as *mut i32;
-    if sc.is_null()||(*arg.add(1001) as usize)<2*na { *meta=-1;return; }
-    let queue=sc.add(na);
-    core::ptr::write_bytes(sc,0,na);
-    let begin=chunk as usize*k.i(1) as usize;
-    for source in begin..((chunk as usize+1)*k.i(1) as usize).min(na) {
-        let epoch=(source-begin+1) as i32;*sc.add(source)=epoch;*queue=source as i32;
-        let mut lo=0;let mut hi=1;let mut x0=i32::MAX;let mut y0=i32::MAX;let mut x1=-1;let mut y1=-1;
-        for d in 0..dd {
-            let row=source*dd+d;
-            if mode==0 {*offsets.add(source*(dd+1)+d+1)=hi as i32;}
-            else {
-                let start=*offsets.add(source*(dd+1)) as usize;
-                core::ptr::copy_nonoverlapping(queue.add(lo),ids.add(start+lo),hi-lo);
-                for j in lo..hi {let b=bounds.add(*queue.add(j) as usize*4);if *b<=*b.add(2){x0=x0.min(*b);y0=y0.min(*b.add(1));x1=x1.max(*b.add(2));y1=y1.max(*b.add(3));}}
-                let b=boxes.add(row*4);*b=x0;*b.add(1)=y0;*b.add(2)=x1;*b.add(3)=y1;
-            }
-            if d+1==dd {break;}
-            if d>=*need.add(source) as usize {lo=hi;continue;}
-            let mut tail=hi;
-            for j in lo..hi {let ar=*queue.add(j) as usize;for p in *off.add(ar)..*off.add(ar+1) {let n=*nb.add(p as usize) as usize;if *sc.add(n)!=epoch {*sc.add(n)=epoch;*queue.add(tail)=n as i32;tail+=1;}}}
-            stationary_sort(queue.add(hi),tail-hi);lo=hi;hi=tail;
-        }
-    }
-}
-
 /// One mass stationary brain input pass. Descriptors are published on
-/// changes; stats and reach tables are shared by owner/type/level and area.
-/// Queries reference immutable CSR slices directly. Four adjacent query
-/// origins are written with SIMD; there is no JS stat/area work per turret.
-/// A tower with custom stats or position (descriptor bit 25) reads its row's
-/// (tc.*, by st.rrow: tower.js towerCustomWrite). A reach past what the
-/// table holds (its area's need, its depth) is the table's for now, counted
-/// (tac.ext[job]): the next table is made deep enough (tower.js). A preferred
-/// target (bit 24): tac.pref 1 (k_tower_fire looks at it first).
+/// changes; stats are shared by owner/type/level. A query is its area and
+/// reach (tac.off: area, range + 1; 0 none), answered by the area index
+/// (arq.rs) in the scan; its box (tac.boxes) the tiles that reach can lie
+/// in (Arq::reach_box), for the broad phase. Four adjacent query origins
+/// are written with SIMD; there is no JS stat/area work per turret. A tower
+/// with custom stats or position (descriptor bit 25) reads its row's (tc.*,
+/// by st.rrow: tower.js towerCustomWrite). A preferred target (bit 24):
+/// tac.pref 1 (k_tower_fire looks at it first).
 #[no_mangle]
 pub unsafe extern "C" fn k_tower_prepare(a:u32,chunk:i32) {
-    let k=K::new(waddr(a) as *const i32);
+    let arg=waddr(a) as *const i32;let k=K::new(arg);
     let input=k.p::<i32>(0);let code=k.p::<u8>(1);let owner=k.p::<i32>(2);let uc=k.p::<u8>(3);let energy=k.p::<f64>(4);let timer=k.p::<f64>(5);let brain=k.p::<u32>(6);
-    let ranges=k.p::<i32>(7);let cds=k.p::<i32>(8);let kinds=k.p::<i32>(9);let grid=k.p::<i32>(10);let offsets=k.p::<i32>(11);let boxes=k.p::<i32>(12);
+    let ranges=k.p::<i32>(7);let cds=k.p::<i32>(8);let kinds=k.p::<i32>(9);let grid=k.p::<i32>(10);let arq=super::arq::Arq::new(k.p::<i32>(11),arg);
     let qx=k.p::<f32>(13);let qy=k.p::<f32>(14);let qo=k.p::<i32>(15);let qt=k.p::<i32>(16);let qb=k.p::<i32>(17);let qtile=k.p::<i32>(18);let qoff=k.p::<i32>(19);let qbox=k.p::<i32>(20);let valid=k.p::<i32>(21);
-    let need=k.p::<i32>(31);let rrow=k.p::<i32>(32);
+    let rrow=k.p::<i32>(32);
     let (cx,cy,crange,ccd,cdmg,cblast,crad,clvl)=(k.p::<f32>(33),k.p::<f32>(34),k.p::<i32>(35),k.p::<i32>(36),k.p::<f32>(37),k.p::<f32>(38),k.p::<f32>(39),k.p::<i32>(40));
     let pref=k.p::<i32>(41);let ext=k.p::<i32>(42);
-    let w=k.i(2).max(1);let dd=k.i(3);let nt=k.i(4);let nl=k.i(5);let np=k.i(6);let now=k.f(7);let tile=k.f(8) as f32;
+    let w=k.i(2).max(1);let hgt=k.i(9)/w;let nt=k.i(4);
+    // (The movement's per-area boxes, exact for reaches below P[3] steps once made: unit.js _simMoveAreaBoxes.)
+    let (abox,aok,bsteps)=(k.p::<i32>(12),k.p::<u8>(31),k.i(3));let nl=k.i(5);let np=k.i(6);let now=k.f(7);let tile=k.f(8) as f32;
     let start=chunk*k.i(1);let end=((chunk+1)*k.i(1)).min(k.i(0));
-    let mut extended=0;
+    *ext.add(chunk as usize)=0;
+    let arq=match arq{Some(x)=>x,None=>{for q in start..end{*valid.add(q as usize)=0;}return;}};
     for first in (start..end).step_by(4) {
         let mut xs=[0i32;4];let mut ys=[0i32;4];let mut cpos=[(-1i32,0f32,0f32);4];
         for lane in 0..(end-first).min(4) as usize {
@@ -121,12 +48,12 @@ pub unsafe extern "C" fn k_tower_prepare(a:u32,chunk:i32) {
                 else{if level<1||level>=nl {continue;}(*ranges.add(stat),*cds.add(stat),*k.p::<f32>(22).add(stat) as f64,*k.p::<f32>(23).add(stat) as f64,*k.p::<f32>(24).add(stat) as f64,(descriptor>>26) as i32)};
             let area=*grid.add(t);
             if range<0||area<0||area>=k.i(10) {continue;}
-            let cap=(*need.add(area as usize)).min(dd-1);
-            if range>cap {range=cap.max(0);extended+=1;}
-            let row4=(area*dd+range) as usize;
-            let list=(area*(dd+1)) as usize;
-            *qoff.add(q*2)=*offsets.add(list);*qoff.add(q*2+1)=*offsets.add(list+range as usize+1);
-            v128_store(qbox.add(q*4) as *mut v128,v128_load(boxes.add(row4*4) as *const v128));
+            range=range.min(63);
+            *qoff.add(q*2)=area;*qoff.add(q*2+1)=range+1;
+            let at=(area*bsteps+range) as usize;
+            let bx=if range<bsteps&&!abox.is_null()&&!aok.is_null()&&*aok.add(at)!=0 {let b=abox.add(at*4);if *b>*b.add(2){[0,0,-1,-1]}else{[*b,*b.add(1),*b.add(2),*b.add(3)]}}
+                else {arq.reach_box(area,range,w,hgt)};
+            v128_store(qbox.add(q*4) as *mut v128,v128_load(bx.as_ptr() as *const v128));
             *xs.get_unchecked_mut(lane)=t as i32%w;*ys.get_unchecked_mut(lane)=t as i32/w;*qo.add(q)=own;*qt.add(q)=kind;
             if custom {*cpos.get_unchecked_mut(lane)=(q as i32,*cx.add(ru),*cy.add(ru));}
             *qb.add(q)=cd;
@@ -147,7 +74,6 @@ pub unsafe extern "C" fn k_tower_prepare(a:u32,chunk:i32) {
         v128_store(qy.add(first as usize) as *mut v128,f32x4_add(f32x4_mul(f32x4_convert_i32x4(v128_load(ys.as_ptr() as *const v128)),scale),half));
         for &(q,x,y) in cpos.iter(){if q>=0{*qx.add(q as usize)=x;*qy.add(q as usize)=y;}}
     }
-    *ext.add(chunk as usize)=extended;
 }
 
 #[no_mangle]
@@ -177,21 +103,23 @@ pub unsafe extern "C" fn k_tower_pack(a:u32,chunk:i32){
 
 #[no_mangle]
 pub unsafe extern "C" fn k_tower_scan(a:u32,chunk:i32){
-    let k=K::new(waddr(a) as *const i32);
+    let arg=waddr(a) as *const i32;let k=K::new(arg);
     let x=k.p::<i32>(0);let y=k.p::<i32>(1);let meta=k.p::<i32>(2);let slots=k.p::<i32>(3);
     let starts=k.p::<i32>(4);let counts=k.p::<i32>(5);let stamps=k.p::<i32>(6);
     let cell_off=k.p::<i32>(7);let cells=k.p::<i32>(8);
     let qx=k.p::<f32>(9);let qy=k.p::<f32>(10);let qo=k.p::<i32>(11);let qt=k.p::<i32>(12);
-    let qoff=k.p::<i32>(13);let areas=k.p::<i32>(14);let out=k.p::<i32>(15);
+    let qoff=k.p::<i32>(13);let out=k.p::<i32>(15);
     let begin=chunk*k.i(1);let end=(begin+k.i(1)).min(k.i(0));
+    let mut arq=match super::arq::Arq::new(k.p::<i32>(14),arg){Some(x)=>x,None=>{for q in begin..end{*out.add(q as usize)=-1;}return;}};
     for q in begin..end{
         let q=q as usize;let owner=*qo.add(q);let ty=*qt.add(q);
         let immune=if ty>=1&&ty<=4{1<<ty}else if ty==5{30}else{0};
         let affected=if ty>=1&&ty<=4{1<<(ty+4)}else if ty==6{512}else if ty==7{1024}else{0};
         let own=i32x4_splat((owner+128)<<16);let origin_x=f32x4_splat(*qx.add(q));let origin_y=f32x4_splat(*qy.add(q));
         let mut best=[-1i32;3];let mut distance=[f32::INFINITY;3];
-        for ai in *qoff.add(q*2)..*qoff.add(q*2+1){
-            let area=*areas.add(ai as usize) as usize;
+        let reach=*qoff.add(q*2+1)-1;
+        if reach>=0 {arq.each(&[*qoff.add(q*2)],reach,|area,_|{
+            let area=area as usize;
             for ci in *cell_off.add(area)..*cell_off.add(area+1){
                 let tile=*cells.add(ci as usize) as usize;
                 if *stamps.add(tile)!=k.i(2){continue;}
@@ -222,7 +150,8 @@ pub unsafe extern "C" fn k_tower_scan(a:u32,chunk:i32){
                     }
                 }
             }
-        }
+            false
+        });}
         *out.add(q)=if best[0]>=0{best[0]}else if best[1]>=0{best[1]}else{best[2]};
     }
 }
@@ -233,19 +162,21 @@ pub unsafe extern "C" fn k_tower_scan(a:u32,chunk:i32){
 /// the same state as the former serial object walks.
 #[no_mangle]
 pub unsafe extern "C" fn k_tower_struct(a:u32,chunk:i32) {
-    let k=K::new(waddr(a) as *const i32);
+    let arg=waddr(a) as *const i32;let k=K::new(arg);
     let code=k.p::<u8>(0);let own=k.p::<i32>(1);let uc=k.p::<u8>(2);let energy=k.p::<f64>(3);let cls=k.p::<i8>(4);
     let off=k.p::<i32>(5);let cells=k.p::<i32>(6);let qx=k.p::<f32>(7);let qy=k.p::<f32>(8);
-    let qo=k.p::<i32>(9);let qoff=k.p::<i32>(10);let areas=k.p::<i32>(11);let out=k.p::<i32>(12);let unit=k.p::<i32>(13);
+    let qo=k.p::<i32>(9);let qoff=k.p::<i32>(10);let out=k.p::<i32>(12);let unit=k.p::<i32>(13);
     let base=k.p::<i32>(14);let tiles=k.p::<i32>(15);let idle=k.p::<i32>(16);
     let w=k.i(3);let tile=k.f(4) as f32;
+    let mut arq=super::arq::Arq::new(k.p::<i32>(11),arg);
     for q in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
         let q=q as usize;*idle.add(q)=0;*out.add(q)=-1;if *unit.add(q)>=0 {continue;}
         let owner=*qo.add(q);let mut best=-1;let mut priority=4;let mut best_d=f32::INFINITY;
         let x=f32x4_splat(*qx.add(q));let y=f32x4_splat(*qy.add(q));
-        let mut unsupported=false;
-        for ai in *qoff.add(q*2)..*qoff.add(q*2+1) {
-            let a=*areas.add(ai as usize) as usize;let mut i=*off.add(a);let end=*off.add(a+1);
+        let unsupported=false;
+        let reach=*qoff.add(q*2+1)-1;
+        if let (Some(arq),true)=(arq.as_mut(),reach>=0) {arq.each(&[*qoff.add(q*2)],reach,|a,_|{
+            let a=a as usize;let mut i=*off.add(a);let end=*off.add(a+1);
             while i<end {
                 let mut ts=[0usize;4];let mut ps=[4i32;4];let mut xs=[0f32;4];let mut ys=[0f32;4];
                 let n=(end-i).min(4) as usize;
@@ -269,7 +200,8 @@ pub unsafe extern "C" fn k_tower_struct(a:u32,chunk:i32) {
                 }
                 i+=n as i32;
             }
-        }
+            false
+        });}
         *out.add(q)=if unsupported{-2}else{best};
         if !unsupported&&best<0&&*base.add(q)>0 {
             let b=*base.add(q);let period=b+1;
@@ -286,7 +218,7 @@ pub unsafe extern "C" fn k_tower_coarse(a:u32,chunk:i32) {
     let k=K::new(waddr(a) as *const i32);
     let boxes=k.p::<i32>(0);let own=k.p::<i32>(1);let live=k.p::<u32>(2);
     let units=k.p::<i32>(3);let blocks=k.p::<i32>(4);let codes=k.p::<i8>(5);
-    let pc=k.i(2);let bw=k.i(3);let w=k.i(4);let bs=k.i(5);let mut active=0;let mut prepared=0;let mut fallback=0;let mut extend=0;
+    let pc=k.i(2);let bw=k.i(3);let w=k.i(4);let bs=k.i(5);let bh=k.i(7).max(1);let hostile=k.p::<i32>(9);let mut active=0;let mut prepared=0;let mut fallback=0;let mut extend=0;
     for q in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
         let q=q as usize;*live.add(q)=0;let b=boxes.add(q*4);
         let (x0,y0,x1,y1)=(*b,*b.add(1),*b.add(2),*b.add(3));
@@ -295,6 +227,16 @@ pub unsafe extern "C" fn k_tower_coarse(a:u32,chunk:i32) {
         let owner=*own.add(q);
         if owner<0||owner>=pc||bs!=8 { *live.add(q)=1;active+=1;continue; }
         let mut hit=false;
+        if !hostile.is_null() {
+            // (Enemy units and structures hostile to the owner, by block: mv.hostile, unit.js _simMoveBuildHostile.)
+            let stride=(bw+1) as usize;let plane=stride*(bh as usize+1);let o=owner as usize*plane;
+            let (bx0,by0,bx1,by1)=((x0/bs).max(0) as usize,(y0/bs).max(0) as usize,(x1/bs).min(bw-1) as usize,(y1/bs).min(bh-1) as usize);
+            let s=*hostile.add(o+(by1+1)*stride+bx1+1) as i64-*hostile.add(o+by0*stride+bx1+1) as i64-*hostile.add(o+(by1+1)*stride+bx0) as i64+*hostile.add(o+by0*stride+bx0) as i64;
+            hit=s>0;
+            *live.add(q)=hit as u32;
+            if hit {active+=1;}else if k.i(6)!=0 {let off=k.p::<i32>(6);*off.add(q*2+1)=0;}
+            continue;
+        }
         'scan:for by in y0/bs..=y1/bs {for bx in x0/bs..=x1/bs {
             let at=((by*bw+bx)*pc) as usize;
             for p in 0..pc {if p!=owner&&*units.add(at+p as usize)>0 {hit=true;break 'scan;}}
@@ -313,7 +255,7 @@ pub unsafe extern "C" fn k_tower_coarse(a:u32,chunk:i32) {
             }
         }}
         *live.add(q)=hit as u32;
-        if hit {active+=1;}else if k.i(6)!=0 {let off=k.p::<i32>(6);*off.add(q*2+1)=*off.add(q*2);}
+        if hit {active+=1;}else if k.i(6)!=0 {let off=k.p::<i32>(6);*off.add(q*2+1)=0;}
     }
     if k.i(6)!=0 {let count=k.p::<i32>(7).add(chunk as usize*16);*count=active;*count.add(1)=prepared;*count.add(2)=fallback;*count.add(3)=extend;}
 }
@@ -393,7 +335,7 @@ unsafe fn id_slot(ids:*const i32,slots:*const i32,n:usize,id:i32)->i32{
 /// players covered.
 #[no_mangle]
 pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
-    let k=K::new(waddr(a) as *const i32);
+    let arg=waddr(a) as *const i32;let k=K::new(arg);
     let (input,row,valid,sout,uout,idle,qx,qy,qo,qt)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<i32>(4),k.p::<i32>(5),k.p::<i32>(6),
         k.p::<f32>(7),k.p::<f32>(8),k.p::<i32>(9),k.p::<i32>(10));
     let (shots,shot_cd,level,damage,blast,radius)=(k.p::<i32>(11),k.p::<i32>(12),k.p::<i32>(13),k.p::<f64>(14),k.p::<f64>(15),k.p::<f64>(16));
@@ -406,7 +348,8 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
         k.p::<f64>(49),k.p::<i32>(50),k.p::<i32>(51),k.p::<f32>(52),k.p::<i32>(53),k.p::<i32>(54),k.p::<i32>(55));
     let (ltgt,ftile,fang,looks,cnt)=(k.p::<i32>(56),k.p::<i32>(57),k.p::<f32>(58),k.p::<i32>(59),k.p::<i32>(60));
     let (pref,ptk,ptv,uids,uslots,udead,uown,sown,sval,cover,agrid,qoff,areas)=(k.p::<i32>(61),k.p::<i8>(62),k.p::<i32>(63),k.p::<i32>(64),k.p::<i32>(65),k.p::<u8>(66),
-        k.p::<i8>(67),k.p::<i32>(68),k.p::<f64>(69),k.p::<i32>(70),k.p::<i32>(71),k.p::<i32>(72),k.p::<i32>(73));
+        k.p::<i8>(67),k.p::<i32>(68),k.p::<f64>(69),k.p::<i32>(70),k.p::<i32>(71),k.p::<i32>(72),super::arq::Arq::new(k.p::<i32>(73),arg));
+    let mut areas=areas;
     let n=k.i(0).max(0) as usize;let now=k.f(1);let w=k.i(2).max(1);let tile=k.f(3);let range=k.f(4);let rscale=k.f(5);
     let nt=k.i(6);let nl=k.i(7);let nlook=k.i(8).max(0) as usize;let nid=k.i(9).max(0) as usize;let cstride=k.i(10).max(0) as usize;let ncov=k.i(11);
     let (mut nf,mut nk,mut drop)=(0usize,0usize,0i32);
@@ -438,8 +381,8 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
             let seen=ar>=0&&own>=0&&own<ncov&&!cover.is_null()&&*cover.add(own as usize*cstride+ar as usize)>0;
             if !seen{*ptk.add(r)=0;*brain.add(t as usize)&=!(1u32<<24);}
             else{
-                let mut inr=false;
-                for i in *qoff.add(q*2)..*qoff.add(q*2+1){if *areas.add(i as usize)==ar{inr=true;break;}}
+                let reach=*qoff.add(q*2+1)-1;
+                let inr=match areas.as_mut(){Some(x)=>reach>=0&&x.within(&[*qoff.add(q*2)],&[ar],reach),None=>false};
                 if inr{pick=(found.0,found.1,found.2,found.3);}
             }
         }

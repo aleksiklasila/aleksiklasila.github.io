@@ -660,7 +660,7 @@ function _unitGoneRun(G, n, S) {
     if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
     const O = typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && typeof _occ !== 'undefined' ? _occ : null;
     const upk = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c ? _upkU.cnt : null;
-    const vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+    const vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaNeighborIds;
     const arrays = [G.list, G.cnt, G.olist, c.owner, c.id, c.x, c.y, c.spEpoch, S.sepKey, S.sepLayer, c.spOwner, c.spType, c.spTile, c.spArea,
         c.mvOn, c.mvOut, c.live, c.statRow, c.vsGen, c.vsR, c.vsP1, c.vsP2, c.vsA, O ? O.bits : null, O ? O.mask : null, O ? O.rec : null,
         spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.upB, upk, c.ordSq,
@@ -4393,6 +4393,8 @@ function simMatchReserve() {
         typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
         typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
         typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve]) if (f) f(B);
+    // (The area index for range queries, per layout: unit.js areaRangeIndexEnsure.)
+    if (typeof areaRangeIndexEnsure === 'function' && typeof areaNeighborIds !== 'undefined' && areaNeighborIds.length) areaRangeIndexEnsure();
 }
 function orderQueueReserve() {
     const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;

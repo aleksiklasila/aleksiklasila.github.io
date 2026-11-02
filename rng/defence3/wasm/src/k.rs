@@ -3123,51 +3123,6 @@ unsafe fn scratch(a: *const i32) -> (*mut i32, usize) {
 const TAG_BRAIN: i32 = 0x4252_4149;
 const TAG_EFF: i32 = 0x4546_4641;
 
-/// Whether any of the areas tg[..nt] is within k steps of any of src[..ns]
-/// (breadth first over the CSR area graph; stamps by epoch in the scratch).
-#[inline(always)]
-unsafe fn area_within(off: *const i32, nb: *const i32, na: usize, src: &[i32; 4], ns: usize, tg: &[i32; 4], nt: usize, k: i32, st: *mut i32, q: *mut i32, ep: i32) -> bool {
-    let hit = |a: i32| -> bool { (0..nt).any(|j| *tg.as_ptr().add(j) == a) };
-    for i in 0..ns {
-        if hit(*src.as_ptr().add(i)) {
-            return true;
-        }
-    }
-    if k <= 0 {
-        return false;
-    }
-    let (mut qh, mut qt) = (0usize, 0usize);
-    for i in 0..ns {
-        let a = *src.as_ptr().add(i);
-        if a >= 0 && (a as usize) < na && g(st, a as usize) != ep {
-            s(st, a as usize, ep);
-            s(q, qt, a);
-            qt += 1;
-        }
-    }
-    let mut d = 1;
-    while d <= k && qh < qt {
-        let end = qt;
-        while qh < end {
-            let a = g(q, qh) as usize;
-            qh += 1;
-            for j in g(off, a)..g(off, a + 1) {
-                let c = g(nb, j as usize);
-                if hit(c) {
-                    return true;
-                }
-                if g(st, c as usize) != ep {
-                    s(st, c as usize, ep);
-                    s(q, qt, c);
-                    qt += 1;
-                }
-            }
-        }
-        d += 1;
-    }
-    false
-}
-
 /// SIM_KERNEL_COMBAT_BRAIN: per unit of the acquisition snapshot (acq.*)
 /// its instruction: keep its target while alive and in sight, else take the
 /// scan's (acq.out); in its attack range by areas (acq.rk steps from its
@@ -3187,27 +3142,17 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let k = K::new(a);
     let (xs, ys, own, flg, cmd, id) = (k.p::<f32>(0), k.p::<f32>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<u8>(4), k.p::<i32>(5));
     let (outa, cm, ct, ctid, rk, ag, covf) = (k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<i32>(11), k.p::<u8>(12));
-    let (off, nb, bm, bt, btid) = (k.p::<i32>(13), k.p::<i32>(14), k.p::<u8>(15), k.p::<i32>(16), k.p::<i32>(17));
+    let (hdr, bm, bt, btid) = (k.p::<i32>(13), k.p::<u8>(15), k.p::<i32>(16), k.p::<i32>(17));
     let sout = k.p::<i32>(18);
     // (The structures' owners per tile, a copy: -1 none, the owner, -2 mixed.)
     let sown = k.p::<i8>(19);
     let (cmd_idle, cmd_am, cmd_atk) = (k.i(2) as u8, k.i(3) as u8, k.i(9) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
-    let nau = na.max(0) as usize;
-    // (Stamps and queue in the scratch, kept from call to call while no
-    // other kernel used it.)
-    let (sc, sw) = scratch(a);
-    let have_bfs = !off.is_null() && !nb.is_null() && !sc.is_null() && 4 + 2 * nau <= sw;
-    let (st, qq) = (sc.add(4), sc.add(4 + nau));
-    if have_bfs && (*sc != TAG_BRAIN || *sc.add(2) != na) {
-        for i in 0..nau {
-            s(st, i, 0);
-        }
-        *sc = TAG_BRAIN;
-        *sc.add(1) = 0;
-        *sc.add(2) = na;
-    }
+    let _ = na;
+    // (In range by areas: the area index, arq.rs, with this thread's context.)
+    let mut arq = super::arq::Arq::new(hdr, a);
+    let have_bfs = arq.is_some();
     let area_of = |x: f32, y: f32| -> i32 {
         let gx = floorf(x * itile) as i32;
         let gy = floorf(y * itile) as i32;
@@ -3334,15 +3279,9 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             // whichever of the two looks; a structure by its tile.)
             let (tgt, nt) = if sg >= 0 { ([ta, 0, 0, 0], 1usize) } else { window(g(xs, tu), g(ys, tu)) };
             if ns > 0 && nt > 0 {
-                let mut ep = *sc.add(1) + 1;
-                if ep >= 0x7fff_ffff {
-                    for i in 0..nau {
-                        s(st, i, 0);
-                    }
-                    ep = 1;
+                if let Some(x) = arq.as_mut() {
+                    in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, q) as i32);
                 }
-                *sc.add(1) = ep;
-                in_range = area_within(off, nb, nau, &src, ns, &tgt, nt, g(rk, q) as i32, st, qq, ep);
             }
         }
         if order {

@@ -5885,11 +5885,11 @@ function resetVisibilityCoverage() {
 }
 
 function _visCoverEnsure() {
-    let C = _visCover, n = Math.max(1, players.length), A = areaDistanceMatrix.length;
-    if (C.adm === areaDistanceMatrix && C.areaCount === A && C.players === n) return;
+    let C = _visCover, n = Math.max(1, players.length), A = areaNeighborIds.length;
+    if (C.adm === areaNeighborIds && C.areaCount === A && C.players === n) return;
     // Entities registered under an older generation count as unregistered.
     C.gen++;
-    C.adm = areaDistanceMatrix; C.areaCount = A; C.players = n;
+    C.adm = areaNeighborIds; C.areaCount = A; C.players = n;
     // (Shared: the combat scan reads it on the helpers. One array, player by
     // player (coverFlat, A per player, in the wasm heap: the Rust kernels
     // read it), cover[p] its parts; bound as vis.coverf with vis.cover.)
@@ -6120,7 +6120,7 @@ function _visAreaTiles() {
 }
 
 function _visCoverActive() {
-    return _visCover.syncedTick >= 0 && _visCover.adm === areaDistanceMatrix;
+    return _visCover.syncedTick >= 0 && _visCover.adm === areaNeighborIds;
 }
 
 let _visCoverSimContext = false;

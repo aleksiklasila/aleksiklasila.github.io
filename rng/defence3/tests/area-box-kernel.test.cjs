@@ -13,7 +13,7 @@ for (const map of ['arena', 'islands', 'crossroads', 'random']) {
     const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         gameTick(); gameTick();
         if (_simAreaBoxJob) return { pending: true };
-        const D = SIM_MOVE_BOX_STEPS, A = areaDistanceMatrix.length, B = _simMoveAreaBox;
+        const D = SIM_MOVE_BOX_STEPS, A = areaNeighborIds.length, B = _simMoveAreaBox;
         let bad = 0, first = null, checked = 0;
         for (let a = 0; a < A; a++) for (let d = 0; d < D; d++) {
             _simMoveAreaSource[0] = a;

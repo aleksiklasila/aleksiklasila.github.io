@@ -48,6 +48,7 @@ mod tch;
 mod nfs;
 mod info;
 mod spr;
+mod arq;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

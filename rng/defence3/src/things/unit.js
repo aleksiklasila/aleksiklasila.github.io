@@ -2754,14 +2754,14 @@ let _simMoveAreaBox = null, _simMoveAreaBoxOk = null, _simMoveAreaBoxFor = null;
 // shooters again, once.)
 let _simMoveAreaBoxesNew = true;
 function _simMoveAreaBoxes() {
-    const A = Math.max(1, areaDistanceMatrix ? areaDistanceMatrix.length : 0);
-    if (_simMoveAreaBoxFor !== areaDistanceMatrix || !_simMoveAreaBoxOk || _simMoveAreaBoxOk.length !== A * SIM_MOVE_BOX_STEPS) {
+    const A = Math.max(1, areaNeighborIds ? areaNeighborIds.length : 0);
+    if (_simMoveAreaBoxFor !== areaNeighborIds || !_simMoveAreaBoxOk || _simMoveAreaBoxOk.length !== A * SIM_MOVE_BOX_STEPS) {
         _simMoveAreaBoxesNew = true;
         _simMoveAreaBox = simHeapArrayAuto(Int32Array, A * SIM_MOVE_BOX_STEPS * 4);
         _simMoveAreaBoxOk = simHeapArrayAuto(Uint8Array, A * SIM_MOVE_BOX_STEPS);
-        _simMoveAreaBoxFor = areaDistanceMatrix;
+        _simMoveAreaBoxFor = areaNeighborIds;
         simParallelBind('mv.areaBox', _simMoveAreaBox); simParallelBind('mv.areaBoxOk', _simMoveAreaBoxOk);
-        _simAreaBoxJob = { layout: areaDistanceMatrix, out: null };
+        _simAreaBoxJob = { layout: areaNeighborIds, out: null };
     }
     if (_simAreaBoxJob) _simAreaBoxStep();
 }
@@ -2773,7 +2773,7 @@ function _simMoveAreaBoxes() {
 let _simAreaBoxJob = null;
 function _simAreaBoxStep() {
     const J = _simAreaBoxJob, lane = typeof SIM_LANE_BUILD === 'number' ? SIM_LANE_BUILD : -1;
-    if (J.layout !== areaDistanceMatrix || lane < 0 || typeof SIM_KERNEL_AREA_BOX !== 'number') { _simAreaBoxJob = null; return; }
+    if (J.layout !== areaNeighborIds || lane < 0 || typeof SIM_KERNEL_AREA_BOX !== 'number') { _simAreaBoxJob = null; return; }
     const D = SIM_MOVE_BOX_STEPS, A = _simMoveAreaBoxOk.length / D;
     if (!J.out) {
         if (simParallelBackgroundPending(lane)) return;
@@ -2807,7 +2807,7 @@ function _simAreaBoxStep() {
 // format: an empty box as [GRID_W, GRID_H, -1, -1]) when the table holds it
 // for the current layout; else nothing written.
 function simMoveAreaBoxRead(area, steps, out, o) {
-    if (_simMoveAreaBoxFor !== areaDistanceMatrix || !_simMoveAreaBoxOk || !(steps >= 0 && steps < SIM_MOVE_BOX_STEPS)) return;
+    if (_simMoveAreaBoxFor !== areaNeighborIds || !_simMoveAreaBoxOk || !(steps >= 0 && steps < SIM_MOVE_BOX_STEPS)) return;
     const k = area * SIM_MOVE_BOX_STEPS + steps;
     if (!(k >= 0 && k < _simMoveAreaBoxOk.length) || !_simMoveAreaBoxOk[k]) return;
     const B = _simMoveAreaBox, b = k * 4;
@@ -3275,6 +3275,55 @@ function _simAreaCsr() {
     simParallelBind('area.off', off); simParallelBind('area.nb', nb);
     simParallelBind('area.bounds',bounds);
     _simAreaCsrFor = areaNeighborIds;
+}
+// The area index for range queries (wasm/src/arq.rs; towers' targets, units'
+// in-range checks): made once per layout (a match's start, a whole
+// restore: areas never change in play), its memory fixed then. arq.hdr its
+// header (arq.rs); each thread queries with its own context (the argument
+// block's word 1002, sim_parallel.js _simThreadSlot): one a helper and one
+// for this thread, made with it. False when there is no area.
+const _arq = { for: null, helpers: -1, hdr: null, arrays: null, P: new Float64Array(4) };
+function _arqCtxBytes(nbk) { let a = nbk * 17; a += (16 - a % 16) % 16; let b = a + nbk * 4; return b + (16 - b % 16) % 16; }
+function areaRangeIndexEnsure() {
+    const Z = _arq, helpers = typeof simParallelHelpers === 'function' ? simParallelHelpers() : 0;
+    if (Z.for === areaNeighborIds && Z.hdr && simHeapHas(Z.hdr) && Z.helpers === helpers) return Z.hdr[8] > 0;
+    _simAreaCsr();
+    const off = _simParReg['area.off'], nb = _simParReg['area.nb'], bounds = _simParReg['area.bounds'], na = off ? off.length - 1 : 0;
+    const fresh = Z.for !== areaNeighborIds || !Z.hdr || !simHeapHas(Z.hdr);
+    if (fresh) {
+        if (Z.arrays) for (const k in Z.arrays) simHeapFree(Z.arrays[k]);
+        Z.arrays = null;
+        if (!Z.hdr || !simHeapHas(Z.hdr)) { Z.hdr = simSharedArray(Int32Array, 16); simParallelBind('arq.hdr', Z.hdr); }
+        Z.hdr.fill(0);
+        if (na > 0) {
+            const A = Z.arrays = {}, P = Z.P, meta = A.meta = simSharedArray(Int32Array, 4), tmp = simSharedArray(Int32Array, 3 * na);
+            A.blk = simSharedArray(Int32Array, na);
+            P[0] = 0; P[1] = 0; P[2] = na;
+            simRustDirect('k_arq_build', [off, nb, A.blk, null, null, null, null, meta, bounds, tmp], P);
+            simHeapFree(tmp);
+            const nbk = meta[0];
+            A.inv = simSharedArray(Int32Array, nbk * 16); A.d = simSharedArray(Uint8Array, nbk * 256);
+            A.xoff = simSharedArray(Int32Array, nbk * 16 + 1); A.xnb = simSharedArray(Int32Array, Math.max(1, meta[2]));
+            P[0] = 1; simRustDirect('k_arq_build', [off, nb, A.blk, A.inv, A.d, A.xoff, A.xnb, meta, bounds, null], P);
+            P[0] = 2; P[1] = nbk; simRustDirect('k_arq_build', [off, nb, A.blk, A.inv, A.d, A.xoff, A.xnb, meta, bounds, null], P);
+        }
+        Z.for = areaNeighborIds;
+        // (And the movement's per-area boxes for this layout: made with it, not at a first use in play.)
+        if (typeof _simMoveAreaBoxes === 'function') _simMoveAreaBoxes();
+    }
+    // (The contexts: one for this thread and each helper.)
+    const A = Z.arrays;
+    if (A) {
+        const nbk = A.meta[0], stride = _arqCtxBytes(nbk), slots = helpers + 1;
+        if (A.ctx) simHeapFree(A.ctx);
+        A.ctx = simSharedArray(Uint8Array, stride * slots);
+        for (let s = 0; s < slots; s++) A.ctx.fill(255, s * stride, s * stride + nbk * 16);
+        const H = Z.hdr, enc = a => _simWEnc(_simHeapPtrOf(a));
+        H[0] = enc(A.blk); H[1] = enc(A.inv); H[2] = enc(A.d); H[3] = enc(A.xoff); H[4] = enc(A.xnb); H[5] = enc(A.ctx); H[6] = enc(bounds);
+        H[8] = nbk; H[9] = na; H[10] = A.meta[1]; H[11] = stride; H[12] = slots;
+    }
+    Z.helpers = helpers;
+    return Z.hdr[8] > 0;
 }
 
 // Runs the armed units' tick (before the update pass), then charges their
@@ -3754,8 +3803,12 @@ function _acqPost() {
     C3.fill(0);
     if (SIM_COMBAT_BRAIN || sampled) {
         _simAreaCsr();
-        _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
-        _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
+        areaRangeIndexEnsure();
+        // (The sampled acquisition's own copy of the area graph.)
+        if (sampled) {
+            _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
+            _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
+        }
         C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A; C3[9] = CMD_ATTACKING;
     }
     const stages=[[SIM_KERNEL_ACQ_OMT,prepJobs]];
