@@ -3196,6 +3196,8 @@
                     float lit = remembered ? .14 : (uSlotFull != 0 || owner == uSlotPlayer) ? 1.0
                         : min(1.0, texelFetch(uSlotVis, ivec2(int(floor(x)), int(floor(z))), 0).r / uSlotLightNorm);
                     light = remembered ? -1.0 - lit : lit;
+                    // (A remembered one's pose as last seen: no walk between ticks.)
+                    if (remembered) m2.w = 0.0;
                     atlasLayer = uSlotLayers[ownerIdx];
                     statusLayer = uSlotStatus;
                 }`;
@@ -6800,7 +6802,8 @@
             for(const G of ulist){G.layers.fill(-2);G.statusLayer=-2;}
             for(let i=0;i<list.length;i++) {
                 const s=LS?LS[i]:list[i]._s;
-                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&66560)!==0) continue;
+                // (Remembered ones too, Team + history: only the hidden are out.)
+                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&1024)!==0) continue;
                 const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s],ownerIdx=Math.max(0,Math.min(8,F.owner[s]+1)),own=F.owner[s]===player;
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && !own && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
@@ -6813,11 +6816,12 @@
                 if(!(_detailScore(x,z,size,false,false,12/(.8+.4*fraction),edgeHeight)>0))continue;
                 const st=this._cmStyle(A,7,F.type[s]);
                 if(!st)continue;
-                const style=st.style,mode=F.mode[s],groupKey=-1-((st.index*64+(mode&31))*2);
+                const near=_cmRememberedNear(F,s,x,z,size),meshKind=st.figure+(near?'':':lod2');
+                const style=st.style,mode=F.mode[s],groupKey=-1-((st.index*64+(mode&31))*2+(near?1:0));
                 let G=S.groups.get(groupKey);
                 if(!G) {
                     const sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
-                    G={units:true,id:ulist.length,styleIndex:st.index,sample,panels:new Set(),kind:st.figure+':lod2',mesh:this.getFigureMesh(st.figure+':lod2'),
+                    G={units:true,id:ulist.length,styleIndex:st.index,sample,panels:new Set(),kind:meshKind,mesh:this.getFigureMesh(meshKind),
                         storage:new PersistentInstances(INSTANCE_STRIDE),ghost:false,slots:new Int32Array(64),layers:new Float32Array(9).fill(-2),statusLayer:-2};
                     S.groups.set(groupKey,G);ulist.push(G);
                 }
@@ -6849,7 +6853,8 @@
                 if(U.face[s]===facing){c=U.fc[s];sn=U.fs[s];}
                 else{c=Math.cos(facing);sn=Math.sin(facing);U.face[s]=facing;U.fc[s]=c;U.fs[s]=sn;}
                 d[o]=c*sx;d[o+2]=-sn*sx;d[o+3]=(F.px[s]-F.x[s])/tile;d[o+5]=sy;d[o+7]=(F.py[s]-F.y[s])/tile;
-                d[o+8]=sn*sx;d[o+10]=c*sx;d[o+11]=F.prate[s];d[o+12]=x;d[o+14]=z;
+                // (A remembered one's pose as last seen: no walk between ticks.)
+                d[o+8]=sn*sx;d[o+10]=c*sx;d[o+11]=F.flags[s]&65536?0:F.prate[s];d[o+12]=x;d[o+14]=z;
                 d[o+20]=F.amount[s];d[o+21]=F.phase[s];
                 const remembered=(F.flags[s]&65536)!==0;
                 const light=remembered?.14:full||own?1:Math.min(1,vis[Math.floor(z)][Math.floor(x)]/norm);
@@ -6953,7 +6958,8 @@
             const byKey=S.sgroupByKey||(S.sgroupByKey=new Map());
             for(let i=0;i<list.length;i++) {
                 const s=LS?LS[i]:list[i]._s;
-                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&66560)!==0) continue;
+                // (Remembered ones too, Team + history: only the hidden are out.)
+                if(!(s>=0) || mask[s] || F.id[s]<0 || F.energy[s]<=0 || (F.flags[s]&1024)!==0) continue;
                 const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s];
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && F.owner[s]!==player && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
@@ -6970,11 +6976,11 @@
                 // A missing panel is temporary, not a permanent sprite-only type.
                 if(st===undefined){st=this._cmStyle(A,7,type);if(st)styleOf[type]=st;}
                 if(!st)continue;
-                const key=st.index*32+(F.mode[s]&31);
+                const near=_cmRememberedNear(F,s,x,z,size),key=(st.index*32+(F.mode[s]&31))*2+(near?1:0);
                 let G=byKey.get(key);
                 if(!G) {
-                    const style=st.style,mode=F.mode[s]&31,sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode};
-                    G={slotGroup:true,styleIndex:st.index,style,figure:st.figure,sample,panels:new Set(),kind:st.figure+':lod2',mesh:this.getFigureMesh(st.figure+':lod2'),
+                    const style=st.style,mode=F.mode[s]&31,sample={modelKey:style.modelKey,isFlying:style.isFlying,animationMode:mode},meshKind=st.figure+(near?'':':lod2');
+                    G={slotGroup:true,styleIndex:st.index,style,figure:st.figure,sample,panels:new Set(),kind:meshKind,mesh:this.getFigureMesh(meshKind),
                         slots:new Float32Array(256),n:0,buffer:null,bufferSize:0,layers:new Float32Array(9).fill(-2),statusLayer:-2};
                     byKey.set(key,G);ulist.push(G);
                 }

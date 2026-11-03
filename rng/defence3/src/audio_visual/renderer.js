@@ -4366,6 +4366,14 @@ function _cmBaseHeight(A, row, code) {
     if (!cat || !(code >= 0 && code < cat.width)) return 1;
     return Math.abs(cat.lookup[(row * cat.width + code) * 4 + 2]) || 1;
 }
+// A remembered unit (Team + history) of slot s as big as the detail split's
+// units: its middle model is the full mesh. (The split takes live units
+// only: its models are drawn from the unit, live; a remembered one is a
+// frozen picture of the frame's columns, which the middle models draw. Its
+// sprite magnified up close was a blur beside detailed structures.)
+function _cmRememberedNear(F, s, x, z, size) {
+    return (F.flags[s] & SIM_UF_GHOST) !== 0 && _detailScore(x, z, size, false, false, UNIT_DETAIL_MIN_PX) > 0;
+}
 function _detailScore(x, z, size, flat2d, retained = false, minPixels = UNIT_DETAIL_MIN_PX, height = 1) {
     const R = renderer3dInstance, M = R.tmpViewProjection;
     const w = M[3] * x + M[7] * .02 + M[11] * z + M[15];
