@@ -29,9 +29,9 @@
 const NAV_UNREACHED = 0xFFFF;
 const NAV_PROFILE_GROUND = 0, NAV_PROFILE_AIR = 1;
 // The builders' walk class (navProfileOf): builders and salvagers of every
-// player walk over every structure (_navClassWalls: their work is at those,
-// in the middle of a base too): the ground's walls less the structures' (a
-// mined-out mine walls again). One navigation for all of them. Collectors
+// player walk over every player's structure (_navClassWalls: their work is
+// at those, in the middle of a base too): the ground's walls less the
+// structures' (mines are neutral and stay walls). One navigation for all of them. Collectors
 // fly (data_static.js isFlying): the air's.
 const NAV_PROFILE_BUILD = 2, NAV_PROFILES = 3;
 
@@ -927,11 +927,12 @@ function navWallTable(profile) {
 const _navClassWall = new Array(NAV_PROFILES).fill(null);
 let _navClassGrid = null;
 function _navClassPass(profile, x, y) {
-    // (Any structure; a mine only while it has some left: tch.rs k_tile_changes, the same rule.)
+    // (Any player's structure; never a mine, it belongs to no player: tch.rs k_tile_changes, the same rule.)
     const e = typeof getTileEntityRef === 'function' ? getTileEntityRef(x, y) : null;
     if (!e) return false;
-    if (typeof GoldMine !== 'undefined' && e instanceof GoldMine) return hasActiveGoldMineAt(x, y);
-    if (typeof AstarMine !== 'undefined' && e instanceof AstarMine) return hasActiveAstarMineAt(x, y);
+    // (Also a mine's record on a page that holds plain column views, not the class.)
+    if ((typeof GoldMine !== 'undefined' && e instanceof GoldMine) || e._isGoldMine || (Number.isFinite(e.gold) && Number.isFinite(e.maxGold))) return false;
+    if ((typeof AstarMine !== 'undefined' && e instanceof AstarMine) || e._isAstarMine || (Number.isFinite(e.astar) && Number.isFinite(e.maxAstar))) return false;
     return true;
 }
 function _navClassWalls(profile) {

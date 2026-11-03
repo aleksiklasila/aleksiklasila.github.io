@@ -506,15 +506,26 @@ function _ipsGroup(S, g, R, o, n, X) {
     if (S.q) {
         _ipsShow(S.q, local); _ipsShow(S.p, local);
         if (local) {
-            const worker = g.kind !== 'barrack', max = Math.round(R[o + IPF.ready]) * (worker ? 10 : 20), value = Math.max(0, Math.min(max, Math.round(R[o + IPF.queued])));
+            const worker = g.kind !== 'barrack', max = Math.round(R[o + IPF.ready]) * (worker ? 10 : 20);
+            let value = Math.max(0, Math.min(max, Math.round(R[o + IPF.queued])));
+            // The player's last release holds until the queue reaches it (the
+            // command lands a tick or more later): no snap back to the old count.
+            const ahead = S.qIn._ahead;
+            if (ahead) {
+                if (value === ahead.target || performance.now() - ahead.at > RESEARCH_AHEAD_MS) S.qIn._ahead = null;
+                else value = Math.max(0, Math.min(max, ahead.target));
+            }
+            // (Mid-gesture the page never rewrites the thumb under the pointer.)
             const label = worker ? 'Worker queue count' : 'Unit queue count', pos = value / Math.max(1, max) * 100;
             _ipsText(S.qCost, X.qcost);
-            _ipsAttr(S.qIn, 'max', max); if (S.qIn.value !== String(value)) S.qIn.value = String(value); _ipsAttr(S.qIn, 'value', value);
             _ipsAttr(S.qIn, 'data-floor', 0); _ipsAttr(S.qIn, 'data-count-spec', worker ? S.specW : S.specU); _ipsAttr(S.qIn, 'data-prefix', ''); _ipsAttr(S.qIn, 'data-label', label); _ipsAttr(S.qIn, 'aria-label', label);
-            if (S.qIn.disabled !== (max <= 0)) S.qIn.disabled = max <= 0;
-            const p = pos + '%'; if (S.qCtl._p !== p) { S.qCtl.style.setProperty('--position', p); S.qCtl.style.setProperty('--locked', '0%'); S.qCtl._p = p; }
-            _ipsAttr(S.qCtl, 'data-label-side', pos < 40 ? 'after' : 'before'); _ipsAttr(S.qCtl, 'data-edge', pos <= 10 ? 'min' : pos >= 90 ? 'max' : '');
-            _ipsText(S.qMax, String(max)); _ipsText(S.qOut, String(value));
+            if (S.qIn !== activeCountBar) {
+                _ipsAttr(S.qIn, 'max', max); if (S.qIn.value !== String(value)) S.qIn.value = String(value); _ipsAttr(S.qIn, 'value', value);
+                if (S.qIn.disabled !== (max <= 0)) S.qIn.disabled = max <= 0;
+                const p = pos + '%'; if (S.qCtl._p !== p) { S.qCtl.style.setProperty('--position', p); S.qCtl.style.setProperty('--locked', '0%'); S.qCtl._p = p; }
+                _ipsAttr(S.qCtl, 'data-label-side', pos < 40 ? 'after' : 'before'); _ipsAttr(S.qCtl, 'data-edge', pos <= 10 ? 'min' : pos >= 90 ? 'max' : '');
+                _ipsText(S.qMax, String(max)); _ipsText(S.qOut, String(value));
+            }
             _ipsText(S.pt, X.ptext);
         }
     }

@@ -239,6 +239,8 @@ function commitCountBar(input) {
         updatePurchaseMultiplierBars();
         updateBuildMenu();
     } else if (spec.type === 'spawn') {
+        // The thumb stays at the release until the queue itself reaches it.
+        input._ahead = { target: value, at: performance.now() };
         setSpawnBarCount(spec, value);
     } else if (spec.type === 'research') {
         if (spec.owner !== localPlayerId) return;
@@ -369,7 +371,8 @@ function syncCountSliderValues(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('.count-slider[data-count-spec]').forEach(input => {
         if (input !== activeCountBar) {
-            input.value = input.getAttribute('value');
+            const ahead = input._ahead && performance.now() - input._ahead.at <= RESEARCH_AHEAD_MS ? input._ahead.target : null;
+            input.value = ahead === null ? input.getAttribute('value') : String(ahead);
             positionCountSliderLabel(input);
         }
     });

@@ -235,7 +235,7 @@
             const color = source && !team ? null : hexToRgb(historyTile ? o.baseTint || o.tint : o.tint);
             this.push(o.x, o.z + (exact ? source._flatOffsetZ || 0 : 0), size || o.scaleX, size || o.scaleZ,
                 source && !team ? light : color[0] * (team || historyTile ? light : 1), source && !team ? light : color[1] * (team || historyTile ? light : 1), source && !team ? light : color[2] * (team || historyTile ? light : 1),
-                o.alpha * (o.pickSource?._r3dDetailBlend ?? 1), exact || tile ? 0 : -(o.rotationY || 0), source);
+                o.alpha * (o.pickSource?._r3dDetailBlend ?? 1) * (source && !team ? -1 : 1), exact || tile ? 0 : -(o.rotationY || 0), source);
         }
     }
 
@@ -1209,7 +1209,7 @@
             }
         }
         let humanoid = kind === 'figure' || kind === 'heavy' || kind === 'knight' || kind === 'ogre' || kind === 'mage' || kind === 'worker'
-            || kind === 'wingworker';
+            || kind === 'wingworker' || kind === 'jetworker';
         if (kind === 'figure' || kind === 'heavy') {
             let bulk = kind === 'heavy' ? 1.2 : 1;
             part(0, .29, 0, .52 * bulk, .39, .34, 0, 0, 0, .76);
@@ -1299,10 +1299,11 @@
             part(.17, .34, .25, .02, .08, .075, 8); // clasp
             statusPanel(.245, .28, .27);
             backPanel(.16, -.215, .46);
-        } else if (kind === 'worker' || kind === 'wingworker') {
+        } else if (kind === 'worker' || kind === 'wingworker' || kind === 'jetworker') {
             // Workers are blocky: cube head, hard hat, square body and a
             // backpack carrying their 2D display. Flying workers (healers,
-            // researchers) wear their own headgear and have wings on the pack.
+            // researchers) wear their own headgear and have wings on the pack;
+            // collectors keep the hard hat and hover on twin jet packs.
             let winged = kind === 'wingworker';
             for (let side of [-1, 1]) {
                 part(side * .15, .02, 0, .16, .24, .18, 1, side, .28);
@@ -1333,6 +1334,18 @@
             part(0, .18, -.25, .48, .48, .14, 5); // backpack
             part(0, .645, -.25, .49, .04, .15, 2); // owner stripe along its top
             panel(0, .20, -.322, .44, .44);
+            if (kind === 'jetworker') {
+                // Jet pack: a thruster canister on each side of the back with
+                // a nozzle and a glowing exhaust, braced to the pack.
+                for (let side of [-1, 1]) {
+                    part(side * .20, .20, -.31, .06, .10, .10, 1);
+                    part(side * .33, .26, -.36, .14, .46, .14, 0); // unit-colored canister
+                    part(side * .33, .66, -.36, .10, .05, .10, 2); // owner-colored cap
+                    part(side * .33, .20, -.36, .15, .04, .15, 1); // band
+                    part(side * .33, .14, -.36, .10, .08, .10, 1); // nozzle
+                    part(side * .33, .05, -.36, .07, .10, .07, 7); // exhaust glow
+                }
+            }
             if (winged) {
                 // Wings root on top of the pack and flap about its center.
                 for (let side of [-1, 1]) {
@@ -1807,7 +1820,7 @@
     // Animation rig of a procedural kind (shader uniform).
     // Rigs 4-7 hover while idle: birds, winged horses (5), flying workers (6).
     const FIGURE_RIGS = { figure: 0, heavy: 0, knight: 0, ogre: 0, worker: 1, mage: 2, rider: 3, bird: 4, pegasus: 5,
-        wingworker: 6, mole: 8, serpent: 9 };
+        wingworker: 6, jetworker: 6, mole: 8, serpent: 9 };
     function figureRig(kind) {
         let rig = FIGURE_RIGS[kind.slice(0, kind.indexOf(':') < 0 ? kind.length : kind.indexOf(':'))];
         return rig === undefined ? 10 : rig;
@@ -1851,6 +1864,7 @@
             if (type === 'flying') return 'pegasus:lance';
             if (type === 'healer_unit') return 'wingworker:healer_staff';
             if (type === 'researcher_unit') return 'wingworker:research_orb';
+            if (type === 'collector' || type === 'astar_collector') return `jetworker:${weapon || (type === 'collector' ? 'axe' : 'pickaxe')}`;
             if (object.isFlying || /flying/.test(type)) return `bird:${weapon || 'talons'}`;
             if (type === 'mole') return `mole:${weapon || 'claws'}`;
             if (type === 'king') return `heavy:${weapon || 'king_sword'}`;
@@ -2818,7 +2832,7 @@
             for (let kind of [
                 'figure:sword', 'rider:dual_blades', 'mage:fire_staff', 'mage:water_staff', 'mage:ice_staff', 'mage:poison_staff', 'mage:laser_staff',
                 'heavy:king_sword', 'ogre:great_axe', 'knight:warhammer',
-                'worker:hammer', 'worker:pickaxe', 'worker:axe', 'worker:cutter', 'wingworker:healer_staff', 'wingworker:research_orb',
+                'worker:hammer', 'worker:pickaxe', 'worker:axe', 'worker:cutter', 'jetworker:axe', 'jetworker:pickaxe', 'wingworker:healer_staff', 'wingworker:research_orb',
                 'pegasus:bow', 'pegasus:lance', 'mole:claws', 'serpent:engine',
                 'tower', 'tower:twin', 'tower:sniper', 'tower:laser', 'tower:fire', 'tower:water', 'tower:ice', 'tower:poison', 'tower:sand',
                 'tower:elements', 'tower:watch', 'portal', 'barrack:rural', 'barrack:castle', 'barrack:boss', 'barrack:arcane', 'barrack:aerie',
@@ -6097,7 +6111,10 @@
                         vec4 texel = spriteLayer >= 0. ? layered : spriteLayer > -1.5 ? single : vec4(1.);
                         // 2.5D: the tint is its owner's colour (FlatSpriteBatch),
                         // over the sprite's shape and shading.
-                        outColor = teamOnly > .5 ? vec4(color.rgb * (.62 + .38 * dot(texel.rgb, vec3(.3,.59,.11))), texel.a * color.a) : texel * color;
+                        // (A negative alpha marks a sprite that keeps its own
+                        // colours, e.g. neutral mines: a light value, not an owner tint.)
+                        float alpha = abs(color.a);
+                        outColor = teamOnly > .5 && color.a >= 0. ? vec4(color.rgb * (.62 + .38 * dot(texel.rgb, vec3(.3,.59,.11))), texel.a * alpha) : texel * vec4(color.rgb, alpha);
                     }`);
                 this.flatVao = gl.createVertexArray();
                 this.flatBuffer = gl.createBuffer();

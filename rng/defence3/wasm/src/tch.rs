@@ -2,8 +2,8 @@
 //! in order, what a change of its cell type or of its tile entity means for
 //! the walk tables: the ground walls (mv.wall) with their block change counts
 //! (mv.wallBlk, mv.wallBlk9), the step costs around it, the walk classes'
-//! walls (flownav.js _navClassWalls: the builders pass every structure, a
-//! mine only while it has some left), and per navigation profile
+//! walls (flownav.js _navClassWalls: the builders pass every player's
+//! structure, never a mine), and per navigation profile
 //! the count of tiles that differ from its newest build (flownav.js
 //! _navDiff). Tiles that became ground walls are listed (their units are
 //! pushed off them by the caller).
@@ -124,8 +124,8 @@ pub unsafe extern "C" fn k_tile_changes(a: u32, _chunk: i32) {
         let gw = g(wall, tu);
         let code = g(stcode, tu);
         let mine = code == mg || code == ma;
-        let pass = code != 0 && (!mine || g(stval, tu) > 0.0);
-        let _ = stown;
+        let pass = code != 0 && !mine;
+        let _ = (stown, stval);
         let mut changed = false;
         for p in pcls..np {
             let cw = arr::<u8>(cwt, p);
