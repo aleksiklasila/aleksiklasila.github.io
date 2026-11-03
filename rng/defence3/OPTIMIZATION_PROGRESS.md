@@ -3989,3 +3989,54 @@ Rebuilt to the user's design: the main panel is one markup string made at the ma
 - Verification and final serial measurements are recorded below when the
   follow-up run completes. These are capacity/correctness changes; fixture
   populations differ, so they do not establish a TPS improvement.
+
+### 2026-11-03 — resumed capacity validation and fixture regeneration
+
+- Resumed the prior session's validation. The regenerated manifest has 234
+  equal-number fight parts, 354 equal-energy fight parts and 3 worker scenes,
+  all targeting 1024-square maps. Fight imports passed in both worker modes.
+  The scenario benchmark caught stale 2000-square worker exports; regenerating
+  them retained all 200 groups and 6,960 starting units in each research scene.
+  The worker/fight benchmark smoke then passed. Regeneration commands are now
+  documented together in `tests/balance/README.md`.
+- Added regression checks for worker-export dimensions and entity coordinates,
+  and exact level/opponent coverage across fight parts (including duplicates,
+  rather than only total matchup counts). Fixed a duplicate `error` declaration
+  in the LOD strip test left by the previous readback-tolerance edit.
+- The resumed serial validation list has **49 passing jobs**, including the
+  34 mode-specific regressions, six sampled fight imports per worker mode,
+  benchmark smokes, eight-team capacity, and retained workload measurements.
+  The strengthened coverage checks passed in both modes. The expanded smoke
+  restored and ticked all three worker scenes, an equal-number fight, and the
+  last numbered part of an equal-energy laser fixture.
+  Raw commands, logs and results remain under
+  `tests/test-runs/full-20261103-background/results/final-validation/`.
+- Retained large mixed-chaos measurement (production WASM32, 11 helpers, dk1,
+  140 steps, first 20 separated): 1,000,004 starting units and 65,536 structures;
+  steady measured population **298,609–506,901**, 8,480 births / 218,388 deaths.
+  Successful work: 8,553 spawns, 7,694 research / 1,235 collector / 897 astar
+  deposits. Steady wall p95 **206.34 ms**, p99 **238.20 ms**, max **307.15 ms**,
+  zero above 500 ms. The **first gameplay step is 3,103.48 ms**, and all-step
+  p99 is 542.61 ms; early gameplay spikes remain in the raw JSON/JSONL and
+  must not be hidden by steady-window statistics. Unit slots stayed 1,150,976.
+  These are retained acceptance measurements, not a new A/B TPS comparison
+  or sustained-million-population result.
+- Browser tests exposed a real first-use/resize rendering error: the small-unit
+  claim pass captured the previous framebuffer after allocating and binding its
+  own target. The next sprite draw sampled that same target, causing a WebGL
+  feedback loop. `drawUnitClaims` now captures the scene target before allocation.
+  `claim-framebuffer-restore.test.cjs` verifies first use, reuse and resize with
+  both R8 and floating-sum targets. The corrected strip test passed; native GL
+  warnings and optional call-level audits are now captured by the browser tests.
+- **All four browser checks pass:** population/map menu, frame stability, LOD
+  strips and the full 20-view LOD run (400,000 starting units, 60,262 structures,
+  1024 map). Every LOD view reports zero GL errors; no native GL error warnings
+  were captured. Raw final LOD data and screenshots are retained as
+  `results/lod-final.json` and `results/lod-final-{2d,3d}-3.png`; the failed full
+  run and timer audit remain separately for attribution. Status and source
+  hashes are in `results/resumed-summary.json`, browser commands/logs in
+  `results/browser-fixes.{cjs,json}`. The sandbox could not launch Edge;
+  browser verification used authorized headless runs outside it.
+- Further memory reductions remain deferred by request. The 1024 menu/runtime
+  cap and the existing navigation/movement/spawn/GC bottlenecks are unchanged
+  by this validation work. The framebuffer fix changes rendering only.

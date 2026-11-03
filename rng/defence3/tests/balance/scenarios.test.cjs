@@ -21,7 +21,12 @@ async function main() {
         assert.equal(parts.reduce((n,s)=>n+s.arenas.length,0),manifest.levels.length*opponents.length,'all matchups retained across legal map parts');
         for(const part of parts) for(const arena of part.arenas) assert.ok(arena.bounds.every(n=>n>=0&&n<manifest.mapSize),'arena fits current maximum map');
         const energy=manifest.scenarios.filter(s=>s.balanceMode==='equal-energy'&&s.focal===focal.id&&s.research===research);
-        if(energy.length)assert.equal(energy.reduce((n,s)=>n+s.arenas.length,0),manifest.levels.length*opponents.length,'all equal-energy matchups retained');
+        assert.ok(energy.length,'equal-energy parts exist');
+        const expected=manifest.levels.flatMap(level=>opponents.map(t=>level+':'+t.id)).sort();
+        for(const set of [parts,energy]) {
+            assert.deepEqual(set.flatMap(s=>s.arenas.map(a=>a.level+':'+a.opponent)).sort(),expected,
+                'every matchup retained exactly once across parts');
+        }
     }
     const menu=require('../menu-limits.cjs');
     for(const part of manifest.scenarios.filter(s=>s.kind==='fight')){
@@ -35,6 +40,19 @@ async function main() {
         assert.ok(units.every(n=>n<=budget.population)&&buildings.every(n=>n<=budget.buildings),'fixture fits menu-derived capacities: '+part.name);
     }
     for(const scenario of manifest.scenarios) assert.ok(fs.statSync(path.join(ROOT,scenario.file)).size>0,scenario.file);
+    // Worker exports are generated separately from fights. Catch stale large
+    // maps here, before a benchmark happens to select and reject one.
+    if(process.argv[2]!=='--sample') for(const scenario of manifest.scenarios.filter(s=>s.kind==='work')) {
+        const records=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(ROOT,scenario.file))));
+        assert.equal(records[0].width,manifest.mapSize,scenario.name+' width');
+        assert.equal(records[0].height,manifest.mapSize,scenario.name+' height');
+        assert.equal(scenario.groups.length,manifest.levels.length*10,'all worker groups retained');
+        for(const record of records) for(const key of ['units','buildings','mines']) for(const e of record[key]||[]) {
+            const xy=key==='mines'?1:2;
+            assert.ok(e[xy]>=0&&e[xy]<manifest.mapSize&&e[xy+1]>=0&&e[xy+1]<manifest.mapSize,
+                scenario.name+' '+key+' coordinates fit');
+        }
+    }
     const samples=['unit_fast_R0','unit_poison_resistant_R10','building_poison_R5',
         'building_laser_R0','building_mine_R10','building_poison_R0'].map(n=>'fight-2-teams-'+n);
     if(process.argv[2]!=='--sample') {

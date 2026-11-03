@@ -23,7 +23,7 @@ let browser;
             const proto=Type.prototype,getError=proto.getError;
             for(const name of Object.getOwnPropertyNames(proto)){
                 const d=Object.getOwnPropertyDescriptor(proto,name);
-                if(!['texSubImage3D','copyTexSubImage3D','drawArraysInstanced','drawElementsInstanced','beginQuery','blitFramebuffer'].includes(name)||typeof d.value!=='function')continue;
+                if(name==='getError'||name==='constructor'||typeof d.value!=='function')continue;
                 const original=d.value;
                 proto[name]=function(...args){const result=original.apply(this,args);if(!reported){const error=getError.call(this);if(error){reported=true;
                     console.error('GL CALL '+name+' error='+error+' '+new Error().stack);
@@ -34,7 +34,9 @@ let browser;
         }
     };
     page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR',e.message); });
-    page.on('console',m=>{if(m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION|GL pass|GL CALL/i.test(m.text())) {errors.push(m.text().slice(0,500));if(process.env.LOD_DEBUG_GL)console.error(m.text());}});
+    page.on('console',m=>{if((m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION|GL pass|GL CALL/i.test(m.text())) ||
+        (m.type()==='warning' && /GL_INVALID|INVALID_OPERATION|INVALID_VALUE|INVALID_ENUM/.test(m.text()))) {errors.push(m.text().slice(0,500));if(process.env.LOD_DEBUG_GL)console.error(m.text());}});
+    if(process.env.LOD_GL_AUDIT)await page.addInitScript(auditGL);
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
     console.log('LOADED');
     const fixture = process.argv[2] || '200000-1000.json', tag = process.env.LOD_TAG || 'current';
@@ -58,7 +60,6 @@ let browser;
     }, {fixture,million:!!process.env.LOD_MILLION,population:Number(process.env.LOD_POP_PER_TEAM)||0,mapSize:Number(process.env.LOD_MAP_SIZE)||0});
     console.log('STARTED');
     await page.waitForFunction(()=>simClientStats().appliedTick>=10, {}, {timeout:240000});
-    if(process.env.LOD_GL_AUDIT)await page.evaluate(auditGL);
     const setup=await page.evaluate(debugGl=>{
         setRenderDimensionMode('3d');
         const R=renderer3dInstance, gl=R.gl, ext=gl.getExtension('WEBGL_debug_renderer_info');

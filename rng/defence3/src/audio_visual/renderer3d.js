@@ -7849,6 +7849,9 @@
             const cw = Math.max(1, Math.ceil(width / cellPx)), ch = Math.max(1, Math.ceil(height / cellPx));
             const K = this.claim || (this.claim = { tex: gl.createTexture(), sum: gl.createTexture(), fb: gl.createFramebuffer(), w: 0, h: 0,
                 float: !!gl.getExtension('EXT_color_buffer_float') && !!gl.getExtension('EXT_float_blend') });
+            // Allocation binds the claim framebuffer too. Preserve the scene
+            // target before that first-use/resize path changes the binding.
+            const prevFb = gl._fb, prevClear = gl._clear;
             if (K.w !== cw || K.h !== ch) {
                 // (Per cell the summed sprite area of its units: the holder's size.)
                 gl.activeTexture(gl.TEXTURE14);
@@ -7869,7 +7872,6 @@
                 gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, K.sum, 0);
                 K.w = cw; K.h = ch;
             }
-            const prevFb = gl._fb, prevClear = gl._clear;
             const depthOn = gl.isEnabled(gl.DEPTH_TEST), blendOn = gl.isEnabled(gl.BLEND), depthMaskOn = gl._depthMask;
             const [blendSrc, blendDst, blendSrcA, blendDstA] = gl._blend;
             gl.bindFramebuffer(gl.FRAMEBUFFER, K.fb);

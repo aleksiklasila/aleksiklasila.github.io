@@ -30,7 +30,22 @@ let browser;
         }));return;
     }
     page.on('pageerror',e=>errors.push(e.message));
-    page.on('console',m=>{if(m.type()==='error'&&/WebGL|shader|INVALID|TypeError/.test(m.text()))errors.push(m.text());});
+    page.on('console',m=>{if((m.type()==='error'&&/WebGL|shader|INVALID|TypeError/.test(m.text()))||
+        (m.type()==='warning'&&/GL_INVALID|INVALID_OPERATION|INVALID_VALUE|INVALID_ENUM/.test(m.text()))){errors.push(m.text());console.error(m.text());}});
+    if(process.env.LOD_GL_AUDIT)await page.addInitScript(()=>{
+        let reported=false;
+        for(const Type of [WebGLRenderingContext,WebGL2RenderingContext]) {
+            const proto=Type.prototype,getError=proto.getError;
+            for(const name of Object.getOwnPropertyNames(proto)) {
+                const d=Object.getOwnPropertyDescriptor(proto,name);
+                if(name==='getError'||name==='constructor'||typeof d.value!=='function')continue;
+                const original=d.value;
+                proto[name]=function(...args){const result=original.apply(this,args);
+                    if(!reported){const error=getError.call(this);if(error){reported=true;console.error('WebGL CALL '+name+' error='+error+' '+new Error().stack);}}
+                    return result;};
+            }
+        }
+    });
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
     const checker=!!process.env.LOD_CHECKER,diagonal=!!process.env.LOD_DIAGONAL,wide=!!process.env.LOD_WIDE,graphics=process.env.LOD_GRAPHICS,aa=process.env.LOD_AA;
     const setup=await page.evaluate(async({checker,diagonal,wide,graphics,aa,baseline})=>{
@@ -87,10 +102,10 @@ let browser;
             // Edge can vary a least-significant readback byte even when these
             // are the very same canvas. Identity already proves that case;
             // independent panels still get a tightly bounded pixel check.
-            let error=0,maxError=0;
+            let bakeError=0,maxError=0;
             if(native!==white){const p=native.getContext('2d').getImageData(0,0,96,96).data,q=white.getContext('2d').getImageData(0,0,96,96).data;
-                for(let i=0;i<p.length;i++){const d=Math.abs(p[i]-q[i]);error+=d;maxError=Math.max(maxError,d);}error/=p.length;}
-            if(!baseline&&(native.width!==96||maxError>1||error>.001))throw Error('Bake panel differs from the live material: '+JSON.stringify({type:s.modelKey,error,maxError}));
+                for(let i=0;i<p.length;i++){const d=Math.abs(p[i]-q[i]);bakeError+=d;maxError=Math.max(maxError,d);}bakeError/=p.length;}
+            if(!baseline&&(native.width!==96||maxError>1||bakeError>.001))throw Error('Bake panel differs from the live material: '+JSON.stringify({type:s.modelKey,error:bakeError,maxError}));
         }
         const title=document.createElement('div');title.style.cssText='position:fixed;left:14px;top:12px;color:white;background:#080e16dd;padding:8px;font:14px monospace;z-index:99';document.body.appendChild(title);
         window.stripDraw=(view,reference=false)=>{

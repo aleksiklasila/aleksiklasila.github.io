@@ -26,6 +26,19 @@ spacing and formations. Building-heavy parts also stay within the derived
 per-player capacity. Regenerate older 2000-square exports with the generators
 before running them; unsupported scene sizes are rejected on import.
 
+Rebuild all local fixtures after changing the supported map sizes:
+
+```powershell
+node tests/balance/generate-scenarios.cjs
+node tests/balance/generate-energy-scenarios.cjs
+node tests/balance/generate-work-scenarios.cjs
+node tests/balance/scenarios.test.cjs
+```
+
+Worker fixtures use their own generator and also need regeneration. The scenario
+test checks their dimensions and verifies that split fight files retain every
+level/opponent pairing exactly once.
+
 Snapshots are organized under `tests/scenarios/equal_numbers/` and
 `tests/scenarios/equal_energy/`. Worker snapshots remain at `tests/scenarios/`.
 The shared `tests/scenarios/manifest.json` registers all sets for measurement
@@ -50,8 +63,9 @@ Every energy arena records `counts`, `requiredCounts`, `countBounded`,
 configured bounds and `equal_energy/count-limits.json` lists bounded cases.
 These are still generated; they are not claimed to have equal budgets. Plot
 diamonds mark them, and a filter hides them. Counts and energy appear on hover
-and in details/CSV. Unit/turret arenas grow to 58×58 tiles (32 clear tiles on
-the full 480-group maps); crossing courses use 90×90 (27 clear tiles).
+and in details/CSV. Unit/turret arenas use 58×58 tiles with at least 32 clear
+tiles between groups; crossing courses use 90×90 with at least 24 clear tiles.
+Numbered parts preserve this spacing within the supported map size.
 
 The report plots fill the window with the bundled, offline Plotly library:
 wheel/box zoom, middle-button drag panning, reset, hover, click details and image
