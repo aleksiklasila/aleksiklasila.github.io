@@ -780,8 +780,8 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
 
     let nextGridW = Number(cfg.GRID_W);
     let nextGridH = Number(cfg.GRID_H);
-    if (Number.isFinite(nextGridW)) GRID_W = Math.max(8, Math.floor(nextGridW));
-    if (Number.isFinite(nextGridH)) GRID_H = Math.max(8, Math.floor(nextGridH));
+    if (Number.isFinite(nextGridW)) GRID_W = Math.min(MAP_SIZE_MAX, Math.max(8, Math.floor(nextGridW)));
+    if (Number.isFinite(nextGridH)) GRID_H = Math.min(MAP_SIZE_MAX, Math.max(8, Math.floor(nextGridH)));
     else GRID_H = GRID_W;
     WORLD_W = GRID_W * TILE;
     WORLD_H = GRID_H * TILE;
@@ -1051,7 +1051,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
         return value || fallback;
     };
 
-    cfg.GRID_W = Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W)));
+    cfg.GRID_W = Math.min(MAP_SIZE_MAX, Math.max(8, Math.floor(getNumber('cfg-mapsize', cfg.GRID_W))));
     cfg.GRID_H = cfg.GRID_W;
     cfg.RESOURCE_MINE_DENSITY = normalizeResourceMineDensity(getNumber('cfg-mine-density', cfg.RESOURCE_MINE_DENSITY));
     cfg.GOLD_MINE_COUNT = Math.max(0, Math.floor(getNumber('cfg-gold-count', cfg.GOLD_MINE_COUNT)));

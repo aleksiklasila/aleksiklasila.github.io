@@ -6,11 +6,11 @@
     "towers": 0,
     "barracks": 0,
     "spawners": 0,
-    "map": 1000
+    "map": 1024
   },
   "info": {
     "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 (0x00001F15) Direct3D11 vs_5_0 ps_5_0, D3D11)",
-    "zoom": 0.02909375,
+    "zoom": 0.028411865234375,
     "settings": {
       "aa": "msaa",
       "shadows": "high",
@@ -33,17 +33,17 @@
       "heals": 0,
       "dropped": 0,
       "presentation": true,
-      "presentationTick": 11,
-      "presentationBuildMs": 55.839999973773956,
+      "presentationTick": 2,
+      "presentationBuildMs": 142.17000007629395,
       "presentationPhases": [
-        0.009999990463256836,
-        47.90000003576279,
-        0.12999999523162842,
-        7.784999966621399,
-        2,
-        2,
-        20353,
-        1
+        0.05500006675720215,
+        129.01500010490417,
+        0.16499996185302734,
+        12.730000019073486,
+        1,
+        1,
+        0,
+        0
       ],
       "presentationTorn": 0,
       "errors": [],
@@ -51,25 +51,25 @@
       "rowsPerTick": 0,
       "rowsPerTickByList": {},
       "applyMs": {
-        "mean": 1.51,
-        "p95": 9.06
+        "mean": 2.81,
+        "p95": 23.04
       },
       "workerSimMs": {
-        "mean": 107.82,
-        "p95": 612.13
+        "mean": 134.26,
+        "p95": 1039.05
       },
       "workerEncodeMs": {
-        "mean": 0.78,
-        "p95": 6.28
+        "mean": 0.58,
+        "p95": 2.52
       },
       "latencyMs": {
-        "mean": 294.28,
-        "p95": 906.29,
-        "shown": 121
+        "mean": 372.47,
+        "p95": 1250.18,
+        "shown": 122
       },
       "workerLateMs": {
-        "mean": 181.79,
-        "p95": 667.15
+        "mean": 233.47,
+        "p95": 1042.21
       },
       "dispatchAhead": true,
       "workerAhead": 2,
@@ -77,69 +77,69 @@
       "autoTicks": 0,
       "autoSeals": 0
     },
-    "start": 48165.17000001669,
+    "start": 52105.16499996185,
     "tick": 15
   },
   "results": {
     "phases": {
       "build3DFrameData": {
-        "n": 1008,
-        "ms": 323.6150006055832,
-        "max": 8.790000021457672
+        "n": 1027,
+        "ms": 358.1850037574768,
+        "max": 8.924999952316284
       },
       "gpuSubmit": {
-        "n": 1008,
-        "ms": 2597.8050004839897,
-        "max": 8.989999949932098
+        "n": 1027,
+        "ms": 620.6199984550476,
+        "max": 4.355000019073486
       },
       "drawMinimap": {
-        "n": 1008,
-        "ms": 265.48999989032745,
-        "max": 4.214999973773956
+        "n": 1027,
+        "ms": 355.3550009727478,
+        "max": 4.819999933242798
       },
       "updateHUD": {
-        "n": 1008,
-        "ms": 89.16500109434128,
-        "max": 0.7699999809265137
+        "n": 1027,
+        "ms": 128.98000121116638,
+        "max": 1.3250000476837158
       },
       "updateControlGroupBar": {
-        "n": 1048,
-        "ms": 25.065000116825104,
-        "max": 0.2549999952316284
+        "n": 1067,
+        "ms": 31.28499460220337,
+        "max": 0.2799999713897705
       },
       "updateBottomBar": {
-        "n": 1008,
-        "ms": 92.51999968290329,
-        "max": 6.610000014305115
+        "n": 1027,
+        "ms": 86.75500273704529,
+        "max": 8.484999895095825
       },
       "processRenderFrame": {
-        "n": 1008,
-        "ms": 3716.964997768402,
-        "max": 18.375
+        "n": 1027,
+        "ms": 1743.9649991989136,
+        "max": 15.105000019073486
       },
       "updateVisualVisibility": {
-        "n": 172,
-        "ms": 0.8250004053115845,
-        "max": 0.08499997854232788
+        "n": 174,
+        "ms": 1.0149972438812256,
+        "max": 0.1099998950958252
       },
       "_simClientPageTickWork": {
-        "n": 172,
-        "ms": 75.80999952554703,
-        "max": 5.139999985694885
+        "n": 174,
+        "ms": 93.6100013256073,
+        "max": 6.640000104904175
       },
       "sampleGameStats": {
         "n": 9,
-        "ms": 5.5200000405311584,
-        "max": 4.840000033378601
+        "ms": 6.940000057220459,
+        "max": 6.424999952316284
       },
       "_simClientApplyFrame": {
-        "n": 67,
-        "ms": 6.709999978542328,
-        "max": 0.26999998092651367
+        "n": 77,
+        "ms": 8.305000066757202,
+        "max": 0.37000012397766113
       },
       "commitStaticCaches": {
-        "n": 67,
-        "ms": 0.17500001192092896,
+        "n": 69,
+        "ms": 0.19499969482421875,
         "max": 0.009999990463256836
       }
     },
@@ -150,21 +150,21 @@
       "helpers": 11,
       "shared": true,
       "epoch": 2,
-      "appliedTick": 184,
+      "appliedTick": 186,
       "inFlight": 3,
       "heals": 0,
       "dropped": 0,
       "presentation": true,
-      "presentationTick": 181,
-      "presentationBuildMs": 35.62000000476837,
+      "presentationTick": 184,
+      "presentationBuildMs": 44.125,
       "presentationPhases": [
-        0.014999985694885254,
-        20.305000007152557,
-        0.1499999761581421,
-        15.134999990463257,
+        0.019999980926513672,
+        33.46999979019165,
+        0.16000008583068848,
+        10.454999923706055,
         2,
         2,
-        33330,
+        41911,
         1
       ],
       "presentationTorn": 0,
@@ -173,25 +173,25 @@
       "rowsPerTick": 0,
       "rowsPerTickByList": {},
       "applyMs": {
-        "mean": 0.64,
-        "p95": 1.1
+        "mean": 0.83,
+        "p95": 1.2
       },
       "workerSimMs": {
-        "mean": 28.75,
-        "p95": 40.66
+        "mean": 27.74,
+        "p95": 44.19
       },
       "workerEncodeMs": {
-        "mean": 0.41,
-        "p95": 0.7
+        "mean": 0.28,
+        "p95": 0.43
       },
       "latencyMs": {
-        "mean": 88.01,
-        "p95": 544.69,
-        "shown": 27
+        "mean": 95.54,
+        "p95": 668.68,
+        "shown": 26
       },
       "workerLateMs": {
-        "mean": 20.01,
-        "p95": 45.12
+        "mean": 28.29,
+        "p95": 61.19
       },
       "dispatchAhead": true,
       "workerAhead": 3,
@@ -199,274 +199,274 @@
       "autoTicks": 10,
       "autoSeals": 0
     },
-    "fps": 105,
+    "fps": 104,
     "tps": 20,
-    "end": 59395.18000000715,
-    "tick": 188,
+    "end": 63339.25500011444,
+    "tick": 190,
     "scale": null,
     "hot": [
       {
         "fn": "(idle)",
         "url": "",
         "line": 0,
-        "ms": 4917.111
+        "ms": 6683.694
       },
       {
         "fn": "(program)",
         "url": "",
         "line": 0,
-        "ms": 2260.937
-      },
-      {
-        "fn": "getParameter",
-        "url": "",
-        "line": 0,
-        "ms": 2170.324
-      },
-      {
-        "fn": "_frameSummarySlice",
-        "url": "http://127.0.0.1:59960/src/audio_visual/hud.js?v=20261024-ui5",
-        "line": 1013,
-        "ms": 161.84
+        "ms": 2304.134
       },
       {
         "fn": "paintMinimapUnitColumns",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 4920,
-        "ms": 161.825
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 5118,
+        "ms": 221.545
       },
       {
         "fn": "(garbage collector)",
         "url": "",
         "line": 0,
-        "ms": 64.679
-      },
-      {
-        "fn": "_bbRenderThings",
-        "url": "http://127.0.0.1:59960/src/audio_visual/bottom_bar.js?v=20261024-ui5",
-        "line": 532,
-        "ms": 41.984
-      },
-      {
-        "fn": "window.<computed>",
-        "url": "",
-        "line": 10,
-        "ms": 32.234
-      },
-      {
-        "fn": "bufferSubData",
-        "url": "",
-        "line": 0,
-        "ms": 30.144
-      },
-      {
-        "fn": "render",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer3d.js?v=20261024-ui5",
-        "line": 7839,
-        "ms": 29.744
+        "ms": 153.408
       },
       {
         "fn": "_pushCombatRecordFx",
-        "url": "http://127.0.0.1:59960/src/audio_visual/effects3d.js?v=20261024-ui5",
+        "url": "http://127.0.0.1:56213/src/audio_visual/effects3d.js?v=20261025-st1",
         "line": 357,
-        "ms": 29.231
+        "ms": 71.017
       },
       {
         "fn": "drawImage",
         "url": "",
         "line": 0,
-        "ms": 27.233
+        "ms": 64.722
+      },
+      {
+        "fn": "window.<computed>",
+        "url": "",
+        "line": 10,
+        "ms": 48.908
+      },
+      {
+        "fn": "render",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer3d.js?v=20261101-d",
+        "line": 7971,
+        "ms": 45.322
+      },
+      {
+        "fn": "bufferSubData",
+        "url": "",
+        "line": 0,
+        "ms": 42.684
+      },
+      {
+        "fn": "drawColumnModels",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer3d.js?v=20261101-d",
+        "line": 6589,
+        "ms": 36.416
+      },
+      {
+        "fn": "_simClientLaserSound",
+        "url": "http://127.0.0.1:56213/src/sim/sim_client.js?v=20261102-j",
+        "line": 1342,
+        "ms": 36.359
+      },
+      {
+        "fn": "build3DFrameData",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 3269,
+        "ms": 33.529
       },
       {
         "fn": "texSubImage2D",
         "url": "",
         "line": 0,
-        "ms": 23.7
+        "ms": 31.909
       },
       {
-        "fn": "_simClientLaserSound",
-        "url": "http://127.0.0.1:59960/src/sim/sim_client.js?v=20261024-ui5",
-        "line": 1280,
-        "ms": 22.753
-      },
-      {
-        "fn": "_siteMarkLists",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 2914,
-        "ms": 21.293
-      },
-      {
-        "fn": "_simChannel.port1.onmessage",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 6737,
-        "ms": 20.831
-      },
-      {
-        "fn": "build3DFrameData",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 3137,
-        "ms": 19.782
-      },
-      {
-        "fn": "drawFrameColumns",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer3d.js?v=20261024-ui5",
-        "line": 7498,
-        "ms": 18.974
-      },
-      {
-        "fn": "drawUnitClaims",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer3d.js?v=20261024-ui5",
-        "line": 7681,
-        "ms": 18.634
+        "fn": "processRenderFrame",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 6642,
+        "ms": 30.576
       },
       {
         "fn": "texImage2D",
         "url": "",
         "line": 0,
-        "ms": 17.845
-      },
-      {
-        "fn": "_renderHudResource",
-        "url": "http://127.0.0.1:59960/src/audio_visual/hud.js?v=20261024-ui5",
-        "line": 138,
-        "ms": 16.977
-      },
-      {
-        "fn": "_detailPick",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 4260,
-        "ms": 16.935
-      },
-      {
-        "fn": "updateInfoPanel",
-        "url": "http://127.0.0.1:59960/src/audio_visual/hud.js?v=20261024-ui5",
-        "line": 6231,
-        "ms": 16.724
+        "ms": 27.804
       },
       {
         "fn": "getChunkRenderView",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 2248,
-        "ms": 15.925
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 2251,
+        "ms": 27.315
+      },
+      {
+        "fn": "drawFrameColumns",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer3d.js?v=20261101-d",
+        "line": 7630,
+        "ms": 27.123
+      },
+      {
+        "fn": "_detailPick",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 4392,
+        "ms": 27.009
+      },
+      {
+        "fn": "",
+        "url": "http://127.0.0.1:56213/src/audio_visual/hud.js?v=20261101-f",
+        "line": 154,
+        "ms": 26.738
+      },
+      {
+        "fn": "postMessage",
+        "url": "",
+        "line": 0,
+        "ms": 22.265
+      },
+      {
+        "fn": "_simChannel.port1.onmessage",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 6735,
+        "ms": 21.935
       },
       {
         "fn": "worker.onmessage",
-        "url": "http://127.0.0.1:59960/src/sim/sim_client.js?v=20261024-ui5",
+        "url": "http://127.0.0.1:56213/src/sim/sim_client.js?v=20261102-j",
         "line": 117,
-        "ms": 15.257
+        "ms": 20.521
       },
       {
-        "fn": "_r3dPhase",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 2234,
-        "ms": 14.598
+        "fn": "_simClientPageTickWork",
+        "url": "http://127.0.0.1:56213/src/sim/sim_client.js?v=20261102-j",
+        "line": 1290,
+        "ms": 19.876
+      },
+      {
+        "fn": "_bbRenderThings",
+        "url": "http://127.0.0.1:56213/src/audio_visual/bottom_bar.js?v=20261101-e",
+        "line": 534,
+        "ms": 18.868
       },
       {
         "fn": "r.render",
         "url": "",
         "line": 13,
-        "ms": 13.081
-      },
-      {
-        "fn": "updateControlGroupBar",
-        "url": "http://127.0.0.1:59960/src/audio_visual/audio.js?v=20261024-ui5",
-        "line": 232,
-        "ms": 12.724
-      },
-      {
-        "fn": "getFrameBuildingSummary",
-        "url": "http://127.0.0.1:59960/src/audio_visual/hud.js?v=20261024-ui5",
-        "line": 1061,
-        "ms": 12.697
-      },
-      {
-        "fn": "simClientAutoArm",
-        "url": "http://127.0.0.1:59960/src/sim/sim_client.js?v=20261024-ui5",
-        "line": 498,
-        "ms": 12.205
-      },
-      {
-        "fn": "_simClientPageTickWork",
-        "url": "http://127.0.0.1:59960/src/sim/sim_client.js?v=20261024-ui5",
-        "line": 1228,
-        "ms": 11.665
+        "ms": 18.012
       },
       {
         "fn": "_gameStatsSlice",
-        "url": "http://127.0.0.1:59960/src/data/data_dynamic.js?v=20261024-ui5",
-        "line": 1648,
-        "ms": 11.633
+        "url": "http://127.0.0.1:56213/src/data/data_dynamic.js?v=20261025-st1",
+        "line": 1514,
+        "ms": 16.758
       },
       {
-        "fn": "getGroundFrustumPolygon",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer3d.js?v=20261024-ui5",
-        "line": 3595,
-        "ms": 11.611
+        "fn": "clearRect",
+        "url": "",
+        "line": 0,
+        "ms": 15.755
       },
       {
-        "fn": "pumpSimulationTicks",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 6245,
-        "ms": 11.205
+        "fn": "gameStatsStep",
+        "url": "http://127.0.0.1:56213/src/data/data_dynamic.js?v=20261025-st1",
+        "line": 1548,
+        "ms": 13.484
+      },
+      {
+        "fn": "drawMinimap",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 5222,
+        "ms": 13.328
+      },
+      {
+        "fn": "_drawRangeVisibilityBody",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer3d.js?v=20261101-d",
+        "line": 4211,
+        "ms": 13.259
+      },
+      {
+        "fn": "updateHUD",
+        "url": "http://127.0.0.1:56213/src/audio_visual/hud.js?v=20261101-f",
+        "line": 1378,
+        "ms": 13.253
       },
       {
         "fn": "render",
-        "url": "http://127.0.0.1:59960/src/audio_visual/postprocess3d.js?v=20261024-ui5",
+        "url": "http://127.0.0.1:56213/src/audio_visual/postprocess3d.js?v=20261025-st1",
         "line": 417,
-        "ms": 10.79
+        "ms": 12.727
       },
       {
-        "fn": "processRenderFrame",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-        "line": 6644,
-        "ms": 10.555
+        "fn": "siteMarkInstances",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 3031,
+        "ms": 12.486
+      },
+      {
+        "fn": "_columnStoreUploadChanged",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer3d.js?v=20261101-d",
+        "line": 7612,
+        "ms": 12.211
+      },
+      {
+        "fn": "drawArrays",
+        "url": "",
+        "line": 0,
+        "ms": 11.871
       },
       {
         "fn": "getQueryParameter",
         "url": "",
         "line": 0,
-        "ms": 10.309
+        "ms": 11.358
       },
       {
-        "fn": "uniform1f",
-        "url": "",
-        "line": 0,
-        "ms": 10.195
+        "fn": "_structureDetailSplit",
+        "url": "http://127.0.0.1:56213/src/audio_visual/renderer.js?v=20261101-e",
+        "line": 4501,
+        "ms": 11.249
       },
       {
-        "fn": "_columnStoreUploadChanged",
-        "url": "http://127.0.0.1:59960/src/audio_visual/renderer3d.js?v=20261024-ui5",
-        "line": 7480,
-        "ms": 9.839
+        "fn": "simClientAutoArm",
+        "url": "http://127.0.0.1:56213/src/sim/sim_client.js?v=20261102-j",
+        "line": 502,
+        "ms": 11.107
       },
       {
-        "fn": "updateHUD",
-        "url": "http://127.0.0.1:59960/src/audio_visual/hud.js?v=20261024-ui5",
-        "line": 1631,
-        "ms": 9.58
+        "fn": "msg.port.onmessage",
+        "url": "http://127.0.0.1:56213/src/sim/sim_client.js?v=20261102-j",
+        "line": 703,
+        "ms": 10.493
+      },
+      {
+        "fn": "formatCompactNumber",
+        "url": "http://127.0.0.1:56213/src/utils/utils_common.js?v=20261025-st1",
+        "line": 313,
+        "ms": 10.332
       }
     ]
   },
   "workerPhases": {
     "simParallelRun": {
-      "n": 3389,
-      "ms": 2491.515000641346,
-      "max": 14.539999961853027
+      "n": 4766,
+      "ms": 2381.3599951267242,
+      "max": 11.920000076293945
     },
     "gameTick": {
-      "n": 172,
-      "ms": 3481.8299998641014,
-      "max": 53.96000003814697
+      "n": 174,
+      "ms": 3036.470001935959,
+      "max": 43.11500000953674
     },
     "simFrameEncodeState": {
-      "n": 172,
-      "ms": 37.84499990940094,
-      "max": 1.7099999785423279
+      "n": 174,
+      "ms": 15.029998302459717,
+      "max": 0.25500011444091797
     },
     "simFrameDetails": {
-      "n": 172,
-      "ms": 0.42999982833862305,
-      "max": 0.009999990463256836
+      "n": 174,
+      "ms": 0.5000007152557373,
+      "max": 0.06000018119812012
     }
   },
   "errors": [
@@ -477,211 +477,211 @@
       "fn": "(idle)",
       "url": "",
       "line": 0,
-      "ms": 6054.653
+      "ms": 7463.575
+    },
+    {
+      "fn": "wasm-function[121]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 223.14
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 207.295
     },
     {
       "fn": "_simWriteStructure",
-      "url": "http://127.0.0.1:59960/src/sim/sim_frame_world.js?v=20261024-ui5",
-      "line": 91,
-      "ms": 657.515
+      "url": "http://127.0.0.1:56213/src/sim/sim_frame_world.js?v=20261102-h",
+      "line": 92,
+      "ms": 207.29
     },
     {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 387.89
-    },
-    {
-      "fn": "wasm-function[49]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "wasm-function[121]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 174.387
-    },
-    {
-      "fn": "simParallelCopyHeap",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 655,
-      "ms": 154.128
-    },
-    {
-      "fn": "wasm-function[142]",
-      "url": "wasm://wasm/0016dbea",
-      "line": 1,
-      "ms": 140.323
+      "ms": 154.428
     },
     {
       "fn": "simPresentationMetadata",
-      "url": "http://127.0.0.1:59960/src/sim/sim_presentation.js?v=20261024-ui5",
-      "line": 369,
-      "ms": 134.405
+      "url": "http://127.0.0.1:56213/src/sim/sim_presentation.js?v=20261025-st1",
+      "line": 423,
+      "ms": 152.326
     },
     {
-      "fn": "wasm-function[104]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "simParallelCopyHeap",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 675,
+      "ms": 133.137
+    },
+    {
+      "fn": "wasm-function[201]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 134.203
+      "ms": 120.019
     },
     {
-      "fn": "wasm-function[49]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "simPresentationWriteMetadata",
+      "url": "http://127.0.0.1:56213/src/sim/sim_presentation.js?v=20261025-st1",
+      "line": 390,
+      "ms": 115.39
+    },
+    {
+      "fn": "wasm-function[288]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 133.102
-    },
-    {
-      "fn": "occupancyJobs",
-      "url": "http://127.0.0.1:59960/src/sim/sim_occupancy.js?v=20261024-ui5",
-      "line": 114,
-      "ms": 102.812
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 99.02
+      "ms": 111.56
     },
     {
       "fn": "(garbage collector)",
       "url": "",
       "line": 0,
-      "ms": 93.122
+      "ms": 87.208
     },
     {
-      "fn": "simPresentationWriteMetadata",
-      "url": "http://127.0.0.1:59960/src/sim/sim_presentation.js?v=20261024-ui5",
-      "line": 336,
-      "ms": 85.438
+      "fn": "wasm-function[262]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 77.236
     },
     {
       "fn": "_simMetaSet",
-      "url": "http://127.0.0.1:59960/src/sim/sim_presentation.js?v=20261024-ui5",
-      "line": 335,
-      "ms": 83.936
+      "url": "http://127.0.0.1:56213/src/sim/sim_presentation.js?v=20261025-st1",
+      "line": 389,
+      "ms": 74.738
     },
     {
-      "fn": "wasm-function[75]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "simParallelBackgroundWait",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1344,
+      "ms": 62.04
+    },
+    {
+      "fn": "wasm-function[130]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 63.265
+      "ms": 61.723
     },
     {
-      "fn": "_acqPost",
-      "url": "http://127.0.0.1:59960/src/things/unit.js?v=20261024-ui5",
-      "line": 3039,
-      "ms": 61.751
+      "fn": "occupancyJobs",
+      "url": "http://127.0.0.1:56213/src/sim/sim_occupancy.js?v=20261025-st1",
+      "line": 116,
+      "ms": 57.605
     },
     {
-      "fn": "wasm-function[50]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "wasm-function[153]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 61.275
+      "ms": 54.261
     },
     {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 59.456
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 57.725
-    },
-    {
-      "fn": "wasm-function[133]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "wasm-function[122]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 56.067
-    },
-    {
-      "fn": "_visCoverSyncUnit",
-      "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-      "line": 5847,
-      "ms": 54.011
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 53.279
+      "ms": 54.103
     },
     {
       "fn": "simPresentationPump",
-      "url": "http://127.0.0.1:59960/src/sim/sim_presentation.js?v=20261024-ui5",
-      "line": 448,
-      "ms": 51.225
+      "url": "http://127.0.0.1:56213/src/sim/sim_presentation.js?v=20261025-st1",
+      "line": 510,
+      "ms": 52.23
     },
     {
-      "fn": "wasm-function[113]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 50.336
+    },
+    {
+      "fn": "wasm-function[144]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 44.051
+      "ms": 46.503
     },
     {
       "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 40.514
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 44.298
     },
     {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 39.766
-    },
-    {
-      "fn": "_sDerivedValue",
-      "url": "http://127.0.0.1:59960/src/data/data_state.js?v=20261024-ui5",
-      "line": 839,
-      "ms": 35.898
-    },
-    {
-      "fn": "syncVisibilityCoverage",
-      "url": "http://127.0.0.1:59960/src/audio_visual/renderer.js?v=20261024-ui5",
-      "line": 5934,
-      "ms": 32.7
-    },
-    {
-      "fn": "unitEventsRun",
-      "url": "http://127.0.0.1:59960/src/things/unit.js?v=20261024-ui5",
-      "line": 109,
-      "ms": 31.324
-    },
-    {
-      "fn": "(program)",
-      "url": "",
-      "line": 0,
-      "ms": 31.228
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 29.147
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 28.95
-    },
-    {
-      "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 28.809
-    },
-    {
-      "fn": "wasm-function[31]",
-      "url": "wasm://wasm/0016dbea",
+      "fn": "wasm-function[279]",
+      "url": "wasm://wasm/00244eee",
       "line": 1,
-      "ms": 25.079
+      "ms": 39.533
+    },
+    {
+      "fn": "_acqPost",
+      "url": "http://127.0.0.1:56213/src/things/unit.js?v=20261103-g",
+      "line": 3729,
+      "ms": 39.179
+    },
+    {
+      "fn": "wasm-function[255]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 38.58
     },
     {
       "fn": "simParallelRun",
-      "url": "http://127.0.0.1:59960/src/sim/sim_parallel.js?v=20261024-ui5",
-      "line": 1128,
-      "ms": 24.436
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 33.191
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 31.35
+    },
+    {
+      "fn": "wasm-function[279]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 29.193
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 28.88
+    },
+    {
+      "fn": "get",
+      "url": "http://127.0.0.1:56213/src/things/unit.js?v=20261103-g",
+      "line": 1215,
+      "ms": 28.371
+    },
+    {
+      "fn": "wasm-function[229]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 27.672
+    },
+    {
+      "fn": "wasm-function[133]",
+      "url": "wasm://wasm/00244eee",
+      "line": 1,
+      "ms": 27.479
+    },
+    {
+      "fn": "simParallelRun",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 1162,
+      "ms": 27.101
+    },
+    {
+      "fn": "simParallelCopyHeap",
+      "url": "http://127.0.0.1:56213/src/sim/sim_parallel.js?v=20261103-g",
+      "line": 675,
+      "ms": 26.666
+    },
+    {
+      "fn": "get",
+      "url": "http://127.0.0.1:56213/src/data/data_state.js?v=20261103-g",
+      "line": 1043,
+      "ms": 26.582
     }
   ]
 }

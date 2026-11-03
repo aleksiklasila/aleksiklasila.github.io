@@ -212,7 +212,7 @@ const SIM_STRUCT_TABLE_RETIRE_MS = 5000;
 // (The first table made then too, taken by simPresentationMetadata.)
 let _simStructReserveCap = 0, _simStructReserved = null;
 function simPresentStructReserve(B) {
-    _simStructReserveCap = Math.ceil((Math.max(0, B.structs | 0) + 64) / 64) * 64;
+    _simStructReserveCap = Math.ceil((Math.max(0, (B.structs | 0) + (B.mines | 0)) + 64) / 64) * 64;
     if (!_simStructReserved || _simStructReserved.cap < _simStructReserveCap || (_simStructReserved.heap && !simHeapHas(_simStructReserved.heap))) _simStructReserved = _simStructTableNew(_simStructReserveCap);
 }
 const _simStructTableRetired = [];

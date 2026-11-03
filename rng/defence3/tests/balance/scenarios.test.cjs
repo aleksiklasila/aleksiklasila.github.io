@@ -13,7 +13,27 @@ async function settle(world, promise) {
 }
 async function main() {
     const manifest=JSON.parse(fs.readFileSync(path.join(ROOT,'manifest.json')));
-    assert.equal(manifest.scenarios.filter(s=>s.kind==='fight'&&s.balanceMode!=='equal-energy').length,manifest.catalog.length*manifest.researchLevels.length);
+    assert.equal(new Set(manifest.scenarios.filter(s=>s.kind==='fight'&&s.balanceMode!=='equal-energy').map(s=>s.focal+':'+s.research)).size,manifest.catalog.length*manifest.researchLevels.length);
+    assert.equal(manifest.mapSize,Math.max(...require('../menu-limits.cjs').choices('cfg-mapsize')));
+    for(const focal of manifest.catalog) for(const research of manifest.researchLevels) {
+        const parts=manifest.scenarios.filter(s=>s.balanceMode==='equal-numbers'&&s.focal===focal.id&&s.research===research);
+        const opponents=manifest.catalog.filter(t=>focal.role==='crossing'?t.kind==='unit':t.role==='army');
+        assert.equal(parts.reduce((n,s)=>n+s.arenas.length,0),manifest.levels.length*opponents.length,'all matchups retained across legal map parts');
+        for(const part of parts) for(const arena of part.arenas) assert.ok(arena.bounds.every(n=>n>=0&&n<manifest.mapSize),'arena fits current maximum map');
+        const energy=manifest.scenarios.filter(s=>s.balanceMode==='equal-energy'&&s.focal===focal.id&&s.research===research);
+        if(energy.length)assert.equal(energy.reduce((n,s)=>n+s.arenas.length,0),manifest.levels.length*opponents.length,'all equal-energy matchups retained');
+    }
+    const menu=require('../menu-limits.cjs');
+    for(const part of manifest.scenarios.filter(s=>s.kind==='fight')){
+        const units=[0,0],buildings=[1,1];
+        for(const a of part.arenas)for(let owner=0;owner<2;owner++){
+            const thing=manifest.catalog.find(t=>t.id===(owner?a.opponent:a.focal));
+            (thing.kind==='unit'?units:buildings)[owner]+=a.counts[owner];
+            assert.ok(a.bounds.every(n=>n>=0&&n<manifest.mapSize),'arena fits current maximum map');
+        }
+        const budget=menu.budget(menu.pick('cfg-max-pop',Math.max(8,...units)),2,manifest.mapSize);
+        assert.ok(units.every(n=>n<=budget.population)&&buildings.every(n=>n<=budget.buildings),'fixture fits menu-derived capacities: '+part.name);
+    }
     for(const scenario of manifest.scenarios) assert.ok(fs.statSync(path.join(ROOT,scenario.file)).size>0,scenario.file);
     const samples=['unit_fast_R0','unit_poison_resistant_R10','building_poison_R5',
         'building_laser_R0','building_mine_R10','building_poison_R0'].map(n=>'fight-2-teams-'+n);
@@ -29,12 +49,13 @@ async function main() {
         const records=JSON.parse(zlib.gunzipSync(compressed));
         const world=new H.World();
         const inst=world.spawn(name,{simWorker:false});
-        inst.scratch.file=new Blob([compressed]);
+        const menuLimits=require('../menu-limits.cjs').scene(records,inst);
+        inst.scratch.file=new Blob([JSON.stringify(records)]);
         inst.scratch.scene=await inst.eval('readSoloGameSnapshotFile(__scratch.file)');
         inst.eval('startMainThreadLoops=()=>{}; document.getElementById("starting-resources-popup").classList.add("hidden")');
         await settle(world,inst.eval('restoreSoloGameSnapshot(__scratch.scene)'));
         const counts=JSON.parse(inst.eval('JSON.stringify({units:units.length,towers:towers.length,items:getCellItemsRowMajor().length,width:GRID_W,height:GRID_H,over:gameOver})'));
-        assert.equal(counts.width,manifest.mapSize); assert.equal(counts.height,manifest.mapSize);
+        assert.equal(counts.width,menuLimits.map); assert.equal(counts.height,menuLimits.map);
         const rows=key=>records.flatMap(r=>r[key]||[]);
         assert.equal(counts.units,rows('units').length);
         assert.equal(counts.towers+counts.items,rows('buildings').length);
@@ -54,11 +75,11 @@ async function main() {
         for(const runs of rows('terrain')) {
             let x=0;
             for(let i=0;i<runs.length;i+=4) for(let j=0;j<runs[i+3];j++,x++)
-                assert.equal(runs[i]===1,turretTiles.has(x+','+y),'only actual turret tiles may be walls');
+                assert.equal(runs[i]===1,x>=manifest.mapSize||y>=manifest.mapSize||turretTiles.has(x+','+y),'only actual turret tiles and the sealed historical-map border may be walls');
             y++;
         }
         assert.ok(inst.eval('units.every(u=>'+JSON.stringify(scenario.levels)+'.includes(u.baseLevel))'));
-        if(baseName==='building_laser_R0') assert.ok(inst.eval('ensureLaserConnections(); towers.every(t=>t.connectedLasers && t.connectedLasers.length>0)'),'every laser has a live link');
+        if(baseName==='building_laser_R0') assert.ok(inst.eval('_laserMapBuild(); towers.every(t=>laserPartnersOf(t).length>0)'),'every laser has a live link');
         if(baseName==='building_poison_R5') {
             assert.ok(inst.eval('towers.every(t=>!t.underConstruction)'));
             assert.equal(inst.eval('getPlayerResearchLevel(0,"building","poison","damage")'),5);
@@ -67,7 +88,7 @@ async function main() {
             let checked=0;
             for(const t of towers.filter(t=>t.type==='poison' && t.owner===0)) {
                 const other=towers.find(o=>o.owner===1 && o.gx===t.gx+1 && o.gy===t.gy);
-                if(other && _isTargetWithinTowerAttackAreaRange(t,other)) checked++;
+                if(other && isWorldTargetWithinAreaRange(t.x,t.y,other.x,other.y,Math.floor(t.currentStats.attackRangeArea))) checked++;
             }
             return checked>0;
         })()`),'adjacent turret fronts are in actual attack range');

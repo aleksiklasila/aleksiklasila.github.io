@@ -49,6 +49,8 @@ function chaosSetup(o) {
         if (typeof visCoverOnBuildingChanged === 'function') visCoverOnBuildingChanged(item);
     };
     const place = (gx, gy, key, p, built = true, lvl = o.level) => {
+        if (playerStructureCount(p) >= getPlayerStructureLimit()) return null;
+        if (o.structures) { let total=0;for(let owner=0;owner<np;owner++)total+=playerStructureCount(owner);if(total>=o.structures)return null; }
         if (!free(gx, gy)) return null;
         if (!placeBuilding(gx, gy, key, p, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: true, buildEnabled: true })) return null;
         const e = entityAt(gx, gy);
@@ -164,16 +166,19 @@ function chaosSetup(o) {
     // Insert before queues and worker placement, so these are real job sites.
     if(o.structures){
         let total=new Set([...towers,...getCellItemsRowMajor()]).size,k=0;
+        // Leave part of the selected structure budget for the interleaved
+        // combat towers and traps placed after the economic districts.
+        const denseTarget=Math.max(total,o.structures-Math.min(16384,Math.ceil(o.structures/8)));
         st.dense={added:0,types:{}};
         const remember=(p,role,e)=>{(jobs[p][role]||(jobs[p][role]=[])).push(e);};
-        for(let gy=3;gy<H-3&&total<o.structures;gy+=2)for(let gx=3;gx<W-3&&total<o.structures;gx++){
+        for(let gy=3;gy<H-3&&total<denseTarget;gy+=2)for(let gx=3;gx<W-3&&total<denseTarget;gx++){
             // Alternating solid turret runs form staggered choke points;
             // intervening rows of isolated buildings allow local circulation.
             if(gy%8===3?((gx+((gy>>3)&1)*8)%16>=12):(gx&1)===0)continue;
             const bx=Math.floor(gx/12),by=Math.floor(gy/12),district=(bx+by*3)%8;
             // Use sub-district tiles for ownership: reusing the district's
             // bx/by sum correlated profession and owner for four teams.
-            const p=np>2?((gx>>2)+(gy>>2))%np:district>=6&&o.layout!=='front'?((gx>>2)+(gy>>2))&1:gy<H/2?0:1;
+            const p=o.layout==='front'&&np===2?(gy<H/2?0:1):((gx>>2)+(gy>>2))%np;
             const center=gx%12===5&&gy%12===5,home=gy%12===9;
             let key;
             if(district<2)key=center?(district?'astar_spawner':'spawner'):(district?'astar_farm':'farm');
@@ -196,7 +201,7 @@ function chaosSetup(o) {
             if(e.type==='barrack'||['research','healer_spawner','spawner','astar_spawner','builder_spawner','salvager'].includes(e.type))built[p].push(e);
             total++;k++;st.dense.added++;st.dense.types[key]=(st.dense.types[key]||0)+1;
         }
-        if(total<o.structures)st.errors.push('Only '+total+' structures fit; requested '+o.structures);
+        if(total<denseTarget)st.errors.push('Only '+total+' structures fit in the dense districts; requested '+denseTarget);
         st.structures=total;
     }
     // Research: the labs' and researchers' stats raised, the researchers at level 9 by the labs.
@@ -239,7 +244,7 @@ function chaosSetup(o) {
         // salvagers': built towers marked for salvage.
         const [y0, y1] = band(p);
         const builders = mine.filter(u => u.workerType === 'builder'), salvagers = mine.filter(u => u.workerType === 'salvager');
-        for (let i = 0; i < o.towerSites; i++) {
+        for (let i = 0; i < (o.structures?0:o.towerSites); i++) {
             const gx = 4 + Math.floor(rnd() * (W - 8)), gy = y0 + Math.floor(rnd() * (y1 - y0));
             const e = place(gx, gy, towerKeys[i % towerKeys.length], p, false);
             if (!e) continue;
@@ -252,7 +257,7 @@ function chaosSetup(o) {
             const sites=towers.filter(t=>t.owner===p&&t.underConstruction);
             for(let i=0;i<builders.length&&sites.length;i++){const t=sites[i%sites.length];put(builders[i],t.gx+1,t.gy);}
         }
-        for (let i = 0; i < salvagers.length; i++) {
+        for (let i = 0; i < (o.structures?0:salvagers.length); i++) {
             const at = freeNear(Math.floor(salvagers[i].x / TILE), Math.floor(salvagers[i].y / TILE), 5);
             if (!at) continue;
             const e = place(at.gx, at.gy, 'pistol', p);
@@ -309,6 +314,17 @@ function chaosSetup(o) {
         }
         if (typeof recalculateLaserConnections === 'function') recalculateLaserConnections();
     }
+    if(o.structures){
+        let total=Array.from({length:np},(_,p)=>playerStructureCount(p)).reduce((a,b)=>a+b,0),n=0;
+        // Use any remaining selected capacity after the economic and combat
+        // layouts have both had room, retaining the mixed tower/trap roster.
+        for(let gy=3;gy<H-3&&total<o.structures;gy+=2)for(let gx=3;gx<W-3&&total<o.structures;gx++){
+            let p=((gx>>2)+(gy>>2))%np;
+            for(let k=0;k<np&&playerStructureCount(p)>=getPlayerStructureLimit();k++)p=(p+1)%np;
+            const trap=(n&1)!==0,key=trap?trapKeys[n%trapKeys.length]:towerKeys[n%towerKeys.length];
+            if(place(gx,gy,key,p)){total++;n++;if(trap)st.traps++;else st.armyTowers++;}
+        }
+    }
     recalculateAdjacency(true);
     if(o.structures){
         st.jobs={};st.jobsByTeam=jobs.map(j=>Object.fromEntries(Object.entries(j).map(([role,list])=>[role,list.length])));
@@ -362,6 +378,7 @@ function chaosSetup(o) {
         st.frontFighters=__scratch.chaosFrontArmy.size;
     }
     st.units = units.length; st.barracks = barracks.length; st.spawners = collectorSpawners.length; st.towers = towers.length;
+    if(o.structures)st.structures=Array.from({length:np},(_,p)=>playerStructureCount(p)).reduce((a,b)=>a+b,0);
     st.researchQueued = Array.from({length:np},(_,p) => getPlayerResearchQueueTotalLength(p));
     // (The upgraded areas, for the bursts' further upgrades: the same on
     // every peer.)

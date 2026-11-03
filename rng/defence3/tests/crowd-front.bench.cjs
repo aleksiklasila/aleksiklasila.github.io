@@ -24,6 +24,8 @@ const session=new(require('node:inspector').Session)(),post=(method)=>new Promis
  i.eval(`if(typeof SIM_TRAFFIC_LOCAL!=='undefined')SIM_TRAFFIC_LOCAL=${Number(arg('local',1))};`);
  if(helpers){i.scratch.Worker=RealWorker;i.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=16;simParallelInit('',${helpers});`);}
  let records=JSON.parse(require('node:zlib').gunzipSync(fs.readFileSync(arg('scene','tests/4M-1K-stuck2.gz'))));
+ const limits=require('./menu-limits.cjs').scene(records,i,{population:Number(arg('population',262144))});
+ log({stage:'menu-limits',...limits});
  if(process.argv.includes('--current-balance'))records[0].settings.editableConfig.tables=i.eval('serializeEditableRuntimeConfigForTransport().tables');
  if(process.argv.includes('--max-stats')){
   const levels=i.eval(`(()=>{const out={};for(const [kind,keys,stats]of [['unit',BASE_UNIT_STATS,PRECOMPUTED_UNIT_STAT_KEYS],['building',BASE_CARD_TYPES,PRECOMPUTED_BUILDING_STAT_KEYS]])for(const key of Object.keys(keys))for(const stat of stats)out[makeResearchLevelId(kind,key,stat)]=MAX_RESEARCH_LEVEL;return out;})()`);

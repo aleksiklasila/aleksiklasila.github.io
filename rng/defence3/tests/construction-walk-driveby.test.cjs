@@ -65,6 +65,11 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     }
     out.bCol = [col, top];
     const gap = top + 10;
+    // Seal the ends: navigation may legitimately prefer a broad route around
+    // a short wall over its narrow gap. Here the site must be the only route.
+    for (let gy = 0; gy < GRID_H; gy++) if (gy < top || gy > top + 20) {
+        grid[gy][col].type = TYPE_WALL; simMoveTileTypeChanged(col, gy);
+    }
     for (let gy = top; gy <= top + 20; gy++) if (gy !== gap) place(col, gy, towerKey, 0);
     const site = place(col, gap, towerKey, 0, false);
     out.bSite = !!site;

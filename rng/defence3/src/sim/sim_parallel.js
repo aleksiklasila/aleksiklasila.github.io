@@ -1046,8 +1046,8 @@ const SIM_RUST_W0 = 512;
 function _simRust(K, P, chunk, fn, name) {
     const A = _simWPtrs(K);
     if (A === null || _simWasmArgI === null || _simWasmX === null) {
-        const missing = K.names.filter((nm, i) => !K.opt[i] && (!_simParReg[nm] || !(_simParWPtr[nm] >= 0)));
-        throw new Error('SIM_KERNEL_' + name + ': module=' + (_simWasmX !== null) + ', args=' + (_simWasmArgI !== null) + ', missing heap arrays=' + missing.map(nm => nm + ':' + (_simParReg[nm] ? _simParWPtr[nm] : 'unbound')).join(','));
+        const missing = K.names.filter((nm, i) => _simParReg[nm] ? !(_simParWPtr[nm] >= 0) : !K.opt[i]);
+        throw new Error('SIM_KERNEL_' + name + ': module=' + (_simWasmX !== null) + ', args=' + (_simWasmArgI !== null) + ', missing heap arrays=' + missing.map(nm => nm + ':' + (_simParReg[nm] ? _simParWPtr[nm] : 'unbound')).join(',') + (typeof simHeapStats === 'function' ? ', heap=' + JSON.stringify(simHeapStats()) : ''));
     }
     const I = _simWasmArgI;
     for (let i = 0; i < A.length; i++) I[SIM_RUST_W0 + i] = _simWEnc(A[i]);
@@ -1693,7 +1693,7 @@ function simRustDirect(fn, arrays, P) {
     if (I === null || _simWasmX === null || _simHeapPtrOf === null) throw new Error(fn + ': no wasm kernels on this thread');
     for (let i = 0; i < arrays.length; i++) {
         const a = arrays[i], p = a ? _simHeapPtrOf(a) : 0;
-        if (a && !(p >= 0)) throw new Error(fn + ': missing heap arrays (argument ' + i + ' not in the wasm heap)');
+        if (a && !(p >= 0)) throw new Error(fn + ': missing heap arrays (argument ' + i + ', ' + a.byteLength + ' bytes, not in the wasm heap): ' + JSON.stringify(simHeapStats()));
         I[SIM_RUST_W0 + i] = a ? _simWEnc(p) : 0;
     }
     I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords; I[1002] = _simThreadSlot;

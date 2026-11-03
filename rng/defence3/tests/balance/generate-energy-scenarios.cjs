@@ -39,14 +39,19 @@ async function main(args=process.argv.slice(2)) {
                 specs.push({profile,other,counts,accounting:{balanceMode:'equal-energy',countBounded,requiredCounts,energyEach:each,plannedStartingEnergy:startingEnergy,energyMismatchFraction:Math.abs(startingEnergy[0]-startingEnergy[1])/Math.max(...startingEnergy)}});
             }
             if(!specs.length)continue;
-            const geometryKey='energy:'+crypto.createHash('sha256').update(JSON.stringify([focal.id,specs.map(s=>[s.profile.level,s.other.id,s.counts])])).digest('hex');
-            const {records,arenas,layout,anchors}=G.makeScene(data,focal,profiles,opponents,{specs,geometryKey,groupSize:focal.role==='crossing'?90:58,minimumGap:focal.role==='crossing'?24:32});
-            const name=`fight-2-teams-equal-energy-${focal.id}_R${research}`;
+            const groupSize=focal.role==='crossing'?90:58,minimumGap=focal.role==='crossing'?24:32;
+            const batches=G.splitSpecs(specs,focal,groupSize,minimumGap);
+            for(let part=0;part<batches.length;part++){
+            const selected=batches[part];
+            const geometryKey='energy:'+crypto.createHash('sha256').update(JSON.stringify([focal.id,selected.map(s=>[s.profile.level,s.other.id,s.counts])])).digest('hex');
+            const {records,arenas,layout,anchors}=G.makeScene(data,focal,profiles,opponents,{specs:selected,geometryKey,groupSize,minimumGap});
+            const name=`fight-2-teams-equal-energy-${focal.id}_R${research}`+(part?`-part${part+1}`:'');
             const file='equal_energy/'+name+'.json.gz';
             fs.writeFileSync(path.join(ROOT,file),G.compressScene(records));
             generated.push({kind:'fight',balanceMode:'equal-energy',name,file,levels:data.levels,research,focal:focal.id,layout,anchors,arenas});
             console.log('Generated '+name+': '+arenas.length+' matchups');
             await new Promise(r=>setImmediate(r));
+            }
         }
     }
     manifest.scenarios=manifest.scenarios.filter(s=>s.balanceMode!=='equal-energy'&&data.research.includes(s.research)&&(s.kind==='work'||data.catalog.some(t=>t.id===s.focal))).concat(generated);

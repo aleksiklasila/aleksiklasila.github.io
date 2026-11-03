@@ -1,17 +1,16 @@
-// The navigation build's exit nodes and exit graph (kernels SIM_KERNEL_NAV_NODES
-// and SIM_KERNEL_NAV_GRAPH, flownav.js) against a plain reference (the
+// The navigation chain's exit nodes and exit graph against a plain reference (the
 // cluster-by-cluster loops they replaced): nodes, their order and pairs,
 // edges, their order and costs, and the bucket count equal on random maps
 // (sizes not multiples of the cluster size, both cluster sizes, with and
 // without step costs), built at once and as the background stages of a
-// rebuild (navBuildNodesBackground ... navBuildGraphBackground).
+// rebuild (navBuildChain).
 // Usage: node tests/nav-build-kernels.test.cjs
 const fs = require('fs'), vm = require('vm'), path = require('path');
 // (The real kernel runtime: the kernels are Rust, in the wasm heap; no
 // helpers, so kernels and background chains run on this thread.)
 for (const f of ['sim/sim_parallel.js', 'sim/sim_wasm_bin.js', 'sim/sim_wasm.js', 'game/flownav.js'])
     vm.runInThisContext(fs.readFileSync(path.join(__dirname, '../src', f), 'utf8'), { filename: f });
-const ctx = vm.runInThisContext('({ navBuild, navBuildStart, navBuildNodesBackground, navBuildCollect, navBuildNodesFinish, navBuildLocalBackground, navBuildGraphAlloc, navBuildGraphBackground, navBuildGraphFinish, navBuildPartsFinish, navBuildFinish })');
+const ctx = vm.runInThisContext('({ navBuild, navBuildStart, navBuildChain, navBuildCollect, navBuildFinish })');
 
 // The reference: nodes cluster by cluster (east and south borders make both
 // sides), then each node's edges from the local fields and its pair.
@@ -58,9 +57,7 @@ for (const [W, H, density, costs] of [[200, 150, 0.15, true], [333, 517, 0.3, tr
     // At once, and as a rebuild's stages.
     const now = ctx.navBuild(0, wall, costs, W, H);
     const st = ctx.navBuildStart(0, wall, costs, W, H);
-    ctx.navBuildNodesBackground(st); ctx.navBuildCollect(); ctx.navBuildNodesFinish(st);
-    ctx.navBuildLocalBackground(st); ctx.navBuildCollect(); ctx.navBuildGraphAlloc(st);
-    ctx.navBuildGraphBackground(st); ctx.navBuildCollect(); ctx.navBuildGraphFinish(st); ctx.navBuildPartsFinish(st);
+    ctx.navBuildChain(st); ctx.navBuildCollect();
     const staged = ctx.navBuildFinish(st);
     for (const [name, b] of [['now', now], ['staged', staged]]) {
         const rn = refNodes(W, H, b.C, wall), rg = refGraph(b);

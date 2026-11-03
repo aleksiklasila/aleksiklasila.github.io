@@ -14,12 +14,14 @@ const log=(...a)=>fs.appendFileSync(progress,a.join(' ')+'\n');
  log('harness ready');
  // Decode locally, then validate every record through the production reader.
  i.scratch.records=JSON.parse(require('node:zlib').gunzipSync(fs.readFileSync('tests/4M-1K-stuck.gz')));
+ const limits=require('./menu-limits.cjs').scene(i.scratch.records,i,{population:Number(process.env.FLOW_POP||262144)});
+ console.error('Menu limits',JSON.stringify(limits));
  log('decoded',i.scratch.records.length);
  i.scratch.scene=i.eval('(()=>{const r=soloSceneReader();for(const a of __scratch.records)r.line(JSON.stringify(a));return r.finish();})()');
  i.scratch.records=null;
  i.eval('startMainThreadLoops=()=>{};document.getElementById("starting-resources-popup").classList.add("hidden")');
  console.error('Read scene',i.scratch.scene.records.reduce((n,r)=>n+(r.units?.length||0),0),'units');
- const goals=[];for(const r of i.scratch.scene.records)for(const u of r.units||[])goals.push(u[7]?u[7][2]*1000+u[7][1]+1:0);
+ const width=i.scratch.scene.header.width,goals=[];for(const r of i.scratch.scene.records)for(const u of r.units||[])goals.push(u[7]?u[7][2]*width+u[7][1]+1:0);
  i.scratch.goals=Int32Array.from(goals);
  log('validated');
  // Renderer preparation uses the harness clock; pump it until import completes.

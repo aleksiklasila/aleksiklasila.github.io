@@ -21,7 +21,10 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
                 if (q.kind === 0) forEachUnitInRange(q.x, q.y, q.r, v);
                 else if (q.kind === 1) forEachUnitInRange(q.x, q.y, q.r, v, { enemyOfPlayer: q.p });
                 else if (q.kind === 2) forEachUnitInRange(q.x, q.y, q.r, v, { player: q.p });
-                else if (q.kind === 3) forEachUnitInAreaRange(q.x, q.y, q.ra, v, { enemyOfPlayer: q.p, areaOnly: true });
+                else if (q.kind === 3) forEachUnitInRange(q.x, q.y, Math.hypot(WORLD_W, WORLD_H), v, {
+                    enemyOfPlayer: q.p,
+                    predicate: u => isWorldTargetWithinAreaRange(q.x, q.y, u.x, u.y, Math.floor(q.ra))
+                });
                 else if (q.kind === 4) for (const u of getUnitsInRange(q.x, q.y, q.r)) ids.push(u.id);
                 else { const e = _findClosestEnemyUnitByChunks(q.p, q.x, q.y, q.r); ids.push(e ? e.id : -1); }
                 return ids.join(',');

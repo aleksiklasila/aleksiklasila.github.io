@@ -190,7 +190,7 @@ const SNAP_FORMAT = 7;
 // reservation always freed (a returning one's was kept), a dead unit
 // target's region not woken; death sounds the first few a tick; towers,
 // barracks and spawners out of energy destroyed in tile order.
-const SIM_RULES_REVISION = 54;
+const SIM_RULES_REVISION = 55;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

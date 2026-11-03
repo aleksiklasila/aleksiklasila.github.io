@@ -1319,6 +1319,7 @@ function _structImmuneTable() {
         M[i + 1] = (isEffectImmune(probe, 'fire') ? 1 : 0) | (isEffectImmune(probe, 'water') ? 2 : 0) | (isEffectImmune(probe, 'ice') ? 4 : 0) | (isEffectImmune(probe, 'poison') ? 8 : 0)
             | (isEffectImmune(probe, 'sand') ? 16 : 0) | (isEffectImmune(probe, 'watch') ? 32 : 0);
     }
+    simHeapFreeAuto(_shK.imm);
     _shK.imm = M; _shK.immN = n;
     return M;
 }
@@ -1331,7 +1332,8 @@ function _structHitsRun(fn, head, P, cap, tail = null) {
     if (!simHeapHas(ST.code)) structTablesRehome();
     const NO = Math.max(16, players.length);
     if (!_shK || _shK.cap < cap || !simHeapHas(_shK.cnt) || _shK.shrine.length < NO) {
-        const c = Math.max(cap, _shK ? _shK.cap : 0, 4096);
+        const c = simReserveCap(Math.max(cap, _shK ? _shK.cap : 0, 4096), 4096);
+        if (_shK) for (const key of ['keys', 'dead', 'watch', 'looks', 'shrine', 'cnt', 'imm']) simHeapFreeAuto(_shK[key]);
         _shK = { cap: c, keys: simSharedArray(Float64Array, c), dead: simSharedArray(Int32Array, c), watch: simSharedArray(Int32Array, c), looks: simSharedArray(Int32Array, 3 * SIM_STRUCT_HIT_LOOKS),
             shrine: simSharedArray(Float64Array, NO), cnt: simSharedArray(Int32Array, 4), imm: null, immN: 0 };
     }
@@ -1385,6 +1387,7 @@ function _hitStArrays(ns) {
     const K = _hitK;
     if (!K.rsty || K.scap < ns) {
         const cap = simReserveCap(Math.max(1, ns), 4096);
+        for (const key of ['rsty', 'rbd', 'rpd', 'rwk', 'rdu']) simHeapFreeAuto(K[key]);
         K.rsty = simSharedArray(Uint8Array, cap); K.rbd = simSharedArray(Int32Array, cap); K.rpd = simSharedArray(Int32Array, cap); K.rwk = simSharedArray(Int32Array, cap);
         K.rdu = simSharedArray(Int32Array, cap * 5);
         K.scap = cap;

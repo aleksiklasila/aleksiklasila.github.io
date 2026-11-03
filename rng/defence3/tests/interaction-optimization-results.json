@@ -1,6 +1,6 @@
 {
-  "baseline": "7257a9ed3360d33ac26a5df56743b65d1066bf87",
-  "node": "v22.20.0",
+  "baseline": "dd991e5f9336c91d3a947dcc50199ad6c88e5881",
+  "node": "v24.22.1",
   "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
   "simulation": [
     {
@@ -8,368 +8,368 @@
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.8068024999999657,
-      "median": 2.344699999999648,
-      "p95": 6.86410000000069,
-      "max": 9.449999999999818,
-      "commandMean": 2.0935666666667507
+      "mean": 2.723639999999932,
+      "median": 2.510200000000623,
+      "p95": 5.034300000001167,
+      "max": 6.102899999999863,
+      "commandMean": 3.119599999999385
     },
     {
       "repeat": 0,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.6932799999999872,
-      "median": 2.2013999999999214,
-      "p95": 6.692299999999932,
-      "max": 14.099099999999908,
-      "commandMean": 2.5130666666667216
+      "mean": 2.712822499999999,
+      "median": 2.40520000000015,
+      "p95": 5.906600000000026,
+      "max": 8.858600000000024,
+      "commandMean": 3.350533333333336
     },
     {
       "repeat": 1,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.839654166666668,
-      "median": 2.424400000000105,
-      "p95": 7.191499999999905,
-      "max": 12.716200000000072,
-      "commandMean": 2.0919000000000474
+      "mean": 2.721930000000007,
+      "median": 2.4221000000000004,
+      "p95": 4.371399999999994,
+      "max": 10.937599999999975,
+      "commandMean": 3.0459333333333234
     },
     {
       "repeat": 1,
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.769600833333349,
-      "median": 2.2965000000003783,
-      "p95": 7.0151999999998225,
-      "max": 10.516999999999825,
-      "commandMean": 2.0762666666669247
+      "mean": 2.640925833333237,
+      "median": 2.4364000000005035,
+      "p95": 5.6841999999996915,
+      "max": 6.099900000001071,
+      "commandMean": 2.730766666666265
     },
     {
       "repeat": 2,
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.7866008333333485,
-      "median": 2.32300000000032,
-      "p95": 6.781100000000151,
-      "max": 10.539700000000266,
-      "commandMean": 2.261233333333015
+      "mean": 2.688670833333329,
+      "median": 2.496399999999994,
+      "p95": 4.614600000000792,
+      "max": 5.924600000000282,
+      "commandMean": 2.592033333333044
     },
     {
       "repeat": 2,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": false,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.8651975000000163,
-      "median": 2.363299999999981,
-      "p95": 7.440599999999904,
-      "max": 10.955299999999852,
-      "commandMean": 2.268533333333304
+      "mean": 2.6472583333333244,
+      "median": 2.3900999999998476,
+      "p95": 4.420800000000099,
+      "max": 9.432299999999941,
+      "commandMean": 2.813700000000002
     },
     {
       "repeat": 0,
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.501633333333325,
-      "median": 2.2559000000001106,
-      "p95": 5.177099999999882,
-      "max": 9.415799999999763,
-      "commandMean": 2.0781999999999243
+      "mean": 2.747372499999953,
+      "median": 2.5812000000005355,
+      "p95": 5.191799999998693,
+      "max": 6.160300000001371,
+      "commandMean": 2.6603333333332557
     },
     {
       "repeat": 0,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.5157983333333354,
-      "median": 2.244799999999941,
-      "p95": 5.676899999999932,
-      "max": 7.464999999999918,
-      "commandMean": 2.250099999999975
+      "mean": 2.601356666666658,
+      "median": 2.2390000000000327,
+      "p95": 6.3052000000000135,
+      "max": 10.285899999999856,
+      "commandMean": 2.3204333333333125
     },
     {
       "repeat": 1,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.659959166666651,
-      "median": 2.345199999999977,
-      "p95": 4.632399999999961,
-      "max": 8.24519999999984,
-      "commandMean": 2.5679999999999836
+      "mean": 2.649101666666655,
+      "median": 2.322599999999966,
+      "p95": 6.026599999999917,
+      "max": 9.785300000000007,
+      "commandMean": 3.0294333333333725
     },
     {
       "repeat": 1,
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.6618458333333215,
-      "median": 2.2132000000001426,
-      "p95": 6.257999999999811,
-      "max": 11.392100000000028,
-      "commandMean": 2.010933333333014
+      "mean": 2.684261666666695,
+      "median": 2.604799999999159,
+      "p95": 4.719799999998941,
+      "max": 5.86830000000009,
+      "commandMean": 2.9166333333323564
     },
     {
       "repeat": 2,
       "scenario": "lasers",
       "baseline": true,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.6118616666666714,
-      "median": 2.309599999999591,
-      "p95": 5.246900000000096,
-      "max": 8.11909999999989,
-      "commandMean": 2.1901666666663004
+      "mean": 2.8148100000000342,
+      "median": 2.6319000000003143,
+      "p95": 5.350800000000163,
+      "max": 7.376500000000306,
+      "commandMean": 2.6578000000002553
     },
     {
       "repeat": 2,
       "scenario": "lasers",
       "baseline": false,
       "multiplayer": true,
-      "units": 2568,
+      "units": 2570,
       "buildings": 996,
       "tick": 160,
-      "lockstep": "22b82209",
+      "lockstep": "1137b466",
       "workers": {
-        "IDLE": 1239,
-        "RETURNING": 7
+        "IDLE": 1244,
+        "RETURNING": 4
       },
-      "state": "63134b0597e0493cf343d069e9cd2e2750f41a5cf94875fdc0fd639e67f95903",
+      "state": "cb1efe78f83c202b86317f80db22793088b4f8f2307f399eee41f12a52ccceb2",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.6343608333333424,
-      "median": 2.335900000000038,
-      "p95": 5.82510000000002,
-      "max": 9.332700000000159,
-      "commandMean": 2.0102333333334172
+      "mean": 2.622387500000006,
+      "median": 2.3800999999998567,
+      "p95": 5.158699999999953,
+      "max": 9.593000000000075,
+      "commandMean": 2.494666666666717
     },
     {
       "repeat": 0,
       "scenario": "combat",
       "baseline": true,
       "multiplayer": false,
-      "units": 2199,
-      "buildings": 1002,
+      "units": 2212,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "a7fdbb4a",
+      "lockstep": "1fc3e235",
       "workers": {
-        "MANUAL_MOVE": 1006,
-        "IDLE": 2
+        "MANUAL_MOVE": 1013,
+        "IDLE": 5
       },
-      "state": "c6dbfcf8634e93f5379a7cba7ef51bd0982822c4e8b5570e866804dab6fc9703",
+      "state": "ac03c81acfd56cae3a418208b66bee516683236b946eca1ff22be04e05f46374",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 4.095159166666645,
-      "median": 3.5893999999998414,
-      "p95": 6.677099999999882,
-      "max": 29.090699999999742,
-      "commandMean": 19.496966666666594
+      "mean": 4.158744999999908,
+      "median": 4.0516999999999825,
+      "p95": 5.402799999999843,
+      "max": 11.837199999999939,
+      "commandMean": 8.441800000000512
     },
     {
       "repeat": 0,
       "scenario": "combat",
       "baseline": false,
       "multiplayer": false,
-      "units": 2199,
-      "buildings": 1002,
+      "units": 2212,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "a7fdbb4a",
+      "lockstep": "1fc3e235",
       "workers": {
-        "MANUAL_MOVE": 1006,
-        "IDLE": 2
+        "MANUAL_MOVE": 1013,
+        "IDLE": 5
       },
-      "state": "c6dbfcf8634e93f5379a7cba7ef51bd0982822c4e8b5570e866804dab6fc9703",
+      "state": "ac03c81acfd56cae3a418208b66bee516683236b946eca1ff22be04e05f46374",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 3.9653724999999858,
-      "median": 3.4235000000001037,
-      "p95": 5.211300000000165,
-      "max": 37.869699999999966,
-      "commandMean": 23.001066666666627
+      "mean": 4.067743333333326,
+      "median": 4.055799999999863,
+      "p95": 5.539999999999964,
+      "max": 11.524800000000141,
+      "commandMean": 7.679833333333363
     },
     {
       "repeat": 0,
       "scenario": "combat",
       "baseline": true,
       "multiplayer": true,
-      "units": 2199,
-      "buildings": 1002,
+      "units": 2212,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "a7fdbb4a",
+      "lockstep": "1fc3e235",
       "workers": {
-        "MANUAL_MOVE": 1006,
-        "IDLE": 2
+        "MANUAL_MOVE": 1013,
+        "IDLE": 5
       },
-      "state": "c6dbfcf8634e93f5379a7cba7ef51bd0982822c4e8b5570e866804dab6fc9703",
+      "state": "ac03c81acfd56cae3a418208b66bee516683236b946eca1ff22be04e05f46374",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 4.08320333333332,
-      "median": 3.3809000000001106,
-      "p95": 5.857299999999668,
-      "max": 36.212499999999636,
-      "commandMean": 25.17019999999987
+      "mean": 4.23267249999996,
+      "median": 4.186299999999392,
+      "p95": 5.830299999999625,
+      "max": 10.644900000001144,
+      "commandMean": 7.97886666666697
     },
     {
       "repeat": 0,
       "scenario": "combat",
       "baseline": false,
       "multiplayer": true,
-      "units": 2199,
-      "buildings": 1002,
+      "units": 2212,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "a7fdbb4a",
+      "lockstep": "1fc3e235",
       "workers": {
-        "MANUAL_MOVE": 1006,
-        "IDLE": 2
+        "MANUAL_MOVE": 1013,
+        "IDLE": 5
       },
-      "state": "c6dbfcf8634e93f5379a7cba7ef51bd0982822c4e8b5570e866804dab6fc9703",
+      "state": "ac03c81acfd56cae3a418208b66bee516683236b946eca1ff22be04e05f46374",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 4.124544166666662,
-      "median": 3.4660999999998694,
-      "p95": 5.684500000000071,
-      "max": 30.269999999999982,
-      "commandMean": 24.490499999999958
+      "mean": 4.102425833333329,
+      "median": 4.048900000000003,
+      "p95": 5.572100000000091,
+      "max": 10.399099999999862,
+      "commandMean": 8.57193333333324
     },
     {
       "repeat": 0,
@@ -377,23 +377,23 @@
       "baseline": true,
       "multiplayer": false,
       "units": 3000,
-      "buildings": 1002,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "8fe17273",
+      "lockstep": "7cf1774a",
       "workers": {
-        "MOVING_TO": 3,
-        "IDLE": 1488,
-        "RETURNING": 9
+        "IDLE": 1496,
+        "MOVING_TO": 1,
+        "RETURNING": 3
       },
-      "state": "c3077a0dc7721c33fee95fa9c4ef687f4bf90892e65b7d1a2370584333325484",
+      "state": "6f0679187ad10e916bbbdb744c28ed25264b8061a8978f60253f3f468117f334",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.241046666666701,
-      "median": 1.9211000000004788,
-      "p95": 4.820299999999406,
-      "max": 9.346800000000258,
-      "commandMean": 6.838066666666539
+      "mean": 2.718306666666619,
+      "median": 2.5938999999998487,
+      "p95": 4.174300000000585,
+      "max": 10.805700000000797,
+      "commandMean": 9.38246666666661
     },
     {
       "repeat": 0,
@@ -401,23 +401,23 @@
       "baseline": false,
       "multiplayer": false,
       "units": 3000,
-      "buildings": 1002,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "8fe17273",
+      "lockstep": "7cf1774a",
       "workers": {
-        "MOVING_TO": 3,
-        "IDLE": 1488,
-        "RETURNING": 9
+        "IDLE": 1496,
+        "MOVING_TO": 1,
+        "RETURNING": 3
       },
-      "state": "c3077a0dc7721c33fee95fa9c4ef687f4bf90892e65b7d1a2370584333325484",
+      "state": "6f0679187ad10e916bbbdb744c28ed25264b8061a8978f60253f3f468117f334",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.2292283333333254,
-      "median": 1.9649000000001706,
-      "p95": 4.1689000000001215,
-      "max": 8.17410000000018,
-      "commandMean": 6.6896000000000795
+      "mean": 2.5616366666666845,
+      "median": 2.3144999999999527,
+      "p95": 3.7202000000002045,
+      "max": 10.996399999999994,
+      "commandMean": 10.189533333333353
     },
     {
       "repeat": 0,
@@ -425,23 +425,23 @@
       "baseline": true,
       "multiplayer": true,
       "units": 3000,
-      "buildings": 1002,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "8fe17273",
+      "lockstep": "7cf1774a",
       "workers": {
-        "MOVING_TO": 3,
-        "IDLE": 1488,
-        "RETURNING": 9
+        "IDLE": 1496,
+        "MOVING_TO": 1,
+        "RETURNING": 3
       },
-      "state": "c3077a0dc7721c33fee95fa9c4ef687f4bf90892e65b7d1a2370584333325484",
+      "state": "6f0679187ad10e916bbbdb744c28ed25264b8061a8978f60253f3f468117f334",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.2531508333333323,
-      "median": 1.9892999999992753,
-      "p95": 3.750500000000102,
-      "max": 7.749499999999898,
-      "commandMean": 6.886500000000221
+      "mean": 2.736352499999869,
+      "median": 2.5486000000000786,
+      "p95": 4.198099999999613,
+      "max": 11.025100000000748,
+      "commandMean": 9.3092666666671
     },
     {
       "repeat": 0,
@@ -449,197 +449,197 @@
       "baseline": false,
       "multiplayer": true,
       "units": 3000,
-      "buildings": 1002,
+      "buildings": 998,
       "tick": 160,
-      "lockstep": "8fe17273",
+      "lockstep": "7cf1774a",
       "workers": {
-        "MOVING_TO": 3,
-        "IDLE": 1488,
-        "RETURNING": 9
+        "IDLE": 1496,
+        "MOVING_TO": 1,
+        "RETURNING": 3
       },
-      "state": "c3077a0dc7721c33fee95fa9c4ef687f4bf90892e65b7d1a2370584333325484",
+      "state": "6f0679187ad10e916bbbdb744c28ed25264b8061a8978f60253f3f468117f334",
       "productionTotal": 0,
       "productionMax": 0,
       "unitShapes": 1,
-      "mean": 2.2593433333333355,
-      "median": 2.0665999999998803,
-      "p95": 5.170900000000074,
-      "max": 6.79950000000008,
-      "commandMean": 6.3149666666666535
+      "mean": 2.5995800000000107,
+      "median": 2.3414999999999964,
+      "p95": 4.205400000000054,
+      "max": 9.627100000000155,
+      "commandMean": 8.920233333333423
     }
   ],
   "input": {
     "benchmark": "Ctrl-click same-type union, half already selected",
-    "ref": "7257a9ed3360d33ac26a5df56743b65d1066bf87",
-    "node": "v22.20.0",
+    "ref": "dd991e5f9336c91d3a947dcc50199ad6c88e5881",
+    "node": "v24.22.1",
     "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
     "result": [
       {
         "n": 50,
         "repeat": 0,
         "before": {
-          "mean": 0.008753333333332117,
-          "p95": 0.013599999999996726,
-          "max": 0.013599999999996726
+          "mean": 0.011486666666669029,
+          "p95": 0.021500000000003183,
+          "max": 0.029899999999997817
         },
         "after": {
-          "mean": 0.008783333333335008,
-          "p95": 0.01300000000000523,
-          "max": 0.013199999999983447
+          "mean": 0.01121333333333799,
+          "p95": 0.01799999999997226,
+          "max": 0.020000000000038654
         }
       },
       {
         "n": 50,
         "repeat": 1,
         "after": {
-          "mean": 0.024003333333335302,
-          "p95": 0.016899999999992588,
-          "max": 0.48810000000000286
+          "mean": 0.008920000000000528,
+          "p95": 0.012299999999981992,
+          "max": 0.01630000000000109
         },
         "before": {
-          "mean": 0.007436666666667217,
-          "p95": 0.007800000000003138,
-          "max": 0.009699999999980946
+          "mean": 0.008573333333331826,
+          "p95": 0.01259999999996353,
+          "max": 0.013399999999990087
         }
       },
       {
         "n": 50,
         "repeat": 2,
         "before": {
-          "mean": 0.007306666666663849,
-          "p95": 0.007400000000018281,
-          "max": 0.0075999999999964984
+          "mean": 0.011109999999994595,
+          "p95": 0.022999999999967713,
+          "max": 0.04210000000000491
         },
         "after": {
-          "mean": 0.00903000000000039,
-          "p95": 0.01630000000000109,
-          "max": 0.01669999999998595
+          "mean": 0.009610000000003538,
+          "p95": 0.03280000000000882,
+          "max": 0.03290000000004056
         }
       },
       {
         "n": 1500,
         "repeat": 0,
         "before": {
-          "mean": 0.21892666666666968,
-          "p95": 0.3967000000000098,
-          "max": 0.4210999999999956
+          "mean": 0.1417633333333375,
+          "p95": 0.25190000000003465,
+          "max": 0.3841000000000463
         },
         "after": {
-          "mean": 0.2373833333333323,
-          "p95": 0.43729999999999336,
-          "max": 1.0360000000000014
+          "mean": 0.17158666666666705,
+          "p95": 0.3546000000000049,
+          "max": 0.4585999999999899
         }
       },
       {
         "n": 1500,
         "repeat": 1,
         "after": {
-          "mean": 0.12097666666666575,
-          "p95": 0.355700000000013,
-          "max": 0.3956999999999766
+          "mean": 0.1518100000000042,
+          "p95": 0.3885999999999967,
+          "max": 0.40280000000001337
         },
         "before": {
-          "mean": 0.10287666666666458,
-          "p95": 0.2621000000000038,
-          "max": 0.30529999999998836
+          "mean": 0.15511000000000383,
+          "p95": 0.3317000000000121,
+          "max": 0.40270000000003847
         }
       },
       {
         "n": 1500,
         "repeat": 2,
         "before": {
-          "mean": 0.09467000000000117,
-          "p95": 0.20079999999998677,
-          "max": 0.20400000000000773
+          "mean": 0.1824633333333338,
+          "p95": 0.4263000000000261,
+          "max": 0.5367999999999711
         },
         "after": {
-          "mean": 0.10071999999999832,
-          "p95": 0.20879999999999654,
-          "max": 0.21989999999999554
+          "mean": 0.19143999999999625,
+          "p95": 0.49049999999999727,
+          "max": 0.6585999999999785
         }
       },
       {
         "n": 6000,
         "repeat": 0,
         "before": {
-          "mean": 0.5218733333333347,
-          "p95": 1.1407999999999845,
-          "max": 1.403599999999983
+          "mean": 0.5709233333333372,
+          "p95": 1.2364000000000033,
+          "max": 1.2830000000000155
         },
         "after": {
-          "mean": 0.5028933333333365,
-          "p95": 1.0711000000000013,
-          "max": 1.169300000000021
+          "mean": 0.5574799999999944,
+          "p95": 1.2887000000000057,
+          "max": 1.383700000000033
         }
       },
       {
         "n": 6000,
         "repeat": 1,
         "after": {
-          "mean": 0.5057833333333349,
-          "p95": 1.074700000000007,
-          "max": 1.0874000000000024
+          "mean": 0.5712233333333264,
+          "p95": 1.2758999999999787,
+          "max": 1.3269000000000233
         },
         "before": {
-          "mean": 0.48886333333333026,
-          "p95": 1.1087999999999738,
-          "max": 1.119100000000003
+          "mean": 0.5469566666666632,
+          "p95": 1.1321000000000367,
+          "max": 1.2730000000000246
         }
       },
       {
         "n": 6000,
         "repeat": 2,
         "before": {
-          "mean": 0.589193333333327,
-          "p95": 1.2367999999999597,
-          "max": 1.720799999999997
+          "mean": 0.6013033333333321,
+          "p95": 1.3086000000000126,
+          "max": 1.3922999999999774
         },
         "after": {
-          "mean": 0.557916666666669,
-          "p95": 1.1684999999999945,
-          "max": 1.882600000000025
+          "mean": 0.5826866666666698,
+          "p95": 1.2804000000000997,
+          "max": 1.35450000000003
         }
       },
       {
         "n": 12000,
         "repeat": 0,
         "before": {
-          "mean": 1.0860533333333402,
-          "p95": 2.2986000000000217,
-          "max": 2.5072999999999865
+          "mean": 1.1061500000000062,
+          "p95": 1.258199999999988,
+          "max": 2.8817000000000235
         },
         "after": {
-          "mean": 1.0806900000000137,
-          "p95": 2.4279000000000224,
-          "max": 2.9299000000000888
+          "mean": 1.126383333333327,
+          "p95": 2.2413999999999987,
+          "max": 2.8203999999999496
         }
       },
       {
         "n": 12000,
         "repeat": 1,
         "after": {
-          "mean": 1.0122066666666532,
-          "p95": 1.5636999999999261,
-          "max": 2.2466000000000577
+          "mean": 1.1766733333333415,
+          "p95": 2.2175000000000864,
+          "max": 3.0488000000000284
         },
         "before": {
-          "mean": 0.987153333333337,
-          "p95": 1.205600000000004,
-          "max": 1.3670000000000755
+          "mean": 1.0925733333333218,
+          "p95": 1.444699999999898,
+          "max": 1.5153000000000247
         }
       },
       {
         "n": 12000,
         "repeat": 2,
         "before": {
-          "mean": 1.0448666666666593,
-          "p95": 1.2658999999999878,
-          "max": 1.2881999999999607
+          "mean": 1.2392466666666677,
+          "p95": 3.254199999999969,
+          "max": 3.591099999999983
         },
         "after": {
-          "mean": 0.9336499999999888,
-          "p95": 1.0775999999999613,
-          "max": 1.1117000000000417
+          "mean": 1.2253900000000006,
+          "p95": 4.295700000000011,
+          "max": 5.102999999999952
         }
       }
     ]

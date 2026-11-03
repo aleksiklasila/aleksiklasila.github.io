@@ -7,10 +7,10 @@ if (process.argv.includes('--baseline')) process.env.DEFENCE_TEST_SOURCE_OVERRID
 });
 const H = require('./net-harness.cjs');
 const {performance} = require('node:perf_hooks');
-const size=Number(process.env.FLOW_MAP||1000),cols=Number(process.env.FLOW_COLS||400),rows=Number(process.env.FLOW_ROWS||200);
+const size=require('./menu-limits.cjs').pick('cfg-mapsize',Number(process.env.FLOW_MAP||1024)),cols=Number(process.env.FLOW_COLS||400),rows=Number(process.env.FLOW_ROWS||200);
 const spacing=Number(process.env.FLOW_SPACING||1),dk=Number(process.env.FLOW_DK||1);
-const world = new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(size),
-    'cfg-map-type':'arena','cfg-max-pop':'20000','cfg-starting-energy':'900000000','cfg-starting-astar':'900000000'}});
+const world = new H.World({controls:require('./menu-limits.cjs').controls({...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(size),
+    'cfg-map-type':'arena','cfg-max-pop':String(cols*rows),'cfg-starting-energy':'900000000','cfg-starting-astar':'900000000'})});
 const inst = world.spawn('flow',{simWorker:false,url:'http://localhost/?wasm64=0'});
 const ticks = Number(process.env.FLOW_TICKS || 600);
 inst.scratch.now=()=>performance.now();
@@ -27,7 +27,7 @@ const result = inst.eval(`(() => {
  }
  for(let t=0;t<NAV_BUILD_TICKS+5;t++)gameTick();
  simDk=${dk};
- processAction({action:'move',unitIds:us.map(u=>u.id),targetX:(GRID_W-10)*TILE+16,targetY:GRID_H/2*TILE+16},0);
+ for(let k=0;k<us.length;k+=ACTION_MAX_UNIT_IDS)processAction({action:'move',unitIds:us.slice(k,k+ACTION_MAX_UNIT_IDS).map(u=>u.id),targetX:(GRID_W-10)*TILE+16,targetY:GRID_H/2*TILE+16},0);
  const starts=us.map(u=>u.x);const samples=[];let ms=0;
  for(let t=0;t<${ticks};t++){
   const a=performance.now();gameTick();ms+=performance.now()-a;

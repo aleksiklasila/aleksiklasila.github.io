@@ -1,6 +1,5 @@
-// The navigation rebuild's background stages (simParallelBackground: the
-// helpers take the local fields and the parts between the tick's other
-// jobs) install exactly the build a synchronous navBuild makes from the same
+// The navigation rebuild's complete background chain installs exactly the
+// build a synchronous navBuild makes from the same
 // walls, with real helper threads (and none), across several rebuilds.
 // Usage: node tests/nav-background.test.cjs
 'use strict';
@@ -47,5 +46,5 @@ const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a.buf
     console.log('PASS: navigation background build ' + rows.join(', '));
     process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
-// (A rebuild starts NAV_FREE_TICKS after the last install: flownav.js navTick.)
+// Allows both changed profiles to rebuild while the match advances.
 function NAV_TICKS() { return 300; }

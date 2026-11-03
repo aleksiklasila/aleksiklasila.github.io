@@ -17,8 +17,24 @@ let browser;
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     browser = await chromium.launch({channel:'msedge', headless:true, args:['--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows']});
     const page = await browser.newPage({viewport:{width:Number(process.env.LOD_WIDTH)||1280,height:Number(process.env.LOD_HEIGHT)||800}}), errors=[];
+    const auditGL=()=>{
+        const undo=[];let reported=false;
+        for(const Type of [WebGLRenderingContext,WebGL2RenderingContext]){
+            const proto=Type.prototype,getError=proto.getError;
+            for(const name of Object.getOwnPropertyNames(proto)){
+                const d=Object.getOwnPropertyDescriptor(proto,name);
+                if(!['texSubImage3D','copyTexSubImage3D','drawArraysInstanced','drawElementsInstanced','beginQuery','blitFramebuffer'].includes(name)||typeof d.value!=='function')continue;
+                const original=d.value;
+                proto[name]=function(...args){const result=original.apply(this,args);if(!reported){const error=getError.call(this);if(error){reported=true;
+                    console.error('GL CALL '+name+' error='+error+' '+new Error().stack);
+                    for(const restore of undo)restore();
+                }}return result;};
+                undo.push(()=>{proto[name]=original;});
+            }
+        }
+    };
     page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR',e.message); });
-    page.on('console',m=>{if(m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION|GL pass/i.test(m.text())) {errors.push(m.text().slice(0,500));if(process.env.LOD_DEBUG_GL)console.error(m.text());}});
+    page.on('console',m=>{if(m.type()==='error' && /render|ReferenceError|TypeError|INVALID_OPERATION|GL pass|GL CALL/i.test(m.text())) {errors.push(m.text().slice(0,500));if(process.env.LOD_DEBUG_GL)console.error(m.text());}});
     await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
     console.log('LOADED');
     const fixture = process.argv[2] || '200000-1000.json', tag = process.env.LOD_TAG || 'current';
@@ -42,13 +58,15 @@ let browser;
     }, {fixture,million:!!process.env.LOD_MILLION,population:Number(process.env.LOD_POP_PER_TEAM)||0,mapSize:Number(process.env.LOD_MAP_SIZE)||0});
     console.log('STARTED');
     await page.waitForFunction(()=>simClientStats().appliedTick>=10, {}, {timeout:240000});
+    if(process.env.LOD_GL_AUDIT)await page.evaluate(auditGL);
     const setup=await page.evaluate(debugGl=>{
         setRenderDimensionMode('3d');
         const R=renderer3dInstance, gl=R.gl, ext=gl.getExtension('WEBGL_debug_renderer_info');
         // The benchmark owns the timer; nesting the renderer's query causes
         // INVALID_OPERATION and invalidates both measurements.
+        R.gpuTimerEnd();
         R.gpuTimerBegin=R.gpuTimerEnd=()=>{};
-        if (debugGl) for (const name of ['drawBackground','drawFrameColumns','drawColumnModels','drawFlatBatch','drawUnitLayer','renderShadowMap','drawFx','resolveScene','presentSceneToCanvas']) {
+        if (debugGl) for (const name of ['prewarmPrograms','updateWalkSurfaces','resizeForSnapshot','buildViewProjection','resetInstanceArena','drawBackground','drawFrameColumns','drawColumnModels','drawFlatBatch','drawUnitLayer','renderShadowMap','drawFx','resolveScene','presentSceneToCanvas']) {
             const fn=R[name];if(!fn)continue;
             R[name]=function(...args){const prior=gl.getError(),result=fn.apply(this,args),error=gl.getError();
                 if(prior||error)console.error('GL pass '+name+' prior='+prior+' error='+error);return result;};
@@ -69,10 +87,13 @@ let browser;
             if(timer)while(pending.length&&gl.getQueryParameter(pending[0],gl.QUERY_RESULT_AVAILABLE)) {
                 const q=pending.shift();if(!gl.getParameter(timer.GPU_DISJOINT_EXT))window.__lodGpu.push(gl.getQueryParameter(q,gl.QUERY_RESULT)/1e6);gl.deleteQuery(q);
             }
-            const q=timer&&++serial%4===0&&pending.length<8?gl.createQuery():null;
+            const q=timer&&++serial%4===0&&pending.length<8&&!gl.getQuery(timer.TIME_ELAPSED_EXT,gl.CURRENT_QUERY)?gl.createQuery():null;
             if(q)gl.beginQuery(timer.TIME_ELAPSED_EXT,q);
-            const t=performance.now(),result=render.apply(this,args);window.__lodRender.push(performance.now()-t);
-            if(q){gl.endQuery(timer.TIME_ELAPSED_EXT);pending.push(q);}return result;
+            const t=performance.now();let result;
+            try{result=render.apply(this,args);}finally{
+                window.__lodRender.push(performance.now()-t);
+                if(q){if(gl.getQuery(timer.TIME_ELAPSED_EXT,gl.CURRENT_QUERY)===q){gl.endQuery(timer.TIME_ELAPSED_EXT);pending.push(q);}else gl.deleteQuery(q);}
+            }return result;
         };
         return {units:units.length,structures:_pageTables.s.n,map:GRID_W,viewport:{width:viewW,height:viewH},gpu:ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER),graphics:graphicsOptions};
     },!!process.env.LOD_DEBUG_GL);

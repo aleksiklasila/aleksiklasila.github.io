@@ -699,7 +699,7 @@ function getPlayerStructureLimit() {
     return Math.max(1, Math.min(configuredMaxBuildings(_structTeams(), GRID_W * GRID_H), structMemoryLimitPerPlayer()));
 }
 function structMemoryLimitPerPlayer() {
-    return Math.max(1, Math.floor(structReserveRowsTotal() / _structTeams()));
+    return Math.max(1, Math.floor(_structReserveRows(null, 'Tower') / _structTeams()));
 }
 function _stOwnerWord(v) { return (v | 0) === v ? v : ST_OWNER_NONE; }
 // (Made at the first entity joining: the page's lookup holds views only.)
@@ -1312,28 +1312,33 @@ function structRowAttach(o) {
 }
 // The match's structure rows, allocated at its start (startGame): the
 // match's building limit for every team (configuredMaxBuildings, the memory
-// budget's), a share of them for each class, no more rows than the map has tiles.
-// Past it, the table grows (counted in structRowStats.grown). Retired rows
-// remain readable until their deterministic expiry tick on every peer.
-const STRUCT_RESERVE_SHARE = { Tower: 0.4, FloorItem: 0.25, Barrack: 0.1, CollectorSpawner: 0.04, AstarSpawner: 0.04, SalvagerSpawner: 0.03, BuilderSpawner: 0.03, HealerSpawner: 0.03, ResearchSpawner: 0.04, GoldMine: 0.02, AstarMine: 0.02 };
+// budget's), for every owned class. A guessed mix of classes let a perfectly
+// legal run of towers exhaust its share and resize tables during play.
+// Retired rows get 1/8 extra room and remain readable until expiry.
+const STRUCT_RESERVE_CLASSES = ['Tower', 'FloorItem', 'Barrack', 'CollectorSpawner', 'AstarSpawner', 'SalvagerSpawner', 'BuilderSpawner', 'HealerSpawner', 'ResearchSpawner', 'GoldMine', 'AstarMine'];
 function _sRowBytes(T) {
     let n = 12 + 24 + 21;
     for (const f of T.fields) { const nk = _S_NUM_KINDS[f.kind]; n += nk ? nk[0].BYTES_PER_ELEMENT : f.kind === 'b' ? 1 : 8; }
     return n;
 }
-// (Rows a class gets: its share of the teams' limits, no more than the map's
-// tiles. From the settings and constants, not from the tables as they are.)
+// From the settings and constants, not from the tables as they are.
 function _structReserveRows(T, name) {
     const tiles = typeof GRID_W === 'number' && typeof GRID_H === 'number' ? GRID_W * GRID_H : 0, teams = _structTeams();
     const total = Math.min(tiles || Infinity, configuredMaxBuildings(teams, tiles) * teams);
-    return Math.ceil(Math.min(tiles || Infinity, total * STRUCT_RESERVE_SHARE[name]) / 1024) * 1024;
+    if (name === 'GoldMine' || name === 'AstarMine') {
+        const mines = name === 'GoldMine' ? GOLD_MINE_COUNT : ASTAR_MINE_COUNT;
+        return Math.ceil(Math.min(tiles || Infinity, Math.max(0, mines)) / 1024) * 1024;
+    }
+    return Math.ceil(total * 1.125 / 1024) * 1024;
 }
 let _structReserveRowsCache = null;
+function structOwnedRowsTotal() { return _structReserveRows(null, 'Tower'); }
 function structReserveRowsTotal() {
-    const key = GRID_W + 'x' + GRID_H + ':' + _structTeams() + ':' + CONFIG_MAX_POP + ':' + CONFIG_MAX_BUILDINGS;
+    const key = GRID_W + 'x' + GRID_H + ':' + _structTeams() + ':' + CONFIG_MAX_POP + ':' + CONFIG_MAX_BUILDINGS + ':' + GOLD_MINE_COUNT + ':' + ASTAR_MINE_COUNT;
     if (_structReserveRowsCache && _structReserveRowsCache.key === key) return _structReserveRowsCache.rows;
-    let rows = 0;
-    for (const [name, C] of Object.entries(_structClasses())) { const T = C ? _sTableOf(C) : null; if (T) rows += _structReserveRows(T, name); }
+    // Maximum simultaneous population, rather than nine copies of it for
+    // the alternative owned classes. Scratch buffers need only one copy.
+    const rows = _structReserveRows(null, 'Tower') + _structReserveRows(null, 'GoldMine') + _structReserveRows(null, 'AstarMine');
     _structReserveRowsCache = { key, rows };
     return rows;
 }
@@ -1349,7 +1354,7 @@ function structTablesReserve() {
         CollectorSpawner: typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, AstarSpawner: typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
         SalvagerSpawner: typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, BuilderSpawner: typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null,
         HealerSpawner: typeof HealerSpawner !== 'undefined' ? HealerSpawner : null, ResearchSpawner: typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null, GoldMine, AstarMine };
-    for (const name in STRUCT_RESERVE_SHARE) {
+    for (const name of STRUCT_RESERVE_CLASSES) {
         const C = classes[name], T = C ? _sTableOf(C) : null;
         if (!T) continue;
         const want = _structReserveRows(T, name);

@@ -4,8 +4,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const H = require('../net-harness.cjs');
-const SIZE = 2000, GROUP_SIZE = 36, COUNT = 100;
+const SIZE = Math.max(...require('../menu-limits.cjs').choices('cfg-mapsize')), GROUP_SIZE = 36, COUNT = 100;
 const geometryCache = new Map(), compressedGeometryCache = new WeakMap();
+// Keep every matchup, but split the former 2000-square exports into legal
+// matches, with population chosen from the menu before deriving buildings.
+function splitSpecs(specs, focal, groupSize=GROUP_SIZE, minimumGap=32) {
+    const side=Math.floor((SIZE-8)/(groupSize+minimumGap)), limit=side*side;
+    if(!limit)throw Error('Arena exceeds the largest menu map');
+    const menu=require('../menu-limits.cjs');
+    const fits=(units,builds)=>{const b=menu.budget(menu.pick('cfg-max-pop',Math.max(8,...units)),2,SIZE);return units.every(n=>n<=b.population)&&builds.every(n=>n<=b.buildings);};
+    const batches=[];let batch=[],builds=[1,1],units=[0,0];
+    for(const spec of specs){
+        const counts=spec.counts||[COUNT,COUNT], add=[focal,spec.other].map((t,i)=>t.kind==='building'?counts[i]:0), army=counts.map((n,i)=>n-add[i]);
+        if(batch.length&&(batch.length>=limit||!fits(units.map((n,i)=>n+army[i]),builds.map((n,i)=>n+add[i])))){batches.push(batch);batch=[];builds=[1,1];units=[0,0];}
+        batch.push(spec);add.forEach((n,i)=>builds[i]+=n);army.forEach((n,i)=>units[i]+=n);
+        if(!fits(units,builds))throw Error('A single matchup exceeds the menu capacity');
+    }
+    if(batch.length)batches.push(batch);return batches;
+}
 
 // One standard gzip member. Full-flush deflate boundaries let repeated map
 // geometry be compressed once, while headers, research and armies stay unique.
@@ -49,7 +65,7 @@ function turretPositions(owner) {
 const TURRET_POSITIONS=[turretPositions(0),turretPositions(1)];
 
 function readGameData({work=false}={}) {
-    const world = new H.World({ controls: { 'cfg-mapsize': '80', 'cfg-map-type': 'arena',
+    const world = new H.World({ controls: { 'cfg-mapsize': '128', 'cfg-map-type': 'arena',
         'cfg-gamemode': 'destroy', 'cfg-full-vis': 'full' } });
     const inst = world.spawn('balance-config', { simWorker: false });
     inst.eval('startSoloGame()');
@@ -250,7 +266,7 @@ function makeScene(data, focal, profiles, opponents = data.catalog.filter(t => f
         return out;
     });
     geometryCache.set(geometryKey,{runs,areas});
-    if(geometryCache.size>2) geometryCache.delete(geometryCache.keys().next().value);
+    if(geometryCache.size>6) geometryCache.delete(geometryCache.keys().next().value);
     }
     const header = { kind:'defence3-scene',version:1,createdAt:'2026-10-19T00:00:00.000Z',
         settings:data.settings,seed:20261019,width:SIZE,height:SIZE,teams:[0,1],
@@ -277,13 +293,17 @@ async function main() {
     for(const research of data.research) {
         const profiles=data.profiles.filter(p=>p.research===research);
         for(const focal of data.catalog) {
-            const name=`fight-2-teams-${focal.id}_R${research}`;
-            const {records,arenas,layout,anchors}=makeScene(data,focal,profiles);
+            const opponents=data.catalog.filter(t=>focal.role==='crossing'?t.kind==='unit':t.role==='army');
+            const batches=splitSpecs(profiles.flatMap(profile=>opponents.map(other=>({profile,other}))),focal);
+            for(let part=0;part<batches.length;part++){
+            const name=`fight-2-teams-${focal.id}_R${research}`+(part?`-part${part+1}`:'');
+            const {records,arenas,layout,anchors}=makeScene(data,focal,profiles,opponents,{specs:batches[part],geometryKey:JSON.stringify([focal.kind,focal.role,focal.key==='laser',part,batches[part].map(s=>s.other.id)])});
             // Same gzip JSON array as the main menu's compressed export.
             const bytes=compressScene(records);
             const file='equal_numbers/'+name+'.json.gz';
             fs.writeFileSync(path.join(out,file),bytes); totalBytes+=bytes.length;
             manifest.scenarios.push({kind:'fight',balanceMode:'equal-numbers',name,file,levels:data.levels,research,focal:focal.id,layout,anchors,arenas});
+            }
         }
         console.log(`Generated R${research}: ${data.catalog.length} snapshots, all L1–L${data.maxLevel}`);
         await new Promise(resolve=>setImmediate(resolve));
@@ -299,7 +319,7 @@ async function main() {
         if(!file.startsWith(root) || !/^(?:(unit|building)_[a-z0-9_]+_L\d+_R\d+|fight-2-teams-(?:equal-energy-)?(?:unit|building)_[a-z0-9_]+_R\d+)\.json\.gz$/.test(path.basename(file))) continue;
         if(!currentFiles.has(file) && fs.existsSync(file)) fs.unlinkSync(file);
     }
-    const order=['# Pair order','','Each file includes L1–L'+data.maxLevel+'. Read left to right, then top to bottom.',
+    const order=['# Pair order','','Each matchup set covers L1–L'+data.maxLevel+' across its numbered files. Read left to right, then top to bottom.',
         'For each level, opponents appear in the order below; then the next level starts.',
         'The grid continues across row boundaries. Exact row, column and destinations are in manifest.json.',
         '','| File kind | Columns | Rows | Origin spacing | Clear gap |','|---|---|---|---|---|'];
@@ -313,5 +333,5 @@ async function main() {
     fs.writeFileSync(path.join(out,'pair-order.md'),order.join('\n'));
     console.log(`${manifest.scenarios.length} snapshots; ${(totalBytes/1048576).toFixed(1)} MiB compressed. See tests/balance/README.md.`);
 }
-module.exports={readGameData,makeScene,compressScene,layoutFor,SIZE,COUNT};
+module.exports={readGameData,makeScene,compressScene,layoutFor,splitSpecs,SIZE,COUNT};
 if(require.main===module) main().catch(e=>{console.error(e);process.exitCode=1;});

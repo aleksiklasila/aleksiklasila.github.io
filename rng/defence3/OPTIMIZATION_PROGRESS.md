@@ -3896,3 +3896,96 @@ Rebuilt to the user's design: the main panel is one markup string made at the ma
 - Fixed memory: per-profile build slots made at the match's start (flownav.js navReserve; ground 2 x 96 B a tile, builders 2 x their start build + border mines, air 1); destination field pools fixed (routes use the atlas). In-play allocations on the chaos scene: 125 MB/30 s -> 11 KB.
 - Rebuild schedule: ~164 ticks -> by simulation step, a stage a step 1-2 steps apart (install in ~6-7 steps); collect waits gone. Edge: main-thread navigation 2.86 -> 0.53 s per 32 s, mean step 556 -> 423 ms (p50 355, p95 686). Sharing between profiles off (memory-neutral with slots).
 - Next (NAV_REBUILD_PLAN.md handoff): the whole rebuild as one background chain with the JS glue as wasm kernels (wasm/src/navg.rs written, not built/wired yet), so the main thread only posts and installs (target well under 1 ms a step) and an install lands 1-3 steps after a change at any TPS.
+
+### 2026-11-03 — navigation rebuilds as one complete helper chain
+
+- Completed the NAV_REBUILD_PLAN.md handoff: registered `navg.rs`, removed
+  division panic/data-segment paths, aligned arena scratch, rebuilt production
+  wasm32 (`21ce5225af2a2064`). One header addresses all arrays through the
+  16-stage chain; Rust performs the old JS sizing, components and hierarchy
+  glue. Initial/restored builds use the same sequence. The old JS glue is gone.
+- Deterministic schedule: install 2 steps after posting at dk >= 3, otherwise
+  3. Another dirty profile can wait behind the current one. Overflow skips
+  later stages and drops the build; reset/restore collects a pending chain
+  before arena reuse. Fixed arena metadata, batched binds, maintained wall
+  diffs and an empty-field-window path remove the remaining serial overhead.
+  A first fallback-field request still expands that window correctly.
+- Final Edge 1M/250k scene, 11 helpers, 40 s: navigation mean **0.393 ms**,
+  p95 **0.705 ms**, p99/max **1.080 ms** (only the first of 88 calls above
+  1 ms); **29 installs, all 2 steps after posting**, no drops. **0 heap
+  allocations and 0 growth** during the measured gameplay window, including
+  the sweep scratch now reserved at match start. Slots 323.80 MiB.
+- Actual simulation unit-list population 268,662–575,323; 111,932 successful
+  spawns; 24,681 research / 32,614 collector / 28,854 astar deposits. The 77
+  available whole-step trace rows have p95 499.84, p99/max 535.92 ms, 3 above
+  500 ms. This is not a sustained-one-million population measurement.
+- Raw results: `tests/test-runs/nav-chain/edge-final.log`, `edge-final-data.json`,
+  `edge-final-trace.json`, `edge-final-summary.json`. The earlier Edge run is
+  retained too (mean nav 0.979 ms; its field bookkeeping and 16 KB allocation
+  led to the final two fixes).
+- Serial headless 1M/250k mixed-chaos runs (80 steps, warmup 20, dk1, 11 helpers)
+  retain every tick and population/work counter in `baseline.json`,
+  `candidate.json`, `final.json` and their JSONL sidecars. Navigation mean/max:
+  1.632/14.691 -> 0.321/0.904 -> 0.486/3.420 ms (the last two before the
+  final empty-window optimization). Whole-step steady wall p95/max:
+  303.41/341.65 -> 265.74/302.32 -> 434.29/495.34 ms; 0 above 500 ms in
+  each. **No reliable overall TPS/hitch improvement established** by these
+  variable runs. Steady populations ~291k–434k; baseline/candidate work:
+  20,436/20,532 spawns, 25,933/25,933 research, 5,813/5,727 collector,
+  3,865/3,770 astar deposits. Synthetic warmup still allocates substantial
+  memory; that is separate from the measured zero-allocation browser window.
+- All-thread profile and neighbor slices retained (`profile.json`, CPU
+  profiles, `profile.json.spike-analysis.json`): previous/slow/next/reference
+  steps 20/21/22/28 have nav 0.831/0.444/0.014/0.475 ms. Slow step 21 has
+  24.21 ms GC, spawning 34.82 vs 9.65 ms in the matching non-burst reference,
+  movement 124.06 vs 104.94 ms. Helpers still spend ~0.89 aggregate CPU-second
+  per full rebuild, mostly local fields/atlas routes; contention remains
+  possible. No build-kernel time was sampled on the simulation thread.
+- Validation: six-map chaos determinism with 0/4 host helpers (2,598 hashes
+  per map, only the two forced repairs); all navigation tests; memory allocation,
+  area-search-range and structure-targeting. New nav-chain-lifecycle covers
+  0/3 helpers, overflow guard bytes, arena reuse, fully blocked maps, no heap
+  allocations in a reserved rebuild, first fallback in an empty window,
+  and repeated pending-chain restores at both boundaries at dk1/4/20.
+- Remaining: helper CPU for full rebuilds, serialization of dirty profiles,
+  fixed-slot overflow fallback, and whole-step movement/spawn/GC tails.
+  Detailed implementation and measurements are at the end of NAV_REBUILD_PLAN.md.
+
+### 2026-11-03 — Full-run failures and bounded WASM32 matches
+
+- Stopped `tests/test-runs/full-20261103-background` with its STOP marker;
+  original results remain historical: 557 passes, 23 failures/timeouts and
+  one stopped balance job. Follow-up logs stay under that run's results.
+- Match limits now account for full worker/status/AI reservations, every
+  permitted owned-building class, neutral mines and gameplay headroom.
+  Explicit building overrides cannot bypass capacity. Starter buildings
+  respect the cap; oversized imports fail with the actual applied limit.
+  Fixed worker-brain reserve arguments and explicitly release replaced
+  hit/AI arrays; loading drains retired setup allocations before play.
+- Per user direction, maximum map size is now **1024×1024**, including the
+  dropdown, configuration application, network startup and scene import.
+  Highest selection allows 1,048,576 total units: 524,288 each with two
+  players or 131,072 each with eight. Building limits are respectively
+  32,768 or 8,192 each. Lower selections remain upper bounds. WASM32 remains
+  the default and the heap limit stays 4 GiB.
+- The rejected 2048 workaround lowered eight-player population to 4,096
+  each; that is not the supported solution. Allocation-site inspection of
+  2048 with only 8 units/64 buildings per player and no mines measured
+  3,712 MiB live after 20 ticks: navigation slots 1,143 MiB, effective-area
+  histogram 309, acquisition 311, spatial indexes 290, worker reservations
+  192, traffic 176 and area boxes 151. A duplicate 96 MiB worker reservation
+  allocation is now reused on cache reset. Remaining memory reductions are
+  deferred. Raw attribution: `results/memory-baseline.json`.
+- Large test fixtures select actual menu values and derive production
+  capacities. Historical crowd scenes are reduced proportionally by team
+  and profession, with the before/after counts retained. Move commands use
+  the real per-action ID limit. Balance generators split their former
+  2000-square matchup grids into supported maps, retaining all pairings.
+- Updated obsolete API/default/order assertions and multiplayer work
+  counters to observe WASM events. Fixed GPU timer ownership when renderer
+  and benchmark queries share a context, and allow one-channel readback
+  rounding in strip comparison. The original intermittent motion failure
+  has not reproduced in the first browser rerun; its assertions remain.
+- Verification and final serial measurements are recorded below when the
+  follow-up run completes. These are capacity/correctness changes; fixture
+  populations differ, so they do not establish a TPS improvement.

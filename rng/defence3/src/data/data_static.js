@@ -7,6 +7,7 @@
 let MINIMAP_SIZE = 160;
 let TILE = 32;
 let GRID_W = 128, GRID_H = 128;
+const MAP_SIZE_MAX = 1024;
 let WORLD_W = GRID_W * TILE, WORLD_H = GRID_H * TILE;
 
 // Gold mine config (adjustable from menu)
@@ -41,28 +42,52 @@ let CONFIG_MAX_BUILDINGS = 0;
 // dropdown); the rest follows: its units' slots (MEMORY_UNIT_BYTES each:
 // columns, side records, index and kernel lists), the map's tile tables
 // (MEMORY_TILE_BYTES a tile), the rest of the simulation (MEMORY_BASE_BYTES);
-// of what is left half goes to structures (MEMORY_STRUCT_BYTES each: row
-// and wasm side, measured 2026-10-29: ~260 + ~1000), the other half is
+// of what is left half goes to structures (MEMORY_STRUCT_BYTES each: all
+// class reservations, retirement room and kernel data), the other half is
 // headroom (projectiles, paths, scratch). The building limit per player is
 // the largest power of two that fits, no more than the map's tiles allow.
 // Integers only: every peer derives the same limits.
-const MEMORY_BUDGET_BYTES = 4 * 1024 * 1024 * 1024, MEMORY_BASE_BYTES = 256 * 1024 * 1024, MEMORY_TILE_BYTES = 400;
-const MEMORY_UNIT_BYTES = 900, MEMORY_STRUCT_BYTES = 1300;
+// Navigation and tile tables plus the per-team visibility, spatial-owner
+// lanes and area/type histograms. A flat estimate missed the eight-team
+// largest-map case even after setup fitted: its first ticks still overflowed.
+const MEMORY_BUDGET_BYTES = 4 * 1024 * 1024 * 1024, MEMORY_BASE_BYTES = 256 * 1024 * 1024;
+const MEMORY_TILE_BYTES = 480, MEMORY_PLAYER_TILE_BYTES = 56;
+function memoryBudgetMapBytes(teams, tiles) {
+    // These tables currently keep all eight lobby slots (players.length),
+    // including inactive colors. Unit/building limits use active teams.
+    return Math.max(1, Math.floor(tiles) || 1) * (MEMORY_TILE_BYTES + Math.max(8, Math.floor(teams) || 1) * MEMORY_PLAYER_TILE_BYTES);
+}
+// Includes reserved slot slack, worker records and the worker/event/search
+// scratch used during play. The old 900-byte estimate exhausted wasm32 on
+// worker-heavy scenes even though the unit columns themselves fitted.
+// Every owned structure class can hold the entire permitted population of
+// buildings, so a player choosing one kind cannot force table growth. Their
+// combined row storage (2524 B), retirement slack and kernel scratch fit here.
+const MEMORY_UNIT_BYTES = 2048, MEMORY_STRUCT_BYTES = 4096;
+// Neutral resource rows and their indexes share the remaining gameplay
+// allowance. A density selection is an upper bound, like population.
+const MEMORY_MINE_BYTES = 512;
+function memoryBudgetMines(pop, teams, tiles) {
+    const free = MEMORY_BUDGET_BYTES - MEMORY_BASE_BYTES - memoryBudgetMapBytes(teams, tiles)
+        - memoryBudgetUnits(pop, teams, tiles) * MEMORY_UNIT_BYTES
+        - memoryBudgetBuildings(pop, teams, tiles) * Math.max(1, teams) * MEMORY_STRUCT_BYTES;
+    return Math.max(0, Math.floor(free / 2 / MEMORY_MINE_BYTES));
+}
 // (No map holds more units than this many a tile, nor more structures than
 // tiles: the slots and rows reserved stop there whatever the settings,
 // sim_unit_state.js simUnitPopulationSlots.)
 const MEMORY_UNITS_PER_TILE = 8;
 // (The units a population reserves slots for: the teams', at most the map's.)
 function memoryBudgetUnits(pop, teams, tiles) { return Math.min(Math.max(0, Math.floor(pop) || 0) * Math.max(1, Math.floor(teams) || 1), Math.max(1, Math.floor(tiles) || 1) * MEMORY_UNITS_PER_TILE); }
-// The menu's population limits: 2^3 to 2^22 per player (those that fit).
-const POP_LIMIT_POW_MIN = 3, POP_LIMIT_POW_MAX = 22;
+// The menu's population limits: 2^3 to 2^20 per player (those that fit).
+const POP_LIMIT_POW_MIN = 3, POP_LIMIT_POW_MAX = 20;
 // (The largest power of two at most n, 0 for n < 1.)
 function _pow2Floor(n) { if (!(n >= 1)) return 0; let p = 1; while (p * 2 <= n) p *= 2; return p; }
 // Structures per player the budget holds beside `pop` units per player
 // (0: that population does not fit).
 function memoryBudgetBuildings(pop, teams, tiles) {
     teams = Math.max(1, Math.floor(teams) || 1); tiles = Math.max(1, Math.floor(tiles) || 1);
-    const free = MEMORY_BUDGET_BYTES - MEMORY_BASE_BYTES - tiles * MEMORY_TILE_BYTES - memoryBudgetUnits(pop, teams, tiles) * MEMORY_UNIT_BYTES;
+    const free = MEMORY_BUDGET_BYTES - MEMORY_BASE_BYTES - memoryBudgetMapBytes(teams, tiles) - memoryBudgetUnits(pop, teams, tiles) * MEMORY_UNIT_BYTES;
     if (free <= 0) return 0;
     return _pow2Floor(Math.min(Math.floor(free / 2 / (teams * MEMORY_STRUCT_BYTES)), Math.floor(tiles / teams)));
 }
@@ -71,9 +96,10 @@ function memoryBudgetBuildings(pop, teams, tiles) {
 // the map's units-per-tile cap reaches (a larger one reserves no more).
 function popLimitOptions(teams, tiles) {
     const out = [];
+    const minimumBuildings = Math.min(64, _pow2Floor(tiles / Math.max(1, teams)));
     for (let k = POP_LIMIT_POW_MIN; k <= POP_LIMIT_POW_MAX; k++) {
         const pop = 2 ** k, buildings = memoryBudgetBuildings(pop, teams, tiles);
-        if (buildings >= 64) out.push({ pop, buildings });
+        if (buildings >= minimumBuildings) out.push({ pop, buildings });
         if (pop * Math.max(1, teams) >= tiles * MEMORY_UNITS_PER_TILE) break;
     }
     return out;
@@ -82,14 +108,20 @@ function popLimitOptions(teams, tiles) {
 // it leaves 64 structures a player on this map with these teams): applied at
 // the match's start, so its slots are all reserved then, nothing grows in play.
 function memoryBudgetPop(pop, teams, tiles) {
-    let p = Math.max(1, Math.floor(pop) || 1);
-    while (p > 8 && memoryBudgetBuildings(p, teams, tiles) < 64) p = Math.floor(p / 2);
+    teams = Math.max(1, Math.floor(teams) || 1); tiles = Math.max(1, Math.floor(tiles) || 1);
+    // Apply the same cap that sizes the reservation to the actual match.
+    // Merely capping the byte estimate left births able to exceed that pool.
+    let p = Math.max(8, _pow2Floor(Math.min(Math.max(8, Number(pop) || 8), 2 ** POP_LIMIT_POW_MAX,
+        Math.floor(tiles * MEMORY_UNITS_PER_TILE / teams))));
+    const minimumBuildings = Math.min(64, _pow2Floor(tiles / teams));
+    while (p > 8 && memoryBudgetBuildings(p, teams, tiles) < minimumBuildings) p = Math.floor(p / 2);
     return p;
 }
 // The match's building limit per player (the menu's 0: the budget's).
 function configuredMaxBuildings(teams, tiles) {
     const cfg = Math.floor(Number(CONFIG_MAX_BUILDINGS) || 0);
-    return cfg > 0 ? cfg : memoryBudgetBuildings(CONFIG_MAX_POP, teams, tiles);
+    const capacity = memoryBudgetBuildings(CONFIG_MAX_POP, teams, tiles);
+    return cfg > 0 ? Math.min(cfg, capacity) : capacity;
 }
 let TICK_RATE = 20; // ticks per second (menu configurable)
 let TICK_MS = 1000 / TICK_RATE;

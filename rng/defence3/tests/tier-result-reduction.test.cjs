@@ -45,5 +45,5 @@ const R = { 'ws.rcnt': W('ws.rcnt', [2, 3]), 'ws.rkind': W('ws.rkind', [1, 4, 0,
     'ws.ures': W('ws.ures', new Array(24).fill(-1)), 'ws.order': W('ws.order', new Array(8).fill(0)), 'ws.orderCount': W('ws.orderCount', [0]) };
 R['ws.res'][0] = 1; R['ws.ures'][3] = 0; R['ws.res'][24] = 2;
 ctx.order(R, [2, 4, 6, 4], 0);
-assert.deepEqual(Array.from(R['ws.order'].subarray(0, R['ws.orderCount'][0])), [1, 4, 0]);
+assert.deepEqual(Array.from(R['ws.order'].subarray(0, R['ws.orderCount'][0])), [0, 1, 4]);
 console.log('PASS: healer top-K matches full-sort oracle across slot layouts; worker replies ordered without padding/empty results.');

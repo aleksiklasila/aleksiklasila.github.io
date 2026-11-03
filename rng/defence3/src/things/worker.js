@@ -1898,7 +1898,15 @@ function _getReservedWorkerForTarget(target, workerType) {
 }
 
 function _invalidateWorkerTargetLoadCache() {
-    workerReservedTiles = workerReservedTable();
+    const n = Math.max(0, GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT);
+    if (workerReservedTiles.length === n && (typeof simHeapHas !== 'function' || simHeapHas(workerReservedTiles))) {
+        if (typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
+        workerReservedTiles.fill(0);
+    } else {
+        const old = workerReservedTiles;
+        workerReservedTiles = workerReservedTable();
+        if (typeof simHeapFreeAuto === 'function') simHeapFreeAuto(old);
+    }
 }
 
 // Caches stamped with the current tick hold references to live entities. A
@@ -3178,7 +3186,8 @@ const _wsCand = { all: { sig: -1 }, spawners: { sig: -1 }, P: new Float64Array(1
 function workerSitesReserve(B) {
     const n = Math.max(1024, (B.structs | 0) + 1024);
     for (const C of [_wsCand.all, _wsCand.spawners]) {
-        if (!C.tiles || C.tiles.length < n || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, n); C.tmp = simSharedArray(Int32Array, n); C.sig = -1; }
+        const count=C===_wsCand.all?n+(B.mines|0):n;
+        if (!C.tiles || C.tiles.length < count || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, count); C.tmp = simSharedArray(Int32Array, count); C.sig = -1; }
         if (!C.cnt || !simHeapHas(C.cnt)) C.cnt = simSharedArray(Int32Array, 4);
     }
     // (Types: at most SPAWN_PROD_TYPES, barrack.js.)
@@ -3250,7 +3259,7 @@ function _workerBrainArray(name,Type,n){
 // (list: slot * 8 + code entries, the first n: the tick's events by default.)
 // The brains' event list for the match (main.js startGame): one entry a unit
 // (units: the population the budget holds), so wb.list is made and bound once.
-function workerBrainReserve(units){if(typeof simHeapHas!=='function')return;_workerBrainArray('list',Int32Array,Math.max(1024,units|0));}
+function workerBrainReserve(B){if(typeof simHeapHas!=='function')return;const units=typeof B==='object'?B.units:B;_workerBrainArray('list',Int32Array,Math.max(1024,units|0));}
 function workerBrainsPrepare(n,defer=false,list=null){
     if(_workerBrain.pending)workerBrainsCollect();
     // (The slots copied into one list bound once (wb.list), not the caller's
@@ -3626,8 +3635,16 @@ const WAI_CTAB_COLS = ['markedForSalvage', 'stacks', 'level', 'queueEnabled', '_
 const _wai = { tver: '', P: new Float64Array(80), declined: 0 };
 function _waiArr(name, Type, n) {
     let a = _wai[name];
-    if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFree(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
+    if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
     return a;
+}
+function workerAiReserve(B) {
+    const n = Math.max(1, B.units | 0), chunks = Math.ceil(n / WAI_DECIDE_PER);
+    for (const key of ['list', 'takeList']) _waiArr(key, Int32Array, n);
+    _waiArr('out', Int32Array, Math.max(n * 8 + 256, B.structs * 2 + 16) * 4);
+    _waiArr('args', Int32Array, 2048); _waiArr('redo', Int32Array, n + 2);
+    _waiArr('ai', Int32Array, chunks * _WAI_AI_W(WAI_DECIDE_PER));
+    _waiArr('a64', Float64Array, chunks * _WAI_A64_W(WAI_DECIDE_PER));
 }
 // (The batch's rows for every player: payments go into them.)
 function _waiRowsReady() {
@@ -3859,7 +3876,7 @@ function _waiParallel(WA, P, n, mode, list) {
     B.fill(0, 512, 1024);
     for (let i = 0; i < WA.length; i++) {
         const a = WA[i], p = a ? _simHeapPtrOf(a) : 0;
-        if (a && !(p >= 0)) throw new Error('waiRun: argument ' + i + ' not in the wasm heap');
+        if (a && !(p >= 0)) throw new Error('waiRun: argument ' + i + ' (' + a.byteLength + ' bytes) not in the wasm heap: ' + JSON.stringify(simHeapStats()));
         B[512 + i] = a ? _simWEnc(p) : 0;
     }
     F.fill(0); F.set(P.length > 512 ? P.subarray(0, 512) : P);

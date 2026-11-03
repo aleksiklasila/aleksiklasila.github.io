@@ -3,577 +3,240 @@
  "population": null,
  "units": 200000,
  "limitMs": 250,
- "controls": 143,
- "slow": [
-  {
-   "label": "Settings",
-   "actMs": 268,
-   "maxLong": 182,
-   "longCount": 1,
-   "tickGap": 253,
-   "ticks": 36
-  }
- ],
+ "controls": 147,
+ "slow": [],
  "errors": [],
  "results": [
   {
-   "label": "Settings",
-   "actMs": 268,
-   "maxLong": 182,
-   "longCount": 1,
-   "tickGap": 253,
-   "ticks": 36
-  },
-  {
    "label": "btn-view-3d 3D 3D view (Space: team colours, hold Space: 2D)",
-   "actMs": 133,
-   "maxLong": 53,
+   "actMs": 153,
+   "maxLong": 71,
    "longCount": 1,
-   "tickGap": 153,
-   "ticks": 37
-  },
-  {
-   "label": "btn-show-statsmap Open JSON",
-   "actMs": 149,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 127,
+   "tickGap": 131,
    "ticks": 36
-  },
-  {
-   "label": "setting-gold-mine-text (toggle)",
-   "actMs": 202,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 123,
-   "ticks": 37
-  },
-  {
-   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
-   "actMs": 9,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 122,
-   "ticks": 33
   },
   {
    "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 5",
-   "actMs": 29,
-   "maxLong": 57,
-   "longCount": 8,
-   "tickGap": 117,
+   "actMs": 31,
+   "maxLong": 58,
+   "longCount": 7,
+   "tickGap": 119,
    "ticks": 33
   },
   {
-   "label": "key Control+a",
-   "actMs": 37,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 114,
-   "ticks": 35
-  },
-  {
-   "label": "setting-rally-line-type Dotted Solid = solid",
-   "actMs": 21,
-   "maxLong": 0,
-   "longCount": 0,
+   "label": "btn-show-statsmap Open JSON",
+   "actMs": 151,
+   "maxLong": 63,
+   "longCount": 1,
    "tickGap": 113,
-   "ticks": 34
+   "ticks": 36
   },
   {
-   "label": "key 2",
-   "actMs": 28,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 112,
-   "ticks": 35
-  },
-  {
-   "label": "btn-help ⚙ Controls & settings",
-   "actMs": 145,
+   "label": "Use shared link",
+   "actMs": 66,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 111,
-   "ticks": 37
-  },
-  {
-   "label": "R Popup group R: empty",
-   "actMs": 77,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 110,
-   "ticks": 35
-  },
-  {
-   "label": "btn-level-visibility EverythingBuildingsOff = 2",
-   "actMs": 12,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 107,
    "ticks": 34
   },
   {
-   "label": "setting-show-rally-lines Buildings Bu = buildings",
-   "actMs": 29,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 107,
-   "ticks": 35
-  },
-  {
-   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
-   "actMs": 20,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 107,
-   "ticks": 35
-  },
-  {
-   "label": "setting-range-team Selected thingsAll team things = selected",
-   "actMs": 30,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 104,
-   "ticks": 34
-  },
-  {
-   "label": "btn-view-3d5 3.5D",
-   "actMs": 92,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 103,
-   "ticks": 36
-  },
-  {
-   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
-   "actMs": 16,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 103,
-   "ticks": 33
-  },
-  {
-   "label": "setting-show-rally-lines Buildings Bu = none",
-   "actMs": 26,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 102,
-   "ticks": 34
-  },
-  {
-   "label": "btn-level-visibility EverythingBuildingsOff = 0",
-   "actMs": 33,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 100,
-   "ticks": 35
-  },
-  {
-   "label": "Towers",
-   "actMs": 128,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 100,
-   "ticks": 37
-  },
-  {
-   "label": "setting-camera-slide (toggle)",
-   "actMs": 150,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 98,
-   "ticks": 37
-  },
-  {
-   "label": "4 Group 4: empty",
-   "actMs": 136,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 98,
-   "ticks": 36
-  },
-  {
-   "label": "btn-default-auto-upgrade L+New: OFF",
-   "actMs": 56,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 97,
-   "ticks": 34
-  },
-  {
-   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
-   "actMs": 40,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 97,
-   "ticks": 35
-  },
-  {
-   "label": "setting-pixel-snap (toggle)",
-   "actMs": 108,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 97,
-   "ticks": 37
-  },
-  {
-   "label": "btn-view-3d 3D",
-   "actMs": 60,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 95,
-   "ticks": 35
-  },
-  {
-   "label": "setting-show-rally-lines Buildings Bu = buildings_units",
-   "actMs": 17,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 95,
-   "ticks": 35
-  },
-  {
-   "label": "4",
-   "actMs": 86,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 95,
-   "ticks": 36
-  },
-  {
-   "label": "9 Group 9: empty",
-   "actMs": 119,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 95,
-   "ticks": 37
-  },
-  {
-   "label": "btn-refresh-statsmap Refresh",
-   "actMs": 369,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 93,
-   "ticks": 41
-  },
-  {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 0",
-   "actMs": 41,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 92,
-   "ticks": 36
-  },
-  {
-   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
-   "actMs": 36,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 91,
-   "ticks": 35
-  },
-  {
-   "label": "Floor",
-   "actMs": 133,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 91,
-   "ticks": 37
-  },
-  {
-   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
-   "actMs": 46,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 90,
-   "ticks": 35
-  },
-  {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = auto",
-   "actMs": 36,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 90,
-   "ticks": 35
-  },
-  {
-   "label": "btn-help-close Close",
-   "actMs": 202,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 90,
-   "ticks": 38
-  },
-  {
-   "label": "Keybinds",
-   "actMs": 135,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 37
-  },
-  {
-   "label": "setting-range-through Behind objectsThrough objects = false",
-   "actMs": 18,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 34
-  },
-  {
-   "label": "setting-selection-outline-type Dotted Solid = solid",
-   "actMs": 9,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 35
-  },
-  {
-   "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
-   "actMs": 33,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 36
-  },
-  {
-   "label": "Objectives",
-   "actMs": 88,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 36
-  },
-  {
-   "label": "3 Group 3: empty",
-   "actMs": 134,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 89,
-   "ticks": 37
-  },
-  {
-   "label": "btn-default-auto-upgrade L+New: ON",
-   "actMs": 50,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 88,
-   "ticks": 35
-  },
-  {
-   "label": "setting-range-through Behind objectsThrough objects = true",
-   "actMs": 20,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 88,
-   "ticks": 34
-  },
-  {
-   "label": "setting-selection-outline-see-through (toggle)",
-   "actMs": 64,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 88,
-   "ticks": 36
-  },
-  {
-   "label": "7",
-   "actMs": 63,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 88,
-   "ticks": 36
-  },
-  {
-   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
-   "actMs": 49,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 87,
-   "ticks": 36
-  },
-  {
-   "label": "8 Group 8: empty",
-   "actMs": 128,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 86,
-   "ticks": 37
-  },
-  {
-   "label": "Y",
-   "actMs": 60,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 86,
-   "ticks": 36
-  },
-  {
-   "label": "Special",
-   "actMs": 133,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 85,
-   "ticks": 37
-  },
-  {
-   "label": "btn-view-2d 2D",
-   "actMs": 49,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 84,
-   "ticks": 35
-  },
-  {
-   "label": "Barracks",
-   "actMs": 134,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 84,
-   "ticks": 37
-  },
-  {
-   "label": "5 Group 5: empty",
-   "actMs": 105,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 84,
-   "ticks": 36
-  },
-  {
-   "label": "key m",
-   "actMs": 11,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 84,
-   "ticks": 34
-  },
-  {
-   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 3",
-   "actMs": 32,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 83,
-   "ticks": 35
-  },
-  {
-   "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
-   "actMs": 12,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 83,
-   "ticks": 34
-  },
-  {
-   "label": "setting-gfx-outline (toggle)",
-   "actMs": 97,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 83,
-   "ticks": 36
-  },
-  {
-   "label": "setting-camera-slide (toggle back)",
-   "actMs": 152,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 83,
+   "label": "Gameplay",
+   "actMs": 155,
+   "maxLong": 60,
+   "longCount": 1,
+   "tickGap": 109,
    "ticks": 37
   },
   {
    "label": "jukebox-open ♫ Open music and sound settings Music and sound",
-   "actMs": 138,
+   "actMs": 149,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 82,
+   "tickGap": 107,
+   "ticks": 35
+  },
+  {
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 1",
+   "actMs": 29,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 100,
+   "ticks": 35
+  },
+  {
+   "label": "M Open level/research matrix",
+   "actMs": 125,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 98,
    "ticks": 37
   },
   {
-   "label": "setting-selection-outline-type Dotted Solid = dotted",
-   "actMs": 40,
+   "label": "btn-minimap ▲",
+   "actMs": 126,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 82,
+   "tickGap": 95,
+   "ticks": 37
+  },
+  {
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = 72",
+   "actMs": 24,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 94,
+   "ticks": 35
+  },
+  {
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 4",
+   "actMs": 14,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 91,
+   "ticks": 34
+  },
+  {
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.85",
+   "actMs": 36,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 91,
+   "ticks": 35
+  },
+  {
+   "label": "Towers",
+   "actMs": 100,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 91,
+   "ticks": 37
+  },
+  {
+   "label": "8 Group 8: empty",
+   "actMs": 65,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 91,
    "ticks": 36
   },
   {
-   "label": "setting-gfx-grade (toggle back)",
-   "actMs": 72,
+   "label": "T Popup group T: empty",
+   "actMs": 77,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 82,
+   "tickGap": 91,
+   "ticks": 37
+  },
+  {
+   "label": "Special",
+   "actMs": 130,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 90,
+   "ticks": 37
+  },
+  {
+   "label": "★ Draining 💀 into ★ (click to toggle; both: half each)",
+   "actMs": 126,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 90,
+   "ticks": 37
+  },
+  {
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 2160",
+   "actMs": 34,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 88,
+   "ticks": 35
+  },
+  {
+   "label": "P Open research popup for this subgroup",
+   "actMs": 126,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 87,
+   "ticks": 37
+  },
+  {
+   "label": "btn-level-visibility EverythingBuildingsOff = 1",
+   "actMs": 32,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 86,
+   "ticks": 35
+  },
+  {
+   "label": "Select all ⚡ Collector",
+   "actMs": 100,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 86,
+   "ticks": 37
+  },
+  {
+   "label": "btn-help ⚙ Controls & settings",
+   "actMs": 135,
+   "maxLong": 62,
+   "longCount": 1,
+   "tickGap": 85,
+   "ticks": 37
+  },
+  {
+   "label": "btn-level-visibility EverythingBuildingsOff = 0",
+   "actMs": 38,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 85,
+   "ticks": 34
+  },
+  {
+   "label": "Y Popup group Y: empty",
+   "actMs": 67,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 85,
+   "ticks": 35
+  },
+  {
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = auto",
+   "actMs": 30,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 84,
+   "ticks": 35
+  },
+  {
+   "label": "Effects",
+   "actMs": 75,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 84,
+   "ticks": 36
+  },
+  {
+   "label": "btn-view-3d 3D",
+   "actMs": 81,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 83,
    "ticks": 36
   },
   {
    "label": "btn-view-3d5 3.5D 3D view in team colours only (Space)",
-   "actMs": 84,
+   "actMs": 47,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 81,
-   "ticks": 37
-  },
-  {
-   "label": "btn-default-build 🔨 New: ON",
-   "actMs": 108,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 81,
-   "ticks": 36
-  },
-  {
-   "label": "btn-level-visibility EverythingBuildingsOff = 1",
-   "actMs": 40,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 81,
+   "tickGap": 83,
    "ticks": 35
   },
   {
-   "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
-   "actMs": 42,
+   "label": "setting-camera-slide (toggle back)",
+   "actMs": 94,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 81,
-   "ticks": 35
-  },
-  {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 720",
-   "actMs": 41,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 81,
-   "ticks": 35
-  },
-  {
-   "label": "2 Group 2: empty",
-   "actMs": 107,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 81,
-   "ticks": 36
-  },
-  {
-   "label": "setting-selection-outline-see-through (toggle back)",
-   "actMs": 90,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 80,
-   "ticks": 36
-  },
-  {
-   "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
-   "actMs": 26,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 80,
-   "ticks": 35
-  },
-  {
-   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
-   "actMs": 45,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 80,
+   "tickGap": 83,
    "ticks": 36
   },
   {
@@ -581,131 +244,171 @@
    "actMs": 71,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 80,
+   "tickGap": 83,
    "ticks": 35
   },
   {
-   "label": "7 Group 7: empty",
-   "actMs": 93,
+   "label": "key m",
+   "actMs": 10,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 82,
+   "ticks": 35
+  },
+  {
+   "label": "btn-default-build 🔨 New: OFF",
+   "actMs": 81,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 81,
+   "ticks": 36
+  },
+  {
+   "label": "setting-gfx-grade (toggle back)",
+   "actMs": 54,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 81,
+   "ticks": 35
+  },
+  {
+   "label": "⚡",
+   "actMs": 62,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 81,
+   "ticks": 35
+  },
+  {
+   "label": "Settings",
+   "actMs": 83,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 80,
    "ticks": 36
   },
   {
-   "label": "U Popup group U: empty",
-   "actMs": 141,
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 0",
+   "actMs": 41,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 80,
-   "ticks": 37
+   "ticks": 35
   },
   {
-   "label": "U",
-   "actMs": 96,
+   "label": "setting-pixel-snap (toggle)",
+   "actMs": 86,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 80,
    "ticks": 36
   },
   {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
-   "actMs": 47,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 79,
-   "ticks": 35
-  },
-  {
-   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
-   "actMs": 22,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 79,
+   "label": "key Escape",
+   "actMs": 12,
+   "maxLong": 55,
+   "longCount": 1,
+   "tickGap": 80,
    "ticks": 34
   },
   {
-   "label": "btn-minimap ▲",
-   "actMs": 135,
+   "label": "btn-statsmap-close Close",
+   "actMs": 345,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 79,
-   "ticks": 37
+   "ticks": 41
   },
   {
-   "label": "setting-gfx-sharpen OffLowMediumHigh = false",
-   "actMs": 34,
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 0",
+   "actMs": 33,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 78,
+   "tickGap": 79,
+   "ticks": 36
+  },
+  {
+   "label": "▸ Expand ⚡/ s",
+   "actMs": 80,
+   "maxLong": 72,
+   "longCount": 1,
+   "tickGap": 79,
+   "ticks": 36
+  },
+  {
+   "label": "▸",
+   "actMs": 80,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 79,
+   "ticks": 36
+  },
+  {
+   "label": "btn-research-matrix-close Close",
+   "actMs": 69,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 79,
+   "ticks": 36
+  },
+  {
+   "label": "key Tab",
+   "actMs": 14,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 79,
    "ticks": 35
   },
   {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1440",
-   "actMs": 27,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 78,
-   "ticks": 35
-  },
-  {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 60",
+   "label": "setting-show-selection-outlines All Units = units",
    "actMs": 25,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 78,
+   "ticks": 36
+  },
+  {
+   "label": "setting-selection-outline-type Dotted Solid = dotted",
+   "actMs": 30,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 78,
+   "ticks": 35
+  },
+  {
+   "label": "btn-help-close Close",
+   "actMs": 82,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 78,
+   "ticks": 36
+  },
+  {
+   "label": "R Popup group R: empty",
+   "actMs": 73,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 78,
+   "ticks": 35
+  },
+  {
+   "label": "key g",
+   "actMs": 5,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 78,
    "ticks": 34
   },
   {
-   "label": "6",
-   "actMs": 132,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 78,
-   "ticks": 37
-  },
-  {
-   "label": "T Popup group T: empty",
-   "actMs": 90,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 78,
-   "ticks": 36
-  },
-  {
-   "label": "★ Draining 💀 into ★ (click to toggle; both: half each)",
-   "actMs": 95,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 78,
-   "ticks": 36
-  },
-  {
-   "label": "btn-default-build 🔨 New: OFF",
-   "actMs": 72,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 77,
-   "ticks": 36
-  },
-  {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
-   "actMs": 41,
+   "label": "setting-show-selection-outlines All Units = buildings_units",
+   "actMs": 36,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 77,
    "ticks": 35
   },
   {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
-   "actMs": 31,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 77,
-   "ticks": 35
-  },
-  {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/mole",
+   "label": "setting-show-selection-outlines All Units = none",
    "actMs": 18,
    "maxLong": 0,
    "longCount": 0,
@@ -713,55 +416,87 @@
    "ticks": 34
   },
   {
-   "label": "btn-statsmap-close Close",
-   "actMs": 355,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 77,
-   "ticks": 41
-  },
-  {
-   "label": "setting-gold-mine-text (toggle back)",
-   "actMs": 69,
+   "label": "setting-gfx-outline (toggle)",
+   "actMs": 85,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 77,
    "ticks": 36
   },
   {
-   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
-   "actMs": 42,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 77,
-   "ticks": 36
-  },
-  {
-   "label": "P Popup group P: empty",
-   "actMs": 101,
+   "label": "setting-gfx-grade (toggle)",
+   "actMs": 98,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 77,
    "ticks": 37
   },
   {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
-   "actMs": 31,
+   "label": "Floor",
+   "actMs": 125,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 77,
+   "ticks": 37
+  },
+  {
+   "label": "3 Group 3: empty",
+   "actMs": 67,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 77,
+   "ticks": 35
+  },
+  {
+   "label": "3",
+   "actMs": 84,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 77,
+   "ticks": 36
+  },
+  {
+   "label": "btn-research-close Close",
+   "actMs": 80,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 77,
+   "ticks": 36
+  },
+  {
+   "label": "setting-range-team Selected thingsAll team things = selected",
+   "actMs": 29,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 76,
    "ticks": 35
   },
   {
-   "label": "setting-gfx-sharpen OffLowMediumHigh = true",
-   "actMs": 45,
+   "label": "setting-range-through Behind objectsThrough objects = false",
+   "actMs": 30,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 76,
    "ticks": 35
   },
   {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 75",
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
+   "actMs": 36,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 76,
+   "ticks": 35
+  },
+  {
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 720",
+   "actMs": 25,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 76,
+   "ticks": 34
+  },
+  {
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.67",
    "actMs": 37,
    "maxLong": 0,
    "longCount": 0,
@@ -769,127 +504,71 @@
    "ticks": 35
   },
   {
-   "label": "btn-minimap ▼",
-   "actMs": 84,
+   "label": "setting-pixel-snap (toggle back)",
+   "actMs": 62,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 76,
-   "ticks": 35
-  },
-  {
-   "label": "1",
-   "actMs": 109,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 76,
-   "ticks": 37
-  },
-  {
-   "label": "Y Popup group Y: empty",
-   "actMs": 94,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 76,
-   "ticks": 35
-  },
-  {
-   "label": "key Tab",
-   "actMs": 28,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 76,
-   "ticks": 35
-  },
-  {
-   "label": "btn-view-2d5 2.5D 2D view in team colours only (Space)",
-   "actMs": 54,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
    "ticks": 36
   },
   {
-   "label": "setting-show-selection-outlines All Units = none",
-   "actMs": 21,
+   "label": "5",
+   "actMs": 57,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 75,
-   "ticks": 34
-  },
-  {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 30",
-   "actMs": 13,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
-   "ticks": 35
-  },
-  {
-   "label": "Effects",
-   "actMs": 77,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
-   "ticks": 35
-  },
-  {
-   "label": "8",
-   "actMs": 58,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
+   "tickGap": 76,
    "ticks": 36
   },
   {
-   "label": "9",
-   "actMs": 87,
+   "label": "7 Group 7: empty",
+   "actMs": 71,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 75,
-   "ticks": 37
+   "tickGap": 76,
+   "ticks": 36
   },
   {
-   "label": "I",
-   "actMs": 121,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
-   "ticks": 37
-  },
-  {
-   "label": "key Escape",
-   "actMs": 4,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 75,
-   "ticks": 34
-  },
-  {
-   "label": "setting-show-selection-outlines All Units = buildings_units",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
    "actMs": 31,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 74,
-   "ticks": 35
+   "tickGap": 75,
+   "ticks": 34
   },
   {
-   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa",
-   "actMs": 34,
+   "label": "setting-gfx-bloom (toggle back)",
+   "actMs": 97,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 75,
+   "ticks": 36
+  },
+  {
+   "label": "I Popup group I: empty",
+   "actMs": 73,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 75,
+   "ticks": 36
+  },
+  {
+   "label": "key F1",
+   "actMs": 5,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 75,
+   "ticks": 34
+  },
+  {
+   "label": "btn-view-2d 2D",
+   "actMs": 54,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 74,
    "ticks": 35
   },
   {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1080",
-   "actMs": 41,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 74,
-   "ticks": 35
-  },
-  {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 2160",
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/fast",
    "actMs": 45,
    "maxLong": 0,
    "longCount": 0,
@@ -897,16 +576,24 @@
    "ticks": 35
   },
   {
-   "label": "P",
-   "actMs": 135,
+   "label": "setting-show-rally-lines Buildings Bu = none",
+   "actMs": 25,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 74,
-   "ticks": 37
+   "ticks": 35
   },
   {
-   "label": "key g",
-   "actMs": 25,
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 1",
+   "actMs": 23,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 74,
+   "ticks": 35
+  },
+  {
+   "label": "T",
+   "actMs": 53,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 74,
@@ -914,142 +601,270 @@
   },
   {
    "label": "key 1",
-   "actMs": 39,
+   "actMs": 9,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 74,
    "ticks": 35
   },
   {
-   "label": "setting-rally-line-type Dotted Solid = dotted",
-   "actMs": 9,
+   "label": "btn-default-auto-upgrade L+New: ON",
+   "actMs": 87,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 73,
-   "ticks": 34
+   "ticks": 36
   },
   {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 50",
-   "actMs": 22,
+   "label": "setting-gfx-sharpen OffLowMediumHigh = true",
+   "actMs": 35,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 73,
+   "ticks": 36
+  },
+  {
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1080",
+   "actMs": 20,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 73,
    "ticks": 35
   },
   {
-   "label": "I Popup group I: empty",
-   "actMs": 126,
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = 60",
+   "actMs": 19,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 73,
-   "ticks": 37
+   "ticks": 35
   },
   {
-   "label": "O Popup group O: empty",
-   "actMs": 98,
+   "label": "setting-camera-slide (toggle)",
+   "actMs": 114,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 73,
-   "ticks": 37
+   "ticks": 36
   },
   {
-   "label": "btn-view-2d 2D 2D view (Space: team colours, hold Space: 3D)",
+   "label": "2",
+   "actMs": 70,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 73,
+   "ticks": 36
+  },
+  {
+   "label": "4",
+   "actMs": 66,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 73,
+   "ticks": 36
+  },
+  {
+   "label": "jukebox-close ✕ Close music settings",
+   "actMs": 73,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 72,
+   "ticks": 36
+  },
+  {
+   "label": "btn-view-3d5 3.5D",
+   "actMs": 81,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 72,
+   "ticks": 36
+  },
+  {
+   "label": "btn-default-build 🔨 New: ON",
+   "actMs": 67,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 72,
+   "ticks": 36
+  },
+  {
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/boss",
    "actMs": 37,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 72,
-   "ticks": 36
+   "ticks": 35
   },
   {
-   "label": "setting-range-team Selected thingsAll team things = team",
-   "actMs": 48,
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/mole",
+   "actMs": 23,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 72,
    "ticks": 35
   },
   {
-   "label": "setting-pixel-snap (toggle back)",
-   "actMs": 85,
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 3",
+   "actMs": 31,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 72,
-   "ticks": 37
+   "ticks": 35
   },
   {
-   "label": "6 Group 6: empty",
-   "actMs": 114,
+   "label": "setting-gold-mine-text (toggle back)",
+   "actMs": 72,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 72,
-   "ticks": 37
-  },
-  {
-   "label": "jukebox-close ✕ Close music settings",
-   "actMs": 79,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 71,
    "ticks": 36
   },
   {
-   "label": "setting-gfx-bloom (toggle back)",
-   "actMs": 87,
+   "label": "setting-rally-line-type Dotted Solid = dotted",
+   "actMs": 18,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 71,
-   "ticks": 36
+   "tickGap": 72,
+   "ticks": 35
   },
   {
-   "label": "setting-gfx-sharpen OffLowMediumHigh = low",
-   "actMs": 32,
-   "maxLong": 0,
-   "longCount": 0,
-   "tickGap": 71,
-   "ticks": 36
-  },
-  {
-   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 900",
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = high",
    "actMs": 33,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 71,
+   "tickGap": 72,
    "ticks": 35
   },
   {
-   "label": "setting-fps-target Auto (110 Hz)305060727590100120144165180 = 72",
-   "actMs": 8,
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = 50",
+   "actMs": 30,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 71,
-   "ticks": 34
+   "tickGap": 72,
+   "ticks": 35
   },
   {
-   "label": "Gameplay",
-   "actMs": 152,
+   "label": "2 Group 2: empty",
+   "actMs": 51,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 71,
-   "ticks": 38
+   "tickGap": 72,
+   "ticks": 35
   },
   {
-   "label": "Use shared link",
+   "label": "5 Group 5: empty",
+   "actMs": 69,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 72,
+   "ticks": 35
+  },
+  {
+   "label": "P Popup group P: empty",
    "actMs": 59,
    "maxLong": 0,
    "longCount": 0,
+   "tickGap": 72,
+   "ticks": 36
+  },
+  {
+   "label": "btn-view-2d 2D 2D view (Space: team colours, hold Space: 3D)",
+   "actMs": 53,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "Keybinds",
+   "actMs": 67,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 36
+  },
+  {
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/flying",
+   "actMs": 27,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "setting-show-rally-lines Buildings Bu = buildings",
+   "actMs": 40,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "setting-show-rally-lines Buildings Bu = buildings_units",
+   "actMs": 30,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "Barracks",
+   "actMs": 63,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "btn-minimap ▼",
+   "actMs": 46,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "9 Group 9: empty",
+   "actMs": 61,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "I",
+   "actMs": 61,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 35
+  },
+  {
+   "label": "P",
+   "actMs": 69,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 71,
+   "ticks": 36
+  },
+  {
+   "label": "btn-default-auto-upgrade L+New: OFF",
+   "actMs": 57,
+   "maxLong": 0,
+   "longCount": 0,
    "tickGap": 70,
    "ticks": 35
   },
   {
-   "label": "setting-gfx-outline (toggle back)",
-   "actMs": 85,
+   "label": "setting-selection-outline-see-through (toggle)",
+   "actMs": 77,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 70,
-   "ticks": 37
+   "ticks": 36
   },
   {
-   "label": "setting-gfx-bloom (toggle)",
+   "label": "setting-selection-outline-see-through (toggle back)",
    "actMs": 88,
    "maxLong": 0,
    "longCount": 0,
@@ -1057,96 +872,316 @@
    "ticks": 36
   },
   {
-   "label": "setting-gfx-sharpen OffLowMediumHigh = high",
-   "actMs": 27,
+   "label": "setting-gfx-outline (toggle back)",
+   "actMs": 70,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 70,
+   "ticks": 36
+  },
+  {
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 900",
+   "actMs": 34,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 70,
    "ticks": 35
   },
   {
-   "label": "key h",
-   "actMs": 18,
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.75",
+   "actMs": 21,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 70,
    "ticks": 35
   },
   {
-   "label": "key F1",
-   "actMs": 15,
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = 75",
+   "actMs": 32,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 70,
+   "ticks": 35
+  },
+  {
+   "label": "⚡ Draining 💀 into energy (click to toggle; both: half each)",
+   "actMs": 86,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 70,
+   "ticks": 37
+  },
+  {
+   "label": "4 Group 4: empty",
+   "actMs": 66,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 70,
+   "ticks": 35
+  },
+  {
+   "label": "★",
+   "actMs": 87,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 70,
+   "ticks": 36
+  },
+  {
+   "label": "key 2",
+   "actMs": 4,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 70,
+   "ticks": 35
+  },
+  {
+   "label": "btn-view-2d5 2.5D 2D view in team colours only (Space)",
+   "actMs": 66,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
    "ticks": 36
   },
   {
    "label": "btn-view-2d5 2.5D",
-   "actMs": 58,
+   "actMs": 65,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 69,
    "ticks": 35
   },
   {
-   "label": "setting-gfx-grade (toggle)",
-   "actMs": 110,
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = low",
+   "actMs": 19,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
+   "ticks": 34
+  },
+  {
+   "label": "setting-gfx-sharpen OffLowMediumHigh = false",
+   "actMs": 37,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 69,
    "ticks": 36
   },
   {
-   "label": "5",
-   "actMs": 102,
+   "label": "setting-render-max-height 720p900p1080p1440p2160p (4K)Native (no c = 1440",
+   "actMs": 40,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 69,
-   "ticks": 37
+   "ticks": 36
   },
   {
-   "label": "setting-show-selection-outlines All Units = units",
-   "actMs": 36,
+   "label": "setting-gfx-resolution 100%85%75%67%50% = 0.5",
+   "actMs": 46,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
+   "ticks": 36
+  },
+  {
+   "label": "setting-fps-target Auto (105 Hz)305060727590100120144165180 = 30",
+   "actMs": 17,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
+   "ticks": 34
+  },
+  {
+   "label": "U Popup group U: empty",
+   "actMs": 76,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
+   "ticks": 35
+  },
+  {
+   "label": "O",
+   "actMs": 85,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 69,
+   "ticks": 36
+  },
+  {
+   "label": "btn-refresh-statsmap Refresh",
+   "actMs": 344,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 40
+  },
+  {
+   "label": "setting-range-through Behind objectsThrough objects = true",
+   "actMs": 29,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 35
+  },
+  {
+   "label": "setting-gold-mine-text (toggle)",
+   "actMs": 93,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 68,
    "ticks": 36
   },
   {
-   "label": "R",
-   "actMs": 104,
+   "label": "setting-rally-line-type Dotted Solid = solid",
+   "actMs": 31,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 68,
-   "ticks": 36
+   "ticks": 35
   },
   {
-   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/norm",
-   "actMs": 26,
+   "label": "setting-selection-outline-type Dotted Solid = solid",
+   "actMs": 40,
    "maxLong": 0,
    "longCount": 0,
-   "tickGap": 66,
+   "tickGap": 68,
    "ticks": 35
   },
   {
    "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = msaa_fxaa",
-   "actMs": 31,
+   "actMs": 28,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 35
+  },
+  {
+   "label": "setting-gfx-bloom (toggle)",
+   "actMs": 89,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 36
+  },
+  {
+   "label": "setting-gfx-sharpen OffLowMediumHigh = low",
+   "actMs": 22,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 34
+  },
+  {
+   "label": "key Control+a",
+   "actMs": 37,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 68,
+   "ticks": 35
+  },
+  {
+   "label": "statsmap-key unit/normunit/fastunit/tankunit/bossunit Stats map entry = unit/tank",
+   "actMs": 25,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 67,
+   "ticks": 35
+  },
+  {
+   "label": "btn-render-range NoneTurretsUnitsTurrets + unitsBuildings = 2",
+   "actMs": 30,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 67,
+   "ticks": 36
+  },
+  {
+   "label": "setting-range-team Selected thingsAll team things = team",
+   "actMs": 28,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 67,
+   "ticks": 35
+  },
+  {
+   "label": "Objectives",
+   "actMs": 53,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 67,
+   "ticks": 35
+  },
+  {
+   "label": "O Popup group O: empty",
+   "actMs": 63,
    "maxLong": 0,
    "longCount": 0,
    "tickGap": 66,
    "ticks": 35
   },
   {
-   "label": "▸ Expand ⚡/ s",
-   "error": "locator.evaluate: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-survey-id=\"s105_1hj42\"]')\u001b[22m\n"
+   "label": "btn-level-visibility EverythingBuildingsOff = 2",
+   "actMs": 22,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 65,
+   "ticks": 34
   },
   {
-   "label": "⚡ Draining 💀 into energy (click to toggle; both: half each)",
-   "error": "locator.evaluate: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-survey-id=\"s87_53vxq\"]')\u001b[22m\n"
+   "label": "6 Group 6: empty",
+   "actMs": 72,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 65,
+   "ticks": 35
   },
   {
-   "label": "★",
-   "error": "locator.evaluate: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-survey-id=\"s88_63qdw\"]')\u001b[22m\n"
+   "label": "▾",
+   "actMs": 84,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 65,
+   "ticks": 37
+  },
+  {
+   "label": "key h",
+   "actMs": 14,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 65,
+   "ticks": 35
+  },
+  {
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = off",
+   "actMs": 31,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 64,
+   "ticks": 36
+  },
+  {
+   "label": "setting-gfx-ao OffLow (half res)High (full res) = off",
+   "actMs": 28,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 64,
+   "ticks": 35
+  },
+  {
+   "label": "setting-gfx-aa OffFXAAMSAAMSAA + FXAA = fxaa",
+   "actMs": 16,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 63,
+   "ticks": 34
+  },
+  {
+   "label": "setting-gfx-sharpen OffLowMediumHigh = high",
+   "actMs": 31,
+   "maxLong": 0,
+   "longCount": 0,
+   "tickGap": 62,
+   "ticks": 35
   }
  ]
 }

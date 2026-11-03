@@ -364,6 +364,14 @@ function _simHeapAllocAutoImpl(Type, n, clear = true) {
 }
 // Once per tick (gameTick): freed arrays that nothing can still read go
 // back to the free blocks.
+function simHeapSetupDone() {
+    if (!_simHeap.ready) return;
+    if (typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
+    // Setup can replace large tables several times before any tick runs.
+    // At this quiescent boundary retire those old allocations before play,
+    // rather than holding both copies through the first gameplay ticks.
+    for (let k = 0; k < SIM_HEAP_FREE_TICKS; k++) simHeapTick();
+}
 function simHeapTick() {
     const H = _simHeap;
     H.clock++;

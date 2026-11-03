@@ -122,7 +122,7 @@ unsafe fn g<T: Copy>(p: *const T, i: usize) -> T { *p.add(i) }
 #[inline(always)]
 unsafe fn s<T>(p: *mut T, i: usize, v: T) { *p.add(i) = v; }
 #[inline(always)]
-fn cdiv(a: i32, b: i32) -> i32 { (a + b - 1) / b }
+fn cdiv(a: i32, b: i32) -> i32 { ((a.max(0) as u32 + b.max(1) as u32 - 1) / b.max(1) as u32) as i32 }
 /// Union-find's root (a set's root its smallest member), halving the way.
 #[inline(always)]
 unsafe fn find(uf: *mut i32, mut x: i32) -> i32 {
@@ -150,7 +150,9 @@ pub unsafe extern "C" fn k_navg(a: u32, _chunk: i32) {
         return;
     }
     let (w, h, c, cw, ch, nc, nm) = (k.i(1), k.i(2), k.i(3), k.i(4), k.i(5), k.i(6), k.i(7));
-    let cap = b.hv(H_CAP);
+    // Slots need not have a rounded byte length. Scratch must stay aligned
+    // even for the builders' measured capacity (which includes 10% slack).
+    let cap = b.hv(H_CAP) & !63;
     b.hs(H_TEMP, cap);
     match k.i(0) {
         1 => nodes_finish(&b, nc, cw, c, nm),
@@ -293,6 +295,7 @@ unsafe fn parts_finish(b: &B, w: i32, h: i32, nc: i32, per: i32, atlas: bool) {
 /// every level (anc), each node's exit nodes (dnodes by dno, with each exit
 /// node's place: didx), the route costs' places (rco, rc) and their jobs.
 unsafe fn atlas_levels(b: &B, cw: i32, ch: i32, _nc: i32) {
+    let cw = cw.max(1);
     let np = b.hv(H_NP).max(0) as usize;
     let k = b.hv(H_K).max(0) as usize;
     if np == 0 { return; }

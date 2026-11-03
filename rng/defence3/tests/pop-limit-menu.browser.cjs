@@ -38,18 +38,18 @@ const server = http.createServer((req, res) => {
         console.log('default', JSON.stringify({ map: first.map, value: first.value, n: first.options.length, last: first.options.at(-1) }));
         assert.equal(first.tag, 'SELECT');
         assert.equal(first.buildingsInput, false, 'no separate Max Buildings control');
-        assert.deepEqual(first.maps, [16, 32, 64, 128, 256, 512, 1024, 2048], 'power-of-two map sizes');
+        assert.deepEqual(first.maps, [16, 32, 64, 128, 256, 512, 1024], 'map dropdown stops at 1024');
         for (const o of first.options) assert.equal(o.v & (o.v - 1), 0, 'power-of-two population: ' + o.v);
         assert.deepEqual(first.options.map(o => o.v), Array.from({ length: 18 }, (_, k) => 2 ** (k + 3)), 'populations 8 to 2^20');
-        assert.equal(first.value, '256');
-        await page.selectOption('#cfg-mapsize', '2048');
+        assert.equal(first.value, '131072');
+        await page.selectOption('#cfg-mapsize', '1024');
         const big = await menu();
         assert.deepEqual(big.options, first.options, 'the same choices on every map');
         assert.equal(big.value, first.value, 'the chosen population kept');
         // (An older export: map 2000, population 500000: the nearest choices.)
         await page.evaluate(() => applyMainMenuSettingsSnapshot({ lobby: { numbers: { 'cfg-max-pop': 500000 }, selects: { 'cfg-mapsize': '2000' } } }));
         const old = await menu();
-        assert.equal(old.map, '2048'); assert.equal(old.value, '524288');
+        assert.equal(old.map, '1024'); assert.equal(old.value, '524288');
         // (A match: the limits and the reservations follow the population.)
         await page.selectOption('#cfg-mapsize', '256');
         await page.selectOption('#cfg-max-pop', '16384');
@@ -63,14 +63,13 @@ const server = http.createServer((req, res) => {
         assert.equal(run.limit, run.budget, 'the budget\'s limit, held by the structure pool');
         assert.ok(run.memory >= run.budget, 'the pool holds it');
         await page.waitForFunction(() => typeof simClientStats === 'function' && simClientStats().appliedTick >= 10, {}, { timeout: 120000 });
-        const hud = await page.evaluate(() => ({ tick: simClientStats().appliedTick, text: document.body.innerText }));
+        const hud = await page.evaluate(() => ({ tick: simClientStats().appliedTick, population: _hudEls.pop.querySelector('.lf-tip').textContent }));
         assert.ok(hud.tick >= 10, 'the match runs');
-        assert.ok(/16,?384|16\.4k|16k/i.test(hud.text), "the match's population on screen");
-        // (A choice that does not fit (8 teams of 2^20 on 2048x2048): the match's
+        assert.equal(Number(hud.population.split('/').at(-1).trim()),run.pop,"the match's population in the HUD tooltip");
+        // (A choice that does not fit (8 teams of 2^20 on 1024x1024): the match's
         // population is the budget's, shown and used in the game.)
-        const fit = await page.evaluate(() => ({ p: memoryBudgetPop(1048576, 8, 2048 * 2048), b: memoryBudgetBuildings(memoryBudgetPop(1048576, 8, 2048 * 2048), 8, 2048 * 2048) }));
-        console.log('8 teams, 2^20 on 2048:', JSON.stringify(fit));
-        assert.ok(fit.p < 1048576 && fit.b >= 64, 'lowered until it fits');
+        const fit = await page.evaluate(() => ({ p: memoryBudgetPop(1048576, 8, 1024 * 1024), b: memoryBudgetBuildings(memoryBudgetPop(1048576, 8, 1024 * 1024), 8, 1024 * 1024) }));
+        assert.equal(fit.p, 131072); assert.equal(fit.b, 8192);
         assert.deepEqual(errors, []);
         console.log('PASS: static power-of-two population dropdown and map sizes, old exports snapped, match limits derived for the map and shown');
     } finally { await browser.close(); server.close(); }

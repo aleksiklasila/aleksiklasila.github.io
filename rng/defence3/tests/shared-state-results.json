@@ -1,6 +1,6 @@
 {
-  "baseline": "7257a9ed3360d33ac26a5df56743b65d1066bf87",
-  "node": "v22.20.0",
+  "baseline": "dd991e5f9336c91d3a947dcc50199ad6c88e5881",
+  "node": "v24.22.1",
   "cpu": "AMD Ryzen 7 4800H with Radeon Graphics         ",
   "results": [
     {
@@ -12,55 +12,55 @@
       "moving": false,
       "combat": false,
       "instrumented": false,
-      "units": 19288,
+      "units": 16384,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 2806,
       "map": [
-        120,
-        120
+        128,
+        128
       ],
       "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
+      "hash": "b8907182",
+      "exact": "faf3f778",
       "tickMs": {
-        "mean": 6.080962499999941,
-        "median": 5.842399999999543,
-        "p95": 8.300599999998667,
-        "p99": 8.6903999999995
+        "mean": 5.1866649999998575,
+        "median": 4.897399999999834,
+        "p95": 7.203799999999319,
+        "p99": 7.576900000000023
       },
       "frameMs": {
-        "mean": 24.786542500000017,
-        "median": 23.790500000000065,
-        "p95": 28.464899999999943,
-        "p99": 28.903299999999945
+        "mean": 37.152990000000045,
+        "median": 37.26879999999983,
+        "p95": 41.53120000000126,
+        "p99": 42.85599999999977
       },
       "separationMs": {
-        "mean": 0.0020274999998491695,
-        "median": 0.0018999999992956873,
+        "mean": 0.0021225000000413274,
+        "median": 0.0020999999997002305,
         "p95": 0.0030000000006111804,
         "p99": 0.0030000000006111804
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 1096,
+          "moved": 0,
           "attacking": 0,
-          "working": 302,
+          "working": 0,
           "pending": 0
         },
         {
           "tick": 41,
-          "moved": 1252,
+          "moved": 0,
           "attacking": 0,
-          "working": 361,
+          "working": 0,
           "pending": 0
         },
         {
           "tick": 60,
-          "moved": 1183,
+          "moved": 0,
           "attacking": 0,
-          "working": 361,
+          "working": 0,
           "pending": 0
         }
       ],
@@ -75,685 +75,685 @@
       "moving": false,
       "combat": false,
       "instrumented": false,
-      "units": 19288,
+      "units": 16384,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 2806,
       "map": [
-        120,
-        120
+        128,
+        128
       ],
       "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
+      "hash": "b8907182",
+      "exact": "faf3f778",
       "tickMs": {
-        "mean": 6.107947500000023,
-        "median": 6.353900000000067,
-        "p95": 8.166199999999662,
-        "p99": 8.365899999999783
+        "mean": 5.290062499999976,
+        "median": 5.191100000000006,
+        "p95": 6.892399999999725,
+        "p99": 10.732899999999972
       },
       "frameMs": {
-        "mean": 25.224604999999997,
-        "median": 24.070200000000114,
-        "p95": 31.368099999999686,
-        "p99": 31.810899999999492
+        "mean": 39.69759750000007,
+        "median": 40.097500000000764,
+        "p95": 44.72409999999991,
+        "p99": 47.050500000000284
       },
       "separationMs": {
-        "mean": 0.002084999999942738,
-        "median": 0.0020999999997002305,
-        "p95": 0.0026000000007115887,
-        "p99": 0.002800000000206637
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 1096,
-          "attacking": 0,
-          "working": 302,
-          "pending": 0
-        },
-        {
-          "tick": 41,
-          "moved": 1252,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        },
-        {
-          "tick": 60,
-          "moved": 1183,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "helpers7",
-      "fixture": "10000.json",
-      "ticks": 40,
-      "helpers": 7,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 19288,
-      "actualHelpers": 7,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        120,
-        120
-      ],
-      "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
-      "tickMs": {
-        "mean": 3.3470000000000937,
-        "median": 3.2620000000006257,
-        "p95": 5.033800000000156,
-        "p99": 5.661399999999958
-      },
-      "frameMs": {
-        "mean": 19.450970000000005,
-        "median": 18.907199999999648,
-        "p95": 22.95679999999993,
-        "p99": 23.57459999999992
-      },
-      "separationMs": {
-        "mean": 0.0016550000000279397,
-        "median": 0.0016999999998006388,
-        "p95": 0.0024000000003070454,
-        "p99": 0.002899999999499414
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 1096,
-          "attacking": 0,
-          "working": 302,
-          "pending": 0
-        },
-        {
-          "tick": 41,
-          "moved": 1252,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        },
-        {
-          "tick": 60,
-          "moved": 1183,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "baseline",
-      "fixture": "50000-200.json",
-      "ticks": 20,
-      "helpers": null,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 82287,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        200,
-        200
-      ],
-      "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
-      "tickMs": {
-        "mean": 20.308854999999948,
-        "median": 20.13589999999931,
-        "p95": 25.90889999999854,
-        "p99": 25.90889999999854
-      },
-      "frameMs": {
-        "mean": 105.99101499999998,
-        "median": 103.6293999999998,
-        "p95": 121.59720000000016,
-        "p99": 121.59720000000016
-      },
-      "separationMs": {
-        "mean": 0.00220500000004904,
-        "median": 0.0021999999989930075,
+        "mean": 0.0022700000000327237,
+        "median": 0.002199999999902502,
         "p95": 0.0030999999999039574,
-        "p99": 0.0030999999999039574
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 3118,
-          "attacking": 0,
-          "working": 208,
-          "pending": 0
-        },
-        {
-          "tick": 40,
-          "moved": 3642,
-          "attacking": 0,
-          "working": 345,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "columns",
-      "fixture": "50000-200.json",
-      "ticks": 20,
-      "helpers": 0,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 82287,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        200,
-        200
-      ],
-      "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
-      "tickMs": {
-        "mean": 21.697694999999932,
-        "median": 22.094100000000253,
-        "p95": 29.47700000000077,
-        "p99": 29.47700000000077
-      },
-      "frameMs": {
-        "mean": 101.98100500000001,
-        "median": 102.41049999999996,
-        "p95": 112.63869999999952,
-        "p99": 112.63869999999952
-      },
-      "separationMs": {
-        "mean": 0.0021450000002005256,
-        "median": 0.0020000000004074536,
-        "p95": 0.003500000000713044,
-        "p99": 0.003500000000713044
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 3118,
-          "attacking": 0,
-          "working": 208,
-          "pending": 0
-        },
-        {
-          "tick": 40,
-          "moved": 3642,
-          "attacking": 0,
-          "working": 345,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "helpers7",
-      "fixture": "50000-200.json",
-      "ticks": 20,
-      "helpers": 7,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 82287,
-      "actualHelpers": 7,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        200,
-        200
-      ],
-      "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
-      "tickMs": {
-        "mean": 8.55735999999979,
-        "median": 8.065500000000611,
-        "p95": 11.24539999999979,
-        "p99": 11.24539999999979
-      },
-      "frameMs": {
-        "mean": 77.5266950000001,
-        "median": 76.12880000000041,
-        "p95": 86.94909999999982,
-        "p99": 86.94909999999982
-      },
-      "separationMs": {
-        "mean": 0.0020299999999224385,
-        "median": 0.0020000000004074536,
-        "p95": 0.002800000000206637,
-        "p99": 0.002800000000206637
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 3118,
-          "attacking": 0,
-          "working": 208,
-          "pending": 0
-        },
-        {
-          "tick": 40,
-          "moved": 3642,
-          "attacking": 0,
-          "working": 345,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "baseline",
-      "fixture": "10000-160.json",
-      "ticks": 60,
-      "helpers": null,
-      "moving": true,
-      "combat": false,
-      "instrumented": false,
-      "units": 19999,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 5596,
-      "map": [
-        160,
-        160
-      ],
-      "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
-      "tickMs": {
-        "mean": 25.42359666666674,
-        "median": 24.0575000000008,
-        "p95": 30.96849999999904,
-        "p99": 91.72479999999996
-      },
-      "frameMs": {
-        "mean": 29.073043333333302,
-        "median": 28.206599999999526,
-        "p95": 35.17139999999927,
-        "p99": 43.34320000000025
-      },
-      "separationMs": {
-        "mean": 0.0021250000000084886,
-        "median": 0.0019000000011146767,
-        "p95": 0.0034000000005107722,
-        "p99": 0.004399999999805004
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 10642,
-          "attacking": 0,
-          "working": 176,
-          "pending": 110
-        },
-        {
-          "tick": 41,
-          "moved": 15594,
-          "attacking": 0,
-          "working": 195,
-          "pending": 4131
-        },
-        {
-          "tick": 61,
-          "moved": 18224,
-          "attacking": 0,
-          "working": 197,
-          "pending": 6434
-        },
-        {
-          "tick": 80,
-          "moved": 18147,
-          "attacking": 0,
-          "working": 201,
-          "pending": 6434
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "columns",
-      "fixture": "10000-160.json",
-      "ticks": 60,
-      "helpers": 0,
-      "moving": true,
-      "combat": false,
-      "instrumented": false,
-      "units": 19999,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 5596,
-      "map": [
-        160,
-        160
-      ],
-      "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
-      "tickMs": {
-        "mean": 24.953381666666655,
-        "median": 23.798499999999876,
-        "p95": 29.148400000000038,
-        "p99": 84.72090000000026
-      },
-      "frameMs": {
-        "mean": 28.51045833333337,
-        "median": 27.570400000000518,
-        "p95": 34.71110000000044,
-        "p99": 37.47360000000026
-      },
-      "separationMs": {
-        "mean": 0.0021183333332677043,
-        "median": 0.0018999999992956873,
-        "p95": 0.0036000000000058208,
-        "p99": 0.0039999999999054126
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 10642,
-          "attacking": 0,
-          "working": 176,
-          "pending": 110
-        },
-        {
-          "tick": 41,
-          "moved": 15594,
-          "attacking": 0,
-          "working": 195,
-          "pending": 4131
-        },
-        {
-          "tick": 61,
-          "moved": 18224,
-          "attacking": 0,
-          "working": 197,
-          "pending": 6434
-        },
-        {
-          "tick": 80,
-          "moved": 18147,
-          "attacking": 0,
-          "working": 201,
-          "pending": 6434
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 0,
-      "mode": "helpers7",
-      "fixture": "10000-160.json",
-      "ticks": 60,
-      "helpers": 7,
-      "moving": true,
-      "combat": false,
-      "instrumented": false,
-      "units": 19999,
-      "actualHelpers": 7,
-      "gameOver": false,
-      "buildings": 5596,
-      "map": [
-        160,
-        160
-      ],
-      "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
-      "tickMs": {
-        "mean": 7.834229999999964,
-        "median": 6.8213000000005195,
-        "p95": 11.179999999999382,
-        "p99": 46.25619999999981
-      },
-      "frameMs": {
-        "mean": 21.7775116666667,
-        "median": 20.961600000000544,
-        "p95": 26.772100000000137,
-        "p99": 30.998000000000502
-      },
-      "separationMs": {
-        "mean": 0.0016083333334336203,
-        "median": 0.0016000000005078618,
-        "p95": 0.0024000000003070454,
-        "p99": 0.0027000000000043656
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 10642,
-          "attacking": 0,
-          "working": 176,
-          "pending": 110
-        },
-        {
-          "tick": 41,
-          "moved": 15594,
-          "attacking": 0,
-          "working": 195,
-          "pending": 4131
-        },
-        {
-          "tick": 61,
-          "moved": 18224,
-          "attacking": 0,
-          "working": 197,
-          "pending": 6434
-        },
-        {
-          "tick": 80,
-          "moved": 18147,
-          "attacking": 0,
-          "working": 201,
-          "pending": 6434
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 1,
-      "mode": "helpers7",
-      "fixture": "10000.json",
-      "ticks": 40,
-      "helpers": 7,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 19288,
-      "actualHelpers": 7,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        120,
-        120
-      ],
-      "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
-      "tickMs": {
-        "mean": 3.306830000000059,
-        "median": 3.2310999999999694,
-        "p95": 4.636199999999917,
-        "p99": 6.074399999999514
-      },
-      "frameMs": {
-        "mean": 19.845262499999897,
-        "median": 18.992299999999886,
-        "p95": 25.133199999999306,
-        "p99": 25.79110000000037
-      },
-      "separationMs": {
-        "mean": 0.0016549999999597275,
-        "median": 0.0016000000005078618,
-        "p95": 0.002299999999195279,
-        "p99": 0.002500000000509317
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 1096,
-          "attacking": 0,
-          "working": 302,
-          "pending": 0
-        },
-        {
-          "tick": 41,
-          "moved": 1252,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        },
-        {
-          "tick": 60,
-          "moved": 1183,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 1,
-      "mode": "columns",
-      "fixture": "10000.json",
-      "ticks": 40,
-      "helpers": 0,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 19288,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        120,
-        120
-      ],
-      "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
-      "tickMs": {
-        "mean": 6.09248249999996,
-        "median": 5.867900000000191,
-        "p95": 9.115300000000389,
-        "p99": 10.012700000000223
-      },
-      "frameMs": {
-        "mean": 24.862844999999993,
-        "median": 24.356699999999364,
-        "p95": 29.49499999999989,
-        "p99": 32.53409999999985
-      },
-      "separationMs": {
-        "mean": 0.0022499999999809005,
-        "median": 0.0020999999997002305,
-        "p95": 0.0033999999996012775,
-        "p99": 0.0036000000000058208
-      },
-      "populations": [
-        {
-          "tick": 21,
-          "moved": 1096,
-          "attacking": 0,
-          "working": 302,
-          "pending": 0
-        },
-        {
-          "tick": 41,
-          "moved": 1252,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        },
-        {
-          "tick": 60,
-          "moved": 1183,
-          "attacking": 0,
-          "working": 361,
-          "pending": 0
-        }
-      ],
-      "phaseMs": {}
-    },
-    {
-      "repeat": 1,
-      "mode": "baseline",
-      "fixture": "10000.json",
-      "ticks": 40,
-      "helpers": null,
-      "moving": false,
-      "combat": false,
-      "instrumented": false,
-      "units": 19288,
-      "actualHelpers": 0,
-      "gameOver": false,
-      "buildings": 2806,
-      "map": [
-        120,
-        120
-      ],
-      "tick": 60,
-      "hash": "8e38085d",
-      "exact": "d96a28ac",
-      "tickMs": {
-        "mean": 6.1464725000000495,
-        "median": 6.105900000000474,
-        "p95": 8.286700000000565,
-        "p99": 8.832400000000234
-      },
-      "frameMs": {
-        "mean": 24.72655250000014,
-        "median": 23.69629999999961,
-        "p95": 28.060699999999997,
-        "p99": 28.11959999999999
-      },
-      "separationMs": {
-        "mean": 0.002282499999932952,
-        "median": 0.002200000000811997,
-        "p95": 0.003800000000410364,
         "p99": 0.003800000000410364
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 1096,
+          "moved": 0,
           "attacking": 0,
-          "working": 302,
+          "working": 0,
           "pending": 0
         },
         {
           "tick": 41,
-          "moved": 1252,
+          "moved": 0,
           "attacking": 0,
-          "working": 361,
+          "working": 0,
           "pending": 0
         },
         {
           "tick": 60,
-          "moved": 1183,
+          "moved": 0,
           "attacking": 0,
-          "working": 361,
+          "working": 0,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "helpers7",
+      "fixture": "10000.json",
+      "ticks": 40,
+      "helpers": 7,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 7,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 60,
+      "hash": "b8907182",
+      "exact": "faf3f778",
+      "tickMs": {
+        "mean": 2.92349999999999,
+        "median": 2.623199999999997,
+        "p95": 4.310500000000047,
+        "p99": 8.600400000000263
+      },
+      "frameMs": {
+        "mean": 32.73543499999998,
+        "median": 32.157500000000255,
+        "p95": 42.43319999999994,
+        "p99": 44.309999999999945
+      },
+      "separationMs": {
+        "mean": 0.0018875000000093678,
+        "median": 0.001900000000205182,
+        "p95": 0.002800000000206637,
+        "p99": 0.003100000000813452
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 41,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 60,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "baseline",
+      "fixture": "50000-200.json",
+      "ticks": 20,
+      "helpers": null,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 100000,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        256,
+        256
+      ],
+      "tick": 40,
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
+      "tickMs": {
+        "mean": 28.36457000000046,
+        "median": 31.53399999999965,
+        "p95": 35.32760000000053,
+        "p99": 35.32760000000053
+      },
+      "frameMs": {
+        "mean": 240.89487000000008,
+        "median": 240.13609999999971,
+        "p95": 256.77080000000205,
+        "p99": 256.77080000000205
+      },
+      "separationMs": {
+        "mean": 0.0022650000000794535,
+        "median": 0.00210000000151922,
+        "p95": 0.0072000000000116415,
+        "p99": 0.0072000000000116415
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 3271,
+          "attacking": 0,
+          "working": 252,
+          "pending": 0
+        },
+        {
+          "tick": 40,
+          "moved": 3841,
+          "attacking": 0,
+          "working": 266,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "columns",
+      "fixture": "50000-200.json",
+      "ticks": 20,
+      "helpers": 0,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 100000,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        256,
+        256
+      ],
+      "tick": 40,
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
+      "tickMs": {
+        "mean": 27.47079500000018,
+        "median": 29.042100000000573,
+        "p95": 34.71019999999953,
+        "p99": 34.71019999999953
+      },
+      "frameMs": {
+        "mean": 240.23075999999983,
+        "median": 243.08300000000054,
+        "p95": 249.3672000000006,
+        "p99": 249.3672000000006
+      },
+      "separationMs": {
+        "mean": 0.0018049999999675491,
+        "median": 0.0018000000000029104,
+        "p95": 0.0026000000016210834,
+        "p99": 0.0026000000016210834
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 3271,
+          "attacking": 0,
+          "working": 252,
+          "pending": 0
+        },
+        {
+          "tick": 40,
+          "moved": 3841,
+          "attacking": 0,
+          "working": 266,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "helpers7",
+      "fixture": "50000-200.json",
+      "ticks": 20,
+      "helpers": 7,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 100000,
+      "actualHelpers": 7,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        256,
+        256
+      ],
+      "tick": 40,
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
+      "tickMs": {
+        "mean": 8.132605000000058,
+        "median": 8.083800000000338,
+        "p95": 10.743599999999788,
+        "p99": 10.743599999999788
+      },
+      "frameMs": {
+        "mean": 206.7190950000002,
+        "median": 206.6244999999999,
+        "p95": 225.4397000000008,
+        "p99": 225.4397000000008
+      },
+      "separationMs": {
+        "mean": 0.0017899999998007843,
+        "median": 0.0018000000000029104,
+        "p95": 0.002200000000811997,
+        "p99": 0.002200000000811997
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 3271,
+          "attacking": 0,
+          "working": 252,
+          "pending": 0
+        },
+        {
+          "tick": 40,
+          "moved": 3841,
+          "attacking": 0,
+          "working": 266,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "baseline",
+      "fixture": "10000-160.json",
+      "ticks": 60,
+      "helpers": null,
+      "moving": true,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 5596,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 80,
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
+      "tickMs": {
+        "mean": 25.199355000000043,
+        "median": 24.331100000001243,
+        "p95": 27.85909999999967,
+        "p99": 83.1846000000005
+      },
+      "frameMs": {
+        "mean": 40.73742166666668,
+        "median": 40.58320000000094,
+        "p95": 45.98159999999916,
+        "p99": 48.70709999999963
+      },
+      "separationMs": {
+        "mean": 0.0018433333334542112,
+        "median": 0.0018000000000029104,
+        "p95": 0.0027000000009138603,
+        "p99": 0.0031999999991967343
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 10755,
+          "attacking": 0,
+          "working": 0,
+          "pending": 120
+        },
+        {
+          "tick": 41,
+          "moved": 14136,
+          "attacking": 0,
+          "working": 0,
+          "pending": 2516
+        },
+        {
+          "tick": 61,
+          "moved": 15582,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3845
+        },
+        {
+          "tick": 80,
+          "moved": 15485,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3858
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "columns",
+      "fixture": "10000-160.json",
+      "ticks": 60,
+      "helpers": 0,
+      "moving": true,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 5596,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 80,
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
+      "tickMs": {
+        "mean": 24.839678333333282,
+        "median": 24.23490000000038,
+        "p95": 25.94799999999941,
+        "p99": 82.8400999999999
+      },
+      "frameMs": {
+        "mean": 40.85773000000004,
+        "median": 40.87249999999949,
+        "p95": 45.29290000000037,
+        "p99": 49.638600000000224
+      },
+      "separationMs": {
+        "mean": 0.0020249999999729577,
+        "median": 0.0020000000004074536,
+        "p95": 0.002800000000206637,
+        "p99": 0.003200000000106229
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 10755,
+          "attacking": 0,
+          "working": 0,
+          "pending": 120
+        },
+        {
+          "tick": 41,
+          "moved": 14136,
+          "attacking": 0,
+          "working": 0,
+          "pending": 2516
+        },
+        {
+          "tick": 61,
+          "moved": 15582,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3845
+        },
+        {
+          "tick": 80,
+          "moved": 15485,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3858
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 0,
+      "mode": "helpers7",
+      "fixture": "10000-160.json",
+      "ticks": 60,
+      "helpers": 7,
+      "moving": true,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 7,
+      "gameOver": false,
+      "buildings": 5596,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 80,
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
+      "tickMs": {
+        "mean": 9.992416666666676,
+        "median": 8.514599999999518,
+        "p95": 20.781700000000455,
+        "p99": 56.009599999999864
+      },
+      "frameMs": {
+        "mean": 34.995861666666684,
+        "median": 34.899500000000444,
+        "p95": 41.4400999999998,
+        "p99": 43.80420000000004
+      },
+      "separationMs": {
+        "mean": 0.001726666666665248,
+        "median": 0.0016999999998006388,
+        "p95": 0.002300000000104774,
+        "p99": 0.003200000000106229
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 10755,
+          "attacking": 0,
+          "working": 0,
+          "pending": 120
+        },
+        {
+          "tick": 41,
+          "moved": 14136,
+          "attacking": 0,
+          "working": 0,
+          "pending": 2516
+        },
+        {
+          "tick": 61,
+          "moved": 15582,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3845
+        },
+        {
+          "tick": 80,
+          "moved": 15485,
+          "attacking": 0,
+          "working": 0,
+          "pending": 3858
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 1,
+      "mode": "helpers7",
+      "fixture": "10000.json",
+      "ticks": 40,
+      "helpers": 7,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 7,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 60,
+      "hash": "b8907182",
+      "exact": "faf3f778",
+      "tickMs": {
+        "mean": 2.672235000000012,
+        "median": 2.698899999999867,
+        "p95": 4.166600000000017,
+        "p99": 4.320099999999911
+      },
+      "frameMs": {
+        "mean": 33.987747499999884,
+        "median": 33.662899999999354,
+        "p95": 40.815399999999954,
+        "p99": 41.38449999999921
+      },
+      "separationMs": {
+        "mean": 0.001932500000032178,
+        "median": 0.001900000000205182,
+        "p95": 0.0027000000000043656,
+        "p99": 0.002899999999499414
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 41,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 60,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 1,
+      "mode": "columns",
+      "fixture": "10000.json",
+      "ticks": 40,
+      "helpers": 0,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 60,
+      "hash": "b8907182",
+      "exact": "faf3f778",
+      "tickMs": {
+        "mean": 4.983430000000055,
+        "median": 4.832100000000082,
+        "p95": 7.049599999999828,
+        "p99": 8.621799999999894
+      },
+      "frameMs": {
+        "mean": 36.702297499999965,
+        "median": 36.70139999999992,
+        "p95": 42.676800000000185,
+        "p99": 43.046800000000076
+      },
+      "separationMs": {
+        "mean": 0.0020550000000071123,
+        "median": 0.002100000000154978,
+        "p95": 0.0033999999996012775,
+        "p99": 0.0037999999995008693
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 41,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 60,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        }
+      ],
+      "phaseMs": {}
+    },
+    {
+      "repeat": 1,
+      "mode": "baseline",
+      "fixture": "10000.json",
+      "ticks": 40,
+      "helpers": null,
+      "moving": false,
+      "combat": false,
+      "instrumented": false,
+      "units": 16384,
+      "actualHelpers": 0,
+      "gameOver": false,
+      "buildings": 2806,
+      "map": [
+        128,
+        128
+      ],
+      "tick": 60,
+      "hash": "b8907182",
+      "exact": "faf3f778",
+      "tickMs": {
+        "mean": 5.025470000000223,
+        "median": 4.917500000001382,
+        "p95": 6.69419999999991,
+        "p99": 6.7312999999994645
+      },
+      "frameMs": {
+        "mean": 37.96878499999989,
+        "median": 38.07510000000002,
+        "p95": 41.772399999999834,
+        "p99": 42.42820000000029
+      },
+      "separationMs": {
+        "mean": 0.002212500000041473,
+        "median": 0.001699999998891144,
+        "p95": 0.0030000000006111804,
+        "p99": 0.022399999999834108
+      },
+      "populations": [
+        {
+          "tick": 21,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 41,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
+          "pending": 0
+        },
+        {
+          "tick": 60,
+          "moved": 0,
+          "attacking": 0,
+          "working": 0,
           "pending": 0
         }
       ],
@@ -768,48 +768,48 @@
       "moving": false,
       "combat": false,
       "instrumented": false,
-      "units": 82287,
+      "units": 100000,
       "actualHelpers": 7,
       "gameOver": false,
       "buildings": 2806,
       "map": [
-        200,
-        200
+        256,
+        256
       ],
       "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
       "tickMs": {
-        "mean": 8.738955000000079,
-        "median": 8.301899999998568,
-        "p95": 12.086900000000242,
-        "p99": 12.086900000000242
+        "mean": 8.65961499999994,
+        "median": 8.707300000000032,
+        "p95": 10.98569999999927,
+        "p99": 10.98569999999927
       },
       "frameMs": {
-        "mean": 78.66044499999961,
-        "median": 78.11410000000069,
-        "p95": 86.58669999999984,
-        "p99": 86.58669999999984
+        "mean": 198.72571499999987,
+        "median": 197.04830000000038,
+        "p95": 212.85599999999977,
+        "p99": 212.85599999999977
       },
       "separationMs": {
-        "mean": 0.001839999999720021,
-        "median": 0.0017000000007101335,
-        "p95": 0.003999999998995918,
-        "p99": 0.003999999998995918
+        "mean": 0.0018349999998463317,
+        "median": 0.0018000000000029104,
+        "p95": 0.0024999999986903276,
+        "p99": 0.0024999999986903276
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 3118,
+          "moved": 3271,
           "attacking": 0,
-          "working": 208,
+          "working": 252,
           "pending": 0
         },
         {
           "tick": 40,
-          "moved": 3642,
+          "moved": 3841,
           "attacking": 0,
-          "working": 345,
+          "working": 266,
           "pending": 0
         }
       ],
@@ -824,48 +824,48 @@
       "moving": false,
       "combat": false,
       "instrumented": false,
-      "units": 82287,
+      "units": 100000,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 2806,
       "map": [
-        200,
-        200
+        256,
+        256
       ],
       "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
       "tickMs": {
-        "mean": 21.549265000000197,
-        "median": 20.42029999999977,
-        "p95": 30.521700000001147,
-        "p99": 30.521700000001147
+        "mean": 28.21276999999973,
+        "median": 29.999700000000303,
+        "p95": 38.39799999999923,
+        "p99": 38.39799999999923
       },
       "frameMs": {
-        "mean": 103.67504999999991,
-        "median": 102.87129999999888,
-        "p95": 112.08150000000023,
-        "p99": 112.08150000000023
+        "mean": 246.18285000000023,
+        "median": 246.92479999999887,
+        "p95": 260.3580000000002,
+        "p99": 260.3580000000002
       },
       "separationMs": {
-        "mean": 0.002444999999988795,
-        "median": 0.002599999999802094,
+        "mean": 0.0023600000000442377,
+        "median": 0.002500000000509317,
         "p95": 0.0036000000000058208,
         "p99": 0.0036000000000058208
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 3118,
+          "moved": 3271,
           "attacking": 0,
-          "working": 208,
+          "working": 252,
           "pending": 0
         },
         {
           "tick": 40,
-          "moved": 3642,
+          "moved": 3841,
           "attacking": 0,
-          "working": 345,
+          "working": 266,
           "pending": 0
         }
       ],
@@ -880,48 +880,48 @@
       "moving": false,
       "combat": false,
       "instrumented": false,
-      "units": 82287,
+      "units": 100000,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 2806,
       "map": [
-        200,
-        200
+        256,
+        256
       ],
       "tick": 40,
-      "hash": "51eaa63b",
-      "exact": "139f6a23",
+      "hash": "e9fd516a",
+      "exact": "7a7da83b",
       "tickMs": {
-        "mean": 20.61552499999998,
-        "median": 19.623999999999796,
-        "p95": 27.59939999999915,
-        "p99": 27.59939999999915
+        "mean": 28.405904999999258,
+        "median": 29.769599999999627,
+        "p95": 35.308100000002014,
+        "p99": 35.308100000002014
       },
       "frameMs": {
-        "mean": 106.89221000000016,
-        "median": 107.28470000000016,
-        "p95": 112.15990000000056,
-        "p99": 112.15990000000056
+        "mean": 244.5651550000006,
+        "median": 246.26540000000023,
+        "p95": 261.27340000000186,
+        "p99": 261.27340000000186
       },
       "separationMs": {
-        "mean": 0.002215000000069267,
-        "median": 0.0020999999997002305,
-        "p95": 0.004000000000814907,
-        "p99": 0.004000000000814907
+        "mean": 0.0019149999998262501,
+        "median": 0.0018999999992956873,
+        "p95": 0.0027000000009138603,
+        "p99": 0.0027000000009138603
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 3118,
+          "moved": 3271,
           "attacking": 0,
-          "working": 208,
+          "working": 252,
           "pending": 0
         },
         {
           "tick": 40,
-          "moved": 3642,
+          "moved": 3841,
           "attacking": 0,
-          "working": 345,
+          "working": 266,
           "pending": 0
         }
       ],
@@ -936,63 +936,63 @@
       "moving": true,
       "combat": false,
       "instrumented": false,
-      "units": 19999,
+      "units": 16384,
       "actualHelpers": 7,
       "gameOver": false,
       "buildings": 5596,
       "map": [
-        160,
-        160
+        128,
+        128
       ],
       "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
       "tickMs": {
-        "mean": 7.70293166666664,
-        "median": 6.740700000000288,
-        "p95": 10.931300000000192,
-        "p99": 49.14059999999972
+        "mean": 9.861564999999974,
+        "median": 8.028399999999237,
+        "p95": 20.198100000000522,
+        "p99": 52.36289999999963
       },
       "frameMs": {
-        "mean": 21.490718333333355,
-        "median": 20.92450000000008,
-        "p95": 25.728000000000065,
-        "p99": 35.96060000000034
+        "mean": 35.72478333333338,
+        "median": 35.33379999999943,
+        "p95": 43.637800000000425,
+        "p99": 46.839300000000094
       },
       "separationMs": {
-        "mean": 0.0015749999999873884,
-        "median": 0.0014000000001033186,
-        "p95": 0.002500000000509317,
-        "p99": 0.003100000000813452
+        "mean": 0.001760000000005372,
+        "median": 0.0016999999998006388,
+        "p95": 0.002800000000206637,
+        "p99": 0.003499999999803549
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 10642,
+          "moved": 10755,
           "attacking": 0,
-          "working": 176,
-          "pending": 110
+          "working": 0,
+          "pending": 120
         },
         {
           "tick": 41,
-          "moved": 15594,
+          "moved": 14136,
           "attacking": 0,
-          "working": 195,
-          "pending": 4131
+          "working": 0,
+          "pending": 2516
         },
         {
           "tick": 61,
-          "moved": 18224,
+          "moved": 15582,
           "attacking": 0,
-          "working": 197,
-          "pending": 6434
+          "working": 0,
+          "pending": 3845
         },
         {
           "tick": 80,
-          "moved": 18147,
+          "moved": 15485,
           "attacking": 0,
-          "working": 201,
-          "pending": 6434
+          "working": 0,
+          "pending": 3858
         }
       ],
       "phaseMs": {}
@@ -1006,63 +1006,63 @@
       "moving": true,
       "combat": false,
       "instrumented": false,
-      "units": 19999,
+      "units": 16384,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 5596,
       "map": [
-        160,
-        160
+        128,
+        128
       ],
       "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
       "tickMs": {
-        "mean": 25.126263333333327,
-        "median": 24.40729999999985,
-        "p95": 29.08430000000044,
-        "p99": 84.5655999999999
+        "mean": 24.701093333333368,
+        "median": 23.923499999999876,
+        "p95": 27.352200000000266,
+        "p99": 78.23939999999993
       },
       "frameMs": {
-        "mean": 30.57881833333334,
-        "median": 30.38839999999982,
-        "p95": 34.56219999999939,
-        "p99": 39.77400000000034
+        "mean": 39.935418333333324,
+        "median": 40.41489999999976,
+        "p95": 45.88370000000032,
+        "p99": 48.077800000000025
       },
       "separationMs": {
-        "mean": 0.0022016666666786477,
-        "median": 0.002199999999902502,
-        "p95": 0.003299999999399006,
-        "p99": 0.0033999999996012775
+        "mean": 0.0025600000000546666,
+        "median": 0.0018000000000029104,
+        "p95": 0.002599999999802094,
+        "p99": 0.0478000000002794
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 10642,
+          "moved": 10755,
           "attacking": 0,
-          "working": 176,
-          "pending": 110
+          "working": 0,
+          "pending": 120
         },
         {
           "tick": 41,
-          "moved": 15594,
+          "moved": 14136,
           "attacking": 0,
-          "working": 195,
-          "pending": 4131
+          "working": 0,
+          "pending": 2516
         },
         {
           "tick": 61,
-          "moved": 18224,
+          "moved": 15582,
           "attacking": 0,
-          "working": 197,
-          "pending": 6434
+          "working": 0,
+          "pending": 3845
         },
         {
           "tick": 80,
-          "moved": 18147,
+          "moved": 15485,
           "attacking": 0,
-          "working": 201,
-          "pending": 6434
+          "working": 0,
+          "pending": 3858
         }
       ],
       "phaseMs": {}
@@ -1076,63 +1076,63 @@
       "moving": true,
       "combat": false,
       "instrumented": false,
-      "units": 19999,
+      "units": 16384,
       "actualHelpers": 0,
       "gameOver": false,
       "buildings": 5596,
       "map": [
-        160,
-        160
+        128,
+        128
       ],
       "tick": 80,
-      "hash": "f80523a8",
-      "exact": "8d24c325",
+      "hash": "afd581a1",
+      "exact": "eb0023d3",
       "tickMs": {
-        "mean": 24.650149999999833,
-        "median": 23.49959999999919,
-        "p95": 28.996399999999994,
-        "p99": 82.08550000000014
+        "mean": 25.09753166666651,
+        "median": 24.437799999999697,
+        "p95": 27.39099999999962,
+        "p99": 84.99569999999949
       },
       "frameMs": {
-        "mean": 28.95268500000005,
-        "median": 28.644399999999223,
-        "p95": 38.02019999999993,
-        "p99": 43.42960000000039
+        "mean": 40.52048000000001,
+        "median": 40.388999999999214,
+        "p95": 43.92529999999897,
+        "p99": 48.02319999999963
       },
       "separationMs": {
-        "mean": 0.001961666666526677,
+        "mean": 0.001936666666764116,
         "median": 0.0018000000000029104,
-        "p95": 0.0030999999999039574,
-        "p99": 0.0034999999988940544
+        "p95": 0.002599999999802094,
+        "p99": 0.004600000000209548
       },
       "populations": [
         {
           "tick": 21,
-          "moved": 10642,
+          "moved": 10755,
           "attacking": 0,
-          "working": 176,
-          "pending": 110
+          "working": 0,
+          "pending": 120
         },
         {
           "tick": 41,
-          "moved": 15594,
+          "moved": 14136,
           "attacking": 0,
-          "working": 195,
-          "pending": 4131
+          "working": 0,
+          "pending": 2516
         },
         {
           "tick": 61,
-          "moved": 18224,
+          "moved": 15582,
           "attacking": 0,
-          "working": 197,
-          "pending": 6434
+          "working": 0,
+          "pending": 3845
         },
         {
           "tick": 80,
-          "moved": 18147,
+          "moved": 15485,
           "attacking": 0,
-          "working": 201,
-          "pending": 6434
+          "working": 0,
+          "pending": 3858
         }
       ],
       "phaseMs": {}

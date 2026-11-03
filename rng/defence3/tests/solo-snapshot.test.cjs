@@ -87,6 +87,8 @@ async function settle(world, promise) {
         const menu=world.spawn('invalid'); menu.scratch.parts=parts.slice(0,-1);
         assert.throws(()=>menu.eval('parseSoloGameSnapshotParts(__scratch.parts)'),/incomplete/);
         assert.throws(()=>menu.eval(`parseSoloGameSnapshotParts(['{"version":4}'])`),/settings export/);
+        menu.scratch.oversize=JSON.stringify({...scene.header,width:2048,height:2048});
+        assert.throws(()=>menu.eval('parseSoloGameSnapshotParts([__scratch.oversize])'),/maximum supported map size is 1024/);
         for(const inst of [source,a,b]) assert.deepEqual(inst.errors,[],inst.name+' errors');
         console.log('PASS portable scene '+(worker?'worker':'page')+': locations, orders, resources, repeated imports and continuation');
     }

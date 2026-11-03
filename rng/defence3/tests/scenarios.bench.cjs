@@ -21,7 +21,9 @@ function options(args) {
 async function run(job) {
     const H=require('./net-harness.cjs'),start=performance.now();
     const world=new H.World(),inst=world.spawn(job.scenario.name,{simWorker:false});
-    inst.scratch.file=new Blob([fs.readFileSync(path.join(ROOT,job.scenario.file))]);
+    const records=JSON.parse(require('node:zlib').gunzipSync(fs.readFileSync(path.join(ROOT,job.scenario.file))));
+    const menuLimits=require('./menu-limits.cjs').scene(records,inst);
+    inst.scratch.file=new Blob([JSON.stringify(records)]);
     inst.scratch.scene=await inst.eval('readSoloGameSnapshotFile(__scratch.file)');
     const rows=key=>inst.scratch.scene.records.reduce((n,r)=>n+(r[key]?.length||0),0);
     const expected={units:rows('units'),buildings:rows('buildings')};
@@ -30,7 +32,7 @@ async function run(job) {
     const state=inst.eval('({width:GRID_W,height:GRID_H,units:units.length,buildings:new Set([...towers,...barracks,...collectorSpawners,...getCellItemsRowMajor()]).size,gameOver})');
     if(state.units!==expected.units||state.buildings!==expected.buildings||state.gameOver)throw Error('Loaded state differs: '+JSON.stringify({expected,state}));
     if(inst.errors.length)throw Error(inst.errors.map(String).join('\n'));
-    const result={name:job.scenario.name,kind:job.scenario.kind,status:'passed',mode:job.options.loadOnly?'load-only':'benchmark',loadMs:performance.now()-start,state};
+    const result={name:job.scenario.name,kind:job.scenario.kind,status:'passed',mode:job.options.loadOnly?'load-only':'benchmark',loadMs:performance.now()-start,state,menuLimits};
     if(job.options.loadOnly)return result;
     inst.scratch.now=()=>performance.now();
     inst.eval('performance.now=__scratch.now; netResetSimulationPace(); __scratch.startTime=gameTime');

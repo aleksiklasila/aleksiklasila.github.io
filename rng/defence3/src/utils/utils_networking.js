@@ -1627,8 +1627,8 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         // page's map size (80x80) and only then took the match's size from the
         // snapshot: its cells' columns read other tiles (areas, owners).
         matchStartConfig = data.cfg;
-        let cfgGridW = Math.max(8, Math.floor(Number(data.cfg.gridW) || 80));
-        let cfgGridH = Math.max(8, Math.floor(Number((data.cfg.gridH !== undefined ? data.cfg.gridH : data.cfg.gridW)) || cfgGridW));
+        let cfgGridW = Math.min(MAP_SIZE_MAX, Math.max(8, Math.floor(Number(data.cfg.gridW) || 80)));
+        let cfgGridH = Math.min(MAP_SIZE_MAX, Math.max(8, Math.floor(Number((data.cfg.gridH !== undefined ? data.cfg.gridH : data.cfg.gridW)) || cfgGridW)));
         GRID_W = cfgGridW;
         GRID_H = cfgGridH;
         WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
@@ -4187,7 +4187,7 @@ function readConfigFromMenu() {
         return Number.isFinite(value) ? Math.max(0, integer ? Math.floor(value) : value) : fallback;
     };
     let size = parseInt(document.getElementById('cfg-mapsize').value) || 80;
-    GRID_W = size; GRID_H = size;
+    GRID_W = Math.min(MAP_SIZE_MAX, Math.max(8, size)); GRID_H = GRID_W;
     WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
     RESOURCE_MINE_DENSITY = normalizeResourceMineDensity((document.getElementById('cfg-mine-density') || {}).value);
     GOLD_MINE_COUNT = readResource('cfg-gold-count', 18);

@@ -46,14 +46,7 @@ for(const [,levels]of combat)for(const l in levels)levels[l]=Math.round(levels[l
 for(const k of Object.keys(counts))if(k.startsWith('unit:')&&k!=='unit:king'){
  const levels={};for(const [l,n]of Object.entries(counts[k])){const next=Math.min(20,Number(l)+unitLevelOffset);levels[next]=(levels[next]||0)+n;}counts[k]=levels;
 }
-data.lobby.numbers['cfg-max-pop']=Math.max(2000000,count);
-// --map=N: the map's side (the fixture's 1000 holds ~290k dense structures).
-if(process.argv.some(a=>a.startsWith('--map=')))data.lobby.selects['cfg-mapsize']=String(num('map',1000));
-if(data.editableConfig?.config)data.editableConfig.config.CONFIG_MAX_POP=data.lobby.numbers['cfg-max-pop'];
-// (No building limit below the structure pool's: the fixture's 125k structures
-// a team, and its players' placements, as before the limit.)
-data.lobby.numbers['cfg-max-buildings']=10000000;
-if(data.editableConfig?.config)data.editableConfig.config.CONFIG_MAX_BUILDINGS=10000000;
+require('./menu-limits.cjs').settings(data,{population:num('population',Math.ceil(count/2)),map:num('map',1024)});
 const controls={...H.SMALL_MATCH_CONTROLS};
 for(const group of ['numbers','selects','checkboxes'])for(const [k,v] of Object.entries(data.lobby[group]||{}))controls[k]=typeof v==='boolean'?v:String(v);
 const world=new H.World({controls}),inst=world.spawn('chaos-spikes',{controls,simWorker:false});
@@ -61,12 +54,15 @@ inst.scratch.now=()=>performance.now();
 inst.eval(`MAX_THING_LEVEL=20; MAX_RESEARCH_LEVEL=10;
  startingResourcesConfig=normalizeStartingResourcesConfig(${JSON.stringify(data.startingResources)});
  applyMainMenuControlsToRuntimeState();applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)},{fromTransport:true});`);
+assert.ok(count<=inst.eval('memoryBudgetPop(CONFIG_MAX_POP,2,GRID_W*GRID_H)*2'),'requested units exceed the menu match population limit');
 if(helpers){inst.scratch.Worker=require('./real-sim-helper.cjs');inst.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=32;simParallelInit('',${helpers});`);}
 console.log('Starting mixed chaos',count,'units');
 inst.eval('SIM_IN_WORKER=true;startSoloGame();');
 if(process.argv.includes('--no-delta'))inst.eval('SPATIAL_INDEX_DELTA=false');
 if(process.argv.includes('--no-merge'))inst.eval('SPATIAL_INDEX_MERGE=false');
-const options={mode:'mega',buildings:5000,level:6,towerSites:1500,collectorBuildings:600,structures,layout,rallyMix:process.argv.includes('--rally-mix')};
+const limits=inst.eval('({population:getConfiguredMaxPop(),buildings:getPlayerStructureLimit(),map:GRID_W,slots:_simUnitState.cap})');
+const options={mode:'mega',buildings:5000,level:6,towerSites:1500,collectorBuildings:600,structures:Math.min(structures,limits.buildings*2),layout,rallyMix:process.argv.includes('--rally-mix')};
+console.log('Menu limits',JSON.stringify(limits));
 const setup=JSON.parse(inst.eval(`JSON.stringify(${chaos.setup(options)})`));
 assert.deepEqual(setup.errors,[]);
 const {upgradeAreas,...setupSummary}=setup;
@@ -89,7 +85,7 @@ if(exportScene){
 // (PRE=<js>: run in the instance after setup, before the measured ticks: A/B switches.)
 if(process.env.PRE){const r=inst.eval(process.env.PRE);if(r!==undefined)console.log(r);}
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
-inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0};{
+inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,healerDeliveries:0,salvagerReturns:0};{
  const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
  _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
  // (Research deposits: the worker kernel counts them, worker.js _wai.researchDeposits.)
@@ -99,6 +95,15 @@ inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDep
  _depositResourceCollectorPayload=function(u,o,c){if(u.carryingValue>0&&c)__scratch.work[c.stockpileKey==='astar'?'astarDeposits':'collectorDeposits']++;return deposit.apply(this,arguments);};
  markConstructionComplete=function(t){if(t.underConstruction)__scratch.work.constructionCompleted++;return complete.apply(this,arguments);};
  destroyBuilding=function(){__scratch.work.destroyedStructures++;return destroy.apply(this,arguments);};
+ if(typeof waiOutEvents==='function'){const events=waiOutEvents;waiOutEvents=function(n){for(let i=0;i<n;i++){
+  const code=_wai.out[i*4];if(code===WAI_OUT_BUILT&&_wai.out[i*4+2]===0)__scratch.work.constructionCompleted++;
+  if(code===WAI_OUT_SOUND_HEAL)__scratch.work.healerDeliveries++;
+  if(code===WAI_OUT_SALVAGE)__scratch.work.salvagerReturns++;
+ }return events.apply(this,arguments);};}
+ if(typeof structDestroyTiles==='function'){const remove=structDestroyTiles;structDestroyTiles=function(list,n){
+  const tiles=[...new Set(Array.from({length:n},(_,j)=>list[j]).filter(t=>_ST.code[t]>0&&_ST.code[t]<0x66))];
+  const r=remove.apply(this,arguments);for(const t of tiles)if(_ST.code[t]===0)__scratch.work.destroyedStructures++;return r;
+ };}
 }`);
 inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
  for(const name of new Set([
@@ -245,6 +250,8 @@ const steady=rows.slice(warmup);
 if(gcObserver){gcEntries.push(...gcObserver.takeRecords().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})));gcObserver.disconnect();for(const row of rows)row.gcMs=gcEntries.reduce((n,e)=>n+Math.max(0,Math.min(e.at+e.ms,row.at+row.wallMs)-Math.max(e.at,row.at)),0);}
 const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:typeof _unitEvSort!=="undefined"?[...new Set(Object.values(_unitEvSort))].reduce((n,a)=>n+(ArrayBuffer.isView(a)?a.byteLength:0),0):_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
 if(process.argv.includes('--hash'))result.hash=inst.eval('__exactStateHash()');
+result.menuLimits={...limits,finalSlots:inst.eval('_simUnitState.cap')};
+assert.ok(result.menuLimits.finalSlots<=limits.slots,'unit columns must stay within their match-start reservation');
 result.projFlight=inst.eval('({..._pj.stats,notMade:_pj.cap?_pj.hdr[3]:0,fired:_pj.cap?_pj.hdr[2]:0})');result.structRows=inst.eval('typeof structRowStats!=="undefined"?structRowStats:null');
 result.structRowCheckpoints={beforeGameplay:structRowsAtStart,beforeSteady:structRowsAtSteady,afterGameplay:result.structRows};
 if(session)result.wasmFunctionNames=require('./wasm-profile-exports.cjs')(inst.eval(`SIM_WASM64?SIM_WASM64_BIN:SIM_WASM_BIN`));

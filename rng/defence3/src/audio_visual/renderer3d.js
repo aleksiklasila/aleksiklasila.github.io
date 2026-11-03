@@ -3288,9 +3288,14 @@
             if (this.gpuTimerExt === undefined) { this.gpuTimerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2') || null; this.gpuQueries = []; this.gpuFrameMs = -1; this.gpuFrameMsMax = 0; }
             const ext = this.gpuTimerExt;
             if (!ext) return;
+            // Profilers can own a timer on this context too. Never nest one
+            // or let our matching end close somebody else's query.
+            const active = gl.getQuery(ext.TIME_ELAPSED_EXT, gl.CURRENT_QUERY);
+            if (active) { if (active !== this.gpuQuery) this.gpuQuery = null; return; }
             // (Results of earlier frames, oldest first.)
             while (this.gpuQueries.length) {
                 const q = this.gpuQueries[0];
+                if (!gl.isQuery(q)) { this.gpuQueries.shift(); continue; }
                 if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
                 this.gpuQueries.shift();
                 if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) {
@@ -3307,8 +3312,11 @@
         }
         gpuTimerEnd() {
             if (!this.gpuQuery) return;
-            this.gl.endQuery(this.gpuTimerExt.TIME_ELAPSED_EXT);
-            this.gpuQueries.push(this.gpuQuery);
+            const gl = this.gl, target = this.gpuTimerExt.TIME_ELAPSED_EXT;
+            if (gl.getQuery(target, gl.CURRENT_QUERY) === this.gpuQuery) {
+                gl.endQuery(target);
+                this.gpuQueries.push(this.gpuQuery);
+            } else gl.deleteQuery(this.gpuQuery);
             this.gpuQuery = null;
         }
 

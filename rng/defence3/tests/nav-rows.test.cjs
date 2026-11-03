@@ -30,7 +30,7 @@ for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map
         const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
         gameTick();
         const PROFS = [NAV_PROFILE_GROUND, NAV_PROFILE_BUILD].filter(p => _nav[p]);
-        const ask = () => {
+        const ask = (advance = true) => {
             const ids = [];
             for (let i = 0; i < 300; i++) {
                 // (Ground and the builders by turns: a rebuild
@@ -40,7 +40,7 @@ for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map
                 if (t >= 0) ids.push(navFieldRequest(pr, t, (i & 3) === 0));
             }
             // (Made by the next flush but one.)
-            gameTick(); gameTick();
+            if (advance) { gameTick(); gameTick(); }
             return ids;
         };
         const check = ids => {
@@ -75,7 +75,9 @@ for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map
         const seq = _nav[0].seq;
         let n = 0;
         while (!_navNext.nav && n++ < NAV_BUILD_TICKS) gameTick();
-        const opened = !!_navNext.nav, during = ask(), stillOpen = !!_navNext.nav;
+        // The chain's window lasts just one/two steps. Request while it is
+        // open, then let the install finish those fields before checking.
+        const opened = !!_navNext.nav, during = ask(false), stillOpen = !!_navNext.nav;
         while (_navNext.nav && n++ < 2 * NAV_BUILD_TICKS) gameTick();
         gameTick();
         const installed = _nav[0].seq !== seq, after = ask();

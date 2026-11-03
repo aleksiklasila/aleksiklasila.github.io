@@ -3,7 +3,7 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const num=(k,v)=>Number(process.argv.find(a=>a.startsWith('--'+k+'='))?.slice(k.length+3)??v);
-const count=num('units',12000),map=num('map',192),structures=num('structures',5000),ticks=num('ticks',160),dk=num('dk',4);
+const count=num('units',12000),map=require('./menu-limits.cjs').pick('cfg-mapsize',num('map',256)),structures=num('structures',5000),ticks=num('ticks',160),dk=num('dk',4);
 const seed=num('seed',777),mapType=process.argv.find(a=>a.startsWith('--map-type='))?.slice(11)||'arena';
 const networkName=process.argv.find(a=>a.startsWith('--network='))?.slice(10)||'wan';
 const network={wan:{latencyMs:60,jitterMs:35},unstable:{latencyMs:80,jitterMs:150,lossRate:.03,spikeEveryMs:7000,spikeMs:600},slow:{latencyMs:400,jitterMs:120,lossRate:.01}}[networkName];
@@ -30,18 +30,24 @@ for(const k of Object.keys(spawnCounts)) {
  else if(k.startsWith('unit:'))spawnCounts[k]={10:Math.max(1,Math.round(Object.values(spawnCounts[k]).reduce((a,b)=>a+b,0)*perTeam/totalCombat))};
  else spawnCounts[k]={10:k==='building:house'?20:1};
 }
-const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(map),'cfg-map-type':mapType,'cfg-gold-count':String(Math.floor(map*1.5)),
- 'cfg-astar-mine-count':String(map),'cfg-max-pop':String(count*4),'cfg-full-vis':'full','cfg-starting-energy':'1000000000000','cfg-starting-astar':'1000000000000'};
+const controls=require('./menu-limits.cjs').controls({...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':String(map),'cfg-map-type':mapType,'cfg-gold-count':String(Math.floor(map*1.5)),
+ 'cfg-astar-mine-count':String(map),'cfg-max-pop':String(Math.ceil(count/teamCount)),'cfg-full-vis':'full','cfg-starting-energy':'1000000000000','cfg-starting-astar':'1000000000000'});
 const options={mode:'mega',layout:'mixed',teams:teamCount,seed,buildings:Math.max(30,Math.floor(map/3)),level:6,towerSites:Math.floor(map/4),collectorBuildings:Math.floor(map/6),structures,keepKings:true};
 const metrics=`__scratch.stressWork={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,placed:0,healerDeliveries:0,salvagerReturns:0,contestedPlacements:0};{
  __scratch.actionKinds={};const action=processAction;processAction=function(a,p){if(a?.netId)__scratch.actionKinds[a.action]=(__scratch.actionKinds[a.action]||0)+1;return action.apply(this,arguments);};
- const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding,place=placeBuilding;
+ const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=structDestroyTiles,place=placeBuilding;
  _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.stressWork.spawns++;if(s.type==='barrack')__scratch.stressWork.armySpawns++;}return r;};
- // (Research deposits: the worker kernel counts them, worker.js _wai.researchDeposits.)
- {const run=waiRun;waiRun=function(){const was=_wai.researchDeposits||0;const r=run.apply(this,arguments);__scratch.stressWork.researchDeposits+=(_wai.researchDeposits||0)-was;return r;};}
+ // Count the real kernel transfers and completion events; these no longer
+ // pass through the historical JavaScript worker callbacks.
+ {const run=waiRun,keys=['researchDeposits','collectorDeposits','astarDeposits'];waiRun=function(){const was=keys.map(k=>_wai[k]||0);const r=run.apply(this,arguments);keys.forEach((k,j)=>{__scratch.stressWork[k]+=(_wai[k]||0)-was[j];});return r;};}
+ {const events=waiOutEvents;waiOutEvents=function(n){const out=_wai.out;for(let i=0;i<n;i++){
+  const code=out[i*4];if(code===WAI_OUT_BUILT&&out[i*4+2]===0)__scratch.stressWork.constructionCompleted++;
+  if(code===WAI_OUT_SOUND_HEAL)__scratch.stressWork.healerDeliveries++;
+  if(code===WAI_OUT_SALVAGE)__scratch.stressWork.salvagerReturns++;
+ }return events.apply(this,arguments);};}
  _depositResourceCollectorPayload=function(u,o,c){if(u.carryingValue>0&&c)__scratch.stressWork[c.stockpileKey==='astar'?'astarDeposits':'collectorDeposits']++;return deposit.apply(this,arguments);};
  markConstructionComplete=function(t){if(t.underConstruction)__scratch.stressWork.constructionCompleted++;return complete.apply(this,arguments);};
- destroyBuilding=function(){__scratch.stressWork.destroyedStructures++;return destroy.apply(this,arguments);};
+ structDestroyTiles=function(list,n){const tiles=[...new Set(Array.from({length:n},(_,j)=>list[j]).filter(t=>_ST.code[t]>0&&_ST.code[t]<0x66))];const r=destroy.apply(this,arguments);for(const t of tiles)if(_ST.code[t]===0)__scratch.stressWork.destroyedStructures++;return r;};
  const attempts=new Map();placeBuilding=function(gx,gy,key,owner){const k=gameTime+':'+gx+':'+gy;if(attempts.has(k))__scratch.stressWork.contestedPlacements++;attempts.set(k,owner);if(attempts.size>4096)attempts.clear();const r=place.apply(this,arguments);if(r)__scratch.stressWork.placed++;return r;};
  const ai=updateWorkerAI;updateWorkerAI=function(u){const role=u.workerType,material=u.healerHasMaterial,cooldown=u.workerTransferCooldown,carry=u.carryingValue;
   const r=ai.apply(this,arguments);if(role==='healer'&&material&&!u.healerHasMaterial&&u.workerTransferCooldown>cooldown)__scratch.stressWork.healerDeliveries++;

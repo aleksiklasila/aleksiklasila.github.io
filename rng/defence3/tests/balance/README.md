@@ -13,12 +13,18 @@ Worker fixtures still cover all applicable build/heal/salvage targets.
 On import, all entities are placed and world indexes rebuilt before saved
 destinations are queued as fresh player commands on live ticks. Routes are
 regenerated, not saved. The normal command budget applies to large scenes.
-Existing snapshots work with this loader fix; they do not need regeneration.
+Snapshots within the supported map sizes work with this loader fix.
 Attack-move now retains its destination when formation movement finishes short:
 the unit regenerates its remaining approach instead of losing the order and
 becoming idle outside engagement range. Combat stats are unchanged. The
 `tests/scene-orders.test.cjs` regression runs through combat in page and worker
 modes, checking completed unit and turret engagements rather than initial motion.
+
+Maps are capped at the menu maximum, currently 1024×1024. Large matchup sets
+are split into numbered parts, retaining every pairing and the original
+spacing and formations. Building-heavy parts also stay within the derived
+per-player capacity. Regenerate older 2000-square exports with the generators
+before running them; unsupported scene sizes are rejected on import.
 
 Snapshots are organized under `tests/scenarios/equal_numbers/` and
 `tests/scenarios/equal_energy/`. Worker snapshots remain at `tests/scenarios/`.
@@ -161,10 +167,10 @@ The match's overall win/defeat result is consequently not a matchup result.
 
 Each file repeats 100 blue focal things against 100 red opponents, one opponent
 type and level per pair. Read pairs left-to-right, then top-to-bottom on a
-2000×2000 map. Groups are spread evenly in a square grid, with a minimum of
-32 clear tiles between their 36×36 bounds. Army maps use 22 columns, 90-tile
-origin spacing and 54 clear tiles; crossing maps use 17 columns, 117-tile
-spacing and 81 clear tiles. There are no artificial barriers.
+1024×1024 map. Matchup sets are split into numbered parts so every pairing
+is retained. Groups are spread evenly in a square grid, with a minimum of
+32 clear tiles between their 36×36 bounds. Equal-energy formations use their
+larger original bounds and gaps. There are no artificial barriers.
 `manifest.json` lists every arena's row, column, coordinates, types and counts.
 `pair-order.md` is a small lookup table for the opponent order.
 The camera opens on arena 1; zoom out to inspect the rest of the map.

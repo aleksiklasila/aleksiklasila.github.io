@@ -108,6 +108,7 @@ function soloSceneReader() {
             if (!scene.header) {
                 if (r.kind !== SOLO_SNAPSHOT_KIND) throw new Error('Choose a portable scene snapshot, not a settings export or an old exact save.');
                 if (r.version !== SOLO_SNAPSHOT_VERSION) throw new Error('This scene file version is not supported.');
+                if (r.width > MAP_SIZE_MAX || r.height > MAP_SIZE_MAX) throw new Error('The maximum supported map size is ' + MAP_SIZE_MAX + ' × ' + MAP_SIZE_MAX + '.');
                 if (!Number.isSafeInteger(r.width) || !Number.isSafeInteger(r.height) || r.width < 8 || r.height < 8
                     || r.width > 4096 || r.height > 4096 || !Number.isFinite(r.seed) || !r.settings
                     || !Array.isArray(r.players) || !r.players.length || r.players.length > 8
@@ -256,6 +257,20 @@ function applySoloScene(scene) {
     const h = scene.header;
     if (GRID_W !== h.width || GRID_H !== h.height) throw new Error('The scene map dimensions do not match its settings.');
     const rows = function* (key) { for (const r of scene.records) if (r[key]) yield* r[key]; };
+    const population = new Map(), structures = new Map(), popLimit = getConfiguredMaxPop(), structureLimit = getPlayerStructureLimit();
+    for (const row of rows('units')) population.set(row[1], (population.get(row[1]) || 0) + 1);
+    for (const row of rows('buildings')) structures.set(row[1], (structures.get(row[1]) || 0) + 1);
+    for (const [owner, count] of population) if (count > popLimit)
+        throw new Error('Scene team ' + owner + ' has ' + count + ' units; this match permits ' + popLimit + ' per team within the WASM32 memory budget.');
+    for (const [owner, count] of structures) if (count > structureLimit)
+        throw new Error('Scene team ' + owner + ' has ' + count + ' buildings; this match permits ' + structureLimit + ' per team within the WASM32 memory budget.');
+    let energyMines = 0, starMines = 0;
+    for (const row of rows('mines')) { if (row[0] === 'energy') energyMines++; else starMines++; }
+    const mineLimit = memoryBudgetMines(popLimit, _structTeams(), GRID_W * GRID_H);
+    if (energyMines + starMines > mineLimit)
+        throw new Error('Scene has ' + (energyMines + starMines) + ' resource mines; this match permits ' + mineLimit + ' within the WASM32 memory budget.');
+    GOLD_MINE_COUNT = energyMines; ASTAR_MINE_COUNT = starMines;
+    structTablesReserve();
     for (const row of rows('units')) if (!Object.hasOwn(BASE_UNIT_STATS, row[0])) throw new Error('Unknown scene unit type: ' + row[0]);
     for (const row of rows('buildings')) if (!Object.hasOwn(BASE_CARD_TYPES, row[0])) throw new Error('Unknown scene building type: ' + row[0]);
     goldMines.length = 0; astarMines.length = 0;
@@ -334,11 +349,13 @@ function applySoloScene(scene) {
     // (The unit columns made for every unit at once: each growth made a new set of every column and gave the old one
     // back, ~4.3 GB allocated and 2.9 GB of it freed at 2.3M units, a heap of 3.3 GB committed and unused.)
     if (typeof simUnitStateReserve === 'function') {
-        let n = 0, workers = 0;
-        for (const r of scene.records) if (r.units) { n += r.units.length; for (const row of r.units) { const t = row[0]; if (t === 'salvager_unit' || t === 'builder_unit' || t === 'healer_unit' || t === 'researcher_unit' || getResourceTypeByCollectorUnit(t)) workers++; } }
-        if (n > 0) simUnitStateReserve(n, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, simReserveCap(n)));
-        // (And their worker records at once: each growth of the pool made a new set of its columns.)
-        if (workers > 0 && typeof simUnitWkReserve === 'function') simUnitWkReserve(workers);
+        let n = 0;
+        for (const r of scene.records) if (r.units) n += r.units.length;
+        if (n > 0) simUnitStateReserve(n, simUnitPopulationSlots());
+        const capacity = getConfiguredMaxPop() * activeTeamIds.length;
+        if (typeof simUnitWkReserve === 'function') simUnitWkReserve(capacity);
+        if (typeof simUnitStReserve === 'function') simUnitStReserve(capacity);
+        simMatchReserve();
     }
     // (Their slots planned by block before any is made: units of a block in
     // neighbouring slots, see sim_unit_state.js. Ids and the list stay in the file's order.)
@@ -375,6 +392,7 @@ function applySoloScene(scene) {
     // like newly issued player commands. The normal backlog budgets large maps.
     for(const a of groups.values()) _actionBacklog.push([a.owner,{action:a.action,targetX:a.targetX,targetY:a.targetY,unitIds:a.unitIds}]);
     _markCombinedBgFullDirty();
+    if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
 }
 
 async function restoreSoloGameSnapshot(scene) {

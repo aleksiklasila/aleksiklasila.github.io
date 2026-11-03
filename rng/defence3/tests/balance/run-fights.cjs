@@ -115,6 +115,8 @@ async function worker(job) {
     const t0=performance.now();
     const records=JSON.parse(zlib.gunzipSync(fs.readFileSync(job.file)));
     const world=new H.World(), inst=world.spawn(job.scenario.name,{simWorker:false});
+    const menuLimits=require('../menu-limits.cjs').scene(records,inst);
+    console.log('Menu limits',job.scenario.name,JSON.stringify(menuLimits));
     inst.scratch.scene={header:records[0],records:records.slice(1,-1)};
     inst.scratch.scenario=job.scenario;
     inst.eval('startMainThreadLoops=()=>{}; document.getElementById("starting-resources-popup").classList.add("hidden");');
@@ -146,7 +148,7 @@ async function worker(job) {
     }
     const result=inst.eval('__scratch.probe.result()');
     const sorted=job.tickMs.sort((a,b)=>a-b);
-    return {...result,name:job.scenario.name,fingerprint:job.fingerprint,requestedSeconds:job.options.seconds,timeBasis:job.options.timeBasis,
+    return {...result,menuLimits,name:job.scenario.name,fingerprint:job.fingerprint,requestedSeconds:job.options.seconds,timeBasis:job.options.timeBasis,
         stepping:'game-adaptive-delta-ticks',backend:'headless page simulation; rendering excluded',dkHistogram,
         loadMs,wallSeconds:(performance.now()-began)/1000,ticks,tickMs:{mean:sorted.reduce((a,b)=>a+b,0)/ticks,p95:sorted[Math.min(sorted.length-1,Math.floor(sorted.length*.95))],max:sorted.at(-1)},errors:inst.errors};
 }

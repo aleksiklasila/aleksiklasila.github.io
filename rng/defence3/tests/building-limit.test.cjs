@@ -26,7 +26,8 @@ const out = JSON.parse(i.eval(`(() => {
     const forced = placeBuilding(gx, gy, 'pistol', 0, { silent: true, ignorePlacementRules: true }) !== false && !!getTileEntityRef(gx, gy);
     CONFIG_MAX_BUILDINGS = 1e9;
     const capped = getPlayerStructureLimit();
-    return JSON.stringify({ start, placed: placed.length, afterPlace, afterDestroy, afterOwner, memory, atLimit, refused, forced, capped, cfg: CONFIG_MAX_BUILDINGS });
+    const budget = memoryBudgetBuildings(CONFIG_MAX_POP, activeTeamIds.length, GRID_W * GRID_H);
+    return JSON.stringify({ start, placed: placed.length, afterPlace, afterDestroy, afterOwner, memory, budget, atLimit, refused, forced, capped, cfg: CONFIG_MAX_BUILDINGS });
 })()`));
 assert.equal(out.start.count, out.start.scan, JSON.stringify(out));
 assert.equal(out.placed, 10);
@@ -39,6 +40,6 @@ assert.ok(out.memory >= 1, 'a memory limit per player');
 assert.equal(out.atLimit, out.afterOwner.c0);
 assert.ok(out.refused, 'a new structure past the limit is refused: ' + JSON.stringify(out));
 assert.ok(out.forced, 'scripted placement (ignorePlacementRules) still places');
-assert.equal(out.capped, out.memory, 'no more than the structure memory per player');
+assert.equal(out.capped, Math.min(out.memory, out.budget), 'no more than the pool and WASM32 budget permit');
 assert.deepEqual(i.errors, []);
 console.log('PASS: building limit (' + out.memory + ' per player from the structure pool); counts follow place, destroy and owner changes');

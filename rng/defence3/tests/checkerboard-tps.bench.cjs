@@ -1,13 +1,13 @@
 // Real main-thread simulation, no rendering/transport. Run serially.
-// node --max-old-space-size=12000 tests/checkerboard-tps.bench.cjs --units=4000000 --map=1000 --ticks=20 --warmup=5 --profile
+// node --max-old-space-size=8192 tests/checkerboard-tps.bench.cjs --units=1000000 --map=1024 --ticks=20 --warmup=5 --profile
 // Smaller --units keeps the same local density, spreading blocks over the map.
-// At 4M use a memory64-capable runtime (Node 24+); Node 22 hits the 4 GiB heap ceiling.
+// Uses the same menu choices and WASM32 memory budget as a real match.
 'use strict';
 const fs = require('node:fs'), path = require('node:path');
 const { performance } = require('node:perf_hooks');
 const assert = require('node:assert/strict');
 const number = (key, fallback) => Number(process.argv.find(a => a.startsWith('--' + key + '='))?.split('=')[1] ?? fallback);
-const count = number('units', 4000000), map = number('map', 1000);
+const count = number('units', 1000000), map = require('./menu-limits.cjs').pick('cfg-mapsize',number('map',1024));
 const ticks = number('ticks', 20), warmup = number('warmup', 5), group = number('group', 32);
 const helpers = number('helpers', 7), dk = number('dk', 1);
 const chunkSize = number('chunk-size', 1);
@@ -72,9 +72,9 @@ if(denseJsCache){
     process.env.DEFENCE_TEST_SOURCE_OVERRIDES=JSON.stringify(overrides);
 }
 const H = require('./net-harness.cjs');
-const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(map), 'cfg-map-type': 'arena',
+const controls = require('./menu-limits.cjs').controls({ ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': String(map), 'cfg-map-type': 'arena',
     'cfg-gold-count': '0', 'cfg-astar-mine-count': '0', 'cfg-full-vis': 'full',
-    'cfg-max-pop': String(Math.ceil(count/2)), 'cfg-starting-energy': '1000000000000000', 'cfg-starting-astar': '1000000000000000' };
+    'cfg-max-pop': String(Math.ceil(count/2)), 'cfg-starting-energy': '1000000000000000', 'cfg-starting-astar': '1000000000000000' });
 const world = new H.World({ controls });
 const inst = world.spawn('checkerboard', { controls, simWorker: false });
 inst.eval('SIM_OCCUPANCY_ENABLED='+occupancy+';SIM_OCCUPANCY_PLANES='+occupancyPlanes);
@@ -117,6 +117,7 @@ if(referenceCollect)inst.eval(`simUnitStateCollect=function(all=false){
 // unbound during startup adjacency. Keep the kings/buildings promised below.
 inst.eval(`startingResourcesConfig = normalizeStartingResourcesConfig({spawnCounts:{'unit:king':{1:1},'building:house':{1:1}},researchLevels:{}});
     applyMainMenuControlsToRuntimeState(); startSoloGame();
+    if(${count}>getConfiguredMaxPop()*activeTeamIds.length)throw Error('Requested units exceed this menu match population limit');
     // Keep the starting kings/buildings for ordinary victory/population rules.
     // Every occupied block: two small hostile groups and two hostile towers.
     // Block centres are distributed row-major over the whole map.

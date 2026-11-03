@@ -4387,8 +4387,11 @@ function simMatchReserve() {
     const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
     const tiles = GRID_W * GRID_H, B = {
         units: memoryBudgetUnits(getConfiguredMaxPop(), teams, tiles), slots: typeof _simUnitState !== 'undefined' && _simUnitState ? _simUnitState.cap : 0,
-        structs: typeof structReserveRowsTotal === 'function' ? structReserveRowsTotal() : tiles, tiles, players: typeof players !== 'undefined' && players ? players.length : teams };
+        structs: typeof structOwnedRowsTotal === 'function' ? structOwnedRowsTotal() : tiles,
+        mines: typeof structReserveRowsTotal === 'function' && typeof structOwnedRowsTotal === 'function' ? structReserveRowsTotal()-structOwnedRowsTotal() : 0,
+        tiles, players: typeof players !== 'undefined' && players ? players.length : teams };
     for (const f of [typeof navSubReserve === 'function' ? navSubReserve : null, typeof workerBrainReserve === 'function' ? workerBrainReserve : null,
+        typeof workerAiReserve === 'function' ? workerAiReserve : null,
         typeof simSpawnBatchReserve === 'function' ? simSpawnBatchReserve : null, typeof simTileChangesReserve === 'function' ? simTileChangesReserve : null,
         typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
         typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
@@ -5474,6 +5477,8 @@ let _simShadowMatchTick = -1;
 let _simClientStartedThisMatch = false;
 
 function startGame() {
+    GRID_W = Math.min(MAP_SIZE_MAX, GRID_W); GRID_H = Math.min(MAP_SIZE_MAX, GRID_H);
+    WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
     resetOrderMarkers();
     _simShadowStartedThisMatch = false;
     _simClientStartedThisMatch = false;
@@ -5525,6 +5530,14 @@ function startGame() {
     visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
     generateAreas();
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
+    // Apply capacities before resource generation creates any structure rows.
+    CONFIG_MAX_POP = memoryBudgetPop(CONFIG_MAX_POP, teams.length, GRID_W * GRID_H);
+    const mineLimit = memoryBudgetMines(CONFIG_MAX_POP, teams.length, GRID_W * GRID_H);
+    const requestedMines = GOLD_MINE_COUNT + ASTAR_MINE_COUNT;
+    if (requestedMines > mineLimit) {
+        GOLD_MINE_COUNT = Math.floor(GOLD_MINE_COUNT * mineLimit / requestedMines);
+        ASTAR_MINE_COUNT = mineLimit - GOLD_MINE_COUNT;
+    }
     let spawns = pickPlayerSpawns(teams.length);
     generateResourceMinesMixed(spawns);
     // (Every player starts within reach of both resources: map.js.)
@@ -5643,6 +5656,7 @@ function startGame() {
     };
 
     let spawnStartingBuilding = (pid, origin, itemKey, level) => {
+        if (playerStructureCount(pid) >= getPlayerStructureLimit()) return null;
         let spot = findStarterBuildSpot(origin);
         if (!spot) return null;
         let ok = placeBuilding(spot.gx, spot.gy, itemKey, pid, {
@@ -5825,17 +5839,11 @@ function startGame() {
         // see simUnitPopulationSlots.)
         simUnitStateReserve(Math.min(perTeam, getConfiguredMaxPop()) * teams.length,
             typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0);
-        // (And the starting workers' records: sim_unit_state.js simUnitWk.)
+        // Any permitted unit can be a worker later, even if none starts so.
         if (typeof simUnitWkReserve === 'function') {
-            let workers = 0;
-            for (let thingId in spawnByThing) {
-                let parsed = parseStartingThingId(thingId), levelMap = spawnByThing[thingId];
-                if (!parsed || parsed.kind === 'building' || !levelMap || typeof levelMap !== 'object') continue;
-                if (!(getResourceTypeByCollectorUnit(parsed.key) || ['salvager_unit', 'builder_unit', 'healer_unit', 'researcher_unit'].includes(parsed.key))) continue;
-                for (let levelText in levelMap) workers += normalizeStartingSpawnCount(levelMap[levelText]);
-            }
-            simUnitWkReserve(Math.min(workers, getConfiguredMaxPop()) * teams.length);
+            simUnitWkReserve(getConfiguredMaxPop() * teams.length);
         }
+        if (typeof simUnitStReserve === 'function') simUnitStReserve(getConfiguredMaxPop() * teams.length);
     }
     // (The ticks' work arrays for the whole match, sized by the slots just
     // reserved: simMatchReserve.)
@@ -5901,6 +5909,7 @@ function startGame() {
 
     recalculateAdjacency();
     dirtyGrid = true; markAreasDirtyAll();
+    if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
     gameStarted = true;
     const snapshotButton = document.getElementById('btn-export-snapshot');
     if (snapshotButton) snapshotButton.style.display = isMultiplayer ? 'none' : '';

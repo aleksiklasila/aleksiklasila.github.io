@@ -11,7 +11,8 @@ const choose = (gold, astar, size, density = 10) => run(
     "document.getElementById('cfg-mine-density').value='" + density + "';" +
     "refreshResourceAbundanceMenu(true); readConfigFromMenu();"
 );
-assert.equal(run("document.getElementById('cfg-mine-density').value"), '10');
+assert.equal(run("document.getElementById('cfg-mine-density').value"), '30');
+choose(8000000, 8000000, 60);
 const presets = read('RESOURCE_ABUNDANCE_PRESETS');
 assert.deepEqual(presets.slice(0, 11).map(p => p.name), ['0','1K','2K','4K','8K','16K','32K','64K','128K','256K','512K']);
 assert.equal(presets.at(-1).value, '1000000000000000000');
@@ -31,7 +32,7 @@ assert.equal(read("deriveResourceAbundance('8000000', 120)").count, 720);
 assert.equal(read("deriveResourceAbundance('8000000', 120)").min, 8e6);
 assert.equal(run('normalizeResourceMineDensity(-5)'), 0);
 assert.equal(run('normalizeResourceMineDensity(100)'), 95);
-assert.equal(run("normalizeResourceMineDensity('bad')"), 10);
+assert.equal(run("normalizeResourceMineDensity('bad')"), 30);
 
 for (const density of [0, 5, 10, 50, 95]) {
     choose(4000, 16000, 40, density);
