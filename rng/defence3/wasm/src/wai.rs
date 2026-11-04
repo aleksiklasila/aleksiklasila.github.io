@@ -172,6 +172,7 @@ struct W {
     // apply appends as one delta), the mines' region sums and their tiles'
     // flags (data_state.js _ST.mineSum, mineAt: a take's term moves there).
     psum: *mut f64, minesum: *mut i32, mineat: *mut i32,
+    take_spawners: *const i32,
 }
 
 impl W {
@@ -213,6 +214,7 @@ impl W {
             recheck: k.i(70), stuck: k.i(71),
             mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
             psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
+            take_spawners: k.p(155),
         }
     }
 }
@@ -1207,12 +1209,27 @@ impl<'a> Ctx<'a> {
     /// tick's nearest of its type for each event), -1 none.
     unsafe fn brain_spawner(&self, q: usize, stype: i32) -> i32 {
         let w = self.w;
+        if w.mode == 1 {
+            return self.take_spawner(q, stype);
+        }
         let r = self.rec(q);
         if r == 0 || g(w.wbtick, r) != w.now { return -1; }
         let t = g(w.wbsp, r);
         if t < 0 { return -1; }
         let tu = t as usize;
         if (self.rd(w.stbrain, tu) & 65535) != stype || g(w.stown, tu) != g(w.own, q) as i32 || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 { return -1; }
+        t
+    }
+    /// A take may use only its posted proposal, checked against live state.
+    unsafe fn take_spawner(&self, q: usize, stype: i32) -> i32 {
+        let w = self.w;
+        if w.take_spawners.is_null() || self.take < 0 { return -1; }
+        let t = g(w.take_spawners, self.take as usize);
+        if t < 0 || t >= w.gw * w.gh { return -1; }
+        let at = t as usize;
+        if g(w.stcode, at) != 0x44 || (self.rd(w.stbrain, at) & 65535) != stype
+            || g(w.stown, at) != g(w.own, q) as i32 || !(self.rd(w.stval, at) > 0.0)
+            || self.rd(w.stuc, at) != 0 { return -1; }
         t
     }
     /// getUnitBaseLevel (its unitLevel column).
@@ -2680,3 +2697,4 @@ fn res_term(slot: i32, id: i32) -> i32 {
 fn work_mix(i: i32) -> i32 {
     (i.wrapping_add(1) ^ 0x9e3779b9u32 as i32).wrapping_mul(2654435761u32 as i32)
 }
+

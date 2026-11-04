@@ -1410,7 +1410,20 @@ function _simUnitSlotStart(S, s, u, held = true) {
 // by slot and id; an object still held reads its id, owner and last position
 // and, from SimUnitGone's prototype, dead with no energy (anything else
 // undefined; writes stay on its record).
-function SimUnitGone(id, owner, x, y) { this.id = id; this.owner = owner; this.x = x; this.y = y; }
+class SimUnitGone {
+    constructor(id, owner, x8, y8) {
+        this.id = id;
+        this.owner = owner;
+        // Keep the slot's integer coordinates. Decode only if a caller still
+        // holding the removed unit reads its position.
+        this.x8 = x8;
+        this.y8 = y8;
+    }
+    get x() { return this.x8 * SIM_POS_INV; }
+    get y() { return this.y8 * SIM_POS_INV; }
+    set x(value) { Object.defineProperty(this, 'x', { value, writable: true, configurable: true, enumerable: true }); }
+    set y(value) { Object.defineProperty(this, 'y', { value, writable: true, configurable: true, enumerable: true }); }
+}
 SimUnitGone.prototype.dead = true;
 SimUnitGone.prototype.energy = 0;
 // (A slot's object fields unset; on detach the references let go.)
@@ -1421,7 +1434,7 @@ function simUnitStateDetach(S, s) {
     const C = S.columns;
     C.statRow[s] = -1; C.bsRow[s] = -1;
     if (C.ppDue[s] >= 0 && typeof pendingPathUnlink === 'function') pendingPathUnlink(C, s);
-    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s] * SIM_POS_INV, C.y[s] * SIM_POS_INV);
+    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s], C.y[s]);
     _simJsRelease(S.columns, s);
     // (Its path window back to the pool: the slot's next unit starts with none;
     // its worker record too.)
@@ -1444,7 +1457,7 @@ function simUnitStateDetach(S, s) {
 function simUnitStateDetachGone(S, s) {
     const u = S.owners[s], C = S.columns;
     if (C.ppDue[s] >= 0) pendingPathUnlink(C, s);
-    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s] * SIM_POS_INV, C.y[s] * SIM_POS_INV);
+    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s], C.y[s]);
     if (C.wkIx[s] > 0) _simWkRelease(S, s);
     if (C.stIx[s] > 0) _simStRelease(S, s);
     u._us = null; u._si = -1;

@@ -1839,6 +1839,13 @@ SIM_KERNELS[SIM_KERNEL_HEAL_REDUCE] = function (R, P, owner) { _simRust(_simHeal
 const _simWsOrderW = _simWK(['ws.rcnt', 'ws.rkind', 'ws.rid', 'ws.res', '?ws.ures', 'ws.order', 'ws.orderCount']);
 SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) { _simRust(_simWsOrderW, P, chunk, 'k_ws_order', 'WS_ORDER'); };
 
+const SIM_KERNEL_WS_RETURN_SPAWNERS = 136;
+const _simWsReturnSpawnersW = _simWK(['ws.order', 'ws.orderCount', 'ws.rkind', 'ws.rneed', 'ws.rowner',
+    'ws.rux', 'ws.ruy', 'ws.spawnOff', 'ws.spawnTiles', 'ws.spawnResult']);
+SIM_KERNELS[SIM_KERNEL_WS_RETURN_SPAWNERS] = function (R, P, chunk) {
+    _simRust(_simWsReturnSpawnersW, P, chunk, 'k_ws_return_spawners', 'WS_RETURN_SPAWNERS');
+};
+
 // Tick-end lifecycle: clear movement outputs and list only dead units (or
 // unbacked objects to check), in units-array order within each block.
 // P: units count, block size, slot count. The tick visits the sparse list

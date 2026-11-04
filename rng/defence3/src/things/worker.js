@@ -744,6 +744,32 @@ function _wsArr(name, Type, n) {
     if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(256, Math.ceil(n * 1.25 / 256) * 256)); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
+
+// The search owns these buffers until its commit. Copy only the eligible
+// builder/healer spawners, grouped by role and owner in tile order.
+function _wsSnapshotReturnSpawners(total, owners) {
+    if (!WORKER_BRAIN_WASM) return false;
+    const X = _spawnerIndex();
+    const off = _wsArr('ws.spawnOff', Int32Array, 2 * owners + 1);
+    const tiles = _wsArr('ws.spawnTiles', Int32Array, X.tiles.length);
+    _wsArr('ws.spawnResult', Int32Array, total);
+    let count = 0;
+    off[0] = 0;
+    for (let role = 0; role < 2; role++) {
+        const ty = _stationaryTypeIds.get(_workerBrainSpawnerTypes[3 + role]);
+        for (let o = 0; o < owners; o++) {
+            if (ty !== undefined && ty < X.nty && o < SPAWNER_OWNER_SLOTS - 1) {
+                const b = ty * SPAWNER_OWNER_SLOTS + o + 1;
+                for (let i = X.off[b]; i < X.off[b + 1]; i++) {
+                    const t = X.tiles[i];
+                    if (_ST.own[t] === o && (_ST.brain[t] & 65535) === ty + 1 && _ST.val[t] > 0 && !_ST.uc[t]) tiles[count++] = t;
+                }
+            }
+            off[role * owners + o + 1] = count;
+        }
+    }
+    return count > 0;
+}
 function _wsPost() {
     simParallelBackgroundWait(WS_LANE);
     _wsPosted = null;
@@ -832,9 +858,13 @@ function _wsPost() {
     // (Then the requests that found something listed, k.rs k_ws_order: one job in the same chain.)
     _wsArr('ws.order', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
     const Op = _simBgStageParams[WS_LANE][4]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
+    const spawners = _wsSnapshotReturnSpawners(total, np);
+    const Sp = _simBgStageParams[WS_LANE][5];
+    Sp[0] = 128; Sp[1] = np; Sp[2] = GRID_W; Sp[3] = GRID_H; Sp[4] = TILE;
+    Sp[5] = WSR_GRID; Sp[6] = WSR_HEAL; Sp[7] = WSW_BUILD;
     simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
-        [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1]]);
-    _wsPosted = { chunks: 1, CH: total, groups, heal, ordered: false };
+        [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1], [SIM_KERNEL_WS_RETURN_SPAWNERS, spawners ? Math.ceil(total / Sp[0]) : 0]]);
+    _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups
 // in place, which the unit pass may change; not chained with the ordering.)
@@ -3815,8 +3845,9 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
         _ST.stab, ACT, WCT, SR['adj.tykey'], SR['adj.rml'], SS.mxe, SR['adj.rlv'], c.wkWx, c.wkWy, c.wkLmt, c.wmRe, _wai.ownStats,
         take ? R2['ws.rslot'] : null, take ? R2['ws.rid'] : null, take ? R2['ws.rkind'] : null, take ? R2['ws.rwt'] : null, take ? R2['ws.rgrp'] : null,
         take ? R2['ws.res'] : null, take ? R2['ws.score'] : null, take ? R2['ws.ures'] : null, take ? _wai.gtab : null, take ? _wai.hid : null,
-        psum, _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null, _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null];
-    if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);
+        psum, _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null, _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null,
+        take?.spawners ? R2['ws.spawnResult'] : null];
+    if (WAI_PARALLEL && mode === 0) _waiParallel(WA, P, n, mode, list);
     else simRustDirect('k_worker_ai', WA, P);
     if (cnt[1]) throw new Error('k_worker_ai: out of room (payments or out events)' + (cnt[7] ? ', the parallel pass\'s lists: ' + cnt[7] : ''));
     // Its writes the JavaScript keeps beside the tables.
@@ -3919,20 +3950,18 @@ function _waiParallel(WA, P, n, mode, list) {
 // take_one). The collectors' groups' arrays and the healers' damaged units
 // (by id) for the kernel.
 function waiTake(J, order, n) {
-    const L = _waiArr('takeList', Int32Array, n);
-    L.set(order.subarray(0, n));
     const gt = _waiArr('gtab', Int32Array, 32);
     gt.fill(0, 0, 32);
     J.groups.forEach((G, k) => { if (G && k < 16 && simHeapHas(G.tile) && simHeapHas(G.st)) { gt[k * 2] = _simWEnc(_simHeapPtrOf(G.tile)); gt[k * 2 + 1] = _simWEnc(_simHeapPtrOf(G.st)); } });
     const HM = HEALER_DAMAGED_CANDIDATE_LIMIT, np = J.heal.length, hid = _waiArr('hid', Int32Array, Math.max(1, np) * HM);
     hid.fill(0, 0, Math.max(1, np) * HM);
     for (let o = 0; o < np; o++) { const Lh = J.heal[o] || []; for (let q = 0; q < Lh.length && q < HM; q++) hid[o * HM + q] = Lh[q] && !Lh[q].dead ? Lh[q].id | 0 : 0; }
-    // (Their nearest spawners: the worker brain over their slots; and their own stat words, without a row.)
-    const RS = _simParReg['ws.rslot'], E = _waiArr('takeSlots', Int32Array, n), S = _simUnitState, c = S.columns;
-    for (let i = 0; i < n; i++) { const q = RS[L[i]]; E[i] = q >= 0 ? q * 8 : -8; if (q >= 0 && c.statRow[q] < 0 && S.owners[q]) _waiOwnStats(S.owners[q], c, q); }
-    workerBrainsPrepare(n, false, E);
+    // Private stats for workers without a shared row. The native commit reads
+    // the search's order and proposed return spawners directly.
+    const RS = _simParReg['ws.rslot'], S = _simUnitState, c = S.columns;
+    for (let i = 0; i < n; i++) { const q = RS[order[i]]; if (q >= 0 && c.statRow[q] < 0 && S.owners[q]) _waiOwnStats(S.owners[q], c, q); }
     playerResourceBatchBegin();
-    try { if (waiAvailable()) waiOutEvents(waiRun(L, n, J)); } finally { playerResourceBatchEnd(); workerBrainsEnd(); }
+    try { if (waiAvailable()) waiOutEvents(waiRun(order, n, J)); } finally { playerResourceBatchEnd(); }
 }
 // One worker's event through the kernel, alone (tests: the tick runs its events as a list).
 function waiStepUnit(u, code = 0) {

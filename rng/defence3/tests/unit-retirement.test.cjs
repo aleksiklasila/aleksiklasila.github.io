@@ -8,6 +8,11 @@ inst.eval('startSoloGame();');
 const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     for (let i = 0; i < 17000; i++) { const u = new Unit('norm', 0, 400 + (i % 130) * 14, 400 + Math.floor(i / 130) * 14); units.push(u); }
     const original = units.slice(), dead = [3, 4, 8191, 8192, units.length - 1];
+    const stale = original[dead[0]];
+    // Fractional coordinates are still exact after the slot is released.
+    stale.x += 0.125;
+    stale.y += 0.375;
+    const retiredPosition = [stale.id, stale.owner, stale.x, stale.y];
     for (const i of dead) { units[i].dead = true; units[i]._removedNow = true; }
     selectedUnits = [units[3], units[6], units[8192]];
     const want = original.filter((u, i) => !dead.includes(i)).map(u => u.id);
@@ -17,9 +22,15 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     _forEachUnitInTickOrder = () => {}; simMoveRun = () => {}; combatScanRun = () => {};
     separationStart = () => {}; runUnitSeparationPass = () => {};
     gameTick();
+    const detached = [stale.id, stale.owner, stale.x, stale.y];
+    const deadAndEmpty = stale.dead === true && stale.energy === 0;
+    stale.x = 17.123;
+    stale.y = undefined;
+    const detachedWrites = stale.x === 17.123 && stale.y === undefined;
     const slots = _unitSlotMapEnsure();
     return { got, dead, want, ids: units.map(u => u.id), selected: selectedUnits.map(u => u.id),
-        kept: original[6].id, slotsMatch: units.every((u, i) => slots[i] === u._si) };
+        kept: original[6].id, slotsMatch: units.every((u, i) => slots[i] === u._si),
+        retiredPosition, detached, deadAndEmpty, detachedWrites };
 })())`));
 assert.deepEqual(result.got, result.dead);
 // (Dead units leave by swap-removal, O(1) each: the order changes alike on
@@ -28,5 +39,8 @@ assert.deepEqual(result.ids.slice().sort((a, b) => a - b), result.want.slice().s
 assert.equal(new Set(result.ids).size, result.ids.length, 'no unit listed twice');
 assert.deepEqual(result.selected, [result.kept]);
 assert.equal(result.slotsMatch, true);
+assert.deepEqual(result.detached, result.retiredPosition);
+assert.equal(result.deadAndEmpty, true);
+assert.equal(result.detachedWrites, true);
 assert.deepEqual(inst.errors.map(String), []);
 console.log('PASS: sparse retirement across block boundaries keeps the survivors, selections, and slot mapping.');

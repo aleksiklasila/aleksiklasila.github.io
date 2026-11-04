@@ -3,6 +3,45 @@
 use super::*;
 use super::k::K;
 
+/// Proposed return destinations for the ordered search replies. Uses the
+/// posted positions and immutable, tile-sorted eligible spawner buckets.
+/// Commit validates the single returned tile against the live structure.
+#[no_mangle]
+pub unsafe extern "C" fn k_ws_return_spawners(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let order = k.p::<i32>(0);
+    let count = *k.p::<i32>(1);
+    let kind = k.p::<i32>(2);
+    let need = k.p::<i32>(3);
+    let owner = k.p::<i32>(4);
+    let x = k.p::<f32>(5);
+    let y = k.p::<f32>(6);
+    let off = k.p::<i32>(7);
+    let tiles = k.p::<i32>(8);
+    let out = k.p::<i32>(9);
+    let (per, owners, w, h, tile) = (k.i(0), k.i(1), k.i(2), k.i(3), k.f(4));
+    let (grid_kind, heal_kind, build_need) = (k.i(5), k.i(6), k.i(7));
+    for row in chunk * per..((chunk + 1) * per).min(count) {
+        let i = *order.add(row as usize) as usize;
+        *out.add(i) = -1;
+        let kd = *kind.add(i);
+        let role = if kd == heal_kind { 1 } else if kd == grid_kind && (*need.add(i) & 255) == build_need { 0 } else { continue; };
+        let o = *owner.add(i);
+        if o < 0 || o >= owners { continue; }
+        let (ux, uy) = (floor(*x.add(i) as f64 / tile) as i32, floor(*y.add(i) as f64 / tile) as i32);
+        if ux < 0 || ux >= w || uy < 0 || uy >= h { continue; }
+        let b = (role * owners + o) as usize;
+        let mut best = -1;
+        let mut best_dist = i32::MAX;
+        for j in *off.add(b)..*off.add(b + 1) {
+            let t = *tiles.add(j as usize);
+            let dist = (irem(t, w) - ux).abs() + (idiv(t, w) - uy).abs();
+            if dist < best_dist { best = t; best_dist = dist; }
+        }
+        *out.add(i) = best;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
     let k=K::new(waddr(a) as *const i32);

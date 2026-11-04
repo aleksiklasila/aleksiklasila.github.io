@@ -638,21 +638,21 @@ let _unitGone = null;
 function _unitGoneRoom(n) {
     let G = _unitGone;
     if (!G || !simHeapHas(G.cnt)) {
-        G = _unitGone = { list: null, olist: null, cnt: simSharedArray(Int32Array, 160), tt: simSharedArray(Int32Array, 8), P: new Float64Array(40) };
+        G = _unitGone = { olist: null, cnt: simSharedArray(Int32Array, 160), tt: simSharedArray(Int32Array, 8), P: new Float64Array(40) };
         // (Worker record types, unit.wbType 1..6: their work type indices.)
         ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { G.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
     }
-    if (!G.list || G.list.length < n || !simHeapHas(G.list)) {
+    if (!G.olist || G.olist.length < n || !simHeapHas(G.olist)) {
         const m = simReserveCap(Math.max(n, 1), 4096);
-        if (G.list && simHeapHas(G.list)) { simHeapFree(G.list); simHeapFree(G.olist); }
-        G.list = simSharedArray(Int32Array, m); G.olist = simSharedArray(Int32Array, m);
+        if (G.olist && simHeapHas(G.olist)) simHeapFree(G.olist);
+        G.olist = simSharedArray(Int32Array, m);
     }
     return G;
 }
-// The removed units' slots (G.list[0..n]) through the gone kernel; then the
+// The removed units' slots from the retire plan through the gone kernel; then the
 // JavaScript's few: their queued orders' entries, the population, the
 // occupancy's totals, the work versions' checksum.
-function _unitGoneRun(G, n, S) {
+function _unitGoneRun(G, list, n, S) {
     if (_spatialCountDefer) throw new Error('unit retire inside the unit pass');
     const c = S.columns, P = G.P, V = _workerWorkTable(), U = unitIdIndex();
     const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
@@ -661,7 +661,7 @@ function _unitGoneRun(G, n, S) {
     const O = typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && typeof _occ !== 'undefined' ? _occ : null;
     const upk = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c ? _upkU.cnt : null;
     const vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaNeighborIds;
-    const arrays = [G.list, G.cnt, G.olist, c.owner, c.id, c.x, c.y, c.spEpoch, S.sepKey, S.sepLayer, c.spOwner, c.spType, c.spTile, c.spArea,
+    const arrays = [list, G.cnt, G.olist, c.owner, c.id, c.x, c.y, c.spEpoch, S.sepKey, S.sepLayer, c.spOwner, c.spType, c.spTile, c.spArea,
         c.mvOn, c.mvOut, c.live, c.statRow, c.vsGen, c.vsR, c.vsP1, c.vsP2, c.vsA, O ? O.bits : null, O ? O.mask : null, O ? O.rec : null,
         spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.upB, upk, c.ordSq,
         c.wkS, c.wkT, c.wkR, c.wkIx, c.wbType, G.tt, workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots,
@@ -707,8 +707,6 @@ function _unitRetirePass(retireBlocks) {
     let kingDied = false;
     if (DS) {
         const R = _retirePlan(retireBlocks, DS), H = R.hdr, ORD = R.ord, owners = DS.owners;
-        const G = _unitGoneRoom(Math.max(1, H[1]));
-        G.list.set(R.gone.subarray(0, H[1]));
         let sounds = H[2];
         for (let k = 0; k < sounds; k++) { const u = owners[R.snd[k]]; if (u) playSound('unit_death', u.x, u.y, u.unitType); }
         kingDied = H[3] === 1;
@@ -731,7 +729,7 @@ function _unitRetirePass(retireBlocks) {
             removeUnitSpatial(u);
             players[u.owner].popCount--;
         }
-        if (H[1] > 0) _unitGoneRun(G, H[1], DS);
+        if (H[1] > 0) _unitGoneRun(_unitGoneRoom(H[1]), R.gone, H[1], DS);
         if (nr > 0) {
             // (Only when the selection has something: a removed unit in it.)
             if (selectedUnits.length) {

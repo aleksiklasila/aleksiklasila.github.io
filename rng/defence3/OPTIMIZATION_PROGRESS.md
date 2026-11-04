@@ -20,6 +20,263 @@ counts over mean TPS; loading before play is separate. Historical bit equality
 is diagnostic; current implementation determinism and intended behavior are
 required.
 
+## 2026-11-04: packed worker replies and SIMD validation trial
+
+- Helpers packed reply headers into contiguous slot, ID, kind, and stamp
+  columns in commit order, with contiguous candidate rows after them.
+  Foreground SIMD compared four request headers at a time. It still gathered
+  current death, ID and kind by unit slot and the stamp by worker record.
+  Live reservations and writes stayed in the scalar ordered loop.
+- Two serial opposite-order pairs used production WASM32, 11 helpers, dk1,
+  160 ticks and settled ticks 60–159. Mixed replay with 0/3 helpers passed.
+  All four large runs matched hash `f8162538`, work and population
+  285,916–376,010. No settled tick exceeded 500 ms. Early maxima remain
+  1.79–1.97 s in the raw rows.
+
+  | Run | Mean tick | p95 | p99 / max | >1.5× median | Mean / max take |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 106.01 ms | 141.84 ms | 218.51 ms | 2 | 3.18 / 6.07 ms |
+  | Candidate A | 104.43 ms | 135.74 ms | 146.29 ms | 0 | 3.14 / 4.86 ms |
+  | Reference B | 105.18 ms | 137.11 ms | 157.99 ms | 1 | 3.05 / 5.13 ms |
+  | Candidate B | 106.06 ms | 133.01 ms | 158.96 ms | 1 | 3.18 / 5.16 ms |
+
+  GC overlap was 60.76/60.95 → 58.76/64.85 ms. Reference A/B → candidate
+  A/B wall-second rates were spawns 675.5/680.8 → 685.7/675.2, research
+  deposits 210.4/212.1 → 213.6/210.3, collector deposits 89.4/90.1 →
+  90.8/89.4, astar deposits 80.5/81.1 → 81.7/80.4.
+- The all-thread capture retained previous/slow/next/reference ticks
+  112/113/114/97, wall 145.45/150.67/93.05/103.45 ms. The slow tick had
+  28.46 ms overlapping GC and no result commit. Main samples show GC and
+  dispatch, with navigation and acquisition work on helpers. The preceding
+  tick had a 5.57 ms take, 71.21 ms movement, and zero GC.
+- The direct commit improvement did not repeat. Production source and
+  WASM32 were restored to the background-proposal implementation. The
+  candidate, baseline, reproduction runner, raw traces and summaries are
+  in `tests/test-runs/commit-simd-20261104/`. A separate live request token
+  or invalidation table would address the validation gathers. Packing only
+  the posted values cannot represent live changes between post and commit.
+
+## 2026-11-04: background return-spawner proposals and direct result commit
+
+- Search posts snapshot only eligible builder and healer spawners in compact
+  owner/role buckets. The existing search chain now emits return destinations
+  from posted worker positions after ordering the replies. The commit reads
+  those proposals, validates each tile live, and applies the ordered results
+  in one native pass. An invalid proposal takes the existing no-spawner path.
+  It does not trigger a replacement search during the commit.
+- `waiTake` no longer launches and joins worker-brain preparation or a
+  parallel decision/apply round. It also reads the search order in place.
+  An intermediate direct-lookup trial cut search-phase mean from 5.87/5.95
+  to 3.45/3.71 ms but still searched a sparse spawner bucket on the foreground.
+  The retained version moves that lookup into the posted chain. Its fixed
+  deadline scan join remains. The unprofiled candidate's measured lane-4
+  wait max was 0.09/0.02 ms. This remains a possible wait if the scan is late.
+- Serial opposite-order WASM32 comparisons ran with 11 helpers, dk1, 160
+  ticks and settled ticks 60–159 of the large mixed scene.
+
+  | Run | Mean wall | p95 | p99 / max | >1.5× median | Search phase mean / max |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 102.19 ms | 132.85 ms | 172.23 ms | 1 | 5.70 / 26.08 ms |
+  | Candidate A | 96.72 ms | 124.58 ms | 139.82 ms | 0 | 2.31 / 6.57 ms |
+  | Reference B | 110.86 ms | 148.28 ms | 161.83 ms | 0 | 5.97 / 22.20 ms |
+  | Candidate B | 102.84 ms | 134.38 ms | 139.67 ms | 0 | 2.55 / 8.55 ms |
+
+  All had zero settled steps above 500 ms. Early maxima were 1.74–1.84 s.
+  GC overlap was 47.45/48.23 → 59.52/55.12 ms over the settled window.
+- Candidate A's 6.57 ms search max was post tick 146, with zero GC.
+  Request selection/packing took 2.11 ms, collector group rebuilding
+  0.77 ms, and the search join 0.008 ms. The remaining post/grid work was
+  not fully subphased in this run. Candidate B's 8.55 ms search max was also
+  a post, tick 66, with 1.84 ms selection, 2.12 ms group rebuilding and
+  0.009 ms search join. The guarded diagnostic measured 25 settled takes at
+  3.29 ms mean and 6.38 ms max. Snapshot preparation averaged 0.54 ms with a
+  0.88 ms max. A guard rejected any helper join, parallel dispatch or
+  separate search call inside `waiTake` across 39 takes and 294,851 replies.
+- A focused non-CPU-profile diagnostic (`commit-breakdown.json`) measured
+  eight settled takes averaging 3.27 ms. The native commit call accounted
+  for 2.83 ms, with JavaScript setup and teardown accounting for about
+  0.44 ms and event output under 0.01 ms. The 6.38 ms profiled take had
+  6,466 replies and no GC. The same tick and reply count took 3.32 ms in
+  the focused run, including 2.79 ms in the native call. The 6.38 ms peak
+  is not a repeatable cost for that batch. Native candidate validation,
+  reservations and approach selection were not timed individually.
+- Population was 285,529–375,694 in the reference and 285,916–376,010 in
+  the candidate. Exact hashes match within each implementation (`338091ed`
+  reference, `f8162538` candidate). Posted spawner eligibility and ordered
+  direct assignment change the work mix. Counts include 7,541 → 7,161
+  spawns and 1,996 → 2,231 research deposits. Reference A/B → candidate A/B
+  rates per measured wall second were spawns 737.9/680.3 → 740.4/696.3,
+  research deposits 195.3/180.1 → 230.7/216.9, collector deposits 87.2/80.4 →
+  98.0/92.2, and astar deposits 81.1/74.8 → 88.2/82.9.
+- The twelve-thread profile retains previous/slow/next/reference ticks
+  75/76/77/84. Wall was 141.82/193.71/154.58/117.15 ms, all with zero
+  overlapping GC. Slow/reference movement was 98.97/66.26 ms and worker
+  search 7.93/4.92 ms. Next-tick movement was 109.01 ms. Main samples include
+  parallel dispatch and movement functions, helpers include native movement
+  kernels. The reference shares action-burst status.
+- WASM32 `38a283105079d750` and WASM64 `97e415cd04186fc1` were rebuilt.
+  Mixed replay checks with 0/3 helpers passed on both builds.
+  Raw profiles, tick rows, source overrides, guard, measurements and the
+  intermediate direct-lookup comparison are retained in
+  `tests/test-runs/commit-nowait-20261104/`.
+
+## 2026-11-04: four worker-search cohorts
+
+- The large mixed fixture uses 11 simulation helpers plus the simulation
+  thread. In-game workers are separate. The first completed tick had 233,907
+  live workers across six professions. Sampled ticks 60–159 had 118,193–178,896
+  workers, with 25,413–32,754 holding targets. Targets indicate assignments,
+  not successful transfers. The baseline had 87,501–141,273 registered
+  searchers, including parked workers waiting for retries. The 25 actual
+  baseline posts held 12,830–21,410 requests each, averaging 17,106.
+- The benchmark-only dk1 trial partitions stable unit IDs into four groups
+  and posts one group per tick. Two separate lanes and payload banks allow
+  a fixed two-tick lead. Each bank has its own collector preparation and
+  copies the work-site grid at post. The candidate diagnostic counted
+  2,947–6,074 actual requests per tick, averaging 4,256. The 50-tick smoke
+  replay with 0 and 3 helpers ended at `a6885b45` in both runs.
+- Serial opposite-order trials used the 1,000,004-unit initial scene and
+  100 settled ticks. Both candidates ended at `6a3301c2`, both references
+  at `338091ed`. Changed reservation order changes work counts. Measured
+  population was 285,529–375,694 in the reference and 285,929–375,944 in the
+  candidate. Raw rows retain births, deaths, actual deposits and work rates.
+
+  | Run | Mean wall | p95 | p99 / max | >1.5× median | GC overlap |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 114.55 ms | 146.12 ms | 168.07 ms | 0 | 53.50 ms |
+  | Candidate A | 120.13 ms | 157.51 ms | 181.10 ms | 2 | 41.83 ms |
+  | Reference B | 114.11 ms | 157.69 ms | 193.45 ms | 2 | 46.93 ms |
+  | Candidate B | 116.07 ms | 144.69 ms | 202.79 ms | 1 | 41.99 ms |
+
+  Zero steps above 500 ms in the settled window. Early maxima were 1.80–1.96 s.
+  Reference A/B → candidate A/B throughput per measured wall second was
+  spawns 658.3/660.9 → 604.5/625.6, research deposits 174.2/174.9 → 185.8/192.3,
+  collector deposits 77.8/78.1 → 77.8/80.6, astar deposits 72.4/72.7 → 70.2/72.6.
+- The search phase's max fell 24.34/23.01 → 20.22/17.43 ms, but its mean
+  rose 6.08/6.04 → 13.08/12.22 ms. Crucial correction to the earlier wait
+  interpretation: the posted scan's actual lane-4 wait max was 0.03/0.02 ms
+  in the reference and 0.09/0.22 ms in the candidate. The new lane 13 max was
+  0.03 ms. The large wait was on **lane 0**, where `waiTake` invokes
+  `workerBrainsPrepare` without deferral. This posts the spawner site and
+  nearest-spawner preparation and immediately collects it. Lane-0 totals
+  include other tick work. Their p95 fell 21.98/21.07 → 15.07/11.28 ms, while
+  their mean rose 5.82/5.86 → 7.77/7.07 ms. Splitting the scan posts does not
+  remove commit-side preparation and now invokes it more often.
+- The twelve-thread profile retains ticks 136/137/138/134, wall
+  132.21/184.00/108.20/97.85 ms. The slow tick overlapped 27.33 ms GC and
+  spent 99.54 ms in movement versus 59.23 ms on the same-burst reference.
+  Search spent 11.46/11.71 ms. Main samples include GC and acquisition work,
+  while helpers include movement, navigation fields and acquisition.
+- The prototype was kept out of production. Source overrides, the WASM32
+  build, raw counts, timings and profiles are in
+  `tests/test-runs/search-cohorts-20261104/`. The measured foreground wait
+  target is now commit-side spawner preparation rather than the scan deadline.
+
+## 2026-11-04: movement profiles and helper partition trial
+
+- Two named WASM32 captures profiled the simulation thread and 11 helpers.
+  In the first, previous/slow/next/reference ticks 111/112/113/114 spent
+  61/83/87/56 ms in movement. Tick 112 took 212 ms overall. Its 25.88 ms
+  major GC event fell entirely inside the 29.49 ms hit-resolution phase.
+  In the second capture, tick 112 resolved hits in 2.46 ms without GC.
+- The first capture's movement-only spike at tick 85 took 142 ms versus
+  60 ms on normal non-burst tick 84 and 97 ms on tick 86. There was no GC.
+  Atlas route-step self samples summed across 12 threads were 122 ms on
+  tick 85 versus 22 ms on tick 84 and 40 ms on tick 86. Including callees,
+  the slow/reference figures were 151/41 ms. These are concurrent samples.
+  The worst overall tick 112 had atlas step self samples of 32/15 ms versus
+  tick 114. Traffic and occupancy work also appears in the slices.
+- The second capture's max, tick 109, took 190 ms with zero GC. Its movement
+  rose to 125 ms versus 54 ms on non-burst tick 107, with 227,399/227,870
+  occupancy attempts, 81,475/81,131 blocked or clipped moves, and
+  155,372/156,376 footprint updates. Neighboring ticks 108/110 spent 58/59 ms
+  in movement. Atlas step samples fell on the slow tick. Helpers also ran
+  atlas rebuild, navigation fields and acquisition work during movement.
+  Elapsed timings and samples leave CPU scheduling versus cache and memory
+  pressure unresolved. No hardware counters were collected.
+- An atlas coordinate-arithmetic trial reduced main movement kernel p95
+  30.59/26.50 → 24.35/24.04 ms in opposite-order pairs. Whole movement p95
+  barely moved, 77.88/76.52 → 76.35/76.70 ms. Whole tick p95/max were
+  145.54/172.75 → 134.56/149.46 ms and 142.76/150.96 → 142.72/152.32 ms.
+  The production source and binary were restored. The diagnostic binary,
+  raw timing series and all-thread captures remain in the run directory.
+- A scheduler trial split the same 11 helpers into eight for foreground and
+  tick-critical lanes, three for bulk and slower tier jobs. The simulation
+  thread did not pick up background chunks while waiting for foreground.
+  No role split was applied to production. The one-helper navigation cap
+  was a separate single-pair diagnostic.
+
+  | Run | Mean tick | Tick p95 | Tick p99 / max | Movement p95 / max | >1.5× median |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Shared A | 109.80 ms | 151.82 ms | 230.32 ms | 82.27 / 106.99 ms | 3 |
+  | Split A | 116.59 ms | 148.83 ms | 176.73 ms | 77.4 / 81.5 ms | 1 |
+  | Shared B | 107.13 ms | 141.39 ms | 164.30 ms | 77.2 / 89.5 ms | 1 |
+  | Split B | 121.53 ms | 157.56 ms | 171.6 ms | 81.9 / 97.2 ms | 0 |
+
+  Neither pair had steps above 500 ms. The split's first-pair tail gain did
+  not repeat. Split A's max was tick 112. Movement took 70.25 ms, search
+  23.51 ms (including 21.6 ms waiting), and hits 24.27 ms with 20.22 ms
+  overlapping GC. The next tick had longer movement at 74.3 ms and a total
+  of 112.0 ms. The one-helper navigation cap had 110.1 ms mean, 142.7 ms
+  p95 and 191.0 ms max against Shared A.
+- All unprofiled trials use the large mixed fixture, dk1, 160 ticks and
+  settled ticks 60–159. Hash `338091ed`, work, and settled population
+  285,529–375,694 match. In the split comparison, reference A/B → candidate
+  A/B wall-second rates were spawns 686.8/703.9 → 646.8/620.5, research
+  deposits 181.8/186.3 → 171.2/164.2, collector deposits 81.1/83.2 →
+  76.4/73.3, astar deposits 75.5/77.4 → 71.1/68.2. Raw captures, trial
+  scheduler sources and diagnostic builds are in `tests/test-runs/movement-20261104/`.
+- Worker search currently posts a batch two base ticks before the commit.
+  `waiTake` assigns results and reservations at that fixed commit. Delaying
+  when a local helper misses its deadline would make state depend on peer
+  speed. A fixed longer deadline or fixed per-tick work budget is possible
+  if search inputs are kept stable until the new commit.
+
+## 2026-11-04: reduce retirement allocation and copying
+
+- The cleanup kernel reads the retire planner's slot array directly, removing
+  the copied buffer and temporary typed-array view. Detached records keep
+  integer coordinates and convert on read, preserving exact stale positions
+  and subsequent writes. Each retired unit still has its own detached record.
+- Sampled retirement allocations including callees fell **12.02 → 10.62 MiB**
+  (11.6%). Simulation total was **130.99 → 129.70 MiB**. Synthetic inputs
+  were 181.47/182.19 MiB and harness/other 81.51/81.21 MiB.
+- Serial opposite-order comparisons used WASM32, 11 helpers, dk1, 160 ticks
+  and 100 settled mixed-chaos ticks. All had zero steps above 500 ms.
+
+  | Run | Mean wall | p95 | p99 / max | >1.5× median | GC total / longest |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 113.65 ms | 149.74 ms | 194.19 ms | 2 | 65.83 / 17.16 ms |
+  | Candidate A | 105.92 ms | 135.97 ms | 148.20 ms | 0 | 61.51 / 19.76 ms |
+  | Reference B | 110.15 ms | 141.83 ms | 173.08 ms | 1 | 64.49 / 17.07 ms |
+  | Candidate B | 106.89 ms | 141.41 ms | 175.02 ms | 1 | 53.50 / 22.01 ms |
+
+  All had one major and one incremental event. Candidate B had three minor
+  events and the other runs four. Early maxima were 1.82–1.89 s.
+- The settled population was 285,529–375,694, with 7,541 births and 98,325
+  deaths. Work and hash `338091ed` matched. Rates per measured wall second,
+  reference A/B → candidate A/B, were spawns 663.5/684.6 → 712.0/705.5,
+  research deposits 175.6/181.2 → 188.4/186.7, collector deposits 78.4/80.9 →
+  84.1/83.4, astar deposits 72.9/75.3 → 78.3/77.6.
+- Twelve-thread slices retain ticks 69/70/71/80 (previous/slow/next/normal
+  same-burst reference), wall 127.47/204.65/119.90/146.47 ms. Slow/reference
+  GC overlap was 16.42/0 ms. Movement was 94.20/58.33 ms, including the main
+  kernel at about 34/22 ms and four occupancy passes totaling 53/33 ms.
+  Main samples include GC and WASM execution. Helpers show native movement,
+  background work and tower preparation. Phase elapsed times leave work
+  volume versus helper scheduling unresolved.
+- Candidate B's unprofiled max, tick 112, had 65.20 ms movement, 23.76 ms
+  worker search (including 21.18 ms wait) and 22.01 ms overlapping GC.
+  Neighboring ticks 111/113 and normal non-burst tick 114 had movement of
+  53.89/81.95/48.95 ms. The next tick's main movement kernel alone rose to
+  41 ms. Reference A's max tick 109 had zero GC and 115.75 ms movement, with
+  52.85 ms in the main kernel and 22.32 ms in occupancy pass 3 alone.
+- Retirement checks passed on WASM32 and WASM64, including fractional stale
+  positions, writes, selection and slot mapping. Shared unit-state checks
+  passed slot reuse and snapshot restoration. Mixed replays passed with 0/3
+  helpers. Raw rows, baselines, summaries and profiles are in
+  `tests/test-runs/retire-gc-20261104/`.
+
 ## 2026-11-04: reuse research rebase storage
 
 - Research rebasing now retains per-player ordered scratch and per-stat
