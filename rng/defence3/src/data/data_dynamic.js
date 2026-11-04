@@ -2679,6 +2679,49 @@ function _buildingStatHasValues(buildingKey, statKey) {
 
 // One stat of one thing at every level. Research level, boost and the unit
 // fallback do not depend on the thing level, so they are resolved once.
+const _statRangeArrays = [null], _statRangeParams = new Float64Array(11);
+function _rebuildPlayerThingRanges(pid, branch, key, levels, sources) {
+    const unit = branch === 'unit', work = unit && THING_STATS[key]?.isWorker ? 1 : 0;
+    const ar = getPlayerResearchLevel(pid, branch, key, 'attackRange');
+    const vr = getPlayerResearchLevel(pid, branch, key, 'visionRange');
+    const ab = _statBoostLevels(pid, branch, key, 'attackRange');
+    const vb = _statBoostLevels(pid, branch, key, 'visionRange');
+    const table = levels[1]?._flatStats;
+    let native = !!(table && _thingStatInHeap(table.data) && typeof _simWasmX?.k_stat_ranges === 'function');
+    // Imported/plain rows and incomplete tables retain the scalar path.
+    for (let l = 0; l <= MAX_THING_LEVEL && native; l++)
+        native = levels[l]?._flatStats === table && levels[l]._flatLevel === Math.max(1,l);
+    for (let l = 0; l <= MAX_THING_LEVEL; l++) {
+        let entry = levels[l];
+        if (!entry) {
+            levels[l] = unit ? _getUnitPlayerPrecomputedEntry(pid,key,l) : _getBuildingPlayerPrecomputedEntry(pid,key,l);
+            continue;
+        }
+        const level = Math.max(1,l), a = sources[_boostedLevel(level,ab)]?.attackRange;
+        const v = sources[_boostedLevel(level,vb)]?.visionRange;
+        const range = areaSteps(a ? a[ar] : unit ? normalizePrecomputedUnitStatValue(key,'attackRange',NaN) : NaN);
+        const own = areaSteps(v ? v[vr] : unit ? normalizePrecomputedUnitStatValue(key,'visionRange',NaN) : NaN);
+        entry.attackRangeArea = range; entry.visionOwn = own;
+        if (unit) entry.rangeIsWork = work;
+        if (!native) {
+            const vision = _visionSteps(own,range,work);
+            entry.attackRange = range * AREA_UNIT_TILE_EQUIVALENT * TILE;
+            entry.visionRangeArea = vision;
+            entry.visionRange = unit ? areaStepsVisionTiles(vision) : vision;
+            _simF32Stats(entry);
+        }
+    }
+    if (native) {
+        const p = _statRangeParams, keys = table.schema.keys;
+        p[0]=MAX_THING_LEVEL; p[1]=table.rowStride; p[2]=table.statStride;
+        p[3]=keys.indexOf('visionOwn'); p[4]=keys.indexOf('attackRangeArea');
+        p[5]=keys.indexOf('attackRange'); p[6]=keys.indexOf('visionRangeArea'); p[7]=keys.indexOf('visionRange');
+        p[8]=unit ? 1 : 0; p[9]=work; p[10]=TILE;
+        _statRangeArrays[0]=table.data;
+        simRustDirect('k_stat_ranges',_statRangeArrays,p);
+        _statRangeArrays[0]=null;
+    }
+}
 function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey) {
     _precomputedStatsVersion++;
     if (branch === 'unit') unitStatsTablesChanged(pid, normalizedKey);
@@ -2687,14 +2730,17 @@ function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey) {
     let levels = playerEntry[branch][normalizedKey];
     let levelSources = (PRECOMPUTED_STATS_MAP[branch] || {})[normalizedKey] || [];
     let isUnit = branch === 'unit';
+    if (statKey === 'attackRange' || statKey === 'visionRange') {
+        _rebuildPlayerThingRanges(pid,branch,normalizedKey,levels,levelSources);
+        if (isUnit && typeof effSharedTablesChanged === 'function') effSharedTablesChanged(pid,normalizedKey);
+        return levels;
+    }
     let rLvl = getPlayerResearchLevel(pid, branch, normalizedKey, statKey);
     let boost = _statBoostLevels(pid, branch, normalizedKey, statKey);
     let fallback;
     for (let lvl = 0; lvl <= MAX_THING_LEVEL; lvl++) {
         let entry = levels[lvl];
-        // Reach and sight are linked: recompute their small stat row together,
-        // including when research is lowered or an old scene is imported.
-        if (!entry || statKey === 'attackRange' || statKey === 'visionRange') {
+        if (!entry) {
             levels[lvl] = isUnit
                 ? _getUnitPlayerPrecomputedEntry(pid, normalizedKey, lvl)
                 : _getBuildingPlayerPrecomputedEntry(pid, normalizedKey, lvl);
@@ -3214,39 +3260,64 @@ function _researchStatsOutOfOrder(playerId, ordered, only) {
         if (!_researchTaskOfStats(task, only)) only.push(task);
     }
 }
+const _researchRebaseScratch = new WeakMap();
 function rebasePlayerResearchQueueState(playerId, only = null) {
     let p = ensurePlayerResearchQueueState(playerId);
-    let ordered = [];
-    if (p.researchTask) ordered.push(p.researchTask);
+    let scratch = _researchRebaseScratch.get(p);
+    if (!scratch) {
+        scratch = { ordered: [], groups: new Map(), epoch: 0 };
+        _researchRebaseScratch.set(p, scratch);
+    }
+    const ordered = scratch.ordered, epoch = ++scratch.epoch;
+    let count = 0;
+    if (p.researchTask) ordered[count++] = p.researchTask;
     if (Array.isArray(p.researchQueue) && p.researchQueue.length > 0) {
-        for (let task of p.researchQueue) {
-            if (task) ordered.push(task);
+        for (let i = 0; i < p.researchQueue.length; i++) {
+            const task = p.researchQueue[i];
+            if (task) ordered[count++] = task;
         }
     }
+    ordered.length = count;
     if (ordered.length <= 0) return p;
     if (only) _researchStatsOutOfOrder(playerId, ordered, only);
 
     // Progress belongs to the level, not the task object: same-stat tasks are interchangeable,
     // so the lowest queued level keeps the most-advanced progress after reordering.
-    let workDoneByStat = Object.create(null);
-    for (let task of ordered) {
+    const groups = scratch.groups;
+    for (let i = 0; i < ordered.length; i++) {
+        const task = ordered[i];
         if (only && !_researchTaskOfStats(task, only)) continue;
         let statKey = researchStatId(task);
-        (workDoneByStat[statKey] || (workDoneByStat[statKey] = [])).push(task);
-    }
-    for (let statKey in workDoneByStat) {
-        let tasks = workDoneByStat[statKey];
-        tasks.sort((a, b) => (Math.floor(Number(a.fromLevel) || 0)) - (Math.floor(Number(b.fromLevel) || 0)));
-        workDoneByStat[statKey] = tasks.map(t => Math.max(0, Number(t.workDone) || 0));
+        let group = groups.get(statKey);
+        if (!group) {
+            group = { epoch: 0, count: 0, used: 0, levels: [], work: [] };
+            groups.set(statKey, group);
+        }
+        if (group.epoch !== epoch) {
+            group.epoch = epoch;
+            group.count = group.used = 0;
+        }
+        // Stable insertion preserves equal-level progress order without a
+        // temporary sorted task array or sort/map callbacks.
+        const level = Math.floor(Number(task.fromLevel) || 0);
+        let pos = group.count++;
+        while (pos > 0 && group.levels[pos - 1] > level) {
+            group.levels[pos] = group.levels[pos - 1];
+            group.work[pos] = group.work[pos - 1];
+            pos--;
+        }
+        group.levels[pos] = level;
+        group.work[pos] = Math.max(0, Number(task.workDone) || 0);
     }
 
-    let queuedLevelsByStat = Object.create(null);
-    for (let task of ordered) {
+    for (let i = 0; i < ordered.length; i++) {
+        const task = ordered[i];
         if (!task) continue;
         if (only && !_researchTaskOfStats(task, only)) continue;
         let statKey = researchStatId(task);
         let baseLevel = Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0));
-        let priorSameStat = Math.max(0, Math.floor(Number(queuedLevelsByStat[statKey]) || 0));
+        const group = groups.get(statKey);
+        let priorSameStat = group.used++;
         let fromLevel = baseLevel + priorSameStat;
         let capLevel = MAX_RESEARCH_LEVEL;
         let atCap = fromLevel >= capLevel;
@@ -3257,14 +3328,13 @@ function rebasePlayerResearchQueueState(playerId, only = null) {
         task.toLevel = atCap ? fromLevel : Math.min(capLevel, fromLevel + 1);
         task.cost = atCap ? 0 : Math.max(0, Number(getResearchCost(task.kind, task.key, task.statKey, fromLevel)) || 0);
         task.workRequired = nextWorkRequired;
-        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(workDoneByStat[statKey][priorSameStat]) || 0));
-
-        queuedLevelsByStat[statKey] = priorSameStat + 1;
+        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(group.work[priorSameStat]) || 0));
     }
 
     p.researchTask = ordered[0] || null;
-    p.researchQueue.length = 0;
-    for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
+    for (let i = 1; i < ordered.length; i++) p.researchQueue[i - 1] = ordered[i];
+    p.researchQueue.length = ordered.length - 1;
+    ordered.fill(null);
     return p;
 }
 

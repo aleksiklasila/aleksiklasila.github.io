@@ -2554,6 +2554,7 @@ function snapDecodeState(S, options = null) {
             }) : null;
         }
         if (typeof healerCandidatesRestore === 'function') { const byId = new Map(); for (const u of units) byId.set(u.id, u); healerCandidatesRestore(S.g ? S.g.healers : null, byId); }
+        if (!pageOnly && !partial && typeof simMatchPrepare === 'function') simMatchPrepare();
 
         let unitsById = null;
         return {

@@ -1602,8 +1602,9 @@ function simUnitStateCollect(all = false) {
     if (S.unitsRef !== _simUnitsEpoch()) {
         S.unitsRef = _simUnitsEpoch();
         if (++S.epoch === 0xffffffff) { S.stamp.fill(0); S.epoch = 1; }
-        for (let i = 0; i < units.length; i++) {
-            const u = units[i];
+        // The proxy's iterator resolves the view once. Indexed reads went
+        // through its get trap twice per unit in this whole-world pass.
+        for (const u of units) {
             if (u && u._us === S.columns) S.stamp[u._si] = S.epoch;
         }
         for (let s = 0; s < owners.length; s++) if (owners[s] && S.stamp[s] !== S.epoch) simUnitStateDetach(S, s);

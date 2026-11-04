@@ -392,6 +392,7 @@ function applySoloScene(scene) {
     // like newly issued player commands. The normal backlog budgets large maps.
     for(const a of groups.values()) _actionBacklog.push([a.owner,{action:a.action,targetX:a.targetX,targetY:a.targetY,unitIds:a.unitIds}]);
     _markCombinedBgFullDirty();
+    if (typeof simMatchPrepare === 'function') simMatchPrepare();
     if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
 }
 

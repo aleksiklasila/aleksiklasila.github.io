@@ -1,5 +1,20 @@
 # High-population tick spikes
 
+For settled gameplay attribution, let the scene run before starting the
+profiler. This captures tick 59 so the first measured tick has a previous
+tick available; recurring rally, queue and other action bursts stay enabled:
+
+```powershell
+node --max-old-space-size=8192 tests/chaos-spikes.bench.cjs --population=524288 --units=1000000 --structures=65536 --map=1024 --ticks=160 --warmup=60 --profile-start=59 --helpers=11 --dk=1 --profile --helper-profile --timeline --kernels --system-metrics --out=tests/test-runs/chaos-spikes/settled.json
+node tests/chaos-spike-profile.cjs tests/test-runs/chaos-spikes/settled.json
+```
+
+Use a separate run without profiling for latency comparisons. `prepareMs`
+records the world-dependent cache preparation performed after synthetic
+placement, matching the production loading/import path. It does not advance
+gameplay or consume orders. Early ticks are retained but are not the target
+of the settled gameplay comparison.
+
 Run performance comparisons serially, with no other builds or test runners:
 
 ```powershell
@@ -31,7 +46,7 @@ Useful options:
 - `--profile-start=300` delays CPU profiling until step 300 to investigate late-game outliers without accumulating a whole run's profiling overhead. The analyzer selects its worst step from the captured window.
 - `--profile-start=19 --warmup=20` also captures the previous tick if the first steady tick is the worst one. Profiles retain their export/function-index names so later rebuilds cannot relabel numeric V8 frames; stripped internal functions still remain numeric.
 - `--timeline` records phase intervals for profile slicing with `--phase=kernel:8`, `--phase=kernel:89:0` or `--phase=simMoveRun` in the analyzer.
-- `--allocation-profile` samples JavaScript allocations during the steady window, including objects later collected, into a `.heapprofile` sidecar. Use this diagnostic separately from unprofiled timing comparisons.
+- `--allocation-profile` samples JavaScript allocations during the steady window, including objects later collected, into a `.heapprofile` sidecar. Sampling stops after the final gameplay step, before report generation and optional exact hashing. Use this diagnostic separately from unprofiled timing comparisons.
 - `--event-metrics` counts event codes, worker AI states/transitions, budget deferrals and fast route commits per tick. It adds per-event wrapper overhead; use it for attribution separately from acceptance timings.
 - `--no-delta` and `--no-merge` compare index construction strategies; `--no-yield` deliberately stresses an uninterrupted headless loop.
 - `DEFENCE_TEST_SOURCE_OVERRIDES` selects historical source/binary snapshots without replacing working files.

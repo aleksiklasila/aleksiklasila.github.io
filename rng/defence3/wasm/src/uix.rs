@@ -97,3 +97,79 @@ pub unsafe extern "C" fn k_uid_delete(a: u32, _chunk: i32) {
     }
     s(out, 0, del);
 }
+
+/// Sanitize an action's integer IDs in input order, using the same table and
+/// per-slot duplicate stamps as UnitIdIndex / _actionCleanIds. Detached slots
+/// are ignored; dead units still in the world remain valid IDs. All pointers
+/// are reserved scratch or existing columns, and no gameplay order is issued.
+/// P: input count, hash mask, stamp, output limit. Arrays: input IDs, hash
+/// table, ID/live/stamp columns, output IDs, output count.
+#[no_mangle]
+pub unsafe extern "C" fn k_uid_clean(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, tab, idc, live, stamps, out, cnt) =
+        (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (n, mask, stamp, limit) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3).max(0) as usize);
+    let mut count = 0;
+    for j in 0..n {
+        if count >= limit { break; }
+        let id = g(ids, j);
+        let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        loop {
+            let slot = g(tab, h as usize);
+            if slot < 0 { break; }
+            let slot = slot as usize;
+            if g(idc, slot) == id && g(live, slot) != 0 {
+                if g(stamps, slot) != stamp {
+                    s(stamps, slot, stamp); s(out, count, id); count += 1;
+                }
+                break;
+            }
+            h = (h + 1) & mask;
+        }
+    }
+    s(cnt, 0, count as i32);
+}
+
+/// Record an action's arrival on its player's indexed units. Duplicate IDs,
+/// including those in earlier chunks, already carry this mark and do nothing.
+/// Return the changed-unit count and runs of superseded marks/counts, so JS
+/// updates its waiting-action records without resolving every unit object.
+/// P: input count, hash mask, new mark, player. Arrays: input IDs, hash table,
+/// ID/live/owner/arrival columns, old marks, run counts, result counts.
+#[no_mangle]
+pub unsafe extern "C" fn k_uid_arrival(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, tab, idc, live, owner, marks) =
+        (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i8>(4), k.p::<i32>(5));
+    let (old_marks, runs, cnt) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8));
+    let (n, mask, mark, player) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3));
+    let (mut changed, mut count) = (0, 0usize);
+    for j in 0..n {
+        let id = g(ids, j);
+        let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        loop {
+            let slot = g(tab, h as usize);
+            if slot < 0 { break; }
+            let slot = slot as usize;
+            if g(idc, slot) == id && g(live, slot) != 0 {
+                if g(owner, slot) as i32 == player {
+                    let old = g(marks, slot);
+                    if old != mark {
+                        s(marks, slot, mark); changed += 1;
+                        if old > 0 {
+                            if count > 0 && g(old_marks, count - 1) == old {
+                                s(runs, count - 1, g(runs, count - 1) + 1);
+                            } else {
+                                s(old_marks, count, old); s(runs, count, 1); count += 1;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            h = (h + 1) & mask;
+        }
+    }
+    s(cnt, 0, changed); s(cnt, 1, count as i32);
+}

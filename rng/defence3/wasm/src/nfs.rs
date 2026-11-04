@@ -385,30 +385,45 @@ pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
     let absent = k.i(3) as u32;
     // (No list: the slots P[4] + j, a growth's new range.)
     let from = k.i(4);
+    // One column at a time: keep its metadata/default outside the slot loop
+    // and write a typed scalar for the usual one-element columns. The old
+    // slot-major loop repeatedly visited hundreds of unrelated cache lines
+    // and called a variable-size memset for every scalar.
+    for c in 0..nc {
+        let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
+        let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
+        let (kind, v) = if defs.is_null() { (0, 0.0) } else { (g(defs, 2 * c) as i32, g(defs, 2 * c + 1)) };
+        let value = match (kind, bytes) {
+            (1, _) => v as i64 as u64,
+            (2, 4) => (v as f32).to_bits() as u64,
+            (3, 8) => v.to_bits(),
+            _ => 0,
+        };
+        macro_rules! clear_column {
+            ($ty:ty) => {{
+                let p = base as *mut $ty;
+                let value = value as $ty;
+                for j in j0..j1 {
+                    let q = if list.is_null() { from + j as i32 } else { g(list, j) };
+                    if q < 0 { continue; }
+                    let at = p.add(q as usize * per);
+                    if per > 1 { core::ptr::write_bytes(at, 0, per); }
+                    *at = value;
+                }
+            }};
+        }
+        match bytes {
+            1 => clear_column!(u8),
+            2 => clear_column!(u16),
+            4 => clear_column!(u32),
+            8 => clear_column!(u64),
+            _ => {}
+        }
+    }
     for j in j0..j1 {
         let q = if list.is_null() { from + j as i32 } else { g(list, j) };
-        if q < 0 {
-            continue;
-        }
+        if q < 0 { continue; }
         let q = q as usize;
-        for c in 0..nc {
-            let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
-            let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
-            let at = base.add(q * per * bytes);
-            core::ptr::write_bytes(at, 0, per * bytes);
-            // A fresh slot's value other than zero (its first element):
-            // defs[2c] 1 an integer, 2 an f32, 3 an f64; defs[2c + 1] it.
-            if defs.is_null() { continue; }
-            let (kind, v) = (g(defs, 2 * c) as i32, g(defs, 2 * c + 1));
-            match (kind, bytes) {
-                (1, 1) => *at = v as i64 as u8,
-                (1, 2) => *(at as *mut u16) = v as i64 as u16,
-                (1, 4) => *(at as *mut u32) = v as i64 as u32,
-                (2, 4) => *(at as *mut f32) = v as f32,
-                (3, 8) => *(at as *mut f64) = v,
-                _ => {}
-            }
-        }
         s(sk, q, absent);
         s(sly, q, 0);
     }

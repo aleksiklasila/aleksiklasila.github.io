@@ -85,6 +85,11 @@ if(exportScene){
 // (PRE=<js>: run in the instance after setup, before the measured ticks: A/B switches.)
 if(process.env.PRE){const r=inst.eval(process.env.PRE);if(r!==undefined)console.log(r);}
 if(process.argv.includes('--worker-brain=js'))inst.eval(`if(typeof WORKER_BRAIN_WASM!=='undefined')WORKER_BRAIN_WASM=false;`);
+// Synthetic placement follows startGame, so finish the same load preparation
+// that a real imported scene performs after its entities have been installed.
+const prepareAt=performance.now();
+inst.eval(`if(typeof simMatchPrepare==='function')simMatchPrepare();`);
+const prepareMs=performance.now()-prepareAt;
 inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,healerDeliveries:0,salvagerReturns:0};{
  const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=destroyBuilding;
  _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.work.spawns++;if(s.type==='barrack')__scratch.work.armySpawns++;}return r;};
@@ -245,10 +250,17 @@ for(let i=0;i<ticks;i++){
  if(i%10===0)console.log('step',i,'ms',ms.toFixed(1),'units',row.units);
  assert.deepEqual(inst.errors.map(String),[]);assert.equal(row.gameOver,false);
 }
+// Capture the gameplay window, not final report construction or the optional
+// exact-state hash (which materializes JS views and can allocate heavily).
+if(allocationSession){
+ const r=await new Promise((resolve,reject)=>allocationSession.post('HeapProfiler.stopSampling',(err,r)=>err?reject(err):resolve(r)));
+ fs.writeFileSync(out+'.heapprofile',JSON.stringify(r.profile));allocationSession.disconnect();
+}
 function stats(rows){const a=rows.map(r=>r.ms).sort((a,b)=>a-b),mean=a.reduce((a,b)=>a+b,0)/a.length,tail=a.slice(Math.floor(a.length*.95));return{samples:a.length,mean,tps:1000/mean,p50:a[Math.floor(a.length*.5)],p95:a[Math.floor(a.length*.95)],p99:a[Math.floor(a.length*.99)],p999:a[Math.floor(a.length*.999)],worst5Mean:tail.reduce((n,v)=>n+v,0)/tail.length,max:a.at(-1)};}
 const steady=rows.slice(warmup);
 if(gcObserver){gcEntries.push(...gcObserver.takeRecords().map(e=>({at:e.startTime,ms:e.duration,kind:e.detail.kind})));gcObserver.disconnect();for(const row of rows)row.gcMs=gcEntries.reduce((n,e)=>n+Math.max(0,Math.min(e.at+e.ms,row.at+row.wallMs)-Math.max(e.at,row.at)),0);}
 const result={count,structures,workerMinimum,unitLevelOffset,ticks,warmup,helpers,dk,burstEvery,yieldBetween,profileOrigins,setup:setupSummary,node:process.version,heap:inst.eval('simHeapStats()'),jsScratch:inst.eval('({spatialCountQueueBytes:_spatialCountQ.byteLength||0,eventOrderBytes:typeof _unitEvSort!=="undefined"?[...new Set(Object.values(_unitEvSort))].reduce((n,a)=>n+(ArrayBuffer.isView(a)?a.byteLength:0),0):_unitEvKey.byteLength+_unitEvEnt.byteLength+_unitEvOrd.byteLength})'),all:stats(rows),steady:stats(steady),wall:stats(steady.map(r=>({ms:r.wallMs}))),bursts:stats(steady.filter(r=>r.burst).length?steady.filter(r=>r.burst):steady),worst:steady.slice().sort((a,b)=>b.wallMs-a.wallMs).slice(0,10),gcEntries,rows};
+if(allocationSession)result.allocationWindow={firstStep:warmup,lastStep:ticks-1,finalDiagnostics:false};
 if(process.argv.includes('--hash'))result.hash=inst.eval('__exactStateHash()');
 result.menuLimits={...limits,finalSlots:inst.eval('_simUnitState.cap')};
 assert.ok(result.menuLimits.finalSlots<=limits.slots,'unit columns must stay within their match-start reservation');
@@ -256,8 +268,13 @@ result.projFlight=inst.eval('({..._pj.stats,notMade:_pj.cap?_pj.hdr[3]:0,fired:_
 result.structRowCheckpoints={beforeGameplay:structRowsAtStart,beforeSteady:structRowsAtSteady,afterGameplay:result.structRows};
 if(session)result.wasmFunctionNames=require('./wasm-profile-exports.cjs')(inst.eval(`SIM_WASM64?SIM_WASM64_BIN:SIM_WASM_BIN`));
 result.layout=layout;result.towerMode=towerMode;
+result.prepareMs=prepareMs;
 result.tower=inst.eval(`typeof _towerAcq==='undefined'?null:({scratchBytes:Object.values(_towerAcq.arrays).reduce((n,a)=>n+a.byteLength,0)})`);
 result.population={min:Math.min(...steady.map(r=>r.units)),max:Math.max(...steady.map(r=>r.units)),births:steady.reduce((n,r)=>n+r.births,0),deaths:steady.reduce((n,r)=>n+r.deaths,0),work:rows.at(-1).work};
+const workBefore=warmup?rows[warmup-1].work:{};
+result.population.steadyWork=Object.fromEntries(Object.entries(rows.at(-1).work).map(([k,v])=>[k,v-(workBefore[k]||0)]));
+result.population.measuredWallSeconds=steady.reduce((n,r)=>n+r.wallMs,0)/1000;
+result.population.workPerWallSecond=Object.fromEntries(Object.entries(result.population.steadyWork).map(([k,v])=>[k,v/result.population.measuredWallSeconds]));
 result.phases={};for(const r of steady)for(const [name,ms]of Object.entries(r.phases))result.phases[name]=(result.phases[name]||0)+ms/steady.length;
 result.outliers={over500ms:steady.filter(r=>r.wallMs>500).length,overMedian1_5:steady.filter(r=>r.wallMs>result.wall.p50*1.5).length,maxToMedian:result.wall.max/result.wall.p50};
 result.outliers.thresholds=Object.fromEntries([500,833.3333333333,1000,1500,2000].map(ms=>[String(ms),steady.filter(r=>r.wallMs>ms).length]));
@@ -266,10 +283,6 @@ result.gameplay={...stats(rows.map(r=>({ms:r.wallMs}))),note:'All ticks after se
 fs.writeFileSync(out,JSON.stringify(result,null,2));
 if(session)session.post('Profiler.stop',(err,r)=>{if(err)throw err;fs.writeFileSync(out+'.cpuprofile',JSON.stringify(r.profile));session.disconnect();});
 if(profileHelpers)await Promise.all((require('./real-sim-helper.cjs').instances||[]).map(async(w,i)=>{const r=await w.benchProfile('stop');fs.writeFileSync(out+'.helper'+i+'.cpuprofile',JSON.stringify(r.profile));}));
-if(allocationSession){
- const r=await new Promise((resolve,reject)=>allocationSession.post('HeapProfiler.stopSampling',(err,r)=>err?reject(err):resolve(r)));
- fs.writeFileSync(out+'.heapprofile',JSON.stringify(r.profile));allocationSession.disconnect();
-}
 console.log(JSON.stringify({all:result.all,steady:result.steady,wall:result.wall,outliers:result.outliers,bursts:result.bursts,out}));
 process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});

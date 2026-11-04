@@ -3417,7 +3417,7 @@ class UnitIdIndex {
         this.dispose();
         if (!S) return;
         this.S = S; this._make();
-        for (let i = 0; i < units.length; i++) { const u = units[i]; if (u && u._us === S.columns && u._si >= 0 && this._at(u.id) < 0) this._put(u.id, u._si); }
+        for (const u of units) if (u && u._us === S.columns && u._si >= 0 && this._at(u.id) < 0) this._put(u.id, u._si);
     }
     // Removed units (the retire pass, their slots and ids still theirs): those
     // with a slot out of the table in one kernel call (uix.rs k_uid_delete).
@@ -3918,8 +3918,29 @@ function actionSanitizeWarm() {
 // (sanitizeAction: a stamp per unit's slot, no set of them), of units there
 // are: an id no unit has does nothing in any action, so it is dropped (a unit
 // outside the columns keeps its id, its duplicates by a set: rare).
+const _actionCleanP = new Float64Array(4);
 function _actionCleanIds(ids) {
     const clean = [], now = _actionIdStampNext(), map = _unitByIdMap(), c = _orderCols(), st = c ? c.idStp : null;
+    // Large selections: validate JS values once, then probe/deduplicate on
+    // the existing numeric tables. No object lookup or per-ID heap check.
+    // Loose units/page views keep the scalar path, including arbitrary IDs.
+    if (ids.length >= 256 && st && map instanceof UnitIdIndex && !map.loose.size && map._ok() && map.S.columns === c
+        && typeof _simWasmX?.k_uid_clean === 'function') {
+        const Q = orderQueueReserve(), P = _actionCleanP;
+        P[1] = map.mask; P[2] = now;
+        for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS;) {
+            let n = 0;
+            for (; i < ids.length && n < ACTION_MAX_UNIT_IDS; i++) {
+                const id = ids[i];
+                if (typeof id === 'number' && Number.isInteger(id) && id >= -2147483648 && id <= 2147483647) Q.ids[n++] = id;
+            }
+            if (!n) continue;
+            P[0] = n; P[3] = ACTION_MAX_UNIT_IDS - clean.length;
+            simRustDirect('k_uid_clean', [Q.ids, map.t, c.id, c.live, st, Q.out, Q.cnt], P);
+            for (let j = 0; j < Q.cnt[0]; j++) clean.push(Q.out[j]);
+        }
+        return clean;
+    }
     let odd = null;
     for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
         const id = ids[i];
@@ -3934,6 +3955,9 @@ function _actionCleanIds(ids) {
     return clean;
 }
 // (The ids' wire form, actionIdsEncode / actionIdsDecode: utils/id_codec.js.)
+const _actionTileFields = ['gx', 'gy', 'targetGx', 'targetGy'];
+const _actionIntFields = ['targetId', 'unitId', 'targetUnitId', 'targetTeam', 'unitLevel', 'fromIndex', 'toIndex'];
+const _actionStringFields = ['itemType', 'kind', 'key', 'statKey', 'targetType', 'mode', 'unitType'];
 function sanitizeAction(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
     let a = { ...raw };
@@ -3946,12 +3970,12 @@ function sanitizeAction(raw) {
         else if (!Array.isArray(a.unitIds)) a.unitIds = actionIdsDecode(a.uidz);
         delete a.uidz;
     }
-    for (let k of ['gx', 'gy', 'targetGx', 'targetGy']) if (k in a) a[k] = _actionInt(a[k]) ?? -1;
+    for (let i = 0; i < _actionTileFields.length; i++) { const k = _actionTileFields[i]; if (k in a) a[k] = _actionInt(a[k]) ?? -1; }
     // World positions stay on the map (paths and tiles are looked up there).
     if ('targetX' in a) { let v = _actionNum(a.targetX); a.targetX = v === null ? null : Math.max(0, Math.min(GRID_W * TILE - 1, v)); }
     if ('targetY' in a) { let v = _actionNum(a.targetY); a.targetY = v === null ? null : Math.max(0, Math.min(GRID_H * TILE - 1, v)); }
-    for (let k of ['targetId', 'unitId', 'targetUnitId', 'targetTeam', 'unitLevel', 'fromIndex', 'toIndex']) if (k in a) a[k] = _actionInt(a[k]);
-    for (let k of ['itemType', 'kind', 'key', 'statKey', 'targetType', 'mode', 'unitType']) if (k in a) a[k] = _actionStr(a[k]);
+    for (let i = 0; i < _actionIntFields.length; i++) { const k = _actionIntFields[i]; if (k in a) a[k] = _actionInt(a[k]); }
+    for (let i = 0; i < _actionStringFields.length; i++) { const k = _actionStringFields[i]; if (k in a) a[k] = _actionStr(a[k]); }
     if ('itemType' in a && !(a.itemType && Object.prototype.hasOwnProperty.call(BASE_CARD_TYPES, a.itemType))) a.itemType = null;
     if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
     // (Each id once, in the order given.)
@@ -4107,11 +4131,38 @@ function _actionMarkIds(raw) {
     return Array.isArray(raw.unitIds) ? raw.unitIds : (typeof raw.uidz === 'string' ? actionIdsDecode(raw.uidz) : []);
 }
 // (The marks: per slot, the unit columns' actMk (arrival + 1, 0 none).)
+const _actionArrivalP = new Float64Array(4);
 function _actionRecordArrival(raw, p, seq, waits) {
     const mark = seq + 1, c = _orderCols(), map = _unitByIdMap();
     let live = 0, lastS = -1, lastE = null;
     const dec = old => { if (old !== lastS) { lastS = old; lastE = _actLive.get(old - 1) || null; } if (lastE) lastE.live--; };
-    if (c) for (const id of _actionMarkIds(raw)) {
+    const ids = c ? _actionMarkIds(raw) : [];
+    if (ids.length >= 256 && c && map instanceof UnitIdIndex && !map.loose.size && map._ok() && map.S.columns === c
+        && Number.isInteger(mark) && mark > 0 && mark <= 2147483647
+        && Number.isInteger(p) && p >= -128 && p <= 127 && typeof _simWasmX?.k_uid_arrival === 'function') {
+        const Q = orderQueueReserve(), P = _actionArrivalP;
+        P[1] = map.mask; P[2] = mark; P[3] = p;
+        // Raw arrivals are not capped at the sanitized action's distinct-ID
+        // limit. Process all of them in bounded chunks, retaining the marks
+        // across chunks so duplicates decrement an older arrival only once.
+        for (let i = 0; i < ids.length;) {
+            let n = 0;
+            for (; i < ids.length && n < ACTION_MAX_UNIT_IDS; i++) {
+                const id = ids[i];
+                if (typeof id === 'number' && Number.isInteger(id) && id >= -2147483648 && id <= 2147483647) Q.ids[n++] = id;
+            }
+            if (!n) continue;
+            P[0] = n;
+            simRustDirect('k_uid_arrival', [Q.ids, map.t, c.id, c.live, c.owner, c.actMk, Q.out, Q.out2, Q.cnt], P);
+            live += Q.cnt[0];
+            for (let j = 0; j < Q.cnt[1]; j++) {
+                const old = Q.out[j];
+                if (old !== lastS) { lastS = old; lastE = _actLive.get(old - 1) || null; }
+                if (lastE) lastE.live -= Q.out2[j];
+            }
+        }
+        if (live) _actMarked = true;
+    } else if (c) for (const id of ids) {
         const u = map.get(id);
         if (u === undefined || u._us !== c || !(u._si >= 0) || c.owner[u._si] !== p) continue;
         const s = u._si, old = c.actMk[s];
@@ -4400,6 +4451,18 @@ function simMatchReserve() {
     if (typeof navReserve === 'function') navReserve();
     // (The area index for range queries, per layout: unit.js areaRangeIndexEnsure.)
     if (typeof areaRangeIndexEnsure === 'function' && typeof areaNeighborIds !== 'undefined' && areaNeighborIds.length) areaRangeIndexEnsure();
+}
+// Finish world-dependent caches while the match/restore is still loading.
+// Reservations run before entities exist; these need the completed world.
+// No tick, command, production or worker decision is advanced here.
+function simMatchPrepare() {
+    if (typeof _simWasmX === 'undefined' || !_simWasmX) return;
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (S && S.unitsRef !== _simUnitsEpoch()) simUnitStateCollect();
+    _unitByIdMap();
+    _upkBuildingsStep();
+    if (typeof _simMoveWalls === 'function') _simMoveWalls();
+    if (typeof _simMoveAreaBoxes === 'function') _simMoveAreaBoxes();
 }
 function orderQueueReserve() {
     const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
@@ -5909,6 +5972,7 @@ function startGame() {
 
     recalculateAdjacency();
     dirtyGrid = true; markAreasDirtyAll();
+    if (!startGameSkipStarters) simMatchPrepare();
     if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
     gameStarted = true;
     const snapshotButton = document.getElementById('btn-export-snapshot');

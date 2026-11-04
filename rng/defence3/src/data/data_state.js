@@ -823,7 +823,7 @@ function stationaryBrainChanged(e) {
     if (type === undefined) { type = _stationaryTypes.length; _stationaryTypeIds.set(raw, type); _stationaryTypes.push(raw); }
     const T = _sTables.get(e.constructor), row = e._sr;
     const effective = getThingEffectiveLevel(e);
-    const custom = effective>63 || (T && ['currentStats', 'x', 'y'].some(k => T.unique[k]?.has(row)));
+    const custom = effective>63 || (T && (T.unique.currentStats?.has(row) || T.unique.x?.has(row) || T.unique.y?.has(row)));
     // (A preferred target: tower.js Tower.preferredTargetSpec, its row's _ptK; custom values: its row's tc.*.)
     const preferred = e._stCode === 0x22 && e._ptK > 0;
     if (custom && e._stCode === 0x22 && typeof towerCustomWrite === 'function') towerCustomWrite(e, row);
@@ -844,7 +844,7 @@ function structTableRefresh(e) {
 // (structListsSetView). Kind of a class code (ctab): 0 towers, 1 barracks,
 // 2 spawners, -1 none.
 const _STL_KIND = [-1, 0, -1, 1, 2, 2, 2, 2, 2, 2, -1, -1];
-const _stl = { arr: [[], [], []], ver: [-1, -1, -1], view: null };
+const _stl = { arr: [[], [], []], counts: new Int32Array(3), ver: [-1, -1, -1], view: null };
 function _stlVer(k) { return k === 0 ? towersVersion : k === 1 ? barracksVersion : collectorSpawnersVersion; }
 function _stlBump(k) { if (k === 0) towersVersion++; else if (k === 1) barracksVersion++; else if (k === 2) collectorSpawnersVersion++; }
 function structListView(k) {
@@ -854,18 +854,21 @@ function structListView(k) {
     return L.arr[k];
 }
 function _stlFill() {
-    const L = _stl, T = _ST, A = L.arr;
+    const L = _stl, T = _ST, A = L.arr, counts = L.counts;
     structRowStats.listFills = (structRowStats.listFills | 0) + 1;
-    A[0].length = 0; A[1].length = 0; A[2].length = 0;
+    counts.fill(0);
     L.ver[0] = towersVersion; L.ver[1] = barracksVersion; L.ver[2] = collectorSpawnersVersion;
-    if (T.n !== GRID_W * GRID_H || !T.ctab) return;
+    if (T.n !== GRID_W * GRID_H || !T.ctab) { A[0].length = 0; A[1].length = 0; A[2].length = 0; return; }
     const n = _activeTileEntities.tileList(), Tl = _activeTileEntities._tiles, C = T.ctab, R = T.rrow;
     for (let i = 0; i < n; i++) {
         const t = Tl[i], c = C[t], k = _STL_KIND[c];
         if (k === undefined || k < 0) continue;
         const Tb = _stTabByCt[c] || _stTabOfCt(c), o = Tb && R[t] >= 0 ? Tb.rowObj[R[t]] : null;
-        if (o && o._stT === t) A[k].push(o);
+        // Overwrite the existing backing store. Clearing the lengths first
+        // made V8 discard it and grow three new stores on every refill.
+        if (o && o._stT === t) A[k][counts[k]++] = o;
     }
+    A[0].length = counts[0]; A[1].length = counts[1]; A[2].length = counts[2];
 }
 // The lists replaced (a reset, a restore): the tables hold the members; the
 // versions tell the lists' caches (the cloud and laser lists too). On the

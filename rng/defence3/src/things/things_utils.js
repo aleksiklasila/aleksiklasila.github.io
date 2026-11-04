@@ -658,7 +658,8 @@ function _effRowAttach(u) {
         if (_effRowN >= EFF_ROW_MAX) { _effRowsReset(); r = -1; }
         if (!(r >= 0)) { r = _effRowN; _effRowGrow(r + 1); _effRowN = r + 1; }
         _effRowObj[r] = pc;
-        _effRowMeta[r] = { owner:o, type:u.unitType, bl, el };
+        _effRowMeta[r] = { owner:o, type:u.unitType, bl, el,
+            unitType:u.unitType, unitLevel:bl, effectiveLevel:el, preComputed:pc };
         _effRowWrite(r, u, pc, ver);
         lk[key] = r;
     }
@@ -689,10 +690,20 @@ function _effRowWrite(r, u, pc, ver) {
     R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : areaSteps(va);
     // One cache line per shared level/stat row. Rust can broadcast a
     // row for equal SIMD lanes instead of streaming per-unit copies.
-    _effHot.set([R.rSpd[r], R.rCost[r], R.rChs[r], R.rCb[r], R.rCd[r], R.rDmg[r], R.rVis[r], R.rRD[r], R.rRA[r], R.rRK[r], R.rVsA[r]], r * EFF_HOT_WIDTH);
+    const h = r * EFF_HOT_WIDTH;
+    _effHot[h] = R.rSpd[r];
+    _effHot[h + 1] = R.rCost[r];
+    _effHot[h + 2] = R.rChs[r];
+    _effHot[h + 3] = R.rCb[r];
+    _effHot[h + 4] = R.rCd[r];
+    _effHot[h + 5] = R.rDmg[r];
+    _effHot[h + 6] = R.rVis[r];
+    _effHot[h + 7] = R.rRD[r];
+    _effHot[h + 8] = R.rRA[r];
+    _effHot[h + 9] = R.rRK[r];
+    _effHot[h + 10] = R.rVsA[r];
     // (A worker's, wai.rs: builderDps, healerDps, researcherDps,
     // gatherPerTrip, transferCooldownTicks.)
-    const h = r * EFF_HOT_WIDTH;
     _effHot[h + 11] = Number(pc.builderDps) || 0; _effHot[h + 12] = Number(pc.healerDps) || 0; _effHot[h + 13] = Number(pc.researcherDps) || 0;
     _effHot[h + 14] = Number(pc.gatherPerTrip) || 0; _effHot[h + 15] = Number(pc.transferCooldownTicks) || 0;
 }
@@ -706,8 +717,8 @@ function effSharedTablesChanged(owner, unitType) {
         if (!base || !effective) continue;
         const next=clonePrecomputedWithBaseMaxEnergy(base,effective), pc=_effRowObj[r];
         if (pc!==next) Object.assign(pc,next);
-        const u={owner,unitType,preComputed:pc,effectiveLevel:m.el,unitLevel:m.bl};
-        _effRowWrite(r,u,pc,_unitStatsVerOf(u));
+        m.preComputed = pc;
+        _effRowWrite(r,m,pc,_unitStatsVerOf(m));
     }
 }
 

@@ -28,6 +28,31 @@ pub struct K {
     w: *const i32,
     f: *const f64,
 }
+
+/// Publish linked range/vision columns in the existing shared stat table.
+/// JS resolves research/boost sources into integer area steps first. No
+/// temporary rows or heap allocations; supports both SoA and padded AoS.
+#[no_mangle]
+pub unsafe extern "C" fn k_stat_ranges(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let data = k.p::<f32>(0);
+    let stride = k.i(1) as usize;
+    let col = k.i(2) as usize;
+    let own = k.i(3) as usize * col;
+    let range = k.i(4) as usize * col;
+    let pixels = k.i(5) as usize * col;
+    let area = k.i(6) as usize * col;
+    let vision = k.i(7) as usize * col;
+    for level in 1..=k.i(0).max(0) as usize {
+        let row = data.add(level * stride);
+        let r = *row.add(range) as f64;
+        let o = *row.add(own) as f64;
+        let v = if k.i(9) != 0 { o } else { o.max(r) };
+        *row.add(pixels) = (r * 5.0 * k.f(10)) as f32;
+        *row.add(area) = v as f32;
+        *row.add(vision) = (if k.i(8) != 0 { v.max(0.6) * 5.0 } else { v }) as f32;
+    }
+}
 impl K {
     #[inline(always)]
     pub unsafe fn new(a: *const i32) -> K {

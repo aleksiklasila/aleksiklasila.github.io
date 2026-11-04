@@ -2417,15 +2417,31 @@ function _getWorkerSpawnersByType(type) {
     let index = _workerSpawnerIndex;
     if (!index || index.list !== collectorSpawners
         || index.length !== collectorSpawners.length || index.version !== version) {
-        index = _workerSpawnerIndex = { tick, version, list: collectorSpawners, length: collectorSpawners.length, types: new Map() };
-        for (let s of collectorSpawners) {
+        if (!index) index = _workerSpawnerIndex = { types: new Map(), buckets: [] };
+        index.tick = tick;
+        index.version = version;
+        index.list = collectorSpawners;
+        index.length = collectorSpawners.length;
+        for (let i = 0; i < index.buckets.length; i++) index.buckets[i].count = 0;
+        for (let i = 0; i < collectorSpawners.length; i++) {
+            const s = collectorSpawners[i];
             if (!s) continue;
             let bucket = index.types.get(s.type);
-            if (!bucket) index.types.set(s.type, bucket = []);
-            bucket.push(s);
+            if (!bucket) {
+                bucket = { list: [], count: 0 };
+                index.types.set(s.type, bucket);
+                index.buckets.push(bucket);
+            }
+            bucket.list[bucket.count++] = s;
+        }
+        // Overwrite before trimming so stable populations reuse array storage.
+        for (let i = 0; i < index.buckets.length; i++) {
+            const bucket = index.buckets[i];
+            bucket.list.length = bucket.count;
+            _structureBucketIndexes.delete(bucket.list);
         }
     }
-    return index.types.get(type) || _emptyWorkerSpawners;
+    return index.types.get(type)?.list || _emptyWorkerSpawners;
 }
 
 // The nearest live spawner of the type (by distance, row, column; bucketed)
