@@ -541,13 +541,13 @@ class Unit {
         updateUnitSpatial(this);
     }
 
-    get id() { return this._us ? this._us.id[this._si] : (this._det ? this._det.id : undefined); }
+    get id() { return this._us ? this._us.id[this._si] : (this._goneRecord ? this._goneRecord.id : this._goneId); }
     set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get owner() { return this._us ? this._us.owner[this._si] : (this._det ? this._det.owner : undefined); }
+    get owner() { return this._us ? this._us.owner[this._si] : (this._goneRecord ? this._goneRecord.owner : this._goneOwner); }
     set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get x() { return this._us ? this._us.x[this._si] * 0.125 : (this._det ? this._det.x : undefined); }
+    get x() { return this._us ? this._us.x[this._si] * 0.125 : this._goneRecord ? this._goneRecord.x : this._si === -1 ? this._goneX8 * 0.125 : undefined; }
     set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[this._si] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get y() { return this._us ? this._us.y[this._si] * 0.125 : (this._det ? this._det.y : undefined); }
+    get y() { return this._us ? this._us.y[this._si] * 0.125 : this._goneRecord ? this._goneRecord.y : this._si === -1 ? this._goneY8 * 0.125 : undefined; }
     set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[this._si] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
     // A jump (a portal): both coordinates at once, placed at the nearest free
     // spot there in the occupancy grid (sim_occupancy.js occupancyTeleport),
@@ -568,7 +568,7 @@ class Unit {
     set attackTimer(v) { if (this._us) { this._us.attackTimer[this._si] = v; if (v > 0) this._us.tmOn[this._si] = 1; } else if (this._det) this._det.attackTimer = v; else Object.defineProperty(this, 'attackTimer', { value: v, writable: true, enumerable: true, configurable: true }); }
     get attackFlash() { return this._us ? this._us.attackFlash[this._si] : (this._det ? this._det.attackFlash : undefined); }
     set attackFlash(v) { if (this._us) { this._us.attackFlash[this._si] = v; if (v > 0) this._us.tmOn[this._si] = 1; } else if (this._det) this._det.attackFlash = v; else Object.defineProperty(this, 'attackFlash', { value: v, writable: true, enumerable: true, configurable: true }); }
-    get energy() { return this._us ? this._us.energy[this._si] : (this._det ? this._det.energy : undefined); }
+    get energy() { return this._us ? this._us.energy[this._si] : this._goneRecord ? this._goneRecord.energy : this._si === -1 ? 0 : undefined; }
     set energy(v) { if (this._us) this._us.energy[this._si] = v; else if (this._det) this._det.energy = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
     get pathIndex() { return this._us ? this._us.pathIndex[this._si] : (this._det ? this._det.pathIndex : undefined); }
     set pathIndex(v) { if (this._us) { if (this._us.pathIndex[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.pathIndex[this._si] = v; } else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
@@ -657,7 +657,7 @@ class Unit {
     get _statsBehind() { const c = this._us; return c ? _unitStatsBehind(this, c.esVer[this._si]) : !!(this._det && this._det._statsBehind); }
     set _statsBehind(v) { const c = this._us; if (c) c.esVer[this._si] = v ? -2 : -3; else if (this._det) this._det._statsBehind = !!v; }
     // Dead: a column (see SIM_MOVE_COLUMNS), true or false.
-    get dead() { const c = this._us; return c ? c.dead[this._si] === 1 : (this._det ? this._det.dead === true : this._deadv === true); }
+    get dead() { const c = this._us; return c ? c.dead[this._si] === 1 : this._goneRecord ? this._goneRecord.dead === true : this._si === -1 || this._deadv === true; }
     set dead(v) {
         const c = this._us;
         // (Outside a tick, an action's or a restore's: the prebuilt unit
@@ -1326,6 +1326,10 @@ function _structImmuneTable() {
 // A structure hit kernel over the structure tables: head its first 14
 // arrays ('keys': its sort scratch), P its params (the common ones set here), room for `cap` hits.
 // The kernel's lists in the returned record (null: no structure tables).
+const _structHitClassCols = ['c__en', 'c__stT', 'c_burning', 'c_burnTickDamage', 'c_poisoned', 'c_poisonTickDamage',
+    'c_frozen', 'c_iceTickDamage', 'c_wet', 'c_watched', 'c_watchedByTeam', 'c_sandy'];
+const _structHitArgs = new Array(144).fill(null);
+const _structHitTailArgs = [];
 function _structHitsRun(fn, head, P, cap, tail = null) {
     const ST = _ST;
     if (!ST.stab) return null;
@@ -1339,21 +1343,26 @@ function _structHitsRun(fn, head, P, cap, tail = null) {
     }
     const K = _shK, imm = _structImmuneTable();
     K.shrine.fill(0);
-    const args = head.slice(0, 14).map(a => a === 'keys' ? K.keys : a);
-    while (args.length < 14) args.push(null);
-    args.push(ST.stab, ST.rrow, ST.val, ST.brain, imm, K.cnt);
+    const args = tail ? _structHitTailArgs : _structHitArgs;
+    for (let j = 0; j < 14; j++) args[j] = j >= head.length ? null : head[j] === 'keys' ? K.keys : head[j];
+    args[14] = ST.stab; args[15] = ST.rrow; args[16] = ST.val;
+    args[17] = ST.brain; args[18] = imm; args[19] = K.cnt;
     const cls = STRUCT_STATUS_CLASSES();
+    let arg = 20;
     for (let j = 0; j < 9; j++) {
         const T = cls[j] ? _sTables.get(cls[j]) : null;
         if (T && !_sColsInHeap(T)) _sTableGrow(T, T.cap);
-        for (const f of ['c__en', 'c__stT', 'c_burning', 'c_burnTickDamage', 'c_poisoned', 'c_poisonTickDamage', 'c_frozen', 'c_iceTickDamage', 'c_wet', 'c_watched', 'c_watchedByTeam', 'c_sandy']) args.push(T ? T[f] : null);
+        for (let i = 0; i < _structHitClassCols.length; i++) args[arg++] = T ? T[_structHitClassCols[i]] : null;
+        args[128 + j] = T ? T.c__ow : null;
     }
-    for (let j = 0; j < 9; j++) { const T = cls[j] ? _sTables.get(cls[j]) : null; args.push(T ? T.c__ow : null); }
-    while (args.length < 140) args.push(null);
-    args.push(K.dead, K.looks, K.watch, K.shrine);
-    if (tail) for (const a of tail) args.push(a);
+    args[137] = args[138] = args[139] = null;
+    args[140] = K.dead; args[141] = K.looks; args[142] = K.watch; args[143] = K.shrine;
+    if (tail) {
+        for (let j = 0; j < tail.length; j++) args[144 + j] = tail[j];
+        args.length = 144 + tail.length;
+    }
     P[2] = SIM_STRUCT_HIT_LOOKS; P[3] = NO; P[5] = TICK_RATE; P[6] = MAX_THING_LEVEL; P[7] = ST.n; P[8] = imm.length; P[9] = RESOURCE_FIXED_POINT_SCALE;
-    simRustDirect(fn, args, P);
+    try { simRustDirect(fn, args, P); } finally { args.fill(null); }
     for (let o = 0; o < NO; o++) if (K.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += K.shrine[o]; }
     return K;
 }
@@ -1486,10 +1495,16 @@ function unitHitsResolve() {
             else { const j = e - n - npj, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
-            if (e >= n) { recordUnitAttackFx(a, t, true); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
+            let tx, ty;
+            if (e >= n || dmg > 0) {
+                const tc = t._us, ts = t._si;
+                tx = tc === C ? C.x[ts] * 0.125 : t.x;
+                ty = tc === C ? C.y[ts] * 0.125 : t.y;
+            }
+            if (e >= n) { recordUnitAttackFx(a, t, true, ax, ay, tx, ty); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
             pushHostileDamageAlert(t, dmg, a.owner);
             recordDamageVisual(t, dmg, a.owner);
-            if (dmg > 0) playSound('melee_hit', t.x, t.y, a.unitType);
+            if (dmg > 0) playSound('melee_hit', tx, ty, a.unitType);
         }
     }
     if (nl) for (let i = 0; i < n; i++) {
@@ -1808,6 +1823,8 @@ let SPAWN_STAT_TEMPLATES = true;
 let SIM_SPAWN_DIRECT = true;
 // (By a number: ((owner * 2 + worker) * types + type index) * 64 + level; no key strings made a spawn.)
 const _spawnStatTemplates = new Map();
+const _spawnStatColumnNames = new WeakMap();
+const _spawnStatBefore = [];
 const _SPAWN_STAT_SKIP = new Set(['upB', 'energy']);
 function _spawnStats(u, C, s, owner, unitType, level) {
     const lvl = Math.max(1, Math.floor(level || 1)), ver = typeof _unitStatsVerOf === 'function' ? _unitStatsVerOf(u) : 0, epoch = typeof _effRowEpoch === 'number' ? _effRowEpoch : 0;
@@ -1815,7 +1832,9 @@ function _spawnStats(u, C, s, owner, unitType, level) {
     let T = _spawnStatTemplates.get(key);
     if (T && T.ver === ver && T.epoch === epoch && T.C === C && T.lvl === lvl) { _spawnTplWrite(T, C, s, false); return; }
     // (The first of its key at these tables: the full path, its writes noted.)
-    const names = Object.keys(C), before = new Array(names.length);
+    let names = _spawnStatColumnNames.get(C);
+    if (!names) _spawnStatColumnNames.set(C, names = Object.keys(C));
+    const before = _spawnStatBefore;
     for (let i = 0; i < names.length; i++) { const c = C[names[i]]; before[i] = !c ? undefined : ArrayBuffer.isView(c) ? (c.length === S_CAP_OF(C) ? c[s] : undefined) : typeof c.get === 'function' ? c.get(s) : undefined; }
     applyUnitLevelScaling(u, lvl);
     // (Kept as lists, written by a loop: _spawnTplWrite. Also split for the
@@ -1840,6 +1859,7 @@ function _spawnStats(u, C, s, owner, unitType, level) {
             if (!Object.is(v, before[i])) { rn.push(k); refs.push(v); }
         }
     }
+    before.fill(undefined, 0, names.length);
     _spawnStatTemplates.set(key, { ver, epoch, lvl, C, refs, rn, an, av: Float64Array.from(av), jn, jv: Float64Array.from(jv),
         pc: Int32Array.from(pc), pv: Float64Array.from(pv), pAt: -1, pGen: -1, e: _spawnMaxE(u) });
 }
@@ -2225,23 +2245,23 @@ function _nearestWalkableRing(gx, gy, unit) {
     return ring;
 }
 
-function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null) {
-    if (isWalkableTileFor(unit, gx, gy)) return { x: gx, y: gy };
+function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null, out = { x: 0, y: 0 }) {
+    if (isWalkableTileFor(unit, gx, gy)) { out.x = gx; out.y = gy; return out; }
     let hasFrom = Number.isFinite(fromGx) && Number.isFinite(fromGy);
     let ring = _nearestWalkableRing(gx, gy, unit);
     if (ring) {
-        if (!hasFrom) return { x: ring[0], y: ring[1] };
+        if (!hasFrom) { out.x = ring[0]; out.y = ring[1]; return out; }
         let bestX = ring[0], bestY = ring[1], bestD = detHypot(bestX - fromGx, bestY - fromGy);
         for (let i = 2; i < ring.length; i += 2) {
             let x = ring[i], y = ring[i + 1], d = detHypot(x - fromGx, y - fromGy);
             if (d < bestD || (d === bestD && (y < bestY || (y === bestY && x < bestX)))) { bestX = x; bestY = y; bestD = d; }
         }
-        return { x: bestX, y: bestY };
+        out.x = bestX; out.y = bestY;
+        return out;
     }
-    return {
-        x: Math.max(0, Math.min(GRID_W - 1, gx)),
-        y: Math.max(0, Math.min(GRID_H - 1, gy))
-    };
+    out.x = Math.max(0, Math.min(GRID_W - 1, gx));
+    out.y = Math.max(0, Math.min(GRID_H - 1, gy));
+    return out;
 }
 
 // ---- Unit separation ----
@@ -3560,7 +3580,7 @@ function _simMoveChargeSteps(chunks, NP, NT, names) {
         if (fix[pid]) _pendingMovementAstarFixed[pid] = (_pendingMovementAstarFixed[pid] || 0) + fix[pid];
         for (let ti = 0; ti < NT; ti++) {
             const u = used[pid * NT + ti];
-            if (u > 0) _recordAstarUsage(pid, u, { unitType: (ti < NT - 1 && names[ti]) || 'norm' }, 'movement');
+            if (u > 0) _recordAstarUsage(pid, u, null, 'movement', (ti < NT - 1 && names[ti]) || 'norm');
         }
     }
 }
@@ -3710,6 +3730,34 @@ function combatBrainReset() {
     const S = _simUnitState;
     if (S) S.columns.cmMode.fill(0);
 }
+// The units' slots moved (sim_unit_state.js simUnitStateCompact: map old
+// slot -> new, -1 gone; runs [to, from, count]): a posted run's results,
+// by slot, follow their units, and the brain's targets (slots) are mapped,
+// so the commit gives every unit what it would have had. (Dropped by the
+// commit's id check instead, a compaction left engaged units without their
+// instructions for a round: 10k of 94k idle, a different battle.)
+// (The background lanes were waited for: the results are complete.)
+function acqTierRemapSlots(map, runs, n0, ns) {
+    if (_acqStage !== 1) return;
+    const n = Math.min(_acqN, n0);
+    for (const name of ['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid']) {
+        const a = _simParReg[name];
+        if (!a) continue;
+        const old = a.slice(0, n);
+        // (Slots past the old run's: none, as if the run had not covered them.)
+        a.fill(name === 'acq.bm' ? 255 : name === 'acq.out' ? -2 : name === 'acq.id' ? -1 : 0, 0, Math.min(a.length, Math.max(ns, n)));
+        const R = [];
+        for (let r = 0; r < runs.length; r += 3) {
+            const from = runs[r + 1], cnt = Math.min(runs[r + 2], n - from);
+            if (cnt > 0) R.push(runs[r], from, cnt);
+        }
+        _simCopyRuns(old, a, R, 1);
+    }
+    // (bt: a unit's slot, or a structure's tile under mode 16.)
+    const bt = _simParReg['acq.bt'], bm = _simParReg['acq.bm'];
+    if (bt && bm) for (let s = 0; s < ns; s++) { const t = bt[s], m = bm[s]; if (t >= 0 && m !== 255 && (m & 16) === 0) bt[s] = t < n0 ? map[t] : -1; }
+    _acqN = ns;
+}
 function acqTierReset() {
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0; _acqCommitTick = -1; _acqStepTick = -1;
@@ -3786,7 +3834,9 @@ function _acqPost() {
     // tables (the build, then its answers: one job a team and part) when
     // sampled, the scan, the combat brain. Each has its own params slot.
     const answers = areaTargets, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
-    const scanSlot = 1 + (sampled ? 1 : 0) + (answers ? 1 : 0);
+    // (Sampled with answers: the build's count, offsets and scatter, the
+    // structure seeds and the answers, five stages; sampled only: the build.)
+    const scanSlot = 1 + (sampled ? (answers ? 5 : 1) : 0);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
@@ -3836,12 +3886,18 @@ function _acqPost() {
             // (A queue a job: the answers' jobs run side by side.)
             _acqArray('acq.saQueue',Int32Array,A*playersK*5);
         }
-        stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
         if(answers){
-            // (The same params for the answers' jobs: their own slot.)
-            simParallelStageParams(ACQ_LANE,2).set(I);
-            stages.push([SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5]);
-        }
+            // The build in entry ranges on the helpers (one serial job held a
+            // helper ~20-30 ms), then a tile pass a team seeding the four
+            // structure classes, then the answers (spreads only: I[35] 1).
+            // (The same params in every stage's own slot.)
+            const ranges=Math.min(24,Math.max(1,Math.ceil(ne/8192)));
+            I[33]=ranges;I[34]=Math.ceil(ne/ranges);I[35]=1;
+            _acqArray('acq.saHist',Int32Array,ranges*A*I[7]);
+            for(let slot=2;slot<=5;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
+            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],
+                [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5]);
+        }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }
     stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);
     simParallelBackgroundChain(ACQ_LANE,stages);

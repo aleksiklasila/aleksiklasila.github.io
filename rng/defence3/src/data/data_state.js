@@ -731,7 +731,7 @@ function structTablesRehome() {
 }
 // The rally structures' classes (their tables' rally fields: the rally kernel's,
 // ord.rs RALLY_TABLES of them, in this order).
-let _stRallyCls = null, _stRallyIx = null, _stStatusIx = null, _stAllCls = null, _stAllIx = null;
+let _stRallyCls = null, _stRallyIx = null, _stStatusCls = null, _stStatusIx = null, _stAllCls = null, _stAllIx = null;
 function structRallyClasses() {
     if (_stRallyCls) return _stRallyCls;
     _stRallyCls = [typeof Barrack !== 'undefined' ? Barrack : null, typeof CollectorSpawner !== 'undefined' ? CollectorSpawner : null, typeof AstarSpawner !== 'undefined' ? AstarSpawner : null,
@@ -739,9 +739,10 @@ function structRallyClasses() {
         typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null];
     _stRallyIx = new Map(); _stRallyCls.forEach((C, i) => { if (C) _stRallyIx.set(C, i + 1); });
     // (The status classes: renderer.js STRUCT_STATUS_CLASSES, the per-tile stab.)
-    _stStatusIx = new Map(); [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls].forEach((C, i) => { if (C) _stStatusIx.set(C, i + 1); });
+    _stStatusCls = [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls];
+    _stStatusIx = new Map(); _stStatusCls.forEach((C, i) => { if (C) _stStatusIx.set(C, i + 1); });
     // (Every tabled class, mines too: the per-tile ctab, getTileEntityRef.)
-    _stAllCls = [typeof Tower !== 'undefined' ? Tower : null, FloorItem, ..._stRallyCls, typeof GoldMine !== 'undefined' ? GoldMine : null, typeof AstarMine !== 'undefined' ? AstarMine : null];
+    _stAllCls = [..._stStatusCls, typeof GoldMine !== 'undefined' ? GoldMine : null, typeof AstarMine !== 'undefined' ? AstarMine : null];
     _stAllIx = new Map(); _stAllCls.forEach((C, i) => { if (C) _stAllIx.set(C, i + 1); });
     return _stRallyCls;
 }
@@ -938,7 +939,7 @@ const STRUCT_SHARED_REFS = new Set(['type','unitType']);
 // Only genuinely unique overrides have instance storage. Ordinary stats
 // resolve owner/type/level directly into shared flat-table views.
 const STRUCT_DERIVED_STATS=new Set(['preComputedBase','preComputedEffective','preComputed','preComputedPotential','baseStats','currentStats','maxEnergy','damage','spawnCooldown','x','y']);
-const _sBuildingStatKeys=new Map();
+const _sBuildingStatKeys=new Map(),_sBarrackStatKeys=new Map();
 // The entry is kept in the structure's row (T.mEnt, valid while T.mTok is the
 // stat tables' version + 1): it depends on the owner, type and levels, whose
 // setters clear it (_sDerivedReconcile), and on the tables (a version). The
@@ -953,9 +954,10 @@ function _sThingStatEntry(e,which='base') {
 }
 function _sThingStatEntryCompute(e,which) {
     const type=e.type;if(!type)return undefined;
-    const raw=type==='barrack'?'barrack_'+e.unitType:type;
-    let key=_sBuildingStatKeys.get(raw);
-    if(key===undefined){key=normalizeBuildingResearchKey(raw);_sBuildingStatKeys.set(raw,key);}
+    // (A barrack's key by its unit type: no 'barrack_' string made a miss.)
+    const barrack=type==='barrack',keys=barrack?_sBarrackStatKeys:_sBuildingStatKeys,by=barrack?e.unitType:type;
+    let key=keys.get(by);
+    if(key===undefined){key=normalizeBuildingResearchKey(barrack?'barrack_'+by:type);keys.set(by,key);}
     const base=getThingBaseLevel(e);
     let level=which==='effective'?getThingEffectiveLevel(e,base):which==='potential'?getThingPotentialLevel(e,getThingEffectiveLevel(e,base)):base;
     level=Math.max(1,clampThingLevel(level));

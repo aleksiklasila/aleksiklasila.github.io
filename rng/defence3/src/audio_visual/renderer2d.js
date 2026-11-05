@@ -849,13 +849,14 @@ function _requestStaticCacheCommit() {
     _staticCacheNeedsCommit = true;
 }
 
-function _clampTileRect(minGx, minGy, maxGx, maxGy) {
+function _clampTileRect(minGx, minGy, maxGx, maxGy, out = {}) {
     minGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(minGx)));
     minGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(minGy)));
     maxGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(maxGx)));
     maxGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(maxGy)));
     if (maxGx < minGx || maxGy < minGy) return null;
-    return { minGx, minGy, maxGx, maxGy };
+    out.minGx = minGx; out.minGy = minGy; out.maxGx = maxGx; out.maxGy = maxGy;
+    return out;
 }
 
 function _markCombinedTerrainFullDirty() {
@@ -948,8 +949,9 @@ function _markCombinedBgFullDirty() {
     _requestStaticCacheCommit();
 }
 
+const _combinedBgClampScratch = { minGx: 0, minGy: 0, maxGx: 0, maxGy: 0 };
 function _markCombinedBgRectDirty(minGx, minGy, maxGx, maxGy, markAreas = false, terrainChanged = false) {
-    let rect = _clampTileRect(minGx, minGy, maxGx, maxGy);
+    let rect = _clampTileRect(minGx, minGy, maxGx, maxGy, _combinedBgClampScratch);
     if (!rect) return;
     minGx = rect.minGx;
     minGy = rect.minGy;

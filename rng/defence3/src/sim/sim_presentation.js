@@ -436,11 +436,17 @@ function* simPresentationMetadata() {
     if (p.metaRev) Atomics.add(p.metaRev, 0, 1);
     simPresentationBind();
     p.worker.postMessage({type:'ready'});
+    // (Index loops: for-of in a generator allocated an iteration result a
+    // structure, ~5 MB a cycle at 65k structures.)
     const S = _simStructSlots, stamp = ++S.tick, lists = _simStructLists();
     let n = 0;
-    for (const list of lists) for (const e of list) {
-        if (e) { S.slotOf(e); n++; }
-        if ((n & 127) === 127) yield;
+    for (let kind = 0; kind < lists.length; kind++) {
+        const list = lists[kind];
+        for (let i = 0; i < list.length; i++) {
+            const e = list[i];
+            if (e) { S.slotOf(e); n++; }
+            if ((n & 127) === 127) yield;
+        }
     }
     const cap = Math.max(64, S.owner.length, _simStructReserveCap);
     let F = p.structures, fresh = false;
@@ -459,7 +465,8 @@ function* simPresentationMetadata() {
     // (The table again after each yield: a tick's changes may have grown it
     // since, _simStructTableGrow.)
     const cur = () => fresh ? p.structuresNext : p.structures;
-    for (let kind=0;kind<lists.length;kind++) for (const e of lists[kind]) {
+    for (let kind=0;kind<lists.length;kind++) for (let i=0, list=lists[kind];i<list.length;i++) {
+        const e=list[i];
         if (!e || S.owner[e._sslot] !== e) continue;
         F = cur();
         const s=e._sslot; S.stamp[s]=stamp; F.order[j++]=s;

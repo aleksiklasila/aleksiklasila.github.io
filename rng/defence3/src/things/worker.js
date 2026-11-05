@@ -373,6 +373,18 @@ function workerSearchTierReset() {
     // (And the failed searches' counts, not in snapshots: a restoring peer starts from none, so every peer does.)
     if (typeof _simUnitState !== 'undefined' && _simUnitState) { _simUnitState.columns.wsKind.fill(0); _simUnitState.columns.wsFail.fill(0); }
 }
+// The units' slots moved (sim_unit_state.js simUnitStateCompact: map old
+// slot -> new, -1 gone): a posted search's requests name their workers by
+// slot (ws.rslot; the take checks the id, ws.rid), so they follow them; a
+// gone worker's request names no slot (the take skipped it anyway). (Left
+// by old slot, every request failed its id check at the commit: 1,131
+// workers stayed idle on the compacted peer.) The lanes were waited for.
+function workerSearchTierRemapSlots(map, n0) {
+    const J = _wsPosted, RS = _simParReg['ws.rslot'];
+    if (!J || !RS) return;
+    const n = Math.min(J.CH | 0, RS.length);
+    for (let i = 0; i < n; i++) { const s = RS[i]; if (s >= 0) RS[i] = s < n0 ? map[s] : -1; }
+}
 // Once a tick, before the unit pass: the commit, the grid's changes (while
 // no search runs: phases 1 after the commit, 2, 3 before the post), the post.
 function workerSearchTierStep() {
@@ -473,7 +485,19 @@ function _wsMyTile(u) {
 // structure's work flags, owner, area and reservation bits, the counts; mode 1
 // only the reservation bits), from the structure tables, the id table and the
 // static stat tables (k_adj_apply's: research, maximum energy).
-const _WSW_CTAB_COLS = ['markedForSalvage', 'buildEnabled', 'queueEnabled', '_qN', '_qReq', '_qPaid', 'autoResearchEnabled'];
+const _WSW_CTAB_COLS = ['c_markedForSalvage', 'c_buildEnabled', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c_autoResearchEnabled'];
+function _wswClassColumns() {
+    const classes = STRUCT_STATUS_CLASSES(), width = _WSW_CTAB_COLS.length;
+    const out = _adjArr('wsw.ctab', Int32Array, 9 * width);
+    for (let c = 0; c < 9; c++) {
+        const T = classes[c] ? _sTables.get(classes[c]) : null;
+        for (let j = 0; j < width; j++) {
+            const a = T && T.n ? T[_WSW_CTAB_COLS[j]] : null;
+            out[c * width + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0;
+        }
+    }
+    return out;
+}
 const _wswP = new Float64Array(16);
 let _wswList = null;
 function _wswTiles(n) { if (!_wswList || _wswList.length < n || !simHeapHas(_wswList)) _wswList = simSharedArray(Int32Array, Math.max(4096, n * 2)); return _wswList; }
@@ -484,11 +508,7 @@ function _wswRun(W, list, n, mode) {
     const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), R = _simParReg;
     const CT = _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length);
     _adjApplyClasses(CT);
-    const WC = _adjArr('wsw.ctab', Int32Array, 9 * _WSW_CTAB_COLS.length), classes = STRUCT_STATUS_CLASSES(), w = _WSW_CTAB_COLS.length;
-    for (let c = 0; c < 9; c++) {
-        const T = classes[c] ? _sTables.get(classes[c]) : null;
-        for (let j = 0; j < w; j++) { const a = T && T.n ? T['c_' + _WSW_CTAB_COLS[j]] : null; WC[c * w + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
-    }
+    const WC = _wswClassColumns();
     const U = typeof _simUnitState !== 'undefined' ? _simUnitState : null, idt = U && _unitById._ok() && simHeapHas(_unitById.t) ? _unitById.t : null;
     const rtype = _stationaryTypeIds.get('research'), P = _wswP;
     P[0] = n; P[1] = GRID_W; P[2] = MAX_THING_LEVEL; P[3] = NT; P[4] = S.nk; P[5] = X.np; P[6] = S.L1; P[7] = S.R1; P[8] = W.bw; P[9] = WSW_MAXOWN;
@@ -856,7 +876,7 @@ function _wsPost() {
     Ep[3] = bucketJobs;
     for (let g = 0; g < eligibleGroups.length; g++) Ep[4 + g] = eligibleGroups[g];
     // (Then the requests that found something listed, k.rs k_ws_order: one job in the same chain.)
-    _wsArr('ws.order', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
+    _wsArr('ws.order', Int32Array, total); _wsArr('ws.otmp', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
     const Op = _simBgStageParams[WS_LANE][4]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
     const spawners = _wsSnapshotReturnSpawners(total, np);
     const Sp = _simBgStageParams[WS_LANE][5];
@@ -1650,13 +1670,13 @@ const WORKER_IDLE_BACKOFF_SECONDS = 5;
 const WORKER_WORK_REGION_TILES = 64;
 const _WORKER_WORK_TYPES = ['*', 'builder', 'healer', 'researcher', 'salvager', ...(typeof RESOURCE_COLLECTOR_UNIT_KEYS !== 'undefined' ? RESOURCE_COLLECTOR_UNIT_KEYS : []), 'other'];
 const _workerWorkTypeIndex = new Map(_WORKER_WORK_TYPES.map((t, i) => [t, i]));
-let _workerWorkVer = null, _workerWorkDims = '';
+let _workerWorkVer = null;
 function _workerWorkTable() {
     const rw = Math.ceil(GRID_W / WORKER_WORK_REGION_TILES), rh = Math.ceil(GRID_H / WORKER_WORK_REGION_TILES), np = Math.max(1, typeof players !== "undefined" && players ? players.length : 1);
-    const dims = np + ':' + rw + 'x' + rh;
-    if (!_workerWorkVer || _workerWorkDims !== dims) {
+    const old = _workerWorkVer;
+    if (!old || old.np !== np || old.rw !== rw || old.rh !== rh) {
         // (Shared: the movement kernel checks parked idle workers' versions.)
-        _workerWorkVer = simHeapArrayAuto(Int32Array, np * _WORKER_WORK_TYPES.length * (1 + rw * rh)); _workerWorkDims = dims;
+        _workerWorkVer = simHeapArrayAuto(Int32Array, np * _WORKER_WORK_TYPES.length * (1 + rw * rh));
         simParallelBind('wk.ver', _workerWorkVer);
         _workerWorkVer.rw = rw; _workerWorkVer.rh = rh; _workerWorkVer.np = np; _workerWorkVer.sum = 0;
     }
@@ -2776,7 +2796,7 @@ function _hcArr(name, Type, n) {
 // (B.slots, reserved before), every player.
 function healerCandidatesReserve(B) {
     const n = Math.max(1024, B.slots | 0), owners = Math.max(1, B.players | 0), cap = Math.max(1, HEALER_DAMAGED_CANDIDATE_LIMIT | 0), chunks = Math.max(1, Math.ceil(n / HC_CHUNK));
-    _hcArr('hc.e', Float32Array, n); _hcArr('hc.m', Float32Array, n); _hcArr('hc.o', Int16Array, n); _hcArr('hc.id', Int32Array, n); _hcArr('hc.l', Uint8Array, n); _hcArr('hc.d', Uint8Array, n);
+    _hcArr('hc.e', Float32Array, n); _hcArr('hc.m', Float32Array, n); _hcArr('hc.o', Int8Array, n); _hcArr('hc.id', Int32Array, n); _hcArr('hc.l', Uint8Array, n); _hcArr('hc.d', Uint8Array, n);
     _hcArr('hc.res', Int32Array, chunks * owners * cap); _hcArr('hc.rat', Float32Array, chunks * owners * cap);
     _hcArr('hc.best', Int32Array, owners * cap); _hcArr('hc.bestRat', Float32Array, owners * cap);
 }
@@ -2784,7 +2804,7 @@ function _hcPost(ownerCount, cap) {
     simParallelBackgroundWait(HC_LANE);
     const S = _simUnitState, c = S.columns, n = S.owners.length;
     // (The columns as they are now, copied on the helpers in one job.)
-    const cp = [_hcArr('hc.e', Float32Array, n), c.energy, _hcArr('hc.m', Float32Array, n), c.maxE, _hcArr('hc.o', Int16Array, n), c.owner,
+    const cp = [_hcArr('hc.e', Float32Array, n), c.energy, _hcArr('hc.m', Float32Array, n), c.maxE, _hcArr('hc.o', Int8Array, n), c.owner,
         _hcArr('hc.id', Int32Array, n), c.id, _hcArr('hc.l', Uint8Array, n), c.live, _hcArr('hc.d', Uint8Array, n), c.dead];
     for (let i = 1; i < cp.length; i += 2) cp[i] = cp[i].subarray(0, n);
     for (let i = 0; i < cp.length; i += 2) cp[i] = cp[i].subarray(0, n);
@@ -2808,6 +2828,28 @@ function _hcReduce() {
     P[0] = J.chunks; P[1] = J.ownerCount; P[2] = J.cap;
     simParallelBackground(SIM_KERNEL_HEAL_REDUCE, J.ownerCount, HC_LANE);
     J.reduced = true;
+}
+// The units' slots moved (simUnitStateCompact; map old slot -> new, -1
+// gone, ns live units now in slots 0..ns-1): a posted scan's lists name
+// units by slot (hc.res before the merge, hc.best after it) with the ids
+// copied by slot (hc.id: the merge orders by them, the collect checks them).
+// They follow their units; a unit gone since keeps its id in a slot past
+// the live ones (ns...), where no unit is yet, so it is ordered as before
+// and skipped as before (a list ends at the first -1). The lanes were waited for.
+function healerCandidatesRemapSlots(map, n0, ns) {
+    const J = _hcPosted, ID = _simParReg['hc.id'];
+    if (!J || !ID) return;
+    const n = Math.min(J.n | 0, n0, ID.length), old = ID.slice(0, n), to = new Int32Array(n).fill(-1);
+    let extra = ns;
+    const remap = s => {
+        if (!(s >= 0) || s >= n) return s;
+        if (to[s] < 0) { const t = map[s] >= 0 ? map[s] : extra++; to[s] = t; if (t < ID.length) ID[t] = old[s]; }
+        return to[s];
+    };
+    for (let s = 0; s < n; s++) if (map[s] >= 0) remap(s);
+    const L = J.reduced ? _simParReg['hc.best'] : _simParReg['hc.res'];
+    const len = J.reduced ? J.ownerCount * J.cap : J.chunks * J.ownerCount * J.cap;
+    for (let i = 0; i < len && i < L.length; i++) L[i] = remap(L[i]);
 }
 // The posted scan's lists per owner ({u, ratio, id}), or null.
 function _hcCollect(ownerCount, cap) {
@@ -3314,7 +3356,7 @@ function workerBrainsPrepare(n,defer=false,list=null){
     if(n>0){const src=list||_unitEvSort.sorted;_workerBrainArray('list',Int32Array,n).set(src.subarray(0,n));}
     const B=_workerBrain;B.active=false;B.tick=-1;B.prepared=0;B.used=0;B.misses=0;
     // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
-    if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.free.length<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
+    if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.freeCount<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
     const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
     _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);
     for(const key of ['code','own','uc','val','brain'])simParallelBind('st.'+key,_ST[key]);
@@ -3561,18 +3603,19 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
 
 function applyWorkerRallyFromSpawner(u, spawner) {
     if (!u || u.dead || !u.workerType || !spawner) return false;
-    let rallyTarget = getSpawnerRallyTargetWorld(spawner);
-    if (!rallyTarget || !Number.isFinite(rallyTarget.x) || !Number.isFinite(rallyTarget.y)) return false;
+    if (!_refreshSpawnerRallyTarget(spawner)) return false;
+    const rallyX = spawner.rallyX, rallyY = spawner.rallyY;
+    if (!Number.isFinite(rallyX) || !Number.isFinite(rallyY)) return false;
 
-    let targetGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(rallyTarget.x / TILE)));
-    let targetGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(rallyTarget.y / TILE)));
+    let targetGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(rallyX / TILE)));
+    let targetGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(rallyY / TILE)));
     let myGx = Math.floor(u.x / TILE);
     let myGy = Math.floor(u.y / TILE);
     u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
 
     if (isResourceCollectorWorkerType(u.workerType)) {
         let resourceCfg = getResourceCollectorConfigByWorkerType(u.workerType);
-        let gather = resourceCfg ? _getResourceCollectorGatherTargetNear(rallyTarget.x, rallyTarget.y, u.owner, resourceCfg, TILE) : null;
+        let gather = resourceCfg ? _getResourceCollectorGatherTargetNear(rallyX, rallyY, u.owner, resourceCfg, TILE) : null;
         if (!(gather && gather.target && _isResourceCollectorTargetValid(gather.target, gather.type, u.owner, resourceCfg))) return false;
         _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
         if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
@@ -3677,8 +3720,9 @@ const _WAI_AI_W = per => 16 + per * 60, _WAI_A64_W = per => per * 54;
 const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work', 'gold_collected', 'astar_collected'];
 // The class columns the kernel reads (wai.ctab: per class of data_state.js
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
-const WAI_CTAB_COLS = ['markedForSalvage', 'stacks', 'level', 'queueEnabled', '_qN', '_qReq', '_qPaid', '_uc'];
-const _wai = { tver: '', P: new Float64Array(80), declined: 0 };
+const WAI_CTAB_COLS = ['c_markedForSalvage', 'c_stacks', 'c_level', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c__uc'];
+const _wai = { tver: -1, tablePlayers: 0, tableLevels: 0, P: new Float64Array(80), declined: 0 };
+const _waiNativeArgs = new Array(156).fill(null);
 function _waiArr(name, Type, n) {
     let a = _wai[name];
     if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
@@ -3707,16 +3751,19 @@ function waiAvailable() {
 // record type and level the search range (_getWorkerAutoSearchDistancePx,
 // _getWorkerAutoSearchDistanceArea). Made again when the stat tables change.
 const _WAI_WB_TYPES = ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'];
+const _waiResearchProbe = { type: 'research', level: 0, owner: 0 };
+const _waiWorkerProbe = { owner: 0, unitType: null, effectiveLevel: 0 };
 function _waiTables() {
-    const np = players.length, L1 = MAX_THING_LEVEL + 1, key = _precomputedStatsVersion + ':' + np + ':' + L1;
-    if (_wai.tver === key && simHeapHas(_wai.teff)) return;
+    const np = players.length, L1 = MAX_THING_LEVEL + 1, version = _precomputedStatsVersion;
+    if (_wai.tver === version && _wai.tablePlayers === np && _wai.tableLevels === L1 && simHeapHas(_wai.teff)) return;
     const teff = _waiArr('teff', Float64Array, np * L1), tdps = _waiArr('tdps', Float64Array, np * L1);
     const tspx = _waiArr('tspx', Float64Array, np * 8 * L1), tsak = _waiArr('tsak', Float64Array, np * 8 * L1);
     const tt = _waiArr('ttab', Int32Array, 8);
     // (Per owner, resource (energy, A*) and level: a farm's multiplier, collector-ai's.)
     const tfarm = _waiArr('tfarm', Float64Array, np * 2 * L1);
     for (let o = 0; o < np; o++) for (let l = 0; l < L1; l++) {
-        teff[o * L1 + l] = getResearchBuildingEfficiency({ type: 'research', level: l, owner: o });
+        _waiResearchProbe.level = l; _waiResearchProbe.owner = o;
+        teff[o * L1 + l] = getResearchBuildingEfficiency(_waiResearchProbe);
         for (let rz = 0; rz < 2; rz++) {
             const cfg = RESOURCE_TYPE_LIST[rz];
             let m = getBuildingStatForOwner(o, cfg.farmKey, Math.max(1, l), 'multiplier');
@@ -3726,12 +3773,24 @@ function _waiTables() {
         const d = getUnitStatForOwner(o, 'researcher_unit', Math.max(1, l), 'researcherDps');
         tdps[o * L1 + l] = Math.max(1, Math.round(Number.isFinite(d) ? d : 1));
         for (let wb = 1; wb < _WAI_WB_TYPES.length; wb++) {
-            const u = { owner: o, unitType: getWorkerUnitTypeFromWorkerType(_WAI_WB_TYPES[wb]), effectiveLevel: l }, i = (o * 8 + wb) * L1 + l;
+            const u = _waiWorkerProbe, i = (o * 8 + wb) * L1 + l;
+            u.owner = o; u.unitType = getWorkerUnitTypeFromWorkerType(_WAI_WB_TYPES[wb]); u.effectiveLevel = l;
             tspx[i] = _getWorkerAutoSearchDistancePx(u); tsak[i] = _getWorkerAutoSearchDistanceArea(u);
         }
     }
-    _WAI_WB_TYPES.forEach((t, i) => { tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
-    _wai.tver = key;
+    for (let i = 0; i < _WAI_WB_TYPES.length; i++) {
+        const t = _WAI_WB_TYPES[i];
+        tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0;
+    }
+    _wai.tver = version; _wai.tablePlayers = np; _wai.tableLevels = L1;
+}
+function _waiHeapColumn(table, key) {
+    const col = table && table.n ? table[key] : null;
+    return simHeapHas(col) ? col : null;
+}
+function _waiStationaryTypeCode(key) {
+    const id = _stationaryTypeIds.get(key);
+    return id === undefined ? -1 : id + 1;
 }
 // The pass over the n worker events listed (slot * 8 + code, their order).
 // (mode: 0 the events, 1 the tier's takes (take), 2 structures' progress ops: things_utils.js structProgressOps.)
@@ -3774,7 +3833,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
     const wsl = _wsw ? _wswResvRoom() : null;
     structRallyClasses();
-    const RT = typeof ResearchSpawner !== 'undefined' ? _sTables.get(ResearchSpawner) : null, rcol = k => RT && RT.n && simHeapHas(RT['c_' + k]) ? RT['c_' + k] : null;
+    const RT = typeof ResearchSpawner !== 'undefined' ? _sTables.get(ResearchSpawner) : null;
     let atlas = 0;
     for (let p = 0; p < NAV_PROFILES; p++) { const nav = _nav[p]; if (NAV_ATLAS && nav && nav.atlas && nav.atlas.header) atlas |= 1 << p; }
     // (Every profile's walls, as navApproachTile reads them.)
@@ -3782,10 +3841,15 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     for (let p = 0; p < NAV_PROFILES; p++) { const a = navWallTable(p); cwall[p] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
     const CW = WAI_CTAB_COLS.length, ctab = _waiArr('ctab', Int32Array, (_stAllCls.length + 1) * CW);
     ctab.fill(0, 0, (_stAllCls.length + 1) * CW);
-    _stAllCls.forEach((C, i) => {
+    for (let i = 0; i < _stAllCls.length; i++) {
+        const C = _stAllCls[i];
         const T = C ? _sTables.get(C) : null;
-        for (let j = 0; j < CW; j++) { const a = T && T.n && WAI_CTAB_COLS[j] ? T['c_' + WAI_CTAB_COLS[j]] : null; ctab[(i + 1) * CW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
-    });
+        if (!T || !T.n) continue;
+        for (let j = 0; j < CW; j++) {
+            const a = T[WAI_CTAB_COLS[j]];
+            ctab[(i + 1) * CW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0;
+        }
+    }
     // (Prices by stationary type: a salvage's refund.)
     const nty = _stationaryTypes.length, price = _waiArr('price', Float64Array, nty + 1);
     for (let i = 0; i < nty; i++) { const p = BASE_CARD_TYPES[_stationaryTypes[i]]; price[i] = p ? Number(p.price) || 0 : 0; }
@@ -3807,7 +3871,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     P[36] = secondsToTicks(Math.max(0.01, Number(salv.transferCooldown) || 0.01)); P[37] = nty;
     // (Per resource, RESOURCE_TYPE_LIST's first two: energy, A*.)
     // (Stationary types as the structure table's descriptor holds them: id + 1.)
-    const sty = k => _stationaryTypeIds.has(k) ? _stationaryTypeIds.get(k) + 1 : -1, RL = RESOURCE_TYPE_LIST;
+    const sty = _waiStationaryTypeCode, RL = RESOURCE_TYPE_LIST;
     P[38] = simWttCode(RL[0].mineTileType); P[39] = simWttCode(RL[1].mineTileType); P[40] = simWttCode(RL[0].farmKey); P[41] = simWttCode(RL[1].farmKey); P[42] = simWttCode('drop');
     P[43] = sty(RL[0].farmKey); P[44] = sty(RL[1].farmKey); P[45] = sty(RL[0].collectorBuildingKey); P[46] = sty(RL[1].collectorBuildingKey);
     P[47] = 0x66; P[48] = 0x77;
@@ -3820,35 +3884,65 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const SS = statTablesStatic(), SX = _adjPlayerStats(SS), STY = _adjTypeKeys(), SR = _simParReg, bld = BASE_UNIT_STATS.builder_unit || {};
     const ACT = _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length);
     _adjApplyClasses(ACT);
-    const WCT = _adjArr('wsw.ctab', Int32Array, 9 * _WSW_CTAB_COLS.length), SCL = STRUCT_STATUS_CLASSES(), WW = _WSW_CTAB_COLS.length;
-    for (let k = 0; k < 9; k++) {
-        const T = SCL[k] ? _sTables.get(SCL[k]) : null;
-        for (let j = 0; j < WW; j++) { const a = T && T.n ? T['c_' + _WSW_CTAB_COLS[j]] : null; WCT[k * WW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
-    }
+    const WCT = _wswClassColumns();
     P[62] = STY; P[63] = SS.nk; P[64] = SX.np; P[65] = SS.L1; P[66] = SS.R1; P[67] = sty('builder_spawner'); P[68] = Number(bld.builderDps) || 1;
     const R2 = _simParReg;
     P[72] = mode; P[76] = _workerTypeToLoadIndex('builder'); P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
     P[69] = secondsToTicks(Math.max(0.01, Number(bld.transferCooldown) || 0.01)); P[70] = Math.max(120, Math.floor(TICK_RATE * 8)); P[71] = Math.max(60, Math.floor(TICK_RATE * 3));
-    const WA = [list, out, cnt,
-        c.id, c.owner, c.x, c.y, c.dead, c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, c.commandState, c.pathIndex, c.nvPK,
-        c.mvOn, c.mvCD, c.mvPath, S.pathPool.fs, c.mvOut, c.wsKind, c.wkIdle, S.sepKey, c.spEpoch, c.workerTransferCooldown, c.mvTgX, c.mvTgY, c.mvNavLD, c.statRow, c.effectiveLevel, c.wkIx,
-        c.wbType, c.mvWake, c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
-        c.wkType, c.wkD, c.wkOx, c.wkOy, c.wkTwice, c.wkFail, c.wkUntil, c.wkSched,
-        c.wsT, c.wsCfg, c.wsOU, c.wsOx, c.wsOy, c.wsR, c.wsAx, c.wsAy, c.wsAk, c.wsNeed, c.wsJid, c.wsCur, c.wsMy, c.wsFail,
-        c.wmSp, c.wmFailU, c.holdF, c.mvPP, _effHot,
-        _ST.ctab, _ST.rrow, _ST.own, _ST.uc, _ST.val, rcol('markedForSalvage'), rcol('autoResearchEnabled'), rcol('level'), rcol('stacks'),
-        navWallTable(NAV_PROFILE_GROUND), workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, _wai.ttab,
-        rs, _wai.teff, _wai.tdps, _wai.tspx, _wai.tsak, payt, payl, es, navWallTable(NAV_PROFILE_AIR), S.sepLayer, c.tmOn,
-        cwall, ctab, price, c.unitLevel, idt, _ST.brain, c.wbTick, c.wbSpawner, c.wmCarry,
-        c.wmPin, c.wmPinTy, c.wmWx, c.wmWy, c.wmWgx, c.wmWgy, c.wmWty, c.wmDrop, c.wmMine, c.wmMineTy, c.wmIdle, _wai.tfarm, _ST.code,
-        c.wmQc, c.wmQr, c.wmQp, c.wmTrip, c.wmBlk, c.energy, c.maxE, c.x0, c.y0,
-        _ST.stab, ACT, WCT, SR['adj.tykey'], SR['adj.rml'], SS.mxe, SR['adj.rlv'], c.wkWx, c.wkWy, c.wkLmt, c.wmRe, _wai.ownStats,
-        take ? R2['ws.rslot'] : null, take ? R2['ws.rid'] : null, take ? R2['ws.rkind'] : null, take ? R2['ws.rwt'] : null, take ? R2['ws.rgrp'] : null,
-        take ? R2['ws.res'] : null, take ? R2['ws.score'] : null, take ? R2['ws.ures'] : null, take ? _wai.gtab : null, take ? _wai.hid : null,
-        psum, _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null, _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null,
-        take?.spawners ? R2['ws.spawnResult'] : null];
-    if (WAI_PARALLEL && mode === 0) _waiParallel(WA, P, n, mode, list);
-    else simRustDirect('k_worker_ai', WA, P);
+    // Arguments in wai.rs order. Reuse the list for both dispatch paths.
+    const WA = _waiNativeArgs;
+    let arg = 0;
+    WA[arg++] = list; WA[arg++] = out; WA[arg++] = cnt;
+    WA[arg++] = c.id; WA[arg++] = c.owner; WA[arg++] = c.x; WA[arg++] = c.y; WA[arg++] = c.dead; WA[arg++] = c.wkS;
+    WA[arg++] = c.wkT; WA[arg++] = c.wkR; WA[arg++] = c.wkN; WA[arg++] = c.idleFV; WA[arg++] = c.commandState;
+    WA[arg++] = c.pathIndex; WA[arg++] = c.nvPK;
+    WA[arg++] = c.mvOn; WA[arg++] = c.mvCD; WA[arg++] = c.mvPath; WA[arg++] = S.pathPool.fs; WA[arg++] = c.mvOut;
+    WA[arg++] = c.wsKind; WA[arg++] = c.wkIdle; WA[arg++] = S.sepKey; WA[arg++] = c.spEpoch;
+    WA[arg++] = c.workerTransferCooldown; WA[arg++] = c.mvTgX; WA[arg++] = c.mvTgY; WA[arg++] = c.mvNavLD;
+    WA[arg++] = c.statRow; WA[arg++] = c.effectiveLevel; WA[arg++] = c.wkIx;
+    WA[arg++] = c.wbType; WA[arg++] = c.mvWake; WA[arg++] = c.mvFlags; WA[arg++] = c.mvReach; WA[arg++] = c.mvFlow;
+    WA[arg++] = c.mvFGen; WA[arg++] = c.mvDest; WA[arg++] = c.mvReady; WA[arg++] = c.mvNP; WA[arg++] = c.mvSteady;
+    WA[arg++] = c.mvWk; WA[arg++] = c.mvSpent; WA[arg++] = c.mvShoot;
+    WA[arg++] = c.wkType; WA[arg++] = c.wkD; WA[arg++] = c.wkOx; WA[arg++] = c.wkOy; WA[arg++] = c.wkTwice;
+    WA[arg++] = c.wkFail; WA[arg++] = c.wkUntil; WA[arg++] = c.wkSched;
+    WA[arg++] = c.wsT; WA[arg++] = c.wsCfg; WA[arg++] = c.wsOU; WA[arg++] = c.wsOx; WA[arg++] = c.wsOy;
+    WA[arg++] = c.wsR; WA[arg++] = c.wsAx; WA[arg++] = c.wsAy; WA[arg++] = c.wsAk; WA[arg++] = c.wsNeed;
+    WA[arg++] = c.wsJid; WA[arg++] = c.wsCur; WA[arg++] = c.wsMy; WA[arg++] = c.wsFail;
+    WA[arg++] = c.wmSp; WA[arg++] = c.wmFailU; WA[arg++] = c.holdF; WA[arg++] = c.mvPP; WA[arg++] = _effHot;
+    WA[arg++] = _ST.ctab; WA[arg++] = _ST.rrow; WA[arg++] = _ST.own; WA[arg++] = _ST.uc; WA[arg++] = _ST.val;
+    WA[arg++] = _waiHeapColumn(RT, 'c_markedForSalvage'); WA[arg++] = _waiHeapColumn(RT, 'c_autoResearchEnabled');
+    WA[arg++] = _waiHeapColumn(RT, 'c_level'); WA[arg++] = _waiHeapColumn(RT, 'c_stacks');
+    WA[arg++] = navWallTable(NAV_PROFILE_GROUND); WA[arg++] = workerReservedTiles;
+    WA[arg++] = resKept ? _workerResCount : null; WA[arg++] = resKept ? _workerResSum : null; WA[arg++] = wsl;
+    WA[arg++] = V; WA[arg++] = _wai.ttab;
+    WA[arg++] = rs; WA[arg++] = _wai.teff; WA[arg++] = _wai.tdps; WA[arg++] = _wai.tspx; WA[arg++] = _wai.tsak;
+    WA[arg++] = payt; WA[arg++] = payl; WA[arg++] = es; WA[arg++] = navWallTable(NAV_PROFILE_AIR);
+    WA[arg++] = S.sepLayer; WA[arg++] = c.tmOn;
+    WA[arg++] = cwall; WA[arg++] = ctab; WA[arg++] = price; WA[arg++] = c.unitLevel; WA[arg++] = idt;
+    WA[arg++] = _ST.brain; WA[arg++] = c.wbTick; WA[arg++] = c.wbSpawner; WA[arg++] = c.wmCarry;
+    WA[arg++] = c.wmPin; WA[arg++] = c.wmPinTy; WA[arg++] = c.wmWx; WA[arg++] = c.wmWy; WA[arg++] = c.wmWgx;
+    WA[arg++] = c.wmWgy; WA[arg++] = c.wmWty; WA[arg++] = c.wmDrop; WA[arg++] = c.wmMine; WA[arg++] = c.wmMineTy;
+    WA[arg++] = c.wmIdle; WA[arg++] = _wai.tfarm; WA[arg++] = _ST.code;
+    WA[arg++] = c.wmQc; WA[arg++] = c.wmQr; WA[arg++] = c.wmQp; WA[arg++] = c.wmTrip; WA[arg++] = c.wmBlk;
+    WA[arg++] = c.energy; WA[arg++] = c.maxE; WA[arg++] = c.x0; WA[arg++] = c.y0;
+    WA[arg++] = _ST.stab; WA[arg++] = ACT; WA[arg++] = WCT; WA[arg++] = SR['adj.tykey']; WA[arg++] = SR['adj.rml'];
+    WA[arg++] = SS.mxe; WA[arg++] = SR['adj.rlv']; WA[arg++] = c.wkWx; WA[arg++] = c.wkWy; WA[arg++] = c.wkLmt;
+    WA[arg++] = c.wmRe; WA[arg++] = _wai.ownStats;
+    WA[arg++] = take ? R2['ws.rslot'] : null; WA[arg++] = take ? R2['ws.rid'] : null;
+    WA[arg++] = take ? R2['ws.rkind'] : null; WA[arg++] = take ? R2['ws.rwt'] : null;
+    WA[arg++] = take ? R2['ws.rgrp'] : null;
+    WA[arg++] = take ? R2['ws.res'] : null; WA[arg++] = take ? R2['ws.score'] : null;
+    WA[arg++] = take ? R2['ws.ures'] : null; WA[arg++] = take ? _wai.gtab : null;
+    WA[arg++] = take ? _wai.hid : null;
+    WA[arg++] = psum; WA[arg++] = _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null;
+    WA[arg++] = _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null;
+    WA[arg++] = take?.spawners ? R2['ws.spawnResult'] : null;
+    try {
+        if (WAI_PARALLEL && mode === 0) _waiParallel(WA, P, n, mode, list);
+        else simRustDirect('k_worker_ai', WA, P);
+    } finally {
+        WA.fill(null);
+    }
     if (cnt[1]) throw new Error('k_worker_ai: out of room (payments or out events)' + (cnt[7] ? ', the parallel pass\'s lists: ' + cnt[7] : ''));
     // Its writes the JavaScript keeps beside the tables.
     for (let o = 0; o < np; o++) {

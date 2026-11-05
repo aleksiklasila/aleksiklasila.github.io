@@ -56,6 +56,11 @@ inst.eval(`MAX_THING_LEVEL=20; MAX_RESEARCH_LEVEL=10;
  applyMainMenuControlsToRuntimeState();applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)},{fromTransport:true});`);
 assert.ok(count<=inst.eval('memoryBudgetPop(CONFIG_MAX_POP,2,GRID_W*GRID_H)*2'),'requested units exceed the menu match population limit');
 if(helpers){inst.scratch.Worker=require('./real-sim-helper.cjs');inst.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=32;simParallelInit('',${helpers});`);}
+// --live-heap: what the JavaScript heap holds at the end, by allocation site,
+// from before the match starts (objects collected meanwhile left out), to a
+// .liveheap sidecar (a sampling heap profile). Diagnostic, not for timing.
+const liveHeapSession=process.argv.includes('--live-heap')?new(require('node:inspector').Session)():null;
+if(liveHeapSession){liveHeapSession.connect();await new Promise((resolve,reject)=>liveHeapSession.post('HeapProfiler.startSampling',{samplingInterval:65536,includeObjectsCollectedByMajorGC:false,includeObjectsCollectedByMinorGC:false},err=>err?reject(err):resolve()));}
 console.log('Starting mixed chaos',count,'units');
 inst.eval('SIM_IN_WORKER=true;startSoloGame();');
 if(process.argv.includes('--no-delta'))inst.eval('SPATIAL_INDEX_DELTA=false');
@@ -109,7 +114,9 @@ inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDep
   const tiles=[...new Set(Array.from({length:n},(_,j)=>list[j]).filter(t=>_ST.code[t]>0&&_ST.code[t]<0x66))];
   const r=remove.apply(this,arguments);for(const t of tiles)if(_ST.code[t]===0)__scratch.work.destroyedStructures++;return r;
  };}
-}`);
+}
+//# sourceURL=chaos-bench-instrumentation-work.js
+`);
 inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
  for(const name of new Set([
   'processActions','gameTick','simMoveRun','simMoveEndTick','runUnitSeparationPass','_forEachUnitInTickOrder','spatialIndexRebuild','simUnitStateCollect',
@@ -125,13 +132,17 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
   const recordInterval=${timeline}&&!${JSON.stringify((process.env.SUBPHASES||'').split(',').filter(Boolean))}.includes(name);
   const wrapped=function(){const a=__scratch.now();try{return f.apply(this,arguments);}finally{const ms=__scratch.now()-a;__scratch.phases[name]=(__scratch.phases[name]||0)+ms;if(recordInterval)__scratch.intervals.push([name,a,ms]);}};eval(name+'=wrapped');
  }
- __scratch.actions=[];queueAction=a=>__scratch.actions.push(a);`);
+ __scratch.actions=[];queueAction=a=>__scratch.actions.push(a);
+//# sourceURL=chaos-bench-instrumentation-phases.js
+`);
 if(process.argv.includes('--kernels'))inst.eval(`{
  const run=simParallelRun,wait=simParallelBackgroundWait,collect=_spatialIndexCollect;
  simParallelRun=function(kind,n){const key='kernel:'+kind+(kind===SIM_KERNEL_MOVE_OCCUPANCY?':'+_simParams[4]:'');const a=__scratch.now();try{return run.apply(this,arguments);}finally{const ms=__scratch.now()-a;__scratch.phases[key]=(__scratch.phases[key]||0)+ms;if(${timeline})__scratch.intervals.push([key,a,ms]);}};
  simParallelBackgroundWait=function(lane=1){const a=__scratch.now();try{return wait.apply(this,arguments);}finally{const key='wait:'+lane;__scratch.phases[key]=(__scratch.phases[key]||0)+__scratch.now()-a;}};
  _spatialIndexCollect=function(){const j=_sxPre;const r=collect.apply(this,arguments);if(j){const d=_sxPar&&_sxPar.ixd;__scratch.index={delta:j.delta,inserts:j.delta&&d?d.plan[j.dj]:null,bad:j.delta&&d?d.plan[j.dj+3]:null};}return r;};
-}`);
+}
+//# sourceURL=chaos-bench-instrumentation-kernels.js
+`);
 // --mass-at=STEP: the mass command (see the step loop); --mass-team,
 // --mass-gap (steps between clicks), --mass-clicks.
 const massAt=num('mass-at',0),massTeam=num('mass-team',0),massGap=num('mass-gap',2),massClicks=num('mass-clicks',3);
@@ -186,9 +197,32 @@ if(eventMetrics)inst.eval(`{
   _unitNoWayCommit=function(){const r=commit.apply(this,arguments);if(r){const m=__scratch.events;m.codes[2]=(m.codes[2]||0)+1;m.combatEvents++;m.fastRoutes=(m.fastRoutes||0)+1;}return r;};
  }
 }`);
+// --worker-post: what the browser's simulation worker does around each tick
+// on its own heap: sounds/effects/alerts recorded as packed events
+// (sim_worker.js _simStubUi), the tick's result encoded and posted
+// (_simPostResult; the post itself dropped), the presentation publish and a
+// metadata pump slice between ticks. For in-game allocation/GC measurements.
+const workerPost=process.argv.includes('--worker-post');
+// --no-census: no worker activity census (a harness scan of every unit's getters; its own garbage and survivors).
+const census=!process.argv.includes('--no-census');
+if(workerPost){
+ // (The worker's script in the game's scope; its functions handed back.)
+ inst.eval(`__scratch.W=(()=>{${fs.readFileSync(path.join(__dirname,'../src/sim/sim_worker.js'),'utf8')}
+  ;return {_simStubUi,_simPostResult,get:{_simEpoch:()=>_simEpoch,_simError:()=>_simError,_simNowAbs:()=>_simNowAbs,_simPost:()=>_simPost,_simStream:()=>_simStream,
+   _simTick:()=>_simTick,_simDefeatedTeams:()=>_simDefeatedTeams,_simLocalDefeat:()=>_simLocalDefeat,_simRef:()=>_simRef}};})()`);
+ // (Worker globals the game-scope encoders name: unresolved there, they are
+ // looked up on this realm's global object. Live values.)
+ for(const [k,get] of Object.entries(inst.eval('__scratch.W.get')))Object.defineProperty(globalThis,k,{get,configurable:true});
+ inst.eval(`self.postMessage=()=>{};__scratch.W._simStubUi();
+  playSound=self._simRecordSound;recordDamageVisual=self._simRecordDamage;pushHostileDamageAlert=self._simRecordAlert;
+  createExplosion=self._simRecordExplosion;createDirectedParticles=self._simRecordDirected;recordCombatFx=self._simRecordFx;
+  {const RW=Worker;Worker=class{postMessage(){}terminate(){}};try{__scratch.presenting=simPresentationStart();}finally{Worker=RW;}}`);
+ console.log('Worker post',JSON.stringify({presentation:inst.eval('!!__scratch.presenting')}));
+}
 const profileInterval=num('profile-interval',5000);
 const session=process.argv.includes('--profile')||profileHelpers?new(require('node:inspector').Session)():null;
 const allocationSession=process.argv.includes('--allocation-profile')?new(require('node:inspector').Session)():null;
+const allocationHarnessScripts={};
 let profileStart=performance.now();
 let profileOrigins=null;
 fs.mkdirSync(path.dirname(out),{recursive:true});
@@ -202,13 +236,30 @@ for(let i=0;i<ticks;i++){
  if(i===warmup)structRowsAtSteady=readStructRows();
  if(i===warmup&&allocationSession){
   allocationSession.connect();
-  await new Promise((resolve,reject)=>allocationSession.post('HeapProfiler.startSampling',{samplingInterval:32768,includeObjectsCollectedByMajorGC:true,includeObjectsCollectedByMinorGC:true},err=>err?reject(err):resolve()));
+  const labelScript=({params:{scriptId,url}})=>{if(url.includes('chaos-bench-instrumentation-'))allocationHarnessScripts[scriptId]=url;};
+  allocationSession.on('Debugger.scriptParsed',labelScript);
+  // V8's heap sampler omits sourceURL on some eval frames. Resolve their
+  // script ids before sampling, and disable the debugger for the run.
+  for(const method of ['Debugger.enable','Debugger.disable']) await new Promise((resolve,reject)=>allocationSession.post(method,err=>err?reject(err):resolve()));
+  allocationSession.off('Debugger.scriptParsed',labelScript);
+  await new Promise((resolve,reject)=>allocationSession.post('HeapProfiler.startSampling',{samplingInterval:32768,includeObjectsCollectedByMajorGC:true,includeObjectsCollectedByMinorGC:!process.argv.includes('--allocation-survivors')},err=>err?reject(err):resolve()));
  }
  if(i===profileStartStep&&session){
   const origins=profileHelpers?await Promise.all((require('./real-sim-helper.cjs').instances||[]).map(w=>w.benchProfile('start',profileInterval))):[];
   session.connect();session.post('Profiler.enable');session.post('Profiler.setSamplingInterval',{interval:profileInterval});profileStart=performance.now();session.post('Profiler.start');
   profileOrigins={beforeStart:true,startStep:profileStartStep,interval:profileInterval,main:profileStart,helpers:origins.map(r=>r.startedAt)};
  }
+ // (--restore-at=N, diagnostic: a multiplayer resync of this peer before step
+ // N, outside the timing: the whole state encoded and decoded in place (its
+ // restore lays the unit slots out dense, simUnitStateCompact), then the
+ // resync tick's flush every peer makes (snapFlushHistoryCaches, sim_worker.js
+ // msg.flush). --flush-at=N: the flush alone, as a peer that was not restored:
+ // the two give the same state from then on (2026-11-05).)
+ // (RESTORE_JS=<js>: that instead, e.g. simUnitStateCompact(true) alone.
+ // RESTORE_SPLIT=1: the restore's encode, decode and flush timed apart.)
+ if(i===num('restore-at',-1)&&process.env.RESTORE_SPLIT&&!process.env.RESTORE_JS){
+  for(const [name,js] of [['encode','__scratch.snap=snapEncodeState(),1'],['decode','snapDecodeState(__scratch.snap),__scratch.snap=null,1'],['flush','snapFlushHistoryCaches(),1']]){const t=performance.now();inst.eval(js);console.log('restore',name,(performance.now()-t).toFixed(0),'ms');}
+ }else if(i===num('restore-at',-1)||i===num('flush-at',-1)){const t=performance.now();const rv=inst.eval(process.env.RESTORE_JS||(i===num('restore-at',-1)?'snapDecodeState(snapEncodeState()),snapFlushHistoryCaches(),1':'snapFlushHistoryCaches(),1'));if(process.env.RESTORE_JS)console.log('restore value',JSON.stringify(rv));console.log(i===num('restore-at',-1)?'restore':'flush',(performance.now()-t).toFixed(0),'ms',inst.eval('JSON.stringify({owners:_simUnitState.owners.length,cap:_simUnitState.cap,units:units.length})'));}
  inst.eval('__scratch.phases={};__scratch.index=null;__scratch.intervals=[]');
  if(eventMetrics)inst.eval('__scratch.events={codes:{},ai:{},transitions:{},workerEvents:0,combatEvents:0,budgetParked:0}');
  // Generating synthetic player inputs is outside tick timing; applying them is inside.
@@ -223,7 +274,7 @@ for(let i=0;i<ticks;i++){
  const a=performance.now();
  if(burst)for(let team=0;team<2;team++)inst.eval(`processActions(__scratch.actions${team},${team})`);
  if(massClick>=0)inst.eval(`processActions(__scratch.massActions,${massTeam})`);
- inst.eval('gameTick();currentTick++;');
+ inst.eval(workerPost?'gameTick();simPresentTickEnd();{const t=currentTick++;__scratch.W._simPostResult(t,null,null,0);}':'gameTick();currentTick++;');
  const ms=performance.now()-a;
  if(yieldBetween)await new Promise(setImmediate);
  const wallMs=performance.now()-a;
@@ -245,15 +296,23 @@ for(let i=0;i<ticks;i++){
  if(metrics){const m=process.memoryUsage();row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=m.heapUsed/1048576;row.rssMB=m.rss/1048576;row.externalMB=m.external/1048576;row.arrayBuffersMB=m.arrayBuffers/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and
  // work states rather than assuming that a spawned worker is doing useful work.
- if(i%10===0||i===ticks-1)row.activity=inst.eval(`(()=>{const roles={};for(let j=0;j<units.length;j++){const u=units[j];if(u.dead||!u.workerType)continue;const r=roles[u.workerType]||(roles[u.workerType]={total:0,targeted:0,carrying:0,coolingDown:0,states:{}});r.total++;if(u.workerTarget)r.targeted++;if(u.workerTransferCooldown>0)r.coolingDown++;if(u.carryingValue>0||u.healerHasMaterial)r.carrying++;const s=u.workerState||'NONE';r.states[s]=(r.states[s]||0)+1;}return {roles,researchQueued:[0,1].map(p=>getPlayerResearchQueueTotalLength(p)),pop:[0,1].map(p=>({count:players[p].popCount,cap:getPlayerPopCap(p)}))};})()`);
+ if(census&&(i%10===0||i===ticks-1))row.activity=inst.eval(`(()=>{const roles={};for(let j=0;j<units.length;j++){const u=units[j];if(u.dead||!u.workerType)continue;const r=roles[u.workerType]||(roles[u.workerType]={total:0,targeted:0,carrying:0,coolingDown:0,states:{}});r.total++;if(u.workerTarget)r.targeted++;if(u.workerTransferCooldown>0)r.coolingDown++;if(u.carryingValue>0||u.healerHasMaterial)r.carrying++;const s=u.workerState||'NONE';r.states[s]=(r.states[s]||0)+1;}return {roles,researchQueued:[0,1].map(p=>getPlayerResearchQueueTotalLength(p)),pop:[0,1].map(p=>({count:players[p].popCount,cap:getPlayerPopCap(p)}))};})()`);
  rows.push(row);fs.appendFileSync(out+'.jsonl',JSON.stringify(row)+'\n');
+ // (Between ticks, outside the timing. The harness clock is virtual, so a
+ // pump call runs a whole metadata pass, not a 1 ms slice: every 5 steps.)
+ if(workerPost&&i%5===4)inst.eval('simPresentationPump()');
  if(i%10===0)console.log('step',i,'ms',ms.toFixed(1),'units',row.units);
  assert.deepEqual(inst.errors.map(String),[]);assert.equal(row.gameOver,false);
 }
 // Capture the gameplay window, not final report construction or the optional
 // exact-state hash (which materializes JS views and can allocate heavily).
+if(liveHeapSession){
+ const r=await new Promise((resolve,reject)=>liveHeapSession.post('HeapProfiler.stopSampling',(err,r)=>err?reject(err):resolve(r)));
+ fs.writeFileSync(out+'.liveheap',JSON.stringify(r.profile));liveHeapSession.disconnect();
+}
 if(allocationSession){
  const r=await new Promise((resolve,reject)=>allocationSession.post('HeapProfiler.stopSampling',(err,r)=>err?reject(err):resolve(r)));
+ r.profile.benchmarkInstrumentationScripts=allocationHarnessScripts;
  fs.writeFileSync(out+'.heapprofile',JSON.stringify(r.profile));allocationSession.disconnect();
 }
 function stats(rows){const a=rows.map(r=>r.ms).sort((a,b)=>a-b),mean=a.reduce((a,b)=>a+b,0)/a.length,tail=a.slice(Math.floor(a.length*.95));return{samples:a.length,mean,tps:1000/mean,p50:a[Math.floor(a.length*.5)],p95:a[Math.floor(a.length*.95)],p99:a[Math.floor(a.length*.99)],p999:a[Math.floor(a.length*.999)],worst5Mean:tail.reduce((n,v)=>n+v,0)/tail.length,max:a.at(-1)};}

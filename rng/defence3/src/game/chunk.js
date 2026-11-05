@@ -10,13 +10,17 @@ function initSpatialHash() {
     closestEnemyChunkQueryCache.clear();
     // (New count tables: changes to the old ones are void.)
     _spatialCountQN = 0;
-    // (New type indexes: the effective-stats windows are worked out again.)
-    if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
-
+    const oldTypes = typeof spatialUnitTypeToIndex !== 'undefined' && spatialUnitTypeToIndex ? spatialUnitTypeToIndex : null;
     spatialUnitTypeToIndex = Object.create(null);
     let unitKeys = Object.keys(BASE_UNIT_STATS || {});
     if (!unitKeys.includes('norm')) unitKeys.push('norm');
     for (let i = 0; i < unitKeys.length; i++) spatialUnitTypeToIndex[unitKeys[i]] = i;
+    // (Other type indexes: the effective-stats windows (esType) are worked
+    // out again. The same ones, as at a restore: kept, as decoded. Cleared,
+    // every restored unit took the full path for a whole period.)
+    let sameTypes = !!oldTypes && Object.keys(oldTypes).length === unitKeys.length;
+    for (let i = 0; i < unitKeys.length && sameTypes; i++) sameTypes = oldTypes[unitKeys[i]] === i;
+    if (!sameTypes && typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
     spatialNormUnitTypeIndex = Number.isFinite(spatialUnitTypeToIndex.norm) ? spatialUnitTypeToIndex.norm : 0;
     spatialUnitsComplexUnitTypeCount = unitKeys.length;
     spatialUnitsComplexPlayerCount = Math.max(1, Math.floor(Number(players && players.length) || 0));

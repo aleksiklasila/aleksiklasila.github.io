@@ -241,7 +241,7 @@ const _spawnerRallyTpl = new WeakMap();
 // finished (occupancy, spatial index), the queue moved on, the rally).
 // Exits by batch index (tile x, y).
 // (Room for a batch's spawns: unit.js SPB_CAP, which loads after this file.)
-const _spawnBatch = { ex: new Int32Array(2 * 16384), n: 0 };
+const _spawnBatch = { ex: new Int32Array(2 * 16384), n: 0, exit: { x: 0, y: 0 } };
 // A spawner's next unit begun: false when it may not spawn. Its owner's
 // population counts it at once (given back when it finds no room at its
 // exit): a step's spawns are decided before any is placed.
@@ -252,7 +252,8 @@ function _spawnBegin(spawner) {
     const owner = spawner.owner;
     if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
     const front = spawnQueueFront(spawner), unitType = front.unitType, level = front.level;
-    const p = findNearestWalkable(spawner.gx, spawner.gy), B = _spawnBatch, k = B.n++;
+    const B = _spawnBatch;
+    const p = findNearestWalkable(spawner.gx, spawner.gy, undefined, undefined, null, B.exit), k = B.n++;
     B.ex[2 * k] = p.x; B.ex[2 * k + 1] = p.y;
     simSpawnBatchAdd(unitType, owner, p.x * TILE + 16, p.y * TILE + 16, level, configureWorkerUnitFromType);
     players[owner].popCount++;
@@ -269,7 +270,8 @@ function spawnQueuedUnitFromSpawner(spawner) {
 }
 // The batch's spawn k (spawner's) ended: false when its unit found no room.
 function _spawnEnd(k, spawner) {
-    const u = simSpawnBatchFinish(k), owner = spawner.owner, spawnPos = { x: _spawnBatch.ex[2 * k], y: _spawnBatch.ex[2 * k + 1] };
+    const u = simSpawnBatchFinish(k), owner = spawner.owner;
+    const sx = _spawnBatch.ex[2 * k], sy = _spawnBatch.ex[2 * k + 1];
     if (u.dead) { players[owner].popCount--; return false; }
     // (In the production pass: the queues move on together after the batch, spr.rs k_spawn_shift.)
     if (_spp.on) _spShiftNote(spawner); else spawnQueueShift(spawner);
@@ -287,39 +289,41 @@ function _spawnEnd(k, spawner) {
         }
     }
 
-    let rallyTarget = getSpawnerRallyTargetWorld(spawner);
-    if (rallyTarget) {
-        let rgx = Math.floor(rallyTarget.x / TILE), rgy = Math.floor(rallyTarget.y / TILE);
+    if (_refreshSpawnerRallyTarget(spawner)) {
+        const rgx = Math.floor(spawner.rallyX / TILE), rgy = Math.floor(spawner.rallyY / TILE);
         let rallyPath = null;
-        if (_canUsePathfindRequestBudget(u.owner, u)) {
-            _consumePathfindRequestBudget(u.owner, u);
+        if (_noteSpawnPathfindRequest(u.owner)) {
             // (The spawner's own: its exit, its rally tile and the unit's
             // movement profile as of the path topology's version, for
             // SPAWNER_RALLY_TEMPLATE_TTL_TICKS. Was a shared map by a ten-part
             // string key made each spawn: ~1.1k spawns a tick in a big match.)
             const canWalk = getPathCanWalkForUnit(u), prof = _resolveMovementProfile(!!u.isFlying, canWalk, null) || 'dynamic';
             let T = _spawnerRallyTpl.get(spawner);
-            if (T && T.sx === spawnPos.x && T.sy === spawnPos.y && T.ex === rgx && T.ey === rgy && T.prof === prof && T.version === pathTopologyVersion
+            if (T && T.sx === sx && T.sy === sy && T.ex === rgx && T.ey === rgy && T.prof === prof && T.version === pathTopologyVersion
                 && !(gameTime - T.tick > SPAWNER_RALLY_TEMPLATE_TTL_TICKS)) rallyPath = T.path;
             if (!rallyPath) {
-                rallyPath = _findPathForUnitTagged('spawner_rally', u, spawnPos.x, spawnPos.y, rgx, rgy, u.isFlying, canWalk, u.owner);
-                _spawnerRallyTpl.set(spawner, { sx: spawnPos.x, sy: spawnPos.y, ex: rgx, ey: rgy, prof, version: pathTopologyVersion, tick: gameTime, path: rallyPath });
+                rallyPath = navPathReach(u, sx, sy, rgx, rgy, T?.path);
+                if (!T) _spawnerRallyTpl.set(spawner, T = { sx, sy, ex: rgx, ey: rgy, prof, version: pathTopologyVersion, tick: gameTime, path: rallyPath });
+                else {
+                    T.sx = sx; T.sy = sy; T.ex = rgx; T.ey = rgy; T.prof = prof;
+                    T.version = pathTopologyVersion; T.tick = gameTime; T.path = rallyPath;
+                }
             }
         }
 
         if (spawner.type === 'barrack') {
             if (!rallyPath || rallyPath.length <= 0) {
-                rallyPath = _makeFallbackPathForUnit(u, spawnPos.x, spawnPos.y, rgx, rgy, CMD_ATTACK_MOVING, 'spawner_rally');
+                rallyPath = _makeFallbackPathForUnit(u, sx, sy, rgx, rgy, CMD_ATTACK_MOVING, 'spawner_rally');
             }
             u.path = rallyPath;
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === sx && u.path[0].y === sy) ? 1 : 0;
             if (u.path && u.path.length > 0) u.commandState = CMD_ATTACK_MOVING;
         } else {
             if (!rallyPath || rallyPath.length <= 0) {
-                rallyPath = _makeFallbackPathForUnit(u, spawnPos.x, spawnPos.y, rgx, rgy, CMD_MOVING, 'spawner_rally');
+                rallyPath = _makeFallbackPathForUnit(u, sx, sy, rgx, rgy, CMD_MOVING, 'spawner_rally');
             }
             u.path = rallyPath;
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === spawnPos.x && u.path[0].y === spawnPos.y) ? 1 : 0;
+            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === sx && u.path[0].y === sy) ? 1 : 0;
             u.commandState = CMD_MOVING;
             u.workerState = 'MANUAL_MOVE';
             u.targetPos = { x: rgx * TILE + 16, y: rgy * TILE + 16 };
@@ -398,7 +402,7 @@ function _spawnHeadOrder(o, L) {
 // (Per owner taking part this tick: its list and its head's order. A spawn
 // changes only its own owner's head (that spawner, that owner's population):
 // the others' are found once a tick, not again for every spawn.)
-const _spawnPickL = [], _spawnPickO = [], _spawnPicked = [];
+const _spawnPickL = [], _spawnPickO = [], _spawnPicked = [], _spawnBlocked = [];
 // (The batch emptied.)
 function _spawnBatchDone() { _spawnBatch.n = 0; simSpawnBatchClear(); }
 let _spawnPickOrd = new Float64Array(64);
@@ -426,9 +430,11 @@ function spawnerProductionReserve(B) {
     _spArr('cls', Int32Array, classes * 16); _spArr('jobs', Int32Array, jobs * 3);
     _spArr('tab', Float64Array, (Math.max(1, B.players) + 1) * SPAWN_PROD_TYPES * 64 * 3); _spp.np = -1;
     _spArr('out', Int32Array, jobs * SPAWN_PROD_ROWS * 5); _spArr('cnt', Int32Array, jobs * 16);
-    _spArr('sel', Int32Array, rows + 4); _spArr('tmp', Uint32Array, 5 * rows + 65536); _spArr('shift', Int32Array, SPB_CAP + 1);
+    _spArr('sel', Int32Array, rows + 4); _spArr('tmp', Uint32Array, 8 * rows + 65536); _spArr('shift', Int32Array, SPB_CAP + 1);
 }
-const _SP_COLS = ['_stT', '_ow', '_en', '_uc', 'queueEnabled', '_qN', '_qLv', '_qReq', '_qPaid', '_spt', '_spawnReadyOrder'];
+const _SP_COLS = ['_stT', '_ow', '_en', '_uc', 'queueEnabled', '_qN', '_qLv', '_qReq', '_qPaid', '_spt', '_spawnReadyOrder'].map(name => 'c_' + name);
+const _spawnSelectArgs = new Array(5).fill(null);
+const _spawnShiftArgs = new Array(4).fill(null);
 function _spClasses() {
     if (!_spp.classes) {
         _spp.classes = [Barrack, CollectorSpawner, AstarSpawner, typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null, typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null,
@@ -460,24 +466,39 @@ function spawnerProductionPass() {
     if (globalSpawnerReadyOrderCounter > 1073741824) _spRebase(CL);
     if (typeof structRallyClasses === 'function') structRallyClasses();
     const cls = _spArr('cls', Int32Array, CL.length * 16);
-    const jobs = [];
-    CL.forEach((C, k) => {
+    let J = 0;
+    for (let k = 0; k < CL.length; k++) {
+        const C = CL[k];
         const T = _sTables.get(C), b = k * 16;
         cls.fill(0, b, b + 16);
-        if (!T || !(T.n > 0)) return;
-        const cols = _SP_COLS.map(f => T['c_' + f]);
-        if (cols.some(a => !a || !simHeapHas(a))) return;
-        cls[b] = T.n; cls[b + 1] = _stAllIx.get(C) || 0;
-        cols.forEach((a, j) => { cls[b + 2 + j] = _simWEnc(_simHeapPtrOf(a)); });
-        for (let r = 0; r < T.n; r += SPAWN_PROD_ROWS) jobs.push(k, r, Math.min(T.n, r + SPAWN_PROD_ROWS));
-    });
-    const J = jobs.length / 3, sel = _spArr('sel', Int32Array, 8);
+        if (!T || !(T.n > 0)) continue;
+        let j = 0;
+        for (; j < _SP_COLS.length; j++) {
+            const a = T[_SP_COLS[j]];
+            if (!a || !simHeapHas(a)) break;
+            cls[b + 2 + j] = _simWEnc(_simHeapPtrOf(a));
+        }
+        if (j !== _SP_COLS.length) { cls.fill(0, b + 2, b + 2 + j); continue; }
+        cls[b] = T.n;
+        cls[b + 1] = _stAllIx.get(C) || 0;
+        J += Math.ceil(T.n / SPAWN_PROD_ROWS);
+    }
+    const sel = _spArr('sel', Int32Array, 8);
     if (J === 0) { sel[0] = 0; return sel; }
-    const JB = _spArr('jobs', Int32Array, jobs.length); JB.set(jobs);
+    const JB = _spArr('jobs', Int32Array, J * 3);
+    let at = 0;
+    for (let k = 0; k < CL.length; k++) {
+        const rows = cls[k * 16];
+        for (let r = 0; r < rows; r += SPAWN_PROD_ROWS) {
+            JB[at++] = k; JB[at++] = r; JB[at++] = Math.min(rows, r + SPAWN_PROD_ROWS);
+        }
+    }
     const np1 = players.length + 1, tab = _spArr('tab', Float64Array, np1 * SPAWN_PROD_TYPES * 64 * 3);
     if (S.np !== np1) { tab.fill(NaN); S.np = np1; }
     const out = _spArr('out', Int32Array, J * SPAWN_PROD_ROWS * 5), cnt = _spArr('cnt', Int32Array, J * 16);
-    for (const [nm, a] of [['spr.cls', cls], ['spr.jobs', JB], ['st.brain', _ST.brain], ['st.ctab', _ST.ctab], ['st.rrow', _ST.rrow], ['st.tim', _ST.tim], ['spr.tab', tab], ['spr.out', out], ['spr.cnt', cnt]]) simParallelBind(nm, a);
+    simParallelBind('spr.cls', cls); simParallelBind('spr.jobs', JB); simParallelBind('st.brain', _ST.brain);
+    simParallelBind('st.ctab', _ST.ctab); simParallelBind('st.rrow', _ST.rrow); simParallelBind('st.tim', _ST.tim);
+    simParallelBind('spr.tab', tab); simParallelBind('spr.out', out); simParallelBind('spr.cnt', cnt);
     const ver = _precomputedStatsVersion, P = _simParams;
     // The table's missing or stale keys, then every row.
     P[0] = J; P[1] = 0; P[2] = ver; P[3] = SPAWN_PROD_TYPES; P[4] = SPAWN_PROD_ROWS;
@@ -487,10 +508,12 @@ function spawnerProductionPass() {
     simParallelRun(SIM_KERNEL_SPAWN_PROD, J);
     let cap = 0;
     for (let j = 0; j < J; j++) cap += cnt[j * 16] + cnt[j * 16 + 1];
-    const sl = _spArr('sel', Int32Array, cap + 4), tmp = _spArr('tmp', Uint32Array, 5 * Math.max(1, cap) + 65536), AP = S.AP;
+    const sl = _spArr('sel', Int32Array, cap + 4), tmp = _spArr('tmp', Uint32Array, 8 * Math.max(1, cap) + 65536), AP = S.AP;
     AP.fill(0); AP[0] = J; AP[1] = SPAWN_PROD_ROWS; AP[2] = globalSpawnerReadyOrderCounter; AP[62] = Math.max(1, cap); AP[63] = Math.min(56, players.length);
     for (let o = 0; o < players.length && o < 56; o++) AP[3 + o] = players[o] ? Math.max(0, getPlayerPopCap(o) - players[o].popCount) : 0;
-    simRustDirect('k_spawn_select', [cls, out, cnt, sl, tmp], AP);
+    const args = _spawnSelectArgs;
+    args[0] = cls; args[1] = out; args[2] = cnt; args[3] = sl; args[4] = tmp;
+    try { simRustDirect('k_spawn_select', args, AP); } finally { args.fill(null); }
     const n = sl[0];
     globalSpawnerReadyOrderCounter = sl[n + 1] + sl[n + 2] * 2147483648;
     return sl;
@@ -504,7 +527,12 @@ function _spRebase(CL) {
 }
 function _spShiftRun() {
     const S = _spp;
-    if (S.ns > 0) { const BP = S.BP; BP[0] = S.ns; BP[1] = SPAWN_PROD_TYPES; simRustDirect('k_spawn_shift', [S.cls, S.shift, _ST.brain, S.tab], BP); }
+    if (S.ns > 0) {
+        const BP = S.BP, args = _spawnShiftArgs;
+        BP[0] = S.ns; BP[1] = SPAWN_PROD_TYPES;
+        args[0] = S.cls; args[1] = S.shift; args[2] = _ST.brain; args[3] = S.tab;
+        try { simRustDirect('k_spawn_shift', args, BP); } finally { args.fill(null); }
+    }
     S.ns = 0;
 }
 function processGlobalSpawnerQueue() {
@@ -516,26 +544,28 @@ function processGlobalSpawnerQueue() {
 function _processSpawnsByTables() {
     const S = _spp;
     S.on = true; S.ns = 0;
-    const sel = spawnerProductionPass(), n = sel[0], blocked = [], picked = _spawnPicked;
+    const sel = spawnerProductionPass(), n = sel[0], blocked = _spawnBlocked, picked = _spawnPicked;
+    let nBlocked = 0;
     // (In batches of at most SPB_CAP spawns, each written and ended before
     // the next begins: the batch's buffers are the match's, made once.)
     for (let i = 1; i <= n;) {
         for (; i <= n && !(typeof simSpawnBatchFull === 'function' && simSpawnBatchFull()); i++) {
             const t = sel[i], s = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
             if (!s) continue;
-            if (!_spawnBegin(s)) { blocked.push(s); continue; }
+            if (!_spawnBegin(s)) { blocked[nBlocked++] = s; continue; }
             s._spawnReadyOrder = undefined;
             picked.push(s);
         }
         simSpawnBatchWrite();
         // (Room for every spawner's shift first: _spShiftNote fills it.)
         _spArr('shift', Int32Array, SPB_CAP + 1);
-        for (let k = 0; k < picked.length; k++) { const s = picked[k]; if (!_spawnEnd(k, s)) blocked.push(s); }
+        for (let k = 0; k < picked.length; k++) { const s = picked[k]; if (!_spawnEnd(k, s)) blocked[nBlocked++] = s; }
         _spShiftRun();
         picked.length = 0; _spawnBatchDone();
     }
     // (A full exit: its turn again behind those ready now, on a later step.)
-    for (const s of blocked) s._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+    for (let i = 0; i < nBlocked; i++) blocked[i]._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
+    blocked.fill(null, 0, nBlocked);
 }
 function _processGlobalSpawnerQueueJs() {
     // The ready spawners in ready order across owners (each owner's list is

@@ -106,7 +106,7 @@ pub unsafe extern "C" fn k_spawn_prod(a: u32, chunk: i32) {
 /// ones by order (a radix sort), each taken while its owner has room (P[3 +
 /// owner]: population cap less population; P[62] the entries spr.tmp holds). Arrays: [0] spr.cls, [1]
 /// spr.out, [2] spr.cnt, [3] spr.sel ([0] count, then tiles), [4] spr.tmp
-/// (scratch: 5 words an entry and 65536). P: [0] jobs, [1] rows a job at most, [2] the
+/// (scratch: 8 words an entry and 65536). P: [0] jobs, [1] rows a job at most, [2] the
 /// order counter (returned in spr.sel's last word + 1), [3..] owners' room;
 /// P[63] owners.
 #[no_mangle]
@@ -127,21 +127,48 @@ pub unsafe extern "C" fn k_spawn_select(a: u32, _chunk: i32) {
         let rd = out.add(base);
         for i in 0..g(cnt, j * 16).max(0) as usize { if m >= cap { break; } s(ord, m, g(rd, i * 3) as u32); s(tl, m, g(rd, i * 3 + 1) as u32); s(own, m, g(rd, i * 3 + 2) as u32); m += 1; }
     }
+    // The new ones take their orders by tile (an LSD radix sort, 16 bits a
+    // pass), not in the rows' order: a restore lays the structure tables'
+    // rows out anew (by the snapshot's lists), and in row order a restored
+    // peer's spawners took other orders than the others': other spawns in
+    // the same tick, other unit ids (2026-11-05, 524k scene).
+    // (spr.tmp words 5 cap + 65536 on: the new ones' words, tiles, order.)
+    let (ix, ix2, hist) = (tmp.add(3 * cap), tmp.add(4 * cap), tmp.add(5 * cap));
+    let (nwv, nkv, niv) = (tmp.add(5 * cap + 65536), tmp.add(6 * cap + 65536), tmp.add(7 * cap + 65536));
+    let mut q = 0usize;
     for j in 0..jobs {
         let base = j * rmax * SJ_W;
         let nw = out.add(base + rmax * 3);
         for i in 0..g(cnt, j * 16 + 1).max(0) as usize {
+            if m + q >= cap { break; }
             let w = g(nw, i);
             let (c, r) = ((w >> 24) as usize, (w & 0xFFFFFF) as usize);
-            if m >= cap { break; }
-            let o = counter; counter += 1;
-            s(col::<i32>(cls, c, SC_RDY), r, o);
-            if g(col::<u8>(cls, c, SC_QON), r) == 1 { continue; }
-            s(ord, m, o as u32); s(tl, m, g(col::<i32>(cls, c, SC_ST), r) as u32); s(own, m, g(col::<i8>(cls, c, SC_OW), r) as i32 as u32); m += 1;
+            s(nwv, q, w as u32); s(nkv, q, g(col::<i32>(cls, c, SC_ST), r) as u32); q += 1;
         }
     }
+    if q > 1 {
+        for i in 0..q { s(ix, i, i as u32); }
+        let (mut src, mut dst) = (ix, niv);
+        for pass in 0..2 {
+            let sh = pass * 16;
+            for b in 0..65536usize { s(hist, b, 0); }
+            for i in 0..q { let b = ((g(nkv, g(src, i) as usize) >> sh) & 65535) as usize; s(hist, b, g(hist, b) + 1); }
+            let mut sum = 0u32;
+            for b in 0..65536usize { let v = g(hist, b); s(hist, b, sum); sum += v; }
+            for i in 0..q { let e = g(src, i); let b = ((g(nkv, e as usize) >> sh) & 65535) as usize; let p = g(hist, b); s(dst, p as usize, e); s(hist, b, p + 1); }
+            let t = src; src = dst; dst = t;
+        }
+    } else if q == 1 { s(ix, 0, 0); }
+    for k2 in 0..q {
+        let e = g(ix, k2) as usize;
+        let w = g(nwv, e) as i32;
+        let (c, r) = ((w >> 24) as usize, (w & 0xFFFFFF) as usize);
+        let o = counter; counter += 1;
+        s(col::<i32>(cls, c, SC_RDY), r, o);
+        if g(col::<u8>(cls, c, SC_QON), r) == 1 { continue; }
+        s(ord, m, o as u32); s(tl, m, g(col::<i32>(cls, c, SC_ST), r) as u32); s(own, m, g(col::<i8>(cls, c, SC_OW), r) as i32 as u32); m += 1;
+    }
     // By order: an LSD radix sort, 16 bits a pass, of entry indices.
-    let (ix, ix2, hist) = (tmp.add(3 * cap), tmp.add(4 * cap), tmp.add(5 * cap));
     for i in 0..m { s(ix, i, i as u32); }
     let (mut src, mut dst) = (ix, ix2);
     for pass in 0..2 {

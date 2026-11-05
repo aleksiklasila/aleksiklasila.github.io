@@ -160,12 +160,14 @@ const _uix = { ids: new Int32Array(0), slots: new Int32Array(0), n: 0, holes: 0,
 const _unitSlotMap = _uix;
 function _uixRoom(n) {
     const inHeap = typeof simHeapHas !== 'function' || simHeapHas(_uix.ids);
-    if (_uix.ids.length >= n && _uix.ids.length && inHeap) return;
+    // (Made outside the heap (it was full): kept until it is too short. Made again at every call, each unit a restore
+    // added copied the whole table.)
+    if (_uix.ids.length >= n && _uix.ids.length && (inHeap || !_uix.inHeap)) return;
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, cap = simReserveCap(Math.max(n, S ? S.cap : 0));
     const ids = simHeapArray(Int32Array, cap), slots = simHeapArray(Int32Array, cap);
     ids.set(_uix.ids.subarray(0, _uix.n)); slots.set(_uix.slots.subarray(0, _uix.n));
     if (_uix.ids.length && inHeap) { simHeapFree(_uix.ids); simHeapFree(_uix.slots); }
-    _uix.ids = ids; _uix.slots = slots;
+    _uix.ids = ids; _uix.slots = slots; _uix.inHeap = typeof simHeapHas !== 'function' || simHeapHas(ids);
 }
 const _uixSlotOf = u => u && typeof _simUnitState !== 'undefined' && _simUnitState && u._us === _simUnitState.columns && u._si >= 0 ? u._si : -1;
 // The table made from a list of units (a reset, a restore, tools): by id.
@@ -177,7 +179,7 @@ function _uixFromList(list) {
     _uix.loose.clear();
     for (let k = 0; k < a.length; k++) { const u = a[k], s = _uixSlotOf(u); _uix.ids[k] = u.id; _uix.slots[k] = s; if (s < 0) _uix.loose.set(u.id, u); }
     _uix.n = a.length; _uix.holes = 0; _uix.ver++; _uix.epoch++;
-    _unitById.stale = true; _unitByIdFor = -1;
+    _unitById.stale = true; _unitByIdFor = -1; _unitById.loose.clear();
 }
 // (The table's row of an id, -1 none.)
 function _uixFind(id) {
@@ -615,19 +617,29 @@ function unitRetirePrepare() {
 }
 function _unitRetireTotal(blocks) { let n = 0; for (let b = 0; b < blocks; b++) n += _unitRetireCounts[b]; return n; }
 // The retire pass's plan (wasm/src/nfs.rs k_retire_plan) over the retire
-// kernel's lists: heap buffers sized by the most retired so far; idx / sl
+// kernel's lists: heap buffers reserved for the match's slots; idx / sl
 // the removed units' list indices and slots, loose the removed without a slot.
 const _rp = { cap: 0, ord: null, gone: null, snd: null, hdr: null, idx: null, sl: null, loose: [], P: new Float64Array(4) };
+const _retirePlanArgs = new Array(11).fill(null);
+const _unitGoneArgs = new Array(48).fill(null);
+function _retirePlanReserve(cap) {
+    const R = _rp;
+    if (R.cap < cap || !simHeapHas(R.ord)) {
+        simHeapFree(R.ord); simHeapFree(R.gone); simHeapFree(R.snd); simHeapFree(R.hdr); simHeapFree(R.sl);
+        R.ord = simHeapArray(Int32Array, cap * 2); R.gone = simHeapArray(Int32Array, cap); R.snd = simHeapArray(Int32Array, 64);
+        R.hdr = simHeapArray(Int32Array, 4); R.idx = new Int32Array(cap); R.sl = simHeapArray(Int32Array, cap); R.cap = cap;
+    }
+}
 function _retirePlan(blocks, S) {
     const R = _rp, total = Math.max(1, _unitRetireTotal(blocks));
-    if (R.cap < total || !simHeapHas(R.ord)) {
-        const cap = Math.max(1024, total * 2);
-        R.ord = simSharedArray(Int32Array, cap * 2); R.gone = simSharedArray(Int32Array, cap); R.snd = simSharedArray(Int32Array, 64);
-        R.hdr = simSharedArray(Int32Array, 4); R.idx = new Int32Array(cap); R.sl = simSharedArray(Int32Array, cap); R.cap = cap;
-    }
+    if (R.cap < total || !simHeapHas(R.ord)) _retirePlanReserve(Math.max(1024, total * 2));
     const c = S.columns, P = R.P, king = spatialUnitTypeToIndex.king;
     P[0] = blocks; P[1] = UNIT_RETIRE_BLOCK; P[2] = Number.isFinite(king) ? king : -1; P[3] = UNIT_DEATH_SOUNDS;
-    simRustDirect('k_retire_plan', [_unitRetireList, _unitRetireCounts, _unitSlotMapEnsure(), c.dead, c.jRmNow, c.wkS, c.spType, R.ord, R.gone, R.snd, R.hdr], P);
+    const args = _retirePlanArgs;
+    args[0] = _unitRetireList; args[1] = _unitRetireCounts; args[2] = _unitSlotMapEnsure();
+    args[3] = c.dead; args[4] = c.jRmNow; args[5] = c.wkS; args[6] = c.spType;
+    args[7] = R.ord; args[8] = R.gone; args[9] = R.snd; args[10] = R.hdr;
+    try { simRustDirect('k_retire_plan', args, P); } finally { args.fill(null); }
     return R;
 }
 // Death sounds a tick (the first deaths in the retire order).
@@ -645,7 +657,7 @@ function _unitGoneRoom(n) {
     if (!G.olist || G.olist.length < n || !simHeapHas(G.olist)) {
         const m = simReserveCap(Math.max(n, 1), 4096);
         if (G.olist && simHeapHas(G.olist)) simHeapFree(G.olist);
-        G.olist = simSharedArray(Int32Array, m);
+        G.olist = simHeapArray(Int32Array, m);
     }
     return G;
 }
@@ -661,11 +673,23 @@ function _unitGoneRun(G, list, n, S) {
     const O = typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && typeof _occ !== 'undefined' ? _occ : null;
     const upk = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c ? _upkU.cnt : null;
     const vis = typeof _visCover !== 'undefined' && _visCover.syncedTick >= 0 && _visCover.adm === areaNeighborIds;
-    const arrays = [list, G.cnt, G.olist, c.owner, c.id, c.x, c.y, c.spEpoch, S.sepKey, S.sepLayer, c.spOwner, c.spType, c.spTile, c.spArea,
-        c.mvOn, c.mvOut, c.live, c.statRow, c.vsGen, c.vsR, c.vsP1, c.vsP2, c.vsA, O ? O.bits : null, O ? O.mask : null, O ? O.rec : null,
-        spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.upB, upk, c.ordSq,
-        c.wkS, c.wkT, c.wkR, c.wkIx, c.wbType, G.tt, workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots,
-        c.mvPath, S.pathPool ? S.pathPool.fs : null, c.dead];
+    const arrays = _unitGoneArgs;
+    arrays[0] = list; arrays[1] = G.cnt; arrays[2] = G.olist;
+    arrays[3] = c.owner; arrays[4] = c.id; arrays[5] = c.x;
+    arrays[6] = c.y; arrays[7] = c.spEpoch; arrays[8] = S.sepKey;
+    arrays[9] = S.sepLayer; arrays[10] = c.spOwner; arrays[11] = c.spType;
+    arrays[12] = c.spTile; arrays[13] = c.spArea; arrays[14] = c.mvOn;
+    arrays[15] = c.mvOut; arrays[16] = c.live; arrays[17] = c.statRow;
+    arrays[18] = c.vsGen; arrays[19] = c.vsR; arrays[20] = c.vsP1;
+    arrays[21] = c.vsP2; arrays[22] = c.vsA; arrays[23] = O ? O.bits : null;
+    arrays[24] = O ? O.mask : null; arrays[25] = O ? O.rec : null; arrays[26] = spatialUnitsComplex;
+    arrays[27] = spatialTypeCounts; arrays[28] = spatialBlockCounts; arrays[29] = c.upB;
+    arrays[30] = upk; arrays[31] = c.ordSq; arrays[32] = c.wkS;
+    arrays[33] = c.wkT; arrays[34] = c.wkR; arrays[35] = c.wkIx;
+    arrays[36] = c.wbType; arrays[37] = G.tt; arrays[38] = workerReservedTiles;
+    arrays[39] = resKept ? _workerResCount : null; arrays[40] = resKept ? _workerResSum : null; arrays[41] = wsl;
+    arrays[42] = V; arrays[43] = U.ids; arrays[44] = U.slots;
+    arrays[45] = c.mvPath; arrays[46] = S.pathPool ? S.pathPool.fs : null; arrays[47] = c.dead;
     P.fill(0);
     P[0] = n; P[1] = spatialEpoch; P[2] = SIM_SEP_ABSENT; P[3] = spatialUnitsComplexPlayerCount; P[4] = spatialUnitsComplexStridePerChunk; P[5] = CHUNKS_W;
     P[6] = spatialTypeBlocksW; P[7] = SPATIAL_TYPE_BLOCK; P[8] = spatialTypeStridePerBlock; P[9] = spatialUnitsComplexUnitTypeCount;
@@ -674,7 +698,7 @@ function _unitGoneRun(G, list, n, S) {
     P[20] = GRID_W; P[21] = TILE; P[22] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[23] = SNAP_REGION_TILES; P[24] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
     P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
-    simRustDirect('k_unit_gone', arrays, P);
+    try { simRustDirect('k_unit_gone', arrays, P); } finally { arrays.fill(null); }
     const C = G.cnt;
     for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
     for (let o = 0; o < 64 && o < players.length; o++) if (C[72 + o]) players[o].popCount -= C[72 + o];
@@ -3400,11 +3424,14 @@ function _pathStartInRegion(labels, region, gx, gy) {
 // behind are dropped then). No objects: the GC traces none of it. Units
 // without a slot (the page's views, units tests made by hand) in a Map.
 class UnitIdIndex {
-    constructor() { this.t = null; this.mask = 0; this.used = 0; this.size = 0; this.S = null; this.stale = false; this.loose = new Map(); }
+    constructor() { this.t = null; this.inHeap = false; this.mask = 0; this.used = 0; this.size = 0; this.S = null; this.stale = false; this.loose = new Map(); }
     static _h(id) { return Math.imul(id | 0, 2654435761) >>> 0; }
     _ok() {
         const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-        if (this.t !== null && (this.stale || this.S !== S || (typeof simHeapHas === 'function' && !simHeapHas(this.t)))) this._refill();
+        // (A table made in the heap that is no longer in it: a new heap. One made outside it, the heap full, stays: made again
+        // here at every call, each set of a restore's 435k units rebuilt the table from every unit, O(n^2): the 1M scene's
+        // restore did not finish in 50 min, 2026-11-05.)
+        if (this.t !== null && (this.stale || this.S !== S || (this.inHeap && typeof simHeapHas === 'function' && !simHeapHas(this.t)))) this._refill();
         return this.t !== null;
     }
     // (Slots moved (a relayout), another state (a restore), a new heap: made
@@ -3415,7 +3442,11 @@ class UnitIdIndex {
         this.dispose();
         if (!S) return;
         this.S = S; this._make();
-        for (const u of units) if (u && u._us === S.columns && u._si >= 0 && this._at(u.id) < 0) this._put(u.id, u._si);
+        // (The units without a slot too, from the same list: kept from before, a whole restore's old units (let go before
+        // the restored ones are made, simUnitStateReleaseAll) stayed reachable from here for the rest of the match, ~700 MB at 524k.)
+        this.loose.clear(); let n = 0;
+        for (const u of units) { if (!u) continue; if (u._us === S.columns && u._si >= 0) { if (this._at(u.id) < 0) { this._put(u.id, u._si); n++; } } else if (!this.loose.has(u.id)) { this.loose.set(u.id, u); n++; } }
+        this.size = n;
     }
     // Removed units (the retire pass, their slots and ids still theirs): those
     // with a slot out of the table in one kernel call (uix.rs k_uid_delete).
@@ -3456,7 +3487,7 @@ class UnitIdIndex {
         while (cap < 2 * Math.max(S ? S.cap : 0, this.size + extra + 1)) cap *= 2;
         const t = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null ? simSharedArray(Int32Array, cap) : new Int32Array(cap);
         t.fill(-1);
-        this.t = t; this.mask = cap - 1; this.used = 0; this.S = S;
+        this.t = t; this.mask = cap - 1; this.used = 0; this.S = S; this.inHeap = typeof simHeapHas === 'function' && simHeapHas(t);
         if (old && oldS === S && S) { const C = S.columns; for (let i = 0; i < old.length; i++) { const sl = old[i]; if (sl >= 0 && S.owners[sl] && S.owners[sl]._si === sl && this._at(C.id[sl]) < 0) this._put(C.id[sl], sl); } }
         if (old && typeof simHeapHas === 'function' && simHeapHas(old)) simHeapFree(old);
     }
@@ -3562,7 +3593,22 @@ function getUnitById(id) {
 // place, and a restore keeps the order).
 function _actionUnits(a) {
     const map = _unitByIdMap(), out = [];
-    for (let id of (a.unitIdSet || new Set(a.unitIds || []))) {
+    if (a[_actionImmediate]) {
+        const ids = a.unitIds;
+        for (let i = 0; i < ids.length; i++) {
+            const u = map.get(ids[i]);
+            if (u !== undefined) out.push(u);
+        }
+        return _unitsInIdOrder(out);
+    }
+    const ids = a.unitIdSet || new Set(a.unitIds || []);
+    if (Object.getPrototypeOf(ids) === Set.prototype) {
+        // Set iteration can allocate an iterator result for each selected unit.
+        ids.forEach(id => {
+            const u = map.get(id);
+            if (u !== undefined) out.push(u);
+        });
+    } else for (const id of ids) {
         const u = map.get(id);
         if (u !== undefined) out.push(u);
     }
@@ -3733,6 +3779,8 @@ function _issueGroupMoveOrderList(list, playerId, cmd, targetX, targetY) {
         }
     };
     let flowDest = [null, null], flowMembers = [null, null];
+    const fallbackDest = { x: 0, y: 0 };
+    let lastReachablePath = null;
     const K = _ordFastOn ? _ordKeys() : null, amGx = cmd === CMD_ATTACK_MOVING ? targetGx : null, amGy = cmd === CMD_ATTACK_MOVING ? targetGy : null;
     const tAmx = 0, tAmy = 0, tTp = 0;
     for (let u of list) {
@@ -3782,8 +3830,10 @@ function _issueGroupMoveOrderList(list, playerId, cmd, targetX, targetY) {
             (flowMembers[profile] ||= []).push(u);
             continue;
         }
-        let dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
-        applyPath(u, ugx, ugy, _findPathForUnitTagged('player_commands', u, ugx, ugy, dest.x, dest.y, !!u.isFlying, null, u.owner));
+        const dest = findNearestWalkable(targetGx, targetGy, ugx, ugy, u, fallbackDest);
+        const path = navPathReach(u, ugx, ugy, dest.x, dest.y, lastReachablePath);
+        if (path) lastReachablePath = path;
+        applyPath(u, ugx, ugy, path);
     }
     for (let p = 0; p < flowMembers.length; p++) if (flowMembers[p]) _issueFlowOrder(playerId, cmd, flowDest[p], flowMembers[p], applyPath, p);
     return list.length;
@@ -3918,7 +3968,16 @@ function actionSanitizeWarm() {
 // outside the columns keeps its id, its duplicates by a set: rare).
 const _actionCleanP = new Float64Array(4);
 function _actionCleanIds(ids) {
-    const clean = [], now = _actionIdStampNext(), map = _unitByIdMap(), c = _orderCols(), st = c ? c.idStp : null;
+    const clean = [];
+    _actionCleanIdsInto(ids, clean);
+    return clean;
+}
+const _actionMoveIds = new Float64Array(ACTION_MAX_UNIT_IDS);
+let _actionMoveIdsBusy = false;
+const _actionMoveIdCount = Symbol('borrowed move ID count');
+function _actionCleanIdsInto(ids, clean) {
+    const now = _actionIdStampNext(), map = _unitByIdMap(), c = _orderCols(), st = c ? c.idStp : null;
+    let written = 0;
     // Large selections: validate JS values once, then probe/deduplicate on
     // the existing numeric tables. No object lookup or per-ID heap check.
     // Loose units/page views keep the scalar path, including arbitrary IDs.
@@ -3926,21 +3985,25 @@ function _actionCleanIds(ids) {
         && typeof _simWasmX?.k_uid_clean === 'function') {
         const Q = orderQueueReserve(), P = _actionCleanP;
         P[1] = map.mask; P[2] = now;
-        for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS;) {
+        for (let i = 0; i < ids.length && written < ACTION_MAX_UNIT_IDS;) {
             let n = 0;
             for (; i < ids.length && n < ACTION_MAX_UNIT_IDS; i++) {
                 const id = ids[i];
                 if (typeof id === 'number' && Number.isInteger(id) && id >= -2147483648 && id <= 2147483647) Q.ids[n++] = id;
             }
             if (!n) continue;
-            P[0] = n; P[3] = ACTION_MAX_UNIT_IDS - clean.length;
+            P[0] = n; P[3] = ACTION_MAX_UNIT_IDS - written;
             simRustDirect('k_uid_clean', [Q.ids, map.t, c.id, c.live, st, Q.out, Q.cnt], P);
-            for (let j = 0; j < Q.cnt[0]; j++) clean.push(Q.out[j]);
+            // The kernel reports how many IDs survived. Size the JS result
+            // once per batch instead of growing its backing store with push.
+            const count = Q.cnt[0];
+            if (clean !== _actionMoveIds) clean.length = written + count;
+            for (let j = 0; j < count; j++) clean[written++] = Q.out[j];
         }
-        return clean;
+        return written;
     }
     let odd = null;
-    for (let i = 0; i < ids.length && clean.length < ACTION_MAX_UNIT_IDS; i++) {
+    for (let i = 0; i < ids.length && written < ACTION_MAX_UNIT_IDS; i++) {
         const id = ids[i];
         if (!(typeof id === 'number' && Number.isInteger(id))) continue;
         const u = map.get(id);
@@ -3948,15 +4011,35 @@ function _actionCleanIds(ids) {
         if (st && u._us === c && u._si >= 0) { const s = u._si; if (st[s] === now) continue; st[s] = now; }
         else if ((odd || (odd = new Set())).has(id)) continue;
         else odd.add(id);
-        clean.push(id);
+        clean[written++] = id;
     }
-    return clean;
+    return written;
 }
 // (The ids' wire form, actionIdsEncode / actionIdsDecode: utils/id_codec.js.)
 const _actionTileFields = ['gx', 'gy', 'targetGx', 'targetGy'];
 const _actionIntFields = ['targetId', 'unitId', 'targetUnitId', 'targetTeam', 'unitLevel', 'fromIndex', 'toIndex'];
 const _actionStringFields = ['itemType', 'kind', 'key', 'statKey', 'targetType', 'mode', 'unitType'];
-function sanitizeAction(raw) {
+const _actionIdSetValue = { value: null, writable: true, configurable: true };
+function _actionStoreIdSet(action, set) {
+    _actionIdSetValue.value = set;
+    Object.defineProperty(action, 'unitIdSet', _actionIdSetValue);
+    _actionIdSetValue.value = null;
+}
+const _actionIdSetAccessor = {
+    configurable: true, enumerable: false,
+    get() { const set = new Set(this.unitIds); _actionStoreIdSet(this, set); return set; },
+    set(value) { _actionStoreIdSet(this, value); }
+};
+const _actionHiddenValue = { value: null, enumerable: false, configurable: true };
+const _actionRawRallyCoords = Symbol('raw rally coordinates');
+const _actionImmediate = Symbol('immediate action');
+const _actionEmptyIds = Object.freeze([]);
+function _actionDefineHidden(action, key, value) {
+    _actionHiddenValue.value = value;
+    Object.defineProperty(action, key, _actionHiddenValue);
+    _actionHiddenValue.value = null;
+}
+function sanitizeAction(raw, immediate = false, moveIds = null) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof raw.action !== 'string') return null;
     let a = { ...raw };
     // (Ids sent compactly: the list they stand for.)
@@ -3964,7 +4047,7 @@ function sanitizeAction(raw) {
     // straight into its scratch (_queueGroupMoveOrder; the kernel takes each
     // unit once, the player's own only); others' as a list.)
     if (typeof a.uidz === 'string') {
-        if (!Array.isArray(a.unitIds) && (a.action === 'move' || a.action === 'attackMove')) { Object.defineProperty(a, '_uidz', { value: a.uidz, enumerable: false, configurable: true }); a.unitIds = []; }
+        if (!Array.isArray(a.unitIds) && (a.action === 'move' || a.action === 'attackMove')) { _actionDefineHidden(a, '_uidz', a.uidz); a.unitIds = []; }
         else if (!Array.isArray(a.unitIds)) a.unitIds = actionIdsDecode(a.uidz);
         delete a.uidz;
     }
@@ -3977,18 +4060,18 @@ function sanitizeAction(raw) {
     if ('itemType' in a && !(a.itemType && Object.prototype.hasOwnProperty.call(BASE_CARD_TYPES, a.itemType))) a.itemType = null;
     if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
     // (Each id once, in the order given.)
-    const clean = Array.isArray(a.unitIds) ? _actionCleanIds(a.unitIds) : [];
+    const rawIds = Array.isArray(a.unitIds) ? a.unitIds : null;
+    const clean = moveIds || (rawIds && (!immediate || rawIds.length)
+        ? _actionCleanIds(rawIds) : immediate ? _actionEmptyIds : []);
+    if (moveIds) a[_actionMoveIdCount] = rawIds ? _actionCleanIdsInto(rawIds, moveIds) : 0;
     a.unitIds = clean;
     // (Distinct now: the order queue takes them as they are.)
-    Object.defineProperty(a, '_idsDistinct', { value: clean, enumerable: false, configurable: true });
+    _actionDefineHidden(a, '_idsDistinct', clean);
     // Membership tests against every unit: a set, not a scan of the ids
     // (made at its first use: a move order needs none).
-    Object.defineProperty(a, 'unitIdSet', {
-        configurable: true, enumerable: false,
-        get() { const set = new Set(this.unitIds); Object.defineProperty(this, 'unitIdSet', { value: set, writable: true, configurable: true }); return set; },
-        set(v) { Object.defineProperty(this, 'unitIdSet', { value: v, writable: true, configurable: true }); }
-    });
-    if ('towerCoords' in a) {
+    if (immediate) _actionDefineHidden(a, _actionImmediate, true);
+    else Object.defineProperty(a, 'unitIdSet', _actionIdSetAccessor);
+    if ('towerCoords' in a && !(immediate && a.action === 'towerTarget')) {
         let coords = Array.isArray(a.towerCoords) ? a.towerCoords : [];
         a.towerCoords = [];
         for (let i = 0; i < coords.length && a.towerCoords.length < ACTION_MAX_TOWER_COORDS; i++) {
@@ -4002,10 +4085,16 @@ function sanitizeAction(raw) {
     if ('tkz' in a && typeof a.tkz !== 'string') delete a.tkz;
     if ('coords' in a) {
         let coords = Array.isArray(a.coords) ? a.coords : [];
-        a.coords = [];
-        for (let i = 0; i + 1 < coords.length && a.coords.length < 2 * ACTION_MAX_RALLY_COORDS; i += 2) {
-            let gx = _actionInt(coords[i]), gy = _actionInt(coords[i + 1]);
-            if (gx !== null && gy !== null) a.coords.push(gx, gy);
+        if (immediate && a.action === 'setRallyMany' && coords.length >= 64) {
+            // The immediate dispatch validates and packs these into its
+            // reserved tile buffer. The packet array stays read-only.
+            _actionDefineHidden(a, _actionRawRallyCoords, true);
+        } else {
+            a.coords = [];
+            for (let i = 0; i + 1 < coords.length && a.coords.length < 2 * ACTION_MAX_RALLY_COORDS; i += 2) {
+                let gx = _actionInt(coords[i]), gy = _actionInt(coords[i + 1]);
+                if (gx !== null && gy !== null) a.coords.push(gx, gy);
+            }
         }
     }
     if ('target' in a) {
@@ -4175,10 +4264,19 @@ function _actionKeepLatest(a, p, seq) {
     const c = _orderCols(), mark = seq + 1;
     if (!c || !_actMarked || !ACTION_JUMP_UNITS.has(a.action)) return true;
     const map = _unitByIdMap();
-    const ids = (a.unitIds || []).filter(id => { const u = map.get(id); return u !== undefined && u._us === c && u._si >= 0 && c.actMk[u._si] === mark; });
-    a.unitIds = ids;
-    Object.defineProperty(a, '_idsDistinct', { value: ids, enumerable: false, configurable: true });
-    return ids.length > 0;
+    // sanitizeAction owns this list, and its lazy membership set has not
+    // been read yet. Compact it in place in arrival order.
+    const ids = a.unitIds;
+    let count = 0;
+    const n = a[_actionMoveIdCount] ?? ids.length;
+    if (!n) return false;
+    for (let i = 0; i < n; i++) {
+        const id = ids[i], u = map.get(id);
+        if (u !== undefined && u._us === c && u._si >= 0 && c.actMk[u._si] === mark) ids[count++] = id;
+    }
+    if (ids === _actionMoveIds) a[_actionMoveIdCount] = count;
+    else ids.length = count;
+    return count > 0;
 }
 function _actionMarksClear() { if (_actMarked) { const c = _orderCols(); if (c) c.actMk.fill(0); _actMarked = false; } if (_actLive.size) _actLive.clear(); }
 // (In a snapshot: the arrival, the marks that waiting actions read (those
@@ -4210,7 +4308,17 @@ function actionEarlyRestore(v) {
 // recorded the latest marks (it waited, or went ahead of waiting ones): only
 // what it still is the latest for.)
 function _processRawAction(raw, playerId, seq = -1, recorded = false) {
-    let a = sanitizeAction(raw);
+    const borrow = !_actionMoveIdsBusy && Array.isArray(raw?.unitIds)
+        && (raw.action === 'move' || raw.action === 'attackMove');
+    if (borrow) _actionMoveIdsBusy = true;
+    try {
+        _dispatchRawAction(raw, playerId, seq, recorded, borrow ? _actionMoveIds : null);
+    } finally {
+        if (borrow) _actionMoveIdsBusy = false;
+    }
+}
+function _dispatchRawAction(raw, playerId, seq, recorded, moveIds) {
+    let a = sanitizeAction(raw, true, moveIds);
     if (!a) return;
     if (recorded && seq >= 0 && _actionMarked(a) && !_actionKeepLatest(a, playerId, seq)) return;
     // One bad action must not take the rest of the tick's actions with
@@ -4411,9 +4519,21 @@ function _actionDistinctIds(a) {
     return _actionCleanIds(a.unitIds || []);
 }
 function _dropQueuedOrderUnits(idSet, playerId) {
-    if (!_orderQueue.length || !idSet || !idSet.size) return;
+    if (!_orderQueue.length || !(idSet?.size ?? idSet?.length)) return;
     const T = _unitOrderSeqOf(playerId), map = _unitByIdMap(), c = _orderCols();
-    for (const id of idSet) { const s = _orderStampSlot(T, id, map, c); if (s >= 0) { _orderStampSuperseded(c.ordSq[s], id); c.ordSq[s] = 0; } }
+    const drop = id => {
+        const s = _orderStampSlot(T, id, map, c);
+        if (s < 0) return;
+        _orderStampSuperseded(c.ordSq[s], id);
+        c.ordSq[s] = 0;
+    };
+    if (Array.isArray(idSet)) {
+        for (let i = 0; i < idSet.length; i++) drop(idSet[i]);
+    } else if (Object.getPrototypeOf(idSet) === Set.prototype) {
+        idSet.forEach(drop);
+    } else {
+        for (const id of idSet) drop(id);
+    }
 }
 // The queue's buffers (wasm heap, bound for the order kernels), allocated at
 // the match's start (orderQueueReserve), sized from the settings so every
@@ -4422,6 +4542,12 @@ function _dropQueuedOrderUnits(idSet, playerId) {
 // orders' slots in id order, entry after entry; compacted when full, the
 // oldest order applied whole when even that has no room).
 const ORDER_ENTRIES_MAX = 16384;
+const _orderEntryPool = new Array(ORDER_ENTRIES_MAX);
+let _orderEntryFree = 0;
+let _orderEntryPoolReady = false;
+function _newOrderEntry() {
+    return { playerId: 0, cmd: 0, action: '', targetX: 0, targetY: 0, ro: 0, rn: 0, next: 0, seq: 0, live: 0, sum: 0, due: 0 };
+}
 let _oq = null;
 // Every work array the ticks use, made at the match's start (a new match,
 // a whole restore) at its bound from the match's settings: the population
@@ -4430,6 +4556,7 @@ let _oq = null;
 // mid-match could find no room (sim_wasm.js simHeapPlayStats counts any).
 // The simulation's only (the page runs startGame too).
 function simMatchReserve() {
+    if (typeof damageFlashReserve === 'function') damageFlashReserve(players.length);
     // (Where the ticks run: the wasm heap is up there; a page whose simulation
     // runs in its worker has none, simWasmInit.)
     if (typeof simWasmInit !== 'function' || !simWasmInit()) return;
@@ -4439,6 +4566,10 @@ function simMatchReserve() {
         structs: typeof structOwnedRowsTotal === 'function' ? structOwnedRowsTotal() : tiles,
         mines: typeof structReserveRowsTotal === 'function' && typeof structOwnedRowsTotal === 'function' ? structReserveRowsTotal()-structOwnedRowsTotal() : 0,
         tiles, players: typeof players !== 'undefined' && players ? players.length : teams };
+    _retirePlanReserve(Math.max(1024, B.slots));
+    _unitGoneRoom(Math.max(1024, B.slots));
+    simUnitFreeQueueReserve(_simUnitState);
+    researchOrderChecksReserve();
     for (const f of [typeof navSubReserve === 'function' ? navSubReserve : null, typeof workerBrainReserve === 'function' ? workerBrainReserve : null,
         typeof workerAiReserve === 'function' ? workerAiReserve : null,
         typeof simSpawnBatchReserve === 'function' ? simSpawnBatchReserve : null, typeof simTileChangesReserve === 'function' ? simTileChangesReserve : null,
@@ -4463,6 +4594,11 @@ function simMatchPrepare() {
     if (typeof _simMoveAreaBoxes === 'function') _simMoveAreaBoxes();
 }
 function orderQueueReserve() {
+    if (!_orderEntryPoolReady) {
+        for (let i = 0; i < ORDER_ENTRIES_MAX; i++) _orderEntryPool[i] = _newOrderEntry();
+        _orderEntryFree = ORDER_ENTRIES_MAX;
+        _orderEntryPoolReady = true;
+    }
     const teams = typeof activeTeamIds !== 'undefined' && Array.isArray(activeTeamIds) && activeTeamIds.length ? activeTeamIds.length : 2;
     const ring = 2 * memoryBudgetUnits(getConfiguredMaxPop(), teams, GRID_W * GRID_H) + 2 * ACTION_MAX_UNIT_IDS;
     // (An action's ids or a rally's tile keys: a player's structures at most;
@@ -4504,9 +4640,12 @@ function _orderRingRoom(k) {
 }
 function _orderDone(qi) {
     const e = _orderQueue[qi];
-    _orderQueue.splice(qi, 1); _orderBySeq.delete(e.seq);
+    for (let i = qi + 1; i < _orderQueue.length; i++) _orderQueue[i - 1] = _orderQueue[i];
+    _orderQueue.pop();
+    _orderBySeq.delete(e.seq);
     if (_orderSupSeq === e.seq) { _orderSupSeq = 0; _orderSupEntry = null; }
     if (!_orderQueue.length) _oq.top = 0;
+    if (_orderEntryFree < ORDER_ENTRIES_MAX) _orderEntryPool[_orderEntryFree++] = e;
 }
 // An order's ids (a list of integers; null: already in the queue's scratch,
 // q.ids) made its units' latest order (the admission kernel): a new entry with
@@ -4517,7 +4656,7 @@ function _orderAdmit(ids, n, playerId, cmd, action, targetX, targetY, due) {
     const Q = orderQueueReserve(), A = Q.ids;
     n = Math.min(n, A.length);
     // (A typed list: one copy; then sorted, in place, when it is not.)
-    if (ids === null) { } else if (ArrayBuffer.isView(ids)) A.set(ids.subarray(0, n)); else for (let i = 0; i < n; i++) A[i] = ids[i];
+    if (ids === null) { } else if (ids !== _actionMoveIds && ArrayBuffer.isView(ids)) A.set(ids.subarray(0, n)); else for (let i = 0; i < n; i++) A[i] = ids[i];
     // (Decoded by the kernel: ascending already, _idsDecode.)
     if (ids !== null) {
         let sorted = true;
@@ -4543,7 +4682,9 @@ function _orderAdmit(ids, n, playerId, cmd, action, targetX, targetY, due) {
     const ro = Q.top;
     Q.ring.set(Q.out.subarray(0, nn + nw), ro);
     Q.top += nn + nw;
-    const e = { playerId, cmd, action, targetX, targetY, ro, rn: nn + nw, next: 0, seq, live: nn + nw, sum, due };
+    const e = _orderEntryFree ? _orderEntryPool[--_orderEntryFree] : _newOrderEntry();
+    e.playerId = playerId; e.cmd = cmd; e.action = action; e.targetX = targetX; e.targetY = targetY;
+    e.ro = ro; e.rn = nn + nw; e.next = 0; e.seq = seq; e.live = nn + nw; e.sum = sum; e.due = due;
     _orderQueue.push(e); _orderBySeq.set(seq, e);
     return e;
 }
@@ -4579,7 +4720,7 @@ function _queueGroupMoveOrder(a, playerId, cmd) {
         return;
     }
     const ids = a.unitIds || [];
-    _orderAdmit(ids, ids.length, playerId, cmd, a.action, a.targetX, a.targetY, due);
+    _orderAdmit(ids, a[_actionMoveIdCount] ?? ids.length, playerId, cmd, a.action, a.targetX, a.targetY, due);
 }
 // The workers of a move order (q.out2[0..n], slots) by the workers' order
 // kernel (ord.rs k_order_workers): their tasks let go and the order's flow
@@ -4702,7 +4843,15 @@ function orderQueueRemapSlots(map) {
     const R = _oq.ring;
     for (const e of _orderQueue) for (let i = e.ro + e.next, end = e.ro + e.rn; i < end; i++) { const s = R[i]; R[i] = s >= 0 && s < map.length ? map[s] : -1; }
 }
-function resetOrderQueue() { _orderQueue = []; if (_oq) _oq.top = 0; { const c = _orderCols(); if (c) c.ordSq.fill(0); } _orderBySeq = new Map(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0; _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionMarksClear(); }
+function resetOrderQueue() {
+    for (let i = 0; i < _orderQueue.length && _orderEntryFree < ORDER_ENTRIES_MAX; i++) _orderEntryPool[_orderEntryFree++] = _orderQueue[i];
+    _orderQueue.length = 0;
+    if (_oq) _oq.top = 0;
+    const c = _orderCols();
+    if (c) c.ordSq.fill(0);
+    _orderBySeq.clear(); _orderSupSeq = 0; _orderSupEntry = null; _orderSeq = 0;
+    _actionBacklog = []; _actionBudgetLeft = ACTION_BUDGET_PER_TICK; _actionJumpLeft = ACTION_JUMP_BUDGET_PER_TICK; _actionArrival = 0; _actionMarksClear();
+}
 // The queue as state (snapshots): each entry's units still to apply that
 // it ordered last, in its order (its slots' units, by id), entries with none
 // left out. A restore admits them again: the same order (ascending ids, as
@@ -4811,6 +4960,22 @@ function _rallySetTiles(a, playerId) {
     R.tid = Number.isFinite(a.targetUnitId) ? a.targetUnitId : NaN;
     R.present = typeof simPresentRally === 'function' && typeof _simPresentation !== 'undefined' && !!_simPresentation;
     if (typeof a.tkz === 'string') _rallyKernel(a.tkz);
+    else if (a[_actionRawRallyCoords] === true) {
+        const c = a.coords;
+        const Q = typeof _ST !== 'undefined' && _ST && _ST.rtab ? orderQueueReserve() : null;
+        const ids = Q && Q.ids.length >= ACTION_MAX_RALLY_COORDS ? Q.ids : null;
+        let count = 0, n = 0;
+        for (let i = 0; i + 1 < c.length && count < ACTION_MAX_RALLY_COORDS; i += 2) {
+            const gx = _actionInt(c[i]), gy = _actionInt(c[i + 1]);
+            if (gx === null || gy === null) continue;
+            count++;
+            if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_W) continue;
+            const tile = gy * GRID_W + gx;
+            if (ids) ids[n++] = tile;
+            else _rallySetTile(tile);
+        }
+        if (n) _rallyKernelRun(n);
+    }
     else {
         const c = a.action === 'setRally' ? [a.gx, a.gy] : (a.coords || []);
         // (Many coordinates: their tile keys through the kernel, as tkz's are.
@@ -4838,7 +5003,10 @@ function processAction(a, playerId) {
         // ~90 ms.)
         { const k = a.action; if (k !== 'move' && k !== 'attackMove' && k !== 'attack' && k !== 'attackBuilding' && k !== 'setRally' && k !== 'setRallyMany' && k !== 'towerTarget') workerWorkChanged(playerId); }
         // Any order for units supersedes queued move orders for them.
-        if (a.action !== 'move' && a.action !== 'attackMove' && a.unitIdSet && a.unitIdSet.size) _dropQueuedOrderUnits(a.unitIdSet, playerId);
+        const immediate = a[_actionImmediate];
+        if (_orderQueue.length && a.action !== 'move' && a.action !== 'attackMove') {
+            _dropQueuedOrderUnits(immediate ? a.unitIds : a.unitIdSet, playerId);
+        }
         if (a.action === 'place') {
             let count = Math.max(1, Math.floor(a.count || 1));
             for (let i = 0; i < count; i++) {
@@ -4850,14 +5018,19 @@ function processAction(a, playerId) {
         } else if (a.action === 'attack') {
             let target = getUnitById(a.targetId);
             if (target) {
-                for (let u of _actionUnits(a)) {
+                const attackers = _actionUnits(a);
+                let position = null;
+                for (let i = 0; i < attackers.length; i++) {
+                    const u = attackers[i];
                     // (Not workers: they do not attack, and a target left on one would stay after it is gone.)
-                    if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead && !u.workerState) {
+                    if ((immediate || a.unitIdSet.has(u.id)) && u.owner === playerId && !u.dead && !u.workerState) {
                         // (The movement kernel's attack order, mv.rs forced: it closes in by the atlas, no way of its own.)
                         unitAttackOrder(u);
                         u.targetUnit = target; u.targetBuilding = null; u.forcedAttackTarget = true;
-                        u._forcedTargetLastSeenX = target.x; u._forcedTargetLastSeenY = target.y;
-                        u.targetPos = { x: target.x, y: target.y };
+                        // The target does not move while this action is applied.
+                        position ||= { x: target.x, y: target.y };
+                        u._forcedTargetLastSeenX = position.x; u._forcedTargetLastSeenY = position.y;
+                        u.targetPos = position;
                     }
                 }
             } else if (Number.isFinite(a.targetX) && Number.isFinite(a.targetY)) {
@@ -4869,18 +5042,22 @@ function processAction(a, playerId) {
             let tb = getTileEntityRef(a.targetGx, a.targetGy);
             if (!(tb && tb.energy > 0)) tb = null;
             if (tb) {
-                for (let u of _actionUnits(a)) {
-                    if (a.unitIdSet.has(u.id) && u.owner === playerId && !u.dead && !u.workerState) {
+                const attackers = _actionUnits(a);
+                let position = null;
+                for (let i = 0; i < attackers.length; i++) {
+                    const u = attackers[i];
+                    if ((immediate || a.unitIdSet.has(u.id)) && u.owner === playerId && !u.dead && !u.workerState) {
                         unitAttackOrder(u);
                         u.targetBuilding = tb; u.targetUnit = null; u.forcedAttackTarget = false;
                         u._forcedTargetLastSeenX = null; u._forcedTargetLastSeenY = null;
-                        u.targetPos = { x: tb.x, y: tb.y };
+                        position ||= { x: tb.x, y: tb.y };
+                        u.targetPos = position;
                     }
                 }
             }
         } else if (a.action === 'stop') {
             for (let u of _actionUnits(a)) {
-                if (a.unitIdSet.has(u.id) && u.owner === playerId) {
+                if ((immediate || a.unitIdSet.has(u.id)) && u.owner === playerId) {
                     // Releasing hold resumes the unit's current orders
                     // (route, rally, worker task). Only free units stop.
                     if (u.holdPosition) { u.holdPosition = false; simMoveDisarm(u); continue; }
@@ -4897,7 +5074,7 @@ function processAction(a, playerId) {
             for (let u of _actionUnits(a)) {
                 // Hold only disables movement. Orders, routes, targets and
                 // worker tasks are kept, and new orders queue up while held.
-                if (a.unitIdSet.has(u.id) && u.owner === playerId) { u.holdPosition = true; simMoveDisarm(u); }
+                if ((immediate || a.unitIdSet.has(u.id)) && u.owner === playerId) { u.holdPosition = true; simMoveDisarm(u); }
             }
         } else if (a.action === 'queueUnit') {
             let b = getBarrackAtTile(a.gx, a.gy);
@@ -4967,7 +5144,7 @@ function processAction(a, playerId) {
             if (!(a.targetGx >= 0 && a.targetGy >= 0 && a.targetGx < GRID_W && a.targetGy < GRID_H)) return;
             // Assign selected worker units to a specific target
             for (let u of _actionUnits(a)) {
-                if (!a.unitIdSet.has(u.id) || u.owner !== playerId || u.dead || !u.workerState) continue;
+                if ((!immediate && !a.unitIdSet.has(u.id)) || u.owner !== playerId || u.dead || !u.workerState) continue;
                 let myGx = Math.floor(u.x / TILE), myGy = Math.floor(u.y / TILE);
                 if (u.workerType === 'builder' && a.targetType === 'build') {
                     // Generic lookup: includes both under-construction and upgrading targets.
@@ -5113,17 +5290,15 @@ function processAction(a, playerId) {
         } else if (a.action === 'reorderResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
             if (!(r && r.owner === playerId && r.type === 'research')) r = null;
-            if (r || getOwnedActiveResearchLabs(playerId).length > 0) {
+            if (r || hasOwnedActiveResearchLab(playerId)) {
                 let p = ensurePlayerResearchQueueState(playerId);
                 let fromIsActive = !!a.fromActive;
                 let toIsActive = !!a.toActive;
-                let ordered = [];
-                if (p.researchTask) ordered.push(p.researchTask);
-                for (let task of p.researchQueue) ordered.push(task);
-                if (ordered.length <= 1) return;
+                const count = p.researchQueue.length + (p.researchTask ? 1 : 0);
+                if (count <= 1) return;
 
                 let from = fromIsActive ? 0 : (Math.floor(Number(a.fromIndex)) + 1);
-                if (!Number.isFinite(from) || from < 0 || from >= ordered.length) return;
+                if (!Number.isFinite(from) || from < 0 || from >= count) return;
 
                 let rawTo = Math.floor(Number(a.toIndex));
                 let to = 0;
@@ -5132,44 +5307,28 @@ function processAction(a, playerId) {
                 } else {
                     if (!Number.isFinite(rawTo)) return;
                     if (fromIsActive) {
-                        to = Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
+                        to = Math.max(0, Math.min(count - 1, rawTo + 1));
                     } else {
                         to = rawTo <= 0
                             ? 0
-                            : Math.max(0, Math.min(ordered.length - 1, rawTo + 1));
+                            : Math.max(0, Math.min(count - 1, rawTo + 1));
                     }
                 }
                 if (from === to) return;
 
-                let [task] = ordered.splice(from, 1);
-                if (!task) return;
-                ordered.splice(to, 0, task);
-
-                p.researchTask = ordered[0] || null;
-                p.researchQueue.length = 0;
-                for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
-                rebasePlayerResearchQueueState(playerId, [task]);
-                tryAdvancePlayerResearchTask(playerId);
+                moveResearchTaskInPlace(playerId, p, from, to, true);
             }
         } else if (a.action === 'moveResearch') {
             // Move one task within the ordered queue (index 0 = the active task).
-            if (getOwnedActiveResearchLabs(playerId).length > 0) {
+            if (hasOwnedActiveResearchLab(playerId)) {
                 let p = ensurePlayerResearchQueueState(playerId);
-                let ordered = [];
-                if (p.researchTask) ordered.push(p.researchTask);
-                for (let task of p.researchQueue) ordered.push(task);
+                const count = p.researchQueue.length + (p.researchTask ? 1 : 0);
                 let from = Math.floor(Number(a.from));
                 let to = Math.floor(Number(a.to));
-                if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from >= ordered.length) return;
-                to = Math.max(0, Math.min(ordered.length - 1, to));
+                if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from >= count) return;
+                to = Math.max(0, Math.min(count - 1, to));
                 if (from === to) return;
-                let [task] = ordered.splice(from, 1);
-                ordered.splice(to, 0, task);
-                p.researchTask = ordered[0] || null;
-                p.researchQueue.length = 0;
-                for (let i = 1; i < ordered.length; i++) p.researchQueue.push(ordered[i]);
-                rebasePlayerResearchQueueState(playerId, task ? [task] : null);
-                tryAdvancePlayerResearchTask(playerId);
+                moveResearchTaskInPlace(playerId, p, from, to, false);
             }
         } else if (a.action === 'markSalvage') {
             // Toggle salvage mark on a building at gx,gy
@@ -5246,40 +5405,33 @@ function processAction(a, playerId) {
             };
             resizeUnitSubgroup(playerId, a.unitIds || [], a.mode, subgroupFilter);
         } else if (a.action === 'towerTarget') {
-            // Set preferredTarget on own towers. (A unit target looked up
-            // once, by id: a scan of every unit per tower took seconds for
-            // thousands of towers.)
-            let targetUnit = null;
-            if (a.target && a.target.type === 'unit') { const tu = getUnitById(a.target.id); targetUnit = tu && !tu.dead && tu.owner !== playerId ? tu : null; }
-            for (let tc of (a.towerCoords || [])) {
-                let t = getTowerAtTile(tc.gx, tc.gy);
-                if (!(t && t.owner === playerId)) t = null;
-                if (!t) continue;
-                if (!a.target) { t.preferredTarget = null; t.preferredTargetSpec = null; continue; }
-                if (a.target.type === 'unit') {
-                    let tu = targetUnit;
-                    t.preferredTarget = tu || null;
-                    t.preferredTargetSpec = tu ? { type: 'unit', id: tu.id } : null;
-                } else if (a.target.type === 'tower') {
-                    let tb = getTowerAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (tb && tb.energy > 0 && tb.owner !== playerId) ? tb : null;
-                    t.preferredTargetSpec = t.preferredTarget ? { type: 'tower', gx: a.target.gx, gy: a.target.gy } : null;
-                } else if (a.target.type === 'barrack') {
-                    let b = getBarrackAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (b && b.energy > 0 && b.owner !== playerId) ? b : null;
-                    t.preferredTargetSpec = t.preferredTarget ? { type: 'barrack', gx: a.target.gx, gy: a.target.gy } : null;
-                } else if (a.target.type === 'spawner') {
-                    let s = getSpawnerAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (s && s.energy > 0 && s.owner !== playerId) ? s : null;
-                    t.preferredTargetSpec = t.preferredTarget ? { type: 'spawner', gx: a.target.gx, gy: a.target.gy } : null;
-                } else if (a.target.type === 'item') {
-                    let item = getFloorItemAtTile(a.target.gx, a.target.gy);
-                    t.preferredTarget = (item && item.energy > 0 && item.owner !== playerId) ? item : null;
-                    t.preferredTargetSpec = t.preferredTarget ? { type: 'item', gx: a.target.gx, gy: a.target.gy } : null;
-                } else {
-                    t.preferredTarget = null;
-                    t.preferredTargetSpec = null;
-                }
+            // Resolve and encode the requested target once for all towers.
+            const target = a.target;
+            let kind = target ? TOWER_TARGET_KINDS.indexOf(target.type) : 0, value = -1;
+            if (kind === 1) {
+                const u = getUnitById(target.id);
+                if (u && !u.dead && u.owner !== playerId && Number.isFinite(u.id)) value = Math.floor(u.id);
+                else kind = 0;
+            } else if (kind > 1 && Number.isFinite(target.gx) && Number.isFinite(target.gy)
+                && _towerHostileStructureAt(kind, target.gx, target.gy, playerId)) {
+                value = Math.floor(target.gy) * GRID_W + Math.floor(target.gx);
+            } else {
+                kind = 0;
+            }
+            const coords = a.towerCoords, n = Array.isArray(coords) ? coords.length : 0;
+            let accepted = 0;
+            for (let i = 0; i < n && (!immediate || accepted < ACTION_MAX_TOWER_COORDS); i++) {
+                const tc = coords[i];
+                // Immediate packets are read-only. Validate each pair here.
+                const gx = immediate ? tc && _actionInt(tc.gx) : tc.gx;
+                const gy = immediate ? tc && _actionInt(tc.gy) : tc.gy;
+                if (immediate && (gx === null || gy === null)) continue;
+                accepted++;
+                const t = getTowerAtTile(gx, gy);
+                if (!t || t.owner !== playerId) continue;
+                // A structure order has historically replaced a live lock.
+                if (kind > 1 && !t.preferredTarget) towerSetPreferredTargetCode(t, 0, -1);
+                else towerSetPreferredTargetCode(t, kind, value);
             }
         }
     }
@@ -5553,7 +5705,7 @@ function startGame() {
 
     rebuildPrecomputedStatsMap();
 
-    mapAlerts = [];
+    resetMapDamageAlerts();
     controlGroupAlertState = {};
     controlGroups = {};
     popupControlGroups = {};

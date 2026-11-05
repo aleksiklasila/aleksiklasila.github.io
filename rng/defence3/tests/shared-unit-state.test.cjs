@@ -26,7 +26,7 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     simUnitMirror(first);
     if (first.x !== x || first._us.x[first._si] !== x * 8) fail('growth/precision');
     for(const [name,value]of cacheValues)if(first[name]!==value)fail('sparse cache growth '+name);
-    const retired = units.pop(), oldX = retired.x, slot = retired._si;
+    const retired = units.pop(), oldX = retired.x, oldY = retired.y, oldId = retired.id, oldOwner = retired.owner, slot = retired._si;
     for(const [name,value]of cacheValues)retired[name]=value;
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
     // (Freed slots are reused from the next unit index rebuild on.)
@@ -35,7 +35,9 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const rx = 300;
     simUnitStateWantSlot(slot);
     const replacement = new Unit('norm', 0, rx, 300); units.push(replacement);
-    if (replacement._si !== slot || retired.x !== oldX) fail('slot retirement');
+    if (replacement._si !== slot || retired.x !== oldX || retired.y !== oldY ||
+        retired.id !== oldId || retired.owner !== oldOwner || !retired.dead || retired.energy !== 0) fail('slot retirement');
+    if (retired._goneRecord !== null) fail('common stale reads allocated a detached record');
     for(const [name,value]of cacheValues){
         // (Detached: its id, owner and last position only, the rest undefined: SimUnitGone.)
         if(retired[name]!==undefined)fail('sparse cache detach '+name);

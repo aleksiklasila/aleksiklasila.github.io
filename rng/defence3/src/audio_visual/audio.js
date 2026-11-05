@@ -105,12 +105,14 @@ function doesCurrentSelectionMatchSnapshot(grp, membership = null) {
     return true;
 }
 
-function getUnitWorldPos(u) {
-    if (!u) return { x: 0, y: 0 };
-    if (u.x !== undefined && u.y !== undefined) return { x: u.x, y: u.y };
-    let gx = u.gx !== undefined ? u.gx : (u._gx !== undefined ? u._gx : 0);
-    let gy = u.gy !== undefined ? u.gy : (u._gy !== undefined ? u._gy : 0);
-    return { x: gx * TILE + TILE / 2, y: gy * TILE + TILE / 2 };
+function getUnitWorldPos(u, out = {}) {
+    if (!u) { out.x = 0; out.y = 0; return out; }
+    const x = u.x, y = u.y;
+    if (x !== undefined && y !== undefined) { out.x = x; out.y = y; return out; }
+    const gx = u.gx !== undefined ? u.gx : (u._gx !== undefined ? u._gx : 0);
+    const gy = u.gy !== undefined ? u.gy : (u._gy !== undefined ? u._gy : 0);
+    out.x = gx * TILE + TILE / 2; out.y = gy * TILE + TILE / 2;
+    return out;
 }
 
 // Whether a control group's list holds x: a big list by a set made once
@@ -157,15 +159,27 @@ function markControlGroupsDamaged(unit, isKing) {
 // (The map keeps the last 40 alerts: a tick adds at most that many, a
 // king's always.)
 let _damageAlertTick = -1, _damageAlertCount = 0;
+const MAP_ALERT_LIMIT = 40;
+const _damageAlertPosition = { x: 0, y: 0 };
+const _mapAlertSpare = Array.from({ length: MAP_ALERT_LIMIT }, () => ({ x: 0, y: 0, start: 0, dur: 0, kind: '' }));
+let _mapAlertSpareCount = MAP_ALERT_LIMIT;
+function resetMapDamageAlerts() {
+    for (let i = 0; i < mapAlerts.length; i++) _mapAlertSpare[_mapAlertSpareCount++] = mapAlerts[i];
+    mapAlerts.length = 0;
+}
 function pushDamageAlert(target, dmg) {
     if (!target || !Number.isFinite(dmg) || dmg <= 0.35) return;
     let isKing = !!target.isKing;
-    let pos = getUnitWorldPos(target);
+    let pos = null;
     if (_damageAlertTick !== gameTime) { _damageAlertTick = gameTime; _damageAlertCount = 0; }
-    if (isKing || _damageAlertCount < 40) {
+    if (isKing || _damageAlertCount < MAP_ALERT_LIMIT) {
         _damageAlertCount++;
-        mapAlerts.push({ x: pos.x, y: pos.y, start: gameTime, dur: isKing ? MAP_KING_ALERT_DURATION : MAP_ALERT_DURATION, kind: isKing ? 'king' : 'damage' });
-        if (mapAlerts.length > 40) mapAlerts.splice(0, mapAlerts.length - 40);
+        pos = getUnitWorldPos(target, _damageAlertPosition);
+        const alert = mapAlerts.length >= MAP_ALERT_LIMIT ? mapAlerts.shift() : _mapAlertSpare[--_mapAlertSpareCount];
+        alert.x = pos.x; alert.y = pos.y; alert.start = gameTime;
+        alert.dur = isKing ? MAP_KING_ALERT_DURATION : MAP_ALERT_DURATION;
+        alert.kind = isKing ? 'king' : 'damage';
+        mapAlerts.push(alert);
     }
 
     markControlGroupsDamaged(target, isKing);
@@ -173,11 +187,13 @@ function pushDamageAlert(target, dmg) {
     if (isKing) {
         if (!_kingDamageAlertTimer || gameTime > _kingDamageAlertTimer + Math.floor(TICK_RATE * 0.9)) {
             _kingDamageAlertTimer = gameTime;
+            pos ||= getUnitWorldPos(target, _damageAlertPosition);
             playSound('alert_king_damage', pos.x, pos.y);
         }
     } else {
         if (!_damageAlertTimer || gameTime > _damageAlertTimer + Math.floor(TICK_RATE * 0.6)) {
             _damageAlertTimer = gameTime;
+            pos ||= getUnitWorldPos(target, _damageAlertPosition);
             playSound('alert_damage', pos.x, pos.y);
         }
     }
@@ -199,7 +215,9 @@ function drawMinimapAlerts(ctx, scale) {
         let a = mapAlerts[i];
         let age = now - a.start;
         if (age >= a.dur) {
-            mapAlerts.splice(i, 1);
+            _mapAlertSpare[_mapAlertSpareCount++] = a;
+            for (let j = i + 1; j < mapAlerts.length; j++) mapAlerts[j - 1] = mapAlerts[j];
+            mapAlerts.pop();
             continue;
         }
         let p = Math.max(0, Math.min(1, age / a.dur));

@@ -68,6 +68,8 @@ function _adjArr(name, Type, n) {
 function adjacencyReserve(B) {
     const no = Math.max(1, B.structs | 0);
     _adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length); _adjArr('adj.ev', Int32Array, 4 * no); _adjArr('adj.evn', Int32Array, 16 * Math.ceil(no / ADJ_APPLY_PER_JOB));
+    for (const key in PRECOMPUTED_STATS_MAP?.building) statKeyId(key);
+    _adjPlayerStatsRoom((B.players + 1) * _statKeyIds.size);
 }
 function adjacencyLaneReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(ADJ_LANE);
@@ -80,13 +82,24 @@ function adjacencyLaneReset() {
 // / stt.atk the vision and attack range in area steps (-1 none), at
 // [(key * L1 + level) * R1 + research level]. Keys in _statKeyIds order.
 const _statKeyIds = new Map();
-function statKeyId(key) { let k = _statKeyIds.get(key); if (k === undefined) { k = _statKeyIds.size; _statKeyIds.set(key, k); } return k; }
+const _adjResearchStats = ['maxLevel', 'maxEnergy', 'visionRange', 'attackRange', 'damage'];
+const _adjResearchKeys = [];
+function statKeyId(key) {
+    let k = _statKeyIds.get(key);
+    if (k === undefined) {
+        k = _statKeyIds.size;
+        _statKeyIds.set(key, k);
+        _adjResearchKeys[k] = { key, ids: _adjResearchStats.map(stat => makeResearchLevelId('building', key, stat)) };
+    }
+    return k;
+}
 const _stt = { map: null, nk: 0, L1: 0, R1: 0 };
 function statTablesStatic() {
     const M = PRECOMPUTED_STATS_MAP && PRECOMPUTED_STATS_MAP.building;
+    const L1 = MAX_THING_LEVEL + 1, R1 = MAX_RESEARCH_LEVEL + 1;
+    if (_stt.map === M && _stt.nk === _statKeyIds.size && _stt.L1 === L1 && _stt.R1 === R1 && simHeapHas(_stt.mxe)) return _stt;
     for (const key in M) statKeyId(key);
-    const nk = _statKeyIds.size, L1 = MAX_THING_LEVEL + 1, R1 = MAX_RESEARCH_LEVEL + 1;
-    if (_stt.map === M && _stt.nk === nk && _stt.L1 === L1 && _stt.R1 === R1 && simHeapHas(_stt.mxe)) return _stt;
+    const nk = _statKeyIds.size;
     const n = Math.max(1, nk * L1 * R1);
     const mxe = _adjArr('stt.mxe', Float64Array, n), vis = _adjArr('stt.vis', Int32Array, n), atk = _adjArr('stt.atk', Int32Array, n), dmg = _adjArr('stt.dmg', Float32Array, n);
     mxe.fill(NaN); vis.fill(-1); atk.fill(-1); dmg.fill(NaN);
@@ -112,28 +125,42 @@ function statTablesStatic() {
 // of maxEnergy, visionRange, attackRange, damage (adj.rlv, four a pair), boost
 // levels of the boosted stats (adj.bl: data_dynamic.js _statBoostLevels as
 // levels, boostStepLevels), the researched maximum level (adj.rml:
-// getThingResearchedMaxLevel). Small arrays, made again when research or a
-// boost changes (the stats version), the players or the keys.
+// getThingResearchedMaxLevel). Refill the reserved columns when their
+// inputs change.
+const _adjPlayerColumns = { version: -1, np: 0, nk: 0, started: false, rml: null, rlv: null, bl: null };
+function _adjPlayerStatsRoom(n) {
+    const P = _adjPlayerColumns;
+    P.rml = _adjArr('adj.rml', Int32Array, n);
+    P.rlv = _adjArr('adj.rlv', Int32Array, 4 * n);
+    P.bl = _adjArr('adj.bl', Int32Array, n);
+    P.version = -1;
+}
 function _adjPlayerStats(S) {
     const np = players.length + 1, nk = S.nk;
-    const ver = _precomputedStatsVersion + '|' + np + '|' + nk + '|' + (typeof gameStarted !== 'undefined' && gameStarted ? 1 : 0);
-    const X = _adjL.ps;
-    if (X && X.ver === ver && simHeapHas(X.rml)) return X;
+    const started = typeof gameStarted !== 'undefined' && !!gameStarted;
+    const P = _adjPlayerColumns;
     const n = Math.max(1, np * nk);
-    const P = { ver, np, rml: _adjArr('adj.rml', Int32Array, n), rlv: _adjArr('adj.rlv', Int32Array, 4 * n), bl: _adjArr('adj.bl', Int32Array, n) };
+    if (!P.rml || P.rml.length < n || P.rlv.length < 4 * n || P.bl.length < n || !simHeapHas(P.rml)) _adjPlayerStatsRoom(n);
+    if (P.version === _precomputedBuildingStatsVersion && P.np === np && P.nk === nk && P.started === started) return P;
     const MAXR = Math.max(1, MAX_RESEARCH_LEVEL), MAXL = Math.max(1, MAX_THING_LEVEL);
     P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 4 * nk); P.bl.fill(0, 0, nk);
-    for (let o = 0; o < np - 1; o++) for (const [key, kb] of _statKeyIds) {
-        const i = (o + 1) * nk + kb;
-        const researched = Math.max(0, Math.floor(getPlayerResearchLevel(o, 'building', key, 'maxLevel') || 0));
-        P.rml[i] = Math.max(1, Math.min(MAXL, 1 + Math.round(researched * (MAXL - 1) / MAXR)));
-        P.rlv[4 * i] = getPlayerResearchLevel(o, 'building', key, 'maxEnergy');
-        P.rlv[4 * i + 1] = getPlayerResearchLevel(o, 'building', key, 'visionRange');
-        P.rlv[4 * i + 2] = getPlayerResearchLevel(o, 'building', key, 'attackRange');
-        P.rlv[4 * i + 3] = getPlayerResearchLevel(o, 'building', key, 'damage');
-        P.bl[i] = boostStepLevels(_statBoostLevels(o, 'building', key, 'visionRange'));
+    for (let o = 0; o < np - 1; o++) {
+        const levels = started ? ensurePlayerResearchLevels(o) : null;
+        for (let kb = 0; kb < nk; kb++) {
+            const { key, ids } = _adjResearchKeys[kb];
+            const i = (o + 1) * nk + kb;
+            const level = levels ? clampResearchLevel(levels[ids[0]] || 0) : getPlayerResearchLevel(o, 'building', key, 'maxLevel');
+            const researched = Math.max(0, Math.floor(level || 0));
+            P.rml[i] = Math.max(1, Math.min(MAXL, 1 + Math.round(researched * (MAXL - 1) / MAXR)));
+            for (let j = 1; j < _adjResearchStats.length; j++) {
+                P.rlv[4 * i + j - 1] = levels ? clampResearchLevel(levels[ids[j]] || 0)
+                    : getPlayerResearchLevel(o, 'building', key, _adjResearchStats[j]);
+            }
+            P.bl[i] = boostStepLevels(_statBoostLevels(o, 'building', key, 'visionRange'));
+        }
     }
-    return (_adjL.ps = P);
+    P.version = _precomputedBuildingStatsVersion; P.np = np; P.nk = nk; P.started = started;
+    return P;
 }
 // Per stationary type its building key's id (adj.tykey; -1 none).
 function _adjTypeKeys() {
@@ -154,7 +181,7 @@ function _adjTypeKeys() {
 // pointer words in adj.ctab (a class without a table: zeros, never met).
 const _ADJ_CTAB_COLS = ['gx', 'gy', 'stacks', 'manualStacks', 'effectiveStacks', 'level', 'effectiveLevel', 'potentialEffectiveLevel', 'isStacking', 'stackingWorkDone',
     'autoUpgradeEnabled', 'isUpgrading', 'effectiveGroupSize', 'effectiveAreaMult', 'autoStackEnabled', '_ow', '_en', '_vsGen', '_vsR', '$tok', 'upgrademaxEnergy',
-    '_mxOv', '_ovMx', '_ovVs', '$mxn', 'watched', 'watchedByTeam'];
+    '_mxOv', '_ovMx', '_ovVs', '$mxn', 'watched', 'watchedByTeam'].map(k => k === '$tok' ? 'mTok' : k === '$mxn' ? 'mxOvN' : 'c_' + k);
 function _adjApplyClasses(CT) {
     const classes = STRUCT_STATUS_CLASSES(), W = _ADJ_CTAB_COLS.length;
     for (let c = 0; c < 9; c++) {
@@ -163,7 +190,7 @@ function _adjApplyClasses(CT) {
         if (!_sColsInHeap(T) || !simHeapHas(T.mTok)) _sTableGrow(T, T.cap);
         if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; }
         for (let j = 0; j < W; j++) {
-            const k = _ADJ_CTAB_COLS[j], a = k === '$tok' ? T.mTok : k === '$mxn' ? T.mxOvN : T['c_' + k];
+            const a = T[_ADJ_CTAB_COLS[j]];
             CT[c * W + j] = _simWEnc(_simHeapPtrOf(a));
         }
     }
@@ -386,11 +413,17 @@ function effStatsUnitBaseChanged(u) {
     c.esRad[s] = _effAreaStepsOf(b);
     c.esType[s] = typeIdx;
 }
-// Every unit takes the full path once more (a restore replaced tables in
-// place, the stat tables changed).
+// Every unit takes the full path once more (the stat tables changed).
 function effStatsInvalidateAll() {
     if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
 }
+// (A restore or a resync flush does not invalidate them: a unit's kernel
+// fields (esOk, esRad, esType) are sent with it (sim_unit_state.js
+// SIM_UNIT_KCOL_FIELDS). Invalidated, on the restoring peer and at every
+// peer's flush, every unit took the JavaScript full path at its next turn:
+// a whole period of ~10x the effective levels' time, 2 -> 50 ms a tick at
+// 330k units, decaying over 100+ ticks; and made again from the decoded
+// tables, units behind their tables took another range than they had.)
 // At a resync, on every peer: each unit's effective level counts as applied
 // (a restored peer has no record of what was; the others applied theirs at
 // its refresh), so no peer applies its tables again for nothing (that also
@@ -715,8 +748,16 @@ function effSharedTablesChanged(owner, unitType) {
         if (!m || m.owner!==owner || m.type!==unitType) continue;
         const base=levels[m.bl], effective=levels[m.el];
         if (!base || !effective) continue;
-        const next=clonePrecomputedWithBaseMaxEnergy(base,effective), pc=_effRowObj[r];
-        if (pc!==next) Object.assign(pc,next);
+        const pc = _effRowObj[r];
+        if (precomputedCloneSource.get(pc) === effective) {
+            // The row already owns a copy. Refresh it from the source directly.
+            Object.assign(pc, effective);
+            const baseMaxEnergy = Number(base.maxEnergy);
+            if (Number.isFinite(baseMaxEnergy)) pc.maxEnergy = baseMaxEnergy;
+        } else {
+            const next = clonePrecomputedWithBaseMaxEnergy(base, effective);
+            if (pc !== next) Object.assign(pc, next);
+        }
         m.preComputed = pc;
         _effRowWrite(r,m,pc,_unitStatsVerOf(m));
     }
@@ -893,10 +934,13 @@ function _areaHasForeignBuildPresence(areaId, playerId) {
         }
     }
 
-    let area = getAreaById(aId);
-    let areaCells = _getCanonicalAreaCellsById(aId, area);
-    if (areaCells.length <= 0) return false;
-    for (let cellPos of areaCells) {
+    const canonical = Array.isArray(gridCellsByArea) ? gridCellsByArea[aId] : null;
+    const hasCanonical = Array.isArray(canonical) && canonical.length > 0;
+    const areaCells = hasCanonical ? canonical : getAreaById(aId)?.cells;
+    if (!Array.isArray(areaCells)) return false;
+    for (let i = 0; i < areaCells.length; i++) {
+        const cellPos = areaCells[i];
+        if (!hasCanonical && (!cellPos || !Number.isFinite(cellPos.x) || !Number.isFinite(cellPos.y))) continue;
         let ref = getTileEntityRef(cellPos.x, cellPos.y);
         if (!ref) continue;
         if (!Number.isFinite(ref.owner) || ref.owner < 0 || ref.owner === playerId) continue;
@@ -1252,7 +1296,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
 // here only the objects' lists (from the rows the kernel hands back), the
 // events of systems not yet kernels (walls, walk classes, reservations) and
 // presentation, then once a batch the versions and checks.
-const _dst = { cap: 0, tiles: null, inp: null, rows: null, hdr: null, walls: null, resv: null, ocnt: null, one: null, tabs: [], P: new Float64Array(32) };
+const _dst = { cap: 0, tiles: null, inp: null, rows: null, hdr: null, walls: null, resv: null, ocnt: null, one: null, tabs: [], args: [], P: new Float64Array(32) };
 function _dstRoom(n) {
     const D = _dst;
     if (D.cap < n || !simHeapHas(D.tiles)) {
@@ -1272,7 +1316,10 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     if (T.n !== GRID_W * GRID_H || !T.ctab) return 0;
     if (!simHeapHas(T.code)) structTablesRehome();
     let inp = list;
-    if (!simHeapHas(list)) { D.inp.set(list.subarray ? list.subarray(0, n) : list.slice(0, n)); inp = D.inp; }
+    if (!simHeapHas(list)) {
+        for (let i = 0; i < Math.min(n, list.length); i++) D.inp[i] = list[i];
+        inp = D.inp;
+    }
     const AD = _adjacencyDirtyTiles; AD.room(GRID_W * GRID_H);
     const V = _workerWorkTable(), L = _teLogRoom();
     const mvOk = !!_simMoveStruct && !!_simMoveStructBlocks && _simMoveStructP === spatialUnitsComplexPlayerCount && _simMoveStructC === spatialBlockCols && _simMoveStructW === GRID_W && _simMoveStructH === GRID_H;
@@ -1282,11 +1329,20 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     P[8] = V.np; P[9] = _WORKER_WORK_TYPES.length; P[10] = V.rw; P[11] = V.rh; P[12] = WORKER_WORK_REGION_TILES; P[13] = _teLogEnd;
     P[14] = spatialUnitsComplexPlayerCount; P[15] = spatialBlockCols; P[16] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[17] = trapOk ? (_trap.all ? -1 : _trap.nd) : -1;
     P[18] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[19] = n * _WORKER_TARGET_LOAD_TYPE_COUNT; P[20] = L.length; P[21] = trapOk ? _trap.dirty.length : 0;
+    structRallyClasses();
     P[0] = n; P[22] = gameTime; P[23] = deadOnly ? 1 : 0; P[24] = _stAllCls.length;
     const resvOk = simHeapHas(workerReservedTiles) && workerReservedTiles.length === GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT;
-    simRustDirect('k_struct_destroy', [inp, T.code, T.own, T.uc, T.val, T.tim, T.brain, T.rtab, T.stab, T.rrow, T.ctab, T.rcnt, T.cnt, cellType, cellOwner,
-        AD.flag, AD.blk, V, L, mvOk ? _simMoveStruct : null, mvOk ? _simStructCls : null, mvOk ? _simMoveStructBlocks : null, trapOk ? _trap.dirty : null,
-        resvOk ? workerReservedTiles : null, D.hdr, D.walls, D.resv, D.ocnt, D.rows, D.tiles, ..._dstClassArgs(D)], P);
+    const A = D.args;
+    A[0] = inp; A[1] = T.code; A[2] = T.own; A[3] = T.uc; A[4] = T.val;
+    A[5] = T.tim; A[6] = T.brain; A[7] = T.rtab; A[8] = T.stab; A[9] = T.rrow;
+    A[10] = T.ctab; A[11] = T.rcnt; A[12] = T.cnt; A[13] = cellType; A[14] = cellOwner;
+    A[15] = AD.flag; A[16] = AD.blk; A[17] = V; A[18] = L;
+    A[19] = mvOk ? _simMoveStruct : null; A[20] = mvOk ? _simStructCls : null;
+    A[21] = mvOk ? _simMoveStructBlocks : null; A[22] = trapOk ? _trap.dirty : null;
+    A[23] = resvOk ? workerReservedTiles : null;
+    A[24] = D.hdr; A[25] = D.walls; A[26] = D.resv; A[27] = D.ocnt; A[28] = D.rows; A[29] = D.tiles;
+    _dstClassArgs(D, 30);
+    simRustDirect('k_struct_destroy', A, P);
     const H = D.hdr, m = H[8];
     if (m === 0) return 0;
     structRowStats.retired += H[9];
@@ -1337,17 +1393,22 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
 }
 // The class tables' retire queues, _stT and energy columns (dst.rs: seven
 // arrays a class, by ctab), in the heap; D.tabs[ctab] the table.
-function _dstClassArgs(D) {
-    structRallyClasses();
-    const out = [];
+function _dstClassArgs(D, offset) {
+    const A = D.args;
     for (let j = 0; j < _stAllCls.length; j++) {
         const T = _stAllCls[j] ? _sTables.get(_stAllCls[j]) : null;
         D.tabs[j + 1] = T || null;
         if (T && !_sColsInHeap(T)) _sTableGrow(T, T.cap);
         const ok = T && simHeapHas(T.ret) && simHeapHas(T.qhdr) && simHeapHas(T.c__stT);
-        out.push(ok ? T.ret : null, ok ? T.rt : null, ok ? T.rp : null, ok ? T.rn : null, ok ? T.qhdr : null, ok ? T.c__stT : null, ok && T.c__en && simHeapHas(T.c__en) ? T.c__en : null);
+        A[offset++] = ok ? T.ret : null;
+        A[offset++] = ok ? T.rt : null;
+        A[offset++] = ok ? T.rp : null;
+        A[offset++] = ok ? T.rn : null;
+        A[offset++] = ok ? T.qhdr : null;
+        A[offset++] = ok ? T.c__stT : null;
+        A[offset++] = ok && T.c__en && simHeapHas(T.c__en) ? T.c__en : null;
     }
-    return out;
+    A.length = offset;
 }
 // A list for callers that gather tiles (not the batch's own).
 let _dstExt = null;

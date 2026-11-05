@@ -178,7 +178,7 @@ function _towerAcqArray(name,Type,n){
     const a=T.arrays[name]=simSharedArray(Type,simReserveCap(Math.max(1,n),256));
     simParallelBind('tac.'+name,a);if(old)simHeapFree(old);return a;
 }
-const _stationaryStats={version:-1,types:0,players:0,levels:0,arrays:{},maxRange:0};
+const _stationaryStats={version:-1,types:0,players:0,levels:0,arrays:{},sources:[],maxRange:0};
 let SIM_STATIONARY_BRAINS=true;
 function _stationaryArray(S,name,Type,n){
     const old=S.arrays[name];if(old&&old.length>=n)return old;
@@ -189,7 +189,12 @@ function _stationaryArray(S,name,Type,n){
 const _TOWER_EFFECT_STATS={fire:['burnDuration','burnDps'],poison:['poisonDuration','poisonDps'],ice:['freezeDuration','freezeDps'],water:['wetDuration',null],sand_gun:['sandDuration',null],watch_tower:['watchDuration',null]};
 function _stationaryStatsPrepare(){
     const S=_stationaryStats,nt=_stationaryTypes.length,np=players.length,nl=MAX_THING_LEVEL+1;
-    if(S.version===_precomputedStatsVersion&&S.types===nt&&S.players===np&&S.levels===nl&&S.sources?.every((entry,o)=>entry===PRECOMPUTED_STATS_MAP_PLAYER[o]))return S;
+    const full = S.types !== nt || S.players !== np || S.levels !== nl || S.version < _precomputedBuildingStatsFullVersion;
+    if(!full && S.version===_precomputedBuildingStatsVersion){
+        let owner=0;
+        while(owner<np&&S.sources[owner]===PRECOMPUTED_STATS_MAP_PLAYER[owner])owner++;
+        if(owner===np)return S;
+    }
     const ranges=_stationaryArray(S,'range',Int32Array,(np+1)*nt*nl),cds=_stationaryArray(S,'cd',Int32Array,(np+1)*nt*nl),kinds=_stationaryArray(S,'kind',Int32Array,nt);
     const damage=_stationaryArray(S,'damage',Float32Array,(np+1)*nt*nl),blast=_stationaryArray(S,'blast',Float32Array,(np+1)*nt*nl),radius=_stationaryArray(S,'radius',Float32Array,(np+1)*nt*nl);
     const maxRanges=_stationaryArray(S,'maxRange',Int32Array,(np+1)*nt);
@@ -200,24 +205,35 @@ function _stationaryStatsPrepare(){
         const name=_stationaryTypes[ty],key=normalizeBuildingResearchKey(name);
         kinds[ty]=name==='laser'||name.startsWith('cloud')?-1:(_towerAcqTypes[name]||0);
         tts[ty]=_projTypeId(name);const eff=_TOWER_EFFECT_STATS[name];
-        for(let own=-1;own<np;own++){
-        let maximum=0;
-        for(let lvl=1;lvl<nl;lvl++){
-            const st=own>=0?PRECOMPUTED_STATS_MAP_PLAYER[own]?.building?.[key]?.[lvl]:_thingStatTables.get('-1|building|'+key)?.entries[lvl];
-            const at=((own+1)*nt+ty)*nl+lvl;
-            // Unknown/custom stat entries stay on the scalar behavior path.
-            const r=st?Math.floor(Math.max(0,Number(st.attackRangeArea)||0)):-1;
-            ranges[at]=r;cds[at]=st?Math.max(1,Math.ceil(secondsToTicks(st.cd||1.5))):0;
-            damage[at]=st?.damage;blast[at]=st?.blastDamage;radius[at]=st?.blastRadius;
-            const dur=eff&&st?Number(st[eff[0]]):NaN,dps=eff&&eff[1]&&st?Number(st[eff[1]]):NaN;
-            sds[at]=Number.isFinite(dur)?secondsToTicks(dur):0;sps[at]=Number.isFinite(dps)&&dps>=0?dps:-1;
-            if(r>maximum)maximum=r;
-        }
-        maxRanges[(own+1)*nt+ty]=maximum;
-        if(kinds[ty]>=0&&BASE_CARD_TYPES[name]?.target==='wall'&&maximum>max)max=maximum;
+        const wallTarget = kinds[ty] >= 0 && BASE_CARD_TYPES[name]?.target === 'wall';
+        for (let own = -1; own < np; own++) {
+            const source = PRECOMPUTED_STATS_MAP_PLAYER[own];
+            const row = (own + 1) * nt + ty;
+            const changed = own >= 0 && (S.sources[own] !== source || _precomputedBuildingStatRowVersions[own]?.[key] > S.version);
+            if (full || changed) {
+                const entries = own >= 0 ? source?.building?.[key] : _thingStatTables.get('-1|building|' + key)?.entries;
+                let maximum = 0;
+                for (let lvl = 1; lvl < nl; lvl++) {
+                    const st = entries?.[lvl], at = row * nl + lvl;
+                    // Unknown/custom stat entries stay on the scalar behavior path.
+                    const r = st ? Math.floor(Math.max(0, Number(st.attackRangeArea) || 0)) : -1;
+                    ranges[at] = r;
+                    cds[at] = st ? Math.max(1, Math.ceil(secondsToTicks(st.cd || 1.5))) : 0;
+                    damage[at] = st?.damage; blast[at] = st?.blastDamage; radius[at] = st?.blastRadius;
+                    const dur = eff && st ? Number(st[eff[0]]) : NaN;
+                    const dps = eff && eff[1] && st ? Number(st[eff[1]]) : NaN;
+                    sds[at] = Number.isFinite(dur) ? secondsToTicks(dur) : 0;
+                    sps[at] = Number.isFinite(dps) && dps >= 0 ? dps : -1;
+                    if (r > maximum) maximum = r;
+                }
+                maxRanges[row] = maximum;
+            }
+            if (wallTarget && maxRanges[row] > max) max = maxRanges[row];
         }
     }
-    S.version=_precomputedStatsVersion;S.types=nt;S.players=np;S.levels=nl;S.sources=PRECOMPUTED_STATS_MAP_PLAYER.slice(0,np);S.maxRange=Math.min(63,max);return S;
+    for(let owner=0;owner<np;owner++)S.sources[owner]=PRECOMPUTED_STATS_MAP_PLAYER[owner];
+    S.sources.length=np;
+    S.version=_precomputedBuildingStatsVersion;S.types=nt;S.players=np;S.levels=nl;S.maxRange=Math.min(63,max);return S;
 }
 // A tower with custom stats or position (data_state.js stationaryBrainChanged:
 // descriptor bit 25): its own values by its row (tc.*: the prepare kernel's
@@ -473,6 +489,11 @@ if (typeof structTableAccessors === 'function') structTableAccessors(Tower, 0x22
 // _ptV) and _ptV; the kernel (k_tower_fire) clears them when the target is
 // gone or out of sight. preferredTarget: its object (looked up).
 const TOWER_TARGET_KINDS = ['', 'unit', 'tower', 'barrack', 'spawner', 'item'];
+function towerSetPreferredTargetCode(tower, kind, value) {
+    tower._ptK = kind;
+    tower._ptV = value;
+    stationaryBrainChanged(tower);
+}
 Object.defineProperty(Tower.prototype, 'preferredTargetSpec', { configurable: true, enumerable: false,
     get() {
         const k = this._ptK, v = this._ptV;
@@ -481,9 +502,8 @@ Object.defineProperty(Tower.prototype, 'preferredTargetSpec', { configurable: tr
     },
     set(s) {
         const spec = s ? normalizeTowerTargetSpec(s) : null, k = spec ? TOWER_TARGET_KINDS.indexOf(spec.type) : -1;
-        if (k <= 0) { this._ptK = 0; this._ptV = -1; }
-        else { this._ptK = k; this._ptV = k === 1 ? spec.id : spec.gy * GRID_W + spec.gx; }
-        stationaryBrainChanged(this);
+        if (k <= 0) towerSetPreferredTargetCode(this, 0, -1);
+        else towerSetPreferredTargetCode(this, k, k === 1 ? spec.id : spec.gy * GRID_W + spec.gx);
     } });
 Object.defineProperty(Tower.prototype, 'preferredTarget', { configurable: true, enumerable: false,
     get() { return resolveTowerPreferredTarget(this); },

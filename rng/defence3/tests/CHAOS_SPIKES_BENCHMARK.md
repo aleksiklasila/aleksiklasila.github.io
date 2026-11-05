@@ -33,7 +33,19 @@ The default run takes 240 steps and excludes its first 20 from steady-state stat
 
 The event loop yields between steps, as a simulation worker receiving successive messages does. `wallMs` includes that yield and any associated GC delay, so moving a pause between ticks does not hide it. `ms` measures input processing plus `gameTick` itself. `wall`, `steady`, `worst`, `outliers` and all raw rows are saved in JSON; the `.jsonl` sidecar is updated every step. TPS means completed simulation steps per second; `dk` records the base ticks advanced by each step.
 
+For in-game GC and allocation work, add `--worker-post --no-census`:
+`--worker-post` runs what the browser's simulation worker does around each
+tick on its own heap (packed sound/effect/alert events instead of local
+presentation, `simPresentTickEnd` and `_simPostResult` inside the timing, a
+presentation metadata pass every 5 steps outside it); `--no-census` drops the
+harness's 10-tick worker census, whose own survivors otherwise dominate the
+benchmark's scavenge pauses. Run with `node --trace-gc-nvp` to see each
+pause's phases and surviving bytes.
+
 Useful options:
+
+- `--allocation-survivors` (with `--allocation-profile`) samples only objects that survived a scavenge: what scavenge pauses copy. `--live-heap` writes a `.liveheap` sampling profile of the JavaScript heap still alive at the end, attributed from before match start.
+- `--restore-at=N` (diagnostic) encodes and decodes the whole state in place before step N, outside the timing, as a resync does; the restore lays unit slots out dense. At 1M starting units this did not finish in 40 minutes; 524k starting units took ~13 s.
 
 - `--warmup=N`, `--ticks=N`, `--units=N`, `--helpers=N`, `--dk=N`, `--burst-every=N` control the workload and measurement window.
 - `--structures=N` controls the dense structural target (default 250000, capped by the derived match capacity); `--worker-min=N` sets each profession's total minimum (default 30000). `--unit-level-offset=N` raises normal starting unit levels (default 8 in the dense workload). `--structures=0 --worker-min=0 --unit-level-offset=0 --dk=20` retains the older sparse structural fixture.
@@ -41,11 +53,21 @@ Useful options:
 - `--worker-brain=js` disables the native return-spawner brain batch for an isolated comparison. The default batches snapshot decisions on helpers and consumes numeric handles during the unit-event phase. `workerBrain` records decisions consumed, stale-target fallbacks and index/record bytes. `towerBatch.native/prepared` and sparse `stationary` rows verify that the shared preparation tier actually activated; a run that stayed on its cold/limited fallback is not a native-path speedup measurement.
 - `--kernels` separates foreground kernels, occupancy phases, background waits and index construction mode.
 - `--system-metrics` records process CPU, free physical memory, JS heap size and GC time overlapping each measured step.
+- For GC comparisons, run `node tests/chaos-gc-summary.cjs RUN.json [RUN.json ...]`.
+  It measures runtime GC events by their own timestamps and durations across
+  the continuous settled window, including gaps between tick timers. Report
+  pause counts, longest pauses and GC milliseconds per second. Tick overlap
+  is useful for attribution when investigating an individual slow tick. The
+  observer covers the benchmark's simulation isolate. Helper CPU profiles
+  can show GC samples, and browser presentation and transport are separate.
 - `--memory-stats` records per-tick WASM live/peak/capacity, unit slot and worker/status record counts, bound array bytes by subsystem, atlas availability and destination-field bytes. With `--system-metrics`, RSS, external and ArrayBuffer bytes are recorded too. RSS includes the harness and helper threads; it is not the WASM heap size. `SIM_HEAP_SITES=1` plus `ROWX='([..._simHeapSiteTotals].map(([site,t])=>[t.bytes-t.freedBytes,site]))'` adds allocation-site attribution outside tick timing. Use attribution separately from acceptance timing, and retain the `.json.jsonl` sidecar if an exhausted heap prevents the final JSON from being written.
 - `--profile` profiles only the steady window. `--helper-profile` also saves each helper's CPU profile. `--profile-interval=5000` sets the sampling interval in microseconds (the default); use a longer interval to limit profiling overhead on large matches.
 - `--profile-start=300` delays CPU profiling until step 300 to investigate late-game outliers without accumulating a whole run's profiling overhead. The analyzer selects its worst step from the captured window.
 - `--profile-start=19 --warmup=20` also captures the previous tick if the first steady tick is the worst one. Profiles retain their export/function-index names so later rebuilds cannot relabel numeric V8 frames; stripped internal functions still remain numeric.
 - `--timeline` records phase intervals for profile slicing with `--phase=kernel:8`, `--phase=kernel:89:0` or `--phase=simMoveRun` in the analyzer.
+  Use `--phase=kernel:89:*` to combine the four occupancy passes, and
+  `--stack=mv_move_occupancy` to restrict attribution to that kernel. Per-thread
+  `outsideStackMs` records non-idle samples in the phase with a different stack.
 - `--allocation-profile` samples JavaScript allocations during the steady window, including objects later collected, into a `.heapprofile` sidecar. Sampling stops after the final gameplay step, before report generation and optional exact hashing. Use this diagnostic separately from unprofiled timing comparisons.
 - `--event-metrics` counts event codes, worker AI states/transitions, budget deferrals and fast route commits per tick. It adds per-event wrapper overhead; use it for attribution separately from acceptance timings.
 - `--no-delta` and `--no-merge` compare index construction strategies; `--no-yield` deliberately stresses an uninterrupted headless loop.
@@ -65,7 +87,7 @@ Sampled thread times are aggregated across concurrent threads and are not elapse
 
 When WASM samples only show numeric function names, make a separate diagnostic binary with `node wasm/build.cjs --wasm32 --features=prof --keep-names --target-dir=target-chaos-profile --out=tests/test-runs/named-wasm32.js` and select it through `DEFENCE_TEST_SOURCE_OVERRIDES` for `src/sim/sim_wasm_bin.js`. For memory64, use `--wasm64` and override `src/sim/sim_wasm64_bin.js` instead. Keep these profiling binaries separate from production; use regular builds for final latency comparisons. `--helper-profile --timeline --kernels` captures the helper threads and phase boundaries needed for full attribution. After changing Rust, rebuild both production variants with `node wasm/build.cjs`.
 
-Summarize sampled allocations with `node tests/chaos-allocation-profile.cjs tests/test-runs/chaos-spikes/latest.json`. Its sidecar separates simulation allocations from synthetic command generation. Both can cause later GC; only simulation allocation reductions are production optimizations.
+Summarize sampled allocations with `node tests/chaos-allocation-profile.cjs tests/test-runs/chaos-spikes/latest.json`. Its sidecar separates simulation stacks from synthetic command generation. The simulation total retains nested benchmark wrappers for comparison with older captures. For tagged captures, use `instrumentationInSimulationMiB` and the `benchmarkInstrumentation` rows to distinguish wrapper allocations from gameplay when choosing a target. Check `sampleCount` and `largestSampleMiB` to distinguish isolated backing-store growth from repeated small allocation samples. All categories can contribute to later GC.
 
 The serial matrix includes mixed chaos at dk=1/4/20, production fronts at dk=1/20, and the original million-unit combat checkerboard at dk=1/20:
 

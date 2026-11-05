@@ -1,28 +1,5 @@
 "use strict";
 
-let pathfindAllowedUnitIdSetsByPlayer = [];
-let pathfindConsumedUnitIdSetsByPlayer = [];
-
-function _ensurePathfindRequesterBudgetArrays() {
-    let count = Math.max(0, players.length || 0);
-    while (pathfindConsumedUnitIdSetsByPlayer.length < count) pathfindConsumedUnitIdSetsByPlayer.push(new Set());
-    if (pathfindConsumedUnitIdSetsByPlayer.length > count) pathfindConsumedUnitIdSetsByPlayer.length = count;
-}
-
-function _rebuildDeterministicPathfindRequestSlotsPerTick() {
-    _ensurePathfindRequesterBudgetArrays();
-    let count = Math.max(0, players.length || 0);
-    for (let pid = 0; pid < count; pid++) {
-        pathfindConsumedUnitIdSetsByPlayer[pid].clear();
-    }
-}
-
-function _getRequesterUnitId(requester) {
-    if (!requester) return null;
-    let unitId = Math.floor(Number(requester.id));
-    return Number.isFinite(unitId) ? unitId : null;
-}
-
 function _ensurePathBudgetArrays() {
     let count = Math.max(0, players.length || 0);
     if (pathfindBudgetByPlayer.length !== count) pathfindBudgetByPlayer = new Int32Array(count);
@@ -34,7 +11,6 @@ function _resetPathBudgetTrackingPerTick() {
     _ensurePathBudgetArrays();
     pathfindBudget = 0;
     _updateAdaptivePathBudget();
-    _rebuildDeterministicPathfindRequestSlotsPerTick();
     astarNodeBudgetPerTick = Math.max(0, Math.floor(Number(ASTAR_ITER_BUDGET_PER_PLAYER_TICK) || 0));
     astarNodeBudgetRemaining = astarNodeBudgetPerTick;
     for (let i = 0; i < players.length; i++) {
@@ -74,40 +50,18 @@ function _getPlayerAstarIterationBudgetRemaining(owner) {
     return Math.max(0, Number(astarNodeBudgetRemainingByPlayer[pid]) || 0);
 }
 
-function _canUsePathfindRequestBudget(owner, requester = null) {
-    let pid = _normalizeOwnerId(owner);
+// Each successful spawn can request a rally path once. It has a fresh
+// unit ID, so there is no duplicate requester to remember for this tick.
+function _noteSpawnPathfindRequest(owner) {
+    if (isMultiplayer && gameStarted) return true;
+    const pid = _normalizeOwnerId(owner);
     if (pid < 0) {
-        if (isMultiplayer && gameStarted) return true;
-        return pathfindBudget < MAX_PATHS_PER_TICK;
-    }
-    let requesterId = _getRequesterUnitId(requester);
-    if (!Number.isFinite(requesterId)) {
-        if (isMultiplayer && gameStarted) return true;
-        return pathfindBudgetByPlayer[pid] < MAX_PATHS_PER_TICK;
-    }
-
-    _ensurePathfindRequesterBudgetArrays();
-    let consumed = pathfindConsumedUnitIdSetsByPlayer[pid];
-    if (consumed && consumed.has(requesterId)) return false;
-    return true;
-}
-
-function _consumePathfindRequestBudget(owner, requester = null) {
-    let pid = _normalizeOwnerId(owner);
-    if (pid < 0) {
-        if (!(isMultiplayer && gameStarted)) pathfindBudget++;
-        return;
-    }
-    let requesterId = _getRequesterUnitId(requester);
-    if (Number.isFinite(requesterId)) {
-        _ensurePathfindRequesterBudgetArrays();
-        let consumed = pathfindConsumedUnitIdSetsByPlayer[pid];
-        if (consumed && consumed.has(requesterId)) return;
-        if (consumed) consumed.add(requesterId);
-    }
-    if (!(isMultiplayer && gameStarted)) {
+        if (!(pathfindBudget < MAX_PATHS_PER_TICK)) return false;
+        pathfindBudget++;
+    } else {
         pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
     }
+    return true;
 }
 
 function _consumeAstarNodeBudget(owner, count = 1, unit = null, sourceTag = null) {
@@ -270,18 +224,23 @@ function _navGoalRecheckTick(u) {
 // else toward the closest tile it can reach (pt kept: not arrived); there,
 // or walled in, it waits until a new navigation build. Looks before its
 // retry tick (u._astarBudgetRetryTick) do nothing.
+const _pendingPathDest = { x: 0, y: 0 };
 function _tryUpgradeAstarFallbackPath(u) {
-    if (!u || !u._pendingPathTarget || u.dead) return;
+    const pt = u && u._pendingPathTarget;
+    if (!pt || u.dead) return;
     if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
     // (On its way to the closest tile: looks again when there, or at its look.)
-    if (u.path && u.pathIndex < u.path.length) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
-    const pt = u._pendingPathTarget, profile = navProfileOf(u), nav = _nav[profile];
-    const ugx = Math.floor(u.x / TILE), ugy = Math.floor(u.y / TILE), here = ugy * GRID_W + ugx;
+    const currentPath = u.path;
+    if (currentPath && u.pathIndex < currentPath.length) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
+    const profile = navProfileOf(u), nav = _nav[profile];
     // Waiting where it got to: only a new build changes the answer.
     if (pt.ver > 0 && nav && pt.ver === nav.seq) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
     pt.ver = 0;
-    const dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u);
-    const way = navPathReach(u, ugx, ugy, dest.x, dest.y);
+    const c = u._us, s = u._si;
+    const ugx = Math.floor((c ? c.x[s] * 0.125 : u.x) / TILE);
+    const ugy = Math.floor((c ? c.y[s] * 0.125 : u.y) / TILE), here = ugy * GRID_W + ugx;
+    const dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u, _pendingPathDest);
+    const way = navPathReach(u, ugx, ugy, dest.x, dest.y, currentPath);
     if (way && way.length > 0) {
         u.path = way;
         u.pathIndex = 0;
@@ -312,7 +271,7 @@ function _tryUpgradeAstarFallbackPath(u) {
     u._astarBudgetRetryTick = _navGoalRecheckTick(u);
 }
 
-function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
+function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null, unitTypeHint = null) {
     let pid = _normalizeOwnerId(owner);
     if (pid < 0) return;
     let used = Math.max(0, Number(usedNodes) || 0);
@@ -321,23 +280,25 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
     let bucket = _ensureAstarLogPlayer(pid);
     if (!bucket) return;
 
-    let unitType = (unit && unit.unitType) || _activePathfindUnitType || 'other';
+    let unitType = unitTypeHint || (unit && unit.unitType) || _activePathfindUnitType || 'other';
     if (typeof unitType !== 'string') unitType = String(unitType);
     let source = sourceTag || _activePathfindSource || PATH_SOURCE_UNSPECIFIED;
     if (typeof source !== 'string') source = String(source);
     // Movement records one spend per unit step. Readers only sum by tick,
     // type and source, so every spend of a tick goes into one row per
     // (owner, type, source), found through this tick's index.
-    if (_astarUsageIndexTick !== gameTime) { _astarUsageIndex = new Map(); _astarUsageIndexTick = gameTime; }
-    // owner -> unit type -> source (nested maps: no key strings per step).
-    let byOwner = _astarUsageIndex.get(pid);
-    if (!byOwner) _astarUsageIndex.set(pid, byOwner = new Map());
+    // Key by the log bucket so replacing a match's logs also releases its index.
+    // A snapshot can rewind the clock while retaining the HUD's log buckets.
+    if (gameTime < _astarUsageIndexTick) _astarUsageIndex = new WeakMap();
+    _astarUsageIndexTick = gameTime;
+    let byOwner = _astarUsageIndex.get(bucket);
+    if (!byOwner) _astarUsageIndex.set(bucket, byOwner = new Map());
     let byType = byOwner.get(unitType);
     if (!byType) byOwner.set(unitType, byType = new Map());
     let row = byType.get(source);
-    if (row && row.bucket === bucket) {
-        row.ev.used += used;
-        row.ev.delta -= used;
+    if (row && row.tick === gameTime) {
+        row.used += used;
+        row.delta -= used;
         return;
     }
     let unitMetric = _astarMetricKeyForUnitType(unitType);
@@ -355,11 +316,11 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null) {
         delta: -used,
     };
     bucket.push(ev);
-    byType.set(source, { bucket, ev });
+    byType.set(source, ev);
 
     _pruneTickLogBucket(bucket, gameTime - Math.max(1, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
 }
-let _astarUsageIndex = new Map(), _astarUsageIndexTick = -1;
+let _astarUsageIndex = new WeakMap(), _astarUsageIndexTick = -1;
 
 function _withPathfindContext(source, owner, unit, fn) {
     let prevSource = _activePathfindSource;

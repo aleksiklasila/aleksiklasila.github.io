@@ -5,6 +5,8 @@ const fs=require('node:fs'),path=require('node:path');
 const file=path.resolve(process.argv[2]),run=JSON.parse(fs.readFileSync(file));
 const option=name=>process.argv.find(a=>a.startsWith('--'+name+'='))?.split('=')[1];
 const phase=option('phase');
+const stack=option('stack');
+const phaseMatches=name=>phase.endsWith('*')?name.startsWith(phase.slice(0,-1)):name===phase;
 const rows=run.rows.slice(Math.max(run.warmup??20,run.profileOrigins?.startStep??0)),duration=r=>r.wallMs??r.ms;
 const spike=option('step')!==undefined?run.rows.find(r=>r.step===Number(option('step'))):rows.slice().sort((a,b)=>duration(b)-duration(a))[0];
 if(!spike||!run.profileOrigins)throw Error('Need an existing step and a run captured with --profile or --helper-profile.');
@@ -27,13 +29,13 @@ function slice(profile,row,origin,allowEmpty=false){
  const nodes=new Map(profile.nodes.map(n=>[n.id,n])),parent=new Map();
  for(const n of profile.nodes)for(const id of n.children||[])parent.set(id,n.id);
  const self=new Map(),total=new Map();
- const intervals=phase?(row.intervals||[]).filter(x=>x[0]===phase).map(x=>[x[1]-origin,x[1]-origin+x[2]]):[[row.at-origin,row.at-origin+duration(row)]];
+ const intervals=phase?(row.intervals||[]).filter(x=>phaseMatches(x[0])).map(x=>[x[1]-origin,x[1]-origin+x[2]]):[[row.at-origin,row.at-origin+duration(row)]];
  if(!intervals.length){
-  if(allowEmpty)return {self,total,sampledMs:0,idleMs:0};
+  if(allowEmpty)return {self,total,sampledMs:0,idleMs:0,outsideStackMs:0};
   throw Error('No timeline interval for '+phase+' in step '+row.step+'; capture with --timeline.');
  }
  const from=Math.min(...intervals.map(x=>x[0])),to=Math.max(...intervals.map(x=>x[1]));
- let time=0,sampledMs=0,idleMs=0;
+ let time=0,sampledMs=0,idleMs=0,outsideStackMs=0;
  for(let i=0;i<profile.samples.length;i++){
   const next=time+(profile.timeDeltas[i]||0)/1000;
   const ms=intervals.reduce((sum,[a,b])=>sum+Math.max(0,Math.min(next,b)-Math.max(time,a)),0);time=next;
@@ -41,13 +43,18 @@ function slice(profile,row,origin,allowEmpty=false){
   const node=nodes.get(profile.samples[i]);if(!node)continue;
   sampledMs+=ms;
   if(node.callFrame.functionName==='(idle)'){idleMs+=ms;continue;}
+  if(stack){
+   let id=node.id,inside=false;
+   while(id!==undefined){const frame=nodes.get(id);if(!frame)break;if(label(frame.callFrame).includes(stack)){inside=true;break;}id=parent.get(id);}
+   if(!inside){outsideStackMs+=ms;continue;}
+  }
   const key=label(node.callFrame);self.set(key,(self.get(key)||0)+ms);
   const seen=new Set();let id=node.id;
   while(id!==undefined){const n=nodes.get(id);if(!n)break;const name=label(n.callFrame);
    if(!seen.has(name)){seen.add(name);total.set(name,(total.get(name)||0)+ms);}id=parent.get(id);
   }
  }
- return{self,total,sampledMs,idleMs};
+ return{self,total,sampledMs,idleMs,outsideStackMs};
 }
 const sum=(dest,src)=>{for(const[k,v]of src)dest.set(k,(dest.get(k)||0)+v);};
 const steps={spike,reference};
@@ -65,13 +72,14 @@ for(const item of profiles){
  const origin=run.profileOrigins.beforeStart?item.origin:item.origin-(profile.timeDeltas[0]||0)/1000;
  for(const [name,step]of Object.entries(steps)){
   const s=slice(profile,step,origin,name==='previous'||name==='next');sum(tables[name].self,s.self);sum(tables[name].total,s.total);
-  row[name]={sampledMs:s.sampledMs,idleMs:s.idleMs,top:[...s.self].filter(([k])=>!noise(k)).sort((a,b)=>b[1]-a[1]).slice(0,6)};
+  row[name]={sampledMs:s.sampledMs,idleMs:s.idleMs,...(stack?{outsideStackMs:s.outsideStackMs}:{}),top:[...s.self].filter(([k])=>!noise(k)).sort((a,b)=>b[1]-a[1]).slice(0,6)};
  }threads.push(row);
 }
 const top=(table,other)=>[...table].filter(([name])=>!noise(name)).map(([name,ms])=>({name,ms,referenceMs:other.get(name)||0,extraMs:ms-(other.get(name)||0)}));
 const topSelf=top(tables.spike.self,tables.reference.self),topTotal=top(tables.spike.total,tables.reference.total);
 const describe=r=>({step:r.step,ms:r.ms,wallMs:duration(r),gcMs:r.gcMs,cpuMs:r.cpu?(r.cpu.user+r.cpu.system)/1000:null,freeMB:r.freeMB,heapUsedMB:r.heapUsedMB,phases:r.phases,index:r.index});
-const result={phase,note:'Sampled thread time across concurrent threads; inclusive values overlap. Process CPU time is reported separately.',spike:describe(spike),reference:describe(reference),self:topSelf.sort((a,b)=>b.ms-a.ms).slice(0,25),extraSelf:topSelf.slice().sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),extraInclusive:topTotal.sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),threads};
+const result={phase,stack,note:'Sampled thread time across concurrent threads; inclusive values overlap. Process CPU time is reported separately.',spike:describe(spike),reference:describe(reference),self:topSelf.sort((a,b)=>b.ms-a.ms).slice(0,25),extraSelf:topSelf.slice().sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),extraInclusive:topTotal.sort((a,b)=>b.extraMs-a.extraMs).slice(0,25),threads};
 result.neighbors=Object.fromEntries(['previous','next'].filter(name=>steps[name]).map(name=>[name,{...describe(steps[name]),self:top(tables[name].self,tables.reference.self).sort((a,b)=>b.ms-a.ms).slice(0,15)}]));
-fs.writeFileSync(file+(phase?'.'+phase.replace(/[^a-z0-9_-]/gi,'-'):'')+'.spike-analysis.json',JSON.stringify(result,null,2));
+const suffix=[phase,stack].filter(Boolean).map(v=>'.'+v.replace(/[^a-z0-9_-]/gi,'-')).join('');
+fs.writeFileSync(file+suffix+'.spike-analysis.json',JSON.stringify(result,null,2));
 console.log(JSON.stringify({spike:result.spike,reference:result.reference,neighbors:result.neighbors,extraSelf:result.extraSelf.slice(0,14),extraInclusive:result.extraInclusive.slice(0,12)},null,2));

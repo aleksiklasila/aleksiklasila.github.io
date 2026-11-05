@@ -95,7 +95,7 @@ function clearCombatFx() {
 // A unit's attack as an effect. Melee and caster styles differ by role, so
 // units of one purpose share a look and others are told apart at a glance.
 // (unitTarget: the target is a unit, followed as drawn with the attacker.)
-function recordUnitAttackFx(unit, target, unitTarget = false) {
+function recordUnitAttackFx(unit, target, unitTarget = false, ax = unit.x, ay = unit.y, tx = target.x, ty = target.y) {
     let style = unit.attackStyle, type = unit.unitType;
     let kind = COMBAT_FX.SLASH, variant = 'default';
     if (style === 'fire' || style === 'water' || style === 'ice' || style === 'poison') { kind = COMBAT_FX.CAST; variant = style; }
@@ -106,5 +106,5 @@ function recordUnitAttackFx(unit, target, unitTarget = false) {
     else if (type === 'fast') kind = COMBAT_FX.DUAL;
     else if (type === 'tank' || type === 'boss') { kind = COMBAT_FX.SMASH; variant = type; }
     else if (type === 'king') { kind = COMBAT_FX.CLEAVE; variant = 'king'; }
-    recordCombatFx(kind, unit.x, unit.y, target.x, target.y, variant, unit.id, unitTarget ? target.id : 0);
+    recordCombatFx(kind, ax, ay, tx, ty, variant, unit.id, unitTarget ? target.id : 0);
 }

@@ -1325,6 +1325,10 @@ function eliminateTeamAssets(pid) {
 }
 
 function getSpawnerRallyTargetWorld(spawner) {
+    return _refreshSpawnerRallyTarget(spawner) ? { x: spawner.rallyX, y: spawner.rallyY } : null;
+}
+
+function _refreshSpawnerRallyTarget(spawner) {
     if (spawner.rallyTargetUnitId != null) {
         // (By id: a search of every unit per spawner per frame stalled the
         // page with thousands of spawners selected.)
@@ -1338,7 +1342,7 @@ function getSpawnerRallyTargetWorld(spawner) {
                 spawner._rallyLastSeenX = tu.x;
                 spawner._rallyLastSeenY = tu.y;
                 spawner._pendingRallyDetach = false;
-                return { x: tu.x, y: tu.y };
+                return true;
             }
 
             let lockX = Number.isFinite(spawner._rallyLastSeenX) ? spawner._rallyLastSeenX : spawner.rallyX;
@@ -1352,10 +1356,7 @@ function getSpawnerRallyTargetWorld(spawner) {
             spawner._pendingRallyDetach = false;
         }
     }
-    if (spawner.rallyX !== null && spawner.rallyY !== null && Number.isFinite(spawner.rallyX) && Number.isFinite(spawner.rallyY)) {
-        return { x: spawner.rallyX, y: spawner.rallyY };
-    }
-    return null;
+    return Number.isFinite(spawner.rallyX) && Number.isFinite(spawner.rallyY);
 }
 
 function normalizeTowerTargetSpec(spec) {
@@ -1384,32 +1385,34 @@ function getTowerTargetSpecFromEntity(target) {
 }
 
 function resolveTowerPreferredTarget(tower) {
-    if (!tower || !tower.preferredTargetSpec) return null;
-    let spec = normalizeTowerTargetSpec(tower.preferredTargetSpec);
+    if (!tower) return null;
+    if (tower instanceof Tower) {
+        const k = tower._ptK, v = tower._ptV;
+        if (!(k > 0) || !Number.isFinite(v)) return null;
+        if (k === 1) {
+            const u = getUnitById(v);
+            return u && !u.dead && u.owner !== tower.owner ? u : null;
+        }
+        return _towerHostileStructureAt(k, v % GRID_W, Math.floor(v / GRID_W), tower.owner);
+    }
+    const spec = normalizeTowerTargetSpec(tower.preferredTargetSpec);
     if (!spec) return null;
     if (spec.type === 'unit') {
-        // (By the id map: a scan of every unit, for each of 2000 towers given
-        // one target, was 300 ms a tick once that unit died.)
         const u = getUnitById(spec.id);
         return u && !u.dead && u.owner !== tower.owner ? u : null;
     }
-    if (spec.type === 'tower') {
-        let t = getTowerAtTile(spec.gx, spec.gy);
-        return (t && t.energy > 0 && t.owner !== tower.owner) ? t : null;
+    return _towerHostileStructureAt(TOWER_TARGET_KINDS.indexOf(spec.type), spec.gx, spec.gy, tower.owner);
+}
+
+function _towerHostileStructureAt(kind, gx, gy, owner) {
+    let target;
+    switch (kind) {
+        case 2: target = getTowerAtTile(gx, gy); break;
+        case 3: target = getBarrackAtTile(gx, gy); break;
+        case 4: target = getSpawnerAtTile(gx, gy); break;
+        case 5: target = getFloorItemAtTile(gx, gy); break;
     }
-    if (spec.type === 'barrack') {
-        let b = getBarrackAtTile(spec.gx, spec.gy);
-        return (b && b.energy > 0 && b.owner !== tower.owner) ? b : null;
-    }
-    if (spec.type === 'spawner') {
-        let s = getSpawnerAtTile(spec.gx, spec.gy);
-        return (s && s.energy > 0 && s.owner !== tower.owner) ? s : null;
-    }
-    if (spec.type === 'item') {
-        let item = getFloorItemAtTile(spec.gx, spec.gy);
-        if (item && item.energy > 0 && item.owner !== tower.owner) return item;
-    }
-    return null;
+    return target && target.energy > 0 && target.owner !== owner ? target : null;
 }
 
 // (A preferred target in reach, in sight: the kernel's, tower.rs k_tower_fire.)
@@ -1667,6 +1670,14 @@ function setHelpTab(tabId) {
 
 function getOwnedActiveResearchLabs(owner) {
     return collectorSpawners.filter(s => s && s.type === 'research' && s.owner === owner && s.energy > 0 && !s.underConstruction);
+}
+function hasOwnedActiveResearchLab(owner) {
+    const spawners = structListView(2);
+    for (let i = 0; i < spawners.length; i++) {
+        const s = spawners[i];
+        if (s && s.type === 'research' && s.owner === owner && s.energy > 0 && !s.underConstruction) return true;
+    }
+    return false;
 }
 
 function setResearchQueueDragGuard(active, rerenderPopup = false) {
@@ -2497,6 +2508,7 @@ function rebuildPrecomputedStatsMapPlayer(targetPlayerId = null) {
     // native rows too: otherwise a snapshot restore attaches fresh rows
     // while the other peers keep moving with the old numeric stats.
     _precomputedStatsVersion++;
+    _invalidateAllBuildingStatPacks();
     const publishUnits = playerId => {
         if (typeof unitStatsTablesChanged === 'function') unitStatsTablesChanged(playerId);
         if (typeof effSharedTablesChanged === 'function') {
@@ -2639,6 +2651,7 @@ function rebuildPrecomputedStatsMapPlayerThingStat(playerId, kind, key, statKey 
 
     if (!statKey) {
         _precomputedStatsVersion++;
+        if (branch === 'building') _noteBuildingStatPackChange(pid, normalizedKey);
         if (branch === 'unit' && typeof unitStatsTablesChanged === 'function') unitStatsTablesChanged(pid, normalizedKey);
         if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(pid);
         if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
@@ -2724,6 +2737,7 @@ function _rebuildPlayerThingRanges(pid, branch, key, levels, sources) {
 }
 function _rebuildPlayerThingStatLevels(pid, branch, normalizedKey, statKey) {
     _precomputedStatsVersion++;
+    if (branch === 'building') _noteBuildingStatPackChange(pid, normalizedKey);
     if (branch === 'unit') unitStatsTablesChanged(pid, normalizedKey);
     let playerEntry = _ensurePrecomputedStatsMapPlayerEntry(pid);
     if (!playerEntry[branch][normalizedKey]) playerEntry[branch][normalizedKey] = [];
@@ -2851,6 +2865,7 @@ function getResearchStatEntriesForThing(kind, key) {
 
 let RESEARCH_THINGS = [];
 let RESEARCH_THINGS_BY_ID = {};
+let _researchThingsByKind = new Map();
 
 function rebuildResearchThings() {
     let things = [];
@@ -2878,18 +2893,27 @@ function rebuildResearchThings() {
     }
     RESEARCH_THINGS = things;
     let out = {};
-    for (let t of RESEARCH_THINGS) out[`${t.kind}:${t.key}`] = t;
+    const byKind = new Map();
+    for (const t of RESEARCH_THINGS) {
+        out[`${t.kind}:${t.key}`] = t;
+        let byKey = byKind.get(t.kind);
+        if (!byKey) byKind.set(t.kind, byKey = new Map());
+        byKey.set(t.key, t);
+    }
     RESEARCH_THINGS_BY_ID = out;
+    _researchThingsByKind = byKind;
 }
 
 function getResearchThing(kind, key) {
+    if (typeof kind === 'string' && typeof key === 'string') return _researchThingsByKind.get(kind)?.get(key) || null;
     return RESEARCH_THINGS_BY_ID[`${kind}:${key}`] || null;
 }
 
 function getResearchStatEntry(kind, key, statKey) {
-    let thing = getResearchThing(kind, key);
-    if (!thing) return null;
-    return (thing.stats || []).find(s => s.statKey === statKey) || null;
+    const stats = getResearchThing(kind, key)?.stats;
+    if (!stats) return null;
+    for (let i = 0; i < stats.length; i++) if (stats[i].statKey === statKey) return stats[i];
+    return null;
 }
 
 function ensurePlayerResearchLevels(playerId) {
@@ -3089,9 +3113,11 @@ function getResearchQueueCapacityForPlayer(playerId) {
     const sv = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1;
     if (!(C.tick === tick && C.ver === ver && C.epoch === epoch && C.sv === sv)) {
         C.counts.fill(0);
-        // (The labs alone, from the worker buildings' index by type.)
-        const list = typeof _getWorkerSpawnersByType === 'function' ? _getWorkerSpawnersByType('research') : collectorSpawners;
-        for (let s of list) {
+        // Count directly into the reusable owner columns. Capacity queries
+        // do not need to rebuild the worker-spawner index.
+        const spawners = structListView(2);
+        for (let i = 0; i < spawners.length; i++) {
+            const s = spawners[i];
             if (!s || s.type !== 'research' || s.energy <= 0) continue;
             const o = s.owner;
             if (o >= 0 && o < C.counts.length) C.counts[o]++;
@@ -3245,15 +3271,26 @@ function _researchTaskOfStats(task, only) {
     return false;
 }
 // (Levels only, from the research levels and the order: no tables read.)
-function _researchStatsOutOfOrder(playerId, ordered, only) {
-    const seen = new Map();
-    for (const task of ordered) {
-        let byKey = seen.get(task.kind);
-        if (!byKey) seen.set(task.kind, byKey = new Map());
-        let byStat = byKey.get(task.key);
-        if (!byStat) byKey.set(task.key, byStat = new Map());
-        let e = byStat.get(task.statKey);
-        if (!e) byStat.set(task.statKey, e = { next: Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0)), bad: false });
+function _researchSeenEntry(seen, kind, key, statKey) {
+    let byKey = seen.get(kind);
+    if (!byKey) seen.set(kind, byKey = new Map());
+    let byStat = byKey.get(key);
+    if (!byStat) byKey.set(key, byStat = new Map());
+    let entry = byStat.get(statKey);
+    if (!entry) byStat.set(statKey, entry = { epoch: 0, next: 0, bad: false, levelId: makeResearchLevelId(kind, key, statKey) });
+    return entry;
+}
+function _researchStatsOutOfOrder(playerId, ordered, only, seen, epoch) {
+    const levels = gameStarted ? ensurePlayerResearchLevels(playerId) : null;
+    for (let i = 0; i < ordered.length; i++) {
+        const task = ordered[i], e = _researchSeenEntry(seen, task.kind, task.key, task.statKey);
+        if (e.epoch !== epoch) {
+            e.epoch = epoch;
+            const level = levels ? clampResearchLevel(levels[e.levelId] || 0)
+                : getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey);
+            e.next = Math.max(0, Math.floor(Number(level) || 0));
+            e.bad = false;
+        }
         const from = e.next++, to = from >= MAX_RESEARCH_LEVEL ? from : Math.min(MAX_RESEARCH_LEVEL, from + 1);
         if (e.bad || (task.fromLevel === from && task.toLevel === to)) continue;
         e.bad = true;
@@ -3261,13 +3298,63 @@ function _researchStatsOutOfOrder(playerId, ordered, only) {
     }
 }
 const _researchRebaseScratch = new WeakMap();
-function rebasePlayerResearchQueueState(playerId, only = null) {
-    let p = ensurePlayerResearchQueueState(playerId);
+function _researchScratchFor(p) {
     let scratch = _researchRebaseScratch.get(p);
     if (!scratch) {
-        scratch = { ordered: [], groups: new Map(), epoch: 0 };
+        scratch = { ordered: [], groups: new Map(), seen: new Map(), touched: [null], epoch: 0 };
         _researchRebaseScratch.set(p, scratch);
     }
+    return scratch;
+}
+function researchOrderChecksReserve() {
+    for (let owner = 0; owner < players.length; owner++) {
+        if (!players[owner]) continue;
+        const seen = _researchScratchFor(players[owner]).seen;
+        for (const thing of RESEARCH_THINGS) {
+            for (const stat of thing.stats) _researchSeenEntry(seen, thing.kind, thing.key, stat.statKey);
+        }
+    }
+}
+// The active task precedes the waiting queue. Move within that logical
+// sequence without copying the queue or using splice's removed-item array.
+function moveResearchTaskInPlace(playerId, p, from, to, requireTask) {
+    const q = p.researchQueue, active = p.researchTask;
+    let task;
+    if (!active) {
+        task = q[from];
+        if (requireTask && !task) return;
+        if (from < to) q.copyWithin(from, from + 1, to + 1);
+        else q.copyWithin(to + 1, to, from);
+        q[to] = task;
+        p.researchTask = q[0] || null;
+        q.copyWithin(0, 1);
+        q.length--;
+    } else if (from === 0) {
+        task = active;
+        p.researchTask = q[0] || null;
+        q.copyWithin(0, 1, to);
+        q[to - 1] = task;
+    } else {
+        task = q[from - 1];
+        if (requireTask && !task) return;
+        if (to === 0) {
+            q.copyWithin(1, 0, from - 1);
+            q[0] = active;
+            p.researchTask = task || null;
+        } else {
+            if (from < to) q.copyWithin(from - 1, from, to);
+            else q.copyWithin(to, to - 1, from - 1);
+            q[to - 1] = task;
+        }
+    }
+    const touched = _researchScratchFor(p).touched;
+    touched[0] = task;
+    try { rebasePlayerResearchQueueState(playerId, task ? touched : null); }
+    finally { touched.fill(null); touched.length = 1; }
+    tryAdvancePlayerResearchTask(playerId);
+}
+function rebasePlayerResearchQueueState(playerId, only = null) {
+    const p = ensurePlayerResearchQueueState(playerId), scratch = _researchScratchFor(p);
     const ordered = scratch.ordered, epoch = ++scratch.epoch;
     let count = 0;
     if (p.researchTask) ordered[count++] = p.researchTask;
@@ -3279,7 +3366,7 @@ function rebasePlayerResearchQueueState(playerId, only = null) {
     }
     ordered.length = count;
     if (ordered.length <= 0) return p;
-    if (only) _researchStatsOutOfOrder(playerId, ordered, only);
+    if (only) _researchStatsOutOfOrder(playerId, ordered, only, scratch.seen, epoch);
 
     // Progress belongs to the level, not the task object: same-stat tasks are interchangeable,
     // so the lowest queued level keeps the most-advanced progress after reordering.
@@ -3416,6 +3503,18 @@ const precomputedCloneSource = new WeakMap();
 // the clones made from their old values.
 const _precomputedCloneCache = new WeakMap();
 let _precomputedStatsVersion = 0;
+// Building-only consumers keep their packed columns when a unit stat changes.
+let _precomputedBuildingStatsVersion = 0;
+let _precomputedBuildingStatsFullVersion = 0;
+const _precomputedBuildingStatRowVersions = [];
+function _invalidateAllBuildingStatPacks() {
+    _precomputedBuildingStatsFullVersion = ++_precomputedBuildingStatsVersion;
+    _precomputedBuildingStatRowVersions.length = 0;
+}
+function _noteBuildingStatPackChange(owner, key) {
+    const versions = _precomputedBuildingStatRowVersions[owner] ||= Object.create(null);
+    versions[key] = ++_precomputedBuildingStatsVersion;
+}
 
 function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
         let preserveBaseMaxEnergy = arguments.length < 3 ? true : !!arguments[2];

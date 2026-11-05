@@ -205,14 +205,34 @@ function _getCachedLitTint(baseTint, lightLevel) {
     return lit;
 }
 
+const _damageFlashBase = [];
+const _damageFlashComplement = [];
+function _damageFlashInvert(base) {
+    let rgb = _parseHexColor(base);
+    if (!rgb) return '#ffffff';
+    return _rgbToHex({ r: 255 - rgb.r, g: 255 - rgb.g, b: 255 - rgb.b });
+}
+function damageFlashReserve(playerCount) {
+    _damageFlashBase.length = _damageFlashComplement.length = playerCount + 1;
+    for (let i = 0; i <= playerCount; i++) {
+        const base = get3DRenderOwnerColor(i - 1);
+        _damageFlashBase[i] = base;
+        _damageFlashComplement[i] = _damageFlashInvert(base);
+    }
+}
 function getDamageFlashColor(target, sourceOwner = null) {
     if (Number.isFinite(sourceOwner) && sourceOwner >= 0 && typeof getTeamDisplayColor === 'function') {
         return getTeamDisplayColor(Math.floor(sourceOwner));
     }
-    let base = get3DRenderOwnerColor(target && target.owner);
-    let rgb = _parseHexColor(base);
-    if (!rgb) return '#ffffff';
-    return _rgbToHex({ r: 255 - rgb.r, g: 255 - rgb.g, b: 255 - rgb.b });
+    const owner = target && target.owner;
+    const base = get3DRenderOwnerColor(owner);
+    const i = owner == null || owner < 0 ? 0 : Math.floor(Number(owner)) + 1;
+    if (!(i >= 0 && i < _damageFlashBase.length)) return _damageFlashInvert(base);
+    if (_damageFlashBase[i] !== base) {
+        _damageFlashBase[i] = base;
+        _damageFlashComplement[i] = _damageFlashInvert(base);
+    }
+    return _damageFlashComplement[i];
 }
 
 function recordDamageVisual(target, amount, sourceOwner = null) {
@@ -7408,8 +7428,10 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
 // damage, shrine income, the watch's end; the structures it found without
 // energy are removed after it, in their lists' order. (No sets of
 // structures, no tick of their own.)
-const STRUCT_STATUS_CLASSES = () => [typeof Tower !== 'undefined' ? Tower : null, FloorItem, typeof Barrack !== 'undefined' ? Barrack : null,
-    ...structRallyClasses().slice(1)];
+function STRUCT_STATUS_CLASSES() {
+    structRallyClasses();
+    return _stStatusCls;
+}
 const _stsP = new Float64Array(4);
 let _stsOut = null;
 function structStatusTick() {

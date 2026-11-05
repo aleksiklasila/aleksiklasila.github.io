@@ -676,6 +676,10 @@ function simParallelCopyHeap(pairs) {
     let total = 0, heap = !!_simPool && !_simParRunning && _simHeapPtrOf !== null && _simWasmMem !== null && _simWasmX !== null;
     // (Heap arrays: see simParallelCopyStage.)
     for (let i = 0; i < pairs.length; i += 2) {
+        // (Same element types only: the heap path copies bytes (an Int32 into a Float32 would be its bits). An Int8 owner column into an Int16
+        // copy (worker.js hc.o) made each copied owner of two slots' bytes: healer candidates by
+        // owner were garbage, and depended on the slot layout.)
+        if (pairs[i].constructor !== pairs[i + 1].constructor) throw new Error('simParallelCopyHeap: element types differ');
         total += pairs[i + 1].byteLength;
         if (heap && (_simHeapPtrOf(pairs[i]) < 0 || _simHeapPtrOf(pairs[i + 1]) < 0)) heap = false;
     }
@@ -1100,6 +1104,7 @@ const _SIM_MOVE_WNAMES2 = ['?-', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?s
     // (Words 295, 296: its route's navigation profile and an attack-mover's aggro reach, mv.rs resume_order.)
     '?unit.nvProf', '?unit.mvReachA'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
+const _SIM_MOVE_NAV_PART_LENGTH = Array.from({ length: _SIM_MOVE_NAV }, (_, p) => 'nav.' + p + '.partL');
 // (Off: no unit controller, no events: a unit the kernel does not move stands. Only for comparisons with old kernels in tests.)
 let _simUnitCtlOn = true;
 const _SIM_MOVE_CTLX = ['unit.holdF', 'unit.isWk', 'unit.rkF', 'unit.amGx', 'unit.amGy', 'unit.tuS', 'unit.tuId', 'unit.fatF', 'unit.tbT', 'unit.nvPK', 'mv.scoutT', 'unit.acqB', 'unit.mvEv'];
@@ -1130,9 +1135,10 @@ function _simMoveWasm(R, P) {
         for (let i = 0; i < _SIM_MOVE_WNAMES2.length; i++) I[_SIM_MOVE_W2 + i] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + i]);
         for (let p = 0; p < _SIM_MOVE_NAV; p++) I[_SIM_MOVE_WATL + p] = _simWEnc(A[nb + _SIM_MOVE_NAV * 8 + _SIM_MOVE_WNAMES2.length + p]);
         for (let i = 0; i < _SIM_MOVE_NSEP; i++) I[_SIM_MOVE_WSEP + i] = _simWEnc(A[nb + _SIM_MOVE_NAV * 9 + _SIM_MOVE_WNAMES2.length + i]);
-        for (let p = 0; p < _SIM_MOVE_NAV; p++) { const a = R['nav.' + p + '.partL']; I[250 + p] = a ? a.length : 0; }
-        const len = nm => R[nm] ? R[nm].length : 0, COV = R['vis.cover'];
-        I[262] = len('area.off'); I[263] = len('wk.ver'); I[264] = len('nav.fmeta.0'); I[265] = len('nav.fmeta.1');
+        for (let p = 0; p < _SIM_MOVE_NAV; p++) I[250 + p] = R[_SIM_MOVE_NAV_PART_LENGTH[p]]?.length || 0;
+        const COV = R['vis.cover'];
+        I[262] = R['area.off']?.length || 0; I[263] = R['wk.ver']?.length || 0;
+        I[264] = R['nav.fmeta.0']?.length || 0; I[265] = R['nav.fmeta.1']?.length || 0;
         I[266] = COV ? COV.length : 0; I[267] = COV && COV[0] ? COV[0].length : 0;
         _simMoveWFill = _simMoveW.binds; _simMoveWArgs = _simWasmArgs;
     }
@@ -1184,8 +1190,13 @@ function simParallelRun(kernel, total) {
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
-    // (The helpers' last chunks: meanwhile background chunks, else wait.)
-    for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) { if (_simBgHelp(ctl, -1)) continue; Atomics.wait(ctl, SIM_PAR_DONE, d, 5); }
+    // Keep the caller ready to finish movement and post any following
+    // occupancy passes instead of letting a background chunk extend this barrier.
+    const helpBackground = kernel !== SIM_KERNEL_MOVE && kernel !== SIM_KERNEL_MOVE_OCCUPANCY;
+    for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) {
+        if (helpBackground && _simBgHelp(ctl, -1)) continue;
+        Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
+    }
     if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
 }
@@ -1836,7 +1847,8 @@ SIM_KERNELS[SIM_KERNEL_HEAL_REDUCE] = function (R, P, owner) { _simRust(_simHeal
 // Worker replies in canonical id order, prepared entirely from the posted
 // request/results. No live columns: withdrawals/deaths are checked by the
 // tick as it consumes its bounded share. P: chunks, chunk size, K, healer kind.
-const _simWsOrderW = _simWK(['ws.rcnt', 'ws.rkind', 'ws.rid', 'ws.res', '?ws.ures', 'ws.order', 'ws.orderCount']);
+// (?ws.otmp: the id sort's other buffer, as long as ws.order.)
+const _simWsOrderW = _simWK(['ws.rcnt', 'ws.rkind', 'ws.rid', 'ws.res', '?ws.ures', 'ws.order', 'ws.orderCount', '?ws.otmp']);
 SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) { _simRust(_simWsOrderW, P, chunk, 'k_ws_order', 'WS_ORDER'); };
 
 const SIM_KERNEL_WS_RETURN_SPAWNERS = 136;
@@ -2030,9 +2042,17 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','?-','?-','acq.saSlot',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
-    // (The build's per-entry key.)
-    '?acq.saKey']);
+    // (The build's per-entry key; its stages' histograms by entry range.)
+    '?acq.saKey','?acq.saHist']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
+// The same build for the area answers in three stages, chunks of entries
+// (acq_sample.rs k_acq_area_count / _prefix / _scatter: the same table),
+// then the structure answers' seeds, a job a team (k_acq_area_seed).
+const SIM_KERNEL_ACQ_AREA_COUNT=137,SIM_KERNEL_ACQ_AREA_PREFIX=138,SIM_KERNEL_ACQ_AREA_SCATTER=139,SIM_KERNEL_ACQ_AREA_SEED=140;
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_COUNT]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_count','ACQ_AREA_COUNT');};
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_PREFIX]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_prefix','ACQ_AREA_PREFIX');};
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SCATTER]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_scatter','ACQ_AREA_SCATTER');};
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SEED]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_seed','ACQ_AREA_SEED');};
 // The area answers after the build: a job per team and part (the nearest area
 // with a visible enemy unit; one for each of the 4 enemy structure classes),
 // chunk = team * 5 + part: independent of one another, so they spread over

@@ -190,7 +190,11 @@ const SNAP_FORMAT = 7;
 // reservation always freed (a returning one's was kept), a dead unit
 // target's region not woken; death sounds the first few a tick; towers,
 // barracks and spawners out of energy destroyed in tile order.
-const SIM_RULES_REVISION = 55;
+// 56: a unit's effective stats kernel fields (esOk, esRad, esType) are sent
+// (a unit behind its tables keeps its old range); a restore and a resync
+// flush no longer send every unit through the full path; the worker
+// search commits its requests in id order (k_ws_order), not slot order.
+const SIM_RULES_REVISION = 56;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -245,12 +249,30 @@ function _snapIsBuilding(e) {
     return e instanceof Tower || e instanceof Barrack || isSpawnerEntity(e);
 }
 
-// Cached with the row-major item list it filters (rebuilt with it). Callers
-// get a fresh copy: some keep or reorder the list they are given.
-let _snapFloorItemsFor = null, _snapFloorItemsList = null;
-function _snapFloorItems() {
+// The floor items (cell items that are not buildings) in tile order. Callers
+// of _snapFloorItems get a fresh copy: some keep or reorder the list.
+let _snapFloorItemsFor = null, _snapFloorItemsList = null, _snapFloorSet = null;
+const _snapFloorCursor = { epoch: -1, pos: 0 };
+function _snapFloorItems() { return _snapFloorItemsView().slice(); }
+function _snapFloorItemAtTile(t) { const item = _cellItemAtTile(t); return item && !_snapIsBuilding(item) ? item : null; }
+// The same list, read only: replaced (never changed) when a floor item
+// changes, by the tile journal's changed tiles; for readers that do not keep
+// or change it. (Rebuilt from the row-major list on every tile change, it was
+// ~0.5 MB a tick of garbage at 65k structures, the hash's and presentation's.)
+function _snapFloorItemsView() {
+    const journal = typeof tileEntityChangesSince === 'function' && typeof _tileOrderedReplaceMany === 'function';
+    if (journal && _snapFloorItemsList !== null && _snapFloorSet === _activeTileEntities) {
+        const changes = tileEntityChangesSince(_snapFloorCursor);
+        if (changes !== null) {
+            if (changes.length) _snapFloorItemsList = _tileOrderedReplaceMany(_snapFloorItemsList, changes, _snapFloorItemAtTile);
+            return _snapFloorItemsList;
+        }
+    } else if (journal) tileEntityChangesSince(_snapFloorCursor);
+    // (Here with the journal: the first list, or the journal asked for a
+    // rebuild; the cursor is at now. Without it: by the row-major list.)
     let rows = getCellItemsRowMajor();
-    if (_snapFloorItemsFor !== rows) {
+    if (journal || _snapFloorItemsFor !== rows || _snapFloorItemsList === null) {
+        _snapFloorSet = _activeTileEntities;
         let out = [];
         for (let item of rows) {
             if (!item || _snapIsBuilding(item)) continue;
@@ -260,7 +282,7 @@ function _snapFloorItems() {
         }
         _snapFloorItemsFor = rows; _snapFloorItemsList = out;
     }
-    return _snapFloorItemsList.slice();
+    return _snapFloorItemsList;
 }
 
 function _snapListEntities(list) {
@@ -269,7 +291,8 @@ function _snapListEntities(list) {
         case 't': return towers;
         case 'b': return barracks;
         case 's': return collectorSpawners;
-        case 'f': return _snapFloorItems();
+        // (The tick hash's reader only: read, not kept.)
+        case 'f': return _snapFloorItemsView();
         case 'g': return goldMines;
         case 'a': return astarMines;
         case 'd': return droppedItems;
@@ -2032,6 +2055,7 @@ function _snapRebuildStatsInPlace(pid) {
     PRECOMPUTED_STATS_MAP_PLAYER[pid] = old;
     // (Clones made from the old values are not handed out again.)
     if (typeof _precomputedStatsVersion !== 'undefined') _precomputedStatsVersion++;
+    if (typeof _invalidateAllBuildingStatPacks === 'function') _invalidateAllBuildingStatPacks();
 }
 
 function _snapEnsureStatMaps() {
@@ -2178,6 +2202,8 @@ function snapDecodeState(S, options = null) {
             // (With the room simUnitStateCompact gives them, 1/8 more: then a
             // start into a fresh state is compact already and keeps these
             // columns instead of making a second set, 1.3 GB at 2M units.)
+            // (The units it replaces let go first: the restored ones take their slots, from 0. sim_unit_state.js simUnitStateReleaseAll.)
+            if (list === 'u' && !partial && typeof simUnitStateReleaseAll === 'function') simUnitStateReleaseAll();
             if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, Math.ceil(rows.length * 1.125)));
             // (And the ticks' work arrays for the match: main.js simMatchReserve.)
             if (list === 'u' && !partial && typeof simMatchReserve === 'function') simMatchReserve();
@@ -2522,7 +2548,7 @@ function snapDecodeState(S, options = null) {
         // Movement caches (flows, armed units, the unit index, walls) start
         // over from the restored world, as on every peer's flush.
         if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
-        if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
+        if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsAppliedSync === 'function') effStatsAppliedSync(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
         // The navigation as the snapshot's peer has it (the same walls). Not
@@ -2606,7 +2632,9 @@ function snapFlushHistoryCaches() {
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     // Armed and parked units go back to Unit.update everywhere (a restored
     // peer's units start that way).
-    if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsInvalidateAll === 'function') { effStatsInvalidateAll(); effStatsAppliedSync(); } if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
+    // (The effective stats' kernel fields stay: a restoring peer decodes
+    // them, sim_unit_state.js SIM_UNIT_KCOL_FIELDS.)
+    if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsAppliedSync === 'function') effStatsAppliedSync(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
     // Gameplay visibility is reused between ticks (see VISIBILITY_TICK_INTERVAL).
     if (typeof clearGameplayVisibilityCache === 'function') clearGameplayVisibilityCache();
     // (Damage not reported yet is state, kept: unit.js _dotPending.)

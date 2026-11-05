@@ -95,4 +95,41 @@ const rally = JSON.parse(a.eval(`JSON.stringify((() => {
 })())`));
 assert.deepEqual(rally, { calls: 2, all: 5000, ordered: true, coords: [4 * a.eval("GRID_W") + 3], waiting: 1 }, 'rallies apply whole on arrival, ahead of a waiting backlog');
 console.log('PASS: rally orders apply whole on arrival');
+
+const packedRally = JSON.parse(a.eval(`JSON.stringify((() => {
+    const coords = [null, 2, -1, 3, 1.9, 2.1];
+    for (let i = 0; i < 5100; i++) coords.push(i % GRID_W, 4);
+    coords.push(7);
+    const raw = { action: 'setRallyMany', coords, targetX: 10, targetY: 20 };
+    const original = JSON.stringify(raw), lists = [[], []];
+    let pass = 0;
+    const run = _rallyKernelRun, set = _rallySetTile;
+    _rallyKernelRun = n => { const ids = orderQueueReserve().ids; for (let i = 0; i < n; i++) lists[pass].push(ids[i]); };
+    _rallySetTile = tile => lists[pass].push(tile);
+    try {
+        processAction(sanitizeAction(raw), 0);
+        pass++;
+        processActions([raw], 0);
+    } finally { _rallyKernelRun = run; _rallySetTile = set; }
+    return { lists, unchanged: JSON.stringify(raw) === original };
+})())`));
+assert.equal(packedRally.lists[0].length, 4999);
+assert.deepEqual(packedRally.lists[1], packedRally.lists[0], 'immediate rally packing preserves validation, cap and order');
+assert.equal(packedRally.unchanged, true, 'rally packing leaves packet coordinates intact');
+const largeSelection = JSON.parse(a.eval(`JSON.stringify((() => {
+    const saved = localInputBuffer;
+    localInputBuffer = {};
+    try {
+        const ids = Array.from({ length: 200000 }, (_, i) => i + 1);
+        queueAction({ action: 'move', unitIds: ids, targetX: 10, targetY: 20 });
+        const pieces = Object.values(localInputBuffer).flat();
+        let seen = 0, ordered = true;
+        for (const piece of pieces) actionIdsForEach(piece.uidz, ACTION_MAX_UNIT_IDS, id => {
+            if (id !== ++seen) ordered = false;
+        });
+        return { pieces: pieces.length, seen, ordered };
+    } finally { localInputBuffer = saved; }
+})())`));
+assert.deepEqual(largeSelection, { pieces: 10, seen: 200000, ordered: true },
+    'one move command sends the entire 200,000-unit selection in order');
 process.exit(0);

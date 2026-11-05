@@ -3345,7 +3345,7 @@ function resetWorldState() {
     controlGroups = {};
     popupControlGroups = {};
     activePopupControlGroupKey = '';
-    mapAlerts = [];
+    resetMapDamageAlerts();
     controlGroupAlertState = {};
 
     localInputBuffer = {};

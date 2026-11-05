@@ -86,9 +86,11 @@ const _simStructSlots = new SimSlots('_sslot');
 const SIM_STRUCT_LABEL_TICKS = 8;
 
 function _simStructLists() {
-    return [towers, barracks, collectorSpawners, _snapFloorItems(), goldMines, astarMines, droppedItems];
+    return [towers, barracks, collectorSpawners, _snapFloorItemsView(), goldMines, astarMines, droppedItems];
 }
 
+// (A laser link's table slot, -1 none; columns l0-l3 by name: no key strings.)
+function _simLinkSlot(o) { return o && o._sslot !== undefined && _simStructSlots.owner[o._sslot] === o ? o._sslot : -1; }
 function _simWriteStructure(F, s, e, kind, tick) {
     F.alive[s] = 1;
     F.serial[s] = _simStructSlots.serials[s];
@@ -130,10 +132,9 @@ function _simWriteStructure(F, s, e, kind, tick) {
     let flash = Number(e.attackFlash) || 0;
     F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
     let links = e.connectedLasers;
-    for (let k = 0; k < 4; k++) {
-        let o = Array.isArray(links) ? links[k] : null;
-        F['l' + k][s] = o && o._sslot !== undefined && _simStructSlots.owner[o._sslot] === o ? o._sslot : -1;
-    }
+    const linked = Array.isArray(links);
+    F.l0[s] = _simLinkSlot(linked ? links[0] : null); F.l1[s] = _simLinkSlot(linked ? links[1] : null);
+    F.l2[s] = _simLinkSlot(linked ? links[2] : null); F.l3[s] = _simLinkSlot(linked ? links[3] : null);
     F.flags[s] = (e.underConstruction ? SIM_SF_UC : 0) | (e.isUpgrading ? SIM_SF_UPGRADING : 0) | (e.markedForSalvage ? SIM_SF_SALVAGE : 0)
         | (e.isStacking ? SIM_SF_STACKING : 0) | (e.watched > 0 ? SIM_SF_WATCHED : 0) | (e.burning > 0 ? SIM_SF_BURNING : 0)
         | (e.poisoned > 0 ? SIM_SF_POISONED : 0) | (e.frozen > 0 ? SIM_SF_FROZEN : 0) | (e.wet > 0 ? SIM_SF_WET : 0) | (e.sandy > 0 ? SIM_SF_SANDY : 0)
@@ -250,6 +251,43 @@ function _simTaskStore(N, at, t) {
     const o = at * 5;
     N[o] = +t.fromLevel; N[o + 1] = +t.toLevel; N[o + 2] = +t.workDone; N[o + 3] = +t.workRequired; N[o + 4] = +t.cost;
 }
+// A reordered queue (a task moved to the front, others shifted) as runs of
+// the last queue sent: {__qr: [start, length, ...], tail, np}, start -1 for
+// the next tasks of tail (new ones). np: [new index, numbers...] for kept
+// tasks whose numbers changed. null when too few tasks are kept in order
+// (then the prefix form: a delta that copies the rest).
+const SIM_QUEUE_RUN_MAX = 64;
+function _simQueueRuns(R, N, m, q, n) {
+    let runs = null, tail = null, np = null, at = 0, pieces = 0, i = 0;
+    while (i < n) {
+        const t = q[i];
+        let r = -1;
+        if (at < m && R[at] === t) r = at;
+        else for (let x = 0; x < m; x++) if (R[x] === t) { r = x; break; }
+        if (++pieces > SIM_QUEUE_RUN_MAX) return null;
+        if (r < 0) {
+            let len = 0;
+            // (New tasks, until the last queue's order resumes; a kept task
+            // met before then goes whole too.)
+            do {
+                (tail || (tail = [])).push(_simPlain(q[i], 2));
+                len++; i++;
+            } while (i < n && (at >= m || R[at] !== q[i]));
+            (runs || (runs = [])).push(-1, len);
+            continue;
+        }
+        let len = 0;
+        while (i < n && r + len < m && R[r + len] === q[i]) {
+            if (!_simTaskSame(N, r + len, q[i])) { const u = q[i]; (np || (np = [])).push(i, +u.fromLevel, +u.toLevel, +u.workDone, +u.workRequired, +u.cost); }
+            len++; i++;
+        }
+        (runs || (runs = [])).push(r, len);
+        at = r + len;
+    }
+    const enc = { __qr: runs || [], tail: tail || [] };
+    if (np) enc.np = np;
+    return enc;
+}
 // The queue's encoding: SAME, a delta, or (fresh) the whole of it.
 const _SIM_SAME = { same: true };
 function _simQueueEncode(C, q, fresh) {
@@ -272,6 +310,7 @@ function _simQueueEncode(C, q, fresh) {
             j++;
         }
         if (k === 0 && j === n && n === m && !np) enc = _SIM_SAME;
+        else if (n - j > 32 && (enc = _simQueueRuns(R, N, m, q, n)) !== null) { }
         else {
             const tail = new Array(n - j);
             for (let i = j; i < n; i++) tail[i - j] = _simPlain(q[i], 2);
@@ -848,6 +887,21 @@ function pageApplyState(st) {
                     if (t && typeof t === 'object') for (let w = 0; w < W; w++) { const key = _SIM_TASK_NUMS[w], v = np[a + 1 + w]; if (!(v !== v && t[key] === undefined)) t[key] = v; }
                 }
                 p.researchQueue = nq.concat(q.tail);
+            } else if (q && q.__qr) {
+                // (Runs of the last queue, start -1 the next of tail: _simQueueRuns.)
+                const old = cur && Array.isArray(cur.researchQueue) ? cur.researchQueue : [];
+                const nq = [], runs = q.__qr, tail = q.tail || [];
+                let ti = 0;
+                for (let a = 0; a + 1 < runs.length; a += 2) {
+                    const start = runs[a], len = runs[a + 1];
+                    for (let b = 0; b < len; b++) nq.push(start < 0 ? tail[ti++] : old[start + b]);
+                }
+                const np = q.np, W = _SIM_TASK_NUMS.length;
+                if (np) for (let a = 0; a + W < np.length + 1; a += W + 1) {
+                    const t = nq[np[a]];
+                    if (t && typeof t === 'object') for (let w = 0; w < W; w++) { const key = _SIM_TASK_NUMS[w], v = np[a + 1 + w]; if (!(v !== v && t[key] === undefined)) t[key] = v; }
+                }
+                p.researchQueue = nq;
             }
             if (p) for (const key of _SIM_FLAT_KEYS) {
                 const lv = p[key];

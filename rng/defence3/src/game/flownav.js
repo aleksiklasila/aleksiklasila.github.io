@@ -1351,7 +1351,7 @@ function navReachable(profile, from, to) {
 // The path of a unit at (sx, sy) sent to tile (tx, ty): one nav node toward
 // it (its open tile, navApproachTile) when it can get there, else null (the
 // closest tile it can reach instead: navPathSubstitute). O(1).
-function navPathReach(u, sx, sy, tx, ty) {
+function navPathReach(u, sx, sy, tx, ty, previous = null) {
     if (!(tx >= 0 && ty >= 0 && tx < GRID_W && ty < GRID_H)) return null;
     const profile = navProfileOf(u);
     navEnsure(profile);
@@ -1359,7 +1359,10 @@ function navPathReach(u, sx, sy, tx, ty) {
     if (to < 0) return null;
     const from = (sx >= 0 && sy >= 0 && sx < GRID_W && sy < GRID_H) ? sy * GRID_W + sx : Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE);
     if (!navReachable(profile, from, to)) return null;
-    return [navNode(profile, to % GRID_W, (to - to % GRID_W) / GRID_W)];
+    const oldNode = previous?.length === 1 ? previous[0] : null;
+    const gx = to % GRID_W;
+    const node = navNode(profile, gx, (to - gx) / GRID_W, oldNode);
+    return node === oldNode ? previous : [node];
 }
 // Substitutes: for a destination a unit cannot reach, the tile of its
 // component nearest it (straight-line; ties: the lower tile), worked out
@@ -1498,10 +1501,13 @@ function navPath(profile, gx, gy, dest, maxLen) {
 // steps toward it one tile at a time (Unit.followPath, or the movement
 // kernel in flow mode), O(1) a tick. `ready`: the tick the route may start
 // (its destination field is made by then; see navFieldReadyTick).
-function navNode(profile, tx, ty) {
+function navNode(profile, tx, ty, previous = null) {
     navEnsure(profile);
     const id = navFieldRequest(profile, ty * GRID_W + tx);
-    return { x: tx, y: ty, nav: profile + 1, ready: navFieldReadyFor(id) };
+    const ready = navFieldReadyFor(id);
+    // Reuse an unchanged, narrow route without skipping the field request.
+    if (previous && previous.x === tx && previous.y === ty && previous.nav === profile + 1 && previous.ready === ready && !previous.w) return previous;
+    return { x: tx, y: ty, nav: profile + 1, ready };
 }
 // Where a unit goes to reach tile t (profile): t itself when open, else the
 // nearest open tile around it (rings outward, up to NAV_APPROACH_MAX tiles;

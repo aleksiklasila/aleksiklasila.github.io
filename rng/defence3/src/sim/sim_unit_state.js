@@ -78,7 +78,13 @@ const SIM_UNIT_WK_FIELDS = ['workerState', 'workerTarget', 'workerTargetType', '
     'builderHasMaterial', 'healerHasMaterial', 'researcherHasMaterial'];
 // Route and worker fields an order kernel writes (ord.rs): heap columns
 // (SIM_MOVE_COLUMNS), [field, column, default], behind unit.js accessors.
-const SIM_UNIT_KCOL_FIELDS = [['_routeSegEnd', 'rsEnd', -1], ['_navReady', 'navRdy', 0], ['_awaitGroupPath', 'agWait', 0], ['_idleFailVer', 'idleFV', -1]];
+// (_effOk, _effRad, _effType: the effective stats kernel's fields, things_utils.js
+// effStatsUnitBaseChanged, as the unit has them: from its base tables when they
+// were applied, so a unit behind its tables (research) holds its old range
+// until its turn. Not derivable from the state: sent. A restore that made them
+// from the tables as decoded gave 35k of 94k units another range.)
+const SIM_UNIT_KCOL_FIELDS = [['_routeSegEnd', 'rsEnd', -1], ['_navReady', 'navRdy', 0], ['_awaitGroupPath', 'agWait', 0], ['_idleFailVer', 'idleFV', -1],
+    ['_effOk', 'esOk', 0], ['_effRad', 'esRad', 0], ['_effType', 'esType', 0]];
 const SIM_WS_NAMES = [undefined, 'IDLE', 'MOVING_TO', 'MOVING_TO_ASTAR', 'RETURNING', 'RETURNING_ASTAR', 'RETURNING_FOR_GOLD', 'MOVING_TO_BUILD',
     'BUILDING_IN_PLACE', 'MOVING_TO_HEAL', 'HEALING', 'MOVING_TO_RESEARCH', 'RESEARCHING', 'MANUAL_MOVE', null];
 const SIM_WS_CODE = new Map(SIM_WS_NAMES.map((v, i) => [v, i]));
@@ -544,7 +550,7 @@ for (const [, col, kind] of SIM_WK_MEM_COLS) if (kind === 'N') SIM_WK_DEFAULTS[c
 // value; initializing a combat unit must not allocate a worker record.
 SIM_WK_DEFAULTS.wmFailU = 0;
 const _simWkInit = new Function('C', 'i', SIM_UNIT_WK_SIDE.map(([k]) => 'C.' + k + '[i] = ' + (k in SIM_WK_DEFAULTS ? String(SIM_WK_DEFAULTS[k]) : '0') + ';').join(' '));
-function _simWkPool(S) { return S.wk || (S.wk = { cap: 0, used: 1, free: [] }); }
+function _simWkPool(S) { return S.wk || (S.wk = { cap: 0, used: 1, free: null, freeCount: 0 }); }
 // Slot s's worker record (columns c), taken now when it has none: before a
 // write. 0 when c is not the live state's (a unit of an old match).
 function simUnitWk(c, s) {
@@ -555,7 +561,7 @@ function simUnitWk(c, s) {
 }
 function _simWkTake(S, s) {
     const W = _simWkPool(S);
-    const i = W.free.length ? W.free.pop() : W.used++;
+    const i = W.freeCount ? W.free[--W.freeCount] : W.used++;
     if (i >= W.cap) _simWkGrow(S, Math.max(4096, Math.ceil((i + 1) * 1.5 / 4096) * 4096));
     _simWkInit(S.columns, i);
     S.columns.wkIx[s] = i;
@@ -565,7 +571,7 @@ function _simWkTake(S, s) {
 function simUnitWkReserve(n) {
     const S = _simUnitState;
     if (!S || !(n > 0)) return;
-    const W = _simWkPool(S), want = Math.ceil((W.used - W.free.length + n) * 1.0625 / 4096) * 4096 + 4096;
+    const W = _simWkPool(S), want = Math.ceil((W.used - W.freeCount + n) * 1.0625 / 4096) * 4096 + 4096;
     if (want > W.cap) _simWkGrow(S, want);
 }
 function _simWkGrow(S, cap) {
@@ -583,12 +589,21 @@ function _simWkGrow(S, cap) {
         }
     } finally { if (typeof simParallelBindFlush === 'function') simParallelBindFlush(); }
     if (W.cap === 0) _simWkInit(C, 0);
+    // A death can release every used record. Reserve their free stack with
+    // the columns so a large retirement wave never grows a JS array.
+    const free = new Int32Array(cap);
+    if (W.freeCount) free.set(W.free.subarray(0, W.freeCount));
+    W.free = free;
     W.cap = cap;
 }
 // (At a detach: the record back to the pool.)
 function _simWkRelease(S, s) {
     const i = S.columns.wkIx[s];
-    if (i > 0) { S.columns.wkIx[s] = 0; _simWkPool(S).free.push(i); }
+    if (i > 0) {
+        const W = _simWkPool(S);
+        S.columns.wkIx[s] = 0;
+        W.free[W.freeCount++] = i;
+    }
 }
 
 // Status records (SIM_UNIT_ST_SIDE). The pool's words (st.hdr, in the heap: the kernels take and give back records with
@@ -748,6 +763,7 @@ function simUnitStateReset() {
     // their own generation's columns, but no registry keeps its owners alive.
     // (Columns allocated ahead: never bound, given back.)
     _simUnitPrepFree(_simUnitState);
+    if (_simUnitState) _simUnitFreeQueueRelease(_simUnitState);
     _simUnitState = null;
     for (const k of SIM_UNIT_COLUMNS) simParallelBind('unit.' + k, null);
 }
@@ -764,12 +780,31 @@ function _simUnitColumnsObject() {
     return new _SimUnitColumns();
 }
 
+function simUnitFreeQueueReserve(S) {
+    if (!S || !S.cap || (S.freeLater && S.freeLater.length >= S.cap)) return;
+    const old = S.freeLater, queue = simHeapArray(Int32Array, S.cap);
+    for (let i = 0; i < S.freeCount; i++) queue[i] = old[i];
+    S.freeLater = queue;
+    simHeapFree(old);
+}
+function _simUnitFreeQueueRelease(S) {
+    if (!S.freeLater) return;
+    simParallelBind('slz.list', null);
+    simHeapFree(S.freeLater);
+    S.freeLater = null;
+    S.freeCount = 0;
+}
+function _simUnitDeferFree(S, s) {
+    simUnitFreeQueueReserve(S);
+    S.owners[s] = null;
+    S.freeLater[S.freeCount++] = s;
+}
 // Slots released this tick become free for new units (spatialIndexRebuild,
 // at the start of a tick).
 function simUnitStateReleaseFreed() {
     const S = _simUnitState;
-    if (!S || !S.freeLater || !S.freeLater.length) return;
-    const sl = S.sl, L = S.freeLater, n = L.length, C = S.columns;
+    if (!S || !S.freeCount) return;
+    const sl = S.sl, L = S.freeLater, n = S.freeCount, C = S.columns;
     // (Back to a fresh slot's state on the helpers, in one job: taking one
     // then clears nothing. A status record still held let go first.)
     let zeroed = false;
@@ -778,7 +813,7 @@ function simUnitStateReleaseFreed() {
         zeroed = _simSlotZeroRun(S, L, n);
     }
     for (let i = 0; i < n; i++) { const s = L[i]; _simSlabFree(sl, s); if (zeroed) sl.used[s >> 5] &= ~(1 << (s & 31)); }
-    L.length = 0;
+    S.freeCount = 0;
 }
 // A fresh slot's column values other than zero (its first element for a
 // strided column). Written wherever a slot becomes fresh: k_slot_zero for
@@ -803,7 +838,7 @@ function simSlotDefaults() {
 function _simSlotDefWord(a, v) { return v === undefined ? [0, 0] : a instanceof Float64Array ? [3, v] : a instanceof Float32Array ? [2, v] : [1, v]; }
 // The unit columns as a table for k_slot_zero (address, bytes, elements a
 // slot; defaults), made again when the columns were (a growth, a compaction).
-const _slz = { S: null, cap: -1, tab: null, defs: null, n: 0, list: null };
+const _slz = { S: null, cap: -1, tab: null, defs: null, n: 0 };
 function _simSlotZeroTable(S) {
     const Z = _slz;
     if (Z.S !== S || Z.cap !== S.cap || !simHeapHas(Z.tab) || !simHeapHas(Z.defs)) {
@@ -821,10 +856,8 @@ function _simSlotZeroTable(S) {
 }
 function _simSlotZeroRun(S, L, n) {
     const Z = _simSlotZeroTable(S);
-    if (!Z) return false;
-    if (!Z.list || Z.list.length < n || !simHeapHas(Z.list)) Z.list = simSharedArray(Int32Array, Math.max(4096, n * 2));
-    for (let i = 0; i < n; i++) Z.list[i] = L[i];
-    simParallelBind('slz.list', Z.list);
+    if (!Z || !simHeapHas(L)) return false;
+    simParallelBind('slz.list', L);
     const P = _simParams;
     // (Small jobs: a slot touches every column (~225 cache lines), 256 a job
     // left one helper ~6 ms of misses at 2,500 deaths a tick.)
@@ -856,7 +889,7 @@ function _simUnitColumnsHeld(S) {
     list.push(S.sepKey, S.sepLayer);
 }
 function _simUnitStateNew() {
-    return _simUnitState = { cap: 0, owners: [], sl: _simSlabNew(), columns: _simUnitColumnsObject(), stamp: null, epoch: 0, unitsRef: null, held: null };
+    return _simUnitState = { cap: 0, owners: [], sl: _simSlabNew(), columns: _simUnitColumnsObject(), stamp: null, epoch: 0, unitsRef: null, held: null, freeLater: null, freeCount: 0 };
 }
 // Room for n more units in one step (before many are made at once: the
 // match's starting units, a restore): growing by half each time kept every
@@ -877,6 +910,7 @@ function simUnitStateReserve(n, room = n) {
     // (Columns outside the heap, an earlier allocation's failure: made
     // again, in the heap, when it has room now.)
     if (want > S.cap || _simUnitColumnsOutside(S)) _simUnitStateGrow(S, want, need);
+    _simSlabReserve(S.sl, Math.ceil(S.cap / SIM_SLAB));
     // (Status records for a sixteenth of them: a battle's statuses then grow
     // the pool a few times, not a dozen, each a wait for the background jobs.)
     if (S.cap > 0) simUnitStReserve(Math.ceil(Math.max(0, n | 0) / 16));
@@ -916,10 +950,12 @@ const SIM_SLAB = 64, SIM_SLAB_KEY_TILES = 16, SIM_SLAB_SLACK_SHIFT = 4, SIM_SLAB
 function _simSlabKeys(sl) {
     sl.kw = Math.max(1, Math.ceil(GRID_W / SIM_SLAB_KEY_TILES)); sl.kh = Math.max(1, Math.ceil(GRID_H / SIM_SLAB_KEY_TILES)); sl.nk = sl.kw * sl.kh + 1;
     sl.gw = GRID_W; sl.gh = GRID_H;
-    sl.cur = new Int32Array(sl.nk).fill(-1); sl.holes = new Array(sl.nk).fill(null);
+    sl.cur = new Int32Array(sl.nk).fill(-1); sl.heads = new Int32Array(sl.nk + 2);
 }
 function _simSlabNew() {
-    const sl = { kw: 0, kh: 0, nk: 0, gw: 0, gh: 0, nfree: 0, slabs: 0, pushes: 0, cur: null, holes: null, any: [], empty: [], bits: new Uint32Array(0), used: new Uint32Array(0), ever: new Uint32Array(0), sfree: new Uint8Array(0), home: new Int32Array(0), want: -1, plan0: -1, layout: 0 };
+    const sl = { kw: 0, kh: 0, nk: 0, gw: 0, gh: 0, nfree: 0, slabs: 0, pushes: 0, cur: null,
+        heads: null, entries: new Int32Array(0), entryCount: 0, bits: new Uint32Array(0), used: new Uint32Array(0),
+        ever: new Uint32Array(0), sfree: new Uint8Array(0), home: new Int32Array(0), want: -1, plan0: -1, layout: 0 };
     _simSlabKeys(sl);
     return sl;
 }
@@ -935,13 +971,24 @@ function _simSlabReserve(sl, slabs) {
     const sfree = new Uint8Array(n), home = new Int32Array(n).fill(-1), bits = new Uint32Array(n * 2), used = new Uint32Array(n * 2), ever = new Uint32Array(n * 2);
     sfree.set(sl.sfree); home.set(sl.home); bits.set(sl.bits); used.set(sl.used); ever.set(sl.ever);
     sl.sfree = sfree; sl.home = home; sl.bits = bits; sl.used = used; sl.ever = ever;
+    // Two entries per slab at relist and at most two per free until the
+    // next relist. Each entry stores a slab and its previous stack head.
+    const entries = new Int32Array(2 * (10 * n + 8195));
+    entries.set(sl.entries);
+    sl.entries = entries;
+}
+function _simSlabListPush(sl, list, slab) {
+    const at = 2 * ++sl.entryCount;
+    sl.entries[at] = slab;
+    sl.entries[at + 1] = sl.heads[list];
+    sl.heads[list] = at;
 }
 // A new slab (its 64 slots free, never used) at the end of the owners.
 function _simSlabFresh(S, sl) {
     const slab = sl.slabs, slots = (slab + 1) * SIM_SLAB;
     if (slots > S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap), Math.ceil(slots / 4096) * 4096);
     sl.slabs++;
-    _simSlabReserve(sl, sl.slabs);
+    _simSlabReserve(sl, Math.ceil(S.cap / SIM_SLAB));
     sl.bits[slab * 2] = 0xFFFFFFFF; sl.bits[slab * 2 + 1] = 0xFFFFFFFF; sl.sfree[slab] = SIM_SLAB; sl.home[slab] = -1; sl.nfree += SIM_SLAB;
     const o = S.owners;
     for (let i = 0; i < SIM_SLAB; i++) o.push(null);
@@ -962,23 +1009,22 @@ function _simSlabFree(sl, s) {
     const f = ++sl.sfree[slab];
     if (f === 1) {
         const h = sl.home[slab];
-        if (h >= 0) (sl.holes[h] || (sl.holes[h] = [])).push(slab);
-        sl.any.push(slab);
-    } else if (f === SIM_SLAB) sl.empty.push(slab);
+        if (h >= 0) _simSlabListPush(sl, h, slab);
+        _simSlabListPush(sl, sl.nk, slab);
+    } else if (f === SIM_SLAB) _simSlabListPush(sl, sl.nk + 1, slab);
     // (The lists keep entries that went stale: made anew now and then.)
     if (++sl.pushes > 4 * sl.slabs + 4096) _simSlabRelist(sl);
 }
 // The lists from the slabs' counts.
 function _simSlabRelist(sl) {
-    sl.pushes = 0; sl.any.length = 0; sl.empty.length = 0;
-    for (const L of sl.holes) if (L !== null) L.length = 0;
+    sl.pushes = 0; sl.entryCount = 0; sl.heads.fill(0);
     for (let slab = 0; slab < sl.slabs; slab++) {
         const f = sl.sfree[slab];
         if (f === 0) continue;
-        if (f === SIM_SLAB) { sl.empty.push(slab); continue; }
+        if (f === SIM_SLAB) { _simSlabListPush(sl, sl.nk + 1, slab); continue; }
         const h = sl.home[slab];
-        if (h >= 0) (sl.holes[h] || (sl.holes[h] = [])).push(slab);
-        sl.any.push(slab);
+        if (h >= 0) _simSlabListPush(sl, h, slab);
+        _simSlabListPush(sl, sl.nk, slab);
     }
 }
 // A hole of a neighbouring block's slabs, else of any slab; -1 when none.
@@ -989,23 +1035,33 @@ function _simSlabNearHole(sl, key) {
             if ((dx < 0 ? -dx : dx) !== r && (dy < 0 ? -dy : dy) !== r) continue;
             const x = kx + dx, y = ky + dy;
             if (x < 0 || y < 0 || x >= sl.kw || y >= sl.kh) continue;
-            const k2 = y * sl.kw + x, L = sl.holes[k2];
-            if (L === null) continue;
-            while (L.length > 0) { const slab = L[L.length - 1]; if (sl.sfree[slab] > 0 && sl.home[slab] === k2) return _simSlabTake(sl, slab); L.pop(); }
+            const k2 = y * sl.kw + x;
+            while (sl.heads[k2]) {
+                const at = sl.heads[k2], slab = sl.entries[at];
+                if (sl.sfree[slab] > 0 && sl.home[slab] === k2) return _simSlabTake(sl, slab);
+                sl.heads[k2] = sl.entries[at + 1];
+            }
         }
     }
-    const A = sl.any;
-    while (A.length > 0) { const slab = A[A.length - 1]; if (sl.sfree[slab] > 0) return _simSlabTake(sl, slab); A.pop(); }
+    while (sl.heads[sl.nk]) {
+        const at = sl.heads[sl.nk], slab = sl.entries[at];
+        if (sl.sfree[slab] > 0) return _simSlabTake(sl, slab);
+        sl.heads[sl.nk] = sl.entries[at + 1];
+    }
     return -1;
 }
 function _simSlabAlloc(S, sl, key) {
     let slab = sl.cur[key];
     if (slab >= 0 && sl.sfree[slab] > 0 && sl.home[slab] === key) return _simSlabTake(sl, slab);
-    const H = sl.holes[key];
-    if (H !== null) while (H.length > 0) { slab = H.pop(); if (sl.sfree[slab] > 0 && sl.home[slab] === key) { sl.cur[key] = slab; return _simSlabTake(sl, slab); } }
+    while (sl.heads[key]) {
+        const at = sl.heads[key]; slab = sl.entries[at]; sl.heads[key] = sl.entries[at + 1];
+        if (sl.sfree[slab] > 0 && sl.home[slab] === key) { sl.cur[key] = slab; return _simSlabTake(sl, slab); }
+    }
     if (sl.nfree > Math.max(SIM_SLAB_SLACK_MIN, S.owners.length >> SIM_SLAB_SLACK_SHIFT)) { const s = _simSlabNearHole(sl, key); if (s >= 0) return s; }
-    const E = sl.empty;
-    while (E.length > 0) { slab = E.pop(); if (sl.sfree[slab] === SIM_SLAB) { sl.home[slab] = key; sl.cur[key] = slab; return _simSlabTake(sl, slab); } }
+    while (sl.heads[sl.nk + 1]) {
+        const at = sl.heads[sl.nk + 1]; slab = sl.entries[at]; sl.heads[sl.nk + 1] = sl.entries[at + 1];
+        if (sl.sfree[slab] === SIM_SLAB) { sl.home[slab] = key; sl.cur[key] = slab; return _simSlabTake(sl, slab); }
+    }
     slab = _simSlabFresh(S, sl); sl.home[slab] = key; sl.cur[key] = slab;
     return _simSlabTake(sl, slab);
 }
@@ -1046,7 +1102,8 @@ function simUnitStatePlanSlots(xs, ys, n) {
 function simUnitSlabAudit() {
     const S = _simUnitState;
     if (!S) return null;
-    const sl = S.sl, pending = new Set(S.freeLater || []);
+    const sl = S.sl, pending = new Set();
+    for (let i = 0; i < S.freeCount; i++) pending.add(S.freeLater[i]);
     let freeBits = 0, wrongSlots = 0, wrongCounts = 0, unmarkedUsed = 0, listed = 0;
     const wrongLength = S.owners.length !== sl.slabs * SIM_SLAB;
     for (let slab = 0; slab < sl.slabs; slab++) {
@@ -1064,8 +1121,10 @@ function simUnitSlabAudit() {
     for (let slab = 0; slab < sl.slabs; slab++) {
         const f = sl.sfree[slab], h = sl.home[slab];
         if (f === 0 || f === SIM_SLAB || h < 0) continue;
-        const L = sl.holes[h];
-        if (!(sl.cur[h] === slab || (L !== null && L.includes(slab)))) listed++;
+        if (sl.cur[h] === slab) continue;
+        let at = sl.heads[h];
+        while (at && sl.entries[at] !== slab) at = sl.entries[at + 1];
+        if (!at) listed++;
     }
     return { slots: S.owners.length, slabs: sl.slabs, free: sl.nfree, freeBits, wrongLength, wrongSlots, wrongCounts, unmarkedUsed, unlistedPartial: listed,
         ok: !wrongLength && wrongSlots === 0 && wrongCounts === 0 && unmarkedUsed === 0 && freeBits === sl.nfree };
@@ -1076,7 +1135,7 @@ function _simSlabFromLive(S, ns, sorted = false) {
     const sl = S.sl = _simSlabNew(), slabs = Math.ceil(ns / SIM_SLAB), o = S.owners;
     if (slabs * SIM_SLAB > S.cap) _simUnitStateGrow(S, _simUnitNextCap(S.cap), Math.ceil(slabs * SIM_SLAB / 4096) * 4096);
     while (o.length < slabs * SIM_SLAB) o.push(null);
-    _simSlabReserve(sl, slabs);
+    _simSlabReserve(sl, Math.ceil(S.cap / SIM_SLAB));
     sl.slabs = slabs;
     for (let s = 0; s < ns; s++) { sl.used[s >> 5] |= 1 << (s & 31); sl.ever[s >> 5] |= 1 << (s & 31); }
     for (let slab = 0; slab < slabs; slab++) {
@@ -1402,7 +1461,11 @@ function _simUnitSlotStart(S, s, u, held = true) {
     // unused again, its JavaScript fields still its last unit's.)
     if (held) { _simUnitObjClear(S.columns, s); _simJsDefaults(S.columns, s); }
     // (One descriptor reused: five objects a unit were made for these four.)
-    const d = _simSlotDesc; d.value = S.columns; Object.defineProperty(u, '_us', d); d.value = s; Object.defineProperty(u, '_si', d); d.value = null; Object.defineProperty(u, '_det', d); Object.defineProperty(u, '_rm', d); d.value = null;
+    const d = _simSlotDesc; d.value = S.columns; Object.defineProperty(u, '_us', d); d.value = s; Object.defineProperty(u, '_si', d);
+    d.value = null; Object.defineProperty(u, '_goneRecord', d); Object.defineProperty(u, '_rm', d);
+    d.value = 0; Object.defineProperty(u, '_goneId', d); Object.defineProperty(u, '_goneOwner', d);
+    Object.defineProperty(u, '_goneX8', d); Object.defineProperty(u, '_goneY8', d); d.value = null;
+    Object.defineProperty(u, '_det', _simGoneAccessor);
 }
 
 // A removed unit lets go of its slot at its removal's tick (main.js
@@ -1426,6 +1489,19 @@ class SimUnitGone {
 }
 SimUnitGone.prototype.dead = true;
 SimUnitGone.prototype.energy = 0;
+// The common stale reads use the wrapper's own values. Create a writable
+// record only when a stale caller accesses the general detached fields.
+const _simGoneAccessor = {
+    configurable: true,
+    get() {
+        if (this._si !== -1) return null;
+        return this._goneRecord || (this._goneRecord = new SimUnitGone(this._goneId, this._goneOwner, this._goneX8, this._goneY8));
+    }
+};
+function _simCaptureGone(u, C, s) {
+    u._goneId = C.id[s]; u._goneOwner = C.owner[s];
+    u._goneX8 = C.x[s]; u._goneY8 = C.y[s];
+}
 // (A slot's object fields unset; on detach the references let go.)
 const _simUnitObjClear = new Function('C', 's', SIM_UNIT_OBJ_FIELDS.map(k => 'C.oc_' + k + '.clear(s);').join(' '));
 function simUnitStateDetach(S, s) {
@@ -1434,7 +1510,7 @@ function simUnitStateDetach(S, s) {
     const C = S.columns;
     C.statRow[s] = -1; C.bsRow[s] = -1;
     if (C.ppDue[s] >= 0 && typeof pendingPathUnlink === 'function') pendingPathUnlink(C, s);
-    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s], C.y[s]);
+    _simCaptureGone(u, C, s);
     _simJsRelease(S.columns, s);
     // (Its path window back to the pool: the slot's next unit starts with none;
     // its worker record too.)
@@ -1447,7 +1523,7 @@ function simUnitStateDetach(S, s) {
     S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
     // (Reused from the next unit index rebuild on: its entries name units
     // by slot for the rest of the tick, see simUnitStateReleaseFreed.)
-    S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
+    _simUnitDeferFree(S, s);
 }
 // A unit the retire pass removed (main.js; the gone kernel already let go of
 // its index entry, path window, statRow and movement flags): its slot let go
@@ -1457,11 +1533,11 @@ function simUnitStateDetach(S, s) {
 function simUnitStateDetachGone(S, s) {
     const u = S.owners[s], C = S.columns;
     if (C.ppDue[s] >= 0) pendingPathUnlink(C, s);
-    u._det = new SimUnitGone(C.id[s], C.owner[s], C.x[s], C.y[s]);
+    _simCaptureGone(u, C, s);
     if (C.wkIx[s] > 0) _simWkRelease(S, s);
     if (C.stIx[s] > 0) _simStRelease(S, s);
     u._us = null; u._si = -1;
-    S.owners[s] = null; (S.freeLater || (S.freeLater = [])).push(s);
+    _simUnitDeferFree(S, s);
 }
 
 // The spatial index reports where a unit is (chunk key, layer) or that it
@@ -1478,6 +1554,40 @@ function simUnitClearSepKeys() {
     if (_simUnitState) _simUnitState.sepKey.fill(SIM_SEP_ABSENT);
 }
 
+// A whole restore, before its units are made (utils_snapshot.js snapDecodeState):
+// every unit of the state let go now (detached, as the collection after the
+// restore would: none of them is in the restored world), the slots from 0
+// again with fresh-slot values. The restored units then take the reservation's
+// slots by plan from slot 0, and the compaction after finds them laid out.
+// (Made after the old units' slots instead, the restored ones needed fresh
+// slabs past them: at 435k live in 1.11M slots the columns grew a few slabs at
+// a time in a full heap, each growth a copy of every column, and the
+// compaction made a second full set: the 1M scene's restore did not end.)
+function simUnitStateReleaseAll() {
+    const S = _simUnitState;
+    if (!S || !S.cap) return;
+    if (typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
+    const n0 = S.owners.length;
+    for (let s = 0; s < n0; s++) if (S.owners[s]) simUnitStateDetach(S, s);
+    _simUnitPrepFree(S);
+    _simUnitFreeQueueRelease(S);
+    S.owners.length = 0;
+    _simSlabFromLive(S, 0, true);
+    // (The released slots as used before: a unit that takes one has its
+    // JavaScript fields made anew (_simUnitSlotStart). Marked never used, a
+    // unit spawned there kept the last one's targetPos.)
+    { const sl = S.sl; for (let s = 0; s < n0; s++) sl.ever[s >> 5] |= 1 << (s & 31); }
+    simUnitFreeQueueReserve(S);
+    // (Every column zeroed over the slots used, then the defaults that are not
+    // zero: _simSlotFreshRange writes only those, as a new array is zero.)
+    const used = Math.min(S.cap, n0), C = S.columns;
+    for (const k of SIM_UNIT_COLUMNS) C[k].fill(0, 0, used);
+    for (const [k, , per] of SIM_MOVE_COLUMNS) C[k].fill(0, 0, used * per);
+    _simSlotFreshRange(S, 0, used);
+    if (S.sepKey) S.sepKey.fill(SIM_SEP_ABSENT, 0, Math.min(S.sepKey.length, n0));
+    if (S.sepLayer) S.sepLayer.fill(0, 0, Math.min(S.sepLayer.length, n0));
+    if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
+}
 // After a whole-world restore (snapDecodeState): the restored units took
 // new slots above the old ones, which the collection frees: every per-slot
 // kernel would walk the gap for the rest of the match. When over a third of
@@ -1513,7 +1623,7 @@ function simUnitStateCompact(force = false) {
     // (Less when the heap has no room for that: the live units' slots.)
     const least = Math.max(1024, Math.ceil(live * 1.125 / 4096) * 4096);
     const cap = _simUnitCapThatFits(want, least);
-    const N = { cap, owners: [], sl: null, columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: _simUnitsEpoch(), held: null };
+    const N = { cap, owners: [], sl: null, columns: _simUnitColumnsObject(), stamp: new Uint32Array(cap), epoch: 0, unitsRef: _simUnitsEpoch(), held: null, freeLater: null, freeCount: 0 };
     const C = N.columns;
     N.pathPool = S.pathPool; C.mvNodes = old.mvNodes;
     // (The worker records stay: wkIx is copied with the columns.)
@@ -1560,21 +1670,45 @@ function simUnitStateCompact(force = false) {
     }
     for (const [k, , per] of SIM_MOVE_COLUMNS) _simCopyRuns(old[k], C[k], runs, per);
     _simCopyRuns(S.sepKey, N.sepKey, runs, 1); _simCopyRuns(S.sepLayer, N.sepLayer, runs, 1);
+    // (The occupancy grid's footprint records are by slot too (sim_occupancy.js
+    // occ.rec: where each footprint stands, the position movement writes
+    // back). Left by old slot, after a compaction a unit walked from the
+    // footprint of the unit that had held its new slot: 47k of 94k units
+    // jumped across the map in the first tick. The grid's bits name no slot.)
+    if (typeof _occ !== 'undefined' && _occ && _occ.rec) {
+        const O = _occ, rec = simHeapArray(Int32Array, cap * 4);
+        rec.fill(0); _simCopyRuns(O.rec, rec, runs, 4);
+        simHeapFree(O.rec); O.rec = rec; O.cap = cap; O.fast = -1;
+        simParallelBind('occ.rec', rec);
+    }
     // (The object fields' arrays: as long as the columns, copied the same way.)
     for (const k of SIM_UNIT_OBJ_FIELDS) {
         C['oc_' + k] = _simRefCopy(old['oc_' + k], cap, runs);
     }
+    // (Every column naming a unit by slot: the target unit (tuS) and the
+    // combat brain's target (cmT; a structure's tile under cmMode 16). Each is
+    // checked against its id column, so one left by old slot named another
+    // unit or none: engaged units dropped their targets. mvHT is a tile.)
     for (let s = 0; s < ns; s++) {
         const t = C.tuS[s];
         if (t >= 0) C.tuS[s] = t < n0 ? map[t] : -1;
+        const c = C.cmT[s];
+        if (c >= 0 && (C.cmMode[s] & 16) === 0) C.cmT[s] = c < n0 ? map[c] : -1;
     }
+    // (And the acquisition tier's results not committed yet: unit.js.)
+    if (typeof acqTierRemapSlots === 'function') acqTierRemapSlots(map, runs, n0, ns);
+    // (The worker search's and the healer scan's: worker.js.)
+    if (typeof workerSearchTierRemapSlots === 'function') workerSearchTierRemapSlots(map, n0);
+    if (typeof healerCandidatesRemapSlots === 'function') healerCandidatesRemapSlots(map, n0, ns);
     // (The order queue's slots too: main.js orderQueueRemapSlots.)
     if (typeof orderQueueRemapSlots === 'function') orderQueueRemapSlots(map);
     // The rest (removed, not yet collected): detached from the old state.
     for (let s = 0; s < n0; s++) if (S.owners[s] && map[s] < 0) simUnitStateDetach(S, s);
     _simUnitPrepFree(S);
+    _simUnitFreeQueueRelease(S);
     _simSlabFromLive(N, ns, true);
     _simUnitState = N;
+    simUnitFreeQueueReserve(N);
     // (Past the live units: fresh slots, simSlotDefaults.)
     _simSlotFreshRange(N, ns, cap);
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
@@ -1743,7 +1877,7 @@ function simMemoryStats() {
         bytesPerSlot: Object.values(SIM_UNIT_SCHEMA).reduce((n, e) => n + e.bytes, 5),
         pathWindows: S && S.pathPool ? S.pathPool.next - S.pathPool.fs[0] : 0,
         statusRecords: simUnitStUsed(), statusCap: S && S.st ? S.st.cap : 0,
-        workerRecords: S && S.wk ? S.wk.used - 1 - S.wk.free.length : 0, workerCap: S && S.wk ? S.wk.cap : 0,
+        workerRecords: S && S.wk ? S.wk.used - 1 - S.wk.freeCount : 0, workerCap: S && S.wk ? S.wk.cap : 0,
         boundBytes: groups, heap: typeof simHeapStats === 'function' ? simHeapStats() : null };
 }
 

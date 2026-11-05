@@ -2156,6 +2156,12 @@ fn px4k(v: v128) -> v128 {
 
 /// stackCountToLevel: floor(log2(max(1, stacks))) + 1, clamped to 1..max.
 #[inline(always)]
+/// unit.js stackCountToLevel of a double (floor(log2) + 1, clamped).
+fn stack_level_f64(st: f64, maxl: i32) -> i32 {
+    let v = if st >= 1.0 { floor(st) } else { 1.0 };
+    let k = if v == f64::INFINITY { 1024 } else { ((v.to_bits() >> 52) & 0x7ff) as i32 - 1023 };
+    (k + 1).max(1).min(maxl.max(1))
+}
 fn stack_level(st: f32, maxl: i32) -> i32 {
     let v = if st >= 1.0 && st < 4.0e9 { st as u32 } else if st >= 4.0e9 { u32::MAX } else { 1 };
     let k = 31 - v.leading_zeros() as i32;
@@ -2369,17 +2375,26 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
                 d += 1;
             }
         }
-        let effs = floorf((sum as f32 * base).max(1.0));
-        let el0 = stack_level(effs, maxl);
+        // (As the full path (things_utils.js _effStatsFullUnit): the count at
+        // least 1 (the unit itself: the period's snapshot may have none of its
+        // type where it stands now), times its stacks, in doubles. The count
+        // was not clamped here, the product was: a unit that walked into an
+        // area without its kind in the snapshot took 1 stack and level 1 in
+        // the kernel, its base stacks (4096, level 13) by the full path, so
+        // which path took it decided its level: a restore, which hands
+        // units behind their tables to the full path, changed the battle.)
+        let effs64 = floor((sum.max(1) as f64) * (base as f64)).max(1.0);
+        let effs = effs64 as f32;
+        let el0 = stack_level_f64(effs64, maxl);
         let lst = g(last, q) as i32;
         let el = if !(lst >= 1) || el0 == lst {
             el0
         } else {
             let l = lst;
             if el0 == l - 1 {
-                if effs * 5.0 >= 4.0 * (1u64 << (l - 1).clamp(0, 62)) as f32 { l } else { el0 }
+                if effs64 * 5.0 >= 4.0 * (1u64 << (l - 1).clamp(0, 62)) as f64 { l } else { el0 }
             } else if el0 == l + 1 {
-                if effs * 4.0 < 5.0 * (1u64 << l.clamp(0, 62)) as f32 { l } else { el0 }
+                if effs64 * 4.0 < 5.0 * (1u64 << l.clamp(0, 62)) as f64 { l } else { el0 }
             } else {
                 el0
             }
@@ -4156,10 +4171,52 @@ pub unsafe extern "C" fn k_ws_order(a: u32, _chunk: i32) {
             }
         }
     }
-    // (In the requests' order: the worker kernel's parallel takes settle
-    // slots by the lowest id whatever the order, wai.rs k_wai_apply; was a
-    // heapsort by id, one serial job a post.)
-    let _ = id;
+    // In id order (LSD radix, 8-bit digits, through ?ws.otmp): the requests
+    // are listed in slot order, and the take's event order is this list's
+    // (wai.rs k_wai_apply: writes, float sums and retry rounds go by it; only
+    // the reservations settle by the lowest id whatever the order), so in
+    // slot order a peer whose slots were laid out otherwise (a restore's
+    // compaction) gave collectors other sites.
+    let tmp = k.p::<i32>(7);
+    if !tmp.is_null() && n > 1 {
+        let mut maxid = 0u32;
+        for i in 0..n {
+            maxid = maxid.max(g(id, g(out, i) as usize) as u32);
+        }
+        let (mut src, mut dst) = (out, tmp);
+        let mut shift = 0u32;
+        let mut passes = 0;
+        let mut cnt = [0usize; 257];
+        loop {
+            for d in cnt.iter_mut() {
+                *d = 0;
+            }
+            for i in 0..n {
+                let d = ((g(id, g(src, i) as usize) as u32 >> shift) & 255) as usize;
+                cnt[d + 1] += 1;
+            }
+            for d in 0..256 {
+                cnt[d + 1] += cnt[d];
+            }
+            for i in 0..n {
+                let v = g(src, i);
+                let d = ((g(id, v as usize) as u32 >> shift) & 255) as usize;
+                s(dst, cnt[d], v);
+                cnt[d] += 1;
+            }
+            core::mem::swap(&mut src, &mut dst);
+            passes += 1;
+            shift += 8;
+            if shift >= 32 || (maxid >> shift) == 0 {
+                break;
+            }
+        }
+        if passes & 1 == 1 {
+            for i in 0..n {
+                s(out, i, g(tmp, i));
+            }
+        }
+    }
     s(oc, 0, n as i32);
 }
 
@@ -4200,7 +4257,7 @@ unsafe fn hc_insert(res: *mut i32, rat: *mut f32, id: *const i32, b: usize, kk: 
 pub unsafe extern "C" fn k_heal_cand(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
-    let (e, m, o, id, l, d, res, rat) = (k.p::<f32>(0), k.p::<f32>(1), k.p::<i16>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<u8>(5), k.p::<i32>(6), k.p::<f32>(7));
+    let (e, m, o, id, l, d, res, rat) = (k.p::<f32>(0), k.p::<f32>(1), k.p::<i8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<u8>(5), k.p::<i32>(6), k.p::<f32>(7));
     let (np, kk) = (k.i(2).max(0) as usize, k.i(3).max(0) as usize);
     if kk == 0 {
         return;

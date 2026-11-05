@@ -20,6 +20,1088 @@ counts over mean TPS; loading before play is separate. Historical bit equality
 is diagnostic; current implementation determinism and intended behavior are
 required.
 
+**In-game measurement (user, 2026-11-05):** only the simulation worker's own
+heap and timing matter, not the harness's. Measure GC and allocation with
+`--worker-post --no-census` (below); stable tick time beats a lower mean with
+deviations (110 ms steady is better than 100 ms with 150 ms spikes).
+
+## 2026-11-05: in-game GC (worker post, presentation pump), acquisition stages
+
+### Benchmarking what the browser worker actually does
+
+- The headless benchmark ran the page's local presentation (alerts, effect
+  records, sounds) and none of the worker's per-tick result post or the
+  presentation thread's metadata pump. New `--worker-post` installs the real
+  `sim_worker.js` recorders (`_simStubUi`: packed events), starts the
+  presentation reader with a no-op Worker, runs `simPresentTickEnd` and
+  `_simPostResult` inside the tick timing (the post itself dropped) and a
+  pump pass every 5 steps outside it (the harness clock is virtual, so one
+  call runs a whole metadata pass, not a 1 ms slice).
+- New `--no-census`: skips the harness's 10-tick worker census, which alone
+  produced ~72 MiB of scavenge survivors per 100 ticks (most of the
+  benchmark's 10 ms scavenges were copying harness data).
+- New `--allocation-survivors` (sample only objects that survived a
+  scavenge), `--live-heap` (live JS heap by allocation site at the end,
+  sampled from before match start) and `--restore-at=N` (diagnostic: full
+  state encode/decode in place before step N, which compacts unit slots).
+- `--trace-gc-nvp` showed steady scavenges spend ~3 ms on the main thread and
+  the rest waiting for V8's parallel scavenge tasks; pause length follows the
+  surviving bytes (~3 MB survived + ~3 MB promoted ≈ 7 ms), not garbage volume.
+
+### Fixes (all in-game paths)
+
+- Presentation metadata pump (`simPresentationMetadata`): `for…of` over the
+  structure lists inside the generator allocated an iteration result per
+  structure (~5 MB a pass at 65k structures); `F['l'+k]` built key strings
+  four times per structure (`_simLinkSlot`, named columns now). The pump
+  went from ~270 to ~29 MiB per 100 ticks in the benchmark's cadence.
+- `_snapFloorItems` copied the whole floor-item list on every call, and the
+  list was rebuilt whenever any tile changed; the tick hash (every tick in
+  multiplayer) and the presentation lists took that path. New
+  `_snapFloorItemsView`: maintained from the tile journal
+  (`tileEntityChangesSince` + `_tileOrderedReplaceMany`), replaced only when a
+  floor item changes, never mutated; `_snapFloorItems()` still returns a copy
+  for callers that keep or reorder it.
+- `_simDeltaEvents`: no Map, key strings or slices per player per tick (reused
+  maps, callbacks without closures). The worker's A*/energy logs are emptied
+  once their sums are sent (only page UI reads those logs), so their entries
+  die young instead of surviving the log window.
+- `_simEvTake`/`_simEvPosted`: the event string/extra lists are reused (the
+  post clones synchronously). `_simTick` skips the per-team filter without
+  actions.
+- Research queue encode: a move (task to the front) failed the prefix match
+  and deep-copied the whole ~1,600-task tail every burst. New run form
+  `{__qr: [start, len, ...], tail, np}` reuses the last queue's tasks by
+  runs; page decoder in `pageApplyState`. `player-state-delta.test.cjs` now
+  mutates larger queues with moves (638 run deltas, 3,198 prefix deltas).
+- Structure stat-entry misses no longer build `'barrack_'+unitType` strings.
+
+### In-game GC result (1M/65,536 structures, 11 helpers, dk1, 340 settled ticks)
+
+| | before | after |
+| --- | ---: | ---: |
+| GC events | 54 | 12 |
+| total GC | 240.2 ms | 108.4 ms |
+| longest pause | 76.6 ms (memory reducer) | 27.1 ms |
+| major GCs | 4 (129.6 ms) | 2 (46.0 ms) |
+
+Same population (220,401–376,010 live) and work. In-game survivors (tick +
+post + pump stacks) fell from ~55 to ~10 MiB per 100 ticks. Raw data:
+`tests/test-runs/gc-ingame-20261105/` (`base-long`, `fix1-long`, nvp logs,
+`surv*`, `alloc*`, `live.json.liveheap`).
+
+- Remaining: major GCs (evacuation of fragmented old space; ~305 MiB live JS
+  heap: areas ~73 MiB + ~40 MiB distance caches, the grid's 1M cell objects
+  ~60 MiB, structure-table JS arrays ~31 MiB, unit objects/slot arrays ~40
+  MiB) and diffuse per-unit survivors (paths and nav nodes, sparse-field Map
+  entries, new Unit objects). Flat stat-entry getters return boxed doubles.
+- The page's own GC is separate and was not measured here.
+
+### Acquisition tier: parallel area build, one seed pass a team
+
+- Every 4th tick (the acquisition post) was ~+9–15 ms. `k_acq_area_build` ran
+  as one serial chunk over ~350k entries, and each of the 8 structure-answer
+  jobs rescanned all 1M tiles. Now: `k_acq_area_count` / `_prefix` /
+  `_scatter` (up to 24 entry ranges, stable range-major order, same table)
+  and `k_acq_area_seed` (one tile pass a team, four class seeds); the answer
+  jobs only spread (P[35] 1). Full exact state hash unchanged on a 131k-unit
+  scene (`560a4cff`); mixed replay 0/3 helpers passes.
+- Measured (serial, both orders): occupancy growth on post ticks fell
+  (8.3/6.8 → 5.4/5.6 ms), but the post-tick wall overhead stayed ~12–15 ms;
+  the rest is the snapshot (`k_acq_snap`, ~5 ms, a memory-bound copy over all
+  1.15M slots) and later waits. Machine noise between runs was ±4 ms.
+
+### Tried and reverted
+
+- Holding helpers off background chunks during the move kernel and the four
+  occupancy phases: movement −1.7 to −3.9 ms, but the deferred background
+  work then appeared as waits later in the tick (`unitEventsRun` +1.4 ms,
+  waits +0.9 ms); net unchanged.
+
+### Where the tick goes (named profile, 81 settled ticks)
+
+- Main thread: ~80 ms/tick in WASM with ~10 of 11 helpers busy, ~26 ms JS
+  (4 ms of it barrier spin) with ~6.5 busy: CPU-throughput bound
+  (~1.1 s CPU per tick on 12 threads). Movement is ~45% of all CPU.
+- Thread scaling (same deterministic scene): move thread-ms 177 (4 threads)
+  → 204 (8) → 250 (12); occupancy 217 → 285 → 347. ~2,000 cycles per live
+  unit per pass even at 4 threads.
+- Occupancy counters (`--features=prof,dbgc`, main-thread share): nearly every
+  live unit resolves through `checked_traffic_q` each tick, ~3 `motion`
+  probes per resolve, ~27% need axis/shoulder retries, few end fully blocked.
+- Slot fragmentation: after the first 60 ticks 16.3k of 16.5k 64-slot slabs
+  hold live units at 16–23 live each (deaths are spread evenly); live units
+  fill ~30% of the 1.06M slot range every slot-ordered pass reads.
+- Slow ticks: bursts (+15–20 ms, `processActions`), the ticks just after a
+  burst (movement +15–36 ms), acquisition posts (+12–15 ms), major GCs.
+
+### Slot density experiment and a restore divergence (open, next)
+
+- 524k-start scene (same flags, 11 helpers), `--restore-at=40` packs 331k
+  live units from 577k slots into 331k: `simMoveRun` 31.3 → 25.1 ms (move
+  kernel −1.95, each occupancy phase ~−0.9 ms), status/kernel 24 −0.5 ms
+  each. The 1M scene runs at ~30% density, so an online, deterministic slot
+  relayout (dense, spatial order, incremental) is the largest locality lever
+  found: `frag-a.json` / `dense-b.json` in `tests/test-runs/tps-20261105/`.
+- **Open bug:** that restore is not state-preserving at this scale. Hashes
+  `44c7f82d` (none) vs `9643a0bd` (restored); live units differ from the first
+  tick after (330,589 vs 330,942), and `recalculateUnitEffectiveLevel` jumps
+  to ~50 ms a tick, decaying over 100+ ticks. Either outcomes depend on slot
+  order or the restore drops staggered stat state. A large multiplayer
+  resync would leave the patched peer diverging and dip TPS for seconds. Fix
+  before any relayout (layout must not change outcomes).
+- **Update (same day, restore divergence session):** causes found and fixed
+  (uncommitted, WASM32 rebuilt):
+  1. `simUnitStateCompact` left slot-keyed state behind: occupancy footprint
+     records `occ.rec` (47k of 94k units walked from another unit's
+     footprint: the "teleport"), `cmT` brain targets (tiles under cmMode 16
+     are not remapped), pending acquisition/brain results (`acqTierRemapSlots`),
+     worker-search requests (`ws.rslot`) and healer-scan lists/ids. Now
+     remapped by the compaction.
+  2. Order by slot: `k_ws_order` now radix-sorts the commit's requests by
+     unit id (its comment already claimed id order); `k_spawn_select` gives
+     newly ready spawners their ready orders by tile, not table row (a
+     restore re-lays rows out).
+  3. Effective stats: the resync flush and decode cleared `esOk` for every
+     unit (`effStatsInvalidateAll`, and `initSpatialHash` on decode), so all
+     units took the JS full path for a whole period (the 2→50 ms burst). The
+     flush no longer invalidates; `initSpatialHash` clears only if type
+     indexes changed; `esOk/esRad/esType` are sent (`SIM_UNIT_KCOL_FIELDS`:
+     units behind their tables keep a stale range on purpose). Rules
+     revision 56.
+  4. Kernel/full-path twin bug in `k_eff_units`: the kernel clamped
+     `count*stacks` to ≥1, JS clamps the count: a unit in an area with none
+     of its kind in the period's snapshot got 1 stack / level 1 in the
+     kernel but its base stacks via JS. Fixed (count ≥ 1, f64 maths).
+- Reference: a restored peer is compared with an unrestored one that also
+  runs the resync flush (`snapFlushHistoryCaches`, as every MP peer does at
+  the flush tick). Decode without flush vs no flush can never match (decode
+  drops every history cache by design). Bench: `--restore-at=N` now does
+  encode+decode+flush; new `--flush-at=N` is the unrestored peer; `RESTORE_JS`
+  env overrides. Raw: `tests/test-runs/restore-20261105/`.
+- 5. (Found after the above, pre-existing, the last 524k divergence.) The
+  healer candidates' scan copied `unit.owner` (Int8 since the column diet)
+  into `hc.o`, an Int16 array, by the heap copy's bytes: every copied
+  owner was made of two slots' bytes, so the damaged-unit lists per owner
+  were garbage (owner 1's units listed for owner 0, the true lowest ratios
+  missing) and changed with the layout; healers then backed off
+  (`wsFail`) differently and were selected at other posts (tick 73 → 113).
+  `hc.o` is Int8 now (JS and `k_heal_cand`), and `simParallelCopyHeap`
+  throws on pairs of different element types (its heap path copies bytes).
+  Healers now see the real most-damaged units: a behaviour change.
+- Results (serial, 11 helpers, dk1, restore/flush/compaction before step 40):
+  - 131k/512 scene: compaction = none, restore = flush, bit-exact.
+  - 524k/1024 scene, 160 ticks: none `f35d9ec9` = compaction `f35d9ec9`;
+    flush `c76b93ca` = restore `c76b93ca` (per-tick unit and exact hashes
+    compared too). Restore 13.2 s (encode+decode outside the timing).
+  - Effective levels after the restore: mean 1.90 ms (none 2.07); one
+    32 ms tick right after the decode (base entries made anew), no burst.
+  - Ticks 42–160 (mean / p99 / max): none 68.1 / 103 / 130; flush 68.5 /
+    106 / 129; restore 62.5 / 105 / 107; compaction 58.9 / 91 / 92.
+    `simMoveRun` 31.4 (none) → 25.1 ms (compaction). Dense slots are worth
+    ~9 ms a tick here; the earlier dense-b figure was confounded by the bug.
+  - The flush tick itself: 866 ms (flush) / 983 ms (restore) vs 96 normal.
+  - Raw: `tests/test-runs/restore-20261105/` (s524-*.json, logs, tests.txt).
+- 6. Why the 1M-start scene's restore never finished (measured: not GC; JS
+  heap ~1 GB, mutator 95%; `--prof` of the decode, `prof1m/prof.txt`):
+  - 65% of ticks: `actionEarlyRestore` → `_unitByIdMap` → `UnitIdIndex._refill`.
+    With the wasm heap full the id table was made outside it, and `_ok()`
+    rebuilt it from every unit whenever it was outside the heap: once per
+    `set`, O(n²). Now only a table that was in the heap and is no longer
+    (a new heap) is rebuilt; `_uixRoom` had the same pattern (fixed alike).
+  - 17%: `_simSlabClaim` → `_simSlabFresh` → `_simUnitStateGrow`: the
+    restored units were planned in fresh slabs past the old units' 1.11M
+    slots, and with the heap tight `_simUnitCapThatFits` grew the columns a
+    few slabs at a time, each a full column copy; then the compaction made a
+    second full set. New `simUnitStateReleaseAll` (called at a whole decode's
+    unit list): every old unit detached (as the collection after would), the
+    allocator from slot 0 (slots marked used-before, columns zeroed then
+    defaulted), so the restored units take the reservation's slots by plan
+    and the compaction finds them laid out. No column growth or copy at all.
+  - The id index's loose map kept the released old units reachable (~700 MB
+    at 524k); `_refill` now rebuilds it from the list, a list replacement
+    empties it. They are collected during the next ticks instead (the
+    restored peer's major GCs up to 88 ms vs 63 ms on the flush peer).
+  - 1M-start scene now (435k live in 1.11M slots, restore before step 40):
+    encode 6.4 s, decode 9.4 s, flush 0.4 s (was > 50 min); flush-only and
+    restore both `879235c` at step 60 (bit-exact). Ticks 42–60: mean 114.3 →
+    93.9 ms, `simMoveRun` 58.3 → 39.9 ms on the dense layout.
+  - 524k after this: flush = restore `c76b93ca` again (160 ticks), restore
+    12.7 s, cap kept at 577,536 (no second column set).
+- Tests (after all changes, run twice, last after the id-index change):
+  player-state-delta, solo-snapshot, multiplayer-snapshot,
+  lockstep-hash-stream, chaos-scenario-determinism (0/3 helpers),
+  multiplayer-chaos-determinism with 0 and 4 host helpers (2,598 hashes per
+  map, only forced patches): all pass. WASM32 `4de2952132a1de9e` (WASM64 not
+  rebuilt). New bench option `RESTORE_SPLIT=1` times encode/decode/flush.
+- **Still open:** (a) the resync flush tick costs 220–980 ms on every peer
+  (131k: pop caps 42, navTick 33, kernel 135 45, `_wswBuild` 15, worker
+  events 20 ms): a resync spike to fix. (b) flush→decode order
+  (`applyAuthoritativeStateSnapshot`) ≠ flush alone; harmless there because
+  every peer, host included, restores the same text. (c) Decode without the
+  flush cannot equal no restore (decode drops the history caches by design).
+  (d) The restored peer's old Unit objects are garbage the GC collects over
+  the next ticks (longer major GCs there); a restore without per-unit JS
+  objects would remove it. (e) One ~32–40 ms effective-levels tick right after
+  a decode (base entries made anew).
+- Restore cost: ~37 µs a unit in JS (row encoding, shells, Unit objects); 1M
+  scene (380k live in 1.06M slots) did not finish in 40 min (cause and fix:
+  item 6 above).
+- Validation for this entry: player-state-delta, chaos-scenario-determinism
+  (0/3 helpers), presentation-worker, research-menu, local-visual-snapshot,
+  solo/multiplayer snapshot, pooled-structure and row-expiry snapshots,
+  lockstep-hash-stream, multiplayer-chaos-determinism with 0 and 4 host
+  helpers (1,398 hashes per map, only forced patches): all pass. Rebuilt
+  WASM32 `a219b2e9bdf86add`, WASM64 `e0f2fceaf011fb18`.
+
+## 2026-11-04: reuse damage alerts and remove fresh-spawn request sets
+
+- Damage alerts read a target position only when adding a minimap
+  alert or playing a sound. The map keeps its 40 reserved records
+  through overwrite, expiry and reset. Kernel attack presentation
+  shares numeric impact coordinates between effects and sound.
+- A fresh spawned unit can request its rally path once. The spawn
+  path records the same solo budget accounting without building and
+  clearing per-player sets of requester IDs.
+- The focused visual check covers capped alerts, king-alert eviction,
+  suppression without position reads, expiry and reset. The mixed
+  replay, combat effects, event codec, local visual snapshots, combat
+  reach, production pass and routing checks passed. Raw data are in
+  `tests/test-runs/gameplay-gc-effects-20261104/`.
+- Across 100 settled ticks, the final allocation sample was 34.50
+  MiB after subtracting tagged benchmark instrumentation, versus
+  38.40 MiB after the research batch and 42.71 MiB before it. The
+  unadjusted totals were 39.75/42.83/46.99 MiB. The alert path
+  including callees went from 2.13 to 0.03 MiB, attack effects from
+  1.00 to 0.34 MiB and the full unit-hit resolution subtree from
+  7.07 to 4.73 MiB. The spawn path requester Set went from 0.25
+  MiB to no samples. Synthetic input generation and other harness
+  activity sampled 183.36 and 84.72 MiB. The headless benchmark
+  executes local presentation, so these alert results do not
+  measure browser worker transport or replay timing.
+- The final long comparison matched hash `70202b6e`, live population
+  220,401–376,010 and all gameplay work over 340 settled ticks. The
+  original reference recorded eight minor, one incremental and one
+  major GC event over 47.26 s. The final run recorded nine minor
+  events over 42.02 s. Total GC time fell from 87.13 to 84.16 ms,
+  while time per second rose from 1.84 to 2.00 ms/s. These runs do
+  not establish a reduction in GC time per second.
+  Wall mean/p95/p99/max fell from 107.42/137.97/163.32/194.03
+  to 95.73/119.03/133.42/144.44 ms. Ticks above 1.5× median
+  were 5 → 1 and none exceeded 500 ms. Spawns, research, collector
+  and A* deposits per timed wall second were 714.7/245.4/88.8/61.1
+  → 801.9/275.3/99.6/68.6.
+- The final 12-thread capture's previous/GC/next/same-burst
+  reference ticks 149/150/151/140 took 119.3/124.1/97.8/135.3 ms.
+  GC accounted for 10.1 ms of tick 150's 10.5 ms yield gap, with
+  movement and worker search on the helpers. The worst wall tick
+  was 110 at 209.6 ms with zero GC. Its previous/next/same-burst
+  reference ticks 109/111/120 took 115.8/116.0/133.7 ms.
+  Command processing rose to 69.4 ms from 24.0 ms on tick 120.
+  The main profile sampled action arrival recording and kernel waits,
+  while helper samples included movement. Track this separately from
+  GC. Remaining allocation samples include unit-hit presentation,
+  generic kernel dispatch and A* usage logging.
+
+## 2026-11-04: reuse research lookups and worker AI preparation
+
+- Adjacency prebuilds the five research IDs for each stat key and reads
+  the owner's level record once when packing. Preview uses the existing
+  research lookup. Static building packs skip the key walk on cache hits.
+  Research catalogue lookups use a kind/key index, and stat lookup walks
+  the list without a callback.
+- Worker work versions and AI stat tables compare numeric dimensions
+  directly. Worker AI reuses the stat probes and uses stable column names
+  and helpers during packing. Worker search and AI now share the
+  class-column packer.
+- The wrapper-adjusted allocation capture over 100 settled mixed-chaos
+  ticks fell from 42.71 to 38.40 MiB (46.99 → 42.83 MiB with wrappers).
+  Adjacency player stats fell from 1.41 to 0.09 MiB, worker AI dispatch
+  including callees from 3.36 to 0.66 MiB, and research task normalization
+  from 0.78 to 0.03 MiB. Worker work-table lookups had no samples, down
+  from 0.69 MiB. These subtrees overlap. Synthetic inputs and other
+  harness activity sampled 183.09 and 86.81 MiB in the candidate.
+- The serial long comparison matched hash `70202b6e` and work across
+  340 settled ticks with 11 helpers, WASM32, dk1 and 220,401–376,010
+  live units. Direct GC events were 10 → 8 over 47.26 → 43.63 s.
+  Both had eight minor events. The reference also recorded an incremental
+  event and a major event. Total runtime GC time was 87.13 → 71.57 ms
+  (1.84 → 1.64 ms/s). Wall mean/p95/p99/max was
+  107.42/137.97/163.32/194.03 → 98.22/120.82/139.79/154.07 ms,
+  with 5 → 2 ticks above 1.5× median and none above 500 ms.
+  Spawns, research, collector and A* deposits per timed wall second
+  were 714.7/245.4/88.8/61.1 → 781.6/268.4/97.1/66.9.
+- The 12-thread CPU capture's previous/GC/next/same-burst reference
+  ticks 89/90/91/80 took 119.3/141.5/124.3/138.4 ms. Tick 90 had
+  10.8 ms of GC. Its movement phase took 62.3 ms, close to tick 80's
+  62.5 ms. Main samples included GC and movement, with helper
+  movement and background claims. The worst wall tick, 105, had zero
+  GC and took 159.4 ms versus 117.9/145.0/114.1 ms on ticks 104/106/86.
+  Movement expanded to 101.4 ms versus 61.2 ms on the same-burst-status
+  reference. The main thread sampled barriers and helpers sampled
+  movement and acquisition.
+- Research queue, partial rebase, boosts, shared-stat snapshots, worker
+  search, collectors, worker snapshots and mixed replay passed. Replay
+  matched all 65 hashes with 0 and 3 helpers. Raw data are in
+  `tests/test-runs/gameplay-gc-research-20261104/`.
+
+## 2026-11-04: remove movement dispatch temporaries and reserve worker free records
+
+- After the command batch, the generic Rust and movement dispatch
+  wrappers sampled 1.96 and 2.10 MiB. Movement now uses stable
+  binding names and avoids creating a length-lookup closure. The
+  experiment also cached the generic kernel's encoded pointer words
+  and removed its oversized-parameter view. Movement had no samples
+  in the experimental capture, while generic dispatch sampled
+  2.04 MiB. The final code keeps the movement change and drops the
+  generic experiment.
+- Individual heap samples showed two large allocations in retirement
+  of 915,752 and 1,373,760 bytes, with sizes repeating across captures.
+  These pointed to the worker-record free list, the growing JS array
+  in the worker detachment path. Worker-record capacity now also
+  reserves a typed free stack, at four bytes per reserved record,
+  with the same LIFO reuse order. The focused retirement check verifies
+  that a worker record is returned without replacing the stack.
+- Over 100 settled ticks, sampled retirement including callees fell
+  from 2.25 to 0.16 MiB. The two large samples disappeared from the
+  retirement stacks. Movement dispatch still had no samples with the
+  generic experiment removed. Allocation under simulation stacks
+  excluding tagged benchmark wrappers fell from 48.38 MiB before
+  the order changes to 46.78 MiB after them and 42.71 MiB in the final
+  capture. The corresponding unadjusted totals were 52.68, 51.56
+  and 46.99 MiB. The final synthetic input and other harness totals
+  were 183.38 and 82.26 MiB. The allocation report now includes sample
+  counts and largest estimated sample sizes alongside grouped totals.
+- The final remaining sites include native generic dispatch, research
+  lookups in adjacency stat packing, worker AI preparation and local
+  combat presentation in the harness. The largest remaining single
+  sample under simulation stacks was 131,112 bytes under spawn
+  completion. Keep the headless presentation stacks separate from the
+  browser authority worker's costs.
+- Retirement, slot zeroing, shared-state reuse, worker snapshots,
+  worker spawner decisions, tower targeting and mixed replay checks
+  passed. The mixed replay matched 65 hashes with 0 and 3 helpers.
+  Raw data are in `tests/test-runs/gameplay-gc-dispatch-20261104/`.
+- Against the fresh pre-order reference, the final code matched
+  hash `70202b6e` and work over 340 settled ticks at 220,401–376,010
+  live units. The continuous window was 45.19 → 46.58 s with
+  9 → 8 minor collections and 75.15 → 70.87 ms total GC
+  (1.66 → 1.52 ms/s). Wall mean/p95/p99/max was
+  102.99/131.21/148.25/182.09 → 105.52/133.12/154.25/159.54 ms.
+  Both had three ticks above 1.5× median and zero above 500 ms.
+  Spawns, research, collector and A* deposits per timed wall second
+  were 745.5/255.9/92.6/63.8 → 727.5/249.8/90.4/62.2.
+  These latency measures are separate from the allocation comparison.
+- The final 12-thread CPU capture's previous/GC/next/same-burst
+  reference ticks 148/149/150/147 took 105.5/133.8/119.4/106.5 ms.
+  GC accounted for 11.8 ms of tick 149's 12.1 ms yield gap. Movement,
+  navigation and acquisition were prominent on the helper threads.
+  The worst wall tick, 113, had zero GC and took 183.0 ms, versus
+  117.3/134.3/103.7 ms on ticks 112/114/96. Movement expanded to
+  111.4 ms versus 60.2 ms on the same-burst-status reference, with
+  the main thread sampling the kernel barrier and helpers sampling
+  movement, navigation and acquisition.
+
+## 2026-11-04: reuse attack targets and pending-path scratch
+
+- Attack orders sample their target coordinates once and reuse the
+  resulting position for the action. Live units store its numeric values.
+  The first capture also tested direct pending/fallback resets, which
+  showed no allocation reduction in the reset itself. The final code
+  keeps the existing setters for that reset.
+- Pending-path retries read quantized positions directly for live unit
+  slots, reuse the walkable-tile result and can keep an unchanged narrow
+  path. The unchanged navigation-build check runs before position reads.
+- Tower commands resolve and encode one target for the whole selection.
+  Live tower target resolution reads the numeric target columns. The
+  existing structure-target replacement rule and public spec accessors
+  remain available and are covered by the tower kernel test.
+- Over 100 settled mixed-chaos ticks, tagged-wrapper-adjusted allocations
+  under simulation stacks were 48.38 → 46.78 MiB (52.68 → 51.56 MiB with
+  wrappers). Command execution fell from 9.23 to 6.25 MiB and pending-path
+  retries from 0.89 to 0.68 MiB. Tower target normalization and resolution
+  had no samples in the candidate, down from 0.59 and 1.06 MiB in their
+  overlapping reference stacks. Synthetic input and other harness activity
+  sampled 184.56 and 83.86 MiB in the candidate.
+- Over 340 settled ticks (60–399, WASM32, 11 helpers, dk1), hash
+  `70202b6e`, gameplay work and live population 220,401–376,010 matched.
+  Direct GC records showed nine minor events each. Total GC was
+  75.15 → 81.66 ms over 45.19 → 43.50 s (1.66 → 1.88 ms/s).
+  Wall mean/p95/p99/max was 102.99/131.21/148.25/182.09 →
+  97.67/120.08/127.68/137.70 ms. Ticks above 1.5× median were
+  3 → 0 and none exceeded 500 ms. Spawns, research, collector and
+  A* deposits per wall second were 745.5/255.9/92.6/63.8 →
+  786.1/269.9/97.6/67.2. This timing pair included the experimental
+  direct attack reset. Raw data are in
+  `tests/test-runs/gameplay-gc-orders-20261104/`.
+- The 12-thread profile's previous/GC/next/same-burst ticks
+  69/70/71/80 took 119.2/136.5/109.1/124.1 ms. GC accounted for
+  10.5 ms of tick 70's 10.9 ms yield gap. The main thread sampled
+  GC and movement, and helpers mostly sampled movement with tile
+  owner and visibility work. The slowest wall tick, 60, had zero
+  GC. Previous/next/same-burst reference ticks 59/61/70 took
+  126.0/136.9/136.5 ms versus 145.2 ms at tick 60, where command
+  execution took 24.8 ms and main and helper profiles sampled slot
+  zeroing.
+- Tower targeting, fast order parity, order supersession, path
+  routing and mixed replay checks passed, including 65 matching
+  hashes with 0 and 3 helpers.
+
+## 2026-11-04: reuse spawn production scratch
+
+- The next profile pointed to the production subtree. Production now
+  writes its job records directly into the reserved typed array and
+  reuses selection and shift arguments and the blocked-spawner list.
+  Spawn-stat template misses reuse the before-image scratch and cache
+  the column names per column store. Template results keep owned data.
+- Over 100 settled ticks, the production subtree sampled 9.21 → 7.81
+  MiB, including production scheduling at 1.00 → 0.25 MiB and stat
+  templates at 1.43 → 0.50 MiB. Total simulation-stack samples were
+  53.32 → 53.52 MiB. Synthetic inputs and harness/other were 182.35
+  and 86.96 MiB in this capture.
+- Over 340 settled ticks, the same population range (220,401–376,010),
+  work counts and hash `70202b6e` matched. Direct GC records showed
+  nine minor collections in each run, 74.97 → 84.10 ms total across
+  42.73 → 45.87 s (1.75 → 1.83 ms/s). Wall mean/p95/p99/max was
+  97.90/124.88/144.31/165.35 → 103.74/136.57/165.38/238.96 ms.
+  Ticks above 1.5× median were 4 → 9, and none exceeded 500 ms.
+  The longest wall ticks 234 and 235 had zero GC. Mean production
+  phase was 2.98 → 3.25 ms, while movement was 57.50 → 60.35 ms.
+  Spawns, research, collector and A* deposits per timed wall second
+  were 784.2/269.2/97.4/67.1 → 740.1/254.1/91.9/63.3.
+  The nearby non-burst comparison for tick 234 was tick 229.
+  Previous/slow/next/reference ticks 233/234/235/229 took
+  165.1/239.0/226.9/120.7 ms, all with zero GC. Movement took
+  91.4/147.3/150.8/78.9 ms. As with the earlier 320 ms tick, this
+  unprofiled stretch showed more elapsed time with lower process CPU
+  on its slowest ticks. Its exact cause remains open.
+- Spawn production, spawn column parity, structure table and mixed
+  replay checks passed, including 65 matching hashes with 0 and 3
+  helpers. Raw data are in
+  `tests/test-runs/gameplay-gc-production-20261104/`.
+- The repeated capture sampled 52.68 MiB under simulation stacks,
+  including 4.30 MiB attributed to tagged benchmark wrappers. Of
+  that wrapper total, 1.31 MiB was the spawn counter. This leaves
+  48.38 MiB under simulation stacks after subtracting tagged
+  instrumentation. Synthetic inputs and other harness activity
+  sampled 180.78 and 81.49 MiB. The capture resolves eval script IDs
+  before allocation sampling and disables the debugger for gameplay.
+- Remaining sampled sources include boxed coordinates in the order
+  and pending-path paths, native dispatch (3.50 MiB across the two
+  main wrappers), retirement (2.18 MiB across the pass and detach),
+  and local combat presentation in the headless harness. Investigate
+  the concrete allocations in those stacks before changing them.
+  Neither a high wall tick nor the longest GC event identifies the
+  allocation that triggered collection.
+
+## 2026-11-04: reuse worker and structure-hit arguments and narrow routes
+
+- Prioritized the next batch from the refreshed allocation stacks. The
+  preceding capture sampled 3.73 MiB under worker AI dispatch, 3.02 MiB
+  under structure-hit dispatch and 2.16 MiB under reachable path creation.
+  Worker AI and structure hits reuse their ordered native argument arrays.
+  The structure-hit class walk also reuses its static column names. A
+  comparison with the reference confirmed all 156 worker ABI argument
+  expressions kept their positions.
+- Move-order fallback and spawner rallies reuse an existing narrow route
+  when its profile, destination and ready time still match. Each call
+  still performs its reachability check and requests its navigation
+  field. The move-order fallback reuses a tile coordinate record within
+  the order. Background dirty marking reuses its clamped rectangle and
+  keeps owned bounds where the renderer holds them past the call.
+- The first direct GC comparison used 340 settled mixed-chaos ticks
+  (60–399, WASM32, dk1, 11 helpers). Both versions matched hash
+  `70202b6e`, live population 220,401–376,010 and gameplay work.
+  Across 44.10 → 42.73 elapsed seconds, both recorded nine minor
+  collections. Total GC was 75.86 → 74.97 ms, the longest was
+  11.28 → 10.55 ms and GC time per second was 1.72 → 1.75 ms/s.
+  Wall mean/p95/p99/max was 101.02/122.87/132.83/181.28 →
+  97.90/124.88/144.31/165.35 ms. There were 1 → 4 ticks above 1.5×
+  median and zero above 500 ms. Rates for spawns, research, collector
+  and A* deposits were 760.0/260.9/94.4/65.0 →
+  784.2/269.2/97.4/67.1 per timed wall second.
+  Raw data are in `tests/test-runs/gameplay-gc-native-20261104/`.
+- The next allocation capture sampled 53.32 MiB under simulation stacks
+  over 100 settled ticks, down from 60.67 MiB. Structure-hit dispatch
+  including callees fell from 3.02 to 0.03 MiB, reachable path creation
+  from 2.16 to 1.06 MiB, and background rectangle marking from 1.00 to
+  0.19 MiB. Worker AI dispatch fell from 3.73 to 3.32 MiB and spawn
+  completion from 6.38 to 4.98 MiB. These subtrees can overlap.
+  Synthetic inputs and harness/other sampled 181.40 and 84.80 MiB.
+- In the 12-thread CPU capture, previous/GC/next/same-burst reference
+  ticks 99/100/101/120 took 100.8/136.9/128.1/137.1 ms. The collector
+  accounted for 10.5 ms of tick 100's 11.0 ms yield gap. Its movement
+  phase was shorter than the same-burst reference's. The slowest
+  wall tick 110 had zero GC and took 177.0 ms, versus 124.3/120.5/
+  136.9 ms on ticks 109/111/100. It showed more movement and queued
+  order work. Helper slices showed movement throughout, with navigation
+  and acquisition activity prominent on some neighboring ticks.
+- Mixed replay, order supersession, mixed rally, production, worker
+  spawner decisions, collector farms, towers, floor traps and structure
+  table checks passed.
+
+## 2026-11-04: avoid repacking building stats and allocating spawn coordinates
+
+- Prioritized full allocation stacks over grouped leaf names, which can
+  conflate different callers. The preceding settled capture sampled
+  2.19 MiB in tower stat getters during packing, 0.91 MiB in the worker
+  adjacency packer's research-level lookups, and 0.88 MiB in order
+  supersession iterator results. Spawn completion and rally lookup
+  appeared across several stacks.
+- Tower and worker adjacency packs now invalidate on building-stat
+  changes, full rebuilds and snapshot restoration. Unit-only research
+  and boosts no longer invalidate them. The worker class-column loop
+  uses fixed property names and no callback. The final tower pack
+  refreshes only the affected owner and building key on a targeted
+  building-stat change, and keeps the cached ranges of the other rows.
+- Spawns reuse the exit coordinate record, use numeric rally coordinates
+  directly and refresh existing path-template records. The public rally
+  lookup and ordinary nearest-walkable callers still get owned results.
+  Order supersession walks immediate arrays by index and uses native Set
+  traversal for ordinary Sets, with the iterable path as a fallback.
+- The first candidate's capture sampled 62.13 MiB under simulation
+  stacks, versus 65.36 MiB in the preceding pass. Spawn begin and end
+  fell from 3.43/6.94 to 2.61/5.33 MiB including callees. The worker
+  adjacency stats pack fell from 1.66 to 0.97 MiB, and order
+  supersession fell from 0.88 to 0.13 MiB. Tower packing fell only
+  from 2.22 to 2.10 MiB, prompting the narrower invalidation above.
+- Initial serial pairs used WASM32, dk1, 11 helpers, settled ticks
+  60–159 and 285,916–376,010 live units. All four matched hash
+  `f8162538` and gameplay work counts. Each had three GC-overlap
+  ticks and zero ticks over 500 ms. These pairs precede per-row
+  invalidation.
+
+  | Run | Wall mean | p95 | p99 / max | Ticks >1.5× median | GC overlap / longest |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 100.76 ms | 118.98 ms | 129.70 ms | 0 | 26.27 / 9.93 ms |
+  | Candidate A | 99.44 ms | 120.45 ms | 138.07 ms | 0 | 26.58 / 10.33 ms |
+  | Candidate B | 102.12 ms | 126.39 ms | 140.23 ms | 0 | 27.71 / 9.87 ms |
+  | Reference B | 126.03 ms | 199.22 ms | 319.84 ms | 7 | 28.87 / 10.40 ms |
+
+  Reference B's 319.84 ms tick had zero GC and wider phase delays.
+  Per wall second, spawns, research deposits, collector deposits and
+  A* deposits were 710.7/221.4/94.1/84.7 → 720.1/224.4/95.3/85.8 in A
+  and 568.2/177.0/75.2/67.7 → 701.2/218.5/92.8/83.5 in B.
+  Raw ticks and profiles are in `tests/test-runs/gameplay-gc-size-20261104/`.
+- The final tower version's 12-thread CPU profile captured its largest
+  GC overlap at tick 70. Previous/slow/next/same-burst reference ticks
+  69/70/71/80 took 118.5/139.4/119.3/130.2 ms. The 10.75 ms collection
+  accounted for nearly all of tick 70's 11.0 ms yield gap. Helpers were
+  mostly in movement, with worker search sampled on tick 70. The
+  slowest wall tick, 81, took 202.4 ms with zero GC. Previous/next/same-
+  burst-status reference ticks 80/82/79 took 130.2/148.0/112.8 ms.
+  Movement took 85.4 ms and effective stat refresh 44.4 ms on tick 81.
+  Helper samples also showed navigation field work and acquisition.
+- GC comparison now uses the runtime's timestamped events over a
+  continuous interval, independent of tick duration. The settled interval
+  starts at the first measured tick's timer and ends at the last yield.
+  It includes synthetic input generation between those endpoints and
+  harness activity. The short runs each had three minor collections.
+  Direct GC time per wall second was 1.98 → 2.03 ms/s in A and
+  1.77 → 2.06 ms/s in B. See `gc-short-summary.json` for raw event
+  aggregates and `tests/chaos-gc-summary.cjs` for the command.
+- Separate stall investigation for reference B: previous/slow/next and
+  same-burst comparison ticks 79/80/81/90 took 157.2/319.8/186.4/124.5 ms.
+  The slow tick was almost entirely inside the tick timer. Compared with
+  tick 90, commands took 55.4 versus 17.9 ms, movement 108.9 versus 58.9 ms,
+  and effective stats 28.2 versus 5.4 ms. Process CPU was 1.00 versus
+  1.05 CPU-seconds across the threads despite the much longer elapsed time.
+  That is consistent with waits or scheduling contributing to the delay.
+  The reference was unprofiled, so the exact cause remains open.
+- After per-row invalidation, the final short allocation capture sampled
+  60.67 MiB under simulation stacks, versus 65.36 MiB before the batch.
+  Tower packing fell from 2.22 to 0.38 MiB, order supersession from
+  0.88 to 0.03 MiB, and worker adjacency stats from 1.66 to 1.06 MiB.
+  Synthetic inputs and harness/other were 184.68 and 83.48 MiB.
+  The final short unprofiled run recorded wall mean/p95/p99/max of
+  106.10/133.85/152.83/152.83 ms, with three minor GC events totaling
+  32.12 ms and a longest event of 10.98 ms. No tick exceeded 1.5× median.
+- The final candidate and reference also ran 340 settled ticks
+  (60–399, 220,401–376,010 live units, hash `70202b6e`, identical work).
+  Runtime minor GC was 10 → 9 events, 89.66 → 75.86 ms total, and
+  11.59 → 11.28 ms longest over continuous windows of 45.78 → 44.10 s,
+  or 1.96 → 1.72 ms/s. Wall mean/p95/p99/max were
+  104.37/138.61/162.52/187.54 → 101.02/122.87/132.83/181.28 ms,
+  with 6 → 1 ticks above 1.5× median and none above 500 ms.
+  Spawns, research, collector and A* deposits per wall second were
+  735.6/252.6/91.4/62.9 → 760.0/260.9/94.2/65.0.
+- Mixed replay matched 65 hashes with 0 and 3 helpers. Tower row
+  packing matched forced rebuilds after boosts to two building types
+  owned by different players. Boost, snapshot, supersession, trap,
+  collector, production pass and mixed rally tests passed.
+
+## 2026-11-04: remove recurring build, stat and A* log allocations
+
+- Build-area checks walk the existing canonical cells by index and validate
+  fallback cells in place. Structure destruction writes the class columns
+  into its reusable native argument array and copies external tile lists
+  directly into the existing input buffer.
+- Effective-stat rows that already hold a clone of the current source are
+  refreshed directly, preserving base max energy. Rows with different
+  sources still use the compatibility path. The A* log reuses its type and
+  source index for each live HUD bucket. It resets the index on clock
+  rewind, and the movement kernel's usage totals pass the unit type
+  directly without a temporary object. The actual HUD log rows still
+  allocate.
+- Serial WASM32 mixed chaos at dk1 used 11 helpers and 100 settled ticks
+  (60–159), with 285,916–376,010 live units. Hash `f8162538` and gameplay
+  work counts matched. The initial timing pairs preceded the A* clock
+  rewind guard, which only resets the index on a rewind.
+
+  | Run | Wall mean | p95 | p99 / max | Ticks >1.5× median | GC overlap / longest |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 108.62 ms | 132.54 ms | 151.27 ms | 0 | 30.53 / 11.65 ms |
+  | Candidate A | 102.10 ms | 121.83 ms | 131.53 ms | 0 | 23.76 / 8.42 ms |
+  | Candidate B | 100.95 ms | 125.05 ms | 155.71 ms | 1 | 25.80 / 9.66 ms |
+  | Reference B | 104.38 ms | 122.70 ms | 217.02 ms | 2 | 26.72 / 9.56 ms |
+  | Final candidate | 98.36 ms | 115.73 ms | 127.97 ms | 0 | 26.07 / 9.63 ms |
+
+  Each run had GC overlap on three settled ticks and zero ticks over
+  500 ms. GC overlap fell in both pairs, but the longest pause improved
+  only in A. Spawns, research deposits, collector deposits and A* deposits
+  per wall second were 659.3/205.4/87.3/78.5 → 701.3/218.5/92.8/83.5 in A
+  and 686.1/213.7/90.8/81.7 → 709.3/221.0/93.9/84.5 in B. The final
+  candidate with the rewind guard reached 728.1/226.8/96.4/86.7. Raw rows,
+  allocation and CPU captures, and reference sources are in
+  `tests/test-runs/gameplay-gc-next-20261104/`.
+- The allocation capture with the rewind guard sampled 65.36 MiB under
+  simulation stacks, down from 72.88 MiB in the preceding pass. Effective
+  stat refresh including callees fell from 4.88 to 0.78 MiB, A* usage
+  accounting from 2.04 to 0.74 MiB, and destruction class arguments from
+  0.63 to 0.09 MiB. The build-area check went from 0.22 MiB to no samples.
+  Synthetic input and harness/other samples were 185.55 and 83.64 MiB,
+  compared with 183.11 and 83.24 MiB. The simulation category includes
+  instrumentation nested within tick calls.
+- Remaining sampled gameplay sources include native kernel dispatch,
+  stationary stat access, unit retirement and queued-order supersession.
+  The harness also runs local damage visuals. This run does not measure
+  allocations or GC in the browser's presentation and transport code.
+- In the 12-thread CPU profile, tick 70 was both the slowest wall tick and
+  the one with the largest GC overlap. Previous/slow/next/same-burst
+  reference ticks 69/70/71/80 took 118.36/143.00/112.74/138.54 ms.
+  The 10.47 ms minor GC on tick 70 began just after the measured game
+  logic ended and accounted for almost all of the 10.90 ms yield gap.
+  Command execution took 26.07 ms versus 17.77 ms on tick 80, while
+  movement took 60.12 versus 61.24 ms. Main-thread samples captured GC.
+  Helper samples showed movement throughout, navigation and acquisition
+  in the neighbors, and more status work on tick 70.
+- The mixed replay matched all 65 hashes with 0 and 3 helpers. Boost,
+  effective-stat kernel parity, structure table, shared-stat snapshot and
+  order supersession checks passed.
+
+## 2026-11-04: reuse retirement records and command storage
+
+- Routine detachment stores the stale ID, owner and quantized position on
+  the existing unit wrapper. The common stale reads use those values.
+  General detached access can still materialize the writable compatibility
+  record. Retirement's two native calls reuse fixed argument arrays.
+- Move-order entries are reserved at load up to the existing 16,384-entry
+  kernel bound and recycled after drain. Removal shifts entries without
+  splice's temporary removed-item array. The existing overflow fallback
+  can still create entries, and the JS order queue and map can grow.
+- Research capacity scans the authoritative spawner list without building
+  type buckets. Commands that only need lab existence use an early-exit
+  scan. Match load seeds order-check entries and their research level keys
+  for the configured catalogue. Reordering moves tasks in place and uses a
+  reusable touched list. First-time unknown stat keys and new research tasks
+  can still allocate.
+- The initial allocation capture reduced the retirement subtree from
+  7.94 to 2.34 MiB and total simulation allocation from 83.56 to 76.40
+  MiB. This capture preceded in-place research reordering.
+- The final allocation capture measured 72.88 MiB of simulation allocation,
+  including 2.31 MiB in retirement and 11.54 MiB in command execution
+  (previously 7.94 and 19.14 MiB). Capacity lookup and research order
+  checking had no allocation samples, and lab existence checks sampled
+  0.03 MiB. Synthetic input and harness totals were 183.11 and 83.24 MiB.
+  Research queue fuzz, supersession, slot reuse and snapshot checks passed,
+  including a check that common stale reads leave the record unallocated.
+  The mixed replay matched all 65 hashes with 0 and 3 helpers.
+- Serial unprofiled runs used WASM32, 11 helpers, dk1 and settled population
+  285,916–376,010 over ticks 60–159. Work and hash `f8162538` matched.
+  No settled tick exceeded 1.5× median or 500 ms.
+
+  | Run | Wall mean | p95 | p99 / max | GC overlap / longest |
+  | --- | ---: | ---: | ---: | ---: |
+  | Previous reference A | 106.33 ms | 133.50 ms | 155.38 ms | 39.02 / 14.53 ms |
+  | Candidate A | 101.17 ms | 129.17 ms | 145.88 ms | 25.61 / 9.37 ms |
+  | Reference B | 100.54 ms | 122.24 ms | 131.51 ms | 37.18 / 14.31 ms |
+  | Candidate B | 98.06 ms | 116.60 ms | 140.16 ms | 25.74 / 9.21 ms |
+
+  GC overlap and longest pause fell in both comparisons. The wall max
+  improved only in A. Reference A/B → candidate A/B rates per wall second
+  were 673.4/712.2 → 707.8/730.3 spawns, 209.8/221.9 → 220.5/227.5
+  research deposits, 89.2/94.3 → 93.7/96.7 collector deposits and
+  80.2/84.8 → 84.3/87.0 astar deposits. Raw rows and reference sources
+  are in `tests/test-runs/retire-command-gc-20261104/`.
+- The 12-thread profile's largest GC overlap was tick 70. Previous/slow/
+  next/normal same-burst ticks 69/70/71/80 took 126.4/145.8/123.5/134.8
+  ms, with 10.3 ms of GC on tick 70 alone. Main samples showed GC and
+  movement. Worker search and spatial indexing gained helper samples.
+  The worst whole tick was the tick 60 burst at 153.0 ms with zero GC.
+  Its previous/next/reference ticks 59/61/70 took 120.2/144.6/145.8 ms.
+
+## 2026-11-04: reuse move IDs and read tower coordinates directly
+
+- Immediate move and attack-move commands with array IDs use a fixed
+  20,000-entry numeric buffer and carry a separate valid count through
+  supersession and admission. The borrow is synchronous and released in
+  a finally block. Nested dispatch falls back to an owned result if the
+  buffer is busy. Public sanitization still returns an owned array.
+- Immediate tower targeting validates its packet coordinates during
+  application, without copying the array or allocating per-coordinate
+  objects. Unit targets and clears write the existing numeric tower
+  fields directly. Immediate commands with no IDs reuse an empty list.
+- The move-only allocation capture sampled 0.38 MiB in the ID cleaner
+  and its callees, down from 3.28 MiB. Total sampled simulation allocation
+  was 91.47 MiB versus 91.91 MiB in the preceding version.
+- With the tower and empty-list changes, sampled simulation allocation
+  fell to 83.56 MiB, sanitization including callees to 0.85 MiB, and ID
+  cleaning to 0.32 MiB. Synthetic inputs were 183.23 → 182.80 MiB and
+  harness/other 84.70 → 83.63 MiB. Retirement still sampled 7.94 MiB
+  and action execution 19.14 MiB including callees.
+- Serial unprofiled runs used production WASM32, 11 helpers, dk1 and
+  settled population 285,916–376,010. All matched hash `f8162538` and
+  work counts. No settled tick exceeded 500 ms.
+
+  | Run | Wall mean | p95 | p99 / max | >1.5× median | GC overlap / longest |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Previous reference A | 105.20 ms | 136.95 ms | 168.84 ms | 1 | 40.20 / 14.96 ms |
+  | Candidate A | 102.72 ms | 131.72 ms | 156.68 ms | 1 | 32.50 / 14.77 ms |
+  | Reference B, previous main.js | 100.57 ms | 127.76 ms | 144.05 ms | 0 | 39.04 / 14.89 ms |
+  | Candidate B | 106.33 ms | 133.50 ms | 155.38 ms | 0 | 39.02 / 14.53 ms |
+
+  Reference A/B → candidate A/B wall-second rates were 680.7/712.1 →
+  697.1/673.4 spawns, 212.1/221.8 → 217.2/209.8 research deposits,
+  90.1/94.3 → 92.3/89.2 collector deposits and 81.1/84.8 → 83.0/80.2
+  astar deposits. Tail and total GC changes did not repeat.
+- The final all-thread capture's largest GC overlap and worst whole tick
+  were both at tick 60. Previous/slow/next/normal same-burst-reference
+  ticks 59/60/61/70 took 123.2/164.3/146.7/135.1 ms. Tick 60 overlapped
+  15.3 ms of GC and the other three had zero GC. Actions on the two burst
+  ticks took 30.4/26.0 ms. Movement was 70.3/62.2/80.2/63.9 ms. Main samples
+  show GC and movement. Helpers sampled more slot zeroing and visibility
+  work on the slow tick than on the normal reference.
+- Native ID cleaning, budget, supersession, order columns, tower cases
+  and tower SIMD checks passed. Mixed replays matched all 65 hashes
+  with 0 and 3 helpers. Raw runs and profiles are in
+  `tests/test-runs/move-id-gc-20261104/`.
+- The production sender regression decoded all 200,000 IDs in order from
+  ten move actions. A separate mixed chaos mass-click run selected 235,326
+  live units on tick 20 and had zero queued units and zero backlog IDs
+  by tick 23. The 20,000-entry scratch capacity follows the existing
+  per-action limit. The sender still splits larger selections.
+
+## 2026-11-04: reserve slot-release and slab lists
+
+- The deferred release queue has one entry per reserved unit slot. The
+  slot-zero kernel reads it directly and the JavaScript consumer resets its
+  count. State replacement and compaction release the old reservation.
+  Detached units still keep their own stale-state record.
+- The slab allocator stores its local-hole, global-hole and empty-slab
+  stacks in a numeric arena sized at match reservation. Rebuilding the
+  stacks resets the heads and cursor. The bound covers the initial relist
+  plus up to two entries per release before the next relist. Push and pop
+  order and stale-entry handling follow the prior implementation.
+- Immediate sanitized commands use the cleaned ID list for unit resolution
+  and queued-order cancellation. Direct sanitized actions still expose the
+  lazy membership Set. The cleaned IDs and resolved-unit output still
+  have per-command storage. Tower stats reuse the source table and resolve
+  neutral stat entries once per tower type during each refresh.
+- Sampled simulation allocation over 100 settled ticks was
+  99.67 → 97.69 → 91.91 MiB for the previous version, initial candidate,
+  and final candidate. Synthetic inputs were 182.99/182.61/183.23 MiB
+  and harness/other 84.33/86.44/84.70 MiB. The slab relist went from
+  1.84 MiB to no samples, the slot-release subtree from 2.10 to 0.22 MiB,
+  and tower stat preparation from 2.57 to 1.88 MiB. Retirement
+  (7.25 MiB including detached records) and command sanitization
+  (6.73 MiB including cleaned IDs) remain significant. The release queue
+  held 1,150,976 slots and the slab arena 376,070 words from tick zero
+  through the final tick. End-of-match live WASM was 3,030 → 3,032 MiB.
+- Serial production WASM32 runs used 11 helpers, dk1, and population
+  285,916–376,010 over ticks 60–159. Work and hash `f8162538` matched.
+
+  | Run | Wall mean | p95 | p99 / max | >1.5× median | GC overlap / longest |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Previous full reference | 104.48 ms | 129.81 ms | 155.47 ms | 0 | 50.97 / 14.01 ms |
+  | Candidate before slab arena | 102.03 ms | 133.24 ms | 159.75 ms | 1 | 39.69 / 14.60 ms |
+  | Reference with tower change | 101.67 ms | 131.81 ms | 140.96 ms | 0 | 46.68 / 13.35 ms |
+  | Final candidate | 105.20 ms | 136.95 ms | 168.84 ms | 1 | 40.20 / 14.96 ms |
+
+  None exceeded 500 ms. Reference and final rates per wall second were
+  685.4/680.7 spawns, 213.5/212.1 research deposits, 90.7/90.1 collector
+  deposits and 81.6/81.1 astar deposits. Total GC overlap fell, while
+  longest pause and whole-tick max did not improve in these runs. A final
+  empty-list guard skips cancellation lookup work for actions without IDs.
+  The supersession test passed after that guard.
+- The separate 12-thread CPU profile's largest GC overlap was also its
+  worst whole tick. Previous/slow/next/normal same-burst reference ticks
+  99/100/101/90 took 114.7/178.6/163.2/147.5 ms. Only tick 100 overlapped GC
+  (17.7 ms). Movement was 64.8/68.5/98.7/67.6 ms. The slow tick's main
+  samples show GC. Helpers show more visibility and effective-stat work.
+  Tick 101 had longer movement without GC.
+- Retirement, shared-unit growth and slot reuse, snapshots, action
+  cleanup/budget/supersession, tower cases, tower SIMD determinism and the
+  mixed 65-hash replay with 0 and 3 helpers passed. Raw captures and
+  reference sources are in `tests/test-runs/zero-gc-20261104/`.
+
+## 2026-11-04: reserve retirement scratch and reuse command, research and visual data
+
+- Retirement planner and cleanup buffers now reserve against the match's
+  unit slot capacity during loading. In the mixed chaos capture, all 160
+  ticks recorded 1,150,976 slots, 1,150,976 planner records and 1,187,840
+  cleanup entries. The reserved buffers added 13 MiB live WASM at the end
+  of this match. Detached unit records still have independent lifetimes.
+- Damage flash complements are prepared per owner at load and reused on
+  the local simulation/render path. A palette change refreshes the affected
+  entry. The simulation worker has its own visual event forwarding path.
+  Research order checks retain the per-player map and refresh counters by
+  rebase epoch. A stat's first encounter can still create an entry.
+- Command sanitization shares property descriptors. Large immediate rally
+  commands validate and pack into the existing order tile buffer without
+  allocating a sanitized coordinate array. Invalid pairs, accepted-pair
+  cap and input order were checked against the public sanitizer path.
+- In allocation profiles before the rally change, sampled simulation
+  allocation fell from 114.36 to 102.04 MiB. Full-stack damage visual
+  allocation was 9.50 → 2.59 MiB, research order checks 2.35 → 1.59 MiB,
+  command sanitization 13.04 → 10.43 MiB, and retirement 10.56 → 9.24 MiB.
+  Synthetic inputs were 184.01/185.96 MiB and harness/other 82.17/81.88 MiB.
+- With direct rally packing, simulation allocation sampled 99.67 MiB,
+  including 7.11 MiB for sanitization with callees, 9.96 MiB for
+  retirement, 3.03 MiB for damage visuals, and 1.13 MiB for research order
+  checks. Synthetic input and harness allocation were 182.99 and 84.33
+  MiB, respectively. Detached unit records, owned command results,
+  membership sets and renderer bookkeeping still allocate. The browser
+  simulation worker's event transport was outside this headless census.
+- The last unprofiled reference and final candidate ran serially with
+  production WASM32, 11 helpers, dk1, ticks 60–159, population
+  285,916–376,010 and matching work and hash `f8162538`. Reference →
+  final mean/p95/p99/max were 108.12/147.32/223.76/223.76 →
+  104.48/129.81/155.47/155.47 ms. Slow ticks above 1.5× median were 3 → 0,
+  with zero above 500 ms. GC overlap was 82.96 → 50.97 ms. The final run
+  had four minor pauses, longest 14.01 ms. Wall-second rates were
+  662.3 → 685.4 spawns, 206.3 → 213.5 research deposits, 87.7 → 90.7
+  collector deposits, and 78.9 → 81.6 astar deposits. The earlier
+  candidate before rally packing had a 224.00 ms max and 59.18 ms of
+  GC overlap. This series does not establish a repeatable tail improvement
+  for the final version.
+- The 12-thread profile before the rally change had its largest GC overlap
+  at tick 120. Previous/slow/next/normal ticks 119/120/121/130 took
+  97.8/189.5/195.1/152.7 ms wall and 58.4/84.3/99.0/69.0 ms in movement.
+  Tick 120 overlapped 16.7 ms of GC and tick 130 had the same burst status.
+  Tick 121 was the overall max with zero GC. Its nearby normal non-burst
+  reference tick 132 took 133.0 ms, with 64.0 ms of movement. Helpers
+  sampled more navigation fields, target acquisition and atlas work.
+- Research partial rebase and multiplayer queue fuzz, retirement, local
+  visual snapshot, action cleanup, supersession, budget and mixed replay
+  checks passed. Raw profiles, reference sources and timing rows are in
+  `tests/test-runs/damage-gc-20261104/`.
+
+## 2026-11-04: gameplay allocation census and reserved adjacency scratch
+
+- Adjacency reserves per-player stat columns at match load from the player
+  count and building stat key count. Research and boost changes refill
+  those columns and reuse their descriptor. Structure status class arrays
+  and adjacency column property names are constructed once. Larger
+  configurations and restored heaps retain the existing capacity checks.
+- Command ID cleanup sizes the native result list from the returned count.
+  Supersession compacts its privately owned list in place. Selected-unit
+  traversal uses Set.forEach on ordinary sets. The per-command result
+  arrays and membership sets still allocate.
+- Sampled simulation allocation over 100 settled ticks was
+  **127.00 → 118.50 → 114.36 MiB** for reference, command changes, and
+  command plus adjacency changes. Synthetic input generation sampled
+  183.71/184.59/184.01 MiB and harness/other 82.43/81.94/82.17 MiB.
+  The full-stack allocation totals for ID cleanup were 10.97 → 3.26 MiB.
+  Selected-unit resolution was 1.04 → 0.51 MiB. The aggregate `next`
+  entry includes many unrelated iterators. Adjacency class/column
+  lookup sampled 4.16 MiB before and had no samples after. The per-player
+  stat refresh still sampled 1.38 MiB including callees.
+- Remaining sources include retirement (10.56 MiB including callees),
+  damage visuals (9.50 MiB including callees), command sanitization
+  (7.17 MiB self, plus cleaned IDs), and research order checks
+  (2.35 MiB including callees). The detached retirement record currently
+  owns stale coordinates and survives reuse of the original slot.
+- The serial unprofiled pairs below compare the command changes alone
+  against the previous implementation. All runs used WASM32, 11 helpers,
+  dk1, and population 285,916–376,010 over ticks 60–159. Work counts and
+  hash `f8162538` matched. No settled tick exceeded 500 ms.
+
+  | Run | Wall mean | p95 | p99 / max | >1.5× median | GC overlap / major pause |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 102.53 ms | 135.03 ms | 157.21 ms | 2 | 57.62 / 26.91 ms |
+  | Command A | 106.39 ms | 137.76 ms | 149.51 ms | 0 | 66.84 / 19.76 ms |
+  | Command B | 103.05 ms | 136.79 ms | 164.73 ms | 1 | 64.01 / 19.90 ms |
+  | Reference B | 103.61 ms | 132.87 ms | 151.58 ms | 0 | 72.53 / 26.38 ms |
+
+  The major pause fell in both pairs. Total GC and tick maxima moved in
+  opposite directions. Reference A/B → command A/B wall-second rates were
+  698.4/691.1 → 673.1/694.9 spawns, 217.6/215.3 → 209.7/216.5 research
+  deposits, 92.5/91.5 → 89.1/92.0 collector deposits, and 83.2/82.3 →
+  80.2/82.8 astar deposits.
+- The final command-plus-adjacency unprofiled run matched the population,
+  work and hash. Wall mean/p95/p99/max were 103.63/133.95/195.14/195.14 ms
+  with one tick above 1.5× median and none above 500 ms. Its worst tick,
+  86, had zero overlapping GC. The window had 68.69 ms overlapping GC
+  and an 18.99 ms major pause. Wall-second rates were 691.0 spawns,
+  215.3 research deposits, 91.5 collector deposits and 82.3 astar deposits.
+- The all-thread command-candidate profile's largest GC overlap was
+  26.6 ms on tick 113. Previous/slow/next/normal non-burst ticks
+  112/113/114/133 took 140.5/157.9/101.6/112.9 ms with movement at
+  68.2/106.2/59.1/72.5 ms. The slow tick's main thread samples include
+  GC, the movement barrier and footprint motion. The worst whole tick
+  was 61 at 203.0 ms with 20.2 ms of GC. Its previous/next/normal
+  non-burst reference ticks were 60/62/71 at 170.3/136.5/132.5 ms.
+- Action ID, arrival, supersession and budget tests passed. Adjacency
+  matched the JavaScript reference with 11,490 buildings. The final
+  mixed replay matched all 65 hashes with 0 and 3 helpers. Raw rows,
+  source snapshots and allocation and CPU profiles are in
+  `tests/test-runs/gameplay-gc-20261104/`.
+
+## 2026-11-04: extend the foreground barrier to wanted steps
+
+- The simulation thread now also waits for `SIM_KERNEL_MOVE` (8) without
+  claiming background jobs. The existing occupancy guard still covers the
+  four passes that follow. The occupancy-only version was the reference.
+- Two serial pairs in opposite orders used production WASM32, 11 helpers,
+  dk1 and settled mixed chaos ticks 60–159. Population was 285,916–376,010
+  with 7,161 births and 97,801 deaths. All four runs matched hash
+  `f8162538` and the work counts.
+
+  | Run | Wall mean | Wall p95 | Wall p99 / max | >1.5× median | Wanted-step mean / p95 / max |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 104.72 ms | 137.16 ms | 152.86 ms | 0 | 21.79 / 27.04 / 41.56 ms |
+  | Candidate A | 103.38 ms | 130.25 ms | 144.52 ms | 0 | 21.13 / 24.56 / 25.62 ms |
+  | Candidate B | 98.23 ms | 124.08 ms | 135.50 ms | 0 | 20.09 / 22.91 / 25.31 ms |
+  | Reference B | 99.11 ms | 127.49 ms | 160.89 ms | 1 | 20.31 / 23.17 / 38.10 ms |
+
+  No settled tick exceeded 500 ms. GC overlap in that order was
+  59.43/57.62/58.86/60.18 ms. Reference A/B → candidate A/B wall-second
+  rates were 683.8/722.6 → 692.7/729.0 spawns, 213.0/225.1 → 215.8/227.1
+  research deposits, 90.5/95.7 → 91.7/96.5 collector deposits and
+  81.5/86.1 → 82.5/86.8 astar deposits. The next-index wait mean fell
+  from 4.10/3.94 to 3.71/3.62 ms. The tick lane wait mean was
+  1.70/1.61 → 1.67/1.60 ms. Neither wait showed a repeatable regression.
+- The separate named 12-thread capture compared previous/slow/next/normal
+  non-burst ticks 155/156/157/145. Wall was 85.5/140.3/137.3/104.4 ms
+  and kernel 8 was 21.1/32.2/26.6/21.9 ms, with zero GC and zero
+  simulation-thread `_simBgHelp` samples inside kernel 8. On the slow
+  tick, main samples concentrated in wall segment checks and flow lookups.
+  Across threads, atlas exit selection, combat and wall segment checks
+  gained the most self samples versus the reference. These are concurrent
+  samples. Tick 117, the previous capture's worst kernel 8 tick, took
+  21.3 ms in this capture. The worst whole tick was the tick 60 command
+  burst, with 37.3 ms command processing and 27.0 ms in kernel 8.
+- The mixed replay matched all 65 hashes with 0 and 3 helpers. The grid
+  audit passed with 0 and 7 helpers. Raw ticks, profiles, slices and the
+  reference source are in `tests/test-runs/move-barrier-20261104/`.
+
+## 2026-11-04: keep background jobs off the occupancy barrier
+
+- The simulation thread waits for the last foreground occupancy chunks
+  without claiming a background chunk. It remains available to post the
+  next pass. Helpers still take background work under their existing policy.
+- Six serial, unprofiled mixed chaos runs used production WASM32, 11 helpers,
+  dk1 and settled ticks 60–159. The actual population was 285,916–376,010
+  with 7,161 births and 97,801 deaths in that window. All runs matched hash
+  `f8162538` and the work counts. No settled tick exceeded 500 ms.
+
+  | Run | Wall mean | Wall p95 | Wall p99 / max | >1.5× median | Occupancy mean / p95 / max |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Reference A | 104.91 ms | 138.04 ms | 161.55 ms | 1 | 31.41 / 42.40 / 53.94 ms |
+  | Scheduling A | 105.12 ms | 135.48 ms | 158.46 ms | 1 | 30.60 / 38.49 / 39.71 ms |
+  | Scheduling + Rust A | 106.39 ms | 133.13 ms | 137.24 ms | 0 | 31.56 / 41.24 / 48.49 ms |
+  | Scheduling + Rust B | 102.64 ms | 126.51 ms | 141.64 ms | 0 | 30.15 / 37.13 / 48.53 ms |
+  | Reference B | 109.82 ms | 174.83 ms | 328.82 ms | 7 | 32.67 / 46.53 / 96.98 ms |
+  | Scheduling B | 102.18 ms | 127.80 ms | 163.56 ms | 1 | 30.01 / 37.39 / 38.70 ms |
+
+  Total GC overlap in that order was 59.00, 61.83, 63.11, 44.90, 67.44
+  and 58.26 ms. Reference A/B → scheduling A/B wall-second rates were
+  682.6/652.1 → 681.2/700.9 spawns, 212.6/203.2 → 212.2/218.3 research
+  deposits, 90.4/86.3 → 90.2/92.8 collector deposits and 81.3/77.7 →
+  81.1/83.5 astar deposits. The raw rows retain the larger early gameplay
+  spikes. Reference B's slowest tick had only 9.66 ms of GC and expanded
+  across several phases. There is no CPU capture for that run to identify
+  the cause. The scheduling runs' worst ticks were both tick 113 with about
+  25.5 ms of GC overlap and occupancy at 33.0/30.6 ms.
+- The 12-thread named profile used the same diagnostic WASM as the previous
+  capture. Previous/slow/next/normal non-burst ticks 64/65/66/68 took
+  117.1/126.7/116.8/104.7 ms wall and 38.3/45.1/37.7/31.2 ms in occupancy,
+  with zero GC. The simulation thread had no `_simBgHelp` samples inside
+  occupancy on any of these ticks. Across all threads, non-idle samples
+  outside the occupancy stack grew from 14.9 to 149.7 ms on tick 65.
+  Helpers were doing target answers and navigation fields, while the main
+  thread was mostly in movement. These concurrent samples show overlap
+  and do not isolate its cost. The worst whole tick was the tick 60 action
+  burst. Against burst tick 70, command processing was 31.6 vs 28.8 ms,
+  kernel 8 was 28.5 vs 24.8 ms, and occupancy was 34.2 vs 33.2 ms.
+- A separate slice of the same capture shows the next barrier candidate.
+  The wanted-step kernel (8) averaged 23.1 ms and took 20.0/41.6/19.8/19.2
+  ms on previous/slow/next/normal non-burst ticks 116/117/118/119, all
+  without GC. The simulation thread sampled 19.8 ms in `k_acq_area_build`
+  via `_simBgHelp` during the slow kernel and zero on the other three.
+  Helpers also ran atlas and navigation work. Occupancy counts (97) on
+  tick 117 sampled 2.57 ms in `acq_omt` at its barrier and averaged 0.81 ms
+  over the window. Traffic capture (93) averaged 0.74 ms. The traffic
+  lane's result wait averaged 0.009 ms. These slices use the existing
+  scheduling-only capture and do not measure a change to those barriers.
+- The Rust trial bypassed duplicate short-step raster probes in axis slides
+  and pruned swap candidates unable to reach the existing three-entry
+  shortlist. It improved whole-tick max in these runs, but the targeted
+  occupancy max was about 48.5 ms in both runs and the average occupancy
+  improvement did not repeat. The production Rust sources and WASM remain
+  at the reference version. Footprint and swap work remains the recurring
+  occupancy bottleneck. Raw ticks, source and binary snapshots are in
+  `tests/test-runs/occupancy-opt-20261104/`.
+- The occupancy grid audit passed with 0 and 7 helpers across the tested
+  collision planes. The mixed replay matched all 65 hashes with 0 and 3
+  helpers.
+
+## 2026-11-04: occupancy phase and stack attribution
+
+- The slicer now combines phase prefixes and can separate a kernel's stack
+  from other work during the same phase. A fresh named WASM32 diagnostic
+  captured all twelve threads with 1 ms sampling. Diagnostic-only counters
+  record nonzero steps, pressure samples, primary/alternate footprint probes,
+  shoulder attempts and swaps per spatial block. Production WASM and Rust
+  movement files are unchanged. The run matched hash `f8162538` and the
+  existing settled work counts, with population 285,916–376,010. This is a
+  profile run, not an unprofiled speed comparison. Mean/p95/p99/max wall
+  was 113.06/149.06/156.11/156.11 ms, with zero settled ticks above 500 ms
+  or 1.5× median. Measured rates per wall second were 633.4 spawns, 197.3
+  research deposits, 83.8 collector deposits, 75.4 astar deposits.
+- Occupancy's own named hotspot is `checked_traffic_q`, which steers from
+  traffic pressure, tests the wall segment and swept footprint, tries up to
+  four shoulders if clipped, then commits the chosen footprint. The normal
+  tick 143 performed 219,570 nonzero checks, 64,898 shoulder entries and
+  145,531 alternate probes. It tried 25,036 swaps and completed 389. These
+  probes are additional to 219,564 primary footprint probes. In all four
+  occupancy passes, normal traffic-check self samples summed to 63.7 ms
+  across threads versus 26.8 ms for leader direction, 26.6 ms for yielding,
+  18.6 ms for footprint motion and 14.1 ms for swaps. These are concurrent
+  samples, with inlined work attributed to callers.
+- Previous/slow/next/normal non-burst reference ticks 144/145/146/143 had
+  wall 135.5/149.1/105.3/97.8 ms and occupancy 46.8/64.3/33.2/31.2 ms, all
+  with zero GC. Pass 0 grew from 7.3 ms on tick 143 to 31.8 ms on tick 145.
+  Tick 145 checked 218,956 nonzero steps, had 65,617 shoulder entries and
+  146,700 alternate probes, close to the normal tick. Its heaviest block
+  had 939 alternate probes versus 911. Swap attempts were 25,247 versus
+  25,036. There is no corresponding jump in counted work.
+- During pass 0, occupancy-stack samples summed to 94.9 ms on the spike
+  and 84.5 ms on the reference. Non-idle samples outside that stack grew
+  from 3.1 to 193.6 ms across threads. The simulation thread alone sampled
+  22.9 ms in `k_acq_area_build` via `_simBgHelp` inside `simParallelRun`.
+  Helpers ran atlas route and table building and navigation fields. The
+  caller cannot return from the acquisition chunk when the occupancy jobs
+  finish. That identifies a foreground scheduling issue separate from the
+  recurring occupancy work. Samples do not measure cache misses or establish
+  how much the pass would save with different scheduling.
+- Saved older profiles show both patterns. Occupancy rose 33.35 → 82.05 ms
+  at tick 85, with checked-traffic and footprint motion samples growing.
+  At tick 109 it rose 29.70 → 67.26 ms with nearly identical attempt counts,
+  footprint motion samples flat and much more overlapping background work.
+  Raw rows, stacks, slices and diagnostic source are in
+  `tests/test-runs/occupancy-20261104/` and the earlier `movement-20261104/`.
+
 ## 2026-11-04: packed worker replies and SIMD validation trial
 
 - Helpers packed reply headers into contiguous slot, ID, kind, and stamp

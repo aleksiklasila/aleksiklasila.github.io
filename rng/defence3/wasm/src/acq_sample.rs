@@ -153,6 +153,9 @@ pub unsafe extern "C" fn k_acq_area_answers(a:u32,chunk:i32){
     }
     let group=viewer*4+part-1;
     let structures=k.p::<i32>(43).add(group*na);let struct_dist=k.p::<i32>(44).add(group*na);
+    // (Seeded by k_acq_area_seed, one tile pass a team for the four
+    // classes, when that stage ran before: P[35] 1.)
+    if k.i(35)==1 {spread_answers(na,structures,struct_dist,queue,go,gn,maxd);return;}
     for i in 0..na {*structures.add(i)=-1;}
     let ag=k.p::<i32>(13);let cls=k.p::<i8>(0);let owners=k.p::<i8>(1);
     let class=part as i8;
@@ -166,6 +169,87 @@ pub unsafe extern "C" fn k_acq_area_answers(a:u32,chunk:i32){
         if *structures.add(ar)<0 {*structures.add(ar)=tile as i32;}
     }
     spread_answers(na,structures,struct_dist,queue,go,gn,maxd);
+}
+
+/// The structure answers' seeds of team `chunk` (viewer), for the four
+/// classes in one pass over the tiles: per area the first (row-major) tile
+/// of a visible enemy structure of each class, -1 none (what each class's
+/// own answer job scanned the whole map for before: eight passes with two
+/// teams). Then k_acq_area_answers' parts 1-4 only spread them (P[35] 1).
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_seed(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;
+    let viewer=chunk.max(0) as usize;
+    if viewer>=players||na==0 {return;}
+    let cov=k.p::<u8>(14).add(viewer*na);
+    let seeds=k.p::<i32>(43).add(viewer*4*na);
+    for i in 0..4*na {*seeds.add(i)=-1;}
+    let ag=k.p::<i32>(13);let cls=k.p::<i8>(0);let owners=k.p::<i8>(1);
+    let tiles=k.i(15).max(0) as usize*k.i(16).max(0) as usize;
+    for tile in 0..tiles {
+        let cl=*cls.add(tile);let cl=if cl==5 {1}else{cl};
+        if cl<1||cl>4 {continue;}
+        let owner=*owners.add(tile);if owner==-1||owner as i32==viewer as i32 {continue;}
+        let ar=*ag.add(tile);if ar<0||ar as usize>=na {continue;}
+        let ar=ar as usize;
+        if *cov.add(ar)==0 {continue;}
+        let at=seeds.add((cl as usize-1)*na+ar);
+        if *at<0 {*at=tile as i32;}
+    }
+}
+
+// The area table's build (k_acq_area_build's count and scatter, its slot
+// snapshot case: acq.saKey) in three stages, entries in fixed ranges (P[33]
+// ranges, P[34] entries each): each range's histogram by key (acq.saHist,
+// ranges * keys), the offsets (one job: every range's cursor, range-major
+// within a key, so the scatter keeps the serial entry order), the scatter.
+// One serial job of all of it held a helper ~20-30 ms at 350k entries.
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_count(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let n=k.i(0).max(0) as usize;let na=k.i(20).max(0) as usize;
+    let players=k.i(7).max(1) as usize;let keys=na*players;
+    let per=k.i(34).max(1) as usize;let c=chunk.max(0) as usize;
+    let e0=(c*per).min(n);let e1=(e0+per).min(n);
+    let hist=k.p::<i32>(46).add(c*keys);let keyv=k.p::<i32>(45);
+    core::ptr::write_bytes(hist,0,keys);
+    for e in e0..e1 {
+        match candidate(&k,e){Some((ar,owner,_,_,_,_)) if ar<na&&owner<players=>{let key=ar*players+owner;*keyv.add(e)=key as i32;*hist.add(key)+=1;}_=>{*keyv.add(e)=-1;}}
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_prefix(a:u32,_chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;let keys=na*players;
+    let ranges=k.i(33).max(0) as usize;
+    let off=k.p::<i32>(27);let counts=k.p::<i32>(35);let cursor=k.p::<i32>(36);let hist=k.p::<i32>(46);
+    let mut total=0;
+    for key in 0..keys {
+        *off.add(key)=total;
+        let mut sum=0;
+        for c in 0..ranges {let h=hist.add(c*keys+key);let v=*h;*h=total+sum;sum+=v;}
+        // (Counts and the cursors' ends as the serial build left them.)
+        *counts.add(key)=sum;*cursor.add(key)=total+sum;total+=sum;
+    }
+    *off.add(keys)=total;
+    if k.i(28)==1 {prepare_area_answers(&k,na,players,off);}
+}
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_scatter(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let n=k.i(0).max(0) as usize;let na=k.i(20).max(0) as usize;
+    let players=k.i(7).max(1) as usize;let keys=na*players;
+    let per=k.i(34).max(1) as usize;let c=chunk.max(0) as usize;
+    let e0=(c*per).min(n);let e1=(e0+per).min(n);
+    let cur=k.p::<i32>(46).add(c*keys);let keyv=k.p::<i32>(45);
+    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
+    let (es,xs,ys)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5));
+    for e in e0..e1 {let key=*keyv.add(e);if key<0 {continue;}
+        let slot=*es.add(e);let s=slot as usize;
+        let at=cur.add(key as usize);let j=*at as usize;*at+=1;
+        *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*slots.add(j)=slot;
+    }
 }
 
 unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){

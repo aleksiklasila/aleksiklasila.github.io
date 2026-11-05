@@ -125,3 +125,22 @@ c.buildFrameEffects([],[],[]);c.endFrameEffects();
 assert.ok(c.batch.total>100,'nearby spell effects retain their individual shapes');
 
 console.log('PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.');
+
+const alerts = vm.createContext({ gameTime: 100, tickAlpha: 0, TICK_RATE: 20, TILE: 32, mapAlerts: [] });
+vm.runInContext(read('src/audio_visual/audio.js') + '\nmarkControlGroupsDamaged = () => {}; playSound = () => {};', alerts);
+const available = new Set(vm.runInContext('_mapAlertSpare', alerts));
+for (let i = 0; i < 40; i++) alerts.pushDamageAlert({ x: i, y: 12 }, 1);
+assert.equal(alerts.mapAlerts.length, 40);
+const suppressed = { get x() { throw new Error('suppressed hit looked up its position'); } };
+alerts.pushDamageAlert(suppressed, 1);
+alerts.pushDamageAlert({ isKing: true, x: 999, y: 12 }, 1);
+assert.equal(alerts.mapAlerts[0].x, 1, 'a new king alert evicts the oldest alert');
+assert.equal(alerts.mapAlerts[39].x, 999);
+assert.ok(alerts.mapAlerts.every(a => available.has(a)), 'alerts use the reserved records');
+alerts.gameTime = 250;
+alerts.drawMinimapAlerts({}, 1);
+assert.equal(alerts.mapAlerts.length, 0);
+alerts.pushDamageAlert({ x: 5, y: 12 }, 1);
+alerts.resetMapDamageAlerts();
+assert.equal(vm.runInContext('_mapAlertSpareCount', alerts), 40, 'expiry and reset both return records');
+console.log('PASS: capped damage alerts skip unused positions and reuse records after expiry and reset.');

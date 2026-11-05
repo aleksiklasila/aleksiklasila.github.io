@@ -1,6 +1,7 @@
 // The players' state the simulation worker sends the page each tick goes as
 // deltas (research queue: front drop + kept run + tail; research levels:
-// changed and removed keys; unchanged keys in __same). Random mutations of
+// changed and removed keys; unchanged keys in __same; a reordered queue:
+// runs of the last one). Random mutations of
 // queues and levels, encoded and applied, must leave the page's players
 // equal to the simulation's.
 //   node tests/player-state-delta.test.cjs
@@ -19,14 +20,14 @@ let seed = 12345;
 const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296;
 let taskId = 0;
 const task = () => ({ kind: 'unit', key: 'k' + (taskId % 37), statKey: 's' + (taskId++ % 5), fromLevel: 0, toLevel: 1, cost: 10, workRequired: 100, workDone: 0, id: taskId });
-function newPlayer() { const q = []; for (let i = 0; i < 50; i++) q.push(task()); const lv = {}; for (let i = 0; i < 20; i++) lv['unit:k' + i + ':s0'] = i % 4; const mu = {}; for (let i = 0; i < 20; i++) mu['unit:k' + i + ':s0'] = 1 + i / 7; return { energy: 100, researchQueue: q, researchTask: task(), researchLevels: lv, researchMultipliers: mu }; }
+function newPlayer() { const q = []; for (let i = 0, n = 50 + Math.floor(rnd() * 200); i < n; i++) q.push(task()); const lv = {}; for (let i = 0; i < 20; i++) lv['unit:k' + i + ':s0'] = i % 4; const mu = {}; for (let i = 0; i < 20; i++) mu['unit:k' + i + ':s0'] = 1 + i / 7; return { energy: 100, researchQueue: q, researchTask: task(), researchLevels: lv, researchMultipliers: mu }; }
 sim.players.push(newPlayer(), newPlayer());
 const mkAreas = () => Array.from({ length: 300 }, (_, id) => ({ id, active: false, multiplierLevel: 0 }));
 sim.areas = mkAreas(); page.areas = mkAreas();
 sim.areaDirtyIds = { ids: new Int32Array(4), n: 0, all: true };
 const plain = v => JSON.parse(JSON.stringify(v));
 const canon = o => JSON.stringify(Object.keys(o || {}).sort().map(k => [k, o[k]]));
-let deltas = 0, sames = 0;
+let deltas = 0, sames = 0, runs = 0;
 const lastEq = [0, 0];
 for (let tick = 0; tick < 3000; tick++) {
     for (const p of sim.players) {
@@ -38,6 +39,9 @@ for (let tick = 0; tick < 3000; tick++) {
         else if (r < 0.58 && q.length > 2) { const a = q.shift(); q.splice(1, 0, a); }
         else if (r < 0.6) p.researchQueue = q.slice();
         else if (r < 0.62) { q.length = 0; for (let n = 10; n > 0; n--) q.push(task()); }
+        // (A task moved to the top or elsewhere, maybe with new ones: the run form.)
+        else if (r < 0.7 && q.length > 40) { const [a] = q.splice(Math.floor(rnd() * q.length), 1); q.splice(rnd() < 0.6 ? 0 : Math.floor(rnd() * q.length), 0, a); if (rnd() < 0.3) q.splice(Math.floor(rnd() * q.length), 0, task()); if (rnd() < 0.3) q[Math.floor(rnd() * q.length)].workDone += 3; }
+        else if (r < 0.72 && q.length < 20) for (let n = 60; n > 0; n--) q.push(task());
         const s = rnd();
         if (s < 0.2) { const k = 'unit:k' + Math.floor(rnd() * 30) + ':s' + Math.floor(rnd() * 3); p.researchLevels[k] = (p.researchLevels[k] || 0) + 1; }
         else if (s < 0.23) { const ks = Object.keys(p.researchLevels); if (ks.length) delete p.researchLevels[ks[Math.floor(rnd() * ks.length)]]; }
@@ -49,7 +53,7 @@ for (let tick = 0; tick < 3000; tick++) {
     if (tick === 1500) sim.players[1] = newPlayer();
     if (tick === 2000) { sim.areas = mkAreas(); sim.areas[3].active = true; }
     const st = plain(sim.simFrameEncodeState(false));
-    for (const e of st.players) { if (e.__same) sames++; if (e.researchQueue && e.researchQueue.__qd) deltas++; }
+    for (const e of st.players) { if (e.__same) sames++; if (e.researchQueue && e.researchQueue.__qd) deltas++; if (e.researchQueue && e.researchQueue.__qr) runs++; }
     page.pageApplyState(st);
     for (let i = 0; i < sim.players.length; i++) {
         const a = sim.players[i], b = page.players[i];
@@ -61,5 +65,5 @@ for (let tick = 0; tick < 3000; tick++) {
     }
     for (let i = 0; i < sim.areas.length; i++) assert.ok(!!page.areas[i].active === !!sim.areas[i].active && (page.areas[i].multiplierLevel || 0) === sim.areas[i].multiplierLevel, 'area ' + i + ' tick ' + tick);
 }
-assert.ok(deltas > 500 && sames > 500, 'deltas ' + deltas + ' sames ' + sames);
-console.log('player-state-delta ok: deltas', deltas, 'unchanged', sames);
+assert.ok(deltas > 500 && sames > 500 && runs > 100, 'deltas ' + deltas + ' sames ' + sames + ' runs ' + runs);
+console.log('player-state-delta ok: deltas', deltas, 'runs', runs, 'unchanged', sames);

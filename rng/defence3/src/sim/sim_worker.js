@@ -151,14 +151,22 @@ function _simEv(op, argc, a0, a1, a2, a3, a4, a5, a6, a7) {
         E.extra.push(e);
     }
 }
-// The tick's events for the message (the buffer: a copy, transferred).
+// The tick's events for the message (the buffer: a copy, transferred). Its
+// string and extra lists are the recorder's own: the message is cloned when
+// posted, then _simEvPosted empties them for the next tick.
+const _simEvOut = { f: null, s: null, x: null };
 function _simEvTake(transfer) {
-    const E = _simEvents;
+    const E = _simEvents, out = _simEvOut;
     const f = E.buf.slice(0, E.n);
     transfer.push(f.buffer);
-    const out = { f, s: E.strs, x: E.extra };
-    _simEvReset();
+    out.f = f; out.s = E.strs; out.x = E.extra;
+    E.n = 0;
     return out;
+}
+function _simEvPosted() {
+    const E = _simEvents, out = _simEvOut;
+    out.f = null; out.s = null; out.x = null;
+    E.n = 0; E.strs.length = 0; E.strIx.clear(); E.extra.length = 0;
 }
 // Set when the simulation's win check found this player defeated (and
 // cleared by a restore or patch that shows its team alive: reviewLocalDefeat).
@@ -626,28 +634,54 @@ let _simStartTimings = null;
 // simulation: the page gets each tick's sums and keeps logs of its own).
 // (Per log, the last entry already sent.)
 let _simDeltaLast = { e: [], a: [] };
+// (Sums by source, and for A* by unit type then source: maps kept and
+// cleared, no key strings made. The sums' order is the order first met.)
+const _simDeltaSums = new Map(), _simDeltaByType = new Map();
 function _simDeltaEvents() {
     if (typeof energyDeltaEventLogByPlayer === 'undefined' || typeof astarUsageEventLogByPlayer === 'undefined') return;
-    for (const [tag, logs, last] of [['E', energyDeltaEventLogByPlayer, _simDeltaLast.e], ['A', astarUsageEventLogByPlayer, _simDeltaLast.a]]) {
-        for (let pid = 0; pid < logs.length; pid++) {
-            const b = logs[pid];
-            if (!Array.isArray(b) || b.length === 0) continue;
-            const stop = last[pid], sums = new Map();
-            for (let i = b.length - 1; i >= 0 && b[i] !== stop; i--) {
-                const ev = b[i];
-                if (!ev) continue;
-                const d = tag === 'E' ? Number(ev.delta) : (Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -Math.max(0, Number(ev.used) || 0));
-                if (!Number.isFinite(d) || d === 0) continue;
-                const key = tag === 'E' ? String(ev.source || '') : String(ev.unitType || 'other') + '|' + String(ev.source || '');
-                sums.set(key, (sums.get(key) || 0) + d);
+    _simDeltaLog(false, energyDeltaEventLogByPlayer, _simDeltaLast.e);
+    _simDeltaLog(true, astarUsageEventLogByPlayer, _simDeltaLast.a);
+}
+function _simDeltaLog(astar, logs, last) {
+    for (let pid = 0; pid < logs.length; pid++) {
+        const b = logs[pid];
+        if (!Array.isArray(b) || b.length === 0) continue;
+        const stop = last[pid];
+        for (let i = b.length - 1; i >= 0 && b[i] !== stop; i--) {
+            const ev = b[i];
+            if (!ev) continue;
+            const d = !astar ? Number(ev.delta) : (Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -Math.max(0, Number(ev.used) || 0));
+            if (!Number.isFinite(d) || d === 0) continue;
+            const source = String(ev.source || '');
+            let sums = _simDeltaSums;
+            if (astar) {
+                const type = String(ev.unitType || 'other');
+                sums = _simDeltaByType.get(type);
+                if (sums === undefined) _simDeltaByType.set(type, sums = new Map());
             }
-            last[pid] = b[b.length - 1];
-            for (const [key, d] of sums) {
-                if (tag === 'E') _simEv('E', 3, pid, key, d);
-                else { const cut = key.indexOf('|'); _simEv('A', 4, pid, key.slice(0, cut), key.slice(cut + 1), d); }
-            }
+            sums.set(source, (sums.get(source) || 0) + d);
         }
+        // (The page keeps the logs it shows; here they only feed these sums.
+        // Emptied once sent, their entries die young instead of living out
+        // the log's window: they were a share of every scavenge's survivors.)
+        b.length = 0;
+        last[pid] = undefined;
+        _simDeltaPid = pid;
+        if (!astar) _simDeltaFlush(_simDeltaSums, null);
+        else _simDeltaByType.forEach(_simDeltaFlush);
     }
+}
+// (Map callbacks, no closures: the player and unit type in these.)
+let _simDeltaPid = 0, _simDeltaType = null;
+function _simDeltaFlush(sums, type) {
+    if (sums.size === 0) return;
+    _simDeltaType = type;
+    sums.forEach(_simDeltaEmit);
+    sums.clear();
+}
+function _simDeltaEmit(d, source) {
+    if (_simDeltaType === null) _simEv('E', 3, _simDeltaPid, source, d);
+    else _simEv('A', 4, _simDeltaPid, _simDeltaType, source, d);
 }
 // ---- ?simtrace=1: where the slow ticks go ----
 // Each tick's time by phase (the functions below, nested ones counted in
@@ -708,7 +742,7 @@ function _simTick(msg) {
     let teams = msg.teams;
     let firstTeam = currentTick % teams.length;
     let actions = msg.actions || [];
-    for (let k = 0; k < teams.length; k++) {
+    for (let k = 0; k < teams.length && actions.length > 0; k++) {
         let teamId = teams[(firstTeam + k) % teams.length];
         let acts = actions.filter(a => (a.teamId ?? 0) === teamId);
         if (acts.length > 0) {
@@ -800,6 +834,7 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
     } catch (err) { sight = null; _simError('sight', err); }
     _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightId, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report,
         lateMs: _simTickLateMs, doneAt: _simNowAbs() }, transfer);
+    _simEvPosted();
 }
 
 // ---- requests the page's network code needs in tick order ----
