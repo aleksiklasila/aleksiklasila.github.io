@@ -492,7 +492,7 @@ class Unit {
         this.prevX = x; this.prevY = y;
         if (this._us) { this._us.x0[this._si] = this._us.x[this._si]; this._us.y0[this._si] = this._us.y[this._si]; this._us.upT[this._si] = simUnitTypeIndex(unitType); if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); }
         // followPath: inputs of the last completed node scan (a cache).
-        this._fpPath = null; this._fpTile = -1; this._fpIdx = -1; this._fpVer = -1;
+        this._fpPath = null;
         this.teleportHideTicks = 0;
 
         let s = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
@@ -544,7 +544,7 @@ class Unit {
         // per-unit tick loops stay monomorphic instead of megamorphic.
         // Values stay undefined, as if the field had never been set.
         this._lastAppliedEffectiveLevel = undefined;
-        this._floorTile = -1; this._removedNow = false; this._pendingDueStamp = -1; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._thingStatsRefreshStamp = 0; this._effectiveStatsStamp = 0; this._statsVer = -1; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
+        this._floorTile = -1; this._removedNow = false; this._okTile = -1; this._okVer = 0; this._okNodeTile = -1; this._okNodeVer = 0; this._effectiveStatsStamp = 0; this._navLastD = -1; this._vsGen = 0; this._vsR = -1; this._vsA = -1; this._vsP1 = -1; this._vsP2 = -1;
         this.workerState = undefined; this.workerType = undefined; this.carryingValue = undefined; this.workerTarget = undefined;
         this.workerTargetType = undefined; this._workerReservedTileIndex = undefined;
         this._workerNextIdleRetargetTick = undefined; this._idleFailVer = -1; this._idleFailUntil = 0;

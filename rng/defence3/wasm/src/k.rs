@@ -5732,7 +5732,7 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
     // type by its term, wk.ttTerm, its code being each peer's own.)
     let (wks, wkt, wkr, wkn, ttt) = (k.p::<u32>(45), k.p::<i32>(46), k.p::<i32>(47), k.p::<i32>(48), k.p::<i32>(49));
     // (What a worker carries: its record's wmCarry, by unit.wkIx; NaN none.)
-    let (wix, wcar) = (k.p::<i32>(50), k.p::<f64>(51));
+    let (wix, wcar) = (k.p::<i32>(50), k.p::<f32>(51));
     let n = k.i(0).max(0) as usize;
     let per = k.i(1).max(0) as usize;
     let its = (1.0 / (k.f(2) * 8.0)) as f32;
@@ -5907,7 +5907,7 @@ pub unsafe extern "C" fn k_snap_units(a: u32, chunk: i32) {
         mix!(33, g32!(wkt));
         mix!(34, g32!(wkr));
         mix!(35, g32!(wkn));
-        let carry = |q: usize| -> i32 { let w = g(wix, q); if w <= 0 { return 0; } let c = g(wcar, w as usize); if c == c { (c * 1024.0) as i64 as i32 } else { 0x7fc00000 } };
+        let carry = |q: usize| -> i32 { let w = g(wix, q); if w <= 0 { return 0; } let c = g(wcar, w as usize) as f64; if c == c { (c * 1024.0) as i64 as i32 } else { 0x7fc00000 } };
         mix!(36, i32x4(carry(q0), carry(q1), carry(q2), carry(q3)));
         // (Seeded by id, then finished; the regions from the positions.)
         let ids = g32!(uid);

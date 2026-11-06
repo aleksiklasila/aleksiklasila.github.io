@@ -140,7 +140,7 @@ struct W {
     wkty: *mut i32, wkd: *mut i32, wkox: *mut i32, wkoy: *mut i32, wktw: *mut u8, wkfail: *mut i32, wkuntil: *mut i32, wksched: *mut i32,
     wst: *mut i32, wscfg: *mut i8, wsou: *mut i32, wsox: *mut f32, wsoy: *mut f32, wsr: *mut f32, wsax: *mut f32, wsay: *mut f32,
     wsak: *mut i8, wsneed: *mut i32, wsjid: *mut i32, wscur: *mut i32, wsmy: *mut i32, wsfail: *mut u8,
-    wmsp: *mut i32, wmfailu: *mut f64, holdf: *mut u8, mvpp: *mut u8, hot: *mut f32,
+    wmsp: *mut i32, wmfailu: *mut f32, holdf: *mut u8, mvpp: *mut u8, hot: *mut f32,
     ctab: *mut u8, rrow: *mut i32, stown: *mut i32, stuc: *mut u8, stval: *mut f64,
     rmark: *mut u8, rauto: *mut u8, rlevel: *mut i8, rstacks: *mut i32,
     wall0: *mut u8, resv: *mut i32, rcount: *mut i32, rsum: *mut i32, wswl: *mut i32, ver: *mut i32, ttab: *mut i32,
@@ -150,11 +150,11 @@ struct W {
     // (ws.res, ws.score, ws.ures), the collectors' groups' tile and kind arrays (gtab: two words a
     // group, encoded), the healers' damaged units' ids by owner (hid, HM an owner).
     trs: *mut i32, trid: *mut i32, trk: *mut i32, trwt: *mut i32, trg: *mut i32, tres: *mut i32, tsc: *mut f32, tur: *mut i32, gtab: *mut i32, hid: *mut i32,
-    cwall: *mut i32, ctabw: *mut i32, price: *mut f64, ulevel: *mut i8, uidt: *mut i32, stbrain: *mut i32, wbtick: *mut i32, wbsp: *mut i32, wmcarry: *mut f64, wsst: *mut f32,
-    wmpin: *mut i32, wmpinty: *mut u8, wmwx: *mut f64, wmwy: *mut f64, wmwgx: *mut f64, wmwgy: *mut f64, wmwty: *mut u8, wmdrop: *mut i32,
-    wmmine: *mut i32, wmminety: *mut u8, wmidle: *mut f64, tfarm: *mut f64, stcode: *mut u8,
-    wmqc: *mut i32, wmqr: *mut f64, wmqp: *mut f64, wmtrip: *mut f64, wmblk: *mut f64, energy: *mut f32, maxe: *mut f32, x0: *mut i32, y0: *mut i32,
-    stab: *mut u8, ajtab: *mut i32, wstab: *mut i32, tykey: *mut i32, rml: *mut i32, smxe: *mut f64, rlv: *mut i32, wkwx: *mut f32, wkwy: *mut f32, wklmt: *mut i32, wmre: *mut f64,
+    cwall: *mut i32, ctabw: *mut i32, price: *mut f64, ulevel: *mut i8, uidt: *mut i32, stbrain: *mut i32, wbtick: *mut i32, wbsp: *mut i32, wmcarry: *mut f32, wsst: *mut f32,
+    wmpin: *mut i32, wmpinty: *mut u8, wmwx: *mut f32, wmwy: *mut f32, wmwgx: *mut f32, wmwgy: *mut f32, wmwty: *mut u8, wmdrop: *mut i32,
+    wmmine: *mut i32, wmminety: *mut u8, wmidle: *mut f32, tfarm: *mut f64, stcode: *mut u8,
+    wmqc: *mut i32, wmqr: *mut f32, wmqp: *mut f32, wmtrip: *mut f32, wmblk: *mut f32, energy: *mut f32, maxe: *mut f32, x0: *mut i32, y0: *mut i32,
+    stab: *mut u8, ajtab: *mut i32, wstab: *mut i32, tykey: *mut i32, rml: *mut i32, smxe: *mut f64, rlv: *mut i32, wkwx: *mut f32, wkwy: *mut f32, wklmt: *mut i32, wmre: *mut f32,
     // Params.
     n: usize, now: i32, dk: i32, gw: i32, gh: i32, tile: f64, delay: i32, retarget: i32, search_ticks: i32, backoff: i32,
     nt: i32, srt: i32, rcols: i32, vtypes: i32, vrw: i32, vrh: i32, vnp: i32, wrt: i32, epoch: i32, absent: u32,
@@ -892,7 +892,7 @@ impl<'a> Ctx<'a> {
         s(w.wkr, q, -1);
     }
     // ---- Idle searches (worker.js) ----
-    unsafe fn fail_until(&self, q: usize) -> f64 { g(self.w.wmfailu, self.rec(q)) }
+    unsafe fn fail_until(&self, q: usize) -> f64 { g(self.w.wmfailu, self.rec(q)) as f64 }
     unsafe fn backoff(&self, q: usize, tick: i32) -> bool {
         let v = g(self.w.idlefv, q);
         let u = self.fail_until(q);
@@ -918,21 +918,21 @@ impl<'a> Ctx<'a> {
         let (gx, gy) = self.utile(q);
         if self.wb(q) == WB_HEALER || self.wb(q) == WB_BUILDER {
             let r = self.rec(q);
-            let (x, y) = (g(w.wmwx, r), g(w.wmwy, r));
+            let (x, y) = (((g(w.wmwx, r) as f64) as f64), ((g(w.wmwy, r) as f64) as f64));
             if x == x && y == y { return (floor(x / w.tile) as i32, floor(y / w.tile) as i32, true); }
             return (gx, gy, false);
         }
         if !self.is_collector(q) { return (gx, gy, false); }
         let r = self.rec(q);
-        let since = g(w.wmidle, r);
+        let since = ((g(w.wmidle, r) as f64) as f64);
         if self.st(q) == WS_IDLE && ((w.now as f64) - (if since == since && since != 0.0 { since } else { 0.0 })) < w.five_s as f64 { return (gx, gy, false); }
-        let (x, y) = (g(w.wmwx, r), g(w.wmwy, r));
+        let (x, y) = (((g(w.wmwx, r) as f64) as f64), ((g(w.wmwy, r) as f64) as f64));
         if x == x && y == y { return (floor(x / w.tile) as i32, floor(y / w.tile) as i32, true); }
         (gx, gy, false)
     }
     /// A collector's idle start (_lastIdleStateTime), 0 unset.
     #[inline(always)]
-    unsafe fn idle_since(&self, q: usize) -> f64 { let v = g(self.w.wmidle, self.rec(q)); if v == v { v } else { 0.0 } }
+    unsafe fn idle_since(&self, q: usize) -> f64 { let v = g(self.w.wmidle, self.rec(q)) as f64; if v == v { v } else { 0.0 } }
     unsafe fn set_next(&self, q: usize, v: i32) {
         if g(self.w.wkn, q) != v { s(self.w.on, q, 0); s(self.w.wkn, q, v); }
     }
@@ -957,7 +957,7 @@ impl<'a> Ctx<'a> {
         if go {
             self.set_next(q, now + w.retarget);
             s(w.idlefv, q, ver);
-            s(w.wmfailu, r, (now + w.backoff) as f64);
+            s(w.wmfailu, r, (((now + w.backoff) as f64) as f32) as f32);
         }
         go
     }
@@ -1052,7 +1052,7 @@ impl<'a> Ctx<'a> {
         if g(w.wskind, q) != 0 {
             let mut wake = now + 0x3fffffff;
             let bld = self.wb(q) == WB_BUILDER;
-            if bld { let re = g(w.wmre, self.rec(q)); if self.target_tile(q) >= 0 && re == re && (re as i32) < wake { wake = re as i32; } }
+            if bld { let re = ((g(w.wmre, self.rec(q)) as f64) as f64); if self.target_tile(q) >= 0 && re == re && (re as i32) < wake { wake = re as i32; } }
             if !(wake > now + 1) { return; }
             s(w.wake, q, wake); s(w.mflags, q, if bld && self.watching(q) { 4 } else { 0 }); s(w.on, q, 2);
             return;
@@ -1069,7 +1069,7 @@ impl<'a> Ctx<'a> {
         let back = self.backoff(q, now + 1);
         let mut sched = if back { (next as f64).max(fu) } else { next as f64 };
         let bld = self.wb(q) == WB_BUILDER;
-        if bld { let re = g(w.wmre, self.rec(q)); if self.target_tile(q) >= 0 && re == re && re < sched { sched = re; } }
+        if bld { let re = ((g(w.wmre, self.rec(q)) as f64) as f64); if self.target_tile(q) >= 0 && re == re && re < sched { sched = re; } }
         // (_workerWorkOriginUntil: a collector's origin moves 5 s into its idle.)
         if coll && self.st(q) == WS_IDLE {
             let since = self.idle_since(q);
@@ -1340,8 +1340,8 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         let r = self.rec(q);
         let (gx, gy) = (irem(t, w.gw), idiv(t, w.gw));
-        s(w.wmwx, r, gx as f64 * w.tile + w.tile * 0.5); s(w.wmwy, r, gy as f64 * w.tile + w.tile * 0.5);
-        s(w.wmwgx, r, gx as f64); s(w.wmwgy, r, gy as f64);
+        s(w.wmwx, r, ((gx as f64 * w.tile + w.tile * 0.5) as f32) as f32); s(w.wmwy, r, ((gy as f64 * w.tile + w.tile * 0.5) as f32) as f32);
+        s(w.wmwgx, r, ((gx as f64) as f32) as f32); s(w.wmwgy, r, ((gy as f64) as f32) as f32);
         if tt > 1 { s(w.wmwty, r, tt as u8); }
     }
     /// _resourceCollectorAssignTarget.
@@ -1376,9 +1376,9 @@ impl<'a> Ctx<'a> {
         }
         let rz = self.res(q);
         let anchor = { let a = self.coll_spawner_ok(q, g(w.wmsp, r)); if a >= 0 { a } else { self.coll_spawner_ok(q, g(w.wmdrop, r)) } };
-        if self.idle_since(q) == 0.0 { s(w.wmidle, r, w.now as f64); }
+        if self.idle_since(q) == 0.0 { s(w.wmidle, r, ((w.now as f64) as f32) as f32); }
         let (px, ak) = self.search(q);
-        let (gx, gy) = (g(w.wmwx, r), g(w.wmwy, r));
+        let (gx, gy) = (((g(w.wmwx, r) as f64) as f64), ((g(w.wmwy, r) as f64) as f64));
         let site = gx == gx && gy == gy;
         let (ax, ay) = if anchor >= 0 { ((irem(anchor, w.gw) as f64 * w.tile + w.tile * 0.5) as f32, (idiv(anchor, w.gw) as f64 * w.tile + w.tile * 0.5) as f32) } else { (f32::NAN, f32::NAN) };
         self.ws_register_at(q, WSR_COLLECT, 0, px, if w.area_search { ak } else { -1 }, false, false, w.cfg_ix[rz],
@@ -1388,7 +1388,7 @@ impl<'a> Ctx<'a> {
     unsafe fn coll_return(&mut self, q: usize) {
         let w = self.w;
         let r = self.rec(q);
-        if !(g(w.wmcarry, r) > 0.0) { self.clear_auto_route(q); return; }
+        if !(((g(w.wmcarry, r) as f64) as f64) > 0.0) { self.clear_auto_route(q); return; }
         let sp = self.brain_spawner(q, w.drop_type[self.res(q)]);
         let key = if sp >= 0 { self.path_to(q, sp) } else { -1 };
         if key >= 0 {
@@ -1411,14 +1411,14 @@ impl<'a> Ctx<'a> {
         let r = self.rec(q);
         let rz = self.res(q);
         if st == WS_IDLE {
-            if self.idle_since(q) == 0.0 { s(w.wmidle, r, w.now as f64); }
+            if self.idle_since(q) == 0.0 { s(w.wmidle, r, ((w.now as f64) as f32) as f32); }
             if g(w.wskind, q) != 0 { return; }
             if !self.idle_retarget(q, heavy) { return; }
             self.coll_find(q);
             return;
         }
         if st == WS_MOVING_TO || st == WS_MOVING_TO_ASTAR {
-            s(w.wmidle, r, 0.0);
+            s(w.wmidle, r, ((0.0) as f32) as f32);
             let t = self.target_tile(q);
             let tt = self.ttype(q);
             if t < 0 || !self.owns_reserved(q, t) {
@@ -1443,11 +1443,11 @@ impl<'a> Ctx<'a> {
                         if sk != i32::MIN { stack_level(sk, w.maxl) } else { 1 }
                     };
                     let mult = if o >= 0 && o < w.np { g(w.tfarm, ((o as usize * 2 + rz) * w.l1 as usize) + bl as usize) } else { bl as f64 };
-                    s(w.wmcarry, r, floor(js_max(1.0, gather * mult)));
+                    s(w.wmcarry, r, ((floor(js_max(1.0, gather * mult))) as f32) as f32);
                 } else {
                     let left = self.rd(w.stval, tu);
                     let ex = floor(js_min(gather, js_max(0.0, left)));
-                    s(w.wmcarry, r, ex);
+                    s(w.wmcarry, r, ((ex) as f32) as f32);
                     self.mine_take(t, rz as i32, ex);
                 }
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, if rz == 1 { SND_ASTAR_WORK } else { SND_COLLECTOR_WORK }); }
@@ -1471,7 +1471,7 @@ impl<'a> Ctx<'a> {
             let drop = if pref >= 0 { pref } else { self.brain_spawner(q, w.drop_type[rz]) };
             let at = drop >= 0 && self.within(q, drop);
             if at { s(w.wmdrop, r, drop * 8 + WT_TILE as i32); s(w.wmsp, r, drop * 8 + WT_TILE as i32); }
-            let carry = g(w.wmcarry, r);
+            let carry = ((g(w.wmcarry, r) as f64) as f64);
             if carry > 0.0 && !at { self.coll_return(q); return; }
             if carry > 0.0 && at {
                 if g(w.cool, q) > 0 { return; }
@@ -1481,7 +1481,7 @@ impl<'a> Ctx<'a> {
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, if rz == 1 { SND_ASTAR_COLLECTED } else { SND_GOLD_COLLECTED }); }
                 self.set_cooldown(q, w.coll_cd[rz]);
             }
-            s(w.wmcarry, r, 0.0);
+            s(w.wmcarry, r, ((0.0) as f32) as f32);
             if !heavy { return; }
             let t = self.target_tile(q);
             let tt = self.ttype(q);
@@ -1613,8 +1613,8 @@ impl<'a> Ctx<'a> {
         if t < 0 { return; }
         let rc = self.rec(q);
         let (gx, gy) = (irem(t, w.gw), idiv(t, w.gw));
-        s(w.wmwx, rc, gx as f64 * w.tile + w.tile * 0.5); s(w.wmwy, rc, gy as f64 * w.tile + w.tile * 0.5);
-        s(w.wmwgx, rc, gx as f64); s(w.wmwgy, rc, gy as f64);
+        s(w.wmwx, rc, ((gx as f64 * w.tile + w.tile * 0.5) as f32) as f32); s(w.wmwy, rc, ((gy as f64 * w.tile + w.tile * 0.5) as f32) as f32);
+        s(w.wmwgx, rc, ((gx as f64) as f32) as f32); s(w.wmwgy, rc, ((gy as f64) as f32) as f32);
     }
     #[inline(always)]
     unsafe fn b_material(&self, q: usize) -> bool { (g(self.w.wks, q) >> 13) & 3 == 2 }
@@ -1646,12 +1646,12 @@ impl<'a> Ctx<'a> {
         let mut t = -1;
         let cur = self.target_tile(q);
         if cur >= 0 && self.b_valid(cur, o) && self.can_assign(q, cur, 1) { t = cur; }
-        let (gxf, gyf) = (g(w.wmwgx, rc), g(w.wmwgy, rc));
+        let (gxf, gyf) = (((g(w.wmwgx, rc) as f64) as f64), ((g(w.wmwgy, rc) as f64) as f64));
         if t < 0 && gxf == gxf && gyf == gyf {
             let c = (gyf as i32) * w.gw + gxf as i32;
             if gxf >= 0.0 && gyf >= 0.0 && (gxf as i32) < w.gw && (gyf as i32) < w.gh && self.b_valid(c, o) && self.can_assign(q, c, 1) { t = c; }
         }
-        let (wx, wy) = (g(w.wmwx, rc), g(w.wmwy, rc));
+        let (wx, wy) = (((g(w.wmwx, rc) as f64) as f64), ((g(w.wmwy, rc) as f64) as f64));
         if t < 0 && wx == wx && wy == wy {
             // (_getBuilderWorkTargetNear: the 3x3 tiles around, nearest within 1.5 tiles, the last of equals.)
             let (cx, cy) = (floor(wx / w.tile) as i32, floor(wy / w.tile) as i32);
@@ -1910,12 +1910,12 @@ impl<'a> Ctx<'a> {
             s(w.wkwx, rc, x as f32); s(w.wkwy, rc, y as f32);
             if moved { s(w.wklmt, rc, now); }
         }
-        let nr = g(w.wmre, rc);
-        if nr != nr { s(w.wmre, rc, (now + w.recheck) as f64); }
+        let nr = ((g(w.wmre, rc) as f64) as f64);
+        if nr != nr { s(w.wmre, rc, (((now + w.recheck) as f64) as f32) as f32); }
         if g(w.wklmt, rc) == i32::MIN { s(w.wklmt, rc, now); }
         let t0 = self.target_tile(q);
-        if st == WS_IDLE && t0 >= 0 && (now as f64) >= g(w.wmre, rc) {
-            s(w.wmre, rc, (now + w.recheck) as f64);
+        if st == WS_IDLE && t0 >= 0 && (now as f64) >= ((g(w.wmre, rc) as f64) as f64) {
+            s(w.wmre, rc, (((now + w.recheck) as f64) as f32) as f32);
             if now - g(w.wklmt, rc) >= w.stuck {
                 self.set_path(q, -1); self.set_pidx(q, 0);
                 s(w.wmsp, rc, 0);
@@ -1973,7 +1973,7 @@ impl<'a> Ctx<'a> {
                     self.pay(o, 0, -trip); self.energy_log(o, ES_BUILDER, -trip);
                     self.b_material_set(q, true);
                     self.set_cooldown(q, w.build_cd);
-                } else { s(w.wmblk, rc, (now + w.blocked_ticks) as f64); }
+                } else { s(w.wmblk, rc, (((now + w.blocked_ticks) as f64) as f32) as f32); }
                 s(w.wmsp, rc, 0);
                 self.set_state(q, WS_MOVING_TO_BUILD);
                 let key = self.path_to(q, t);
@@ -2077,8 +2077,8 @@ impl<'a> Ctx<'a> {
         match self.queue_of(t) {
             Some((n, req, paid)) if n > 0 => {
                 s(w.wmqc, r, t * 8 + WT_TILE as i32);
-                s(w.wmqr, r, js_max(1.0, floor(req)));
-                s(w.wmqp, r, js_max(0.0, floor(paid)));
+                s(w.wmqr, r, ((js_max(1.0, floor(req))) as f32) as f32);
+                s(w.wmqp, r, ((js_max(0.0, floor(paid))) as f32) as f32);
             }
             _ => self.heal_commit_clear(q),
         }
@@ -2093,9 +2093,9 @@ impl<'a> Ctx<'a> {
         let o = g(w.own, q) as i32;
         if !self.heal_queue_ok(t, o) { self.heal_commit_clear(q); return -1; }
         let paid = js_max(0.0, floor(self.queue_of(t).map(|v| v.2).unwrap_or(0.0)));
-        let req = js_max(1.0, floor(g(w.wmqr, r)));
-        let mp = js_max(floor(g(w.wmqp, r)), paid);
-        s(w.wmqp, r, mp);
+        let req = js_max(1.0, floor(((g(w.wmqr, r) as f64) as f64)));
+        let mp = js_max(floor(((g(w.wmqp, r) as f64) as f64)), paid);
+        s(w.wmqp, r, ((mp) as f32) as f32);
         if mp >= req { self.heal_commit_clear(q); return -1; }
         t
     }
@@ -2105,11 +2105,11 @@ impl<'a> Ctx<'a> {
         let r = self.rec(q);
         if t >= 0 {
             let (gx, gy) = (irem(t, w.gw), idiv(t, w.gw));
-            s(w.wmwx, r, gx as f64 * w.tile + w.tile * 0.5); s(w.wmwy, r, gy as f64 * w.tile + w.tile * 0.5);
-            s(w.wmwgx, r, gx as f64); s(w.wmwgy, r, gy as f64);
+            s(w.wmwx, r, ((gx as f64 * w.tile + w.tile * 0.5) as f32) as f32); s(w.wmwy, r, ((gy as f64 * w.tile + w.tile * 0.5) as f32) as f32);
+            s(w.wmwgx, r, ((gx as f64) as f32) as f32); s(w.wmwgy, r, ((gy as f64) as f32) as f32);
         } else if sl >= 0 {
             let (x, y) = self.tick_pos(sl as usize);
-            s(w.wmwx, r, x); s(w.wmwy, r, y);
+            s(w.wmwx, r, ((x) as f32) as f32); s(w.wmwy, r, ((y) as f32) as f32);
         }
     }
     /// The route to its nearest healer spawner (RETURNING_FOR_GOLD), true when one.
@@ -2149,7 +2149,7 @@ impl<'a> Ctx<'a> {
         let w = self.w;
         let o = g(w.own, q) as i32;
         let r = self.rec(q);
-        let (ox, oy, from_site) = { let (x, y) = (g(w.wmwx, r), g(w.wmwy, r)); if x == x && y == y { (x, y, true) } else { let (ux, uy) = (g(w.x, q) as f64 * 0.125, g(w.y, q) as f64 * 0.125); (ux, uy, false) } };
+        let (ox, oy, from_site) = { let (x, y) = (((g(w.wmwx, r) as f64) as f64), ((g(w.wmwy, r) as f64) as f64)); if x == x && y == y { (x, y, true) } else { let (ux, uy) = (g(w.x, q) as f64 * 0.125, g(w.y, q) as f64 * 0.125); (ux, uy, false) } };
         let (px, ak) = self.search(q);
         let pin = Self::tile_of_word(g(w.wmpin, r));
         let pinned = self.heal_anchor_ok(pin, o);
@@ -2176,7 +2176,7 @@ impl<'a> Ctx<'a> {
                 return;
             }
             let trip = self.heal_trip_cost(q, qt);
-            if trip > 0.0 && self.heal_route(q) { s(w.wmtrip, r, trip); return; }
+            if trip > 0.0 && self.heal_route(q) { s(w.wmtrip, r, ((trip) as f32) as f32); return; }
             self.set_state(q, WS_IDLE); self.set_cmd(q, CMD_IDLE);
             return;
         }
@@ -2238,7 +2238,7 @@ impl<'a> Ctx<'a> {
             }
             if g(w.cool, q) > 0 { return; }
             if is_queue {
-                let tr = g(w.wmtrip, r);
+                let tr = ((g(w.wmtrip, r) as f64) as f64);
                 let work = js_max(1.0, floor(if tr != 0.0 && tr == tr { tr } else { self.heal_dps_round(q) }));
                 let mut did = false;
                 if let Some((n, req, paid)) = self.queue_of(tq) {
@@ -2250,7 +2250,7 @@ impl<'a> Ctx<'a> {
                 }
                 if did {
                     self.heal_material_set(q, false);
-                    s(w.wmtrip, r, 0.0);
+                    s(w.wmtrip, r, ((0.0) as f32) as f32);
                     self.set_cooldown(q, w.heal_cd);
                     if g(w.stown, tq as usize) == w.local { self.emit(OUT_SOUND_HEAL, tq, -1, 0); }
                 }
@@ -2262,7 +2262,7 @@ impl<'a> Ctx<'a> {
                     return;
                 }
                 let trip = self.heal_trip_cost(q, tq);
-                if trip > 0.0 && self.heal_route(q) { s(w.wmtrip, r, trip); return; }
+                if trip > 0.0 && self.heal_route(q) { s(w.wmtrip, r, ((trip) as f32) as f32); return; }
                 self.set_state(q, WS_IDLE); self.set_cmd(q, CMD_IDLE);
                 return;
             }
@@ -2288,7 +2288,7 @@ impl<'a> Ctx<'a> {
             if !valid {
                 if is_queue { self.heal_commit_clear(q); }
                 self.clear_target(q, true);
-                s(w.wmtrip, r, 0.0);
+                s(w.wmtrip, r, ((0.0) as f32) as f32);
                 if !self.heal_retarget_due(q, heavy) { self.set_state(q, WS_IDLE); self.set_cmd(q, CMD_IDLE); }
                 return;
             }
@@ -2302,10 +2302,10 @@ impl<'a> Ctx<'a> {
                     self.pay(o, 0, -trip);
                     self.energy_log(o, ES_HEALER, -trip);
                     self.heal_material_set(q, true);
-                    s(w.wmtrip, r, if is_queue { trip } else { 0.0 });
+                    s(w.wmtrip, r, ((if is_queue { trip } else { 0.0 }) as f32) as f32);
                     self.set_cooldown(q, w.heal_cd);
                 } else if trip > 0.0 {
-                    s(w.wmblk, r, (w.now + w.blocked_ticks) as f64);
+                    s(w.wmblk, r, (((w.now + w.blocked_ticks) as f64) as f32) as f32);
                 }
                 s(w.wmsp, r, 0);
                 self.set_state(q, WS_MOVING_TO_HEAL);
@@ -2348,7 +2348,7 @@ impl<'a> Ctx<'a> {
                 let sk = { let p = self.ccol::<i32>(tu, CT_STACKS); if p.is_null() { i32::MIN } else { self.rd(p, g(w.rrow, tu).max(0) as usize) } };
                 let stacks = if sk == i32::MIN || sk == 0 { 1.0 } else { sk as f64 };
                 let refund = floor(price * stacks * 0.1);
-                s(w.wmcarry, self.rec(q), refund * self.base_level(q) as f64);
+                s(w.wmcarry, self.rec(q), ((refund * self.base_level(q) as f64) as f32) as f32);
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, SND_SALVAGER_WORK); }
                 self.emit(OUT_SALVAGE, t, (g(w.wks, q) >> 10 & 7) as i32, 0);
                 self.set_cooldown(q, w.salv_cd);
@@ -2370,7 +2370,7 @@ impl<'a> Ctx<'a> {
         } else if st == WS_RETURNING {
             if !self.path_done(q) { return; }
             let r = self.rec(q);
-            let carry = g(w.wmcarry, r);
+            let carry = ((g(w.wmcarry, r) as f64) as f64);
             if carry > 0.0 {
                 if g(w.cool, q) > 0 { return; }
                 self.pay(o, 0, carry);
@@ -2378,7 +2378,7 @@ impl<'a> Ctx<'a> {
                 self.set_cooldown(q, w.salv_cd);
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, SND_SALVAGE_COLLECTED); }
             }
-            s(w.wmcarry, r, 0.0);
+            s(w.wmcarry, r, ((0.0) as f32) as f32);
             if !heavy { return; }
             self.salvager_find(q);
         }
@@ -2557,7 +2557,7 @@ impl<'a> Ctx<'a> {
     /// what it carries.
     unsafe fn return_path(&mut self, q: usize) {
         let w = self.w;
-        if !(g(w.wmcarry, self.rec(q)) > 0.0) { self.clear_auto_route(q); return; }
+        if !(((g(w.wmcarry, self.rec(q)) as f64) as f64) > 0.0) { self.clear_auto_route(q); return; }
         let sp = self.brain_spawner(q, w.salv_type);
         let key = if sp >= 0 { self.path_to(q, sp) } else { -1 };
         if key >= 0 {

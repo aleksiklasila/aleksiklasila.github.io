@@ -560,7 +560,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The numeric fields JavaScript alone reads (SIM_UNIT_JS_FIELDS, through
     // SIM_UNIT_JS_COL_ALIAS): heap columns as the rest, so a slot's whole
     // numeric state moves, zeroes and grows with the kernels' columns.
-    ['j__statsVer', Int32Array, 1], ['j__damageFlashStart', Int32Array, 1], ['j__rslot', Int32Array, 1], ['j__thingStatsRefreshStamp', Int32Array, 1], ['j__damageFlashUntil', Int32Array, 1], ['j__damageFlashStrength', Float32Array, 1], ['j__fpTile', Int32Array, 1], ['j__fpIdx', Int32Array, 1], ['j__fpVer', Int32Array, 1], ['j__pendingDueStamp', Int32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1]];
+    ['j__damageFlashStart', Int32Array, 1], ['j__rslot', Int32Array, 1], ['j__damageFlashUntil', Int32Array, 1], ['j__damageFlashStrength', Float32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 // Worker records: the worker columns are a pool with a record a worker (a
@@ -612,7 +612,8 @@ const SIM_WK_MEM = [
     ['carryingValue', 'wmCarry', 'N'],
     // (Its last idle search's backoff end: workerIdleBackoff.)
     ['_idleFailUntil', 'wmFailU', 'N']];
-const _SIM_WK_MEM_TYPES = { T: Int32Array, N: Float64Array, Y: Uint8Array };
+// (N: f32: ticks exact to 2^24 (~9 days at 20 TPS), positions, amounts; was f64, ~70 MB at 1M units.)
+const _SIM_WK_MEM_TYPES = { T: Int32Array, N: Float32Array, Y: Uint8Array };
 const SIM_WK_MEM_COLS = [...new Map(SIM_WK_MEM.map(([k, col, kind]) => [col, [k, col, kind]])).values()];
 // (Snapshot keys: a column's first name.)
 const SIM_WK_MEM_KEYS = SIM_WK_MEM.filter(([k, col]) => SIM_WK_MEM.find(e => e[1] === col)[0] === k);
@@ -768,11 +769,11 @@ function simUnitStUsed() { const S = _simUnitState, T = S && S.st; return T && T
 // fields'). [name, kind, default, in the snapshot].
 const SIM_UNIT_JS_FIELDS = [
     ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
-    ['_fpTile', 'i', -1, true], ['_fpIdx', 'i', -1, true], ['_fpVer', 'i', -1, true], ['_pendingDueStamp', 'i', -1, true], ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
-    ['_okNodeVer', 'i', 0, true], ['_statsVer', 'i', -1, true], ['_damageFlashStart', 'i', 0, true],
+    ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
+    ['_okNodeVer', 'i', 0, true], ['_damageFlashStart', 'i', 0, true],
     // (Its frame slot: sim_frame.js _simRenderSlotOf; every unit has one.)
     ['_rslot', 'i', -1, false],
-    ['_thingStatsRefreshStamp', 'i', 0, true], ['_effectiveStatsStamp', 'i', 0, true],
+    ['_effectiveStatsStamp', 'i', 0, true],
     ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
     ['preComputedBase', 'r', null, false], ['basePreComputed', 'r', null, false], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
     ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
@@ -813,7 +814,7 @@ function _simSparseIntGrow(old,cap,def,used){const a=new SimSparseIntColumn(cap,
 function _simSparseIntCopy(old,cap,def,runs){const a=new SimSparseIntColumn(cap,def);for(let j=0;j<runs.length;j+=3)a.copyFrom(old,runs[j+1],runs[j+2],runs[j]);return a;}
 // (JavaScript fields kept in a movement column of the heap: the kernels write them.)
 const SIM_UNIT_JS_COL_ALIAS = { maxEnergy: 'jMaxE', _removedNow: 'jRmNow', isFlying: 'jFly',
-    _statsVer: 'j__statsVer', _damageFlashStart: 'j__damageFlashStart', _rslot: 'j__rslot', _thingStatsRefreshStamp: 'j__thingStatsRefreshStamp', _damageFlashUntil: 'j__damageFlashUntil', _damageFlashStrength: 'j__damageFlashStrength', _fpTile: 'j__fpTile', _fpIdx: 'j__fpIdx', _fpVer: 'j__fpVer', _pendingDueStamp: 'j__pendingDueStamp', _okTile: 'j__okTile', _okVer: 'j__okVer', _okNodeTile: 'j__okNodeTile', _okNodeVer: 'j__okNodeVer', _effectiveStatsStamp: 'j__effectiveStatsStamp' };
+    _damageFlashStart: 'j__damageFlashStart', _rslot: 'j__rslot', _damageFlashUntil: 'j__damageFlashUntil', _damageFlashStrength: 'j__damageFlashStrength', _okTile: 'j__okTile', _okVer: 'j__okVer', _okNodeTile: 'j__okNodeTile', _okNodeVer: 'j__okNodeVer', _effectiveStatsStamp: 'j__effectiveStatsStamp' };
 const _simJsName = (k, kind) => SIM_UNIT_JS_COL_ALIAS[k] || (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
@@ -904,7 +905,7 @@ function simSlotDefaults() {
         wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
         cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1 };
     for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
-    d.j__statsVer = -1; d.j__rslot = -1; d.j__damageFlashStrength = -0; d.j__fpTile = -1; d.j__fpIdx = -1; d.j__fpVer = -1; d.j__pendingDueStamp = -1; d.j__okTile = -1; d.j__okNodeTile = -1;
+    d.j__rslot = -1; d.j__damageFlashStrength = -0; d.j__okTile = -1; d.j__okNodeTile = -1;
     for (const k in SIM_SPATIAL_DEFAULTS) d[k] = SIM_SPATIAL_DEFAULTS[k];
     for (const [, k, v] of SIM_UNIT_KCOL_FIELDS) d[k] = v;
     const known = new Set([...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0])]);

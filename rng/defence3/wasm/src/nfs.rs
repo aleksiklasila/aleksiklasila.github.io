@@ -823,7 +823,7 @@ pub unsafe extern "C" fn k_meta_units(a: u32, chunk: i32) {
     let (mid, mfl, mot, mme, mca, mtx, mty) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<f32>(3), k.p::<f32>(4), k.p::<f32>(5), k.p::<f32>(6));
     let (mty2, mwt, mws, mst, mwb, mvi) = (k.p::<i16>(7), k.p::<i16>(8), k.p::<i16>(9), k.p::<i16>(10), k.p::<i16>(11), k.p::<u8>(12));
     let (live, dead, id, upt, wks, wteam) = (k.p::<u8>(13), k.p::<u8>(14), k.p::<i32>(15), k.p::<i16>(16), k.p::<u32>(17), k.p::<i8>(18));
-    let (srow, rvsa, rmaxe, en, wkix, wcar, wblk) = (k.p::<i16>(19), k.p::<i8>(20), k.p::<f32>(21), k.p::<f32>(22), k.p::<i32>(23), k.p::<f64>(24), k.p::<f64>(25));
+    let (srow, rvsa, rmaxe, en, wkix, wcar, wblk) = (k.p::<i16>(19), k.p::<i8>(20), k.p::<f32>(21), k.p::<f32>(22), k.p::<i32>(23), k.p::<f32>(24), k.p::<f32>(25));
     let (fly, hold, wtid, tab, list, cnt, pvat) = (k.p::<u8>(26), k.p::<u8>(27), k.p::<u8>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32));
     if mid.is_null() || live.is_null() || tab.is_null() { return; }
     let (s0, s1) = super::k::job_range(chunk, k.i(1), k.i(0));
@@ -854,7 +854,7 @@ pub unsafe extern "C" fn k_meta_units(a: u32, chunk: i32) {
         // (Its maxEnergy: its base level's, unit.maxE.)
         let me = if !rmaxe.is_null() { g(rmaxe, q) } else { g(en, q) };
         let w = g(wkix, q);
-        let (car, blk) = if w > 0 { (g(wcar, w as usize), g(wblk, w as usize)) } else { (f64::NAN, f64::NAN) };
+        let (car, blk) = if w > 0 { (g(wcar, w as usize) as f64, g(wblk, w as usize) as f64) } else { (f64::NAN, f64::NAN) };
         let car = if car == car { car as f32 } else { 0.0 };
         let mut fl = tf;
         if g(fly, q) != 0 { fl |= f_fly; }

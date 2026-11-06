@@ -343,16 +343,16 @@ fn work_mix(i: i32) -> i32 {
 pub unsafe fn wm_clear(k: &K, at: usize, wr: usize, wb: i32, man: f64) {
     let t = |j: usize| k.p::<i32>(at + j);
     let y = |j: usize| k.p::<u8>(at + j);
-    let n = |j: usize| k.p::<f64>(at + j);
-    let site = || { for j in 2..6 { s(n(j), wr, f64::NAN); } };
+    let n = |j: usize| k.p::<f32>(at + j);
+    let site = || { for j in 2..6 { s(n(j), wr, f32::NAN); } };
     match wb {
         1 | 2 => { s(t(0), wr, 0); s(y(1), wr, 0); site(); s(y(6), wr, 0); s(t(7), wr, 0); s(t(8), wr, 0); s(t(9), wr, 0); s(y(10), wr, 0); }
         4 => { site(); s(t(7), wr, 0); }
-        5 => { s(t(0), wr, 0); s(t(11), wr, 0); s(n(12), wr, 0.0); s(n(13), wr, 0.0); site(); s(t(7), wr, 0); s(n(14), wr, 0.0); }
-        6 => { s(t(7), wr, 0); s(n(14), wr, 0.0); s(n(15), wr, 0.0); s(n(16), wr, 0.0); }
+        5 => { s(t(0), wr, 0); s(t(11), wr, 0); s(n(12), wr, 0.0f32); s(n(13), wr, 0.0f32); site(); s(t(7), wr, 0); s(n(14), wr, 0.0f32); }
+        6 => { s(t(7), wr, 0); s(n(14), wr, 0.0f32); s(n(15), wr, 0.0f32); s(n(16), wr, 0.0f32); }
         _ => {}
     }
-    s(n(17), wr, man);
+    s(n(17), wr, man as f32);
 }
 #[no_mangle]
 pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
