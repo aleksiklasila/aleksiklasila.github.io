@@ -250,7 +250,7 @@ unsafe fn let_go_path(q: usize, nvpk: *mut i32, mpath: *mut i32, pfs: *mut i32, 
     s(nvpk, q, -1);
     let p = g(mpath, q);
     if p >= 0 && !pfs.is_null() { let top = g(pfs, 0) + 1; s(pfs, 0, top); s(pfs, top as usize, p); s(mpath, q, -1); }
-    s(on, q, 0); s(mcd, q, -1);
+    s(on, q, 0); s(mcd, q * 8, -1);
     if list && !pout.is_null() { s(pout, *np, q as i32); *np += 1; }
 }
 // (sim_unit_state.js simPendingClear: target null and, flag, the fallback flag false; their digest terms, the kernels' mirrors.)

@@ -26,7 +26,7 @@ const run = cold => {
  const far=primed[7]>>1;wall(far%GRID_W,Math.floor(far/GRID_W),true);
  // (Its record and step let go, as a unit entering another tile: the next look is made after the edit;
  // one listed before it, still on the helpers, must not be committed.)
- u._us.mvNav[u._si*8]=-1;u._us.mvCD[u._si]=-1;u._us.mvCT[u._si]=-1;
+ u._us.mvNav[u._si*8]=-1;u._us.mvSteer[u._si*8]=-1;u._us.mvSteer[u._si*8+1]=-1;
  const after=[],path=[];
  for(let t=0;t<8;t++){tick();const r=rec();after.push(r);path.push([u.x,u.y]);}
  return {primed,far,after,path,walled:after.filter(r=>r[0]>=0&&!(r[4]&65536)&&((r[7]>>1)===far||r[5]===far)).length};

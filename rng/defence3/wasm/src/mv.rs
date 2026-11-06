@@ -55,6 +55,29 @@ const W_Y: usize = 10;
 const W_PX: usize = 11;
 const W_PY: usize = 12;
 const W_FLOOR: usize = 13;
+/// The steering record (unit.mvSteer, sim_unit_state.js SIM_STEER_W): SR
+/// words a slot, its fields' words SR_*; the Mv fields point at their word,
+/// a slot's at its index * SR. Words W_FLOOR, W_CD..W_CN and W_STEADY all
+/// bind the record.
+const SR: usize = 8;
+const SR_CD: usize = 0;
+const SR_CT: usize = 1;
+const SR_CTL: usize = 2;
+const SR_CVX: usize = 3;
+const SR_CVY: usize = 4;
+const SR_FLOOR: usize = 5;
+const SR_STEADY: usize = 6;
+const SR_CN: usize = 7;
+/// A steering field's pointer: the record's base (null: none) at its word.
+#[inline(always)]
+fn sr_at(base: *mut i32, k: usize) -> *mut i32 {
+    if base.is_null() { core::ptr::null_mut() } else { unsafe { base.add(k) } }
+}
+/// Four slots' steering field (s..s+4), one word a record, as a vector.
+#[inline(always)]
+unsafe fn sr_ld4(p: *const i32, s: usize) -> v128 {
+    i32x4(*p.add(s * SR), *p.add((s + 1) * SR), *p.add((s + 2) * SR), *p.add((s + 3) * SR))
+}
 const W_SC: usize = 14;
 const W_D0: usize = 15;
 const W_WAKE: usize = 16;
@@ -377,7 +400,7 @@ struct Mv {
     cvx: *mut F32,
     cvy: *mut F32,
     ctl: *mut i32,
-    cn: *mut u8,
+    cn: *mut i32,
     vx: *mut F32,
     vy: *mut F32,
     spent: *mut u8,
@@ -700,19 +723,19 @@ impl Mv {
             y: p!(W_Y),
             px: p!(W_PX),
             py: p!(W_PY),
-            floor: p!(W_FLOOR),
+            floor: sr_at(word(a, W_FLOOR) as *mut i32, SR_FLOOR),
             sc: p!(W_SC),
             d0: p!(W_D0),
             wake: p!(W_WAKE),
             wkwx: p!(W_WKWX),
             wkwy: p!(W_WKWY),
             dest: p!(W_DEST),
-            cd: p!(W_CD),
-            ct: p!(W_CT),
-            cvx: p!(W_CVX),
-            cvy: p!(W_CVY),
-            ctl: p!(W_CTL),
-            cn: p!(W_CN),
+            cd: sr_at(word(a, W_CD) as *mut i32, SR_CD),
+            ct: sr_at(word(a, W_CT) as *mut i32, SR_CT),
+            cvx: sr_at(word(a, W_CVX) as *mut i32, SR_CVX) as *mut F32,
+            cvy: sr_at(word(a, W_CVY) as *mut i32, SR_CVY) as *mut F32,
+            ctl: sr_at(word(a, W_CTL) as *mut i32, SR_CTL),
+            cn: sr_at(word(a, W_CN) as *mut i32, SR_CN),
             vx: p!(W_VX),
             vy: p!(W_VY),
             spent: p!(W_SPENT),
@@ -834,7 +857,7 @@ impl Mv {
             tgx: p!(W_TGX),
             tgy: p!(W_TGY),
             tgtol: p!(W_TGTOL),
-            steady: p!(W_STEADY),
+            steady: sr_at(word(a, W_STEADY) as *mut i32, SR_STEADY),
             wklmt: p!(W_WKLMT),
             spx: p!(W_SPX),
             spy: p!(W_SPY),
@@ -1950,7 +1973,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
         let blocked=1.0-progress.max(0.0)/original_len;
         if blocked>0.3{super::traffic::push_deposit(m.traffic,tx,ty,original_dx,original_dy,original_len,blocked,(*m.occ).radius_q(s),rd(m.own,s),0);}
     }
-    if tx!=nx || ty!=ny {wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);}
+    if tx!=nx || ty!=ny {wr(m.steady, (s) * SR,0);wr(m.ct, (s) * SR,-1);wr(m.cd, (s) * SR,-1);}
     if tx!=original_nx || ty!=original_ny {
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
     }
@@ -1969,7 +1992,7 @@ unsafe fn checked_position_legacy(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
             if seg_open(wl,m.w,m.h,ox as f64*0.125,oy as f64*0.125,ax as f64*0.125,ay as f64*0.125,m.itile,m.tile){(tx,ty)=(*m.occ).position(s,ax,ay);if tx!=ox||ty!=oy{break;}}
         }
     }
-    if tx!=nx||ty!=ny{wr(m.steady,s,0);wr(m.ct,s,-1);wr(m.cd,s,-1);wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));}
+    if tx!=nx||ty!=ny{wr(m.steady, (s) * SR,0);wr(m.ct, (s) * SR,-1);wr(m.cd, (s) * SR,-1);wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));}
     (tx as f64*0.125,ty as f64*0.125)
 }
 #[inline(always)]
@@ -1996,7 +2019,7 @@ unsafe fn commit_step(m: &Mv, s: usize, x: f64, y: f64, vx: f64, vy: f64, gx: i3
     wr(m.vx, s, vx);
     wr(m.vy, s, vy);
     wr(m.spent, s, if floor(nx * itile) != gx as f64 || floor(ny * itile) != gy as f64 { 1 } else { 0 });
-    wr(m.floor, s, tl);
+    wr(m.floor, (s) * SR, tl);
     let qx = quant_mul(nx, q, iq);
     let qy = quant_mul(ny, q, iq);
     let (qx,qy)=checked_position(m,s,qx,qy);
@@ -2108,7 +2131,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
         let on1 = i32x4_bitmask(v128_and(i32x4_eq(on, one), i32x4_eq(v128_and(fl, i32x4_splat(64)), zero))) as i32;
         dbgc!(m, 25, on1.count_ones());
     }
-    ok = v128_and(ok, i32x4_lt(ti, v128_load(m.steady.add(s) as *const v128)));
+    ok = v128_and(ok, i32x4_lt(ti, sr_ld4(m.steady as *const i32, s)));
     #[cfg(feature = "dbgc")]
     let cand1 = i32x4_bitmask(ok) as i32;
     #[cfg(feature = "dbgc")]
@@ -2127,11 +2150,11 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     ok = v128_and(ok, v128_and(i32x4_ge(gx, zero), i32x4_lt(gx, i32x4_splat(m.w))));
     ok = v128_and(ok, v128_and(i32x4_ge(gy, zero), i32x4_lt(gy, i32x4_splat(m.h))));
     let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
-    ok = v128_and(ok, i32x4_eq(tl, v128_load(m.ctl.add(s) as *const v128)));
-    ok = v128_and(ok, i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128)));
+    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.ctl as *const i32, s)));
+    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.floor as *const i32, s)));
     // (The committed step is per base tick: dk of them this step.)
-    let mut vx = v128_load(m.cvx.add(s) as *const v128);
-    let mut vy = v128_load(m.cvy.add(s) as *const v128);
+    let mut vx = sr_ld4(m.cvx as *const i32, s);
+    let mut vy = sr_ld4(m.cvy as *const i32, s);
     if m.dk > 1 {
         let k = f32x4_splat(m.dk as f32);
         vx = f32x4_mul(vx, k);
@@ -2147,9 +2170,9 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
         let alive = v128_and(f32x4_gt(v128_load(m.en.add(s) as *const v128), f32x4_splat(0.0)), v128_not(i32x4_eq(v128_load(m.sep.add(s) as *const v128), i32x4_splat(p.absent as u32 as i32))));
         let a = cand1 & !(i32x4_bitmask(alive) as i32);
         dbgc!(m, 26, a.count_ones());
-        let c = cand1 & !a & !(i32x4_bitmask(i32x4_eq(tl, v128_load(m.ctl.add(s) as *const v128))) as i32);
+        let c = cand1 & !a & !(i32x4_bitmask(i32x4_eq(tl, sr_ld4(m.ctl as *const i32, s))) as i32);
         dbgc!(m, 27, c.count_ones());
-        let f = cand1 & !a & !c & !(i32x4_bitmask(i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128))) as i32);
+        let f = cand1 & !a & !c & !(i32x4_bitmask(i32x4_eq(tl, sr_ld4(m.floor as *const i32, s))) as i32);
         dbgc!(m, 28, f.count_ones());
         let c2 = i32x4_bitmask(ok) as i32;
         dbgc!(m, 22, (cand1 & !c2).count_ones());
@@ -2364,7 +2387,7 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
     ok = v128_and(ok, v128_and(i32x4_ge(gx, zero), i32x4_lt(gx, i32x4_splat(m.w))));
     ok = v128_and(ok, v128_and(i32x4_ge(gy, zero), i32x4_lt(gy, i32x4_splat(m.h))));
     let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
-    ok = v128_and(ok, i32x4_eq(tl, v128_load(m.floor.add(s) as *const v128)));
+    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.floor as *const i32, s)));
     if !v128_any_true(ok) {
         return 0;
     }
@@ -2456,12 +2479,12 @@ unsafe fn step_slot(m: &Mv, p: &StepP, s: usize) {
             return;
         }
         let tl = gy as i32 * w + gx as i32;
-        if rd(m.floor, s) != tl || irem_f(tw, tr) < m.dk {
+        if rd(m.floor, (s) * SR) != tl || irem_f(tw, tr) < m.dk {
             let code = rd(m.sc, tl as usize) as i32;
             if code != -1 && code != owner && floor_hit(m, s, tl) {
                 return;
             }
-            wr(m.floor, s, tl);
+            wr(m.floor, (s) * SR, tl);
         }
         wr(m.px, s, x);
         wr(m.py, s, y);
@@ -2485,7 +2508,7 @@ unsafe fn step_flow(
     let f = rd(m.fl, s);
     let id = rd(m.id, s);
     let dk = rd(m.dest, s);
-    if rd(m.cd, s) != dk || t - rd(m.ct, s) >= rd(m.cn, s) as i32 {
+    if rd(m.cd, (s) * SR) != dk || t - rd(m.ct, (s) * SR) >= rd(m.cn, (s) * SR) as i32 {
         return;
     }
     if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == absent || rd(m.dead, s) != 0 {
@@ -2501,11 +2524,11 @@ unsafe fn step_flow(
     }
     let (gx, gy) = (gxf as i32, gyf as i32);
     let tl = gy * w + gx;
-    if tl == dk || tl != rd(m.ctl, s) {
+    if tl == dk || tl != rd(m.ctl, (s) * SR) {
         return;
     }
     let tw = t.wrapping_add(id);
-    if rd(m.floor, s) != tl || irem_f(tw, tr) < m.dk {
+    if rd(m.floor, (s) * SR) != tl || irem_f(tw, tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             return;
@@ -2532,8 +2555,8 @@ unsafe fn step_flow(
     if t < rd(m.rdy, s) {
         return;
     }
-    let mut vx = rd(m.cvx, s) * m.dkf;
-    let mut vy = rd(m.cvy, s) * m.dkf;
+    let mut vx = rd(m.cvx, (s) * SR) * m.dkf;
+    let mut vy = rd(m.cvy, (s) * SR) * m.dkf;
     let sgx = floor((x + vx) * itile);
     let sgy = floor((y + vy) * itile);
     // (Several base ticks a step leaving the tile: steered by move_flow.)
@@ -2551,17 +2574,17 @@ unsafe fn step_flow(
             if sl & 2 != 0 {
                 vy = 0.0;
             }
-            wr(m.cd, s, -1);
-            if !m.steady.is_null() { wr(m.steady, s, 0); }
+            wr(m.cd, (s) * SR, -1);
+            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
         }
     }
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
     wr(m.stept, s - m.stepbase, 1);
     // (Its window again, to the step's end or its next look: the steady step
     // takes the next ticks. Not after a slide: the step ends.)
-    if !m.steady.is_null() && rd(m.cd, s) == dk {
-        let end = rd(m.ct, s).wrapping_add(rd(m.cn, s) as i32);
-        wr(m.steady, s, if end > t + 1 { steady_until(m, s, t, end, f, tr, acq_t, wcheck) } else { 0 });
+    if !m.steady.is_null() && rd(m.cd, (s) * SR) == dk {
+        let end = rd(m.ct, (s) * SR).wrapping_add(rd(m.cn, (s) * SR) as i32);
+        wr(m.steady, (s) * SR, if end > t + 1 { steady_until(m, s, t, end, f, tr, acq_t, wcheck) } else { 0 });
     }
 }
 
@@ -2622,9 +2645,9 @@ unsafe fn leader_dir(m:&Mv,a:*const i32,x0:i32,x1:i32,y0:i32,y1:i32,cw:i32,epoch
         if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
             let s=slot as usize;
             rd(m.on,s)==1 && rd(m.fl,s)&64!=0 && (!BRAIN||rd(m.cmode,s)&3==0)
-                && rd(m.cd,s)==rd(m.dest,s) && rd(m.ctl,s)==key as i32
+                && rd(m.cd, (s) * SR)==rd(m.dest,s) && rd(m.ctl, (s) * SR)==key as i32
         }) {
-            dx+=rd(m.cvx,slot as usize);dy+=rd(m.cvy,slot as usize);
+            dx+=rd(m.cvx, (slot as usize) * SR);dy+=rd(m.cvy, (slot as usize) * SR);
         }
     }}
     (dx,dy)
@@ -2919,7 +2942,7 @@ unsafe fn ord_pickup(a: *const i32, b0: usize, e: usize, chunk: usize) {
                 *tgx.add(q) = *row.add(5) as f32; *tgy.add(q) = *row.add(6) as f32;
                 *rkf.add(q) = 1; *rte.add(q) = d; *nvp.add(q) = prof as i8; *pidx.add(q) = 0;
                 *nvpk.add(q) = (prof as i32 * 16777216 + d) * 2 + wide as i32;
-                *cd.add(q) = -1;
+                *cd.add(q * SR) = -1;
                 // (A group's unit: its distance to the destination's middle within 64 tiles, -1 further.)
                 let mut ld = -1.0f64;
                 if wide {
@@ -2960,7 +2983,7 @@ unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
 #[inline(always)]
 unsafe fn walker_short(m:&Mv,s:usize)->bool{
     if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0){return false;}
-    let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl2=hx*hx+hy*hy;
+    let (hx,hy)=(rd(m.cvx, (s) * SR),rd(m.cvy, (s) * SR));let hl2=hx*hx+hy*hy;
     if !(hl2>0.0){return false;}
     let dx=rd(m.x,s)-rd(m.x0,s);let dy=rd(m.y,s)-rd(m.y0,s);
     // (Along its heading, as traffic_yield measures it.)
@@ -3217,7 +3240,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             // pocket otherwise pushed against each other for good.)
             if rd(m.dead,b)!=0||rd(m.own,b)!=own||(rd(m.wk,b)!=0&&!walkers)||(BRAIN&&rd(m.cmode,b)!=0){continue;}
             if walkers{
-                if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx,b),rd(m.cvy,b));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
+                if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx, (b) * SR),rd(m.cvy, (b) * SR));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
             }else if ob!=0&&ob!=2{continue;}
             let re=rd(m.rte,b);
             if mine>=0&&re>=0&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
@@ -3254,8 +3277,8 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
         // The other: where the mover stood (its tile's change is listed in
         // the job's second pass; its orders stay as they are).
         wr(m.px,b,rd(m.x0,b));wr(m.py,b,rd(m.y0,b));wr(m.x,b,x0);wr(m.y,b,y0);
-        if rd(m.fl,b)&64==0{wr(m.cd,b,-1);wr(m.ct,b,-1);}
-        wr(m.steady,b,0);
+        if rd(m.fl,b)&64==0{wr(m.cd, (b) * SR,-1);wr(m.ct, (b) * SR,-1);}
+        wr(m.steady, (b) * SR,0);
         if walker{wr(m.vx,b,(x0-rd(m.x0,b))/m.dkf);wr(m.vy,b,(y0-rd(m.y0,b))/m.dkf);}
         if home{*m.swl.add(*m.swn as usize)=b as i32;*m.swn+=1;}else{g.xswap_push(b);}
         return Some((bx,by));
@@ -3308,7 +3331,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
         // pressure (never back, at most ~50 degrees), as its step was.
         // (Short of it along its heading: a unit sliding to and fro beside a
         // blocker spends its step without getting on.)
-        let (hx,hy)=(rd(m.cvx,s),rd(m.cvy,s));let hl=sqrt(hx*hx+hy*hy);
+        let (hx,hy)=(rd(m.cvx, (s) * SR),rd(m.cvy, (s) * SR));let hl=sqrt(hx*hx+hy*hy);
         if !(hl>0.0)||(dx*hx+dy*hy)/hl>hl*m.dkf*0.75{return;}
         dbgc!(m,78);
         let ux=hx/hl;let uy=hy/hl;hux=ux;huy=uy;
@@ -3347,7 +3370,7 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     dbgc!(m,81);
     wr(m.px,s,x0);wr(m.py,s,y0);wr(m.x,s,tx);wr(m.y,s,ty);
     wr(m.vx,s,(tx-x0)/m.dkf);wr(m.vy,s,(ty-y0)/m.dkf);
-    if rd(m.fl,s)&64==0{wr(m.cd,s,-1);wr(m.ct,s,-1);wr(m.steady,s,0);}
+    if rd(m.fl,s)&64==0{wr(m.cd, (s) * SR,-1);wr(m.ct, (s) * SR,-1);wr(m.steady, (s) * SR,0);}
     let cross=floor(tx*m.itile)!=floor(x0*m.itile)||floor(ty*m.itile)!=floor(y0*m.itile);
     if cross{wr(m.out,s,3);}else if rd(m.out,s)==0{wr(m.out,s,1);}
 }
@@ -3819,9 +3842,9 @@ unsafe fn move_struct(m: &Mv, p: &MoveP, s: usize, cm: u8) -> bool {
         wc(m.htid, s, 0);
         wc(m.wk, s, 4);
         wr(m.spent, s, 0);
-        wr(m.cd, s, -1);
+        wr(m.cd, (s) * SR, -1);
         if !m.steady.is_null() {
-            wr(m.steady, s, 0);
+            wr(m.steady, (s) * SR, 0);
         }
         wr(m.on, s, 6);
     }
@@ -3862,9 +3885,9 @@ unsafe fn resume_order(m: &Mv, s: usize) {
             wr(m.fl, s, 64 | 16 | if rd(m.slayer, s) == 1 { 32 } else { 0 });
             wc(m.reach, s, ra);
             wr(m.spent, s, 0);
-            wr(m.cd, s, -1);
+            wr(m.cd, (s) * SR, -1);
             if !m.steady.is_null() {
-                wr(m.steady, s, 0);
+                wr(m.steady, (s) * SR, 0);
             }
             wr(m.on, s, 1);
         }
@@ -3943,7 +3966,7 @@ unsafe fn clear_path(m: &Mv, s: usize) {
     wr(m.nvpk, s, -1);
     wr(m.pidx, s, 0.0);
     wr(m.rkf, s, 0);
-    wr(m.cd, s, -1);
+    wr(m.cd, (s) * SR, -1);
 }
 
 /// An order done (simFlowArrive's end): idle, nothing issued, parked.
@@ -3976,9 +3999,9 @@ unsafe fn arm_common(m: &Mv, s: usize, profile: usize, dest: i32, cmd: i32, wide
     wc(m.reach, s, if cmd == 2 { ra } else { 0 });
     wc(m.wk, s, 0);
     wr(m.spent, s, 0);
-    wr(m.cd, s, -1);
+    wr(m.cd, (s) * SR, -1);
     if !m.steady.is_null() {
-        wr(m.steady, s, 0);
+        wr(m.steady, (s) * SR, 0);
     }
     wr(m.on, s, 1);
     true
@@ -4276,12 +4299,12 @@ unsafe fn close_in(m: &Mv, p: &MoveP, s: usize, tx: f64, ty: f64, tt: i32) -> i3
         wc(m.htid, s, 0);
         wc(m.wk, s, 4);
         wr(m.spent, s, 0);
-        wr(m.cd, s, -1);
+        wr(m.cd, (s) * SR, -1);
         wr(m.on, s, 6);
     }
     move_flow(m, p, s);
     if !m.steady.is_null() {
-        wr(m.steady, s, 0);
+        wr(m.steady, (s) * SR, 0);
     }
     if rd(m.on, s) == 0 || rd(m.out, s) == 0 {
         // (There, or no way on from here: it stands and looks again next tick.)
@@ -4308,8 +4331,8 @@ unsafe fn close_in(m: &Mv, p: &MoveP, s: usize, tx: f64, ty: f64, tt: i32) -> i3
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn forced(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let (w, h, tile, itile) = (m.w, m.h, m.tile, m.itile);
-    if !m.steady.is_null() && rd(m.steady, s) != 0 {
-        wr(m.steady, s, 0);
+    if !m.steady.is_null() && rd(m.steady, (s) * SR) != 0 {
+        wr(m.steady, (s) * SR, 0);
     }
     if !(rd(m.en, s) > 0.0) || rd(m.dead, s) != 0 {
         wr(m.on, s, 0);
@@ -4326,7 +4349,7 @@ unsafe fn forced(m: &Mv, p: &MoveP, s: usize) -> i32 {
         return 0;
     }
     let tl = gyf as i32 * w + gxf as i32;
-    if rd(m.floor, s) != tl || irem_f(m.t.wrapping_add(rd(m.id, s)), p.tr) < m.dk {
+    if rd(m.floor, (s) * SR) != tl || irem_f(m.t.wrapping_add(rd(m.id, s)), p.tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             wr(m.on, s, 0);
@@ -4334,7 +4357,7 @@ unsafe fn forced(m: &Mv, p: &MoveP, s: usize) -> i32 {
             stand_here(m, s);
             return 0;
         }
-        wr(m.floor, s, tl);
+        wr(m.floor, (s) * SR, tl);
     }
     let hold = rd(m.holdf, s) != 0;
     let k = rd(m.rk, s) as i32;
@@ -4466,14 +4489,14 @@ unsafe fn ctl(m: &Mv, p: &MoveP, s: usize) -> i32 {
     }
     let tl = gyf as i32 * w + gxf as i32;
     // (A hostile mine under it, or a floor this cannot tell: the main thread's.)
-    if rd(m.floor, s) != tl || irem_f(m.t.wrapping_add(rd(m.id, s)), p.tr) < m.dk {
+    if rd(m.floor, (s) * SR) != tl || irem_f(m.t.wrapping_add(rd(m.id, s)), p.tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             set_ev(m, s, EV_FLOOR);
             stand_here(m, s);
             return 0;
         }
-        wr(m.floor, s, tl);
+        wr(m.floor, (s) * SR, tl);
     }
     let scout = !m.scoutt.is_null() && rd(m.upt, s) as i32 == rd(m.scoutt, 0);
     let r = ctl_order(m, p, s, cmd, tl);
@@ -4769,13 +4792,13 @@ unsafe fn move_pre0(m: &Mv, p: &MoveP, s: usize) -> i32 {
     let tl = gy * w + gx;
     let tw = t.wrapping_add(id);
     let ts = tsum(t, id);
-    if rd(m.floor, s) != tl || irem_f(tw, p.tr) < m.dk {
+    if rd(m.floor, (s) * SR) != tl || irem_f(tw, p.tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
             set_ev(m, s, EV_FLOOR);
             back!();
         }
-        wr(m.floor, s, tl);
+        wr(m.floor, (s) * SR, tl);
     }
     if parked {
         // (Waiting for its way: near enough to where it was sent, the
@@ -5210,8 +5233,8 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             back!();
         }
         wr(m.fgen, s, rd(fmeta, dm + 6));
-        wr(m.cd, s, -1);
-        if !m.steady.is_null() { wr(m.steady, s, 0); }
+        wr(m.cd, (s) * SR, -1);
+        if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
     }
     if t < rd(m.rdy, s) {
         stand!();
@@ -5221,13 +5244,13 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     }
     // (The committed step is per base tick; several a step leaving the tile
     // are steered again below.)
-    if rd(m.cd, s) == dk && rd(m.ctl, s) == tl && t - rd(m.ct, s) < rd(m.cn, s) as i32
-        && (m.dk == 1 || (floor((x + rd(m.cvx, s) * m.dkf) * itile) == gx as f64 && floor((y + rd(m.cvy, s) * m.dkf) * itile) == gy as f64)) {
+    if rd(m.cd, (s) * SR) == dk && rd(m.ctl, (s) * SR) == tl && t - rd(m.ct, (s) * SR) < rd(m.cn, (s) * SR) as i32
+        && (m.dk == 1 || (floor((x + rd(m.cvx, (s) * SR) * m.dkf) * itile) == gx as f64 && floor((y + rd(m.cvy, (s) * SR) * m.dkf) * itile) == gy as f64)) {
         if tl == dk {
             back!();
         }
-        let mut vx = rd(m.cvx, s) * m.dkf;
-        let mut vy = rd(m.cvy, s) * m.dkf;
+        let mut vx = rd(m.cvx, (s) * SR) * m.dkf;
+        let mut vy = rd(m.cvy, (s) * SR) * m.dkf;
         let sgx = floor((x + vx) * itile);
         let sgy = floor((y + vy) * itile);
         if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
@@ -5239,15 +5262,15 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
                 if sl & 2 != 0 {
                     vy = 0.0;
                 }
-                wr(m.cd, s, -1);
-            if !m.steady.is_null() { wr(m.steady, s, 0); }
+                wr(m.cd, (s) * SR, -1);
+            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
             }
         }
         commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
         return;
     }
-    wr(m.cd, s, -1);
-            if !m.steady.is_null() { wr(m.steady, s, 0); }
+    wr(m.cd, (s) * SR, -1);
+            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
     let nv = match navp {
         Some(n) => n,
         None => back!(),
@@ -5448,20 +5471,20 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             cvy = 0.0;
         }
     }
-    if rd(m.ctl, s) == tl { dbgc!(m, 33); }
-    wr(m.cd, s, dk);
-    wr(m.ct, s, t);
-    wr(m.cvx, s, cvx);
-    wr(m.cvy, s, cvy);
-    wr(m.ctl, s, tl);
+    if rd(m.ctl, (s) * SR) == tl { dbgc!(m, 33); }
+    wr(m.cd, (s) * SR, dk);
+    wr(m.ct, (s) * SR, t);
+    wr(m.cvx, (s) * SR, cvx);
+    wr(m.cvy, (s) * SR, cvy);
+    wr(m.ctl, (s) * SR, tl);
     let cn = if (*nr.add(NV_G) & LOOK_APPROX) != 0 { 1 } else if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
     // (Counters: 31 steers near the destination, 32 far, 33 steers in the
     // tile the last one was made in.)
     dbgc!(m, if cn == SIM_STEER_NEAR_TICKS { 31 } else { 32 });
-    wr(m.cn, s, cn);
+    wr(m.cn, (s) * SR, cn as i32);
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
     if !m.steady.is_null() {
-        wr(m.steady, s, if tl != dk { steady_until(m, s, t, t + cn as i32, f, p.tr, p.acq_t, p.wcheck) } else { 0 });
+        wr(m.steady, (s) * SR, if tl != dk { steady_until(m, s, t, t + cn as i32, f, p.tr, p.acq_t, p.wcheck) } else { 0 });
     }
 }
 
@@ -5733,7 +5756,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
         wr(m.pidx, s, idx as f64);
         wr(m.spent, s, spent as u8);
         wr(m.scan, s, -1);
-        wr(m.floor, s, tl);
+        wr(m.floor, (s) * SR, tl);
         wr(m.out, s, 1);
         return;
     }
@@ -5757,7 +5780,7 @@ unsafe fn move_path(m: &Mv, p: &MoveP, s: usize) {
     wr(m.vy, s, vy);
     wr(m.pidx, s, idx as f64);
     wr(m.spent, s, spent as u8);
-    wr(m.floor, s, tl);
+    wr(m.floor, (s) * SR, tl);
     wr(m.scan, s, tl);
     let ngx = floor(nx * itile);
     let ngy = floor(ny * itile);

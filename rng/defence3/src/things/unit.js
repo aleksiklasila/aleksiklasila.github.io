@@ -254,7 +254,7 @@ function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
     if ((c.ptSt[s] & 3) === 2) { c.ptVer[s] = 0; c.ptAt[s] = -1; c.ptSub[s] = 0; }
     else { _unitNoWayPt.gx = dest % GRID_W; _unitNoWayPt.gy = Math.floor(dest / GRID_W); _unitNoWayPt.cmd = c.commandState[s]; simPendingTargetSet(c, s, _unitNoWayPt); }
     c.nvPK[s] = -1; simUnitPathRelease(c, s); simPathRelease(c.pthH, s);
-    c.mvOn[s] = 0; c.mvCD[s] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
+    c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
     simPendingFlagSet(c, s, true);
     const pt = u._pendingPathTarget;
     if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
@@ -644,8 +644,8 @@ class Unit {
     set _lastAppliedEffectiveLevel(v) { const c = this._us; if (c) c._lastAppliedEffectiveLevel[this._si] = typeof v === 'number' ? v : NaN; else if (this._det) this._det._lastAppliedEffectiveLevel = v; else Object.defineProperty(this, '_lastAppliedEffectiveLevel', { value: v, writable: true, enumerable: true, configurable: true }); }
     // The tile whose floor it last checked (Unit.update's floor items): a
     // column (mvFloor) the movement kernel keeps as it moves the unit.
-    get _floorTile() { const c = this._us; return c ? c.mvFloor[this._si] : (this._det ? this._det._floorTile : this._flt); }
-    set _floorTile(v) { const c = this._us; if (c) c.mvFloor[this._si] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
+    get _floorTile() { const c = this._us; return c ? c.mvSteer[this._si * SIM_STEER_W + SIM_ST_FLOOR] : (this._det ? this._det._floorTile : this._flt); }
+    set _floorTile(v) { const c = this._us; if (c) c.mvSteer[this._si * SIM_STEER_W + SIM_ST_FLOOR] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
     // Arriving in a crowd (see _followNavNode): a column (mvNavLD) the kernel shares.
     get _sepMoved() { const c = this._us; return c ? c.sepMov[this._si] & 1 : (this._det ? this._det._sepMoved : (this._smv | 0)); }
     set _sepMoved(v) { const c = this._us; if (c) c.sepMov[this._si] = v ? 1 : 0; else if (this._det) this._det._sepMoved = v ? 1 : 0; else Object.defineProperty(this, '_smv', { value: v ? 1 : 0, writable: true, configurable: true }); }
@@ -939,7 +939,7 @@ class Unit {
         const h = simPathStore(v);
         simPathRelease(c.pthH, s);
         c.pthH[s] = h;
-        c.mvOn[s] = 0; c.mvCD[s] = -1;
+        c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1;
     }
 
     getCollisionLayer() {
@@ -2410,7 +2410,7 @@ function simMoveRefreshAllStats() {
 // that was armed before and a restored one start alike: leftovers of an
 // earlier arming made the two peers' units move differently.)
 const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen', 'mvScan', 'mvWake', 'mvFlow', 'mvFGen', 'mvDest', 'mvReady', 'mvNP',
-    'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
+    'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol',
     'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
     if (typeof flowLooksDrop === 'function') flowLooksDrop();
@@ -2419,7 +2419,9 @@ function simMoveDisarmAll() {
     const c = S.columns;
     c.mvOn.fill(0);
     for (const k of SIM_MOVE_ARM_COLUMNS) if (c[k]) c[k].fill(0);
-    c.mvCD.fill(-1);
+    // (The steering records: all but the floor tile, which is not an arming's; no destination.)
+    const R = c.mvSteer;
+    for (let i = 0; i < R.length; i += SIM_STEER_W) { R[i] = -1; R[i + 1] = 0; R[i + 2] = 0; R[i + 3] = 0; R[i + 4] = 0; R[i + 6] = 0; R[i + 7] = 0; }
     // (Pending chunk moves are counted at the unit pass's end: none now.)
     const NV = c.mvNav; if (NV) for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1;
 }
@@ -2428,7 +2430,7 @@ function simMoveDisarmAll() {
 // contents count (a restoring peer starts without them).
 function simMoveResetLookCaches() {
     const S = _simUnitState;
-    if (S) { const NV = S.columns.mvNav; for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1; S.columns.mvCD.fill(-1); }
+    if (S) { const NV = S.columns.mvNav; for (let i = 0; i < NV.length; i += SIM_NAV_STRIDE) NV[i] = -1; const R = S.columns.mvSteer; for (let i = 0; i < R.length; i += SIM_STEER_W) R[i] = -1; }
 }
 
 // A level/stat change rechecks the navigation reach and armed path.
@@ -2530,7 +2532,7 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         _simMoveEnsureAreaBox(area, reach);
         flags |= 1;
     }
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile; c.mvSteady[s] = 0;
+    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile; c.mvSteer[s * SIM_STEER_W + SIM_ST_STEADY] = 0;
     // (1: a worker at its task, which stands where the way ends; 2: one the
     // player sent, handed back there.)
     c.mvWk[s] = isWorker === 2 || isWorker === 3 ? isWorker : (isWorker ? 1 : 0);

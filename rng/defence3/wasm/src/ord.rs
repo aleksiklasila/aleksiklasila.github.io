@@ -414,7 +414,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             let h = g(mpath, q);
             if h >= 0 { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
             crate::path_release(pth, q, parena, pfree);
-            s(on, q, 0); s(mcd, q, -1);
+            s(on, q, 0); s(mcd, q * 8, -1);
             s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0);
             let t = g(pst, q) as i32;
             if t & 3 != 1 {
@@ -565,13 +565,13 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         s(nvpk, q, if at { -1 } else { ((p as i32) * 16777216 + dest) * 2 + wide as i32 });
         let h = g(mpath, q);
         if h >= 0 { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
-        s(on, q, 0); s(mcd, q, -1);
+        s(on, q, 0); s(mcd, q * 8, -1);
         s(rsend, q, if at { -1 } else { dest });
         s(nld, q, -1.0);
         if !at && fid >= 0 && g(sepk, q) != absent {
             s(mflags, q, 64 | if p == 1 { 32 } else { 0 } | 128);
             s(mreach, q, 0); s(mflow, q, fid); s(mfgen, q, gen); s(mdest, q, dest); s(mready, q, ready); s(mnp, q, p as u8);
-            s(msteady, q, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);
+            s(msteady.add(6), q * 8, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);
         }
     }
     s(cnt, 0, no as i32); s(cnt, 1, nf as i32); s(cnt, 2, vsum); s(cnt, 3, full);

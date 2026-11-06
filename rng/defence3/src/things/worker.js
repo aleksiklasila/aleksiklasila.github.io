@@ -3680,6 +3680,11 @@ const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED
 // round, up to WAI_TAKE_ROUNDS a step.
 let WAI_PARALLEL = true;
 const WAI_DECIDE_PER = 128, WAI_TAKE_ROUNDS = 16;
+// The parallel pass's events a batch: decided together, applied in order, then
+// the next batch (later ones see the earlier ones' results). Bounds the
+// decisions' arenas (wai.ai, wai.a64: ~670 B an event) to a batch's, not the
+// match's every unit (800 MB at 1M). Every event of the pass in its tick.
+const WAI_BATCH = 65536;
 // (A chunk's words in wai.ai and wai.a64: wai.rs wp_i32, wp_u64.)
 const _WAI_AI_W = per => 16 + per * 60, _WAI_A64_W = per => per * 54;
 const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_work', 'astar_work', 'gold_collected', 'astar_collected'];
@@ -3698,8 +3703,9 @@ function workerAiReserve(B) {
     for (const key of ['list', 'takeList']) _waiArr(key, Int32Array, n);
     _waiArr('out', Int32Array, Math.max(n * 8 + 256, B.structs * 2 + 16) * 4);
     _waiArr('args', Int32Array, 2048); _waiArr('redo', Int32Array, n + 2);
-    _waiArr('ai', Int32Array, chunks * _WAI_AI_W(WAI_DECIDE_PER));
-    _waiArr('a64', Float64Array, chunks * _WAI_A64_W(WAI_DECIDE_PER));
+    const bchunks = Math.min(chunks, Math.ceil(WAI_BATCH / WAI_DECIDE_PER));
+    _waiArr('ai', Int32Array, bchunks * _WAI_AI_W(WAI_DECIDE_PER));
+    _waiArr('a64', Float64Array, bchunks * _WAI_A64_W(WAI_DECIDE_PER));
 }
 // (The batch's rows for every player: payments go into them.)
 function _waiRowsReady() {
@@ -3856,12 +3862,12 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     WA[arg++] = c.id; WA[arg++] = c.owner; WA[arg++] = c.x; WA[arg++] = c.y; WA[arg++] = c.dead; WA[arg++] = c.wkS;
     WA[arg++] = c.wkT; WA[arg++] = c.wkR; WA[arg++] = c.wkN; WA[arg++] = c.idleFV; WA[arg++] = c.commandState;
     WA[arg++] = c.pathIndex; WA[arg++] = c.nvPK;
-    WA[arg++] = c.mvOn; WA[arg++] = c.mvCD; WA[arg++] = c.mvPath; WA[arg++] = S.pathPool.fs; WA[arg++] = c.mvOut;
+    WA[arg++] = c.mvOn; WA[arg++] = c.mvSteer; WA[arg++] = c.mvPath; WA[arg++] = S.pathPool.fs; WA[arg++] = c.mvOut;
     WA[arg++] = c.wsKind; WA[arg++] = c.wkIdle; WA[arg++] = S.sepKey; WA[arg++] = c.spEpoch;
     WA[arg++] = c.workerTransferCooldown; WA[arg++] = c.mvTgX; WA[arg++] = c.mvTgY; WA[arg++] = c.mvNavLD;
     WA[arg++] = c.statRow; WA[arg++] = c.effectiveLevel; WA[arg++] = c.wkIx;
     WA[arg++] = c.wbType; WA[arg++] = c.mvWake; WA[arg++] = c.mvFlags; WA[arg++] = c.mvReach; WA[arg++] = c.mvFlow;
-    WA[arg++] = c.mvFGen; WA[arg++] = c.mvDest; WA[arg++] = c.mvReady; WA[arg++] = c.mvNP; WA[arg++] = c.mvSteady;
+    WA[arg++] = c.mvFGen; WA[arg++] = c.mvDest; WA[arg++] = c.mvReady; WA[arg++] = c.mvNP; WA[arg++] = c.mvSteer;
     WA[arg++] = c.mvWk; WA[arg++] = c.mvSpent; WA[arg++] = c.mvShoot;
     WA[arg++] = c.wkType; WA[arg++] = c.wkD; WA[arg++] = c.wkOx; WA[arg++] = c.wkOy; WA[arg++] = c.wkTwice;
     WA[arg++] = c.wkFail; WA[arg++] = c.wkUntil; WA[arg++] = c.wkSched;
@@ -3983,20 +3989,30 @@ function _waiParallel(WA, P, n, mode, list) {
     F.fill(0); F.set(P.length > 512 ? P.subarray(0, 512) : P);
     const per = WAI_DECIDE_PER, redo = mode === 1 ? _waiArr('redo', Int32Array, n + 2) : null, AP = _wai.AP || (_wai.AP = new Float64Array(4));
     let base = 0;
+    const listPtr = _simHeapPtrOf(list), listAt = _simWEnc(listPtr), bchunks = Math.ceil(Math.min(n, WAI_BATCH) / per);
+    const ai = _waiArr('ai', Int32Array, bchunks * _WAI_AI_W(per)), a64 = _waiArr('a64', Float64Array, bchunks * _WAI_A64_W(per));
+    simParallelBind('wai.args', B); simParallelBind('wai.ai', ai); simParallelBind('wai.a64', a64);
+    // (The takes' losers of every batch, for the next round.)
+    const again = redo ? _waiArr('again', Int32Array, n + 2) : null;
     for (let round = 0; n > 0; round++) {
-        F[0] = n;
-        const chunks = Math.ceil(n / per);
-        const ai = _waiArr('ai', Int32Array, chunks * _WAI_AI_W(per)), a64 = _waiArr('a64', Float64Array, chunks * _WAI_A64_W(per));
-        simParallelBind('wai.args', B); simParallelBind('wai.ai', ai); simParallelBind('wai.a64', a64);
-        const SP = _simParams; SP[0] = chunks; SP[1] = per;
-        simParallelRun(SIM_KERNEL_WAI_DECIDE, chunks);
-        AP[0] = chunks; AP[1] = per; AP[2] = base;
-        simRustDirect('k_wai_apply', [B, ai, a64, redo], AP);
-        base = WA[2][0];
+        let na = 0;
+        for (let b0 = 0; b0 < n; b0 += WAI_BATCH) {
+            const bn = Math.min(WAI_BATCH, n - b0), chunks = Math.ceil(bn / per);
+            // (The batch's events: the list from b0.)
+            B[512] = _simWEnc(listPtr + b0 * 4); F[0] = bn;
+            const SP = _simParams; SP[0] = chunks; SP[1] = per;
+            simParallelRun(SIM_KERNEL_WAI_DECIDE, chunks);
+            AP[0] = chunks; AP[1] = per; AP[2] = base;
+            simRustDirect('k_wai_apply', [B, ai, a64, redo], AP);
+            base = WA[2][0];
+            if (redo && redo[0] > 0) { again.set(redo.subarray(1, 1 + redo[0]), na); na += redo[0]; }
+            if (WA[2][1]) break;
+        }
+        B[512] = listAt;
         _wai.rounds = round + 1;
-        if (WA[2][1] || !redo || !(redo[0] > 0) || round + 1 >= WAI_TAKE_ROUNDS) break;
-        n = redo[0];
-        list.set(redo.subarray(1, 1 + n));
+        if (WA[2][1] || !redo || !(na > 0) || round + 1 >= WAI_TAKE_ROUNDS) break;
+        n = na;
+        list.set(again.subarray(0, n));
     }
 }
 // The search tier's takes (worker.js _wsCommit): the n requests of the

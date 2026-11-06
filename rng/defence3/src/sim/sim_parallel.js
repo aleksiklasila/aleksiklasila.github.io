@@ -208,7 +208,7 @@ for(const [id,name]of [[SIM_KERNEL_TRAFFIC_CAPTURE,'traffic_capture'],[SIM_KERNE
 const _simOccW = _simWK(['occ.bits','occ.mask','occ.rec','?-','?-','?-','?-',
     'unit.x','unit.y','unit.prevX','unit.prevY','unit.vx','unit.vy','unit.dead','unit.live',
     'unit.spTile','unit.sepKey','unit.spArea','unit.spMvOld','unit.spMvNew','unit.spMvOwn','unit.owner','unit.spOwner',
-    'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','unit.mvSteady','unit.mvCT','unit.mvCD','occ.offsets','occ.config',
+    'occ.areaGrid','occ.eslot','occ.start','occ.count','occ.stamp','occ.stats','?-','?-','?-','occ.offsets','occ.config',
     // (34: per job, the idle units it swapped across its block's edge: mv.rs traffic_swap;
     // 35: per job's range (as mv.post's), the units its second pass looks at;
     // 36: the phases' blocks with units, heaviest first: occupancyJobs;
@@ -1094,8 +1094,8 @@ function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R =
 // then lengths (partL per profile at 250, area.off, wk.ver, nav.fmeta.0/1,
 // the cover's players and stride at 262..267); the params P as doubles.
 const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvPath', 'unit.energy', 'unit.sepKey', 'unit.dead',
-    'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvFloor', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
-    'unit.mvDest', 'unit.mvCD', 'unit.mvCT', 'unit.mvCVx', 'unit.mvCVy', 'unit.mvCTl', 'unit.mvCN', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
+    'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvSteer', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
+    'unit.mvDest', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
     'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', '?-', '?-', '?-', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.stFr', 'unit.stSa',
@@ -1112,7 +1112,7 @@ const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 
     'unit.commandState', 'unit.mvShoot', 'unit.mvReachD', 'unit.mvRangeK', 'unit.lzFlags', '?sep.rs', '?sep.rc', '?sep.rstamp', '?sep.eslot',
     '?ix.omask', '?mv.scls', '?mv.hstruct', '?-', 'unit.mvFire',
     '?-' , 'unit.attackFlash', '?mv.hita', '?mv.hitt', '?mv.hitc', 'unit.tmOn', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.sepLayer',
-    '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', '?unit.mvSteady', '?unit.wkLmt',
+    '?unit.mvTgX', '?unit.mvTgY', '?unit.mvTgTol', 'unit.mvSteer', '?unit.wkLmt',
     // (The separation's finish, fused into the epilogue: mv.rs W_SPX...)
     '?sep.px', '?sep.py', '?sep.ov', '?sep.hit', '?unit.sepCx'];
 // (From word 268, after the navigation profiles' words and their lengths.)

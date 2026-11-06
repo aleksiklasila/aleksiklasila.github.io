@@ -20,7 +20,7 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  let cases=0,fast=0,walls=0;
  const capture=u=>({pending:u._pendingPathTarget&&{...u._pendingPathTarget},path:u.path,index:u.pathIndex,
   fallback:u.pathIsFallbackAstar,key:u._routeKey,retry:u._astarBudgetRetryTick,h:u._us.hObj[u._si],
-  cols:['nvPK','mvOn','mvCD','mvPF','rkF'].map(k=>u._us[k][u._si]),
+  cols:['nvPK','mvOn','mvSteer','mvPF','rkF'].map(k=>u._us[k][k==='mvSteer'?u._si*8:u._si]),
   requests:_navSub.req.slice(),entries:[..._navSub.map],due:u._us.ppDue[u._si],pending:pendingPathWaiting()});
  for(let round=0;round<4;round++){
   gameTime=100+round*20;
@@ -44,9 +44,9 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    if(comp===-2)walls++;else if(comp!==_navUnitComp(profile,tile))throw Error('prepared component '+j);
    const missingView=false;
    const initial={path:u.path,index:u.pathIndex,pending:u._pendingPathTarget&&{...u._pendingPathTarget},fallback:u.pathIsFallbackAstar,
-    retry:u._astarBudgetRetryTick,key:u._routeKey,on:C.mvOn[s],cd:C.mvCD[s],h:C.hObj[s]};
+    retry:u._astarBudgetRetryTick,key:u._routeKey,on:C.mvOn[s],cd:C.mvSteer[s*8],h:C.hObj[s]};
    const reset=()=>{u.path=initial.path;u.pathIndex=initial.index;u._pendingPathTarget=initial.pending&&{...initial.pending};u.pathIsFallbackAstar=initial.fallback;
-    u._astarBudgetRetryTick=initial.retry;u._routeKey=initial.key;C.mvOn[s]=initial.on;C.mvCD[s]=initial.cd;C.hObj[s]=initial.h;
+    u._astarBudgetRetryTick=initial.retry;u._routeKey=initial.key;C.mvOn[s]=initial.on;C.mvSteer[s*8]=initial.cd;C.hObj[s]=initial.h;
     _navSubReset();C.ppDue.fill(-1);_ppHeads().fill(-1);_ppCount=0;};
    reset();_unitNoWay(u);const expected=JSON.stringify(capture(u));
    reset();const used=_unitNoWayCommit(u,C,s,key,comp,_simHTerm(_UH_PFA,true));

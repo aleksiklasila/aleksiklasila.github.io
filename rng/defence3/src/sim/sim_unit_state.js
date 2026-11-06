@@ -314,9 +314,11 @@ function simUnitMirror(u) {
 const SIM_MOVE_WINDOW = 16;
 // Words of a slot's flow look-ahead record (unit.mvNav).
 const SIM_NAV_STRIDE = 8;
+// The steering record's words (mvSteer; mv.rs SR_*): a slot's at slot * SIM_STEER_W.
+const SIM_STEER_W = 8, SIM_ST_CD = 0, SIM_ST_CT = 1, SIM_ST_CTL = 2, SIM_ST_CVX = 3, SIM_ST_CVY = 4, SIM_ST_FLOOR = 5, SIM_ST_STEADY = 6, SIM_ST_CN = 7;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
     ['mvLane', Float32Array, 1], ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
-    ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvFloor', Int32Array, 1], ['mvPath', Int32Array, 1],
+    ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvPath', Int32Array, 1],
     // Parked idle workers (mvOn 2): the tick their Unit.update next does anything.
     ['mvWake', Int32Array, 1],
     // A worker's task (SIM_UNIT_WK_FIELDS).
@@ -379,7 +381,6 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['mvTgX', Float32Array, 1], ['mvTgY', Float32Array, 1], ['mvTgTol', Float32Array, 1],
     // A flow unit's steady window (SIM_KERNEL_MOVE_STEP's steady step): its
     // committed step is taken as it is until this tick (0: not steady).
-    ['mvSteady', Int32Array, 1],
     // Effective stats (SIM_KERNEL_EFF_UNITS): 1 when the unit's base tables
     // fit its baseLevel and its window is known (esRad chunks around it,
     // esType its spatial type); esTaken the pass that took it; esFlag the
@@ -435,9 +436,12 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     ['spMvOld', Int32Array, 1], ['spMvNew', Int32Array, 1], ['spMvOwn', Int8Array, 1], ['mvBlk', Uint8Array, 1],
     // Flow movement's committed step (SIM_STEER_TICKS): its destination tile
     // (-1 none), the tick and the step its last steer committed.
-    ['mvCD', Int32Array, 1], ['mvCT', Int32Array, 1], ['mvCVx', Float32Array, 1], ['mvCVy', Float32Array, 1],
+    // (The steering record, mv.rs SR: [destination tile (cd), tick (ct), tile (ctl), velocity x, y (f32 bits),
+    // floor tile, steady steps, ticks (cn)] a slot: the movement's per-mover words, one cache line half,
+    // not eight columns (~350k lines a tick at 1M).)
+    ['mvSteer', Int32Array, 8],
     // (The tile it steered in, and for how many ticks the step holds.)
-    ['mvCTl', Int32Array, 1], ['mvCN', Uint8Array, 1],
+
     // Flow mode: its navigation profile (flownav.js navProfileOf: ground, air,
     // a walk class), whose fields and walls the kernel reads.
     ['mvNP', Uint8Array, 1],
@@ -878,14 +882,14 @@ function simUnitStateReleaseFreed() {
     const S = _simUnitState;
     if (!S || !S.freeCount) return;
     const sl = S.sl, L = S.freeLater, n = S.freeCount, C = S.columns;
-    // (Back to a fresh slot's state on the helpers, in one job: taking one
-    // then clears nothing. A status record still held let go first.)
-    let zeroed = false;
-    if (typeof SIM_KERNEL_SLOT_ZERO === 'number' && typeof _simWasmX !== 'undefined' && _simWasmX !== null) {
-        for (let i = 0; i < n; i++) { const s = L[i]; if (C.stIx[s] > 0) _simStRelease(S, s); }
-        zeroed = _simSlotZeroRun(S, L, n);
-    }
-    for (let i = 0; i < n; i++) { const s = L[i]; _simSlabFree(sl, s); if (zeroed) sl.used[s >> 5] &= ~(1 << (s & 31)); }
+    // (Not zeroed here: a slot is made fresh when a unit takes it again
+    // (simUnitStateAllocate: its used bit), most released slots never are
+    // (an army shrinking) and zeroing each released one's ~130 columns was
+    // ~190k cache lines a tick at 1M. A released slot reads as none: dead,
+    // not live, no separation key, unarmed (k_unit_gone). A status record
+    // still held let go now.)
+    for (let i = 0; i < n; i++) { const s = L[i]; if (C.stIx[s] > 0) _simStRelease(S, s); }
+    for (let i = 0; i < n; i++) _simSlabFree(sl, L[i]);
     S.freeCount = 0;
 }
 // A fresh slot's column values other than zero (its first element for a
@@ -896,8 +900,8 @@ function simUnitStateReleaseFreed() {
 let _simSlotDefs = null;
 function simSlotDefaults() {
     if (_simSlotDefs) return _simSlotDefs;
-    const d = { mvNav: -1, mvNavLD: -1, mvFloor: -1, esVer: -1, statRow: -1, bsRow: -1, fLsX: NaN, fLsY: NaN, mvPath: -1,
-        wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, mvCD: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
+    const d = { mvNav: -1, mvNavLD: -1, mvSteer: -1, esVer: -1, statRow: -1, bsRow: -1, fLsX: NaN, fLsY: NaN, mvPath: -1,
+        wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
         cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1 };
     for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
     d.j__statsVer = -1; d.j__rslot = -1; d.j__damageFlashStrength = -0; d.j__fpTile = -1; d.j__fpIdx = -1; d.j__fpVer = -1; d.j__pendingDueStamp = -1; d.j__okTile = -1; d.j__okNodeTile = -1;
@@ -970,6 +974,8 @@ function _simSlotFreshRange(S, from, to) {
     if (!(to > from)) return;
     const D = simSlotDefaults(), C = S.columns;
     for (const k in D) { const per = C[k].length / Math.max(1, S.cap); if (per === 1) C[k].fill(D[k], from, to); else for (let s = from; s < to; s++) C[k][s * per] = D[k]; }
+    // (The steering record's floor tile: none, as the destination word above.)
+    for (let s = from; s < to; s++) C.mvSteer[s * SIM_STEER_W + SIM_ST_FLOOR] = -1;
 }
 
 // The columns live in the wasm heap (simHeapArray: the Rust kernels read
@@ -1337,6 +1343,7 @@ function _simSlotZeroFn() {
     // (A fresh slot's defaults: simSlotDefaults.)
     const D = simSlotDefaults(), per = new Map(SIM_MOVE_COLUMNS.map(c => [c[0], c[2]]));
     for (const k in D) body.push('C.' + k + '[s' + (per.get(k) > 1 ? ' * ' + per.get(k) : '') + '] = ' + (Number.isNaN(D[k]) ? 'NaN' : Object.is(D[k], -0) ? '-0' : String(D[k])) + ';');
+    body.push('C.mvSteer[s * ' + SIM_STEER_W + ' + ' + SIM_ST_FLOOR + '] = -1;');
     return new Function('C', 's', body.join('\n'));
 }
 // References use pages only where values differ from their column default.

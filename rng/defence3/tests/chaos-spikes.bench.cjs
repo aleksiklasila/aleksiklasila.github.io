@@ -234,6 +234,9 @@ const readStructRows=()=>inst.eval('typeof structRowStats!=="undefined"?({...str
 const structRowsAtStart=readStructRows();
 let structRowsAtSteady=null;
 let previousUnits=setup.units,previousSpawns=0;
+// --census=steps (with --helpers=0): the unit column census over those steps, to <out>.census.json (unit-column-census-hooks.js).
+const censusSteps=new Set((process.argv.find(a=>a.startsWith('--census='))?.slice(9)||'').split(',').filter(Boolean).map(Number));
+if(censusSteps.size){const src=fs.readFileSync(path.join(__dirname,'../src/sim/sim_parallel.js'),'utf8');inst.scratch.kernelNames=[...src.matchAll(/SIM_KERNEL_([A-Z0-9_]+)\s*=\s*(\d+)/g)].map(m=>m[1]+'='+m[2]).join(',');inst.eval(fs.readFileSync(path.join(__dirname,'unit-column-census-hooks.js'),'utf8'));}
 for(let i=0;i<ticks;i++){
  if(i===warmup)structRowsAtSteady=readStructRows();
  if(i===warmup&&allocationSession){
@@ -276,12 +279,16 @@ for(let i=0;i<ticks;i++){
  // (wire form: JSON round trip, ids compact). Outside the timing too.
  const massClick=massAt>0&&i>=massAt&&(i-massAt)%massGap===0&&(i-massAt)/massGap<massClicks?(i-massAt)/massGap:-1;
  if(massClick>=0){inst.eval(`__scratch.massActions=JSON.parse(JSON.stringify(${MASS_COMMAND}(${massClick})))`);}
+ if(censusSteps.has(i))inst.eval('__scratch.census.begin()');
  const cpu0=metrics?process.cpuUsage():null;
  const a=performance.now();
  if(burst)for(let team=0;team<2;team++)inst.eval(`processActions(__scratch.actions${team},${team})`);
  if(massClick>=0)inst.eval(`processActions(__scratch.massActions,${massTeam})`);
  inst.eval(workerPost?'gameTick();simPresentTickEnd();{const t=currentTick++;__scratch.W._simPostResult(t,null,null,0);}':'gameTick();currentTick++;');
  const ms=performance.now()-a;
+ if(censusSteps.has(i))inst.eval('__scratch.census.end()');
+ // --heap-inventory=STEP (with SIM_HEAP_SITES=1): the wasm heap's live bytes by allocation site and every registered array by name, to <out>.heap.json.
+ if(String(process.argv.find(a=>a.startsWith('--heap-inventory='))||'').slice(17).split(',').map(Number).includes(i))fs.writeFileSync(out+'.heap'+i+'.json',inst.eval(`JSON.stringify((()=>{const by=new Map();if(typeof _simHeapSiteOf!=="undefined")for(const [,e] of _simHeapSiteOf)by.set(e[0],(by.get(e[0])||0)+e[1]);const reg=Object.entries(_simParReg).filter(([k,v])=>ArrayBuffer.isView(v)).map(([k,v])=>[k,v.constructor.name,v.length,v.byteLength]).sort((x,y)=>y[3]-x[3]);const S=_simUnitState;const cols=Object.entries(S.columns).map(([k,v])=>[k,ArrayBuffer.isView(v)?v.byteLength:(v&&v.data?v.data.byteLength:0)]).sort((x,y)=>y[1]-x[1]);const sl=S.sl,ns=Math.ceil(S.owners.length/64);let empty=0,full=0,part=0,liveIn=0;for(let k=0;k<ns;k++){const f=sl.sfree[k];if(f>=64)empty++;else if(f===0)full++;else part++;}const navs=typeof _navSlots!=="undefined"&&_navSlots.slots?_navSlots.slots.map((L,p)=>L?L.map(e=>[p,e.a.length,e.off]):[]):null;return {navs,slabs:{n:ns,empty,full,part,nfree:sl.nfree},stats:simHeapStats(),cap:S.cap,slots:S.owners.length,units:units.length,sites:[...by].sort((x,y)=>y[1]-x[1]).map(([s,b])=>[b,s]),registry:reg,columns:cols};})())`));
  if(yieldBetween)await new Promise(setImmediate);
  const wallMs=performance.now()-a;
  const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
@@ -346,6 +353,7 @@ result.outliers.thresholds=Object.fromEntries([500,833.3333333333,1000,1500,2000
 result.outliers.excessOverMedian1_5Ms=steady.reduce((n,r)=>n+Math.max(0,r.wallMs-result.wall.p50*1.5),0);
 result.gameplay={...stats(rows.map(r=>({ms:r.wallMs}))),note:'All ticks after setup, including warmup; see wall for the separately selected steady window.'};
 fs.writeFileSync(out,JSON.stringify(result,null,2));
+if(censusSteps.size)fs.writeFileSync(out+'.census.json',inst.eval(`JSON.stringify(__scratch.census.report(${JSON.stringify([...censusSteps])}))`));
 if(session)session.post('Profiler.stop',(err,r)=>{if(err)throw err;fs.writeFileSync(out+'.cpuprofile',JSON.stringify(r.profile));session.disconnect();});
 if(profileHelpers)await Promise.all((require('./real-sim-helper.cjs').instances||[]).map(async(w,i)=>{const r=await w.benchProfile('stop');fs.writeFileSync(out+'.helper'+i+'.cpuprofile',JSON.stringify(r.profile));}));
 console.log(JSON.stringify({all:result.all,steady:result.steady,wall:result.wall,outliers:result.outliers,bursts:result.bursts,out}));

@@ -152,7 +152,7 @@ function occupancyTeleport(u,x,y) {
     let ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);
     if(!ok)ok=_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,O.cell,O.planes,s,ox,oy,r,layer,32);
     if(ok){O.registered++;O.expectedBits+=O.sizes[r];x=O.rec[s*4];y=O.rec[s*4+1];}
-    c.x[s]=x;c.y[s]=y;c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;
+    c.x[s]=x;c.y[s]=y;{const r=s*SIM_STEER_W;c.mvSteer[r+SIM_ST_STEADY]=0;c.mvSteer[r+SIM_ST_CT]=-1;c.mvSteer[r]=-1;}
 }
 // (The five arrays' encoded addresses for the move below, worked out again
 // only when a binding changed: five calls and a registry lookup each, a move.)
@@ -175,7 +175,7 @@ function occupancyMovePosition(u,x,y) {
     // (Where the footprint ended is its record: the position it returned.)
     const nx=rec[s*4],ny=rec[s*4+1];
     c.x[s]=nx;c.y[s]=ny;
-    if(nx!==x || ny!==y){c.mvSteady[s]=0;c.mvCT[s]=-1;c.mvCD[s]=-1;}
+    if(nx!==x || ny!==y){const r=s*SIM_STEER_W;c.mvSteer[r+SIM_ST_STEADY]=0;c.mvSteer[r+SIM_ST_CT]=-1;c.mvSteer[r]=-1;}
 }
 function occupancyAudit() {
     const O=_occ;if(!O)return null;

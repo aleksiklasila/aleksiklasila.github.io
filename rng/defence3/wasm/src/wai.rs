@@ -700,7 +700,7 @@ impl<'a> Ctx<'a> {
             s(w.mpath, q, -1);
         }
         s(w.on, q, 0);
-        s(w.mcd, q, -1);
+        s(w.mcd, q * 8, -1);
     }
     #[inline(always)]
     unsafe fn path_done(&self, q: usize) -> bool { !(g(self.w.nvpk, q) >= 0 && g(self.w.pidx, q) < 1) }
@@ -1042,7 +1042,7 @@ impl<'a> Ctx<'a> {
         let st = self.st(q);
         let kind = if st == WS_MANUAL { 2 } else if st == WS_RETURNING_FOR_GOLD || (st == WS_RETURNING && self.wb(q) == WB_SALVAGER) { 3 } else { 1 };
         s(w.mflags, q, 64 | if prof == 1 { 32 } else { 0 } | 128); s(w.mreach, q, 0); s(w.mflow, q, ATLAS_FID); s(w.mfgen, q, 0); s(w.mdest, q, dest); s(w.mready, q, 0);
-        s(w.mnp, q, prof as u8); s(w.msteady, q, 0); s(w.mwk, q, kind); s(w.mspent, q, 0); s(w.on, q, 1);
+        s(w.mnp, q, prof as u8); s(w.msteady.add(6), q * 8, 0); s(w.mwk, q, kind); s(w.mspent, q, 0); s(w.on, q, 1);
     }
     /// simMoveTryPark for an idle worker (not a builder or collector).
     unsafe fn park_idle(&self, q: usize) {

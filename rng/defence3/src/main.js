@@ -3721,7 +3721,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
                 simUnitPathRelease(c, s);
                 // (The group's one path array: stored once, its units' handles, sim_unit_state.js simPathStore.)
                 { const h = at ? 0 : simPathStore(navPath); simPathRelease(c.pthH, s); c.pthH[s] = h; }
-                c.mvOn[s] = 0; c.mvCD[s] = -1;
+                c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1;
                 c.rsEnd[s] = at ? -1 : destKey;
                 c.mvNavLD[s] = group && !at && !wk ? _ordNavLD(c, s, destKey) : -1;
                 if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, wk ? CMD_MOVING : cmd, flying, ready, wk || !group, wk ? 2 : 0, profile);
@@ -4614,8 +4614,8 @@ function _orderWorkerArgs(list, S, W, V, U, resKept, wsl) {
         c.owner, c.dead, c.isWk, c.holdF, c.spEpoch, c.x, c.y, S.sepLayer, S.sepKey, c.id,
         c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.commandState, c.mvOn, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.agWait, c.mvPP, c.mvPF,
         c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, null, c.wkIdle, c.wsKind, c.wkIx, c.wbType,
-        c.rkF, c.rtEnd, c.nvProf, c.navRdy, c.pathIndex, c.nvPK, c.mvPath, S.pathPool.fs, c.mvCD, c.rsEnd, c.mvNavLD,
-        c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteady, c.mvWk, c.mvSpent, c.mvShoot,
+        c.rkF, c.rtEnd, c.nvProf, c.navRdy, c.pathIndex, c.nvPK, c.mvPath, S.pathPool.fs, c.mvSteer, c.rsEnd, c.mvNavLD,
+        c.mvFlags, c.mvReach, c.mvFlow, c.mvFGen, c.mvDest, c.mvReady, c.mvNP, c.mvSteer, c.mvWk, c.mvSpent, c.mvShoot,
         workerReservedTiles, resKept ? _workerResCount : null, resKept ? _workerResSum : null, wsl, V, U.ids, U.slots, W.tt,
         c.wmPin, c.wmPinTy, c.wmWx, c.wmWy, c.wmWgx, c.wmWgy, c.wmWty, c.wmSp, c.wmDrop, c.wmMine, c.wmMineTy, c.wmQc, c.wmQr, c.wmQp, c.wmTrip, c.wmTw, c.wmReady, c.wmMan, c.ptSt, c.ptGx, c.ptGy, c.hObj, c.pthH, simPathArena().a, SIM_PATH.free];
 }
@@ -5000,7 +5000,7 @@ function _unitCmdKernel(a, playerId, op, target) {
     P[18] = simUnitTypeIndex('king'); P[19] = 1; P[20] = H.data.BYTES_PER_ELEMENT;
     const fs = S.pathPool ? S.pathPool.fs : null;
     simRustDirect('k_unit_cmd', [_unitCmdIds, map.t, c.id, c.live, c.idStp, _unitCmdOut, _unitCmdCnt, c.owner, c.dead, c.isWk, c.upT, c.commandState, c.mvOn, c.holdF, H.data, c.hObj,
-        c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.rkF, c.nvPK, c.pathIndex, c.mvPath, fs, c.mvCD, c.cmMode, c.mvWk,
+        c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.rkF, c.nvPK, c.pathIndex, c.mvPath, fs, c.mvSteer, c.cmMode, c.mvWk,
         c.ptSt, c.ptGx, c.ptGy, c.mvPP, c.mvPF, c.energy, _unitCmdPaths, c.pthH, simPathArena().a, SIM_PATH.free], P);
     const C = _unitCmdCnt, left = C[0], np = C[1];
     // Stopped workers: their tasks let go in the worker kernel (mode 2).
