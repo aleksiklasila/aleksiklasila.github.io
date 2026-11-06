@@ -79,7 +79,9 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
     let (tick, dead_only, ncls) = (k.i(22), k.i(23) != 0, k.i(24).max(0));
     let mut nret = 0i32;
     let (mut nw, mut na, mut asum, mut amin, mut wsum, mut nr, mut nk) = (0usize, 0i32, 0i32, -1i32, 0i32, 0i32, 0i32);
-    for o in 0..64 {
+    // (Per owner: [0, 64) structures, [64, 128) research labs (class P[25]), [128, 192) those built.)
+    let labct = k.i(25);
+    for o in 0..192 {
         s(ocnt, o, 0);
     }
     for i in 0..n {
@@ -148,6 +150,10 @@ pub unsafe extern "C" fn k_struct_destroy(a: u32, _chunk: i32) {
         if cc != 0 {
             let o = cc as usize - 1;
             s(ocnt, o, g(ocnt, o) - 1);
+            if labct > 0 && g(ctab, tu) as i32 == labct {
+                s(ocnt, 64 + o, g(ocnt, 64 + o) - 1);
+                if g(uc, tu) == 0 { s(ocnt, 128 + o, g(ocnt, 128 + o) - 1); }
+            }
             s(cnt, tu, 0);
         }
         s(code, tu, 0); s(own, tu, 0); s(uc, tu, 0); s(val, tu, 0.0); s(tim, tu, 0.0); s(brain, tu, 0);

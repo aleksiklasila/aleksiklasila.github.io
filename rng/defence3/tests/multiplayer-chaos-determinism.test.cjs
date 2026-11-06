@@ -145,6 +145,11 @@ async function setupChaosWorld(mapType, seed, { guestOptions = [], exactHashes =
         host.scratch.Worker = require('./real-sim-helper.cjs');
         host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${Number(process.env.CHAOS_HOST_HELPERS)})`);
     }
+    // CHAOS_HOST_EVAL / CHAOS_GUEST_EVAL: code run once on the host or on
+    // every guest alone, e.g. peer-local switches that must not change
+    // anything (SIM_RELAYOUT_STRESS = true; SIM_RELAYOUT_PERIOD = 1).
+    if (process.env.CHAOS_HOST_EVAL) host.eval(process.env.CHAOS_HOST_EVAL);
+    if (process.env.CHAOS_GUEST_EVAL) for (const g of guests) g.eval(process.env.CHAOS_GUEST_EVAL);
     // Every building and unit the game has is in the mix (new ones too).
     const missing = JSON.parse(host.eval(`JSON.stringify([...Object.keys(BASE_CARD_TYPES).filter(k => !BASE_CARD_TYPES[k].notBuildable && !${JSON.stringify(BUILDINGS)}.includes(k)), ...Object.keys(BASE_UNIT_STATS).filter(k => !${JSON.stringify(UNITS)}.includes(k))])`));
     assert.deepEqual(missing, [], 'chaos lists miss these buildings/units');
@@ -280,7 +285,9 @@ async function chaosMatch(mapType, seed, { corruptions = 2 } = {}) {
     const desyncs = all.reduce((n, i) => n + i.eval('netCounters.desyncsDetected'), 0);
     return {
         mapType, setupCounts: JSON.parse(setupCounts), maxUnits, unitTypesSeen: unitTypesSeen.size, commandKinds: commandKinds.size,
-        compared: cmp.compared, hostResyncs, desyncs, ticks: host.eval('currentTick')
+        compared: cmp.compared, hostResyncs, desyncs, ticks: host.eval('currentTick'),
+        // (The host's online slot relayout: sim_unit_state.js simUnitRelayoutStats.)
+        relayout: JSON.parse(host.eval('JSON.stringify(typeof simUnitRelayoutStats === "function" ? simUnitRelayoutStats() : null)'))
     };
 }
 
@@ -296,6 +303,7 @@ if (require.main === module) (async () => {
         assert.ok(r.unitTypesSeen >= 18, r.mapType + ' unit types seen ' + r.unitTypesSeen);
         assert.ok(r.commandKinds >= 24, r.mapType + ' command kinds used ' + r.commandKinds);
     }
+    if (results.some(r => r.relayout && r.relayout.moved)) console.log('host relayout: ' + results.map(r => r.mapType + ' ' + r.relayout.moved + ' moved in ' + r.relayout.steps + ' steps').join(', '));
     console.log('PASS: chaos determinism\n  ' + results.map(r => `${r.mapType}: ${r.setupCounts.units} units + ${r.setupCounts.towers + r.setupCounts.barracks + r.setupCounts.spawners + r.setupCounts.floor} buildings at start (max ${r.maxUnits} units), ${r.unitTypesSeen} unit types, ${r.commandKinds} command kinds, ${r.compared} tick hashes compared, ${r.hostResyncs} patches for forced divergences`).join('\n  '));
     // (Helper threads keep the process alive.)
     if (Number(process.env.CHAOS_HOST_HELPERS) > 0) process.exit(0);

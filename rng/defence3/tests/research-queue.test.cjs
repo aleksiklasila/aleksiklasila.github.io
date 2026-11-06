@@ -205,7 +205,7 @@ function rng(seed) {
         rows.push(`reported case: R${base + 2} moved above R${base + 1} stays second, progress ${progress.toFixed(0)} kept on R${base + 1}; queue drained to +2/+1`);
     }
 
-    // 2. A queue left inconsistent (e.g. by an older build) heals on the next reorder/dequeue.
+    // 2. Task objects are views of the numbers (data_dynamic.js p._rq): one written over is made again at the next reorder/dequeue.
     {
         const { world, host, all } = await match();
         const pid = host.eval('localPlayerId');
@@ -225,7 +225,7 @@ function rng(seed) {
         assertValid(all, [pid], 'healed by reorder');
         world.atNextSafeTick(`(() => { const p = ensurePlayerResearchQueueState(${pid}); p.researchQueue[0].fromLevel = 7; p.researchQueue[0].workRequired = 99999; })()`);
         await world.run(3000);
-        q(host, { action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, kind: 'unit', key: 'nope', statKey: 'nope', count: 1 });
+        q(host, { action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, ...S, count: 1 });
         await world.run(1500);
         assertValid(all, [pid], 'healed by dequeue');
         assertInSync(world, all, 'healing');

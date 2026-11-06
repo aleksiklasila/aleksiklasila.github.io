@@ -443,6 +443,21 @@ function _spClasses() {
     }
     return _spp.classes;
 }
+// A group's spawn queue changes (main.js spawnCounts): tiles and counts, by
+// the kernel (wasm/src/spr.rs k_spawn_counts); the changed tiles' list and
+// count back (_spp.out, n). Fronts' costs: spr.tab, missing keys filled first.
+function spawnCountsKernel(tiles, counts, n, playerId, worker) {
+    const S = _spp, CL = _spClasses(), { cls } = _spClsBuild();
+    const np1 = players.length + 1, tab = _spArr('tab', Float64Array, np1 * SPAWN_PROD_TYPES * 64 * 3);
+    if (S.np !== np1) { tab.fill(NaN); S.np = np1; }
+    const out = _spArr('cout', Int32Array, n + 4), cnt = _spArr('ccnt', Int32Array, 4), ver = _precomputedStatsVersion, P = S.CP || (S.CP = new Float64Array(16));
+    P.fill(0); P[0] = n; P[1] = SPAWN_PROD_TYPES; P[2] = playerId; P[3] = worker ? 1 : 0; P[4] = CL.length; P[5] = GRID_W * GRID_H; P[7] = ver; P[8] = worker ? 10 : 20;
+    const args = [cls, tiles, counts, _ST.ctab, _ST.rrow, _ST.brain, tab, out, cnt, _ST.tim];
+    P[6] = 0; simRustDirect('k_spawn_counts', args, P);
+    for (let i = 0, m = cnt[1]; i < m; i++) { const key = out[i]; if (tab[key * 3 + 2] !== ver) _spTabFill(tab, key, ver); }
+    P[6] = 1; simRustDirect('k_spawn_counts', args, P);
+    return cnt[0];
+}
 // A spawner that spawned: its queue moves on after the batch.
 function _spShiftNote(s) {
     const k = _spp.ix.get(s.constructor), L = _spp.shift;
@@ -461,9 +476,10 @@ function _spTabFill(tab, key, ver) {
     tab[key * 3] = cd; tab[key * 3 + 1] = cost; tab[key * 3 + 2] = ver;
 }
 // The step's production; returns spr.sel ([0] count, then the tiles of the spawners to spawn, in order).
-function spawnerProductionPass() {
-    const S = _spp, CL = _spClasses();
-    if (globalSpawnerReadyOrderCounter > 1073741824) _spRebase(CL);
+// The classes' table for the kernels (spr.cls: rows, ctab tag, column
+// pointers by _SP_COLS) and their jobs' count.
+function _spClsBuild() {
+    const CL = _spClasses();
     if (typeof structRallyClasses === 'function') structRallyClasses();
     const cls = _spArr('cls', Int32Array, CL.length * 16);
     let J = 0;
@@ -483,6 +499,12 @@ function spawnerProductionPass() {
         cls[b + 1] = _stAllIx.get(C) || 0;
         J += Math.ceil(T.n / SPAWN_PROD_ROWS);
     }
+    return { cls, J };
+}
+function spawnerProductionPass() {
+    const S = _spp, CL = _spClasses();
+    if (globalSpawnerReadyOrderCounter > 1073741824) _spRebase(CL);
+    const { cls, J } = _spClsBuild();
     const sel = _spArr('sel', Int32Array, 8);
     if (J === 0) { sel[0] = 0; return sel; }
     const JB = _spArr('jobs', Int32Array, J * 3);
@@ -1119,7 +1141,7 @@ if (typeof structTableAccessors === 'function') structTableAccessors(ResearchSpa
 // is the player's; nothing is written into each research building when it
 // changes). Writes are ignored. (The page's views define their own.)
 Object.defineProperties(ResearchSpawner.prototype, {
-    researchTask: { configurable: true, get() { const p = this.owner >= 0 ? players[this.owner] : null; return (p && p.researchTask) || null; }, set(v) {} },
+    researchTask: { configurable: true, get() { return this.owner >= 0 && players[this.owner] ? getPlayerResearchTask(this.owner) || null : null; }, set(v) {} },
     isResearching: { configurable: true, get() { const t = this.researchTask; return !!(t && !this.isUpgrading && isAutoResearchEnabled(this) && (t.workDone || 0) < t.workRequired); }, set(v) {} },
 });
 

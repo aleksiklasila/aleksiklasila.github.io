@@ -279,7 +279,7 @@ function applySoloScene(scene) {
     for (const runs of rows('terrain')) {
         let x = 0;
         for (let i = 0; i < runs.length; i += 4) for (let n = 0; n < runs[i+3]; n++, x++) {
-            Object.assign(grid[y][x], { type: runs[i], owner: runs[i+1], areaId: runs[i+2], item: null, droppedItem: null });
+            Object.assign(grid[y][x], { type: runs[i], owner: runs[i+1], areaId: runs[i+2], item: null });
             areaIdGrid[y][x] = runs[i+2];
         }
         y++;
@@ -333,7 +333,7 @@ function applySoloScene(scene) {
     }
     if(typeof salvageMarksChanged==='function') salvageMarksChanged();
     for(let pid=0;pid<slots;pid++) {
-        const orders=h.players[pid].researchOrders || [], p=ensurePlayerResearchQueueState(pid),depth={};
+        const orders=h.players[pid].researchOrders || [], p=ensurePlayerResearchQueueState(pid),depth={},tasks=[];
         if(orders.length>getResearchQueueCapacityForPlayer(pid)) throw new Error('The scene research queue exceeds its lab capacity.');
         for(const order of orders) {
             if(!getResearchStatEntry(order.kind,order.key,order.statKey)) throw new Error('Unknown scene research stat.');
@@ -341,8 +341,9 @@ function applySoloScene(scene) {
             if(level>=MAX_RESEARCH_LEVEL) throw new Error('Scene research is already at its maximum.');
             const task=makeResearchTask(pid,order.kind,order.key,order.statKey,level);
             task.workDone=Math.min(task.workRequired,Math.max(0,order.workDone||0));
-            p.researchQueue.push(task);depth[id]=(depth[id]||0)+1;
+            tasks.push(task);depth[id]=(depth[id]||0)+1;
         }
+        researchQueueReset(p,pid); p.researchQueue=tasks;
         tryAdvancePlayerResearchTask(pid);
     }
     simMoveWallsDirty(); simMoveStructsReset(); navReset();

@@ -222,3 +222,84 @@ pub unsafe extern "C" fn k_spawn_shift(a: u32, _chunk: i32) {
         s(qpaid, r, 0.0);
     }
 }
+
+/// A group's spawn queue changes (main.js spawnCounts): per tile [1][i] its
+/// count [2][i] (+ pushed, - taken off) on the structure there (st.ctab [3],
+/// st.rrow [4]) of a barrack class (P[3] 0: class 0) or a spawner class
+/// (P[3] 1: the others), owned by P[2]; pushes on a built one with energy,
+/// at most P[8] queued. A front made from nothing: the base level (st.brain
+/// [5]), its cost (spr.tab [6] at the key, P[7] its version), nothing paid.
+/// P[6] 0: only the keys of fronts to make whose cost is not in the table
+/// listed ([7], count [8][1]); 1: done, the changed tiles listed ([7],
+/// [8][0]), a queue emptied with its timer 0 and no ready order.
+/// Arrays: [0] spr.cls, [9] st.tim. P: [0] count, [1] types, [4] classes, [5] tiles.
+#[no_mangle]
+pub unsafe extern "C" fn k_spawn_counts(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (cls, tiles, counts, ctab, rrow, brain, tab, out, cnt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<f64>(6), k.p::<i32>(7), k.p::<i32>(8));
+    let tim = k.p::<f64>(9);
+    let (n, types, player, worker, ncls, ntiles, phase, cap) = (k.i(0).max(0) as usize, k.i(1).max(1), k.i(2), k.i(3) != 0, k.i(4).max(0) as usize, k.i(5).max(0), k.i(6), k.i(8).max(0));
+    let ver = k.f(7);
+    let (mut m, mut miss) = (0usize, 0usize);
+    for i in 0..n {
+        let t = g(tiles, i);
+        let d = g(counts, i);
+        if t < 0 || t >= ntiles || d == 0 { continue; }
+        let tu = t as usize;
+        let tag = g(ctab, tu) as i32;
+        let mut c = usize::MAX;
+        for j in 0..ncls { if tag != 0 && g(cls, j * SC_W + SC_TAG) == tag && g(cls, j * SC_W + SC_N) > 0 { c = j; break; } }
+        if c == usize::MAX || (c == 0) == worker { continue; }
+        let r = g(rrow, tu);
+        if r < 0 { continue; }
+        let r = r as usize;
+        let ow = col::<i8>(cls, c, SC_OW);
+        let o = g(ow, r) as i32;
+        if o != player { continue; }
+        let (en, uc, qn, qlv, qreq, qpaid, spt, rdy) = (col::<f64>(cls, c, SC_EN), col::<u8>(cls, c, SC_UC), col::<i8>(cls, c, SC_QN), col::<f64>(cls, c, SC_QLV),
+            col::<f64>(cls, c, SC_QREQ), col::<f64>(cls, c, SC_QPAID), col::<f64>(cls, c, SC_SPT), col::<i32>(cls, c, SC_RDY));
+        let q0 = g(qn, r);
+        let mut q = if q0 == -128 { 0 } else { q0 as i32 };
+        let b = g(brain, tu);
+        let key = key_of(b, o, types);
+        if d > 0 {
+            if !(g(en, r) > 0.0) || g(uc, r) == 2 { continue; }
+            let add = d.min(cap - q).max(0);
+            if add == 0 { continue; }
+            if phase == 0 {
+                if q <= 0 && key >= 0 && g(tab, key as usize * 3 + 2) != ver { s(out, miss, key); miss += 1; }
+                continue;
+            }
+            if q <= 0 {
+                q = 0;
+                let cost = if key >= 0 { g(tab, key as usize * 3 + 1) } else { f64::NAN };
+                s(qlv, r, ((b >> 16) & 255).max(1) as f64);
+                s(qreq, r, js_max(1.0, floor(if cost.is_finite() { cost } else { 1.0 })));
+                s(qpaid, r, 0.0);
+            }
+            s(qn, r, (q + add) as i8);
+        } else {
+            if q <= 0 { continue; }
+            // (Taken off one by one, the next front made each time: as spawnQueueShift.)
+            let take = (-d).min(q);
+            if phase == 0 {
+                if q - take > 0 && key >= 0 && g(tab, key as usize * 3 + 2) != ver { s(out, miss, key); miss += 1; }
+                continue;
+            }
+            q -= take;
+            s(qn, r, q as i8);
+            if q <= 0 { s(qlv, r, 0.0); s(qreq, r, 0.0); s(qpaid, r, 0.0); }
+            else {
+                let cost = if key >= 0 { g(tab, key as usize * 3 + 1) } else { f64::NAN };
+                s(qlv, r, ((b >> 16) & 255).max(1) as f64);
+                s(qreq, r, js_max(1.0, floor(if cost.is_finite() { cost } else { 1.0 })));
+                s(qpaid, r, 0.0);
+            }
+        }
+        // (barrack.js spawnerProductionChanged: an empty queue's timer 0, no ready order.)
+        // (st.tim [9] with it: the tile table's copy of the timer, which the state hash reads.)
+        if q <= 0 && g(en, r) > 0.0 && g(uc, r) != 2 { s(spt, r, 0.0); s(rdy, r, i32::MIN); if !tim.is_null() { s(tim, tu, 0.0); } }
+        s(out, m, t); m += 1;
+    }
+    s(cnt, 0, m as i32); s(cnt, 1, miss as i32);
+}

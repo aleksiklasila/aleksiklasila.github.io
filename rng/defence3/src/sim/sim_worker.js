@@ -233,10 +233,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261103-g', base).href;
+    let url = new URL('sim_helper.js?v=20261105-rl2', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261103-g', 'sim_wasm_bin.js?v=20261103-g', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261025-st1', '../game/flownav.js?v=20261025-st1'].map(f => {
+    let parts = ['sim_parallel.js?v=20261105-rl2', 'sim_wasm_bin.js?v=20261105-rl2', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -277,6 +277,8 @@ self.onmessage = (ev) => {
         } else if (msg.type === 'presentationStop') {
             simPresentationStop();
         } else if (msg.type === 'tick') {
+            // (Its commands prepared now, before it runs: main.js actionPrepare.)
+            if (typeof actionsPrepare === 'function') actionsPrepare(msg.actions);
             _simStreamPush(msg);
         } else if (msg.type === 'sealed') {
             _simAutoSealed(msg);
@@ -405,6 +407,7 @@ function _simAutoSealed(m) {
         flush = !!b.flush;
         dk = b.dk | 0 || 1;
     }
+    if (typeof actionsPrepare === 'function') actionsPrepare(actions);
     _simSealed.set(t, { actions: actions || [], flush, dk });
 }
 // Claims the next tick of a word (SEALED, CLAIM) unless the page did, or

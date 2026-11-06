@@ -7,7 +7,8 @@ const result = inst.eval(`(() => {
     if(typeof _simWasmX.k_uid_clean!=='function')throw Error('missing native cleaner');
     // Sanitization concerns list membership, including dead units not yet
     // retired. No occupancy/spawning limits are needed for these table rows.
-    const count=ACTION_MAX_UNIT_IDS+300, made=[];
+    // (No cap on an action's ids: ACTION_MAX_UNIT_IDS is 1 << 30; the size here is the test's own.)
+    const count=24300, made=[];
     for(let j=0;j<count;j++){
         const u=Object.create(Unit.prototype);
         simUnitStateAllocate(u,320,320);u.id=nextUnitId++;u.owner=j%2;
@@ -15,14 +16,14 @@ const result = inst.eval(`(() => {
     }
     const oracle=ids=>{const out=[],seen=new Set(),map=_unitByIdMap();for(const id of ids){
         if(typeof id!=='number'||!Number.isInteger(id)||seen.has(id)||map.get(id)===undefined)continue;
-        seen.add(id);out.push(id);if(out.length===ACTION_MAX_UNIT_IDS)break;
+        seen.add(id);out.push(id);
     }return out;};
     let seed=7,cases=0,native=0;
     const run=simRustDirect;simRustDirect=function(fn){if(fn==='k_uid_clean')native++;return run.apply(this,arguments);};
     const check=ids=>{const want=oracle(ids),actual=_actionCleanIds(ids);if(want.length!==actual.length||want.some((id,j)=>id!==actual[j]))throw Error('cleaner mismatch case '+cases);cases++;};
     const ids=made.map(u=>u.id);
     check(ids);check(ids.slice().reverse());check([...ids,...ids]);
-    check([...new Array(ACTION_MAX_UNIT_IDS).fill(-123),...ids]);
+    check([...new Array(30000).fill(-123),...ids]);
     check([...ids.slice(0,12000),...ids.slice(0,12000),...ids.slice(12000)]);
     for(let t=0;t<16;t++){
         const a=[];for(let j=0;j<1200;j++){seed=(Math.imul(seed,1664525)+1013904223)|0;

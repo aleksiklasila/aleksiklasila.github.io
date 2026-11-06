@@ -18,7 +18,7 @@ const H = require('./net-harness.cjs');
     host.eval('startSoloGame();');
     await world.run(1500);
     const out = JSON.parse(host.eval(`(() => {
-        const POS = new Set(['id', 'x', 'y', 'prevX', 'prevY', 'x0', 'y0', 'spTile', 'spArea', 'spEpoch', 'spKey', 'sepKey', 'spChunk', 'occX', 'occY', 'upB', 'cbTick', 'cbS', 'wkIx']);
+        const POS = new Set(['id', 'x', 'y', 'prevX', 'prevY', 'x0', 'y0', 'spTile', 'spArea', 'spEpoch', 'spKey', 'sepKey', 'spChunk', 'occX', 'occY', 'upB', 'cbTick', 'cbS', 'wkIx', 'hnd', 'hslot']);
         const snap = (C, s) => {
             const o = {};
             for (const k of Object.keys(C)) {

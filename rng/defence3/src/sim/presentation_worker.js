@@ -660,7 +660,7 @@ function presentHelpers(nn) {
     if (!helpers.every(h=>h.ready)) return null;
     const key=stateVersion+':'+bindVersion;
     if (helperBound!==key) {
-        for (const h of helpers) h.worker.postMessage({type:'helperBind',columns:source,meta:{buf:meta.buf,cap:meta.cap},last,vis,face,ghost,mot,fullAt,easing,stamps:dirty.stamps,done:helperDone,results:helperResults});
+        for (const h of helpers) h.worker.postMessage({type:'helperBind',columns:source,meta:{buf:meta.buf,cap:meta.cap,off:meta.off||0},last,vis,face,ghost,mot,fullAt,easing,stamps:dirty.stamps,done:helperDone,results:helperResults});
         helperBound=key;
     }
     return helpers;
@@ -711,7 +711,7 @@ function runRanges(J,F,P) {
 function onHelperMessage(event) {
     const m=event.data;
     if (m.type==='helperBind') {
-        source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap);last=m.last;
+        source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap,m.meta.off||0);last=m.last;
         Object.assign(vis,m.vis);Object.assign(face,m.face);Object.assign(ghost,m.ghost);Object.assign(mot,m.mot);fullAt=m.fullAt;easing=m.easing;
         dirty.stamps=m.stamps;helperDone=m.done;helperResults=m.results;
         return;
@@ -832,11 +832,12 @@ function draw() {
         if(b) {new Uint8Array(b,0,projectiles.buf.byteLength).set(new Uint8Array(projectiles.buf));world.projectiles={...projectiles,buf:b};sentProjectileRevision=projectileRevision;}
     }
     if(cells) {
-        const delta=[];
-        if(!oldCells || oldCells.length!==cells.length) oldCells=new Int32Array(cells.length).fill(-2147483648);
-        for(let i=0;i<cells.length;i+=2) if(cells[i]!==oldCells[i] || cells[i+1]!==oldCells[i+1]) {
-            oldCells[i]=cells[i];oldCells[i+1]=cells[i+1];delta.push(i/2,oldCells[i],oldCells[i+1]);
-        }
+        // (The simulation's own cell columns, shared: type and owner a tile.)
+        const delta=[], ct=cells.type, co=cells.owner, n=Math.min(ct.length,co.length);
+        if(!oldCells || oldCells.length!==n*2) oldCells=new Int32Array(n*2).fill(-2147483648);
+        for(let i=0;i<n;i++) { const a=ct[i], b=co[i]; if(a!==oldCells[i*2] || b!==oldCells[i*2+1]) {
+            oldCells[i*2]=a;oldCells[i*2+1]=b;delta.push(i,a,b);
+        } }
         if(delta.length) world.state={cells:delta};
         cells=null;
     }
@@ -845,6 +846,25 @@ function draw() {
     // the rest; then how many threads made the ranges, and the pace.)
     (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,lastFilled,lastStamped?1:0]});
     schedule();
+}
+// Units the simulation moved to other slots (sim_unit_state.js
+// simUnitStateRelayoutStep: pairs from, to; their ids): their drawn
+// position, facing, easing and last-seen ghost follow them (else a moved
+// unit turned anew and an unseen one lost its ghost). The frames' own
+// per-slot records (last ids, fullAt) stay: the new slot is filled anew.
+// (Only where the old slot still holds that unit's state: a frame drawn
+// meanwhile may have let it go.)
+function slotMoves(P) {
+    if (!P || !source || !source.id) return;
+    const ID=source.id;
+    for (let j=0;2*j+1<P.length;j++) {
+        const f=P[2*j],t=P[2*j+1],id=t<ID.length ? ID[t] : -1;
+        if (!(id>0)) continue;
+        if (vis.id && f<vis.id.length && t<vis.id.length && vis.id[f]===id) {vis.x[t]=vis.x[f];vis.y[t]=vis.y[f];vis.id[t]=id;vis.id[f]=-1;}
+        if (face.id && f<face.id.length && t<face.id.length && face.id[f]===id) {face.a[t]=face.a[f];face.vx[t]=face.vx[f];face.vy[t]=face.vy[f];face.id[t]=id;face.id[f]=-1;}
+        if (ghost.id && f<ghost.id.length && t<ghost.id.length && ghost.id[f]===id) {ghost.x[t]=ghost.x[f];ghost.y[t]=ghost.y[f];ghost.id[t]=id;ghost.id[f]=-1;}
+        if (easing && f<easing.length && t<easing.length) {easing[t]=easing[f];easing[f]=0;}
+    }
 }
 function onMessage(event) {
     const m=event.data;
@@ -864,13 +884,14 @@ function onMessage(event) {
             if (!paceDue(m)) return;
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {bindVersion++;epoch=m.epoch;generation=m.generation;source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
+        if(m.type==='bind') {bindVersion++;epoch=m.epoch;generation=m.generation;source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap,m.meta.off||0);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
         else if(m.type==='strings') strings=m.strings;
+        else if(m.type==='slotMoves') slotMoves(m.pairs);
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}
         else if(m.type==='projectiles') {projectiles=m.table;projectileRevision=m.revision;}
         else if(m.type==='cellBaseline') oldCells=m.cells.slice();
-        else if(m.type==='cells') cells=m.cells;
+        else if(m.type==='cells') cells={type:m.ctype,owner:m.cowner};
         else if(m.type==='release') {release(m.buf);if(snapCtl)Atomics.store(snapCtl,1,1);schedule();}
     } catch(err) {postMessage({type:'error',message:String(err.stack || err)});}
 }

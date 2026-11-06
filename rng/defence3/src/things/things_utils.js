@@ -127,12 +127,13 @@ function statTablesStatic() {
 // levels, boostStepLevels), the researched maximum level (adj.rml:
 // getThingResearchedMaxLevel). Refill the reserved columns when their
 // inputs change.
-const _adjPlayerColumns = { version: -1, np: 0, nk: 0, started: false, rml: null, rlv: null, bl: null };
+const _adjPlayerColumns = { version: -1, np: 0, nk: 0, started: false, rml: null, rlv: null, bl: null, blx: null };
 function _adjPlayerStatsRoom(n) {
     const P = _adjPlayerColumns;
     P.rml = _adjArr('adj.rml', Int32Array, n);
     P.rlv = _adjArr('adj.rlv', Int32Array, 4 * n);
     P.bl = _adjArr('adj.bl', Int32Array, n);
+    P.blx = _adjArr('adj.blx', Int32Array, 4 * n);
     P.version = -1;
 }
 function _adjPlayerStats(S) {
@@ -140,10 +141,10 @@ function _adjPlayerStats(S) {
     const started = typeof gameStarted !== 'undefined' && !!gameStarted;
     const P = _adjPlayerColumns;
     const n = Math.max(1, np * nk);
-    if (!P.rml || P.rml.length < n || P.rlv.length < 4 * n || P.bl.length < n || !simHeapHas(P.rml)) _adjPlayerStatsRoom(n);
+    if (!P.rml || P.rml.length < n || P.rlv.length < 4 * n || P.bl.length < n || !P.blx || P.blx.length < 4 * n || !simHeapHas(P.rml)) _adjPlayerStatsRoom(n);
     if (P.version === _precomputedBuildingStatsVersion && P.np === np && P.nk === nk && P.started === started) return P;
     const MAXR = Math.max(1, MAX_RESEARCH_LEVEL), MAXL = Math.max(1, MAX_THING_LEVEL);
-    P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 4 * nk); P.bl.fill(0, 0, nk);
+    P.rml.fill(1, 0, nk); P.rlv.fill(0, 0, 4 * nk); P.bl.fill(0, 0, nk); P.blx.fill(0, 0, 4 * nk);
     for (let o = 0; o < np - 1; o++) {
         const levels = started ? ensurePlayerResearchLevels(o) : null;
         for (let kb = 0; kb < nk; kb++) {
@@ -157,6 +158,7 @@ function _adjPlayerStats(S) {
                     : getPlayerResearchLevel(o, 'building', key, _adjResearchStats[j]);
             }
             P.bl[i] = boostStepLevels(_statBoostLevels(o, 'building', key, 'visionRange'));
+            for (let j = 1; j < _adjResearchStats.length; j++) P.blx[4 * i + j - 1] = boostStepLevels(_statBoostLevels(o, 'building', key, _adjResearchStats[j]));
         }
     }
     P.version = _precomputedBuildingStatsVersion; P.np = np; P.nk = nk; P.started = started;
@@ -413,10 +415,6 @@ function effStatsUnitBaseChanged(u) {
     c.esRad[s] = _effAreaStepsOf(b);
     c.esType[s] = typeIdx;
 }
-// Every unit takes the full path once more (the stat tables changed).
-function effStatsInvalidateAll() {
-    if (typeof _simUnitState !== 'undefined' && _simUnitState) _simUnitState.columns.esOk.fill(0);
-}
 // (A restore or a resync flush does not invalidate them: a unit's kernel
 // fields (esOk, esRad, esType) are sent with it (sim_unit_state.js
 // SIM_UNIT_KCOL_FIELDS). Invalidated, on the restoring peer and at every
@@ -438,7 +436,7 @@ function effStatsAppliedSync() {
     for (let s = 0; s < n; s++) {
         const v = c.esVer[s];
         if (v !== -2 && v !== -3) continue;
-        const u = S.owners[s];
+        const u = S.owners.at(s);
         c.esVer[s] = v === -3 && u ? _unitStatsVerOf(u) : -2;
     }
 }
@@ -449,39 +447,7 @@ function _unitStatsBehind(u, ver) {
     if (ver < 0) return true;
     return ver !== _unitStatsVerOf(u);
 }
-let _effStatsVersion = -1;
 
-// The nearby same-owner same-type count of one unit (the full path): the snapshot's counts of its area and, for a range of r
-// area steps, of the areas within r of it (breadth first over the area graph), as the kernel sums them.
-let _effAreaSeen = new Int32Array(0), _effAreaQueue = new Int32Array(0), _effAreaEpoch = 0;
-function _effAreaCount(u, hist) {
-    const H = hist || _effAreaHist, c = u._us;
-    if (!c || !H.arr) return 0;
-    const owner = Math.floor(Number(u.owner)), typeIdx = spatialUnitTypeToIndex[u.unitType];
-    if (!Number.isFinite(typeIdx) || typeIdx < 0 || !(owner >= 0 && owner < spatialUnitsComplexPlayerCount)) return 0;
-    const ar = c.spArea[u._si];
-    if (!(ar >= 0 && ar < H.areas)) return 0;
-    const lane = owner * spatialUnitsComplexUnitTypeCount + typeIdx, L = H.lanes, arr = H.arr, r = c.esRad[u._si];
-    let sum = arr[ar * L + lane];
-    if (r >= 1) {
-        const nbs = areaNeighborIds;
-        if (r === 1) { const l = nbs[ar]; if (l) for (let i = 0; i < l.length; i++) sum += arr[l[i] * L + lane]; }
-        else {
-            if (_effAreaSeen.length < H.areas) { _effAreaSeen = new Int32Array(H.areas); _effAreaQueue = new Int32Array(H.areas); _effAreaEpoch = 0; }
-            const ep = ++_effAreaEpoch, seen = _effAreaSeen, q = _effAreaQueue;
-            seen[ar] = ep; q[0] = ar;
-            let qh = 0, qt = 1;
-            for (let d = 1; d <= r && qh < qt; d++) {
-                const end = qt;
-                while (qh < end) {
-                    const l = nbs[q[qh++]];
-                    if (l) for (let i = 0; i < l.length; i++) { const nb = l[i]; if (nb >= 0 && nb < H.areas && seen[nb] !== ep) { seen[nb] = ep; q[qt++] = nb; sum += arr[nb * L + lane]; } }
-                }
-            }
-        }
-    }
-    return sum | 0;
-}
 
 // One unit, the whole way (new units, the selection, units the kernel
 // leaves to objects): base stacks and level (its base tables made again
@@ -512,29 +478,19 @@ function _unitStatsVerOf(u) {
     if (!(o >= 0) || !(ti >= 0 && ti < UNIT_STATS_VER_TYPES) || o * UNIT_STATS_VER_TYPES + ti >= _unitStatsVer.length) return 0;
     return _unitStatsVer[o * UNIT_STATS_VER_TYPES + ti];
 }
-// ---- Effective stat rows ----
-// A unit's effective stat tables are one of few shared objects (those of its
-// owner, type, base and effective level: clonePrecomputedWithBaseMaxEnergy
-// hands out the same object), kept as rows: the object (_effRowObj) and what
-// the kernels need of it (eff.r* columns), found by (owner, spatial type,
-// base level, effective level) in eff.rowOf and valid for the (owner, type)
-// stat tables' version it was made at (eff.rowVer, as unit.esVer). A unit
-// with a row (unit.statRow >= 0) reads its tables from it (Unit.preComputed);
-// SIM_KERNEL_EFF_UNITS gives a unit the row of its new effective level and
-// the movement columns from it (simMoveStatsChanged's); the JavaScript only
-// makes rows (_effRowAttach, when it applies a unit's tables itself).
-const EFF_ROW_MAX = 1 << 15;
-let _effRowMeta = [];
 let _effRowObj = [], _effRowN = 0, _effRowCap = 0, _effRowLk = null, _effRowLkDims = '';
 const _EFF_ROW_COLS = [['rowVer', Int32Array], ['rSpd', Float32Array], ['rCost', Float32Array], ['rRD', Int32Array], ['rRA', Int32Array], ['rRK', Uint8Array],
     ['rLzW', Uint8Array], ['rCb', Float32Array], ['rCd', Float32Array], ['rDmg', Float32Array], ['rVis', Float32Array], ['rChs', Float32Array],
     // (The visibility cover's steps of a unit with the row, as _visCoverSyncUnit
     // works them out: -1 none, -2 for the JavaScript.)
-    ['rVsA', Int8Array]];
+    ['rVsA', Int8Array],
+    // (Its tables' max energy: the presentation's metadata, k_meta_units.)
+    ['rMaxE', Float32Array],
+    // (A scout's watch from its swoop, ticks: unit.js _unitWatchTicks.)
+    ['rWch', Int32Array]];
 const _effRowCols = {};
 const EFF_HOT_WIDTH = 16;
 let _effHot = null;
-function _effRowDims() { return [spatialUnitsComplexPlayerCount | 0, spatialUnitsComplexUnitTypeCount | 0, (MAX_THING_LEVEL | 0) + 1]; }
 // The same as numbers, and their key made when they change (every lookup of every unit made an array and a string of them).
 let _effDimNP = -1, _effDimNT = -1, _effDimL1 = -1, _effDimKey = '';
 function _effDimsRefresh() {
@@ -542,277 +498,123 @@ function _effDimsRefresh() {
     if (NP !== _effDimNP || NT !== _effDimNT || L1 !== _effDimL1) { _effDimNP = NP; _effDimNT = NT; _effDimL1 = L1; _effDimKey = NP + ':' + NT + ':' + L1; }
     return _effDimKey;
 }
-function _effRowLookup() {
-    const dims = _effDimsRefresh();
-    if (_effRowLk === null || _effRowLkDims !== dims) {
-        const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
-        if (_effRowLk !== null) _effRowsReset();
-        _effRowLk = simSharedArray(Int32Array, Math.max(1, NP * NT * L1 * L1));
-        _effRowLk.fill(-1);
-        _effRowLkDims = dims;
-        simParallelBind('eff.rowOf', _effRowLk);
-    }
-    return _effRowLk;
-}
+function _effRowLookup() { unitStatTables(); return null; }
 // The rows for the match (main.js simMatchReserve): one for each entry of
 // the lookup (player, type, level, level) at most.
 function effRowsReserve() {
     if (typeof spatialUnitsComplexUnitTypeCount === 'undefined' || !(spatialUnitsComplexUnitTypeCount > 0)) return;
-    _effRowGrow(_effRowLookup().length);
+    unitStatTables();
 }
-function _effRowGrow(n) {
-    if (n <= _effRowCap) return;
-    const cap = Math.max(256, _effRowCap * 2, n);
-    const hot = simSharedArray(Float32Array, cap * EFF_HOT_WIDTH);
-    if (_effHot) hot.set(_effHot.subarray(0, _effRowN * EFF_HOT_WIDTH));
-    _effHot = hot; simParallelBind('eff.hot', hot);
-    for (const [k, T] of _EFF_ROW_COLS) {
-        const a = simSharedArray(T, cap);
-        if (_effRowCols[k]) a.set(_effRowCols[k].subarray(0, _effRowN));
-        _effRowCols[k] = a;
-        simParallelBind('eff.' + k, a);
-    }
-    _effRowCap = cap;
-}
-// Every row dropped (too many, or the lookup's dimensions changed): units
-// keep their objects.
-function _effRowsReset() {
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S) {
-        const c = S.columns, n = S.owners.length;
-        for (let s = 0; s < n; s++) {
-            const r = c.statRow[s];
-            if (r < 0) continue;
-            const u = S.owners[s];
-            if (u) u._effRowKeep(_effRowObj[r]);
-            c.statRow[s] = -1;
+// ---- Unit stat tables (wasm heap) ----
+// T: every unit type's stats at every level and research level, as the
+// stats map holds them (PRECOMPUTED_STATS_MAP.unit), Float64 at ((type * L1 +
+// level) * NS + stat) * R1 + research level (types by spatialUnitTypeToIndex,
+// stats PRECOMPUTED_UNIT_STAT_KEYS): static for the match. Per player only
+// its research level and boost (levels up) of each type's stat (RL, BL, at
+// (player * NT + type) * NS + stat), written where they change. The
+// kernels' rows per (player, type, level) (eff.* columns, eff.hot, the base
+// entries eff.bVer / bRad / bMaxE / bRow) are made from them by
+// wasm/src/k.rs k_stat_fill: at the tables' build and for a (player, type)
+// whose research or boosts changed (effSharedTablesChanged). A unit's row is
+// its index there (unit.statRow: its effective level's, unit.bsRow: its
+// base level's); no row is made on demand.
+const _ust = { key: '', map: null, T: null, RL: null, BL: null, wk: null, upTy: null, bRad: null, bRow: null, NP: 0, NT: 0, L1: 0, NS: 0, R1: 0, N: 0, P: new Float64Array(16), types: [] };
+function unitStatTables() {
+    _effDimsRefresh();
+    const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1, NS = PRECOMPUTED_UNIT_STAT_KEYS.length, R1 = MAX_RESEARCH_LEVEL + 1, U = _ust;
+    const key = NP + '|' + NT + '|' + L1 + '|' + R1;
+    if (U.key === key && U.map === PRECOMPUTED_STATS_MAP && U.T && simHeapHas(U.T)) return U;
+    if (!ensurePrecomputedStatsMap()) return U;
+    const N = Math.max(1, NP * NT * L1);
+    for (const a of [U.T, U.RL, U.BL, U.wk, U.upTy, U.bRad, U.bRow]) if (a && simHeapHas(a)) simHeapFree(a);
+    U.T = simSharedArray(Float64Array, Math.max(1, NT * L1 * NS * R1)); U.RL = simSharedArray(Int8Array, Math.max(1, NP * NT * NS)); U.BL = simSharedArray(Int8Array, Math.max(1, NP * NT * NS));
+    U.wk = simSharedArray(Uint8Array, Math.max(1, NT)); U.bRad = simSharedArray(Int32Array, N); U.bRow = simSharedArray(Int32Array, N);
+    // (Per type: its attack style code (unit.js _hitStyleCode) | turret immune 256 | laser resistant 512.)
+    if (U.tys && simHeapHas(U.tys)) simHeapFree(U.tys);
+    U.tys = simSharedArray(Int32Array, Math.max(1, NT));
+    U.types = [];
+    for (const k in spatialUnitTypeToIndex) U.types[spatialUnitTypeToIndex[k]] = k;
+    const T = U.T;
+    for (let ty = 0; ty < NT; ty++) {
+        const name = U.types[ty];
+        if (!name) continue;
+        const key0 = _normalizePlayerPrecomputedUnitKey(name), levels = PRECOMPUTED_STATS_MAP.unit[key0] || [];
+        U.wk[ty] = THING_STATS[key0] && THING_STATS[key0].isWorker ? 1 : 0;
+        { const b = BASE_UNIT_STATS[name] || BASE_UNIT_STATS.norm || {}; U.tys[ty] = _hitStyleCode({ attackStyle: b.attackStyle, unitType: name }) | (b.turretImmune ? 256 : 0) | (b.laserResistant ? 512 : 0); }
+        for (let lv = 0; lv < L1; lv++) {
+            const e = levels[lv] || {};
+            for (let st = 0; st < NS; st++) {
+                const sk = PRECOMPUTED_UNIT_STAT_KEYS[st], arr = e[sk] || null, base = ((ty * L1 + lv) * NS + st) * R1;
+                for (let r = 0; r < R1; r++) T[base + r] = Number(arr ? arr[r] : normalizePrecomputedUnitStatValue(key0, sk, NaN));
+            }
         }
     }
-    _effRowObj = []; _effRowMeta = []; _effRowN = 0;
-    if (_effRowLk) _effRowLk.fill(-1);
-    _effRowEpoch++;
+    // (Upkeep type, unit.upT, to spatial type: the kernels set a new unit's type from it.)
+    const names = typeof _simUnitTypeNames !== 'undefined' ? _simUnitTypeNames : [];
+    U.upTy = simSharedArray(Int8Array, Math.max(64, names.length + 8));
+    U.upTy.fill(-1);
+    for (let i = 0; i < names.length; i++) { const j = spatialUnitTypeToIndex[names[i]]; if (j >= 0) U.upTy[i] = j; }
+    // The rows' columns, one per (player, type, level).
+    _effHot = simSharedArray(Float32Array, N * EFF_HOT_WIDTH); simParallelBind('eff.hot', _effHot);
+    for (const [k, Ty] of _EFF_ROW_COLS) { _effRowCols[k] = simSharedArray(Ty, N); simParallelBind('eff.' + k, _effRowCols[k]); }
+    simParallelBind('eff.bVer', _effRowCols.rowVer); simParallelBind('eff.bRad', U.bRad); simParallelBind('eff.bMaxE', _effRowCols.rMaxE); simParallelBind('eff.bRow', U.bRow);
+    simParallelBind('eff.upTy', U.upTy);
+    Object.assign(U, { key, map: PRECOMPUTED_STATS_MAP, NP, NT, L1, NS, R1, N });
+    _effRowN = N; _effRowCap = N;
+    for (let p = 0; p < NP; p++) unitStatFill(p, -1);
+    return U;
 }
+// Player p's rows of type ty (-1: every type) from the tables: its research
+// and boost levels written, then k_stat_fill.
+function unitStatFill(p, ty) {
+    const U = _ust;
+    // (A page whose simulation runs in its worker has no kernels and no units' rows to fill.)
+    if (!U.T || !(p >= 0 && p < U.NP) || _simWasmX === null) return;
+    const t0 = ty >= 0 ? ty : 0, t1 = ty >= 0 ? ty + 1 : U.NT, R1 = U.R1;
+    for (let t = t0; t < t1; t++) {
+        const name = U.types[t];
+        if (!name) continue;
+        const key0 = _normalizePlayerPrecomputedUnitKey(name);
+        for (let st = 0; st < U.NS; st++) {
+            const sk = PRECOMPUTED_UNIT_STAT_KEYS[st], i = (p * U.NT + t) * U.NS + st;
+            U.RL[i] = Math.max(0, Math.min(R1 - 1, getPlayerResearchLevel(p, 'unit', key0, sk) | 0));
+            const steps = _statBoostLevels(p, 'unit', key0, sk);
+            U.BL[i] = steps > 0 ? Math.min(127, boostStepLevels(steps)) : 0;
+        }
+    }
+    const P = U.P;
+    P.fill(0);
+    P[0] = p; P[1] = ty; P[2] = U.NT; P[3] = U.L1; P[4] = U.NS; P[5] = R1; P[6] = TICK_RATE; P[7] = TILE; P[8] = AREA_STEPS_MAX; P[9] = AREA_UNIT_TILE_EQUIVALENT; P[10] = EFF_AREA_STEPS_MAX; P[11] = UNIT_STATS_VER_TYPES;
+    const R = _effRowCols;
+    simRustDirect('k_stat_fill', [U.T, U.RL, U.BL, U.wk, _unitStatsVerTable(spatialUnitsComplexPlayerCount), R.rowVer, R.rSpd, R.rCost, R.rRD, R.rRA, R.rRK, R.rLzW, R.rCb, R.rCd, R.rDmg, R.rVis, R.rChs, R.rVsA, R.rMaxE, _effHot, U.bRad, U.bRow, R.rWch], P);
+}
+function _effRowGrow(n) { if (n > _effRowCap) unitStatTables(); }
 // (Bumped when the rows are made anew: a row index kept elsewhere, unit.js _spawnStatTemplates, is void then.)
 let _effRowEpoch = 0;
-// ---- Base entries ----
-// Per (owner, spatial type, base level): the base tables a unit of them has
-// after its full path at the (owner, type) stat tables' version eff.bVer (the
-// tables themselves, their window radius eff.bRad and maxEnergy: eff.bMaxE
-// for the kernel, Float32 as the unit's column holds it; the double here),
-// noted by the full path (_effBaseNote). A unit behind its tables whose base
-// entry and new level's row are of the current version is taken in the
-// kernel (SIM_KERNEL_EFF_UNITS: its full path's result; the caller gives it
-// the tables and maxEnergy, flags 5 and 6): after a research ~700 units a
-// tick at 105k took the full path (~4 us each, of a ~4.5 ms step).
-const EFF_BASE_NONE = -2147483648;
-let _effBase = { dims: '', ver: null, rad: null, maxE: null, maxE64: null, obj: [], row: null };
-// Base rows: the base tables objects units hold by row (unit.bsRow, Unit's
-// preComputedBase / basePreComputed), one per (base entry, version) noted;
-// eff.bRow per base entry its current one (-1 none). The kernel gives a unit
-// that catches up with its stat tables its entry's row.
-let _effBRowObj = [];
-const EFF_BROW_MAX = 1 << 15;
-// Every base row dropped (too many): each unit holding one keeps its object as its own.
-function _effBRowsReset() {
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (S) {
-        const c = S.columns, n = S.owners.length;
-        for (let s = 0; s < n; s++) {
-            const r = c.bsRow[s];
-            if (r < 0) continue;
-            const o = _effBRowObj[r];
-            c.bsRow[s] = -1; c.jr_preComputedBase.set(s, o); c.jr_basePreComputed.set(s, o);
-        }
-    }
-    _effBRowObj = [];
-    if (_effBase.row) _effBase.row.fill(-1);
-}
-function _effBaseLookup() {
-    const dims = _effDimsRefresh(), B = _effBase;
-    if (B.dims !== dims || !B.ver) {
-        const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
-        const n = Math.max(1, NP * NT * L1);
-        B.ver = simSharedArray(Int32Array, n); B.ver.fill(EFF_BASE_NONE);
-        B.rad = simSharedArray(Int32Array, n); B.maxE = simSharedArray(Float32Array, n);
-        B.maxE64 = new Float64Array(n); B.obj = new Array(n).fill(null); B.dims = dims;
-        B.row = simSharedArray(Int32Array, n); B.row.fill(-1);
-        simParallelBind('eff.bVer', B.ver); simParallelBind('eff.bRad', B.rad); simParallelBind('eff.bMaxE', B.maxE); simParallelBind('eff.bRow', B.row);
-    }
-    return B;
-}
-function _effBaseClear() {
-    const B = _effBase;
-    if (!B.ver) return;
-    B.ver.fill(EFF_BASE_NONE);
-    B.obj.fill(null);
-    B.row.fill(-1);
-}
-function _effBaseIndex(o, ty, bl) {
-    _effDimsRefresh();
-    const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
-    if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1) || bl !== Math.floor(bl)) return -1;
-    return (o * NT + ty) * L1 + bl;
-}
-// u just took its base tables at its stat tables' version (the full path).
-function _effBaseNote(u) {
-    const c = u && u._us;
-    if (!c || typeof simSharedArray !== 'function') return;
-    const s = u._si, b = u.preComputedBase;
-    if (!c.esOk[s] || !b || typeof b !== 'object') return;
-    const ver = c.esVer[s];
-    if (ver !== _unitStatsVerOf(u)) return;
-    const mx = Number(b.maxEnergy);
-    if (!Number.isFinite(mx) || Number(u.maxEnergy) !== mx) return;
-    const B = _effBaseLookup(), i = _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]);
-    if (i < 0) return;
-    if (!(B.obj[i] === b && B.row[i] >= 0 && _effBRowObj[B.row[i]] === b)) {
-        if (_effBRowObj.length >= EFF_BROW_MAX) _effBRowsReset();
-        B.row[i] = _effBRowObj.length; _effBRowObj.push(b);
-    }
-    B.obj[i] = b; B.maxE64[i] = mx; B.maxE[i] = mx; B.rad[i] = c.esRad[s]; B.ver[i] = ver;
-}
+function _effBaseLookup() { unitStatTables(); return { ver: _effRowCols.rowVer, rad: _ust.bRad, maxE: _effRowCols.rMaxE, row: _ust.bRow }; }
+function _effBaseClear() {}
 // Off: units behind their tables take the full path, as before (tests:
 // both ways give the same state).
-let EFF_BEHIND_IN_KERNEL = true, _effBehindInKernel = 0;
+let _effBehindInKernel = 0;
 
 // u's tables (just applied: preComputed, the effective ones) as its row.
 function _effRowAttach(u) {
     const c = u && u._us;
     if (!c || typeof simSharedArray !== 'function') return;
-    const s = u._si, pc = u._pc;
-    if (!pc || typeof pc !== 'object' || pc !== u._pce) return;
-    _effDimsRefresh();
-    const NP = _effDimNP, NT = _effDimNT, L1 = _effDimL1;
-    const o = c.owner[s], ty = spatialUnitTypeToIndex[u.unitType], bl = Math.max(1,c.baseLevel[s]), el = Math.max(1,c.effectiveLevel[s]);
-    if (!(o >= 0 && o < NP && ty >= 0 && ty < NT && bl >= 1 && bl < L1 && el >= 1 && el < L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
-    const lk = _effRowLookup(), key = ((o * NT + ty) * L1 + bl) * L1 + el, ver = c.esVer[s];
-    let r = lk[key];
-    if (!(r >= 0 && _effRowObj[r] === pc && _effRowCols.rowVer[r] === ver)) {
-        if (_effRowN >= EFF_ROW_MAX) { _effRowsReset(); r = -1; }
-        if (!(r >= 0)) { r = _effRowN; _effRowGrow(r + 1); _effRowN = r + 1; }
-        _effRowObj[r] = pc;
-        _effRowMeta[r] = { owner:o, type:u.unitType, bl, el,
-            unitType:u.unitType, unitLevel:bl, effectiveLevel:el, preComputed:pc };
-        _effRowWrite(r, u, pc, ver);
-        lk[key] = r;
-    }
-    c.statRow[s] = r;
-    // The row already owns both effective tables. Keep private handles
-    // empty unless a caller overrides one of the tables independently.
-    c.jr__pc.clear(s); c.jr__pce.clear(s);
+    const U = unitStatTables(), s = u._si, o = c.owner[s], ty = spatialUnitTypeToIndex[u.unitType], bl = Math.max(1, c.baseLevel[s]), el = Math.max(1, c.effectiveLevel[s]);
+    if (!(o >= 0 && o < U.NP && ty >= 0 && ty < U.NT && bl < U.L1 && el < U.L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
+    c.statRow[s] = (o * U.NT + ty) * U.L1 + el;
+    c.bsRow[s] = (o * U.NT + ty) * U.L1 + bl;
+    // (Its tables are the rows': no handles of its own.)
+    c.jr__pc.clear(s); c.jr__pce.clear(s); c.jr_preComputedBase.clear(s); c.jr_basePreComputed.clear(s);
 }
 
-// Research/boost changes rewrite rows, never the unit list. Row handles
-// remain valid for every existing instance, including sleeping SIMD lanes.
-function _effRowWrite(r, u, pc, ver) {
-    const R = _effRowCols, range = _getUnitAttackRangeArea(u), vis = Number(pc.visionRange);
-    R.rowVer[r] = ver;
-    R.rSpd[r] = pc.speed * _getUnitAstarSpeedMultiplier(u);
-    R.rCost[r] = _resolveUnitAstarTileCost(u);
-    R.rRD[r] = Math.ceil(range) + 1;
-    R.rRA[r] = Math.ceil(Math.max(TILE, vis * TILE) / TILE) + 1;
-    R.rRK[r] = Math.min(255, Math.floor(range));
-    R.rLzW[r] = Math.floor(range) === Math.ceil(range) ? 1 : 0;
-    R.rCb[r] = Math.max(TILE, vis * TILE);
-    R.rCd[r] = pc.attackCooldown; R.rDmg[r] = pc.attackDamage; R.rVis[r] = vis;
-    R.rChs[r] = Math.max(TILE * 0.6, Number(pc.speed) || 1);
-    // (getEntityEffectiveVisibilityRangeArea of a unit whose effective
-    // tables are pc.)
-    // (Whole steps, 0 its own area: every unit sees.)
-    const va = Number(pc.visionRangeArea);
-    R.rVsA[r] = !Number.isFinite(va) || typeof VIS_COVER_MAX_STEPS !== 'number' ? -2 : areaSteps(va);
-    // One cache line per shared level/stat row. Rust can broadcast a
-    // row for equal SIMD lanes instead of streaming per-unit copies.
-    const h = r * EFF_HOT_WIDTH;
-    _effHot[h] = R.rSpd[r];
-    _effHot[h + 1] = R.rCost[r];
-    _effHot[h + 2] = R.rChs[r];
-    _effHot[h + 3] = R.rCb[r];
-    _effHot[h + 4] = R.rCd[r];
-    _effHot[h + 5] = R.rDmg[r];
-    _effHot[h + 6] = R.rVis[r];
-    _effHot[h + 7] = R.rRD[r];
-    _effHot[h + 8] = R.rRA[r];
-    _effHot[h + 9] = R.rRK[r];
-    _effHot[h + 10] = R.rVsA[r];
-    // (A worker's, wai.rs: builderDps, healerDps, researcherDps,
-    // gatherPerTrip, transferCooldownTicks.)
-    _effHot[h + 11] = Number(pc.builderDps) || 0; _effHot[h + 12] = Number(pc.healerDps) || 0; _effHot[h + 13] = Number(pc.researcherDps) || 0;
-    _effHot[h + 14] = Number(pc.gatherPerTrip) || 0; _effHot[h + 15] = Number(pc.transferCooldownTicks) || 0;
-}
+
 function effSharedTablesChanged(owner, unitType) {
-    const levels = PRECOMPUTED_STATS_MAP_PLAYER[owner]?.unit?.[unitType];
-    if (!levels) return;
-    for (let r=0;r<_effRowN;r++) {
-        const m=_effRowMeta[r];
-        if (!m || m.owner!==owner || m.type!==unitType) continue;
-        const base=levels[m.bl], effective=levels[m.el];
-        if (!base || !effective) continue;
-        const pc = _effRowObj[r];
-        if (precomputedCloneSource.get(pc) === effective) {
-            // The row already owns a copy. Refresh it from the source directly.
-            Object.assign(pc, effective);
-            const baseMaxEnergy = Number(base.maxEnergy);
-            if (Number.isFinite(baseMaxEnergy)) pc.maxEnergy = baseMaxEnergy;
-        } else {
-            const next = clonePrecomputedWithBaseMaxEnergy(base, effective);
-            if (pc !== next) Object.assign(pc, next);
-        }
-        m.preComputed = pc;
-        _effRowWrite(r,m,pc,_unitStatsVerOf(m));
-    }
+    const U = unitStatTables(), ty = spatialUnitTypeToIndex[unitType];
+    if (ty >= 0) unitStatFill(owner, ty);
 }
 
-// A unit's effective level from its effective stacks, sticky around the
-// level it has (last): one level down only below 0.8 of its threshold, one
-// up only from 1.25 of the next one's, so counts around a power of two do not
-// flip it every refresh (in a battle ~1.7k units a tick at 400k took new
-// tables). The kernel's twin: SIM_KERNEL_EFF_UNITS.
-function _effSticky(el, effS, last) {
-    if (!(last >= 1) || el === last) return el;
-    // (detPow: Math.pow need not be exact, even for 2^k.)
-    if (el === last - 1) return effS * 5 >= 4 * detPow(2, last - 1) ? last : el;
-    if (el === last + 1) return effS * 4 < 5 * detPow(2, last) ? last : el;
-    return el;
-}
-function _effStatsFullUnit(u) {
-    let baseStacks = getUnitStackCount(u);
-    let baseLevel = stackCountToLevel(baseStacks);
-    const previousRow=u._us ? u._us.statRow[u._si] : -1;
-    // (The effective level applied before this refresh: the sticky level's
-    // reference, as the kernel twin reads it; the base refresh below applies
-    // the base level's tables.)
-    const lastApplied = u._lastAppliedEffectiveLevel;
-    const c = u._us, ver = _unitStatsVerOf(u), behind = !!c && c.esVer[u._si] !== ver;
-    if (c) c.esVer[u._si] = ver;
-    let needsRefresh = behind || !Number.isFinite(u.baseLevel) || u.baseLevel !== baseLevel ||
-        !(u.basePreComputed && Number.isFinite(u.basePreComputed.visionRange)) || !(u.basePreComputed && Number.isFinite(u.basePreComputed.maxEnergy));
-    u.stackCount = baseStacks;
-    u.unitLevel = baseLevel;
-    if (needsRefresh) {
-        // (The movement columns told once, by the effective scaling below,
-        // which always follows a refresh: the base level's tables between
-        // disarmed every unit above its base level at each refresh, as
-        // _refreshThingPrecomputedStats holds them too.)
-        const held = _unitStatsNotifyHeld;
-        _unitStatsNotifyHeld = true;
-        try { applyUnitLevelScaling(u, baseLevel); } finally { _unitStatsNotifyHeld = held; }
-        u.stackCount = baseStacks;
-        _effBaseNote(u);
-    } else if (u._us && !u._us.esOk[u._si]) effStatsUnitBaseChanged(u);
-    // (Its range's count from the period's snapshot.)
-    _effAreaHistEnsure(Math.max(0, Math.floor(Number(gameTime) || 0)), getUnitEffectiveStatsRecalcTicks());
-    let similarCount = _effAreaCount(u);
-    if (similarCount < 1) similarCount = 1;
-    let effStacks = Math.max(1, Math.floor(similarCount * baseStacks));
-    u.effectiveStacks = effStacks;
-    u.effectiveLevel = _effSticky(stackCountToLevel(effStacks), effStacks, lastApplied);
-    let nextEffLevel = getUnitEffectiveLevel(u);
-    if (needsRefresh || lastApplied !== nextEffLevel) {
-        applyUnitEffectiveScaling(u, nextEffLevel, previousRow);
-        u._lastAppliedEffectiveLevel = nextEffLevel;
-    }
-}
 
 // Units' effective level: the strided share of the units (1/intervalTicks
 // of them a tick, by index; a new unit has its turn like the others; the
@@ -843,12 +645,18 @@ function recalculateUnitEffectiveLevel() {
     // without them this tick takes the full path, which makes both, and the
     // kernel runs again for the rest (no cap: the whole share this tick; which
     // path takes one decides nothing).
-    const behindNow = u => { const c = u._us; return !!c && c.esVer[u._si] !== _unitStatsVerOf(u); };
-    const takenNow = u => { const c = u._us; return c ? c.esTaken[u._si] === stamp : u._effectiveStatsStamp === stamp; };
     let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
-    let m = phase < n ? Math.ceil((n - phase) / step) : 0;
-    const hist = m > 0 && S && typeof SIM_KERNEL_EFF_UNITS === 'number' && n >= EFF_STATS_KERNEL_MIN_UNITS ? _effAreaHistEnsure(tick, step) : null;
-    if (hist) {
+    const m = phase < n ? Math.ceil((n - phase) / step) : 0;
+    if (m > 0 && S) _effUnitsRun(tick, step, phase, m, stamp);
+}
+// The effective-levels kernel over a strided share of the units (m entries
+// from phase, every step-th), then the new levels' tables and movement
+// columns (k_unit_stats_apply).
+let _effApplyL = null;
+const _effApplyP = new Float64Array(8);
+function _effUnitsRun(tick, step, phase, m, stamp) {
+    const S = _simUnitState, hist = _effAreaHistEnsure(tick, step);
+    {
         const slots = _unitSlotMapEnsure(), c = S.columns;
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }
         simParallelBind('ix.slots', slots); _simAreaCsr();
@@ -865,58 +673,39 @@ function recalculateUnitEffectiveLevel() {
         P[20] = -1; P[21] = 0; P[22] = SIM_SEP_ABSENT;
         simParallelBind('eff.tver', _unitStatsVerTable(spatialUnitsComplexPlayerCount)); P[14] = UNIT_STATS_VER_TYPES;
         _effBaseLookup();
-        // (Off: the full path for every unit behind, the tests' reference.)
-        P[23] = EFF_BEHIND_IN_KERNEL ? m : 0; P[24] = 0;
+        P[23] = m; P[24] = 0;
         // (The upkeep bins, when kept: main.js _upkU.)
         const UK = typeof _upkU !== 'undefined' && _upkU && _upkU.cols === c && _upkU.cnt === _upkHist ? _upkU : null;
         P[12] = UK ? UK.np : 0; P[13] = UK ? UK.L1 : 0; P[17] = UK && _simParReg['upk.h'] ? _simParReg['upk.h'].length : 0;
         _effPSave.set(P.subarray(0, 32));
         simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 64));
-        // (Keys whose entry the full path made this tick: _effKeySeen, by stamp.)
-        const NK = _effDimNP * _effDimNT * _effDimL1;
-        if (!_effKeySeen || _effKeySeen.length < NK) _effKeySeen = new Int32Array(Math.max(64, NK));
-        let again = false;
-        for (let pass = 0; pass < 2; pass++) {
-            // (The full path ran kernels of its own (the shared parameters) and made rows.)
-            if (pass === 1) { if (!again) break; P.set(_effPSave); _effRowGrow(1); P[18] = _effRowN; simParallelRun(SIM_KERNEL_EFF_UNITS, Math.ceil(m / 64)); }
-            const F = _effFlags;
-            for (let j = 0; j < m; j++) {
-                const f = F[j];
-                if (f === 0 || f === 3 || f === 4) continue;
-                const i = phase + j * step, u = unitAtRow(i);
-                if (f === 5 || f === 6) {
-                    // (Behind its tables, taken in the kernel from its base entry
-                    // and row: its base row and maxEnergy written there.)
-                    _effBehindInKernel++;
-                } else if (f === 1) {
-                    // (The kernel set its stacks and levels.)
-                    const s = slots[i], lvl = c.effectiveLevel[s];
-                    applyUnitEffectiveScaling(u, lvl);
-                    c._lastAppliedEffectiveLevel[s] = lvl;
-                } else if (u && !u.dead && !takenNow(u)) {
-                    // (Behind, its key's entry made by another this tick: the kernel's again.)
-                    if (pass === 0 && behindNow(u)) {
-                        const s = slots[i], bi = s >= 0 ? _effBaseIndex(c.owner[s], c.esType[s], c.baseLevel[s]) : -1;
-                        if (bi >= 0 && _effKeySeen[bi] === stamp) { again = true; continue; }
-                        if (bi >= 0) _effKeySeen[bi] = stamp;
-                    }
-                    if (!taken(u)) _effStatsFullUnit(u);
-                }
-            }
-        }
-    } else {
-        unitRows();
-        for (let i = phase; i < n; i += step) {
-            const u = unitAtRow(i);
-            if (!u || u.dead || takenNow(u)) continue;
-            if (!taken(u)) _effStatsFullUnit(u);
-        }
+        // The units of a new level: their tables and movement columns (k.rs k_unit_stats_apply).
+        const F = _effFlags;
+        if (!_effApplyL || _effApplyL.length < m || !simHeapHas(_effApplyL)) _effApplyL = simHeapArray(Int32Array, Math.max(1024, m * 2));
+        const L = _effApplyL;
+        let nl = 0;
+        for (let j = 0; j < m; j++) { const f = F[j]; if (f === 1) L[nl++] = slots[phase + j * step]; else if (f === 5 || f === 6) _effBehindInKernel++; }
+        if (nl) _effStatsApply(L, nl);
     }
 }
-// From this many units the strided share runs in the kernels (tests lower
-// it; both ways give the same state).
-let EFF_STATS_KERNEL_MIN_UNITS = 2048;
-let _effKeySeen = null;
+// Units' new effective levels applied (their slots, list L of n): k.rs k_unit_stats_apply.
+function _effStatsApply(L, n) {
+    const S = _simUnitState, c = S.columns, U = unitStatTables(), P = _effApplyP;
+    _simMoveAreaBoxes();
+    P[0] = n; P[1] = U.NT; P[2] = U.L1; P[3] = U.NP; P[4] = SIM_MOVE_BOX_STEPS;
+    simRustDirect('k_unit_stats_apply', [L, c.owner, c.esType, c.baseLevel, c.effectiveLevel, c._lastAppliedEffectiveLevel, null, null, null, c.statRow, c.bsRow,
+        c.maxE, c.jMaxE, c.energy, c.r, _effHot, _effRowCols.rMaxE, U.tys, _effRowCols.rWch, c.mvLane, c.mvReachD, c.mvReachA, c.mvShoot, c.mvRangeK, c.lzFlags,
+        c.atkSty, c.atkWatch, c.mvOn, c.mvFlags, c.mvReach, c.spArea, _simMoveAreaBoxOk], P);
+}
+// The units of some owners (a restore's stale tables), but those skipped
+// (carried), by the kernel at once: the others marked taken first.
+function effStatsAllUnits(owners, skip) {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, n = units.length;
+    if (!S || !n) return;
+    const stamp = ++_effectiveStatsStamp, c = S.columns;
+    for (const u of units) if (u && u._us === c && (!owners.has(u.owner) || skip.has(u))) c.esTaken[u._si] = stamp;
+    _effUnitsRun(Math.max(0, Math.floor(Number(gameTime) || 0)), 1, 0, n, stamp);
+}
 const _effPSave = new Float64Array(32);
 
 // ============================================================
@@ -1024,7 +813,6 @@ function canStackAt(gx, gy, itemKey, playerId) {
 }
 
 const AREA_LEVEL_COLORS = ['#888', '#4f4', '#4af', '#c4f', '#f90', '#fd0'];
-const AREA_LEVEL_NAMES = ['Gray', 'Green', 'Blue', 'Purple', 'Orange', 'Gold'];
 
 function getAreaUpgradeCost(currentLevel) {
     return Math.floor(100 * detPow(3, currentLevel));
@@ -1303,7 +1091,7 @@ function _dstRoom(n) {
         const cap = Math.max(1024, n * 2);
         D.tiles = simSharedArray(Int32Array, cap); D.inp = simSharedArray(Int32Array, cap); D.rows = simSharedArray(Int32Array, cap * 2); D.walls = simSharedArray(Int32Array, cap);
         D.resv = simSharedArray(Int32Array, cap * 2 * _WORKER_TARGET_LOAD_TYPE_COUNT);
-        D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 64); D.one = simSharedArray(Int32Array, 1);
+        D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 192); D.one = simSharedArray(Int32Array, 1);
         D.cap = cap;
     }
     return D;
@@ -1330,7 +1118,7 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     P[14] = spatialUnitsComplexPlayerCount; P[15] = spatialBlockCols; P[16] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[17] = trapOk ? (_trap.all ? -1 : _trap.nd) : -1;
     P[18] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[19] = n * _WORKER_TARGET_LOAD_TYPE_COUNT; P[20] = L.length; P[21] = trapOk ? _trap.dirty.length : 0;
     structRallyClasses();
-    P[0] = n; P[22] = gameTime; P[23] = deadOnly ? 1 : 0; P[24] = _stAllCls.length;
+    P[0] = n; P[22] = gameTime; P[23] = deadOnly ? 1 : 0; P[24] = _stAllCls.length; P[25] = _stLabCt();
     const resvOk = simHeapHas(workerReservedTiles) && workerReservedTiles.length === GRID_W * GRID_H * _WORKER_TARGET_LOAD_TYPE_COUNT;
     const A = D.args;
     A[0] = inp; A[1] = T.code; A[2] = T.own; A[3] = T.uc; A[4] = T.val;
@@ -1363,7 +1151,7 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     if (H[1] > 0) { if (AD.n === 0 || H[3] < AD.min) AD.min = H[3]; AD.n += H[1]; AD.sum = (AD.sum + H[2]) | 0; }
     _adjacencyNeedsRecalc = true;
     if (trapOk) { if (H[5] < 0) _trap.all = true; else _trap.nd = H[5]; }
-    for (let o = 0; o < 64; o++) if (D.ocnt[o]) structCountByOwner[o] += D.ocnt[o];
+    for (let o = 0; o < 64; o++) { if (D.ocnt[o]) structCountByOwner[o] += D.ocnt[o]; if (D.ocnt[64 + o]) structLabCount[o] += D.ocnt[64 + o]; if (D.ocnt[128 + o]) structLabBuilt[o] += D.ocnt[128 + o]; }
     // Events of the systems that are not tables yet.
     for (let r = 0, nr = H[7]; r < nr; r++) {
         const slot = D.resv[r * 2], u = workerReservedAt(slot);
@@ -1534,10 +1322,45 @@ function refreshThingProgressState(item) {
 function structProgressOps(item, op, v) {
     const t = item._stT;
     if (!(t >= 0) || item._stMine) return;
+    // (A tick's commands: listed, run together at their end, structProgressFlush.)
+    if (_structProgBatch.on) {
+        const B = _structProgBatch;
+        if (3 * (B.n + 1) > B.L.length) { const g = new Int32Array(Math.max(3 * 1024, B.L.length * 2)); g.set(B.L); B.L = g; }
+        B.L[3 * B.n] = t; B.L[3 * B.n + 1] = op; B.L[3 * B.n + 2] = v | 0; B.n++;
+        return;
+    }
     const L = _waiArr('progOps', Int32Array, 3);
     L[0] = t; L[1] = op; L[2] = v | 0;
     playerResourceBatchBegin();
     try { waiRun(L, 1, null, 2); } finally { playerResourceBatchEnd(); }
+}
+// Progress ops collected while on (main.js processActions: a burst's toggles
+// were a worker kernel pass each, ~150 us), then run in one pass, in order.
+const _structProgBatch = { on: false, n: 0, L: new Int32Array(3 * 1024) };
+// (Ops [tile, op, v] x n, from a kernel: listed while on, else run now.)
+function structProgressOpsList(L, n) {
+    if (!(n > 0)) return;
+    const B = _structProgBatch;
+    if (B.on) {
+        if (3 * (B.n + n) > B.L.length) { const g = new Int32Array(Math.max(3 * (B.n + n), B.L.length * 2)); g.set(B.L); B.L = g; }
+        B.L.set(L.subarray(0, 3 * n), 3 * B.n); B.n += n;
+        return;
+    }
+    const W = _waiArr('progOps', Int32Array, 3 * n);
+    W.set(L.subarray(0, 3 * n));
+    playerResourceBatchBegin();
+    try { waiRun(W, n, null, 2); } finally { playerResourceBatchEnd(); }
+}
+function structProgressBatchBegin() { _structProgBatch.on = true; _structProgBatch.n = 0; }
+function structProgressFlush() {
+    const B = _structProgBatch;
+    B.on = false;
+    if (!B.n) return;
+    const n = B.n, L = _waiArr('progOps', Int32Array, 3 * n);
+    L.set(B.L.subarray(0, 3 * n));
+    B.n = 0;
+    playerResourceBatchBegin();
+    try { waiRun(L, n, null, 2); } finally { playerResourceBatchEnd(); }
 }
 
 function addManualStackToThing(item, amount = 1) {

@@ -1598,8 +1598,6 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
     let b = k.raw(0);
     match k.i(0) {
         1 => super::wsw::k_wsw_set(b, chunk),
-        2 => super::reg::k_reg_ident(b, chunk),
-        3 => super::reg::k_reg_owner(b, chunk),
         _ => {}
     }
 }
@@ -2257,6 +2255,8 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
         *bsc.add(2) = na;
     }
     let (j0, j1) = job(chunk, k.i(1), k.i(0));
+    // (A unit whose kernel fields are not set yet: its type by its upkeep type, unit.upT, through eff.upTy [72].)
+    let upty = k.p::<i8>(72);
     // Mode 1 (P[24]): only the units of the job behind their stat tables counted (eff.bcnt[chunk]): the caller finds the share
     // place its cap falls at from the sums, in the job it falls in.
     if k.i(24) == 1 {
@@ -2288,24 +2288,41 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
             continue;
         }
         let sc = g(stk, q);
-        if g(ok, q) == 0 || !(sc >= 1.0 && sc < f32::INFINITY) {
+        let o = g(own, q) as i32;
+        if !(sc >= 1.0 && sc < f32::INFINITY) || !(o >= 0 && o < players) {
             s(fl, j, 2);
             continue;
+        }
+        // (Its kernel fields unset: its type from its upkeep type.)
+        if g(ok, q) == 0 {
+            let t = if ut.is_null() { -1 } else { g(ut, q) as i32 };
+            let ty0 = if t >= 0 && !upty.is_null() { g(upty, t as usize) as i32 } else { -1 };
+            if !(ty0 >= 0 && ty0 < nt) { s(fl, j, 2); continue; }
+            s(typ, q, ty0 as i8); s(ok, q, 1);
         }
         let base = floorf(sc);
         let bl = stack_level(base, maxl);
-        if g(blv, q) as i32 != bl {
-            s(fl, j, 2);
-            continue;
+        let ty = g(typ, q) as i32;
+        // (A new base level (its stacks changed): its base entry from the
+        // table: maxEnergy, the energy within it, its window, its base row and
+        // version; its effective tables are made below in any case.)
+        let rebase = g(blv, q) as i32 != bl;
+        if rebase {
+            let bi = (((o * nt + ty) * (maxl + 1)) + bl) as usize;
+            let (bv, brd, bmx, bro) = (k.p::<i32>(63), k.p::<i32>(64), k.p::<f32>(65), k.p::<i32>(70));
+            if bv.is_null() || brd.is_null() || bmx.is_null() || !(ty >= 0 && ty < nt && bl >= 1 && bl <= maxl) { s(fl, j, 2); continue; }
+            let mx = g(bmx, bi);
+            let (maxe, en) = (k.p::<f32>(52), k.p::<f32>(51));
+            s(maxe, q, mx); s(k.p::<f32>(71), q, mx);
+            let e = floorf(g(en, q));
+            s(en, q, if e != e { mx.max(1.0) } else { e.min(mx).max(1.0) });
+            s(blv, q, bl as i8);
+            s(rad, q, g(brd, bi) as u8);
+            if !bro.is_null() { s(k.p::<i16>(69), q, g(bro, bi) as i16); }
+            if !tv.is_null() && ntv != 0 { s(ev, q, g(tv, (o * ntv + ty) as usize)); }
         }
         s(stk, q, base);
         s(ulv, q, bl as i8);
-        let o = g(own, q) as i32;
-        if !(o >= 0 && o < players) {
-            s(fl, j, 2);
-            continue;
-        }
-        let ty = g(typ, q) as i32;
         // (Behind: its base entry's version, index and radius.)
         let mut behind: Option<(i32, usize)> = None;
         let mut r = g(rad, q) as i32;
@@ -2426,7 +2443,7 @@ pub unsafe extern "C" fn k_eff_units(a: u32, chunk: i32) {
         s(taken, q, stamp);
         // (A new level: its stat row's tables (4: another vision range), else
         // the JavaScript's, 1.)
-        if behind.is_none() && lst != el {
+        if behind.is_none() && (lst != el || rebase) {
             let mut vis = false;
             if k.i(18) > 0 && eff_row_apply(&k, q, o, ty, bl, el, g(ev, q), &mut vis) {
                 s(last, q, el as i8);
@@ -3228,7 +3245,11 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             } else if !(cur >= 0 && (cur as usize) < k.i(0).max(0) as usize) || g(flg, cur as usize) & 1 != 0 || g(id, cur as usize) != g(ctid, q) {
                 continue;
             }
-        } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 {
+        } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 && (cur as usize) < k.i(0).max(0) as usize {
+            // (Within the snapshot: past its slots the copies hold an older
+            // post's values, a unit gone since that still read as alive with
+            // its id: the slots given up at the end by the relayout,
+            // sim_unit_state.js _simRelayoutTrim.)
             let cu = cur as usize;
             if g(flg, cu) & 1 == 0 && g(id, cu) == g(ctid, q) && g(own, cu) as i32 != owner {
                 let ar = area_of(g(xs, cu), g(ys, cu));
@@ -3537,7 +3558,7 @@ macro_rules! kc {
 ///   another worker of its type (but its own); score: the distance from the
 ///   anchor (or the owner's nearest working spawner by tile steps, then row,
 ///   column, id; or the worker) plus 0.22 of the distance from the origin,
-///   plus P[7] for a drop.
+///   (site types 1 a mine, 2 a farm).
 ///  Kinds 3, 4, 5, the work grid: the owner's tiles offering all the needed
 ///   bits (kind 5: P[24 + owner]), not reserved by a worker of its type (but
 ///   its own tile); score the distance, less 0.75 tile for its current
@@ -3549,7 +3570,7 @@ macro_rules! kc {
 /// 26-29 wsw.flags, own, area, resv (?), 30.. groups: meta, sx, sy, st, so,
 /// pgx, pgy, po, pid, px, py, bs, bc, bi (14 each, 8 groups), then 142
 /// ?wsw.cnt. P: [0] requests, [1] per job, [2] K, [3] tile, [4] bucket
-/// tiles, [5] owners (wsh.n), [7] drop penalty, [8]/[9] grid, [10] work grid blocks wide, [11]
+/// tiles, [5] owners (wsh.n), [8]/[9] grid, [10] work grid blocks wide, [11]
 /// select chunks, [12] slots a select chunk, [13] healer slots per owner,
 /// [14] 1: requests by position, [15] areas, [16..24) group per config,
 /// [24..56) research bits per owner.
@@ -3599,7 +3620,6 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
     let itile = 1.0 / tile;
     let half = tile * 0.5;
     let bt = k.i(4).max(1);
-    let drop_pen = k.f(7) as f32;
     let (w, h, gbw, nreg, chs, hmax) = (k.i(8), k.i(9), k.i(10), k.i(11), k.i(12), k.i(13));
     let by_pos = k.i(14) == 1;
     let na = k.i(15).max(0) as usize;
@@ -3962,7 +3982,7 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                 }
                 let ex = g(sx, su) - ax;
                 let ey = g(sy, su) - ay;
-                let score = sqrtf(ex * ex + ey * ey) + sqrtf(d2) * 0.22 + if g(stp, su) == 0 { drop_pen } else { 0.0 };
+                let score = sqrtf(ex * ex + ey * ey) + sqrtf(d2) * 0.22;
                 ws_insert(out, osc, o0, kk, site, score);
             }
         };
@@ -5612,15 +5632,17 @@ fn ceilf(v: f32) -> f32 {
 /// changed (renderer.js visCoverOnUnitSpatialChanged).
 #[inline(always)]
 unsafe fn eff_row_apply(k: &K, q: usize, o: i32, ty: i32, bl: i32, el: i32, ver: i32, vis: &mut bool) -> bool {
-    let (row_of, row_ver) = (k.p::<i32>(23), k.p::<i32>(24));
-    if row_of.is_null() || row_ver.is_null() {
+    // (The row: the stat table's entry of (owner, type, effective level),
+    // things_utils.js unitStatTables / k_stat_fill.)
+    let row_ver = k.p::<i32>(24);
+    if row_ver.is_null() {
         return false;
     }
     let (np, nt, l1) = (k.i(9), k.i(8), k.i(10) + 1);
     if !(o >= 0 && o < np && ty >= 0 && ty < nt && bl >= 1 && bl < l1 && el >= 1 && el < l1) {
         return false;
     }
-    let r = g(row_of, (((o * nt + ty) * l1 + bl) * l1 + el) as usize);
+    let r = (o * nt + ty) * l1 + el;
     if r < 0 || r >= k.i(18) || g(row_ver, r as usize) != ver {
         return false;
     }
@@ -6081,3 +6103,337 @@ unsafe fn flat_stats4(rows: *const i16, hot: *const f32, q: usize) -> (v128,v128
     let r1=i32x4_extract_lane::<1>(rv);let r2=i32x4_extract_lane::<2>(rv);let r3=i32x4_extract_lane::<3>(rv);
     (f32x4(at(r,3),at(r1,3),at(r2,3),at(r3,3)),f32x4(at(r,5),at(r1,5),at(r2,5),at(r3,5)))
 }
+
+
+/// The units' stats per (player, unit type, level), from the static table
+/// (things_utils.js unitStatTables: [0] T at ((type * L1 + level) * NS +
+/// stat) * R1 + research level, the stats PRECOMPUTED_UNIT_STAT_KEYS) and the
+/// player's research levels [1] and boost levels [2] ((player * NT + type) *
+/// NS + stat; a boost: that many levels up), [3] whether a type is a worker
+/// (its range is its work reach). Into entry e = (player * NT + type) * L1 +
+/// level: the stat row columns (eff.*: [5] rowVer from [4] the (player,
+/// type) stats version (P[11] types a row), [6] rSpd, [7] rCost, [8] rRD,
+/// [9] rRA, [10] rRK, [11] rLzW, [12] rCb, [13] rCd, [14] rDmg, [15] rVis,
+/// [16] rChs, [17] rVsA, [18] rMaxE), the hot row [19] (16 a row), the base
+/// entry's window radius [20] and row [21] (e itself). As
+/// data_dynamic.js _getUnitPlayerPrecomputedEntryObject and _effRowWrite
+/// make them. P: [0] player, [1] type (-1: all), [2] NT, [3] L1, [4] NS, [5]
+/// R1, [6] ticks a second, [7] tile, [8] area steps max, [9] tiles an area
+/// step, [10] window steps max, [11] types a version row.
+#[no_mangle]
+pub unsafe extern "C" fn k_stat_fill(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (t, rl, bl, iswk, tver) = (k.p::<f64>(0), k.p::<i8>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<i32>(4));
+    let (rver, rspd, rcost, rrd, rra, rrk, rlzw) = (k.p::<i32>(5), k.p::<f32>(6), k.p::<f32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<u8>(11));
+    let (rcb, rcd, rdmg, rvis, rchs, rvsa, rmaxe) = (k.p::<f32>(12), k.p::<f32>(13), k.p::<f32>(14), k.p::<f32>(15), k.p::<f32>(16), k.p::<i8>(17), k.p::<f32>(18));
+    let (hot, brad, brow) = (k.p::<f32>(19), k.p::<i32>(20), k.p::<i32>(21));
+    if t.is_null() || rl.is_null() || bl.is_null() || rver.is_null() || hot.is_null() { return; }
+    let (p, ty1, nt, l1, ns, r1) = (k.i(0), k.i(1), k.i(2).max(1), k.i(3).max(2), k.i(4).max(1), k.i(5).max(1));
+    let (tps, tile, smax, aute, wmax, ntv) = (k.f(6), k.f(7), k.f(8), k.f(9), k.i(10), k.i(11).max(1));
+    let steps = |v: f64| -> f64 { if v > 0.0 { floor(v + 1e-9).min(smax) } else { 0.0 } };
+    let ticks = |sec: f64| -> f64 { let s = if sec.is_nan() || sec == 0.0 { 0.01 } else { sec.max(0.01) }; floor(s.max(0.0) * tps + 0.5).max(1.0) };
+    let nz = |v: f64, d: f64| -> f64 { if v.is_nan() || v == 0.0 { d } else { v } };
+    let (t0, t1) = if ty1 >= 0 { (ty1, ty1 + 1) } else { (0, nt) };
+    for ty in t0..t1 {
+        let pi = ((p * nt + ty) * ns) as usize;
+        let wk = !iswk.is_null() && g(iswk, ty as usize) != 0;
+        let ver = if tver.is_null() { 0 } else { g(tver, (p * ntv + ty) as usize) };
+        for lv in 1..l1 {
+            // (Each stat at the level its boost lifts it to, at its research level.)
+            let v = |st: usize| -> f64 {
+                let up = g(bl, pi + st) as i32;
+                let lb = if up > 0 { (lv + up).min(l1 - 1) } else { lv };
+                let r = (g(rl, pi + st) as i32).clamp(0, r1 - 1);
+                g(t, (((ty * l1 + lb) * ns + st as i32) * r1 + r) as usize)
+            };
+            let max_e = floor(nz(v(1), 1.0)).max(1.0);
+            let atk = v(2).max(0.0);
+            let dmg = if atk.is_nan() { 0.0 } else { atk };
+            let cd = ticks(v(3));
+            let sp0 = v(4);
+            let speed = (if sp0.is_nan() || sp0 == 0.0 { 0.1 } else { sp0 }).max(0.1);
+            let ara = steps(v(6));
+            let vown = steps(v(5));
+            let vra = if wk { vown } else { vown.max(ara) };
+            let vis = ((if vra > 0.6 { vra } else { 0.6 }) * aute) as f32 as f64;
+            let range = if wk { 0.0 } else { ara };
+            let cost = { let c = v(13); (if c.is_nan() || c == 0.0 { 0.1 } else { c }).max(0.01) };
+            let pos = |x: f64| if x.is_nan() { 0.0 } else { x.max(0.0) };
+            let e = ((p * nt + ty) * l1 + lv) as usize;
+            let cb = tile.max(vis * tile);
+            s(rver, e, ver);
+            s(rspd, e, speed as f32); s(rcost, e, cost as f32);
+            s(rrd, e, range as i32 + 1); s(rra, e, ceil(cb / tile) as i32 + 1); s(rrk, e, range.min(255.0) as u8); s(rlzw, e, 1);
+            s(rcb, e, cb as f32); s(rcd, e, cd as f32); s(rdmg, e, dmg as f32); s(rvis, e, vis as f32);
+            let chs = (tile * 0.6).max(nz(speed, 1.0));
+            s(rchs, e, chs as f32); s(rvsa, e, vra as i8); s(rmaxe, e, max_e as f32);
+            let h = e * 16;
+            let hv = [speed, cost, chs, cb, cd, dmg, vis, range + 1.0, ceil(cb / tile) + 1.0, range.min(255.0), vra,
+                pos(v(9)), pos(v(10)), pos(v(11)), pos(v(8)), ticks(v(12))];
+            for (i, x) in hv.iter().enumerate() { s(hot, h + i, *x as f32); }
+            if !brad.is_null() { s(brad, e, (vra as i32).min(wmax)); }
+            if !brow.is_null() { s(brow, e, e as i32); }
+        }
+    }
+}
+
+
+/// q / e (main.js resizeUnitGroup): a selection's units by subgroup (unit
+/// type, and base level unless merged), halved (d2) or doubled (x2) in
+/// count, their stacks kept: each group's stacks spread evenly over its
+/// units, its energy too (water-filled under the units' new maxEnergy: at
+/// most the sum it had). Phase P[3] 0: ids [0] (P[0]; the id table [1], mask
+/// P[1], unit.id [2], unit.live [3], stamps unit.idStp [4] with P[2]) to the
+/// player's (P[4]; unit.owner [5]) live, not dead [6], not king (unit.upT
+/// [7] != P[5]) units, sorted by (key, id) into [8] (scratch [9], twice as
+/// long); groups into [10] (per group: start, units kept, spawns, key,
+/// stacks (f32 bits), energy (f32 bits)), counted in [11][0]; d2: all but the
+/// first half of each group killed (energy [12] 0, dead 1); x2: spawns up to
+/// the stacks, double the units, the player's population room (P[6]),
+/// their templates' slots into [13] in group order ([11][1] of them). Phase 1:
+/// each group's units (kept: [8] from start; new: [14] in group order) take
+/// their shares: stacks (unit.stackCount [15]), base level (unit.unitLevel
+/// [16], baseLevel [17], effectiveLevel [18], _lastAppliedEffectiveLevel [19]
+/// 0: its effective tables at its next turn), effective stacks [20], the
+/// table's maxEnergy (eff.bMaxE [21] at (owner * NT + type) * L1 + level;
+/// unit.maxE [22], jMaxE [23]), its window (eff.bRad [24] -> unit.esRad
+/// [25]), its rows (unit.statRow [26], bsRow [27]), energy; the type by
+/// unit.esType [28]. P: [7] by level, [8] NT, [9] L1 (max level + 1), [10]
+/// d2 (1) or x2 (0).
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_resize(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, tab, idc, live, stamps, own, dead, upt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i8>(5), k.p::<u8>(6), k.p::<i16>(7));
+    let (list, tmp, grp, cnt, en, spw, newl) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<f32>(12), k.p::<i32>(13), k.p::<i32>(14));
+    let (stk, ulv, blv, elv, last, esk, bmx, maxe, jmaxe, brad, rad, srow, bsrow, typ) = (k.p::<f32>(15), k.p::<i8>(16), k.p::<i8>(17), k.p::<i8>(18), k.p::<i8>(19), k.p::<f32>(20),
+        k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<i32>(24), k.p::<u8>(25), k.p::<i16>(26), k.p::<i16>(27), k.p::<i8>(28));
+    let (n, mask, stamp, phase, player, king, room0, by_level, nt, l1, half) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3), k.i(4), k.i(5), k.i(6).max(0), k.i(7) != 0, k.i(8).max(1), k.i(9).max(2), k.i(10) != 0);
+    let maxl = l1 - 1;
+    let key_of = |q: usize| -> u32 { let t = (g(typ, q) as i32).max(0) as u32; if by_level { t * 64 + ((g(blv, q) as i32).clamp(1, 63) as u32) } else { t * 64 } };
+    if phase == 0 {
+        // The units, each once.
+        let mut m = 0usize;
+        for j in 0..n {
+            let id = g(ids, j);
+            let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+            let mut q = usize::MAX;
+            loop {
+                let slot = g(tab, h as usize);
+                if slot < 0 { break; }
+                let sl = slot as usize;
+                if g(idc, sl) == id && g(live, sl) != 0 { q = sl; break; }
+                h = (h + 1) & mask;
+            }
+            if q == usize::MAX || g(stamps, q) == stamp { continue; }
+            s(stamps, q, stamp);
+            if g(own, q) as i32 != player || g(dead, q) != 0 || g(upt, q) as i32 == king { continue; }
+            s(list, m, q as i32); m += 1;
+        }
+        // (By key, then id: LSD radix, 8 bits a pass, on (key << 32 | id) as two words.)
+        let (a, b) = (list, tmp);
+        let mut src = a; let mut dst = b;
+        let mut hist = [0u32; 256];
+        for pass in 0..6u32 {
+            for v in hist.iter_mut() { *v = 0; }
+            let word = |q: usize| -> u32 { if pass < 4 { g(idc, q) as u32 ^ 0x8000_0000 } else { key_of(q) } };
+            let sh = (pass % 4) * 8;
+            for i in 0..m { let q = g(src, i) as usize; hist[((word(q) >> sh) & 255) as usize] += 1; }
+            let mut sum = 0u32;
+            for v in hist.iter_mut() { let c = *v; *v = sum; sum += c; }
+            for i in 0..m { let q = g(src, i); let bk = ((word(q as usize) >> sh) & 255) as usize; s(dst, hist[bk] as usize, q); hist[bk] += 1; }
+            let t = src; src = dst; dst = t;
+        }
+        // (Six passes: back in the list.)
+        let mut room = room0;
+        let (mut ng, mut ns) = (0usize, 0usize);
+        let mut i = 0usize;
+        while i < m {
+            let k0 = key_of(g(src, i) as usize);
+            let mut e = i;
+            let (mut st, mut ensum) = (0f64, 0f64);
+            while e < m && key_of(g(src, e) as usize) == k0 {
+                let q = g(src, e) as usize;
+                let sc = g(stk, q);
+                st += if sc >= 1.0 && sc < f32::INFINITY { floorf(sc) as f64 } else { 1.0 };
+                let ev = g(en, q);
+                if ev > 0.0 { ensum += ev as f64; }
+                e += 1;
+            }
+            let cnt0 = e - i;
+            let (keep, spawn) = if half {
+                if cnt0 < 2 { (cnt0, 0) } else { (cnt0 / 2, 0) }
+            } else {
+                let tgt = (st as i64).min(2 * cnt0 as i64).min(cnt0 as i64 + room as i64).max(cnt0 as i64) as usize;
+                let sp = tgt - cnt0;
+                room -= sp as i32;
+                (cnt0, sp)
+            };
+            if half && cnt0 >= 2 {
+                for x in i + keep..e { let q = g(src, x) as usize; s(en, q, 0.0); s(dead, q, 1); }
+            }
+            // (Templates in turn; no division: no panic path, no data segment.)
+            let mut tx = 0usize;
+            for _ in 0..spawn { s(spw, ns, g(src, i + tx)); ns += 1; tx += 1; if tx >= cnt0 { tx = 0; } }
+            let gb = ng * 6;
+            s(grp, gb, i as i32); s(grp, gb + 1, keep as i32); s(grp, gb + 2, spawn as i32); s(grp, gb + 3, k0 as i32);
+            s(grp, gb + 4, (st as f32).to_bits() as i32); s(grp, gb + 5, (ensum as f32).to_bits() as i32);
+            ng += 1;
+            i = e;
+        }
+        if src != list { for x in 0..m { s(list, x, g(src, x)); } }
+        s(cnt, 0, ng as i32); s(cnt, 1, ns as i32);
+        return;
+    }
+    // Phase 1: the shares.
+    let ng = g(cnt, 0).max(0) as usize;
+    let mut nb = 0usize;
+    for gi in 0..ng {
+        let gb = gi * 6;
+        let (start, keep, spawn) = (g(grp, gb) as usize, g(grp, gb + 1) as usize, g(grp, gb + 2) as usize);
+        let st = f32::from_bits(g(grp, gb + 4) as u32) as f64;
+        let ensum = f32::from_bits(g(grp, gb + 5) as u32) as f64;
+        let m = keep + spawn;
+        if m == 0 { nb += spawn; continue; }
+        let at = |x: usize| -> usize { if x < keep { g(list, start + x) as usize } else { g(newl, nb + x - keep) as usize } };
+        let total = st.max(m as f64);
+        let base = floor(total / m as f64);
+        let rem = (total - base * m as f64) as usize;
+        // Stacks, levels, rows, maxEnergy; the caps for the energy.
+        let mut capsum = 0f64;
+        for x in 0..m {
+            let q = at(x);
+            let share = (base + if x < rem { 1.0 } else { 0.0 }).max(1.0) as f32;
+            let lvl = stack_level(share, maxl);
+            let o = g(own, q) as i32;
+            let ty = g(typ, q) as i32;
+            s(stk, q, share); s(esk, q, share);
+            s(ulv, q, lvl as i8); s(blv, q, lvl as i8); s(elv, q, lvl as i8); s(last, q, 0);
+            let bi = if o >= 0 && ty >= 0 && ty < nt { ((o * nt + ty) * l1 + lvl) as usize } else { usize::MAX };
+            if bi != usize::MAX {
+                let mx = g(bmx, bi);
+                s(maxe, q, mx); s(jmaxe, q, mx);
+                s(rad, q, g(brad, bi) as u8);
+                s(srow, q, bi as i16); s(bsrow, q, bi as i16);
+                if mx > 0.0 { capsum += mx as f64; }
+            }
+        }
+        // Energy: water-filled under the caps, at most what the group had.
+        let mut left = ensum.min(capsum);
+        for x in 0..m { s(en, at(x), 0.0); }
+        let mut active = m;
+        let mut guard = 0;
+        while left > 1e-6 && active > 0 && guard < 64 {
+            let share = left / active as f64;
+            let mut next = 0usize;
+            for x in 0..m {
+                let q = at(x);
+                let cap = g(maxe, q) as f64 - g(en, q) as f64;
+                if cap <= 1e-6 { continue; }
+                let add = cap.min(share);
+                s(en, q, (g(en, q) as f64 + add) as f32);
+                left -= add;
+                if cap - add > 1e-6 { next += 1; }
+            }
+            if next == active { break; }
+            active = next; guard += 1;
+        }
+        for x in 0..m { let q = at(x); if !(g(en, q) > 0.0) { s(en, q, g(maxe, q).min(1.0)); } }
+        nb += spawn;
+    }
+}
+
+/// data_dynamic.js applyUnitEffectiveScaling and unit.js simMoveStatsChanged
+/// for a list of units (list [0], P[0] of them) whose effective level the
+/// effective-levels kernel set: last applied level = level; stat rows
+/// (unit.statRow [9], unit.bsRow [10]) by (owner [1], type [2] unit.esType,
+/// base level [3], effective level [4]); maxEnergy (unit.maxE [11],
+/// unit.jMaxE [12]) the base row's (eff.rMaxE [16]); energy [13] floored into
+/// [1, maxEnergy]; then the movement columns from the new row's hot values
+/// (eff.hot [15], 16 a row: [0] speed, [1] cost, [3] vision px, [5] damage,
+/// [7] reach D, [8] reach A, [9] range) and the type's static attack style
+/// and laser bits (types [17]: style | bits << 8) and the row's watch ticks
+/// (eff.rWch [18]): mvLane [19] (from unit.r [14]), mvReachD [20], mvReachA
+/// [21], mvShoot [22], mvRangeK [23], lzFlags [24], atkSty [25], atkWatch
+/// [26]; unchanged (speed, cost, vision and those): nothing more; else the
+/// arming as simMoveStatsChanged decides it (mvOn [27], mvFlags [28], mvReach
+/// [29]; an area box (unit.spArea [30], mv.areaBoxOk [31]) not made yet:
+/// disarmed). [5] last applied level. P: [0] n, [1] NT, [2] L1, [3] NP, [4]
+/// box steps.
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_stats_apply(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let list = k.p::<i32>(0);
+    let (own, ety, blv, elv, last) = (k.p::<i8>(1), k.p::<i8>(2), k.p::<i8>(3), k.p::<i8>(4), k.p::<i8>(5));
+    let (srow, bsrow, maxe, jmaxe, en, rad) = (k.p::<i16>(9), k.p::<i16>(10), k.p::<f32>(11), k.p::<f32>(12), k.p::<f32>(13), k.p::<f32>(14));
+    let (hot, rmaxe, tys, rwch) = (k.p::<f32>(15), k.p::<f32>(16), k.p::<i32>(17), k.p::<i32>(18));
+    let (lane, rd_, ra_, shoot, rk_, lz, sty, wch) = (k.p::<f32>(19), k.p::<u8>(20), k.p::<u8>(21), k.p::<u8>(22), k.p::<u8>(23), k.p::<u8>(24), k.p::<u8>(25), k.p::<i32>(26));
+    let (on_, fl_, reach_, spa, boxok) = (k.p::<u8>(27), k.p::<u8>(28), k.p::<u8>(29), k.p::<i32>(30), k.p::<u8>(31));
+    if list.is_null() || srow.is_null() || hot.is_null() { return; }
+    let (n, nt, l1, np, bsteps) = (k.i(0).max(0) as usize, k.i(1).max(1), k.i(2).max(2), k.i(3).max(1), k.i(4).max(1));
+    let nrows = np * nt * l1;
+    for i in 0..n {
+        let s = g(list, i);
+        if s < 0 { continue; }
+        let s = s as usize;
+        let (o, ty) = (g(own, s) as i32, g(ety, s) as i32);
+        let bl = (g(blv, s) as i32).max(1);
+        let el = (g(elv, s) as i32).max(1);
+        s_(last, s, el as i8);
+        if !(o >= 0 && o < np && ty >= 0 && ty < nt && bl < l1 && el < l1) { continue; }
+        let prev = g(srow, s) as i32;
+        let row = (o * nt + ty) * l1 + el;
+        let brow = (o * nt + ty) * l1 + bl;
+        s_(srow, s, row as i16); s_(bsrow, s, brow as i16);
+        // maxEnergy: the base row's; energy within it.
+        let mx = if rmaxe.is_null() { 1.0 } else { g(rmaxe, brow as usize).max(1.0) };
+        s_(maxe, s, mx);
+        if !jmaxe.is_null() { s_(jmaxe, s, mx); }
+        if !en.is_null() {
+            let e = g(en, s);
+            let e = if e == e { floor(e as f64) as f32 } else { mx };
+            s_(en, s, e.min(mx).max(1.0));
+        }
+        // The movement columns from the row.
+        let h = (row * 16) as usize;
+        let (spd, cost, cb, dmg, rd, ra, rk) = (g(hot, h), g(hot, h + 1), g(hot, h + 3), g(hot, h + 5), g(hot, h + 7) as i32, g(hot, h + 8) as i32, g(hot, h + 9) as i32);
+        let tv = if tys.is_null() { 0 } else { g(tys, ty as usize) };
+        let st = (tv & 255) as u8;
+        let r0 = if rad.is_null() { 0.0 } else { g(rad, s) };
+        let ln = (r0 * 0.6).min(4.0).max(1.5);
+        let nrd: u8 = if rd >= 0 && rd < bsteps { rd as u8 } else { 255 };
+        let nra: u8 = if ra >= 0 && ra < 255 { ra as u8 } else { 255 };
+        let nsh: u8 = if dmg > 0.0 { 1 } else { 0 };
+        let nrk: u8 = rk.max(0).min(255) as u8;
+        let (o1, o3, o4, o5, o6) = (g(lane, s), g(rd_, s), g(ra_, s), g(shoot, s), g(rk_, s));
+        if !sty.is_null() { s_(sty, s, st); }
+        if !wch.is_null() { s_(wch, s, if st == 5 && !rwch.is_null() { g(rwch, row as usize) } else { 0 }); }
+        s_(lane, s, ln); s_(rd_, s, nrd); s_(ra_, s, nra); s_(shoot, s, nsh); s_(rk_, s, nrk);
+        if !lz.is_null() { s_(lz, s, (((tv >> 8) & 3) | 4) as u8); }
+        let same = prev >= 0 && prev < nrows && {
+            let p = (prev * 16) as usize;
+            g(hot, p) == spd && g(hot, p + 1) == cost && g(hot, p + 3) == cb
+        } && o1 == ln && o3 == nrd && o4 == nra && o5 == nsh && o6 == nrk;
+        if same || on_.is_null() { continue; }
+        let on = g(on_, s);
+        let f = if fl_.is_null() { 0 } else { g(fl_, s) };
+        if on == 3 || on == 5 {
+            if dmg > 0.0 && rk == g(reach_, s) as i32 { continue; }
+            s_(on_, s, 0); continue;
+        }
+        if on == 2 && (f & 19) == 0 { continue; }
+        if on == 2 && (f & 19) == 16 { if nra != 255 { s_(reach_, s, nra); } else { s_(on_, s, 0); } continue; }
+        if on >= 2 { s_(on_, s, 0); continue; }
+        if on != 1 { continue; }
+        let ok = spd >= 0.0;
+        let reach = if ok && (f & 16) != 0 { ra } else if ok && (f & 1) != 0 { rd } else { 0 };
+        let lim = if (f & 16) != 0 { 256 } else { bsteps };
+        if !ok || ((f & 16) == 0 && ((f & 1) != 0) != (dmg > 0.0)) || !(reach >= 0 && reach < lim) { s_(on_, s, 0); continue; }
+        if (f & 1) != 0 && reach != g(reach_, s) as i32 {
+            let area = if spa.is_null() { -1 } else { g(spa, s) };
+            if area < 0 || boxok.is_null() || g(boxok, (area * bsteps + reach) as usize) == 0 { s_(on_, s, 0); continue; }
+        }
+        s_(reach_, s, reach as u8);
+    }
+}
+#[inline(always)]
+unsafe fn s_<T>(p: *mut T, i: usize, v: T) { if !p.is_null() { *p.add(i) = v; } }

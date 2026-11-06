@@ -5632,7 +5632,7 @@ function bindResearchPopupControls(container) {
         if (btn.classList.contains('info-auto-research-group-btn')) {
             let enabled = btn.dataset.enabled === '1';
             let coords = parseCoords(infoCoordText(btn.dataset.coords));
-            for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
+            queueToggleMany('research', coords, enabled);
             infoTogglePressed(btn);
             updateInfoPanel();
             renderResearchPopupContent();
@@ -5963,6 +5963,14 @@ function parseInfoCoordList(coordStr) {
     }).filter(c => Number.isFinite(c.gx) && Number.isFinite(c.gy));
 }
 
+// A selection's building flag: one command, its buildings' tile keys (main.js setToggleMany).
+function queueToggleMany(toggle, coords, enabled) {
+    const keys = [];
+    for (const c of coords || []) if (c && c.gx >= 0 && c.gy >= 0 && c.gx < GRID_W && c.gy < GRID_H) keys.push(c.gy * GRID_W + c.gx);
+    if (!keys.length) return;
+    keys.sort((x, y) => x - y);
+    queueAction({ action: 'setToggleMany', toggle, enabled, tkz: actionIdsEncode(keys) });
+}
 // Queue lengths of the local player's ready producers at the given tiles.
 function _getGroupSpawnQueueOptions(coords, isWorker) {
     return (coords || []).map(c => {
@@ -5972,37 +5980,45 @@ function _getGroupSpawnQueueOptions(coords, isWorker) {
     }).filter(Boolean);
 }
 
+// A group's queue changes as one command (main.js spawnCounts): the producers'
+// tile keys, sorted, and each one's change.
+function queueSpawnCounts(options, isWorker) {
+    const ch = options.filter(o => o.d).map(o => [o.gy * GRID_W + o.gx, o.d]).sort((x, y) => x[0] - y[0]);
+    if (ch.length) queueAction({ action: 'spawnCounts', worker: !!isWorker, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[1]) });
+}
 // Queues count spawns across producers, each to the shortest queue.
 function queueGroupSpawns(coords, isWorker, count) {
     let options = _getGroupSpawnQueueOptions(coords, isWorker);
     let cap = isWorker ? 10 : 20;
     let n = Math.max(1, Math.floor(count || 1));
+    for (const o of options) o.d = 0;
     for (let i = 0; i < n; i++) {
         let best = null;
         for (let o of options) {
             if (o.len >= cap) continue;
             if (!best || o.len < best.len) best = o;
         }
-        if (!best) return;
-        queueAction({ action: isWorker ? 'queueWorker' : 'queueUnit', gx: best.gx, gy: best.gy, count: 1 });
-        best.len++;
+        if (!best) break;
+        best.len++; best.d++;
     }
+    queueSpawnCounts(options, isWorker);
 }
 
 // Removes count spawns across producers, each from the longest queue.
 function dequeueGroupSpawns(coords, isWorker, count) {
     let options = _getGroupSpawnQueueOptions(coords, isWorker);
     let n = Math.max(1, Math.floor(count || 1));
+    for (const o of options) o.d = 0;
     for (let i = 0; i < n; i++) {
         let best = null;
         for (let o of options) {
             if (o.len <= 0) continue;
             if (!best || o.len > best.len) best = o;
         }
-        if (!best) return;
-        queueAction({ action: isWorker ? 'dequeueWorker' : 'dequeueUnit', gx: best.gx, gy: best.gy, count: 1 });
-        best.len--;
+        if (!best) break;
+        best.len--; best.d--;
     }
+    queueSpawnCounts(options, isWorker);
 }
 
 function updateInfoPanel(panelOverride = null, opts = {}) {
@@ -6551,7 +6567,9 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setAutoUpgrade', gx: c.gx, gy: c.gy, enabled });
+            // (One command for the group: main.js setToggleMany.)
+            const keys = coords.filter(c => c.gx >= 0 && c.gy >= 0 && c.gx < GRID_W && c.gy < GRID_H).map(c => c.gy * GRID_W + c.gx).sort((x, y) => x - y);
+            queueAction({ action: 'setToggleMany', toggle: 'autoUpgrade', enabled, tkz: actionIdsEncode(keys) });
             setTimeout(updateInfoPanel, 50);
         });
     });
@@ -6569,7 +6587,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setAutoStack', gx: c.gx, gy: c.gy, enabled });
+            queueToggleMany('autoStack', coords, enabled);
             setTimeout(updateInfoPanel, 50);
         });
     });
@@ -6587,7 +6605,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setQueueEnabled', gx: c.gx, gy: c.gy, enabled });
+            queueToggleMany('queue', coords, enabled);
             setTimeout(updateInfoPanel, 50);
         });
     });
@@ -6605,7 +6623,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setAutoResearch', gx: c.gx, gy: c.gy, enabled });
+            queueToggleMany('research', coords, enabled);
             setTimeout(updateInfoPanel, 50);
         });
     });
@@ -6623,7 +6641,7 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         bindInstantPress(btn, () => {
             let enabled = btn.dataset.enabled === '1';
             let coords = infoCoordText(btn.dataset.coords).split(';').map(c => { let [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-            for (let c of coords) queueAction({ action: 'setBuildEnabled', gx: c.gx, gy: c.gy, enabled });
+            queueToggleMany('build', coords, enabled);
             setTimeout(updateInfoPanel, 50);
         });
     });

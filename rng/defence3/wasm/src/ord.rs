@@ -337,6 +337,93 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         return;
     }
     let (mut no, mut nf, mut vsum, mut full) = (0usize, 0usize, 0i32, 0i32);
+    if mode == 2 {
+        // Stopped workers (main.js stop, k_unit_cmd's list): its order's
+        // fields cleared (commandState P[18], no way, no targets, the
+        // pending target null: [89] ptSt, [90] ptGx, [91] ptGy, [92] hObj,
+        // key P[23]), its task let go as _clearWorkerTarget does (a worker
+        // returning keeps it), its task memory cleared, state IDLE.
+        let (pst, pgx, pgy, hobj, kp) = (k.p::<u8>(89), k.p::<i16>(90), k.p::<i16>(91), k.p::<i32>(92), k.i(23));
+        // (The path store: [93] unit.pthH, [94] its arena, [95] its free lists.)
+        let (pth, parena, pfree) = (k.p::<i32>(93), k.p::<i32>(94), k.p::<i32>(95));
+        for i in 0..n {
+            let qv = g(list, i);
+            if qv < 0 { continue; }
+            let q = qv as usize;
+            let owner = g(own, q) as i32;
+            let wb = g(wbtype, g(wkix, q).max(0) as usize);
+            let id = g(uid, q);
+            if g(cmdc, q) != cmd_move { s(on, q, 0); s(cmdc, q, cmd_move); }
+            s(nvpk, q, -1);
+            let h = g(mpath, q);
+            if h >= 0 { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
+            crate::path_release(pth, q, parena, pfree);
+            s(on, q, 0); s(mcd, q, -1);
+            s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0);
+            let t = g(pst, q) as i32;
+            if t & 3 != 1 {
+                let e = match t & 3 { 2 => (-16i32).wrapping_sub((g(pgy, q) as i32).wrapping_mul(65536).wrapping_add(g(pgx, q) as i32)), _ => i32::MIN };
+                s(hobj, q, g(hobj, q).wrapping_add(hterm2(kp, -2147483647)).wrapping_sub(hterm2(kp, e)));
+                s(pst, q, ((t & 12) | 1) as u8);
+            }
+            s(mvpp, q, (((t >> 2) & 3) == 2) as u8); s(mvpf, q, 0);
+            s(fatf, q, 0); s(lsx, q, f32::NAN); s(lsy, q, f32::NAN); s(amgx, q, -1); s(amgy, q, -1);
+            let mut w = g(wks, q);
+            let st = w & 31;
+            let tt = g(ttab, wb as usize);
+            let wi = (tt >> 8) & 255;
+            // (_clearWorkerTarget: none while returning; nothing without a target or its type.)
+            let has = g(wkt, q) != 0 || ((w >> 5) & 31) != 1 || ((w >> 10) & 7) != 1;
+            if !(st == 4 || st == 5 || st == 6) && has {
+                let kind = (w >> 10) & 7;
+                if kind >= 2 && wb != 0 {
+                    let mut tl = -1i32;
+                    if kind == 5 {
+                        let want = g(wkt, q);
+                        let (mut lo, mut hi) = (0usize, umn);
+                        while lo < hi { let mid = (lo + hi) >> 1; if g(umids, mid) < want { lo = mid + 1; } else { hi = mid; } }
+                        if lo < umn && g(umids, lo) == want {
+                            let ts = g(umslots, lo);
+                            if ts >= 0 && g(dead, ts as usize) == 0 { tl = tile_of(ts as usize); }
+                        }
+                    } else { tl = g(wkt, q); }
+                    if tl >= 0 && owner >= 0 && owner < vnp && wi < vtypes {
+                        let (gx, gy) = (irem(tl, gw), idiv(tl, gw));
+                        let vi = (owner * vtypes + wi) * (1 + vrw * vrh) + 1 + (gy / wrt).min(vrh - 1) * vrw + (gx / wrt).min(vrw - 1);
+                        if vi >= 0 && vi < nver { s(wver, vi as usize, g(wver, vi as usize).wrapping_add(1)); vsum = vsum.wrapping_add(work_mix(vi)); }
+                    }
+                }
+                let r = g(wkr, q);
+                if r >= 0 && r < nres && g(resv, r as usize) == id {
+                    s(resv, r as usize, 0);
+                    if !rcount.is_null() {
+                        let t = r / nt;
+                        let rg = (idiv(t, gw) / srt) * rcols + irem(t, gw) / srt;
+                        s(rcount, rg as usize, g(rcount, rg as usize) - 1);
+                        s(rsum, rg as usize, g(rsum, rg as usize).wrapping_sub(res_term(r, id)));
+                    }
+                    if !wswl.is_null() {
+                        let m = g(wswl, 0);
+                        if m + 1 < k.i(22) { s(wswl, (m + 1) as usize, r); s(wswl, 0, m + 1); } else { full = 1; }
+                    }
+                }
+                w = (w & !((31 << 5) | (7 << 10)) as u32) | (1 << 5) | (1 << 10);
+                s(wkt, q, 0); s(wkr, q, -1);
+            }
+            // (clearWorkerTaskMemoryForFreeRetarget: its type's memory, its material false, next search now.)
+            let mb = match wb { 4 => 13, 5 => 15, 6 => 17, _ => 0 };
+            if mb != 0 { w = (w & !(3u32 << mb)) | (1u32 << mb); }
+            let wr = g(wkix, q);
+            if wr > 0 { let man = g(k.p::<f64>(71 + 17), wr as usize); wm_clear(&k, 71, wr as usize, wb as i32, man); }
+            if g(wkn, q) != now { s(on, q, 0); s(wkn, q, now); }
+            s(idlefv, q, -1);
+            // State IDLE (1): a change unparks it.
+            if st != 1 { s(on, q, 0); s(wkidle, q, 1); w = (w & !31u32) | 1; }
+            s(wks, q, w);
+        }
+        s(cnt, 0, 0); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
+        return;
+    }
     for i in 0..n {
         let qv = g(list, i);
         if qv < 0 { continue; }
@@ -432,6 +519,12 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         }
     }
     s(cnt, 0, no as i32); s(cnt, 1, nf as i32); s(cnt, 2, vsum); s(cnt, 3, full);
+}
+
+#[inline(always)]
+fn hterm2(key: i32, e: i32) -> i32 {
+    let t = (key ^ e).wrapping_mul(16777619u32.wrapping_mul(2654435761u32) as i32);
+    (t ^ ((t as u32) >> 15) as i32).wrapping_mul(0x2c1b3c6d)
 }
 
 /// worker.js _wsGroupBuild: a collector group's sites and spawners from the
@@ -1383,4 +1476,119 @@ pub unsafe extern "C" fn k_adj_post(a: u32, chunk: i32) {
         let _ = nc;
     }
     s(pflag, chunk.max(0) as usize * 16, paths);
+}
+
+/// A building flag over a selection (main.js setToggleMany): tile keys
+/// [0][0..P[0]); a structure there of class c (ctab [1], 1..=P[4]), row [2]
+/// >= 0, owner word [3] = P[1] takes P[2] into its class's column A
+/// ([6 + 2(c-1)], u8: 0 unset, 1 false, 2 true; none: skipped) and, P[3] > 0,
+/// P[3] into column B ([7 + 2(c-1)]). P[6] 1: only where A is set already.
+/// Each one's [tile, P[7], 0] into [4] (structure progress ops, P[7] < 0:
+/// none written but the tile), their count in [5][0].
+#[no_mangle]
+pub unsafe extern "C" fn k_struct_flags(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (keys, ctab, rrow, own, ops, cnt) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
+    if keys.is_null() || ctab.is_null() || rrow.is_null() || own.is_null() || ops.is_null() || cnt.is_null() { return; }
+    let (n, ow, va, vb, ncls, tiles, need, op) = (k.i(0).max(0) as usize, k.i(1), k.i(2), k.i(3), k.i(4).max(0) as usize, k.i(5).max(0) as usize, k.i(6), k.i(7));
+    let mut m = 0usize;
+    for i in 0..n {
+        let t = g(keys, i);
+        if t < 0 || t as usize >= tiles { continue; }
+        let tu = t as usize;
+        let c = g(ctab, tu) as usize;
+        if c == 0 || c > ncls { continue; }
+        let r = g(rrow, tu);
+        if r < 0 || g(own, tu) != ow { continue; }
+        let r = r as usize;
+        let ca = k.p::<u8>(6 + 2 * (c - 1));
+        if ca.is_null() || (need != 0 && g(ca, r) == 0) { continue; }
+        s(ca, r, va as u8);
+        if vb > 0 { let cb = k.p::<u8>(7 + 2 * (c - 1)); if !cb.is_null() { s(cb, r, vb as u8); } }
+        s(ops, 3 * m, t); s(ops, 3 * m + 1, op); s(ops, 3 * m + 2, 0);
+        m += 1;
+    }
+    s(cnt, 0, m as i32);
+}
+
+/// A command's units off their queued move orders (main.js
+/// _dropQueuedOrderUnits): each id [0] by the id table ([1], mask P[1];
+/// unit.id [2], unit.live [3]), the player's (P[2]; unit.owner [4]): its
+/// stamp (unit.ordSq [5]) 0, its entry (by seq, q.eseq [6], ascending, P[3]
+/// entries) one unit less (q.edl [7]) and its id's share less (q.eds [8]).
+/// P: [0] ids.
+#[no_mangle]
+pub unsafe extern "C" fn k_order_drop(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, tab, idc, live, own, ordsq, eseq, edl, eds) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i8>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8));
+    let (n, mask, player, ne) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3).max(0) as usize);
+    for j in 0..n {
+        let id = g(ids, j);
+        let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        let mut q = usize::MAX;
+        loop {
+            let slot = g(tab, h as usize);
+            if slot < 0 { break; }
+            let sl = slot as usize;
+            if g(idc, sl) == id && g(live, sl) != 0 { q = sl; break; }
+            h = (h + 1) & mask;
+        }
+        if q == usize::MAX || g(own, q) as i32 != player { continue; }
+        let old = g(ordsq, q);
+        if old <= 0 { continue; }
+        s(ordsq, q, 0);
+        let (mut lo, mut hi) = (0usize, ne);
+        while lo < hi { let mid = (lo + hi) >> 1; if g(eseq, mid) < old { lo = mid + 1; } else { hi = mid; } }
+        if lo < ne && g(eseq, lo) == old { s(edl, lo, g(edl, lo) - 1); s(eds, lo, g(eds, lo).wrapping_sub(id_h(id))); }
+    }
+}
+
+/// A research queue's change (data_dynamic.js SimResearchQueue): its ids [0]
+/// (stat ids, [0] the active task), each stat's count [1], its header [2]
+/// ([0] length, [1] version, [2] the stat of the last removal, -1 none).
+/// P: [0] op: 0 stat P[2] in at place P[1]; 1 place P[1] out; 2 the task at
+/// place P[1] moved to P[2]; 3 the last P[3] tasks of stat P[2] out (P[2] < 0:
+/// the last of any). Room for an insert: the caller's.
+#[no_mangle]
+pub unsafe extern "C" fn k_rq_op(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, depth, hdr) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
+    let (op, p1, p2, p3) = (k.i(0), k.i(1), k.i(2), k.i(3));
+    let mut n = g(hdr, 0).max(0) as usize;
+    s(hdr, 2, -1);
+    let remove = |n: &mut usize, i: usize| {
+        let st = g(ids, i);
+        for j in i..*n - 1 { s(ids, j, g(ids, j + 1)); }
+        *n -= 1; s(ids, *n, 0);
+        if st >= 0 { s(depth, st as usize, g(depth, st as usize) - 1); }
+        s(hdr, 2, st);
+    };
+    match op {
+        0 => {
+            let i = (p1.max(0) as usize).min(n);
+            let mut j = n;
+            while j > i { s(ids, j, g(ids, j - 1)); j -= 1; }
+            s(ids, i, p2); n += 1;
+            if p2 >= 0 { s(depth, p2 as usize, g(depth, p2 as usize) + 1); }
+        }
+        1 => { let i = p1.max(0) as usize; if i < n { remove(&mut n, i); } else { return; } }
+        2 => {
+            let (f, t) = (p1.max(0) as usize, p2.max(0) as usize);
+            if f >= n || t >= n || f == t { return; }
+            let st = g(ids, f);
+            if f < t { for j in f..t { s(ids, j, g(ids, j + 1)); } } else { let mut j = f; while j > t { s(ids, j, g(ids, j - 1)); j -= 1; } }
+            s(ids, t, st);
+        }
+        3 => {
+            for _ in 0..p3.max(0) {
+                if n == 0 { break; }
+                let mut i = n as i64 - 1;
+                if p2 >= 0 { while i >= 0 && g(ids, i as usize) != p2 { i -= 1; } if i < 0 { break; } }
+                remove(&mut n, i as usize);
+            }
+        }
+        _ => return,
+    }
+    s(hdr, 0, n as i32);
+    s(hdr, 1, g(hdr, 1).wrapping_add(1));
 }

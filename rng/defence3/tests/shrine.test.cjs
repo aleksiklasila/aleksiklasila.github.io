@@ -21,7 +21,6 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         u.energy = 3; u.energy -= 50; shrineDamageTaken(u, 50);
         out.overkill = (_shrinePendingFixed[0] - f1) / RESOURCE_FIXED_POINT_SCALE;
         u.energy = e0; _shrinePendingFixed[0] = f0;
-        out.drops = droppedItems.length;
         // Shrines off: damage still counts, nothing drains, drain orders ignored.
         const was = SHRINES_ENABLED, fx = p._resourceFixedValues || (p._resourceFixedValues = {});
         const sh0 = fx.shrine, en0 = p.energy, as0 = p.astar, dr0 = p.shrineDrain;
@@ -38,7 +37,6 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
     })()`));
     assert.equal(unit.normal, 10, 'damage taken goes to the shrine');
     assert.equal(unit.overkill, 3, 'only the energy actually lost counts');
-    assert.equal(unit.drops, 0, 'nothing dropped on the map');
     assert.equal(unit.offMode, 0, 'shrines off: no drain mode');
     assert.equal(unit.offShrine, 60, 'shrines off: damage still counts, nothing drained');
     assert.equal(unit.offEnergy, 0); assert.equal(unit.offAstar, 0);
@@ -58,8 +56,6 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
     const hs = st(host), gs = st(g);
     assert.deepEqual(gs, hs, 'peers agree on the shrines');
     assert.equal(hs[1].drain, 2, 'drain order applied');
-    const drops = JSON.parse(host.evalSim('JSON.stringify(droppedItems.length)'));
-    assert.equal(drops, 0, 'no bounty drops with shrines on');
     const taken = JSON.parse(host.evalSim(`JSON.stringify((() => { const S = _snapHashGlobals ? 1 : 0; return gameStatsHistory.length ? gameStatsHistory[gameStatsHistory.length - 1].shrine : null; })())`));
     const bad = [];
     for (const [t, h] of host.tickExact || []) { const o = g.tickExact.get(t); if (o !== undefined && o !== h) bad.push(t); }

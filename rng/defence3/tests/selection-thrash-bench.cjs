@@ -88,7 +88,7 @@ const PAGE_SETUP = names => {
 // The worker's parts of a tick, and what it does between ticks.
 const WORKER_FNS = ['_simTick', '_simRequest', 'gameTick', 'processActions', '_simPostResult', 'snapRecordTickHash', 'resyncAfterTick',
     'updateAllPlayerVisibility', 'recalculateUnitEffectiveLevel', 'processGlobalSpawnerQueue', 'simMoveRun', 'simMoveEndTick', 'spatialIndexRebuild',
-    'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect', 'advanceGroupRoutes', 'takeDuePendingPathUnits', 'recomputePlayerPopCaps',
+    'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect', 'takeDuePendingPathUnits', 'recomputePlayerPopCaps',
     '_runAdjacencyRecalculation', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits',
     'ensureLaserConnections', 'gameStatsStep', 'healerCandidatesStep', 'simPresentationPublish', 'simPresentTickEnd', 'simFrameEncodeState', 'simFrameDetails',
     'simFrameStructureDetails', 'simFrameWatch', 'simFrameWatchStructures', 'simPresentationPump', 'workerSearchTierStep', 'towersTick', 'laserBeamsTick',

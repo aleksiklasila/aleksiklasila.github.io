@@ -422,3 +422,27 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
     *hdr=nlive as i32;*hdr.add(1)=nfree as i32;*hdr.add(3)+=drop;
     *cnt=0;*cnt.add(1)=nf as i32;*cnt.add(2)=nk as i32;*cnt.add(3)=drop;
 }
+
+/// A towerTarget order's towers (main.js processAction): tiles [0][0..P[0])
+/// (-1 skipped); a tower there (ctab [1] = P[1], row [2] >= 0, owner [3] =
+/// P[2]) takes target kind P[3], value P[4] into its row's _ptK [5] (i8) and
+/// _ptV [6] (i32), and its brain word [4] the preferred bit (1 << 24) as
+/// data_state.js stationaryBrainChanged makes it (a word 0: none made yet).
+#[no_mangle]
+pub unsafe extern "C" fn k_tower_target(a: u32, _chunk: i32) {
+    let k = crate::k::K::new(crate::waddr(a) as *const i32);
+    let (tl, ctab, rrow, own, brain, pk, pv) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i8>(5), k.p::<i32>(6));
+    if tl.is_null() || ctab.is_null() || rrow.is_null() || own.is_null() || brain.is_null() || pk.is_null() || pv.is_null() { return; }
+    let (n, tct, ow, kind, value) = (k.i(0).max(0) as usize, k.i(1), k.i(2), k.i(3), k.i(4));
+    for i in 0..n {
+        let t = *tl.add(i);
+        if t < 0 { continue; }
+        let t = t as usize;
+        let row = *rrow.add(t);
+        if *ctab.add(t) as i32 != tct || row < 0 || *own.add(t) != ow { continue; }
+        *pk.add(row as usize) = kind as i8;
+        *pv.add(row as usize) = value;
+        let b = *brain.add(t);
+        if b != 0 { *brain.add(t) = if kind > 0 { b | (1 << 24) } else { b & !(1 << 24) }; }
+    }
+}

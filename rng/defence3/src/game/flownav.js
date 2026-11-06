@@ -49,6 +49,8 @@ const NAV_PROFILE_BUILD = 2, NAV_PROFILES = 3;
 // intermediate arrays in a fixed arena; JavaScript posts it and installs
 // views of the completed header at deterministic simulation steps.
 const NAV_NODES_PER_JOB = 16, NAV_GRAPH_PER_JOB = 256, NAV_LOCAL_PER_JOB = 32, NAV_COST_ROWS = 32;
+// (A build keeps the installed build's fields of clusters that did not change: navBuildChain; false: every field made, an A/B switch.)
+let NAV_FIELD_REUSE = true;
 function navBuild(profile, wall, costs, W, H) {
     try { return _navBuildAll(profile, wall, costs, W, H, true); }
     catch (e) {
@@ -285,8 +287,22 @@ SIM_KERNELS[SIM_KERNEL_NAV_CHAIN] = function (R, P, chunk) {
         const nt = new Int32Array(_simWasmMem.buffer, base + h[NAVH.NODETILE], Math.max(1, count));
         const jobs = Math.ceil(count / NAV_LOCAL_PER_JOB), groups = P[22];
         const start = Math.floor(chunk * jobs / groups) * NAV_LOCAL_PER_JOB, end = Math.min(count, Math.floor((chunk + 1) * jobs / groups) * NAV_LOCAL_PER_JOB);
+        // (The installed build's, P[25]: a cluster the same in both keeps its
+        // nodes' fields, copied: navBuildChain, wasm nav_cluster_same.)
+        const prev = P[25] === 1 && typeof X.nav_cluster_same === 'function';
+        const nb = prev ? new Int32Array(_simWasmMem.buffer, base + h[NAVH.NODEBASE], P[7] + 1) : null, onb = prev ? new Int32Array(_simWasmMem.buffer, P[28], P[7] + 1) : null;
+        const mem = prev ? new Uint8Array(_simWasmMem.buffer) : null, nf = base + h[NAVH.FIELDS], of = P[30];
+        let lastC = -1, same = 0;
         for (let i = start; i < end; i++) {
             const t = nt[i], c = _navClusterOf(t, W, C, cw), cx = c % cw, cy = (c - cx) / cw;
+            if (prev) {
+                if (c !== lastC) {
+                    lastC = c;
+                    same = X.nav_cluster_same(_simWEnc(base + h[NAVH.WALL]), _simWEnc(P[26]), h[NAVH.COST] ? _simWEnc(base + h[NAVH.COST]) : 0, P[27] ? _simWEnc(P[27]) : 0,
+                        _simWEnc(base + h[NAVH.NODEBASE]), _simWEnc(base + h[NAVH.NODETILE]), _simWEnc(P[28]), _simWEnc(P[29]), c, W, H, C, cx * C, cy * C);
+                }
+                if (same) { const j = onb[c] + (i - nb[c]); mem.copyWithin(nf + i * CC * 2, of + j * CC * 2, of + (j + 1) * CC * 2); continue; }
+            }
             X.nav_field(_simWEnc(base + h[NAVH.FIELDS]), i * CC, CC, cx * C, cy * C, C, C, W, H, t,
                 _simWEnc(base + h[NAVH.WALL]), h[NAVH.COST] ? _simWEnc(base + h[NAVH.COST]) : 0,
                 0,0,0,0,0,0,0,0,0,0, 0,0,0,0, 1,0,0, 0,0, _simWEnc(_simWasmScratch), _simWasmScratchWords);
@@ -311,6 +327,11 @@ SIM_KERNELS[SIM_KERNEL_NAV_CHAIN] = function (R, P, chunk) {
 };
 function navBuildChain(b, background = true) {
     const lane = _navBuildLane(), groups = Math.min(128, Math.max(1, b.nc));
+    // (The installed build of the profile, the same grid and clusters, its
+    // arrays in the wasm heap: its unchanged clusters' fields are kept. It
+    // stays installed until this build is.)
+    const q = _nav[b.profile], prev = NAV_FIELD_REUSE && background && q && q !== b && q.W === b.W && q.H === b.H && q.C === b.C && q.nc === b.nc && !!q.cost === !!b.withCosts
+        && q.wall && q.nodeBase && q.nodeTile && q.fields && q.wall.buffer === _simWasmMem.buffer && q.fields.buffer === _simWasmMem.buffer ? q : null;
     const rows = b.withCosts ? Math.ceil(b.H / NAV_COST_ROWS) : 0, blocks = b.withAtlas ? Math.ceil(b.nc / NAV_ATLAS_CLUSTERS_PER_JOB) : 0;
     const counts = [rows, rows, Math.ceil(b.nc / NAV_NODES_PER_JOB), 1, groups, groups, 1, groups,
         Math.ceil(b.nc / NAV_PARTS_PER_JOB), 1, blocks, 1, b.withAtlas ? groups : 0, 1, blocks, 1];
@@ -319,6 +340,7 @@ function navBuildChain(b, background = true) {
         const P = background ? simParallelStageParams(lane, stage) : _simParams;
         P.fill(0); P[3] = b.W; P[4] = b.H; P[5] = b.C; P[6] = b.cw; P[7] = b.nc; P[11] = b.NM;
         P[20] = stage; P[21] = _simHeapPtrOf(b.arena); P[22] = groups; P[23] = b.withAtlas ? 1 : 0; P[24] = b.ch;
+        if (stage === 4 && prev) { P[25] = 1; P[26] = prev.wall.byteOffset; P[27] = prev.cost ? prev.cost.byteOffset : 0; P[28] = prev.nodeBase.byteOffset; P[29] = prev.nodeTile.byteOffset; P[30] = prev.fields.byteOffset; }
         if (background) stages.push([SIM_KERNEL_NAV_CHAIN, counts[stage]]);
         else if (counts[stage]) simParallelRun(SIM_KERNEL_NAV_CHAIN, counts[stage]);
     }
@@ -1652,9 +1674,15 @@ function _navRushCheck() {
 // post to install; at dk < 3 it is three. The complete build gets two short
 // steps, followed by one step for the destination-field window.
 const _NAV_STAGES = [0, NAV_STEP_STAGE, NAV_STEP_INSTALL];
-// (Steps of 3+ ticks are long enough for a stage's background work: 1 step
-// apart; else 2.)
-function _navStageGap() { return typeof simDk === 'number' && simDk >= 3 ? 1 : 2; }
+// (The build's background work by the map's size, in ticks: NAV_BUILD_TILES_A_TICK
+// tiles a tick (a 1024x1024 map: 8 ticks); as steps, at least 1 step apart at
+// steps of 3+ ticks, else 2. The map and the step size are every peer's: the
+// same schedule; a build that waited for its helpers stalled the tick.)
+const NAV_BUILD_TILES_A_TICK = 131072;
+function _navStageGap() {
+    const dk = typeof simDk === 'number' && simDk >= 1 ? simDk : 1, ticks = Math.ceil(GRID_W * GRID_H / NAV_BUILD_TILES_A_TICK);
+    return Math.max(dk >= 3 ? 1 : 2, Math.ceil(ticks / dk));
+}
 function _navJobAdvance(J) {
     J.calls++;
     if (J.calls < J.nextAt || J.si >= _NAV_STAGES.length) return;

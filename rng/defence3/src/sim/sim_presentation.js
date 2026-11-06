@@ -72,7 +72,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261025-st1', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261105-cells', base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -122,7 +122,15 @@ function simPresentationBind() {
         p.columns = columns; p.sourceBuffer = S.columns.x;
         if (grown) {
             const old = p.meta;
-            p.meta = simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
+            // (In the wasm heap, the slot kernels' table holds its columns:
+            // a released slot's row reset, a moved unit's row moved with it,
+            // sim_unit_state.js _simSlotZeroTable. A replaced one given back
+            // later: the reader may still read it.)
+            const hb = typeof simHeapArray === 'function' && typeof _simHeap !== 'undefined' && _simHeap.ready ? simHeapArray(Uint8Array, S.cap * SIM_META_SLOT_BYTES) : null;
+            p.meta = hb && simHeapHas(hb) ? simMetaViews(hb.buffer, S.cap, hb.byteOffset) : simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
+            p.meta.heap = hb && simHeapHas(hb) ? hb : null;
+            if (old && old.heap) _simStructTableRetired.push({ heap: old.heap, at: performance.now() });
+            if (typeof _simSharedVer !== 'undefined') _simSharedVer++;
             p.meta.id.fill(-1);
             if (old) for (const k of [...SIM_META_I32, ...SIM_META_F32, ...SIM_META_I16]) p.meta[k].set(old[k].subarray(0,p.meta.cap));
             else simPresentationSeedMetadata(p.meta);
@@ -132,7 +140,7 @@ function simPresentationBind() {
             if (!p.metaRev) p.metaRev = new Int32Array(new SharedArrayBuffer(4));
             Atomics.add(p.metaRev, 0, 1);
         }
-        p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap}, metaRev:p.metaRev});
+        p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap,off:p.meta.off||0}, metaRev:p.metaRev});
     }
     const strings = _simFrameStrings.list;
     if (p.strings !== strings.length) {
@@ -181,7 +189,8 @@ function simPresentTowerAngles(tiles, angles, n) {
 // cleared by it.
 function _simPresentTileSlots(p) {
     const n = GRID_W * GRID_H;
-    if (!p.tileSlot || p.tileSlot.length !== n) p.tileSlot = new Int32Array(n).fill(-1);
+    // (In the wasm heap: the metadata kernel writes it in place.)
+    if (!p.tileSlot || p.tileSlot.length !== n || !simHeapHas(p.tileSlot)) { if (p.tileSlot && simHeapHas(p.tileSlot)) simHeapFree(p.tileSlot); p.tileSlot = simHeapArray(Int32Array, n).fill(-1); }
     return p.tileSlot;
 }
 // A structure placed, built or changed shows at the next tick: its tile's
@@ -250,12 +259,32 @@ function simPresentRally(e, x, y, id) {
     _simPresentRallyCells(p.structuresNext, s, on, x, y, id);
     p.rallyDirty = true;
 }
+// The rally kernel's buildings (main.js _rallyKernelRun): by their tiles,
+// the presentation's slot of each (p.tileSlot, its tile still its: gx, gy).
+function simPresentRallyTiles(keys, m, x, y, id) {
+    const p = _simPresentation;
+    if (!p || !p.tileSlot) return;
+    const T = p.tileSlot, on = x === x && y === y, W = GRID_W;
+    for (const F of [p.structures, p.structuresNext]) {
+        if (!F) continue;
+        for (let i = 0; i < m; i++) {
+            const t = keys[i], s = T[t];
+            if (s < 0 || s >= F.cap) continue;
+            const gx = t % W;
+            if (F.gx[s] !== gx || F.gy[s] !== (t - gx) / W) continue;
+            _simPresentRallyCells(F, s, on, x, y, id);
+        }
+    }
+    p.rallyDirty = true;
+}
 function _simPresentRallyCells(F, s, on, x, y, id) {
     if (!F || s >= F.cap) return;
     F.rallyX[s] = on ? x : 0; F.rallyY[s] = on ? y : 0; F.rallyTargetId[s] = id === id ? id : -1;
     F.flags[s] = on ? F.flags[s] | SIM_SF_RALLY : F.flags[s] & ~SIM_SF_RALLY;
     F.orderTick[s] = currentTick;
 }
+// (The changed tiles' slots, for the metadata kernel: a heap list.)
+let _simChgL = null;
 function _simPresentStructureChanges(p) {
     let F = p.structures;
     if (!F || typeof tileEntityChangesSince !== 'function') return;
@@ -269,7 +298,9 @@ function _simPresentStructureChanges(p) {
     if ((!tiles || !tiles.length) && !rally) return;
     if (!tiles) tiles = [];
     const S = _simStructSlots, T = _simPresentTileSlots(p);
-    let count = Math.min(F.cap, p.structCount | 0), wrote = rally;
+    let count = Math.min(F.cap, p.structCount | 0), wrote = rally, nl = 0;
+    if (!_simChgL || _simChgL.length < tiles.length || !simHeapHas(_simChgL)) _simChgL = simHeapArray(Int32Array, Math.max(1024, tiles.length * 2));
+    const L = _simChgL;
     for (const t of tiles) {
         const gx = t % GRID_W, gy = (t - gx) / GRID_W;
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
@@ -286,7 +317,7 @@ function _simPresentStructureChanges(p) {
         if (prev >= 0 && S.owner[prev] !== e) {
             const pe = S.owner[prev];
             if (pe && pe.gx === gx && pe.gy === gy) {
-                pe._sslot = undefined; S.owner[prev] = null; S.free.push(prev); S.version++;
+                pe._sslot = undefined; S.owner[prev] = null; S.free.push(prev); S.version++; S.psrcSet(prev, null);
                 if (prev < F.cap) F.alive[prev] = 0;
                 if (p.structuresNext && prev < p.structuresNext.cap) p.structuresNext.alive[prev] = 0;
                 wrote = true;
@@ -302,12 +333,19 @@ function _simPresentStructureChanges(p) {
         // (The bigger table the cycle is filling, too.)
         let N = p.structuresNext;
         if (N && s >= N.cap) N = p.structuresNext = _simStructTableGrow(N, S.owner.length);
-        if (N) _simWriteStructure(N, s, e, kind, gameTime);
-        if (p.angles && s < p.angles.length) p.angles[s] = Math.fround(Number(e.angle) || 0);
         if (s >= F.cap || (!known && count >= F.cap)) { F = p.structures = _simStructTableGrow(F, Math.max(S.owner.length, count + 1)); count = Math.min(count, F.cap); }
         if (!known) F.order[count++] = s;
-        _simWriteStructure(F, s, e, kind, gameTime);
+        L[nl++] = s;
         wrote = true;
+    }
+    // Their rows by the metadata kernel (both tables while a bigger one fills).
+    if (nl) {
+        const N = p.structuresNext;
+        _simMetaStructsRun(p, F, S, T, L, nl, N);
+        for (let i = 0; i < nl; i++) {
+            const s = L[i];
+            if (p.angles && s < p.angles.length) p.angles[s] = F.angle[s];
+        }
     }
     if (!wrote) return;
     p.structCount = count;
@@ -420,6 +458,122 @@ function simPresentationWriteMetadata(u, F) {
     if (fresh && p && p.metaRev) Atomics.add(p.metaRev, 0, 1);
 }
 
+// The units' metadata by the kernel: false when it cannot run (no heap
+// table, no kernel), the JavaScript pass instead.
+// (false: the JavaScript pass, an A/B switch.)
+let SIM_META_KERNEL = true;
+const _simMeta = { tab: null, list: null, cnt: null, M: null, nt: -1, nw: -1, ns: -1 };
+function _simMetaKernel(p) {
+    const S = _simUnitState, M = p.meta;
+    if (!SIM_META_KERNEL || !S || !M || !M.heap || !simHeapHas(M.heap) || typeof SIM_KERNEL_META_UNITS !== 'number' || typeof _simWasmX === 'undefined' || !_simWasmX || typeof _simWasmX.k_meta_units !== 'function') return false;
+    const C = S.columns, n = Math.min(S.owners.length, M.cap), K = _simMeta;
+    if (M.cap < S.owners.length) return false;
+    // (The table's columns bound when it is another.)
+    if (K.M !== M) { for (const k of [...SIM_META_I32, ...SIM_META_F32, ...SIM_META_I16, ...SIM_META_U8]) simParallelBind('pm.' + k, M[k]); K.M = M; }
+    const W = C.oc_workerType, wd = W && W.data && simHeapHas(W.data) ? W.data : null;
+    if (wd) simParallelBind('pm.wtid', wd);
+    // (Codes: by type, by worker type id, by worker state.)
+    const types = _simUnitTypeNames, nt = types.length, wv = W && W.pool ? W.pool.values : [], nw = wv.length, ns = SIM_WS_NAMES.length;
+    const need = 3 * nt + nw + 32;
+    if (!K.tab || K.tab.length < need || !simHeapHas(K.tab)) { if (K.tab) simHeapFree(K.tab); K.tab = simHeapArray(Int32Array, Math.max(1024, need * 2)); simParallelBind('pm.tab', K.tab); }
+    const T = K.tab;
+    for (let t = 0; t < nt; t++) {
+        const st = BASE_UNIT_STATS[types[t]] || BASE_UNIT_STATS.norm;
+        T[t] = _simFrameCode(types[t]); T[nt + t] = _simFrameCode(st.attackStyle || 'melee');
+        T[2 * nt + t] = (st.isSnake ? SIM_UF_SNAKE : 0) | (types[t] === 'king' ? SIM_UF_KING : 0);
+    }
+    for (let w = 0; w < nw; w++) T[3 * nt + w] = _simFrameCode(wv[w]);
+    for (let w = 0; w < 32; w++) T[3 * nt + nw + w] = w < ns ? _simFrameCode(SIM_WS_NAMES[w]) : 0;
+    const room = Math.max(4096, n >> 4);
+    if (!K.list || K.list.length < room || !simHeapHas(K.list)) { if (K.list) simHeapFree(K.list); K.list = simHeapArray(Int32Array, room); simParallelBind('pm.list', K.list); }
+    if (!K.cnt || !simHeapHas(K.cnt)) { K.cnt = simHeapArray(Int32Array, 16); simParallelBind('pm.cnt', K.cnt); }
+    K.cnt[0] = 0; K.cnt[1] = 0;
+    const P = _simParams, per = 16384;
+    P.fill(0, 0, 16);
+    P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0; P[3] = gameTime; P[4] = nt; P[5] = wd ? nw : 0; P[6] = wd ? wd.BYTES_PER_ELEMENT : 0; P[7] = room;
+    P[8] = SIM_UF_FLYING; P[9] = SIM_UF_HOLD; P[10] = SIM_UF_RESEARCH_MATERIAL; P[11] = SIM_UF_ENERGY_BLOCKED;
+    simParallelRun(SIM_KERNEL_META_UNITS, Math.ceil(Math.max(1, n) / per));
+    // (The units it left: their full JavaScript write; past the list's room, every unit as before.)
+    const listed = K.cnt[0], O = S.owners;
+    if (listed > room) { for (let s = 0; s < n; s++) { const u = O.at(s); if (u) simPresentationWriteMetadata(u, M); } }
+    else for (let i = 0; i < listed; i++) { const u = O.at(K.list[i]); if (u) simPresentationWriteMetadata(u, M); }
+    if (K.cnt[1] > 0 && p.metaRev) Atomics.add(p.metaRev, 0, 1);
+    return true;
+}
+// The structure metadata by the kernel (wasm/src/nfs.rs k_meta_structs).
+const _simMetaP = new Float64Array(16);
+let _simMetaB = null;
+// (list, nl: only those slots' rows (the tick's changed tiles), into F and F2 if given.)
+function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
+    _simMetaClassOf(null);
+    const CL = _simMetaCls, CW = 56, nc = CL.length;
+    if (!_simMetaB || !simHeapHas(_simMetaB.cls)) _simMetaB = { cls: simHeapArray(Int32Array, nc * CW), gone: null, cnt: simHeapArray(Int32Array, 4), res: null, ser: null, tslot: null, codes: [] };
+    const B = _simMetaB, cls = B.cls, enc = a => a && typeof simHeapHas === 'function' && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0;
+    cls.fill(0);
+    if (typeof structRallyClasses === 'function') structRallyClasses();
+    const stt = statTablesStatic(), adj = _adjPlayerStats(stt), L1 = MAX_THING_LEVEL + 1;
+    const KIND = [0, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5];
+    const COLS = { 11: '_stT', 12: '_ow', 13: '_uc', 14: '_en', 15: 'gx', 16: 'gy', 17: 'stacks', 18: 'manualStacks', 19: 'effectiveStacks', 20: 'level', 21: 'effectiveLevel', 22: 'isStacking',
+        23: 'stackingWorkDone', 24: 'markedForSalvage', 25: 'autoUpgradeEnabled', 26: 'buildEnabled', 27: 'isUpgrading', 28: 'burning', 29: 'poisoned', 30: 'frozen', 31: 'wet', 32: 'sandy', 33: 'watched',
+        34: 'watchedByTeam', 35: 'autoStackEnabled', 36: 'upgrademaxEnergy', 37: '_mxOv', 38: '_spt', 39: 'queueEnabled', 40: '_qN', 41: 'rallyX', 42: 'rallyY', 43: 'rallyTargetUnitId',
+        44: 'autoResearchEnabled', 45: '_cdUntil', 46: 'angle', 47: 'laserState', 48: '_mv', 50: 'damage', 51: 'potentialEffectiveLevel' };
+    for (let k = 0; k < nc; k++) {
+        const C = CL[k], Tb = C ? _sTables.get(C) : null, b = k * CW;
+        if (!Tb || !(Tb.n > 0)) continue;
+        cls[b] = Tb.n; cls[b + 1] = _stAllIx.get(C) || 0; cls[b + 2] = KIND[k];
+        for (const j in COLS) cls[b + (+j)] = enc(Tb['c_' + COLS[j]]);
+        cls[b + 49] = enc(Tb.c_maxGold || Tb.c_maxAstar || null);
+        // (The type and unit type ids: their pools' values as frame codes, stat keys, queued unit types.)
+        const tc = Tb.c_type, uc = Tb.c_unitType;
+        if (tc && tc.data) { cls[b + 3] = tc.data.BYTES_PER_ELEMENT; cls[b + 5] = enc(tc.data); }
+        if (uc && uc.data) { cls[b + 4] = uc.data.BYTES_PER_ELEMENT; cls[b + 6] = enc(uc.data); }
+        const tab = (name, vals, fn) => { const m = Math.max(1, vals.length); let a = B.codes[k * 4 + name]; if (!a || a.length < m || !simHeapHas(a)) a = B.codes[k * 4 + name] = simHeapArray(Int32Array, Math.max(64, m * 2)); for (let i = 0; i < vals.length; i++) a[i] = fn(vals[i]); return a; };
+        const tv = tc && tc.pool ? tc.pool.values : [], uv = uc && uc.pool ? uc.pool.values : [];
+        cls[b + 7] = enc(tab(0, tv, v => _simFrameCode(v)));
+        cls[b + 8] = enc(tab(1, uv, v => _simFrameCode(v)));
+        const keyOf = raw => { if (!raw) return -1; const kk = _normalizePlayerPrecomputedBuildingKey(normalizeBuildingResearchKey(raw)); return _statKeyIds.has(kk) ? _statKeyIds.get(kk) : -1; };
+        cls[b + 9] = enc(KIND[k] === 1 ? tab(2, uv, v => keyOf(v ? 'barrack_' + v : null)) : tab(2, tv, v => keyOf(v)));
+        cls[b + 10] = enc(KIND[k] === 1 ? tab(3, uv, v => _simFrameCode(v || 'norm')) : tab(3, tv, v => _simFrameCode(v ? getSpawnedUnitTypeForBuildingKey(v) : null)));
+    }
+    // (Each owner's research: done, required, a task, still to research.)
+    const np = players.length;
+    if (!B.res || B.res.length < 4 * np || !simHeapHas(B.res)) B.res = simHeapArray(Float64Array, Math.max(64, 8 * np));
+    for (let o = 0; o < np; o++) {
+        const task = players[o] ? getPlayerResearchTask(o) : null, b = 4 * o;
+        B.res[b] = task ? Number(task.workDone) || 0 : 0; B.res[b + 1] = task ? Number(task.workRequired) || 0 : 0;
+        B.res[b + 2] = task ? 1 : 0; B.res[b + 3] = task && (task.workDone || 0) < task.workRequired ? 1 : 0;
+    }
+    const nslots = Math.min(S.owner.length, F.cap, F2 ? F2.cap : F.cap);
+    if (!B.gone || B.gone.length < nslots || !simHeapHas(B.gone)) { const m = Math.max(1024, nslots * 2); B.gone = simHeapArray(Int32Array, m); B.missK = simHeapArray(Int32Array, m); B.missS = simHeapArray(Int32Array, m); }
+    S.psrcSet(Math.max(0, nslots - 1), S.owner[Math.max(0, nslots - 1)] || null);
+    const spt = typeof _spp !== 'undefined' && _spp.tab && simHeapHas(_spp.tab) ? _spp.tab : null;
+    const P = _simMetaP;
+    P.fill(0);
+    P[0] = nslots; P[1] = nc; P[2] = gameTime; P[3] = currentTick - 1; P[4] = TILE; P[5] = L1; P[6] = MAX_RESEARCH_LEVEL + 1; P[7] = stt.nk; P[8] = SPAWN_PROD_TYPES; P[9] = AREA_STEPS_MAX;
+    P[10] = GRID_W; P[11] = GRID_W * GRID_H; P[12] = np + 1; P[13] = _precomputedStatsVersion; P[14] = nl;
+    for (const Ft of F2 ? [F, F2] : [F]) {
+    const args = [cls, S.psrc, _ST.ctab, _ST.rrow, _ST.own, _ST.brain, stt.mxe, stt.vis, stt.atk, stt.dmg, adj.rlv, adj.blx, spt, B.res, B.missK, B.missS];
+    const F = Ft;
+    for (const k of SIM_STRUCT_SPEC.f32) args.push(F[k]);
+    for (const k of SIM_STRUCT_SPEC.i32) args.push(F[k]);
+    args.push(F.order);
+    for (const k of SIM_STRUCT_SPEC.i16) args.push(F[k]);
+    for (const k of SIM_STRUCT_SPEC.u8) args.push(F[k]);
+    const LM = typeof _laserMap !== 'undefined' && _laserMap.lslot && simHeapHas(_laserMap.lslot) ? _laserMap : null;
+    args.push(T, S.pser, B.gone, B.cnt, list, _ST.val, LM && LM.lslot, LM && LM.pn, LM && LM.part, adj.rml);
+    simRustDirect('k_meta_structs', args, P);
+    // (Spawn cooldowns of keys not in the table for these stats: filled, written.)
+    for (let i = 0, nm = B.cnt[2]; i < nm; i++) { const key = B.missK[i]; if (spt[key * 3 + 2] !== _precomputedStatsVersion) _spTabFill(spt, key, _precomputedStatsVersion); const v = spt[key * 3]; F.spawnCooldown[B.missS[i]] = v === v ? v : 0; }
+    }
+    if (list) return B.cnt[1];
+    // The slots of structures gone: freed.
+    for (let i = 0, ng = B.cnt[0]; i < ng; i++) {
+        const s = B.gone[i], e = S.owner[s];
+        if (e) { e._sslot = undefined; S.owner[s] = null; S.free.push(s); S.version++; }
+        S.psrcSet(s, null);
+    }
+    return B.cnt[1];
+}
 function* simPresentationMetadata() {
     const p = _simPresentation;
     // Metadata changes more slowly than positions. This scan never runs in
@@ -427,11 +581,17 @@ function* simPresentationMetadata() {
     // (The units' array itself, again after each yield: through the units
     // proxy two trapped reads a unit were ~600 ms of this thread per 10 s
     // at 390k units.)
+    // (With the kernels and the table in the heap: every slot's unit at once
+    // on the helpers, SIM_KERNEL_META_UNITS; the units it lists (no stat row's
+    // steps) here.)
+    if (_simMetaKernel(p)) yield;
+    else {
     const view = () => _unitsPageView !== null ? _unitsPageView : unitsView();
     let list = view();
     for (let i=0;i<list.length;i++) {
         simPresentationWriteMetadata(list[i], p.meta);
         if ((i & 127) === 127) { yield; list = view(); }
+    }
     }
     if (p.metaRev) Atomics.add(p.metaRev, 0, 1);
     simPresentationBind();
@@ -439,14 +599,20 @@ function* simPresentationMetadata() {
     // (Index loops: for-of in a generator allocated an iteration result a
     // structure, ~5 MB a cycle at 65k structures.)
     const S = _simStructSlots, stamp = ++S.tick, lists = _simStructLists();
+    // (Every structure has its slot from the tile journal, _simPresentStructureChanges;
+    // all of them again only when the journal started over, a restore.)
+    const tep = typeof _tileEntityEpoch === 'number' ? _tileEntityEpoch : -1;
     let n = 0;
-    for (let kind = 0; kind < lists.length; kind++) {
-        const list = lists[kind];
-        for (let i = 0; i < list.length; i++) {
-            const e = list[i];
-            if (e) { S.slotOf(e); n++; }
-            if ((n & 127) === 127) yield;
+    if (p.slotsEpoch !== tep) {
+        for (let kind = 0; kind < lists.length; kind++) {
+            const list = lists[kind];
+            for (let i = 0; i < list.length; i++) {
+                const e = list[i];
+                if (e) { S.psrcSet(S.slotOf(e), e); n++; }
+                if ((n & 127) === 127) yield;
+            }
         }
+        p.slotsEpoch = tep;
     }
     const cap = Math.max(64, S.owner.length, _simStructReserveCap);
     let F = p.structures, fresh = false;
@@ -465,23 +631,11 @@ function* simPresentationMetadata() {
     // (The table again after each yield: a tick's changes may have grown it
     // since, _simStructTableGrow.)
     const cur = () => fresh ? p.structuresNext : p.structures;
-    for (let kind=0;kind<lists.length;kind++) for (let i=0, list=lists[kind];i<list.length;i++) {
-        const e=list[i];
-        if (!e || S.owner[e._sslot] !== e) continue;
+    {
+        // Every tabled structure's row by the kernel; what it finds gone freed here.
         F = cur();
-        const s=e._sslot; S.stamp[s]=stamp; F.order[j++]=s;
-        _simWriteStructure(F,s,e,kind,gameTime);
-        if (p.angles && s < p.angles.length) p.angles[s] = F.angle[s];
-        if (kind<=3 && e.gx>=0 && e.gy>=0 && e.gx<GRID_W && e.gy<GRID_H) T[(e.gy|0)*GRID_W+(e.gx|0)]=s;
-        if ((j & 31) === 31) yield;
-    }
-    for (let s=0;s<S.owner.length;s++) {
-        if (S.stamp[s] !== stamp) {
-            F = cur(); F.alive[s]=0;
-            const e=S.owner[s];
-            if (e) { e._sslot=undefined;S.owner[s]=null;S.free.push(s);S.version++; }
-        }
-        if ((s & 511) === 511) yield;
+        j = _simMetaStructsRun(p, F, S, T);
+        yield;
     }
     F = cur();
     S.orderChanged(F.order,j);
@@ -492,20 +646,13 @@ function* simPresentationMetadata() {
     _simInfoPackTable(F);
     simInfoPackStatDirCheck();
     p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev}), revision:++p.revision});
-    // Grid data is not shared by the simulation yet. Publish its primitive
-    // columns in small slices too; the reader computes the display delta.
-    // (Only when a tile changed, or every few seconds: a million cells
-    // copied each cycle took this thread's time between ticks for nothing.)
-    const size = GRID_W * GRID_H, tev = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1, nowMs = performance.now();
-    if (p.cells && p.cells.length === size * 2 && p.cellsVersion === tev && nowMs - (p.cellsAt || 0) < 5000) return;
-    p.cellsVersion = tev; p.cellsAt = nowMs;
-    if (!p.cells || p.cells.length !== size * 2) p.cells = new Int32Array(new SharedArrayBuffer(size * 8));
-    for (let y=0;y<GRID_H;y++) {
-        const row=grid[y];
-        for (let x=0;x<GRID_W;x++) { const i=y*GRID_W+x; p.cells[i*2]=row[x].type;p.cells[i*2+1]=row[x].owner; }
-        yield;
-    }
-    p.worker.postMessage({type:'cells', cells:p.cells, width:GRID_W});
+    // The cells: the reader reads the simulation's columns (map.js cellType,
+    // cellOwner: shared) and computes the display delta; nothing copied here.
+    // (When a tile changed, or every few seconds.)
+    const tev = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1, nowMs = performance.now();
+    if (p.cells === cellType && p.cellsVersion === tev && nowMs - (p.cellsAt || 0) < 5000) return;
+    p.cellsVersion = tev; p.cellsAt = nowMs; p.cells = cellType;
+    p.worker.postMessage({type:'cells', ctype:cellType, cowner:cellOwner, width:GRID_W});
 }
 
 // (The metadata cycle again SIM_PRESENT_PUMP_REST_MS after one ends: types,

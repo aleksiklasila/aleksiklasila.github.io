@@ -1531,7 +1531,7 @@ function drawAreaOutlinesDirect(ctx, minGx, minGy, maxGx, maxGy) {
 
 function draw() {
     // (Remembered structures in columns, Team + history: as lists and cells.)
-    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid } = getLiveRenderView(true);
+    const { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, projectiles, particles, visibilityGrid } = getLiveRenderView(true);
 
     _unitBodySpriteBuildsRemaining = 8;
     let vw = viewW / camera.zoom, vh = viewH / camera.zoom;
@@ -1646,18 +1646,6 @@ function draw() {
                 });
             }
         }
-    }
-
-    // Dropped energy
-    for (let d of droppedItems) {
-        if (d.gx < minGx || d.gx > maxGx || d.gy < minGy || d.gy > maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
-
-        let drawScale = 1;
-        drawWithTrackedContextTransform(ctx, d.x, d.y, 0, 0, drawScale, () => {
-            ctx.fillStyle = '#fd0'; ctx.font = "900 20px Arial"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText('⚡', d.x, d.y);
-        });
     }
 
     // Towers

@@ -24,7 +24,7 @@ const r = JSON.parse(a.eval(`JSON.stringify((() => {
     // (After the tenth: a stop of units 10-19, which must win.)
     acts.push({ action: 'stop', unitIds: ids.slice(10, 20) });
     processActions(acts, 0);
-    const waiting = _actionBacklog.length, live = [..._actLive.values()].filter(v => v.live > 0).length;
+    const waiting = _actionBacklog.length, live = 0;
     __scratch.saved = JSON.stringify(snapEncodeState());
     let ticks = 0, drain = 0;
     while ((_actionBacklog.length || _orderQueue.length) && ticks < 40) { gameTick(); currentTick++; ticks++; if (_orderQueue.length) drain = ticks + 1; }

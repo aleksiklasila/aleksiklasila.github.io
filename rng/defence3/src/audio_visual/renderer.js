@@ -2347,11 +2347,11 @@ function getChunkRenderView(view, bounds, flat2d) {
         // middle models read the columns by them, not each unit's _s.)
         result.unitSlots = U.slots;
     }
-    for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems']) {
+    for (const name of ['units', 'towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines']) {
         const list = view[name];
         // The live structure split reads the packed table itself. Building
         // and sorting object buckets here would immediately be discarded.
-        if (name !== 'units' && name !== 'droppedItems' && typeof flat2d === 'boolean' && F
+        if (name !== 'units' && typeof flat2d === 'boolean' && F
             && typeof _pageTables !== 'undefined' && _pageTables.s?.n > STRUCT_DETAIL_BUDGET && _isLiveRenderGrid(view.grid)) continue;
         if (list.length < 5000 || (name === 'units' && F)) continue;
         let index = rendererChunkCache.lists.get(name);
@@ -2416,7 +2416,7 @@ function buildScaleFrameData(flat2d, view) {
         cache = rendererScaleCache = { grid: view.grid, renderer: renderer3dInstance,
             layers: [new P(12), new P(12)], tick: NaN, colors: new Map() };
     }
-    const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.droppedItems, view.units];
+    const refs = [view.towers, view.barracks, view.collectorSpawners, view.goldMines, view.astarMines, view.units];
     const frame = view.units === units && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     const structuresFrame = frame && typeof _pageTables !== 'undefined' && _isLiveRenderGrid(view.grid) ? _pageTables.s : null;
     // Units from the frame's columns whenever the view's units are the live
@@ -3295,7 +3295,7 @@ function build3DFrameData(flat2d = false) {
     const projection = get3DProjectionSnapshot(); projection.flat2d = flat2d;
     renderer3dInstance.buildViewProjection(projection);
     const queryBounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
-    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid, unitSlots } = getChunkRenderView(sourceView, queryBounds, flat2d);
+    let { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, projectiles, particles, visibilityGrid, unitSlots } = getChunkRenderView(sourceView, queryBounds, flat2d);
     // Detail per unit, by its drawn size, within a budget (see
     // _unitDetailSplit): the rest are the GPU's glyphs, drawn from the frame.
     const unitDetail = _isLiveUnitList(sourceView.units) ? _unitDetailSplit(units, flat2d, queryBounds, unitSlots) : null;
@@ -3760,27 +3760,6 @@ function build3DFrameData(flat2d = false) {
         // (Its structures' fade states are kept: pruning runs only on frames
         // that walk the structures; the layer is rebuilt every tick.)
     }
-    for (let d of droppedItems) {
-        if (d.gx < bounds.minGx || d.gx > bounds.maxGx || d.gy < bounds.minGy || d.gy > bounds.maxGy) continue;
-        if (!fullVisibility && (!visibilityGrid[d.gy] || visibilityGrid[d.gy][d.gx] === 0)) continue;
-
-        push3DRenderObject(objects, {
-            modelKey: 'dropped_energy',
-            x: d.x / TILE,
-            y: 0,
-            z: d.y / TILE,
-            scaleX: 0.22,
-            scaleY: 0.22,
-            scaleZ: 0.22,
-            tint: '#ffd84d',
-            topTextureKey: 'dropped_energy',
-            topTextureCanvas: get3DTopTextureCanvas('dropped_energy', (g) => {
-                g.fillStyle = '#ffd84d'; g.beginPath(); g.arc(32, 32, 16, 0, Math.PI * 2); g.fill();
-                g.fillStyle = '#222'; g.font = 'bold 24px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('⚡', 32, 33);
-            })
-        });
-    }
-
     if (flat2d) drainFlatObjects();
     // Units already in the reused layer need only their panels kept alive
     // and their motion effects (a few unit types) at this frame's position.
@@ -5700,32 +5679,30 @@ function _visibilityPoolGrid(pool, k, pid) {
 let _visibilityJobs = null;
 // The area layout as the visibility kernel reads it (rebuilt when it changes).
 let _visibilityKernelAreaKey = null;
+const _visAreaP = new Float64Array(4);
 function _visibilityKernelAreas() {
     let key = _visibilityKernelAreaKey;
     if (key && key.grid === areaIdGrid && key.cells === gridCellsByArea && key.nb === areaNeighborIds && key.byId === _areaById
         && key.w === GRID_W && key.h === GRID_H) return key.count;
     let W = GRID_W, H = GRID_H;
     let count = Math.max(_areaById.length, gridCellsByArea.length, areaNeighborIds.length);
-    let areaGrid = simSharedArray(Int32Array, W * H);
-    for (let y = 0; y < H; y++) {
-        let row = areaIdGrid[y];
-        for (let x = 0; x < W; x++) { let a = row ? Math.floor(Number(row[x])) : -1; areaGrid[y * W + x] = a >= 0 ? a : -1; }
-    }
+    // (The tiles' areas: map.js cellArea itself; each area's tiles in tile
+    // order by the kernel, tch.rs k_area_cells.)
+    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    let areaGrid = cellArea;
     let nbOff = simSharedArray(Int32Array, count + 1), cellOff = simSharedArray(Int32Array, count + 1), exists = simSharedArray(Uint8Array, count);
-    let nbTotal = 0, cellTotal = 0;
+    let nbTotal = 0;
+    for (let a = 0; a < count; a++) nbTotal += (areaNeighborIds[a] || []).length;
+    let nb = simSharedArray(Int32Array, nbTotal), cells = simSharedArray(Int32Array, Math.max(1, W * H));
+    let j = 0;
     for (let a = 0; a < count; a++) {
-        nbTotal += (areaNeighborIds[a] || []).length;
-        for (let c of (gridCellsByArea[a] || [])) if (c) cellTotal++;
-    }
-    let nb = simSharedArray(Int32Array, nbTotal), cells = simSharedArray(Int32Array, cellTotal);
-    let j = 0, q = 0;
-    for (let a = 0; a < count; a++) {
-        nbOff[a] = j; cellOff[a] = q;
+        nbOff[a] = j;
         for (let n of (areaNeighborIds[a] || [])) nb[j++] = n;
-        for (let c of (gridCellsByArea[a] || [])) if (c) cells[q++] = c.y * W + c.x;
         exists[a] = _areaById[a] ? 1 : 0;
     }
-    nbOff[count] = j; cellOff[count] = q;
+    nbOff[count] = j;
+    _visAreaP[0] = W * H; _visAreaP[1] = count;
+    simRustDirect('k_area_cells', [cellArea, cellOff, cells], _visAreaP);
     for (let [name, arr] of [['vis.areaGrid', areaGrid], ['vis.nbOff', nbOff], ['vis.nb', nb], ['vis.cellOff', cellOff], ['vis.cells', cells], ['vis.areaExists', exists]]) simParallelBind(name, arr);
     _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
     return count;
@@ -5933,14 +5910,6 @@ function _visCoverEnsure() {
     C.syncedTick = -1;
 }
 
-// Visual rows: a covered area is fully lit (light saturates at the
-// normalization range; visibility_history fades it in and out).
-function _visCoverPaintArea(rows, area, lit) {
-    let cells = gridCellsByArea[area];
-    if (!cells) return;
-    let v = lit ? VISIBILITY_LIGHT_NORMALIZATION_RANGE : 0;
-    for (let c of cells) if (c) rows[c.y][c.x] = v;
-}
 
 // Which of the 3x3 zones of its tile a coordinate pair is in: the zone and
 // the tile decide which tiles the +-0.3 tile window covers.
@@ -6174,6 +6143,7 @@ function _visCoverTileVisible(pid, gx, gy) {
 
 // A player's visibility rows from the coverage: made on first request, then
 // repainted per area as areas enter and leave cover.
+const _visPaintP = new Float64Array(4);
 function _visCoverRows(pid) {
     let C = _visCover;
     let rows = C.visual[pid];
@@ -6182,8 +6152,10 @@ function _visCoverRows(pid) {
     rows = new Array(GRID_H);
     for (let y = 0; y < GRID_H; y++) rows[y] = flat.subarray(y * GRID_W, (y + 1) * GRID_W);
     rows._flat = flat;
-    let cover = C.cover[pid];
-    for (let a = 0; a < cover.length; a++) if (cover[a] > 0) _visCoverPaintArea(rows, a, true);
+    // (Painted whole by tch.rs k_vis_paint: a tile lit when its area (map.js cellArea) is covered.)
+    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    _visPaintP[0] = GRID_W * GRID_H; _visPaintP[1] = C.areaCount; _visPaintP[2] = VISIBILITY_LIGHT_NORMALIZATION_RANGE;
+    simRustDirect('k_vis_paint', [cellArea, C.cover[pid], flat], _visPaintP);
     C.visual[pid] = rows;
     return rows;
 }
@@ -7269,21 +7241,9 @@ function updatePurchaseMultiplierBars() {
 function queueResizeForEachActiveUnitSubgroup(mode) {
     let activeUnits = getActiveUnits();
     if (!activeUnits || activeUnits.length === 0) return;
-    let groups = new Map();
-    for (let u of activeUnits) {
-        let key = getUnitGroupKey(u);
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(u);
-    }
-    for (let group of groups.values()) {
-        if (!group || group.length === 0) continue;
-        if (mode === 'd2' && group.length < 2) continue;
-        let u0 = group[0];
-        let unitType = u0.unitType;
-        let unitLevel = ignoreLevelSubgroups ? null : getUnitBaseLevel(u0);
-        let ids = group.map(u => u.id);
-        queueAction({ action: 'resizeUnitGroup', unitIds: ids, mode, unitType, unitLevel });
-    }
+    // (One command for the selection: the simulation splits it by subgroup,
+    // main.js resizeUnitGroup bySub.)
+    queueAction({ action: 'resizeUnitGroup', unitIds: activeUnits.map(u => u.id), mode, bySub: true, byLevel: !ignoreLevelSubgroups });
     setTimeout(updateInfoPanel, 50);
 }
 

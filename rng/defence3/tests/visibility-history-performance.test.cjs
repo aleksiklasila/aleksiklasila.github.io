@@ -102,17 +102,15 @@ assert.ok(!renderer.includes('getHistoryBackground('));
 assert.ok(!renderer.includes('updateVisibilityHistory('));
 assert.ok(!read('src/utils/utils_networking.js').includes('snapshotVisibilityAreaHold'));
 // The simulation worker exposes all structures through a shared frame schema.
-// Mines/drops have energy=0 there even though their resource amount is positive.
+// Mines have energy=0 there even though their resource amount is positive.
 c.units=[{id:999,x:16,y:16,energy:0}];
 c.goldMines=[{gx:0,gy:0,x:16,y:16,energy:0,gold:123,maxGold:200}];
 c.astarMines=[{gx:1,gy:0,x:48,y:16,energy:0,astar:0,maxAstar:300}];
-c.droppedItems=[{gx:0,gy:0,x:16,y:16,energy:0,value:4}];
 c.raw=raw();c.raw[0][0]=c.raw[0][1]=3;c.gameTime=0;
 vm.runInContext('visibilityHistoryState=null; teamVisibilityHistory=true;',c);
 update();
 assert.equal(c.getLiveRenderView().goldMines.length,1,'live frame energy mine survives health filter');
 assert.equal(c.getLiveRenderView().astarMines.length,1,'depleted frame A* mine stays visible');
-assert.equal(c.getLiveRenderView().droppedItems.length,1,'resource drops have no health');
 // (Units are the live list as it is: the dead are not drawn, from the frame's columns.)
 assert.equal(c.getLiveRenderView().units,c.units,'units are the live list');
 c.raw=raw();

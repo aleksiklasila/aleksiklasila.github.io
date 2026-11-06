@@ -34,6 +34,8 @@ c._detailScore = (x, z, size, flat, retained, minPixels) => ((Math.floor(x * 3) 
 c._structureDetailCandidates = () => [];
 // (The catalog entry's model height: renderer.js, loaded with it in the page.)
 vm.runInContext(read('src/audio_visual/renderer.js').match(/function _cmBaseHeight[\s\S]*?\r?\n}\r?\n/)[0], c);
+// (A remembered unit near the camera: its live detail; none here.)
+vm.runInContext('function _cmRememberedNear() { return false; }', c);
 let seed = 4242;
 const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 const TAU = Math.PI * 2;
@@ -66,7 +68,7 @@ function reference(C, F, mask) {
     const colors = C.colors.map(hexToRgb);
     for (const u of C.unitCandidates) {
         const s = u._s;
-        if (!(s >= 0) || want[s] || F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & 66560) !== 0) continue;
+        if (!(s >= 0) || want[s] || F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & 1024) !== 0) continue; // (remembered ones too: only the hidden are out)
         const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
         if (!C.fullVisibility && !(F.flags[s] & 65536) && F.owner[s] !== C.player && !(C.visibility[Math.floor(z)]?.[Math.floor(x)] > 0)) continue;
         const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / C.tile));
@@ -75,7 +77,7 @@ function reference(C, F, mask) {
         const fraction = ((sd ^ (sd >>> 16)) >>> 0) / 4294967296;
         if (!(c._detailScore(x, z, size, false, false, 12 / (.8 + .4 * fraction)) > 0)) continue;
         const code = F.type[s], styleIndex = (lookup[(7 * width + code) * 4] - 1) / stride, style = styles[styleIndex];
-        const mode = F.mode[s], key = styleIndex * 32 + (mode & 31);
+        const mode = F.mode[s], key = (styleIndex * 32 + (mode & 31)) * 2; // (x2 + near: a remembered unit up close, none here)
         const d = new Array(28), flying = style.isFlying, sx = size * style.scaleX;
         let sy = size * style.scaleY;
         if (!style.mounted) sy = style.snake ? Math.max(.24, sy) : Math.max(.48 * style.scaleX, sy);
@@ -83,7 +85,7 @@ function reference(C, F, mask) {
         const f = F.facing[s], co = Math.cos(f), sn = Math.sin(f);
         d[0] = co * sx; d[1] = 0; d[2] = -sn * sx; d[3] = (F.px[s] - F.x[s]) / C.tile;
         d[4] = flying ? (F.id[s] * 1.7) % TAU : 0; d[5] = sy; d[6] = flying ? 1 : 0; d[7] = (F.py[s] - F.y[s]) / C.tile;
-        d[8] = sn * sx; d[9] = 0; d[10] = co * sx; d[11] = F.prate[s];
+        d[8] = sn * sx; d[9] = 0; d[10] = co * sx; d[11] = F.flags[s] & 65536 ? 0 : F.prate[s];
         d[12] = x; d[13] = .012 + (((F.id[s] * 1103515245) >>> 0) % 7) * .003 + (flying ? (style.isWorker ? .36 : .30) : 0); d[14] = z; d[15] = 1;
         const owner = colors[Math.max(0, Math.min(8, F.owner[s] + 1))], tint = hexToRgb(style.color);
         d[16] = owner[0]; d[17] = owner[1]; d[18] = owner[2]; d[19] = 1;
@@ -122,7 +124,7 @@ function slotRecords(S, F) {
             const lit = remembered ? .14 : (P.full || owner === P.player) ? 1 : Math.min(1, P.vis[Math.floor(z)][Math.floor(x)] / P.lightNorm);
             const d = [co * sx, 0, -sn * sx, (F.px[s] - wx) / P.tile,
                 flying ? (id * 1.7) % TAU : 0, sy, flying ? 1 : 0, (F.py[s] - wy) / P.tile,
-                sn * sx, 0, co * sx, F.prate[s],
+                sn * sx, 0, co * sx, remembered ? 0 : F.prate[s],
                 x, .012 + (((id * 1103515245) >>> 0) % 7) * .003 + (flying ? ((flagsU & 16) !== 0 ? .36 : .30) : 0), z, 1,
                 P.colors[ownerIdx * 3], P.colors[ownerIdx * 3 + 1], P.colors[ownerIdx * 3 + 2], 1,
                 F.amount[s], F.phase[s], tint[0], tint[1], tint[2],

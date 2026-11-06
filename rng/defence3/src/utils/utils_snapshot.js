@@ -220,7 +220,7 @@ const SNAP_SKIP_KEYS = new Set([
     'textCtx', 'textCanvas', '_textCanvasScale', '_levelTextLabel', 'prevX', 'prevY',
     '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
-    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_simLabelKey', '_simLabel', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
+    '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
     '_detSortStamp', '_laserDmgSeen',
     '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp',
     // (Charges already made this tick: nothing between ticks.)
@@ -229,10 +229,10 @@ const SNAP_SKIP_KEYS = new Set([
 
 // Lists: P players, u units, t towers, b barracks, s spawners, f floor
 // items, g gold mines, a A* mines, d dropped items, p projectiles.
-const SNAP_LISTS = ['P', 'u', 't', 'b', 's', 'f', 'g', 'a', 'd', 'p'];
+const SNAP_LISTS = ['P', 'u', 't', 'b', 's', 'f', 'g', 'a', 'p'];
 const SNAP_LIST_CODE = { P: 0, u: 1, t: 2, b: 3, s: 4, f: 5, g: 6, a: 7, d: 8, p: 9 };
-const SNAP_REGION_LISTS = ['u', 't', 'b', 's', 'f', 'g', 'a', 'd'];
-const SNAP_ORDER_LISTS = ['u', 't', 'b', 's', 'g', 'a', 'd'];
+const SNAP_REGION_LISTS = ['u', 't', 'b', 's', 'f', 'g', 'a'];
+const SNAP_ORDER_LISTS = ['u', 't', 'b', 's', 'g', 'a'];
 // Hash codes: part * 2^24 + index. Regions are part 0.
 const SNAP_CODE_SHIFT = 16777216;
 const SNAP_PART_REGION = 0;
@@ -295,7 +295,6 @@ function _snapListEntities(list) {
         case 'f': return _snapFloorItemsView();
         case 'g': return goldMines;
         case 'a': return astarMines;
-        case 'd': return droppedItems;
         // (The shots: records made from the pool, projectile.js.)
         case 'p': return projSnapshotRecords();
         case 'P': return players;
@@ -487,7 +486,7 @@ function _snapHPathNode(h, n) {
 // field of an entity, so the rest is repaired along with these).
 const SNAP_HASH_FIELDS = {
     u: ['owner', 'unitType', 'x', 'y', 'vx', 'vy', 'energy', 'maxEnergy', 'attackTimer', 'commandState', 'holdPosition', 'forcedAttackTarget',
-        'targetUnit', 'targetBuilding', 'targetPos', 'path', '_pendingPathTarget', 'pathIsFallbackAstar', '_attackMoveGx', '_attackMoveGy',
+        'targetUnit', 'targetBuilding', 'targetPos', 'path', '_pptSnap', 'pathIsFallbackAstar', '_attackMoveGx', '_attackMoveGy',
         'stackCount', 'effectiveStacks', 'unitLevel', 'effectiveLevel', 'dead', 'teleportHideTicks',
         'poisoned', 'burning', 'frozen', 'wet', 'sandy', 'watched', 'watchedByTeam',
         'workerState', '_wkTgt', 'workerTargetType', 'carryingValue', 'workerTransferCooldown', '_workerReservedTileIndex',
@@ -498,7 +497,6 @@ const SNAP_HASH_FIELDS = {
         'spawnTimer', 'spawnCooldown', 'spawnQueue', 'cd', 'laserState', 'laserTimer', '_ptK', '_ptV',
         'rallyX', 'rallyY', 'rallyTargetUnitId', 'burning', 'poisoned', 'frozen', 'wet', 'sandy', 'watched', 'watchedByTeam'],
     m: ['gold', 'astar', 'maxGold', 'maxAstar'],
-    d: ['type', 'value', 'timer'],
     p: ['x', 'y', 'vx', 'vy', 'life', 'dmg', 'lvl', 'type', 'sx', 'sy', 'own']
 };
 
@@ -534,7 +532,6 @@ const _snapHashers = {
     u: _snapMakeFieldHasher(SNAP_HASH_FIELDS.u),
     b: _snapMakeFieldHasher(SNAP_HASH_FIELDS.b),
     m: _snapMakeFieldHasher(SNAP_HASH_FIELDS.m),
-    d: _snapMakeFieldHasher(SNAP_HASH_FIELDS.d),
     p: _snapMakeFieldHasher(SNAP_HASH_FIELDS.p)
 };
 
@@ -640,7 +637,7 @@ function _snapHashOrder(list, slice = -1, round = -1, rounds = SNAP_HASH_GRID_RO
         h = Math.imul(h ^ units.length, 16777619);
         for (let i = slice < 0 ? 0 : slice, step = slice < 0 ? 1 : SNAP_HASH_SLICES; i < units.length; i += step) {
             let si = slots ? slots[i] : -1;
-            h = Math.imul(h ^ (si >= 0 && owners[si] === units[i] ? ID[si] : units[i].id), 16777619);
+            h = Math.imul(h ^ (si >= 0 && owners.at(si) === units[i] ? ID[si] : units[i].id), 16777619);
         }
     }
     else {
@@ -728,9 +725,11 @@ function _snapStaticCoreSweep(slice, skipRound, regions) {
                     let h = (Math.imul(gx, 4099) + gy) ^ c;
                     if (c < 0x66) h = Math.imul(Math.imul(h ^ OWN[t], 16777619) ^ (UC[t] ? 0x3bd : 0x2bd), 16777619);
                     h = (v | 0) === v ? Math.imul(h ^ v, 16777619) : _snapHNum(h, v);
-                    // (A tower's cooldown deadline (its shots), a barrack's or
+                    // (A tower's cooldown left (its shots: the snapshot's cd, not
+                    // the deadline: one long past is 0 on a restored peer and
+                    // its old tick here, the same tower), a barrack's or
                     // spawner's spawn timer.)
-                    if (c === 0x22 || c === 0x33 || c === 0x44) { const d = T.tim[t]; h = (d | 0) === d ? Math.imul(h ^ d, 16777619) : _snapHNum(h, d); }
+                    if (c === 0x22 || c === 0x33 || c === 0x44) { const d = c === 0x22 ? Math.max(0, T.tim[t] - gameTime) : T.tim[t]; h = (d | 0) === d ? Math.imul(h ^ d, 16777619) : _snapHNum(h, d); }
                     acc = (acc + (Math.imul(h ^ (h >>> 15), 2246822519) >>> 0)) | 0;
                     n++;
                 }
@@ -943,13 +942,6 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
                 }
             }
         }
-    }
-    for (let i = 0; i < droppedItems.length; i++) {
-        let e = droppedItems[i];
-        let r = Math.floor(e.gy / rt) * 1024 + Math.floor(e.gx / rt);
-        if (!allSlices && (r % SNAP_HASH_SLICES) !== slice) continue;
-        let h = _snapHashEntity('d', e, (Math.imul(e.gx, 4099) + e.gy) ^ 0x88);
-        _snapRegionAdd(regions, r, h);
     }
     // (Each region's reservations every SNAP_HASH_SLICES * SNAP_HASH_GRID_ROUNDS
     // ticks, with its buildings' round: walking a slice's slots every tick
@@ -1170,7 +1162,7 @@ function snapDescribeCodes(codes, limit = 12) {
         let ry = Math.floor(r / 1024), rx = r - ry * 1024;
         let things = [];
         for (let u of units) if (_snapUnitRegion(u) === r) things.push('unit ' + u.id + ' ' + u.unitType + (u.dead ? ' (dead)' : ''));
-        for (let list of ['t', 'b', 's', 'f', 'g', 'a', 'd']) {
+        for (let list of ['t', 'b', 's', 'f', 'g', 'a']) {
             for (let gy = ry * rt; gy < ry * rt + rt && gy < GRID_H; gy++) for (let gx = rx * rt; gx < rx * rt + rt && gx < GRID_W; gx++) {
                 let e = _snapEntityAtTile(list, gx, gy);
                 if (e && e.gx === gx && e.gy === gy) things.push((e.type || e.unitType || list) + ' at ' + gx + ',' + gy);
@@ -1342,7 +1334,6 @@ function _snapRootRef(v) {
         if (isSpawnerEntity(v)) return cell.item === v ? '~s' + gx + ',' + gy : null;
         {
             if (cell.item === v) return '~f' + gx + ',' + gy;
-            if (droppedItemGrid[gy] && droppedItemGrid[gy][gx] === v) return '~d' + gx + ',' + gy;
             if (getTileEntityRef(gx, gy) === v) {
                 let type = getTileEntityType(gx, gy);
                 if (type === TILE_ENTITY_GOLDMINE) return '~g' + gx + ',' + gy;
@@ -1863,7 +1854,6 @@ function _snapEntityAtTile(list, gx, gy) {
         case 'f': e = grid[gy][gx].item; return (e && !_snapIsBuilding(e)) ? e : undefined;
         case 'g': return getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
         case 'a': return getTileEntityType(gx, gy) === TILE_ENTITY_ASTARMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
-        case 'd': e = droppedItemGrid[gy] && droppedItemGrid[gy][gx]; return e || undefined;
     }
     return undefined;
 }
@@ -2061,6 +2051,11 @@ function _snapRebuildStatsInPlace(pid) {
 function _snapEnsureStatMaps() {
     let ctx = _snapDec;
     ctx.statMapReady = true;
+    // (Each player's research queue its heap queue again at once: a restored
+    // plain copy hashed as plain arrays until its next use, the host's as the
+    // queue's: a desync.)
+    if (typeof researchQueueViewsInvalidate === 'function') researchQueueViewsInvalidate();
+    if (typeof ensurePlayerResearchQueueState === 'function') for (let pid = 0; pid < players.length; pid++) if (players[pid]) ensurePlayerResearchQueueState(pid);
     // (The restored players' count: a peer that started its world for another team list holds more tables.)
     if (PRECOMPUTED_STATS_MAP_PLAYER.length > players.length) PRECOMPUTED_STATS_MAP_PLAYER.length = players.length;
     let stale = [];
@@ -2364,6 +2359,8 @@ function snapDecodeState(S, options = null) {
         };
         fill('P');
         players = finals.P;
+        // (The research queues' views over their restored numbers.)
+        if (typeof ensurePlayerResearchQueueState === 'function') for (let i = 0; i < players.length; i++) if (players[i]) ensurePlayerResearchQueueState(i);
         _snapEnsureStatMaps();
         for (let list of SNAP_LISTS) if (list !== 'P') fill(list);
 
@@ -2444,7 +2441,7 @@ function snapDecodeState(S, options = null) {
         }
         const tileLists = ['t', 'b', 's', 'f', 'g', 'a'];
         if (!partial) {
-            for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) { row[gx].item = null; row[gx].droppedItem = null; } }
+            for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) { row[gx].item = null; } }
             initTileEntityLookup();
             for (let list of tileLists) {
                 for (let e of finals[list]) {
@@ -2465,18 +2462,6 @@ function snapDecodeState(S, options = null) {
                     if (list === 'b' || list === 's' || list === 'f') { let row = grid[e.gy]; if (row && row[e.gx]) row[e.gx].item = e; }
                     _snapSetTile(e.gx, e.gy, _snapTileTypeOf(list, e), e);
                 }
-            }
-        }
-        // Dropped items: list and indexes rebuilt when they changed.
-        if (!partial || finals.d !== prev.d || shells.d.length > 0) {
-            for (let e of prev.d) { let row = grid[e.gy]; if (row && row[e.gx]) row[e.gx].droppedItem = null; }
-            droppedItems = [];
-            initDroppedItemGrid();
-            for (let d of finals.d) {
-                _setDroppedItemAt(d.gx, d.gy, d);
-                _addDroppedItemToAreaBucket(d, getAreaIdAtTile(d.gx, d.gy));
-                d._droppedIndex = droppedItems.length;
-                droppedItems.push(d);
             }
         }
         // Worker reservations.
@@ -2538,16 +2523,12 @@ function snapDecodeState(S, options = null) {
         // refresh after a research), each share changed how its energy rounds
         // on this peer alone when its turn came: a new difference a rotation,
         // a patch each, six for one research counted wrongly.)
-        if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof _effStatsFullUnit === 'function') {
-            const staleOwners = new Set(ctx.statMapsStale), carried = new Set(shells.u);
-            for (let u of units) if (u && !u.dead && staleOwners.has(u.owner) && !carried.has(u)) _effStatsFullUnit(u);
-        }
+        if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof effStatsAllUnits === 'function') effStatsAllUnits(new Set(ctx.statMapsStale), new Set(shells.u));
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
         resetPendingPathUnits();
         resetNewUnitsForStats();
         // Movement caches (flows, armed units, the unit index, walls) start
         // over from the restored world, as on every peer's flush.
-        if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
         if (typeof simMoveDisarmAll === 'function') { simMoveDisarmAll(); simMoveResetLookCaches(); } if (typeof simMoveRefreshAllStats === 'function') simMoveRefreshAllStats(); if (typeof effStatsAppliedSync === 'function') effStatsAppliedSync(); if (typeof deterministicSortCachesReset === 'function') deterministicSortCachesReset(); if (typeof shrineResetPending === 'function') shrineResetPending();
         if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
         if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
@@ -2600,6 +2581,11 @@ function _snapSameValue(a, b, depth) {
     if (a === b) return true;
     if (a !== a && b !== b) return true;
     if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+    // (A research queue against its restored copy: by its numbers.)
+    if (typeof SimResearchQueue === 'function' && (a instanceof SimResearchQueue || b instanceof SimResearchQueue)) {
+        const same = (x, y) => { if (!x || !y || x.length !== y.length) return false; for (let i = 0; i < x.length; i++) if (x[i] !== y[i] && !(x[i] !== x[i] && y[i] !== y[i])) return false; return true; };
+        return ['ids', 'depth', 'prog', 'hdr'].every(k => same(a[k], b[k]));
+    }
     let pa = Object.getPrototypeOf(a), pb = Object.getPrototypeOf(b);
     if (pa !== pb) return false;
     if (pa !== Object.prototype && pa !== Array.prototype) return false; // entities: identity only
@@ -2626,7 +2612,6 @@ function snapFlushHistoryCaches() {
     // The movement kernel's world tables are rebuilt on every peer alike.
     if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
     // Routes (flows) are rebuilt on every peer alike.
-    if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
     if (typeof navReset === 'function') navReset();
     // The unit index too (a restoring peer builds it from the restored state).
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
@@ -2652,6 +2637,7 @@ function snapFlushHistoryCaches() {
     if (typeof workerSearchTierReset === 'function') workerSearchTierReset();
     if (typeof healerCandidatesTierReset === 'function') healerCandidatesTierReset();
     if (typeof upkeepReset === 'function') upkeepReset();
+    if (typeof cloudTowersReset === 'function') cloudTowersReset();
     if (typeof spawnerReadyReset === 'function') spawnerReadyReset();
     closestEnemyChunkQueryCache.clear();
     // Worker caches stamped with gameTime: the previous tick's last part and

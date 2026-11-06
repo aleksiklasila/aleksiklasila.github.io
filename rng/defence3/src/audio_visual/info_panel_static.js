@@ -361,9 +361,11 @@ function _ipsBind(S) {
     });
     const later = () => setTimeout(updateInfoPanel, 50);
     const coords = p => infoCoordText(p.dataset.coords).split(';').filter(Boolean).map(c => { const [x, y] = c.split(','); return { gx: parseInt(x), gy: parseInt(y) }; });
-    const toggle = (name, action) => { const p = S.btn[name]; if (p) bindInstantPress(p, () => { const enabled = p.dataset.enabled === '1'; for (const c of coords(p)) queueAction({ action, gx: c.gx, gy: c.gy, enabled }); _ipsForget(p); later(); }); };
-    toggle('build', 'setBuildEnabled'); toggle('queue', 'setQueueEnabled'); toggle('stack', 'setAutoStack'); toggle('research', 'setAutoResearch'); toggle('auto', 'setAutoUpgrade');
-    if (S.btn.salvage) { const p = S.btn.salvage; bindInstantPress(p, () => { const marked = p.dataset.marked === '1'; for (const c of coords(p)) { queueAction({ action: 'setSalvage', gx: c.gx, gy: c.gy, marked: !marked }); if (typeof noteSalvageShown === 'function') noteSalvageShown(c.gx, c.gy, !marked); } _ipsForget(p); later(); }); }
+    // (A selection's flag: one command, its buildings' tile keys: main.js setToggleMany.)
+    const tileKeys = cs => { const k = []; for (const c of cs) if (c.gx >= 0 && c.gy >= 0 && c.gx < GRID_W && c.gy < GRID_H) k.push(c.gy * GRID_W + c.gx); k.sort((x, y) => x - y); return actionIdsEncode(k); };
+    const toggle = (name, flag) => { const p = S.btn[name]; if (p) bindInstantPress(p, () => { const enabled = p.dataset.enabled === '1'; queueAction({ action: 'setToggleMany', toggle: flag, enabled, tkz: tileKeys(coords(p)) }); _ipsForget(p); later(); }); };
+    toggle('build', 'build'); toggle('queue', 'queue'); toggle('stack', 'autoStack'); toggle('research', 'research'); toggle('auto', 'autoUpgrade');
+    if (S.btn.salvage) { const p = S.btn.salvage; bindInstantPress(p, () => { const marked = p.dataset.marked === '1', cs = coords(p); queueAction({ action: 'setToggleMany', toggle: 'salvage', enabled: !marked, tkz: tileKeys(cs) }); if (typeof noteSalvageShown === 'function') for (const c of cs) noteSalvageShown(c.gx, c.gy, !marked); _ipsForget(p); later(); }); }
     if (S.btn.kill) { const p = S.btn.kill; bindInstantPress(p, () => { const ids = infoPanelUnitIds(p.dataset.ids); if (ids.length) queueAction({ action: 'killUnit', unitIds: ids }); later(); }); }
     if (S.btn.hold) { const p = S.btn.hold; bindInstantPress(p, () => {
         const us = infoPanelUnitIds(p.dataset.ids).map(id => _infoPanelUnitById(id)).filter(u => u && !u.dead);

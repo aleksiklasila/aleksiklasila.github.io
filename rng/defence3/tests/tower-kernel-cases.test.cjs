@@ -37,7 +37,8 @@ const result = JSON.parse(i.eval(`JSON.stringify((()=>{
  for(let k=1;k<ACTION_MAX_TOWER_COORDS;k++)coords.push({gx:-1,gy:-1});
  coords.push({gx:c.gx,gy:c.gy});
  processActions([{action:'towerTarget',towerCoords:coords,target:{type:'unit',id:ub.id}}],0);
- if(c.preferredTargetSpec||coords[2].gx!==20.9)throw Error('tower target cap or packet mutation');
+ // (No count cap: the tower past 5000 bad pairs takes the order too.)
+ if(!c.preferredTargetSpec||c.preferredTargetSpec.id!==ub.id||coords[2].gx!==20.9)throw Error('tower target past the old cap, or packet mutation');
  c.currentStats={...c.currentStats,damage:777};
  const brainBits=t=>(_ST.brain[t._stT]>>>24)&3;
  const bits0=[brainBits(a),brainBits(b),brainBits(c)];
@@ -52,7 +53,7 @@ const result = JSON.parse(i.eval(`JSON.stringify((()=>{
 })())`));
 console.log(JSON.stringify(result));
 assert.deepEqual(i.errors.map(String), []);
-assert.deepEqual(result.bits0, [1, 1, 2], 'preference and custom bits in the descriptors');
+assert.deepEqual(result.bits0, [1, 1, 3], 'preference and custom bits in the descriptors (c: custom, and preferred by the order past the old cap)');
 assert.ok(result.foeLoss > 0, 'the preferred structure is shot though units stand nearer');
 assert.ok(result.ubLoss > 0, 'the preferred unit is shot');
 assert.equal(result.maxDmg, 777, 'custom stats shoot with their damage');

@@ -123,7 +123,7 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
   '_resolveDeferredPathsByGroup','_runAdjacencyRecalculation','syncVisibilityCoverage','sampleGameStats','recalculateUnitEffectiveLevel','processGlobalSpawnerQueue',
   'navTick','navFieldsFlush','compactRemovedUnits','unitHitsResolve','statusPrepassRun','runQueuedOrders','visCoverHoldEnd','updateAllPlayerVisibility','unitEventsRun',
   'towersTick','_towerAcqKernels','projectilesAdvance','laserBeamsTick','spawnerStructuresTick','adjacencyLaneStep','unitRetirePrepare',
-  'updateVisibility','spatialIndexPrebuild','_upKeepSecond','ensureLaserConnections','healerCandidatesStep','pathRegionsWarm',
+  'updateVisibility','spatialIndexPrebuild','_upKeepSecond','ensureLaserConnections','healerCandidatesStep',
   'workerSearchTierStep','_wswBuild','flushPendingResourceStatRebuilds','resourceTick','researchDrainTick','shrineTick','recomputePlayerPopCaps','structRowsExpire',
   ...${JSON.stringify((process.env.SUBPHASES||'').split(',').filter(Boolean))}])) {
   let f;try{f=eval(name);}catch{continue;}if(typeof f!=='function')continue;

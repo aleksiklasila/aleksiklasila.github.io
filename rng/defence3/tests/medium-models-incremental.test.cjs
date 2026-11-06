@@ -24,6 +24,8 @@ c._detailScore = (x, z, size, flat, retained, minPixels) => ((Math.floor(x * 3) 
 c._structureDetailCandidates = () => [];
 // (The catalog entry's model height: renderer.js, loaded with it in the page.)
 vm.runInContext(read('src/audio_visual/renderer.js').match(/function _cmBaseHeight[\s\S]*?\r?\n}\r?\n/)[0], c);
+// (A remembered unit near the camera: its live detail; none here.)
+vm.runInContext('function _cmRememberedNear() { return false; }', c);
 let seed = 12345;
 const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 const TAU = Math.PI * 2;
@@ -56,7 +58,7 @@ function reference(C, F, mask) {
     const colors = C.colors.map(hexToRgb);
     for (const u of C.unitCandidates) {
         const s = u._s;
-        if (!(s >= 0) || want[s] || F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & 66560) !== 0) continue;
+        if (!(s >= 0) || want[s] || F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & 1024) !== 0) continue; // (remembered ones too: only the hidden are out)
         const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
         if (!C.fullVisibility && !(F.flags[s] & 65536) && F.owner[s] !== C.player && !(C.visibility[Math.floor(z)]?.[Math.floor(x)] > 0)) continue;
         const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / C.tile));
@@ -73,7 +75,7 @@ function reference(C, F, mask) {
         const f = F.facing[s], co = Math.cos(f), sn = Math.sin(f);
         d[0] = co * sx; d[1] = 0; d[2] = -sn * sx; d[3] = (F.px[s] - F.x[s]) / C.tile;
         d[4] = flying ? (F.id[s] * 1.7) % TAU : 0; d[5] = sy; d[6] = flying ? 1 : 0; d[7] = (F.py[s] - F.y[s]) / C.tile;
-        d[8] = sn * sx; d[9] = 0; d[10] = co * sx; d[11] = F.prate[s];
+        d[8] = sn * sx; d[9] = 0; d[10] = co * sx; d[11] = F.flags[s] & 65536 ? 0 : F.prate[s];
         d[12] = x; d[13] = .012 + (((F.id[s] * 1103515245) >>> 0) % 7) * .003 + (flying ? (style.isWorker ? .36 : .30) : 0); d[14] = z; d[15] = 1;
         const owner = colors[Math.max(0, Math.min(8, F.owner[s] + 1))], tint = hexToRgb(style.color);
         d[16] = owner[0]; d[17] = owner[1]; d[18] = owner[2]; d[19] = 1;

@@ -155,13 +155,15 @@ for (const [res, farmKey, unitKey] of [['energy', 'farm', 'collector'], ['astar'
     c.applyWorkerAssignTargets(group, 'mine', 4, 4, false);
     actions.length = 0;
     c.applyWorkerAssignTargets(group, 'farm', 5, 4, true);
-    assert.deepEqual(actions.map(a => a.targetType), ['mine', 'farm'], 'Ctrl-click retains each gather target type');
+    // (One command for the click: orderMany's groups.)
+    const groupsOf = () => actions.flatMap(a => a.action === 'orderMany' ? a.groups : [a]);
+    assert.deepEqual(groupsOf().map(a => a.targetType), ['mine', 'farm'], 'Ctrl-click retains each gather target type');
     const near = w(3, 5, 4), far = w(4, 30, 30);
     c.multiCollectorAssignTargets.length = 0;
     c.applyWorkerAssignTargets([far, near], 'mine', 29, 30, false);
     actions.length = 0;
     c.applyWorkerAssignTargets([far, near], 'farm', 5, 4, true);
-    assert.equal(JSON.stringify(actions.map(a => [a.targetType, a.unitIds])), JSON.stringify([['mine', [far.id]], ['farm', [near.id]]]), 'nearest workers take each target');
+    assert.equal(JSON.stringify(groupsOf().map(a => [a.targetType, a.unitIds])), JSON.stringify([['mine', [far.id]], ['farm', [near.id]]]), 'nearest workers take each target');
 }
 
 console.log('PASS: farm discovery, group orders, collection, mines and deterministic replay (worker kernel); Ctrl-click split.');

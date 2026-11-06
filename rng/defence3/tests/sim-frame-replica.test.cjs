@@ -21,7 +21,7 @@ const OTHERS = `(() => { const out = {};
     const S = e => [e.gx, e.gy, e.type || null, e.unitType || null, e.owner, Math.fround(Number(e.energy) || 0), e.level ?? null, e.effectiveLevel ?? null,
         !!e.underConstruction, !!e.isUpgrading, !!e.isResearching, !!e.markedForSalvage, Array.isArray(e.spawnQueue) ? e.spawnQueue.length : 0, Math.fround(Number(e.spawnTimer) || 0),
         e.gold ?? null, e.astar ?? null, e.value ?? null, Array.isArray(e.connectedLasers) ? e.connectedLasers.length : 0, e._structView ? e._labelText() : getLevelLabelText(e)];
-    for (const [name, list] of [['t', towers], ['b', barracks], ['s', collectorSpawners], ['g', goldMines], ['a', astarMines], ['d', droppedItems]]) out[name] = JSON.stringify(list.map(S));
+    for (const [name, list] of [['t', towers], ['b', barracks], ['s', collectorSpawners], ['g', goldMines], ['a', astarMines]]) out[name] = JSON.stringify(list.map(S));
     out.f = JSON.stringify(getCellItemsRowMajor().filter(e => !(e instanceof Tower) && !(e instanceof Barrack) && !isSpawnerEntity(e)).map(S));
     out.P = JSON.stringify(players.map(p => [p.energy, p.astar, p.popCount, JSON.stringify(p.researchLevels), (p.researchQueue || []).length]));
     // (The worker's shots are its pool, the page's views of its table: compared as sets.)
@@ -67,7 +67,7 @@ const OTHERS = `(() => { const out = {};
             }
             const po = JSON.parse(P.eval(OTHERS)), wo = JSON.parse(W.eval(OTHERS));
             const keys = [...new Set([...Object.keys(po), ...Object.keys(wo)])].filter(k => po[k] !== wo[k]);
-            if (keys.length) { failure = `tick ${tick}: page differs from the worker in ${keys.slice(0, 8).join(', ')}: ` + keys.slice(0, 2).map(k => String(po[k]).slice(0, 300) + ' vs ' + String(wo[k]).slice(0, 300)).join(' ;; '); return; }
+            if (keys.length) { failure = `tick ${tick}: page differs from the worker in ${keys.slice(0, 8).join(', ')}: ` + keys.slice(0, 2).map(k => { let A, B; try { A = JSON.parse(po[k]); B = JSON.parse(wo[k]); } catch (e) { return String(po[k]).slice(0, 300) + ' vs ' + String(wo[k]).slice(0, 300); } if (!Array.isArray(A)) return String(po[k]).slice(0, 300) + ' vs ' + String(wo[k]).slice(0, 300); const i = A.findIndex((x, j) => JSON.stringify(x) !== JSON.stringify(B[j])); return k + '[' + i + '/' + A.length + '/' + B.length + '] ' + JSON.stringify(A[i]) + ' vs ' + JSON.stringify(B[i]); }).join(' ;; '); return; }
             unitsSeen = Math.max(unitsSeen, JSON.parse(pu).length);
             checked++;
         } catch (err) { failure = `tick ${tick}: ${err && err.stack || err}`; }

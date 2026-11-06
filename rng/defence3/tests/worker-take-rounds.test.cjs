@@ -1,11 +1,9 @@
 'use strict';
 // Ten construction sites and ten idle builders on one spot (all wanting the
-// same nearest site first): the worker kernel's parallel takes (wai.rs
-// k_wai_apply; worker.js _waiParallel) give each builder of a take a
-// different site in the same step: one that lost its first site to a lower
-// id takes its next in another round. Checked against the serial pass
-// (WAI_PARALLEL = false): its first take gives as many builders a site;
-// rounds were needed; as many sites held at the last take.
+// same nearest site first): the takes (worker.js waiTake: one native pass,
+// wai.rs take_one, in the search's order) give each builder of a take a
+// different site in the same step. The same with the decisions' parallel
+// pass off (WAI_PARALLEL = false): takes never use it.
 //   node tests/worker-take-rounds.test.cjs
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
@@ -64,9 +62,8 @@ async function run(parallel) {
     console.log('serial  ', JSON.stringify(ser));
     assert.ok(par.setup.sites === 10 && par.setup.builders === 10, 'ten sites and builders');
     assert.ok(par.first, 'a take gave sites');
-    assert.ok(par.first[1] >= ser.first[1], 'the first take gives at least as many builders a site as the serial pass');
-    assert.ok(par.rounds > 1, 'contended sites took more than one round');
-    assert.ok(par.end >= ser.end, 'as many sites held at the takes as the serial pass (sites finish meanwhile)');
-    console.log('ok: contended takes matched in rounds within a step');
+    assert.ok(par.first[1] >= 5, 'the first take gives builders distinct sites at once: ' + par.first[1]);
+    assert.deepEqual([par.first, par.end], [ser.first, ser.end], 'the same takes either way');
+    console.log('ok: contended takes give distinct sites in one pass');
     process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });

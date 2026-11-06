@@ -34,7 +34,6 @@ mod tower;
 mod worker_brain;
 mod proj;
 mod ord;
-mod reg;
 mod laser;
 mod vis;
 mod tfx;
@@ -1109,6 +1108,50 @@ pub unsafe extern "C" fn sep_pairs(
 // =====================================================================
 
 const NAV_UNREACHED: u16 = 0xFFFF;
+
+/// sim_unit_state.js simPathRelease: unit q's path handle (pth: 0 none, 1
+/// empty, else its block + 2) let go: its block's refs one less, back onto
+/// its class's free list (free) at none, its gen one more.
+#[inline(always)]
+pub unsafe fn path_release(pth: *mut i32, q: usize, arena: *mut i32, free: *mut i32) {
+    if pth.is_null() { return; }
+    let h = *pth.add(q);
+    *pth.add(q) = 0;
+    if h < 2 || arena.is_null() || free.is_null() { return; }
+    let b = (h - 2) as usize;
+    let refs = *arena.add(b + 1) - 1;
+    if refs > 0 { *arena.add(b + 1) = refs; return; }
+    let cls = (*arena.add(b) as u32 >> 24) as usize;
+    *arena.add(b + 1) = *free.add(cls);
+    *free.add(cls) = b as i32;
+    *arena.add(b + 2) += 1;
+}
+
+/// Whether cluster `cl` (C x C tiles from x0, y0) is the same in two
+/// navigation builds: its tiles' walls and step costs (costs 0: none) and its
+/// nodes (nodeBase ranges, nodeTile): its nodes' local fields (nav_field over
+/// the cluster's box, a function of those alone) are then the other build's.
+#[no_mangle]
+pub unsafe extern "C" fn nav_cluster_same(nw: u32, ow: u32, nc: u32, oc: u32, nnb: u32, nnt: u32, onb: u32, ont: u32, cl: i32, w: i32, h: i32, c: i32, x0: i32, y0: i32) -> i32 {
+    let (nw, ow) = (waddr(nw) as *const u8, waddr(ow) as *const u8);
+    let (nnb, nnt, onb, ont) = (waddr(nnb) as *const i32, waddr(nnt) as *const i32, waddr(onb) as *const i32, waddr(ont) as *const i32);
+    let cl = cl.max(0);
+    let (n0, n1, o0, o1) = (*nnb.add(cl as usize), *nnb.add(cl as usize + 1), *onb.add(cl as usize), *onb.add(cl as usize + 1));
+    if n1 - n0 != o1 - o0 { return 0; }
+    for i in 0..(n1 - n0) { if *nnt.add((n0 + i) as usize) != *ont.add((o0 + i) as usize) { return 0; } }
+    let (x1, y1) = ((x0 + c).min(w), (y0 + c).min(h));
+    let (ncs, ocs) = (if nc == 0 { core::ptr::null() } else { waddr(nc) as *const u8 }, if oc == 0 { core::ptr::null() } else { waddr(oc) as *const u8 });
+    if ncs.is_null() != ocs.is_null() { return 0; }
+    for y in y0..y1 {
+        let r = (y * w) as usize;
+        for x in x0..x1 {
+            let t = r + x as usize;
+            if *nw.add(t) != *ow.add(t) { return 0; }
+            if !ncs.is_null() && *ncs.add(t) != *ocs.add(t) { return 0; }
+        }
+    }
+    1
+}
 
 /// One destination field: the costs to reach `dest` from every tile of the
 /// box (bx, by, bw x bh) into pool[off..off + bw * bh] (stepping onto a tile

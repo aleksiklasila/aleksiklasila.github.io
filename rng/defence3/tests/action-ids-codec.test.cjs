@@ -1,7 +1,7 @@
 // Orders' unit ids on the wire (main.js actionIdsEncode / actionIdsDecode):
 // the same ids in the same order after a round trip, compact for big
 // armies, and malformed or oversized input (another player's machine)
-// decodes to a bounded list without throwing.
+// decodes to a list within the codec's bound without throwing.
 //   node tests/action-ids-codec.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -44,7 +44,8 @@ const r = JSON.parse(a.eval(`JSON.stringify((() => {
 for (const c of r.out) assert.ok(c.same, 'round trip of ' + c.n + ' ids');
 assert.deepEqual(r.rejected, [null, null, null, null], 'only plain non-negative integer ids are encoded');
 for (const n of r.hostileOut) assert.equal(typeof n, 'number', 'hostile input decodes without throwing: ' + n);
-assert.ok(r.hostileOut.every(n => n <= 20000), 'decoded lists are bounded');
+// (No cap but the codec's own: ACTION_MAX_UNIT_IDS.)
+assert.ok(r.hostileOut.every(n => Number.isFinite(n) && n <= a.eval('ACTION_MAX_UNIT_IDS')), 'decoded lists stay within the codec bound');
 assert.ok(r.bigRun <= 100, 'a huge run is cut at the bound');
 assert.ok(r.sanitized && r.noUidz, 'a move order keeps its ids compact (not a sent field) for the queue');
 assert.ok(r.hold, 'another action gets its list: each unit once, ids of no unit dropped');

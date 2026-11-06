@@ -9,7 +9,7 @@ const result=inst.eval(`(()=>{
  for(let i=0;i<128;i++) { const u=new Unit('norm',0,(20+i%8)*TILE,(20+(i>>3))*TILE);units.push(u);updateUnitSpatial(u);group.push(u); }
  gameTick();gameTick();
  // (Their effective levels first settled by the area counts: a refresh later changes no row.)
- for(const v of group)_effStatsFullUnit(v);
+ effStatsAllUnits(new Set([0]),new Set());
  const u=group[0],c=u._us,s=u._si,r=c.statRow[s];
  if(r<0)throw Error('missing shared row');
  const before=_effHot[r*EFF_HOT_WIDTH], rows=_effRowN;
@@ -24,9 +24,9 @@ const result=inst.eval(`(()=>{
  finally {unitsSetView(null);_simUnitState.owners=owners;}
  const after=_effHot[r*EFF_HOT_WIDTH],pc=u.preComputed.speed;
  const sameHandle=c.statRow[s]===r,cacheRemoved=!Object.hasOwn(c,'mvSpd');
- for(const v of group)_effStatsFullUnit(v);
+ effStatsAllUnits(new Set([0]),new Set());
  c.mvOn[s]=1;c.mvFlags[s]=0;
- applyUnitEffectiveScaling(u,u.effectiveLevel);
+ { const L=simHeapArray(Int32Array,1); L[0]=s; _effStatsApply(L,1); simHeapFree(L); }
  const unchangedMovePreserved=c.mvOn[s]===1;
  return {before,after,pc,sameHandle,cacheRemoved,unchangedMovePreserved,stableAfterRefresh:c.statRow[s]===r,rowsBefore:rows,rowsAfter:_effRowN};
 })()`);

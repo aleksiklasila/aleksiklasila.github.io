@@ -64,7 +64,7 @@ const result=inst.eval(`(() => {
     const liveBefore = units.filter(u => !u.dead).length;
     simUnitStateCompact(true);
     out.audit6 = simUnitSlabAudit();
-    out.consistent = units.every(u => u.dead || (u._us && S.owners[u._si] === u) || (_simUnitState.owners[u._si] === u));
+    out.consistent = units.every(u => u.dead || (u._us && S.owners.at(u._si) === u) || (_simUnitState.owners.at(u._si) === u));
     out.liveSame = units.filter(u => !u.dead).length === liveBefore;
     return out;
 })()`);

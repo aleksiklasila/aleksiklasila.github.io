@@ -3320,8 +3320,6 @@ function resetWorldState() {
     particles = [];
     if (typeof clearCombatFx === 'function') clearCombatFx();
     collectors = [];
-    droppedItems = [];
-    droppedItemGrid = [];
     goldMines = [];
     astarMines = [];
     if (typeof _sTablesReset === 'function') _sTablesReset();
@@ -3413,7 +3411,6 @@ function resetWorldState() {
     pendingPathResolveCursor = 0;
     if (typeof resetPendingPathUnits === 'function') resetPendingPathUnits();
     if (typeof resetOrderQueue === 'function') resetOrderQueue();
-    if (typeof resetGroupRoutes === 'function') resetGroupRoutes();
     if (typeof navReset === 'function') navReset();
     if (typeof resetWorkerWorkVersions === 'function') resetWorkerWorkVersions();
     if (typeof resetNewUnitsForStats === 'function') resetNewUnitsForStats();

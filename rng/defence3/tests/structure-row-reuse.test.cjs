@@ -24,7 +24,7 @@ const out = JSON.parse(i.eval(`(() => {
     const second = place(), n2 = T.n, stillKept = kept._sr === keptRow && kept.gx === view.gx;
     for (const b of second) destroyBuilding(b);
     // (Past the keep: the rows expire and the next placement takes them.)
-    gameTime += STRUCT_ROW_KEEP_TICKS; structRowsExpire();
+    gameTime += STRUCT_ROW_KEEP_TICKS + STRUCT_ROW_STAGGER_TICKS; structRowsExpire();
     const gone = { sr: kept._sr, energy: kept.energy, stT: kept._stT, gxUnset: kept.gx === undefined }, goneKeys = Object.keys(kept).filter(k => k.startsWith('_s'));
     kept.energy = 5;
     const third = place(), n3 = T.n;

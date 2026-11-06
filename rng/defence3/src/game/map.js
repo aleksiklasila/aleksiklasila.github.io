@@ -5,11 +5,10 @@
 // ============================================================
 // Cells: per-tile columns (wasm heap where it is up: kernels read them), the
 // grid's cells views over them (grid[y][x].type, .owner, .areaId read and
-// write the columns; .item comes from the structure table on a tabled tile,
-// .droppedItem is the view's own). (MAIN_THREAD_SERIAL_PLAN.md, world model.)
+// write the columns; .item comes from the structure table on a tabled tile). (MAIN_THREAD_SERIAL_PLAN.md, world model.)
 let cellType = new Uint8Array(0), cellOwner = new Int8Array(0), cellArea = new Int32Array(0);
 class GridCell {
-    constructor(t) { this.t = t; this._item = null; this.droppedItem = null; }
+    constructor(t) { this.t = t; this._item = null; }
     // Its item: a tabled tile's from the structure table (the structure there
     // when it is not a tower or a mine: world model W3); else its own field
     // (the page's views; a cleared tile).
@@ -26,7 +25,7 @@ class GridCell {
     get areaId() { return cellArea[this.t]; }
     set areaId(v) { cellArea[this.t] = v; }
     // (A plain record of its values: copies, snapshots of a cell.)
-    toJSON() { return { type: this.type, item: this.item, owner: this.owner, areaId: this.areaId, droppedItem: this.droppedItem }; }
+    toJSON() { return { type: this.type, item: this.item, owner: this.owner, areaId: this.areaId }; }
 }
 function _cellColumn(T, n, name) {
     const heap = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null;
@@ -37,7 +36,6 @@ function _cellColumn(T, n, name) {
 function initGrid() {
     grid = [];
     areaIdGrid = [];
-    initDroppedItemGrid();
     workerReservedTiles = workerReservedTable();
     const n = GRID_W * GRID_H;
     if (typeof simHeapHas === 'function') for (const a of [cellType, cellOwner, cellArea]) if (a.length && simHeapHas(a)) simHeapFree(a);

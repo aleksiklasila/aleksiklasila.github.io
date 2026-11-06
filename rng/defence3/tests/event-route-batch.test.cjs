@@ -31,7 +31,6 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    u.commandState=j%3===0?CMD_ATTACK_MOVING:CMD_MOVING;u.pathIsFallbackAstar=j%3===0?true:undefined;
    u._pendingPathTarget=j%4===0?{gx:rnd(GRID_W),gy:rnd(GRID_H),cmd:u.commandState,src:'player_commands',ver:3,at:7,sub:2}:null;
    u._astarBudgetRetryTick=j%3===0?75:undefined;u._routeKey=NAV_ROUTE_KEY;
-   if(j%5===0)C.jr__path.clear(u._si); // a native-written route with no JS view
    if(j%17===0){const t=_nav[profile].partL.findIndex(v=>v===65535);if(t>=0){C.x[u._si]=(t%GRID_W)*TILE*8+128;C.y[u._si]=Math.floor(t/GRID_W)*TILE*8+128;}}
    E[j]=u._si*8+2;
   }
@@ -43,12 +42,11 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    if(key!==C.nvPK[s])throw Error('prepared key '+j);
    const profile=navProfileOf(u),tile=Math.floor(u.y/TILE)*GRID_W+Math.floor(u.x/TILE);
    if(comp===-2)walls++;else if(comp!==_navUnitComp(profile,tile))throw Error('prepared component '+j);
-   const missingView=!C.jr__path.get(s);
+   const missingView=false;
    const initial={path:u.path,index:u.pathIndex,pending:u._pendingPathTarget&&{...u._pendingPathTarget},fallback:u.pathIsFallbackAstar,
     retry:u._astarBudgetRetryTick,key:u._routeKey,on:C.mvOn[s],cd:C.mvCD[s],h:C.hObj[s]};
    const reset=()=>{u.path=initial.path;u.pathIndex=initial.index;u._pendingPathTarget=initial.pending&&{...initial.pending};u.pathIsFallbackAstar=initial.fallback;
     u._astarBudgetRetryTick=initial.retry;u._routeKey=initial.key;C.mvOn[s]=initial.on;C.mvCD[s]=initial.cd;C.hObj[s]=initial.h;
-    if(missingView)C.jr__path.clear(s);
     _navSubReset();C.ppDue.fill(-1);_ppHeads().fill(-1);_ppCount=0;};
    reset();_unitNoWay(u);const expected=JSON.stringify(capture(u));
    reset();const used=_unitNoWayCommit(u,C,s,key,comp,_simHTerm(_UH_PFA,true));

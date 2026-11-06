@@ -160,156 +160,6 @@ unsafe fn find(par: *mut i32, mut a: i32) -> i32 {
     a
 }
 
-/// The path regions' labels follow the listed tiles' cell types
-/// (pathfinding.js pathRegionsTileChanged, for each kept label set in
-/// turn): an opened tile joins the regions around it (a new region when
-/// none), a closed one is left out, and when its open 4-neighbours may have
-/// come apart (more than one run of them in its ring) and no way around it
-/// within the window joins them, the set is marked to be made again.
-/// Arrays: [0] list (t * 2 + kind; kind 1 skipped), [1] cell types, [2]
-/// ?the regions' wall copy, [3] the sets (4 words each: labels, parents
-/// (encoded addresses), parents' length, next region), [4] out per set
-/// (next, dirty, canon), [5] stamps (a tile each), [6] queue, [7] hdr ([0]
-/// the stamps' counter, kept).
-/// P: [0] n, [1] W, [2] H, [3] TYPE_WALL, [4] sets, [5] window radius.
-#[no_mangle]
-pub unsafe extern "C" fn k_reg_tiles(a: u32, _chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (list, ctype, rwall, sets, out, stamp, q, hdr) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
-    let n = k.i(0).max(0) as usize;
-    let (w, h) = (k.i(1).max(0), k.i(2).max(0));
-    let twall = k.i(3) as u8;
-    let ns = k.i(4).max(0) as usize;
-    let rad = k.i(5).max(0);
-    let nt = w * h;
-    let mut now = g(hdr, 0);
-    for e in 0..ns {
-        s(out, e * 3, g(sets, e * 4 + 3));
-        s(out, e * 3 + 1, 0);
-        s(out, e * 3 + 2, 0);
-    }
-    const RING: [i32; 16] = [0, -1, 1, -1, 1, 0, 1, 1, 0, 1, -1, 1, -1, 0, -1, -1];
-    for i in 0..n {
-        let en = g(list, i);
-        if en < 0 || en & 1 != 0 {
-            continue;
-        }
-        let t = en >> 1;
-        if t >= nt || w == 0 {
-            continue;
-        }
-        let gy = idiv(t, w);
-        let gx = t - gy * w;
-        let open = g(ctype, t as usize) != twall;
-        if !rwall.is_null() {
-            s(rwall, t as usize, if open { 0 } else { 1 });
-        }
-        for e in 0..ns {
-            if g(out, e * 3 + 1) != 0 {
-                continue;
-            }
-            let lab = waddr(g(sets, e * 4) as u32) as *mut i32;
-            let par = waddr(g(sets, e * 4 + 1) as u32) as *mut i32;
-            let plen = g(sets, e * 4 + 2);
-            if open == (g(lab, t as usize) >= 0) {
-                continue;
-            }
-            if open {
-                let mut root = -1i32;
-                for d in 0..4 {
-                    let kk = match d { 0 => if gx > 0 { t - 1 } else { -1 }, 1 => if gx < w - 1 { t + 1 } else { -1 }, 2 => if gy > 0 { t - w } else { -1 }, _ => if gy < h - 1 { t + w } else { -1 } };
-                    if kk < 0 || g(lab, kk as usize) < 0 {
-                        continue;
-                    }
-                    let r = find(par, g(lab, kk as usize));
-                    if root < 0 {
-                        root = r;
-                    } else if r != root {
-                        if r < root { s(par, root as usize, r); root = r; } else { s(par, r as usize, root); }
-                        s(out, e * 3 + 2, 1);
-                    }
-                }
-                if root < 0 {
-                    root = g(out, e * 3);
-                    if root >= plen {
-                        // (No room for a new region: made again.)
-                        s(out, e * 3 + 1, 1);
-                        continue;
-                    }
-                    s(out, e * 3, root + 1);
-                    s(par, root as usize, root);
-                }
-                s(lab, t as usize, root);
-            } else {
-                s(lab, t as usize, -1);
-                let (mut n4, mut first_closed) = (0, -1i32);
-                let mut ring = [0u8; 8];
-                for r in 0..8 {
-                    let (x, y) = (gx + RING[2 * r], gy + RING[2 * r + 1]);
-                    let o = x >= 0 && y >= 0 && x < w && y < h && g(lab, (y * w + x) as usize) >= 0;
-                    ring[r] = o as u8;
-                    if o && r & 1 == 0 { n4 += 1; }
-                    if !o && first_closed < 0 { first_closed = r as i32; }
-                }
-                if n4 <= 1 || first_closed < 0 {
-                    continue;
-                }
-                let (mut runs, mut has4) = (0, false);
-                for kk in 1..=8 {
-                    let r = ((first_closed + kk) & 7) as usize;
-                    if ring[r] != 0 { if r & 1 == 0 { has4 = true; } } else { if has4 { runs += 1; } has4 = false; }
-                }
-                if runs > 1 {
-                    // (A breadth-first search from one open neighbour, in the window, until it meets the others.)
-                    now += 1;
-                    if now >= 0x7fff_ffff {
-                        for z in 0..nt as usize { s(stamp, z, 0); }
-                        now = 1;
-                    }
-                    let (x0, y0, x1, y1) = ((gx - rad).max(0), (gy - rad).max(0), (gx + rad).min(w - 1), (gy + rad).min(h - 1));
-                    let nb = [if gx > 0 { t - 1 } else { -1 }, if gx < w - 1 { t + 1 } else { -1 }, if gy > 0 { t - w } else { -1 }, if gy < h - 1 { t + w } else { -1 }];
-                    let (mut want, mut start) = (0, -1i32);
-                    for &kk in nb.iter() {
-                        if kk >= 0 && g(lab, kk as usize) >= 0 {
-                            if start < 0 { start = kk; } else { s(stamp, kk as usize, -now); want += 1; }
-                        }
-                    }
-                    let mut joined = start < 0 || want == 0;
-                    if !joined {
-                        let (mut head, mut tail) = (0usize, 0usize);
-                        s(stamp, start as usize, now);
-                        s(q, tail, start);
-                        tail += 1;
-                        'bfs: while head < tail {
-                            let kk = g(q, head);
-                            head += 1;
-                            let y = idiv(kk, w);
-                            let x = kk - y * w;
-                            for d in 0..4 {
-                                let (nx, ny) = match d { 0 => (x - 1, y), 1 => (x + 1, y), 2 => (x, y - 1), _ => (x, y + 1) };
-                                if nx < x0 || nx > x1 || ny < y0 || ny > y1 { continue; }
-                                let m = (ny * w + nx) as usize;
-                                let sm = g(stamp, m);
-                                if sm == now || g(lab, m) < 0 { continue; }
-                                if sm == -now {
-                                    want -= 1;
-                                    if want == 0 { joined = true; break 'bfs; }
-                                }
-                                s(stamp, m, now);
-                                s(q, tail, m as i32);
-                                tail += 1;
-                            }
-                        }
-                    }
-                    if !joined {
-                        s(out, e * 3 + 1, 1);
-                    }
-                }
-            }
-        }
-    }
-    s(hdr, 0, now);
-}
 
 /// The units standing on tiles that just became walls (unit.js
 /// simTileChangesFlush; forEachUnitInRange's candidates of a 1.5 tile range
@@ -383,3 +233,322 @@ pub unsafe extern "C" fn k_wall_units(a: u32, _chunk: i32) {
     }
     s(hdr, 0, no as i32);
 }
+
+/// The tiles holding a tabled structure or mine (st.ctab not 0), in tile
+/// order, into out (the occupied tiles: data_state.js _activeTileEntities'
+/// iteration), at most P[1] of them; the count at cnt[0]. P: [0] tiles, [1]
+/// room.
+#[no_mangle]
+pub unsafe extern "C" fn k_tile_occupied(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ctab, out, cnt) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<i32>(2));
+    let (n, room) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize);
+    let mut m = 0usize;
+    let mut t = 0usize;
+    // (Sixteen tiles a compare: most are empty.)
+    while t + 16 <= n {
+        let mut bits = !(i8x16_bitmask(i8x16_eq(v128_load(ctab.add(t) as *const v128), i8x16_splat(0))) as u32) & 0xffff;
+        while bits != 0 { let u = t + bits.trailing_zeros() as usize; bits &= bits - 1; if m < room { s(out, m, u as i32); m += 1; } }
+        t += 16;
+    }
+    while t < n { if g(ctab, t) != 0 && m < room { s(out, m, t as i32); m += 1; } t += 1; }
+    s(cnt, 0, m as i32);
+}
+
+/// unit.js findNearestWalkable: the tile (P[0], P[1]) if the unit may stand
+/// there, else the nearest ring around it holding such tiles and in it the
+/// one nearest (P[2], P[3]) (NaN: the ring's first; ties: smaller y, then
+/// smaller x), the ring's order its top and bottom rows by x, then its sides
+/// by y; none: the tile clamped to the map. out [8] (x, y). Where a unit may
+/// stand: the map ([0] mv.wall, or the builders' class walls [1]) open, or an
+/// active mine (st.code [2] 0x66 / 0x77 with st.val [3] > 0) for a collector
+/// (P[8]), or a built (st.uc [4] 0) live cloud tower (code 0x22, its type
+/// (st.brain [6] low word - 1) a cloud in [7]) of its owner (st.own [5]; P[7]
+/// < 0 any owner); flying (P[6] 2) anywhere; no unit (P[6] 0) the map's
+/// walls only. P: [4] W, [5] H.
+#[no_mangle]
+pub unsafe extern "C" fn k_nearest_walk(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ground, cwall, code, val, uc, own, brain, cloud, out) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<f64>(3), k.p::<u8>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8));
+    if out.is_null() { return; }
+    let (gx, gy, fx, fy) = (k.i(0), k.i(1), k.f(2), k.f(3));
+    let (w, h, mode, owner, coll) = (k.i(4).max(1), k.i(5).max(1), k.i(6), k.i(7), k.i(8) != 0);
+    let walls = if cwall.is_null() { ground } else { cwall };
+    let nty = k.i(9).max(0);
+    let ok = |x: i32, y: i32| -> bool {
+        if x < 0 || y < 0 || x >= w || y >= h { return false; }
+        if mode == 2 { return true; }
+        let t = (y * w + x) as usize;
+        if walls.is_null() || g(walls, t) == 0 { return true; }
+        // (No unit: the map's walls only.)
+        if mode == 0 || code.is_null() { return false; }
+        let c = g(code, t);
+        if coll && (c == 0x66 || c == 0x77) && !val.is_null() && g(val, t) > 0.0 { return true; }
+        if c == 0x22 && !cloud.is_null() && !brain.is_null() && (uc.is_null() || g(uc, t) == 0) {
+            let ty = (g(brain, t) & 65535) - 1;
+            if ty >= 0 && ty < nty && g(cloud, ty as usize) != 0 && (owner < 0 || own.is_null() || g(own, t) == owner) { return true; }
+        }
+        false
+    };
+    if ok(gx, gy) { s(out, 0, gx); s(out, 1, gy); return; }
+    let has_from = fx == fx && fy == fy;
+    let (fxi, fyi) = (if has_from { fx as i64 } else { 0 }, if has_from { fy as i64 } else { 0 });
+    let maxr = w.max(h);
+    let mut r = 1;
+    while r <= maxr {
+        let (mut bx, mut by, mut bd, mut found) = (0i32, 0i32, 0i64, false);
+        let mut take = |x: i32, y: i32| {
+            if !ok(x, y) { return; }
+            if !has_from { if !found { bx = x; by = y; found = true; } return; }
+            let (dx, dy) = (x as i64 - fxi, y as i64 - fyi);
+            let d = dx * dx + dy * dy;
+            if !found || d < bd || (d == bd && (y < by || (y == by && x < bx))) { bx = x; by = y; bd = d; found = true; }
+        };
+        let mut x = gx - r;
+        while x <= gx + r { take(x, gy - r); take(x, gy + r); x += 1; }
+        let mut y = gy - r + 1;
+        while y <= gy + r - 1 { take(gx - r, y); take(gx + r, y); y += 1; }
+        if found { s(out, 0, bx); s(out, 1, by); return; }
+        r += 1;
+    }
+    s(out, 0, gx.max(0).min(w - 1)); s(out, 1, gy.max(0).min(h - 1));
+}
+
+/// unit.js _simMoveWalls: the ground walls (mv.wall [1]) from the cell types
+/// ([0] map.js cellType), 1 where TYPE_WALL (P[1]); P[0] tiles.
+#[no_mangle]
+pub unsafe extern "C" fn k_walls_from_types(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ct, wall) = (k.p::<u8>(0), k.p::<u8>(1));
+    if ct.is_null() || wall.is_null() { return; }
+    let (n, tw) = (k.i(0).max(0) as usize, k.i(1) as u8);
+    let mut t = 0usize;
+    let (sp, one) = (i8x16_splat(tw as i8), i8x16_splat(1));
+    while t + 16 <= n {
+        let v = v128_load(ct.add(t) as *const v128);
+        v128_store(wall.add(t) as *mut v128, v128_and(i8x16_eq(v, sp), one));
+        t += 16;
+    }
+    while t < n { s(wall, t, if g(ct, t) == tw { 1 } else { 0 }); t += 1; }
+}
+
+/// renderer.js _visCoverRows: a player's visibility rows ([2] f32 a tile)
+/// from its cover ([1] i32 an area): P[2] (the light) where the tile's area
+/// ([0] map.js cellArea) is covered, else 0. P: [0] tiles, [1] areas.
+#[no_mangle]
+pub unsafe extern "C" fn k_vis_paint(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ca, cover, out) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<f32>(2));
+    if ca.is_null() || cover.is_null() || out.is_null() { return; }
+    let (n, na, light) = (k.i(0).max(0) as usize, k.i(1), k.f(2) as f32);
+    for t in 0..n {
+        let ar = g(ca, t);
+        s(out, t, if ar >= 0 && ar < na && g(cover, ar as usize) > 0 { light } else { 0.0 });
+    }
+}
+
+/// unit.js _simMoveStructs: the movement kernel's structure tables from the
+/// tile table (st.code [0], st.own [1], cell owners [2] (map.js cellOwner),
+/// st.brain [3]; per stationary type [4]: 1 a floor trap, 8 a cloud tower):
+/// the code (mv.struct [5]: -1 none or a mine; the owner, a floor item's or a
+/// building's that is its cell's owner too; -2 otherwise), the class
+/// (mv.scls [6]: 1 tower, 5 cloud tower, 3 barrack or spawner, 2 trap, 4
+/// another floor item, 0 none) and the counts of structures hostile to each
+/// player per spatial block (mv.stblk [7]: (block * players + p), every
+/// code but p's). P[6] 1: every tile (P[0] of them), tables cleared first;
+/// else the listed tiles ([8], P[0]) again. P: [1] W, [2] block columns, [3]
+/// players, [4] tiles a block side, [5] types, [7] tiles.
+#[no_mangle]
+pub unsafe extern "C" fn k_move_structs(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (code, own, cown, brain, tycls, mvs, scls, blk, list) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<i8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<i8>(5), k.p::<i8>(6), k.p::<i32>(7), k.p::<i32>(8));
+    if mvs.is_null() || scls.is_null() { return; }
+    let (n, w, bcols, np, bs, nty, full) = (k.i(0).max(0) as usize, k.i(1).max(1), k.i(2).max(1), k.i(3).max(0), k.i(4).max(1), k.i(5).max(0), k.i(6) != 0);
+    let cnt = |t: usize, c: i32, d: i32| {
+        if blk.is_null() || c == -1 { return; }
+        let (gx, gy) = (t as i32 % w, t as i32 / w);
+        let b = ((gy / bs) * bcols + gx / bs) * np;
+        for p in 0..np { if c != p { let i = (b + p) as usize; s(blk, i, g(blk, i) + d); } }
+    };
+    let eval = |t: usize| -> (i32, i32) {
+        if code.is_null() { return (-1, 0); }
+        let c = g(code, t);
+        if c == 0 || c == 0x66 || c == 0x77 { return (-1, 0); }
+        let o = if own.is_null() { -1 } else { g(own, t) };
+        let item = c == 0x33 || c == 0x44 || c == 0x55;
+        let co = if item && !cown.is_null() { g(cown, t) as i32 } else { o };
+        let cd = if o >= 0 && o < 127 && o == co { o } else { -2 };
+        let ty = if brain.is_null() { -1 } else { (g(brain, t) & 65535) - 1 };
+        let tc = if ty >= 0 && ty < nty && !tycls.is_null() { g(tycls, ty as usize) } else { 0 };
+        let cl = if c == 0x22 { if tc & 8 != 0 { 5 } else { 1 } } else if c == 0x33 || c == 0x44 { 3 } else if c == 0x55 { if tc & 1 != 0 { 2 } else { 4 } } else { 0 };
+        (cd, cl)
+    };
+    if full {
+        for t in 0..n { s(mvs, t, -1); s(scls, t, 0); }
+        for t in 0..n {
+            if code.is_null() || g(code, t) == 0 { continue; }
+            let (cd, cl) = eval(t);
+            s(mvs, t, cd as i8); s(scls, t, cl as i8);
+            cnt(t, cd, 1);
+        }
+        return;
+    }
+    if list.is_null() { return; }
+    for i in 0..n {
+        let t = g(list, i);
+        if t < 0 || t >= k.i(7) { continue; }
+        let t = t as usize;
+        let old = g(mvs, t) as i32;
+        let (cd, cl) = eval(t);
+        s(scls, t, cl as i8);
+        if old == cd { continue; }
+        cnt(t, old, -1);
+        cnt(t, cd, 1);
+        s(mvs, t, cd as i8);
+    }
+}
+
+/// worker.js _wswBuild: the work-site grid's reservation bits (wsw.resv [5],
+/// a tile each: bit i for load type i < 8) from the reservations (wk.resv
+/// [0]: P[0] slots, P[1] types a tile, a unit id each, 0 none) whose unit is
+/// alive (by the unit id index: [1] its table, P[2] its mask; [2] unit.id,
+/// [3] unit.live, [4] unit.dead).
+#[no_mangle]
+pub unsafe extern "C" fn k_wsw_resv(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (rs, tab, idc, live, dead, out) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<u8>(4), k.p::<u8>(5));
+    if rs.is_null() || tab.is_null() || out.is_null() { return; }
+    let (n, nt, mask) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2) as u32);
+    for slot in 0..n {
+        let id = g(rs, slot);
+        if id <= 0 { continue; }
+        let i = slot % nt;
+        if i >= 8 { continue; }
+        let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        let mut q = usize::MAX;
+        loop {
+            let sl = g(tab, h as usize);
+            if sl < 0 { break; }
+            if g(idc, sl as usize) == id && g(live, sl as usize) != 0 { q = sl as usize; break; }
+            h = (h + 1) & mask;
+        }
+        if q == usize::MAX || g(dead, q) != 0 { continue; }
+        let t = slot / nt;
+        s(out, t, g(out, t) | (1u8 << i));
+    }
+}
+
+/// renderer.js _visibilityKernelAreas: each area's tiles (vis.cells [2]),
+/// in tile order, from offsets (vis.cellOff [1], P[1] areas + 1) made by
+/// counting the tiles' areas ([0] map.js cellArea, P[0] tiles; -1 none).
+#[no_mangle]
+pub unsafe extern "C" fn k_area_cells(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ca, off, cells) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
+    if ca.is_null() || off.is_null() || cells.is_null() { return; }
+    let (n, na) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize);
+    for a in 0..=na { s(off, a, 0); }
+    for t in 0..n { let ar = g(ca, t); if ar >= 0 && (ar as usize) < na { let i = ar as usize + 1; s(off, i, g(off, i) + 1); } }
+    for a in 0..na { s(off, a + 1, g(off, a + 1) + g(off, a)); }
+    // (Filled from each area's start: its cursor the next one's offset, put back after.)
+    for t in 0..n {
+        let ar = g(ca, t);
+        if ar < 0 || (ar as usize) >= na { continue; }
+        let at = g(off, ar as usize);
+        s(cells, at as usize, t as i32);
+        s(off, ar as usize, at + 1);
+    }
+    let mut prev = 0;
+    for a in 0..na { let end = g(off, a); s(off, a, prev); prev = end; }
+    s(off, na, prev);
+}
+
+/// unit.js _spbSpatial (chunk.js updateUnitSpatial of a new unit) for a spawn
+/// batch's units (slots [0], P[0]; dead ones [19] skipped): its tile from its
+/// position ([1] x, [2] y, 1/8 px; P[3] a tile's eighths), clamped; its
+/// chunk key (the tile: chunks of one tile), area ([7] cellArea), owner [3],
+/// type (its upkeep type [4] by [5] U.upTy; none: P[9] norm's), separation
+/// layer by type [6]; into unit.spTile [8], sepKey [9], sepLayer [10],
+/// spArea [11], spOwner [12], spEpoch [13] (P[4]), spType [14]; disarmed
+/// (mvOn [15] 0); counted (unless P[15]: the caller queues them): per chunk
+/// and owner [16] (P[5] a chunk), per type block, owner and type [17] (P[6] a
+/// block; P[11] chunks a block side, P[12] blocks wide), per 8x8 block and
+/// owner [18] (P[13], P[14] blocks wide). P: [1] W, [2] H, [7] types, [8]
+/// players, [10] chunks wide.
+#[no_mangle]
+pub unsafe extern "C" fn k_spawn_spatial(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, xs, ys, own, upt, upty, lay, ca) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i8>(3), k.p::<i16>(4), k.p::<i8>(5), k.p::<u8>(6), k.p::<i32>(7));
+    let (sptile, sepkey, seplay, sparea, spown, spep, sptype, mvon) = (k.p::<i32>(8), k.p::<u32>(9), k.p::<u8>(10), k.p::<i32>(11), k.p::<i8>(12), k.p::<i32>(13), k.p::<i16>(14), k.p::<u8>(15));
+    let (cplx, tcnt, bcnt, dead) = (k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<u8>(19));
+    if list.is_null() || xs.is_null() || sptile.is_null() { return; }
+    let (n, w, h, tl, ep, sch, sbl, nt, np, norm, cw, tb, tbw, bs, bcols, defer) = (k.i(0).max(0) as usize, k.i(1).max(1), k.i(2).max(1), k.i(3).max(1), k.i(4), k.i(5), k.i(6), k.i(7), k.i(8), k.i(9), k.i(10).max(1), k.i(11).max(1), k.i(12), k.i(13).max(1), k.i(14), k.i(15) != 0);
+    for i in 0..n {
+        let q = g(list, i);
+        if q < 0 { continue; }
+        let q = q as usize;
+        if !dead.is_null() && g(dead, q) == 1 { continue; }
+        let gx = (g(xs, q).div_euclid(tl)).max(0).min(w - 1);
+        let gy = (g(ys, q).div_euclid(tl)).max(0).min(h - 1);
+        let tile = gy * w + gx;
+        let o = g(own, q) as i32;
+        let ut = if upt.is_null() { -1 } else { g(upt, q) as i32 };
+        let ty0 = if ut >= 0 && !upty.is_null() { g(upty, ut as usize) as i32 } else { -1 };
+        let ty = if ty0 >= 0 && ty0 < nt { ty0 } else { norm };
+        let ar = if ca.is_null() { -1 } else { g(ca, tile as usize) };
+        s(sptile, q, tile); s(sepkey, q, tile as u32);
+        if !seplay.is_null() { s(seplay, q, if ty >= 0 && ty < nt && !lay.is_null() { g(lay, ty as usize) } else { 0 }); }
+        s(sparea, q, if ar >= 0 { ar } else { -1 }); s(spown, q, o as i8); s(spep, q, ep); s(sptype, q, ty as i16);
+        if !mvon.is_null() { s(mvon, q, 0); }
+        if defer || !(o >= 0 && o < np) { continue; }
+        // (Chunks of one tile: the key is the tile, its chunk (gx, gy).)
+        let key = tile;
+        if !cplx.is_null() { let i2 = (key * sch + o) as usize; s(cplx, i2, g(cplx, i2) + 1); }
+        let (cx, cy) = (key % cw, key / cw);
+        if !tcnt.is_null() && ty >= 0 { let i2 = (((cy / tb) * tbw + cx / tb) * sbl + o * nt + ty) as usize; s(tcnt, i2, g(tcnt, i2) + 1); }
+        if !bcnt.is_null() { let i2 = (((cy / bs) * bcols + cx / bs) * np + o) as usize; s(bcnt, i2, g(bcnt, i2) + 1); }
+    }
+}
+
+/// sim_unit_state.js _simRelayoutIndex: after a relayout's moves, the unit
+/// index's entries (sep.eslot [1], P[0] of them) name the new slots (rl.fwd
+/// [0]: per slot its new one where rl.fst [7] is the step's stamp P[4]: never
+/// cleared; P[1] its length), and the
+/// by-changes listing by slot (ixd.k [2], ixd.id [3], ixd.own [4]; P[3] its
+/// slots, 0: none) moves by the pairs (rl.pairs [6]: from, to; P[2] of them):
+/// every source read first (scratch [5], 3 a pair), cleared, then written
+/// at its target (swaps and cycles alike).
+#[no_mangle]
+pub unsafe extern "C" fn k_ixd_relayout(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (fwd, es, dk, did, down, scr, pairs, fst) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i8>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
+    let stamp = k.i(4);
+    let (listed, nf, np, ds) = (k.i(0).max(0) as usize, k.i(1).max(0), k.i(2).max(0) as usize, k.i(3).max(0));
+    if fwd.is_null() || es.is_null() || fst.is_null() { return; }
+    for p in 0..listed {
+        let s = g(es, p);
+        if s >= 0 && s < nf && g(fst, s as usize) == stamp { let t = g(fwd, s as usize); if t >= 0 { s_(es, p, t); } }
+    }
+    if dk.is_null() || did.is_null() || down.is_null() || scr.is_null() || pairs.is_null() || ds == 0 { return; }
+    let ok = |x: i32| x >= 0 && x < ds;
+    for i in 0..np {
+        let f = g(pairs, 2 * i);
+        if !ok(f) { continue; }
+        let fu = f as usize;
+        s_(scr, 3 * i, g(dk, fu)); s_(scr, 3 * i + 1, g(did, fu)); s_(scr, 3 * i + 2, g(down, fu) as i32);
+    }
+    for i in 0..np {
+        let f = g(pairs, 2 * i);
+        if !ok(f) { continue; }
+        let fu = f as usize;
+        s_(dk, fu, -1); s_(did, fu, 0); s_(down, fu, 0);
+    }
+    for i in 0..np {
+        let (f, t) = (g(pairs, 2 * i), g(pairs, 2 * i + 1));
+        if !ok(f) || !ok(t) { continue; }
+        let tu = t as usize;
+        s_(dk, tu, g(scr, 3 * i)); s_(did, tu, g(scr, 3 * i + 1)); s_(down, tu, g(scr, 3 * i + 2) as i8);
+    }
+}
+#[inline(always)]
+unsafe fn s_<T>(p: *mut T, i: usize, v: T) { *p.add(i) = v; }

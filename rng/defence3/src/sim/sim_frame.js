@@ -48,9 +48,10 @@ const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['maxEnergy', 'cargo', 'tx', 'ty'],
     SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'], SIM_META_U8 = ['vision'];
 const SIM_META_SLOT_BYTES = Math.ceil((4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length + SIM_META_U8.length) / 4) * 4;
-function simMetaViews(buf, cap) {
-    const v = { buf, cap };
-    let o = 0;
+// (off: where in buf it starts, the table in the wasm heap.)
+function simMetaViews(buf, cap, off = 0) {
+    const v = { buf, cap, off };
+    let o = off;
     for (const k of SIM_META_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
     for (const k of SIM_META_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
     for (const k of SIM_META_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
@@ -340,7 +341,7 @@ function simFrameDetails() {
     let R = typeof _simPresentation !== 'undefined' && _simPresentation ? {owner:_simUnitState.owners} : _simRenderSlots, out = [];
     for (let j = 0; j + 1 < _simWatched.length; j += 2) {
         let id = _simWatched[j], slot = _simWatched[j + 1];
-        let u = slot >= 0 ? R.owner[slot] : null;
+        let u = slot >= 0 ? R.owner.at(slot) : null;
         if (!u || u.id !== id) { u = null; for (let c of units) if (c.id === id) { u = c; break; } }
         if (!u || u.dead) continue;
         let d = { id };

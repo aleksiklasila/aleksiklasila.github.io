@@ -18,7 +18,7 @@ function getLiveRenderView(canvas = false) {
         if (canvas && v.historyColumns) return _historyColumnsCanvasView(visibilityHistoryState);
         return v;
     }
-    return { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems, projectiles, particles, visibilityGrid };
+    return { grid, units, towers, barracks, collectorSpawners, goldMines, astarMines, projectiles, particles, visibilityGrid };
 }
 
 // The fog made by the presentation reader (sim_client.js 'fogBind'): its
@@ -125,7 +125,7 @@ const HISTORY_RENDER_FIELDS = ('id owner type unitType gx gy x y vx vy energy ma
 // items. Units are shown while seen only (the live list: the renderer draws
 // them from the frame's columns, hidden where nothing sees): remembering
 // 200k units each tick cost most of a frame.
-const HISTORY_LISTS = ['towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines', 'droppedItems'];
+const HISTORY_LISTS = ['towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines'];
 // (Structures change slowly: their memory is brought up to date this often.)
 const HISTORY_STRUCTURE_TICKS = 4;
 
@@ -162,7 +162,7 @@ function freezeHistoryRecord(record) {
 
 // Beside a simulation worker (the page's structures are its table,
 // sim_frame_world.js _pageTables.s): structures are remembered as columns
-// (historyStructureFrame); only dropped items as records here.
+// (historyStructureFrame).
 function _historyColumnsMode() {
     return typeof _pageTables !== 'undefined' && typeof _pageStructViews !== 'undefined'
         && typeof simClientActive === 'function' && simClientActive();
@@ -196,7 +196,7 @@ function updateLocalVisibilityHistory(h) {
     h._structAt = gameTime;
     const generation = h.generation = (h.generation || 0) + 1;
     const visible = (x, y) => !!(h.light[y] && h.light[y][x] > 0);
-    const live = { towers, barracks, collectorSpawners, goldMines, astarMines, droppedItems };
+    const live = { towers, barracks, collectorSpawners, goldMines, astarMines };
     for (const name of HISTORY_LISTS) _historyObserveList(h, name, live[name], generation, visible);
     const memory = h.memories.floorItems;
     const observeFloor = (e, gx, gy) => {
@@ -240,7 +240,7 @@ function _historyObserveList(h, name, list, generation, visible) {
     shown.length = 0;
     // Resource frame views share the structure schema and report energy=0;
     // that is not a health/death flag. Keep depleted mines visible too.
-    const hasHealth = name !== 'goldMines' && name !== 'astarMines' && name !== 'droppedItems';
+    const hasHealth = name !== 'goldMines' && name !== 'astarMines';
     for (const e of list) {
         if (!e || e.dead || (hasHealth && e.energy <= 0)) continue;
         const gx = Number.isFinite(e.x) ? Math.floor(e.x / TILE) : e.gx;
@@ -276,8 +276,8 @@ const HISTORY_GHOST_FLAG = 4194304;
 
 function _updateHistoryColumnsView(h) {
     if (!h.view) {
-        h.memories = { droppedItems: new Map() };
-        h.view = { historyColumns: true, grid: Array(GRID_H).fill(HISTORY_NO_CELLS_ROW), droppedItems: [] };
+        h.memories = {};
+        h.view = { historyColumns: true, grid: Array(GRID_H).fill(HISTORY_NO_CELLS_ROW) };
         for (const name of ['towers', 'barracks', 'collectorSpawners', 'goldMines', 'astarMines']) h.view[name] = HISTORY_NO_LIST;
     }
     const v = h.view;
@@ -285,11 +285,6 @@ function _updateHistoryColumnsView(h) {
     // (The live ones: effects are drawn only where something sees now,
     // effects3d.js _fxVisible.)
     v.projectiles = projectiles; v.particles = particles;
-    if (h.dropsTick === undefined || gameTime < h.dropsTick || gameTime - h.dropsTick >= HISTORY_STRUCTURE_TICKS) {
-        h.dropsTick = gameTime;
-        const generation = h.generation = (h.generation || 0) + 1;
-        _historyObserveList(h, 'droppedItems', droppedItems, generation, (x, y) => !!(h.light[y] && h.light[y][x] > 0));
-    }
 }
 function _historyColumnsAlloc(types, cap, old) {
     const out = {};
@@ -583,7 +578,7 @@ function _historyColumnsCanvasView(h) {
     const visibleNow = e => seen(Math.floor(e.x / TILE), Math.floor(e.y / TILE));
     h.canvasKey = key;
     return h.canvasView = { grid: h.canvasCells, units, towers: lists[0], barracks: lists[1], collectorSpawners: lists[2],
-        goldMines: lists[4], astarMines: lists[5], droppedItems: h.view.droppedItems,
+        goldMines: lists[4], astarMines: lists[5],
         projectiles: projectiles.filter(visibleNow), particles: particles.filter(visibleNow), visibilityGrid: h.fog };
 }
 

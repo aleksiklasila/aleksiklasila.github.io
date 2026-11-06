@@ -8,7 +8,7 @@ const c=vm.createContext({RESOURCE_COLLECTOR_UNIT_KEYS:[],TILE:32,GRID_W:20,game
 vm.runInContext(read('src/things/worker.js'),c);
 c.clearWorkerTaskMemoryForFreeRetarget=()=>{}; c._clearWorkerTarget=()=>{};
 const source=read('src/game/pathfinding.js');
-vm.runInContext(source.slice(source.indexOf('function _tryUpgradeAstarFallbackPath('),source.indexOf('function _recordAstarUsage(')),c);
+vm.runInContext(source.slice(source.indexOf('const _pendingPathDest ='),source.indexOf('function _recordAstarUsage(')),c);
 const make=()=>({id:1,x:48,y:48,owner:0,workerState:'MANUAL_MOVE',targetPos:{x:336,y:336},path:[],pathIndex:0,
     pathIsFallbackAstar:true,_pendingPathTarget:{gx:10,gy:10,cmd:1},_manualMoveIssuedTick:1});
 c.navPathReach=()=>[{x:1,y:1},{x:10,y:10}];

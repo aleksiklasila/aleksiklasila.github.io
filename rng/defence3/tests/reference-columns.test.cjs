@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs');
 const source=fs.readFileSync(require('node:path').join(__dirname,'../src/sim/sim_unit_state.js'),'utf8');
 const code=source.slice(source.indexOf('class SimRefColumn {'),source.indexOf('function _simUnitNextCap'));
-const {SimRefColumn,SimSharedColumn,grow,copy}=new Function(code+';return {SimRefColumn,SimSharedColumn,grow:_simRefGrow,copy:_simRefCopy};')();
+const {SimRefColumn,SimSharedColumn,grow,copy}=new Function('const simHeapArray=(T,n)=>new T(n),simHeapHas=()=>true,simHeapFree=()=>{},simSharedArray=(T,n)=>new T(n),simParallelBind=()=>{},_simSlabHeapFree=()=>{};'+code+';return {SimRefColumn,SimSharedColumn,grow:_simRefGrow,copy:_simRefCopy};')();
 for(const def of [undefined,null,false,'',-0]){
     const c=new SimRefColumn(30000,def),a=new Array(30000).fill(def),object={value:1};
     const values=[def,undefined,null,false,true,'text',object,NaN,0,-0,17];

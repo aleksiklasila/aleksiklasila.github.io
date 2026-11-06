@@ -113,7 +113,6 @@ const PICK_QUEUE: u8 = 4;
 const WS_MOVING_TO_HEAL: u32 = 9;
 const WS_HEALING: u32 = 10;
 const WSR_COLLECT: u8 = 1;
-const WT_DROP: u32 = 4;
 const WS_MOVING_TO_ASTAR: u32 = 3;
 // Search kinds and work bits for the grid searches.
 const WSR_GRID: u8 = 3;
@@ -163,7 +162,7 @@ struct W {
     scale: f64, research_tt: u32, fallback_rdps: f64, base_cd: i32, umask: u32, salv_type: i32, salv_cd: i32, nprice: i32,
     // Per resource (0 energy, 1 A*): the target type codes of its mines and farms, its farms' and dropoff
     // buildings' stationary types, its mines' structure code, its collectors' base cooldown, its config index.
-    tt_mine: [u32; 2], tt_farm: [u32; 2], tt_drop: u32, farm_type: [i32; 2], drop_type: [i32; 2], mine_code: [u8; 2], coll_cd: [i32; 2],
+    tt_mine: [u32; 2], tt_farm: [u32; 2], farm_type: [i32; 2], drop_type: [i32; 2], mine_code: [u8; 2], coll_cd: [i32; 2],
     cfg_ix: [i32; 2], five_s: i32, area_search: bool,
     heal_type: i32, heal_base_dps: f64, heal_cd: i32, blocked_ticks: i32, pass_on: bool, tt_queue: u32, tt_unit: u32,
     ntypes: i32, nkeys: i32, snp: i32, sl1: usize, sr1: usize, build_type: i32, build_base_dps: f64, build_cd: i32, recheck: i32, stuck: i32,
@@ -206,7 +205,7 @@ impl W {
             outcap: k.i(25).max(0) as usize, nres: k.i(26), nver: k.i(27), nwsw: k.i(28), np: k.i(29), scale: k.f(30),
             research_tt: k.i(31) as u32, fallback_rdps: k.f(32), base_cd: k.i(33),
             umask: (k.i(34).max(1) as u32) - 1, salv_type: k.i(35), salv_cd: k.i(36), nprice: k.i(37),
-            tt_mine: [k.i(38) as u32, k.i(39) as u32], tt_farm: [k.i(40) as u32, k.i(41) as u32], tt_drop: k.i(42) as u32,
+            tt_mine: [k.i(38) as u32, k.i(39) as u32], tt_farm: [k.i(40) as u32, k.i(41) as u32],
             farm_type: [k.i(43), k.i(44)], drop_type: [k.i(45), k.i(46)], mine_code: [k.i(47) as u8, k.i(48) as u8], coll_cd: [k.i(49), k.i(50)],
             cfg_ix: [k.i(51), k.i(52)], five_s: k.i(53), area_search: k.i(54) != 0,
             heal_type: k.i(55), heal_base_dps: k.f(56), heal_cd: k.i(57), blocked_ticks: k.i(58), pass_on: k.i(59) != 0, tt_queue: k.i(60) as u32, tt_unit: k.i(61) as u32,

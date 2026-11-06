@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
 (async()=>{
     const count=Number(process.argv[2])||4000000;
     const unit={unitType:'norm',owner:0,x:48,y:80,energy:37,baseLevel:2,stackCount:1};
-    const c=vm.createContext({console,TextDecoder,Blob,Response,CompressionStream,DecompressionStream,gameStarted:true,isMultiplayer:false,gameSeed:123,GRID_W:8,GRID_H:8,TILE:32,
+    const c=vm.createContext({console,TextDecoder,Blob,Response,CompressionStream,DecompressionStream,gameStarted:true,isMultiplayer:false,gameSeed:123,GRID_W:8,GRID_H:8,TILE:32,MAP_SIZE_MAX:1024,
         currentTick:120,activeTeamIds:[0,1],players:[{energy:1000,astar:500,researchLevels:{}},{energy:1000,astar:500,researchLevels:{}}],
         grid:Array.from({length:8},()=>Array.from({length:8},()=>({type:0,owner:-1,areaId:0}))),areas:[],goldMines:[],astarMines:[],
         towers:[],barracks:[],collectorSpawners:[],getCellItemsRowMajor:()=>[],units:new Array(count).fill(unit),getUnitOrderDestinationCode:()=>-55});

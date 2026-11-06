@@ -130,46 +130,154 @@ pub unsafe extern "C" fn k_uid_clean(a: u32, _chunk: i32) {
     }
     s(cnt, 0, count as i32);
 }
+
 
-/// Record an action's arrival on its player's indexed units. Duplicate IDs,
-/// including those in earlier chunks, already carry this mark and do nothing.
-/// Return the changed-unit count and runs of superseded marks/counts, so JS
-/// updates its waiting-action records without resolving every unit object.
-/// P: input count, hash mask, new mark, player. Arrays: input IDs, hash table,
-/// ID/live/owner/arrival columns, old marks, run counts, result counts.
+/// A unit command over its ids (main.js processAction hold / stop / attack /
+/// attackBuilding / killUnit: _unitCmdKernel), each unit once (the id
+/// stamps), the player's own: its columns as the setters write them.
+/// Arrays: [0] ids, [1] the id table, [2] unit.id, [3] unit.live, [4]
+/// unit.idStp, [5] slots left to the JavaScript (stop: workers), [6] counts
+/// ([0] left, [1] paths let go, [2] changed), [7] owner, [8] dead, [9] isWk,
+/// [10] upT, [11] commandState, [12] mvOn, [13] holdF, [14] holdPosition's
+/// value ids (width P[20]), [15] hObj, [16] tuS, [17] tuId, [18] tbT, [19]
+/// acqB, [20] fatF, [21] fLsX, [22] fLsY, [23] amGx, [24] amGy, [25] mvTgX,
+/// [26] mvTgY, [27] rkF, [28] nvPK, [29] pathIndex, [30] mvPath, [31] the
+/// path pool's free stack ([0] its top), [32] mvCD, [33] cmMode, [34] mvWk,
+/// [35] ptSt, [36] ptGx, [37] ptGy, [38] mvPP, [39] mvPF, [40] energy, [41]
+/// slots whose path went (for their JavaScript path, P[19] 1).
+/// P: [0] ids, [1] table mask, [2] stamp, [3] op (1 hold, 2 stop, 3 attack a
+/// unit, 4 attack a structure, 5 kill), [4] player, [5] CMD_IDLE, [6]
+/// CMD_ATTACKING, [7] / [8] / [9] the digest keys of holdPosition, the
+/// pending target, the fallback flag, [10] / [11] / [12] holdPosition's ids
+/// of undefined / false / true, [13] / [14] the target unit's slot and id,
+/// [15] / [16] the target's position, [17] the target structure's tile,
+/// [18] the king's type index, [19] list paths, [20] the hold ids' width.
 #[no_mangle]
-pub unsafe extern "C" fn k_uid_arrival(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_unit_cmd(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (ids, tab, idc, live, owner, marks) =
-        (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i8>(4), k.p::<i32>(5));
-    let (old_marks, runs, cnt) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8));
-    let (n, mask, mark, player) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3));
-    let (mut changed, mut count) = (0, 0usize);
+    let (ids, tab, idc, live, stamps, left, cnt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (own, dead, iswk, upt, cmd, on, holdf) = (k.p::<i8>(7), k.p::<u8>(8), k.p::<u8>(9), k.p::<i16>(10), k.p::<u8>(11), k.p::<u8>(12), k.p::<u8>(13));
+    let (hold_ids, hobj, tus, tuid, tbt, acqb, fatf) = (k.p::<u8>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<u8>(19), k.p::<u8>(20));
+    let (lsx, lsy, amgx, amgy, tgx, tgy, rkf) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<i16>(23), k.p::<i16>(24), k.p::<f32>(25), k.p::<f32>(26), k.p::<u8>(27));
+    let (nvpk, pidx, mpath, pfs, mcd, cmm, mvwk) = (k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<u8>(33), k.p::<u8>(34));
+    let (pst, pgx, pgy, mpp, mpf, en, pout) = (k.p::<u8>(35), k.p::<i16>(36), k.p::<i16>(37), k.p::<u8>(38), k.p::<u8>(39), k.p::<f32>(40), k.p::<i32>(41));
+    // (The path store: [42] unit.pthH, [43] its arena, [44] its free lists.)
+    let (pth, parena, pfree) = (k.p::<i32>(42), k.p::<i32>(43), k.p::<i32>(44));
+    let (n, mask, stamp, op, player) = (k.i(0).max(0) as usize, k.i(1) as u32, k.i(2), k.i(3), k.i(4));
+    let (cmd_idle, cmd_att) = (k.i(5) as u8, k.i(6) as u8);
+    let (k_hold, k_ppt, k_pfa) = (k.i(7), k.i(8), k.i(9));
+    let (h_undef, h_false, h_true) = (k.i(10) as u32, k.i(11) as u32, k.i(12) as u32);
+    let (t_slot, t_id, t_x, t_y, t_tile, king, list_paths, hw) = (k.i(13), k.i(14), k.f(15) as f32, k.f(16) as f32, k.i(17), k.i(18), k.i(19) != 0, k.i(20));
+    // (holdPosition's value id at slot q, and written.)
+    let hget = |q: usize| -> u32 { match hw { 2 => *(hold_ids as *const u16).add(q) as u32, 4 => *(hold_ids as *const u32).add(q), _ => *hold_ids.add(q) as u32 } };
+    let hset = |q: usize, v: u32| { match hw { 2 => *(hold_ids as *mut u16).add(q) = v as u16, 4 => *(hold_ids as *mut u32).add(q) = v, _ => *hold_ids.add(q) = v as u8 } };
+    let henc = |id: u32| -> i32 { if id == h_true { 0x3bd } else if id == h_false { 0x2bd } else { H_UNDEF } };
+    let (mut nl, mut np, mut nc) = (0usize, 0usize, 0i32);
     for j in 0..n {
+        // The id's slot (unit.js UnitIdIndex: the table's probe), once.
         let id = g(ids, j);
         let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        let mut q = usize::MAX;
         loop {
             let slot = g(tab, h as usize);
             if slot < 0 { break; }
-            let slot = slot as usize;
-            if g(idc, slot) == id && g(live, slot) != 0 {
-                if g(owner, slot) as i32 == player {
-                    let old = g(marks, slot);
-                    if old != mark {
-                        s(marks, slot, mark); changed += 1;
-                        if old > 0 {
-                            if count > 0 && g(old_marks, count - 1) == old {
-                                s(runs, count - 1, g(runs, count - 1) + 1);
-                            } else {
-                                s(old_marks, count, old); s(runs, count, 1); count += 1;
-                            }
-                        }
-                    }
-                }
-                break;
-            }
+            let sl = slot as usize;
+            if g(idc, sl) == id && g(live, sl) != 0 { q = sl; break; }
             h = (h + 1) & mask;
         }
+        if q == usize::MAX || g(stamps, q) == stamp { continue; }
+        s(stamps, q, stamp);
+        if g(own, q) as i32 != player { continue; }
+        match op {
+            1 => {
+                // Hold: movement off, everything else kept.
+                let o = hget(q);
+                if o != h_true { s(hobj, q, g(hobj, q).wrapping_add(hterm(k_hold, 0x3bd)).wrapping_sub(hterm(k_hold, henc(o)))); hset(q, h_true); }
+                s(holdf, q, 1); s(on, q, 0); nc += 1;
+            }
+            2 => {
+                // Stop: a held unit released (its orders resume); a free one stops.
+                if g(holdf, q) != 0 {
+                    let o = hget(q);
+                    if o != h_false { s(hobj, q, g(hobj, q).wrapping_add(hterm(k_hold, 0x2bd)).wrapping_sub(hterm(k_hold, henc(o)))); hset(q, h_false); }
+                    s(holdf, q, 0); s(on, q, 0); nc += 1;
+                    continue;
+                }
+                if g(iswk, q) != 0 { s(left, nl, q as i32); nl += 1; continue; }
+                if g(cmd, q) != cmd_idle { s(on, q, 0); s(cmd, q, cmd_idle); }
+                let_go_path(q, nvpk, mpath, pfs, on, mcd, pout, list_paths, &mut np);
+                crate::path_release(pth, q, parena, pfree);
+                s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0);
+                pending_clear(q, pst, pgx, pgy, hobj, mpp, mpf, k_ppt, k_pfa, false);
+                s(fatf, q, 0); s(lsx, q, f32::NAN); s(lsy, q, f32::NAN); s(amgx, q, -1); s(amgy, q, -1);
+                nc += 1;
+            }
+            3 | 4 => {
+                // An attack order (unit.js unitAttackOrder): no way of its own,
+                // the movement kernel follows its target (mv.rs forced).
+                if g(dead, q) != 0 || g(iswk, q) != 0 { continue; }
+                if g(cmd, q) != cmd_att { s(on, q, 0); s(cmd, q, cmd_att); }
+                s(amgx, q, -1); s(amgy, q, -1);
+                let_go_path(q, nvpk, mpath, pfs, on, mcd, pout, list_paths, &mut np);
+                crate::path_release(pth, q, parena, pfree);
+                if g(pidx, q) != 0 { s(on, q, 0); s(pidx, q, 0); }
+                s(rkf, q, 0);
+                pending_clear(q, pst, pgx, pgy, hobj, mpp, mpf, k_ppt, k_pfa, true);
+                s(cmm, q, 0); s(on, q, 0); s(mvwk, q, 0);
+                if op == 3 {
+                    s(tus, q, t_slot); s(tuid, q, t_id); s(tbt, q, -1); s(acqb, q, 0); s(fatf, q, 1);
+                    s(lsx, q, t_x); s(lsy, q, t_y);
+                } else {
+                    s(tbt, q, t_tile); s(acqb, q, 1); s(tus, q, -1); s(tuid, q, 0); s(fatf, q, 0);
+                    s(lsx, q, f32::NAN); s(lsy, q, f32::NAN);
+                }
+                s(tgx, q, t_x); s(tgy, q, t_y);
+                nc += 1;
+            }
+            5 => {
+                // Killed (not a king): gameTick's sweep removes it.
+                if g(dead, q) != 0 || g(upt, q) as i32 == king { continue; }
+                s(en, q, 0.0); s(dead, q, 1); nc += 1;
+            }
+            _ => {}
+        }
     }
-    s(cnt, 0, changed); s(cnt, 1, count as i32);
+    s(cnt, 0, nl as i32); s(cnt, 1, np as i32); s(cnt, 2, nc);
+}
+// (unit.js path = null: its flow key and pool path let go, unarmed.)
+#[inline(always)]
+unsafe fn let_go_path(q: usize, nvpk: *mut i32, mpath: *mut i32, pfs: *mut i32, on: *mut u8, mcd: *mut i32, pout: *mut i32, list: bool, np: &mut usize) {
+    s(nvpk, q, -1);
+    let p = g(mpath, q);
+    if p >= 0 && !pfs.is_null() { let top = g(pfs, 0) + 1; s(pfs, 0, top); s(pfs, top as usize, p); s(mpath, q, -1); }
+    s(on, q, 0); s(mcd, q, -1);
+    if list && !pout.is_null() { s(pout, *np, q as i32); *np += 1; }
+}
+// (sim_unit_state.js simPendingClear: target null and, flag, the fallback flag false; their digest terms, the kernels' mirrors.)
+#[inline(always)]
+unsafe fn pending_clear(q: usize, pst: *mut u8, pgx: *mut i16, pgy: *mut i16, hobj: *mut i32, mpp: *mut u8, mpf: *mut u8, kp: i32, kf: i32, flag: bool) {
+    let t = g(pst, q) as i32;
+    let want = if flag { 5 } else { (t & 12) | 1 };
+    if t != want {
+        let mut h = g(hobj, q);
+        if t & 3 != 1 {
+            let e = match t & 3 { 2 => (-16i32).wrapping_sub((g(pgy, q) as i32).wrapping_mul(65536).wrapping_add(g(pgx, q) as i32)), _ => H_UNDEF };
+            h = h.wrapping_add(hterm(kp, H_NULL)).wrapping_sub(hterm(kp, e));
+        }
+        if flag && (t >> 2) & 3 != 1 {
+            let e = match (t >> 2) & 3 { 2 => 0x3bd, _ => H_UNDEF };
+            h = h.wrapping_add(hterm(kf, 0x2bd)).wrapping_sub(hterm(kf, e));
+        }
+        s(hobj, q, h); s(pst, q, want as u8);
+    }
+    // (mvPF: both set; mvPP: bit 1 the flag, 2 the target.)
+    let f = ((want >> 2) & 3) == 2;
+    s(mpp, q, f as u8); s(mpf, q, 0);
+}
+const H_NULL: i32 = -2147483647;
+const H_UNDEF: i32 = -2147483648;
+#[inline(always)]
+fn hterm(key: i32, e: i32) -> i32 {
+    let t = (key ^ e).wrapping_mul(16777619u32.wrapping_mul(2654435761u32) as i32);
+    (t ^ ((t as u32) >> 15) as i32).wrapping_mul(0x2c1b3c6d)
 }

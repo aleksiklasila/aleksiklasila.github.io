@@ -111,7 +111,7 @@ function spatialSlotUpdate(c, s) {
         if (tile !== c.spTile[s]) spatialSlotMove(c, s, gx, gy, tile);
         return;
     }
-    const u = _simUnitState.owners[s];
+    const u = _simUnitState.owners.at(s);
     if (u && !u.dead) updateUnitSpatial(u);
 }
 
@@ -263,7 +263,7 @@ let _sxFill = new Int32Array(0), _sxAFill = new Int32Array(0), _sxAreaCap = 0, _
 // and chunk; the number of entries.
 let _sxESlot = new Int32Array(0), _sxEKey = new Int32Array(0), _sxSi = new Int32Array(0), _sxListed = 0;
 // The parallel build lists units by slot (_sxESlot, _sxASlot; the unit is
-// _simUnitState.owners[slot], null once released): _sxBySlot. The serial
+// _simUnitState.owners.at(slot), null once released): _sxBySlot. The serial
 // build lists the objects (_sxList, _sxAList).
 let _sxBySlot = false, _sxASlot = new Int32Array(0);
 function _sxOwners() { return _sxBySlot ? _simUnitState.owners : null; }
@@ -547,7 +547,7 @@ function _spatialIndexRebuildParallel() {
     simParallelRun(SIM_KERNEL_INDEX_KEYS, Math.ceil(n / UJ));
     // A unit without a state slot (none in play, normally): the serial build.
     if (X.bad[0]) return false;
-    // Entries by slot (owners[slot]: slots freed this tick are not reused
+    // Entries by slot (owners.at(slot): slots freed this tick are not reused
     // before the next rebuild, simUnitStateReleaseFreed); per position in
     // key order the slot, per key its range, then the counts (and owners
     // per area), all in the kernels.
@@ -652,7 +652,7 @@ function _spatialIndexRebuildSerial() {
     for (let i = 0; i < n; i++) {
         const u = units[i];
         const si = slots ? slots[i] : -1;
-        _sxSi[i] = si >= 0 && owners[si] === u ? si : -1;
+        _sxSi[i] = si >= 0 && owners.at(si) === u ? si : -1;
         if (!u || u.dead) { keys[i] = -1; continue; }
         let gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
         if (!(gx >= 0)) gx = 0; else if (gx >= GRID_W) gx = GRID_W - 1;
@@ -744,7 +744,7 @@ function getUnitsInRange(wx, wy, rangePx) {
         for (let cx = minCx; cx <= maxCx; cx++) {
             let ck = cy * CHUNKS_W + cx;
             if (_sxStamp[ck] !== _sxEpoch) continue;
-            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) { const u = own ? own[_sxESlot[k]] : _sxList[k]; if (u) result.push(u); }
+            for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) { const u = own ? own.at(_sxESlot[k]) : _sxList[k]; if (u) result.push(u); }
         }
     }
     return result;
@@ -833,7 +833,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
                 for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                    let u = own ? own[ES[k]] : sxList[k];
+                    let u = own ? own.at(ES[k]) : sxList[k];
                 if (!u) continue;
                     if (u.owner !== playerFilter || u.dead) continue;
                     let dx = (tickStart ? _unitTickX(u) : u.x) - wx, dy = (tickStart ? _unitTickY(u) : u.y) - wy;
@@ -860,7 +860,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 let ddx = wx - nx, ddy = wy - ny;
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
                 for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                    let u = own ? own[ES[k]] : sxList[k];
+                    let u = own ? own.at(ES[k]) : sxList[k];
                 if (!u) continue;
                     if (hasPlayerFilter && u.owner !== playerFilter) continue;
                     if (hasEnemyFilter && u.owner === enemyFilter) continue;
@@ -891,7 +891,7 @@ function forEachUnitInRange(wx, wy, rangePx, visitor, opts = null) {
                 if (ddx * ddx + ddy * ddy > radiusSq) continue;
             }
             for (let k = sxStart[ck], k1 = k + sxCount[ck]; k < k1; k++) {
-                let u = own ? own[ES[k]] : sxList[k];
+                let u = own ? own.at(ES[k]) : sxList[k];
                 if (!u) continue;
                 if (hasPlayerFilter && u.owner !== playerFilter) continue;
                 if (hasEnemyFilter && u.owner === enemyFilter) continue;
@@ -950,7 +950,7 @@ function _findClosestEnemyUnitByChunks(owner, wx, wy, rangePx) {
             let ck = cy * CHUNKS_W + cx;
             if (!_chunkHasEnemyForOwnerFast(ck, ownerId) || _sxStamp[ck] !== _sxEpoch) continue;
             for (let k = _sxStart[ck], k1 = k + _sxCount[ck]; k < k1; k++) {
-                let u = own ? own[_sxESlot[k]] : _sxList[k];
+                let u = own ? own.at(_sxESlot[k]) : _sxList[k];
                 if (!u || u.dead || u.owner === ownerId) continue;
                 let ux = _unitTickX(u), uy = _unitTickY(u);
                 let dx = ux - wx, dy = uy - wy, d2 = dx * dx + dy * dy;

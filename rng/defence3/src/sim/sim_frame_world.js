@@ -66,13 +66,13 @@ class SimSlots {
 }
 
 // ---- structures ----
-const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a', 'd'];
+const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a'];
 const SIM_STRUCT_SPEC = simTableSpec({
     f32: ['x', 'y', 'energy', 'maxEnergy', 'spawnTimer', 'spawnCooldown', 'stackWork', 'stackReq', 'angle', 'amount', 'amountMax', 'cd',
         'tx', 'ty', 'resDone', 'resReq', 'rallyX', 'rallyY', 'timer', 'damage'],
-    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId'],
+    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId', 'label'],
     i16: ['kind', 'gx', 'gy', 'owner', 'type', 'utype', 'level', 'elevel', 'stacks', 'mstacks', 'estacks', 'qlen', 'qtype', 'laser',
-        'watchedBy', 'label', 'stackCount'],
+        'watchedBy', 'stackCount'],
     // (vision: whole area steps.)
     u8: ['alive', 'flash', 'vision']
 });
@@ -81,96 +81,81 @@ const SIM_SF_UC = 1, SIM_SF_UPGRADING = 2, SIM_SF_SALVAGE = 4, SIM_SF_STACKING =
     SIM_SF_QUEUE = 4096, SIM_SF_AUTO_RESEARCH = 8192, SIM_SF_ATTACK_TARGET = 16384, SIM_SF_RALLY = 32768, SIM_SF_RESEARCH_TASK = 65536,
     SIM_SF_AUTO_STACK = 131072, SIM_SF_RESEARCHING = 262144;
 const _simStructSlots = new SimSlots('_sslot');
-// Level labels are worked out every few ticks per structure (or on a change
-// of its levels): they are visual only.
-const SIM_STRUCT_LABEL_TICKS = 8;
-
+// (A structure slot's class table row, for the metadata kernel (wasm/src/nfs.rs
+// k_meta_structs): psrc[slot] = class << 24 | row, -1 none / not tabled.)
+const _simMetaCls = [];
+function _simMetaClassOf(e) {
+    if (!_simMetaCls.length && typeof Tower !== 'undefined') _simMetaCls.push(...[Tower, Barrack, CollectorSpawner, AstarSpawner, typeof SalvagerSpawner !== 'undefined' ? SalvagerSpawner : null,
+        typeof BuilderSpawner !== 'undefined' ? BuilderSpawner : null, typeof HealerSpawner !== 'undefined' ? HealerSpawner : null, typeof ResearchSpawner !== 'undefined' ? ResearchSpawner : null,
+        typeof FloorItem !== 'undefined' ? FloorItem : null, typeof GoldMine !== 'undefined' ? GoldMine : null, typeof AstarMine !== 'undefined' ? AstarMine : null]);
+    const k = _simMetaCls.indexOf(e && e.constructor);
+    return k;
+}
+// (pser: the slots' serials beside it, in the heap too.)
+_simStructSlots.psrc = null;
+_simStructSlots.pser = null;
+_simStructSlots.psrcSet = function (s, e) {
+    if (!this.psrc || this.psrc.length <= s || (typeof simHeapHas === 'function' && !simHeapHas(this.psrc))) {
+        if (typeof simHeapArray !== 'function') return;
+        const a = simHeapArray(Int32Array, Math.max(1024, (s + 1) * 2));
+        a.fill(-1);
+        if (this.psrc) a.set(this.psrc.subarray(0, Math.min(this.psrc.length, a.length)));
+        this.psrc = a;
+        const b = simHeapArray(Int32Array, a.length);
+        b.set(this.serials.subarray(0, Math.min(this.serials.length, b.length)));
+        this.pser = b;
+    }
+    if (s < this.serials.length) this.pser[s] = this.serials[s];
+    if (!e) { this.psrc[s] = -1; return; }
+    const k = _simMetaClassOf(e);
+    this.psrc[s] = k >= 0 && e._sr >= 0 ? (k << 24) | e._sr : -1;
+};
+{
+    const slotOf0 = _simStructSlots.slotOf;
+    _simStructSlots.slotOf = function (e) { const known = e[this.key] !== undefined && this.owner[e[this.key]] === e, s = slotOf0.call(this, e); if (!known) this.psrcSet(s, e); return s; };
+    const sweep0 = _simStructSlots.sweep;
+    _simStructSlots.sweep = function (tick, F) { for (let s = 0; s < this.owner.length; s++) if (this.stamp[s] !== tick && this.psrc && s < this.psrc.length) this.psrc[s] = -1; return sweep0.call(this, tick, F); };
+    const reset0 = _simStructSlots.reset;
+    _simStructSlots.reset = function () { if (this.psrc) this.psrc.fill(-1); return reset0.call(this); };
+}
 function _simStructLists() {
-    return [towers, barracks, collectorSpawners, _snapFloorItemsView(), goldMines, astarMines, droppedItems];
+    return [towers, barracks, collectorSpawners, _snapFloorItemsView(), goldMines, astarMines];
 }
 
-// (A laser link's table slot, -1 none; columns l0-l3 by name: no key strings.)
-function _simLinkSlot(o) { return o && o._sslot !== undefined && _simStructSlots.owner[o._sslot] === o ? o._sslot : -1; }
-function _simWriteStructure(F, s, e, kind, tick) {
-    F.alive[s] = 1;
-    F.serial[s] = _simStructSlots.serials[s];
-    F.orderTick[s] = currentTick - 1;
-    F.kind[s] = kind;
-    let gx = e.gx | 0, gy = e.gy | 0;
-    F.gx[s] = gx; F.gy[s] = gy;
-    F.x[s] = Number.isFinite(e.x) ? e.x : gx * TILE + TILE * .5;
-    F.y[s] = Number.isFinite(e.y) ? e.y : gy * TILE + TILE * .5;
-    F.owner[s] = Number.isFinite(e.owner) ? e.owner : (kind === 3 && grid[gy] && grid[gy][gx] ? grid[gy][gx].owner : -1);
-    F.type[s] = _simFrameCode(e.type);
-    F.utype[s] = _simFrameCode(e.unitType);
-    F.energy[s] = Number(e.energy) || 0;
-    F.maxEnergy[s] = Number(e.maxEnergy) || Number(e.preComputed && e.preComputed.maxEnergy) || Number(e.preComputedEffective && e.preComputedEffective.maxEnergy) || 0;
-    F.spawnTimer[s] = Number(e.spawnTimer) || 0; F.spawnCooldown[s] = Number(e.spawnCooldown) || 0;
-    F.stackWork[s] = Number(e.stackingWorkDone) || 0; F.stackReq[s] = Number(e.stackingWorkRequired) || 0;
-    F.angle[s] = Number(e.angle) || 0;
-    F.cd[s] = Number(e.cd) || 0; F.damage[s] = Number(e.damage) || 0;
-    F.amount[s] = kind === 4 ? Number(e.gold) || 0 : kind === 5 ? Number(e.astar) || 0 : kind === 6 ? Number(e.value) || 0 : 0;
-    F.amountMax[s] = kind === 4 ? Number(e.maxGold) || 0 : kind === 5 ? Number(e.maxAstar) || 0 : 0;
-    F.timer[s] = Number(e.timer) || 0;
-    let at = e.attackTarget, task = e.researchTask;
-    F.tx[s] = at ? Number(at.x) || 0 : 0; F.ty[s] = at ? Number(at.y) || 0 : 0;
-    F.resDone[s] = task ? Number(task.workDone) || 0 : 0; F.resReq[s] = task ? Number(task.workRequired) || 0 : 0;
-    F.rallyX[s] = Number(e.rallyX) || 0; F.rallyY[s] = Number(e.rallyY) || 0;
-    F.rallyTargetId[s] = e.rallyTargetUnitId == null ? -1 : e.rallyTargetUnitId;
-    F.vision[s] = kind <= 3 ? areaSteps(getEntityEffectiveVisibilityRangeArea(e)) : 0;
-    F.level[s] = Number.isFinite(e.level) ? e.level : -1;
-    F.elevel[s] = Number.isFinite(e.effectiveLevel) ? e.effectiveLevel : -1;
-    F.stacks[s] = Number.isFinite(e.stacks) ? e.stacks : -1;
-    F.mstacks[s] = Number.isFinite(e.manualStacks) ? e.manualStacks : -1;
-    F.estacks[s] = Number.isFinite(e.effectiveStacks) ? e.effectiveStacks : -1;
-    F.stackCount[s] = Number.isFinite(e.stackCount) ? e.stackCount : -1;
-    const qn = typeof spawnQueueCount === 'function' ? spawnQueueCount(e) : 0;
-    F.qlen[s] = qn;
-    F.qtype[s] = qn > 0 ? _simFrameCode(spawnQueueUnitType(e)) : 0;
-    F.laser[s] = Number(e.laserState) || 0;
-    F.watchedBy[s] = Number.isFinite(e.watchedByTeam) ? e.watchedByTeam : -1;
-    let flash = Number(e.attackFlash) || 0;
-    F.flash[s] = flash <= 0 ? 0 : flash >= 255 ? 255 : flash;
-    let links = e.connectedLasers;
-    const linked = Array.isArray(links);
-    F.l0[s] = _simLinkSlot(linked ? links[0] : null); F.l1[s] = _simLinkSlot(linked ? links[1] : null);
-    F.l2[s] = _simLinkSlot(linked ? links[2] : null); F.l3[s] = _simLinkSlot(linked ? links[3] : null);
-    F.flags[s] = (e.underConstruction ? SIM_SF_UC : 0) | (e.isUpgrading ? SIM_SF_UPGRADING : 0) | (e.markedForSalvage ? SIM_SF_SALVAGE : 0)
-        | (e.isStacking ? SIM_SF_STACKING : 0) | (e.watched > 0 ? SIM_SF_WATCHED : 0) | (e.burning > 0 ? SIM_SF_BURNING : 0)
-        | (e.poisoned > 0 ? SIM_SF_POISONED : 0) | (e.frozen > 0 ? SIM_SF_FROZEN : 0) | (e.wet > 0 ? SIM_SF_WET : 0) | (e.sandy > 0 ? SIM_SF_SANDY : 0)
-        | (e.autoUpgradeEnabled ? SIM_SF_AUTO_UPGRADE : 0) | (e.buildEnabled ? SIM_SF_BUILD : 0) | (e.queueEnabled ? SIM_SF_QUEUE : 0)
-        | (e.autoResearchEnabled ? SIM_SF_AUTO_RESEARCH : 0) | (at && Number.isFinite(at.x) ? SIM_SF_ATTACK_TARGET : 0)
-        | (Number.isFinite(e.rallyX) && Number.isFinite(e.rallyY) ? SIM_SF_RALLY : 0) | (task ? SIM_SF_RESEARCH_TASK : 0)
-        | (e.autoStackEnabled ? SIM_SF_AUTO_STACK : 0) | (e.isResearching ? SIM_SF_RESEARCHING : 0);
-    // The level label, when its inputs change or on its staggered tick.
-    if (kind <= 3 && units.length < 5000) {
-        let key = F.level[s] * 7919 + F.elevel[s] * 131 + F.stacks[s] * 17 + F.mstacks[s] * 3 + F.estacks[s] + (e.underConstruction ? 0.5 : 0);
-        if (e._simLabelKey !== key || ((tick + s) % SIM_STRUCT_LABEL_TICKS) === 0 || e._simLabel === undefined) {
-            e._simLabelKey = key;
-            e._simLabel = _simFrameCode(getLevelLabelText(e));
-        }
-        F.label[s] = e._simLabel;
-    } else F.label[s] = 0;
+// A level label's text from its numbers (the label column: wasm/src/nfs.rs
+// k_meta_structs; 0 none): level, effective and potential levels, researched
+// maximum, as things_utils.js getLevelLabelText makes it.
+function simLabelText(v) {
+    if (!(v & (1 << 28))) return 'L1';
+    const cl = v & 127, el = (v >> 7) & 127, pl = (v >> 14) & 127, rm = (v >> 21) & 127;
+    let shown = Math.max(el, pl);
+    if (shown > cl) {
+        if (pl > rm) return cl === rm ? 'L' + cl + '->L' + pl + '|BLOCKED' : 'L' + cl + '->L' + rm + '->L' + pl + '|BLOCKED';
+        return 'L' + cl + '->L' + Math.min(shown, rm);
+    }
+    return 'L' + cl;
 }
 
 // This tick's structures table. Returns { buf, cap, n, count, mver }.
+let _simFrameStructHeap = null, _simFrameTileSlot = null;
 function simFrameEncodeStructures() {
     let S = _simStructSlots, tick = ++S.tick, lists = _simStructLists();
     let count = 0;
     for (let k = 0; k < lists.length; k++) for (let e of lists[k]) if (e) { S.slotOf(e); count++; }
     let n = S.owner.length, cap = Math.max(64, n);
-    let buf = _simFrameAcquire(cap * SIM_STRUCT_SPEC.slotBytes);
-    let F = simTableViews(SIM_STRUCT_SPEC, buf, cap);
-    let order = F.order, j = 0;
-    for (let k = 0; k < lists.length; k++) for (let e of lists[k]) {
-        if (!e) continue;
-        let s = e._sslot;
-        S.stamp[s] = tick;
-        order[j++] = s;
-        _simWriteStructure(F, s, e, k, tick);
-    }
-    S.sweep(tick, F);
-    S.orderChanged(order, j);
+    // (The rows by the metadata kernel into a heap table, sim_presentation.js
+    // _simMetaStructsRun, then copied into the frame's buffer.)
+    if (!_simFrameStructHeap || _simFrameStructHeap.cap < cap || !simHeapHas(_simFrameStructHeap.heap)) { if (_simFrameStructHeap && _simFrameStructHeap.heap && simHeapHas(_simFrameStructHeap.heap)) simHeapFree(_simFrameStructHeap.heap); _simFrameStructHeap = _simStructTableNew(Math.ceil(cap * 1.25 / 64) * 64); }
+    const H = _simFrameStructHeap;
+    new Uint8Array(H.buf, H.off, H.bytes).fill(0);
+    const nt = GRID_W * GRID_H;
+    if (!_simFrameTileSlot || _simFrameTileSlot.length !== nt || !simHeapHas(_simFrameTileSlot)) _simFrameTileSlot = simHeapArray(Int32Array, nt);
+    _simFrameTileSlot.fill(-1);
+    const j = _simMetaStructsRun(null, H, S, _simFrameTileSlot);
+    n = S.owner.length; cap = Math.max(64, n);
+    const buf = _simFrameAcquire(cap * SIM_STRUCT_SPEC.slotBytes), F = simTableViews(SIM_STRUCT_SPEC, buf, cap);
+    for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8, 'order']) F[k].set(H[k].subarray(0, cap));
+    S.orderChanged(F.order, j);
     return { buf, cap, n, count: j, mver: S.version };
 }
 
@@ -357,6 +342,8 @@ function _simLevelsEncode(C, lv, fresh) {
 }
 function _simPlayerEncode(p, i) {
     if (!p || typeof p !== 'object') return _simPlain(p, 0);
+    // (The research queue's views: data_dynamic.js ensurePlayerResearchQueueState.)
+    if (typeof ensurePlayerResearchQueueState === 'function' && players[i] === p) ensurePlayerResearchQueueState(i);
     let C = _simPlayerSent[i];
     const fresh = !C || C.obj !== p;
     if (fresh) C = _simPlayerSent[i] = { obj: p, qLen: -2, qRefs: null, qNums: null, maps: {}, task: undefined, calls: 0 };
@@ -371,6 +358,11 @@ function _simPlayerEncode(p, i) {
         const x = k === 'researchQueue' ? qEnc : _SIM_FLAT_KEYS.has(k) ? (flat ? _simLevelsEncode(C.maps[k] || (C.maps[k] = { lvPrev: null, lvN: 0 }), p[k], fresh) : _SIM_SAME) : _simPlain(p[k], 1);
         if (x === _SIM_SAME) same.push(k);
         else if (x !== undefined) out[k] = x;
+    }
+    // (The views of the numbers' queue (not enumerable): as the plain arrays went.)
+    if ('researchQueue' in p && !Object.prototype.propertyIsEnumerable.call(p, 'researchQueue')) {
+        if (qEnc === _SIM_SAME) same.push('researchQueue'); else if (qEnc !== undefined) out.researchQueue = qEnc;
+        out.researchTask = _simPlain(p.researchTask, 1);
     }
     if (same.length) out.__same = same;
     return out;
@@ -434,6 +426,9 @@ function simFrameEncodeState(includeCells = true) {
         caps: typeof playerPopCaps !== 'undefined' ? Array.from(playerPopCaps) : null,
         // (Structures per player, for the HUD's building count.)
         builds: typeof structCountByOwner !== 'undefined' ? Array.from(structCountByOwner.subarray(0, Math.max(8, players.length))) : null,
+        // (Research labs per player, all and built: the research queue's capacity.)
+        labs: typeof structLabCount !== 'undefined' ? Array.from(structLabCount.subarray(0, Math.max(8, players.length))) : null,
+        labsBuilt: typeof structLabBuilt !== 'undefined' ? Array.from(structLabBuilt.subarray(0, Math.max(8, players.length))) : null,
         pathBudget: pathfindBudgetByPlayer ? Array.from(pathfindBudgetByPlayer) : null,
         astarBudget: astarNodeBudgetRemainingByPlayer ? Array.from(astarNodeBudgetRemainingByPlayer) : null };
     let gs = JSON.stringify(g);
@@ -441,14 +436,13 @@ function simFrameEncodeState(includeCells = true) {
     if (!includeCells) return out;
     // Cells whose type or owner changed since the last frame.
     let L = _simStateLast, n = GRID_W * GRID_H;
-    if (!L.cellTypes || L.w !== GRID_W || L.h !== GRID_H) { L.cellTypes = new Array(n).fill(null); L.cellOwners = new Int32Array(n).fill(-9); L.w = GRID_W; L.h = GRID_H; }
+    if (!L.cellTypes || L.w !== GRID_W || L.h !== GRID_H) { L.cellTypes = new Int16Array(n).fill(-1); L.cellOwners = new Int32Array(n).fill(-9); L.w = GRID_W; L.h = GRID_H; }
+    // (From the cell columns, map.js cellType / cellOwner.)
     let cells = [];
-    for (let y = 0; y < GRID_H; y++) {
-        let row = grid[y];
-        for (let x = 0; x < GRID_W; x++) {
-            let i = y * GRID_W + x, c = row[x];
-            if (c.type !== L.cellTypes[i] || c.owner !== L.cellOwners[i]) { L.cellTypes[i] = c.type; L.cellOwners[i] = c.owner; cells.push(i, c.type, c.owner); }
-        }
+    const ct = cellType, co = cellOwner, m = Math.min(n, ct.length, co.length);
+    for (let i = 0; i < m; i++) {
+        const a = ct[i], b = co[i];
+        if (a !== L.cellTypes[i] || b !== L.cellOwners[i]) { L.cellTypes[i] = a; L.cellOwners[i] = b; cells.push(i, a, b); }
     }
     if (cells.length) out.cells = cells;
     return out;
@@ -463,7 +457,7 @@ function simFrameStructureDetails() {
     for (let j = 0; j + 1 < _simWatchedStructures.length; j += 2) {
         let gx = _simWatchedStructures[j], gy = _simWatchedStructures[j + 1];
         let cell = grid[gy] && grid[gy][gx];
-        let e = getTileEntityRef(gx, gy) || (cell && cell.item) || getDroppedItemAt(gx, gy);
+        let e = getTileEntityRef(gx, gy) || (cell && cell.item);
         if (!e) continue;
         let d = { gx, gy };
         for (let k in e) {
@@ -512,8 +506,6 @@ const _PAGE_STRUCT_ACCESSORS = {
     astar: { get() { return this._kind === 5 ? _pageStructCol(this, 'amount') : undefined; } },
     maxGold: { get() { return this._kind === 4 ? _pageStructCol(this, 'amountMax') : undefined; } },
     maxAstar: { get() { return this._kind === 5 ? _pageStructCol(this, 'amountMax') : undefined; } },
-    value: { get() { return this._kind === 6 ? _pageStructCol(this, 'amount') : undefined; } },
-    timer: { get() { return this._kind === 6 ? _pageStructCol(this, 'timer') : undefined; } },
     level: { get() { return _pageNum(this, 'level'); } },
     effectiveLevel: { get() { return _pageNum(this, 'elevel'); } },
     stacks: { get() { return _pageNum(this, 'stacks'); } },
@@ -593,7 +585,7 @@ const _PAGE_STRUCT_ACCESSORS = {
         st.maxEnergy = this.maxEnergy; st.visionRangeArea = _pageStructCol(this, 'vision'); st.visionRange = st.visionRangeArea;
         return st;
     } },
-    _labelText: { value() { return _pageFrameStrings[_pageStructCol(this, 'label')] || 'L1'; } },
+    _labelText: { value() { return simLabelText(_pageStructCol(this, 'label')); } },
     _frameView: { value: true },
     _structView: { value: true }
 };
@@ -629,7 +621,7 @@ function _pageFreezeStruct(v) {
 // A structure view's page list (towers, barracks, ...; cell items have none:
 // the grid and the tile index hold them), its place there in v._pli.
 function _pageStructList(kind) {
-    return kind === 0 ? towers : kind === 1 ? barracks : kind === 2 ? collectorSpawners : kind === 4 ? goldMines : kind === 5 ? astarMines : kind === 6 ? droppedItems : null;
+    return kind === 0 ? towers : kind === 1 ? barracks : kind === 2 ? collectorSpawners : kind === 4 ? goldMines : kind === 5 ? astarMines : null;
 }
 // (The lists' membership versions: caches of them are kept by these, the
 // list itself staying the same array.)
@@ -638,7 +630,6 @@ function _pageStructListVersion(v) {
     if (kind === 0) towerJoinedOrLeft(v);
     else if (kind === 1) barracksChanged();
     else if (kind === 2) collectorSpawnersVersion++;
-    else if (kind === 6) droppedItemsVersion++;
 }
 function _pageStructListAdd(v) { const L = _pageStructList(v._kind); if (L) { v._pli = L.length; L.push(v); _pageStructListVersion(v); } }
 function _pageStructListRemove(v) {
@@ -652,16 +643,14 @@ function _pageStructListRemove(v) {
     const last = L.pop();
     if (last !== v) { L[i] = last; last._pli = i; }
 }
-// A view onto its tile (the cell's item, the tile index, the drop grid), and off it.
+// A view onto its tile (the cell's item, the tile index), and off it.
 function _pageStructPlace(v) {
     const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy];
-    if (kind === 6) { _setDroppedItemAt(gx, gy, v); return; }
     if ((kind === 1 || kind === 2 || kind === 3) && row && row[gx]) row[gx].item = v;
     setTileEntity(gx, gy, _snapTileTypeOf(SIM_STRUCT_KINDS[kind], v), v);
 }
 function _pageStructUnplace(v) {
     const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy], cell = row ? row[gx] : null;
-    if (kind === 6) { if (cell && cell.droppedItem === v) _setDroppedItemAt(gx, gy, null); return; }
     if (cell && cell.item === v) cell.item = null;
     clearTileEntity(gx, gy, v);
 }
@@ -745,7 +734,7 @@ function pageApplyStructures(table, c) {
     }
     if (changed) {
         pageStructStats.full++; pageStructStats.fullWhy = !old ? 'first' : c.structGrid !== grid ? 'grid' : 'many';
-        let lists = [[], [], [], [], [], [], []], seen = new Set(), replaced = [];
+        let lists = [[], [], [], [], [], []], seen = new Set(), replaced = [];
         for (let s = 0, live = Math.min(F.n, F.cap); s < live; s++) {
             if (F.alive[s] !== 1) continue;
             let kind = F.kind[s], v = _pageStructViews[s];
@@ -773,7 +762,7 @@ function pageApplyStructures(table, c) {
         astarMines.length = 0; for (let m of lists[5]) astarMines.push(m);
         // The tile index and the cells' items.
         initTileEntityLookup();
-        for (let row of grid) for (let cell of row) { cell.item = null; cell.droppedItem = null; }
+        for (let row of grid) for (let cell of row) cell.item = null;
         for (let kind = 0; kind <= 5; kind++) {
             let list = SIM_STRUCT_KINDS[kind];
             for (let v of lists[kind]) {
@@ -782,9 +771,6 @@ function pageApplyStructures(table, c) {
                 setTileEntity(v.gx, v.gy, _snapTileTypeOf(list, v), v);
             }
         }
-        droppedItems = lists[6];
-        initDroppedItemGrid();
-        for (let d of lists[6]) _setDroppedItemAt(d.gx, d.gy, d);
         if (typeof recalculateLaserConnections === 'function') { /* links come from the frame */ }
         _simClientMapChanged();
     } else {
@@ -951,6 +937,8 @@ function pageApplyState(st) {
         if (Array.isArray(g.teams) && g.teams.length) activeTeamIds = g.teams;
         if (Array.isArray(g.caps) && typeof playerPopCaps !== 'undefined') for (let i = 0; i < g.caps.length; i++) playerPopCaps[i] = g.caps[i];
         if (Array.isArray(g.builds) && typeof structCountByOwner !== 'undefined') for (let i = 0; i < g.builds.length && i < structCountByOwner.length; i++) structCountByOwner[i] = g.builds[i];
+        if (Array.isArray(g.labs) && typeof structLabCount !== 'undefined') for (let i = 0; i < g.labs.length && i < 64; i++) structLabCount[i] = g.labs[i];
+        if (Array.isArray(g.labsBuilt) && typeof structLabBuilt !== 'undefined') for (let i = 0; i < g.labsBuilt.length && i < 64; i++) structLabBuilt[i] = g.labsBuilt[i];
         if (g.pathBudget) for (let i = 0; i < g.pathBudget.length; i++) pathfindBudgetByPlayer[i] = g.pathBudget[i];
         if (g.astarBudget) for (let i = 0; i < g.astarBudget.length; i++) astarNodeBudgetRemainingByPlayer[i] = g.astarBudget[i];
     }
@@ -1017,7 +1005,7 @@ function pageApplyStructureDetails(details, c) {
     if (!details) return;
     for (let d of details) {
         let cell = grid[d.gy] && grid[d.gy][d.gx];
-        let v = getTileEntityRef(d.gx, d.gy) || (cell && cell.item) || getDroppedItemAt(d.gx, d.gy);
+        let v = getTileEntityRef(d.gx, d.gy) || (cell && cell.item);
         if (!v || !v._structView) continue;
         _pageResolveRefs(d);
         v._det = d;

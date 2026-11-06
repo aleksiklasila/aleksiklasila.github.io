@@ -108,9 +108,9 @@ if(referenceCollect)inst.eval(`simUnitStateCollect=function(all=false){
     const S=_simUnitState;if(!S)return;const owners=S.owners;
     if(S.unitsRef!==units){S.unitsRef=units;if(++S.epoch===0xffffffff){S.stamp.fill(0);S.epoch=1;}
         for(let i=0;i<units.length;i++){const u=units[i];if(u&&u._us===S.columns)S.stamp[u._si]=S.epoch;}
-        for(let s=0;s<owners.length;s++)if(owners[s]&&S.stamp[s]!==S.epoch)simUnitStateDetach(S,s);return;}
+        for(let s=0;s<owners.length;s++)if(owners.at(s)&&S.stamp[s]!==S.epoch)simUnitStateDetach(S,s);return;}
     const step=all?1:SIM_UNIT_COLLECT_SLICES,DEAD=S.columns.dead;
-    for(let s=all?0:gameTime%step;s<owners.length;s+=step){if(DEAD[s]!==1)continue;const u=owners[s];
+    for(let s=all?0:gameTime%step;s<owners.length;s+=step){if(DEAD[s]!==1)continue;const u=owners.at(s);
         if(u&&u._us===S.columns&&u._si===s)simUnitStateDetach(S,s);else if(u&&u.dead)simUnitStateDetach(S,s);}
 };`);
 // Explicit minimal starters: an empty fixture leaves the stationary tables

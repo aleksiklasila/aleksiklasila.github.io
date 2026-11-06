@@ -1672,12 +1672,8 @@ function getOwnedActiveResearchLabs(owner) {
     return collectorSpawners.filter(s => s && s.type === 'research' && s.owner === owner && s.energy > 0 && !s.underConstruction);
 }
 function hasOwnedActiveResearchLab(owner) {
-    const spawners = structListView(2);
-    for (let i = 0; i < spawners.length; i++) {
-        const s = spawners[i];
-        if (s && s.type === 'research' && s.owner === owner && s.energy > 0 && !s.underConstruction) return true;
-    }
-    return false;
+    const o = Number(owner);
+    return Number.isInteger(o) && o >= 0 && o < 64 && typeof structLabBuilt !== 'undefined' && structLabBuilt[o] > 0;
 }
 
 function setResearchQueueDragGuard(active, rerenderPopup = false) {
@@ -3084,11 +3080,211 @@ function getResearchWork(kind, key, statKey, currentLevel) {
     return Math.max(1, Math.floor(RESEARCH_WORK_BASE * weight * detPow(RESEARCH_WORK_EXP, lvl)));
 }
 
+// ---- Research queue: one per player, numbers ----
+// The simulation's queue is p._rq: ids (Int32Array: the stat ids in order,
+// ids[0] the active task), n (its length), depth (each stat's tasks queued),
+// prog (Float64Array: the work done on each stat's next level; the progress
+// is the level's, so moving or removing a task moves none), owner, ver (its
+// changes: the views' key). A task's level is its stat's level plus the
+// stat's tasks ahead of it; its cost and work follow from that. Every
+// operation is O(1) or a shift of the ids (moving a task, removing one).
+// p.researchTask / p.researchQueue: views of it (task objects, kept while
+// they stay the same task: the frames' queue deltas compare them), read-only
+// but assignable whole (a reset, a scene, tests). The page of a simulation
+// worker has the frames' plain arrays instead (sim_frame_world.js).
+let _researchStatList = null, _researchStatIx = null, _researchStatThings = null;
+function _researchStats() {
+    if (_researchStatList && _researchStatThings === RESEARCH_THINGS) return _researchStatList;
+    _researchStatThings = RESEARCH_THINGS; _researchStatList = []; _researchStatIx = new Map();
+    for (const t of RESEARCH_THINGS || []) for (const s of t.stats || []) {
+        const id = makeResearchLevelId(t.kind, t.key, s.statKey);
+        if (_researchStatIx.has(id)) continue;
+        _researchStatIx.set(id, _researchStatList.length);
+        _researchStatList.push({ kind: t.kind, key: t.key, statKey: s.statKey });
+    }
+    return _researchStatList;
+}
+function researchStatIndex(kind, key, statKey) { _researchStats(); const i = _researchStatIx.get(makeResearchLevelId(kind, key, statKey)); return i === undefined ? -1 : i; }
+// (Where the queue is the numbers: not the page of a simulation worker.)
+function _researchSimSide() { return !(typeof simClientActive === 'function' && simClientActive()); }
+// The queue's numbers in the wasm heap: ids, depth, prog, hdr ([0] length,
+// [1] version, [2] the last removal's stat); its changes by the kernel
+// (wasm/src/ord.rs k_rq_op). Made from a restored plain copy (its arrays
+// copied into the heap) or anew.
+const _rqHeap = (Type, src, n) => { const a = simHeapArray(Type, Math.max(n, src ? src.length : 0)); if (src) a.set(src); return a; };
+class SimResearchQueue {
+    constructor(owner, src = null) {
+        const ns = Math.max(16, _researchStats().length);
+        this.ids = _rqHeap(Int32Array, src && src.ids, 64);
+        this.depth = _rqHeap(Int32Array, src && src.depth, ns);
+        this.prog = _rqHeap(Float64Array, src && src.prog, ns);
+        this.hdr = _rqHeap(Int32Array, src && src.hdr, 4);
+        // (An older copy's length and version: the header.)
+        if (src && !src.hdr) { this.hdr[0] = src.n | 0; this.hdr[1] = src.ver | 0; }
+        this.owner = owner;
+    }
+    get n() { return this.hdr[0]; }
+    get ver() { return this.hdr[1]; }
+    set ver(v) { this.hdr[1] = v | 0; }
+    // (Its arrays in the heap again: a heap made since.)
+    rehome() { for (const k of ['ids', 'depth', 'prog', 'hdr']) if (!simHeapHas(this[k])) this[k] = _rqHeap(this[k].constructor, this[k], 0); }
+}
+const _rqP = new Float64Array(4);
+function _rqOp(R, op, p1, p2, p3 = 0) {
+    R.rehome();
+    _rqP[0] = op; _rqP[1] = p1; _rqP[2] = p2; _rqP[3] = p3;
+    simRustDirect('k_rq_op', [R.ids, R.depth, R.hdr], _rqP);
+    return R.hdr[2];
+}
+function _rqNew(owner) { return new SimResearchQueue(owner); }
+function _rqStatRoom(R, s) {
+    if (s < R.depth.length) return;
+    const m = Math.max(s + 1, R.depth.length * 2), d = simHeapArray(Int32Array, m), p = simHeapArray(Float64Array, m);
+    d.set(R.depth); p.set(R.prog); simHeapFree(R.depth); simHeapFree(R.prog); R.depth = d; R.prog = p;
+}
+function _rqInsert(R, i, s) {
+    if (R.n >= R.ids.length - 1) { const a = simHeapArray(Int32Array, R.ids.length * 2); a.set(R.ids); simHeapFree(R.ids); R.ids = a; }
+    _rqStatRoom(R, s);
+    _rqOp(R, 0, i, s);
+}
+function _rqRemove(R, i) { return _rqOp(R, 1, i, 0); }
+function _rqLevel(o, s) { const e = _researchStatList[s]; return e ? getPlayerResearchLevel(o, e.kind, e.key, e.statKey) : MAX_RESEARCH_LEVEL; }
+// The views: one task object per (stat, level) while it is queued.
+// (Views by the queue's version and the research levels' epoch: a restore or
+// a stat change gives levels the version does not see; _rqViewEpoch.)
+const _rqViews = new WeakMap();
+let _rqViewEpoch = 0;
+function researchQueueViewsInvalidate() { _rqViewEpoch++; }
+function _rqViewOf(R) { let V = _rqViews.get(R); if (!V) _rqViews.set(R, V = { qver: -1, tver: -1, ep: -1, queue: [], task: null, objs: new Map(), seen: new Int32Array(16) }); const ep = _rqViewEpoch + (typeof _precomputedStatsVersion === 'number' ? _precomputedStatsVersion * 65536 : 0); if (V.ep !== ep) { V.ep = ep; V.qver = -1; V.tver = -1; V.objs = new Map(); } return V; }
+function _rqTaskObj(V, o, s, from, done) {
+    const e = _researchStatList[s], key = s * 4096 + Math.min(4095, from);
+    let t = V.objs.get(key);
+    if (!t) { t = { owner: o, kind: e.kind, key: e.key, statKey: e.statKey, fromLevel: 0, toLevel: 0, cost: 0, workRequired: 0, workDone: 0 }; V.objs.set(key, t); }
+    const cap = from >= MAX_RESEARCH_LEVEL;
+    t.fromLevel = from; t.toLevel = cap ? from : from + 1;
+    t.cost = cap ? 0 : getResearchCost(e.kind, e.key, e.statKey, from);
+    t.workRequired = cap ? 0 : getResearchWork(e.kind, e.key, e.statKey, from);
+    t.workDone = done ? Math.min(t.workRequired, done) : 0;
+    return t;
+}
+function _rqTask(p) {
+    const R = p._rq;
+    if (!R || R.n === 0) return null;
+    _researchStats();
+    const V = _rqViewOf(R), s = R.ids[0];
+    if (V.tver !== R.ver || !V.task) { V.task = _rqTaskObj(V, R.owner, s, _rqLevel(R.owner, s), R.prog[s]); V.tver = R.ver; }
+    else V.task.workDone = Math.min(V.task.workRequired, R.prog[s]);
+    return V.task;
+}
+function _rqQueue(p) {
+    const R = p._rq;
+    if (!R) return [];
+    const V = _rqViewOf(R);
+    if (V.qver === R.ver) return V.queue;
+    const stats = _researchStats(), old = V.objs, o = R.owner;
+    if (V.seen.length < stats.length) V.seen = new Int32Array(stats.length);
+    const seen = V.seen;
+    V.objs = new Map(); V.queue.length = 0;
+    // (The objects of the tasks still queued kept: old's.)
+    const keep = V.objs; V.objs = old;
+    const made = new Map();
+    for (let i = 0; i < R.n; i++) {
+        const s = R.ids[i];
+        if (!stats[s]) continue;
+        const from = _rqLevel(o, s) + seen[s]++;
+        const t = _rqTaskObj(V, o, s, from, seen[s] === 1 ? R.prog[s] : 0);
+        made.set(s * 4096 + Math.min(4095, from), t);
+        if (i === 0) { V.task = t; V.tver = R.ver; } else V.queue.push(t);
+    }
+    for (let i = 0; i < R.n; i++) seen[R.ids[i]] = 0;
+    V.objs = made; keep.clear();
+    V.qver = R.ver;
+    return V.queue;
+}
+// (Players whose task was just set to none: not state, kept beside them.)
+const _rqNoTask = new WeakSet();
+function _rqSetTask(p, t) {
+    const R = p._rq;
+    if (R.n > 0) _rqRemove(R, 0);
+    // (None active: the next one queued is the head now, not chosen; a queue
+    // set right after replaces it too (researchTask = null; researchQueue = [...]).)
+    if (t == null) { _rqNoTask.add(p); return; }
+    _rqNoTask.delete(p);
+    const s = researchStatIndex(t.kind, t.key, t.statKey);
+    if (s < 0) return;
+    _rqInsert(R, 0, s);
+    if (Number(t.workDone) > 0) R.prog[s] = Number(t.workDone);
+}
+// (The tasks after the active one; with none active, the first becomes it.)
+function _rqSetQueue(p, arr) {
+    const R = p._rq, keep = _rqNoTask.has(p) ? 0 : 1;
+    _rqNoTask.delete(p);
+    while (R.n > keep) _rqRemove(R, R.n - 1);
+    for (const t of Array.isArray(arr) ? arr : []) {
+        const s = t ? researchStatIndex(t.kind, t.key, t.statKey) : -1;
+        if (s < 0) continue;
+        const first = !(s < R.depth.length) || R.depth[s] === 0;
+        _rqInsert(R, R.n, s);
+        if (first && Number(t.workDone) > 0) R.prog[s] = Number(t.workDone);
+    }
+}
+function _rqAttach(p, o) {
+    const dq = Object.getOwnPropertyDescriptor(p, 'researchQueue');
+    // (A restored player's queue is its plain copy under the views: made the heap queue again.)
+    if (p._rq && dq && dq.get) { if (!(p._rq instanceof SimResearchQueue)) p._rq = new SimResearchQueue(o, typeof p._rq === 'object' ? p._rq : null); p._rq.owner = o; return p; }
+    const dt = Object.getOwnPropertyDescriptor(p, 'researchTask');
+    const plainQ = dq && !dq.get ? dq.value : null, plainT = dt && !dt.get ? dt.value : null;
+    delete p.researchQueue; delete p.researchTask;
+    if (!(p._rq instanceof SimResearchQueue)) p._rq = new SimResearchQueue(o, p._rq && typeof p._rq === 'object' ? p._rq : null);
+    p._rq.owner = o;
+    Object.defineProperty(p, 'researchTask', { configurable: true, enumerable: false, get() { return _rqTask(this); }, set(v) { _rqSetTask(this, v); } });
+    Object.defineProperty(p, 'researchQueue', { configurable: true, enumerable: false, get() { return _rqQueue(this); }, set(v) { _rqSetQueue(this, v); } });
+    if (plainT) p.researchTask = plainT;
+    if (Array.isArray(plainQ) && plainQ.length) p.researchQueue = plainQ;
+    return p;
+}
 function ensurePlayerResearchQueueState(playerId) {
-    if (!players[playerId]) return { researchQueue: [], researchTask: null };
-    if (!Array.isArray(players[playerId].researchQueue)) players[playerId].researchQueue = [];
-    if (!Object.prototype.hasOwnProperty.call(players[playerId], 'researchTask')) players[playerId].researchTask = null;
-    return players[playerId];
+    const p = players[playerId];
+    if (!p) return { researchQueue: [], researchTask: null };
+    if (_researchSimSide()) return _rqAttach(p, playerId);
+    if (!Array.isArray(p.researchQueue)) p.researchQueue = [];
+    if (!Object.prototype.hasOwnProperty.call(p, 'researchTask')) p.researchTask = null;
+    return p;
+}
+// A player's queue emptied, its progress too (a new match).
+function researchQueueReset(p, playerId) {
+    if (p && p._rq && _researchSimSide()) { const old = p._rq; p._rq = _rqNew(playerId); if (old instanceof SimResearchQueue) for (const k of ['ids', 'depth', 'prog', 'hdr']) simHeapFree(old[k]); _rqAttach(p, playerId); return; }
+    if (p) { p.researchQueue = []; p.researchTask = null; }
+}
+// Count tasks of a stat added (at insertAt and on, -1 the end): as many as
+// the labs' capacity and the stat's levels leave room for. The tasks added.
+function researchQueueAdd(playerId, kind, key, statKey, count, insertAt = -1) {
+    const p = ensurePlayerResearchQueueState(playerId), R = p._rq, s = researchStatIndex(kind, key, statKey);
+    if (!R || s < 0) return 0;
+    _rqStatRoom(R, s);
+    const capacity = getResearchQueueCapacityForPlayer(playerId), level = getPlayerResearchLevel(playerId, kind, key, statKey);
+    let added = 0;
+    for (let i = 0; i < count; i++) {
+        if (R.n >= capacity || level + R.depth[s] >= MAX_RESEARCH_LEVEL) break;
+        _rqInsert(R, insertAt >= 0 ? Math.min(R.n, insertAt + i) : R.n, s);
+        added++;
+    }
+    tryAdvancePlayerResearchTask(playerId);
+    return added;
+}
+// Count tasks taken off, the last of stat s each (any: the last of all).
+function researchQueueRemove(playerId, s, count, any) {
+    const R = ensurePlayerResearchQueueState(playerId)._rq;
+    if (!R) return;
+    _rqOp(R, 3, 0, any ? -1 : s, count);
+    tryAdvancePlayerResearchTask(playerId);
+}
+// The task at place from moved to place to (0: the active one).
+function researchQueueMove(playerId, from, to) {
+    const R = ensurePlayerResearchQueueState(playerId)._rq;
+    if (!R || !(from >= 0 && from < R.n && to >= 0 && to < R.n) || from === to) return;
+    _rqOp(R, 2, from, to);
+    tryAdvancePlayerResearchTask(playerId);
 }
 
 function getPlayerResearchQueue(playerId) {
@@ -3099,148 +3295,72 @@ function getPlayerResearchTask(playerId) {
     return ensurePlayerResearchQueueState(playerId).researchTask;
 }
 
-// Every player's working labs, counted in one pass and kept while nothing
-// they depend on can have changed: the same tick (game time), no structure
-// placed or removed (the tile entity version and epoch: restores bump them),
-// the worker buildings' list the same. (A lab's energy reaches 0 only by
-// damage, and one destroyed leaves its tile; a site starts at 1.) A pass over
-// every lab for every research order: ~29k labs, 540 ms over the 22 command
-// bursts of the chaos benchmark, ~25 ms a burst tick.
-const _researchLabCount = { tick: NaN, ver: -1, epoch: -1, sv: -1, counts: new Int32Array(16) };
+// (Each player's research labs: the structure table's counts, data_state.js
+// structLabCount / structLabBuilt, kept where its entries change: O(1).)
 function getResearchQueueCapacityForPlayer(playerId) {
-    const C = _researchLabCount, tick = typeof gameTime === 'number' ? gameTime : NaN;
-    const ver = typeof _tileEntityVersion === 'number' ? _tileEntityVersion : -1, epoch = typeof _tileEntityEpoch === 'number' ? _tileEntityEpoch : -1;
-    const sv = typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : -1;
-    if (!(C.tick === tick && C.ver === ver && C.epoch === epoch && C.sv === sv)) {
-        C.counts.fill(0);
-        // Count directly into the reusable owner columns. Capacity queries
-        // do not need to rebuild the worker-spawner index.
-        const spawners = structListView(2);
-        for (let i = 0; i < spawners.length; i++) {
-            const s = spawners[i];
-            if (!s || s.type !== 'research' || s.energy <= 0) continue;
-            const o = s.owner;
-            if (o >= 0 && o < C.counts.length) C.counts[o]++;
-            else if (Number.isInteger(o) && o >= 0) { const g = new Int32Array(o + 16); g.set(C.counts); C.counts = g; C.counts[o]++; }
-        }
-        C.tick = tick; C.ver = ver; C.epoch = epoch; C.sv = sv;
-    }
     const o = Number(playerId);
-    return Number.isInteger(o) && o >= 0 && o < C.counts.length ? C.counts[o] * 20 : 0;
+    return Number.isInteger(o) && o >= 0 && o < 64 && typeof structLabCount !== 'undefined' ? Math.max(0, structLabCount[o]) * 20 : 0;
 }
 
 function getPlayerResearchQueueTotalLength(playerId) {
-    let queue = getPlayerResearchQueue(playerId);
-    let task = getPlayerResearchTask(playerId);
-    return (task ? 1 : 0) + queue.length;
+    const p = ensurePlayerResearchQueueState(playerId);
+    if (p._rq) return p._rq.n;
+    return (p.researchTask ? 1 : 0) + (Array.isArray(p.researchQueue) ? p.researchQueue.length : 0);
 }
 
-function _researchTasksEquivalent(a, b) {
-    if (!a || !b) return false;
-    return String(a.kind || '') === String(b.kind || '')
-        && String(a.key || '') === String(b.key || '')
-        && String(a.statKey || '') === String(b.statKey || '')
-        && Math.max(0, Math.floor(Number(a.fromLevel) || 0)) === Math.max(0, Math.floor(Number(b.fromLevel) || 0))
-        && Math.max(0, Math.floor(Number(a.toLevel) || 0)) === Math.max(0, Math.floor(Number(b.toLevel) || 0));
-}
-
-function _normalizeResearchTaskForOwner(task, owner) {
-    if (!task || typeof task !== 'object') return null;
-    let kind = String(task.kind || '');
-    let key = String(task.key || '');
-    let statKey = String(task.statKey || '');
-    if (!kind || !key || !statKey) return null;
-    if (!getResearchStatEntry(kind, key, statKey)) return null;
-
-    let normalizedOwner = Math.max(0, Math.floor(Number(owner) || 0));
-    // maxLevel research maps 0..MAX_RESEARCH_LEVEL onto thing levels, so every stat shares one cap.
-    let capLevel = MAX_RESEARCH_LEVEL;
-
-    let fromLevel = Math.max(0, Math.floor(Number(task.fromLevel) || 0));
-    let toLevel = Math.max(fromLevel, Math.floor(Number(task.toLevel) || (fromLevel + 1)));
-    if (fromLevel >= capLevel) {
-        toLevel = fromLevel;
-    } else {
-        toLevel = Math.min(capLevel, Math.max(fromLevel + 1, toLevel));
-    }
-
-    let workRequired = Number(task.workRequired);
-    if (!Number.isFinite(workRequired) || workRequired < 0) {
-        workRequired = fromLevel >= capLevel ? 0 : getResearchWork(kind, key, statKey, fromLevel);
-    }
-    workRequired = Math.max(0, Number(workRequired) || 0);
-
-    let cost = Number(task.cost);
-    if (!Number.isFinite(cost) || cost < 0) {
-        cost = fromLevel >= capLevel ? 0 : getResearchCost(kind, key, statKey, fromLevel);
-    }
-    cost = Math.max(0, Number(cost) || 0);
-
-    let workDone = Math.max(0, Number(task.workDone) || 0);
-    if (workRequired > 0) workDone = Math.min(workRequired, workDone);
-    else workDone = 0;
-
-    task.owner = normalizedOwner;
-    task.kind = kind;
-    task.key = key;
-    task.statKey = statKey;
-    task.fromLevel = fromLevel;
-    task.toLevel = toLevel;
-    task.cost = cost;
-    task.workRequired = workRequired;
-    task.workDone = workDone;
-    return task;
-}
-
+// The active task as it stands: one at the stat's last level dropped, one
+// whose work is done (its work changed) completed.
 function tryAdvancePlayerResearchTask(playerId) {
-    let p = ensurePlayerResearchQueueState(playerId);
-    while (true) {
-        if (p.researchTask) {
-            p.researchTask = _normalizeResearchTaskForOwner(p.researchTask, playerId);
-        }
-
-        // Safety net: never let a completed/invalid active task stall the queue at 100%.
-        if (p.researchTask) {
-            let required = Math.max(0, Number(p.researchTask.workRequired) || 0);
-            let done = Math.max(0, Number(p.researchTask.workDone) || 0);
-            if (!(required > 0) || done >= required) {
-                applyResearchCompletion(playerId, p.researchTask);
-                p.researchTask = null;
-                continue;
-            }
-            break;
-        }
-
-        if (!Array.isArray(p.researchQueue) || p.researchQueue.length <= 0) break;
-        let nextTask = _normalizeResearchTaskForOwner(p.researchQueue.shift(), playerId);
-        if (!nextTask) continue;
-        p.researchTask = nextTask;
+    const p = ensurePlayerResearchQueueState(playerId), R = p._rq;
+    if (!R) return p.researchTask || null;
+    _researchStats();
+    for (let guard = 0; guard < 64 && R.n > 0; guard++) {
+        const s = R.ids[0], e = _researchStatList[s];
+        if (!e) { _rqRemove(R, 0); continue; }
+        const level = _rqLevel(playerId, s);
+        if (level >= MAX_RESEARCH_LEVEL) { _rqRemove(R, 0); continue; }
+        const req = getResearchWork(e.kind, e.key, e.statKey, level);
+        if (req > 0 && R.prog[s] >= req) { _rqCompleteHead(playerId, R); continue; }
+        break;
     }
     return p.researchTask;
 }
+// The active task done: its stat's next level, its progress back to 0.
+function _rqCompleteHead(playerId, R) {
+    const s = R.ids[0], e = _researchStatList[s];
+    R.prog[s] = 0;
+    _rqRemove(R, 0);
+    if (e) applyResearchCompletion(playerId, e);
+}
+// The research pool's points into the active tasks (researchDrainTick):
+// the points left.
+function researchQueueSpend(playerId, pts) {
+    const R = ensurePlayerResearchQueueState(playerId)._rq;
+    if (!R) return pts;
+    for (let guard = 0; guard < 64 && pts > 0; guard++) {
+        tryAdvancePlayerResearchTask(playerId);
+        if (R.n === 0) break;
+        const s = R.ids[0], e = _researchStatList[s], req = getResearchWork(e.kind, e.key, e.statKey, _rqLevel(playerId, s));
+        const used = Math.min(Math.max(0, req - R.prog[s]), pts);
+        R.prog[s] += used; pts -= used;
+        if (R.prog[s] < req) break;
+        _rqCompleteHead(playerId, R);
+    }
+    tryAdvancePlayerResearchTask(playerId);
+    return pts;
+}
 
 function getResearchQueueDepthForStat(researchBuilding, kind, key, statKey) {
-    if (!researchBuilding) return 0;
-    let owner = researchBuilding.owner;
-    if (!Number.isFinite(owner)) return 0;
-    let task = getPlayerResearchTask(owner);
-    let queue = getPlayerResearchQueue(owner);
-    let n = 0;
-    if (task && task.kind === kind && task.key === key && task.statKey === statKey) n++;
-    for (let q of queue) {
-        if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
-    }
-    return n;
+    if (!researchBuilding || !Number.isFinite(researchBuilding.owner)) return 0;
+    return getResearchQueuedDepthForPlayer(researchBuilding.owner, kind, key, statKey);
 }
 
 function getResearchQueuedDepthForPlayer(playerId, kind, key, statKey) {
-    let task = getPlayerResearchTask(playerId);
-    let queue = getPlayerResearchQueue(playerId);
-    let n = 0;
+    const p = ensurePlayerResearchQueueState(playerId);
+    if (p._rq) { const s = researchStatIndex(kind, key, statKey); return s >= 0 && s < p._rq.depth.length ? p._rq.depth[s] : 0; }
+    let task = p.researchTask, queue = p.researchQueue || [], n = 0;
     if (task && task.kind === kind && task.key === key && task.statKey === statKey) n++;
-    for (let q of queue) {
-        if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
-    }
+    for (let q of queue) if (q && q.kind === kind && q.key === key && q.statKey === statKey) n++;
     return n;
 }
 
@@ -3258,172 +3378,8 @@ function makeResearchTask(owner, kind, key, statKey, projectedLevel) {
         workDone: 0
     };
 }
-
-// The queue's levels, costs and progress made again from its order. With
-// `only` (tasks standing for their stats), those stats' tasks alone: a
-// move, a removal or an insertion keeps every other stat's tasks in their
-// order (a pass over every task's tables was ~5 ms with 600 queued). A
-// stat whose tasks' levels do not follow their order (a queue an older
-// build left so) is made again too: any move or removal heals the queue.
-function researchStatId(task) { return `${task.kind || ''}:${task.key || ''}:${task.statKey || ''}`; }
-function _researchTaskOfStats(task, only) {
-    for (let i = 0; i < only.length; i++) { const o = only[i]; if (task.statKey === o.statKey && task.key === o.key && task.kind === o.kind) return true; }
-    return false;
-}
-// (Levels only, from the research levels and the order: no tables read.)
-function _researchSeenEntry(seen, kind, key, statKey) {
-    let byKey = seen.get(kind);
-    if (!byKey) seen.set(kind, byKey = new Map());
-    let byStat = byKey.get(key);
-    if (!byStat) byKey.set(key, byStat = new Map());
-    let entry = byStat.get(statKey);
-    if (!entry) byStat.set(statKey, entry = { epoch: 0, next: 0, bad: false, levelId: makeResearchLevelId(kind, key, statKey) });
-    return entry;
-}
-function _researchStatsOutOfOrder(playerId, ordered, only, seen, epoch) {
-    const levels = gameStarted ? ensurePlayerResearchLevels(playerId) : null;
-    for (let i = 0; i < ordered.length; i++) {
-        const task = ordered[i], e = _researchSeenEntry(seen, task.kind, task.key, task.statKey);
-        if (e.epoch !== epoch) {
-            e.epoch = epoch;
-            const level = levels ? clampResearchLevel(levels[e.levelId] || 0)
-                : getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey);
-            e.next = Math.max(0, Math.floor(Number(level) || 0));
-            e.bad = false;
-        }
-        const from = e.next++, to = from >= MAX_RESEARCH_LEVEL ? from : Math.min(MAX_RESEARCH_LEVEL, from + 1);
-        if (e.bad || (task.fromLevel === from && task.toLevel === to)) continue;
-        e.bad = true;
-        if (!_researchTaskOfStats(task, only)) only.push(task);
-    }
-}
-const _researchRebaseScratch = new WeakMap();
-function _researchScratchFor(p) {
-    let scratch = _researchRebaseScratch.get(p);
-    if (!scratch) {
-        scratch = { ordered: [], groups: new Map(), seen: new Map(), touched: [null], epoch: 0 };
-        _researchRebaseScratch.set(p, scratch);
-    }
-    return scratch;
-}
-function researchOrderChecksReserve() {
-    for (let owner = 0; owner < players.length; owner++) {
-        if (!players[owner]) continue;
-        const seen = _researchScratchFor(players[owner]).seen;
-        for (const thing of RESEARCH_THINGS) {
-            for (const stat of thing.stats) _researchSeenEntry(seen, thing.kind, thing.key, stat.statKey);
-        }
-    }
-}
-// The active task precedes the waiting queue. Move within that logical
-// sequence without copying the queue or using splice's removed-item array.
-function moveResearchTaskInPlace(playerId, p, from, to, requireTask) {
-    const q = p.researchQueue, active = p.researchTask;
-    let task;
-    if (!active) {
-        task = q[from];
-        if (requireTask && !task) return;
-        if (from < to) q.copyWithin(from, from + 1, to + 1);
-        else q.copyWithin(to + 1, to, from);
-        q[to] = task;
-        p.researchTask = q[0] || null;
-        q.copyWithin(0, 1);
-        q.length--;
-    } else if (from === 0) {
-        task = active;
-        p.researchTask = q[0] || null;
-        q.copyWithin(0, 1, to);
-        q[to - 1] = task;
-    } else {
-        task = q[from - 1];
-        if (requireTask && !task) return;
-        if (to === 0) {
-            q.copyWithin(1, 0, from - 1);
-            q[0] = active;
-            p.researchTask = task || null;
-        } else {
-            if (from < to) q.copyWithin(from - 1, from, to);
-            else q.copyWithin(to, to - 1, from - 1);
-            q[to - 1] = task;
-        }
-    }
-    const touched = _researchScratchFor(p).touched;
-    touched[0] = task;
-    try { rebasePlayerResearchQueueState(playerId, task ? touched : null); }
-    finally { touched.fill(null); touched.length = 1; }
-    tryAdvancePlayerResearchTask(playerId);
-}
-function rebasePlayerResearchQueueState(playerId, only = null) {
-    const p = ensurePlayerResearchQueueState(playerId), scratch = _researchScratchFor(p);
-    const ordered = scratch.ordered, epoch = ++scratch.epoch;
-    let count = 0;
-    if (p.researchTask) ordered[count++] = p.researchTask;
-    if (Array.isArray(p.researchQueue) && p.researchQueue.length > 0) {
-        for (let i = 0; i < p.researchQueue.length; i++) {
-            const task = p.researchQueue[i];
-            if (task) ordered[count++] = task;
-        }
-    }
-    ordered.length = count;
-    if (ordered.length <= 0) return p;
-    if (only) _researchStatsOutOfOrder(playerId, ordered, only, scratch.seen, epoch);
-
-    // Progress belongs to the level, not the task object: same-stat tasks are interchangeable,
-    // so the lowest queued level keeps the most-advanced progress after reordering.
-    const groups = scratch.groups;
-    for (let i = 0; i < ordered.length; i++) {
-        const task = ordered[i];
-        if (only && !_researchTaskOfStats(task, only)) continue;
-        let statKey = researchStatId(task);
-        let group = groups.get(statKey);
-        if (!group) {
-            group = { epoch: 0, count: 0, used: 0, levels: [], work: [] };
-            groups.set(statKey, group);
-        }
-        if (group.epoch !== epoch) {
-            group.epoch = epoch;
-            group.count = group.used = 0;
-        }
-        // Stable insertion preserves equal-level progress order without a
-        // temporary sorted task array or sort/map callbacks.
-        const level = Math.floor(Number(task.fromLevel) || 0);
-        let pos = group.count++;
-        while (pos > 0 && group.levels[pos - 1] > level) {
-            group.levels[pos] = group.levels[pos - 1];
-            group.work[pos] = group.work[pos - 1];
-            pos--;
-        }
-        group.levels[pos] = level;
-        group.work[pos] = Math.max(0, Number(task.workDone) || 0);
-    }
-
-    for (let i = 0; i < ordered.length; i++) {
-        const task = ordered[i];
-        if (!task) continue;
-        if (only && !_researchTaskOfStats(task, only)) continue;
-        let statKey = researchStatId(task);
-        let baseLevel = Math.max(0, Math.floor(Number(getPlayerResearchLevel(playerId, task.kind, task.key, task.statKey)) || 0));
-        const group = groups.get(statKey);
-        let priorSameStat = group.used++;
-        let fromLevel = baseLevel + priorSameStat;
-        let capLevel = MAX_RESEARCH_LEVEL;
-        let atCap = fromLevel >= capLevel;
-        let nextWorkRequired = atCap ? 0 : Math.max(0, Number(getResearchWork(task.kind, task.key, task.statKey, fromLevel)) || 0);
-
-        task.owner = playerId;
-        task.fromLevel = fromLevel;
-        task.toLevel = atCap ? fromLevel : Math.min(capLevel, fromLevel + 1);
-        task.cost = atCap ? 0 : Math.max(0, Number(getResearchCost(task.kind, task.key, task.statKey, fromLevel)) || 0);
-        task.workRequired = nextWorkRequired;
-        task.workDone = Math.max(0, Math.min(nextWorkRequired, Number(group.work[priorSameStat]) || 0));
-    }
-
-    p.researchTask = ordered[0] || null;
-    for (let i = 1; i < ordered.length; i++) p.researchQueue[i - 1] = ordered[i];
-    p.researchQueue.length = ordered.length - 1;
-    ordered.fill(null);
-    return p;
-}
+// (Kept for callers: no checks to reserve now.)
+function researchOrderChecksReserve() {}
 
 // The units take the new tables at their next effective-stats refresh (a
 // twentieth of them a tick, UNIT_EFFECTIVE_STATS_RECALC_TICKS): their
@@ -3458,24 +3414,13 @@ function applyResearchCompletion(owner, task) {
     if (task.kind === 'building' && task.statKey === 'maxLevel') recalculateAdjacency();
 }
 
+// The active task completed (its work done): the next one active.
 function completeActiveResearchTaskForPlayer(owner, completedTask) {
-    if (!Number.isFinite(owner) || !completedTask) return;
-    let p = ensurePlayerResearchQueueState(owner);
-    p.researchTask = _normalizeResearchTaskForOwner(p.researchTask, owner);
-    if (!p.researchTask) {
-        tryAdvancePlayerResearchTask(owner);
-        return;
-    }
-
-    let isMatchingTask = (p.researchTask === completedTask) || _researchTasksEquivalent(p.researchTask, completedTask);
-    if (!isMatchingTask) {
-        let required = Math.max(0, Number(p.researchTask.workRequired) || 0);
-        let done = Math.max(0, Number(p.researchTask.workDone) || 0);
-        if (required > 0 && done < required) return;
-    }
-
-    applyResearchCompletion(owner, p.researchTask);
-    p.researchTask = null;
+    if (!Number.isFinite(owner)) return;
+    const R = ensurePlayerResearchQueueState(owner)._rq;
+    if (!R || R.n === 0) return;
+    _researchStats();
+    _rqCompleteHead(owner, R);
     tryAdvancePlayerResearchTask(owner);
 }
 
@@ -3542,49 +3487,31 @@ function clonePrecomputedWithBaseMaxEnergy(baseStats, effectiveStats) {
 // count: simMoveStatsChanged disarms a unit whose stats changed).
 let _unitStatsNotifyHeld = false;
 function applyUnitLevelScaling(unit, level) {
-    const previousRow=unit && unit._us ? unit._us.statRow[unit._si] : -1;
     if (!unit) return;
-    let lvl = Math.max(1, Math.floor(level || 1));
+    const c = unit._us, s = unit._si, previousRow = c ? c.statRow[s] : -1;
+    const lvl = Math.max(1, Math.floor(level || 1));
     unit.unitLevel = lvl;
-    let shouldSyncStackFromLevel = !(Number.isFinite(unit.stackCount) && unit.stackCount >= 1)
-        || !Number.isFinite(unit.baseLevel)
-        || Math.max(1, Math.floor(unit.baseLevel || 1)) !== lvl;
-    if (shouldSyncStackFromLevel) {
-        unit.stackCount = getRequiredStacksForLevel(lvl);
-    }
-
-    let scaled = computeUnitLevelScaledStats(unit, lvl);
-    if (!scaled) return;
-
+    if (!(Number.isFinite(unit.stackCount) && unit.stackCount >= 1) || !Number.isFinite(unit.baseLevel) || Math.max(1, Math.floor(unit.baseLevel || 1)) !== lvl) unit.stackCount = getRequiredStacksForLevel(lvl);
+    const base = computeUnitLevelScaledStats(unit, lvl);
+    if (!base) return;
     let prevEnergyAbs = Number(unit.energy);
-    if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(scaled.maxEnergy) || 1;
-    unit.preComputedBase = scaled;
-    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
-    unit.basePreComputed = unit.preComputedBase;
-    unit.preComputed = unit.preComputedEffective;
-
-    let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
-    unit.isFlying = !!unitDef.isFlying;
-    unit.maxEnergy = unit.preComputedBase.maxEnergy;
-    if (typeof simUnitMaxE === 'function') simUnitMaxE(unit);
-    unit.energy = Math.max(1, Math.min(unit.preComputedBase.maxEnergy, Math.floor(prevEnergyAbs)));
-
+    if (!Number.isFinite(prevEnergyAbs)) prevEnergyAbs = Number(base.maxEnergy) || 1;
+    unit.isFlying = !!(BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {}).isFlying;
     unit.baseLevel = lvl;
     unit.effectiveStacks = Math.max(1, Number.isFinite(unit.stackCount) ? Math.floor(unit.stackCount) : 1);
     unit.effectiveLevel = lvl;
-    // (Its effective tables are this level's now: as applied. Left at the
-    // level before, a split or merge's unit that came back to that level
-    // kept this level's tables (the refresh saw them as applied), until a
-    // resync made them anew on the restored peer only: a divergence.)
     unit._lastAppliedEffectiveLevel = lvl;
+    if (!c) {
+        // (No slot: its own tables.)
+        unit.preComputedBase = base; unit.basePreComputed = base;
+        unit.preComputedEffective = unit.preComputed = clonePrecomputedWithBaseMaxEnergy(base, base);
+    } else _effRowAttach(unit);
+    unit.maxEnergy = base.maxEnergy;
+    if (typeof simUnitMaxE === 'function') simUnitMaxE(unit);
+    unit.energy = Math.max(1, Math.min(base.maxEnergy, Math.floor(prevEnergyAbs)));
     if (typeof effStatsUnitBaseChanged === 'function') effStatsUnitBaseChanged(unit);
-    if (typeof _effRowAttach === 'function') _effRowAttach(unit);
-    // (Its tables are of the stat tables' current version: no catch-up
-    // pass, and its base entry noted, for the kernels that take the others of
-    // its owner, type and level: things_utils.js _effBaseNote.)
-    if (unit._us && typeof _unitStatsVerOf === 'function') { unit._us.esVer[unit._si] = _unitStatsVerOf(unit); if (typeof _effBaseNote === 'function') _effBaseNote(unit); }
+    if (c && typeof _unitStatsVerOf === 'function') c.esVer[s] = _unitStatsVerOf(unit);
     if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
-    if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
 }
 
 // A restored unit's effective tables (utils_snapshot.js decode): its base
@@ -3592,37 +3519,24 @@ function applyUnitLevelScaling(unit, level) {
 // applyUnitEffectiveScaling makes them, with no energy, level or cover side
 // effects (the unit's fields are the snapshot's).
 function unitDerivedStatsRestore(unit) {
-    if (!unit || unit.preComputed) return;
-    const base = unit.preComputedBase || unit.basePreComputed;
-    if (!base) return;
-    const lvl = Math.max(1, Math.floor(Number(unit.effectiveLevel) || Number(unit.unitLevel) || 1));
-    const scaled = computeUnitLevelScaledStats(unit, lvl);
-    if (!scaled) return;
-    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(base, scaled);
-    unit.preComputed = unit.preComputedEffective;
+    // (A restored unit's tables: its rows by its levels, things_utils.js _effRowAttach.)
+    if (unit && unit._us && typeof _effRowAttach === 'function') _effRowAttach(unit);
 }
 
 function applyUnitEffectiveScaling(unit, effectiveLevel, previousRow) {
-    if (!Number.isInteger(previousRow)) previousRow=unit && unit._us ? unit._us.statRow[unit._si] : -1;
     if (!unit) return;
-    let lvl = Math.max(1, Math.floor(effectiveLevel || 1));
-    let scaled = computeUnitLevelScaledStats(unit, lvl);
-    if (!scaled) return;
-
-    unit.preComputedEffective = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase, scaled);
-    unit.preComputed = unit.preComputedEffective;
-
-    let unitDef = BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {};
-    unit.isFlying = !!unitDef.isFlying;
-    unit.maxEnergy = Number(unit.preComputedBase && unit.preComputedBase.maxEnergy) || unit.preComputedEffective.maxEnergy;
+    const c = unit._us;
+    if (!Number.isInteger(previousRow)) previousRow = c ? c.statRow[unit._si] : -1;
+    const lvl = Math.max(1, Math.floor(effectiveLevel || 1));
+    unit.isFlying = !!(BASE_UNIT_STATS[unit.unitType] || BASE_UNIT_STATS.norm || {}).isFlying;
+    unit.effectiveLevel = lvl;
+    unit._lastAppliedEffectiveLevel = lvl;
+    if (c) _effRowAttach(unit);
+    else { const scaled = computeUnitLevelScaledStats(unit, lvl); if (scaled) unit.preComputedEffective = unit.preComputed = clonePrecomputedWithBaseMaxEnergy(unit.preComputedBase || scaled, scaled); }
+    const base = unit.preComputedBase;
+    unit.maxEnergy = Number(base && base.maxEnergy) || Number(unit.preComputed && unit.preComputed.maxEnergy) || 1;
     if (typeof simUnitMaxE === 'function') simUnitMaxE(unit);
     if (!Number.isFinite(unit.energy)) unit.energy = Math.max(1, unit.maxEnergy);
     unit.energy = Math.max(1, Math.min(unit.maxEnergy, Math.floor(unit.energy)));
-
-    unit.effectiveLevel = lvl;
-    unit._lastAppliedEffectiveLevel = lvl;
-    if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(unit);
-    // (Its tables as a stat row: units of the same tables take it in the kernel.)
-    if (typeof _effRowAttach === 'function') _effRowAttach(unit);
     if (!_unitStatsNotifyHeld && typeof simMoveStatsChanged === 'function') simMoveStatsChanged(unit, previousRow);
 }

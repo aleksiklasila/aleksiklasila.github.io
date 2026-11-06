@@ -17,7 +17,7 @@ const f32 = Math.fround;
 for (const per of [7, 37, 1000]) for (const reverse of [false, true]) {
     const n = 237, np = 5, K = 12, chunks = Math.ceil(n / per);
     const R = {
-        'hc.e': heap('hc.e', 'Float32Array', n), 'hc.m': heap('hc.m', 'Float32Array', n), 'hc.o': heap('hc.o', 'Int16Array', n),
+        'hc.e': heap('hc.e', 'Float32Array', n), 'hc.m': heap('hc.m', 'Float32Array', n), 'hc.o': heap('hc.o', 'Int8Array', n),
         'hc.id': heap('hc.id', 'Int32Array', n), 'hc.l': heap('hc.l', 'Uint8Array', n), 'hc.d': heap('hc.d', 'Uint8Array', n)
     };
     for (let s = 0; s < n; s++) {

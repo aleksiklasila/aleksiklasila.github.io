@@ -13,7 +13,7 @@ const PROFILE = process.argv.includes('--profile');
 (async () => {
     const { world, host, guest, setup } = await SW.buildScaleWorld({ unitsPerTeam: UNITS, buildingsPerTeam: BUILDINGS });
     console.log('setup', setup, 'tick', host.eval('currentTick'), guest.eval('currentTick'));
-    console.log('entities', host.eval('JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: _snapFloorItems().length, drops: droppedItems.length, projectiles: projectiles.length })'));
+    console.log('entities', host.eval('JSON.stringify({ units: units.length, towers: towers.length, barracks: barracks.length, spawners: collectorSpawners.length, floor: _snapFloorItems().length, projectiles: projectiles.length })'));
     const row = (label, ms, extra = '') => console.log(label.padEnd(44), (ms.toFixed(3) + ' ms').padStart(12), extra);
     const t = (inst, code, n) => SW.time(inst, code, n);
     const tick = host.eval('currentTick');

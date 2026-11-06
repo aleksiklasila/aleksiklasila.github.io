@@ -28,6 +28,8 @@ c.window.Defence3Renderer3D.PersistentInstances.prototype.upload=function(){retu
 c._detailViewKey=()=>String(c.view||0);c._detailScore=()=>10;c._detailPick=(scores)=>Array.from(scores,(_,i)=>i).filter(i=>scores[i]>0);
 c._structureDetailCandidates=()=>[];
 vm.runInContext(read('src/audio_visual/renderer.js').match(/function _cmBaseHeight[\s\S]*?\r?\n}\r?\n/)[0],c);
+// (A remembered unit near the camera: its live detail; none here.)
+vm.runInContext('function _cmRememberedNear() { return false; }', c);
 const n=7,F={n,cap:n};
 for(const key of ['x','y','px','py','r','id','energy','flags','type','owner','facing','mode','vision','prate','amount','phase'])F[key]=new Float32Array(n);
 F.x.fill(16000);F.y.fill(16000);F.px.fill(15996);F.py.fill(16000);F.r.fill(8);F.energy.fill(100);F.type.fill(1);F.vision.fill(3);F.amount.fill(1);
@@ -37,18 +39,19 @@ const A={catalog:{width:2,lookup,styles:[{modelKey:'unit_norm',weaponType:'sword
 const C={units:F,unitCandidates:Array.from({length:n},(_,s)=>({_s:s})),detailMask:new Uint8Array(n),detailMaskVersion:1,colors:Array(9).fill('#08f'),fullVisibility:true,tile:32,alpha:.25};
 C.detailMask[0]=255;
 const S=R.drawColumnModels(C,{worldWidth:1000},A);
-assert.equal(S.count,3,'only unselected, live, visible units enter the middle layer');
-assert.deepEqual(Array.from(S.masks[1]),[255,255,0,0,0,255,255]);
+// (A remembered unit (flags 65536) is a frozen picture of its columns: the middle models draw it too.)
+assert.equal(S.count,4,'unselected, live units, visible or remembered, enter the middle layer');
+assert.deepEqual(Array.from(S.masks[1]),[255,255,0,255,0,255,255]);
 const record=draws[0],data=Array.from(S.groups.values())[0].storage.data;
-assert.equal(record.count,3);
+assert.equal(record.count,4);
 assert.ok(Math.abs(data[5]-.55*1.45*3)<1e-6,'height matches the close model, including its baked sight scale');
 assert.equal(data[3],-4/32,'GPU retains interpolation offset');
 assert.equal(data[19],1,'middle models are opaque');
 const version=S.version;R.drawColumnModels(C,{worldWidth:1000},A);assert.equal(S.version,version,'camera-only stable frames reuse instance storage');
 C.detailMask[1]=255;C.detailMaskVersion++;R.drawColumnModels(C,{worldWidth:1000},A);
-assert.equal(S.count,2,'promotion to full detail removes exactly one middle instance');
+assert.equal(S.count,3,'promotion to full detail removes exactly one middle instance');
 assert.equal(S.masks[1][1],255,'promotion never opens a hole in the far mask');
-F.energy[5]=0;c.view=1;R.drawColumnModels(C,{worldWidth:1000},A);assert.equal(S.count,1,'retirement cannot retain a stale middle model');
+F.energy[5]=0;c.view=1;R.drawColumnModels(C,{worldWidth:1000},A);assert.equal(S.count,2,'retirement cannot retain a stale middle model');
 // Workshops keep their fixed height and the actual timber sign in the middle
 // pass. Losing either makes a whole row flash to short player-colored boards.
 const B={n:1,cap:1};

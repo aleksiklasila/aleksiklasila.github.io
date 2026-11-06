@@ -324,7 +324,7 @@ const PAGE_COLLECT = (longMs = 50) => {
 // callers too).
 const PHASE_NAMES = ['gameTick', 'processActions', '_simPostResult', 'snapRecordTickHash', 'computeLockstepStateHashFast', 'resyncAfterTick',
     'updateAllPlayerVisibility', 'updateVisibility', 'syncVisibilityCoverage', 'recalculateUnitEffectiveLevel', 'processGlobalSpawnerQueue', 'simMoveRun', 'simMoveEndTick', 'spatialIndexRebuild', 'runUnitSeparationPass', '_forEachUnitInTickOrder', 'simUnitStateCollect',
-    'advanceGroupRoutes', 'takeDuePendingPathUnits', 'flushPendingMovementAstarSpend', 'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats',
+    'takeDuePendingPathUnits', 'flushPendingMovementAstarSpend', 'recomputePlayerPopCaps', '_runAdjacencyRecalculation', 'sampleGameStats',
     'visCoverHoldEnd', 'unitHitsResolve', 'statusPrepassRun', 'runQueuedOrders', 'navTick', 'navFieldsFlush', 'compactRemovedUnits', 'flushPendingResourceStatRebuilds',
     'ensureLaserConnections', 'gameStatsStep', 'projectilesBegin', '_buildDeterministicBuildingUpdateOrderForTick', 'healerCandidatesStep', 'tickStatusEffects',
     'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', 'getRawVisibilityGridForPlayer', 'simParallelBackgroundWait', 'simParallelRun'];

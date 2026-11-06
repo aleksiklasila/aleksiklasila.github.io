@@ -28,3 +28,12 @@ improvements when they reduce the actual gameplay bottleneck.
 
 Record changes, measurements and remaining bottlenecks in
 [`OPTIMIZATION_PROGRESS.md`](OPTIMIZATION_PROGRESS.md).
+
+## Hard rule: wasm, no JS fallbacks
+
+- Convert simulation JS to wasm directly and completely (kernels on helpers / lanes / preparation). Not a JS rewrite first, not JS glue doing per-item work.
+- No fallbacks: never keep or add a JS path for cases a kernel cannot do. If state the kernel needs is still JS (objects, arrays, tables), move it to the wasm heap and the logic to wasm in the same change. Kernels never hand items back to JS for per-item handling.
+- No temporary JS or detours: no interim step where JS makes rows / entries / keys for a kernel. Static and derived tables (stats as [type][level][stat][researchLevel], costs, lookups) are built whole in the wasm heap at match start or at their change event. Tables of ~1 MB are fine.
+- Exceptions only when wasm is impossible (DOM, network, page UI) or measurably costs significant performance; say so explicitly.
+- Match functionality, not the old JS structure: simplify while converting.
+- The main tick thread only applies (O(1) / O(things changed)); no arbitrary per-tick budgets or count caps.

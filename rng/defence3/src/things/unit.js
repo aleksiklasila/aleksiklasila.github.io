@@ -47,6 +47,25 @@ function _quantizeUnitWorldCoord(value) {
 }
 
 // (Whole area steps. A worker's range is its work reach, not an attack: 0 for the kernels.)
+// A unit's stat tables as JavaScript reads them: the shared tables of its
+// owner, type and levels (the player's precomputed ones: its effective
+// level's with its base level's maxEnergy, clonePrecomputedWithBaseMaxEnergy,
+// one shared object a pair). The kernels read the heap tables
+// (things_utils.js unitStatTables), not these.
+function _unitStatLevels(u, c, s) {
+    const o = c.owner[s], key = _normalizePlayerPrecomputedUnitKey(u.unitType || 'norm');
+    if (!PRECOMPUTED_STATS_MAP_PLAYER[o]) rebuildPrecomputedStatsMapPlayer(o);
+    return { o, key, levels: (((PRECOMPUTED_STATS_MAP_PLAYER[o] || {}).unit || {})[key]) || [] };
+}
+function _unitBaseView(u, c, s) {
+    const L = _unitStatLevels(u, c, s), bl = Math.max(1, c.baseLevel[s] | 0);
+    return L.levels[bl] || _getUnitPlayerPrecomputedEntry(L.o, L.key, bl);
+}
+function _unitStatView(u, c, s) {
+    const L = _unitStatLevels(u, c, s), bl = Math.max(1, c.baseLevel[s] | 0), el = Math.max(1, c.effectiveLevel[s] | 0);
+    const b = L.levels[bl] || _getUnitPlayerPrecomputedEntry(L.o, L.key, bl), e = L.levels[el] || _getUnitPlayerPrecomputedEntry(L.o, L.key, el);
+    return clonePrecomputedWithBaseMaxEnergy(b, e);
+}
 function _getUnitAttackRangeArea(unit) {
     const pc = unit && unit.preComputed;
     return pc && !pc.rangeIsWork ? areaSteps(pc.attackRangeArea) : 0;
@@ -92,7 +111,6 @@ function _unitEventSortReserve(n) {
     _unitEvSort.cap = m; _unitEvSort.ent = _unitEvSort.sorted;
 }
 // The sorted events' split (k.rs k_unit_events_split): a chunk's two halves and counts, kept between ticks (bound once).
-let UNIT_EVENTS_SPLIT = true;
 const UNIT_EVENTS_SPLIT_PER = 2048;
 const _unitEvSplit = { split: null, cnt: null };
 function _unitEvSplitRoom(chunks, per) {
@@ -141,7 +159,7 @@ function unitEventsRun() {
             let wn = 0;
             // One event the JavaScript takes (its index in the sorted list).
             const one = i => {
-                const ent = E[i], s = ent >> 3, u = owners[s];
+                const ent = E[i], s = ent >> 3, u = owners.at(s);
                 if (!u || u.dead) return;
                 if (wai && u.workerState) {
                     if ((ent & 7) === UNIT_EV_FLOOR && _unitFloorEvent(u)) return;
@@ -152,7 +170,7 @@ function unitEventsRun() {
                 if (routes && routes[i * 2] >= 0 && !u.workerState && _unitNoWayCommit(u, c, s, routes[i * 2], routes[i * 2 + 1], trueTerm)) return;
                 _unitEvent(u, c, s, ent & 7);
             };
-            if (UNIT_EVENTS_SPLIT && typeof SIM_KERNEL_UNIT_EVENTS_SPLIT === 'number' && _simWasmX !== null) {
+            {
                 // (The split on the helpers, k.rs k_unit_events_split: the worker
                 // kernel's events listed, their positions kept; the rest here.)
                 const per = UNIT_EVENTS_SPLIT_PER, chunks = Math.ceil(j / per), X = _unitEvSplitRoom(chunks, per);
@@ -160,14 +178,6 @@ function unitEventsRun() {
                 simParallelRun(SIM_KERNEL_UNIT_EVENTS_SPLIT, chunks);
                 for (let k = 0; k < chunks; k++) { const m = X.cnt[k * 16]; if (m > 0) { WL.set(X.split.subarray(k * per * 2, k * per * 2 + m), wn); wn += m; } }
                 for (let k = 0; k < chunks; k++) { const b = k * per * 2 + per, m = X.cnt[k * 16 + 1]; for (let r = 0; r < m; r++) one(X.split[b + r]); }
-            } else {
-                for (let i = 0; i < j; i++) {
-                    const ent = E[i], s = ent >> 3, u = owners[s];
-                    if (!u || u.dead) continue;
-                    // (Where it stood, for its interpolation, unless the kernel moved it.)
-                    if (c.mvOut[s] === 0) { c.prevX[s] = c.x[s]; c.prevY[s] = c.y[s]; }
-                    one(i);
-                }
             }
             if (wn > 0) waiOutEvents(waiRun(WL, wn));
         } finally { playerResourceBatchEnd(); if(typeof workerBrainsEnd==='function')workerBrainsEnd(); }
@@ -226,7 +236,7 @@ function _unitNoWay(u) {
     if (!nd) return;
     let pt = u._pendingPathTarget;
     if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
-    else pt = u._pendingPathTarget = { gx: nd.x, gy: nd.y, cmd: u.commandState, src: 'nav_unreachable' };
+    else { u._pendingPathTarget = { gx: nd.x, gy: nd.y, cmd: u.commandState, src: 'nav_unreachable' }; pt = u._pendingPathTarget; }
     u.path = null; u.pathIndex = 0; u._routeKey = null; u.pathIsFallbackAstar = true;
     navPathSubstitute(u, Math.floor(u.x / TILE), Math.floor(u.y / TILE), pt);
     notePendingPathUnit(u);
@@ -236,27 +246,47 @@ function _unitNoWay(u) {
 // The common native path needs no temporary JS path or repeated accessors.
 function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
     if (c.nvPK[s] !== key || c.pathIndex[s] !== 0) return false;
-    const cached = c.jr__path.get(s);
-    if (cached && cached.length > 1) return false;
+    // (A path of more than its one node: not this one's.)
+    const ph = c.pthH[s];
+    if (ph >= 2 && (SIM_PATH.a[ph - 2] & 0xffffff) > 1) return false;
     const decoded = key >> 1, profile = Math.floor(decoded / 16777216), dest = decoded % 16777216;
     if (profile !== (c.jFly[s] ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND)) return false;
-    let pt = c.jr__ppt.get(s), h = c.hObj[s];
-    if (pt) { pt.ver = 0; pt.at = -1; pt.sub = 0; }
-    else {
-        pt = { gx: dest % GRID_W, gy: Math.floor(dest / GRID_W), cmd: c.commandState[s], src: 'nav_unreachable' };
-        const old = c.jr__ppt.set(s, pt);
-        h = (h + _simHTerm(_UH_PPT, pt) - _simHTerm(_UH_PPT, old)) | 0;
-    }
-    c.nvPK[s] = -1; simUnitPathRelease(c, s); c.jr__path.clear(s);
+    if ((c.ptSt[s] & 3) === 2) { c.ptVer[s] = 0; c.ptAt[s] = -1; c.ptSub[s] = 0; }
+    else { _unitNoWayPt.gx = dest % GRID_W; _unitNoWayPt.gy = Math.floor(dest / GRID_W); _unitNoWayPt.cmd = c.commandState[s]; simPendingTargetSet(c, s, _unitNoWayPt); }
+    c.nvPK[s] = -1; simUnitPathRelease(c, s); simPathRelease(c.pthH, s);
     c.mvOn[s] = 0; c.mvCD[s] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
-    const old = c.jr__pfa.set(s, true);
-    if (old !== true) h = (h + trueTerm - _simHTerm(_UH_PFA, old)) | 0;
-    c.hObj[s] = h; c.mvPF[s] = 1; c.mvPP[s] = 3;
+    simPendingFlagSet(c, s, true);
+    const pt = u._pendingPathTarget;
     if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
-    const to = Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0));
+    const to = Math.max(0, Math.min(GRID_H - 1, c.ptGy[s])) * GRID_W + Math.max(0, Math.min(GRID_W - 1, c.ptGx[s]));
     navPathSubstitutePrepared(u, profile, to, comp, pt);
     notePendingPathUnit(u);
     return true;
+}
+// (_unitNoWayCommit's target written into the columns: one object, reused.)
+const _unitNoWayPt = { gx: 0, gy: 0, cmd: 0, src: 'nav_unreachable' };
+// A unit's pending target (Unit._pendingPathTarget) as its columns hold it
+// (sim_unit_state.js ptSt ...): read and written in place through these, as
+// the object they replaced. Made when read, short-lived; by the unit, so a
+// relayout between its reads moves nothing under it.
+class SimPendingTarget {
+    constructor(u) { this.u = u; }
+    get gx() { const u = this.u, c = u._us; return c ? c.ptGx[u._si] : undefined; }
+    set gx(v) { const u = this.u, c = u._us; if (c) simPendingTargetTile(c, u._si, v, c.ptGy[u._si]); }
+    get gy() { const u = this.u, c = u._us; return c ? c.ptGy[u._si] : undefined; }
+    set gy(v) { const u = this.u, c = u._us; if (c) simPendingTargetTile(c, u._si, c.ptGx[u._si], v); }
+    get cmd() { const u = this.u, c = u._us; return c ? c.ptCmd[u._si] : undefined; }
+    set cmd(v) { const u = this.u, c = u._us; if (c) c.ptCmd[u._si] = v | 0; }
+    get src() { const u = this.u, c = u._us; if (!c) return undefined; const k = c.ptSrc[u._si]; return k === 255 ? undefined : SIM_PPT_SRC[k]; }
+    set src(v) { const u = this.u, c = u._us; if (c) { const k = SIM_PPT_SRC.indexOf(v); c.ptSrc[u._si] = v === undefined ? 255 : k < 0 ? 0 : k; } }
+    get ver() { const u = this.u, c = u._us; return c ? c.ptVer[u._si] : undefined; }
+    set ver(v) { const u = this.u, c = u._us; if (c) c.ptVer[u._si] = v | 0; }
+    get at() { const u = this.u, c = u._us; return c ? c.ptAt[u._si] : undefined; }
+    set at(v) { const u = this.u, c = u._us; if (c) c.ptAt[u._si] = v | 0; }
+    get sub() { const u = this.u, c = u._us; return c ? c.ptSub[u._si] : undefined; }
+    set sub(v) { const u = this.u, c = u._us; if (c) c.ptSub[u._si] = v | 0; }
+    // (A plain copy: snapshots, Unit._pptSnap.)
+    plain() { return { gx: this.gx, gy: this.gy, cmd: this.cmd, src: this.src, ver: this.ver, at: this.at, sub: this.sub }; }
 }
 // A unit waiting for its way (a pending target) near its issued target (the
 // controller's look): its way once more, else the order ends where it stands.
@@ -374,7 +404,7 @@ function simUnitTargetsDecoded() {
         if (!c) continue;
         const s = u._si;
         // (Only while it is still the unit's target: a later row may have set another.)
-        if (c.tuId[s] === 0 || (c.tuS[s] >= 0 ? _simUnitState.owners[c.tuS[s]] !== t : false)) continue;
+        if (c.tuId[s] === 0 || (c.tuS[s] >= 0 ? _simUnitState.owners.at(c.tuS[s]) !== t : false)) continue;
         u.targetUnit = t;
     }
     // Every unit's target slot from its id: a patch makes some units anew (in
@@ -388,7 +418,7 @@ function simUnitTargetsDecoded() {
         const s = u._si, id = c.tuId[s];
         if (id === 0) continue;
         const q = c.tuS[s];
-        if (q >= 0 && owners[q] && (owners[q].id | 0) === id) continue;
+        if (q >= 0 && owners.at(q) && (owners.at(q).id | 0) === id) continue;
         const t = getUnitById(id);
         c.tuS[s] = t && t._us === c && t._si >= 0 ? t._si : -1;
         if (c.tuS[s] < 0) _tuPending.push(u);
@@ -766,7 +796,7 @@ class Unit {
             const s = this._si, id = c.tuId[s];
             if (id === 0) return null;
             const q = c.tuS[s];
-            let o = q >= 0 ? _simUnitState.owners[q] : null;
+            let o = q >= 0 ? _simUnitState.owners.at(q) : null;
             if (!(o && (o.id | 0) === id)) {
                 o = getUnitById(id);
                 if (!o) return null;
@@ -823,37 +853,38 @@ class Unit {
     // retries it now and then: _tryUpgradeAstarFallbackPath): mirrored into
     // the mvPF column (1 while both are set), so the separation lists only
     // those units on their retry ticks, without reading every unit object.
-    get pathIsFallbackAstar() { return this._pfa; }
+    // (Both in the unit's columns, ptSt ...: sim_unit_state.js simPendingFlagSet,
+    // simPendingTargetSet; the target read as a SimPendingTarget over them.)
+    get pathIsFallbackAstar() { const c = this._us; if (c) { const t = (c.ptSt[this._si] >> 2) & 3; return t === 2 ? true : t === 1 ? false : undefined; } return this._det ? this._det.pathIsFallbackAstar : this._pfaO; }
     set pathIsFallbackAstar(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_pfa', { value: v, writable: true, configurable: true }); return; }
-        if (c && this._pfa !== v) _unitHD(c, this._si, _UH_PFA, this._pfa, v);
-        this._pfa = v;
-        if (c) { const p = this._ppt; c.mvPF[this._si] = v && p ? 1 : 0; c.mvPP[this._si] = (v ? 1 : 0) | (p != null ? 2 : 0); }
+        if (c) { simPendingFlagSet(c, this._si, v); return; }
+        if (this._det) this._det.pathIsFallbackAstar = v; else Object.defineProperty(this, '_pfaO', { value: v, writable: true, configurable: true });
     }
-    get _pendingPathTarget() { return this._ppt; }
+    get _pendingPathTarget() { const c = this._us; if (c) { const t = c.ptSt[this._si] & 3; return t === 2 ? new SimPendingTarget(this) : t === 1 ? null : undefined; } return this._det ? this._det._pendingPathTarget : this._pptO; }
     set _pendingPathTarget(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_ppt', { value: v, writable: true, configurable: true }); return; }
-        if (c && this._ppt !== v) _unitHD(c, this._si, _UH_PPT, this._ppt, v);
-        this._ppt = v;
-        if (c) { const f = this._pfa; c.mvPF[this._si] = v && f ? 1 : 0; c.mvPP[this._si] = (f ? 1 : 0) | (v != null ? 2 : 0); }
+        if (c) { if (!(v instanceof SimPendingTarget && v.u === this)) simPendingTargetSet(c, this._si, v); return; }
+        if (this._det) this._det._pendingPathTarget = v; else Object.defineProperty(this, '_pptO', { value: v, writable: true, configurable: true });
     }
+    // (The target as a plain object: snapshots and patches.)
+    get _pptSnap() { const v = this._pendingPathTarget; return v instanceof SimPendingTarget ? v.plain() : v; }
+    set _pptSnap(v) { this._pendingPathTarget = v; }
     // The effective stat tables: its stat row's (unit.statRow >= 0, see
     // things_utils.js _effRowAttach), else its own (_pc, _pce: non-enumerable,
     // as the snapshot leaves derived tables out). Setting them drops the row.
-    get preComputed() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pc; }
+    get preComputed() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _unitStatView(this, c, this._si); } return this._pc; }
     set preComputed(v) {
         const oldColumns = this._us;
-        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_effRowObj[oldColumns.statRow[this._si]]);
+        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_unitStatView(this, oldColumns, this._si));
         if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: v, writable: true, configurable: true }); else this._pc = v;
         const c = this._us;
         if (c) c.statRow[this._si] = -1;
     }
-    get preComputedEffective() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _effRowObj[r]; } return this._pce; }
+    get preComputedEffective() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _unitStatView(this, c, this._si); } return this._pce; }
     set preComputedEffective(v) {
         const oldColumns = this._us;
-        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_effRowObj[oldColumns.statRow[this._si]]);
+        if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_unitStatView(this, oldColumns, this._si));
         if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: v, writable: true, configurable: true }); else this._pce = v;
         const c = this._us;
         if (c) c.statRow[this._si] = -1;
@@ -883,29 +914,32 @@ class Unit {
     }
     // Its path: one navigation node, the columns' (nvPK: profile, destination, wide) when a kernel made or ended it;
     // else the array it was given.
+    // (The path itself: the heap path store's, sim_unit_state.js SIM_PATH, by
+    // its handle in pthH; read as a view of its block.)
     get path() {
         const c = this._us;
-        if (!c) return this._path;
-        const p = this._path, k = c.nvPK[this._si], last = p && p.length ? p[p.length - 1] : null;
+        if (!c) return this._det ? this._det.path : this._pathO;
+        const s = this._si, p = simPathView(c.pthH[s]), k = c.nvPK[s], last = p && p.length ? p[p.length - 1] : null;
         const lk = last && last.nav ? ((last.nav - 1) * 16777216 + last.y * GRID_W + last.x) * 2 + (last.w ? 1 : 0) : -1;
         if (lk === k) return p;
         if (k < 0) return null;
         const key = k >> 1, prof = Math.floor(key / 16777216), dest = key - prof * 16777216, gx = dest % GRID_W, gy = (dest - gx) / GRID_W;
         const np = [(k & 1) ? { x: gx, y: gy, nav: prof + 1, w: 1, ready: 0 } : { x: gx, y: gy, nav: prof + 1, ready: 0 }];
-        this._path = np;
-        return np;
+        simPathRelease(c.pthH, s); c.pthH[s] = simPathStore(np);
+        return simPathView(c.pthH[s]);
     }
     set path(v) {
         const c = this._us;
-        if (c === undefined) { Object.defineProperty(this, '_path', { value: v, writable: true, configurable: true }); return; }
-        if (c) {
-            // (Its last flow node's field, for the field sweep.)
-            const nd = v && v.length ? v[v.length - 1] : null;
-            c.nvPK[this._si] = nd && nd.nav ? ((nd.nav - 1) * 16777216 + nd.y * GRID_W + nd.x) * 2 + (nd.w ? 1 : 0) : -1;
-        }
-        if (this._us) simUnitPathRelease(this._us, this._si);
-        this._path = v;
-        if (c) { c.mvOn[this._si] = 0; c.mvCD[this._si] = -1; }
+        if (!c) { if (this._det) this._det.path = v; else Object.defineProperty(this, '_pathO', { value: v, writable: true, configurable: true }); return; }
+        const s = this._si;
+        // (Its last flow node's field, for the field sweep.)
+        const nd = v && v.length ? v[v.length - 1] : null;
+        c.nvPK[s] = nd && nd.nav ? ((nd.nav - 1) * 16777216 + nd.y * GRID_W + nd.x) * 2 + (nd.w ? 1 : 0) : -1;
+        simUnitPathRelease(c, s);
+        const h = simPathStore(v);
+        simPathRelease(c.pthH, s);
+        c.pthH[s] = h;
+        c.mvOn[s] = 0; c.mvCD[s] = -1;
     }
 
     getCollisionLayer() {
@@ -1186,8 +1220,8 @@ Object.defineProperty(Unit.prototype, 'unitType', { configurable: true, enumerab
 // both its own (the row's object kept in the other).
 for (const k of ['preComputedBase', 'basePreComputed']) {
     const own = 'jr_' + k, other = 'jr_' + (k === 'preComputedBase' ? 'basePreComputed' : 'preComputedBase');
-    const get = new Function('return function () { const c = this._us; if (c) { const r = c.bsRow[this._si]; return r >= 0 ? _effBRowObj[r] : c.' + own + '.get(this._si); } return this._det ? this._det.' + k + ' : undefined; };')();
-    const set = new Function('k', 'return function (v) { const c = this._us; if (c) { const s = this._si, r = c.bsRow[s]; if (r >= 0) { c.' + other + '.set(s, _effBRowObj[r]); c.bsRow[s] = -1; } c.' + own + '.set(s, v); } else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
+    const get = new Function('return function () { const c = this._us; if (c) { const r = c.bsRow[this._si]; return r >= 0 ? _unitBaseView(this, c, this._si) : c.' + own + '.get(this._si); } return this._det ? this._det.' + k + ' : undefined; };')();
+    const set = new Function('k', 'return function (v) { const c = this._us; if (c) { const s = this._si, r = c.bsRow[s]; if (r >= 0) { c.' + other + '.set(s, _unitBaseView(this, c, s)); c.bsRow[s] = -1; } c.' + own + '.set(s, v); } else if (this._det) this._det.' + k + ' = v; else Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); };')(k);
     Object.defineProperty(Unit.prototype, k, { get, set, configurable: true, enumerable: false });
 }
 // The movement columns that are state (SIM_UNIT_MOVE_SNAPSHOT_KEYS: the step
@@ -1382,7 +1416,7 @@ function _structHitsApply(KC, HC, HA, HT, CH) {
     const K = _structHitsRun('k_struct_hits', [HC, HA, HT, 'keys', C.id, C.owner, C.atkN, C.atkSty, _effHot, C.statRow, C.unitLevel, C.baseLevel, C.effectiveLevel, C.atkWatch], P, KC * CH);
     if (!K) return;
     _structHitsAfter(K, (s, tb, dmg) => {
-        const a = owners[s];
+        const a = owners.at(s);
         if (!a) return;
         recordUnitAttackFx(a, tb); playSound(C.atkSty[s] >= 1 && C.atkSty[s] <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', a.x, a.y, a.unitType);
         pushHostileDamageAlert(tb, dmg, a.owner); recordDamageVisual(tb, dmg, a.owner);
@@ -1478,7 +1512,7 @@ function unitHitsResolve() {
             }
             // (Newly watched: their vision cover; each its own.)
             const WL = K.wlist, nw = CNT[2];
-            if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners[WL[i]]; if (u) visCoverOnEntityChanged(u); }
+            if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners.at(WL[i]); if (u) visCoverOnEntityChanged(u); }
         }
         // The looks (presentation only: which hits differs between peers).
         const PL = K.plist, np = Math.min(CNT[1], looks), no = V[0] <= V[2] ? Math.min(CNT[3], SIM_HITS_OUT) : 0;
@@ -1488,11 +1522,11 @@ function unitHitsResolve() {
             if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
             else if (e < n + npj) {
                 // (A shot's: its impact's look is the projectile phase's.)
-                const sl = PJ.uev[e - n], tu = owners[PJ.a.arg[sl]], own = PJ.a.own[sl];
+                const sl = PJ.uev[e - n], tu = owners.at(PJ.a.arg[sl]), own = PJ.a.own[sl];
                 if (tu) { pushHostileDamageAlert(tu, PJ.a.dmg[sl], own); recordDamageVisual(tu, PJ.a.dmg[sl], own); }
                 continue;
             }
-            else { const j = e - n - npj, s = HA[j]; a = owners[s]; t = owners[HT[j]]; ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
+            else { const j = e - n - npj, s = HA[j]; a = owners.at(s); t = owners.at(HT[j]); ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
             if (!a || !t) continue;
             // (A kernel attack's own look and sound, as _attackerSide's.)
             let tx, ty;
@@ -1693,7 +1727,7 @@ function statusPrepassRun() {
             const s = LIST[j], r = IX[s], ev = EV[r];
             if (ev === 0) continue;
             EV[r] = 0;
-            const u = owners[s];
+            const u = owners.at(s);
             if (!u || u._si !== s) continue;
             if (ev & 1) recordDamageVisual(u, DOT[r]);
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
@@ -1765,6 +1799,10 @@ function removeUnitNow(u, adjustPop = true) {
     if (adjustPop && players[u.owner]) players[u.owner].popCount = Math.max(0, (players[u.owner].popCount || 0) - 1);
 }
 
+// A unit's slot: through its handle (sim_unit_state.js SimOwners; _h, set
+// when it takes a slot, 0 once it let go of it): the relayout moves units
+// between slots in the heap alone (the handle table), no object written.
+Object.defineProperty(Unit.prototype, '_si', { configurable: true, get() { const c = this._us; return c ? c.hslot[this._h] : -1; } });
 // A new unit: its slot and the columns of its own values, nothing else (the
 // slot holds every other column at its default already: zeroed,
 // simSlotDefaults, _simJsDefaults). The object is only the slot's handle
@@ -1912,7 +1950,7 @@ const _SPB_FINAL = [['energy', 10]];
 // SPB_PROG triples, started again at each batch; a template whose program
 // finds no room is written whole at once (as the first of its key).)
 const SPB_CAP = 16384, SPB_PROG = 65536;
-const _spb = { n: 0, units: new Array(SPB_CAP).fill(null), mode: new Int8Array(SPB_CAP), rows: null, prog: null, progN: 0, base: 0, gen: 0, colIx: null, kind: null, P: new Float64Array(8), off: false };
+const _spb = { sp: null, spN: 0, n: 0, units: new Array(SPB_CAP).fill(null), mode: new Int8Array(SPB_CAP), rows: null, prog: null, progN: 0, base: 0, gen: 0, colIx: null, kind: null, P: new Float64Array(8), off: false };
 function simSpawnBatchFull() { return _spb.n >= SPB_CAP; }
 function simSpawnBatchReserve() {
     const B = _spb;
@@ -2051,11 +2089,45 @@ function simSpawnBatchFinish(i) {
     if (B.mode[i] === 2) { if (!u.dead) u.energy = u.maxEnergy; return u; }
     if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(u);
     if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && !occupancySpawn(u)) { u.dead = true; simUnitStateDetach(_simUnitState, u._si); return u; }
-    updateUnitSpatial(u);
+    // (Into the spatial index with the batch's others: simSpawnBatchClear.)
+    if (!B.sp || !simHeapHas(B.sp)) B.sp = simSharedArray(Int32Array, SPB_CAP);
+    B.sp[B.spN++] = u._si;
     return u;
 }
-// The batch emptied (its units finished).
-function simSpawnBatchClear() { const B = _spb; B.units.fill(null, 0, B.n); B.n = 0; }
+// The batch emptied (its units finished): those finished into the spatial
+// index at once (tch.rs k_spawn_spatial: as updateUnitSpatial does a new unit).
+function simSpawnBatchClear() { const B = _spb; if (B.spN) _spbSpatial(B); B.units.fill(null, 0, B.n); B.n = 0; }
+let _spbLayer = null, _spbLayerN = -1, _spbTy = null, _spbTyN = -1;
+const _spbSpP = new Float64Array(16);
+function _spbSpatial(B) {
+    const n = B.spN, S = _simUnitState, c = S.columns;
+    if (CHUNK_SIZE !== 1) throw new Error('spawn batch: k_spawn_spatial takes chunks of one tile');
+    B.spN = 0;
+    if (_sxPre && typeof _inGameTick !== 'undefined' && !_inGameTick) spatialIndexInvalidate();
+    // (Per spatial type its separation layer: 1 flying, 2 a mole.)
+    const NT = spatialUnitsComplexUnitTypeCount;
+    if (_spbLayerN !== NT || !_spbLayer || !simHeapHas(_spbLayer)) {
+        _spbLayer = simSharedArray(Uint8Array, Math.max(64, NT));
+        for (const k in spatialUnitTypeToIndex) { const i = spatialUnitTypeToIndex[k], b = BASE_UNIT_STATS[k]; if (i >= 0 && i < NT) _spbLayer[i] = b && b.isFlying ? 1 : k === 'mole' ? 2 : 0; }
+        _spbLayerN = NT;
+    }
+    // (Upkeep type (unit.upT) -> spatial type, as the type names grow: -1 none.)
+    const names = typeof _simUnitTypeNames !== 'undefined' ? _simUnitTypeNames : [];
+    if (_spbTyN !== names.length || !_spbTy || !simHeapHas(_spbTy)) {
+        _spbTy = simSharedArray(Int8Array, Math.max(64, names.length + 8)); _spbTy.fill(-1);
+        for (let i = 0; i < names.length; i++) { const j = spatialUnitTypeToIndex[names[i]]; if (j >= 0) _spbTy[i] = j; }
+        _spbTyN = names.length;
+    }
+    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    const P = _spbSpP;
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = NT;
+    P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols;
+    P[15] = _spatialCountDefer ? 1 : 0;
+    simRustDirect('k_spawn_spatial', [B.sp, c.x, c.y, c.owner, c.upT, _spbTy, _spbLayer, cellArea, c.spTile, S.sepKey, S.sepLayer, c.spArea, c.spOwner, c.spEpoch, c.spType, c.mvOn,
+        spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.dead], P);
+    // (During the unit pass the counts wait for its end, as _spatialCountAdd queues them.)
+    if (_spatialCountDefer) for (let i = 0; i < n; i++) { const s = B.sp[i]; if (c.dead[s] !== 1) _spatialCountAdd(c.sepKey[s], c.spOwner[s], c.spType[s], 1); }
+}
 // (The slot count of the unit columns: per-slot columns are this long, those of other strides not.)
 function S_CAP_OF(C) { return _simUnitState.cap; }
 
@@ -2207,60 +2279,33 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
 }
 
 
-// The nearest walkable tile to (gx, gy) by ring, and in that ring the one
-// nearest to (fromGx, fromGy) (ties: smaller y, then smaller x). Scans each
-// ring in place: building and sorting a candidate list per ring per unit made
-// a rally to an unwalkable spot cost most of a tick.
-// The walkable tiles of the nearest ring do not depend on where the unit is,
-// only on what may stand on them: cached per target and walking class for the
-// rest of the tick (a big army ordered to an unwalkable spot asks thousands
-// of times). Keyed by the path topology version, which every peer bumps at
-// resyncs, and by the tick.
-let _nearestWalkableRingCache = new Map();
-let _nearestWalkableRingCacheKey = '';
-
-function _nearestWalkableRing(gx, gy, unit) {
-    let tickKey = gameTime + '|' + currentTick + '|' + pathTopologyVersion;
-    if (_nearestWalkableRingCacheKey !== tickKey) { _nearestWalkableRingCacheKey = tickKey; _nearestWalkableRingCache.clear(); }
-    let cls = !unit ? 'n' : unit.isFlying ? 'f' : (unit.owner + '|' + (unit.workerType || ''));
-    let key = gx + ',' + gy + '|' + cls;
-    let ring = _nearestWalkableRingCache.get(key);
-    if (ring !== undefined) return ring;
-    ring = null;
-    let maxRadius = Math.max(GRID_W, GRID_H);
-    for (let r = 1; r <= maxRadius && !ring; r++) {
-        let tiles = [];
-        // The old candidate order: top and bottom rows by x, then the sides.
-        for (let x = gx - r; x <= gx + r; x++) {
-            if (isWalkableTileFor(unit, x, gy - r)) tiles.push(x, gy - r);
-            if (isWalkableTileFor(unit, x, gy + r)) tiles.push(x, gy + r);
-        }
-        for (let y = gy - r + 1; y <= gy + r - 1; y++) {
-            if (isWalkableTileFor(unit, gx - r, y)) tiles.push(gx - r, y);
-            if (isWalkableTileFor(unit, gx + r, y)) tiles.push(gx + r, y);
-        }
-        if (tiles.length) ring = tiles;
-    }
-    _nearestWalkableRingCache.set(key, ring);
-    return ring;
-}
-
+// The nearest tile to (gx, gy) the unit may stand on (itself if it may), and
+// in the nearest ring holding any the one nearest (fromGx, fromGy) (ties:
+// smaller y, then smaller x); by the kernel (wasm/src/tch.rs k_nearest_walk)
+// over the walls the unit walks by (the ground's, the builders' class walls,
+// none flying), active mines for collectors, its owner's cloud towers.
+const _nwP = new Float64Array(16);
+let _nwOut = null, _nwCloud = null, _nwCloudN = -1;
 function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null, out = { x: 0, y: 0 }) {
-    if (isWalkableTileFor(unit, gx, gy)) { out.x = gx; out.y = gy; return out; }
-    let hasFrom = Number.isFinite(fromGx) && Number.isFinite(fromGy);
-    let ring = _nearestWalkableRing(gx, gy, unit);
-    if (ring) {
-        if (!hasFrom) { out.x = ring[0]; out.y = ring[1]; return out; }
-        let bestX = ring[0], bestY = ring[1], bestD = detHypot(bestX - fromGx, bestY - fromGy);
-        for (let i = 2; i < ring.length; i += 2) {
-            let x = ring[i], y = ring[i + 1], d = detHypot(x - fromGx, y - fromGy);
-            if (d < bestD || (d === bestD && (y < bestY || (y === bestY && x < bestX)))) { bestX = x; bestY = y; bestD = d; }
-        }
-        out.x = bestX; out.y = bestY;
-        return out;
+    if (!_nwOut || !simHeapHas(_nwOut)) _nwOut = simHeapArray(Int32Array, 2);
+    _stationaryTypesSeed();
+    const nty = _stationaryTypes.length;
+    if (_nwCloudN !== nty || !_nwCloud || !simHeapHas(_nwCloud)) {
+        _nwCloud = simHeapArray(Uint8Array, Math.max(16, nty));
+        for (let i = 0; i < nty; i++) { const b = BASE_CARD_TYPES[_stationaryTypes[i]]; _nwCloud[i] = b && b.isCloud ? 1 : 0; }
+        _nwCloudN = nty;
     }
-    out.x = Math.max(0, Math.min(GRID_W - 1, gx));
-    out.y = Math.max(0, Math.min(GRID_H - 1, gy));
+    const wt = unit ? unit.workerType : null, build = wt === 'builder' || wt === 'salvager', P = _nwP;
+    const T = _ST.code && _ST.n === GRID_W * GRID_H ? _ST : null;
+    if (T && !simHeapHas(T.code)) structTablesRehome();
+    P[0] = Math.floor(gx); P[1] = Math.floor(gy);
+    const hasFrom = Number.isFinite(fromGx) && Number.isFinite(fromGy);
+    P[2] = hasFrom ? Math.floor(fromGx) : NaN; P[3] = hasFrom ? Math.floor(fromGy) : NaN;
+    P[4] = GRID_W; P[5] = GRID_H; P[6] = unit && unit.isFlying ? 2 : unit ? 1 : 0;
+    P[7] = unit && Number.isFinite(unit.owner) ? unit.owner : -1; P[8] = wt && isResourceCollectorWorkerType(wt) ? 1 : 0; P[9] = nty;
+    simRustDirect('k_nearest_walk', [simMoveWallGrid(), build && !(unit && unit.isFlying) ? _navClassWalls(NAV_PROFILE_BUILD) : null,
+        T && T.code, T && T.val, T && T.uc, T && T.own, T && T.brain, _nwCloud, _nwOut], P);
+    out.x = _nwOut[0]; out.y = _nwOut[1];
     return out;
 }
 
@@ -2576,7 +2621,7 @@ function _simWallPushOutTiles(list, n) {
         if (Z.hdr[0] >= (Z.out.length >> 1) && n > 1) { const h = n >> 1; _simWallPushOutTiles(list, h); list.copyWithin(0, h, n); _simWallPushOutTiles(list, n - h); return; }
     }
     for (let i = 0, m = Math.min(Z.hdr[0], Z.out.length >> 1); i < m; i++) {
-        const u = S.owners[Z.out[2 * i + 1]];
+        const u = S.owners.at(Z.out[2 * i + 1]);
         if (!u) continue;
         pushUnitOutOfBlockedTile(u);
         u.x = _quantizeUnitWorldCoord(u.x); u.y = _quantizeUnitWorldCoord(u.y);
@@ -2928,21 +2973,17 @@ function simTileChangesFlush() {
     if (n === 0) return;
     T.n = 0;
     if (T.mark) for (let i = 0; i < n; i++) T.mark[T.list[i] >> 1] = 0;
-    // (The path regions' labels: pathfinding.js.)
-    pathRegionsTilesRun(T.list, n);
     if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H || !_simMoveWallBlk || !simHeapHas(_simMoveWall) || !simHeapHas(_simMoveWallBlk)) { _simMoveWallDirty = true; return; }
     if (!T.hdr || !simHeapHas(T.hdr) || !T.nw || T.nw.length < GRID_W * GRID_H || !simHeapHas(T.nw)) simTileChangesReserve();
     const diff = navTileTables(T.tabN, T.tabC);
-    const sc = typeof _stepCost !== 'undefined' && _stepCost && _stepCost.length === GRID_W * GRID_H ? _stepCost : null, scOk = !!sc && simHeapHas(sc);
     const b9 = _simMoveWallBlk9 && simHeapHas(_simMoveWallBlk9) ? _simMoveWallBlk9 : null;
     const b81 = b9 && _simMoveWallBlk81 && simHeapHas(_simMoveWallBlk81) && _simMoveWallBlk81.length === b9.length ? _simMoveWallBlk81 : null;
     if (!simHeapHas(_ST.code)) structTablesRehome();
     const P = T.P;
     P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TYPE_WALL; P[4] = NAV_PROFILES; P[5] = NAV_PROFILE_BUILD; P[6] = NAV_PROFILE_BUILD;
     P[7] = _simMoveWallBlkW; P[8] = 0x66; P[9] = 0x77;
-    simRustDirect('k_tile_changes', [T.list, cellType, _simMoveWall, _simMoveWallBlk, b9, scOk ? sc : null, diff, T.tabN, T.tabC, _ST.code, _ST.own, _ST.val, T.hdr, T.nw, b81], P);
+    simRustDirect('k_tile_changes', [T.list, cellType, _simMoveWall, _simMoveWallBlk, b9, null, diff, T.tabN, T.tabC, _ST.code, _ST.own, _ST.val, T.hdr, T.nw, b81], P);
     _simMoveWallVer = (_simMoveWallVer + T.hdr[0]) | 0;
-    if (sc && !scOk) stepCostsReset();
     if (_simMoveWallBlk9 && (!b9 || !b81)) _simMoveWallBlk9All();
     if (navTileTablesRedo()) { _simMoveWallDirty = true; return; }
     // (A new wall: whoever stands there steps off it.)
@@ -2981,16 +3022,17 @@ function _simMoveWallBlk9All() {
     // (The shared looks keyed by these sums from now: none kept from before, keyed otherwise.)
     if (typeof simMoveLookCacheClear === 'function') simMoveLookCacheClear();
 }
-function simMoveWallsDirty() { _simMoveWallDirty = true; if (typeof stepCostsReset === 'function') stepCostsReset(); if (typeof pathRegionsReset === 'function') pathRegionsReset(); }
+function simMoveWallsDirty() { _simMoveWallDirty = true; }
 // The wall table, current (1: grid type TYPE_WALL).
+const _simWallsP = new Float64Array(4);
 function simMoveWallGrid() { _simMoveWalls(); return _simMoveWall; }
 function _simMoveWalls() {
     if (!_simMoveWallDirty && _simMoveWallGrid === grid && _simMoveWall && _simMoveWall.length === GRID_W * GRID_H) return;
     if (!_simMoveWall || _simMoveWall.length !== GRID_W * GRID_H) { const old = _simMoveWall; _simMoveWall = simHeapArray(Uint8Array, GRID_W * GRID_H); simParallelBind('mv.wall', _simMoveWall); simHeapFree(old); }
-    for (let y = 0; y < GRID_H; y++) {
-        const row = grid[y], o = y * GRID_W;
-        for (let x = 0; x < GRID_W; x++) _simMoveWall[o + x] = row && row[x] && row[x].type === TYPE_WALL ? 1 : 0;
-    }
+    // (From the cell types: tch.rs k_walls_from_types.)
+    if (!simHeapHas(cellType) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    _simWallsP[0] = GRID_W * GRID_H; _simWallsP[1] = TYPE_WALL;
+    simRustDirect('k_walls_from_types', [cellType, _simMoveWall], _simWallsP);
     _simMoveWallGrid = grid; _simMoveWallDirty = false; _simMoveWallVer = (_simMoveWallVer + 1) | 0;
     simMoveLookCacheClear();
     // (Every block's version moves on: the look-aheads cached anywhere are
@@ -3002,7 +3044,6 @@ function _simMoveWalls() {
     _simMoveWallBlk9All();
     if (typeof _navWallDiffReset === 'function') _navWallDiffReset();
     if (typeof navClassReset === 'function') navClassReset();
-    if (typeof stepCostsReset === 'function') stepCostsReset();
 }
 
 // Structures by tile, for "hostile to player p?" without the tables of
@@ -3018,69 +3059,52 @@ let _simStructCls = null;
 // building (a cell item), 5 a cloud tower: the order
 // _findAutoStructureTarget takes them in (cloud towers with the turrets;
 // the drive-by look ranks them with the buildings).
-function _simStructClass(gx, gy) {
-    const e = getTileEntityRef(gx, gy);
-    if (!e || e._stMine) return 0;
-    if (e instanceof Tower) return String(e.type || '').startsWith('cloud') ? 5 : 1;
-    if (e instanceof Barrack || isSpawnerEntity(e)) return 3;
-    const cell = grid[gy] && grid[gy][gx];
-    if (cell && cell.item === e) return isTrapItem(e) ? 2 : 4;
-    return 0;
-}
-let _simMoveStructDirty = [];
+// (The tiles whose structure changed since: a heap list; full: all again.)
+let _simMoveStructDirty = null, _simMoveStructDirtyN = 0;
 // Cell owners replaced (a restore): every tile's code again.
 function simMoveStructsReset() { _simMoveStructW = -1; }
 function simMoveTileEntityChanged(gx, gy) {
-    if (_simMoveStruct) _simMoveStructDirty.push(gy * GRID_W + gx);
+    if (_simMoveStruct) { if (!_simMoveStructDirty || !simHeapHas(_simMoveStructDirty)) { _simMoveStructDirty = simHeapArrayAuto(Int32Array, 65536); _simMoveStructDirtyN = 0; } if (_simMoveStructDirtyN < _simMoveStructDirty.length) _simMoveStructDirty[_simMoveStructDirtyN++] = gy * GRID_W + gx; else _simMoveStructW = -1; }
     // (The walk classes' walls: a builder's own buildings, active mines; at
     // the unit pass's end when in it, as the walls.)
     if (gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) _simMoveClassTileChanged(gy * GRID_W + gx);
 }
-function _simMoveStructCode(gx, gy) {
-    const e = getTileEntityRef(gx, gy);
-    if (!e || e._stMine) return -1;
-    const cell = grid[gy] && grid[gy][gx];
-    const cellOwner = cell && cell.item === e ? cell.owner : e.owner;
-    return Number.isInteger(e.owner) && e.owner >= 0 && e.owner === cellOwner && e.owner < 127 ? e.owner : -2;
-}
-function _simMoveStructCount(tile, code, delta) {
-    const players = spatialUnitsComplexPlayerCount, gx = tile % GRID_W, gy = (tile - gx) / GRID_W;
-    const b = (Math.floor(gy / (SPATIAL_BLOCK_SIZE * CHUNK_SIZE)) * spatialBlockCols + Math.floor(gx / (SPATIAL_BLOCK_SIZE * CHUNK_SIZE))) * players;
-    for (let p = 0; p < players; p++) if (code !== p) _simMoveStructBlocks[b + p] += delta;
-}
+// The movement kernel's structure tables from the tile table (tch.rs
+// k_move_structs): per tile its code (mv.struct: -1 none or a mine, the
+// owner when its cell's owner too, -2 otherwise), its class (mv.scls: 1 a
+// tower, 5 a cloud tower, 3 a barrack or spawner, 2 a floor trap, 4 another
+// floor item), per spatial block the structures hostile to each player
+// (mv.stblk); whole when the layout is new, else the changed tiles'.
+const _simMoveStructsP = new Float64Array(8);
+let _simStructTyCls = null, _simStructTyClsN = -1;
 function _simMoveStructs() {
     const players = spatialUnitsComplexPlayerCount;
-    if (!_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructW !== GRID_W || _simMoveStructH !== GRID_H || _simMoveStructP !== players || _simMoveStructC !== spatialBlockCols) {
+    const full = !_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructW !== GRID_W || _simMoveStructH !== GRID_H || _simMoveStructP !== players || _simMoveStructC !== spatialBlockCols;
+    if (!full && _simMoveStructDirtyN === 0) { _simTrapStep(); return; }
+    if (full) {
         if (!_simMoveStruct || _simMoveStruct.length !== GRID_W * GRID_H) { _simMoveStruct = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.struct', _simMoveStruct); }
         if (!_simStructCls || _simStructCls.length !== GRID_W * GRID_H) { _simStructCls = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.scls', _simStructCls); }
-        _simMoveStruct.fill(-1); _simStructCls.fill(0);
         _simTrapAlloc();
         _simMoveStructBlocks = simHeapArrayAuto(Int32Array, spatialBlockCols * spatialBlockRows * players);
-        for (const e of _activeTileEntities) {
-            const gx = e.gx, gy = e.gy;
-            if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) continue;
-            const t = gy * GRID_W + gx;
-            if (_simMoveStruct[t] !== -1) continue;
-            const code = _simMoveStructCode(gx, gy);
-            _simMoveStruct[t] = code; _simStructCls[t] = _simStructClass(gx, gy);
-            if (code !== -1) _simMoveStructCount(t, code, 1);
-        }
-        _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; _simMoveStructDirty.length = 0;
-        return;
+        _simMoveStructBlocks.fill(0);
     }
-    const dirty = _simMoveStructDirty;
-    for (let i = 0; i < dirty.length; i++) {
-        const t = dirty[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
-        const old = _simMoveStruct[t], code = _simMoveStructCode(gx, gy);
-        _simStructCls[t] = _simStructClass(gx, gy);
-        simTrapDirty(gx, gy);
-        if (old === code) continue;
-        if (old !== -1) _simMoveStructCount(t, old, -1);
-        if (code !== -1) _simMoveStructCount(t, code, 1);
-        _simMoveStruct[t] = code;
+    // (Per stationary type: its trap kind, 8 a cloud tower.)
+    const K = _simTrapKinds(), nty = _stationaryTypes.length;
+    if (_simStructTyClsN !== nty || !_simStructTyCls || !simHeapHas(_simStructTyCls)) {
+        _simStructTyCls = simHeapArrayAuto(Uint8Array, Math.max(64, nty));
+        for (let ty = 0; ty < nty; ty++) _simStructTyCls[ty] = (K[ty] > 0 ? 1 : 0) | (String(_stationaryTypes[ty] || '').startsWith('cloud') ? 8 : 0);
+        _simStructTyClsN = nty;
     }
-    dirty.length = 0;
-    _simTrapStep();
+    const T = _ST;
+    if (T.code && !simHeapHas(T.code)) structTablesRehome();
+    const ok = T.code && T.n === GRID_W * GRID_H, P = _simMoveStructsP;
+    P[0] = full ? GRID_W * GRID_H : _simMoveStructDirtyN; P[1] = GRID_W; P[2] = spatialBlockCols; P[3] = players; P[4] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[5] = nty; P[6] = full ? 1 : 0; P[7] = GRID_W * GRID_H;
+    simRustDirect('k_move_structs', [ok ? T.code : null, ok ? T.own : null, cellOwner, ok ? T.brain : null, _simStructTyCls, _simMoveStruct, _simStructCls, _simMoveStructBlocks, full ? null : _simMoveStructDirty, _trap.dirty, _trap.hdr], P);
+    // (The changed tiles' traps looked at again, as simTrapDirty.)
+    if (full) { _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; }
+    else { for (let i = 0; i < _simMoveStructDirtyN; i++) { if (_trap.nd < _trap.dirty.length) _trap.dirty[_trap.nd++] = _simMoveStructDirty[i]; else _trap.all = true; } }
+    _simMoveStructDirtyN = 0;
+    if (!full) _simTrapStep();
 }
 
 // Floor traps for the movement kernel (mv.rs floor_hit): per tile the trap
@@ -3414,7 +3438,6 @@ function simMoveRun() {
     // (Attack holds: sight by area, the area of each tile.)
     if (typeof _visCoverReady === 'function' && _visCoverReady()) { simParallelBind('vis.cover', _visCover.visible); simParallelBind('vis.coverf', _visCover.visibleFlat); }
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
-    if (typeof _flowTables === 'function') _flowTables();
     const occupancy = typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED;
     const chunks = occupancy ? occupancyPrepareMovement() : Math.ceil(n / CH);
     if(occupancy&&typeof trafficBeforeMovement==='function')trafficBeforeMovement();
@@ -3500,12 +3523,12 @@ function simMoveRun() {
     for (let k = 0; k < chunks; k++) for (let i = occupancy ? _occ.offsets[k] : k * CH, e = i + PC[k]; i < e; i++) {
         const s = PL[i], o = OUT[s];
         if (o === 0) continue;
-        if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners[s]) _setUnitAstarBudgetBlockedIndicator(owners[s], 1); }
+        if (c.mvBlk[s]) { c.mvBlk[s] = 0; if (owners.at(s)) _setUnitAstarBudgetBlockedIndicator(owners.at(s), 1); }
         if (o === 1 || o === 6 || o === 7 || o === 10 || o === 11 || o === 13 || o === 14 || o === 15) continue;
         // Arrived in the crowd at its destination: the move is done.
         // Into a wall tile: the end of Unit.update (pushed out; can start
         // path work on the owner's budget): in id order afterwards.
-        if (o === 4) { if (owners[s]) (slow ||= []).push(owners[s]); continue; }
+        if (o === 4) { if (owners.at(s)) (slow ||= []).push(owners.at(s)); continue; }
         // Another tile: the spatial index, from the columns.
         spatialSlotUpdate(c, s);
         // A drive-by shooter entering another area needs its box.
@@ -3535,21 +3558,21 @@ function _simMoveSepListed(chunks, per) {
         const i = EX[j];
         if (fast[i]) {
             if (simStepCrosses(c.id[i] | 0, UNIT_SEPARATION_PATH_RETRY_TICKS)) {
-                const u = owners[i];
+                const u = owners.at(i);
                 if (u && !u.dead && u.pathIsFallbackAstar && u._pendingPathTarget) (retries ||= []).push(u);
             }
             if (c.energy[i] > 0) spatialSlotUpdate(c, i);
             if ((c.mvFlags[i] & 1) && c.spArea[i] >= 0) _simMoveEnsureAreaBox(c.spArea[i], c.mvReach[i]);
             continue;
         }
-        const u = owners[i];
+        const u = owners.at(i);
         if (!u || u.dead) continue;
         (slow ||= []).push(i);
     }
     if (slow) {
-        slow.sort((a, b) => owners[a].id - owners[b].id);
+        slow.sort((a, b) => owners.at(a).id - owners.at(b).id);
         for (let i of slow) {
-            const u = owners[i];
+            const u = owners.at(i);
             applyUnitSeparation(u, S.nextX[i], S.nextY[i], Infinity);
             if (u.pathIsFallbackAstar && u._pendingPathTarget && simStepCrosses(u.id, UNIT_SEPARATION_PATH_RETRY_TICKS)) (retries ||= []).push(u);
             pushUnitOutOfBlockedTile(u);
@@ -3758,7 +3781,57 @@ function acqTierRemapSlots(map, runs, n0, ns) {
     if (bt && bm) for (let s = 0; s < ns; s++) { const t = bt[s], m = bm[s]; if (t >= 0 && m !== 255 && (m & 16) === 0) bt[s] = t < n0 ? map[t] : -1; }
     _acqN = ns;
 }
+// Units moved while a run is in flight (sim_unit_state.js
+// simUnitStateRelayoutStep): each step's pairs (from, to), replayed in order
+// at the commit, after the run (which reads only its snapshot, by the slots
+// as posted): every result by slot to the unit's new slot (the old one as a
+// slot the run did not cover), the brain's targets following theirs
+// (SIM_KERNEL_ACQ_REMAP). A unit from a slot past the run's (made after its
+// post) brings none: the run did not see it.
+// (The log: the steps' pairs one after another in a heap buffer (acq.mlog),
+// where each step starts (_acqMoveAt), room for SIM_ACQ_MOVE_STEPS steps of
+// the most pairs a step makes: a step finding no room waits, acqTierMoveRoom.)
+const SIM_ACQ_MOVE_STEPS = 8;
+let _acqMoves = [], _acqMoveLog = null;
+function _acqMoveLogRoom() {
+    const R = typeof _rl !== 'undefined' ? _rl : null, need = R ? 2 * R.maxPairs * SIM_ACQ_MOVE_STEPS : 0;
+    if (!need) return null;
+    if (!_acqMoveLog || _acqMoveLog.length < need || !simHeapHas(_acqMoveLog)) { if (_acqMoveLog) simHeapFree(_acqMoveLog); _acqMoveLog = simHeapArray(Int32Array, need); simParallelBind('acq.mlog', _acqMoveLog); }
+    return _acqMoveLog;
+}
+// (Whether a step's pairs fit the log now.)
+function acqTierMoveRoom() { return _acqStage !== 1 || _acqMoves.length < SIM_ACQ_MOVE_STEPS; }
+function acqTierNoteMoves(pairs, n) {
+    if (_acqStage !== 1 || !(n > 0)) return;
+    const L = _acqMoveLogRoom();
+    if (!L) return;
+    const at = _acqMoves.length ? _acqMoves[_acqMoves.length - 1][0] + _acqMoves[_acqMoves.length - 1][1] : 0;
+    L.set(pairs.subarray(0, 2 * n), 2 * at);
+    _acqMoves.push([at, n]);
+}
+// (The slab past which a step must not move units while a run is in flight:
+// its commit covers the slots it was posted with.)
+function acqTierSlotLimit() { return _acqStage === 1 ? _acqN : Infinity; }
+function _acqApplyMoves() {
+    const L = _acqMoves;
+    _acqMoves = [];
+    if (!L.length || typeof _rl === 'undefined' || !_rl.fwd || !_acqMoveLog) return;
+    const n = _acqN, P = _simParams;
+    for (const [at, m] of L) {
+        // (A stamp of its own, below the relayout's steps': the forward map is
+        // never cleared.) Each result to its unit's new slot (SIM_KERNEL_ACQ_
+        // REPLAY, the map written), then the brain's targets (SIM_KERNEL_ACQ_REMAP).
+        const stamp = _rl.acqStamp = (_rl.acqStamp | 0) - 1 | 0, per = Math.max(64, Math.ceil(m / 64));
+        P.fill(0, 0, 8);
+        P[0] = m; P[1] = per; P[2] = n; P[3] = stamp; P[4] = at; P[5] = _rl.fwd.length;
+        simParallelRun(SIM_KERNEL_ACQ_REPLAY, Math.ceil(m / per));
+        P.fill(0, 0, 8);
+        P[0] = n; P[1] = 65536; P[2] = _rl.fwd.length; P[3] = stamp;
+        if (n > 0) simParallelRun(SIM_KERNEL_ACQ_REMAP, Math.ceil(n / 65536));
+    }
+}
 function acqTierReset() {
+    _acqMoves = [];
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0; _acqCommitTick = -1; _acqStepTick = -1;
 }
@@ -3908,6 +3981,7 @@ function _acqCommit() {
     if (_acqStage !== 1) return;
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0;
+    if (_acqMoves.length) _acqApplyMoves();
     const S = _simUnitState;
     if (!S) return;
     const n = Math.min(_acqN, S.owners.length), P = _simParams;

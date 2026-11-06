@@ -119,7 +119,7 @@ function laserBeamsTick() {
         simRustDirect('k_laser_report', [M.list, M.rcnt, C.lzAcc, C.lzBeam, C.owner, C.energy, M.shrine, M.look, M.lcnt], R);
         _shrineAdd(M.shrine, NO);
         for (let k = 0, nl = M.lcnt[0]; k < nl; k++) {
-            const u = S.owners[M.look[3 * k]], d = M.look[3 * k + 2] / 1024, own = M.bown[M.look[3 * k + 1]];
+            const u = S.owners.at(M.look[3 * k]), d = M.look[3 * k + 2] / 1024, own = M.bown[M.look[3 * k + 1]];
             if (!u) continue;
             pushHostileDamageAlert(u, d, own); recordDamageVisual(u, d, own);
             createExplosion(u.x, u.y, "#f00", 1);
@@ -490,9 +490,9 @@ if (typeof structTableAccessors === 'function') structTableAccessors(Tower, 0x22
 // gone or out of sight. preferredTarget: its object (looked up).
 const TOWER_TARGET_KINDS = ['', 'unit', 'tower', 'barrack', 'spawner', 'item'];
 function towerSetPreferredTargetCode(tower, kind, value) {
-    tower._ptK = kind;
+    // (_ptV first: setting _ptK makes the brain word again, stationaryBrainChanged.)
     tower._ptV = value;
-    stationaryBrainChanged(tower);
+    tower._ptK = kind;
 }
 Object.defineProperty(Tower.prototype, 'preferredTargetSpec', { configurable: true, enumerable: false,
     get() {

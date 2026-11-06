@@ -80,7 +80,7 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     snapDecodeState(saved);
     const restored = new Set(units);
     for (let s = 0; s < _simUnitState.owners.length; s++) {
-        const u = _simUnitState.owners[s];
+        const u = _simUnitState.owners.at(s);
         if (u && !restored.has(u)) fail('restore left stale slot live');
         if (!!_simUnitState.columns.live[s] !== !!u) fail('restore live membership');
     }

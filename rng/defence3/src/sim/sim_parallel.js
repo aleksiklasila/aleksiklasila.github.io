@@ -1573,7 +1573,9 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     // (68: its status record, for unit.stWa.)
     'unit.stIx',
     // (69-71: a unit taken behind: its base row and maxEnergy field.)
-    'unit.bsRow', '?eff.bRow', 'unit.jMaxE']);
+    'unit.bsRow', '?eff.bRow', 'unit.jMaxE',
+    // (72: the spatial type of each upkeep type, for units whose kernel fields are not set.)
+    '?eff.upTy']);
 // The effective levels' counts: the units of each lane (owner, type) in each area, a snapshot (things_utils.js _effAreaHistEnsure).
 const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist']);
 SIM_KERNELS[SIM_KERNEL_EFF_AREA_HIST] = function (R, P, chunk) { _simRust(_simEffAreaHistW, P, chunk, 'k_eff_area_hist', 'EFF_AREA_HIST'); };
@@ -1735,18 +1737,6 @@ const SIM_KERNEL_ADJ_APPLY = 119;
 const _simAdjApplyW = _simWK(['adj.otile', 'adj.ogrp', 'adj.gsize', 'adj.gmul', 'adj.sig', '?adj.none', 'st.stab', 'st.rrow', 'st.uc', 'st.brain', 'st.val',
     'adj.rml', 'stt.mxe', 'stt.vis', 'stt.atk', 'adj.ev', 'adj.evn', 'adj.ctab', 'st.code', 'st.own', 'adj.tykey', 'adj.rlv', 'adj.bl']);
 SIM_KERNELS[SIM_KERNEL_ADJ_APPLY] = function (R, P, chunk) { _simRust(_simAdjApplyW, P, chunk, 'k_adj_apply', 'ADJ_APPLY'); };
-// Path regions (pathfinding.js _pathRegionsPlain / _pathRegionsOwner; reg.rs):
-// a band of rows a job (LOCAL), the band edges joined (MERGE, one job), the
-// labels made canonical (FINAL), an owner's parents (IDENT) and labels (OWNER).
-const SIM_KERNEL_REG_LOCAL = 121, SIM_KERNEL_REG_MERGE = 122, SIM_KERNEL_REG_FINAL = 123, SIM_KERNEL_REG_IDENT = 124, SIM_KERNEL_REG_OWNER = 125;
-const _simRegW = _simWK(['reg.wall', 'reg.lab', 'reg.par', 'reg.q', '?reg.opar', '?reg.olab']);
-const _simRegOwnW = _simWK(['?reg.wall', 'reg.lab', 'reg.par', '?reg.q', 'reg.opar', '?reg.olab']);
-SIM_KERNELS[SIM_KERNEL_REG_LOCAL] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_local', 'REG_LOCAL'); };
-SIM_KERNELS[SIM_KERNEL_REG_MERGE] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_merge', 'REG_MERGE'); };
-SIM_KERNELS[SIM_KERNEL_REG_FINAL] = function (R, P, chunk) { _simRust(_simRegW, P, chunk, 'k_reg_final', 'REG_FINAL'); };
-SIM_KERNELS[SIM_KERNEL_REG_IDENT] = function (R, P, chunk) { _simRust(_simRegOwnW, P, chunk, 'k_reg_ident', 'REG_IDENT'); };
-const _simRegOwnerW = _simWK(['?reg.wall', 'reg.lab', 'reg.par', '?reg.q', 'reg.opar', 'reg.olab']);
-SIM_KERNELS[SIM_KERNEL_REG_OWNER] = function (R, P, chunk) { _simRust(_simRegOwnerW, P, chunk, 'k_reg_owner', 'REG_OWNER'); };
 // The adjacency post (things_utils.js _adjacencyLanePost; ord.rs k_adj_post):
 // P[1] 256-tile blocks a job.
 const SIM_KERNEL_ADJ_POST = 120;
@@ -1791,7 +1781,7 @@ SIM_KERNELS[SIM_KERNEL_WS_GROUP] = function (R, P, chunk) { _simRust(_simWsGroup
 //   worker of its type (wsw.resv; but its own, ws.rmy); score from the
 //   anchor (or the group's nearest working spawner of the owner by tile
 //   steps, then row, column, id; or the worker) plus 0.22 of the distance
-//   from the origin, plus P[7] for a drop (site kind 0). The site: its index
+//   from the origin. The site: its index
 //   in the group.
 //  Kinds 3, 4 and 5, the work site grid (wsw.*): the owner's tiles offering
 //   all of ws.rneed's bits (low byte; count index in the next, the
@@ -1803,7 +1793,7 @@ SIM_KERNELS[SIM_KERNEL_WS_GROUP] = function (R, P, chunk) { _simRust(_simWsGroup
 //   owner's damaged units (wsh.*, P[13] an owner) by squared distance plus
 //   0.08 of the squared distance from the worker, the best 3 in ws.ures.
 // P: [0] requests, [1] per job, [2] K, [3] TILE, [4] bucket tiles, [5] owners
-// (wsh.n), [7] drop penalty, [8]/[9] grid, [10] the work grid's 8x8 blocks
+// (wsh.n), [8]/[9] grid, [10] the work grid's 8x8 blocks
 // wide, [11] select chunks, [12] slots a select chunk, [13] healer units an
 // owner, [14] 1: requests by position, [15] areas. Rust: k.rs k_ws_scan.
 const _simWsScanW = _simWK(['ws.rkind', 'ws.rowner', 'ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rak', 'ws.rax', 'ws.ray', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy',
@@ -1869,6 +1859,30 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 const SIM_KERNEL_SLOT_ZERO = 128;
 const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
 SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZeroW, P, chunk, 'k_slot_zero', 'SLOT_ZERO'); };
+// The online relayout (sim_unit_state.js simUnitStateRelayoutStep; wasm/src/
+// nfs.rs): units' columns moved to other slots, the references to the moved
+// slots following them, and the slabs' scores that choose what moves.
+const SIM_KERNEL_SLOT_MOVE = 141, SIM_KERNEL_SLOT_REMAP = 142, SIM_KERNEL_SLAB_SCORE = 143;
+const _simSlotMoveW = _simWK(['rl.pairs', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?occ.rec', 'unit.hslot', 'unit.hnd', 'rl.fwd', 'rl.fst', '?unit.pvS', '?rl.uid', 'unit.id', '?rl.uids', '?rl.rows']);
+SIM_KERNELS[SIM_KERNEL_SLOT_MOVE] = function (R, P, chunk) { _simRust(_simSlotMoveW, P, chunk, 'k_slot_move', 'SLOT_MOVE'); };
+const _simSlotRemapW = _simWK(['rl.fwd', 'unit.tuS', 'unit.cmT', 'unit.cmMode', 'unit.ppNext', 'unit.ppPrev', '?rl.rows', 'unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?rl.uid', '?ord.ring', '?rl.pph', 'rl.fst']);
+SIM_KERNELS[SIM_KERNEL_SLOT_REMAP] = function (R, P, chunk) { _simRust(_simSlotRemapW, P, chunk, 'k_slot_remap', 'SLOT_REMAP'); };
+const _simSlabScoreW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score']);
+SIM_KERNELS[SIM_KERNEL_SLAB_SCORE] = function (R, P, chunk) { _simRust(_simSlabScoreW, P, chunk, 'k_slab_score', 'SLAB_SCORE'); };
+const SIM_KERNEL_ACQ_REMAP = 144;
+const _simAcqRemapW = _simWK(['rl.fwd', 'acq.bt', 'acq.bm', 'rl.fst']);
+SIM_KERNELS[SIM_KERNEL_ACQ_REMAP] = function (R, P, chunk) { _simRust(_simAcqRemapW, P, chunk, 'k_acq_remap', 'ACQ_REMAP'); };
+const SIM_KERNEL_ORDER_PRE = 147;
+const _simOrderPreW = _simWK(['ord.slots', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPP', 'unit.agWait', 'unit.sepLayer', 'ord.pst', 'unit.ptSt', 'unit.ptGx', 'unit.ptGy', 'unit.hObj', 'unit.mvPF']);
+SIM_KERNELS[SIM_KERNEL_ORDER_PRE] = function (R, P, chunk) { _simRust(_simOrderPreW, P, chunk, 'k_order_pre', 'ORDER_PRE'); };
+const SIM_KERNEL_META_UNITS = 146;
+const _simMetaUnitsW = _simWK(['pm.id', 'pm.flags', 'pm.orderTick', 'pm.maxEnergy', 'pm.cargo', 'pm.tx', 'pm.ty', 'pm.type', 'pm.wtype', 'pm.wstate', 'pm.style', 'pm.watchedBy', 'pm.vision',
+    'unit.live', 'unit.dead', 'unit.id', 'unit.upT', 'unit.wkS', 'unit.wTeam', 'unit.statRow', '?eff.rVsA', 'unit.maxE', 'unit.energy', 'unit.wkIx', 'unit.wmCarry', 'unit.wmBlk', 'unit.jFly', 'unit.holdF',
+    '?pm.wtid', 'pm.tab', 'pm.list', 'pm.cnt', '?unit.pvAt']);
+SIM_KERNELS[SIM_KERNEL_META_UNITS] = function (R, P, chunk) { _simRust(_simMetaUnitsW, P, chunk, 'k_meta_units', 'META_UNITS'); };
+const SIM_KERNEL_ACQ_REPLAY = 145;
+const _simAcqReplayW = _simWK(['acq.mlog', 'acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid', 'rl.fwd', 'rl.fst']);
+SIM_KERNELS[SIM_KERNEL_ACQ_REPLAY] = function (R, P, chunk) { _simRust(_simAcqReplayW, P, chunk, 'k_acq_replay', 'ACQ_REPLAY'); };
 // The worker AI's parallel pass (worker.js waiRun; wasm/src/wai.rs k_wai_decide):
 // a chunk of the events decided against the pass's start, its effects into
 // its lists (k_wai_apply writes them after, in order).

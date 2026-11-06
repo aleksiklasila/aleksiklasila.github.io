@@ -20,15 +20,7 @@ function researchDrainTick() {
         const p = players[pid];
         let pts = Number(p && p.researchPoints) || 0;
         if (!(pts > 0)) continue;
-        for (let guard = 0; guard < 64 && pts > 0; guard++) {
-            const task = tryAdvancePlayerResearchTask(pid);
-            if (!task) break;
-            const done = Number(task.workDone) || 0, rem = Math.max(0, (Number(task.workRequired) || 0) - done), used = Math.min(rem, pts);
-            task.workDone = done + used; pts -= used;
-            if (task.workDone < task.workRequired) break;
-            completeActiveResearchTaskForPlayer(pid, task);
-        }
-        p.researchPoints = pts;
+        p.researchPoints = researchQueueSpend(pid, pts);
     }
 }
 
@@ -539,6 +531,7 @@ function workSiteFlagsOf(e) {
     L[0] = t; _wswRun(_wsw, L, 1, 0);
     return _wsw.flags[t];
 }
+const _wswResvP = new Float64Array(4);
 function _wswBuild() {
     const n = GRID_W * GRID_H, bw = Math.ceil(GRID_W / 8), bh = Math.ceil(GRID_H / 8);
     const W = _wsw = { w: GRID_W, h: GRID_H, n, bw, bh, set: _activeTileEntities, areaFor: areaIdGrid, resvFor: workerReservedTiles,
@@ -550,7 +543,10 @@ function _wswBuild() {
     _wswDirty = []; _wswResvRoom()[0] = 0;
     // Every live reservation (mines and drops too), then every structure.
     const RS = workerReservedTiles, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
-    for (let slot = 0; slot < RS.length; slot++) { const r = RS[slot] ? workerReservedAt(slot) : null; if (r && !r.dead) { const i = slot % NT; if (i < 8) W.resv[(slot - i) / NT] |= 1 << i; } }
+    // (By the kernel: tch.rs k_wsw_resv, the reservers by the unit id index.)
+    { const S = _simUnitState, map = _unitByIdMap(), c = S && S.columns, P = _wswResvP;
+      P[0] = RS.length; P[1] = NT; P[2] = map instanceof UnitIdIndex ? map.mask : 0;
+      if (c && map instanceof UnitIdIndex && simHeapHas(RS)) simRustDirect('k_wsw_resv', [RS, map.t, c.id, c.live, c.dead, W.resv], P); }
     const m = _activeTileEntities.tileList();
     _wswRun(W, _activeTileEntities._tiles, m, 0);
 }
@@ -854,7 +850,7 @@ function _wsPost() {
     // The area layout as of now (its arrays are never changed).
     simParallelBind('ws.agrid', _spatialAreaGridFlat());
     if (typeof _simAreaCsr === 'function') { _simAreaCsr(); simParallelBind('ws.aoff', _simParReg['area.off']); simParallelBind('ws.anb', _simParReg['area.nb']); }
-    Bp[0] = total; Bp[1] = 16; Bp[2] = WS_K; Bp[3] = TILE; Bp[4] = WS_BUCKET; Bp[7] = TILE * 0.5; Bp[8] = GRID_W; Bp[9] = GRID_H;
+    Bp[0] = total; Bp[1] = 16; Bp[2] = WS_K; Bp[3] = TILE; Bp[4] = WS_BUCKET; Bp[8] = GRID_W; Bp[9] = GRID_H;
     Bp[10] = _wsw ? _wsw.bw : 0; Bp[11] = 1; Bp[12] = total; Bp[13] = HM; Bp[14] = 1;
     Bp[5] = np; Bp[15] = _simParReg['ws.aoff'] ? _simParReg['ws.aoff'].length - 1 : 0;
     Bp[56]=areaSearchEnabled()?1:0;
@@ -884,7 +880,7 @@ function _wsPost() {
     Sp[5] = WSR_GRID; Sp[6] = WSR_HEAL; Sp[7] = WSW_BUILD;
     simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
         [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1], [SIM_KERNEL_WS_RETURN_SPAWNERS, spawners ? Math.ceil(total / Sp[0]) : 0]]);
-    _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false };
+    _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false, moved: typeof _rl !== 'undefined' ? _rl.moved : 0 };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups
 // in place, which the unit pass may change; not chained with the ordering.)
@@ -905,6 +901,18 @@ function _wsCommit() {
     _wsPosted = null;
     if (!_simUnitState) return;
     _wsCommitTick = gameTime;
+    // (Workers moved to other slots while the search ran (the online
+    // relayout, sim_unit_state.js): each request's slot found again by its
+    // id; a worker gone names none, as its slot's id check would have.)
+    if (typeof _rl !== 'undefined' && J.moved !== _rl.moved) {
+        const RS = _simParReg['ws.rslot'], RI = _simParReg['ws.rid'], S = _simUnitState, O = S.owners;
+        for (let i = 0, m = Math.min(J.CH | 0, RS.length); i < m; i++) {
+            const s = RS[i];
+            if (s >= 0) { const o = O.at(s); if (o && o.id === RI[i]) continue; }
+            const u = getUnitById(RI[i]);
+            RS[i] = u && u._us === S.columns && u._si >= 0 ? u._si : -1;
+        }
+    }
     const n = _simParReg['ws.orderCount'][0];
     if (n > 0) waiTake(J, _simParReg['ws.order'], n);
 }
@@ -966,7 +974,7 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     // One occupancy lookup per (synchronous) search instead of a unit scan
     // per candidate; nothing is assigned until the search completes.
     let conflictCache = {};
-    let considerCandidate = (candidate, candidateType, dropPenalty = 0) => {
+    let considerCandidate = (candidate, candidateType) => {
         if (!candidate) return;
         let dx = Number(candidate.x) - origin.x;
         let dy = Number(candidate.y) - origin.y;
@@ -983,7 +991,7 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
         candidates.push({
             target: candidate,
             targetType: candidateType,
-            dist: spawnerDist + originDist * 0.22 + dropPenalty,
+            dist: spawnerDist + originDist * 0.22,
             worldDist: detHypot(candidate.x - u.x, candidate.y - u.y)
         });
     };
@@ -991,9 +999,6 @@ function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     // Drops and farms: only those in buckets overlapping the search box.
     const searchBox=_workerSearchTileBox(u,origin.x,origin.y,maxSearchPx,0);
     let minGx=Math.max(0,searchBox[0]),minGy=Math.max(0,searchBox[1]),maxGx=Math.min(GRID_W-1,searchBox[2]),maxGy=Math.min(GRID_H-1,searchBox[3]);
-    if (resourceCfg.supportsDropTarget) {
-        _forEachStructureInTileBox(_droppedItemsForBuckets(), minGx, minGy, maxGx, maxGy, (drop) => considerCandidate(drop, 'drop', TILE * 0.5));
-    }
 
     let mineArray = _getResourceCollectorMineArray(resourceCfg) || [];
     // Only mines inside the search box can pass considerCandidate; visit
@@ -1034,9 +1039,6 @@ function _isResourceCollectorTargetValid(target, targetType, owner, resourceCfg)
     }
     if (targetType === resourceCfg.farmKey) {
         return target.type === resourceCfg.farmKey && target.owner === owner && !target.underConstruction && target.energy > 0;
-    }
-    if (targetType === 'drop') {
-        return !!resourceCfg.supportsDropTarget && getDroppedItemAt(target.gx, target.gy) === target;
     }
     return false;
 }
@@ -1121,10 +1123,6 @@ function _getResourceCollectorGatherTargetAt(gx, gy, owner, resourceCfg, preferr
             }
         }
     }
-    if (resourceCfg.supportsDropTarget && (preferredType === 'drop' || preferredType === null)) {
-        let drop = getDroppedItemAt(gx, gy);
-        if (drop) return { target: drop, type: 'drop' };
-    }
     return null;
 }
 
@@ -1160,21 +1158,6 @@ function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCf
             if (d <= bestDist) {
                 bestDist = d;
                 best = { target: item, type: resourceCfg.farmKey };
-            }
-        }
-    }
-    if (resourceCfg.supportsDropTarget) {
-        let minDropGx = Math.max(0, gx - 1), maxDropGx = Math.min(GRID_W - 1, gx + 1);
-        let minDropGy = Math.max(0, gy - 1), maxDropGy = Math.min(GRID_H - 1, gy + 1);
-        for (let y = minDropGy; y <= maxDropGy; y++) {
-            for (let x = minDropGx; x <= maxDropGx; x++) {
-                let drop = getDroppedItemAt(x, y);
-                if (!drop) continue;
-                let d = detHypot(drop.x - worldX, drop.y - worldY);
-                if (d <= bestDist) {
-                    bestDist = d;
-                    best = { target: drop, type: 'drop' };
-                }
             }
         }
     }
@@ -1217,7 +1200,7 @@ function _getAstarCollectorGatherTargetNear(worldX, worldY, owner, radius = 22) 
     return _getResourceCollectorGatherTargetNear(worldX, worldY, owner, getResourceTypeConfig('astar'), radius);
 }
 
-// Collector: find nearest gold mine/farm/drop, preferring area around last gather source.
+// Collector: find nearest gold mine/farm, preferring area around last gather source.
 function _collectorFindTarget(u, myGx, myGy) {
     if (_isCollectorTargetValid(u._collectorPinnedTarget, u._collectorPinnedTargetType, u.owner)
         && _canAssignWorkerTargetExclusive(u, u._collectorPinnedTarget, u._collectorPinnedTargetType)) {
@@ -1252,19 +1235,13 @@ function _collectorFindTarget(u, myGx, myGy) {
         let dy = worldY - origin.y;
         let originDistSq = dx * dx + dy * dy;
 
-        let drop = getDroppedItemAt(x, y);
         let mine = getGoldMineAt(x, y);
         let item = cell.item;
 
         let candidate = null;
         let candidateType = null;
-        let dropPenalty = 0;
 
-        if (drop) {
-            candidate = drop;
-            candidateType = 'drop';
-            dropPenalty = TILE * 0.5;
-        } else if (mine && mine.gold > 0) {
+        if (mine && mine.gold > 0) {
             candidate = mine;
             candidateType = 'mine';
         } else if (item && item.type === 'farm' && item.owner === u.owner && !item.underConstruction && item.energy > 0) {
@@ -1284,7 +1261,7 @@ function _collectorFindTarget(u, myGx, myGy) {
         candidates.push({
             target: candidate,
             targetType: candidateType,
-            dist: spawnerDist + originDist * 0.22 + dropPenalty,
+            dist: spawnerDist + originDist * 0.22,
             worldDist: detHypot(candidate.x - u.x, candidate.y - u.y)
         });
         return false;
@@ -1692,13 +1669,6 @@ function workerWorkChanged(owner, workerType = null, gx = -1, gy = -1) {
     if (gx >= 0 && gy >= 0) i += 1 + Math.min(V.rh - 1, Math.floor(gy / WORKER_WORK_REGION_TILES)) * V.rw + Math.min(V.rw - 1, Math.floor(gx / WORKER_WORK_REGION_TILES));
     V[i] = (V[i] + 1) | 0;
     V.sum = (V.sum + _workerWorkMix(i)) | 0;
-}
-// A drop at (gx, gy): work for every player's collectors that pick drops up
-// (supportsDropTarget), and no other worker's (a battle drops hundreds a
-// tick; waking every idle worker near it for a search was most of a siege's
-// worker time).
-function workerWorkDropAdded(gx, gy) {
-    for (const cfg of RESOURCE_TYPE_LIST) if (cfg.supportsDropTarget) workerWorkChanged(-1, cfg.collectorUnitKey, gx, gy);
 }
 // The state hash's checksum of the versions, kept as they change: the sum
 // of each version times a mix of its index.
@@ -2867,7 +2837,11 @@ function _hcCollect(ownerCount, cap) {
         for (let k = 0, b = o * cap; k < cap; k++) {
             const s = RES[b + k];
             if (s < 0) break;
-            const id = Math.floor(ID[s]), u = owners[s];
+            // (By id when its slot holds another: the online relayout,
+            // sim_unit_state.js simUnitStateRelayoutStep, may have moved it.)
+            const id = Math.floor(ID[s]);
+            let u = owners.at(s);
+            if (!u || u.id !== id) u = getUnitById(id);
             if (u && u.id === id && !u.dead) list.push({ u, ratio: RAT[b + k], id });
         }
         out.push(list);
@@ -3242,16 +3216,6 @@ function _cellItemsOfType(type) {
     return list;
 }
 
-// The live drops as a list for the bucket index, re-made when drops change.
-let _dropBucketList = [], _dropBucketVersion = -1, _dropBucketSource = null, _dropBucketLength = -1;
-function _droppedItemsForBuckets() {
-    if (_dropBucketVersion !== droppedItemsVersion || _dropBucketSource !== droppedItems || _dropBucketLength !== droppedItems.length) {
-        _dropBucketList = droppedItems.filter(d => !!d);
-        _dropBucketVersion = droppedItemsVersion; _dropBucketSource = droppedItems; _dropBucketLength = droppedItems.length;
-    }
-    return _dropBucketList;
-}
-
 // Every structure of `list` in buckets overlapping the tile box.
 function _forEachStructureInTileBox(list, x0, y0, x1, y1, fn) {
     let index = _structureBuckets(list), B = STRUCTURE_BUCKET_TILES;
@@ -3468,6 +3432,7 @@ let localUnitOrderHook = null;
 function _queueLocalAction(action) {
     if (gameOver) return;
     if (localUnitOrderHook && action && Array.isArray(action.unitIds)) localUnitOrderHook(action);
+    if (localUnitOrderHook && action && action.action === 'orderMany' && Array.isArray(action.groups)) for (const g of action.groups) if (g && Array.isArray(g.unitIds)) localUnitOrderHook({ ...g, action: action.mode });
     // (A research order: shown at once, see hud.js noteResearchOrder.)
     if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
         noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));
@@ -3491,7 +3456,19 @@ function _queueLocalAction(action) {
     if (!localInputBuffer[tick]) localInputBuffer[tick] = [];
     let actorId = myPeerId || `p${localPlayerId}`;
     let finalAction = { ...action, teamId: localPlayerId, netId: `${actorId}:${_localActionEpoch}:${nextLocalActionSeq++}` };
-    if (typeof noteOrderMarker === 'function') noteOrderMarker(action, tick);
+    if (typeof noteOrderMarker === 'function') {
+        if (action.action === 'orderMany' && Array.isArray(action.groups)) for (const g of action.groups) noteOrderMarker({ ...g, action: action.mode }, tick);
+        else noteOrderMarker(action, tick);
+    }
+    // (A multi-point order's groups: their long id lists compact.)
+    if (finalAction.action === 'orderMany' && Array.isArray(finalAction.groups) && typeof actionIdsEncode === 'function') {
+        finalAction.groups = finalAction.groups.map(g => {
+            if (!g || !Array.isArray(g.unitIds) || g.unitIds.length < 64) return g;
+            const z = actionIdsEncode(g.unitIds), o = { ...g };
+            if (z !== null) { o.uidz = z; delete o.unitIds; }
+            return o;
+        });
+    }
     // A long id list goes compactly (main.js actionIdsEncode; every peer,
     // this one too, decodes it when it processes the action).
     if (Array.isArray(finalAction.unitIds) && finalAction.unitIds.length >= 64 && typeof actionIdsEncode === 'function') {
@@ -3647,7 +3624,7 @@ function applyWorkerRallyFromSpawner(u, spawner) {
         u._healerPinnedQueueTarget = qTarget;
         if (_isHealerQueueTarget(qTarget, u.owner)) _setHealerQueueCommit(u, qTarget);
         else _clearHealerQueueCommit(u);
-        _healerFindTarget(u, myGx, myGy);
+        // (Its target from the pinned queue by the worker kernel at its check, due now: wai.rs healer.)
         u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
         return true;
     }
@@ -3804,13 +3781,8 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     for (let o = 0; o < np; o++) {
         const b = o * WAI_RS_W, task = getPlayerResearchTask(o);
         rs[b + 4] = Number(players[o] && players[o].researchPoints) || 0;
-        if (task) { rs[b] = 1; rs[b + 1] = Number(task.workRequired) || 0; rs[b + 2] = Number(task.workDone) || 0; rs[b + 3] = Number(task.cost) || 0; continue; }
-        for (const q of getPlayerResearchQueue(o)) {
-            const t = _normalizeResearchTaskForOwner(q, o);
-            if (!t) continue;
-            rs[b + 5] = 1; rs[b + 6] = Number(t.workRequired) || 0; rs[b + 7] = Number(t.workDone) || 0; rs[b + 8] = Number(t.cost) || 0;
-            break;
-        }
+        // (The active task is the queue's first: none queued, none.)
+        if (task) { rs[b] = 1; rs[b + 1] = Number(task.workRequired) || 0; rs[b + 2] = Number(task.workDone) || 0; rs[b + 3] = Number(task.cost) || 0; }
     }
     // Payments: the batch rows' deltas (room for two a worker), their counts and sums.
     const payt = _waiArr('payt', Int32Array, np * 4), payl = _waiArr('payl', Float64Array, np * 2);
@@ -3872,7 +3844,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     // (Per resource, RESOURCE_TYPE_LIST's first two: energy, A*.)
     // (Stationary types as the structure table's descriptor holds them: id + 1.)
     const sty = _waiStationaryTypeCode, RL = RESOURCE_TYPE_LIST;
-    P[38] = simWttCode(RL[0].mineTileType); P[39] = simWttCode(RL[1].mineTileType); P[40] = simWttCode(RL[0].farmKey); P[41] = simWttCode(RL[1].farmKey); P[42] = simWttCode('drop');
+    P[38] = simWttCode(RL[0].mineTileType); P[39] = simWttCode(RL[1].mineTileType); P[40] = simWttCode(RL[0].farmKey); P[41] = simWttCode(RL[1].farmKey);
     P[43] = sty(RL[0].farmKey); P[44] = sty(RL[1].farmKey); P[45] = sty(RL[0].collectorBuildingKey); P[46] = sty(RL[1].collectorBuildingKey);
     P[47] = 0x66; P[48] = 0x77;
     for (let rz = 0; rz < 2; rz++) { const b = BASE_UNIT_STATS[RL[rz].collectorUnitKey] || {}; P[49 + rz] = secondsToTicks(Math.max(0.01, Number(b.transferCooldown) || 0.01)); P[51 + rz] = rz; }
@@ -3966,7 +3938,7 @@ function waiOutEvents(m) {
     for (let i = 0; i < m; i++) {
         const code = out[i * 4], a = out[i * 4 + 1], b = out[i * 4 + 2];
         if (code === WAI_OUT_DECLINED) {
-            const u = owners[a];
+            const u = owners.at(a);
             if (!u || u.dead) continue;
             _wai.declined++;
             // (Its floor was looked at before the pass.)
@@ -3975,12 +3947,12 @@ function waiOutEvents(m) {
             const t = getTileEntityRef(b % GRID_W, Math.floor(b / GRID_W));
             if (t && _noteAmbientSoundTick(t, 'research_tick', 12)) playSound('research_tick', t.x, t.y);
         } else if (code === WAI_OUT_RESEARCH_ADVANCE) tryAdvancePlayerResearchTask(a);
-        else if (code === WAI_OUT_ARM) { const u = owners[a]; if (u && !u.dead) simMoveTryArm(u); }
+        else if (code === WAI_OUT_ARM) { const u = owners.at(a); if (u && !u.dead) simMoveTryArm(u); }
         else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e && e._stT >= 0) { if (!salv) salv = structDestroyList(m); salv[ns++] = e._stT; } }
-        else if (code === WAI_OUT_SOUND_UNIT) { const u = owners[a]; if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
+        else if (code === WAI_OUT_SOUND_UNIT) { const u = owners.at(a); if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
         else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
         else if (code === WAI_OUT_MINE_GONE) _waiMineGone(a, RESOURCE_TYPE_LIST[b]);
-        else if (code === WAI_OUT_ASTAR_LOG) { const u = owners[a]; if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
+        else if (code === WAI_OUT_ASTAR_LOG) { const u = owners.at(a); if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
         else if (code === WAI_OUT_QUEUE_PAID) {
             // (The production pass brings every spawner up to date each step: barrack.js spawnerProductionPass.)
             if (typeof _spProdOn === 'function' && _spProdOn()) continue;
@@ -3994,12 +3966,12 @@ function waiOutEvents(m) {
                 if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
             }
         } else if (code === WAI_OUT_SOUND_HEAL) {
-            const t = a >= 0 ? getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)) : owners[b];
+            const t = a >= 0 ? getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)) : owners.at(b);
             if (t && _noteAmbientSoundTick(t, 'heal_tick', 12)) playSound('heal_tick', t.x, t.y);
         }
         else if (code === WAI_OUT_BUILT) _waiBuilt(a, b, out[i * 4 + 3]);
         else if (code === WAI_OUT_SOUND_BUILD) { const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)); if (t && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y); }
-        else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners[a]; if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
+        else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners.at(a); if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
     }
     if (ns > 0) structDestroyTiles(salv, ns);
     if (_wai.adjDue) { _wai.adjDue = false; recalculateAdjacency(); }
@@ -4053,7 +4025,7 @@ function waiTake(J, order, n) {
     // Private stats for workers without a shared row. The native commit reads
     // the search's order and proposed return spawners directly.
     const RS = _simParReg['ws.rslot'], S = _simUnitState, c = S.columns;
-    for (let i = 0; i < n; i++) { const q = RS[order[i]]; if (q >= 0 && c.statRow[q] < 0 && S.owners[q]) _waiOwnStats(S.owners[q], c, q); }
+    for (let i = 0; i < n; i++) { const q = RS[order[i]]; if (q >= 0 && c.statRow[q] < 0 && S.owners.at(q)) _waiOwnStats(S.owners.at(q), c, q); }
     playerResourceBatchBegin();
     try { if (waiAvailable()) waiOutEvents(waiRun(order, n, J)); } finally { playerResourceBatchEnd(); }
 }

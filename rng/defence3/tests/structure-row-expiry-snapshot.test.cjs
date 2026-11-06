@@ -20,7 +20,7 @@ const out = JSON.parse(i.eval(`(() => {
     const ids = [a.id, b.id];
     // The first destroyed long ago (expired), the second recently (kept).
     destroyBuilding(placed[0]);
-    gameTime += STRUCT_ROW_KEEP_TICKS; structRowsExpire();
+    gameTime += STRUCT_ROW_KEEP_TICKS + STRUCT_ROW_STAGGER_TICKS; structRowsExpire();
     destroyBuilding(placed[1]);
     const t1 = gameTime;
     gameTime += 50; structRowsExpire();

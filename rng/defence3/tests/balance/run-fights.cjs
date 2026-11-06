@@ -54,12 +54,6 @@ function installProbe() {
         if(d&&source!=='movement') d.g.astarEstimate[owner]+=Math.max(0,Number(used)||0);
         return astar.apply(this,arguments);
     };
-    const nodeBudget=_tryConsumeAstarNodeBudget;
-    _tryConsumeAstarNodeBudget=function(owner,count=1) {
-        const ok=nodeBudget.apply(this,arguments);
-        if(ok&&teams[owner]) teams[owner].astarNodes+=count;
-        return ok;
-    };
     const energy=recordEnergyDelta;
     recordEnergyDelta=function(owner,source,delta) {
         if(teams[owner]) teams[owner].energyBySource[source]=(teams[owner].energyBySource[source]||0)+delta;

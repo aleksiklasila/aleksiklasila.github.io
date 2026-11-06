@@ -5,7 +5,7 @@
 //     reach and wait there with their order kept (not idle); one wall opened
 //     (a new build), they go on to the destination itself;
 //  C. a unit walled in, sent outside: the closest tile inside the ring.
-// Nothing searches on the simulation thread (no A*, no group routes).
+// Nothing searches on the simulation thread (the A* and group routes are gone).
 //   node tests/nav-reach.test.cjs
 'use strict';
 const assert = require('node:assert/strict');
@@ -15,9 +15,6 @@ const inst = world.spawn('navreach', { simWorker: false });
 inst.eval('startSoloGame();');
 const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     const out = {};
-    // (Searches counted: none may run.)
-    let searches = 0;
-    { const fA = findPathAStar; findPathAStar = function () { searches++; return fA.apply(this, arguments); }; const fG = GroupRoute.prototype.advance; GroupRoute.prototype.advance = function () { searches++; return fG.apply(this, arguments); }; }
     // An open area in the map's middle (walls cleared, nothing on it).
     const x0 = 24, y0 = 24, x1 = 72, y1 = 72;
     const setWall = (x, y, on) => { const c = grid[y][x]; if (c.item || getTileEntityRef(x, y)) return false; c.type = on ? TYPE_WALL : TYPE_FLOOR; simMoveTileTypeChanged(x, y); return true; };
@@ -65,7 +62,6 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     order([c], 45, 55);
     run(300);
     out.cTile = tileOf(c); out.cCmd = c.commandState; out.cPending = !!c._pendingPathTarget;
-    out.searches = searches;
     return out;
 })())`));
 console.log(JSON.stringify(r));
@@ -78,6 +74,5 @@ assert.ok(r.bTicks > 0, 'B: after the wall opened, the units reached the destina
 // C: inside the ring (31..35, 53..57), on its east side, still ordered.
 assert.ok(r.cTile[0] >= 34 && r.cTile[0] <= 35 && r.cTile[1] >= 53 && r.cTile[1] <= 57, 'C: the walled-in unit at the ring side nearest the target: ' + JSON.stringify(r.cTile));
 assert.equal(r.cCmd, 1, 'C: keeps its move order');
-assert.equal(r.searches, 0, 'no path search (A*, group route) ran');
 console.log('PASS: flow navigation reach (' + r.build + '; A in ' + r.aTicks + ' ticks, B on after opening in ' + r.bTicks + ')');
 process.exit(0);

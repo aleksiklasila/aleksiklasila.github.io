@@ -200,15 +200,17 @@ function setSpawnBarCount(spec, target) {
             o.len += step; delta -= step;
         }
     }
+    // (One command for the bar's change: main.js spawnCounts.)
+    const ch = [];
     for (const o of options) {
         const change = o.len - o.initial;
         if (!change) continue;
         const old = spawnBarAhead.get(o.key);
         spawnBarAhead.set(o.key, { base: old ? old.base : o.initial,
             delta: (old ? old.delta : 0) + change, at: performance.now() });
-        queueAction({ action: change > 0 ? (spec.worker ? 'queueWorker' : 'queueUnit') :
-            (spec.worker ? 'dequeueWorker' : 'dequeueUnit'), gx: o.gx, gy: o.gy, count: Math.abs(change) });
+        ch.push([o.gy * GRID_W + o.gx, change]);
     }
+    if (ch.length) { ch.sort((x, y) => x[0] - y[0]); queueAction({ action: 'spawnCounts', worker: !!spec.worker, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[1]) }); }
 }
 
 function researchBarLevel(owner, stat) {

@@ -23,7 +23,6 @@ let areaNeighborIds = []; // [areaId] -> [neighborAreaId]
 let areaIdGrid = []; // 2D lookup [y][x] -> areaId
 let gridCellsByArea = []; // [areaId] -> [{x,y}]
 let spatialUnitsByArea = []; // [areaId] -> [Unit]
-let droppedItemsByArea = []; // [areaId] -> [drop]
 
 const TILE_ENTITY_NONE = '';
 const TILE_ENTITY_GOLDMINE = 'goldmine';
@@ -132,38 +131,12 @@ function resetAreaDistanceCaches() {
     areaIdGrid = [];
     gridCellsByArea = [];
     spatialUnitsByArea = [];
-    droppedItemsByArea = [];
 }
 
 function _ensureArrayBucketsLength(list, length, factory) {
     if (!Array.isArray(list)) list = [];
     while (list.length < length) list.push(factory());
     return list;
-}
-
-function _addDroppedItemToAreaBucket(drop, areaId) {
-    let aId = Math.floor(Number(areaId));
-    if (!drop || aId < 0) return;
-    droppedItemsByArea = _ensureArrayBucketsLength(droppedItemsByArea, aId + 1, () => []);
-    let bucket = droppedItemsByArea[aId];
-    if (!Array.isArray(bucket)) bucket = droppedItemsByArea[aId] = [];
-    if (bucket.indexOf(drop) === -1) bucket.push(drop);
-    drop._areaBucketId = aId;
-}
-
-function _removeDroppedItemFromAreaBucket(drop) {
-    if (!drop) return;
-    let aId = Math.floor(Number(drop._areaBucketId));
-    if (!(aId >= 0 && aId < droppedItemsByArea.length)) {
-        delete drop._areaBucketId;
-        return;
-    }
-    let bucket = droppedItemsByArea[aId];
-    if (Array.isArray(bucket)) {
-        let index = bucket.indexOf(drop);
-        if (index >= 0) bucket.splice(index, 1);
-    }
-    delete drop._areaBucketId;
 }
 
 function rebuildAreaDistanceCachesFromAreas() {
@@ -247,12 +220,6 @@ function rebuildAreaDistanceCachesFromAreas() {
     // A new layout: fresh buckets, every indexed unit in its tile's area.
     spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
     if (typeof rebuildUnitAreaBuckets === 'function') rebuildUnitAreaBuckets();
-    droppedItemsByArea = Array.from({ length: areaCount }, () => []);
-    for (let i = 0; i < droppedItems.length; i++) {
-        let drop = droppedItems[i];
-        if (!drop) continue;
-        _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(drop.gx, drop.gy));
-    }
 
     for (let source = 0; source < areaCount; source++) {
         let neighbors = _areaById[source] ? Array.from(neighborSets[source] || []).sort((a, b) => a - b) : [];
@@ -557,17 +524,6 @@ function getAreaRangeTileBox(sources, distance) {
     return out;
 }
 
-function getDroppedItemsWithinAreaDistance(areaId, distance) {
-    let areaIds = getAreaIdsWithinDistance(areaId, distance);
-    if (!areaIds || areaIds.length <= 0) return [];
-    let drops = [];
-    for (let i = 0; i < areaIds.length; i++) {
-        let bucket = droppedItemsByArea[areaIds[i]];
-        if (Array.isArray(bucket) && bucket.length > 0) drops = drops.concat(bucket);
-    }
-    return drops;
-}
-
 function _adjTileKey(gx, gy) {
     return gy * GRID_W + gx;
 }
@@ -685,11 +641,28 @@ const ST_OWNER_NONE = 0x7ff9;
 // tile is counted for, + 1 (0: none), so a refresh or an owner change moves
 // the count once. The page's copy comes with the frame globals.
 const structCountByOwner = new Int32Array(64);
+// Research labs per owner the same way (a tile counted for an owner whose
+// class is ResearchSpawner): all of them, and those built (uc 0); the
+// destroy kernel's batches too (dst.rs, its ocnt[64..192)). The research
+// queue's capacity and its "has a lab" read these.
+const structLabCount = new Int32Array(64), structLabBuilt = new Int32Array(64);
+let _stLabCtV = 0;
+function _stLabCt() { if (!_stLabCtV && typeof ResearchSpawner === 'function') { structRallyClasses(); _stLabCtV = _stAllIx.get(ResearchSpawner) || 0; } return _stLabCtV; }
+function _stLabTerm(t, d) {
+    const T = _ST, c = T.cnt[t];
+    if (!c || T.ctab[t] === 0 || T.ctab[t] !== _stLabCt()) return;
+    structLabCount[c - 1] += d;
+    if (!T.uc[t]) structLabBuilt[c - 1] += d;
+}
 function _stOwnCount(t, w) {
     const T = _ST, c = T.cnt[t];
+    _stLabTerm(t, -1);
     if (c) structCountByOwner[c - 1]--;
     if (w >= 0 && w < 64 && T.code[t] !== 0 && T.code[t] < 0x66) { structCountByOwner[w]++; T.cnt[t] = w + 1; } else T.cnt[t] = 0;
+    _stLabTerm(t, 1);
 }
+// (Its under-construction entry: the built count with it.)
+function _stUcSet(t, v) { _stLabTerm(t, -1); _ST.uc[t] = v; _stLabTerm(t, 1); }
 function playerStructureCount(pid) { return pid >= 0 && pid < 64 ? structCountByOwner[pid] : 0; }
 // The limit: the match's (configuredMaxBuildings: the menu's, from the
 // memory budget and the population), no more than each team's share of the
@@ -708,7 +681,7 @@ function structTableReset() {
     const T = _ST;
     T.mineN = 0; if (T.mineAt) T.mineAt.fill(0);
     T.mineRegN = 0; if (T.mineSum) { T.mineSum.fill(0); T.mineRc.fill(0); T.mineRegAt.fill(0); }
-    structCountByOwner.fill(0);
+    structCountByOwner.fill(0); structLabCount.fill(0); structLabBuilt.fill(0);
     if (T.n !== GRID_W * GRID_H) { T.n = 0; T.code = T.own = T.uc = T.val = T.tim = T.brain = T.rtab = T.stab = T.rrow = T.ctab = T.rcnt = T.cnt = null; }
     else { T.cnt.fill(0); T.code.fill(0); T.own.fill(0); T.uc.fill(0); T.val.fill(0); T.tim.fill(0); T.brain.fill(0); T.rtab.fill(0); T.stab.fill(0); T.rrow.fill(-1); T.ctab.fill(0); T.rcnt.fill(0); }
 }
@@ -793,7 +766,7 @@ function _stWrite(ref, t) {
     const T = _ST;
     if (ref._stMine) { T.own[t] = ST_OWNER_NONE; _stMineVal(t, Number(ref._mv)); T.tim[t] = 0; }
     // (A floor item given no owner: its cell's, as the towers' floor search took it.)
-    else { T.own[t] = _stOwnerWord(ref._ow !== undefined || ref._stCode !== 0x55 ? ref._ow : _stCellOwner(t)); _stOwnCount(t, T.own[t]); T.uc[t] = ref._uc ? 1 : 0; T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
+    else { T.own[t] = _stOwnerWord(ref._ow !== undefined || ref._stCode !== 0x55 ? ref._ow : _stCellOwner(t)); _stOwnCount(t, T.own[t]); _stUcSet(t, ref._uc ? 1 : 0); T.val[t] = Number(ref._en); T.tim[t] = ref._stCode === 0x22 ? Number(ref._cdUntil) || 0 : ref._stTimer ? Number(ref._spt) || 0 : 0; }
     stationaryBrainChanged(ref);
 }
 
@@ -1120,6 +1093,11 @@ function _sTableGrow(T, cap) {
 // every field into a dictionary record: 50 ms in a destroy wave, ~3 MB a
 // tick of garbage.)
 const STRUCT_ROW_KEEP_TICKS = 200;
+// (Each row a few ticks more, 0 .. STRUCT_ROW_STAGGER_TICKS - 1 by its
+// structure's tile (the same on every peer, whatever its row): a destroy
+// wave's rows expire over that many ticks, not all in one.)
+const STRUCT_ROW_STAGGER_TICKS = 16;
+function _sRowStagger(gx, gy) { return gx === -32768 ? 0 : (Math.imul(gx, 0x9E3779B1) ^ Math.imul(gy === -32768 ? 0 : gy, 0x85EBCA77)) >>> 28; }
 // (What a structure whose row expired reads: out of the world, no energy.
 // Writes to it go to a sink nobody reads.)
 const _S_GONE = Object.freeze(Object.assign(Object.create(null), { _stT: -1, _en: 0, _ow: -1, _uc: false, _mv: 0, _spt: 0 }));
@@ -1202,6 +1180,9 @@ let _sExpireRows = new Int32Array(1024);
 function structRowsExpire() {
     for (const T of _sTables.values()) {
         if (!(T.qn > 0) || gameTime - T.rt[T.qh] < STRUCT_ROW_KEEP_TICKS) continue;
+        // (Rows past the keep in retire order, each expiring at its stagger;
+        // one not yet due stays linked where it is: checked again next tick,
+        // STRUCT_ROW_STAGGER_TICKS times at most.)
         let n = 0;
         // (The tile from its columns, as the gx/gy accessors read them
         // (-32768: unset); objects made by structTableInit have the hidden
@@ -1211,10 +1192,13 @@ function structRowsExpire() {
         // property accesses a hash lookup: ~0.6 us a pop through
         // _sRowQueueUnlink. Same links as it leaves.)
         const GX = T.c_gx, GY = T.c_gy, rt = T.rt, rn = T.rn, rp = T.rp, ret = T.ret, obj = T.rowObj, t0 = gameTime;
-        let qh = T.qh, qn = T.qn, R = _sExpireRows;
-        while (qn > 0 && t0 - rt[qh] >= STRUCT_ROW_KEEP_TICKS) {
-            const r = qh, o = obj[r], nx = rn[r];
-            qh = nx; if (nx >= 0) rp[nx] = -1;
+        let qh = T.qh, qt = T.qt, qn = T.qn, R = _sExpireRows;
+        for (let r = qh; r >= 0 && t0 - rt[r] >= STRUCT_ROW_KEEP_TICKS;) {
+            const o = obj[r], nx = rn[r];
+            if (t0 - rt[r] < STRUCT_ROW_KEEP_TICKS + (GX ? _sRowStagger(GX[r], GY ? GY[r] : -32768) : 0)) { r = nx; continue; }
+            const pv = rp[r];
+            if (pv < 0) qh = nx; else rn[pv] = nx;
+            if (nx < 0) qt = pv; else rp[nx] = pv;
             ret[r] = 0; qn--;
             if (o) {
                 if (GX && _sHas.call(o, '_hgx')) {
@@ -1225,8 +1209,9 @@ function structRowsExpire() {
             }
             if (n === R.length) { const g = new Int32Array(n * 2); g.set(R); R = _sExpireRows = g; }
             R[n++] = r;
+            r = nx;
         }
-        T.qh = qh; T.qn = qn; if (qh < 0) T.qt = -1;
+        T.qh = qh; T.qt = qh < 0 ? -1 : qt; T.qn = qn;
         structRowStats.expired += n;
         _sRowsFree(T, R, n);
     }
@@ -1420,7 +1405,7 @@ function structTableAccessors(C, code, mineKey = null) {
         set(v) { this._ow = v; const t = this._stT; if (t >= 0) { _ST.own[t] = _stOwnerWord(v); _stOwnCount(t, _ST.own[t]); } } });
     Object.defineProperty(P, 'underConstruction', { enumerable: true, configurable: true,
         get() { return this._uc; },
-        set(v) { this._uc = v; const t = this._stT; if (t >= 0) _ST.uc[t] = v ? 1 : 0; } });
+        set(v) { this._uc = v; const t = this._stT; if (t >= 0) _stUcSet(t, v ? 1 : 0); } });
     Object.defineProperty(P, 'energy', { enumerable: true, configurable: true,
         get() { return this._en; },
         set(v) { this._en = v; const t = this._stT; if (t >= 0) _ST.val[t] = Number(v); } });
@@ -1955,89 +1940,6 @@ function barracksChanged() { barracksVersion++; }
 let collectorSpawnersVersion = 0;
 function collectorSpawnersChanged() { collectorSpawnersVersion++; }
 let collectors = []; // deprecated - worker units now in units array
-let droppedItems = [];
-let droppedItemGrid = [];
-
-function initDroppedItemGrid() {
-    droppedItemGrid = [];
-    for (let y = 0; y < GRID_H; y++) {
-        droppedItemGrid.push(new Array(GRID_W).fill(null));
-    }
-    droppedItemsByArea = Array.from({ length: Array.isArray(areas) ? areas.length : 0 }, () => []);
-}
-
-function getDroppedItemAt(gx, gy) {
-    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return null;
-    let x = Math.floor(gx), y = Math.floor(gy);
-    if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H) return null;
-    if (!droppedItemGrid[y]) return null;
-    return droppedItemGrid[y][x] || null;
-}
-
-function _setDroppedItemAt(gx, gy, drop) {
-    if (!Number.isFinite(gx) || !Number.isFinite(gy)) return;
-    let x = Math.floor(gx), y = Math.floor(gy);
-    if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H) return;
-    if (!droppedItemGrid[y]) return;
-    droppedItemGrid[y][x] = drop || null;
-    if (grid[y] && grid[y][x]) grid[y][x].droppedItem = drop || null;
-}
-
-// Bumped whenever a drop is added or removed (bucket indexes rebuild on it).
-let droppedItemsVersion = 0;
-
-function addDroppedItem(drop) {
-    if (!drop) return null;
-    droppedItemsVersion++;
-    if (typeof workerWorkDropAdded === 'function') workerWorkDropAdded(Math.floor(Number(drop.gx)), Math.floor(Number(drop.gy)));
-    let gx = Math.floor(Number(drop.gx));
-    let gy = Math.floor(Number(drop.gy));
-    if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return null;
-    if (getDroppedItemAt(gx, gy)) return null;
-
-    drop.gx = gx;
-    drop.gy = gy;
-    if (!Number.isFinite(drop.x)) drop.x = gx * TILE + 16;
-    if (!Number.isFinite(drop.y)) drop.y = gy * TILE + 16;
-    if (!Number.isFinite(drop.timer)) drop.timer = TICK_RATE * 120;
-
-    _setDroppedItemAt(gx, gy, drop);
-    _addDroppedItemToAreaBucket(drop, getAreaIdAtTile(gx, gy));
-    drop._droppedIndex = droppedItems.length;
-    droppedItems.push(drop);
-    return drop;
-}
-
-function removeDroppedItem(drop) {
-    if (!drop) return false;
-    droppedItemsVersion++;
-    let gx = Math.floor(Number(drop.gx));
-    let gy = Math.floor(Number(drop.gy));
-    if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
-        if (getDroppedItemAt(gx, gy) === drop) _setDroppedItemAt(gx, gy, null);
-        let tileIndex = gy * GRID_W + gx;
-        let baseIndex = tileIndex * _WORKER_TARGET_LOAD_TYPE_COUNT;
-        for (let i = 0; i < _WORKER_TARGET_LOAD_TYPE_COUNT; i++) {
-            let reservedUnit = workerReservedAt(baseIndex + i);
-            if (reservedUnit) reservedUnit._workerReservedTileIndex = -1;
-            workerReservedSet(baseIndex + i, null);
-        }
-    }
-
-    let idx = Number.isFinite(drop._droppedIndex) ? Math.floor(drop._droppedIndex) : -1;
-    if (idx < 0 || idx >= droppedItems.length || droppedItems[idx] !== drop) {
-        return false;
-    }
-    _removeDroppedItemFromAreaBucket(drop);
-    let lastIdx = droppedItems.length - 1;
-    let moved = droppedItems[lastIdx];
-    droppedItems[idx] = moved;
-    droppedItems.pop();
-    if (idx !== lastIdx && moved) moved._droppedIndex = idx;
-    delete drop._droppedIndex;
-    return true;
-}
-
 const TEAM_PRESET_COLORS = ['#ff4d4f', '#4da6ff', '#4dff88', '#ffd24d', '#b366ff', '#ff8c4d', '#4dfff5', '#ff4dd2'];
 let players = Array.from({ length: 8 }, () => ({ energy: 2000, astar: 9000, popCount: 0 }));
 let playerPopCaps = Array.from({ length: 8 }, () => 200);
