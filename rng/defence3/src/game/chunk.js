@@ -49,7 +49,7 @@ let spatialBlockCols = 0, spatialBlockRows = 0, spatialBlockCounts = new Int32Ar
 
 function _adjustSpatialBlockCount(chunkKey, owner, delta) {
     // (The tick-start chain reads the counts: done before they change.)
-    if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettle();
+    if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettleHostile();
     let cx = chunkKey % CHUNKS_W, cy = (chunkKey - cx) / CHUNKS_W;
     let index = (Math.floor(cy / SPATIAL_BLOCK_SIZE) * spatialBlockCols + Math.floor(cx / SPATIAL_BLOCK_SIZE)) * spatialUnitsComplexPlayerCount + owner;
     if (index >= 0 && index < spatialBlockCounts.length) spatialBlockCounts[index] += delta;
@@ -188,7 +188,7 @@ function spatialCountsDeferEnd(keepKernel = false) {
             P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
             P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialTypeBlocksW; P[10] = SPATIAL_TYPE_BLOCK;
             simParallelBind('spatial.types', spatialTypeCounts); P[11] = _simParReg['ix.bcount'] ? _simParReg['ix.bcount'].length : 0;
-            if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettle();
+            if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettleHostile();
             simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 4096));
         }
     }

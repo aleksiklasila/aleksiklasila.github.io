@@ -698,7 +698,7 @@ function _unitGoneRun(G, list, n, S) {
     P[20] = GRID_W; P[21] = TILE; P[22] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[23] = SNAP_REGION_TILES; P[24] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
     P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
-    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
     try { simRustDirect('k_unit_gone', arrays, P); } finally { arrays.fill(null); }
     const C = G.cnt;
     for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
@@ -834,8 +834,6 @@ function _gameTickBody() {
     // The unit index for this tick's queries and collision pass, from the
     // state as the tick begins (the same on a peer that just restored it).
     spatialIndexRebuild();
-    // The tick's hostile tables, on the helpers from here (tower.js tickStartChainPost).
-    if (typeof tickStartChainPost === 'function') tickStartChainPost();
     // Queued slices of big orders first (this tick's budget is shared with
     // the orders that came in for it), then a fresh budget for the next.
     runQueuedOrders();
@@ -875,6 +873,10 @@ function _gameTickBody() {
         _requestStaticCacheCommit();
         recalculateAdjacency();
     }
+    // On the helpers from here to the movement (tower.js tickStartChainPost):
+    // the tick's hostile tables and the flow looks' prewarm, after the
+    // orders, the fields and the structures' removals of the tick.
+    if (typeof tickStartChainPost === 'function') tickStartChainPost();
 
     recomputePlayerPopCaps();
     healerCandidatesStep();
@@ -923,6 +925,11 @@ function _gameTickBody() {
     unitPassBegin();
     try {
         simMoveRun();
+        // The queued move orders the movement took (mv.rs ord_pickup): settled, the few it left the JavaScript's.
+        orderPickupFinish();
+        // The looks its turns took approximate, made exact on the helpers
+        // for the next turns (unit.js flowLooksPost; committed at the next movement's start).
+        if (typeof flowLooksPost === 'function') flowLooksPost();
         // (What the kernels left to this thread: unit.js unitEventsRun.)
         unitEventsRun();
     } finally { unitPassEnd(); }
@@ -3749,18 +3756,16 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
 // No search: O(1) a unit. Unit order and every tie-break are deterministic.
 // The order's units by the kernel (SIM_KERNEL_ORDER_MOVE, _orderMoveSlots):
 // their slots, the units it leaves to the JavaScript (_issueGroupMoveOrderList).
-const ORDER_KERNEL_PER_JOB = 16384;
-let _ordSlots = null, _ordOut = null, _ordCnt = null;
-// An order for units by id (the queue's own go by slot, _orderTake).
+// (Jobs of 4096: an 80k-unit order is 20 jobs, every helper's share; 16384
+// left most of 11 helpers idle.)
+const ORDER_KERNEL_PER_JOB = 4096;
+let _ordSlots = null, _ordOut = null, _ordCnt = null; let _ordTmp = null;
+// An order for units by id: queued, taken by the next movement (the queue's
+// admission, _orderAdmit; the movement kernel's pickup).
 function _issueGroupMoveOrder(a, playerId, cmd) {
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, map = _unitByIdMap();
-    const ids = a.unitIdSet && !a.distinct ? Array.from(a.unitIdSet) : (a.unitIds || []), list = [];
-    _ordSlotsRoom(ids.length);
-    let n = 0;
-    for (const id of ids) { const u = map.get(id); if (u === undefined) continue; if (S && u._us === S.columns && u._si >= 0) _ordSlots[n++] = u._si; else list.push(u); }
-    const targetGx = Math.floor(a.targetX / TILE), targetGy = Math.floor(a.targetY / TILE);
-    if (n) for (const u of _orderMoveSlots(n, playerId, cmd, targetGx, targetGy, { x: targetGx * TILE + 16, y: targetGy * TILE + 16 }, S)) list.push(u);
-    return _issueGroupMoveOrderList(_unitsInIdOrder(list), playerId, cmd, a.targetX, a.targetY);
+    const ids = a.unitIdSet && !a.distinct ? Array.from(a.unitIdSet) : (a.unitIds || []);
+    _orderAdmit(ids, ids.length, playerId, cmd, cmd === CMD_ATTACK_MOVING ? 'attackMove' : 'move', a.targetX, a.targetY, currentTick);
+    return ids.length;
 }
 // The JavaScript's part of a move order: units the kernel left (workers,
 // held, a pending way...), in id order.
@@ -3839,76 +3844,74 @@ function _issueGroupMoveOrderList(list, playerId, cmd, targetX, targetY) {
     for (let p = 0; p < flowMembers.length; p++) if (flowMembers[p]) _issueFlowOrder(playerId, cmd, flowDest[p], flowMembers[p], applyPath, p);
     return list.length;
 }
-// The kernel's part of a move order: the destination by each navigation (the
-// ground's, the air's: from the order's first unit of each, as the JavaScript
-// takes it), each unit's columns in parallel; returns the units it left, in
-// the order's order (unit objects), for the JavaScript.
-// (Its n units' slots in ord.slots (_ordSlots), in the order's order.)
-// (The prepass kernel's per-job results, bound once at their size.)
-let _ordPreStats = null;
-function _ordPreArrays(jobs, n) {
-    if (!_ordPreStats || _ordPreStats.length < 5 * jobs || !simHeapHas(_ordPreStats)) { if (_ordPreStats) simHeapFree(_ordPreStats); _ordPreStats = simSharedArray(Int32Array, Math.max(320, 10 * jobs)); simParallelBind('ord.pst', _ordPreStats); }
-    return _ordPreStats;
-}
-function _orderMoveSlots(n, playerId, cmd, targetGx, targetGy, targetPos, S) {
-    const c = S.columns;
-    const jobs = Math.ceil(n / ORDER_KERNEL_PER_JOB);
-    if (!_ordCnt || _ordCnt.length < jobs) { _ordCnt = simSharedArray(Int32Array, Math.max(64, jobs * 2)); simParallelBind('ord.cnt', _ordCnt); }
-    const slots = _ordSlots, objs = [];
-    // (The kernel's own: off a group path's wait and any pending way or fallback path (their
-    // digest fields, as _ordClearFast clears them: a fight's army had a tenth
-    // of its units waiting for a way, each left to the JavaScript).)
-    const first = [-1, -1], count = [0, 0], layer = S.sepLayer, wait = c.agWait;
-    // (The units' checks, counts, first units and pending ways let go
-    // (numeric columns, their digest terms too) on the helpers, k_order_pre.)
-    if (typeof SIM_KERNEL_ORDER_PRE === 'number' && _simWasmX && typeof _simWasmX.k_order_pre === 'function' && simHeapHas(slots)) {
-        const pst = _ordPreArrays(jobs, n), P0 = _simParams;
-        _simPptKeys();
-        P0.fill(0, 0, 8);
-        P0[0] = n; P0[1] = ORDER_KERNEL_PER_JOB; P0[2] = playerId; P0[3] = spatialEpoch; P0[4] = _simPptK; P0[5] = _simPfaK;
-        simParallelRun(SIM_KERNEL_ORDER_PRE, jobs);
-        let f0 = -1, f1 = -1;
-        for (let k = 0; k < jobs; k++) {
-            const b = 5 * k;
-            if (pst[b] >= 0 && f0 < 0) f0 = pst[b];
-            if (pst[b + 1] >= 0 && f1 < 0) f1 = pst[b + 1];
-            count[0] += pst[b + 2]; count[1] += pst[b + 3];
-        }
-        first[0] = f0 >= 0 ? slots[f0] : -1; first[1] = f1 >= 0 ? slots[f1] : -1;
-    } else for (let i = 0; i < n; i++) {
-        const s = slots[i];
-        if (c.owner[s] !== playerId || c.dead[s] === 1 || c.isWk[s] !== 0) continue;
-        if (c.holdF[s] === 0 && c.spEpoch[s] === spatialEpoch && c.mvPP[s] !== 0) simPendingClear(c, s);
-        wait[s] = 0;
-        const prof = layer[s] === 1 ? 1 : 0;
-        count[prof]++;
-        if (first[prof] < 0) first[prof] = s;
+// The queued move orders' table for the movement kernel's pickup (mv.rs
+// ord_pickup): a row per order with units of it to take (16 doubles: seq,
+// player, command, attack-move tile, issued position, destination by
+// profile, wide by profile), their counts (4 words a row), the units it
+// leaves (slot, row: from each movement chunk's first slot; counts by chunk),
+// the header ([0] rows, [1] / [2] the pending way's digest keys, [3] index
+// epoch, [4] grid width). Heap arrays made once a size.
+const ORD_TAB_W = 16;
+const _ordPick = { tab: null, tcnt: null, left: null, leftr: null, lcnt: null, hdr: null, rows: 0, list: [] };
+function _ordPickArrays() {
+    const T = _ordPick, S = _simUnitState, cap = Math.max(65536, S ? S.cap : 0);
+    if (!T.tab || !simHeapHas(T.tab)) {
+        T.tab = simSharedArray(Float64Array, ORDER_ENTRIES_MAX * ORD_TAB_W); T.tcnt = simSharedArray(Int32Array, ORDER_ENTRIES_MAX * 4); T.hdr = simSharedArray(Int32Array, 8);
+        simParallelBind('ord.tab', T.tab); simParallelBind('ord.tcnt', T.tcnt); simParallelBind('ord.hdr', T.hdr);
     }
-    // (Each navigation's destination: as _issueFlowOrder's, from its first
-    // unit's tile; -1 none: those units the JavaScript's.)
-    const dest = [-1, -1], wide = [0, 0];
+    if (!T.left || T.left.length < cap || !simHeapHas(T.left)) {
+        T.left = simSharedArray(Int32Array, cap); T.leftr = simSharedArray(Int32Array, cap); T.lcnt = simSharedArray(Int32Array, Math.ceil(cap / 64) + 64);
+        simParallelBind('ord.left', T.left); simParallelBind('ord.leftr', T.leftr); simParallelBind('ord.lcnt', T.lcnt);
+    }
+    return T;
+}
+// An entry's row (once, at the tick it is taken): each navigation's
+// destination as _issueFlowOrder's, from its first unit (the admission's:
+// the first id of the layer, the same on every peer) and its tile; wide
+// when NAV_GROUP_MIN or more of the order's units are of the layer.
+function _ordPickPublish(e, row) {
+    const T = _ordPick, S = _simUnitState, c = S.columns, map = _unitByIdMap(), R = T.tab, b = row * ORD_TAB_W;
+    const targetGx = Math.floor(e.targetX / TILE), targetGy = Math.floor(e.targetY / TILE);
+    R.fill(0, b, b + ORD_TAB_W);
+    R[b] = e.seq; R[b + 1] = e.playerId; R[b + 2] = e.cmd;
+    R[b + 3] = e.cmd === CMD_ATTACK_MOVING ? targetGx : -1; R[b + 4] = e.cmd === CMD_ATTACK_MOVING ? targetGy : -1;
+    R[b + 5] = targetGx * TILE + 16; R[b + 6] = targetGy * TILE + 16; R[b + 7] = -1; R[b + 8] = -1;
     for (let p = 0; p < 2; p++) {
-        if (first[p] < 0) continue;
-        const profile = p === 1 ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND, s = first[p];
+        if (!(e.kc[p] > 0)) continue;
+        const profile = p === 1 ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND, u = e.kf[p] >= 0 ? map.get(e.kf[p]) : undefined;
+        const s = u !== undefined && u._us === c ? u._si : -1;
         navEnsure(profile);
-        const u = S.owners.at(s), ugx = Math.floor(c.x[s] * 0.125 / TILE), ugy = Math.floor(c.y[s] * 0.125 / TILE);
+        const ugx = s >= 0 ? Math.floor(c.x[s] * 0.125 / TILE) : targetGx, ugy = s >= 0 ? Math.floor(c.y[s] * 0.125 / TILE) : targetGy;
         const fd = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
         const to = navApproachTile(profile, fd.y * GRID_W + fd.x);
         if (to < 0) continue;
-        dest[p] = to;
-        // (A group: the order's units of it, NAV_GROUP_MIN or more.)
-        wide[p] = count[p] >= NAV_GROUP_MIN ? 1 : 0;
-        navFieldRequest(profile, to, wide[p] === 1);
+        const wide = e.kc[p] >= NAV_GROUP_MIN;
+        R[b + 7 + p] = to; R[b + 9 + p] = wide ? 1 : 0;
+        navFieldRequest(profile, to, wide);
     }
-    const P = _simParams;
-    P[0] = n; P[1] = ORDER_KERNEL_PER_JOB; P[2] = playerId; P[3] = cmd;
-    P[4] = cmd === CMD_ATTACK_MOVING ? targetGx : -1; P[5] = cmd === CMD_ATTACK_MOVING ? targetGy : -1;
-    P[6] = targetPos.x; P[7] = targetPos.y; P[8] = spatialEpoch; P[9] = dest[0]; P[10] = dest[1]; P[11] = wide[0]; P[12] = wide[1];
-    P[13] = GRID_W; P[14] = TILE;
-    simParallelRun(SIM_KERNEL_ORDER_MOVE, jobs);
-    // (The units it left: in the order's order, job by job.)
-    for (let k = 0; k < jobs; k++) for (let i = k * ORDER_KERNEL_PER_JOB, e = i + _ordCnt[k]; i < e; i++) { const u = S.owners.at(_ordOut[i]); if (u) objs.push(u); }
-    return objs;
+    T.tcnt.fill(0, row * 4, row * 4 + 4);
+}
+// After the movement (main.js gameTick): the rows' units taken (their
+// entries' live counts and sums), the units the pickup left given the order
+// by the JavaScript (in id order, per order), the taken orders done.
+function orderPickupFinish() {
+    const T = _ordPick, rows = T.rows;
+    if (!rows) return;
+    T.rows = 0; T.hdr[0] = 0;
+    const S = _simUnitState, ran = typeof _simMoveRanTick !== 'undefined' && _simMoveRanTick === gameTime;
+    const left = ran ? new Array(rows).fill(null) : null;
+    if (ran && S) {
+        const per = simMovePick.per, jobs = simMovePick.jobs;
+        for (let k = 0; k < jobs; k++) for (let i = k * per, e = i + T.lcnt[k]; i < e; i++) { const u = S.owners.at(T.left[i]); if (u) (left[T.leftr[i]] ||= []).push(u); }
+    }
+    for (let r = 0; r < rows; r++) {
+        const e = T.list[r];
+        e.live -= T.tcnt[r * 4]; e.sum = (e.sum - T.tcnt[r * 4 + 1]) | 0;
+        if (left && left[r]) { try { _issueGroupMoveOrderList(_unitsInIdOrder(left[r]), e.playerId, e.cmd, e.targetX, e.targetY); } catch (err) { reportRuntimeError('queued order', err); } }
+    }
+    // (Every unit of a taken order the movement's: the order done. A stamp it left is cleared by the next pickup.)
+    for (const e of T.list) { const qi = _orderQueue.indexOf(e); if (qi >= 0) _orderDone(qi); }
+    T.list.length = 0;
 }
 
 // Actions come from other players' machines. Malformed fields are dropped or
@@ -4394,7 +4397,8 @@ const _orderEntryPool = new Array(ORDER_ENTRIES_MAX);
 let _orderEntryFree = 0;
 let _orderEntryPoolReady = false;
 function _newOrderEntry() {
-    return { playerId: 0, cmd: 0, action: '', targetX: 0, targetY: 0, ro: 0, rn: 0, next: 0, seq: 0, live: 0, sum: 0, due: 0 };
+    // (kc / kf: the movement's units of it by layer, ground and flying: how many, the first id; pub: its row this tick.)
+    return { playerId: 0, cmd: 0, action: '', targetX: 0, targetY: 0, ro: 0, rn: 0, next: 0, seq: 0, live: 0, sum: 0, due: 0, kc: [0, 0], kf: [-1, -1], pub: false };
 }
 let _oq = null;
 // Every work array the ticks use, made at the match's start (a new match,
@@ -4468,8 +4472,11 @@ function orderQueueReserve() {
     const inHeap = !_oq || typeof simHeapHas !== 'function' || simHeapHas(_oq.ring);
     if (_oq && _oq.ring.length === ring && _oq.ids.length === keys && _oq.bytes.length === bytes && inHeap) return _oq;
     const I = n => simSharedArray(Int32Array, n), m = U, was = _oq;
-    _oq = { ids: I(keys), keysOut: I(keys), bytes: simSharedArray(Uint8Array, bytes), out: I(m), out2: I(m), loose: I(m), eseq: I(ORDER_ENTRIES_MAX), edl: I(ORDER_ENTRIES_MAX), eds: I(ORDER_ENTRIES_MAX), cnt: I(8), ring: I(ring), top: 0 };
-    for (const [k, v] of [['q.ids', _oq.ids], ['q.bytes', _oq.bytes], ['q.out', _oq.out], ['q.out2', _oq.out2], ['q.loose', _oq.loose], ['q.eseq', _oq.eseq], ['q.edl', _oq.edl], ['q.eds', _oq.eds], ['q.cnt', _oq.cnt], ['ord.ring', _oq.ring]]) simParallelBind(k, v);
+    // (The admission's and take's lists by job: each job's from its first
+    // place, job * ORDER_KERNEL_PER_JOB; jc their counts, 8 words a job.)
+    const per = ORDER_KERNEL_PER_JOB, jcJobs = Math.ceil(Math.max(keys, ring) / per) + 2;
+    _oq = { ids: I(keys), keysOut: I(keys), bytes: simSharedArray(Uint8Array, bytes), out: I(keys), out2: I(m + per), loose: I(keys), eseq: I(ORDER_ENTRIES_MAX), edl: I(ORDER_ENTRIES_MAX), eds: I(ORDER_ENTRIES_MAX), cnt: I(8), jc: I(8 * jcJobs), jcCopy: new Int32Array(8 * jcJobs), ring: I(ring), top: 0 };
+    for (const [k, v] of [['q.ids', _oq.ids], ['q.bytes', _oq.bytes], ['q.out', _oq.out], ['q.out2', _oq.out2], ['q.loose', _oq.loose], ['q.eseq', _oq.eseq], ['q.edl', _oq.edl], ['q.eds', _oq.eds], ['q.cnt', _oq.cnt], ['q.jc', _oq.jc], ['ord.ring', _oq.ring]]) simParallelBind(k, v);
     if (was) { _oq.top = Math.min(was.top, ring); _oq.ring.set(was.ring.subarray(0, _oq.top)); }
     // (The order move kernel's list: an entry's take at most.)
     if (_ordSlots && typeof simHeapHas === 'function' && !simHeapHas(_ordSlots)) _ordSlots = null;
@@ -4479,7 +4486,9 @@ function orderQueueReserve() {
 function _ordSlotsRoom(n) {
     if (_ordSlots && _ordSlots.length >= n) return;
     _ordSlots = simSharedArray(Int32Array, simReserveCap(n, 16384)); _ordOut = simSharedArray(Int32Array, _ordSlots.length + ORDER_KERNEL_PER_JOB);
-    simParallelBind('ord.slots', _ordSlots); simParallelBind('ord.out', _ordOut);
+    // (The take's sort scratch: k_order_take.)
+    _ordTmp = simSharedArray(Int32Array, _ordSlots.length);
+    simParallelBind('ord.slots', _ordSlots); simParallelBind('ord.out', _ordOut); simParallelBind('ord.tmp', _ordTmp);
 }
 // Room for k more slots at the ring's top: the entries' slots still to apply
 // moved to its start (in queue order), then, while that is not enough, the
@@ -4490,11 +4499,10 @@ function _orderRingRoom(k) {
     let top = 0;
     for (const e of _orderQueue) { const n = e.rn - e.next; R.copyWithin(top, e.ro + e.next, e.ro + e.rn); e.ro = top; e.rn = n; e.next = 0; top += n; }
     Q.top = top;
-    while (Q.top + k > R.length && _orderQueue.length) {
-        const e = _orderQueue[0];
-        while (e.live > 0 && e.next < e.rn) _orderTake(e, e.live);
-        _orderDone(0);
-        _orderRingRoom(0);
+    // (Still no room: the oldest orders' workers and held units applied now, their ring parts freed.)
+    for (let qi = 0; Q.top + k > R.length && qi < _orderQueue.length; qi++) {
+        const e = _orderQueue[qi];
+        if (e.live > 0 && e.next < e.rn) { _orderTake(e); _orderRingRoom(0); }
     }
 }
 function _orderDone(qi) {
@@ -4526,24 +4534,34 @@ function _orderAdmit(ids, n, playerId, cmd, action, targetX, targetY, due) {
     for (let k = 0; k < E; k++) { Q.eseq[k] = _orderQueue[k].seq; Q.edl[k] = 0; Q.eds[k] = 0; }
     // (Bound again only when they are other arrays: a binding reaches every helper.)
     if (Q.um !== U.ids) { simParallelBind('um.ids', U.ids); simParallelBind('um.slots', U.slots); Q.um = U.ids; }
-    const seq = _orderSeqNext(), P = _simParams;
-    P[0] = n; P[1] = U.n; P[2] = playerId; P[3] = seq; P[4] = E;
-    simParallelRun(SIM_KERNEL_ORDER_ADMIT, 1);
+    const seq = _orderSeqNext(), P = _simParams, per = ORDER_KERNEL_PER_JOB, jobs = Math.max(1, Math.ceil(n / per));
+    P[0] = n; P[1] = U.n; P[2] = playerId; P[3] = seq; P[4] = E; P[5] = per;
+    simParallelRun(SIM_KERNEL_ORDER_ADMIT, jobs);
     for (let k = 0; k < E; k++) if (Q.edl[k]) { const e = _orderQueue[k]; e.live += Q.edl[k]; e.sum = (e.sum + Q.eds[k]) | 0; }
-    const C = Q.cnt, nn = C[0], nw = C[1], nl = C[2], sum = C[3];
+    // (The jobs' counts kept: a full ring's room below takes an older order, which reuses q.jc.)
+    const J = Q.jcCopy;
+    J.set(Q.jc.subarray(0, 8 * jobs));
+    // (Per job: listed (workers, held), loose, sum, the movement's by layer and their first ids (the first job's: id order).)
+    let nt = 0, nl = 0, sum = 0, c0 = 0, c1 = 0, f0 = -1, f1 = -1;
+    for (let k = 0; k < jobs; k++) {
+        const b = 8 * k;
+        nt += J[b]; nl += J[b + 1]; sum = (sum + J[b + 2]) | 0; c0 += J[b + 3]; c1 += J[b + 4];
+        if (f0 < 0) f0 = J[b + 5];
+        if (f1 < 0) f1 = J[b + 6];
+    }
     if (nl) {
         const map = _unitByIdMap(), loose = [];
-        for (let i = 0; i < nl; i++) { const u = map.get(U.ids[Q.loose[i]]); if (u !== undefined && u.owner === playerId) loose.push(u); }
+        for (let k = 0; k < jobs; k++) for (let i = k * per, e = i + J[8 * k + 1]; i < e; i++) { const u = map.get(U.ids[Q.loose[i]]); if (u !== undefined && u.owner === playerId) loose.push(u); }
         if (loose.length) _issueGroupMoveOrderList(loose, playerId, cmd, targetX, targetY);
     }
-    if (!(nn + nw)) return null;
-    _orderRingRoom(nn + nw);
+    if (!(nt + c0 + c1)) return null;
+    _orderRingRoom(nt);
     const ro = Q.top;
-    Q.ring.set(Q.out.subarray(0, nn + nw), ro);
-    Q.top += nn + nw;
+    for (let k = 0; k < jobs; k++) { const c = J[8 * k]; if (c) { Q.ring.set(Q.out.subarray(k * per, k * per + c), Q.top); Q.top += c; } }
     const e = _orderEntryFree ? _orderEntryPool[--_orderEntryFree] : _newOrderEntry();
     e.playerId = playerId; e.cmd = cmd; e.action = action; e.targetX = targetX; e.targetY = targetY;
-    e.ro = ro; e.rn = nn + nw; e.next = 0; e.seq = seq; e.live = nn + nw; e.sum = sum; e.due = due;
+    e.ro = ro; e.rn = nt; e.next = 0; e.seq = seq; e.live = nt + c0 + c1; e.sum = sum; e.due = due;
+    e.kc[0] = c0; e.kc[1] = c1; e.kf[0] = f0; e.kf[1] = f1; e.pub = false;
     _orderQueue.push(e); _orderBySeq.set(seq, e);
     return e;
 }
@@ -4566,7 +4584,7 @@ function _idsDecode(s, max, write = true, sort = false) {
     const D = _idsP;
     D[0] = len; D[1] = Math.min(max, Q.ids.length); D[2] = write ? 1 : 0; D[3] = sort ? 1 : 0;
     // (On this thread, no job posted: a click decodes several actions' ids.)
-    simRustDirect('k_ids_decode', [Q.bytes, Q.ids, Q.cnt], D);
+    simRustDirect('k_ids_decode', [Q.bytes, Q.ids, Q.cnt, Q.keysOut], D);
     return Q.cnt[4];
 }
 // (An action's id count where the simulation runs: by the kernel.)
@@ -4668,23 +4686,26 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
 }
 // An entry's next `need` units (the take kernel): those of the kernel to its
 // order move kernel, the rest (workers, held, a pending way) the JavaScript's.
-function _orderTake(e, need) {
-    const Q = orderQueueReserve(), P = _simParams;
-    _ordSlotsRoom(need);
-    P[0] = e.ro + e.next; P[1] = e.rn - e.next; P[2] = need; P[3] = e.seq;
-    simParallelRun(SIM_KERNEL_ORDER_TAKE, 1);
-    const C = Q.cnt, passed = C[0], nn = C[1], nw = C[2], sum = C[3];
-    e.next += passed; e.live -= nn + nw; e.sum = (e.sum - sum) | 0;
-    simOrderStats.units += nn + nw;
-    if (nn + nw) orderAppliedTick = gameTime;
-    if (!(nn + nw)) return;
+function _orderTake(e) {
+    const Q = orderQueueReserve(), P = _simParams, per = ORDER_KERNEL_PER_JOB, len = e.rn - e.next, jobs = Math.max(1, Math.ceil(len / per));
+    if (!(len > 0)) return;
+    P[0] = e.ro + e.next; P[1] = len; P[2] = 0; P[3] = e.seq; P[4] = e.playerId; P[5] = per;
+    simParallelRun(SIM_KERNEL_ORDER_TAKE, jobs);
+    // (Per job: its units (workers, held) and their sum; in one list, ring order: the workers' kernel's.)
+    const J = Q.jc;
+    let nw = 0, sum = 0;
+    for (let k = 0; k < jobs; k++) {
+        const b = 8 * k, c2 = J[b];
+        if (c2 && nw !== k * per) Q.out2.copyWithin(nw, k * per, k * per + c2);
+        nw += c2; sum = (sum + J[b + 1]) | 0;
+    }
+    e.next += len; e.live -= nw; e.sum = (e.sum - sum) | 0;
+    simOrderStats.units += nw;
+    if (!nw) return;
+    orderAppliedTick = gameTime;
     const S = _simUnitState, targetGx = Math.floor(e.targetX / TILE), targetGy = Math.floor(e.targetY / TILE);
-    // (The workers first: the order move kernel lists its leftovers in
-    // ord.out, the workers' kernel reads q.out2.)
-    const left = nw ? _orderWorkers(nw, e.playerId, targetGx, targetGy, S) : null;
-    const list = nn ? _orderMoveSlots(nn, e.playerId, e.cmd, targetGx, targetGy, { x: targetGx * TILE + 16, y: targetGy * TILE + 16 }, S) : [];
-    if (left) for (const u of left) list.push(u);
-    if (list.length) { try { _issueGroupMoveOrderList(_unitsInIdOrder(list), e.playerId, e.cmd, e.targetX, e.targetY); } catch (err) { reportRuntimeError('queued order', err); } }
+    const left = _orderWorkers(nw, e.playerId, targetGx, targetGy, S);
+    if (left.length) { try { _issueGroupMoveOrderList(_unitsInIdOrder(left), e.playerId, e.cmd, e.targetX, e.targetY); } catch (err) { reportRuntimeError('queued order', err); } }
 }
 // Applies queued orders, oldest first: each order's share of its units by
 // its deadline (all of a small one). Units ordered again since are passed over.
@@ -4699,13 +4720,30 @@ function runQueuedOrders() {
     try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.calls++; }
 }
 function _runQueuedOrders() {
+    // (Rows of an earlier tick not settled (no movement ran): settled now.)
+    if (_ordPick.rows) orderPickupFinish();
+    const T = _orderQueue.length ? _ordPickArrays() : _ordPick;
+    let rows = 0;
     for (let qi = 0; qi < _orderQueue.length; qi++) {
         const e = _orderQueue[qi];
         if (e.live > 0 && e.next < e.rn) {
-            // (Whole at once: its units' work is the kernels'.)
-            try { _orderTake(e, e.live); } catch (err) { reportRuntimeError('queued order', err); }
+            // (Its workers and held units whole at once: the kernels'.)
+            try { _orderTake(e); } catch (err) { reportRuntimeError('queued order', err); }
+        }
+        // (The rest the movement's: a row of the table, settled after it, orderPickupFinish.)
+        if (e.live > 0 && (e.kc[0] + e.kc[1]) > 0 && rows < ORDER_ENTRIES_MAX) {
+            try { _ordPickPublish(e, rows); } catch (err) { reportRuntimeError('queued order', err); }
+            T.list[rows++] = e; e.pub = true;
+            simOrderStats.units += e.kc[0] + e.kc[1];
+            orderAppliedTick = gameTime;
+            continue;
         }
         if (e.live <= 0 || e.next >= e.rn) { _orderDone(qi); qi--; }
+    }
+    if (rows) {
+        _simPptKeys();
+        T.rows = rows; T.list.length = rows;
+        T.hdr[0] = rows; T.hdr[1] = _simPptK; T.hdr[2] = _simPfaK; T.hdr[3] = spatialEpoch; T.hdr[4] = GRID_W;
     }
 }
 // A unit removed (main.js gameTick's retire pass): no longer its queued
@@ -4733,6 +4771,7 @@ function orderQueueRemapFwd(fwd) {
     for (const e of _orderQueue) for (let i = e.ro + e.next, end = e.ro + e.rn; i < end; i++) { const s = R[i]; if (s >= 0 && s < fwd.length && fwd[s] >= 0) R[i] = fwd[s]; }
 }
 function resetOrderQueue() {
+    _ordPick.rows = 0; _ordPick.list.length = 0; if (_ordPick.hdr) _ordPick.hdr[0] = 0;
     for (let i = 0; i < _orderQueue.length && _orderEntryFree < ORDER_ENTRIES_MAX; i++) _orderEntryPool[_orderEntryFree++] = _orderQueue[i];
     _orderQueue.length = 0;
     if (_oq) _oq.top = 0;
@@ -4747,12 +4786,15 @@ function resetOrderQueue() {
 // the admission made it).
 function orderQueueSnapshot() {
     const out = [], S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    if (!S || !_oq) return out;
-    const c = S.columns, R = _oq.ring;
+    if (!S || !_oq || !_orderQueue.length) return out;
+    // (Its units by their stamps, every slot once: the movement's are in no
+    // list (the ring holds the workers and held units only). Rare: snapshots.)
+    const c = S.columns, n = S.owners.length, by = new Map();
+    for (const e of _orderQueue) if (e.live > 0) by.set(e.seq, []);
+    for (let s = 0; s < n; s++) { const q = c.ordSq[s]; if (q > 0) { const l = by.get(q); if (l) l.push(c.id[s]); } }
     for (const e of _orderQueue) {
-        const ids = [];
-        for (let i = e.ro + e.next, end = e.ro + e.rn; i < end; i++) { const s = R[i]; if (s >= 0 && c.ordSq[s] === e.seq) ids.push(c.id[s]); }
-        if (ids.length) out.push([e.playerId, e.cmd, e.action, e.targetX, e.targetY, ids, e.due]);
+        const ids = by.get(e.seq);
+        if (ids && ids.length) { ids.sort((x, y) => x - y); out.push([e.playerId, e.cmd, e.action, e.targetX, e.targetY, ids, e.due]); }
     }
     return out;
 }

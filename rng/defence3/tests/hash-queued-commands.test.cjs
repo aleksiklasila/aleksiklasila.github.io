@@ -52,8 +52,7 @@ const H = require('./net-harness.cjs');
         _queueGroupMoveOrder({ action: 'move', unitIds: mine, targetX: 640, targetY: 640 }, localPlayerId, CMD_MOVING);
         _queueGroupMoveOrder({ action: 'attackMove', unitIds: mine.slice(0, 2), targetX: 320, targetY: 320 }, localPlayerId, CMD_ATTACK_MOVING);
         _dropQueuedOrderUnits(new Set([mine[2]]), localPlayerId);
-        // (One unit applied, as runQueuedOrders does.)
-        _orderTake(_orderQueue[0], 1);
+        // (Applied by the movement kernel, mv.rs ord_pickup: not here; what is queued is snapshotted.)
         const before = orderQueueChecksum(), snap = orderQueueSnapshot();
         orderQueueRestore(snap);
         out.restored = orderQueueChecksum() === before;
@@ -70,6 +69,6 @@ const H = require('./net-harness.cjs');
     assert.equal(r.pending, true, 'a pending move order is hashed');
     assert.equal(r.target, true, 'its target too');
     assert.equal(r.restored, true, 'a restore of what is left hashes the same');
-    assert.deepEqual(r.left, [r.mine - 4, 2], 'what is left: less the applied, the superseded and the dropped');
+    assert.deepEqual(r.left, [r.mine - 3, 2], 'what is left: the first order less the superseded and the dropped, the second whole');
     console.log('PASS hash-queued-commands');
 })().catch(e => { console.error(e); process.exit(1); });

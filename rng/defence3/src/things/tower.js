@@ -277,30 +277,40 @@ function _towerDueArray(TT) {
     return D.a;
 }
 function towerDueReset(row) { const a = _towerDue.a; if (a !== null && row >= 0 && row < a.length) a[row] = 0; }
-// The tick-start chain (lane SIM_LANE_TICK, main.js right after
-// spatialIndexRebuild): the hostile tables (unit.js _simHostileStages), the
-// tick's one build, from the state as the tick begins. Settled by whoever
-// reads them or changes what they read (_simMoveBuildHostile; the unit
-// counts' and structure blocks' writers; another index). Posted every tick
-// (when the block tables are this layout's): the same on every peer.
-// Without helpers it runs at the post (eager), the same tables.
-const _tickChain = { posted: false };
+// The tick's chain (lane SIM_LANE_TICK, main.js after the structures'
+// statuses and removals, the orders and the fields of the tick): stages 0-1
+// the hostile tables (unit.js _simHostileStages), the tick's one build;
+// (the flow looks off the turns: unit.js flowLooksPost). The
+// hostile tables' readers and the writers of what they read (unit counts,
+// structure blocks) wait for stages 0-1 (tickStartChainSettleHostile); the
+// movement, and whatever changes what the prewarm reads (walls, a
+// navigation build, the fields, the look table's reset), for all of it
+// (tickStartChainSettle). Posted every tick (the hostile tables when the
+// block tables are this layout's): the same on every peer. Without helpers
+// it runs at the post (eager), the same tables and looks.
+const _tickChain = { posted: false, hostile: false };
 function tickStartChainPost() {
     tickStartChainSettle();
     if (typeof SIM_LANE_TICK !== 'number' || typeof _simHostileStages !== 'function' || !(spatialBlockCols > 0)) return;
     const L = SIM_LANE_TICK, PH = simParallelStageParams(L, 0);
     PH.fill(0);
-    const hs = _simHostileStages(PH);
-    if (!hs) return;
-    simParallelStageParams(L, 1).set(PH);
-    _tickChain.posted = true;
-    simParallelBackgroundChain(L, hs, true);
-    _simHostileMark();
+    const hs = _simHostileStages(PH), stages = [];
+    if (hs) { simParallelStageParams(L, 1).set(PH); stages.push(hs[0], hs[1]); }
+    else stages.push([0, 0], [0, 0]);
+    if (!stages.some(st => st[1] > 0)) return;
+    _tickChain.posted = true; _tickChain.hostile = !!hs;
+    simParallelBackgroundChain(L, stages, true);
+    if (hs) _simHostileMark();
+}
+function tickStartChainSettleHostile() {
+    if (!_tickChain.posted || !_tickChain.hostile) return;
+    _tickChain.hostile = false;
+    simParallelBackgroundWaitStage(SIM_LANE_TICK, 1);
 }
 function _tickStartChainPosted() { return _tickChain.posted; }
 function tickStartChainSettle() {
     if (!_tickChain.posted) return;
-    _tickChain.posted = false;
+    _tickChain.posted = false; _tickChain.hostile = false;
     simParallelBackgroundWait(SIM_LANE_TICK);
 }
 

@@ -3411,6 +3411,8 @@ function resetWorldState() {
     pendingPathResolveCursor = 0;
     if (typeof resetPendingPathUnits === 'function') resetPendingPathUnits();
     if (typeof resetOrderQueue === 'function') resetOrderQueue();
+    // (The last match's flow looks still to commit: none.)
+    if (typeof flowLooksDrop === 'function') flowLooksDrop();
     if (typeof navReset === 'function') navReset();
     if (typeof resetWorkerWorkVersions === 'function') resetWorkerWorkVersions();
     if (typeof resetNewUnitsForStats === 'function') resetNewUnitsForStats();

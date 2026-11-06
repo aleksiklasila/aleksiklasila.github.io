@@ -2123,7 +2123,7 @@ function _spbSpatial(B) {
     P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = NT;
     P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols;
     P[15] = _spatialCountDefer ? 1 : 0;
-    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
     simRustDirect('k_spawn_spatial', [B.sp, c.x, c.y, c.owner, c.upT, _spbTy, _spbLayer, cellArea, c.spTile, S.sepKey, S.sepLayer, c.spArea, c.spOwner, c.spEpoch, c.spType, c.mvOn,
         spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.dead], P);
     // (During the unit pass the counts wait for its end, as _spatialCountAdd queues them.)
@@ -2413,6 +2413,7 @@ const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen'
     'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol', 'mvSteady', 'mvCT', 'mvCN', 'mvCTl', 'mvCVx', 'mvCVy',
     'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
+    if (typeof flowLooksDrop === 'function') flowLooksDrop();
     const S = _simUnitState;
     if (!S) return;
     const c = S.columns;
@@ -2972,6 +2973,8 @@ function simTileChangesFlush() {
     if (_unitPassOn) return;
     const T = _tch, n = T.n;
     if (n === 0) return;
+    // (The walls and their versions change: the flow looks' prewarm reading them done first.)
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     T.n = 0;
     if (T.mark) for (let i = 0; i < n; i++) T.mark[T.list[i] >> 1] = 0;
     if (!_simMoveWall || _simMoveWallGrid !== grid || _simMoveWall.length !== GRID_W * GRID_H || !_simMoveWallBlk || !simHeapHas(_simMoveWall) || !simHeapHas(_simMoveWallBlk)) { _simMoveWallDirty = true; return; }
@@ -3029,6 +3032,8 @@ const _simWallsP = new Float64Array(4);
 function simMoveWallGrid() { _simMoveWalls(); return _simMoveWall; }
 function _simMoveWalls() {
     if (!_simMoveWallDirty && _simMoveWallGrid === grid && _simMoveWall && _simMoveWall.length === GRID_W * GRID_H) return;
+    // (The flow looks' prewarm reads the walls: done first.)
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     if (!_simMoveWall || _simMoveWall.length !== GRID_W * GRID_H) { const old = _simMoveWall; _simMoveWall = simHeapArray(Uint8Array, GRID_W * GRID_H); simParallelBind('mv.wall', _simMoveWall); simHeapFree(old); }
     // (From the cell types: tch.rs k_walls_from_types.)
     if (!simHeapHas(cellType) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
@@ -3082,8 +3087,8 @@ function _simMoveStructs() {
     const players = spatialUnitsComplexPlayerCount;
     const full = !_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructW !== GRID_W || _simMoveStructH !== GRID_H || _simMoveStructP !== players || _simMoveStructC !== spatialBlockCols;
     if (!full && _simMoveStructDirtyN === 0) { _simTrapStep(); return; }
-    // (It writes the block table the tick-start chain reads: that is done first.)
-    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
+    // (It writes the block table the tick's chain reads: its hostile stages done first.)
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
     if (full) {
         if (!_simMoveStruct || _simMoveStruct.length !== GRID_W * GRID_H) { _simMoveStruct = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.struct', _simMoveStruct); }
         if (!_simStructCls || _simStructCls.length !== GRID_W * GRID_H) { _simStructCls = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.scls', _simStructCls); }
@@ -3387,7 +3392,94 @@ let _simMoveHitA = null, _simMoveHitT = null, _simMoveHitC = null, _simMoveHitSC
 // (The occupancy jobs' second-pass lists: mv.rs move_job.)
 let _simMoveWork = null;
 let SIM_KERNEL_FIRE = true;
+// The movement kernel's scalar params [0..39] (simMoveRun's; the flow looks'
+// kernels off the turns, flowLooksPost, give it the same): n slots, per a job.
+function _simMoveScalarParams(P, n, per, players) {
+    P[0] = n; P[1] = per; P[2] = gameTime; P[3] = TICK_RATE; P[4] = 0; P[5] = GRID_W; P[6] = GRID_H;
+    P[7] = TILE; P[8] = UNIT_POSITION_QUANTIZATION; P[9] = spatialBlockCols; P[10] = spatialBlockRows;
+    P[11] = players; P[12] = CMD_MOVING; P[13] = CMD_ATTACK_MOVING; P[14] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[15] = SIM_SEP_ABSENT;
+    P[16] = SIM_MOVE_WINDOW; P[17] = SIM_MOVE_BOX_STEPS; P[18] = SIM_FLOW_ARRIVE; P[19] = _simMoveWallVer;
+    P[20] = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
+    P[21] = WORKER_MOVE_CHECK_TICKS;
+    {
+        const V = _workerWorkTable(), delay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
+        simParallelBind('wk.ver', V);
+        P[22] = V.np; P[23] = _WORKER_WORK_TYPES.length; P[24] = V.rw; P[25] = V.rh; P[26] = WORKER_WORK_REGION_TILES;
+        P[27] = delay * Math.ceil(getWorkerIdleSearchTicks() / delay); P[28] = _healerCandidatesGen; P[29] = BUILDER_WATCH_TICKS;
+        P[30] = _simMoveWallBlkW; P[31] = (GRID_H + 7) >> 3;
+    }
+    _simAreaCsr();
+    P[32] = _simAreaLayoutVer;
+    // (Drive-by looks: the unit index by chunk, and its owners per chunk
+    // when this tick's combat scan made them.)
+    P[33] = _sxEpoch; P[34] = CHUNKS_W; P[35] = CHUNKS_H; P[36] = CHUNK_SIZE; P[37] = _combatScanTick === gameTime ? 1 : 0;
+    P[38] = SIM_ACQUIRE_TICKS; P[39] = _acqCommitTick;
+}
+// The flow looks made exact off the turns. A turn whose look-ahead record
+// misses takes an O(1) answer (mv.rs flow_look_approx: along its last answer,
+// or a step toward its destination) and moves on; after the movement each
+// walker whose record is not the exact answer where it stands lists its key
+// (mv_flow_pending, foreground), the helpers make the answers (mv_flow_exact,
+// lane SIM_LANE_FLOW) through the tick's rest and up to the next movement,
+// whose start puts them into the records (mv_flow_commit, by unit id: slots
+// move between): its turns have them. Listed and committed at fixed points,
+// each answer a function of its key, checked at the commit against what it
+// read (build, field, walls in reach: their versions; one made while they
+// changed is dropped): the same on every peer, with any helpers, and nothing
+// waits for the helpers but the commit (and a look table reset). The
+// movement kernel's arguments (bound by its first run) and params, its slots
+// by FLOW_PER a job.
+const SIM_FLOW_PER = 8192;
+// (Its helpers' claims a job: mv.rs FLOW_SPLIT, short ones.)
+const SIM_FLOW_SPLIT = 32;
+const _flowLooks = { posted: false, jobs: 0, P: new Float64Array(64) };
+let _simMoveRanTick = -1;
+// (The movement's first stage chunking this tick: slots a chunk, chunks.)
+const simMovePick = { per: 0, jobs: 0 };
+function _flowLooksArrays(n) {
+    const jobs = Math.ceil(n / SIM_FLOW_PER), cap = jobs * SIM_FLOW_PER;
+    for (const [name, Type, len] of [['fl.pend', Int32Array, cap * 8], ['fl.res', Int32Array, cap * 4], ['fl.cnt', Int32Array, Math.max(64, jobs)]]) {
+        const a = _simParReg[name];
+        if (!a || a.length < len || !simHeapHas(a)) { const b = simHeapArray(Type, len); simParallelBind(name, b); if (a && simHeapHas(a)) simHeapFree(a); }
+    }
+    return jobs;
+}
+function flowLooksPost() {
+    flowLooksCommit();
+    const S = _simUnitState;
+    if (!S || _simMoveRanTick !== gameTime || !_simMoveLookC || typeof SIM_KERNEL_FLOW_PENDING !== 'number' || !_simWasmX || typeof _simWasmX.mv_flow_pending !== 'function') return;
+    const n = S.owners.length;
+    if (!n || !spatialBlockCols) return;
+    const jobs = _flowLooksArrays(n), P = _simParams;
+    _simMoveScalarParams(P, n, SIM_FLOW_PER, spatialUnitsComplexPlayerCount);
+    P[47] = areaSearchEnabled() ? 1 : 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0; P[58] = simDk;
+    _flowLooks.P.set(P);
+    simParallelRun(SIM_KERNEL_FLOW_PENDING, jobs);
+    const Q = simParallelStageParams(SIM_LANE_FLOW, 0);
+    Q.set(P);
+    _flowLooks.posted = true; _flowLooks.jobs = jobs;
+    // (Eager: without helpers made now, not at a later wait, after the state they read changed.)
+    simParallelBackgroundChain(SIM_LANE_FLOW, [[SIM_KERNEL_FLOW_EXACT, jobs * SIM_FLOW_SPLIT]], true);
+}
+// (The helpers' answers waited for; still to commit.)
+function flowLooksSettle() { if (_flowLooks.posted) simParallelBackgroundWait(SIM_LANE_FLOW); }
+// The next movement's start (simMoveRun): the answers into the records.
+function flowLooksCommit() {
+    const L = _flowLooks;
+    if (!L.posted) return;
+    simParallelBackgroundWait(SIM_LANE_FLOW);
+    L.posted = false;
+    const U = unitIdIndex();
+    if (!U || !simHeapHas(U.ids) || !simHeapHas(U.slots)) return;
+    if (_simParReg['um.ids'] !== U.ids || _simParReg['um.slots'] !== U.slots) { simParallelBind('um.ids', U.ids); simParallelBind('um.slots', U.slots); }
+    _simParams.set(L.P); _simParams[63] = U.n;
+    simParallelRun(SIM_KERNEL_FLOW_COMMIT, L.jobs);
+}
+// (A resync, on every peer: nothing listed is committed.)
+function flowLooksDrop() { if (_flowLooks.posted) { simParallelBackgroundWait(SIM_LANE_FLOW); _flowLooks.posted = false; } }
 function simMoveRun() {
+    // (The last movement's looks made exact on the helpers, into the records first.)
+    flowLooksCommit();
     const S = _simUnitState;
     if (!S || !spatialBlockCols || spatialBlockCounts.length !== spatialBlockCols * spatialBlockRows * spatialUnitsComplexPlayerCount) return;
     const n = S.owners.length;
@@ -3420,25 +3512,7 @@ function simMoveRun() {
     // kernel takes them on the helpers, mv.rs floor_hit.)
     if (typeof simUnitStReserve === 'function') simUnitStReserve(_simTrapUnitsBound() + 64);
     const P = _simParams, CH = SIM_MOVE_CHUNK;
-    P[0] = n; P[1] = CH; P[2] = gameTime; P[3] = TICK_RATE; P[4] = 0; P[5] = GRID_W; P[6] = GRID_H;
-    P[7] = TILE; P[8] = UNIT_POSITION_QUANTIZATION; P[9] = spatialBlockCols; P[10] = spatialBlockRows;
-    P[11] = players; P[12] = CMD_MOVING; P[13] = CMD_ATTACK_MOVING; P[14] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[15] = SIM_SEP_ABSENT;
-    P[16] = SIM_MOVE_WINDOW; P[17] = SIM_MOVE_BOX_STEPS; P[18] = SIM_FLOW_ARRIVE; P[19] = _simMoveWallVer;
-    P[20] = Math.max(0, Number(CROSS_TEAM_UNIT_COLLISION_PADDING) || 0) + UNIT_CONTACT_ATTACK_MARGIN;
-    P[21] = WORKER_MOVE_CHECK_TICKS;
-    {
-        const V = _workerWorkTable(), delay = Math.max(1, Math.floor(Number(WORKER_AI_TICK_DELAY) || 1));
-        simParallelBind('wk.ver', V);
-        P[22] = V.np; P[23] = _WORKER_WORK_TYPES.length; P[24] = V.rw; P[25] = V.rh; P[26] = WORKER_WORK_REGION_TILES;
-        P[27] = delay * Math.ceil(getWorkerIdleSearchTicks() / delay); P[28] = _healerCandidatesGen; P[29] = BUILDER_WATCH_TICKS;
-        P[30] = _simMoveWallBlkW; P[31] = (GRID_H + 7) >> 3;
-    }
-    _simAreaCsr();
-    P[32] = _simAreaLayoutVer;
-    // (Drive-by looks: the unit index by chunk, and its owners per chunk
-    // when this tick's combat scan made them.)
-    P[33] = _sxEpoch; P[34] = CHUNKS_W; P[35] = CHUNKS_H; P[36] = CHUNK_SIZE; P[37] = _combatScanTick === gameTime ? 1 : 0;
-    P[38] = SIM_ACQUIRE_TICKS; P[39] = _acqCommitTick;
+    _simMoveScalarParams(P, n, CH, players);
     // (Attack holds: sight by area, the area of each tile.)
     if (typeof _visCoverReady === 'function' && _visCoverReady()) { simParallelBind('vis.cover', _visCover.visible); simParallelBind('vis.coverf', _visCover.visibleFlat); }
     simParallelBind('ix.agrid', _spatialAreaGridFlat());
@@ -3448,6 +3522,8 @@ function simMoveRun() {
     const outputSlots = occupancy ? n : chunks * CH;
     // (The attacks are listed by slot chunk: with the occupancy, by its first stage's.)
     const stepChunks = Math.ceil(n / CH), hitChunks = occupancy ? stepChunks : chunks;
+    // (The first stage's chunks: the orders' pickup lists its leftovers by them, main.js orderPickupFinish.)
+    simMovePick.per = CH; simMovePick.jobs = stepChunks;
     // (The flow looks shared by the kernel's threads: see mv.rs look_cache.)
     if (!_simMoveLookC) { _simMoveLookC = simHeapArray(Int32Array, SIM_MOVE_LOOKC_ENTRIES * 16); _simMoveLookC.fill(0); simParallelBind('mv.lookc', _simMoveLookC); }
     // (The scout's type index, for the unit controller: scouts are Unit.update's.)
@@ -3516,7 +3592,7 @@ function simMoveRun() {
         for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase]);}}
     }else simParallelRun(SIM_KERNEL_MOVE, chunks);
     if (typeof simUnitStSettle === 'function') simUnitStSettle();
-    _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime;
+    _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime; _simMoveRanTick = gameTime;
     _spatialKernelMoves = true;
     _simMoveChargeSteps(chunks, NPa, NT, names);
     // The slots the kernel listed (an arrival, a wall, a budget mark, a unit
@@ -3620,7 +3696,7 @@ let _simMoveRem = null, _simMoveChFix = null, _simMoveChUse = null;
 // reset or a wall rebuild: emptied then (peer-local, results unchanged).
 const SIM_MOVE_LOOKC_ENTRIES = 1 << 18;
 let _simMoveLookC = null;
-function simMoveLookCacheClear() { if (_simMoveLookC) _simMoveLookC.fill(0); }
+function simMoveLookCacheClear() { if (typeof tickStartChainSettle === 'function') tickStartChainSettle(); flowLooksSettle(); if (_simMoveLookC) _simMoveLookC.fill(0); }
 // (The step kernel before the movement kernel: see SIM_KERNEL_MOVE_STEP.)
 let SIM_MOVE_STEP_KERNEL = true;
 // Slots per job of the movement kernels: small jobs, so the helpers share

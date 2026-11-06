@@ -608,6 +608,8 @@ function selectionIds(seq) {
     const a = all.slice(0, na), c = combat.slice(0, nc), w = workers.slice(0, nw);
     // (In the order split's pieces, worker.js _queueLocalAction: each piece's string.)
     const chunk = cat.idsChunk || 20000;
-    const enc = x => { if (x.length < 64 || typeof actionIdsEncode !== 'function') return null; const out = []; for (let i = 0; i < x.length; i += chunk) { const p = x.subarray(i, i + chunk); out.push(p.length >= 64 ? actionIdsEncode(p) : null); } return out; };
+    // (Each piece's ids ascending: a shorter string (runs, small steps), and
+    // no sort on any peer's simulation (main.js _idsDecode sorts what is not).)
+    const enc = x => { if (x.length < 64 || typeof actionIdsEncode !== 'function') return null; const out = []; for (let i = 0; i < x.length; i += chunk) { const p = x.subarray(i, i + chunk); out.push(p.length >= 64 ? actionIdsEncode(p.slice().sort()) : null); } return out; };
     self.postMessage({ type: 'ids', seq, all: a, combat: c, workers: w, allZ: enc(a), combatZ: enc(c), workersZ: enc(w) }, [a.buffer, c.buffer, w.buffer]);
 }

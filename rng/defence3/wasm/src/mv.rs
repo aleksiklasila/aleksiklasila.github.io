@@ -1589,9 +1589,12 @@ unsafe fn nv_put(m: &Mv, s: usize, tl: i32, dk: i32, ver: i32, wv: i32, fgen: i3
 /// simFlowLook: 1 in the look-ahead record, 0 no way, -1 walled in, -2 a
 /// bad build.
 #[cfg_attr(feature = "prof", inline(never))]
-unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, global_wv: i32, fgen: i32) -> i32 {
+unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, _global_wv: i32, fgen: i32) -> i32 {
     let r = m.nv.add(s * NV_STRIDE);
     if *r == tl && *r.add(NV_D) == dk && *r.add(NV_G) == fgen && (!refresh || (*r.add(NV_V) == nav_ver && *r.add(NV_W) == wv)) {
+        // (A committed answer of no way: its code, LOOK_CODE_BASE + code.)
+        let n1 = *r.add(NV_N1);
+        if n1 <= LOOK_CODE_BASE { return n1 - LOOK_CODE_BASE; }
         return 1;
     }
     // (Nothing in the way to its destination, by the atlas's clear blocks:
@@ -1600,26 +1603,49 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     if look_direct(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen) {
         return 1;
     }
-    // (The shared looks: the field kind and the profile in one key word.)
-    // (The walls it looks against: the profile's, else the air or ground
-    // map: a flyer's bit.)
-    let kp = fgen | ((rd(m.npr, s) as i32) << 8) | (if wl == m.airw { 1 << 20 } else { 0 });
-    if let Some((code, n1, n2, far, open)) = look_get(m, tl, dk, kp, nav_ver, global_wv) {
-        if code == 1 {
-            nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open != 0);
+    // Else O(1), never the look itself: along its last answer, or a step
+    // toward the destination (flow_look_approx); the exact answer is made on
+    // the helpers and committed into its record at the tick's end (unit.js
+    // flowLooksPost / flowLooksCommit: mv_flow_pending, mv_flow_exact,
+    // mv_flow_commit).
+    flow_look_approx(m, s, tl, gx, gy, dk, wl, v.w, v.h, nav_ver, wv, fgen)
+}
+/// A committed look's code (no way 0, walled in -1, a bad build -2) in the
+/// record's next tile word: LOOK_CODE_BASE + code.
+const LOOK_CODE_BASE: i32 = -1000;
+/// A record made by the approximation (its kind word | LOOK_APPROX): never
+/// taken as an answer (flow_look's first test), the next turn approximates
+/// again until the commit.
+const LOOK_APPROX: i32 = 1 << 16;
+/// The O(1) look: standing on its last answer's next tile toward the same
+/// destination, that answer's tile after; else the open neighbour toward
+/// the destination on its longer axis, then the other (-1 walled in: none,
+/// it stands this turn). Written as an approximate record.
+#[inline(never)]
+unsafe fn flow_look_approx(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, w: i32, h: i32, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
+    let r = m.nv.add(s * NV_STRIDE);
+    let open_at = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && rd(wl, (y * w + x) as usize) == 0;
+    let mut n1 = -1;
+    if *r.add(NV_D) == dk && (*r.add(NV_G) & 0xFFFF) == fgen && *r.add(NV_N1) == tl {
+        let n2 = *r.add(NV_N2);
+        if n2 >= 0 {
+            let (x2, y2) = (irem_f(n2, w), idiv(n2 - irem_f(n2, w), w));
+            if (x2 - gx).abs() + (y2 - gy).abs() == 1 && open_at(x2, y2) { n1 = n2; }
         }
-        return code;
     }
-    dbgc!(m, 18);
-    let code = flow_look_calc(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen);
-    if code != 1 {
-        look_put(m, tl, dk, kp, nav_ver, global_wv, code, 0, 0, 0, false);
-    } else {
-        let r = m.nv.add(s * NV_STRIDE);
-        let fo = *r.add(NV_FO);
-        look_put(m, tl, dk, kp, nav_ver, global_wv, 1, *r.add(NV_N1), *r.add(NV_N2), fo >> 1, (fo & 1) != 0);
+    if n1 < 0 {
+        let (dx, dy) = (irem_f(dk, w) - gx, idiv(dk - irem_f(dk, w), w) - gy);
+        let (sx, sy) = (dx.signum(), dy.signum());
+        let first_x = dx.abs() >= dy.abs();
+        for k in 0..2 {
+            let along_x = if k == 0 { first_x } else { !first_x };
+            let (nx, ny) = if along_x { (gx + sx, gy) } else { (gx, gy + sy) };
+            if (if along_x { sx } else { sy }) != 0 && open_at(nx, ny) { n1 = ny * w + nx; break; }
+        }
     }
-    code
+    if n1 < 0 { return -1; }
+    nv_put(m, s, tl, dk, nav_ver, wv, fgen | LOOK_APPROX, n1, -1, n1, false);
+    1
 }
 /// A straight look (no wall in the blocks between it and its destination,
 /// the atlas's clear rectangle; the live walls around it open): its next
@@ -1645,18 +1671,37 @@ unsafe fn look_direct(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: 
     }
     false
 }
-/// The look itself (flow_look's miss).
-#[inline(never)]
-unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
+/// look_direct's test alone (no record written): the prewarm's.
+#[inline(always)]
+unsafe fn look_direct_ok(v: &Nav, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8) -> bool {
     let (w, h) = (v.w, v.h);
-    if look_direct(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen) {
-        return 1;
+    if v.atl.is_null() || dk < 0 || dk >= w * h || tl == dk {
+        return false;
     }
+    let dx=irem_f(dk,w);let dy=idiv(dk-dx,w);
+    if let Some(a)=crate::atlas::Atl::from(v.atl) {
+        if a.clear_rect(gx,gy,dx,dy) {
+            let n=if (dx-gx).abs()>=(dy-gy).abs(){tl+if dx>gx{1}else{-1}}
+                else{tl+if dy>gy{w}else{-w}};
+            let nx=step_x(n,tl,gx,w);let ny=step_y(n,tl,gx,gy,w);
+            return open_block(wl,gx,gy,w,h) && open_block(wl,nx,ny,w,h);
+        }
+    }
+    false
+}
+/// The look's answer for tile tl toward dk, writing nothing: (code (1 a
+/// way, 0 none, -1 walled in, -2 a step off the grid), next tile, the one
+/// after, the farthest, open): a function of the key alone (flow_look's
+/// shared entry), so a unit's turn and the prewarm (mv_flow_prewarm) make
+/// the same.
+#[inline(never)]
+unsafe fn flow_look_vals(m: &Mv, v: &Nav, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8) -> (i32, i32, i32, i32, bool) {
+    let (w, h) = (v.w, v.h);
     let mut own_cache = core::mem::MaybeUninit::<crate::atlas::ExitCache>::uninit();
     let exit_cache = if !m.nav_exit_cache.is_null() { m.nav_exit_cache } else { core::ptr::write_bytes(own_cache.as_mut_ptr(), 0, 1); own_cache.as_mut_ptr() };
     let mut n1 = nav_step(v, tl, gx, gy, dk, exit_cache);
     if n1 < 0 {
-        return 0;
+        return (0, 0, 0, 0, false);
     }
     let mut n2 = -1;
     let mut far = n1;
@@ -1670,12 +1715,12 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
         }
         n1 = nav_detour(wl, w, h, gx, gy, aim);
         if n1 < 0 {
-            return -1;
+            return (-1, 0, 0, 0, false);
         }
         far = n1;
     } else {
         if (n1x - gx).abs() + (n1y - gy).abs() != 1 {
-            return -2;
+            return (-2, 0, 0, 0, false);
         }
         open = open_block(wl, gx, gy, w, h) && open_block(wl, n1x, n1y, w, h);
         let mut cur = n1;
@@ -1717,8 +1762,7 @@ unsafe fn flow_look_calc(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, d
                 fx as f64*m.tile+16.0,fy as f64*m.tile+16.0,m.itile,m.tile) {far=short;}
         }
     }
-    nv_put(m, s, tl, dk, nav_ver, wv, fgen, n1, n2, far, open);
-    1
+    (1, n1, n2, far, open)
 }
 
 // ---- the movement kernels ----
@@ -2758,11 +2802,141 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         let intent=rd(f,4)<0.0;
         if !m.hita.is_null(){wr(m.hitc,p.chunk,0);if !m.hsc.is_null(){wr(m.hsc,p.chunk,0);}}
         let b0=s0.max(0) as usize;let e=end.max(0) as usize;
+        // (The queued move orders' units of the chunk first: their columns
+        // the order's before anything reads them this tick.)
+        ord_pickup(a,b0,e,chunk.max(0) as usize);
         let mut ep=if intent{epi_none()}else{epi_begin(&m,f,chunk,b0,e)};
         move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
         if intent&&!m.need.is_null(){mark_need(&m,b0,e);}
         if !intent{epi_end(&m,&ep,chunk);}
     }
+}
+/// The queued move orders' pickup (main.js _runQueuedOrders publishes,
+/// orderPickupFinish settles): a unit stamped by its order's admission (its
+/// ordSq the order's seq: the player's, alive, not a worker, not held then)
+/// takes the order here, at its chunk's start in the movement kernel's first
+/// stage, which reads its columns this tick anyway (no pass of its own over
+/// the ordered units' scattered columns). The orders' table (ord.tab, 16
+/// doubles a row, seq ascending): [seq, player, command, attack-move tile x,
+/// y (-1 none), issued position x, y, destination tile by the ground / air
+/// navigation (-1 none), wide by profile]. Per unit: its stamp cleared, its
+/// row's taken count and id sum (ord.tcnt, 4 words a row: atomic adds);
+/// not the player's or dead: nothing more. The player's alive non-workers:
+/// the group-path wait cleared, a pending way or fallback path let go (not
+/// held, indexed this epoch: target null, flag false, their digest terms
+/// moved: sim_unit_state.js simPendingClear). Then, not held, not a worker,
+/// indexed this epoch, no pending flag, no path window, a destination, off
+/// its tile: targets cleared, its command, the attack-move tile, the issued
+/// position, its route's end and profile, its path's key (profile,
+/// destination, wide), the path's index 0, its distance to the destination
+/// (a group's, within 64 tiles), unarmed (ctl arms it in this movement).
+/// Any other (rare: at its destination's tile, a path window...) listed for
+/// the JavaScript after the movement (ord.left / ord.leftr: slot and row,
+/// from the chunk's first slot; ord.lcnt per chunk). A stamp of no row (a
+/// stale one) is cleared. Words 485..497 (sim_parallel.js _simMoveWasm):
+/// ord.tab, ord.tcnt, unit.ordSq, unit.mvPP, unit.agWait, unit.ptSt,
+/// unit.ptGx, unit.ptGy, unit.hObj, ord.left, ord.leftr, ord.lcnt, ord.hdr
+/// ([0] rows, [1] / [2] the pending way's digest keys, [3] index epoch).
+const W_ORD: usize = 485;
+unsafe fn ord_pickup(a: *const i32, b0: usize, e: usize, chunk: usize) {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    use crate::nfs::{hterm, H_NULL, H_UNDEF};
+    macro_rules! w { ($i:expr, $t:ty) => { word(a, $i) as *mut $t }; }
+    let hdr = w!(W_ORD + 12, i32);
+    let lcnt = w!(W_ORD + 11, i32);
+    if hdr.is_null() || lcnt.is_null() { return; }
+    let rows = (*hdr).max(0) as usize;
+    let mut nl = 0usize;
+    let (tab, tcnt, sq) = (w!(W_ORD, f64), w!(W_ORD + 1, i32), w!(W_ORD + 2, i32));
+    if rows > 0 && !tab.is_null() && !tcnt.is_null() && !sq.is_null() {
+        let (pp, wait, pst, pgx, pgy, hob) = (w!(W_ORD + 3, u8), w!(W_ORD + 4, i32), w!(W_ORD + 5, u8), w!(W_ORD + 6, i16), w!(W_ORD + 7, i16), w!(W_ORD + 8, i32));
+        let (left, leftr) = (w!(W_ORD + 9, i32), w!(W_ORD + 10, i32));
+        let (kp, kf, epoch) = (*hdr.add(1), *hdr.add(2), *hdr.add(3));
+        let (own, dead, iswk, holdf, ep, pf) = (w!(W_OWN, i8), w!(W_DEAD, u8), w!(W_CTLX + 1, u8), w!(W_CTLX, u8), w!(W_SPE, i32), w!(W_PF, u8));
+        let (xs, ys, layer, idc, mpath) = (w!(W_X, i32), w!(W_Y, i32), w!(W_SLAYER, u8), w!(W_ID, i32), w!(W_PATH, i32));
+        let (tus, tuid, tbt, acqb, fatf, lsx, lsy) = (w!(W_CTLX + 5, i32), w!(W_CTLX + 6, i32), w!(W_CTLX + 8, i32), w!(W_CTLX + 11, u8), w!(W_CTLX + 7, u8), w!(W_LSX, f32), w!(W_LSY, f32));
+        let (cmdc, on, amgx, amgy, tgx, tgy) = (w!(W_CMD, u8), w!(W_ON, u8), w!(W_CTLX + 3, i16), w!(W_CTLX + 4, i16), w!(W_TGX, f32), w!(W_TGY, f32));
+        let (rkf, rte, nvp, pidx, nvpk, cd, nld) = (w!(W_CTLX + 2, u8), w!(458, i32), w!(W_NVP, i8), w!(W_PIDX, i32), w!(W_CTLX + 9, i32), w!(W_CD, i32), w!(W_NLD, f32));
+        let f = (a as usize + 4096) as *const f64;
+        let tile = rd(f, 7);
+        let (gw, itile) = (*hdr.add(4), 1.0 / (tile * 8.0));
+        let (mut last_seq, mut last_r) = (0i32, usize::MAX);
+        let mut s0 = b0;
+        while s0 < e {
+            let s1 = (s0 + 4).min(e);
+            // (Four stamps at a time: almost always none.)
+            if s1 - s0 == 4 && !v128_any_true(v128_load(sq.add(s0) as *const v128)) { s0 = s1; continue; }
+            for q in s0..s1 {
+                let seq = *sq.add(q);
+                if seq <= 0 { continue; }
+                if seq != last_seq {
+                    last_seq = seq;
+                    let (mut lo, mut hi) = (0usize, rows);
+                    while lo < hi { let mid = (lo + hi) >> 1; if (*tab.add(mid * 16) as i32) < seq { lo = mid + 1; } else { hi = mid; } }
+                    last_r = if lo < rows && *tab.add(lo * 16) as i32 == seq { lo } else { usize::MAX };
+                }
+                *sq.add(q) = 0;
+                let r = last_r;
+                if r == usize::MAX { continue; }
+                (*(tcnt.add(r * 4) as *const AtomicI32)).fetch_add(1, Ordering::Relaxed);
+                (*(tcnt.add(r * 4 + 1) as *const AtomicI32)).fetch_add(crate::ord::id_h(*idc.add(q)), Ordering::Relaxed);
+                let row = tab.add(r * 16);
+                if *own.add(q) as i32 != *row.add(1) as i32 || *dead.add(q) != 0 { continue; }
+                let wk = *iswk.add(q) != 0;
+                let held = *holdf.add(q) != 0;
+                let indexed = *ep.add(q) == epoch;
+                if !wk {
+                    // (The pre-pass: a pending way let go, the group-path wait cleared.)
+                    if !held && indexed && *pp.add(q) != 0 {
+                        let t = *pst.add(q) as i32;
+                        let mut h = *hob.add(q);
+                        if t & 3 != 1 {
+                            let ev = match t & 3 { 2 => (-16i32).wrapping_sub((*pgy.add(q) as i32).wrapping_mul(65536).wrapping_add(*pgx.add(q) as i32)), 1 => H_NULL, _ => H_UNDEF };
+                            h = h.wrapping_add(hterm(kp, H_NULL)).wrapping_sub(hterm(kp, ev));
+                        }
+                        if (t >> 2) & 3 != 1 {
+                            let ev = match (t >> 2) & 3 { 2 => 0x3bd, 1 => 0x2bd, _ => H_UNDEF };
+                            h = h.wrapping_add(hterm(kf, 0x2bd)).wrapping_sub(hterm(kf, ev));
+                        }
+                        *hob.add(q) = h; *pst.add(q) = 5; *pp.add(q) = 0; *pf.add(q) = 0;
+                    }
+                    *wait.add(q) = 0;
+                }
+                let prof = if *layer.add(q) == 1 { 1usize } else { 0usize };
+                let d = *row.add(7 + prof) as i32;
+                let (x, y) = (*xs.add(q) as f64, *ys.add(q) as f64);
+                let tl = if d >= 0 { floor(y * itile) as i32 * gw + floor(x * itile) as i32 } else { -1 };
+                if wk || held || !indexed || *pf.add(q) != 0 || *mpath.add(q) >= 0 || d < 0 || tl == d {
+                    *left.add(b0 + nl) = q as i32; *leftr.add(b0 + nl) = r as i32; nl += 1;
+                    continue;
+                }
+                let cmd = *row.add(2) as i32;
+                let wide = *row.add(9 + prof) != 0.0;
+                *tus.add(q) = -1; *tuid.add(q) = 0; *tbt.add(q) = -1; *acqb.add(q) = 0; *fatf.add(q) = 0;
+                *lsx.add(q) = f32::NAN; *lsy.add(q) = f32::NAN;
+                *cmdc.add(q) = cmd as u8;
+                *amgx.add(q) = *row.add(3) as i32 as i16; *amgy.add(q) = *row.add(4) as i32 as i16;
+                *tgx.add(q) = *row.add(5) as f32; *tgy.add(q) = *row.add(6) as f32;
+                *rkf.add(q) = 1; *rte.add(q) = d; *nvp.add(q) = prof as i8; *pidx.add(q) = 0;
+                *nvpk.add(q) = (prof as i32 * 16777216 + d) * 2 + wide as i32;
+                *cd.add(q) = -1;
+                // (A group's unit: its distance to the destination's middle within 64 tiles, -1 further.)
+                let mut ld = -1.0f64;
+                if wide {
+                    let (ux, uy) = (x * 0.125, y * 0.125);
+                    let (dx, dy) = (irem(d, gw), idiv(d, gw));
+                    if (dx - floor(ux / tile) as i32).abs() <= 64 && (dy - floor(uy / tile) as i32).abs() <= 64 {
+                        let (ex, ey) = (dx as f64 * tile + 16.0 - ux, dy as f64 * tile + 16.0 - uy);
+                        ld = sqrt(ex * ex + ey * ey);
+                    }
+                }
+                *nld.add(q) = ld as f32;
+                *on.add(q) = 0;
+            }
+            s0 = s1;
+        }
+    }
+    *lcnt.add(chunk) = nl as i32;
 }
 /// The first stage's marks for the second (occ.need), a byte a slot in slot
 /// order: a unit whose wanted position is not its footprint's (resolve_slot
@@ -4702,6 +4876,276 @@ unsafe fn wk_stay(m: &Mv, p: &MoveP, s: usize, gx: f64, gy: f64, o: i32) -> bool
     hh == rd(m.wkf, w)
 }
 
+/// The flow looks made exact off the turns (unit.js flowLooksPost /
+/// flowLooksCommit): a turn whose record misses takes an O(1) answer
+/// (flow_look_approx); these three kernels, over the movement kernel's
+/// arguments (and words 480-482: fl.pend, fl.res, fl.cnt; FLOW_PER slots a
+/// job), make the exact one for the next turn.
+/// mv_flow_pending (after the movement, foreground): each flow walker whose
+/// record is not the exact answer where it stands now lists its key
+/// [unit id, tile, destination, field id, key word (kind | profile << 8 |
+/// flyer << 20), build, wall version in reach, its field's generation].
+/// mv_flow_exact (the helpers, lane SIM_LANE_FLOW): each listed key's answer
+/// into fl.res [code, n1, n2, far << 1 | open] (the shared table mv.lookc
+/// a memo of them, the helpers' alone; flow_look_vals).
+/// mv_flow_commit (the next movement's start, foreground): each answer into
+/// its unit's record (by id: slots move between) when the unit, its route
+/// and what the answer read (build, field generation, walls in reach: their
+/// versions) are as listed. The same on every peer: keys listed and answers
+/// committed at fixed points, each answer a function of its key, one made
+/// while what it read changed dropped (FLOW_STALE; its field checked before
+/// and after, the rest by the versions at the commit). (A look table reset
+/// waits for the helpers: unit.js simMoveLookCacheClear.)
+pub const FLOW_PER: usize = 8192;
+/// The helpers' claims a job (mv_flow_exact): 256 keys at most each.
+pub const FLOW_SPLIT: usize = 32;
+const FLOW_W: usize = 8;
+/// An answer made while its field or build changed: not committed.
+const FLOW_STALE: i32 = 99;
+/// The key's field (not on the atlas) still the listed one, and the
+/// profile's build the listed build.
+#[inline(always)]
+unsafe fn flow_inputs_same(m: &Mv, k: &FlowKey) -> bool {
+    let nv = m.nav.get_unchecked(k.np);
+    if nv.meta.is_null() || rd(nv.meta, 6) != k.ver {
+        return false;
+    }
+    if k.fid == NAV_ATLAS_FID {
+        return true;
+    }
+    let wide = k.fid >= 4194304;
+    let did = if wide { k.fid - 4194304 } else { k.fid };
+    let dm = (did as i64 * 8) as usize;
+    let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
+    k.fid >= 0 && !fmeta.is_null() && dm + 7 < fmn && rd(fmeta, dm + 1) == k.dk && rd(fmeta, dm + 6) == k.fgen && rd(fmeta, dm + 7) == 1
+}
+/// A unit's slot by its id (main.js unitIdIndex: ids ascending, their
+/// slots; -2 a hole), -1 none.
+#[inline(always)]
+unsafe fn flow_id_slot(ids: *const i32, slots: *const i32, n: usize, id: i32) -> i32 {
+    let (mut lo, mut hi) = (0usize, n);
+    while lo < hi { let mid = (lo + hi) / 2; if *ids.add(mid) < id { lo = mid + 1; } else { hi = mid; } }
+    if lo < n && *ids.add(lo) == id { let s = *slots.add(lo); if s >= 0 { return s; } }
+    -1
+}
+
+struct FlowKey { tl: i32, gx: i32, gy: i32, dk: i32, fid: i32, np: usize, kind: i32, kp: i32, ver: i32, wv: i32, lwv: i32, fgen: i32 }
+
+/// A flow walker's look key where it stands (move_flow's), None: none.
+unsafe fn flow_key(m: &Mv, s: usize, wver: i32, wbw: i32) -> Option<FlowKey> {
+    if rd(m.on, s) != 1 || rd(m.dead, s) != 0 {
+        return None;
+    }
+    let (w, h, itile) = (m.w, m.h, m.itile);
+    let gx = floor(rd(m.x, s) * itile) as i32;
+    let gy = floor(rd(m.y, s) * itile) as i32;
+    if gx < 0 || gy < 0 || gx >= w || gy >= h {
+        return None;
+    }
+    let tl = gy * w + gx;
+    let dk = rd(m.dest, s);
+    if tl == dk || dk < 0 || dk >= w * h {
+        return None;
+    }
+    let np = rd(m.npr, s) as usize;
+    if np >= NAV_PROFILES {
+        return None;
+    }
+    let nv = m.nav.get_unchecked(np);
+    if nv.meta.is_null() || nv.fields.is_null() || nv.partl.is_null() || nv.partb.is_null() {
+        return None;
+    }
+    let wl = if !nv.walls.is_null() { nv.walls } else if (rd(m.fl, s) & 32) != 0 { m.airw } else { m.wall };
+    let fid = rd(m.flow, s);
+    let on_atl = fid == NAV_ATLAS_FID;
+    if on_atl && (*m.atlh.get_unchecked(np)).is_null() {
+        return None;
+    }
+    let wide = !on_atl && fid >= 4194304;
+    let mut fgen = 0;
+    if !on_atl {
+        let did = if wide { fid - 4194304 } else { fid };
+        let dm = (did as i64 * 8) as usize;
+        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
+        if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk || rd(fmeta, dm + 7) != 1 {
+            return None;
+        }
+        let rows = if wide { m.frw } else { m.frn };
+        let rw = if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
+        if rows.is_null() || !(rw > 0) {
+            return None;
+        }
+        fgen = rd(fmeta, dm + 6);
+    }
+    let kind = if on_atl { 3 } else if wide { 2 } else { 1 };
+    let kp = kind | ((np as i32) << 8) | (if wl == m.airw { 1 << 20 } else { 0 });
+    let bi = ((gy >> 3) * wbw + (gx >> 3)) as usize;
+    let wv = if m.wblk9.is_null() { wver } else { rd(m.wblk9, bi) };
+    let lwv = if m.wblk81.is_null() { wver } else { rd(m.wblk81, bi) };
+    Some(FlowKey { tl, gx, gy, dk, fid, np, kind, kp, ver: rd(nv.meta, 6), wv, lwv, fgen })
+}
+/// The key's navigation view and walls (move_flow's Nav).
+unsafe fn flow_nav(m: &Mv, k: &FlowKey) -> (Nav, *const u8) {
+    let nv = m.nav.get_unchecked(k.np);
+    let on_atl = k.fid == NAV_ATLAS_FID;
+    let wide = !on_atl && k.fid >= 4194304;
+    let did = if on_atl { 0 } else if wide { k.fid - 4194304 } else { k.fid };
+    let dm = (did as i64 * 8) as usize;
+    let (fmeta, fpool) = if wide { (m.fmw, m.fpw) } else { (m.fmn, m.fpn) };
+    let rows = if on_atl { 0 as *const u8 } else if wide { m.frw } else { m.frn };
+    let rw = if on_atl { 1 } else if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
+    let n_c = rd(nv.meta, 0);
+    let span = if wide { 3 * n_c } else { n_c };
+    let wl = if !nv.walls.is_null() { nv.walls } else if (k.kp & (1 << 20)) != 0 { m.airw } else { m.wall };
+    let w = m.w;
+    (Nav {
+        atl: if on_atl { *m.atlh.get_unchecked(k.np) } else { 0 as *const i32 },
+        step_cache: m.nav_step_cache,
+        w,
+        h: m.h,
+        cs: 31 - (n_c as u32).leading_zeros() as i32,
+        c: n_c,
+        cw: rd(nv.meta, 1),
+        pl: nv.partl,
+        plh: if w > 0 { (nv.partln as i64).wrapping_div(w as i64) as i32 } else { 0 },
+        pb: nv.partb,
+        rows,
+        ro: did * rw,
+        fields: nv.fields,
+        nb: nv.nb,
+        nt: nv.nt,
+        np: nv.np,
+        df: if on_atl { 0 as *const u16 } else { fpool },
+        doff: did * span * span,
+        bx: if on_atl { 0 } else { rd(fmeta, dm + 2) },
+        by: if on_atl { 0 } else { rd(fmeta, dm + 3) },
+        bw: if on_atl { 0 } else { rd(fmeta, dm + 4) },
+        bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
+    }, wl)
+}
+#[inline(always)]
+unsafe fn flow_arrays(a: *const i32) -> (*mut i32, *mut i32, *mut i32) {
+    (word(a, 480) as *mut i32, word(a, 481) as *mut i32, word(a, 482) as *mut i32)
+}
+#[no_mangle]
+pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let m = Mv::load(a);
+    let f = (a as usize + 4096) as *const f64;
+    let (wver, wbw) = (to_i32(rd(f, 19)), to_i32(rd(f, 30)));
+    let (pend, _, cnt) = flow_arrays(a);
+    if pend.is_null() || cnt.is_null() {
+        return;
+    }
+    let base = chunk.max(0) as usize * FLOW_PER;
+    let mut n = 0usize;
+    for s in s0.max(0)..end.max(0) {
+        let s = s as usize;
+        let k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
+        let r = m.nv.add(s * NV_STRIDE);
+        if *r == k.tl && *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) == k.ver && *r.add(NV_W) == k.wv {
+            continue;
+        }
+        // (Straight at its destination: its turn makes that exactly, in O(1).)
+        let (v, wl) = flow_nav(&m, &k);
+        if look_direct_ok(&v, k.tl, k.gx, k.gy, k.dk, wl) {
+            continue;
+        }
+        let e = pend.add((base + n) * FLOW_W);
+        *e = rd(m.id, s); *e.add(1) = k.tl; *e.add(2) = k.dk; *e.add(3) = k.fid;
+        *e.add(4) = k.kp; *e.add(5) = k.ver; *e.add(6) = k.lwv; *e.add(7) = k.fgen;
+        n += 1;
+    }
+    *cnt.add(chunk.max(0) as usize) = n as i32;
+}
+#[no_mangle]
+pub unsafe extern "C" fn mv_flow_exact(a: u32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let mut m = Mv::load(a);
+    let mut step_cache = core::mem::MaybeUninit::<[AtlasStepEntry; ATLAS_STEP_CACHE_ENTRIES]>::uninit();
+    let mut exit_cache = core::mem::MaybeUninit::<crate::atlas::ExitCache>::uninit();
+    m.nav_step_cache = step_cache.as_mut_ptr() as *mut AtlasStepEntry;
+    core::ptr::write_bytes(m.nav_step_cache, 0, ATLAS_STEP_CACHE_ENTRIES);
+    m.nav_exit_cache = exit_cache.as_mut_ptr();
+    core::ptr::write_bytes(m.nav_exit_cache, 0, 1);
+    let (pend, res, cnt) = flow_arrays(a);
+    if pend.is_null() || res.is_null() || cnt.is_null() {
+        return;
+    }
+    // (A claim a FLOW_SPLIT-th of a job's keys: short, so a thread waiting
+    // on a foreground kernel that takes one (sim_parallel.js _simBgHelp) is
+    // back soon, and helpers return to the foreground's jobs soon.)
+    let (c, part) = ((chunk.max(0) as usize) / FLOW_SPLIT, (chunk.max(0) as usize) % FLOW_SPLIT);
+    let (n, base, w) = (*cnt.add(c) as usize, c * FLOW_PER, m.w);
+    let (i0, i1) = (n * part / FLOW_SPLIT, n * (part + 1) / FLOW_SPLIT);
+    for i in i0..i1 {
+        let e = pend.add((base + i) * FLOW_W);
+        let (tl, kp) = (*e.add(1), *e.add(4));
+        let gx = irem_f(tl, w);
+        let k = FlowKey { tl, gx, gy: idiv(tl - gx, w), dk: *e.add(2), fid: *e.add(3), np: ((kp >> 8) & 255) as usize, kind: kp & 255, kp,
+            ver: *e.add(5), wv: 0, lwv: *e.add(6), fgen: *e.add(7) };
+        let o = res.add((base + i) * 4);
+        let (code, n1, n2, far, open) = match look_get(&m, k.tl, k.dk, k.kp, k.ver, k.lwv) {
+            Some((c, n1, n2, far, open)) => (c, n1, n2, far, open != 0),
+            None => {
+                // (Its field and build as listed before and after: else the
+                // answer may be of another's, neither kept nor committed.)
+                if !flow_inputs_same(&m, &k) {
+                    (FLOW_STALE, 0, 0, 0, false)
+                } else {
+                    let (v, wl) = flow_nav(&m, &k);
+                    let r = flow_look_vals(&m, &v, k.tl, k.gx, k.gy, k.dk, wl);
+                    if !flow_inputs_same(&m, &k) {
+                        (FLOW_STALE, 0, 0, 0, false)
+                    } else {
+                        if r.0 == 1 { look_put(&m, k.tl, k.dk, k.kp, k.ver, k.lwv, 1, r.1, r.2, r.3, r.4); }
+                        else { look_put(&m, k.tl, k.dk, k.kp, k.ver, k.lwv, r.0, 0, 0, 0, false); }
+                        r
+                    }
+                }
+            }
+        };
+        *o = code; *o.add(1) = n1; *o.add(2) = n2; *o.add(3) = (far << 1) | (open as i32);
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn mv_flow_commit(a: u32, chunk: i32) {
+    let a = waddr(a) as *const i32;
+    let m = Mv::load(a);
+    let f = (a as usize + 4096) as *const f64;
+    let (wver, wbw) = (to_i32(rd(f, 19)), to_i32(rd(f, 30)));
+    let (pend, res, cnt) = flow_arrays(a);
+    if pend.is_null() || res.is_null() || cnt.is_null() {
+        return;
+    }
+    // (The id index: words 483-484, um.ids / um.slots; P[63] its length.)
+    let (uids, uslots, nid) = (word(a, 483) as *const i32, word(a, 484) as *const i32, to_i32(rd(f, 63)).max(0) as usize);
+    if uids.is_null() || uslots.is_null() {
+        return;
+    }
+    let c = chunk.max(0) as usize;
+    let (n, base) = (*cnt.add(c) as usize, c * FLOW_PER);
+    for i in 0..n {
+        let e = pend.add((base + i) * FLOW_W);
+        let s = flow_id_slot(uids, uslots, nid, *e);
+        if s < 0 || *res.add((base + i) * 4) == FLOW_STALE {
+            continue;
+        }
+        let s = s as usize;
+        let k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
+        if k.tl != *e.add(1) || k.dk != *e.add(2) || k.fid != *e.add(3) || k.kp != *e.add(4) || k.ver != *e.add(5) || k.lwv != *e.add(6) || k.fgen != *e.add(7) {
+            continue;
+        }
+        let o = res.add((base + i) * 4);
+        let code = *o;
+        if code == 1 {
+            nv_put(&m, s, k.tl, k.dk, k.ver, k.wv, k.kind, *o.add(1), *o.add(2), *o.add(3) >> 1, (*o.add(3) & 1) != 0);
+        } else {
+            nv_put(&m, s, k.tl, k.dk, k.ver, k.wv, k.kind, LOOK_CODE_BASE + code, -1, -1, false);
+        }
+    }
+}
+
 /// _simMoveFlow for slot s.
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
@@ -5010,7 +5454,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     wr(m.cvx, s, cvx);
     wr(m.cvy, s, cvy);
     wr(m.ctl, s, tl);
-    let cn = if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
+    let cn = if (*nr.add(NV_G) & LOOK_APPROX) != 0 { 1 } else if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
     // (Counters: 31 steers near the destination, 32 far, 33 steers in the
     // tile the last one was made in.)
     dbgc!(m, if cn == SIM_STEER_NEAR_TICKS { 31 } else { 32 });

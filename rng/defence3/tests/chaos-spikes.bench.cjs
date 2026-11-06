@@ -266,7 +266,11 @@ for(let i=0;i<ticks;i++){
  if(eventMetrics)inst.eval('__scratch.events={codes:{},ai:{},transitions:{},workerEvents:0,combatEvents:0,budgetParked:0}');
  // Generating synthetic player inputs is outside tick timing; applying them is inside.
  const burst=i%burstEvery===0;
- if(burst)for(let team=0;team<2;team++)inst.eval(`localPlayerId=${team};__scratch.actions=[];${chaos.burst(options,Math.floor(i/burstEvery))};__scratch['actions'+${team}]=__scratch.actions;`);
+ // (As the page sends them: long id lists compact (worker.js _queueLocalAction),
+ // the wire's JSON round trip, prepared as the simulation worker does on arrival.)
+ if(burst)for(let team=0;team<2;team++)inst.eval(`localPlayerId=${team};__scratch.actions=[];${chaos.burst(options,Math.floor(i/burstEvery))};
+  __scratch['actions'+${team}]=JSON.parse(JSON.stringify(__scratch.actions.map(a=>{if(!Array.isArray(a.unitIds)||a.unitIds.length<64)return a;const z=actionIdsEncode(a.unitIds);if(z===null)return a;const o={...a,uidz:z};delete o.unitIds;return o;})));
+  actionsPrepare(__scratch['actions'+${team}]);`);
  // A player's whole selection (every unit and building) ctrl-clicked to
  // massClicks appended points, massGap steps apart, as the page sends them
  // (wire form: JSON round trip, ids compact). Outside the timing too.

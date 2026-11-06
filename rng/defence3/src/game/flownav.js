@@ -607,6 +607,7 @@ function navFieldReadyFor(id) { return id === NAV_ATLAS_FID ? 0 : navFieldReadyT
 // leave the job. In a rebuild's window the job makes its fields over the
 // next build too: _navNextStage.)
 function navFieldsFlush() {
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     _navFieldsCommit();
     // (A pool grown in the background: its arrays swapped now, the job and
     // its copy done. See _navGrowPlan.)
@@ -995,6 +996,8 @@ function navPublish(nav, made = false) {
     try { _navPublishBody(nav, made); } finally { simParallelBindFlush(); }
 }
 function _navPublishBody(nav, made) {
+    // (The flow looks' prewarm reads the builds: done first, tower.js tickStartChainSettle.)
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     // (The fields' jobs finished: the arrays they write may be replaced. A
     // window still open is closed: its build installed as any, at its end.)
     _navFieldsLaneWait();

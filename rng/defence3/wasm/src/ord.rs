@@ -15,105 +15,161 @@ unsafe fn s<T>(p: *mut T, i: usize, v: T) {
 }
 /// main.js _orderIdH: a queued unit's share of its entry's sum.
 #[inline(always)]
-fn id_h(id: i32) -> i32 {
+pub(crate) fn id_h(id: i32) -> i32 {
     let x = ((id ^ 0x5bd1e995u32 as i32) as u32).wrapping_mul(2654435761);
     (x ^ (x >> 15)) as i32
 }
 
 /// SIM_KERNEL_ORDER_ADMIT: a move order's ids (q.ids, ascending) made their
-/// units' latest order. The ids are joined with the units in id order
-/// (um.ids, ascending, um.slots their slots: main.js unitIdIndex): two
-/// streams forward, the units' skipped four at a time (SIMD). A unit taken:
-/// the player's, alive, not already this order's; an earlier queued order of
-/// it (its ordSq) loses it (that entry's live count and sum, q.edl / q.eds,
-/// by its seq in q.eseq, ascending). Its slot listed in q.out, in id order
-/// (q.out2 unused); a unit outside the columns (slot -1) in q.loose (its
-/// position in um.ids).
+/// units' latest order, a job of P[5] ids each (helpers). The ids are joined
+/// with the units in id order (um.ids, ascending, um.slots their slots:
+/// main.js unitIdIndex): two streams forward from the job's first id (found by
+/// a binary search), the units' skipped four at a time (SIMD). An id once (a
+/// repeat, next to it: passed over). A unit taken: the player's, alive, not
+/// already this order's; an earlier queued order of it (its ordSq) loses it
+/// (that entry's live count and sum, q.edl / q.eds, by its seq in q.eseq,
+/// ascending: atomic adds, the same whatever the jobs' timing). A worker's or
+/// held unit's slot listed in q.out from the job's first place (job * P[5]),
+/// in id order (the take's, k_order_take); the others only stamped: the
+/// movement kernel takes them (mv.rs ord_pickup), counted by layer (ground,
+/// flying: sepLayer 1) with the first id of each. A unit outside the
+/// columns (slot -1) in q.loose the same (its position in um.ids).
 /// Arrays: q.ids, um.ids, um.slots, unit.owner, unit.dead, unit.isWk,
-/// unit.ordSq, q.out, q.out2, q.loose, q.eseq, q.edl, q.eds, q.cnt.
-/// P: [0] ids, [1] units, [2] player, [3] seq, [4] entries.
-/// q.cnt: [kernel's, workers (both in q.out), loose, the taken ids' sum].
+/// unit.ordSq, q.out, q.out2, q.loose, q.eseq, q.edl, q.eds, q.cnt, q.jc,
+/// unit.holdF, unit.sepLayer.
+/// P: [0] ids, [1] units, [2] player, [3] seq, [4] entries, [5] per job.
+/// q.jc per job (8 words): [listed, loose, the taken ids' sum, ground count,
+/// flying count, first ground id, first flying id (-1 none)].
 #[no_mangle]
-pub unsafe extern "C" fn k_order_admit(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_order_admit(a: u32, chunk: i32) {
+    use core::sync::atomic::{AtomicI32, Ordering};
     let k = K::new(waddr(a) as *const i32);
     let (ids, uid, usl) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
     let (own, dead, iswk, sq) = (k.p::<i8>(3), k.p::<u8>(4), k.p::<u8>(5), k.p::<i32>(6));
-    let (out, out2, loose, eseq, edl, eds, cnt) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(13));
-    let (n, nu, player, seq, ne) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2), k.i(3), k.i(4).max(0) as usize);
-    let (mut nn, mut nw, mut nl, mut sum) = (0usize, 0usize, 0usize, 0i32);
-    let mut j = 0usize;
-    // (The last entry looked up: an order's units mostly come from one earlier order.)
-    let (mut last_seq, mut last_e) = (0i32, usize::MAX);
-    for i in 0..n {
-        let id = g(ids, i);
-        // Skip the units with smaller ids, four at a time.
-        while j + 4 <= nu {
-            let m = i32x4_bitmask(i32x4_lt(v128_load(uid.add(j) as *const v128), i32x4_splat(id))) as u32;
-            if m == 0xF { j += 4; continue; }
-            j += m.trailing_ones() as usize;
-            break;
-        }
-        while j < nu && g(uid, j) < id { j += 1; }
-        if j >= nu { break; }
-        if g(uid, j) != id { continue; }
-        let q = g(usl, j);
-        // (-2: a unit gone, its hole; -1: one outside the columns.)
-        if q < -1 { continue; }
-        if q < 0 { s(loose, nl, j as i32); nl += 1; continue; }
-        let q = q as usize;
-        if g(own, q) as i32 != player || g(dead, q) != 0 { continue; }
-        let old = g(sq, q);
-        if old == seq { continue; }
-        if old > 0 {
-            if old != last_seq {
-                last_seq = old;
-                // (Binary search: entries few, in cache.)
-                let (mut lo, mut hi) = (0usize, ne);
-                while lo < hi { let mid = (lo + hi) >> 1; if g(eseq, mid) < old { lo = mid + 1; } else { hi = mid; } }
-                last_e = if lo < ne && g(eseq, lo) == old { lo } else { usize::MAX };
+    let (out, loose, eseq, edl, eds, jc) = (k.p::<i32>(7), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(14));
+    let (holdf, lay) = (k.p::<u8>(15), k.p::<u8>(16));
+    let (n, nu, player, seq, ne, per) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2), k.i(3), k.i(4).max(0) as usize, k.i(5).max(1) as usize);
+    let c = chunk.max(0) as usize;
+    let (i0, i1) = (c * per, (c * per + per).min(n));
+    let (mut m, mut nl, mut sum) = (0usize, 0usize, 0i32);
+    let (mut c0, mut c1, mut f0, mut f1) = (0i32, 0i32, -1i32, -1i32);
+    if i0 < i1 {
+        // (The first unit not below the job's first id.)
+        let id0 = g(ids, i0);
+        let (mut lo, mut hi) = (0usize, nu);
+        while lo < hi { let mid = (lo + hi) >> 1; if g(uid, mid) < id0 { lo = mid + 1; } else { hi = mid; } }
+        let mut j = lo;
+        // (The last entry looked up: an order's units mostly come from one earlier order.)
+        let (mut last_seq, mut last_e) = (0i32, usize::MAX);
+        for i in i0..i1 {
+            let id = g(ids, i);
+            if i > 0 && g(ids, i - 1) == id { continue; }
+            // Skip the units with smaller ids, four at a time.
+            while j + 4 <= nu {
+                let mk = i32x4_bitmask(i32x4_lt(v128_load(uid.add(j) as *const v128), i32x4_splat(id))) as u32;
+                if mk == 0xF { j += 4; continue; }
+                j += mk.trailing_ones() as usize;
+                break;
             }
-            if last_e != usize::MAX {
-                s(edl, last_e, g(edl, last_e) - 1);
-                s(eds, last_e, g(eds, last_e).wrapping_sub(id_h(id)));
+            while j < nu && g(uid, j) < id { j += 1; }
+            if j >= nu { break; }
+            if g(uid, j) != id { continue; }
+            let q = g(usl, j);
+            // (-2: a unit gone, its hole; -1: one outside the columns.)
+            if q < -1 { continue; }
+            if q < 0 { s(loose, i0 + nl, j as i32); nl += 1; continue; }
+            let q = q as usize;
+            if g(own, q) as i32 != player || g(dead, q) != 0 { continue; }
+            let old = g(sq, q);
+            if old == seq { continue; }
+            if old > 0 {
+                if old != last_seq {
+                    last_seq = old;
+                    // (Binary search: entries few, in cache.)
+                    let (mut lo, mut hi) = (0usize, ne);
+                    while lo < hi { let mid = (lo + hi) >> 1; if g(eseq, mid) < old { lo = mid + 1; } else { hi = mid; } }
+                    last_e = if lo < ne && g(eseq, lo) == old { lo } else { usize::MAX };
+                }
+                if last_e != usize::MAX {
+                    (*(edl.add(last_e) as *const AtomicI32)).fetch_sub(1, Ordering::Relaxed);
+                    (*(eds.add(last_e) as *const AtomicI32)).fetch_sub(id_h(id), Ordering::Relaxed);
+                }
             }
+            s(sq, q, seq);
+            sum = sum.wrapping_add(id_h(id));
+            if g(iswk, q) != 0 || g(holdf, q) != 0 {
+                // (Workers and held units: the take's list, in id order.)
+                s(out, i0 + m, q as i32);
+                m += 1;
+            } else if g(lay, q) == 1 { c1 += 1; if f1 < 0 { f1 = id; } } else { c0 += 1; if f0 < 0 { f0 = id; } }
         }
-        s(sq, q, seq);
-        sum = sum.wrapping_add(id_h(id));
-        // (One list in id order, workers among the rest: a drain spreads them
-        // over its steps, not all at its last.)
-        s(out, nn + nw, q as i32);
-        if g(iswk, q) != 0 { nw += 1; } else { nn += 1; }
     }
-    s(cnt, 0, nn as i32); s(cnt, 1, nw as i32); s(cnt, 2, nl as i32); s(cnt, 3, sum);
+    let b = c * 8;
+    s(jc, b, m as i32); s(jc, b + 1, nl as i32); s(jc, b + 2, sum);
+    s(jc, b + 3, c0); s(jc, b + 4, c1); s(jc, b + 5, f0); s(jc, b + 6, f1);
 }
 
-/// SIM_KERNEL_ORDER_TAKE: an entry's next units to apply, from its slots in
-/// the queue's ring (ord.ring, from P[0], P[1] of them): those still its
-/// (ordSq its seq), at most P[2], their stamps cleared. The kernel's (no
-/// worker, not held) to ord.slots (SIM_KERNEL_ORDER_MOVE's list), the rest
-/// to q.out2.
-/// Arrays: ord.ring, unit.ordSq, unit.isWk, unit.holdF, unit.id, ord.slots, q.out2, q.cnt.
-/// P: [0] start, [1] slots, [2] need, [3] seq.
-/// q.cnt: [slots passed, kernel's, others, the taken units' sum].
+/// An LSD radix sort of n non-negative i32 (11 bits a pass, only the bits in
+/// use), ascending, through the scratch t (n long); the result in v.
+pub unsafe fn radix_sort_i32(v: *mut i32, t: *mut i32, n: usize) {
+    if n < 2 {
+        return;
+    }
+    let mut or = 0u32;
+    for i in 0..n { or |= *v.add(i) as u32; }
+    let bits = 32 - or.leading_zeros();
+    let (mut src, mut dst) = (v, t);
+    let mut counts = [0u32; 2048];
+    let mut shift = 0u32;
+    while shift < bits {
+        let width = (bits - shift).min(11);
+        let mask = (1u32 << width) - 1;
+        for c in counts.iter_mut().take(1usize << width) { *c = 0; }
+        for i in 0..n { *counts.get_unchecked_mut(((*src.add(i) as u32 >> shift) & mask) as usize) += 1; }
+        let mut acc = 0u32;
+        for c in counts.iter_mut().take(1usize << width) { let x = *c; *c = acc; acc += x; }
+        for i in 0..n {
+            let x = *src.add(i);
+            let c = counts.get_unchecked_mut(((x as u32 >> shift) & mask) as usize);
+            *dst.add(*c as usize) = x;
+            *c += 1;
+        }
+        core::mem::swap(&mut src, &mut dst);
+        shift += width;
+    }
+    if src != v {
+        core::ptr::copy_nonoverlapping(src, v, n);
+    }
+}
+
+/// SIM_KERNEL_ORDER_TAKE: an entry's workers and held units (the admission's
+/// list: the rest the movement kernel's, mv.rs ord_pickup), from its slots in
+/// the queue's ring (ord.ring, from P[0], P[1] of them), a job of P[5] each
+/// (helpers): those still its (ordSq its seq), their stamps cleared, to q.out2
+/// from the job's first place (job * P[5]), in ring (id) order.
+/// Arrays: ord.ring, unit.ordSq, unit.id, q.out2, q.jc.
+/// P: [0] start, [1] slots, [3] seq, [5] per job.
+/// q.jc per job (8 words): [listed, the taken units' sum].
 #[no_mangle]
-pub unsafe extern "C" fn k_order_take(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_order_take(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (ring, sq, iswk, holdf, uidc) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<i32>(4));
-    let (out, out2, cnt) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
-    let (start, len, need, seq) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(0) as usize, k.i(3));
-    let (mut nn, mut nw, mut sum, mut i) = (0usize, 0usize, 0i32, 0usize);
-    while i < len && nn + nw < need {
+    let (ring, sq, uidc, out2, jc) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
+    let (start, len, seq, per) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(3), k.i(5).max(1) as usize);
+    let c = chunk.max(0) as usize;
+    let (i0, i1) = (c * per, (c * per + per).min(len));
+    let (mut nw, mut sum) = (0usize, 0i32);
+    for i in i0..i1.max(i0) {
         let q = g(ring, start + i);
-        i += 1;
         // (-1: its unit's slot gone in a compaction, main.js orderQueueRemapSlots.)
         if q < 0 { continue; }
         let q = q as usize;
         if g(sq, q) != seq { continue; }
         s(sq, q, 0);
         sum = sum.wrapping_add(id_h(g(uidc, q)));
-        if g(iswk, q) == 0 && g(holdf, q) == 0 { s(out, nn, q as i32); nn += 1; } else { s(out2, nw, q as i32); nw += 1; }
+        s(out2, i0 + nw, q as i32); nw += 1;
     }
-    s(cnt, 0, i as i32); s(cnt, 1, nn as i32); s(cnt, 2, nw as i32); s(cnt, 3, sum);
+    let b = c * 8;
+    s(jc, b, nw as i32); s(jc, b + 1, sum);
 }
 
 /// The wire form's character values (id_codec.js _UIDZ_ABC), -1 none.
@@ -148,13 +204,13 @@ unsafe fn varint(b: *const u8, len: usize, pos: &mut usize) -> i64 {
 /// SIM_KERNEL_IDS_DECODE (id_codec.js actionIdsForEach): an order's ids (or a
 /// rally's tile keys) from their wire form's bytes (q.bytes[0..P[0]]), at
 /// most P[1]: to q.ids when P[2] (else only counted), sorted ascending when
-/// P[3] and they are not. Malformed input ends the list where it breaks, as
-/// the JavaScript's.
-/// Arrays: q.bytes, q.ids, q.cnt. q.cnt: [4] ids, [5] 1 when ascending.
+/// P[3] and they are not (radix, q.keysOut its scratch). Malformed input
+/// ends the list where it breaks, as the JavaScript's.
+/// Arrays: q.bytes, q.ids, q.cnt, q.keysOut. q.cnt: [4] ids, [5] 1 when ascending.
 #[no_mangle]
 pub unsafe extern "C" fn k_ids_decode(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (b, ids, cnt) = (k.p::<u8>(0) as *const u8, k.p::<i32>(1), k.p::<i32>(2));
+    let (b, ids, cnt, tmp) = (k.p::<u8>(0) as *const u8, k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3));
     let (len, max, write, sort) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2) != 0, k.i(3) != 0);
     let (mut pos, mut prev, mut n, mut asc, mut last) = (0usize, 0i64, 0usize, true, -1i64);
     'all: while pos < len && n < max {
@@ -181,7 +237,7 @@ pub unsafe extern "C" fn k_ids_decode(a: u32, _chunk: i32) {
         prev = id + run;
     }
     if write && sort && !asc {
-        core::slice::from_raw_parts_mut(ids, n).sort_unstable();
+        radix_sort_i32(ids, tmp, n);
         asc = true;
     }
     s(cnt, 4, n as i32); s(cnt, 5, asc as i32);

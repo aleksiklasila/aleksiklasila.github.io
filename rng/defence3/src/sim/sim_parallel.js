@@ -31,9 +31,9 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 13;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 14;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
-// (Control words: SIM_PAR_BG_BASE + lanes * 8, rounded up.)
+// (Control words: SIM_PAR_BG_BASE + lanes * 8 (8..119), then ERR 120, CAP 121, RUN 122.., FIRST 136, BG_ERR 137..: rounded up.)
 const SIM_PAR_CTL_WORDS = 160;
 // Bulk lanes (every live field remade over a new navigation build,
 // SIM_LANE_NAVX): at most SIM_PAR_BG_CAP helpers inside their chunks at once
@@ -41,7 +41,7 @@ const SIM_PAR_CTL_WORDS = 160;
 // tick's foreground kernels always find helpers (all of them deep in a
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
-const SIM_PAR_BG_CAP = 113, SIM_PAR_BG_RUN = 114;
+const SIM_PAR_BG_CAP = 121, SIM_PAR_BG_RUN = 122;
 // A bulk lane behind its deadline (a navigation rebuild's window ending with
 // its fields not made: flownav.js navTick): its chunks taken right after the
 // tick's own lanes (the first SIM_PAR_BG_RUSH_AT of SIM_PAR_BG_ORDER: tick,
@@ -50,12 +50,12 @@ const SIM_PAR_BG_CAP = 113, SIM_PAR_BG_RUN = 114;
 // once (simParallelBulkRush); -1 none. (The install made what was left on
 // the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
 // the helpers busy with the tiers before it.)
-// (6: SIM_PAR_BG_ORDER's first six, the search tier's lane among them.)
-const SIM_PAR_BG_FIRST = 128, SIM_PAR_BG_RUSH_AT = 6;
+// (7: SIM_PAR_BG_ORDER's first seven, the search tier's lane among them.)
+const SIM_PAR_BG_FIRST = 136, SIM_PAR_BG_RUSH_AT = 7;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait. (Foreground jobs
 // only: background lanes have their own flags, SIM_PAR_BG_ERR.)
-const SIM_PAR_ERR = 112;
+const SIM_PAR_ERR = 120;
 // A background lane's chunk threw, on any thread (per lane, at
 // SIM_PAR_BG_ERR + lane): the chunk counts as done, the chain's remaining
 // chunks and stages are skipped (counted done, not run: no stage consumes a
@@ -66,7 +66,7 @@ const SIM_PAR_ERR = 112;
 // other chunks running on helpers after the job was already unlisted; a
 // helper's failure shared the foreground flag, so a foreground job's check
 // could take it and the background wait then reported success.
-const SIM_PAR_BG_ERR = 129;
+const SIM_PAR_BG_ERR = 137;
 const _simBgErrObj = new Array(SIM_PAR_BG_LANES).fill(null);
 function _simParCheckErr(ctl) {
     if (Atomics.load(ctl, SIM_PAR_ERR) !== 0) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw new Error('a simulation helper kernel failed (see the helper log)'); }
@@ -92,8 +92,11 @@ function _simParCheckErr(ctl) {
 // _simHeapGrowAhead), never waited for.
 const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
 const SIM_LANE_TRAFFIC = 12;
+// SIM_LANE_FLOW: the flow looks the movement left approximate, made exact
+// between the movement and the tick's end (unit.js flowLooksPost / Commit).
+const SIM_LANE_FLOW = 13;
 // (T1 right after the index: the worker search tier's scan, worker.js WS_LANE, is waited for one tick after its post.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_FLOW, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -467,6 +470,26 @@ let _simNavArraysR = null, _simNavArraysBinds = -1;
 // path's; their lengths in _simMoveCounts[2], [3]). (A pass visits its own
 // units: a mode per slot tested in each mispredicted on mixed chunks; in six
 // passes, ~2x the kernel.)
+// The flow looks off the turns (mv.rs mv_flow_pending / _exact / _commit;
+// unit.js flowLooksPost): the movement kernel's arguments, words 480-482 the
+// keys listed, their answers, the counts per job; slots by job.
+const SIM_KERNEL_FLOW_PENDING = 151, SIM_KERNEL_FLOW_EXACT = 152, SIM_KERNEL_FLOW_COMMIT = 153;
+function _simFlowArgs(R, P) {
+    if (!_simMoveWasm(R, P)) return false;
+    const I = _simWasmArgI, a = R['fl.pend'], b = R['fl.res'], c = R['fl.cnt'], ids = R['um.ids'], slots = R['um.slots'];
+    if (!a || !b || !c) return false;
+    I[480] = _simWEnc(a.byteOffset); I[481] = _simWEnc(b.byteOffset); I[482] = _simWEnc(c.byteOffset);
+    // (The commit's id index: unit.js flowLooksCommit binds it.)
+    I[483] = ids ? _simWEnc(ids.byteOffset) : 0; I[484] = slots ? _simWEnc(slots.byteOffset) : 0;
+    return true;
+}
+SIM_KERNELS[SIM_KERNEL_FLOW_PENDING] = function (R, P, chunk) {
+    const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]);
+    if (_simFlowArgs(R, P)) { _simWasmX.mv_flow_pending(_simWasmArgsW, s0, end, chunk); return; }
+    _simNoWasm('FLOW_PENDING');
+};
+SIM_KERNELS[SIM_KERNEL_FLOW_EXACT] = function (R, P, chunk) { if (_simFlowArgs(R, P)) { _simWasmX.mv_flow_exact(_simWasmArgsW, chunk); return; } _simNoWasm('FLOW_EXACT'); };
+SIM_KERNELS[SIM_KERNEL_FLOW_COMMIT] = function (R, P, chunk) { if (_simFlowArgs(R, P)) { _simWasmX.mv_flow_commit(_simWasmArgsW, chunk); return; } _simNoWasm('FLOW_COMMIT'); };
 SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
     const s0 = chunk * P[1], end = Math.min(P[0], s0 + P[1]), n = Math.max(0, end - s0);
     if (_simMoveWasm(R, P)) { _simWasmX.mv_move(_simWasmArgsW, s0, end, chunk); return; }
@@ -1120,6 +1143,8 @@ const _simMoveW = _simWK([..._SIM_MOVE_WNAMES, ...Array.from({ length: _SIM_MOVE
 // contact response's, mv.rs W_SIV (300..427: mv_move's step scratch).)
 const _SIM_MOVE_WATL = 430, _SIM_MOVE_WSEP = 448, _SIM_MOVE_NSEP = 6;
 let _simMoveWFill = -1, _simMoveWArgs = 0;
+// (The queued move orders' pickup, words 485..: mv.rs ord_pickup, main.js _runQueuedOrders.)
+const _SIM_MOVE_ORD = ['ord.tab', 'ord.tcnt', 'unit.ordSq', 'unit.mvPP', 'unit.agWait', 'unit.ptSt', 'unit.ptGx', 'unit.ptGy', 'unit.hObj', 'ord.left', 'ord.leftr', 'ord.lcnt', 'ord.hdr'];
 // Fills the argument block for a movement kernel's Rust twin; false: the
 // JavaScript kernel runs (no wasm, or an array not in the heap).
 let _simMoveWTail = -1, _simMoveWTailCtl = null, _simMoveWTailArgs = null;
@@ -1156,6 +1181,8 @@ function _simMoveWasm(R, P) {
     for(let i=0;i<_SIM_MOVE_CTLX.length;i++){const a=R[_SIM_MOVE_CTLX[i]];_simWasmArgI[463+i]=_simUnitCtlOn&&a&&simHeapHas(a)?_simWEnc(a.byteOffset):0;}
     // (Words 459-460: the occupancy's footprint records, whose byte 3 holds the marks for its second stage, and
     // their positions, mv.rs mark_need; 0 without the occupancy.)
+    // (Words 485-497: the queued move orders' pickup, mv.rs ord_pickup.)
+    for(let i=0;i<_SIM_MOVE_ORD.length;i++){const x=R[_SIM_MOVE_ORD[i]];_simWasmArgI[485+i]=x&&simHeapHas(x)?_simWEnc(x.byteOffset):0;}
     const occRec=R['occ.rec'];
     if(occRec&&simHeapHas(occRec)){
         _simWasmArgI[459]=_simWEnc(occRec.byteOffset);_simWasmArgI[460]=_simWEnc(occRec.byteOffset);
@@ -1338,7 +1365,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
 // or long jobs, whose one chunk could keep the waiter well past its own
 // job's end). True when it ran one. (Their results are taken at their own
 // waits, whoever ran them.)
-const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
+const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_FLOW, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
 // (false: waits only wait, an A/B switch.)
 let SIM_BG_HELP = true;
 function _simBgHelp(ctl, except) {
@@ -1647,10 +1674,6 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCom
 // P: [0] slots, [1] per job.
 const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCombatCommitW, P, chunk, 'k_combat_commit', 'COMBAT_COMMIT'); };
-// A move or attack-move order's units into their columns (main.js
-// _issueGroupMoveOrder; k.rs k_order_move): those it cannot take (workers,
-// held, a pending way...) listed for the JavaScript. P: see k_order_move.
-const SIM_KERNEL_ORDER_MOVE = 101;
 // Towers in the acquisition tier (tower.rs k_tower_acq_snap: the rows at
 // the post, a job over the rows; k_tower_acq: a stage of the tier's chain
 // after the area answers): unit.js _acqPost, tower.js towerAcqPost.
@@ -1685,21 +1708,18 @@ const _simTowerPrepareW=_simWK(['tac.input','st.code','st.own','st.uc','st.val',
     'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','?mv.areaBoxOk',
     'st.rrow','tc.x','tc.y','tc.range','tc.cd','tc.dmg','tc.blast','tc.radius','tc.lvl','tac.pref','tac.ext']);
 SIM_KERNELS[SIM_KERNEL_TOWER_PREPARE]=function(R,P,chunk){_simRust(_simTowerPrepareW,P,chunk,'k_tower_prepare','TOWER_PREPARE');};
-const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPF', 'unit.x', 'unit.y',
-    'unit.sepLayer', 'unit.tuS', 'unit.tuId', 'unit.tbT', 'unit.acqB', 'unit.fatF', 'unit.fLsX', 'unit.fLsY', 'unit.commandState', 'unit.mvOn', 'unit.amGx', 'unit.amGy',
-    'unit.mvTgX', 'unit.mvTgY', 'unit.rkF', 'unit.rtEnd', 'unit.nvProf', 'unit.pathIndex', 'unit.nvPK', 'unit.mvCD', 'unit.mvNavLD', 'unit.mvPath']);
-SIM_KERNELS[SIM_KERNEL_ORDER_MOVE] = function (R, P, chunk) { _simRust(_simOrderMoveW, P, chunk, 'k_order_move', 'ORDER_MOVE'); };
+// (The order move kernel: gone, the movement kernel picks the orders up, mv.rs ord_pickup.)
 // The order queue's admission and take (main.js _queueGroupMoveOrder,
-// _orderTake; wasm/src/ord.rs): one job, on the simulation thread.
+// _orderTake; wasm/src/ord.rs): jobs of ORDER_KERNEL_PER_JOB, their results per job in q.jc.
 const SIM_KERNEL_ORDER_ADMIT = 115, SIM_KERNEL_ORDER_TAKE = 116;
-const _simOrderAdmitW = _simWK(['q.ids', 'um.ids', 'um.slots', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.ordSq', 'q.out', 'q.out2', 'q.loose', 'q.eseq', 'q.edl', 'q.eds', 'q.cnt']);
-const _simOrderTakeW = _simWK(['ord.ring', 'unit.ordSq', 'unit.isWk', 'unit.holdF', 'unit.id', 'ord.slots', 'q.out2', 'q.cnt']);
+const _simOrderAdmitW = _simWK(['q.ids', 'um.ids', 'um.slots', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.ordSq', 'q.out', 'q.out2', 'q.loose', 'q.eseq', 'q.edl', 'q.eds', 'q.cnt', 'q.jc', 'unit.holdF', 'unit.sepLayer']);
+const _simOrderTakeW = _simWK(['ord.ring', 'unit.ordSq', 'unit.id', 'q.out2', 'q.jc']);
 SIM_KERNELS[SIM_KERNEL_ORDER_ADMIT] = function (R, P, chunk) { _simRust(_simOrderAdmitW, P, chunk, 'k_order_admit', 'ORDER_ADMIT'); };
 SIM_KERNELS[SIM_KERNEL_ORDER_TAKE] = function (R, P, chunk) { _simRust(_simOrderTakeW, P, chunk, 'k_order_take', 'ORDER_TAKE'); };
 // An order's ids or a rally's tile keys from their wire form (main.js
 // _idsDecode; ord.rs k_ids_decode): one job, on the simulation thread.
 const SIM_KERNEL_IDS_DECODE = 117;
-const _simIdsDecodeW = _simWK(['q.bytes', 'q.ids', 'q.cnt']);
+const _simIdsDecodeW = _simWK(['q.bytes', 'q.ids', 'q.cnt', 'q.keysOut']);
 SIM_KERNELS[SIM_KERNEL_IDS_DECODE] = function (R, P, chunk) { _simRust(_simIdsDecodeW, P, chunk, 'k_ids_decode', 'IDS_DECODE'); };
 // A Rust kernel on this thread over heap arrays given directly (their
 // addresses its arguments, in order; null: 0), P its parameters: for arrays
@@ -1875,9 +1895,7 @@ SIM_KERNELS[SIM_KERNEL_SLAB_SCORE] = function (R, P, chunk) { _simRust(_simSlabS
 const SIM_KERNEL_ACQ_REMAP = 144;
 const _simAcqRemapW = _simWK(['rl.fwd', 'acq.bt', 'acq.bm', 'rl.fst']);
 SIM_KERNELS[SIM_KERNEL_ACQ_REMAP] = function (R, P, chunk) { _simRust(_simAcqRemapW, P, chunk, 'k_acq_remap', 'ACQ_REMAP'); };
-const SIM_KERNEL_ORDER_PRE = 147;
-const _simOrderPreW = _simWK(['ord.slots', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPP', 'unit.agWait', 'unit.sepLayer', 'ord.pst', 'unit.ptSt', 'unit.ptGx', 'unit.ptGy', 'unit.hObj', 'unit.mvPF']);
-SIM_KERNELS[SIM_KERNEL_ORDER_PRE] = function (R, P, chunk) { _simRust(_simOrderPreW, P, chunk, 'k_order_pre', 'ORDER_PRE'); };
+// (The order pre-pass: in k_order_move now, k.rs.)
 const SIM_KERNEL_META_UNITS = 146;
 const _simMetaUnitsW = _simWK(['pm.id', 'pm.flags', 'pm.orderTick', 'pm.maxEnergy', 'pm.cargo', 'pm.tx', 'pm.ty', 'pm.type', 'pm.wtype', 'pm.wstate', 'pm.style', 'pm.watchedBy', 'pm.vision',
     'unit.live', 'unit.dead', 'unit.id', 'unit.upT', 'unit.wkS', 'unit.wTeam', 'unit.statRow', '?eff.rVsA', 'unit.maxE', 'unit.energy', 'unit.wkIx', 'unit.wmCarry', 'unit.wmBlk', 'unit.jFly', 'unit.holdF',

@@ -878,57 +878,11 @@ pub unsafe extern "C" fn k_meta_units(a: u32, chunk: i32) {
     }
 }
 
-/// SIM_KERNEL_ORDER_PRE (main.js _orderMoveSlots): a move order's units
-/// (ord.slots[0..P[0]]), per job of P[1]: those of player P[2], alive, not
-/// workers: their group-path wait cleared (agWait), counted by layer (ground,
-/// flying: sepLayer 1) with the first of each by its place in the list, and
-/// a pending way or fallback path let go (mvPP, not held, indexed this
-/// epoch P[3]): target null, flag false (ptSt 5), their digest terms moved
-/// (hObj; keys P[4], P[5]: sim_unit_state.js simPendingClear).
-/// Arrays: [0] ord.slots, [1] unit.owner, [2] unit.dead, [3] unit.isWk, [4]
-/// unit.holdF, [5] unit.spEpoch, [6] unit.mvPP, [7] unit.agWait, [8]
-/// unit.sepLayer, [9] per job: first ground, first flying (places, -1 none),
-/// ground count, flying count, 0, [10] unit.ptSt, [11] unit.ptGx, [12]
-/// unit.ptGy, [13] unit.hObj, [14] unit.mvPF.
-#[no_mangle]
-pub unsafe extern "C" fn k_order_pre(a: u32, chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (sl, own, dead, wk, hold, ep, pp, wait, lay, st) = (k.p::<i32>(0), k.p::<i8>(1), k.p::<u8>(2), k.p::<u8>(3), k.p::<u8>(4), k.p::<i32>(5),
-        k.p::<u8>(6), k.p::<i32>(7), k.p::<u8>(8), k.p::<i32>(9));
-    let (pst, pgx, pgy, hob, pf) = (k.p::<u8>(10), k.p::<i16>(11), k.p::<i16>(12), k.p::<i32>(13), k.p::<u8>(14));
-    if sl.is_null() || st.is_null() || pst.is_null() || hob.is_null() { return; }
-    let (i0, i1) = super::k::job_range(chunk, k.i(1), k.i(0));
-    let (player, epoch, kp, kf) = (k.i(2), k.i(3), k.i(4), k.i(5));
-    let (mut f0, mut f1, mut c0, mut c1) = (-1i32, -1i32, 0i32, 0i32);
-    for i in i0..i1 {
-        let s = g(sl, i);
-        if s < 0 { continue; }
-        let s = s as usize;
-        if g(own, s) as i32 != player || g(dead, s) == 1 || g(wk, s) != 0 { continue; }
-        if g(hold, s) == 0 && g(ep, s) == epoch && g(pp, s) != 0 {
-            let t = g(pst, s) as i32;
-            let mut h = g(hob, s);
-            if t & 3 != 1 {
-                let e = match t & 3 { 2 => (-16i32).wrapping_sub((g(pgy, s) as i32).wrapping_mul(65536).wrapping_add(g(pgx, s) as i32)), 1 => H_NULL, _ => H_UNDEF };
-                h = h.wrapping_add(hterm(kp, H_NULL)).wrapping_sub(hterm(kp, e));
-            }
-            if (t >> 2) & 3 != 1 {
-                let e = match (t >> 2) & 3 { 2 => 0x3bd, 1 => 0x2bd, _ => H_UNDEF };
-                h = h.wrapping_add(hterm(kf, 0x2bd)).wrapping_sub(hterm(kf, e));
-            }
-            *hob.add(s) = h; *pst.add(s) = 5; *pp.add(s) = 0; *pf.add(s) = 0;
-        }
-        s_(wait, s, 0);
-        if g(lay, s) == 1 { c1 += 1; if f1 < 0 { f1 = i as i32; } } else { c0 += 1; if f0 < 0 { f0 = i as i32; } }
-    }
-    let b = chunk.max(0) as usize * 5;
-    s_(st, b, f0); s_(st, b + 1, f1); s_(st, b + 2, c0); s_(st, b + 3, c1); s_(st, b + 4, 0);
-}
 // (sim_unit_state.js _simHTermE and its words for null and unset.)
-const H_NULL: i32 = -2147483647;
-const H_UNDEF: i32 = -2147483648;
+pub(crate) const H_NULL: i32 = -2147483647;
+pub(crate) const H_UNDEF: i32 = -2147483648;
 #[inline(always)]
-fn hterm(key: i32, e: i32) -> i32 {
+pub(crate) fn hterm(key: i32, e: i32) -> i32 {
     let t = (key ^ e).wrapping_mul(16777619u32.wrapping_mul(2654435761u32) as i32);
     (t ^ ((t as u32) >> 15) as i32).wrapping_mul(0x2c1b3c6d)
 }

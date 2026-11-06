@@ -212,7 +212,7 @@ function _simHTermE(key, e) { const t = Math.imul(key ^ e, SIM_H_M); return Math
 // The pending way's columns (ptSt ...: SIM_MOVE_COLUMNS) and their digest
 // terms, the words _simHEnc gave the objects they replace: the target its
 // tile (-16 - (gy * 65536 + gx)), null or unset; the flag a boolean or unset
-// (wasm/src/nfs.rs k_order_pre clears them the same way).
+// (wasm/src/k.rs k_order_move clears them the same way).
 const SIM_PPT_SRC = ['fallback', 'nav_unreachable', 'player_commands', 'spawner_rally', 'ai_combat', 'worker_ai', 'scout_ai'];
 let _simPptK = 0, _simPfaK = 0;
 function _simPptKeys() { if (!_simPptK) { _simPptK = _simHKey('_pendingPathTarget'); _simPfaK = _simHKey('pathIsFallbackAstar'); } }
