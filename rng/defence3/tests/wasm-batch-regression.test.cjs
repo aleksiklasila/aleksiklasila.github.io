@@ -1,5 +1,5 @@
 'use strict';
-// Differential checks for the grouped native tower/resource changes. Run
+// Differential checks for the grouped native resource changes. Run
 // after timing acceptance; these are not performance measurements.
 const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const helpers=Number(process.argv.find(a=>a.startsWith('--helpers='))?.slice(10)||0);
@@ -16,16 +16,7 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
   }
  }
  for(let j=0;j<1000;j++){const u=new Unit('norm',rnd(2),(4+rnd(28))*TILE+16,(4+rnd(28))*TILE+16);units.push(u);updateUnitSpatial(u);}
- spatialIndexRebuild();_simMoveStructs();simParallelBind('mv.stblk',_simMoveStructBlocks);
- const n=1031,boxes=_towerAcqArray('boxes',Int32Array,n*4),own=_towerAcqArray('owner',Int32Array,n),live=_towerAcqArray('live',Uint32Array,n),expected=[];
- for(let q=0;q<n;q++){
-  const x=rnd(GRID_W),y=rnd(GRID_H),x1=Math.min(GRID_W-1,x+rnd(25)),y1=Math.min(GRID_H-1,y+rnd(25)),o=q%17===0?-1:rnd(2),empty=q%19===0;
-  boxes.set([x,y,empty?-1:x1,y1],q*4);own[q]=o;
-  expected[q]=!empty&&(_regionMayHaveEnemyUnits(o,x,y,x1,y1)||hasHostileStructureInTileRect(o,x,y,x1,y1));
- }
- const P=_simParams;P[0]=n;P[1]=32;P[2]=spatialUnitsComplexPlayerCount;P[3]=spatialBlockCols;P[4]=GRID_W;P[5]=SPATIAL_BLOCK_SIZE;
- simParallelRun(SIM_KERNEL_TOWER_COARSE,Math.ceil(n/32));
- for(let q=0;q<n;q++)if(!!live[q]!==expected[q])throw Error('Tower broad-phase differs at '+q);
+ // (The towers' broad phase it checked is gone: towers take the acquisition tier's answers, tower.js towerAcqPost.)
  // Compare public resource mutations with/without batching, including
  // intermediate flushes, explicit writes, fractional debt and extra keys.
  const initial=players.map(p=>({energy:-3.25,astar:17.125,shrine:2,resourceMaxValues:{energy:9,astar:20,shrine:3},_resourceFixedValues:{energy:-3328,astar:17536,shrine:2048}}));
@@ -44,8 +35,8 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
   return JSON.stringify({returns,players:players.map(p=>({energy:p.energy,astar:p.astar,shrine:p.shrine,custom:p.custom,max:p.resourceMaxValues,fixed:p._resourceFixedValues}))});
  }
  const plain=run(false),batch=run(true);if(plain!==batch)throw Error('Batched resource mutations differ from immediate public mutations');
- return{coarseQueries:n,resourceMutations:ops.length,wasm64:SIM_WASM64};
+ return{resourceMutations:ops.length,wasm64:SIM_WASM64};
 })())`));
-assert.equal(result.coarseQueries,1031);assert.equal(result.resourceMutations,6400);
+assert.equal(result.resourceMutations,6400);
 assert.deepEqual(i.errors.map(String),[]);
-console.log('PASS: native tower broad phase and batched resource boundary checks',JSON.stringify({helpers,...result}));process.exit(0);
+console.log('PASS: batched resource boundary checks',JSON.stringify({helpers,...result}));process.exit(0);

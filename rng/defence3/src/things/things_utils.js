@@ -40,13 +40,17 @@ function _runAdjacencyRecalculation() {
     _adjacencyLanePost(true);
     _adjacencyLaneCommit();
 }
-const ADJACENCY_BATCH_TICKS = 8;
+// (The commit at base tick % 8 === ADJACENCY_BATCH_PHASE, the post half a
+// period later: each half on a tier tick of its own, every 4 ticks one of
+// them (data_static.js "The tier steps' ticks").)
+const ADJACENCY_BATCH_TICKS = 8, ADJACENCY_BATCH_PHASE = 2;
 
 // ---- Adjacency on a helper lane (BRAIN_OFF_MAIN_THREAD_PLAN.md) ----
 // The main thread keeps a signature grid current (O(1) per dirty tile at
 // the post), posts the flood (SIM_KERNEL_ADJ_FLOOD) every
-// ADJACENCY_BATCH_TICKS ticks at phase 3 and takes the last post's result
-// then: all its groups' members applied to their rows by one parallel
+// ADJACENCY_BATCH_TICKS ticks at phase ADJACENCY_BATCH_PHASE + 4 and takes
+// the last post's result at phase ADJACENCY_BATCH_PHASE (four ticks later):
+// all its groups' members applied to their rows by one parallel
 // kernel (SIM_KERNEL_ADJ_APPLY, ord.rs k_adj_apply: levels, upgrades,
 // stacking, energy, the stat entries and descriptors), the JavaScript only
 // its events (work sites, traps, vision registrations, lasers); areas'
@@ -219,11 +223,12 @@ function _adjApplyRun(no, passive) {
         if ((flags & 32) && obj.laserCheck) obj.laserCheck();
     }
 }
-// On the batch tick: the last post's commit, then the next post.
+// The last post's commit on the batch tick, the next post half a period
+// later (a step of more base ticks covering both: the commit first).
 function adjacencyLaneStep() {
-    if (!simStepCrosses(-3, ADJACENCY_BATCH_TICKS)) return;
-    _adjacencyLaneCommit();
-    _adjacencyLanePost(false);
+    const T = ADJACENCY_BATCH_TICKS;
+    if (simStepCrosses(-ADJACENCY_BATCH_PHASE, T)) _adjacencyLaneCommit();
+    if (simStepCrosses(-(ADJACENCY_BATCH_PHASE + T / 2), T)) { if (_adjL.posted) _adjacencyLaneCommit(); _adjacencyLanePost(false); }
 }
 // The last post's result (the flood's members applied, the areas' flags).
 function _adjacencyLaneCommit() {
@@ -1649,7 +1654,11 @@ function structCompleteHooks(item) {
     if (typeof simTrapDirty === 'function' && Number.isFinite(item.gx)) simTrapDirty(item.gx, item.gy);
     if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
     if (typeof spawnerProductionChanged === 'function' && hasSpawnQueue(item)) spawnerProductionChanged(item);
-    if (typeof Tower === 'function' && item instanceof Tower) item.laserCheck();
+    if (typeof Tower === 'function' && item instanceof Tower) {
+        item.laserCheck();
+        // (Built: the due kernel looks at it again; the worker kernel wrote st.uc itself, wai.rs p_complete.)
+        if (typeof towerDueReset === 'function') towerDueReset(item._sr);
+    }
 }
 
 function isAutoUpgradeEnabled(item) {

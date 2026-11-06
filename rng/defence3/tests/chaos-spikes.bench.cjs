@@ -138,6 +138,8 @@ inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
 if(process.argv.includes('--kernels'))inst.eval(`{
  const run=simParallelRun,wait=simParallelBackgroundWait,collect=_spatialIndexCollect;
  simParallelRun=function(kind,n){const key='kernel:'+kind+(kind===SIM_KERNEL_MOVE_OCCUPANCY?':'+_simParams[4]:'');const a=__scratch.now();try{return run.apply(this,arguments);}finally{const ms=__scratch.now()-a;__scratch.phases[key]=(__scratch.phases[key]||0)+ms;if(${timeline})__scratch.intervals.push([key,a,ms]);}};
+ // (--rust-direct: the serial Rust calls on this thread too, as rust:<name>.)
+ if(${process.argv.includes('--rust-direct')}){const rd=simRustDirect;simRustDirect=function(fn){const a=__scratch.now();try{return rd.apply(this,arguments);}finally{const key='rust:'+fn;__scratch.phases[key]=(__scratch.phases[key]||0)+__scratch.now()-a;}};}
  simParallelBackgroundWait=function(lane=1){const a=__scratch.now();try{return wait.apply(this,arguments);}finally{const key='wait:'+lane;__scratch.phases[key]=(__scratch.phases[key]||0)+__scratch.now()-a;}};
  _spatialIndexCollect=function(){const j=_sxPre;const r=collect.apply(this,arguments);if(j){const d=_sxPar&&_sxPar.ixd;__scratch.index={delta:j.delta,inserts:j.delta&&d?d.plan[j.dj]:null,bad:j.delta&&d?d.plan[j.dj+3]:null};}return r;};
 }

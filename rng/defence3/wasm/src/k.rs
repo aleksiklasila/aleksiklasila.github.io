@@ -2123,6 +2123,13 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         }
         q += 1;
     }
+    // The towers' look at a unit (tower.rs k_tower_acq), copied: its type
+    // [35] -> [45], its status record [37] -> [46], its watch team [44] ->
+    // [47] (the records themselves: unit.js _acqPost copies them).
+    let (upt, stix, wteam, oup, ost, owt) = (k.p::<i16>(35), k.p::<i32>(37), k.p::<i8>(44), k.p::<i16>(45), k.p::<i32>(46), k.p::<i8>(47));
+    if !upt.is_null() && !oup.is_null() { core::ptr::copy_nonoverlapping(upt.add(s0), oup.add(s0), n); }
+    if !stix.is_null() && !ost.is_null() { core::ptr::copy_nonoverlapping(stix.add(s0), ost.add(s0), n); }
+    if !wteam.is_null() && !owt.is_null() { core::ptr::copy_nonoverlapping(wteam.add(s0), owt.add(s0), n); }
     // An attack order's target as the brain's instruction target (cm 32, a
     // structure's 48): the brain says only whether it is in range.
     if !tus.is_null() && !tuid.is_null() && !tbt.is_null() {

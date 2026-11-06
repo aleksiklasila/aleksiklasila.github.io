@@ -698,6 +698,7 @@ function _unitGoneRun(G, list, n, S) {
     P[20] = GRID_W; P[21] = TILE; P[22] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[23] = SNAP_REGION_TILES; P[24] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
     P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     try { simRustDirect('k_unit_gone', arrays, P); } finally { arrays.fill(null); }
     const C = G.cnt;
     for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
@@ -833,6 +834,8 @@ function _gameTickBody() {
     // The unit index for this tick's queries and collision pass, from the
     // state as the tick begins (the same on a peer that just restored it).
     spatialIndexRebuild();
+    // The tick's hostile tables, on the helpers from here (tower.js tickStartChainPost).
+    if (typeof tickStartChainPost === 'function') tickStartChainPost();
     // Queued slices of big orders first (this tick's budget is shared with
     // the orders that came in for it), then a fresh budget for the next.
     runQueuedOrders();
@@ -966,7 +969,7 @@ function _gameTickBody() {
     // dirtied again and again is flooded once per batch.)
     if (ADJACENCY_LANE) adjacencyLaneStep();
     if (_winCheckDue) { _winCheckDue = false; checkWinCondition(); }
-    else if (_adjacencyNeedsRecalc && simStepCrosses(-3, ADJACENCY_BATCH_TICKS)) _runAdjacencyRecalculation();
+    else if (!ADJACENCY_LANE && _adjacencyNeedsRecalc && simStepCrosses(-ADJACENCY_BATCH_PHASE, ADJACENCY_BATCH_TICKS)) _runAdjacencyRecalculation();
 
     // Upkeep, once a second: worked out now (_upKeepSecond; the info panel
     // shows it), deducted.
@@ -4673,6 +4676,7 @@ function _orderTake(e, need) {
     const C = Q.cnt, passed = C[0], nn = C[1], nw = C[2], sum = C[3];
     e.next += passed; e.live -= nn + nw; e.sum = (e.sum - sum) | 0;
     simOrderStats.units += nn + nw;
+    if (nn + nw) orderAppliedTick = gameTime;
     if (!(nn + nw)) return;
     const S = _simUnitState, targetGx = Math.floor(e.targetX / TILE), targetGy = Math.floor(e.targetY / TILE);
     // (The workers first: the order move kernel lists its leftovers in
@@ -4687,6 +4691,9 @@ function _orderTake(e, need) {
 // (Diagnostics: the time and units of the queued orders applied, the
 // actions' time; reset by whoever reads them.)
 const simOrderStats = globalThis.simOrderStats = { ms: 0, units: 0, calls: 0, actionsMs: 0 };
+// (The last tick that applied queued orders' units: peer-local upkeep (the slot
+// relayout) stays off it, sim_unit_state.js simUnitStateRelayoutStep.)
+let orderAppliedTick = -1;
 function runQueuedOrders() {
     const t0 = performance.now();
     try { _runQueuedOrders(); } finally { simOrderStats.ms += performance.now() - t0; simOrderStats.calls++; }
@@ -5423,35 +5430,21 @@ function processAction(a, playerId) {
                 kind = 0;
             }
             const coords = a.towerCoords, n = Array.isArray(coords) ? coords.length : 0;
-            // (A tower by the tile table (its class, owner and row): its
-            // target code written into its row's columns and the preferred
-            // bit of its brain word (data_state.js stationaryBrainChanged's,
-            // the only part the target changes), no tower object read.
-            // A structure order still asks the tower for its live lock.)
+            // Every selected tower of the player takes the target (a unit by
+            // id, a structure by tile, or none): its row's columns and the
+            // preferred bit of its brain word, by the tile table (its class,
+            // owner and row), in the kernel (wasm/src/tower.rs
+            // k_tower_target); no tower object read. A target gone or out of
+            // sight later is cleared by the towers' turns (k_tower_fire).
             structRallyClasses();
             const ST = _ST, TT = _sTables.get(Tower), tct = _stAllIx.get(Tower) || 0;
-            const fast = kind <= 1 && !!(TT && tct && ST.ctab && ST.brain && _simWasmX && _simWasmX.k_tower_target && simHeapHas(TT.c__ptK) && simHeapHas(ST.brain));
-            // (The tiles packed here, the towers written in the kernel, wasm/src/tower.rs k_tower_target.)
+            if (!n || !TT || !tct || !ST.ctab || !simHeapHas(TT.c__ptK) || !simHeapHas(ST.brain)) return;
             const pre = a[_actionPrepared], ready = pre && pre.tiles ? pre.tiles : null;
-            const tiles = fast ? _towerTargetTiles(n) : null;
-            if (fast) tiles.set(ready && ready.length === n ? ready : _actionTowerTiles(coords));
-            for (let i = 0; i < n && !fast; i++) {
-                const tc = coords[i];
-                // Immediate packets are read-only. Validate each pair here.
-                const gx = immediate ? tc && _actionInt(tc.gx) : tc.gx;
-                const gy = immediate ? tc && _actionInt(tc.gy) : tc.gy;
-                if (immediate && (gx === null || gy === null)) continue;
-                const t = getTowerAtTile(gx, gy);
-                if (!t || t.owner !== playerId) continue;
-                // A structure order has historically replaced a live lock.
-                if (kind > 1 && !t.preferredTarget) towerSetPreferredTargetCode(t, 0, -1);
-                else towerSetPreferredTargetCode(t, kind, value);
-            }
-            if (fast) {
-                const P = _towerTargetP;
-                P[0] = Math.min(n, tiles.length); P[1] = tct; P[2] = _stOwnerWord(playerId); P[3] = kind; P[4] = value;
-                simRustDirect('k_tower_target', [tiles, ST.ctab, ST.rrow, ST.own, ST.brain, TT.c__ptK, TT.c__ptV], P);
-            }
+            const tiles = _towerTargetTiles(n);
+            tiles.set(ready && ready.length === n ? ready : _actionTowerTiles(coords));
+            const P = _towerTargetP;
+            P[0] = Math.min(n, tiles.length); P[1] = tct; P[2] = _stOwnerWord(playerId); P[3] = kind; P[4] = value;
+            simRustDirect('k_tower_target', [tiles, ST.ctab, ST.rrow, ST.own, ST.brain, TT.c__ptK, TT.c__ptV], P);
         }
     }
 }

@@ -48,6 +48,8 @@ const SPATIAL_BLOCK_SIZE = 8;
 let spatialBlockCols = 0, spatialBlockRows = 0, spatialBlockCounts = new Int32Array(0);
 
 function _adjustSpatialBlockCount(chunkKey, owner, delta) {
+    // (The tick-start chain reads the counts: done before they change.)
+    if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettle();
     let cx = chunkKey % CHUNKS_W, cy = (chunkKey - cx) / CHUNKS_W;
     let index = (Math.floor(cy / SPATIAL_BLOCK_SIZE) * spatialBlockCols + Math.floor(cx / SPATIAL_BLOCK_SIZE)) * spatialUnitsComplexPlayerCount + owner;
     if (index >= 0 && index < spatialBlockCounts.length) spatialBlockCounts[index] += delta;
@@ -186,6 +188,7 @@ function spatialCountsDeferEnd(keepKernel = false) {
             P[5] = CHUNKS_W; P[6] = spatialBlockCols; P[7] = SPATIAL_BLOCK_SIZE;
             P[8] = spatialUnitsComplexUnitTypeCount; P[9] = spatialTypeBlocksW; P[10] = SPATIAL_TYPE_BLOCK;
             simParallelBind('spatial.types', spatialTypeCounts); P[11] = _simParReg['ix.bcount'] ? _simParReg['ix.bcount'].length : 0;
+            if (typeof _tickStartChainPosted === 'function' && _tickStartChainPosted()) tickStartChainSettle();
             simParallelRun(SIM_KERNEL_SP_COUNTS, Math.ceil(n / 4096));
         }
     }
@@ -273,7 +276,7 @@ function spatialIndexEnsure() { if (_sxPre) _spatialIndexCollect(); if (_sxDirty
 // Before anything changes units after a tick (a tick's actions, its start):
 // the prebuild chain's stages reading live state are done.
 function spatialIndexPrebuildSettle() { if (_sxPre) _spatialIndexCollect(); }
-function spatialIndexInvalidate() { if (_sxPre) _spatialIndexCollect(); _sxDirty = true; _spatialIndexChainDrop(); }
+function spatialIndexInvalidate() { if (typeof tickStartChainSettle === 'function') tickStartChainSettle(); if (_sxPre) _spatialIndexCollect(); _sxDirty = true; _spatialIndexChainDrop(); }
 // The prebuild chain's separation still running reads the index's arrays:
 // before they are rewritten (or the world changes), waited for and dropped
 // (the tick then separates itself, from the same state: the same result).
@@ -486,6 +489,8 @@ let _sxPar = null;
 // both builds give the same queries).
 let SPATIAL_PARALLEL_MIN_UNITS = 0;
 function spatialIndexRebuild() {
+    // (The towers' table of units reads the index: done before it is made again.)
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     // (Chunk moves a tick left pending, a tick that ended early: counted.)
     if (_spatialKernelMoves) spatialCountsDeferEnd();
     // (A posted acquisition scan reads the index in place.)

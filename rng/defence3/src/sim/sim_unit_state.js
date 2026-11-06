@@ -1974,7 +1974,7 @@ let SIM_RELAYOUT = true;
 let SIM_RELAYOUT_PERIOD = 256;
 // (A step every this many ticks, its share as many times larger: the passes
 // over every slot and slab a step makes, half as often.)
-let SIM_RELAYOUT_EVERY = 2;
+let SIM_RELAYOUT_EVERY = 4, SIM_RELAYOUT_PHASE = 3;
 // (Tests: every slab with units a candidate, so peers' layouts differ as much as they can.)
 let SIM_RELAYOUT_STRESS = false;
 // (How many ticks a step's scores are taken by the next step.)
@@ -2027,7 +2027,15 @@ function _simRelayoutReady(S) {
 // fields still held as JavaScript references, the presentation.
 function simUnitStateRelayoutStep() {
     const S = _simUnitState;
-    if (SIM_RELAYOUT_EVERY > 1 && (_rl.ticks = (_rl.ticks + 1) | 0) % SIM_RELAYOUT_EVERY !== 0) return 0;
+    // (On the base ticks % SIM_RELAYOUT_EVERY === SIM_RELAYOUT_PHASE: with 4
+    // and 3, beside the worker search's post, apart from the heavy tier steps
+    // (the coverage and the acquisition's commit on 0, the search's commit and
+    // the dead's slots on 1, the acquisition's post on 2: data_static.js "The
+    // tier steps' ticks"). It counted its own calls and landed on 0 and 2.
+    // Not on a tick that applied orders (a burst): peer-local, so skipped
+    // there; the next step's share is the same.)
+    if (SIM_RELAYOUT_EVERY > 1 && (((gameTime % SIM_RELAYOUT_EVERY) + SIM_RELAYOUT_EVERY) % SIM_RELAYOUT_EVERY) !== SIM_RELAYOUT_PHASE % SIM_RELAYOUT_EVERY) return 0;
+    if (typeof orderAppliedTick === 'number' && orderAppliedTick === gameTime) { _rl.skipped++; return 0; }
     if (!_simRelayoutReady(S)) { if (SIM_RELAYOUT && S) _rl.skipped++; return 0; }
     const R = _simRelayoutArrays(S), Z0 = R ? _simSlotZeroTable(S) : null;
     if (!Z0 || !Z0.all) return 0;

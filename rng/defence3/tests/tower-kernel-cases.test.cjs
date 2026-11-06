@@ -32,7 +32,8 @@ const result = JSON.parse(i.eval(`JSON.stringify((()=>{
  // A preferred structure, a preferred unit, custom stats.
  a.preferredTargetSpec={type:'tower',gx:21,gy:20};
  processActions([{action:'towerTarget',towerCoords:[{gx:a.gx,gy:a.gy},{gx:c.gx,gy:c.gy}],target:{type:'tower',gx:foe.gx,gy:foe.gy}}],0);
- if(a.preferredTarget!==foe||c.preferredTargetSpec!==null)throw Error('structure order changed the existing-lock rule');
+ // (A structure order sets every selected tower's target, as a unit order: no live-lock rule.)
+ if(a.preferredTarget!==foe||!c.preferredTargetSpec||c.preferredTargetSpec.type!=='tower'||c.preferredTargetSpec.gx!==foe.gx)throw Error('a structure order sets every selected tower');
  const coords=[null,{gx:'20',gy:26},{gx:20.9,gy:26.1}];
  for(let k=1;k<ACTION_MAX_TOWER_COORDS;k++)coords.push({gx:-1,gy:-1});
  coords.push({gx:c.gx,gy:c.gy});

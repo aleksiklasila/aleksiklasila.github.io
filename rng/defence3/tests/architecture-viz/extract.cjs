@@ -126,8 +126,9 @@ const MANIFEST = {
         },
         {
             lane: 'T5', label: 'adjacency flood', thread: 'sim_worker', nominal_lane: 'T5',
-            notes: 'Adjacency groups recalculated in batches: simStepCrosses(-3, ADJACENCY_BATCH_TICKS), i.e. at t mod 8 === 3.',
-            events: [{ name: 'adjacency post', kind: 'post', period: 'ADJACENCY_BATCH_TICKS', phase: 3, file: 'src/things/things_utils.js' }]
+            notes: 'Adjacency groups recalculated in batches: commit at t mod 8 === ADJACENCY_BATCH_PHASE (2), post half a period later (6); see data_static.js "The tier steps\' ticks".',
+            events: [{ name: 'adjacency commit', kind: 'commit', period: 'ADJACENCY_BATCH_TICKS', phase: 'ADJACENCY_BATCH_PHASE', file: 'src/things/things_utils.js' },
+                { name: 'adjacency post', kind: 'post', period: 'ADJACENCY_BATCH_TICKS', phase: 'ADJACENCY_BATCH_PHASE+4', file: 'src/things/things_utils.js' }]
         },
         {
             lane: 'T1', label: 'worker search tier', thread: 'sim_worker', nominal_lane: 'T1',

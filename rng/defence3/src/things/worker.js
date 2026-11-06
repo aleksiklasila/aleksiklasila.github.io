@@ -763,28 +763,18 @@ function _wsArr(name, Type, n) {
 
 // The search owns these buffers until its commit. Copy only the eligible
 // builder/healer spawners, grouped by role and owner in tile order.
+const _wsSnapP = new Float64Array(8);
 function _wsSnapshotReturnSpawners(total, owners) {
     if (!WORKER_BRAIN_WASM) return false;
     const X = _spawnerIndex();
     const off = _wsArr('ws.spawnOff', Int32Array, 2 * owners + 1);
     const tiles = _wsArr('ws.spawnTiles', Int32Array, X.tiles.length);
     _wsArr('ws.spawnResult', Int32Array, total);
-    let count = 0;
-    off[0] = 0;
-    for (let role = 0; role < 2; role++) {
-        const ty = _stationaryTypeIds.get(_workerBrainSpawnerTypes[3 + role]);
-        for (let o = 0; o < owners; o++) {
-            if (ty !== undefined && ty < X.nty && o < SPAWNER_OWNER_SLOTS - 1) {
-                const b = ty * SPAWNER_OWNER_SLOTS + o + 1;
-                for (let i = X.off[b]; i < X.off[b + 1]; i++) {
-                    const t = X.tiles[i];
-                    if (_ST.own[t] === o && (_ST.brain[t] & 65535) === ty + 1 && _ST.val[t] > 0 && !_ST.uc[t]) tiles[count++] = t;
-                }
-            }
-            off[role * owners + o + 1] = count;
-        }
-    }
-    return count > 0;
+    // (The working ones of the index's buckets: ord.rs k_ws_spawner_snap.)
+    const P = _wsSnapP, t0 = _stationaryTypeIds.get(_workerBrainSpawnerTypes[3]), t1 = _stationaryTypeIds.get(_workerBrainSpawnerTypes[4]);
+    P[0] = owners; P[1] = X.nty; P[2] = SPAWNER_OWNER_SLOTS; P[3] = t0 === undefined ? -1 : t0; P[4] = t1 === undefined ? -1 : t1;
+    simRustDirect('k_ws_spawner_snap', [X.tiles, X.off, _ST.own, _ST.brain, _ST.val, _ST.uc, off, tiles], P);
+    return off[2 * owners] > 0;
 }
 function _wsPost() {
     simParallelBackgroundWait(WS_LANE);
@@ -3228,10 +3218,10 @@ function _forEachStructureInTileBox(list, x0, y0, x1, y1, fn) {
 }
 
 // The structures' tiles worth a look, ascending (ord.rs k_ws_candidates):
-// the collectors' groups' from the floor items' and spawners' rows and the
-// mines, made again when any structure comes or goes (the tile table's
-// version); the spawner index's from the spawners' rows alone, when
-// spawners come or go. Not every tile of the map.
+// the collectors' groups' the floor items', spawners' and mines' tiles, made
+// again when any structure comes or goes (the tile table's version); the
+// spawner index's the spawners' alone, when spawners come or go. A SIMD pass
+// over the tile codes (a byte a tile: ~0.1 ms for 1M tiles), no gather or sort.
 const _wsCand = { all: { sig: -1 }, spawners: { sig: -1 }, P: new Float64Array(12) };
 // The candidates' and the spawner index's arrays for the match (main.js
 // simMatchReserve): a structure row's tile each at most (B.structs).
@@ -3239,7 +3229,7 @@ function workerSitesReserve(B) {
     const n = Math.max(1024, (B.structs | 0) + 1024);
     for (const C of [_wsCand.all, _wsCand.spawners]) {
         const count=C===_wsCand.all?n+(B.mines|0):n;
-        if (!C.tiles || C.tiles.length < count || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, count); C.tmp = simSharedArray(Int32Array, count); C.sig = -1; }
+        if (!C.tiles || C.tiles.length < count || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, count); C.sig = -1; }
         if (!C.cnt || !simHeapHas(C.cnt)) C.cnt = simSharedArray(Int32Array, 4);
     }
     // (Types: at most SPAWN_PROD_TYPES, barrack.js.)
@@ -3253,19 +3243,17 @@ function _wsCandidates(spawnersOnly = false) {
     const sig = spawnersOnly ? (typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion : _tileEntityVersion) : _tileEntityVersion;
     if (C.sig === sig && C.tiles && simHeapHas(C.tiles) && C.w === GRID_W) return C;
     if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
-    const cls = STRUCT_STATUS_CLASSES().filter(K => K && K !== Tower && K !== Barrack && (!spawnersOnly || K !== FloorItem)), tabs = [];
-    let room = 0;
-    for (const K of cls) { const T = _sTables.get(K); if (!T || !T.n) continue; if (!_sColsInHeap(T)) _sTableGrow(T, T.cap); tabs.push(T); room += T.n; }
-    if (!spawnersOnly && _ST.mineArr && !simHeapHas(_ST.mineArr)) { const m = simSharedArray(Int32Array, Math.max(64, _ST.mineArr.length)); m.set(_ST.mineArr); _ST.mineArr = m; }
-    if (!spawnersOnly) room += _ST.mineN || 0;
-    if (!C.tiles || C.tiles.length < room || !simHeapHas(C.tiles)) { C.tiles = simSharedArray(Int32Array, Math.max(1024, Math.ceil(room * 1.25))); C.tmp = simSharedArray(Int32Array, C.tiles.length); }
+    // (Room: the rows of the tables whose codes it takes, and the mines; a
+    // SIMD pass over the code grid finds them: ord.rs k_ws_candidates.)
+    let room = spawnersOnly ? 0 : _ST.mineN || 0;
+    for (const K of STRUCT_STATUS_CLASSES()) { if (!K || K === Tower || K === Barrack || (spawnersOnly && K === FloorItem)) continue; const T = _sTables.get(K); if (T) room += T.n | 0; }
+    if (!C.tiles || C.tiles.length < room || !simHeapHas(C.tiles)) C.tiles = simSharedArray(Int32Array, Math.max(1024, Math.ceil(room * 1.25)));
     if (!C.cnt || !simHeapHas(C.cnt)) C.cnt = simSharedArray(Int32Array, 4);
-    const P = _wsCand.P, args = [];
-    for (let j = 0; j < 8; j++) { const T = tabs[j]; args.push(T ? T.c__stT : null); P[1 + j] = T ? T.n : 0; }
-    P[0] = Math.min(8, tabs.length); P[9] = spawnersOnly ? 0 : _ST.mineN || 0; P[10] = _ST.n || 0;
-    args.push(spawnersOnly ? null : _ST.mineArr || null, _ST.rrow, _ST.code, C.tmp, C.tiles, C.cnt);
-    C.cnt[0] = 0;
-    if (_ST.n && _ST.code) simRustDirect('k_ws_candidates', args, P);
+    const P = _wsCand.P;
+    P[0] = _ST.n || 0; P[1] = spawnersOnly ? 1 : 0; P[2] = C.tiles.length;
+    C.cnt[0] = 0; C.cnt[1] = 0;
+    if (_ST.n && _ST.code) simRustDirect('k_ws_candidates', [_ST.code, C.tiles, C.cnt], P);
+    if (C.cnt[1] > C.cnt[0]) throw new Error('k_ws_candidates: ' + C.cnt[1] + ' tiles, room for ' + C.cnt[0]);
     C.n = C.cnt[0]; C.sig = sig; C.w = GRID_W;
     return C;
 }

@@ -55,7 +55,8 @@ const result = JSON.parse(i.eval(`JSON.stringify((()=>{
 })())`));
 console.log(JSON.stringify(result));
 assert.deepEqual(i.errors.map(String), []);
-assert.ok(result.fired > 250 && result.maxShots > 20, 'towers fire into the pool');
+// (Towers take the acquisition tier's answers, a commit every 4 ticks: a few shots fewer than a search at each turn.)
+assert.ok(result.fired > 200 && result.maxShots > 20, 'towers fire into the pool');
 assert.equal(result.leak, 0, 'every slot is in flight or free');
 assert.ok(result.unitLoss > 0, 'shots damage units');
 assert.ok(result.structLoss > 0, 'shots damage enemy structures');

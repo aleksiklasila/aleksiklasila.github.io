@@ -10,7 +10,7 @@ const setup=`startSoloGame();simDk=4;
  const keys=['pistol','smg','sniper','fire','water','poison','ice','elements','sand_gun','watch_tower'];
  for(let gy=5,j=0;gy<123;gy+=4)for(let gx=5;gx<123;gx+=4,j++)if(placeBuilding(gx,gy,keys[j%keys.length],j%2,{silent:true,ignorePlacementRules:true})){const t=getTileEntityRef(gx,gy);markConstructionComplete(t);t.energy=t.maxEnergy;}
  recalculateAdjacency(true);}
- if(typeof _simWasmX.k_tower_scan!=='function')throw Error('Rebuild WASM before the tower determinism test');`;
+ if(typeof _simWasmX.k_tower_acq!=='function')throw Error('Rebuild WASM before the tower determinism test');`;
 const peers=[];
 for(const helpers of [0,3]){
  const world=new H.World({controls}),i=world.spawn('tower-'+helpers,{controls,simWorker:false});

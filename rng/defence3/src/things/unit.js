@@ -2123,6 +2123,7 @@ function _spbSpatial(B) {
     P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = NT;
     P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols;
     P[15] = _spatialCountDefer ? 1 : 0;
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     simRustDirect('k_spawn_spatial', [B.sp, c.x, c.y, c.owner, c.upT, _spbTy, _spbLayer, cellArea, c.spTile, S.sepKey, S.sepLayer, c.spArea, c.spOwner, c.spEpoch, c.spType, c.mvOn,
         spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.dead], P);
     // (During the unit pass the counts wait for its end, as _spatialCountAdd queues them.)
@@ -3081,6 +3082,8 @@ function _simMoveStructs() {
     const players = spatialUnitsComplexPlayerCount;
     const full = !_simMoveStruct || _simMoveStructSet !== _activeTileEntities || _simMoveStructW !== GRID_W || _simMoveStructH !== GRID_H || _simMoveStructP !== players || _simMoveStructC !== spatialBlockCols;
     if (!full && _simMoveStructDirtyN === 0) { _simTrapStep(); return; }
+    // (It writes the block table the tick-start chain reads: that is done first.)
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
     if (full) {
         if (!_simMoveStruct || _simMoveStruct.length !== GRID_W * GRID_H) { _simMoveStruct = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.struct', _simMoveStruct); }
         if (!_simStructCls || _simStructCls.length !== GRID_W * GRID_H) { _simStructCls = simHeapArrayAuto(Int8Array, GRID_W * GRID_H); simParallelBind('mv.scls', _simStructCls); }
@@ -3240,7 +3243,17 @@ function _simTrapStep() {
 // hostile to the player, as summed-area tables (the kernel's "anything in
 // reach?").
 let _simMoveHostile = null;
-function _simMoveBuildHostile() {
+// Built once a tick, from the state as the tick begins: the tick-start chain
+// on the helpers (tower.js tickStartChainPost;
+// settled with it before anything that reads them or changes what they
+// read: _simMoveStructs' writes, unit counts, the beams), else here at the
+// first use. The towers' broad phase, the movement kernel and the
+// acquisition's copy all read that one build: structures removed or units
+// counted again later in the tick show from the next tick's build.
+// P (rows and columns alike): [0] players, [1] blocks wide, [2] high, [3]
+// rows (columns) per job. Null when the block tables are not this layout's.
+let _simHostileTick = -1, _simHostileDims = '';
+function _simHostileStages(P) {
     _simMoveStructs();
     const players = spatialUnitsComplexPlayerCount, bc = spatialBlockCols, br = spatialBlockRows;
     const stride = bc + 1, plane = stride * (br + 1);
@@ -3248,40 +3261,31 @@ function _simMoveBuildHostile() {
         simHeapFree(_simMoveHostile);
         _simMoveHostile = simHeapArray(Int32Array, Math.max(1, players * plane));
         simParallelBind('mv.hostile', _simMoveHostile);
+        _simHostileTick = -1;
     }
     if (!_simMoveHostStruct || _simMoveHostStruct.length < players * plane) {
         simHeapFree(_simMoveHostStruct);
         _simMoveHostStruct = simHeapArray(Int32Array, Math.max(1, players * plane));
         simParallelBind('mv.hstruct', _simMoveHostStruct);
+        _simHostileTick = -1;
     }
-    // (In parallel: the rows, then the columns; see SIM_KERNEL_SAT_ROWS.)
-    if (_simPool && typeof SIM_KERNEL_SAT_ROWS === 'number' && spatialBlockCounts.length === bc * br * players && _simMoveStructBlocks.length === bc * br * players) {
-        simParallelBind('ix.bcount', spatialBlockCounts); simParallelBind('mv.stblk', _simMoveStructBlocks);
-        const P = _simParams, per = 16;
-        P[0] = players; P[1] = bc; P[2] = br; P[3] = per;
-        simParallelRun(SIM_KERNEL_SAT_ROWS, players * Math.ceil(br / per));
-        simParallelRun(SIM_KERNEL_SAT_COLS, players * Math.ceil(bc / per));
-        return;
-    }
-    const H = _simMoveHostile, HS = _simMoveHostStruct, counts = spatialBlockCounts, st = _simMoveStructBlocks;
-    for (let p = 0; p < players; p++) {
-        const o = p * plane;
-        H.fill(0, o, o + stride); HS.fill(0, o, o + stride);
-        for (let by = 0; by < br; by++) {
-            const row = o + (by + 1) * stride, above = row - stride;
-            H[row] = 0; HS[row] = 0;
-            let run = 0, runS = 0;
-            for (let bx = 0; bx < bc; bx++) {
-                const base = (by * bc + bx) * players;
-                let v = st[base + p];
-                runS += v;
-                for (let q = 0; q < players; q++) if (q !== p) v += counts[base + q];
-                run += v;
-                H[row + bx + 1] = H[above + bx + 1] + run;
-                HS[row + bx + 1] = HS[above + bx + 1] + runS;
-            }
-        }
-    }
+    if (typeof SIM_KERNEL_SAT_ROWS !== 'number' || !(bc > 0) || spatialBlockCounts.length !== bc * br * players || !_simMoveStructBlocks || _simMoveStructBlocks.length !== bc * br * players) return null;
+    simParallelBind('ix.bcount', spatialBlockCounts); simParallelBind('mv.stblk', _simMoveStructBlocks);
+    const per = 16;
+    P[0] = players; P[1] = bc; P[2] = br; P[3] = per;
+    return [[SIM_KERNEL_SAT_ROWS, players * Math.ceil(br / per)], [SIM_KERNEL_SAT_COLS, players * Math.ceil(bc / per)]];
+}
+// (This tick's build is there or posted: the dims it was made for.)
+function _simHostileMark() { _simHostileTick = gameTime; _simHostileDims = spatialUnitsComplexPlayerCount + ':' + spatialBlockCols + ':' + spatialBlockRows; }
+function _simMoveBuildHostile() {
+    if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
+    _simMoveStructs();
+    if (_simHostileTick === gameTime && _simHostileDims === spatialUnitsComplexPlayerCount + ':' + spatialBlockCols + ':' + spatialBlockRows) return;
+    const P = _simParams, st = _simHostileStages(P);
+    if (!st) return;
+    simParallelRun(st[0][0], st[0][1]);
+    simParallelRun(st[1][0], st[1][1]);
+    _simHostileMark();
 }
 // (The same, structures hostile to the player alone.)
 let _simMoveHostStruct = null;
@@ -3834,6 +3838,7 @@ function acqTierReset() {
     _acqMoves = [];
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0; _acqCommitTick = -1; _acqStepTick = -1;
+    if (typeof towerAcqDrop === 'function') towerAcqDrop();
 }
 function _acqArray(name, Type, n) {
     let a = _simParReg[name];
@@ -3854,9 +3859,12 @@ function _acqPost() {
     const S = _simUnitState;
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0;
-    if (!S || !_visCoverReady() || !_simMoveHostile || !_simMoveStruct || !_simStructCls || !spatialBlockCols || spatialIndexEntries() <= 0) return;
+    // (No units listed: still the towers' structure answers, tower.js towersTick steps the tier then.)
+    const tw = typeof towerAcqWanted === 'function' && towerAcqWanted();
+    if (!S || !_visCoverReady() || !_simMoveHostile || !_simMoveStruct || !_simStructCls || !spatialBlockCols || (spatialIndexEntries() <= 0 && !tw)) return;
     const n = S.owners.length, nc = CHUNKS_W * CHUNKS_H, ne = spatialIndexEntries(), C = _visCover, A = C.areaCount, np = C.players;
-    if (!n || !_combatScanOwnerMask) return;
+    if (!_combatScanOwnerMask && tw) { _combatScanOwnerMask = simHeapArray(Uint8Array, nc); _sxOwnerMaskEpoch = -1; }
+    if ((!n && !tw) || !_combatScanOwnerMask) return;
     const cap = simReserveCap(n);
     if (_acq.cap < n) {
         _acqArray('acq.x', Float32Array, cap); _acqArray('acq.y', Float32Array, cap); _acqArray('acq.own', Int8Array, cap); _acqArray('acq.flags', Uint8Array, cap);
@@ -3870,6 +3878,8 @@ function _acqPost() {
     simUnitTargetsResolve();
     const P = _simParams;
     P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING; P[4] = SIM_COMBAT_BRAIN ? 1 : 0; P[5] = CMD_MOVING;
+    // (And the units' look for the towers: tower.js towerAcqUnitMeta, P[6] / P[7].)
+    if (typeof towerAcqUnitMeta === 'function') towerAcqUnitMeta(P, cap);
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index
@@ -3966,6 +3976,8 @@ function _acqPost() {
             // (The same params in every stage's own slot.)
             const ranges=Math.min(24,Math.max(1,Math.ceil(ne/8192)));
             I[33]=ranges;I[34]=Math.ceil(ne/ranges);I[35]=1;
+            // (The towers look as far: the answers' depth, tower.js towerAcqMaxReach.)
+            I[36]=typeof towerAcqMaxReach==='function'?towerAcqMaxReach():0;
             _acqArray('acq.saHist',Int32Array,ranges*A*I[7]);
             for(let slot=2;slot<=5;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
             stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],
@@ -3973,6 +3985,9 @@ function _acqPost() {
         }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }
     stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);
+    // The towers, after the area answers (tower.js towerAcqPost: their rows'
+    // snapshot now, the stage its params at its place in the chain).
+    if(answers&&typeof towerAcqPost==='function'){const st=towerAcqPost(ACQ_LANE,stages.length,A,playersK);if(st)stages.push(st);}
     simParallelBackgroundChain(ACQ_LANE,stages);
     _acqBrain = SIM_COMBAT_BRAIN;
     _acqStage = 1; _acqN = n;
@@ -3988,6 +4003,8 @@ function _acqCommit() {
     P[0] = n; P[1] = 8192; P[2] = gameTime;
     simParallelRun(SIM_KERNEL_ACQ_COMMIT, Math.ceil(n / 8192));
     if (_acqBrain) { P[0] = n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(n / 8192)); }
+    // (The towers' answers into their rows.)
+    if (typeof towerAcqCommit === 'function') towerAcqCommit();
     _acqCommitTick = gameTime;
 }
 

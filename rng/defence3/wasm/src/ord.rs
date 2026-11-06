@@ -907,44 +907,34 @@ pub unsafe extern "C" fn k_proj_struct_hits(a: u32, _chunk: i32) {
 }
 
 /// The structures' tiles worth a look, ascending (worker.js _wsCandidates):
-/// the tiles of the rows of up to 8 structure tables (arrays 0..7, P[1 + j]
-/// rows each; a row counts when st.rrow of its tile is the row) and of the
-/// mines (array 8, P[9] of them), each once. Out: tiles (array 12), cnt[0]
-/// how many. P: [0] tables, [10] tiles on the map. Arrays 9..11: st.rrow,
-/// st.code, scratch (i32, room for all: the radix sort's).
+/// every tile whose st.code is a spawner's (0x44) and, unless P[1] (spawners
+/// only), a floor item's (0x55) or a mine's (0x66, 0x77). A structure's code
+/// is on its anchor tile alone, so each comes once, in tile order, without a
+/// gather or a sort: one SIMD pass over the code grid, 16 tiles a step (most
+/// steps hold none: one test). Arrays: st.code, out, cnt (cnt[0] how many).
+/// P: [0] tiles on the map, [1] spawners only, [2] out's room (cnt[1]: how
+/// many there were, past the room too).
 #[no_mangle]
 pub unsafe extern "C" fn k_ws_candidates(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (mines, rrow, code, out, cnt) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<i32>(12), k.p::<i32>(13));
-    let (nt, nm, tiles) = (k.i(0).max(0).min(8) as usize, k.i(9).max(0) as usize, k.i(10).max(0));
-    let mut n = 0usize;
-    for j in 0..nt {
-        let stt = k.p::<i32>(j);
-        if stt.is_null() { continue; }
-        for r in 0..k.i(1 + j).max(0) as usize {
-            let t = g(stt, r);
-            if t < 0 || t >= tiles || g(rrow, t as usize) != r as i32 || g(code, t as usize) == 0 { continue; }
-            s(out, n, t); n += 1;
-        }
-    }
-    if !mines.is_null() { for i in 0..nm { let t = g(mines, i); if t >= 0 && t < tiles { s(out, n, t); n += 1; } } }
-    // (Ascending by an LSD radix sort, 8 bits a pass, over the scratch
-    // keys (array 11, room for all): tiles below 2^24 take three passes.)
-    let tmp = k.p::<i32>(11);
-    let passes = if tiles <= 1 << 16 { 2 } else if tiles <= 1 << 24 { 3 } else { 4 };
-    let (mut src, mut dst) = (out, tmp);
-    for p in 0..passes {
-        let sh = 8 * p as u32;
-        let mut hist = [0usize; 257];
-        for i in 0..n { hist[((g(src, i) as u32 >> sh) & 255) as usize + 1] += 1; }
-        for b in 0..256 { hist[b + 1] += hist[b]; }
-        for i in 0..n { let v = g(src, i); let b = ((v as u32 >> sh) & 255) as usize; s(dst, hist[b], v); hist[b] += 1; }
-        core::mem::swap(&mut src, &mut dst);
-    }
-    if src != out { for i in 0..n { s(out, i, g(src, i)); } }
+    let (code, out, cnt) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<i32>(2));
+    let (n, sp, cap) = (k.i(0).max(0) as usize, k.i(1) != 0, k.i(2).max(0) as usize);
+    let hit = |c: u8| c == 0x44 || (!sp && (c == 0x55 || c == 0x66 || c == 0x77));
+    let (c44, c55, c66, c77) = (u8x16_splat(0x44), u8x16_splat(0x55), u8x16_splat(0x66), u8x16_splat(0x77));
     let mut w = 0usize;
-    for i in 0..n { if i == 0 || g(out, i) != g(out, i - 1) { s(out, w, g(out, i)); w += 1; } }
-    s(cnt, 0, w as i32);
+    let mut t = 0usize;
+    while t + 16 <= n {
+        let v = v128_load(code.add(t) as *const v128);
+        let m = if sp { u8x16_eq(v, c44) } else { v128_or(v128_or(u8x16_eq(v, c44), u8x16_eq(v, c55)), v128_or(u8x16_eq(v, c66), u8x16_eq(v, c77))) };
+        let mut bits = u8x16_bitmask(m) as u32;
+        while bits != 0 {
+            if w < cap { s(out, w, (t + bits.trailing_zeros() as usize) as i32); }
+            w += 1; bits &= bits - 1;
+        }
+        t += 16;
+    }
+    while t < n { if hit(g(code, t)) { if w < cap { s(out, w, t as i32); } w += 1; } t += 1; }
+    s(cnt, 0, w.min(cap) as i32); s(cnt, 1, w as i32);
 }
 
 /// Spawners (code 0x44) by (type, owner), in tile order (worker.js
@@ -974,6 +964,35 @@ pub unsafe extern "C" fn k_spawner_index(a: u32, _chunk: i32) {
         let t = g(cand, i); let b = bucket(t as usize);
         if b < 0 { continue; }
         let at = g(cur, b as usize); s(tl, at as usize, t); s(cur, b as usize, at + 1);
+    }
+}
+
+/// The worker search's return spawners (worker.js _wsSnapshotReturnSpawners):
+/// per role (builder, healer: their spawner types P[3], P[4], -1 none) and
+/// owner (P[0] of them), the working ones (owner, type, energy, built) of
+/// the spawner index's bucket in tile order, grouped role * owners + owner:
+/// out_off (2 * owners + 1), out_tiles. Arrays: index tiles, index off,
+/// st.own, st.brain, st.val, st.uc, out_off, out_tiles. P: [0] owners,
+/// [1] types in the index, [2] owner slots.
+#[no_mangle]
+pub unsafe extern "C" fn k_ws_spawner_snap(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (xt, xo, own, brain, val, uc, off, tl) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<f64>(4), k.p::<u8>(5), k.p::<i32>(6), k.p::<i32>(7));
+    let (owners, nty, slots) = (k.i(0).max(0), k.i(1).max(0), k.i(2).max(1));
+    let mut n = 0i32;
+    s(off, 0, 0);
+    for role in 0..2 {
+        let ty = k.i(3 + role);
+        for o in 0..owners {
+            if ty >= 0 && ty < nty && o < slots - 1 {
+                let b = (ty * slots + o + 1) as usize;
+                for i in g(xo, b)..g(xo, b + 1) {
+                    let t = g(xt, i as usize) as usize;
+                    if g(own, t) == o && (g(brain, t) & 65535) == ty + 1 && g(val, t) > 0.0 && g(uc, t) == 0 { s(tl, n as usize, t as i32); n += 1; }
+                }
+            }
+            s(off, (role as i32 * owners + o + 1) as usize, n);
+        }
     }
 }
 

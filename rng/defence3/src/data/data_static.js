@@ -200,6 +200,24 @@ function simStepCrosses(phase, period) {
     const r = (gameTime + phase) % period;
     return (r < 0 ? r + period : r) < simDk;
 }
+// The tier steps' ticks. The heavy periodic steps on the simulation thread
+// each have a base tick of their own, so no two land on one tick, and every
+// tick carries about the same share of them (at one base tick a step; a step
+// of several base ticks covers several anyway). By base tick % 4:
+//   0  visibility coverage: commit and post (renderer.js VIS_COVER_UNITS_PHASE;
+//      its buildings' table a quarter of the map on each tick of the cycle)
+//      (and the acquisition tier's commit, unit.js _acqTierStep: light)
+//   1  worker search commit (worker.js WS_POST_PHASE + 2)
+//   2  adjacency: its commit at % 8 === 2, its post at % 8 === 6
+//      (things_utils.js ADJACENCY_BATCH_PHASE; and the acquisition tier's post)
+//   3  worker search post (worker.js WS_POST_PHASE)
+//   3  also the unit slots' relayout step at the tick's end (sim_unit_state.js
+//      SIM_RELAYOUT_PHASE; skipped on a tick that applied orders); on 0 and
+//      2 it stacked onto the coverage and the acquisition (~5 ms a step at
+//      380k units)
+// (Measured 2026-11-06, 250k chaos: coverage ~8 ms, search post ~11 (its
+// commit ~5.5, the base tick without other steps ~3 ms heavier), adjacency
+// ~7 for both halves.) tests/tier-phase-schedule.test.cjs checks it.
 // The phases (base tick % period) of the base ticks the step covers, in
 // their order, one period's at most (each once): a sweep of a slice a base
 // tick visits all of them (at one base tick a step: [gameTime % period]).

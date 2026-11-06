@@ -65,7 +65,8 @@ const r = JSON.parse(inst.eval(REF + `;JSON.stringify((() => {
     // The post kernel's signature grid against the reference's signatures:
     // the same tiles, one kernel id per reference signature and back.
     _adjacencyDirtyAll = true; _adjacencyNeedsRecalc = true;
-    while (gameTime % ADJACENCY_BATCH_TICKS !== 2) gameTick();
+    // (Up to the tick before the post: the batch's phase + half its period.)
+    while ((gameTime + 1) % ADJACENCY_BATCH_TICKS !== (ADJACENCY_BATCH_PHASE + ADJACENCY_BATCH_TICKS / 2) % ADJACENCY_BATCH_TICKS) gameTick();
     gameTick();
     const fast = _simParReg['adj.sig'];
     const byRef = new Map(), byId = new Map();

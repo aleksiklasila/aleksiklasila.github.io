@@ -106,7 +106,8 @@ unsafe fn prepare_area_answers(k:&K,na:usize,players:usize,off:*const i32){
     let mut far=0.0f32;
     for s in 0..n {let r=*ranges.add(s);if r>far {far=r;}}
     let reach=ceil(far as f64/(k.f(5)*k.f(29).max(1.0))) as i32;
-    *k.p::<i32>(34)=reach.max(0);
+    // (And the towers' longest reach, P[36]: tower.rs k_tower_acq asks as far.)
+    *k.p::<i32>(34)=reach.max(k.i(36)).max(0);
 }
 
 // Multi-source BFS: for each viewer, the nearest graph distance to a

@@ -1601,11 +1601,17 @@ SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnap
 // players, [8] stamp.
 const _simVisSeedW = _simWK(['vt.p', '?-', 'vt.key', 'vis.useed', 'vis.ulist', 'vis.ucnt', 'vt.agrid']);
 SIM_KERNELS[SIM_KERNEL_VIS_SEED] = function (R, P, chunk) { _simRust(_simVisSeedW, P, chunk, 'k_vis_seed', 'VIS_SEED'); };
-// Buildings' sight seeds (renderer.js _visCoverStructSeeds; vis.rs).
+// Buildings' sight into the structures' steps table, a quarter of the map a
+// tick (renderer.js _visCoverStructQuarter; vis.rs).
 const SIM_KERNEL_VIS_SEED_STRUCTS = 127;
-const _simVisSeedStructsW = _simWK(['st.code', 'st.own', 'st.uc', 'st.val', 'st.brain', 'st.stab', 'st.rrow', 'vt.agrid', 'vis.useed', 'vis.ulist', 'vis.ucnt',
+const _simVisSeedStructsW = _simWK(['st.code', 'st.own', 'st.uc', 'st.val', 'st.brain', 'st.stab', 'st.rrow', 'vs.agrid', 'vis.sst', '?-', '?-',
     'adj.ctab', 'adj.tykey', 'adj.rlv', 'adj.bl', 'stt.vis', 'stt.atk']);
 SIM_KERNELS[SIM_KERNEL_VIS_SEED_STRUCTS] = function (R, P, chunk) { _simRust(_simVisSeedStructsW, P, chunk, 'k_vis_seed_structs', 'VIS_SEED_STRUCTS'); };
+// The table's finished half into a run's seeds, a job a player (the cover
+// chain's first stage: renderer.js _visCoverUnitsPost; vis.rs k_vis_seed_sst).
+const SIM_KERNEL_VIS_SEED_SST = 148;
+const _simVisSeedSstW = _simWK(['vis.sst', 'vis.useed', 'vis.ulist', 'vis.ucnt']);
+SIM_KERNELS[SIM_KERNEL_VIS_SEED_SST] = function (R, P, chunk) { _simRust(_simVisSeedSstW, P, chunk, 'k_vis_seed_sst', 'VIS_SEED_SST'); };
 // Laser beams on units (tower.js laserBeamsTick): a unit on a tile of a
 // beam (lz.tb: per tile four beam slots, laser.rs k_laser_lines) of another owner (lz.bown) takes its damage (lz.bdmg, per tick)
 // unless immune to towers (lzFlags 1); laser resistant (2) it lights the
@@ -1645,15 +1651,17 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCo
 // _issueGroupMoveOrder; k.rs k_order_move): those it cannot take (workers,
 // held, a pending way...) listed for the JavaScript. P: see k_order_move.
 const SIM_KERNEL_ORDER_MOVE = 101;
-const SIM_KERNEL_TOWER_PACK=102,SIM_KERNEL_TOWER_SCAN=103;
-const _simTowerPackW=_simWK(['sep.eslot','unit.x','unit.y','unit.dead','unit.owner','unit.upT','tac.flags','unit.stIx',
-    'unit.stBu','unit.stWe','unit.stPo','unit.stFr','unit.stSa','unit.stWa','unit.wTeam','tac.x','tac.y','tac.meta']);
-const _simTowerScanW=_simWK(['tac.x','tac.y','tac.meta','sep.eslot','ix.start','ix.cnt','ix.stamp','vis.cellOff','vis.cells',
-    'tac.qx','tac.qy','tac.owner','tac.type','tac.off','arq.hdr','tac.out']);
-const SIM_KERNEL_TOWER_STRUCT = 104;
-const _simTowerStructW = _simWK(['st.code','st.own','st.uc','st.val','mv.scls','vis.cellOff','vis.cells',
-    'tac.qx','tac.qy','tac.owner','tac.off','arq.hdr','tac.sout','tac.out','tac.base','tac.tile','tac.idle']);
-const SIM_KERNEL_TOWER_COARSE=106;
+// Towers in the acquisition tier (tower.rs k_tower_acq_snap: the rows at
+// the post, a job over the rows; k_tower_acq: a stage of the tier's chain
+// after the area answers): unit.js _acqPost, tower.js towerAcqPost.
+const SIM_KERNEL_TOWER_ACQ_SNAP=102,SIM_KERNEL_TOWER_ACQ=103;
+const _simTowerAcqSnapW=_simWK(['twq.stt','st.code','st.uc','st.val','st.brain','st.rrow','st.own','sta.kind','sta.range','?tc.range','acq.agrid',
+    'twq.area','twq.own','twq.kind','twq.reach','twq.tile']);
+const _simTowerAcqW=_simWK(['twq.area','twq.own','twq.kind','twq.reach','twq.tile','acq.saOff','acq.saX','acq.saY','acq.saSlot','acq.id','acq.upt','acq.wt',
+    'acq.saNearest','acq.saDistance','acq.saStructure','acq.saStructureDistance','twr.slot','twr.id','twr.st',
+    'tac.flags','acq.stix','acq.sb0','acq.sb1','acq.sb2','acq.sb3','acq.sb4','acq.sb5']);
+SIM_KERNELS[SIM_KERNEL_TOWER_ACQ_SNAP]=function(R,P,chunk){_simRust(_simTowerAcqSnapW,P,chunk,'k_tower_acq_snap','TOWER_ACQ_SNAP');};
+SIM_KERNELS[SIM_KERNEL_TOWER_ACQ]=function(R,P,chunk){_simRust(_simTowerAcqW,P,chunk,'k_tower_acq','TOWER_ACQ');};
 const SIM_KERNEL_TOWER_PREPARE=110;
 const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
 const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any']);
@@ -1677,11 +1685,6 @@ const _simTowerPrepareW=_simWK(['tac.input','st.code','st.own','st.uc','st.val',
     'sta.damage','sta.blast','sta.radius','tac.damage','tac.blast','tac.radius','tac.shots','tac.shotCd','tac.level','?mv.areaBoxOk',
     'st.rrow','tc.x','tc.y','tc.range','tc.cd','tc.dmg','tc.blast','tc.radius','tc.lvl','tac.pref','tac.ext']);
 SIM_KERNELS[SIM_KERNEL_TOWER_PREPARE]=function(R,P,chunk){_simRust(_simTowerPrepareW,P,chunk,'k_tower_prepare','TOWER_PREPARE');};
-const _simTowerCoarseW=_simWK(['tac.boxes','tac.owner','tac.live','ix.bcount','mv.stblk','mv.struct','?tac.off','?tac.count','?tac.valid','?mv.hostile']);
-SIM_KERNELS[SIM_KERNEL_TOWER_COARSE]=function(R,P,chunk){_simRust(_simTowerCoarseW,P,chunk,'k_tower_coarse','TOWER_COARSE');};
-SIM_KERNELS[SIM_KERNEL_TOWER_STRUCT] = function(R,P,chunk){_simRust(_simTowerStructW,P,chunk,'k_tower_struct','TOWER_STRUCT');};
-SIM_KERNELS[SIM_KERNEL_TOWER_PACK]=function(R,P,chunk){_simRust(_simTowerPackW,P,chunk,'k_tower_pack','TOWER_PACK');};
-SIM_KERNELS[SIM_KERNEL_TOWER_SCAN]=function(R,P,chunk){_simRust(_simTowerScanW,P,chunk,'k_tower_scan','TOWER_SCAN');};
 const _simOrderMoveW = _simWK(['ord.slots', 'ord.out', 'ord.cnt', 'unit.owner', 'unit.dead', 'unit.isWk', 'unit.holdF', 'unit.spEpoch', 'unit.mvPF', 'unit.x', 'unit.y',
     'unit.sepLayer', 'unit.tuS', 'unit.tuId', 'unit.tbT', 'unit.acqB', 'unit.fatF', 'unit.fLsX', 'unit.fLsY', 'unit.commandState', 'unit.mvOn', 'unit.amGx', 'unit.amGy',
     'unit.mvTgX', 'unit.mvTgY', 'unit.rkF', 'unit.rtEnd', 'unit.nvProf', 'unit.pathIndex', 'unit.nvPK', 'unit.mvCD', 'unit.mvNavLD', 'unit.mvPath']);
@@ -2024,7 +2027,9 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_SCAN] = function (R, P, chunk) { _simRust(_simComb
 // [2] SIM_SEP_ABSENT.
 const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'unit.sepKey', 'unit.commandState', '?-' , 'unit.id', 'unit.acqB', 'acq.tid', 'acq.sout',
     'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
-    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF', 'unit.tuS', 'unit.tuId', 'unit.tbT']);
+    'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF', 'unit.tuS', 'unit.tuId', 'unit.tbT',
+    // (The towers' look at a unit, 35-47: k.rs k_acq_snap's copies.)
+    '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of

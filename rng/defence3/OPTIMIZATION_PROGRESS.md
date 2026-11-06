@@ -25,6 +25,222 @@ heap and timing matter, not the harness's. Measure GC and allocation with
 `--worker-post --no-census` (below); stable tick time beats a lower mean with
 deviations (110 ms steady is better than 100 ms with 150 ms spikes).
 
+## 2026-11-06: towers: background units table by area, SIMD due table
+
+User: optimize towers with SIMD; the background provides tables the
+foreground SIMD-loops over. Smoke tests and benchmarks only (no full suite).
+
+Where towers went (baseline, 1M-start mixed chaos, 1024 map, 11 helpers,
+dk=1, 100 steady steps, ~420k -> 300k units, 22k tower rows, 336 due a step
+on average, 1364 max): towersTick 4.51 ms mean / p95 6.98 / max 8.98, of it
+k_tower_pack 2.66 (every index entry gathered again each step, mostly on the
+simulation thread: the helpers were in foreground jobs), k_tower_due 0.33
+(serial walk of every row with tile-table reads), scan 0.34, fire 0.17,
+hostile tables (k_sat_rows/cols) ~0.3 of the towers' share.
+
+Done:
+- Units table on the helpers (tower.js towerPackPost, lane SIM_LANE_TICK):
+  posted right after spatialIndexRebuild at the tick's start, settled before
+  the laser beams (the first phase writing unit statuses) and before any
+  index rebuild/invalidate. Nothing in that window moves, retypes or gives
+  statuses to units; a unit dying in it is skipped by the scan (it checks
+  live dead for a candidate that would become the best). So towers see the
+  statuses as the tick began: one laser phase behind (statuses-lag rule).
+  Not ready for this step's index (an invalidation in the window): built by
+  the towers' step with the same kernels. Posted or not by towers and index
+  only, never by helpers.
+- The table is grouped by area (k_tower_acount: atomic per-area counts per
+  entry run; k_tower_aoff: offsets, one job, counts back to 0;
+  k_tower_pack: each entry run placed at its area's atomic cursor). The scan
+  (k_tower_scan) loops each reached area's run four entries a vector: no
+  cell lists, stamps, tile starts/counts. Order inside a run depends on
+  thread timing, so exact-distance ties are now broken by unit id (slots are peer-local; results
+  deterministic; differ from history only on such ties). A first version
+  counted by walking every area's cells (~1M tiles): the chain did not
+  finish before the beams (lasers 0.45 -> 1.50 ms waiting); counting by
+  entry (~420k) fixed most of it.
+- Due rows by a row-dense i32 table (tower.js _towerDue, tw.due): the due
+  kernel compares four rows with i32x4_le(due, now) and reads the tile table
+  only for rows let through; a looked-at row gets ceil(tim)+1, or i32::MAX
+  when no tower stands there, its kind does not shoot, or it is being built.
+  k_tower_fire writes the next tick of the rows it handled. A value below
+  the true one only costs a look, so rows are put to 0 by: Tower.cd setter,
+  stationaryBrainChanged (joins, restores, type/level), _stUcSet (built), and
+  structCompleteHooks (the worker kernel writes st.uc itself, wai.rs
+  p_complete). New table (match, restore, growth): all 0. Peer-local cache.
+  Rows looked at: 22k -> ~540 a step (336 due).
+- Test: tests/tower-due-table.test.cjs (a tower being built sleeps and fires
+  once built; a cooldown set wakes it; the step uses the background table).
+  Smoke: tower-kernel-cases, tower-target-batch, tower-simd-determinism (0 vs
+  3 helpers), projectile-pool, laser-activation, structure-table pass.
+
+Measured (same command, serial runs, tests/test-runs/tower-simd-20261106,
+raw rows in the .json/.jsonl; base.json before, final.json after; the
+in-between designs: pack-bg / due-uc (entry-order table), area-pack (count
+by cells), area-entry (count by entries, ties by slot)):
+- towersTick 4.51 -> 1.14 ms mean, p95 6.98 -> 2.10, max 8.98 -> 3.03.
+- k_tower_due 0.33 -> 0.08; scan 0.34 -> 0.16 (p95 0.80 -> 0.40, max 1.97 ->
+  1.06); pack on the step 2.66 -> 0.
+- laserBeamsTick now includes the settle (area-entry.json: 0.29 mean, p95
+  1.02, the helpers' unfinished chain). Towers + lasers per step: mean 4.96
+  -> 1.72, p95 7.52 -> 2.65, max 9.36 -> 3.50. The entry-order table
+  (due-uc.json: same, without area runs) had mean 1.81, p95 3.30, max 6.01.
+- Whole step (noisy single runs): mean 107.4 -> 97.7, p95 143.1 -> 122.2,
+  max 180.5 -> 145.4. Population window the same (~421k -> 298k).
+- Determinism smoke: multiplayer-chaos-determinism (4 maps, 2598 tick hashes
+  each, forced-divergence patches) passes without and with 3 host helpers;
+  multiplayer-border-combat passes.
+
+Then (same day): the hostile summed-area tables (mv.hostile / mv.hstruct,
+k_sat_rows/cols) are built once a tick, as stages 0-1 of the tick-start chain
+(tower.js towerPackPost, every tick, towers or not; the towers' table is
+stages 2-4). unit.js _simMoveBuildHostile settles the chain and builds only
+if this tick has no build (no chain: at its first use). The towers' broad
+phase, the movement kernel and the acquisition's copy read that one build,
+so structures removed and unit counts changed later in the tick show from
+the next tick (movement used to rebuild after the towers and projectiles).
+Every writer of what the chain reads settles it first: _simMoveStructs
+(when it writes), _adjustSpatialBlockCount, k_sp_counts, k_spawn_spatial,
+k_unit_gone. The JS summed-area fallback loop is gone (the kernels run
+without helpers too). Smoke and multiplayer-chaos-determinism (with and
+without 3 host helpers) pass. Not benchmarked separately (user: profile).
+
+### Towers as stationary units of the acquisition tier (2026-11-06, later)
+
+User: towers are effectively stationary units; they should work as units do
+(the brain), with no expensive foreground step. The tick-start units table
+(k_tower_acount / aoff / pack: ~36 ms of helper CPU a step, 3.2-4.0 ms wall
+on idle helpers), the broad phase (k_tower_coarse), the unit scan
+(k_tower_scan) and the structure scan (k_tower_struct) are gone, with their
+JS (_towerPack*). The tick-start chain (tower.js tickStartChainPost /
+tickStartChainSettle, renamed) builds only the hostile tables; the laser
+beams no longer wait for it.
+
+How towers get targets now (unit.js _acqPost / _acqCommit, every
+SIM_ACQUIRE_TICKS = 4 ticks, the tier's area-targets mode):
+- At the post: k_tower_acq_snap (a parallel job over the tower rows: tile,
+  area, owner, kind, reach from the stat tables or tc.range) and, in the
+  units' k_acq_snap, copies of each slot's type, status record and watch
+  team; tower.js towerAcqPost copies the status records (burning, wet,
+  poisoned, frozen, sandy, watched) up to the pool's high-water mark.
+- In the chain, after the area answers: k_tower_acq, as a unit's
+  area_answer: the owner's nearest area holding a visible enemy unit
+  (acq.saNearest / saDistance at the tower's area) within its reach, then
+  the best of a seeded batch of four in that area's enemy buckets: never
+  turret-immune; not yet affected and not resisting before affected before
+  resisting (as the old scan's classes); nearest; ties by id. Else the
+  first structure class answer within reach (acq.saStructure).
+- The answers' depth (prepare_area_answers, P[36]) also covers the towers'
+  longest reach (towerAcqMaxReach: the stat tables' and custom rows', 8 area
+  steps in the chaos scene; 63 first: area answers 6.4 -> 15.4 ms CPU).
+- The commit copies the answers into Tower table columns _aqI (unit id, 0
+  none) and _aqT (structure tile, -1 none): state (snapshots, hashes, the
+  same on every peer); slots are peer-local, so the fire looks the id up.
+- k_tower_fire (still O(due)): the preferred target as before, else the
+  committed answer checked in O(1): the unit alive, the same id, not the
+  tower's owner's, its current area within reach (Arq::within); the
+  structure standing, hostile, built where it must be, within reach.
+  Nothing found: idle the cooldown by tile phase (as the structure scan
+  did). Gone since, or never committed (a new row): wait for the next
+  commit (P[13]). cnt[4..8] count outcomes (diagnostic).
+- No units listed: the movement's combat scan, which steps the tier, does
+  not run; towersTick steps it then (_acqPost runs for towers alone), so
+  towers still answer structures (tests/tower-structures-only.test.cjs).
+- Behavior changes: targets from a snapshot 2-5 ticks old, as units';
+  visibility now filters tower targets (the answers are by cover); the
+  nearest enemy area and a batch of four instead of every unit in reach;
+  ?acq=exact (no area answers) leaves towers without unit targets.
+
+Tests: tower-due-table (now checks _aqI), tower-structures-only (new),
+tower-kernel-cases, tower-target-batch, tower-simd-determinism (0 vs 3
+helpers), projectile-pool (bound 250 -> 200 shots: commits every 4 ticks;
+247 measured, 238 of them with units as before), laser-activation,
+structure-table, wasm-batch-regression (its broad-phase check removed with
+the kernel), multiplayer-border-combat, multiplayer-chaos-determinism (with
+and without 3 host helpers, forced-divergence patches) pass. A first build
+idled every never-committed row a full cooldown (unset columns read as
+"nothing"); the shot count caught it.
+
+Profiled (named wasm, settled capture, 60 steps; prof.json before, with
+the tower table; prof-acq3.json after):
+- towersTick 0.93 -> 0.83 ms mean, p95 2.32 -> 1.49, max 2.53 -> 2.34;
+  laserBeamsTick 0.62 -> 0.42 (no wait).
+- Helper CPU a step: tower table and scans 36.2 -> tower kernels 0.84;
+  k_acq_area_answers 6.4 -> 8.5 (the towers' depth); k_acq_snap 7.7 ->
+  11.3 (the copies). Net about -30 ms CPU a step.
+- On the tier's post tick (tick % 4 == 2): k_acq_snap 3.8 -> 4.7 ms wall,
+  k_tower_acq_snap 0.46 ms.
+
+Left: the units' snapshot k_acq_snap (~3.8 ms foreground on every fourth
+tick, the tick % 4 spike) and its new copies (+0.9 ms there): a 2-byte
+"tower look" column kept by k_status would replace the three per-slot
+copies and the records' copy; k_tower_fire 0.42 ms serial (p95 1.07);
+the commit's k_acq_commit (1.5 ms on tick % 4 == 0).
+
+### Tower orders, tick-phase spread (2026-11-06, later)
+
+- towerTarget with a structure target goes through k_tower_target like a
+  unit target: every selected tower of the player takes it. The old rule
+  (a structure order replaced only a live lock, other towers were cleared)
+  and its per-tower JavaScript (resolveTowerPreferredTarget,
+  stationaryBrainChanged: ~6 ms on the chaos bursts) are gone;
+  tower-kernel-cases checks the new rule.
+- The slot relayout (peer-local) counted its own calls and ran on base
+  ticks % 4 = 0 and 2, on top of the coverage and the acquisition commit
+  (0) and the acquisition post (2). Now every 4 ticks on % 4 = 3
+  (SIM_RELAYOUT_EVERY 4, SIM_RELAYOUT_PHASE 3: its share per step doubled)
+  and skipped on a tick that applied queued orders (main.js
+  orderAppliedTick): bursts never carry it. (On % 4 = 1 and 3 first: the
+  bench's bursts land on odd ticks and step 80 stacked burst + relayout +
+  the search commit + the dead's slots: 162 ms.)
+- Unprofiled, same scene (steady.json before, spread2.json after; single
+  runs, noisy): non-burst means by tick % 4 94.2 / 84.0 / 100.2 / 81.1 ->
+  86.1 / 85.2 / 95.2 / 90.5; steady mean 93.1 -> 92.2, p95 117.6 -> 116.5,
+  max 127.3 -> 132.9 (a burst, step 90, on % 4 = 3); bursts 114.9 -> 116.9.
+- Left by phase: 2 (acquisition post: k_acq_snap ~4.5 + setup, occupancy
+  slower by the chain) the high point; 1 the search commit (~5) and the
+  dead's slots zeroed (k_slot_zero ~4.2, deaths after the acquisition
+  commit's tick); bursts +25-30 (orders' application ~10 on the main
+  thread, the move kernel's flow-look misses ~10: Atl::exit's per-job exit
+  cache starts empty for every chunk, each ordered unit's tile walks 32
+  atlas steps toward the new destination).
+
+### Profile of the longest ticks (2026-11-06, prof.json)
+
+Named wasm (tests/test-runs/named-wasm32.js), settled capture from step 59,
+60 steps, all 12 threads, 5 ms sampling; steady p50 98 / p95 128 / max 133
+ms (~330k units). The 8 longest (70, 80, 65, 100, 90, 69, 61, 63: five are
+the 10-step action bursts) aggregated with scratch agg.cjs over
+chaos-spike-profile (reference: nearest step of the same burst status).
+
+Phases, mean over those steps (ms): gameTick 115.7; simMoveRun 64.6 (the
+move kernel, kernel:8, 25.3; the four occupancy passes, kernel:89:0-3,
+8.0-8.3 each, 32.6 together); processActions 7.9 (19.8 on step 70: the
+burst); runQueuedOrders 6.1 (k_order_move, kernel:101, 3.0); unitEventsRun
+6.0; spatialIndexRebuild 4.1; processGlobalSpawnerQueue 3.8;
+unitHitsResolve 3.7; statusPrepassRun 3.6; workerSearchTierStep 2.7;
+recalculateUnitEffectiveLevel 2.6; towersTick 1.2.
+
+Inside the movement (step 70 against 80, sampled CPU over all threads):
+- Occupancy passes: mv::move_job's own code 109 ms, checked_traffic_q 44,
+  traffic::sample 23 (only on the slow step), leader_dir 21,
+  traffic_yield 21 (10.6 on the reference), traffic::push_deposit 16,
+  occ::free_r 15. Helpers also ran background lanes inside these passes
+  (k_ws_nearfield 16, k_unit_events 7, k_ws_scan 7).
+- Move kernel: flow_look_calc 71, atlas_step_h 49, Atl::exit 45 (17 on the
+  reference: grows on the slow step), seg_open 40 (22), mv::park 24 (0 on
+  the reference), move_job 24, move_flow 16, move_pre 16.
+- Main thread over the longest steps: move_job 9.5, simParallelRun 3.8,
+  checked_traffic_q 3.5, traffic_yield 3.4, seg_open 3.1, k_order_move 2.6,
+  GC 1.3.
+
+Ideas from it: the four occupancy passes are each ~8 ms with the same
+functions (traffic queue checks, leader direction, yields): the pass count
+or what each pass recomputes is the biggest lever (~32 ms); in the move
+kernel, flow lookups and atlas exits/steps (~165 ms CPU) are next, and
+Atl::exit / park / seg_open are what grow on the slow step; the bursts'
+processActions + k_order_move (~25 ms on step 70) for the burst spikes.
+
 ## 2026-11-05: command bursts: no budgets, numbers, preparation (branch claude/gallant-shaw-b7cbef)
 
 User rule: the main thread only applies (O(1) / O(things changed) per command); the work is prepared off the tick and done by kernels; no arbitrary per-tick limits.
@@ -79,6 +295,12 @@ Remaining failures (2026-11-06):
 - Full run after these: 272/272 test files pass (tests/run-all.cjs --jobs=4 --timeout=1500).
 
 Slow ticks now (2026-11-06, chaos 250k units, 3 helpers, 160 ticks, warm-up 40; tests/test-runs/slow-ticks-20261106, analysis slow-ticks.cjs): steady mean 104.2 ms (was 114.1), p50 103.3, p95 129.8 (205.5), p99 148.1 (225.9), max 154.6 (239.5). 56 ticks above the mean average 116.1 ms against 93.8 for the rest; the ~20 ms extra is no single phase. It is the periodic lane steps landing on the same ticks: syncVisibilityCoverage every 4 ticks 8-11 ms (VIS_SEED_STRUCTS ~6 of it), workerSearchTierStep 7-12 ms every 2-4 ticks, adjacencyLaneStep every 8 ticks 6-8 ms, SLOT_ZERO (released slots) 3-6 ms on some ticks, the bench's command bursts every 10 ticks (processActions 8-16 ms); 48 of 120 ticks carry two or more of them, 32 of those above the mean. Movement itself varies +6.7 ms (MOVE +2.2, the occupancy stages +3.7). The worst ticks (125-155 ms) are those where the visibility sync, a slower index build (9-15 ms, typical 4-5) and the worker search tier coincide. Next: spread these steps evenly over their periods (a share a tick, or phases offset so no two meet), the visibility coverage sync first.
+Tier steps on even ticks (2026-11-06, same scene and settings; tests/test-runs/tier-phases-20261106, phasevar.cjs = every phase by tick % 4, bymod.cjs = the periodic steps by tick % M). Before, base tick % 4 === 1 carried the coverage sync (~8 ms) and the worker search commit (~5.5) and % 4 === 3 the search post (~11) and, every 8, adjacency (~7); % 4 === 0 and 2 had none. Now each % 4 tick has one share: 0 the coverage commit+post (VIS_COVER_UNITS_PHASE 1 -> 0), 1 the search commit, 2 adjacency with its commit (% 8 === 2) and its post (% 8 === 6) half a period apart (each ~half of the old step, and a batch is applied 4 ticks after its post instead of 8), 3 the search post. The schedule is written down in data_static.js ("The tier steps' ticks"), checked by tests/tier-phase-schedule.test.cjs (the steps' real calls, at most one a tick). main.js's synchronous adjacency recompute at the batch tick now runs only without the lane (it would have run at every commit tick: nothing posted there). Mean tick by tick % 4: 92.6 / 97.1 / 95.2 / 93.3 ms (was 96.9 / 111.4 / 100.4 / 108.0: spread 4.5 ms, was 14.5). Steady mean 94.5, p50 92.7, p95 114.0, p99 124.2, max 139.5 (104.2 / 103.3 / 129.8 / 148.1 / 154.6); the population path is the same (113,371 units at step 150, was 113,364). Most of the mean's -9.6 ms is spread over phases the change does not touch (simMoveRun -3.6, every kernel ~8% lower): machine state, not the schedule; relative to the mean, p95 went 1.25 -> 1.21, p99 1.42 -> 1.31. Left uneven: % 4 === 1 is ~4 ms heavier (the search commit 4.8, plus the deaths after the acquisition commit at 0: slot clearing 2.7, the index +3, towers +3); % 4 === 2 has the spawner production's cluster (SPAWN_PROD 5.1 vs 1.4, processGlobalSpawnerQueue +4: the scene's spawners' timers are in step, not a schedule); % 4 === 3 is the search post alone at 11.4 ms, the largest single share. Smoother next: split the search post (its select and group build, kernel:129 2.7 ms, from the scan post) over two ticks, and the burst ticks (the bench's commands, % 10) remain 11 of the 52 slow ticks.
+
+Tier shares cut (2026-11-06, same scene; sub2-sub4.json with SUBPHASES and the bench's new --rust-direct (serial Rust calls as rust:<name>), now2.json clean). The search post was 10.35 ms: k_ws_candidates 3.2 (a gather of up to 8 structure tables' rows, a radix sort, a dedupe, serial), the group kernel 3.1, k_ws_buckets 1.6, the return spawners 1.9 (k_spawner_index 0.9, a JS loop over the spawner index). Now: k_ws_candidates is one SIMD pass over the tile codes (st.code: spawners 0x44, floor items 0x55, mines 0x66/0x77, a structure's code on its anchor tile only, so the same tiles in tile order with no gather or sort): 3.2 -> 0.77 ms for both lists; the return spawners' JS loop is a kernel (ord.rs k_ws_spawner_snap); the post 7.4 ms. The coverage's buildings (k_vis_seed_structs, 5.3 ms synchronous at the post) go into a per-player-and-area steps table (vis.sst, two halves) a quarter of the map a tick (phases 1, 2, 3 and 0; ~0.8-1.4 ms each, atomic max: any order), and the chain's new first stage (vis.rs k_vis_seed_sst, i32x4 sign test, a job a player, plain writes) puts the finished half into the run's seeds on the lane: the coverage tick 7.5 -> 2.95 ms (its snapshot kernel 2.1 of it). A building's sight still comes and goes within two periods (visibility-buildings). Clean run: steady mean 95.8, p50 95.3, p95 118.6, p99 126.5, max 133.3 (the first round's run: 94.5 / 92.7 / 114.0 / 124.2 / 139.5; simMoveRun +0.8 ms in this run, a phase not touched: the machine), by tick % 4 92.2 / 97.8 / 97.5 / 95.7. The search tier step's mean 4.50 -> 3.98 ms a tick, the coverage's 1.87 -> 1.51. Left: kills are locked to tick % 4 === 0 (units lost in the tick by % 4: 1634 / 242 / 263 / 70): the combat brain's instructions are committed for every unit at the acquisition commit (k_combat_commit, phase 0), and units waiting for their next word after a kill (mv.rs CM_WAIT) all fire then; the next tick (% 4 === 1) carries the dead slots' clearing (~3 ms), the index's extra (+3.4) and the towers' retargeting (3,401 tower queries against ~300-700). Staggering the brain's take by unit id (as the acquisition take already is) would spread that, but changes when units resume fighting.
+
+First shots staggered (2026-11-06, stagger.json): k_combat_commit gives a unit that starts firing with the new word (it waited, CM_WAIT, or had no fire bit) an attack timer of id % 4 base ticks (no new columns; units already firing keep their rhythm). Units lost by tick % 4: 708 / 622 / 529 / 410 (was 1634 / 242 / 263 / 70); slot clearing (kernel:128) 1.06 / 1.60 / 1.37 / 1.22 ms (0.56 / 2.61 / 0.73 / 0.80), the index rebuild's extra at % 4 === 1 5.1 (6.1). But the ticks are not flatter: 92.5 / 98.3 / 104.1 / 100.1 ms, steady mean 98.7, p95 118.2, p99 135.3, max 149.9 (now2: 95.8 / 118.6 / 126.5 / 133.3; one run each; ~1.4% more units alive at step 150, 114,986 vs 113,394: the slower first shots). The tower retargeting at % 4 === 1 did not move (tower queries 2397 / 976 / 978 / 1659 against 2349 / 968 / 967 / 1634): it is the towers' own timing, not the kills. The clusters that make the tick totals now: towers at % 4 === 1 (towersTick 7.3 vs ~4.8, _towerAcqKernels 5.1 vs ~3.2), the spawner production at % 4 === 2 (SPAWN_PROD 5.5 vs 1.5, processGlobalSpawnerQueue +4), the search post at % 4 === 3.
+
 Tick 0 (1589 ms; 1291 earlier, same composition): the navigation's first build (NAV_CHAIN 439 ms; the simulation worker makes it before the match is reported started, sim_worker.js, the page-simulated bench does not), the opening orders on every unit (runQueuedOrders 381 ms), the first acquisitions and tower scans.
 
 Tools for this kind of hunt (scratchpad copies of the chaos test, kept as recipes): hObj-vs-fields drift check; per-peer raw column dump of a region's units and structures; the region's hash split into all-slices total, static and unit parts; the slice-only parts (core sweep, reservation running sums vs a fresh sum, mine sums, tile code/val/tim).

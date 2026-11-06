@@ -5955,7 +5955,9 @@ function syncVisibilityCoverage() {
 // Its inputs are the snapshot and the area layout of its start (the grid
 // and graph arrays of a layout are never changed, a new layout gets new
 // ones), its outputs counted at fixed ticks: every peer the same.
-const VIS_COVER_UNITS_TICKS = 4, VIS_COVER_UNITS_PHASE = 1;
+// (Base tick % 4 === 0: a tick of its own among the tier steps, see
+// data_static.js "The tier steps' ticks".)
+const VIS_COVER_UNITS_TICKS = 4, VIS_COVER_UNITS_PHASE = 0;
 const VIS_COVER_UNITS_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
 function _visCoverUnitsStep() {
     const C = _visCover;
@@ -5963,10 +5965,12 @@ function _visCoverUnitsStep() {
     C.uTick = gameTime;
     // (The phases of the step's base ticks in their order: the cycle's.)
     const T = VIS_COVER_UNITS_TICKS;
+    // (The buildings' share a quarter of the map a tick, the next run's:
+    // phases 1, 2, 3 the first three, phase 0 the last, then the post.)
     for (const p of simStepPhases(T)) {
         const ph = (((p - VIS_COVER_UNITS_PHASE) % T) + T) % T;
         if (ph === 0) { _visCoverUnitsCommit(); _visCoverUnitsPost(); }
-        else if (ph === 2) _visCoverUnitsSpreadPost();
+        else _visCoverStructQuarter(ph - 1);
     }
 }
 // After a reset: the whole run at once (the helpers help), counted now.
@@ -5976,8 +5980,10 @@ function _visCoverUnitsStep() {
 // is its own: _visCoverUnitsStep, once per tick.)
 function _visCoverUnitsNow() {
     _visCoverUnitsDrop();
+    // (The buildings' table made whole by the post: every peer from here on
+    // the same quarters.)
+    _visCover.sq = 0;
     _visCoverUnitsPost();
-    _visCoverUnitsSpreadPost();
     _visCoverUnitsCommit();
 }
 // A run in progress is dropped (a reset: every peer at the same tick).
@@ -5998,24 +6004,43 @@ function _visCoverUnitsAlloc() {
     C.ust = simSharedArray(Uint8Array, NA); C.uprev = I32(NA); C.uprevn = I32(np);
     C.uplus = I32(NA); C.uminus = I32(NA); C.udiff = I32(2 * np);
     C.uaok = simSharedArray(Uint8Array, Math.max(1, A));
-    for (const [name, arr] of [['vis.useed', C.useed], ['vis.ulist', C.ulist], ['vis.ucnt', C.ucnt], ['vis.urem', C.urem],
+    // (The buildings' steps per player and area, two halves: one made a
+    // quarter of the map a tick while the chain reads the other; nothing of
+    // it done for this generation yet.)
+    C.sst = I32(2 * NA); C.sw = 0; C.sq = 0;
+    for (const [name, arr] of [['vis.sst', C.sst], ['vis.useed', C.useed], ['vis.ulist', C.ulist], ['vis.ucnt', C.ucnt], ['vis.urem', C.urem],
         ['vis.ubufA', C.ubufA], ['vis.ubufB', C.ubufB], ['vis.ubufC', C.ubufC], ['vis.ucur', C.ucur], ['vis.ust', C.ust],
         ['vis.uprev', C.uprev], ['vis.uprevn', C.uprevn], ['vis.uplus', C.uplus], ['vis.uminus', C.uminus], ['vis.udiff', C.udiff], ['vt.aok', C.uaok]]) simParallelBind(name, arr);
     C.ustamp = 0; C.uGen = C.gen; C.uStage = 0;
 }
-// Phase 0: the snapshot and the seeds.
-// Buildings' sight seeds (vis.rs k_vis_seed_structs, on the helpers): the
-// structure table, its rows' watch and custom vision, the static stat tables.
-function _visCoverStructSeeds(A, np, stamp) {
+// Buildings' sight (vis.rs k_vis_seed_structs, on the helpers): the
+// structure table, its rows' watch and custom vision, the static stat
+// tables, into the steps table's half being made (C.sw), a quarter q of the
+// map's 256-tile blocks a tick (phases 1, 2, 3 and 0 of the cycle: the
+// buildings as they were then, every peer the same). Each quarter once a
+// half; the half cleared before its first.
+function _visCoverStructQuarter(q) {
+    _visCoverEnsure();
+    _visCoverUnitsAlloc();
+    const C = _visCover;
+    if (C.sq & (1 << q)) return;
+    const NA = Math.max(1, C.players * C.areaCount);
+    if (C.sq === 0) C.sst.fill(-1, C.sw * NA, (C.sw + 1) * NA);
+    C.sq |= 1 << q;
     if (!_ST.code || typeof statTablesStatic !== 'function') return;
     // (Tables made before the heap was up: a page whose worker failed.)
     if (!simHeapHas(_ST.code)) structTablesRehome();
-    const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), N = GRID_W * GRID_H, blocks = (N + 255) >> 8;
+    const N = GRID_W * GRID_H, blocks = (N + 255) >> 8, b0 = Math.floor(blocks * q / 4), b1 = Math.floor(blocks * (q + 1) / 4);
+    if (b1 <= b0) return;
+    const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys();
     _adjApplyClasses(_adjArr('adj.ctab', Int32Array, 9 * _ADJ_CTAB_COLS.length));
     for (const k of ['code', 'own', 'uc', 'val', 'brain', 'stab', 'rrow']) simParallelBind('st.' + k, _ST[k]);
+    // (The area grid under its own name: the chain in flight reads vt.agrid.)
+    simParallelBind('vs.agrid', _spatialAreaGridFlat());
     const P = _simParams;
-    P[0] = blocks; P[1] = 64; P[2] = N; P[3] = A; P[4] = np; P[5] = stamp; P[6] = S.nk; P[7] = S.L1; P[8] = S.R1; P[9] = NT; P[10] = MAX_THING_LEVEL;
-    simParallelRun(SIM_KERNEL_VIS_SEED_STRUCTS, Math.ceil(blocks / 64));
+    P[0] = b1; P[1] = 64; P[2] = N; P[3] = C.areaCount; P[4] = C.players; P[5] = 0; P[6] = S.nk; P[7] = S.L1; P[8] = S.R1; P[9] = NT; P[10] = MAX_THING_LEVEL;
+    P[11] = b0; P[12] = C.sw;
+    simParallelRun(SIM_KERNEL_VIS_SEED_STRUCTS, Math.ceil((b1 - b0) / 64));
 }
 function _visCoverUnitsPost() {
     const C = _visCover, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
@@ -6049,44 +6074,28 @@ function _visCoverUnitsPost() {
     }
     if (++C.ustamp >= (1 << 24)) { C.useed.fill(0); C.ustamp = 1; }
     C.ucnt.fill(0);
-    // Buildings' seeds now, from the structure table as it is at this tick
-    // (vis.rs k_vis_seed_structs; the units' come with the chain below).
-    _visCoverStructSeeds(A, np, C.ustamp);
-    // The seeds, then the spread, as one chain (the spread no longer posted
-    // at phase 2: that waited there for the seeds on the simulation thread).
-    // (Each stage's params written whole.)
-    if (!VIS_COVER_CHAIN) {
-        const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
-        B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
-        B[9] = 0;
-        simParallelBackground(SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024), VIS_COVER_UNITS_LANE);
-        C.uStage = 1;
-        return;
-    }
-    const B = simParallelStageParams(VIS_COVER_UNITS_LANE, 0), B2 = simParallelStageParams(VIS_COVER_UNITS_LANE, 1);
-    B.fill(0); B2.fill(0);
+    // The buildings' table: its last quarter now (the others made on the
+    // cycle's earlier ticks; all of them after a reset or a new generation),
+    // then that half is the run's and the other is made next.
+    for (let q = 0; q < 4; q++) _visCoverStructQuarter(q);
+    const half = C.sw;
+    C.sw ^= 1; C.sq = 0;
+    // The buildings' seeds, the units', then the spread, as one chain on the
+    // lane (vis.rs k_vis_seed_sst: the table's half into the seeds, first,
+    // with plain writes). (Each stage's params written whole.)
+    const B0 = simParallelStageParams(VIS_COVER_UNITS_LANE, 0), B = simParallelStageParams(VIS_COVER_UNITS_LANE, 1), B2 = simParallelStageParams(VIS_COVER_UNITS_LANE, 2);
+    B0.fill(0); B.fill(0); B2.fill(0);
+    B0[0] = A; B0[1] = np; B0[2] = C.ustamp; B0[3] = half;
     B[0] = n; B[1] = 1024; B[2] = TILE; B[3] = GRID_W; B[4] = GRID_H; B[6] = A; B[7] = np; B[8] = C.ustamp;
     B[9] = 0;
     B2[0] = A; B2[1] = np; B2[2] = C.ustamp;
-    simParallelBackgroundChain(VIS_COVER_UNITS_LANE, [[SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024)], [SIM_KERNEL_VIS_SPREAD, np]]);
-    C.uStage = 2;
-}
-let VIS_COVER_CHAIN = true;
-// Phase 2: the spread, once the seeds are in.
-function _visCoverUnitsSpreadPost() {
-    const C = _visCover;
-    if (C.uStage !== 1 || C.uGen !== C.gen) return;
-    simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
-    const B = _simBgParamsByLane[VIS_COVER_UNITS_LANE];
-    B[0] = C.areaCount; B[1] = C.players; B[2] = C.ustamp;
-    simParallelBackground(SIM_KERNEL_VIS_SPREAD, C.players, VIS_COVER_UNITS_LANE);
+    simParallelBackgroundChain(VIS_COVER_UNITS_LANE, [[SIM_KERNEL_VIS_SEED_SST, np], [SIM_KERNEL_VIS_SEED, Math.ceil(n / 1024)], [SIM_KERNEL_VIS_SPREAD, np]]);
     C.uStage = 2;
 }
 // The commit: the run's change counted in the cover (no longer covered
 // first, then newly covered).
 function _visCoverUnitsCommit() {
     const C = _visCover;
-    if (C.uStage === 1) _visCoverUnitsSpreadPost();
     if (C.uStage !== 2 || C.uGen !== C.gen) { C.uStage = 0; return; }
     simParallelBackgroundWait(VIS_COVER_UNITS_LANE);
     C.uStage = 0;

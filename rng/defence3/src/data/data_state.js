@@ -662,7 +662,7 @@ function _stOwnCount(t, w) {
     _stLabTerm(t, 1);
 }
 // (Its under-construction entry: the built count with it.)
-function _stUcSet(t, v) { _stLabTerm(t, -1); _ST.uc[t] = v; _stLabTerm(t, 1); }
+function _stUcSet(t, v) { _stLabTerm(t, -1); _ST.uc[t] = v; _stLabTerm(t, 1); if (v === 0 && _ST.code[t] === 0x22 && typeof towerDueReset === 'function') towerDueReset(_ST.rrow[t]); }
 function playerStructureCount(pid) { return pid >= 0 && pid < 64 ? structCountByOwner[pid] : 0; }
 // The limit: the match's (configuredMaxBuildings: the menu's, from the
 // memory budget and the population), no more than each team's share of the
@@ -801,6 +801,8 @@ function stationaryBrainChanged(e) {
     // (A preferred target: tower.js Tower.preferredTargetSpec, its row's _ptK; custom values: its row's tc.*.)
     const preferred = e._stCode === 0x22 && e._ptK > 0;
     if (custom && e._stCode === 0x22 && typeof towerCustomWrite === 'function') towerCustomWrite(e, row);
+    // (A tower's row looked at again by the due kernel: tower.js towerDueReset.)
+    if (e._stCode === 0x22 && typeof towerDueReset === 'function') towerDueReset(row);
     _ST.brain[tile] = (type + 1) | (Math.min(255, getThingBaseLevel(e)) << 16) | (preferred ? 1 << 24 : 0) | (custom ? 1 << 25 : 0) | (Math.min(63,effective) << 26);
 }
 // A structure's entry written again from its fields (a restore sets some
@@ -897,7 +899,7 @@ const _STF_BUILDING = 'i:_stT c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stack
 const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown i:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'i:_stT n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
-    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV',
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV i:_aqI i:_aqT',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
     CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
     BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
