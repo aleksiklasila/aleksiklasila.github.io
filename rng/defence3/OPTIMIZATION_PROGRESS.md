@@ -6255,3 +6255,14 @@ Rebuilt to the user's design: the main panel is one markup string made at the ma
   WASM64. Raw validation logs/results and source hashes are retained alongside
   the measurements. Timing comparisons were serial and separate from builds,
   correctness runners and profiled captures.
+
+### 2026-11-07 — perf-fuzz spikes on the 1M chaos scene (open)
+
+- 60-minute perf fuzz (headless Edge, re-exported 1M-unit / 65,536-structure
+  scene): no page errors or stalls, but 72 of 113 trials flagged. The worst are
+  tick stalls of 2-5 s from q / e on big selections (per-unit JS spawning +
+  one occ_spawn search per new unit), 1.8 s after stop/hold of 115k units,
+  0.85 s from a box select at 478k units, and the end-of-tick watched-unit
+  details doing a full units scan. Page: selection index/markers/id lists
+  per frame, effects lookups, frame apply. Details, evidence and directions:
+  [PERF_FUZZ_SPIKES_2026-11-07.md](PERF_FUZZ_SPIKES_2026-11-07.md).
