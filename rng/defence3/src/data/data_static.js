@@ -211,10 +211,10 @@ function simStepCrosses(phase, period) {
 //   2  adjacency: its commit at % 8 === 2, its post at % 8 === 6
 //      (things_utils.js ADJACENCY_BATCH_PHASE; and the acquisition tier's post)
 //   3  worker search post (worker.js WS_POST_PHASE)
-//   3  also the unit slots' relayout step at the tick's end (sim_unit_state.js
-//      SIM_RELAYOUT_PHASE; skipped on a tick that applied orders); on 0 and
-//      2 it stacked onto the coverage and the acquisition (~5 ms a step at
-//      380k units)
+//   1, 3  also the unit slots' relayout step at the tick's end (sim_unit_state.js
+//      SIM_RELAYOUT_EVERY 2, SIM_RELAYOUT_PHASE; skipped on a tick that
+//      applied orders); on 0 and 2 it stacked onto the coverage and the
+//      acquisition (~5 ms a step at 380k units; ~8-10 ms at 1M chaos)
 // (Measured 2026-11-06, 250k chaos: coverage ~8 ms, search post ~11 (its
 // commit ~5.5, the base tick without other steps ~3 ms heavier), adjacency
 // ~7 for both halves.) tests/tier-phase-schedule.test.cjs checks it.

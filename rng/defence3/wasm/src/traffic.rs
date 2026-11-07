@@ -79,7 +79,10 @@ pub(super) unsafe fn push_deposit(c:*const i32,ox:i32,oy:i32,dx:f64,dy:f64,len:f
     let lat=js_round((ux*(py-cy) as f64-uy*(px-cx) as f64)*0.125) as i32;
     let r=ptr::<i32>(c,34).add((ty*w+tx) as usize*PUSH_WORDS);
     let epoch=*c.add(36);
-    if *r!=epoch{*r=epoch;for k in 1..PUSH_WORDS{*r.add(k)=0;}}
+    if *r!=epoch{*r=epoch;for k in 1..PUSH_WORDS{*r.add(k)=0;}
+        // (The tile's bit in this step's push bits ([40]: push_at's next step).)
+        if *c.add(40)!=0{let t=(ty*w+tx) as usize;let b=ptr::<u32>(c,40).add(t>>5);
+            if *b&(1u32<<(t&31))==0{(*(b as *const core::sync::atomic::AtomicU32)).fetch_or(1u32<<(t&31),core::sync::atomic::Ordering::Relaxed);}}}
     let team=(own&0x7f)+1;
     let slot=if (*r.add(2)>>16)&255==team||(*r.add(2)>>16)&255==0{1}else if (*r.add(4)>>16)&255==team||(*r.add(4)>>16)&255==0{3}else{return;};
     let d=*r.add(slot);let m=*r.add(slot+1);
@@ -91,6 +94,8 @@ pub(super) unsafe fn push_deposit(c:*const i32,ox:i32,oy:i32,dx:f64,dy:f64,len:f
 /// Whether tile (tx, ty) has last step's push record (any side).
 pub(super) unsafe fn push_at(c:*const i32,tx:i32,ty:i32)->bool{
     if c.is_null()||*c.add(35)==0||tx<0||ty<0||tx>=*c.add(37)||ty>=*c.add(38){return false;}
+    // (A bit a tile ([41], last step's: 128 KB at 1M tiles, in cache), not its 20-byte record.)
+    if *c.add(41)!=0{let t=(ty* *c.add(37)+tx) as usize;return *ptr::<u32>(c,41).add(t>>5)&(1u32<<(t&31))!=0;}
     *ptr::<i32>(c,35).add((ty* *c.add(37)+tx) as usize*PUSH_WORDS)==*c.add(36)-1
 }
 /// A standing unit's response to last step's pushes at its tile, as a

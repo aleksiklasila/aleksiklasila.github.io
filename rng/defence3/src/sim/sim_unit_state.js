@@ -1331,8 +1331,22 @@ function simUnitStateAllocate(u, x, y) {
     // speeds) must not reach the new one: which slot a unit gets depends on
     // the peer's history, a restore's above all, so a leftover there made
     // peers diverge).
-    if (reused) { _simStRelease(S, s); (_simSlotZero || (_simSlotZero = _simSlotZeroFn()))(S.columns, s); S.sepLayer[s] = 0; }
+    if (reused) { _simStRelease(S, s); if (!_simSlotZeroOne(S, s)) (_simSlotZero || (_simSlotZero = _simSlotZeroFn()))(S.columns, s); S.sepLayer[s] = 0; }
     _simUnitSlotStart(S, s, u, reused || ever);
+}
+// A reused slot made fresh by the slot-zero kernel on this thread (k_slot_zero over the column table, its
+// defaults: ~130 columns in wasm; the straight-line JavaScript below took ~20 us a slot): false when the
+// table is not ready (then the JavaScript).
+const _simSlotZeroP = new Float64Array(8);
+function _simSlotZeroOne(S, s) {
+    if (typeof _simWasmX === 'undefined' || _simWasmX === null || typeof _simWasmX.k_slot_zero !== 'function') return false;
+    const Z = _simSlotZeroTable(S);
+    if (!Z || !Z.tab || !Z.defs) return false;
+    const P = _simSlotZeroP;
+    P[0] = 1; P[1] = 1; P[2] = Z.n; P[3] = SIM_SEP_ABSENT; P[4] = s;
+    simRustDirect('k_slot_zero', [null, Z.tab, S.sepKey, S.sepLayer, Z.defs], P);
+    S.columns.mvSteer[s * SIM_STEER_W + SIM_ST_FLOOR] = -1;
+    return true;
 }
 // (One straight-line function over every column: a fill call per column was
 // ~10 us a unit.)
@@ -1755,6 +1769,16 @@ function simUnitStateDetachGone(S, s) {
     _simUnitDeferFree(S, s);
 }
 
+// The allocator's free counts per slab bound for the passes over every slot
+// (sl.sfree: 64 an empty slab, k.rs slab_runs); the slabs in use (0: none
+// bound, the kernels then pass every slot).
+function simUnitStateSlabsBind() {
+    const S = _simUnitState, sl = S && S.sl;
+    if (!sl || !sl.sfree || !simHeapHas(sl.sfree) || !(sl.slabs > 0)) return 0;
+    simParallelBind('sl.sfree', sl.sfree);
+    return Math.min(sl.slabs, sl.sfree.length);
+}
+
 // The spatial index reports where a unit is (chunk key, layer) or that it
 // left (key SIM_SEP_ABSENT).
 function simUnitSetSepKey(u, key, layer) {
@@ -1979,10 +2003,12 @@ function _simCopyRuns(a, b, runs, per) {
 // tick spikes. Which slot a unit has decides nothing (see the allocator), so
 // peers need not relayout alike.
 let SIM_RELAYOUT = true;
-let SIM_RELAYOUT_PERIOD = 256;
+// (64 with a step every 2 ticks (each step as large as 128's every 4): a 1M chaos A/B, 2026-11-07, two sittings: steady 85.0 -> 81.6, p95 95.9 -> 91.0;
+// the first stage -1.4 ms, the occupancy -1.8 (denser, block-ordered slots), the steps +1.4. 64 every 4 (steps twice as large): steady -1.0, p95 +0.8. Earlier 128 against 1024 / 512: 90.0 -> 87.9 / 512 +2.4.)
+let SIM_RELAYOUT_PERIOD = 64;
 // (A step every this many ticks, its share as many times larger: the passes
 // over every slot and slab a step makes, half as often.)
-let SIM_RELAYOUT_EVERY = 4, SIM_RELAYOUT_PHASE = 3;
+let SIM_RELAYOUT_EVERY = 2, SIM_RELAYOUT_PHASE = 3;
 // (Tests: every slab with units a candidate, so peers' layouts differ as much as they can.)
 let SIM_RELAYOUT_STRESS = false;
 // (How many ticks a step's scores are taken by the next step.)
@@ -2001,6 +2027,9 @@ function _simRelayoutArrays(S) {
         R.maxPairs = Math.max(4096, Math.ceil(S.cap / 64));
         R.pairs = simHeapArray(Int32Array, 2 * R.maxPairs); R.fwd = simHeapArray(Int32Array, S.cap); R.fst = simHeapArray(Int32Array, S.cap).fill(0);
         R.score = simHeapArray(Int32Array, 2 * slabs); R.scr = simHeapArray(Int32Array, 5 * nk + 1 + 7 * slabs); R.hdr = simHeapArray(Int32Array, 8);
+        // (A bit a slot moved this step: the remap reads the forward map only for those, k_slot_remap.)
+        if (R.mbits) simHeapFree(R.mbits);
+        R.mbits = simHeapArray(Uint32Array, (S.cap >> 5) + 2); simParallelBind('rl.mbits', R.mbits);
         for (const k of ['pairs', 'fwd', 'fst', 'score', 'scr', 'hdr']) if (!simHeapHas(R[k])) { R.cap = 0; return null; }
         simParallelBind('rl.pairs', R.pairs); simParallelBind('rl.fwd', R.fwd); simParallelBind('rl.fst', R.fst); simParallelBind('rl.score', R.score);
         R.cap = S.cap; R.nk = nk; R.slabs = slabs; R.scoreSlabs = -1;
@@ -2035,11 +2064,12 @@ function _simRelayoutReady(S) {
 // fields still held as JavaScript references, the presentation.
 function simUnitStateRelayoutStep() {
     const S = _simUnitState;
-    // (On the base ticks % SIM_RELAYOUT_EVERY === SIM_RELAYOUT_PHASE: with 4
-    // and 3, beside the worker search's post, apart from the heavy tier steps
-    // (the coverage and the acquisition's commit on 0, the search's commit and
-    // the dead's slots on 1, the acquisition's post on 2: data_static.js "The
-    // tier steps' ticks"). It counted its own calls and landed on 0 and 2.
+    // (On the base ticks % SIM_RELAYOUT_EVERY === SIM_RELAYOUT_PHASE % EVERY:
+    // with 2 and 3, the odd ticks (1: the search's commit and the dead's
+    // slots, 3: the search's post), apart from the heavy tier steps (the
+    // coverage and the acquisition's commit on 0, the acquisition's post on
+    // 2: data_static.js "The tier steps' ticks"). It counted its own calls
+    // and landed on 0 and 2.
     // Not on a tick that applied orders (a burst): peer-local, so skipped
     // there; the next step's share is the same.)
     if (SIM_RELAYOUT_EVERY > 1 && (((gameTime % SIM_RELAYOUT_EVERY) + SIM_RELAYOUT_EVERY) % SIM_RELAYOUT_EVERY) !== SIM_RELAYOUT_PHASE % SIM_RELAYOUT_EVERY) return 0;
@@ -2062,6 +2092,7 @@ function simUnitStateRelayoutStep() {
     if (!(R.scoreSlabs === nsl && R.scoreAt <= gameTime && gameTime - R.scoreAt <= SIM_RELAYOUT_SCORE_TICKS)) {
         P.fill(0, 0, 8);
         P[0] = nsl; P[1] = 256; P[2] = sl.kw; P[3] = sl.kh; P[4] = TILE * SIM_SLAB_KEY_TILES * SIM_POS_SCALE;
+        P[5] = simUnitStateSlabsBind();
         simParallelRun(SIM_KERNEL_SLAB_SCORE, Math.ceil(nsl / 256));
         R.scoreSlabs = nsl; R.scoreAt = gameTime;
     }
@@ -2122,6 +2153,7 @@ function _simRelayoutApply(S, R, n) {
     const P = _simParams, per = Math.max(16, Math.ceil(n / 64));
     P.fill(0, 0, 8);
     P[0] = n; P[1] = per; P[2] = Z.n; P[3] = SIM_SEP_ABSENT; P[4] = stamp; P[5] = uidLen; P[6] = rows;
+    if (R.mbits) R.mbits.fill(0);
     simParallelRun(SIM_KERNEL_SLOT_MOVE, Math.ceil(n / per));
     const ring = typeof _oq !== 'undefined' && _oq && _oq.top > 0 && simHeapHas(_oq.ring) ? _oq.top : 0;
     const pph = typeof _ppHead !== 'undefined' && _ppHead && simHeapHas(_ppHead) ? _ppHead.length : 0;
@@ -2131,6 +2163,8 @@ function _simRelayoutApply(S, R, n) {
     P[0] = Math.max(ns, ring, pph); P[1] = rper; P[2] = R.fwd.length; P[3] = 0;
     P[4] = S.sl.kw; P[5] = S.sl.kh; P[6] = TILE * SIM_SLAB_KEY_TILES * SIM_POS_SCALE; P[7] = nsl;
     P[8] = 0; P[9] = ns; P[10] = ring; P[11] = pph; P[12] = stamp;
+    // (Empty slabs' slots skipped: k.rs slab_runs.)
+    P[13] = simUnitStateSlabsBind();
     simParallelRun(SIM_KERNEL_SLOT_REMAP, Math.ceil(P[0] / rper));
     R.scoreSlabs = nsl; R.scoreAt = gameTime;
     if (IDS) { IDS.ver++; if (!rows && IDS.n > 0) unitSlotMapInvalidate(); }

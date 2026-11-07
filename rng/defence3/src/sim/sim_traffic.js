@@ -22,17 +22,20 @@ function trafficEnsure(O){
     const w=Math.ceil(GRID_W/4),h=Math.ceil(GRID_H/4),n=w*h*O.planes;
     if(!_traffic||_traffic.epoch!==spatialEpoch||_traffic.n!==n){
         if(_traffic){if(_traffic.pending)simParallelBackgroundWait(SIM_LANE_TRAFFIC);for(const a of Object.values(_traffic))if(ArrayBuffer.isView(a))simHeapFree(a);}
-        const T=_traffic={epoch:spatialEpoch,n,w,h,pending:0,config:simHeapArray(Int32Array,40)};
+        const T=_traffic={epoch:spatialEpoch,n,w,h,pending:0,config:simHeapArray(Int32Array,48)};
         for(const key of ['workX','workY','workLoss','snapX','snapY','snapLoss'])T[key]=simHeapArray(Int32Array,n);
         for(const key of ['density','capacity','source','p0','p1','x','y','nextX','nextY'])T[key]=simHeapArray(Float32Array,n);
         T.mask=simHeapArray(Uint8Array,n);T.nextMask=simHeapArray(Uint8Array,n);
         for(const key of ['pushA','pushB']){T[key]=simHeapArray(Int32Array,GRID_W*GRID_H*SIM_TRAFFIC_PUSH_WORDS);T[key].fill(0);}
+        // (A bit a tile a step: pushed this step (the deposits set it), last step (push_at reads it).)
+        for(const key of ['pushBitsA','pushBitsB'])T[key]=simHeapArray(Uint32Array,(GRID_W*GRID_H+31)>>5);
         const C=T.config,ptr=a=>_simWEnc(_simHeapPtrOf(a));
         C.fill(0);
         C.set([SIM_TRAFFIC_MODE,w,h,10,O.planes,0,O.stride,O.h,GRID_W,GRID_H,32,0,0,0,0,0]);
         for(const [i,key]of [[16,'x'],[17,'y'],[18,'workX'],[19,'workY'],[20,'snapX'],[21,'snapY'],[22,'density'],[23,'p0'],[24,'p1'],[25,'capacity'],[26,'source'],[27,'nextX'],[28,'nextY'],[29,'workLoss'],[30,'snapLoss']])C[i]=ptr(T[key]);
         C[32]=ptr(T.mask);C[33]=ptr(T.nextMask);
         C[34]=ptr(T.pushA);C[35]=ptr(T.pushB);C[36]=2;C[37]=GRID_W;C[38]=GRID_H;C[39]=Math.round(Math.log2(TILE*8));
+        C[40]=ptr(T.pushBitsA);C[41]=ptr(T.pushBitsB);
         simParallelBind('traffic.config',C);
     }
     _traffic.config[0]=SIM_TRAFFIC_MODE;
@@ -44,7 +47,8 @@ function trafficEnsure(O){
 function trafficBeforeMovement(){
     const T=_traffic;if(!T)return;
     // This step's pushes go to the other buffer; last step's are read.
-    {const C=T.config;[C[34],C[35]]=[C[35],C[34]];[T.pushA,T.pushB]=[T.pushB,T.pushA];C[36]++;}
+    {const C=T.config;[C[34],C[35]]=[C[35],C[34]];[T.pushA,T.pushB]=[T.pushB,T.pushA];C[36]++;
+        [C[40],C[41]]=[C[41],C[40]];[T.pushBitsA,T.pushBitsB]=[T.pushBitsB,T.pushBitsA];T.pushBitsA.fill(0);}
     if(T.pending&&gameTime>=T.pending){
         simParallelBackgroundWait(SIM_LANE_TRAFFIC);T.pending=0;
         [T.x,T.nextX]=[T.nextX,T.x];[T.y,T.nextY]=[T.nextY,T.y];

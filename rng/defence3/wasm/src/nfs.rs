@@ -449,6 +449,8 @@ pub unsafe extern "C" fn k_slot_move(a: u32, chunk: i32) {
     // slot's presentation mark reset (unit.pvS: its next frame by changes
     // fills it).)
     let (fwd, fst, pvs) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<u32>(10));
+    // (A bit a moved slot, [15]: the remap's first test.)
+    let mbits = k.p::<u32>(15);
     let stamp = k.i(4);
     // (The id index's table (slots by id's hash, -1 empty: main.js
     // UnitIdIndex; P[5] its length, a power of two) and the id table (ids
@@ -478,13 +480,24 @@ pub unsafe extern "C" fn k_slot_move(a: u32, chunk: i32) {
             ($ty:ty) => {{
                 let p = base as *mut $ty;
                 let value = value as $ty;
-                for j in j0..j1 {
-                    let (f, t) = (g(pairs, 2 * j), g(pairs, 2 * j + 1));
-                    if f < 0 || t < 0 { continue; }
-                    let (src, dst) = (p.add(f as usize * per), p.add(t as usize * per));
-                    core::ptr::copy_nonoverlapping(src as *const $ty, dst, per);
-                    if per > 1 { core::ptr::write_bytes(src, 0, per); }
-                    *src = value;
+                // (Element by element: memory.copy / memory.fill per column and
+                // unit are runtime calls, most of the step's time.)
+                if per == 1 {
+                    for j in j0..j1 {
+                        let (f, t) = (g(pairs, 2 * j), g(pairs, 2 * j + 1));
+                        if f < 0 || t < 0 { continue; }
+                        let (src, dst) = (p.add(f as usize), p.add(t as usize));
+                        *dst = *src;
+                        *src = value;
+                    }
+                } else {
+                    for j in j0..j1 {
+                        let (f, t) = (g(pairs, 2 * j), g(pairs, 2 * j + 1));
+                        if f < 0 || t < 0 { continue; }
+                        let (src, dst) = (p.add(f as usize * per), p.add(t as usize * per));
+                        for e in 0..per { *dst.add(e) = *src.add(e); *src.add(e) = 0 as $ty; }
+                        *src = value;
+                    }
                 }
             }};
         }
@@ -507,6 +520,7 @@ pub unsafe extern "C" fn k_slot_move(a: u32, chunk: i32) {
         }
         if !hsl.is_null() && !hnd.is_null() { let h = g(hnd, t); if h > 0 { s(hsl, h as usize, t as i32); } }
         if !fwd.is_null() && !fst.is_null() { s(fwd, f, t as i32); s(fst, f, stamp); }
+        if !mbits.is_null() { (*(mbits.add(f as usize >> 5) as *const core::sync::atomic::AtomicU32)).fetch_or(1u32 << (f & 31), core::sync::atomic::Ordering::Relaxed); }
         if !pvs.is_null() { s(pvs, t, 0); }
         if !idc.is_null() {
             let id = g(idc, t);
@@ -551,13 +565,24 @@ pub unsafe extern "C" fn k_slot_remap(a: u32, chunk: i32) {
     let fl = k.i(2).max(0);
     let (fst, stamp) = (k.p::<i32>(16), k.i(12));
     if fst.is_null() { return; }
-    let map = |v: i32| -> i32 { if v >= 0 && v < fl && g(fst, v as usize) == stamp { g(fwd, v as usize) } else { v } };
+    // (The moved slots' bits first, [17] (a 144 KB table at 1M slots: in cache), the forward map only for them.)
+    let mbits = k.p::<u32>(17);
+    let map = |v: i32| -> i32 { if v >= 0 && v < fl && (mbits.is_null() || g(mbits, v as usize >> 5) & (1u32 << (v & 31)) != 0) && g(fst, v as usize) == stamp { g(fwd, v as usize) } else { v } };
     let ns = k.i(9).max(0) as usize;
-    for q in s0..s1.min(ns) {
-        if !tu.is_null() { let v = g(tu, q); let m = map(v); if m != v { s(tu as *mut i32, q, m); } }
-        if !cm.is_null() && !cmm.is_null() && (g(cmm, q) & 16) == 0 { let v = g(cm, q); let m = map(v); if m != v { s(cm as *mut i32, q, m); } }
-        if !pn.is_null() { let v = g(pn, q); let m = map(v); if m != v { s(pn as *mut i32, q, m); } }
-        if !pp.is_null() { let v = g(pp, q); let m = map(v); if m != v { s(pp as *mut i32, q, m); } }
+    // (By runs of slabs with units ([18] sl.sfree, P[13] its slabs: an empty
+    // slab's slots hold no unit, their references are read by none).)
+    let (sfree, nsl) = (k.p::<u8>(18), k.i(13).max(0) as usize);
+    let per_slot = |r0: usize, r1: usize| {
+        for q in r0..r1 {
+            if !tu.is_null() { let v = g(tu, q); let m = map(v); if m != v { s(tu as *mut i32, q, m); } }
+            if !cm.is_null() && !cmm.is_null() && (g(cmm, q) & 16) == 0 { let v = g(cm, q); let m = map(v); if m != v { s(cm as *mut i32, q, m); } }
+            if !pn.is_null() { let v = g(pn, q); let m = map(v); if m != v { s(pn as *mut i32, q, m); } }
+            if !pp.is_null() { let v = g(pp, q); let m = map(v); if m != v { s(pp as *mut i32, q, m); } }
+        }
+    };
+    let e = s1.min(ns);
+    if s0 < e {
+        if sfree.is_null() || nsl == 0 { per_slot(s0, e); } else { super::k::slab_runs(sfree, nsl, s0, e, |r0, r1, empty| if !empty { per_slot(r0, r1); }); }
     }
     let rows = k.i(3).max(0) as usize;
     let ix = k.p::<i32>(6);
@@ -573,14 +598,16 @@ pub unsafe extern "C" fn k_slot_remap(a: u32, chunk: i32) {
     let slabs = k.i(7).max(0) as usize;
     let (live, dead, xs, ys, home, out) = (k.p::<u8>(7), k.p::<u8>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12));
     if slabs > 0 && !live.is_null() && !out.is_null() {
-        slab_scores(live, dead, xs, ys, home, out, s0 / 64, ((s1 + 63) / 64).min(slabs), k.i(4).max(1), k.i(5).max(1), k.i(6).max(1));
+        slab_scores(live, dead, xs, ys, home, out, s0 / 64, ((s1 + 63) / 64).min(slabs), k.i(4).max(1), k.i(5).max(1), k.i(6).max(1), sfree, nsl);
     }
 }
 
 /// Slabs b0..b1's scores: per slab its living units (live, not dead) and how
 /// many of them stand in its home block.
-unsafe fn slab_scores(live: *const u8, dead: *const u8, xs: *const i32, ys: *const i32, home: *const i32, out: *mut i32, b0: usize, b1: usize, kw: i32, kh: i32, bw: i32) {
+unsafe fn slab_scores(live: *const u8, dead: *const u8, xs: *const i32, ys: *const i32, home: *const i32, out: *mut i32, b0: usize, b1: usize, kw: i32, kh: i32, bw: i32, sfree: *const u8, nsl: usize) {
     for b in b0..b1 {
+        // (An empty slab (the allocator's free count 64): none.)
+        if !sfree.is_null() && b < nsl && g(sfree, b) >= 64 { s(out, 2 * b, 0); s(out, 2 * b + 1, 0); continue; }
         let h = g(home, b);
         let (mut n, mut at) = (0i32, 0i32);
         for q in b * 64..b * 64 + 64 {
@@ -957,7 +984,8 @@ pub unsafe extern "C" fn k_slab_score(a: u32, chunk: i32) {
         return;
     }
     let (b0, b1) = super::k::job_range(chunk, k.i(1), k.i(0));
-    slab_scores(live, dead, xs, ys, home, out, b0, b1, k.i(2).max(1), k.i(3).max(1), k.i(4).max(1));
+    // ([6] sl.sfree, P[5] its slabs: empty slabs scored without their slots.)
+    slab_scores(live, dead, xs, ys, home, out, b0, b1, k.i(2).max(1), k.i(3).max(1), k.i(4).max(1), k.p::<u8>(6), k.i(5).max(0) as usize);
 }
 
 

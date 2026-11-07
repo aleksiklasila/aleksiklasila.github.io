@@ -292,6 +292,28 @@ impl MoveGrid {
         let n=block+2;
         if self.ix_slot.is_null()||block<1||(n*n) as usize>cells{self.lc=core::ptr::null();return;}
         let cx0=self.bx*block-1;let cy0=self.by*block-1;
+        // (Inside the map: a row four tiles a step, the stamps' compare masking start and count, interleaved.)
+        if cx0>=0&&cy0>=0&&cx0+n<=self.cw&&cy0+n<=self.ch{
+            let ep=i32x4_splat(self.epoch);
+            for j in 0..n{
+                let k=((cy0+j)*self.cw+cx0) as usize;let o=(j*n*2) as usize;
+                let mut i=0usize;
+                while i+4<=n as usize{
+                    let m=i32x4_eq(v128_load(self.ix_stamp.add(k+i) as *const v128),ep);
+                    let a=v128_and(v128_load(self.ix_start.add(k+i) as *const v128),m);
+                    let c=v128_and(v128_load(self.ix_count.add(k+i) as *const v128),m);
+                    v128_store(buf.add(o+2*i) as *mut v128,i32x4_shuffle::<0,4,1,5>(a,c));
+                    v128_store(buf.add(o+2*i+4) as *mut v128,i32x4_shuffle::<2,6,3,7>(a,c));
+                    i+=4;
+                }
+                while i<n as usize{
+                    let (a,c)=if *self.ix_stamp.add(k+i)==self.epoch{(*self.ix_start.add(k+i),*self.ix_count.add(k+i))}else{(0,0)};
+                    *buf.add(o+2*i)=a;*buf.add(o+2*i+1)=c;i+=1;
+                }
+            }
+            self.lc=buf;self.lcx=cx0;self.lcy=cy0;self.lcn=n;
+            return;
+        }
         for j in 0..n{for i in 0..n{
             let cx=cx0+i;let cy=cy0+j;let (mut a,mut c)=(0,0);
             if cx>=0&&cy>=0&&cx<self.cw&&cy<self.ch{
@@ -305,6 +327,12 @@ impl MoveGrid {
     pub(super) unsafe fn visit(&self,n:usize){
         *self.stats+=n as i32;
         *self.stats.add(4)+=1;
+    }
+    /// The index entries of tile (cx, cy) (key: its index key; this job's block or the ring around it, indexed this tick) from the job's cache: (first, end).
+    #[inline(always)]
+    pub(super) unsafe fn tile_range(&self,cx:i32,cy:i32,key:usize)->(i32,i32){
+        if !self.lc.is_null(){let o=(((cy-self.lcy)*self.lcn+(cx-self.lcx))*2) as usize;let a=*self.lc.add(o);return (a,a+*self.lc.add(o+1));}
+        let a=*self.ix_start.add(key);(a,a+*self.ix_count.add(key))
     }
     pub(super) unsafe fn scalar_lane(&self){*self.stats.add(7)+=1;}
     pub(super) unsafe fn reset(&self){core::ptr::write_bytes(self.stats,0,8);if !self.xsw.is_null(){*self.xsw=0;}}

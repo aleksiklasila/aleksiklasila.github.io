@@ -1936,7 +1936,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
         // A blocked flow may use the free shoulder. At most one accepted
         // move, at the requested speed; every candidate keeps the same
         // swept exclusive footprint, block halo and wall checks.
-        let len=sqrt(want);
+        let len=sqrt(want);dbgc!(m,94);
         let handed=!m.traffic.is_null()&&*m.traffic.add(13)!=0;
         let mut best=(ax*dx+ay*dy)/len*0.7+sqrt(ax*ax+ay*ay)*0.3;
         for k in 0..4 {
@@ -1948,17 +1948,18 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
             };
             let ax=ox+floor(vx+0.5) as i32;let ay=oy+floor(vy+0.5) as i32;
             if clear(ax,ay) {
-                let (px,py)=(*m.occ).preview(s,ax,ay);
+                let (px,py)=(*m.occ).preview(s,ax,ay);dbgc!(m,95);
                 let vx=(px-ox) as f64;let vy=(py-oy) as f64;
                 let distance=sqrt(vx*vx+vy*vy);
                 let score=(vx*dx+vy*dy)/len*0.7+distance*0.3+if handed&&k<2{distance*0.4}else{0.0};
-                if score>best+0.0625 {best=score;tx=px;ty=py;}
+                if score>best+0.0625 {best=score;tx=px;ty=py;dbgc!(m,96);}
                 if handed&&k<2&&distance>=len*0.65{break;}
                 if best>len*0.78 {break;}
             }
         }
     }
     let (mut tx,mut ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
+    #[cfg(feature="dbgc")]{if tx==ox&&ty==oy{dbgc!(m,97);}}
     if intent && m.traffic_mode>=2 && original_len>0.0{
         let mut progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)/original_len;
         dbgc!(m,64);
@@ -1967,13 +1968,17 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
                 tx=sx;ty=sy;progress=original_len;
             }
         }
-        let x0=*(m.x0.add(s) as *const i32);let y0=*(m.y0.add(s) as *const i32);
+        // (The tick-start position: the footprint's before this step, ox / oy, as unit.x0 / y0.)
+        #[cfg(feature="dbgc")]{if *(m.x0.add(s) as *const i32)!=ox||*(m.y0.add(s) as *const i32)!=oy{dbgc!(m,99);}}
+        let (x0,y0)=(ox,oy);
         super::traffic::deposit(m.traffic,x0,y0,layer,mass,original_dx,original_dy,(original_len-progress).max(0.0),m.dkf);
         // Blocked: a push for whoever stands in the way (read next step).
         let blocked=1.0-progress.max(0.0)/original_len;
         if blocked>0.3{super::traffic::push_deposit(m.traffic,tx,ty,original_dx,original_dy,original_len,blocked,(*m.occ).radius_q(s),rd(m.own,s),0);}
     }
-    if tx!=nx || ty!=ny {wr(m.steady, (s) * SR,0);wr(m.ct, (s) * SR,-1);wr(m.cd, (s) * SR,-1);}
+    // (Diverted (the pressure, a shoulder, a swap, the footprints): its steady window ends; its steering stands,
+    // the flow's heading from its tile is the same: re-steering every blocked unit every tick was ~350k steers a tick at 1M.)
+    if tx!=nx || ty!=ny {wr(m.steady, (s) * SR,0);}
     if tx!=original_nx || ty!=original_ny {
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
     }
@@ -2635,12 +2640,24 @@ struct MoveP {
 /// The block's flow direction: the desired velocities of the first unit of
 /// each tile that walks the flow (summed), which sets the sweep's direction.
 #[cfg_attr(feature="prof",inline(never))]
+/// The tiles x0..x1 (at most 64) of the index row starting at key `row`
+/// whose stamp is the epoch (entries this epoch), as bits from x0: four
+/// stamps a compare.
+#[inline(always)]
+unsafe fn row_live(stamp:*const i32,row:usize,x0:i32,x1:i32,epoch:i32)->u64{
+    let n=(x1-x0).max(0) as usize;let p=stamp.add(row+x0 as usize);let e=i32x4_splat(epoch);
+    let mut m=0u64;let mut i=0usize;
+    while i+4<=n{m|=(i32x4_bitmask(i32x4_eq(v128_load(p.add(i) as *const v128),e)) as u64)<<i;i+=4;}
+    while i<n{if *p.add(i)==epoch{m|=1u64<<i;}i+=1;}
+    m
+}
 unsafe fn leader_dir(m:&Mv,a:*const i32,x0:i32,x1:i32,y0:i32,y1:i32,cw:i32,epoch:i32)->(f64,f64) {
     let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *const i32;
     let mut dx=0.0;let mut dy=0.0;
-    for cy in y0..y1 {for cx in x0..x1 {
+    for cy in y0..y1 {let mut live=row_live(ptr(27),(cy*cw) as usize,x0,x1,epoch);while live!=0 {
+        let cx=x0+live.trailing_zeros() as i32;live&=live-1;
         let key=(cy*cw+cx) as usize;
-        if *ptr(27).add(key)!=epoch || *ptr(26).add(key)==0 {continue;}
+        if *ptr(26).add(key)==0 {continue;}
         let slot=*ptr(24).add(*ptr(25).add(key) as usize);
         if slot>=0 && (if m.traffic_mode==0{rd(m.on,slot as usize)==6}else{
             let s=slot as usize;
@@ -2743,26 +2760,34 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         // to one unit per tile; no sorting or per-unit allocation.
         let (dx,dy)=leader_dir(&m,a,x0,x1,y0,y1,cw,epoch);
         for yi in 0..y1-y0 {let cy=if dy>0.0{y1-1-yi}else{y0+yi};
-        for xi in 0..x1-x0 {let cx=if dx>0.0{x1-1-xi}else{x0+xi};
-            let key=(cy*cw+cx) as usize;if *ptr(27).add(key)!=epoch {continue;}
-            let mut i=*ptr(25).add(key);let end=i+*ptr(26).add(key);
+        // (The row's tiles with index entries this epoch, four stamps a compare;
+        // visited in the leader's order: from the high end when it heads +x.)
+        let mut live=row_live(ptr(27),(cy*cw) as usize,x0,x1,epoch);
+        while live!=0 {let cx=if dx>0.0{let b=63-live.leading_zeros();live&=!(1u64<<b);x0+b as i32}else{let b=live.trailing_zeros();live&=live-1;x0+b as i32};
+            let key=(cy*cw+cx) as usize;dbgc!(m,90);
+            let (mut i,end)=grid.tile_range(cx,cy,key);dbgc!(m,91);dbgc!(m,92,(end-i) as u32);
             // (Standing units here may give way: last step's pushes at the tile.)
             let pushed=traffic_deferred(&m)&&super::traffic::push_at(m.traffic,cx,cy);
             while i<end {
                 let slot=*ptr(24).add(i as usize);
                 if slot>=0 && (need.is_null()||pushed||*need.add(slot as usize*4+2)>>24!=0) {
                     let s=slot as usize;
-                    resolve_slot(&m,s);
+                    // (Its tick-start position: walker_short's, no unit.x0 / y0 lines.)
+                    let (sx0,sy0)=resolve_slot(&m,s);
                     dbgc!(m,86);
                     #[cfg(feature="dbgc")]
                     {
                         if *m.out.add(s)>1{dbgc!(m,82);}
                         if *m.spent.add(s)!=0{dbgc!(m,83);}
                         if traffic_deferred(&m)&&pushed{dbgc!(m,84);}
-                        if traffic_deferred(&m)&&walker_short(&m,s){dbgc!(m,85);}
+                        if traffic_deferred(&m)&&walker_short_at(&m,s,sx0,sy0){dbgc!(m,85);}
                     }
-                    if !wk.is_null()&&(*m.out.add(s)>1||*m.spent.add(s)!=0||(traffic_deferred(&m)&&(pushed||walker_short(&m,s)))){
-                        *wk.add(wn)=slot;wn+=1;*m.out.add(s)|=128;
+                    if !wk.is_null(){
+                        let td=traffic_deferred(&m);let short=td&&walker_short_at(&m,s,sx0,sy0);
+                        if *m.out.add(s)>1||*m.spent.add(s)!=0||(td&&(pushed||short)){
+                            // (Bit 30: its yield may do something (yield_tag); the others' returns at once.)
+                            *wk.add(wn)=slot|((yield_tag(&m,s,short) as i32)<<30);wn+=1;*m.out.add(s)|=128;
+                        }
                     }
                 }
                 i+=1;
@@ -2776,7 +2801,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
                 let listed=*m.out.add(b)&128;
                 let gx=floor(rd(m.x,b)*m.itile) as i32;let gy=floor(rd(m.y,b)*m.itile) as i32;
                 if gy*m.w+gx!=rd(m.spt,b){wr(m.out,b,3|listed);}else if *m.out.add(b)&127==0{wr(m.out,b,1|listed);}
-                if listed==0&&!wk.is_null(){*wk.add(wn)=b as i32;wn+=1;*m.out.add(b)|=128;}
+                if listed==0&&!wk.is_null(){*wk.add(wn)=(b as i32)|(yield_tag(&m,b,walker_short(&m,b)) as i32)<<30;wn+=1;*m.out.add(b)|=128;}
             }
             // (Swaps made from here on, walkers passing each other in the
             // second pass: their partners' tiles go to the index after it.)
@@ -2787,9 +2812,9 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
             m.shared_hot=core::ptr::null();m.span_n=1;
             let yield_on=traffic_deferred(&m);
             if !wk.is_null(){
-                for k in 0..wn{let s=*wk.add(k) as usize;
+                for k in 0..wn{let e=*wk.add(k);let s=(e&0x3fffffff) as usize;
                     *m.out.add(s)&=127;
-                    if yield_on{traffic_yield(&m,s);}
+                    if yield_on&&e&(1<<30)!=0{traffic_yield(&m,s);}
                     if *m.out.add(s)>1||*m.spent.add(s)!=0{epi_slot(&m,f,&mut ep,s,false);}
                 }
             }else{
@@ -2971,7 +2996,29 @@ unsafe fn ord_pickup(a: *const i32, b0: usize, e: usize, chunk: usize) {
 #[cfg_attr(feature="prof",inline(never))]
 unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
     let occ=!m.orec.is_null();
-    for s in b0..e{
+    let mut s0=b0;
+    if occ{
+        // Four slots a step: their records (16 bytes each: x, y, meta, -) as four vectors, transposed;
+        // marked where active and moved off its record, or out > 1, spent, or armed (on 1).
+        let (zero,one)=(i32x4_splat(0),i32x4_splat(1));
+        while s0+4<=e{
+            let rp=m.orec.add(s0*4);
+            let (r0,r1,r2,r3)=(v128_load(rp as *const v128),v128_load(rp.add(4) as *const v128),v128_load(rp.add(8) as *const v128),v128_load(rp.add(12) as *const v128));
+            let t0=i32x4_shuffle::<0,4,1,5>(r0,r1);let t1=i32x4_shuffle::<0,4,1,5>(r2,r3);let t2=i32x4_shuffle::<2,6,3,7>(r0,r1);let t3=i32x4_shuffle::<2,6,3,7>(r2,r3);
+            let rx=i32x4_shuffle::<0,1,4,5>(t0,t1);let ry=i32x4_shuffle::<2,3,6,7>(t0,t1);let meta=i32x4_shuffle::<0,1,4,5>(t2,t3);
+            let x=v128_load(m.x.add(s0) as *const v128);let y=v128_load(m.y.add(s0) as *const v128);
+            let active=i32x4_ne(v128_and(i32x4_shr(meta,16),i32x4_splat(255)),zero);
+            let moved=v128_and(active,v128_or(i32x4_ne(x,rx),i32x4_ne(y,ry)));
+            let o=u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(m.out.add(s0) as *const u32)));
+            let sp=u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(m.spent.add(s0) as *const u32)));
+            let on=u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(m.on.add(s0) as *const u32)));
+            let mark=v128_or(v128_or(moved,u32x4_gt(o,one)),v128_or(i32x4_ne(sp,zero),i32x4_eq(on,one)));
+            let bits=i32x4_bitmask(mark) as i32;
+            for l in 0..4{let p=rp.add(l*4+2);*p=(*p&0x00ffffff)|(((bits>>l)&1)<<24);}
+            s0+=4;
+        }
+    }
+    for s in s0..e{
         let r=if occ{m.orec.add(s*4)}else{core::ptr::null_mut()};
         let moved=!occ||((*r.add(2)>>16)&255!=0&&(*(m.x.add(s) as *const i32)!=*r||*(m.y.add(s) as *const i32)!=*r.add(1)));
         let mark=(moved||*m.out.add(s)>1||*m.spent.add(s)!=0||*m.on.add(s)==1) as i32;
@@ -2981,11 +3028,26 @@ unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
 /// A flow unit left short of its step (its second-pass retry may move it:
 /// traffic_yield's walker branch, the same test).
 #[inline(always)]
+/// Whether traffic_yield may move slot s (its early returns otherwise): a
+/// standing unit (not a walker: pushes it answers), or a flow walker short
+/// of its step (short: walker_short); any other walker returns at once.
+#[inline(always)]
+unsafe fn yield_tag(m:&Mv,s:usize,short:bool)->bool{
+    let on=*m.on.add(s);
+    let walker=on==1||on==4||on==6||on==7||(BRAIN&&rd(m.cmode,s)&3==2);
+    !walker||short
+}
 unsafe fn walker_short(m:&Mv,s:usize)->bool{
+    walker_short_at(m,s,*(m.x0.add(s) as *const i32),*(m.y0.add(s) as *const i32))
+}
+/// walker_short with its tick-start position given (ox, oy in eighths: the
+/// footprint's before the stage, resolve_slot's; unit.x0 / y0 hold the same).
+#[inline(always)]
+unsafe fn walker_short_at(m:&Mv,s:usize,ox:i32,oy:i32)->bool{
     if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0){return false;}
     let (hx,hy)=(rd(m.cvx, (s) * SR),rd(m.cvy, (s) * SR));let hl2=hx*hx+hy*hy;
     if !(hl2>0.0){return false;}
-    let dx=rd(m.x,s)-rd(m.x0,s);let dy=rd(m.y,s)-rd(m.y0,s);
+    let dx=rd(m.x,s)-ox as f64*0.125;let dy=rd(m.y,s)-oy as f64*0.125;
     // (Along its heading, as traffic_yield measures it.)
     let along=(dx*hx+dy*hy)/sqrt(hl2);
     along<=sqrt(hl2)*m.dkf*0.75
@@ -2995,21 +3057,25 @@ unsafe fn walker_short(m:&Mv,s:usize)->bool{
 /// step resolved it itself before: the pressure's steering, shoulders, swaps,
 /// pushes. Its tile flags (out 1 / 3, spent) for where it ended up.
 #[inline(always)]
-unsafe fn resolve_slot(m:&Mv,s:usize){
+unsafe fn resolve_slot(m:&Mv,s:usize)->(i32,i32){
     let g=&*m.occ;
-    if !g.active(s){return;}
+    if !g.active(s){return (*(m.x0.add(s) as *const i32),*(m.y0.add(s) as *const i32));}
     let (ox,oy)=g.pos(s);
     let nx=*(m.x.add(s) as *const i32);let ny=*(m.y.add(s) as *const i32);
-    if nx==ox&&ny==oy{return;}
+    if nx==ox&&ny==oy{return (ox,oy);}
+    dbgc!(m,93);
     let (tx,ty)=if m.traffic_mode==0{checked_position_legacy(m,s,nx as f64*0.125,ny as f64*0.125)}else{checked_traffic_q(m,s,ox,oy,nx,ny,true)};
     wr(m.x,s,tx);wr(m.y,s,ty);
     let o=rd(m.out,s);
     if o==1||o==3{
-        let x0=rd(m.x0,s);let y0=rd(m.y0,s);
+        // (Its tick-start position: its footprint's before this stage moved it (ox, oy), as unit.x0 / y0: two lines a mover fewer.)
+        #[cfg(feature="dbgc")]{if *(m.x0.add(s) as *const i32)!=ox||*(m.y0.add(s) as *const i32)!=oy{dbgc!(m,98);}}
+        let x0=ox as f64*0.125;let y0=oy as f64*0.125;
         let crossed=floor(tx*m.itile)!=floor(x0*m.itile)||floor(ty*m.itile)!=floor(y0*m.itile);
         wr(m.out,s,if crossed{3}else{1});
         if !crossed&&rd(m.spent,s)!=0{wr(m.spent,s,0);}
     }
+    (ox,oy)
 }
 #[no_mangle]
 pub unsafe extern "C" fn mv_move(a:u32,s0:i32,end:i32,chunk:i32){move_job(a,s0,end,chunk,false);}
@@ -5062,9 +5128,16 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
     }
     let base = chunk.max(0) as usize * FLOW_PER;
     let mut n = 0usize;
-    for s in s0.max(0)..end.max(0) {
-        let s = s as usize;
-        let k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
+    let (se, one) = (end.max(0) as usize, i8x16_splat(1));
+    let mut s = s0.max(0) as usize;
+    while s < se {
+        // (Sixteen slots without a flow walker (on 1, alive): flow_key's first test, a compare.)
+        if s & 15 == 0 && s + 16 <= se {
+            let w = v128_andnot(i8x16_eq(v128_load(m.on.add(s) as *const v128), one), i8x16_ne(v128_load(m.dead.add(s) as *const v128), i8x16_splat(0)));
+            if !v128_any_true(w) { s += 16; continue; }
+        }
+        let k = match flow_key(&m, s, wver, wbw) { Some(k) => { s += 1; k }, None => { s += 1; continue } };
+        let s = s - 1;
         let r = m.nv.add(s * NV_STRIDE);
         if *r == k.tl && *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) == k.ver && *r.add(NV_W) == k.wv {
             continue;

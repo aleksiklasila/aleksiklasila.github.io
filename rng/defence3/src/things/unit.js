@@ -1705,6 +1705,8 @@ function statusPrepassRun() {
     const NO = Math.max(16, players.length);
     if (!_statusShr || _statusShr.length < chunks * NO) { _statusShr = simSharedArray(Float64Array, Math.max(1024, chunks * NO * 2)); simParallelBind('st.shr', _statusShr); }
     P[5] = NO; P[6] = RESOURCE_FIXED_POINT_SCALE; P[7] = STATUS_LOOKS_PER_JOB;
+    // (Empty slabs skipped by the copies: the allocator's free counts, k.rs slab_runs.)
+    P[9] = simUnitStateSlabsBind();
     simParallelRun(SIM_KERNEL_STATUS, chunks);
     {
         // (The shares per owner: wasm/src/nfs.rs k_owner_sum.)
@@ -3958,6 +3960,8 @@ function _acqPost() {
     P[0] = n; P[1] = 8192; P[2] = SIM_SEP_ABSENT; P[3] = CMD_ATTACKING; P[4] = SIM_COMBAT_BRAIN ? 1 : 0; P[5] = CMD_MOVING;
     // (And the units' look for the towers: tower.js towerAcqUnitMeta, P[6] / P[7].)
     if (typeof towerAcqUnitMeta === 'function') towerAcqUnitMeta(P, cap);
+    // (Empty slabs only marked: k.rs k_acq_snap.)
+    P[8] = simUnitStateSlabsBind();
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index

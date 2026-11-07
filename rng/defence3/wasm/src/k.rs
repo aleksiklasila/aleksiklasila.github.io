@@ -145,6 +145,9 @@ pub unsafe extern "C" fn k_ix_keys(a: u32, chunk: i32) {
     let k = K::new(a);
     let (sl, xs, ys, dead, ag) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4));
     let (keys, areas, bad) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
+    // (Per row its key and slot packed, key high ([8]: the index's radix
+    // passes carry them, k_ixr_*; null: none).)
+    let pk = k.p::<u64>(8);
     let (n, per, nch, na) = (k.i(0), k.i(1), k.i(2), k.i(3));
     let tq = TileQ::new(k.f(9));
     let (gw, gh, cs, cw) = (k.i(10), k.i(11), k.i(12), k.i(13));
@@ -160,13 +163,16 @@ pub unsafe extern "C" fn k_ix_keys(a: u32, chunk: i32) {
         let su = si as usize;
         if g(dead, su) != 0 {
             s(keys, i, nch);
+            if !pk.is_null() { s(pk, i, ((nch as u32 as u64) << 32) | si as u32 as u64); }
             if !areas.is_null(){s(areas, i, na);}
             continue;
         }
         let gx = tq.of(g(xs, su)).max(0).min(gw - 1);
         let gy = tq.of(g(ys, su)).max(0).min(gh - 1);
         let key = if cs == 1 { gy * gw + gx } else { idiv(gy, cs) * cw + idiv(gx, cs) };
-        s(keys, i, if key >= 0 && key < nch { key } else { nch });
+        let key = if key >= 0 && key < nch { key } else { nch };
+        s(keys, i, key);
+        if !pk.is_null() { s(pk, i, ((key as u32 as u64) << 32) | si as u32 as u64); }
         if !areas.is_null(){
             let ar = g(ag, (gy * gw + gx) as usize);
             s(areas, i, if ar >= 0 && ar < na { ar } else { na });
@@ -180,169 +186,6 @@ fn floorf(v: f32) -> f32 {
     if v.is_nan() { v } else if t > v { t - 1.0 } else { t }
 }
 
-/// In-place heapsort of u64 keys (distinct): no allocation, no panics.
-unsafe fn heapsort_u64(v: *mut u64, n: usize) {
-    if n < 2 {
-        return;
-    }
-    let sift = |v: *mut u64, mut root: usize, end: usize| {
-        loop {
-            let mut c = 2 * root + 1;
-            if c >= end {
-                break;
-            }
-            if c + 1 < end && *v.add(c + 1) > *v.add(c) {
-                c += 1;
-            }
-            if *v.add(root) >= *v.add(c) {
-                break;
-            }
-            core::ptr::swap(v.add(root), v.add(c));
-            root = c;
-        }
-    };
-    let mut i = n / 2;
-    while i > 0 {
-        i -= 1;
-        sift(v, i, n);
-    }
-    let mut end = n;
-    while end > 1 {
-        end -= 1;
-        core::ptr::swap(v, v.add(end));
-        sift(v, 0, end);
-    }
-}
-
-/// SIM_KERNEL_INDEX_MERGE (one job): the index order ix.ordC (units indices
-/// by (chunk, index)) from the last index: its entries whose unit holds the
-/// same slot and stands in the same chunk keep their order; the others are
-/// sorted by (chunk, index) and merged in; units without a chunk after.
-/// Disorder among the kept ones (never expected): everything sorted.
-/// Arrays: sep.eslot, sep.ekey, ix.eid, ix.keys, ix.slots, unit.id, ix.inv,
-/// ix.invStamp, ix.kept, ix.ordC, ix.chg (u64 work, as many as units).
-/// P: [0] units, [1] last entries, [2] chunks, [3] epoch.
-#[no_mangle]
-pub unsafe extern "C" fn k_ix_merge(a: u32, _chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let (es, ek, eid, key, sl, uid) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
-    let (inv, invs, kept, out, ch) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u64>(10));
-    let (n, prev, nch, ep) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2), k.i(3));
-    for i in 0..n {
-        let sv = g(sl, i);
-        if sv >= 0 {
-            s(inv, sv as usize, i as i32);
-            s(invs, sv as usize, ep);
-        }
-    }
-    let mut kn = 0usize;
-    let mut sorted = true;
-    let (mut lk, mut li) = (-1i32, -1i32);
-    for p in 0..prev {
-        let sv = g(es, p);
-        if sv < 0 || g(invs, sv as usize) != ep {
-            continue;
-        }
-        let i = g(inv, sv as usize);
-        let kk = g(key, i as usize);
-        if kk >= nch || kk != g(ek, p) || g(uid, sv as usize) != g(eid, p) {
-            continue;
-        }
-        s(kept, i as usize, ep);
-        if kk < lk || (kk == lk && i < li) {
-            sorted = false;
-        }
-        lk = kk;
-        li = i;
-        s(out, kn, i);
-        kn += 1;
-    }
-    let mut m = 0usize;
-    if sorted {
-        for i in 0..n {
-            let kk = g(key, i);
-            if kk < nch && g(kept, i) != ep {
-                s(ch, m, ((kk as u64) << 32) | i as u64);
-                m += 1;
-            }
-        }
-    } else {
-        for i in 0..n {
-            let kk = g(key, i);
-            if kk < nch {
-                s(ch, m, ((kk as u64) << 32) | i as u64);
-                m += 1;
-            }
-        }
-        kn = 0;
-    }
-    heapsort_u64(ch, m);
-    // Merge from the back (out's front holds the kept ones).
-    let mut ai = kn as isize - 1;
-    let mut bi = m as isize - 1;
-    let mut w = kn as isize + m as isize - 1;
-    while bi >= 0 {
-        let cb = g(ch, bi as usize);
-        let (kb, ib) = ((cb >> 32) as i32, (cb & 0xFFFF_FFFF) as i32);
-        if ai >= 0 {
-            let ia = g(out, ai as usize);
-            let ka = g(key, ia as usize);
-            if ka > kb || (ka == kb && ia > ib) {
-                s(out, w as usize, ia);
-                ai -= 1;
-                w -= 1;
-                continue;
-            }
-        }
-        s(out, w as usize, ib);
-        bi -= 1;
-        w -= 1;
-    }
-    // (The units without a chunk after them.)
-    let mut t = kn + m;
-    let mut i = 0usize;
-    while i < n && t < n {
-        if !(g(key, i) < nch) {
-            s(out, t, i as i32);
-            t += 1;
-        }
-        i += 1;
-    }
-}
-
-// ---- The index order, merged in parallel (SIM_KERNEL_IXM_*) ----
-// The same order as k_ix_merge: units with a chunk by (chunk, units index),
-// then those without one by units index. From the last index's entries
-// (sorted by chunk): those whose unit holds the same slot in the same chunk
-// are kept; the rest (changed) are sorted in. In stages of a chain: the
-// slots' units indices; per band of chunks the kept entries (a band's
-// disorder, after units changed places in the list, sorted in the band);
-// per block of units the changed ones (sorted) and those without a chunk;
-// one job's plan (each band's place in the order, each block's runs per
-// band); per band the merge into place, per block its chunkless ones.
-// Arrays: 0 sep.eslot, 1 sep.ekey, 2 ix.eid, 3 ix.keys, 4 ix.slots,
-// 5 unit.id, 6 ix.inv, 7 ix.invStamp, 8 ix.kept, 9 ix.ordC, 10 ix.chg (u64
-// per unit), 11 ix.kt (per last entry: its kept unit or -1), 12 ix.ch2 (u64
-// per unit), 13 ix.ncl, 14 ix.mplan. P: [0] units, [1] last entries, [2]
-// chunks, [3] epoch, [4] bands B, [5] chunks a band KB, [6] units a block
-// UJ, [7] blocks J.
-// ix.mplan: chc[J], ncc[J], keptCnt[B], dis[B], boff[B + 1], ncOff[J],
-// bst[(B + 1) * J].
-struct Ixm {
-    n: usize,
-    prev: usize,
-    nch: i32,
-    ep: i32,
-    b: usize,
-    kb: i32,
-    uj: usize,
-    j: usize,
-}
-#[inline(always)]
-unsafe fn ixm(k: &K) -> Ixm {
-    Ixm { n: k.i(0).max(0) as usize, prev: k.i(1).max(0) as usize, nch: k.i(2), ep: k.i(3), b: k.i(4).max(1) as usize, kb: k.i(5).max(1), uj: k.i(6).max(1) as usize, j: k.i(7).max(0) as usize }
-}
 /// The first position in [lo, hi) whose key is at least kk (keys sorted).
 #[inline(always)]
 unsafe fn lb_i32(v: *const i32, mut lo: usize, mut hi: usize, kk: i32) -> usize {
@@ -360,350 +203,94 @@ unsafe fn lb_u64(v: *const u64, mut lo: usize, mut hi: usize, kk: u64) -> usize 
     }
     lo
 }
-/// SIM_KERNEL_IXM_INV: per units index of the block, its slot's index.
+/// SIM_KERNEL_IXR_HIST (a pass of the index's stable radix sort, per
+/// partition of P[1] entries): the 8-bit digit counts of the packed entries'
+/// keys (k_ix_keys pk: key high, slot low) at ix.rhist[part * 256..].
+/// Arrays: ix.pkA, ix.pkB, ix.rhist. P: [0] entries, [1] partition, [2]
+/// shift (of the key), [4] flip (input B).
 #[no_mangle]
-pub unsafe extern "C" fn k_ixm_inv(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let m = ixm(&k);
-    let (sl, inv, invs) = (k.p::<i32>(4), k.p::<i32>(6), k.p::<i32>(7));
-    let i0 = (chunk.max(0) as usize * m.uj).min(m.n);
-    let i1 = (i0 + m.uj).min(m.n);
-    for i in i0..i1 {
-        let sv = g(sl, i);
-        if sv >= 0 {
-            s(inv, sv as usize, i as i32);
-            s(invs, sv as usize, m.ep);
-        }
-    }
-}
-/// SIM_KERNEL_IXM_KEEP: band `chunk`'s last entries: kept (ix.kt its units
-/// index, ix.kept stamped) or not (-1); the band's count and disorder.
-#[no_mangle]
-pub unsafe extern "C" fn k_ixm_keep(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let m = ixm(&k);
-    let (es, ek, eid, key, uid) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(5));
-    let (inv, invs, kept, kt, plan) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(11), k.p::<i32>(14));
-    let b = chunk.max(0) as usize;
-    if b >= m.b {
-        return;
-    }
-    let k0 = (b as i64 * m.kb as i64).min(m.nch as i64) as i32;
-    let k1 = ((b as i64 + 1) * m.kb as i64).min(m.nch as i64) as i32;
-    let p0 = lb_i32(ek, 0, m.prev, k0);
-    let p1 = lb_i32(ek, p0, m.prev, k1);
-    let (mut cnt, mut dis) = (0i32, 0i32);
-    let (mut lk, mut li) = (-1i32, -1i32);
-    for p in p0..p1 {
-        s(kt, p, -1);
-        let sv = g(es, p);
-        if sv < 0 || g(invs, sv as usize) != m.ep {
-            continue;
-        }
-        let i = g(inv, sv as usize);
-        let kk = g(key, i as usize);
-        if kk >= m.nch || kk != g(ek, p) || g(uid, sv as usize) != g(eid, p) {
-            continue;
-        }
-        s(kept, i as usize, m.ep);
-        s(kt, p, i);
-        if kk < lk || (kk == lk && i < li) {
-            dis = 1;
-        }
-        lk = kk;
-        li = i;
-        cnt += 1;
-    }
-    let j = m.j;
-    s(plan, 2 * j + b, cnt);
-    s(plan, 2 * j + m.b + b, dis);
-}
-/// SIM_KERNEL_IXM_CHG: block `chunk`'s units: the changed ones (a chunk, not
-/// kept) as (chunk << 32 | index) sorted, at ix.chg[block * UJ..]; those
-/// without a chunk at ix.ncl[block * UJ..]; their counts.
-#[no_mangle]
-pub unsafe extern "C" fn k_ixm_chg(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let m = ixm(&k);
-    let (key, kept, ch, ncl, plan) = (k.p::<i32>(3), k.p::<i32>(8), k.p::<u64>(10), k.p::<i32>(13), k.p::<i32>(14));
-    let jb = chunk.max(0) as usize;
-    if jb >= m.j {
-        return;
-    }
-    let i0 = (jb * m.uj).min(m.n);
-    let i1 = (i0 + m.uj).min(m.n);
-    let (mut c, mut nc) = (0usize, 0usize);
-    let mut sorted = true;
-    let mut last = 0u64;
-    for i in i0..i1 {
-        let kk = g(key, i);
-        if kk < m.nch {
-            if g(kept, i) != m.ep {
-                let v = ((kk as u32 as u64) << 32) | i as u64;
-                if c > 0 && v < last {
-                    sorted = false;
-                }
-                last = v;
-                s(ch, i0 + c, v);
-                c += 1;
-            }
-        } else {
-            s(ncl, i0 + nc, i as i32);
-            nc += 1;
-        }
-    }
-    if !sorted {
-        heapsort_u64(ch.add(i0), c);
-    }
-    s(plan, jb, c as i32);
-    s(plan, m.j + jb, nc as i32);
-}
-/// SIM_KERNEL_IXM_PLAN (one job): each block's run per band, each band's
-/// place in the order, each block's chunkless ones' place after them.
-#[no_mangle]
-pub unsafe extern "C" fn k_ixm_plan(a: u32, _chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let m = ixm(&k);
-    let (ch, plan) = (k.p::<u64>(10), k.p::<i32>(14));
-    let (j, bn) = (m.j, m.b);
-    let (o_kc, o_boff, o_nco, o_bst) = (2 * j, 2 * j + 2 * bn, 2 * j + 3 * bn + 1, 3 * j + 3 * bn + 1);
-    for jb in 0..j {
-        let base = jb * m.uj;
-        let end = base + g(plan, jb) as usize;
-        let mut lo = base;
-        for b in 0..bn {
-            let k0 = (b as i64 * m.kb as i64).min(m.nch as i64) as u64;
-            lo = lb_u64(ch, lo, end, k0 << 32);
-            s(plan, o_bst + b * j + jb, lo as i32);
-        }
-        s(plan, o_bst + bn * j + jb, end as i32);
-    }
-    let mut acc = 0i32;
-    for b in 0..bn {
-        let mut c = g(plan, o_kc + b);
-        for jb in 0..j {
-            c += g(plan, o_bst + (b + 1) * j + jb) - g(plan, o_bst + b * j + jb);
-        }
-        s(plan, o_boff + b, acc);
-        acc += c;
-    }
-    s(plan, o_boff + bn, acc);
-    for jb in 0..j {
-        s(plan, o_nco + jb, acc);
-        acc += g(plan, j + jb);
-    }
-}
-/// SIM_KERNEL_IXM_WRITE: jobs 0..B a band each (its kept entries, sorted if
-/// out of order, merged with its changed ones into ix.ordC at its place;
-/// ix.ch2 the band's scratch there), then a job per block (its chunkless
-/// units after all of them).
-#[no_mangle]
-pub unsafe extern "C" fn k_ixm_write(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let m = ixm(&k);
-    let (ek, key, out, ch, kt, ch2, ncl, plan) = (k.p::<i32>(1), k.p::<i32>(3), k.p::<i32>(9), k.p::<u64>(10), k.p::<i32>(11), k.p::<u64>(12), k.p::<i32>(13), k.p::<i32>(14));
-    let (j, bn) = (m.j, m.b);
-    let (o_kc, o_dis, o_boff, o_nco, o_bst) = (2 * j, 2 * j + bn, 2 * j + 2 * bn, 2 * j + 3 * bn + 1, 3 * j + 3 * bn + 1);
-    let c = chunk.max(0) as usize;
-    if c >= bn {
-        let jb = c - bn;
-        if jb >= j {
-            return;
-        }
-        let (src, cnt, dst) = (jb * m.uj, g(plan, j + jb) as usize, g(plan, o_nco + jb) as usize);
-        core::ptr::copy_nonoverlapping(ncl.add(src), out.add(dst), cnt);
-        return;
-    }
-    let b = c;
-    let off = g(plan, o_boff + b) as usize;
-    let kc = g(plan, o_kc + b) as usize;
-    // Its kept entries in the scratch, in order (sorted when not).
-    let k0 = (b as i64 * m.kb as i64).min(m.nch as i64) as i32;
-    let k1 = ((b as i64 + 1) * m.kb as i64).min(m.nch as i64) as i32;
-    let p0 = lb_i32(ek, 0, m.prev, k0);
-    let p1 = lb_i32(ek, p0, m.prev, k1);
-    let mut w = off;
-    for p in p0..p1 {
-        let i = g(kt, p);
-        if i >= 0 {
-            s(ch2, w, ((g(key, i as usize) as u32 as u64) << 32) | i as u64);
-            w += 1;
-        }
-    }
-    if g(plan, o_dis + b) != 0 {
-        heapsort_u64(ch2.add(off), kc);
-    }
-    // Its changed ones (each block's run sorted), then sorted together.
-    let c0 = off + kc;
-    let mut w2 = c0;
-    for jb in 0..j {
-        let (q0, q1) = (g(plan, o_bst + b * j + jb) as usize, g(plan, o_bst + (b + 1) * j + jb) as usize);
-        if q1 > q0 {
-            core::ptr::copy_nonoverlapping(ch.add(q0), ch2.add(w2), q1 - q0);
-            w2 += q1 - q0;
-        }
-    }
-    let cc = w2 - c0;
-    // (One run already sorted: most bands' changed ones come from a block or two.)
-    let mut runs = 0;
-    for jb in 0..j {
-        if g(plan, o_bst + (b + 1) * j + jb) > g(plan, o_bst + b * j + jb) {
-            runs += 1;
-        }
-    }
-    if runs > 1 {
-        heapsort_u64(ch2.add(c0), cc);
-    }
-    // The two sorted runs merged into place.
-    let (mut x, mut y, mut o) = (off, c0, off);
-    let (xe, ye) = (c0, c0 + cc);
-    while x < xe && y < ye {
-        let (vx, vy) = (g(ch2, x), g(ch2, y));
-        if vx < vy {
-            s(out, o, (vx & 0xFFFF_FFFF) as i32);
-            x += 1;
-        } else {
-            s(out, o, (vy & 0xFFFF_FFFF) as i32);
-            y += 1;
-        }
-        o += 1;
-    }
-    while x < xe {
-        s(out, o, (g(ch2, x) & 0xFFFF_FFFF) as i32);
-        x += 1;
-        o += 1;
-    }
-    while y < ye {
-        s(out, o, (g(ch2, y) & 0xFFFF_FFFF) as i32);
-        y += 1;
-        o += 1;
-    }
-}
-
-/// SIM_KERNEL_INDEX_FILL: per position in key order its unit's slot (and
-/// chunk and id), and where each key's range starts (stamped); ix.listed[k]
-/// the first position past the valid keys. P[14] 1: areas (ix.ordA,
-/// ix.areas -> ix.aslot, ix.astart, ix.astamp), else chunks (ix.ordC,
-/// ix.keys -> sep.eslot, sep.ekey, ix.eid, ix.start, ix.stamp).
-/// Arrays: ix.slots, ord, key, out slots, out keys (chunks), start, stamp,
-/// ix.listed, ix.eid (chunks), unit.id.
-/// P: [0] units, [1] per job, [2] chunks, [3] areas, [14] areas?, [15] epoch.
-#[no_mangle]
-pub unsafe extern "C" fn k_ix_fill(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let area = k.i(14) == 1;
-    let (sl, ord, key, outs, outk, start, stamp, listed, eidp, uid) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4),
-        k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9));
-    let lim = if area { k.i(3) } else { k.i(2) };
-    let ep = k.i(15);
+pub unsafe extern "C" fn k_ixr_hist(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (pa, pb, hist) = (k.p::<u64>(0), k.p::<u64>(1), k.p::<i32>(2));
+    let shift = 32 + (k.i(2) & 31) as u32;
+    let input = if k.i(4) != 0 { pb } else { pa };
+    let hh = hist.add(chunk as usize * 256);
+    let mut h = [0i32; 256];
     let (i0, i1) = job(chunk, k.i(1), k.i(0));
-    for pos in i0..i1 {
-        let i = g(ord, pos) as usize;
-        let kk = g(key, i);
-        if kk >= lim {
-            if pos == 0 || g(key, g(ord, pos - 1) as usize) < lim {
-                s(listed, if area { 1 } else { 0 }, pos as i32);
-            }
-            continue;
-        }
-        let sv = g(sl, i);
-        s(outs, pos, sv);
-        if !eidp.is_null() && !area {
-            s(eidp, pos, if sv >= 0 { g(uid, sv as usize) } else { -1 });
-        }
-        if !outk.is_null() && !area {
-            s(outk, pos, kk);
-        }
-        if pos == 0 || g(key, g(ord, pos - 1) as usize) != kk {
-            s(start, kk as usize, pos as i32);
-            s(stamp, kk as usize, ep);
-        }
+    for i in i0..i1 {
+        let d = ((g(input, i) >> shift) & 255) as usize;
+        *h.get_unchecked_mut(d) += 1;
+    }
+    for d in 0..256 { s(hh, d, *h.get_unchecked(d)); }
+}
+
+/// SIM_KERNEL_IXR_SCATTER: a partition's packed entries to their cursors
+/// (ix.rhist after SIM_KERNEL_IXR_PREFIX), in order: stable. Arrays and P as
+/// IXR_HIST; output the other array.
+#[no_mangle]
+pub unsafe extern "C" fn k_ixr_scatter(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (pa, pb, hist) = (k.p::<u64>(0), k.p::<u64>(1), k.p::<i32>(2));
+    let shift = 32 + (k.i(2) & 31) as u32;
+    let (input, output) = if k.i(4) != 0 { (pb, pa) } else { (pa, pb) };
+    let hh = hist.add(chunk as usize * 256);
+    let mut cur = [0i32; 256];
+    for d in 0..256 { *cur.get_unchecked_mut(d) = g(hh, d); }
+    let (i0, i1) = job(chunk, k.i(1), k.i(0));
+    for i in i0..i1 {
+        let v = g(input, i);
+        let d = ((v >> shift) & 255) as usize;
+        let at = *cur.get_unchecked(d);
+        *cur.get_unchecked_mut(d) = at + 1;
+        s(output, at as usize, v);
     }
 }
 
-/// SIM_KERNEL_INDEX_IDSORT: the entries of each chunk (a run of one key)
-/// that starts in block `chunk` of positions sorted by unit id (sep.eslot,
-/// sep.ekey, ix.eid together): a chunk's units by id in every build, the
-/// order the build by changes keeps (chunks hold a few units: insertion).
-/// Arrays: sep.eslot, sep.ekey, ix.eid, ix.listed. P: [0] per job.
+/// SIM_KERNEL_INDEX_BUILD (blocks of positions): the index from the packed
+/// entries sorted by key (k_ix_keys, k_ixr_*; the rows are by id ascending
+/// and the sort stable: a key's entries are by id). A job takes the runs (a
+/// key's positions) that start in its block, whole: their entries (slot,
+/// key), the key's start, stamp and count, and (P[16] 1) the tile's owner
+/// bits; the first position past the valid keys into ix.listed[0] (kept at
+/// the entries' count when there is none). P[17] 1: the entries' ids too
+/// (ix.eid, the builds by changes read them).
+/// Arrays: [0] the sorted entries, sep.eslot, sep.ekey, ix.start, ix.stamp,
+/// ix.listed, ix.cnt, unit.owner, ix.omask, ix.eid, unit.id.
+/// P: [0] entries, [1] per job, [2] chunks, [15] epoch, [16] masks, [17] ids.
 #[no_mangle]
-pub unsafe extern "C" fn k_ix_idsort(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let (es, ek, eid, listed) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3));
-    let n = g(listed, 0).max(0) as usize;
-    let (p0, p1) = job(chunk, k.i(0), n as i32);
-    let mut p = p0;
-    // (A run that started before the block is its starter's.)
-    while p > 0 && p < p1 && g(ek, p - 1) == g(ek, p) {
-        p += 1;
-    }
-    while p < p1 {
-        let kk = g(ek, p);
-        let mut e = p + 1;
-        while e < n && g(ek, e) == kk {
+pub unsafe extern "C" fn k_ix_build(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (pk, es, ek, start, stamp, listed, cnt) = (k.p::<u64>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (own, msk, eid, uid) = (k.p::<i8>(7), k.p::<u8>(8), k.p::<i32>(9), k.p::<i32>(10));
+    let (n, lim, ep) = (k.i(0).max(0) as usize, k.i(2), k.i(15));
+    let masks = k.i(16) == 1 && !msk.is_null() && !own.is_null();
+    let ids = k.i(17) == 1 && !eid.is_null() && !uid.is_null();
+    let (i0, i1) = job(chunk, k.i(1), n as i32);
+    let key_at = |p: usize| -> i32 { (g(pk, p) >> 32) as u32 as i32 };
+    let mut p = i0;
+    // (A run from the block before: its starter's.)
+    if p > 0 && p < i1 { let k0 = key_at(p - 1); while p < i1 && key_at(p) == k0 { p += 1; } }
+    while p < i1 {
+        let kk = key_at(p);
+        // (Past the valid keys (one key, the chunks' count): sorted last.)
+        if kk >= lim || kk < 0 { s(listed, 0, p as i32); break; }
+        let mut e = p;
+        let mut m = 0u32;
+        while e < n {
+            let v = g(pk, e);
+            if (v >> 32) as u32 as i32 != kk { break; }
+            let sv = v as u32 as i32;
+            s(es, e, sv);
+            s(ek, e, kk);
+            if masks { let o = g(own, sv as usize) as i32; m |= if o >= 0 && o < 8 { 1 << o } else { 0xFF }; }
+            if ids { s(eid, e, g(uid, sv as usize)); }
             e += 1;
         }
-        for i in p + 1..e {
-            let (si, di) = (g(es, i), g(eid, i));
-            let mut j = i;
-            while j > p && g(eid, j - 1) > di {
-                s(es, j, g(es, j - 1));
-                s(eid, j, g(eid, j - 1));
-                j -= 1;
-            }
-            s(es, j, si);
-            s(eid, j, di);
-        }
+        s(start, kk as usize, p as i32);
+        s(stamp, kk as usize, ep);
+        s(cnt, kk as usize, (e - p) as i32);
+        if masks { s(msk, kk as usize, m as u8); }
         p = e;
-    }
-}
-
-/// SIM_KERNEL_INDEX_RUNS: each key's count at the end of its range; for
-/// areas, the units of each owner too (counted by the range's first
-/// position). Arrays: ix.slots, ord, key, start, cnt, ix.listed, ix.aown,
-/// unit.owner. P as INDEX_FILL's, [4] players.
-#[no_mangle]
-pub unsafe extern "C" fn k_ix_runs(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let area = k.i(14) == 1;
-    let (sl, ord, key, start, cnt, listed, aown, own) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4),
-        k.p::<i32>(5), k.p::<i32>(6), k.p::<i8>(7));
-    let players = k.i(4).max(0) as usize;
-    let nl = g(listed, if area { 1 } else { 0 });
-    let (i0, i1) = job(chunk, k.i(1), nl);
-    let nlu = nl.max(0) as usize;
-    for pos in i0..i1 {
-        let kk = g(key, g(ord, pos) as usize);
-        if pos + 1 == nlu || g(key, g(ord, pos + 1) as usize) != kk {
-            s(cnt, kk as usize, pos as i32 + 1 - g(start, kk as usize));
-        }
-        if area && (pos == 0 || g(key, g(ord, pos - 1) as usize) != kk) {
-            let o0 = kk as usize * players;
-            for p in 0..players {
-                s(aown, o0 + p, 0);
-            }
-            let mut q = pos;
-            while q < nlu {
-                let i = g(ord, q) as usize;
-                if g(key, i) != kk {
-                    break;
-                }
-                let o = g(own, g(sl, i) as usize) as i32;
-                if o >= 0 && (o as usize) < players {
-                    let c = aown.add(o0 + o as usize);
-                    *c += 1;
-                }
-                q += 1;
-            }
-        }
     }
 }
 
@@ -1361,8 +948,10 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
     let per = k.i(3).max(1);
     let sep_copy = k.i(4) == 1;
     let (i0, i1) = job(chunk, k.i(1), k.i(0));
-    // The tick-start copies, in bulk.
-    if i1 > i0 {
+    // The tick-start copies, in bulk (by runs of slabs with units: [40]
+    // sl.sfree, P[9] its slabs; an empty slab's slots hold no unit).
+    let (sfree, slabs) = (k.p::<u8>(40), k.i(9).max(0) as usize);
+    let mut copy = |i0: usize, i1: usize| {
         let n = i1 - i0;
         core::ptr::copy_nonoverlapping(xs.add(i0), x0.add(i0), n);
         core::ptr::copy_nonoverlapping(ys.add(i0), y0.add(i0), n);
@@ -1388,6 +977,9 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                 q += 1;
             }
         }
+    };
+    if i1 > i0 {
+        if sfree.is_null() || slabs == 0 { copy(i0, i1); } else { slab_runs(sfree, slabs, i0, i1, |r0, r1, empty| if !empty { copy(r0, r1); }); }
     }
     let mut n = 0usize;
     let zero16 = i8x16_splat(0);
@@ -1573,10 +1165,16 @@ pub unsafe extern "C" fn k_dead_mark(a: u32, chunk: i32) {
     let fz = f32x4_splat(0.0);
     let mut q = s0;
     while q < s1 {
-        // (Four with energy left at once.)
-        if q + 4 <= s1 && i32x4_bitmask(f32x4_gt(v128_load(en.add(q) as *const v128), fz)) == 15 {
-            q += 4;
-            continue;
+        // (Four at once with none to mark: energy left, dead already or no unit
+        // (a released slot keeps its last energy: no unit there).)
+        if q + 4 <= s1 {
+            let ld = |p: *const u8| u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(p as *const u32)));
+            let out_e = v128_not(f32x4_gt(v128_load(en.add(q) as *const v128), fz));
+            let alive = v128_and(i32x4_eq(ld(dead.add(q)), i32x4_splat(0)), i32x4_ne(ld(live.add(q)), i32x4_splat(0)));
+            if !v128_any_true(v128_and(out_e, alive)) {
+                q += 4;
+                continue;
+            }
         }
         if !(g(en, q) > 0.0) && g(dead, q) == 0 && g(live, q) != 0 {
             s(dead, q, 1);
@@ -1937,6 +1535,28 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
     }
 }
 
+/// Slots s0..s1 as runs of whole slabs (64 slots) empty or not by the
+/// allocator's free counts (sl.sfree: 64 an empty slab), the job's ends
+/// partial: f(run start, run end, empty). Empty slabs hold no unit (nothing
+/// lives there, nothing is listed by the index): a pass over every slot
+/// skips their columns.
+#[inline(always)]
+pub(crate) unsafe fn slab_runs(sfree: *const u8, slabs: usize, s0: usize, s1: usize, mut f: impl FnMut(usize, usize, bool)) {
+    let mut q = s0;
+    while q < s1 {
+        let sl = q >> 6;
+        let empty = sl < slabs && g(sfree, sl) >= 64;
+        let mut e = ((sl + 1) << 6).min(s1);
+        while e < s1 {
+            let n = e >> 6;
+            if (n < slabs && g(sfree, n) >= 64) != empty { break; }
+            e = ((n + 1) << 6).min(s1);
+        }
+        f(q, e, empty);
+        q = e;
+    }
+}
+
 /// SIM_KERNEL_ACQ_SNAP: the acquisition tier's snapshot per slot (positions
 /// at the pass's start, owner, command, aggro range, id; flags 1 dead, 2
 /// absent from the index, 4 attacking a unit (no structure target), 8 a
@@ -1949,10 +1569,28 @@ pub unsafe extern "C" fn k_combat_scan(a: u32, chunk: i32) {
 /// acq.cmd, acq.rng, acq.id, acq.out, unit.cmMode, unit.cmT, unit.cmTId,
 /// unit.isWk, unit.atkDmg, unit.mvRangeK, acq.cm, acq.ct, acq.ctid, acq.rk.
 /// P: [0] slots, [1] per job, [2] absent key, [3] CMD_ATTACKING, [4], [5].
+/// (Arrays [48] sl.sfree, P[8] its slabs: an empty slab's slots only
+/// marked (dead, absent, not looked for: nothing reads the rest of an
+/// empty slot), not copied: ~a quarter of the slots in a battle's wake.)
 #[no_mangle]
 pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
+    let k = K::new(waddr(a) as *const i32);
+    let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    if s1 <= s0 {
+        return;
+    }
+    let (sfree, slabs) = (k.p::<u8>(48), k.i(8).max(0) as usize);
+    if sfree.is_null() || slabs == 0 {
+        acq_snap_range(&k, s0, s1);
+        return;
+    }
+    let (sf, outa) = (k.p::<u8>(14), k.p::<i32>(18));
+    slab_runs(sfree, slabs, s0, s1, |r0, r1, empty| {
+        if !empty { acq_snap_range(&k, r0, r1); return; }
+        for q in r0..r1 { s(sf, q, 3); s(outa, q, -2); }
+    });
+}
+unsafe fn acq_snap_range(k: &K, s0: usize, s1: usize) {
     let (x0, y0, own, dead, sep, cmd, rng, id, acqb) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<u32>(4), k.p::<u8>(5),
         k.p::<f32>(6), k.p::<i32>(7), k.p::<u8>(8));
     let (tid, sout, sx, sy, so, sf, sc, sr, si, outa) = (k.p::<i32>(9), k.p::<i32>(10), k.p::<f32>(11), k.p::<f32>(12), k.p::<i8>(13), k.p::<u8>(14),
@@ -1967,10 +1605,6 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     let cmd_atk = k.i(3) as u8;
     let brain = k.i(4) == 1;
     let brain_cmd = k.i(5) as u8;
-    let (s0, s1) = job(chunk, k.i(1), k.i(0));
-    if s1 <= s0 {
-        return;
-    }
     // (Bulk: the copies as they are; then four slots a lane for the
     // positions in pixels, the flags and the cleared results.)
     let n = s1 - s0;
@@ -2838,6 +2472,17 @@ pub unsafe extern "C" fn k_vis_snap(a: u32, chunk: i32) {
     let itile = (1.0 / (k.f(4) * 8.0)) as f32;
     let (w, h) = (k.i(5), k.i(6));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    // (Empty slabs ([12] sl.sfree, P[7] its slabs): no sight there, the key alone.)
+    let (sfree, nsl) = (k.p::<u8>(12), k.i(7).max(0) as usize);
+    if !sfree.is_null() && nsl > 0 {
+        slab_runs(sfree, nsl, s0, s1, |r0, r1, empty| if empty { for q in r0..r1 { s(key, q, -1); } } else { vis_snap_range(xs, ys, dead, sk, srow, rvsa, own, wteam, tp, stix, key, stwa, np, absent, itile, w, h, r0, r1); });
+        return;
+    }
+    vis_snap_range(xs, ys, dead, sk, srow, rvsa, own, wteam, tp, stix, key, stwa, np, absent, itile, w, h, s0, s1);
+}
+#[inline(always)]
+unsafe fn vis_snap_range(xs: *const i32, ys: *const i32, dead: *const u8, sk: *const u32, srow: *const i16, rvsa: *const i8, own: *const i8, wteam: *const i8,
+    tp: *mut i32, stix: *const i32, key: *mut i32, stwa: *const u16, np: i32, absent: u32, itile: f32, w: i32, h: i32, s0: usize, s1: usize) {
     for q in s0..s1 {
         s(tp, q, vis_tile_of(g(xs, q), g(ys, q), itile, w, h));
         let r = g(srow, q) as i32;
@@ -4404,15 +4049,18 @@ pub unsafe extern "C" fn k_radix_hist(a: u32, chunk: i32) {
     let shift = (k.i(2) & 31) as u32;
     let first = k.i(3) != 0;
     let input = if k.i(4) != 0 { ob } else { oa };
-    let base = chunk as usize * 256;
+    // (P[6]: the digit's bits, 8 when 0.)
+    let bits = if k.i(6) > 0 { k.i(6).min(16) as u32 } else { 8 };
+    let (radix, mask) = (1usize << bits, (1u32 << bits) - 1);
+    let base = chunk as usize * radix;
     let hh = hist.add(base);
-    for d in 0..256 {
+    for d in 0..radix {
         s(hh, d, 0);
     }
     let (i0, i1) = job(chunk, k.i(1), k.i(0));
     for i in i0..i1 {
         let u = if first { i } else { g(input, i) as usize };
-        let d = ((g(keys, u) >> shift) & 255) as usize;
+        let d = ((g(keys, u) >> shift) & mask) as usize;
         s(hh, d, g(hh, d) + 1);
     }
 }
@@ -4425,10 +4073,12 @@ pub unsafe extern "C" fn k_radix_prefix(a: u32, _chunk: i32) {
     let k = K::new(a);
     let hist = k.p::<i32>(0);
     let parts = k.i(0).max(0) as usize;
+    // (P[1]: digits a partition, 256 when 0.)
+    let radix = if k.i(1) > 0 { k.i(1) as usize } else { 256 };
     let mut cur = 0i32;
-    for d in 0..256 {
+    for d in 0..radix {
         for p in 0..parts {
-            let i = p * 256 + d;
+            let i = p * radix + d;
             let n = g(hist, i);
             s(hist, i, cur);
             cur += n;
@@ -4447,11 +4097,36 @@ pub unsafe extern "C" fn k_radix_scatter(a: u32, chunk: i32) {
     let first = k.i(3) != 0;
     let flip = k.i(4) != 0;
     let (input, output) = if flip { (ob, oa) } else { (oa, ob) };
-    let hh = hist.add(chunk as usize * 256);
+    let bits = if k.i(6) > 0 { k.i(6).min(16) as u32 } else { 8 };
+    let (radix, mask) = (1usize << bits, (1u32 << bits) - 1);
     let (i0, i1) = job(chunk, k.i(1), k.i(0));
+    // (P[7] 1: no prefix stage before: the job's cursors from the raw
+    // histograms (every lower digit's total, this digit's in the earlier
+    // partitions), in a local table; 8-bit digits.)
+    if k.i(7) == 1 && radix == 256 {
+        let parts = ((k.i(0).max(0) + k.i(1).max(1) - 1) / k.i(1).max(1)) as usize;
+        let c = chunk.max(0) as usize;
+        let mut cur = [0i32; 256];
+        let mut acc = 0i32;
+        for d in 0..256 {
+            let (mut before, mut tot) = (0i32, 0i32);
+            for p in 0..parts { let v = g(hist, p * 256 + d); if p < c { before += v; } tot += v; }
+            cur[d] = acc + before;
+            acc += tot;
+        }
+        for i in i0..i1 {
+            let u = if first { i } else { g(input, i) as usize };
+            let d = ((g(keys, u) >> shift) & mask) as usize;
+            let at = *cur.get_unchecked(d);
+            *cur.get_unchecked_mut(d) = at + 1;
+            s(output, at as usize, u as i32);
+        }
+        return;
+    }
+    let hh = hist.add(chunk as usize * radix);
     for i in i0..i1 {
         let u = if first { i } else { g(input, i) as usize };
-        let d = ((g(keys, u) >> shift) & 255) as usize;
+        let d = ((g(keys, u) >> shift) & mask) as usize;
         let c = g(hh, d);
         s(hh, d, c + 1);
         s(output, c as usize, u as i32);

@@ -357,37 +357,40 @@ function spatialIndexPrebuild() {
     const M = _unitSlotMap;
     _sxPre = { units, n, ver: M.ver, ep, masks, indexStages, sep: !!sep, delta, init, dj: DJ };
 }
-// The index built whole (prebuild): each unit's chunk, the order (merged
-// from the index in use, its entries by slot in key order, when there is
-// one: SIM_KERNEL_INDEX_MERGE, most units keep their chunk from one tick to
-// the next; else sorted), the entries and ranges, the owners per tile.
+// The index built whole (prebuild): each unit's chunk and slot packed, sorted,
+// the entries and ranges, the owners per tile.
 function _spatialPrebuildFullStages(X, n, nChunks, ep, uj, base, masks) {
-    const UJ = 8192;
-    let sortStages;
-    if (SPATIAL_INDEX_MERGE && typeof SIM_KERNEL_INDEX_MERGE === 'number' && X.mergeOk && _sxBySlot && !_sxDirty) {
-        _spatialMergeArrays(X, n);
-        simParallelBind('ix.ordC', X.ordM);
-        if (SPATIAL_INDEX_MERGE_PAR && typeof SIM_KERNEL_IXM_WRITE === 'number') {
-            // (In parallel: bands of chunks, blocks of units; see k.rs k_ixm_*.)
-            const MB = SPATIAL_IXM_BANDS, KB = Math.ceil(nChunks / MB), MJ = Math.ceil(n / UJ);
-            _spatialMergeParArrays(X, n, MB, MJ);
-            const mp = [n, _sxListed, nChunks, ep, MB, KB, UJ, MJ];
-            sortStages = [[SIM_KERNEL_IXM_INV, MJ, mp], [SIM_KERNEL_IXM_KEEP, MB, mp], [SIM_KERNEL_IXM_CHG, MJ, mp], [SIM_KERNEL_IXM_PLAN, 1, mp], [SIM_KERNEL_IXM_WRITE, MB + MJ, mp]];
-        } else sortStages = [[SIM_KERNEL_INDEX_MERGE, 1, [n, _sxListed, nChunks, ep]]];
-    } else {
-        const order = simSpatialStableOrderStages(n, nChunks, 1);
-        simParallelBind('ix.ordC', order.out);
-        sortStages = order.stages;
+    // (The keys pack (key, slot) per row (ix.pkA); the radix passes carry
+    // them; the build reads them in order: no gathers by row or slot. The
+    // rows are by id ascending and the sort stable: a tile's units by id.)
+    const sortStages = _spatialRadixStages(X, n, nChunks);
+    const fb = base.slice(); fb[16] = masks ? 1 : 0; fb[17] = SPATIAL_INDEX_DELTA ? 1 : 0;
+    return [[SIM_KERNEL_INDEX_KEYS, uj, base], ...sortStages, [SIM_KERNEL_INDEX_BUILD, uj, fb]];
+}
+// The packed entries' arrays (two, a pass's input and output) and the
+// passes' histograms, for X.cap rows; the stages: per 8 bits of the key a
+// histogram, prefix and scatter stage; the sorted array bound as ix.pkS.
+const SPATIAL_RADIX_PART = 4096;
+function _spatialRadixStages(X, n, nChunks) {
+    if (!X.pkA || X.pkA.length < X.cap) {
+        for (const k of ['pkA', 'pkB', 'rhist']) if (X[k]) simHeapFree(X[k]);
+        X.pkA = simHeapArray(Float64Array, X.cap); X.pkB = simHeapArray(Float64Array, X.cap);
+        X.rhist = simHeapArray(Int32Array, Math.ceil(X.cap / SPATIAL_RADIX_PART) * 256);
     }
-    const stages = [[SIM_KERNEL_INDEX_KEYS, uj, base], ...sortStages, [SIM_KERNEL_INDEX_FILL, uj, base], [SIM_KERNEL_INDEX_RUNS, uj, base],
-        [SIM_KERNEL_INDEX_IDSORT, Math.ceil(Math.max(n, 1) / SPATIAL_IDSORT_PER), [SPATIAL_IDSORT_PER]]];
-    // (The owners per tile, for the next tick's combat scan, from it.)
-    if (masks) stages.push([SIM_KERNEL_TILE_OWNERS, uj, [n, UJ, 1]]);
+    simParallelBind('ix.pkA', X.pkA); simParallelBind('ix.pkB', X.pkB); simParallelBind('ix.rhist', X.rhist);
+    const parts = Math.ceil(Math.max(n, 1) / SPATIAL_RADIX_PART), stages = [];
+    let flip = 0;
+    for (let shift = 0; shift === 0 || (nChunks >>> shift) !== 0; shift += 8) {
+        const p = [n, SPATIAL_RADIX_PART, shift, 0, flip];
+        stages.push([SIM_KERNEL_IXR_HIST, parts, p], [SIM_KERNEL_IXR_PREFIX, 1, [parts, 256]], [SIM_KERNEL_IXR_SCATTER, parts, p]);
+        flip ^= 1;
+    }
+    simParallelBind('ix.pkS', flip ? X.pkB : X.pkA);
     return stages;
 }
 // The index by its changes: on when the last one was a parallel build with
 // its slots' listing recorded (X.ixd.ok). (Every build lists a chunk's units
-// by id: SIM_KERNEL_INDEX_IDSORT, SPATIAL_IDSORT_PER entries a job.)
+// by id: the rows are by id and the sort stable.)
 // Off (2026-10-29): its apply and owner stages are single jobs; at 1M units
 // in battle the parallel merge build left the next tick waiting 6 ms instead
 // of 14 (steady mean 181 -> 171 ms; tests/test-runs/unit-gone-20261029/
@@ -409,7 +412,6 @@ function _spatialPreferParallelMerge(n) {
     }
     return false;
 }
-const SPATIAL_IDSORT_PER = 65536;
 const SPATIAL_IXD_BANDS = 64, SPATIAL_IXD_UJ = 8192, SPATIAL_IXD_CPER = 65536;
 // Its arrays: per slot (slots, whole scan blocks) the listing (key, id,
 // owner) and the scan's lists; per entry the new entries and the struck
@@ -546,6 +548,7 @@ function _spatialIndexRebuildParallel() {
     P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[5] = SIM_SEP_ABSENT; P[6] = cj; P[7] = CJ; P[8] = AJ;
     P[9] = TILE; P[10] = GRID_W; P[11] = GRID_H; P[12] = CHUNK_SIZE; P[13] = CHUNKS_W;
     X.bad[0] = 0;
+    _spatialRadixStages(X, n, nChunks);
     // Each unit's chunk and area (the kernels), then the units sorted by
     // chunk and by area with the stable parallel radix sort (units order
     // within one): ranges in key order, as the serial build lists them.
@@ -560,16 +563,12 @@ function _spatialIndexRebuildParallel() {
     X.listed[0] = n; X.listed[1] = n;
     // (Chunks only: units by area are their areas' tiles' units, see
     // forEachUnitInAreaRange.)
-    {
-        const order = simSpatialStableOrder(X.keys, n, nChunks, 1);
-        simParallelBind('ix.ordC', order);
-        P[0] = n; P[1] = UJ; P[2] = nChunks; P[3] = A; P[4] = players; P[14] = 0; P[15] = ep;
-        simParallelRun(SIM_KERNEL_INDEX_FILL, Math.ceil(n / UJ));
-        simParallelRun(SIM_KERNEL_INDEX_RUNS, Math.ceil(n / UJ));
-        // (A chunk's units by id: k.rs k_ix_idsort.)
-        P[0] = SPATIAL_IDSORT_PER;
-        simParallelRun(SIM_KERNEL_INDEX_IDSORT, Math.ceil(Math.max(n, 1) / SPATIAL_IDSORT_PER));
-    }
+    // (The prebuild's stages after its keys: the packed entries sorted, the
+    // index from them; owners per tile not made here.)
+    for (const [kn, jobs, v] of _spatialRadixStages(X, n, nChunks)) { P.fill(0, 0, 16); for (let k = 0; k < v.length; k++) P[k] = v[k]; simParallelRun(kn, jobs); }
+    P.fill(0, 0, 24);
+    P[0] = n; P[1] = UJ; P[2] = nChunks; P[15] = ep; P[16] = 0; P[17] = SPATIAL_INDEX_DELTA ? 1 : 0;
+    simParallelRun(SIM_KERNEL_INDEX_BUILD, Math.ceil(n / UJ));
     _sxListed = X.listed[0];
     _sxBySlot = true;
     // (The serial build's lists of the objects (_sxList, _sxAList): not read while the index is by slot, and a unit that died since is held by them for good: ~0.45 KB of its detached record each, 95k units after six minutes of a big battle. A serial build fills them again.)
@@ -593,25 +592,6 @@ function _spatialIndexRebuildParallel() {
     }
     return true;
 }
-// The incremental index order (SIM_KERNEL_INDEX_MERGE) in the prebuild;
-// false: every build sorts (both give the same index). (Off: the builds by
-// changes took its place; its arrays, ~40 bytes a unit, are not made.)
-let SPATIAL_INDEX_MERGE = false;
-// The parallel merge's arrays (k.rs k_ixm_*): per last entry its kept unit,
-// a second u64 scratch, the chunkless units per block, the plan.
-let SPATIAL_INDEX_MERGE_PAR = true;
-const SPATIAL_IXM_BANDS = 64;
-function _spatialMergeParArrays(X, n, B, J) {
-    const cap = Math.max(X.ordM.length, simReserveCap(Math.max(n, _sxListed), 4096));
-    if (!X.kt || X.kt.length < cap) { X.kt = simHeapArray(Int32Array, cap); X.ch2 = simHeapArray(Float64Array, cap); X.ncl = simHeapArray(Int32Array, cap); simParallelBind('ix.kt', X.kt); simParallelBind('ix.ch2', X.ch2); simParallelBind('ix.ncl', X.ncl); }
-    const pl = 3 * J + 3 * B + 1 + (B + 1) * J;
-    if (!X.mplan || X.mplan.length < pl) { X.mplan = simHeapArray(Int32Array, Math.max(1024, pl * 2)); simParallelBind('ix.mplan', X.mplan); }
-}
-function _spatialMergeArrays(X, n) {
-    const S = _simUnitState, slotsCap = S ? S.cap : 0;
-    if (!X.ordM || X.ordM.length < n) { X.ordM = simSharedArray(Int32Array, simReserveCap(n, 4096)); X.kept = simSharedArray(Int32Array, X.ordM.length); X.chg = simSharedArray(Float64Array, X.ordM.length); simParallelBind('ix.kept', X.kept); simParallelBind('ix.chg', X.chg); }
-    if (!X.inv || X.inv.length < slotsCap) { X.inv = simSharedArray(Int32Array, Math.max(4096, slotsCap)); X.invStamp = simSharedArray(Int32Array, X.inv.length); simParallelBind('ix.inv', X.inv); simParallelBind('ix.invStamp', X.invStamp); }
-}
 // The entries' slots and chunks for n units (in the wasm heap, see above).
 function _spatialEntryArrays(n) {
     if (_sxESlot.length >= n) return;
@@ -624,7 +604,7 @@ function _sxParFree(X) {
     if (!X) return;
     for (const k of ['stamp', 'start', 'cnt']) simHeapFree(X[k]);
 }
-// Per entry its unit's id (SIM_KERNEL_INDEX_FILL), sized with the entries.
+// Per entry its unit's id (k_ix_build with ids: the builds by changes), sized with the entries.
 function _spatialEntryIds() {
     if (!_sxEId || _sxEId.length !== _sxESlot.length) { _sxEId = simSharedArray(Int32Array, _sxESlot.length); simParallelBind('ix.eid', _sxEId); if (_sxPar) _sxPar.mergeOk = false; }
 }
@@ -689,7 +669,7 @@ function _spatialIndexRebuildSerial() {
         if (_sxCount[key] < 0) _sxCount[key] = -_sxCount[key];
     }
     // (A chunk's units by id, as the parallel builds list them: k.rs
-    // k_ix_idsort.)
+    // k_ix_build, by id from a stable sort of the rows.)
     for (let p = 0; p < pos;) {
         const key = _sxEKey[p];
         let e = p + 1;

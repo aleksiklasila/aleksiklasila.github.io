@@ -4801,6 +4801,17 @@ function orderQueueSnapshot() {
 function orderQueueRestore(rows) {
     resetOrderQueue();
     orderQueueReserve();
+    // (The admission counts the units by layer (unit.sepLayer, the spatial
+    // index's: chunk.js updateUnitSpatial). The restore admits before the
+    // units are in the index (a restored slot's layer 0: every unit ground,
+    // and a restored peer's flying units of a queued order went to the
+    // JavaScript order, not the movement's pickup: a desync), so the ordered
+    // units' layers are set here, as the index sets them.)
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, map = rows && rows.length && S ? _unitByIdMap() : null;
+    if (map) for (const r of rows) for (const id of (Array.isArray(r[5]) ? r[5] : [])) {
+        const u = map.get(id);
+        if (u !== undefined && u._us === S.columns && u._si >= 0) S.sepLayer[u._si] = u.isFlying ? 1 : (u.unitType === 'mole' ? 2 : 0);
+    }
     for (const r of rows || []) {
         const ids = Array.isArray(r[5]) ? r[5] : [];
         _orderAdmit(ids, ids.length, r[0] | 0, r[1] | 0, r[2], r[3], r[4], Number.isFinite(r[6]) ? r[6] : currentTick + ORDER_DRAIN_STEPS - 1);

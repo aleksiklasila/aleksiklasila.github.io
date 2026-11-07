@@ -6058,6 +6058,8 @@ function _visCoverUnitsPost() {
         const P = _simParams;
         if (typeof _effRowCols !== 'undefined' && _effRowCols && _effRowCols.rVsA) simParallelBind('eff.rVsA', _effRowCols.rVsA);
         P[0] = n; P[1] = 8192; P[2] = np; P[3] = SIM_SEP_ABSENT; P[4] = TILE; P[5] = GRID_W; P[6] = GRID_H;
+        // (Empty slabs: their keys -1 only, k.rs k_vis_snap.)
+        P[7] = typeof simUnitStateSlabsBind === 'function' ? simUnitStateSlabsBind() : 0;
         simParallelRun(SIM_KERNEL_VIS_SNAP, Math.ceil(n / 8192));
     }
     // The layout as of now (its arrays are its own: see above).

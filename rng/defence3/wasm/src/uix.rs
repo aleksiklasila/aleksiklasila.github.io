@@ -36,14 +36,15 @@ pub unsafe extern "C" fn k_uix_remove(a: u32, _chunk: i32) {
         }
     }
     if holes as usize * 4 > n || (k.i(1) != 0 && holes > 0) {
+        // (From the first hole; branchless: every row written, kept ones
+        // advance. Holes fall anywhere: a branch per row mispredicted.)
         let mut w = 0usize;
-        for r in 0..n {
+        while w < n && g(slots, w) != -2 { w += 1; }
+        for r in w..n {
             let sl = g(slots, r);
-            if sl != -2 {
-                s(ids, w, g(ids, r));
-                s(slots, w, sl);
-                w += 1;
-            }
+            s(ids, w, g(ids, r));
+            s(slots, w, sl);
+            w += (sl != -2) as usize;
         }
         n = w;
         holes = 0;

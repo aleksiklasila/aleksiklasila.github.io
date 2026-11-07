@@ -55,9 +55,16 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
     }
     let cols=k.i(5).max(1);let w=k.i(3).max(1);let h=k.i(4);
     for b in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
-        let b=b as usize;let c=cnt.add(b*stride);core::ptr::write_bytes(c,0,stride);
+        // (The block's record zeroed only where it holds anything: a line's write a block a tick, most blocks have no site.)
+        let b=b as usize;let c=cnt.add(b*stride);
+        if (0..=np.min(stride-1)).any(|i| *c.add(i)!=0) {core::ptr::write_bytes(c,0,stride);}
         let x0=(b as i32%cols)*8;let y0=(b as i32/cols)*8;let mut n=0;
         for y in y0..(y0+8).min(h){
+            // (A block row of eight codes as one word: none a spawner's (0x44), passed over: most rows.)
+            if x0+8<=w {
+                let v=(code.add((y*w+x0) as usize) as *const u64).read_unaligned()^0x4444_4444_4444_4444u64;
+                if (v.wrapping_sub(0x0101_0101_0101_0101)&!v&0x8080_8080_8080_8080)==0 {continue;}
+            }
             let mut x=x0;while x<(x0+8).min(w){
                 let len=(w-x).min(4);let base=(y*w+x) as usize;
                 // Tail words are read only inside the map; the last partial
@@ -79,7 +86,7 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
                 x+=4;
             }
         }
-        *c=n as i32;
+        if n!=0 {*c=n as i32;}
     }
 }
 

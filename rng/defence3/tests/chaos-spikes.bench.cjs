@@ -64,7 +64,6 @@ if(liveHeapSession){liveHeapSession.connect();await new Promise((resolve,reject)
 console.log('Starting mixed chaos',count,'units');
 inst.eval('SIM_IN_WORKER=true;startSoloGame();');
 if(process.argv.includes('--no-delta'))inst.eval('SPATIAL_INDEX_DELTA=false');
-if(process.argv.includes('--no-merge'))inst.eval('SPATIAL_INDEX_MERGE=false');
 const limits=inst.eval('({population:getConfiguredMaxPop(),buildings:getPlayerStructureLimit(),map:GRID_W,slots:_simUnitState.cap})');
 const options={mode:'mega',buildings:5000,level:6,towerSites:1500,collectorBuildings:600,structures:Math.min(structures,limits.buildings*2),layout,rallyMix:process.argv.includes('--rally-mix')};
 console.log('Menu limits',JSON.stringify(limits));
@@ -237,6 +236,7 @@ let previousUnits=setup.units,previousSpawns=0;
 // --census=steps (with --helpers=0): the unit column census over those steps, to <out>.census.json (unit-column-census-hooks.js).
 const censusSteps=new Set((process.argv.find(a=>a.startsWith('--census='))?.slice(9)||'').split(',').filter(Boolean).map(Number));
 if(censusSteps.size){const src=fs.readFileSync(path.join(__dirname,'../src/sim/sim_parallel.js'),'utf8');inst.scratch.kernelNames=[...src.matchAll(/SIM_KERNEL_([A-Z0-9_]+)\s*=\s*(\d+)/g)].map(m=>m[1]+'='+m[2]).join(',');inst.eval(fs.readFileSync(path.join(__dirname,'unit-column-census-hooks.js'),'utf8'));}
+let __dbgcRow;
 for(let i=0;i<ticks;i++){
  if(i===warmup)structRowsAtSteady=readStructRows();
  if(i===warmup&&allocationSession){
@@ -287,11 +287,13 @@ for(let i=0;i<ticks;i++){
  inst.eval(workerPost?'gameTick();simPresentTickEnd();{const t=currentTick++;__scratch.W._simPostResult(t,null,null,0);}':'gameTick();currentTick++;');
  const ms=performance.now()-a;
  if(censusSteps.has(i))inst.eval('__scratch.census.end()');
+ // --dbgc (a --features=dbgc build, --helpers=0): the kernels's debug counters a step, in the row.
+ if(process.argv.includes('--dbgc'))__dbgcRow=inst.eval('(()=>{const v=new Int32Array(_simWasmArgI.buffer,_simWasmArgI.byteOffset+1536*4,128);const a=Array.from(v);v.fill(0);return a;})()');
  // --heap-inventory=STEP (with SIM_HEAP_SITES=1): the wasm heap's live bytes by allocation site and every registered array by name, to <out>.heap.json.
  if(String(process.argv.find(a=>a.startsWith('--heap-inventory='))||'').slice(17).split(',').map(Number).includes(i))fs.writeFileSync(out+'.heap'+i+'.json',inst.eval(`JSON.stringify((()=>{const by=new Map();if(typeof _simHeapSiteOf!=="undefined")for(const [,e] of _simHeapSiteOf)by.set(e[0],(by.get(e[0])||0)+e[1]);const reg=Object.entries(_simParReg).filter(([k,v])=>ArrayBuffer.isView(v)).map(([k,v])=>[k,v.constructor.name,v.length,v.byteLength]).sort((x,y)=>y[3]-x[3]);const S=_simUnitState;const cols=Object.entries(S.columns).map(([k,v])=>[k,ArrayBuffer.isView(v)?v.byteLength:(v&&v.data?v.data.byteLength:0)]).sort((x,y)=>y[1]-x[1]);const sl=S.sl,ns=Math.ceil(S.owners.length/64);let empty=0,full=0,part=0,liveIn=0;for(let k=0;k<ns;k++){const f=sl.sfree[k];if(f>=64)empty++;else if(f===0)full++;else part++;}const navs=typeof _navSlots!=="undefined"&&_navSlots.slots?_navSlots.slots.map((L,p)=>L?L.map(e=>[p,e.a.length,e.off]):[]):null;return {navs,slabs:{n:ns,empty,full,part,nfree:sl.nfree},stats:simHeapStats(),cap:S.cap,slots:S.owners.length,units:units.length,sites:[...by].sort((x,y)=>y[1]-x[1]).map(([s,b])=>[b,s]),registry:reg,columns:cols};})())`));
  if(yieldBetween)await new Promise(setImmediate);
  const wallMs=performance.now()-a;
- const row={step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
+ const row={dbgc:typeof __dbgcRow!=="undefined"?__dbgcRow:undefined,step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  // (ROWX=<js>: a diagnostic value per tick, outside the timing.)
  if(process.env.ROWX)row.x=inst.eval(process.env.ROWX);
  if(process.argv.includes('--memory-stats'))row.memory=inst.eval(`({ ...simMemoryStats(),

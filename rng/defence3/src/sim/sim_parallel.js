@@ -96,7 +96,12 @@ const SIM_LANE_TRAFFIC = 12;
 // between the movement and the tick's end (unit.js flowLooksPost / Commit).
 const SIM_LANE_FLOW = 13;
 // (T1 right after the index: the worker search tier's scan, worker.js WS_LANE, is waited for one tick after its post.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_FLOW, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+// (The flow looks after the index and the hash: their answers are wanted at the next movement, which the
+// next tick's index comes before; ahead of them the helpers drained every flow claim first and the tick start
+// waited for its index.)
+// (T10 (the acquisition scan, committed two ticks after its post) next: behind T1 / GROW / NAV the
+// commit waited up to 7 ms on some ticks at 1M chaos (wait:2); ahead of them no lane waits more.)
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -189,7 +194,7 @@ const SIM_KERNEL_EFF_AREA_HIST = 100, SIM_KERNEL_SNAP_REGION = 19, SIM_KERNEL_CO
 const SIM_KERNEL_VIS_SNAP = 30, SIM_KERNEL_VIS_SPREAD = 31;
 const SIM_KERNEL_ACQ_SNAP = 32, SIM_KERNEL_ACQ_SCAN = 33, SIM_KERNEL_ACQ_COMMIT = 34, SIM_KERNEL_LASER_HITS = 35;
 const SIM_KERNEL_UNIT_EVENTS = 36, SIM_KERNEL_DEAD_MARK = 37, SIM_KERNEL_WS_SCAN = 39, SIM_KERNEL_HEAL_CAND = 40, SIM_KERNEL_SP_COUNTS = 41, SIM_KERNEL_MOVE_STEP = 42, SIM_KERNEL_SAT_ROWS = 43, SIM_KERNEL_SAT_COLS = 44, SIM_KERNEL_WS_SELECT = 45, SIM_KERNEL_UPKEEP = 46;
-const SIM_KERNEL_STATUS = 24, SIM_KERNEL_INDEX_FILL = 25, SIM_KERNEL_INDEX_RUNS = 26, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
+const SIM_KERNEL_STATUS = 24, SIM_KERNEL_EFF_UNITS = 27, SIM_KERNEL_VIS_SEED = 28;
 const SIM_KERNEL_TILE_OWNERS = 29;
 const SIM_KERNEL_HEAL_REDUCE = 47;
 const SIM_KERNEL_WS_ORDER = 48;
@@ -198,7 +203,7 @@ const SIM_KERNEL_UNIT_RETIRE = 49;
 // to re-route, each on its own (t + id) tick (a power of two).
 const SIM_REROUTE_TICKS = 32;
 const SIM_KERNEL_SEP_PACK = 50, SIM_KERNEL_SEP_MARK = 51, SIM_KERNEL_SEP_PAIRS = 52, SIM_KERNEL_ZERO = 53, SIM_KERNEL_SPATIAL_PREFIX = 54;
-const SIM_KERNEL_AREA_BOX = 55, SIM_KERNEL_INDEX_MERGE = 56;
+const SIM_KERNEL_AREA_BOX = 55;
 const SIM_KERNEL_MOVE_OCCUPANCY = 89;
 const SIM_KERNEL_TRAFFIC_CAPTURE=93,SIM_KERNEL_TRAFFIC_SOLVE=94,SIM_KERNEL_TRAFFIC_OUTPUT=95,SIM_KERNEL_TRAFFIC_MASK=96;
 const _simTrafficW=_simWK(['traffic.config','occ.bits','mv.wall']);
@@ -547,36 +552,11 @@ SIM_KERNELS[SIM_KERNEL_SPATIAL_SCATTER] = function (R, P, chunk) { _simRust(_sim
 const _simAreaBoxW = _simWK(['abox.own', 'abox.out', 'abox.off', 'abox.nb']);
 SIM_KERNELS[SIM_KERNEL_AREA_BOX] = function (R, P, chunk) { _simRust(_simAreaBoxW, P, chunk, 'k_area_box', 'AREA_BOX'); };
 
-// The unit index's order (ix.ordC: units indices by (chunk, index), the
-// radix sort's result) made from the last index instead of sorted anew
-// (chunk.js spatialIndexPrebuild): its entries (sep.eslot / sep.ekey /
-// ix.eid, P[1] of them, by (chunk, index) as the units list was then) whose
-// unit holds the same slot and stands in the same chunk keep their order
-// (removals keep the list's order, additions come last); the others (moved,
-// new, a slot given to another unit) sorted by (chunk, index) and merged
-// in. One job: a pass over the last entries and over the units, a sort of
-// the movers. Disorder (never expected): a counting sort of everything,
-// the same order. P: [0] units, [1] last entries, [2] chunks, [3] epoch.
-const _simIxMergeW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.keys', 'ix.slots', 'unit.id', 'ix.inv', 'ix.invStamp', 'ix.kept', 'ix.ordC', 'ix.chg']);
-SIM_KERNELS[SIM_KERNEL_INDEX_MERGE] = function (R, P, chunk) { _simRust(_simIxMergeW, P, chunk, 'k_ix_merge', 'INDEX_MERGE'); };
-// The index order merged in parallel (wasm/src/k.rs k_ixm_*: the same order
-// as INDEX_MERGE), five stages of the prebuild chain.
-const SIM_KERNEL_IXM_INV = 68, SIM_KERNEL_IXM_KEEP = 69, SIM_KERNEL_IXM_CHG = 70, SIM_KERNEL_IXM_PLAN = 71, SIM_KERNEL_IXM_WRITE = 72;
-const _simIxmW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.keys', 'ix.slots', 'unit.id', 'ix.inv', 'ix.invStamp', 'ix.kept', 'ix.ordC', 'ix.chg', 'ix.kt', 'ix.ch2', 'ix.ncl', 'ix.mplan']);
-SIM_KERNELS[SIM_KERNEL_IXM_INV] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_inv', 'IXM_INV'); };
-SIM_KERNELS[SIM_KERNEL_IXM_KEEP] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_keep', 'IXM_KEEP'); };
-SIM_KERNELS[SIM_KERNEL_IXM_CHG] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_chg', 'IXM_CHG'); };
-SIM_KERNELS[SIM_KERNEL_IXM_PLAN] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_plan', 'IXM_PLAN'); };
-SIM_KERNELS[SIM_KERNEL_IXM_WRITE] = function (R, P, chunk) { _simRust(_simIxmW, P, chunk, 'k_ixm_write', 'IXM_WRITE'); };
 // The index by its changes (wasm/src/k.rs k_ixd_*: the same index as a full
 // build), the prebuild chain's stages: a scan of the slots for those listed
 // otherwise than they are, their entries struck and sorted in (one job),
 // the bands merged, copied into place, the touched chunks' owners; and,
 // after a full build, the slots' listing from its entries.
-// (Every build's chunks' units by id, after INDEX_FILL: k.rs k_ix_idsort.)
-const SIM_KERNEL_INDEX_IDSORT = 84;
-const _simIxIdSortW = _simWK(['sep.eslot', 'sep.ekey', 'ix.eid', 'ix.listed']);
-SIM_KERNELS[SIM_KERNEL_INDEX_IDSORT] = function (R, P, chunk) { _simRust(_simIxIdSortW, P, chunk, 'k_ix_idsort', 'INDEX_IDSORT'); };
 // Each slot's last visual change (k.rs k_pv_marks; sim_presentation.js
 // simPresentTickEnd): the presentation fills only the slots stamped since
 // its last frame.
@@ -735,33 +715,17 @@ const _simSpatialOrder = { cap: 0 };
 // The stages of a stable radix ordering (simSpatialStableOrder's) for a
 // background chain: [[kernel, jobs, params], ...] and the array the order
 // ends in. The keys must be bound (spatial.keys.<keySlot>) by the caller.
-function simSpatialStableOrderStages(count, maxKey, keySlot) {
-    const S = _simSpatialOrder, partition = 4096, parts = Math.ceil(count / partition);
-    if (!S.a || count > S.cap) {
-        S.cap = Math.max(1024, count, S.cap * 2);
-        S.a = simSharedArray(Int32Array, S.cap); S.b = simSharedArray(Int32Array, S.cap);
-        S.hist = simSharedArray(Int32Array, Math.ceil(S.cap / partition) * 256);
-        simParallelBind('spatial.orderA', S.a); simParallelBind('spatial.orderB', S.b);
-        simParallelBind('spatial.hist', S.hist);
-    }
-    const stages = [];
-    let flip = 0;
-    for (let shift = 0; shift === 0 || (maxKey >>> shift) !== 0; shift += 8) {
-        const p = [count, partition, shift, shift === 0 ? 1 : 0, flip, keySlot];
-        stages.push([SIM_KERNEL_SPATIAL_HISTOGRAM, parts, p], [SIM_KERNEL_SPATIAL_PREFIX, 1, [parts]], [SIM_KERNEL_SPATIAL_SCATTER, parts, p]);
-        flip ^= 1;
-        if (shift === 24) break;
-    }
-    return { stages, out: flip ? S.b : S.a };
-}
+// (The digit's bits and the entries a partition: 8 / 4096; 11 / 16384 (two passes for a 20-bit key) measured slower, the
+// wider histograms and their single-job prefix: tests/test-runs/census-20261106/ab.)
+const SIM_ORDER_BITS = 8, SIM_ORDER_PART = 4096;
 // (keySlot: the name the keys are bound under, so that callers sorting
 // different key arrays each keep theirs bound.)
 function simSpatialStableOrder(keys, count, maxKey, keySlot = 0) {
     const S = _simSpatialOrder, partition = 4096, parts = Math.ceil(count / partition);
-    if (!S.a || count > S.cap) {
-        S.cap = Math.max(1024, count, S.cap * 2);
+    if (!S.a || count > S.cap || !S.wide) {
+        S.cap = Math.max(1024, count, S.cap * 2); S.wide = true;
         S.a = simSharedArray(Int32Array, S.cap); S.b = simSharedArray(Int32Array, S.cap);
-        S.hist = simSharedArray(Int32Array, Math.ceil(S.cap / partition) * 256);
+        S.hist = simSharedArray(Int32Array, Math.ceil(S.cap / 4096) * 512);
         simParallelBind('spatial.orderA', S.a); simParallelBind('spatial.orderB', S.b);
         simParallelBind('spatial.hist', S.hist);
     }
@@ -769,7 +733,7 @@ function simSpatialStableOrder(keys, count, maxKey, keySlot = 0) {
     let flip = 0;
     for (let shift = 0; shift === 0 || (maxKey >>> shift) !== 0; shift += 8) {
         _simParams[0] = count; _simParams[1] = partition; _simParams[2] = shift;
-        _simParams[3] = shift === 0 ? 1 : 0; _simParams[4] = flip; _simParams[5] = keySlot;
+        _simParams[3] = shift === 0 ? 1 : 0; _simParams[4] = flip; _simParams[5] = keySlot; _simParams[6] = 8; _simParams[7] = 0;
         simParallelRun(SIM_KERNEL_SPATIAL_HISTOGRAM, parts);
         let cursor = 0;
         for (let digit = 0; digit < 256; digit++) for (let part = 0; part < parts; part++) {
@@ -1365,7 +1329,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
 // or long jobs, whose one chunk could keep the waiter well past its own
 // job's end). True when it ran one. (Their results are taken at their own
 // waits, whoever ran them.)
-const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_FLOW, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
+const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
 // (false: waits only wait, an A/B switch.)
 let SIM_BG_HELP = true;
 function _simBgHelp(ctl, except) {
@@ -1614,7 +1578,7 @@ SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUni
 // key vt.key = steps | (vsP1 + 1) << 8 | (vsP2 + 1) << 16 (its player and a
 // watching team), else -1.
 // P: [0] slots, [1] per job, [2] coverage generation, [3] SIM_SEP_ABSENT.
-const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.statRow', '?eff.rVsA', 'unit.owner', 'unit.wTeam', 'vt.p', 'unit.stIx', 'vt.key', 'unit.stWa']);
+const _simVisSnapW = _simWK(['unit.x', 'unit.y', 'unit.dead', 'unit.sepKey', 'unit.statRow', '?eff.rVsA', 'unit.owner', 'unit.wTeam', 'vt.p', 'unit.stIx', 'vt.key', 'unit.stWa', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_VIS_SNAP] = function (R, P, chunk) { _simRust(_simVisSnapW, P, chunk, 'k_vis_snap', 'VIS_SNAP'); };
 
 // Units' visibility seeds (renderer.js _visCoverUnits): every unit of the
@@ -1886,11 +1850,11 @@ SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZe
 // nfs.rs): units' columns moved to other slots, the references to the moved
 // slots following them, and the slabs' scores that choose what moves.
 const SIM_KERNEL_SLOT_MOVE = 141, SIM_KERNEL_SLOT_REMAP = 142, SIM_KERNEL_SLAB_SCORE = 143;
-const _simSlotMoveW = _simWK(['rl.pairs', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?occ.rec', 'unit.hslot', 'unit.hnd', 'rl.fwd', 'rl.fst', '?unit.pvS', '?rl.uid', 'unit.id', '?rl.uids', '?rl.rows']);
+const _simSlotMoveW = _simWK(['rl.pairs', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?occ.rec', 'unit.hslot', 'unit.hnd', 'rl.fwd', 'rl.fst', '?unit.pvS', '?rl.uid', 'unit.id', '?rl.uids', '?rl.rows', '?rl.mbits']);
 SIM_KERNELS[SIM_KERNEL_SLOT_MOVE] = function (R, P, chunk) { _simRust(_simSlotMoveW, P, chunk, 'k_slot_move', 'SLOT_MOVE'); };
-const _simSlotRemapW = _simWK(['rl.fwd', 'unit.tuS', 'unit.cmT', 'unit.cmMode', 'unit.ppNext', 'unit.ppPrev', '?rl.rows', 'unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?rl.uid', '?ord.ring', '?rl.pph', 'rl.fst']);
+const _simSlotRemapW = _simWK(['rl.fwd', 'unit.tuS', 'unit.cmT', 'unit.cmMode', 'unit.ppNext', 'unit.ppPrev', '?rl.rows', 'unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?rl.uid', '?ord.ring', '?rl.pph', 'rl.fst', '?rl.mbits', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_SLOT_REMAP] = function (R, P, chunk) { _simRust(_simSlotRemapW, P, chunk, 'k_slot_remap', 'SLOT_REMAP'); };
-const _simSlabScoreW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score']);
+const _simSlabScoreW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_SLAB_SCORE] = function (R, P, chunk) { _simRust(_simSlabScoreW, P, chunk, 'k_slab_score', 'SLAB_SCORE'); };
 const SIM_KERNEL_ACQ_REMAP = 144;
 const _simAcqRemapW = _simWK(['rl.fwd', 'acq.bt', 'acq.bm', 'rl.fst']);
@@ -2017,7 +1981,7 @@ SIM_KERNELS[SIM_KERNEL_SNAP_MERGE] = function (R, P, chunk) { _simRust(_simSnapM
 const _simStatusW = _simWK(['unit.live', 'unit.dead', 'unit.energy', 'unit.attackTimer', 'unit.attackFlash', 'unit.stTh', 'unit.stBu',
     'unit.stBd', 'unit.stPo', 'unit.stPd', 'unit.stFr', 'unit.stId', 'unit.stWe', 'unit.stSa', 'unit.stWa', 'unit.stEv',
     'unit.stDt', 'st.count', 'unit.x', 'unit.y', 'unit.x0', 'unit.y0', 'unit.workerTransferCooldown', 'unit.stAc', 'unit.id', 'unit.sepD0', 'unit.sepR0',
-    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stIx', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr', '?unit.atkL', '?unit.wtcL', 'st.hdr', 'st.free']);
+    'unit.sepL0', 'unit.collisionR', 'unit.r', 'unit.sepLayer', 'unit.stIx', 'unit.tmOn', '?st.list', 'unit.owner', 'st.shr', '?unit.atkL', '?unit.wtcL', 'st.hdr', 'st.free', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_STATUS] = function (R, P, chunk) { _simRust(_simStatusW, P, chunk, 'k_status', 'STATUS'); };
 
 // Owners per tile of the unit index (ix.omask: bit p set when a unit of
@@ -2047,7 +2011,7 @@ const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'u
     'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
     'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF', 'unit.tuS', 'unit.tuId', 'unit.tbT',
     // (The towers' look at a unit, 35-47: k.rs k_acq_snap's copies.)
-    '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt']);
+    '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of
@@ -2206,20 +2170,17 @@ SIM_KERNELS[SIM_KERNEL_ACQ_COMMIT] = function (R, P, chunk) { _simRust(_simAcqCo
 // index, its chunk (every unit not dead, by the tile it stands on; others
 // nChunks) and that tile's area (none: A), for the radix sorts.
 // P as SIM_KERNEL_INDEX_COUNT's.
-// The unit index from the sorted orders (chunk.js _spatialIndexRebuildParallel):
-// per position in key order its unit's slot (and chunk), and where each key's
-// range starts (stamped). P[14] 0: chunks (ix.ordC, ix.keys -> sep.eslot,
-// sep.ekey, ix.start, ix.stamp), 1: areas (ix.ordA, ix.areas -> ix.aslot,
-// ix.astart, ix.astamp). P: [0] units, [1] per job, [2] chunks, [3] areas,
-// [15] epoch; ix.listed[k]: the first position past the valid keys.
-const _simIxFillW = [_simWK(['ix.slots', 'ix.ordC', 'ix.keys', 'sep.eslot', 'sep.ekey', 'ix.start', 'ix.stamp', 'ix.listed', 'ix.eid', 'unit.id']),
-    _simWK(['ix.slots', 'ix.ordA', 'ix.areas', 'ix.aslot', '?ix.none', 'ix.astart', 'ix.astamp', 'ix.listed', '?ix.none', 'unit.id'])];
-SIM_KERNELS[SIM_KERNEL_INDEX_FILL] = function (R, P, chunk) { _simRust(_simIxFillW[P[14] === 1 ? 1 : 0], P, chunk, 'k_ix_fill', 'INDEX_FILL'); };
-// Each key's count at the end of its range; for areas, the units of each
-// owner too (counted by the range's first position). P as INDEX_FILL's, [4] players.
-const _simIxRunsW = [_simWK(['ix.slots', 'ix.ordC', 'ix.keys', 'ix.start', 'ix.cnt', 'ix.listed', '?ix.aown', 'unit.owner']),
-    _simWK(['ix.slots', 'ix.ordA', 'ix.areas', 'ix.astart', 'ix.acnt', 'ix.listed', 'ix.aown', 'unit.owner'])];
-SIM_KERNELS[SIM_KERNEL_INDEX_RUNS] = function (R, P, chunk) { _simRust(_simIxRunsW[P[14] === 1 ? 1 : 0], P, chunk, 'k_ix_runs', 'INDEX_RUNS'); };
-
-const _simIxKeysW = _simWK(['ix.slots', 'unit.x', 'unit.y', 'unit.dead', 'ix.agrid', 'ix.keys', '?ix.areas', 'ix.bad']);
+// The chunk index from its packed entries sorted (k.rs k_ix_build): the entries, each tile's range, stamp and count, its owner bits. P: [0] entries, [1] per job, [2] chunks, [15] epoch, [16] masks, [17] ids (ix.eid: the builds by changes').
+const SIM_KERNEL_INDEX_BUILD = 154;
+// (From the packed entries sorted (ix.pkS: ix.pkA or ix.pkB, the last pass's output).)
+const _simIxBuildW = _simWK(['ix.pkS', 'sep.eslot', 'sep.ekey', 'ix.start', 'ix.stamp', 'ix.listed', 'ix.cnt', 'unit.owner', '?ix.omask', '?ix.eid', 'unit.id']);
+SIM_KERNELS[SIM_KERNEL_INDEX_BUILD] = function (R, P, chunk) { _simRust(_simIxBuildW, P, chunk, 'k_ix_build', 'INDEX_BUILD'); };
+// The index's stable radix sort of the packed (key, slot) entries (k.rs
+// k_ixr_*): 8-bit digits of the key, the entries carried (no gathers).
+const SIM_KERNEL_IXR_HIST = 155, SIM_KERNEL_IXR_PREFIX = 156, SIM_KERNEL_IXR_SCATTER = 157;
+const _simIxrW = _simWK(['ix.pkA', 'ix.pkB', 'ix.rhist']), _simIxrPrefixW = _simWK(['ix.rhist']);
+SIM_KERNELS[SIM_KERNEL_IXR_HIST] = function (R, P, chunk) { _simRust(_simIxrW, P, chunk, 'k_ixr_hist', 'IXR_HIST'); };
+SIM_KERNELS[SIM_KERNEL_IXR_PREFIX] = function (R, P, chunk) { _simRust(_simIxrPrefixW, P, chunk, 'k_radix_prefix', 'IXR_PREFIX'); };
+SIM_KERNELS[SIM_KERNEL_IXR_SCATTER] = function (R, P, chunk) { _simRust(_simIxrW, P, chunk, 'k_ixr_scatter', 'IXR_SCATTER'); };
+const _simIxKeysW = _simWK(['ix.slots', 'unit.x', 'unit.y', 'unit.dead', 'ix.agrid', 'ix.keys', '?ix.areas', 'ix.bad', '?ix.pkA']);
 SIM_KERNELS[SIM_KERNEL_INDEX_KEYS] = function (R, P, chunk) { _simRust(_simIxKeysW, P, chunk, 'k_ix_keys', 'INDEX_KEYS'); };
