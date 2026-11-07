@@ -26,64 +26,64 @@
       "zoom": 0.025,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 100.21039648812169,
-      "p95": 10.614999999997963,
-      "buildMs": 0.3309502288766576,
-      "columnMs": 0.23477375777059012,
-      "renderCpuMs": 0.44843891303463757,
-      "gpuMs": 3.7620555636363644,
+      "fps": 95.69421390058073,
+      "p95": 18.885000000002037,
+      "buildMs": 0.34988151624869396,
+      "columnMs": 0.27440758466155607,
+      "renderCpuMs": 0.4988151665829934,
+      "gpuMs": 3.413103094339622,
       "timings": {
         "getChunkRenderView": {
-          "calls": 221,
-          "mean": 0.04004525383133694,
-          "total": 8.850001096725464
+          "calls": 211,
+          "mean": 0.038080568138457026,
+          "total": 8.034999877214432
         },
         "_unitDetailSplit": {
-          "calls": 221,
-          "mean": 0.014909514474653012,
-          "total": 3.2950026988983154
+          "calls": 211,
+          "mean": 0.014715639053362806,
+          "total": 3.104999840259552
         },
         "_structureDetailSplit": {
-          "calls": 221,
-          "mean": 0.05237556798425735,
-          "total": 11.575000524520874
+          "calls": 211,
+          "mean": 0.059360189460465125,
+          "total": 12.524999976158142
         },
         "build3DOverlayData": {
-          "calls": 221,
-          "mean": 0.04814479685477002,
-          "total": 10.640000104904175
+          "calls": 211,
+          "mean": 0.054407582887541064,
+          "total": 11.479999989271164
         },
         "drawMinimap": {
-          "calls": 221,
-          "mean": 0.43276017607606915,
-          "total": 95.63999891281128
+          "calls": 211,
+          "mean": 0.44504739379430835,
+          "total": 93.90500009059906
         },
         "updateBottomBar": {
-          "calls": 221,
-          "mean": 0.08561086654663086,
-          "total": 18.92000150680542
+          "calls": 211,
+          "mean": 0.05701421829761487,
+          "total": 12.030000060796738
         },
         "_simClientApplyWorld": {
-          "calls": 55,
-          "mean": 0.11436366167935458,
-          "total": 6.290001392364502
+          "calls": 56,
+          "mean": 4.781517857419593,
+          "total": 267.7650000154972
         }
       },
-      "glError": 1282,
+      "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -94,9 +94,9 @@
       "flatCount": 0,
       "modelCount": 0,
       "meshLods": null,
-      "units": 400000,
-      "moving": 82986,
-      "mediumModels": 490,
+      "units": 399977,
+      "moving": 81650,
+      "mediumModels": 115,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
@@ -112,64 +112,64 @@
       "zoom": 0.6,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 101.22284458100252,
-      "p95": 10.544999999998254,
-      "buildMs": 0.4370179454307385,
-      "columnMs": 0.3006726530100733,
-      "renderCpuMs": 0.5380717521291143,
-      "gpuMs": 3.455574857142858,
+      "fps": 93.43441788245893,
+      "p95": 19.450000000004366,
+      "buildMs": 0.34053397930941537,
+      "columnMs": 0.2584708733755408,
+      "renderCpuMs": 0.47000000039929324,
+      "gpuMs": 3.7304420392156867,
       "timings": {
         "getChunkRenderView": {
-          "calls": 223,
-          "mean": 0.08869955892520101,
-          "total": 19.780001640319824
+          "calls": 206,
+          "mean": 0.04152912697167072,
+          "total": 8.55500015616417
         },
         "_unitDetailSplit": {
-          "calls": 223,
-          "mean": 0.015739903856286017,
-          "total": 3.5099985599517822
+          "calls": 206,
+          "mean": 0.017233009766606452,
+          "total": 3.550000011920929
         },
         "_structureDetailSplit": {
-          "calls": 223,
-          "mean": 0.10349775857454993,
-          "total": 23.080000162124634
+          "calls": 206,
+          "mean": 0.05992718503891843,
+          "total": 12.345000118017197
         },
         "build3DOverlayData": {
-          "calls": 223,
-          "mean": 0.046008976051091076,
-          "total": 10.26000165939331
+          "calls": 206,
+          "mean": 0.05922330004497639,
+          "total": 12.199999809265137
         },
         "drawMinimap": {
-          "calls": 223,
-          "mean": 0.48513452354568004,
-          "total": 108.18499875068665
+          "calls": 206,
+          "mean": 0.46114077773487683,
+          "total": 94.99500021338463
         },
         "updateBottomBar": {
-          "calls": 223,
-          "mean": 0.0632062760169196,
-          "total": 14.094999551773071
+          "calls": 206,
+          "mean": 0.0543689318362949,
+          "total": 11.199999958276749
         },
         "_simClientApplyWorld": {
           "calls": 56,
-          "mean": 0.10883926919528417,
-          "total": 6.094999074935913
+          "mean": 4.93098214215466,
+          "total": 276.13499996066093
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -181,10 +181,10 @@
       "modelCount": 0,
       "meshLods": null,
       "units": 400000,
-      "moving": 51162,
-      "mediumModels": 490,
+      "moving": 49625,
+      "mediumModels": 115,
       "nativeRebase": true,
-      "tps": 21,
+      "tps": 20,
       "unitLayerStats": {
         "reuse": 0,
         "build": 2,
@@ -198,77 +198,77 @@
       "zoom": 1.5,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 102.32263322404688,
-      "p95": 10.519999999989523,
-      "buildMs": 0.8811061920317929,
-      "columnMs": 0.22272124332664286,
-      "renderCpuMs": 0.49420353691134833,
-      "gpuMs": 3.7698125714285724,
+      "fps": 95.51098376220517,
+      "p95": 10.650000000001455,
+      "buildMs": 0.827037916364263,
+      "columnMs": 0.21293838894197725,
+      "renderCpuMs": 0.4675829376654602,
+      "gpuMs": 3.4633533584905667,
       "timings": {
         "getChunkRenderView": {
-          "calls": 226,
-          "mean": 0.27851769565481,
-          "total": 62.94499921798706
+          "calls": 211,
+          "mean": 0.22476303210190687,
+          "total": 47.42499977350235
         },
         "_unitDetailSplit": {
-          "calls": 226,
-          "mean": 0.1053318587024655,
-          "total": 23.805000066757202
+          "calls": 211,
+          "mean": 0.09855450343746709,
+          "total": 20.795000225305557
         },
         "_structureDetailSplit": {
-          "calls": 226,
-          "mean": 0.051504415748393644,
-          "total": 11.639997959136963
+          "calls": 211,
+          "mean": 0.060142178953541396,
+          "total": 12.689999759197235
         },
         "build3DOverlayData": {
-          "calls": 226,
-          "mean": 0.04488937095203231,
-          "total": 10.144997835159302
+          "calls": 211,
+          "mean": 0.044952607409084015,
+          "total": 9.485000163316727
         },
         "drawMinimap": {
-          "calls": 226,
-          "mean": 0.4748008768115423,
-          "total": 107.30499815940857
+          "calls": 211,
+          "mean": 0.4605924176378838,
+          "total": 97.18500012159348
         },
         "updateBottomBar": {
-          "calls": 226,
-          "mean": 0.06637167825108081,
-          "total": 14.999999284744263
+          "calls": 211,
+          "mean": 0.056255925040674434,
+          "total": 11.870000183582306
         },
         "_simClientApplyWorld": {
-          "calls": 56,
-          "mean": 0.11669641307422093,
-          "total": 6.534999132156372
+          "calls": 55,
+          "mean": 3.411909090388905,
+          "total": 187.65499997138977
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 378,
-      "visibleDetail": 272,
+      "detail": 361,
+      "visibleDetail": 249,
       "scale": false,
       "flat": true,
       "objects": 0,
-      "flatCount": 378,
+      "flatCount": 361,
       "modelCount": 0,
       "meshLods": null,
       "units": 400000,
-      "moving": 39920,
-      "mediumModels": 490,
+      "moving": 39052,
+      "mediumModels": 115,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
@@ -284,77 +284,77 @@
       "zoom": 3,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 101.02909229550117,
-      "p95": 10.285000000003492,
-      "buildMs": 0.6911210746508543,
-      "columnMs": 0.19997757967277494,
-      "renderCpuMs": 0.5971972920969463,
-      "gpuMs": 3.2273611636363624,
+      "fps": 97.67843350951239,
+      "p95": 10.504999999990105,
+      "buildMs": 0.7190930225128351,
+      "columnMs": 0.24999999902969183,
+      "renderCpuMs": 0.4930000016855639,
+      "gpuMs": 3.776822518518518,
       "timings": {
         "getChunkRenderView": {
-          "calls": 223,
-          "mean": 0.22903587892985663,
-          "total": 51.07500100135803
+          "calls": 215,
+          "mean": 0.23255814008934553,
+          "total": 50.00000011920929
         },
         "_unitDetailSplit": {
-          "calls": 223,
-          "mean": 0.0698654683716094,
-          "total": 15.579999446868896
+          "calls": 215,
+          "mean": 0.06465116406595985,
+          "total": 13.900000274181366
         },
         "_structureDetailSplit": {
-          "calls": 223,
-          "mean": 0.05065023311050484,
-          "total": 11.295001983642578
+          "calls": 215,
+          "mean": 0.0617674402026243,
+          "total": 13.279999643564224
         },
         "build3DOverlayData": {
-          "calls": 223,
-          "mean": 0.03977578637845847,
-          "total": 8.87000036239624
+          "calls": 215,
+          "mean": 0.04295348802278208,
+          "total": 9.234999924898148
         },
         "drawMinimap": {
-          "calls": 223,
-          "mean": 0.4584529175352088,
-          "total": 102.23500061035156
+          "calls": 215,
+          "mean": 0.46602325675099393,
+          "total": 100.1950002014637
         },
         "updateBottomBar": {
-          "calls": 223,
-          "mean": 0.07161434028180726,
-          "total": 15.969997882843018
+          "calls": 215,
+          "mean": 0.056651162546734475,
+          "total": 12.179999947547913
         },
         "_simClientApplyWorld": {
-          "calls": 53,
-          "mean": 0.09188679479203134,
-          "total": 4.870000123977661
+          "calls": 56,
+          "mean": 2.838392856929983,
+          "total": 158.94999998807907
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 197,
-      "visibleDetail": 118,
+      "detail": 195,
+      "visibleDetail": 110,
       "scale": false,
       "flat": true,
       "objects": 0,
-      "flatCount": 197,
+      "flatCount": 195,
       "modelCount": 0,
       "meshLods": null,
       "units": 400000,
-      "moving": 36211,
-      "mediumModels": 490,
+      "moving": 34183,
+      "mediumModels": 115,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
@@ -370,64 +370,64 @@
       "zoom": 0.025,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 101.83714204024757,
-      "p95": 10.195000000006985,
-      "buildMs": 0.3799333318074544,
-      "columnMs": 0.3478666655222575,
-      "renderCpuMs": 0.6427111233605279,
-      "gpuMs": 3.7845877894736835,
+      "fps": 99.98273025552089,
+      "p95": 10.389999999999418,
+      "buildMs": 0.40506818172606557,
+      "columnMs": 0.32470454438166185,
+      "renderCpuMs": 0.6417499989271164,
+      "gpuMs": 3.9584738909090906,
       "timings": {
         "getChunkRenderView": {
-          "calls": 225,
-          "mean": 0.04148888905843099,
-          "total": 9.335000038146973
+          "calls": 220,
+          "mean": 0.042931817336515944,
+          "total": 9.444999814033508
         },
         "_unitDetailSplit": {
-          "calls": 225,
-          "mean": 0.01579999711778429,
-          "total": 3.554999351501465
+          "calls": 220,
+          "mean": 0.017613637447357177,
+          "total": 3.875000238418579
         },
         "_structureDetailSplit": {
-          "calls": 225,
-          "mean": 0.05366666052076552,
-          "total": 12.074998617172241
+          "calls": 220,
+          "mean": 0.06236363649368286,
+          "total": 13.72000002861023
         },
         "build3DOverlayData": {
-          "calls": 225,
-          "mean": 0.03631110933091906,
-          "total": 8.169999599456787
+          "calls": 220,
+          "mean": 0.03922727419571443,
+          "total": 8.630000323057175
         },
         "drawMinimap": {
-          "calls": 225,
-          "mean": 0.5031777795155843,
-          "total": 113.21500039100647
+          "calls": 220,
+          "mean": 0.4692954538898034,
+          "total": 103.24499985575676
         },
         "updateBottomBar": {
-          "calls": 225,
-          "mean": 0.0712444527943929,
-          "total": 16.030001878738403
+          "calls": 220,
+          "mean": 0.06084090809930454,
+          "total": 13.384999781847
         },
         "_simClientApplyWorld": {
           "calls": 55,
-          "mean": 0.10563639294017445,
-          "total": 5.810001611709595
+          "mean": 1.1508181815797633,
+          "total": 63.29499998688698
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -438,16 +438,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 30182,
+      "moving": 33040,
       "mediumModels": 0,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 509,
-        "build": 26,
+        "reuse": 485,
+        "build": 32,
         "why": {
           "none": 3,
-          "tick": 23
+          "tick": 29
         }
       }
     },
@@ -456,64 +456,64 @@
       "zoom": 0.025,
       "pitch": 0.55,
       "yaw": 0,
-      "fps": 102.14087268409915,
-      "p95": 10.285000000003492,
-      "buildMs": 0.3345111168755425,
-      "columnMs": 0.3144666586981879,
-      "renderCpuMs": 0.5685555574629042,
-      "gpuMs": 3.2657548571428565,
+      "fps": 101.41413866965041,
+      "p95": 10.240000000005239,
+      "buildMs": 0.38290178616132053,
+      "columnMs": 0.3612946426229818,
+      "renderCpuMs": 0.6154910703854901,
+      "gpuMs": 3.934475428571428,
       "timings": {
         "getChunkRenderView": {
-          "calls": 225,
-          "mean": 0.043866671456231014,
-          "total": 9.870001077651978
+          "calls": 224,
+          "mean": 0.043102678443704336,
+          "total": 9.65499997138977
         },
         "_unitDetailSplit": {
-          "calls": 225,
-          "mean": 0.017622228198581273,
-          "total": 3.965001344680786
+          "calls": 224,
+          "mean": 0.018058036853160177,
+          "total": 4.04500025510788
         },
         "_structureDetailSplit": {
-          "calls": 225,
-          "mean": 0.051244436899820965,
-          "total": 11.529998302459717
+          "calls": 224,
+          "mean": 0.05799107253551483,
+          "total": 12.990000247955322
         },
         "build3DOverlayData": {
-          "calls": 225,
-          "mean": 0.03877778053283691,
-          "total": 8.725000619888306
+          "calls": 224,
+          "mean": 0.03700892760285309,
+          "total": 8.289999783039093
         },
         "drawMinimap": {
-          "calls": 225,
-          "mean": 0.5272888925340441,
-          "total": 118.64000082015991
+          "calls": 224,
+          "mean": 0.4659598210294332,
+          "total": 104.37499991059303
         },
         "updateBottomBar": {
-          "calls": 225,
-          "mean": 0.057444449530707466,
-          "total": 12.92500114440918
+          "calls": 224,
+          "mean": 0.06412946366305862,
+          "total": 14.364999860525131
         },
         "_simClientApplyWorld": {
-          "calls": 54,
-          "mean": 0.08981481304875126,
-          "total": 4.849999904632568
+          "calls": 58,
+          "mean": 0.7193965516213713,
+          "total": 41.724999994039536
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -524,16 +524,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 30009,
+      "moving": 23971,
       "mediumModels": 0,
       "nativeRebase": true,
-      "tps": 19,
+      "tps": 20,
       "unitLayerStats": {
-        "reuse": 1017,
-        "build": 47,
+        "reuse": 980,
+        "build": 64,
         "why": {
           "none": 3,
-          "tick": 44
+          "tick": 61
         }
       }
     },
@@ -542,64 +542,64 @@
       "zoom": 0.025,
       "pitch": 0.55,
       "yaw": 1.5707963267948966,
-      "fps": 102.3840534518528,
-      "p95": 10.244999999995343,
-      "buildMs": 0.38646017239157077,
-      "columnMs": 0.33057522140773,
-      "renderCpuMs": 0.6816814114562179,
-      "gpuMs": 3.984787428571429,
+      "fps": 101.1071917592478,
+      "p95": 10.289999999993597,
+      "buildMs": 0.3963228706019876,
+      "columnMs": 0.43098654634749406,
+      "renderCpuMs": 0.7368834078846491,
+      "gpuMs": 3.792294981818181,
       "timings": {
         "getChunkRenderView": {
-          "calls": 226,
-          "mean": 0.04371682099536457,
-          "total": 9.880001544952393
+          "calls": 223,
+          "mean": 0.0420852012163855,
+          "total": 9.384999871253967
         },
         "_unitDetailSplit": {
-          "calls": 226,
-          "mean": 0.016792042065510708,
-          "total": 3.79500150680542
+          "calls": 223,
+          "mean": 0.016008967642292312,
+          "total": 3.569999784231186
         },
         "_structureDetailSplit": {
-          "calls": 226,
-          "mean": 0.05050885360852807,
-          "total": 11.415000915527344
+          "calls": 223,
+          "mean": 0.05504484267512779,
+          "total": 12.274999916553497
         },
         "build3DOverlayData": {
-          "calls": 226,
-          "mean": 0.03615044176051047,
-          "total": 8.169999837875366
+          "calls": 223,
+          "mean": 0.03860986473314431,
+          "total": 8.60999983549118
         },
         "drawMinimap": {
-          "calls": 226,
-          "mean": 0.5099336373067536,
-          "total": 115.2450020313263
+          "calls": 223,
+          "mean": 0.540224214840363,
+          "total": 120.46999990940094
         },
         "updateBottomBar": {
-          "calls": 226,
-          "mean": 0.07426991610400445,
-          "total": 16.785001039505005
+          "calls": 223,
+          "mean": 0.048452914696637824,
+          "total": 10.804999977350235
         },
         "_simClientApplyWorld": {
-          "calls": 54,
-          "mean": 0.09268518288930257,
-          "total": 5.004999876022339
+          "calls": 58,
+          "mean": 0.6170689658872013,
+          "total": 35.79000002145767
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -610,16 +610,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 30302,
+      "moving": 25132,
       "mediumModels": 0,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 1524,
-        "build": 73,
+        "reuse": 1479,
+        "build": 94,
         "why": {
           "none": 3,
-          "tick": 70
+          "tick": 91
         }
       }
     },
@@ -628,64 +628,64 @@
       "zoom": 0.025,
       "pitch": 0.8,
       "yaw": 3.141592653589793,
-      "fps": 102.04868402287741,
-      "p95": 10.154999999998836,
-      "buildMs": 0.3371777809990777,
-      "columnMs": 0.3537111059824626,
-      "renderCpuMs": 0.610199998219808,
-      "gpuMs": 3.6299457142857143,
+      "fps": 100.9913455400691,
+      "p95": 10.330000000001746,
+      "buildMs": 0.33482062816619873,
+      "columnMs": 0.33313901461827916,
+      "renderCpuMs": 0.5821300448323579,
+      "gpuMs": 4.003170857142858,
       "timings": {
         "getChunkRenderView": {
-          "calls": 225,
-          "mean": 0.04504444228278266,
-          "total": 10.134999513626099
+          "calls": 223,
+          "mean": 0.044125561489652625,
+          "total": 9.840000212192535
         },
         "_unitDetailSplit": {
-          "calls": 225,
-          "mean": 0.018066657384236653,
-          "total": 4.064997911453247
+          "calls": 223,
+          "mean": 0.01867712974013769,
+          "total": 4.164999932050705
         },
         "_structureDetailSplit": {
-          "calls": 225,
-          "mean": 0.05157778633965386,
-          "total": 11.60500192642212
+          "calls": 223,
+          "mean": 0.06002242188282612,
+          "total": 13.385000079870224
         },
         "build3DOverlayData": {
-          "calls": 225,
-          "mean": 0.03751110606723362,
-          "total": 8.439998865127563
+          "calls": 223,
+          "mean": 0.039753362736894414,
+          "total": 8.864999890327454
         },
         "drawMinimap": {
-          "calls": 225,
-          "mean": 0.5212222311231826,
-          "total": 117.27500200271606
+          "calls": 223,
+          "mean": 0.48730941591241433,
+          "total": 108.6699997484684
         },
         "updateBottomBar": {
-          "calls": 225,
-          "mean": 0.06506667455037435,
-          "total": 14.640001773834229
+          "calls": 223,
+          "mean": 0.04639013465744497,
+          "total": 10.34500002861023
         },
         "_simClientApplyWorld": {
-          "calls": 56,
-          "mean": 0.08964282274246216,
-          "total": 5.019998073577881
+          "calls": 58,
+          "mean": 0.5881896532815079,
+          "total": 34.114999890327454
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -696,16 +696,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 28736,
+      "moving": 24193,
       "mediumModels": 0,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 2034,
-        "build": 97,
+        "reuse": 1973,
+        "build": 126,
         "why": {
           "none": 3,
-          "tick": 94
+          "tick": 123
         }
       }
     },
@@ -714,64 +714,64 @@
       "zoom": 0.6,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 101.60250740165955,
-      "p95": 10.330000000001746,
-      "buildMs": 1.2547321447304316,
-      "columnMs": 0.42754463851451874,
-      "renderCpuMs": 0.7106249992336545,
-      "gpuMs": 3.594369163636364,
+      "fps": 99.96092436614644,
+      "p95": 10.294999999998254,
+      "buildMs": 1.185863636163148,
+      "columnMs": 0.5773409084840254,
+      "renderCpuMs": 0.8578636375340548,
+      "gpuMs": 3.8338944000000006,
       "timings": {
-        "_simClientApplyWorld": {
-          "calls": 54,
-          "mean": 0.0981481428499575,
-          "total": 5.299999713897705
-        },
         "getChunkRenderView": {
-          "calls": 224,
-          "mean": 0.7165178677865437,
-          "total": 160.5000023841858
+          "calls": 220,
+          "mean": 0.6767272735183889,
+          "total": 148.88000017404556
         },
         "_unitDetailSplit": {
-          "calls": 224,
-          "mean": 0.22741070815495082,
-          "total": 50.939998626708984
+          "calls": 220,
+          "mean": 0.20765909186818382,
+          "total": 45.68500021100044
         },
         "_structureDetailSplit": {
-          "calls": 224,
-          "mean": 0.05462053311722619,
-          "total": 12.234999418258667
+          "calls": 220,
+          "mean": 0.05129545385187322,
+          "total": 11.28499984741211
         },
         "build3DOverlayData": {
-          "calls": 224,
-          "mean": 0.03540178175483431,
-          "total": 7.929999113082886
+          "calls": 220,
+          "mean": 0.03488636179403825,
+          "total": 7.6749995946884155
         },
         "drawMinimap": {
-          "calls": 224,
-          "mean": 0.4977008955819266,
-          "total": 111.48500061035156
+          "calls": 220,
+          "mean": 0.5146590904756025,
+          "total": 113.22499990463257
         },
         "updateBottomBar": {
-          "calls": 224,
-          "mean": 0.07138392648526601,
-          "total": 15.989999532699585
+          "calls": 220,
+          "mean": 0.04702272808009928,
+          "total": 10.345000177621841
+        },
+        "_simClientApplyWorld": {
+          "calls": 61,
+          "mean": 0.517950819164026,
+          "total": 31.594999969005585
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -782,16 +782,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 25925,
-      "mediumModels": 424,
+      "moving": 22846,
+      "mediumModels": 385,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 2535,
-        "build": 120,
+        "reuse": 2454,
+        "build": 164,
         "why": {
           "none": 3,
-          "tick": 116,
+          "tick": 160,
           "bounds": 1
         }
       }
@@ -801,64 +801,64 @@
       "zoom": 0.6,
       "pitch": 0.55,
       "yaw": 0,
-      "fps": 101.16977552956028,
-      "p95": 10.154999999998836,
-      "buildMs": 1.6438392943569593,
-      "columnMs": 0.607767861868654,
-      "renderCpuMs": 1.1206919604114123,
-      "gpuMs": 3.7371274285714273,
+      "fps": 101.73309595500761,
+      "p95": 10.305000000007567,
+      "buildMs": 1.375066963822714,
+      "columnMs": 0.6250892866935048,
+      "renderCpuMs": 1.0213839286672217,
+      "gpuMs": 4.225747428571429,
       "timings": {
+        "_simClientApplyWorld": {
+          "calls": 57,
+          "mean": 0.14166666541183204,
+          "total": 8.074999928474426
+        },
         "getChunkRenderView": {
           "calls": 224,
-          "mean": 1.0515401629464967,
-          "total": 235.54499650001526
+          "mean": 0.8332812506705523,
+          "total": 186.6550001502037
         },
         "_unitDetailSplit": {
           "calls": 224,
-          "mean": 0.2793080231973103,
-          "total": 62.56499719619751
+          "mean": 0.23015625003193105,
+          "total": 51.55500000715256
         },
         "_structureDetailSplit": {
           "calls": 224,
-          "mean": 0.05468749787126269,
-          "total": 12.249999523162842
+          "mean": 0.04979910807950156,
+          "total": 11.15500020980835
         },
         "build3DOverlayData": {
           "calls": 224,
-          "mean": 0.03638392261096409,
-          "total": 8.149998664855957
+          "mean": 0.03359375082488571,
+          "total": 7.525000184774399
         },
         "drawMinimap": {
           "calls": 224,
-          "mean": 0.50459821415799,
-          "total": 113.02999997138977
+          "mean": 0.4865848199863519,
+          "total": 108.99499967694283
         },
         "updateBottomBar": {
           "calls": 224,
-          "mean": 0.07145089656114578,
-          "total": 16.005000829696655
-        },
-        "_simClientApplyWorld": {
-          "calls": 54,
-          "mean": 0.08425925837622748,
-          "total": 4.549999952316284
+          "mean": 0.04419642819889954,
+          "total": 9.899999916553497
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -869,16 +869,16 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 24440,
-      "mediumModels": 913,
+      "moving": 24183,
+      "mediumModels": 831,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 3043,
-        "build": 143,
+        "reuse": 2939,
+        "build": 196,
         "why": {
           "none": 3,
-          "tick": 138,
+          "tick": 191,
           "bounds": 2
         }
       }
@@ -888,64 +888,64 @@
       "zoom": 0.6,
       "pitch": 0.55,
       "yaw": 1.5707963267948966,
-      "fps": 102.470165767669,
+      "fps": 100.63782622257284,
       "p95": 10.229999999995925,
-      "buildMs": 1.1495353985676724,
-      "columnMs": 0.4596238885305624,
-      "renderCpuMs": 0.7787610693315489,
-      "gpuMs": 3.4555671578947376,
+      "buildMs": 1.4779504510733459,
+      "columnMs": 0.753603602986078,
+      "renderCpuMs": 1.1823423421597696,
+      "gpuMs": 4.456390981818182,
       "timings": {
         "getChunkRenderView": {
-          "calls": 226,
-          "mean": 0.7087831824226717,
-          "total": 160.1849992275238
+          "calls": 222,
+          "mean": 0.9364864859763566,
+          "total": 207.89999988675117
         },
         "_unitDetailSplit": {
-          "calls": 226,
-          "mean": 0.16380530648526892,
-          "total": 37.019999265670776
+          "calls": 222,
+          "mean": 0.2664639635665997,
+          "total": 59.154999911785126
         },
         "_structureDetailSplit": {
-          "calls": 226,
-          "mean": 0.0557521982530577,
-          "total": 12.59999680519104
+          "calls": 222,
+          "mean": 0.05754504534038338,
+          "total": 12.77500006556511
         },
         "build3DOverlayData": {
-          "calls": 226,
-          "mean": 0.037588502453491754,
-          "total": 8.495001554489136
+          "calls": 222,
+          "mean": 0.03684684634208679,
+          "total": 8.179999887943268
         },
         "drawMinimap": {
-          "calls": 226,
-          "mean": 0.5200884922415809,
-          "total": 117.53999924659729
+          "calls": 222,
+          "mean": 0.49452702741365173,
+          "total": 109.78500008583069
         },
         "updateBottomBar": {
-          "calls": 226,
-          "mean": 0.06115044640228812,
-          "total": 13.820000886917114
+          "calls": 222,
+          "mean": 0.0825675688348375,
+          "total": 18.330000281333923
         },
         "_simClientApplyWorld": {
-          "calls": 53,
-          "mean": 0.08952831772138488,
-          "total": 4.745000839233398
+          "calls": 60,
+          "mean": 0.12783333013455073,
+          "total": 7.669999808073044
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -956,17 +956,17 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 25506,
-      "mediumModels": 673,
+      "moving": 22508,
+      "mediumModels": 820,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 3551,
-        "build": 165,
+        "reuse": 3425,
+        "build": 233,
         "why": {
           "none": 3,
-          "tick": 159,
-          "bounds": 3
+          "tick": 228,
+          "bounds": 2
         }
       }
     },
@@ -975,64 +975,64 @@
       "zoom": 0.6,
       "pitch": 0.8,
       "yaw": 3.141592653589793,
-      "fps": 102.48154991343011,
-      "p95": 10.279999999998836,
-      "buildMs": 1.0750221246111709,
-      "columnMs": 0.41030973881746813,
-      "renderCpuMs": 0.7269469045959742,
-      "gpuMs": 3.8100115087719306,
+      "fps": 101.22330405486422,
+      "p95": 10.389999999999418,
+      "buildMs": 1.1052690577346649,
+      "columnMs": 0.6213452900204424,
+      "renderCpuMs": 0.9273094170029388,
+      "gpuMs": 3.161966545454546,
       "timings": {
         "getChunkRenderView": {
-          "calls": 226,
-          "mean": 0.6381858460671079,
-          "total": 144.23000121116638
+          "calls": 223,
+          "mean": 0.6677802702236603,
+          "total": 148.91500025987625
         },
         "_unitDetailSplit": {
-          "calls": 226,
-          "mean": 0.16533185106463136,
-          "total": 37.36499834060669
+          "calls": 223,
+          "mean": 0.17246636681492553,
+          "total": 38.459999799728394
         },
         "_structureDetailSplit": {
-          "calls": 226,
-          "mean": 0.04820796346242449,
-          "total": 10.894999742507935
+          "calls": 223,
+          "mean": 0.05159192876430905,
+          "total": 11.505000114440918
         },
         "build3DOverlayData": {
-          "calls": 226,
-          "mean": 0.03887167124621636,
-          "total": 8.784997701644897
+          "calls": 223,
+          "mean": 0.03677130012768801,
+          "total": 8.199999928474426
         },
         "drawMinimap": {
-          "calls": 226,
-          "mean": 0.47761061866726495,
-          "total": 107.93999981880188
+          "calls": 223,
+          "mean": 0.46181614409647714,
+          "total": 102.9850001335144
         },
         "updateBottomBar": {
-          "calls": 226,
-          "mean": 0.06601770261747647,
-          "total": 14.920000791549683
+          "calls": 223,
+          "mean": 0.04663677172810508,
+          "total": 10.400000095367432
         },
         "_simClientApplyWorld": {
-          "calls": 52,
-          "mean": 0.08576921774790837,
-          "total": 4.459999322891235
+          "calls": 59,
+          "mean": 0.1387288161253525,
+          "total": 8.185000151395798
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
       "detail": 0,
@@ -1043,17 +1043,17 @@
       "modelCount": 0,
       "meshLods": {},
       "units": 400000,
-      "moving": 21466,
-      "mediumModels": 592,
+      "moving": 24020,
+      "mediumModels": 572,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 4064,
-        "build": 186,
+        "reuse": 3925,
+        "build": 264,
         "why": {
           "none": 3,
-          "tick": 180,
-          "bounds": 3
+          "tick": 259,
+          "bounds": 2
         }
       }
     },
@@ -1062,88 +1062,88 @@
       "zoom": 1.5,
       "pitch": 1.35,
       "yaw": 0,
-      "fps": 98.1211614561712,
-      "p95": 10.570000000006985,
-      "buildMs": 0.8688888858865809,
-      "columnMs": 0.3823379620357796,
-      "renderCpuMs": 0.8518518529556416,
-      "gpuMs": 3.2864171851851838,
+      "fps": 100.26404377078308,
+      "p95": 10.395000000004075,
+      "buildMs": 0.627511312249559,
+      "columnMs": 0.46346153784121863,
+      "renderCpuMs": 0.8977828051439777,
+      "gpuMs": 3.914608872727274,
       "timings": {
         "getChunkRenderView": {
-          "calls": 216,
-          "mean": 0.45261573681124934,
-          "total": 97.76499915122986
+          "calls": 221,
+          "mean": 0.21260181028918443,
+          "total": 46.98500007390976
         },
         "_unitDetailSplit": {
-          "calls": 216,
-          "mean": 0.09608796018141287,
-          "total": 20.75499939918518
+          "calls": 221,
+          "mean": 0.09730769201641169,
+          "total": 21.504999935626984
         },
         "_structureDetailSplit": {
-          "calls": 216,
-          "mean": 0.05523148730949119,
-          "total": 11.930001258850098
+          "calls": 221,
+          "mean": 0.0549321271715121,
+          "total": 12.140000104904175
         },
         "build3DOverlayData": {
-          "calls": 216,
-          "mean": 0.04173611932330661,
-          "total": 9.015001773834229
+          "calls": 221,
+          "mean": 0.03954751081596133,
+          "total": 8.739999890327454
         },
         "drawMinimap": {
-          "calls": 216,
-          "mean": 0.504583328962326,
-          "total": 108.98999905586243
+          "calls": 221,
+          "mean": 0.5140723997381478,
+          "total": 113.61000034213066
         },
         "updateBottomBar": {
-          "calls": 216,
-          "mean": 0.07307871072380631,
-          "total": 15.785001516342163
+          "calls": 221,
+          "mean": 0.06787330370682937,
+          "total": 15.00000011920929
         },
         "_simClientApplyWorld": {
-          "calls": 51,
-          "mean": 0.08215684984244552,
-          "total": 4.189999341964722
+          "calls": 56,
+          "mean": 0.8823214285075665,
+          "total": 49.40999999642372
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 353,
-      "visibleDetail": 275,
+      "detail": 350,
+      "visibleDetail": 260,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 353,
+      "modelCount": 350,
       "meshLods": {
-        "far": 353
+        "far": 350
       },
       "units": 400000,
-      "moving": 26617,
-      "mediumModels": 510,
+      "moving": 22591,
+      "mediumModels": 497,
       "nativeRebase": true,
-      "tps": 19,
+      "tps": 20,
       "unitLayerStats": {
-        "reuse": 4549,
-        "build": 213,
+        "reuse": 4419,
+        "build": 292,
         "why": {
           "none": 3,
-          "tick": 204,
-          "bounds": 3,
-          "units": 3
+          "tick": 286,
+          "bounds": 2,
+          "units": 1
         }
       }
     },
@@ -1152,89 +1152,89 @@
       "zoom": 1.5,
       "pitch": 0.55,
       "yaw": 0,
-      "fps": 99.73185730400087,
-      "p95": 10.375,
-      "buildMs": 1.1598863536661321,
-      "columnMs": 0.4582499937577681,
-      "renderCpuMs": 1.0970000061121854,
-      "gpuMs": 4.193488290909091,
+      "fps": 99.720329801357,
+      "p95": 10.559999999997672,
+      "buildMs": 1.0212727264924484,
+      "columnMs": 0.5328181828964841,
+      "renderCpuMs": 1.1185909096490254,
+      "gpuMs": 5.4114728727272725,
       "timings": {
         "getChunkRenderView": {
           "calls": 220,
-          "mean": 0.6074545394290577,
-          "total": 133.6399986743927
+          "mean": 0.5169772736050866,
+          "total": 113.73500019311905
         },
         "_unitDetailSplit": {
           "calls": 220,
-          "mean": 0.18586363467303188,
-          "total": 40.88999962806702
+          "mean": 0.15470454421910373,
+          "total": 34.03499972820282
         },
         "_structureDetailSplit": {
           "calls": 220,
-          "mean": 0.05365909337997436,
-          "total": 11.80500054359436
+          "mean": 0.04993181838230653,
+          "total": 10.985000044107437
         },
         "build3DOverlayData": {
           "calls": 220,
-          "mean": 0.03965908614071933,
-          "total": 8.724998950958252
+          "mean": 0.0364999995990233,
+          "total": 8.029999911785126
         },
         "drawMinimap": {
           "calls": 220,
-          "mean": 0.8108409036289562,
-          "total": 178.38499879837036
+          "mean": 0.7234999998049303,
+          "total": 159.16999995708466
         },
         "updateBottomBar": {
           "calls": 220,
-          "mean": 0.08225000229748812,
-          "total": 18.095000505447388
+          "mean": 0.07152272760868073,
+          "total": 15.73500007390976
         },
         "_simClientApplyWorld": {
-          "calls": 51,
-          "mean": 0.09764702647340064,
-          "total": 4.979998350143433
+          "calls": 56,
+          "mean": 1.1159821434744768,
+          "total": 62.495000034570694
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 527,
-      "visibleDetail": 415,
+      "detail": 513,
+      "visibleDetail": 398,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 527,
+      "modelCount": 513,
       "meshLods": {
-        "far": 514,
-        "medium": 13
+        "far": 504,
+        "medium": 9
       },
       "units": 400000,
-      "moving": 22431,
-      "mediumModels": 1260,
+      "moving": 22317,
+      "mediumModels": 1219,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 5050,
-        "build": 235,
+        "reuse": 4918,
+        "build": 318,
         "why": {
           "none": 3,
-          "tick": 222,
-          "bounds": 3,
-          "units": 7
+          "tick": 311,
+          "bounds": 2,
+          "units": 2
         }
       }
     },
@@ -1243,89 +1243,89 @@
       "zoom": 1.5,
       "pitch": 0.55,
       "yaw": 1.5707963267948966,
-      "fps": 98.37410721134408,
-      "p95": 10.570000000006985,
-      "buildMs": 1.4551152106254333,
-      "columnMs": 0.4889400928251205,
-      "renderCpuMs": 1.104838699789091,
-      "gpuMs": 4.266000592592592,
+      "fps": 95.60034524858868,
+      "p95": 10.634999999994761,
+      "buildMs": 1.0643601889293905,
+      "columnMs": 0.46902843603590655,
+      "renderCpuMs": 1.0560189573120733,
+      "gpuMs": 4.705563169811319,
       "timings": {
+        "_simClientApplyWorld": {
+          "calls": 54,
+          "mean": 2.331388888535676,
+          "total": 125.89499998092651
+        },
         "getChunkRenderView": {
-          "calls": 217,
-          "mean": 0.8817050698715421,
-          "total": 191.33000016212463
+          "calls": 211,
+          "mean": 0.536066350637454,
+          "total": 113.10999998450279
         },
         "_unitDetailSplit": {
-          "calls": 217,
-          "mean": 0.2405760277251494,
-          "total": 52.20499801635742
+          "calls": 211,
+          "mean": 0.1554976302018098,
+          "total": 32.80999997258186
         },
         "_structureDetailSplit": {
-          "calls": 217,
-          "mean": 0.05315669780502671,
-          "total": 11.535003423690796
+          "calls": 211,
+          "mean": 0.051137440577502496,
+          "total": 10.789999961853027
         },
         "build3DOverlayData": {
-          "calls": 217,
-          "mean": 0.041728112005418344,
-          "total": 9.055000305175781
+          "calls": 211,
+          "mean": 0.038720378661042706,
+          "total": 8.169999897480011
         },
         "drawMinimap": {
-          "calls": 217,
-          "mean": 0.806198149782172,
-          "total": 174.94499850273132
+          "calls": 211,
+          "mean": 0.7013033169423234,
+          "total": 147.97499987483025
         },
         "updateBottomBar": {
-          "calls": 217,
-          "mean": 0.0730414731161935,
-          "total": 15.84999966621399
-        },
-        "_simClientApplyWorld": {
-          "calls": 50,
-          "mean": 0.644499979019165,
-          "total": 32.22499895095825
+          "calls": 211,
+          "mean": 0.05400473995231339,
+          "total": 11.395000129938126
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 299,
-      "visibleDetail": 237,
+      "detail": 552,
+      "visibleDetail": 433,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 299,
+      "modelCount": 552,
       "meshLods": {
-        "far": 276,
-        "medium": 23
+        "far": 546,
+        "medium": 6
       },
-      "units": 399996,
-      "moving": 22904,
-      "mediumModels": 1256,
+      "units": 399988,
+      "moving": 22073,
+      "mediumModels": 1220,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 5552,
-        "build": 255,
+        "reuse": 5393,
+        "build": 341,
         "why": {
           "none": 3,
-          "tick": 239,
-          "bounds": 3,
-          "units": 10
+          "tick": 331,
+          "bounds": 2,
+          "units": 5
         }
       }
     },
@@ -1334,87 +1334,271 @@
       "zoom": 1.5,
       "pitch": 0.8,
       "yaw": 3.141592653589793,
-      "fps": 97.52380261182367,
-      "p95": 14.880000000004657,
-      "buildMs": 0.8659069715544235,
-      "columnMs": 0.4274883691654649,
-      "renderCpuMs": 1.0589767467143925,
-      "gpuMs": 4.263349925925927,
+      "fps": 97.59042433614835,
+      "p95": 10.595000000001164,
+      "buildMs": 0.9214651181254276,
+      "columnMs": 0.44902325619098754,
+      "renderCpuMs": 0.9329534881336744,
+      "gpuMs": 4.3098317037037015,
       "timings": {
         "getChunkRenderView": {
           "calls": 215,
-          "mean": 0.40404651996701263,
-          "total": 86.87000179290771
+          "mean": 0.4751395340575728,
+          "total": 102.15499982237816
         },
         "_unitDetailSplit": {
           "calls": 215,
-          "mean": 0.11281394293141919,
-          "total": 24.254997730255127
+          "mean": 0.1342558134433835,
+          "total": 28.864999890327454
         },
         "_structureDetailSplit": {
           "calls": 215,
-          "mean": 0.05200001472650572,
-          "total": 11.18000316619873
+          "mean": 0.05106976836226707,
+          "total": 10.98000019788742
         },
         "build3DOverlayData": {
           "calls": 215,
-          "mean": 0.04137209737023642,
-          "total": 8.89500093460083
+          "mean": 0.038604651079621424,
+          "total": 8.299999982118607
         },
         "drawMinimap": {
           "calls": 215,
-          "mean": 0.7105116400607797,
-          "total": 152.76000261306763
+          "mean": 0.6957906985005667,
+          "total": 149.59500017762184
         },
         "updateBottomBar": {
           "calls": 215,
-          "mean": 0.0725348805272302,
-          "total": 15.594999313354492
+          "mean": 0.06683720877004225,
+          "total": 14.369999885559082
         },
         "_simClientApplyWorld": {
-          "calls": 51,
-          "mean": 1.6496078594058168,
-          "total": 84.13000082969666
+          "calls": 53,
+          "mean": 1.9188679271149185,
+          "total": 101.70000013709068
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 366,
-      "visibleDetail": 279,
+      "detail": 224,
+      "visibleDetail": 182,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 366,
+      "modelCount": 224,
       "meshLods": {
-        "far": 366
+        "far": 222,
+        "medium": 2
       },
-      "units": 399981,
-      "moving": 22217,
-      "mediumModels": 844,
+      "units": 399959,
+      "moving": 21506,
+      "mediumModels": 1380,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 6046,
-        "build": 273,
+        "reuse": 5866,
+        "build": 364,
         "why": {
           "none": 3,
-          "tick": 256,
-          "bounds": 3,
+          "tick": 353,
+          "bounds": 2,
+          "units": 6
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 1.35,
+      "yaw": 0,
+      "fps": 95.52460437590875,
+      "p95": 10.535000000003492,
+      "buildMs": 0.5916350702821361,
+      "columnMs": 0.3916587671397422,
+      "renderCpuMs": 0.8404265403465072,
+      "gpuMs": 4.21327516981132,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 211,
+          "mean": 0.19575829472022033,
+          "total": 41.30500018596649
+        },
+        "_unitDetailSplit": {
+          "calls": 211,
+          "mean": 0.05331753469756429,
+          "total": 11.249999821186066
+        },
+        "_structureDetailSplit": {
+          "calls": 211,
+          "mean": 0.0624644558576611,
+          "total": 13.180000185966492
+        },
+        "build3DOverlayData": {
+          "calls": 211,
+          "mean": 0.043886255031513374,
+          "total": 9.259999811649323
+        },
+        "drawMinimap": {
+          "calls": 211,
+          "mean": 0.6776540270913833,
+          "total": 142.9849997162819
+        },
+        "updateBottomBar": {
+          "calls": 211,
+          "mean": 0.057203792423998576,
+          "total": 12.0700002014637
+        },
+        "_simClientApplyWorld": {
+          "calls": 54,
+          "mean": 3.2469444462546595,
+          "total": 175.33500009775162
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 93,
+        "next": 110919,
+        "revision": 79,
+        "ready": 7533,
+        "structureTypes": [
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
+        ]
+      },
+      "detail": 270,
+      "visibleDetail": 172,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 270,
+      "meshLods": {
+        "medium": 115,
+        "far": 155
+      },
+      "units": 399913,
+      "moving": 21106,
+      "mediumModels": 31,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 6343,
+        "build": 391,
+        "why": {
+          "none": 3,
+          "tick": 377,
+          "bounds": 2,
+          "units": 9
+        }
+      }
+    },
+    {
+      "mode": "3d",
+      "zoom": 3,
+      "pitch": 0.55,
+      "yaw": 0,
+      "fps": 97.2488570982912,
+      "p95": 10.205000000016298,
+      "buildMs": 0.7375700948672874,
+      "columnMs": 0.34757009315713544,
+      "renderCpuMs": 0.9135981303787677,
+      "gpuMs": 3.7632794074074067,
+      "timings": {
+        "getChunkRenderView": {
+          "calls": 214,
+          "mean": 0.2853037376548642,
+          "total": 61.054999858140945
+        },
+        "_unitDetailSplit": {
+          "calls": 214,
+          "mean": 0.07871495326545751,
+          "total": 16.844999998807907
+        },
+        "_structureDetailSplit": {
+          "calls": 214,
+          "mean": 0.04964953396364907,
+          "total": 10.625000268220901
+        },
+        "build3DOverlayData": {
+          "calls": 214,
+          "mean": 0.03976635439930675,
+          "total": 8.509999841451645
+        },
+        "drawMinimap": {
+          "calls": 214,
+          "mean": 0.6835981317769702,
+          "total": 146.2900002002716
+        },
+        "updateBottomBar": {
+          "calls": 214,
+          "mean": 0.06488317696847648,
+          "total": 13.884999871253967
+        },
+        "_simClientApplyWorld": {
+          "calls": 50,
+          "mean": 2.515600000619888,
+          "total": 125.78000003099442
+        }
+      },
+      "glError": 0,
+      "atlas": {
+        "styles": 93,
+        "next": 110919,
+        "revision": 79,
+        "ready": 7533,
+        "structureTypes": [
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
+        ]
+      },
+      "detail": 526,
+      "visibleDetail": 400,
+      "scale": false,
+      "flat": false,
+      "objects": 0,
+      "modelCount": 526,
+      "meshLods": {
+        "far": 354,
+        "medium": 138,
+        "full": 34
+      },
+      "units": 399844,
+      "moving": 21899,
+      "mediumModels": 284,
+      "nativeRebase": true,
+      "tps": 20,
+      "unitLayerStats": {
+        "reuse": 6838,
+        "build": 405,
+        "why": {
+          "none": 3,
+          "tick": 389,
+          "bounds": 2,
           "units": 11
         }
       }
@@ -1422,275 +1606,92 @@
     {
       "mode": "3d",
       "zoom": 3,
-      "pitch": 1.35,
-      "yaw": 0,
-      "fps": 98.19759890439042,
-      "p95": 10.614999999990687,
-      "buildMs": 0.5701382489797706,
-      "columnMs": 0.3267511497444821,
-      "renderCpuMs": 0.8032488460364979,
-      "gpuMs": 3.711217777777778,
-      "timings": {
-        "getChunkRenderView": {
-          "calls": 217,
-          "mean": 0.20527649914614066,
-          "total": 44.545000314712524
-        },
-        "_unitDetailSplit": {
-          "calls": 217,
-          "mean": 0.04419354359675113,
-          "total": 9.589998960494995
-        },
-        "_structureDetailSplit": {
-          "calls": 217,
-          "mean": 0.05080645754590012,
-          "total": 11.025001287460327
-        },
-        "build3DOverlayData": {
-          "calls": 217,
-          "mean": 0.040069137300763814,
-          "total": 8.695002794265747
-        },
-        "drawMinimap": {
-          "calls": 217,
-          "mean": 0.7963364036401845,
-          "total": 172.80499958992004
-        },
-        "updateBottomBar": {
-          "calls": 217,
-          "mean": 0.07605990067055698,
-          "total": 16.504998445510864
-        },
-        "_simClientApplyWorld": {
-          "calls": 51,
-          "mean": 1.3989215645135618,
-          "total": 71.34499979019165
-        }
-      },
-      "glError": 0,
-      "atlas": {
-        "styles": 93,
-        "next": 110919,
-        "revision": 83,
-        "ready": 7533,
-        "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
-        ]
-      },
-      "detail": 233,
-      "visibleDetail": 149,
-      "scale": false,
-      "flat": false,
-      "objects": 0,
-      "modelCount": 233,
-      "meshLods": {
-        "far": 133,
-        "medium": 100
-      },
-      "units": 399961,
-      "moving": 21071,
-      "mediumModels": 29,
-      "nativeRebase": true,
-      "tps": 19,
-      "unitLayerStats": {
-        "reuse": 6543,
-        "build": 294,
-        "why": {
-          "none": 3,
-          "tick": 273,
-          "bounds": 3,
-          "units": 15
-        }
-      }
-    },
-    {
-      "mode": "3d",
-      "zoom": 3,
-      "pitch": 0.55,
-      "yaw": 0,
-      "fps": 98.53760208560921,
-      "p95": 10.565000000002328,
-      "buildMs": 1.0677880120167536,
-      "columnMs": 0.475437787271315,
-      "renderCpuMs": 1.1938018524152343,
-      "gpuMs": 5.582758399999997,
-      "timings": {
-        "getChunkRenderView": {
-          "calls": 217,
-          "mean": 0.5513594359296807,
-          "total": 119.64499759674072
-        },
-        "_unitDetailSplit": {
-          "calls": 217,
-          "mean": 0.1660138220281645,
-          "total": 36.024999380111694
-        },
-        "_structureDetailSplit": {
-          "calls": 217,
-          "mean": 0.05359446947475732,
-          "total": 11.629999876022339
-        },
-        "build3DOverlayData": {
-          "calls": 217,
-          "mean": 0.04032257515164564,
-          "total": 8.749998807907104
-        },
-        "drawMinimap": {
-          "calls": 217,
-          "mean": 0.7844930903702837,
-          "total": 170.23500061035156
-        },
-        "updateBottomBar": {
-          "calls": 217,
-          "mean": 0.07829493311693042,
-          "total": 16.9900004863739
-        },
-        "_simClientApplyWorld": {
-          "calls": 50,
-          "mean": 1.3982000160217285,
-          "total": 69.91000080108643
-        }
-      },
-      "glError": 0,
-      "atlas": {
-        "styles": 93,
-        "next": 110919,
-        "revision": 83,
-        "ready": 7533,
-        "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
-        ]
-      },
-      "detail": 488,
-      "visibleDetail": 407,
-      "scale": false,
-      "flat": false,
-      "objects": 0,
-      "modelCount": 488,
-      "meshLods": {
-        "far": 402,
-        "medium": 50,
-        "full": 36
-      },
-      "units": 399920,
-      "moving": 21734,
-      "mediumModels": 1425,
-      "nativeRebase": true,
-      "tps": 20,
-      "unitLayerStats": {
-        "reuse": 7030,
-        "build": 314,
-        "why": {
-          "none": 3,
-          "tick": 289,
-          "bounds": 3,
-          "units": 19
-        }
-      }
-    },
-    {
-      "mode": "3d",
-      "zoom": 3,
       "pitch": 0.55,
       "yaw": 1.5707963267948966,
-      "fps": 97.53353565618283,
-      "p95": 10.529999999998836,
-      "buildMs": 1.087558144192363,
-      "columnMs": 0.4830697680628577,
-      "renderCpuMs": 1.2090232616247132,
-      "gpuMs": 5.055913056603773,
+      "fps": 93.4937856134548,
+      "p95": 19.56500000000233,
+      "buildMs": 0.855509708373292,
+      "columnMs": 0.4262135927248927,
+      "renderCpuMs": 0.962451455228537,
+      "gpuMs": 4.893322461538462,
       "timings": {
         "getChunkRenderView": {
-          "calls": 215,
-          "mean": 0.5832093072492023,
-          "total": 125.39000105857849
+          "calls": 206,
+          "mean": 0.3452912629808037,
+          "total": 71.13000017404556
         },
         "_unitDetailSplit": {
-          "calls": 215,
-          "mean": 0.17488372159558674,
-          "total": 37.60000014305115
+          "calls": 206,
+          "mean": 0.09837378604898175,
+          "total": 20.26499992609024
         },
         "_structureDetailSplit": {
-          "calls": 215,
-          "mean": 0.05174418382866438,
-          "total": 11.124999523162842
+          "calls": 206,
+          "mean": 0.056917475554549575,
+          "total": 11.724999964237213
         },
         "build3DOverlayData": {
-          "calls": 215,
-          "mean": 0.04058139712311501,
-          "total": 8.725000381469727
+          "calls": 206,
+          "mean": 0.04145630977107483,
+          "total": 8.539999812841415
         },
         "drawMinimap": {
-          "calls": 215,
-          "mean": 0.7161395394524862,
-          "total": 153.97000098228455
+          "calls": 206,
+          "mean": 0.7980339810686204,
+          "total": 164.3950001001358
         },
         "updateBottomBar": {
-          "calls": 215,
-          "mean": 0.07469767526138661,
-          "total": 16.06000018119812
+          "calls": 206,
+          "mean": 0.07395630959168221,
+          "total": 15.234999775886536
         },
         "_simClientApplyWorld": {
-          "calls": 50,
-          "mean": 1.6748000288009643,
-          "total": 83.74000144004822
+          "calls": 56,
+          "mean": 3.3428571421120847,
+          "total": 187.19999995827675
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 496,
-      "visibleDetail": 422,
+      "detail": 575,
+      "visibleDetail": 421,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 496,
+      "modelCount": 575,
       "meshLods": {
-        "far": 409,
-        "medium": 56,
-        "full": 31
+        "far": 403,
+        "medium": 138,
+        "full": 34
       },
-      "units": 399831,
-      "moving": 21698,
-      "mediumModels": 1337,
+      "units": 399744,
+      "moving": 18889,
+      "mediumModels": 233,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 7550,
-        "build": 331,
+        "reuse": 7314,
+        "build": 433,
         "why": {
           "none": 3,
-          "tick": 305,
-          "bounds": 3,
-          "units": 20
+          "tick": 413,
+          "bounds": 2,
+          "units": 15
         }
       }
     },
@@ -1699,95 +1700,93 @@
       "zoom": 3,
       "pitch": 0.8,
       "yaw": 3.141592653589793,
-      "fps": 97.08561681249702,
-      "p95": 10.570000000006985,
-      "buildMs": 0.7424065364855472,
-      "columnMs": 0.4205140198502585,
-      "renderCpuMs": 1.232313089281599,
-      "gpuMs": 4.666452528301888,
+      "fps": 92.91911051406453,
+      "p95": 19.58499999999185,
+      "buildMs": 0.708560975004987,
+      "columnMs": 0.4547317078927668,
+      "renderCpuMs": 0.9884146335648327,
+      "gpuMs": 4.303546352941176,
       "timings": {
         "getChunkRenderView": {
-          "calls": 214,
-          "mean": 0.3170794382273594,
-          "total": 67.85499978065491
+          "calls": 205,
+          "mean": 0.2743170730951356,
+          "total": 56.23499998450279
         },
         "_unitDetailSplit": {
-          "calls": 214,
-          "mean": 0.0804439159197228,
-          "total": 17.21499800682068
+          "calls": 205,
+          "mean": 0.088609755766101,
+          "total": 18.164999932050705
         },
         "_structureDetailSplit": {
-          "calls": 214,
-          "mean": 0.052850469250545325,
-          "total": 11.3100004196167
+          "calls": 205,
+          "mean": 0.056829267740249635,
+          "total": 11.649999886751175
         },
         "build3DOverlayData": {
-          "calls": 214,
-          "mean": 0.03549065768161667,
-          "total": 7.595000743865967
+          "calls": 205,
+          "mean": 0.039219513753565347,
+          "total": 8.040000319480896
         },
         "drawMinimap": {
-          "calls": 214,
-          "mean": 0.7809112194542572,
-          "total": 167.11500096321106
+          "calls": 205,
+          "mean": 0.7640487804645445,
+          "total": 156.62999999523163
         },
         "updateBottomBar": {
-          "calls": 214,
-          "mean": 0.07212616572870273,
-          "total": 15.434999465942383
+          "calls": 205,
+          "mean": 0.05697560906410217,
+          "total": 11.679999858140945
         },
         "_simClientApplyWorld": {
-          "calls": 51,
-          "mean": 1.6277450720469158,
-          "total": 83.0149986743927
+          "calls": 56,
+          "mean": 4.060357145432915,
+          "total": 227.38000014424324
         }
       },
       "glError": 0,
       "atlas": {
         "styles": 93,
         "next": 110919,
-        "revision": 83,
+        "revision": 79,
         "ready": 7533,
         "structureTypes": [
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34,
-          34
+          46,
+          46,
+          46,
+          46,
+          46,
+          45,
+          45,
+          45
         ]
       },
-      "detail": 472,
-      "visibleDetail": 315,
+      "detail": 491,
+      "visibleDetail": 341,
       "scale": false,
       "flat": false,
       "objects": 0,
-      "modelCount": 472,
+      "modelCount": 491,
       "meshLods": {
-        "far": 393,
-        "medium": 53,
-        "full": 26
+        "far": 408,
+        "medium": 60,
+        "full": 23
       },
-      "units": 399724,
-      "moving": 20659,
-      "mediumModels": 230,
+      "units": 399629,
+      "moving": 18574,
+      "mediumModels": 247,
       "nativeRebase": true,
       "tps": 20,
       "unitLayerStats": {
-        "reuse": 8042,
-        "build": 352,
+        "reuse": 7764,
+        "build": 465,
         "why": {
           "none": 3,
-          "tick": 320,
-          "bounds": 3,
-          "units": 26
+          "tick": 443,
+          "bounds": 2,
+          "units": 17
         }
       }
     }
   ],
-  "errors": [
-    "WebGL error 1282 in {\"mode\":\"2d\",\"zoom\":0.025,\"pitch\":1.35,\"yaw\":0}"
-  ]
+  "errors": []
 }

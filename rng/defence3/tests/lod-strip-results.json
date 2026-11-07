@@ -1,7 +1,383 @@
 {
   "setup": {
     "styles": 93,
-    "atlasPixels": 2048,
+    "backgroundBake": true,
+    "atlasPixels": 2816,
+    "animationPixels": 5504,
+    "snapshotSizes": [
+      [
+        "unit_norm",
+        32
+      ],
+      [
+        "barrack_norm",
+        32
+      ],
+      [
+        "unit_fast",
+        32
+      ],
+      [
+        "barrack_fast",
+        32
+      ],
+      [
+        "unit_tank",
+        32
+      ],
+      [
+        "barrack_tank",
+        32
+      ],
+      [
+        "unit_boss",
+        32
+      ],
+      [
+        "barrack_boss",
+        32
+      ],
+      [
+        "unit_flying",
+        32
+      ],
+      [
+        "barrack_flying",
+        32
+      ],
+      [
+        "unit_mole",
+        32
+      ],
+      [
+        "barrack_mole",
+        32
+      ],
+      [
+        "unit_poison_resistant",
+        32
+      ],
+      [
+        "barrack_poison_resistant",
+        32
+      ],
+      [
+        "unit_fire_resistant",
+        32
+      ],
+      [
+        "barrack_fire_resistant",
+        32
+      ],
+      [
+        "unit_water_resistant",
+        32
+      ],
+      [
+        "barrack_water_resistant",
+        32
+      ],
+      [
+        "unit_ice_resistant",
+        32
+      ],
+      [
+        "barrack_ice_resistant",
+        32
+      ],
+      [
+        "unit_laser_resistant",
+        32
+      ],
+      [
+        "barrack_laser_resistant",
+        32
+      ],
+      [
+        "unit_snake",
+        32
+      ],
+      [
+        "barrack_snake",
+        32
+      ],
+      [
+        "unit_scout",
+        32
+      ],
+      [
+        "barrack_scout",
+        32
+      ],
+      [
+        "unit_collector",
+        32
+      ],
+      [
+        "barrack_collector",
+        32
+      ],
+      [
+        "unit_astar_collector",
+        32
+      ],
+      [
+        "barrack_astar_collector",
+        32
+      ],
+      [
+        "unit_salvager_unit",
+        32
+      ],
+      [
+        "barrack_salvager_unit",
+        32
+      ],
+      [
+        "unit_builder_unit",
+        32
+      ],
+      [
+        "barrack_builder_unit",
+        32
+      ],
+      [
+        "unit_healer_unit",
+        32
+      ],
+      [
+        "barrack_healer_unit",
+        32
+      ],
+      [
+        "unit_researcher_unit",
+        32
+      ],
+      [
+        "barrack_researcher_unit",
+        32
+      ],
+      [
+        "unit_king",
+        32
+      ],
+      [
+        "barrack_king",
+        32
+      ],
+      [
+        "tower_pistol",
+        32
+      ],
+      [
+        "tower_smg",
+        32
+      ],
+      [
+        "tower_water",
+        32
+      ],
+      [
+        "tower_poison",
+        32
+      ],
+      [
+        "tower_fire",
+        32
+      ],
+      [
+        "tower_sand_gun",
+        32
+      ],
+      [
+        "tower_ice",
+        32
+      ],
+      [
+        "tower_sniper",
+        32
+      ],
+      [
+        "tower_elements",
+        32
+      ],
+      [
+        "tower_laser",
+        32
+      ],
+      [
+        "tower_watch_tower",
+        32
+      ],
+      [
+        "item_sand",
+        32
+      ],
+      [
+        "item_lava",
+        32
+      ],
+      [
+        "item_poison_puddle",
+        32
+      ],
+      [
+        "item_ice_patch",
+        32
+      ],
+      [
+        "item_water_puddle",
+        32
+      ],
+      [
+        "item_mine",
+        32
+      ],
+      [
+        "item_farm",
+        32
+      ],
+      [
+        "spawner_spawner",
+        32
+      ],
+      [
+        "item_astar_farm",
+        32
+      ],
+      [
+        "spawner_astar_spawner",
+        32
+      ],
+      [
+        "spawner_salvager",
+        32
+      ],
+      [
+        "spawner_builder_spawner",
+        32
+      ],
+      [
+        "spawner_healer_spawner",
+        32
+      ],
+      [
+        "spawner_research",
+        32
+      ],
+      [
+        "item_house",
+        32
+      ],
+      [
+        "tower_area_upgrader",
+        32
+      ],
+      [
+        "tower_shrine",
+        32
+      ],
+      [
+        "tower_cloud_0a",
+        32
+      ],
+      [
+        "tower_cloud_0b",
+        32
+      ],
+      [
+        "tower_cloud_1a",
+        32
+      ],
+      [
+        "tower_cloud_1b",
+        32
+      ],
+      [
+        "tower_cloud_2a",
+        32
+      ],
+      [
+        "tower_cloud_2b",
+        32
+      ],
+      [
+        "tower_cloud_3a",
+        32
+      ],
+      [
+        "tower_cloud_3b",
+        32
+      ],
+      [
+        "item_barrack_norm",
+        32
+      ],
+      [
+        "item_barrack_fast",
+        32
+      ],
+      [
+        "item_barrack_tank",
+        32
+      ],
+      [
+        "item_barrack_boss",
+        32
+      ],
+      [
+        "item_barrack_flying",
+        32
+      ],
+      [
+        "item_barrack_mole",
+        32
+      ],
+      [
+        "item_barrack_poison_resistant",
+        32
+      ],
+      [
+        "item_barrack_fire_resistant",
+        32
+      ],
+      [
+        "item_barrack_water_resistant",
+        32
+      ],
+      [
+        "item_barrack_ice_resistant",
+        32
+      ],
+      [
+        "item_barrack_laser_resistant",
+        32
+      ],
+      [
+        "item_barrack_snake",
+        32
+      ],
+      [
+        "item_barrack_scout",
+        32
+      ],
+      [
+        "gold_mine_active",
+        32
+      ],
+      [
+        "gold_mine_empty",
+        32
+      ],
+      [
+        "astar_mine_active",
+        32
+      ],
+      [
+        "astar_mine_empty",
+        32
+      ]
+    ],
     "rows": [
       "unit_norm",
       "unit_fast",
@@ -275,10 +651,22 @@
       "yaw": 0,
       "reference": false,
       "glError": 0,
-      "coverage": 0.4202828414351852,
-      "middle": 1159,
+      "coverage": 0.42108796296296297,
+      "energy": [
+        51335008,
+        47602019,
+        39802666
+      ],
+      "hash": 517528228,
+      "bounds": [
+        0,
+        21,
+        1439,
+        629
+      ],
+      "middle": 1628,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-low",
@@ -286,10 +674,22 @@
       "yaw": 0,
       "reference": true,
       "glError": 0,
-      "coverage": 0.41418330439814816,
+      "coverage": 0.4153602430555556,
+      "energy": [
+        51504507,
+        47461523,
+        39528682
+      ],
+      "hash": -831394809,
+      "bounds": [
+        0,
+        21,
+        1439,
+        629
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-diagonal-low",
@@ -297,10 +697,22 @@
       "yaw": 0.65,
       "reference": false,
       "glError": 0,
-      "coverage": 0.37533058449074075,
-      "middle": 1214,
+      "coverage": 0.3745659722222222,
+      "energy": [
+        48761482,
+        46620103,
+        36647675
+      ],
+      "hash": -91290919,
+      "bounds": [
+        0,
+        0,
+        1439,
+        620
+      ],
+      "middle": 1578,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-diagonal-low",
@@ -308,10 +720,22 @@
       "yaw": 0.65,
       "reference": true,
       "glError": 0,
-      "coverage": 0.36706669560185184,
+      "coverage": 0.3660611979166667,
+      "energy": [
+        48535326,
+        46593696,
+        36352047
+      ],
+      "hash": 723887104,
+      "bounds": [
+        0,
+        0,
+        1439,
+        621
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-diagonal",
@@ -319,10 +743,22 @@
       "yaw": 0.65,
       "reference": false,
       "glError": 0,
-      "coverage": 0.5048820891203704,
-      "middle": 1239,
+      "coverage": 0.48452690972222223,
+      "energy": [
+        57607020,
+        55088314,
+        46579306
+      ],
+      "hash": -460185503,
+      "bounds": [
+        0,
+        0,
+        1439,
+        882
+      ],
+      "middle": 1576,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-diagonal",
@@ -330,10 +766,22 @@
       "yaw": 0.65,
       "reference": true,
       "glError": 0,
-      "coverage": 0.48096571180555553,
+      "coverage": 0.47877025462962963,
+      "energy": [
+        58941941,
+        56737526,
+        48044569
+      ],
+      "hash": 418586965,
+      "bounds": [
+        0,
+        0,
+        1439,
+        882
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-overhead",
@@ -341,10 +789,22 @@
       "yaw": 0.35,
       "reference": false,
       "glError": 0,
-      "coverage": 0.46994719328703705,
-      "middle": 1237,
+      "coverage": 0.38228081597222224,
+      "energy": [
+        41557330,
+        40008070,
+        33432148
+      ],
+      "hash": -1407558235,
+      "bounds": [
+        0,
+        0,
+        1399,
+        959
+      ],
+      "middle": 1491,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "all-overhead",
@@ -352,10 +812,22 @@
       "yaw": 0.35,
       "reference": true,
       "glError": 0,
-      "coverage": 0.39300130208333334,
+      "coverage": 0.3947554976851852,
+      "energy": [
+        44427301,
+        42778784,
+        35654232
+      ],
+      "hash": 778447466,
+      "bounds": [
+        0,
+        0,
+        1400,
+        959
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "towers-low",
@@ -364,10 +836,22 @@
       "focus": "tower_sniper",
       "reference": false,
       "glError": 0,
-      "coverage": 0.3872359664351852,
-      "middle": 800,
+      "coverage": 0.38712094907407407,
+      "energy": [
+        55836820,
+        52783602,
+        42076125
+      ],
+      "hash": 127361512,
+      "bounds": [
+        0,
+        0,
+        1439,
+        672
+      ],
+      "middle": 1495,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "towers-low",
@@ -376,10 +860,22 @@
       "focus": "tower_sniper",
       "reference": true,
       "glError": 0,
-      "coverage": 0.3789547164351852,
+      "coverage": 0.3791644965277778,
+      "energy": [
+        54950798,
+        51929073,
+        41355859
+      ],
+      "hash": -1459372623,
+      "bounds": [
+        0,
+        0,
+        1439,
+        673
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "towers-diagonal",
@@ -388,10 +884,22 @@
       "focus": "tower_sniper",
       "reference": false,
       "glError": 0,
-      "coverage": 0.5874782986111111,
-      "middle": 1297,
+      "coverage": 0.5915458622685185,
+      "energy": [
+        84403106,
+        78138614,
+        62017031
+      ],
+      "hash": -237423720,
+      "bounds": [
+        0,
+        0,
+        1439,
+        714
+      ],
+      "middle": 1341,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "towers-diagonal",
@@ -400,10 +908,22 @@
       "focus": "tower_sniper",
       "reference": true,
       "glError": 0,
-      "coverage": 0.579427806712963,
+      "coverage": 0.5856061921296296,
+      "energy": [
+        84184684,
+        78090836,
+        61758824
+      ],
+      "hash": -427227483,
+      "bounds": [
+        0,
+        0,
+        1439,
+        714
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "workshops-diagonal",
@@ -412,10 +932,22 @@
       "focus": "spawner_builder_spawner",
       "reference": false,
       "glError": 0,
-      "coverage": 0.6012659143518518,
-      "middle": 817,
+      "coverage": 0.6003776041666666,
+      "energy": [
+        68001073,
+        64691353,
+        38802978
+      ],
+      "hash": 1840960621,
+      "bounds": [
+        0,
+        0,
+        1439,
+        711
+      ],
+      "middle": 907,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "workshops-diagonal",
@@ -424,10 +956,22 @@
       "focus": "spawner_builder_spawner",
       "reference": true,
       "glError": 0,
-      "coverage": 0.6021086516203704,
+      "coverage": 0.6005642361111111,
+      "energy": [
+        68410739,
+        65002416,
+        38896838
+      ],
+      "hash": 1551952016,
+      "bounds": [
+        0,
+        0,
+        1439,
+        711
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "barracks-diagonal",
@@ -436,10 +980,22 @@
       "focus": "barrack_norm",
       "reference": false,
       "glError": 0,
-      "coverage": 0.6338035300925926,
-      "middle": 913,
+      "coverage": 0.6327654803240741,
+      "energy": [
+        90617253,
+        86679463,
+        68655729
+      ],
+      "hash": 250096630,
+      "bounds": [
+        0,
+        0,
+        1439,
+        713
+      ],
+      "middle": 972,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "barracks-diagonal",
@@ -448,10 +1004,22 @@
       "focus": "barrack_norm",
       "reference": true,
       "glError": 0,
-      "coverage": 0.6338035300925926,
+      "coverage": 0.6327228009259259,
+      "energy": [
+        91049389,
+        87030552,
+        68819848
+      ],
+      "hash": 492651640,
+      "bounds": [
+        0,
+        0,
+        1439,
+        713
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "houses-low",
@@ -460,10 +1028,22 @@
       "focus": "item_house",
       "reference": false,
       "glError": 0,
-      "coverage": 0.48079499421296296,
-      "middle": 675,
+      "coverage": 0.4802177372685185,
+      "energy": [
+        70769973,
+        67145307,
+        46142929
+      ],
+      "hash": 633468662,
+      "bounds": [
+        0,
+        0,
+        1439,
+        626
+      ],
+      "middle": 936,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "houses-low",
@@ -472,10 +1052,22 @@
       "focus": "item_house",
       "reference": true,
       "glError": 0,
-      "coverage": 0.4767990451388889,
+      "coverage": 0.47678023726851854,
+      "energy": [
+        69931790,
+        66388333,
+        45697128
+      ],
+      "hash": -118915664,
+      "bounds": [
+        0,
+        0,
+        1439,
+        626
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "houses-diagonal",
@@ -484,10 +1076,22 @@
       "focus": "item_house",
       "reference": false,
       "glError": 0,
-      "coverage": 0.34217881944444445,
-      "middle": 1000,
+      "coverage": 0.3413396990740741,
+      "energy": [
+        48898002,
+        46023314,
+        31652033
+      ],
+      "hash": -242764364,
+      "bounds": [
+        0,
+        30,
+        1439,
+        716
+      ],
+      "middle": 1656,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "houses-diagonal",
@@ -496,10 +1100,22 @@
       "focus": "item_house",
       "reference": true,
       "glError": 0,
-      "coverage": 0.3375325520833333,
+      "coverage": 0.3369842303240741,
+      "energy": [
+        48264431,
+        45473343,
+        31364491
+      ],
+      "hash": -916835998,
+      "bounds": [
+        0,
+        30,
+        1439,
+        716
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "units-diagonal",
@@ -508,10 +1124,22 @@
       "focus": "unit_water_resistant",
       "reference": false,
       "glError": 0,
-      "coverage": 0.3062767650462963,
-      "middle": 337,
+      "coverage": 0.3080302372685185,
+      "energy": [
+        44644936,
+        43019420,
+        45042755
+      ],
+      "hash": 502740878,
+      "bounds": [
+        0,
+        0,
+        1439,
+        697
+      ],
+      "middle": 524,
       "objects": 2556,
-      "atlasReady": 3069
+      "atlasReady": 110919
     },
     {
       "name": "units-diagonal",
@@ -520,10 +1148,22 @@
       "focus": "unit_water_resistant",
       "reference": true,
       "glError": 0,
-      "coverage": 0.3082523148148148,
+      "coverage": 0.310111400462963,
+      "energy": [
+        45550672,
+        43786748,
+        45131845
+      ],
+      "hash": -786294780,
+      "bounds": [
+        0,
+        0,
+        1439,
+        697
+      ],
       "middle": 0,
       "objects": 21300,
-      "atlasReady": 3069
+      "atlasReady": 110919
     }
   ],
   "errors": []

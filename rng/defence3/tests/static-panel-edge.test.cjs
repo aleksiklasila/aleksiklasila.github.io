@@ -91,7 +91,8 @@ const check = (name, fn) => results.push(Promise.resolve().then(fn).then(() => {
             let wireOk = true, pieces = 0;
             for (const list of [all, combat, workers]) for (let k = 0; k * ACTION_MAX_UNIT_IDS < list.length; k++) {
                 const z = infoPackIdsWire(list, k); pieces++;
-                if (!z || !same(actionIdsDecode(z), list.slice(k * ACTION_MAX_UNIT_IDS, (k + 1) * ACTION_MAX_UNIT_IDS))) wireOk = false;
+                // (Each piece's string holds its ids ascending: info_pack_worker.js selectionIds.)
+                if (!z || !same(actionIdsDecode(z), sorted(list.slice(k * ACTION_MAX_UNIT_IDS, (k + 1) * ACTION_MAX_UNIT_IDS)))) wireOk = false;
             }
             return { n: all.length, all: same(sorted(all), want), workers: same(sorted(workers), wantW), split: combat.length + workers.length === all.length, wireOk, pieces };
         });

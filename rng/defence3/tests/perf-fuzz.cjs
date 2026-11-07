@@ -157,14 +157,15 @@ const shouldStop = () => stopRequested || fs.existsSync(stopFile) || (cfg.minute
     log(`output: ${cfg.outDir}   (create a file named STOP there, or press Ctrl+C, to end after the current trial; report.md is rewritten every ${cfg.reportEveryMin} min)`);
     if (cfg.plant.length) log('PLANTED slowdowns (self-test): ' + cfg.plant.join(', '));
     const masterRng = makeRng(cfg.seed), planner = makePlanner(masterRng);
-    let failures = 0, lastReport = Date.now();
+    // (Sessions that never start fail the run: no trials is not a pass.)
+    let failures = 0, lastReport = Date.now(), startFailed = false;
     for (let idx = 0; !shouldStop(); idx++) {
         const S = new Session({ cfg, index: idx, base, os: osSampler, out, log, seed: cfg.seed + idx });
         sessionsSeen.push(S);
         try { await S.open(); failures = 0; }
         catch (e) {
             log(`ERROR: session ${idx} failed to start: ${String(e.message).split('\n')[0]}`); await S.close().catch(() => { });
-            if (++failures >= 3) { log('ERROR: three sessions in a row failed to start: giving up'); break; }
+            if (++failures >= 3) { log('ERROR: three sessions in a row failed to start: giving up'); startFailed = true; break; }
             await sleep(10000); continue;
         }
         if (S.startWarning) (runInfo.warnings = runInfo.warnings || []).push(`session ${idx}: ${S.startWarning}`);
@@ -222,5 +223,5 @@ const shouldStop = () => stopRequested || fs.existsSync(stopFile) || (cfg.minute
     osSampler.close(); server.close();
     log('done. report: ' + path.join(cfg.outDir, 'report.md'));
     const head = text.split('\n## ')[0]; console.log('\n' + head);
-    process.exit(0);
+    process.exit(startFailed ? 1 : 0);
 })().catch(e => { console.error(e); try { writeReport(); } catch { } process.exit(1); });

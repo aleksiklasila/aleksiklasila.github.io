@@ -51,7 +51,7 @@ assert.match(renderer, /watchedByTeam\)\) === targetId/);
 assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(target, 'watch'/);
 assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(tb, 'watch'/);
 // (A watch tower prefers units its own team does not watch: the kernel's.)
-assert.match(towerRs, /if ty==7\{af=v128_and\(af,i32x4_eq\(u32x4_shr\(m,24\)/);
+assert.match(towerRs, /m&affected!=0&&\(ty!=7\|\|\*wt\.add\(su\) as i32==own as i32\)/);
 assert.match(dataStatic, /scout: \{[\s\S]*?watchDuration: \{base: 5/);
 assert.match(dataStatic, /PRECOMPUTED_UNIT_STAT_KEYS = \[[^\]]*'watchDuration'/);
 assert.match(dataDynamic, /watchDuration: Math\.max\(0, Number\(values\.watchDuration\) \|\| 0\)/);

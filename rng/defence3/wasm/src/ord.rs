@@ -470,7 +470,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             let mb = match wb { 4 => 13, 5 => 15, 6 => 17, _ => 0 };
             if mb != 0 { w = (w & !(3u32 << mb)) | (1u32 << mb); }
             let wr = g(wkix, q);
-            if wr > 0 { let man = g(k.p::<f64>(71 + 17), wr as usize); wm_clear(&k, 71, wr as usize, wb as i32, man); }
+            if wr > 0 { let man = g(k.p::<f32>(71 + 17), wr as usize) as f64; wm_clear(&k, 71, wr as usize, wb as i32, man); }
             if g(wkn, q) != now { s(on, q, 0); s(wkn, q, now); }
             s(idlefv, q, -1);
             // State IDLE (1): a change unparks it.
