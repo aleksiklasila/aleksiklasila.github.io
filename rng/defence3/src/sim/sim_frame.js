@@ -342,7 +342,8 @@ function simFrameDetails() {
     for (let j = 0; j + 1 < _simWatched.length; j += 2) {
         let id = _simWatched[j], slot = _simWatched[j + 1];
         let u = slot >= 0 ? R.owner.at(slot) : null;
-        if (!u || u.id !== id) { u = null; for (let c of units) if (c.id === id) { u = c; break; } }
+        // (Not at its slot (dead, or moved by relayout): by the id index, O(1); a scan of every unit was up to 512 x 480k reads a tick.)
+        if (!u || u.id !== id) u = typeof getUnitById === 'function' ? getUnitById(id) : null;
         if (!u || u.dead) continue;
         let d = { id };
         for (let k of SIM_DETAIL_FIELDS) { let v = u[k]; if (v !== undefined && (v === null || typeof v !== 'object')) d[k] = v; }

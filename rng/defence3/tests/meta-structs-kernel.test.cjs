@@ -9,6 +9,8 @@ const assert = require('node:assert/strict'), H = require('./net-harness.cjs'), 
 globalThis.self = { crossOriginIsolated: true };
 const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '192', 'cfg-map-type': 'arena', 'cfg-gold-count': '200', 'cfg-astar-mine-count': '200', 'cfg-max-pop': '20000', 'cfg-starting-energy': '1000000000000', 'cfg-starting-astar': '1000000000000' };
 const world = new H.World({ controls }), i = world.spawn('meta', { controls, simWorker: false });
+// (PAR=1: the whole cycles on real helpers by k_meta_structs_par (every size), against the same reference.)
+if (process.env.PAR) { i.scratch.Worker = require('./real-sim-helper.cjs'); i.eval("Worker=__scratch.Worker;navigator.hardwareConcurrency=16;simParallelInit('',3);SIM_META_PAR_MIN=0;SIM_META_PER=256;"); }
 i.eval(`MAX_THING_LEVEL=20;MAX_RESEARCH_LEVEL=10;startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{'unit:king':{1:1},'unit:norm':{12:1000},'unit:builder_unit':{10:60}},researchLevels:{}});applyMainMenuControlsToRuntimeState();startSoloGame();simDk=20;netStepTicks=()=>20;`);
 const setup = JSON.parse(i.eval('JSON.stringify(' + chaos.setup({ mode: 'mega', layout: 'mixed', buildings: 50, level: 6, towerSites: 30, collectorBuildings: 20, structures: 4000 }) + ')'));
 assert.deepEqual(setup.errors, []);

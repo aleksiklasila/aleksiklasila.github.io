@@ -1805,6 +1805,17 @@ function removeUnitNow(u, adjustPop = true) {
 // when it takes a slot, 0 once it let go of it): the relayout moves units
 // between slots in the heap alone (the handle table), no object written.
 Object.defineProperty(Unit.prototype, '_si', { configurable: true, get() { const c = this._us; return c ? c.hslot[this._h] : -1; } });
+// Its columns while its handle names a slot (null once let go: the release
+// gives the object handle 0 and its unit's last id, owner and position,
+// sim_unit_state.js simUnitStateDetachGoneMany).
+Object.defineProperty(Unit.prototype, '_us', { configurable: true, get() { const c = this.__c, h = this._h; return c && h > 0 && c.hgen[h] === this._g && c.hslot[h] >= 0 ? c : null; }, set(v) { if (Object.prototype.hasOwnProperty.call(this, '__c')) this.__c = v; else Object.defineProperty(this, '__c', { value: v, writable: true, configurable: true }); } });
+// (A gone unit's id, owner and position: its handle's gone record while the
+// handle is one generation on (the release kernel's), unless set on the
+// object (a single detach's _simCaptureGone).)
+for (const [k, i] of [['_goneId', 0], ['_goneOwner', 1], ['_goneX8', 2], ['_goneY8', 3]]) {
+    Object.defineProperty(Unit.prototype, k, { configurable: true, get() { const c = this.__c, h = this._h; return c && h > 0 && c.hgen[h] === ((this._g + 1) >>> 0) ? c.hg[4 * h + i] : 0; }, set(v) { Object.defineProperty(this, k, { value: v, writable: true, configurable: true }); } });
+}
+Object.defineProperty(Unit.prototype, '_det', _simGoneAccessor);
 // A new unit: its slot and the columns of its own values, nothing else (the
 // slot holds every other column at its default already: zeroed,
 // simSlotDefaults, _simJsDefaults). The object is only the slot's handle
@@ -1937,12 +1948,16 @@ function _spawnStatsHit(u, C, s, owner, level) {
 const _SPB_ROW = 12;
 // (Row: [0] slot, [1] its template program's first triple, [2] its triples
 // (-1: written already), [3] id, [4] owner, [5] type index, [6] x, [7] y
-// (1/8 px), [8] r, [9] collisionR, [10] energy.)
+// (1/8 px), [8] r, [9] collisionR, [10] energy, [11] handle.)
 // The values every new unit gets ([column, row value index] or [column, -1,
 // value]), as simSpawnUnit writes them; then its template's; then energy.
 const _SPB_CORE = [['id', 3], ['owner', 4], ['upT', 5], ['x', 6], ['y', 7], ['prevX', 6], ['prevY', 7], ['x0', 6], ['y0', 7], ['r', 8], ['collisionR', 9],
     ['unitLevel', -1, 1], ['stackCount', -1, 1], ['effectiveStacks', -1, 1], ['effectiveLevel', -1, 1], ['baseLevel', -1, 1],
-    ['tuS', -1, -1], ['tuId', -1, 0], ['tbT', -1, -1], ['acqB', -1, 0], ['mvTgX', -1, NaN], ['mvTgY', -1, NaN]];
+    ['tuS', -1, -1], ['tuId', -1, 0], ['tbT', -1, -1], ['acqB', -1, 0], ['mvTgX', -1, NaN], ['mvTgY', -1, NaN],
+    // (Its handle: the slot's start's (simUnitStateAllocate), again; a staged birth's 0, set at its commit with live, birth.rs.)
+    ['hnd', 11],
+    // (Alive: a staged birth's reserved slot keeps its last unit's dead flags until the commit, main.js _rzZeroTable.)
+    ['dead', -1, 0], ['dead0', -1, 0]];
 const _SPB_FINAL = [['energy', 10]];
 // (mode per unit: 0 the kernel writes it, 1 written already (the first of
 // its template), 2 made whole by simSpawnUnit (no kernels here).)
@@ -2062,7 +2077,7 @@ function simSpawnBatchAdd(unitType, owner, x, y, level = 1, prepare = null) {
     if (T.jn.length || T.rn.length) _spawnTplWrite(T, C, s, true);
     R[r + 1] = T.pAt; R[r + 2] = T.pc.length; R[r + 3] = id; R[r + 4] = owner; R[r + 5] = ti;
     R[r + 6] = Math.round(x * 8); R[r + 7] = Math.round(y * 8);
-    R[r + 8] = def.r; R[r + 9] = Number.isFinite(def.collisionR) ? def.collisionR : def.r; R[r + 10] = T.e;
+    R[r + 8] = def.r; R[r + 9] = Number.isFinite(def.collisionR) ? def.collisionR : def.r; R[r + 10] = T.e; R[r + 11] = C.hnd[s];
     _spbPush(B, u, 0);
     return u;
 }
@@ -2074,14 +2089,33 @@ function simSpawnBatchWrite() {
     if (!any) return;
     const S = _simUnitState, Z = _simSlotZeroTable(S);
     if (!Z) throw new Error('spawn batch: unit columns not in the heap');
+    _spbWriteRows(B.rows, n, Z);
+}
+// Rows bound by their own name (kernel: the spawn write kernel registered
+// over it, q / e's SIM_KERNEL_RZ_SPAWN_WRITE), on the helpers.
+function _spbRowsRun(rows, n, kernel, from = 0) {
+    const B = _spb, Z = _simSlotZeroTable(_simUnitState);
+    if (!Z) throw new Error('spawn batch: unit columns not in the heap');
     _spbKind(Z);
     if (B.prog === null || !simHeapHas(B.prog)) _spbProgRoom(0);
-    simParallelBind('spw.rows', B.rows); simParallelBind('spw.kind', B.kind); simParallelBind('spw.prog', B.prog);
+    simParallelBind('spw.kind', B.kind); simParallelBind('spw.prog', B.prog);
+    const P = _simParams;
+    P[0] = n; P[1] = 1024; P[2] = _SPB_ROW; P[3] = 0; P[4] = _SPB_CORE.length; P[5] = _SPB_CORE.length; P[6] = _SPB_FINAL.length; P[7] = from;
+    simParallelRun(kernel, Math.ceil(n / 1024));
+}
+// Rows (12 f64 a unit: _SPB_ROW) written by k_spawn_write, on the helpers when many.
+function _spbWriteRows(rows, n, Z = _simSlotZeroTable(_simUnitState)) {
+    const B = _spb;
+    if (!Z) throw new Error('spawn batch: unit columns not in the heap');
+    _spbKind(Z);
+    if (B.prog === null || !simHeapHas(B.prog)) _spbProgRoom(0);
+    if (B.boundRows !== rows) { simParallelBind('spw.rows', rows); B.boundRows = rows; }
+    simParallelBind('spw.kind', B.kind); simParallelBind('spw.prog', B.prog);
     // (The helpers' params are _simParams, which simParallelRun hands them.)
     const per = n >= 512 ? Math.max(32, Math.ceil(n / 48)) : n, P = per < n ? _simParams : B.P;
-    P[0] = n; P[1] = per; P[2] = _SPB_ROW; P[3] = 0; P[4] = _SPB_CORE.length; P[5] = _SPB_CORE.length; P[6] = _SPB_FINAL.length;
+    P[0] = n; P[1] = per; P[2] = _SPB_ROW; P[3] = 0; P[4] = _SPB_CORE.length; P[5] = _SPB_CORE.length; P[6] = _SPB_FINAL.length; P[7] = 0;
     if (per < n) simParallelRun(SIM_KERNEL_SPAWN_WRITE, Math.ceil(n / per));
-    else simRustDirect('k_spawn_write', [B.rows, Z.tab, B.kind, B.prog], P);
+    else simRustDirect('k_spawn_write', [rows, Z.tab, B.kind, B.prog], P);
 }
 // The batch's unit i finished (in the batch's order, after its write): its
 // upkeep bin, its place in the occupancy grid (none free: dead, its slot let
@@ -2101,12 +2135,29 @@ function simSpawnBatchFinish(i) {
 function simSpawnBatchClear() { const B = _spb; if (B.spN) _spbSpatial(B); B.units.fill(null, 0, B.n); B.n = 0; }
 let _spbLayer = null, _spbLayerN = -1, _spbTy = null, _spbTyN = -1;
 const _spbSpP = new Float64Array(16);
-function _spbSpatial(B) {
-    const n = B.spN, S = _simUnitState, c = S.columns;
+function _spbSpatial(B) { const n = B.spN; B.spN = 0; _spbSpatialList(B.sp, n); }
+// New units (n slots of list) into the spatial index (k_spawn_spatial).
+function _spbSpatialList(list, n) {
+    const S = _simUnitState, c = S.columns;
     if (CHUNK_SIZE !== 1) throw new Error('spawn batch: k_spawn_spatial takes chunks of one tile');
-    B.spN = 0;
     if (_sxPre && typeof _inGameTick !== 'undefined' && !_inGameTick) spatialIndexInvalidate();
-    // (Per spatial type its separation layer: 1 flying, 2 a mole.)
+    _spbSpatialTables();
+    const NT = spatialUnitsComplexUnitTypeCount;
+    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    const P = _spbSpP;
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = NT;
+    P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols;
+    P[15] = _spatialCountDefer ? 1 : 0;
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
+    simRustDirect('k_spawn_spatial', [list, c.x, c.y, c.owner, c.upT, _spbTy, _spbLayer, cellArea, c.spTile, S.sepKey, S.sepLayer, c.spArea, c.spOwner, c.spEpoch, c.spType, c.mvOn,
+        spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.dead], P);
+    // (During the unit pass the counts wait for its end, as _spatialCountAdd queues them.)
+    if (_spatialCountDefer) for (let i = 0; i < n; i++) { const s = list[i]; if (c.dead[s] !== 1) _spatialCountAdd(c.sepKey[s], c.spOwner[s], c.spType[s], 1); }
+}
+// The spawns' spatial type tables: per spatial type its separation layer (1
+// flying, 2 a mole), upkeep type (unit.upT) -> spatial type (-1 none), made
+// again as the type names grow.
+function _spbSpatialTables() {
     const NT = spatialUnitsComplexUnitTypeCount;
     if (_spbLayerN !== NT || !_spbLayer || !simHeapHas(_spbLayer)) {
         _spbLayer = simSharedArray(Uint8Array, Math.max(64, NT));
@@ -2120,16 +2171,6 @@ function _spbSpatial(B) {
         for (let i = 0; i < names.length; i++) { const j = spatialUnitTypeToIndex[names[i]]; if (j >= 0) _spbTy[i] = j; }
         _spbTyN = names.length;
     }
-    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
-    const P = _spbSpP;
-    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = NT;
-    P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols;
-    P[15] = _spatialCountDefer ? 1 : 0;
-    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
-    simRustDirect('k_spawn_spatial', [B.sp, c.x, c.y, c.owner, c.upT, _spbTy, _spbLayer, cellArea, c.spTile, S.sepKey, S.sepLayer, c.spArea, c.spOwner, c.spEpoch, c.spType, c.mvOn,
-        spatialUnitsComplex, spatialTypeCounts, spatialBlockCounts, c.dead], P);
-    // (During the unit pass the counts wait for its end, as _spatialCountAdd queues them.)
-    if (_spatialCountDefer) for (let i = 0; i < n; i++) { const s = B.sp[i]; if (c.dead[s] !== 1) _spatialCountAdd(c.sepKey[s], c.spOwner[s], c.spType[s], 1); }
 }
 // (The slot count of the unit columns: per-slot columns are this long, those of other strides not.)
 function S_CAP_OF(C) { return _simUnitState.cap; }
@@ -3436,20 +3477,27 @@ function _simMoveScalarParams(P, n, per, players) {
 const SIM_FLOW_PER = 8192;
 // (Its helpers' claims a job: mv.rs FLOW_SPLIT, short ones.)
 const SIM_FLOW_SPLIT = 32;
-const _flowLooks = { posted: false, jobs: 0, P: new Float64Array(64) };
+// (A job is committed at the movement after its post, a tick more per SIM_FLOW_TICK_LOOKS looks it lists (the burst when
+// many records miss at once): calls counts the posts' ticks, due the one it commits at; while one is in flight no other is
+// posted, the records keep the O(1) answers. The same ticks on every peer: the count is the state's.)
+const SIM_FLOW_TICK_LOOKS = 131072;
+const _flowLooks = { posted: false, jobs: 0, P: new Float64Array(64), calls: 0, due: 0, pend: 0 };
 let _simMoveRanTick = -1;
 // (The movement's first stage chunking this tick: slots a chunk, chunks.)
 const simMovePick = { per: 0, jobs: 0 };
 function _flowLooksArrays(n) {
-    const jobs = Math.ceil(n / SIM_FLOW_PER), cap = jobs * SIM_FLOW_PER;
-    for (const [name, Type, len] of [['fl.pend', Int32Array, cap * 8], ['fl.res', Int32Array, cap * 4], ['fl.cnt', Int32Array, Math.max(64, jobs)]]) {
+    // (Sized for every slot of the match: made once, never grown in play.)
+    const jobs = Math.ceil(n / SIM_FLOW_PER), cap = Math.ceil(Math.max(n, _simUnitState ? _simUnitState.cap : 0) / SIM_FLOW_PER) * SIM_FLOW_PER;
+    for (const [name, Type, len] of [['fl.pend', Int32Array, cap * 8], ['fl.res', Int32Array, cap * 4], ['fl.cnt', Int32Array, Math.max(64, cap / SIM_FLOW_PER)]]) {
         const a = _simParReg[name];
         if (!a || a.length < len || !simHeapHas(a)) { const b = simHeapArray(Type, len); simParallelBind(name, b); if (a && simHeapHas(a)) simHeapFree(a); }
     }
     return jobs;
 }
 function flowLooksPost() {
-    flowLooksCommit();
+    const L0 = _flowLooks;
+    L0.calls++;
+    if (L0.posted) { if (L0.calls - 1 < L0.due) return; flowLooksCommit(); }
     const S = _simUnitState;
     if (!S || _simMoveRanTick !== gameTime || !_simMoveLookC || typeof SIM_KERNEL_FLOW_PENDING !== 'number' || !_simWasmX || typeof _simWasmX.mv_flow_pending !== 'function') return;
     const n = S.owners.length;
@@ -3459,9 +3507,10 @@ function flowLooksPost() {
     P[47] = areaSearchEnabled() ? 1 : 0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0; P[58] = simDk;
     _flowLooks.P.set(P);
     simParallelRun(SIM_KERNEL_FLOW_PENDING, jobs);
+    { const cnt = _simParReg['fl.cnt']; let m = 0; for (let j = 0; j < jobs; j++) m += cnt[j]; _flowLooks.pend = m; }
     const Q = simParallelStageParams(SIM_LANE_FLOW, 0);
     Q.set(P);
-    _flowLooks.posted = true; _flowLooks.jobs = jobs;
+    _flowLooks.posted = true; _flowLooks.jobs = jobs; _flowLooks.due = _flowLooks.calls + Math.floor(_flowLooks.pend / SIM_FLOW_TICK_LOOKS);
     // (Eager: without helpers made now, not at a later wait, after the state they read changed.)
     simParallelBackgroundChain(SIM_LANE_FLOW, [[SIM_KERNEL_FLOW_EXACT, jobs * SIM_FLOW_SPLIT]], true);
 }
@@ -3470,7 +3519,7 @@ function flowLooksSettle() { if (_flowLooks.posted) simParallelBackgroundWait(SI
 // The next movement's start (simMoveRun): the answers into the records.
 function flowLooksCommit() {
     const L = _flowLooks;
-    if (!L.posted) return;
+    if (!L.posted || L.calls < L.due) return;
     simParallelBackgroundWait(SIM_LANE_FLOW);
     L.posted = false;
     const U = unitIdIndex();

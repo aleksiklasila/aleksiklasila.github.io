@@ -7250,6 +7250,7 @@ function updatePurchaseMultiplierBars() {
 }
 
 function queueResizeForEachActiveUnitSubgroup(mode) {
+    if (typeof UNIT_RESIZE_ENABLED !== 'undefined' && !UNIT_RESIZE_ENABLED) return;
     let activeUnits = getActiveUnits();
     if (!activeUnits || activeUnits.length === 0) return;
     // (One command for the selection: the simulation splits it by subgroup,

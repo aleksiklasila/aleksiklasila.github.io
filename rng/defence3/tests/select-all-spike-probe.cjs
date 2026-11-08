@@ -20,12 +20,17 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
         const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
         const errors = [];
         page.on('pageerror', e => errors.push(e.message));
-        await page.goto(base + '/index.html?simtrace=1', { waitUntil: 'load', timeout: 120000 });
+        // (CONSOLE=1: the page's and its workers' console errors and warnings.)
+        if (process.env.CONSOLE) { const log = (src, m) => { if (m.type() === 'error' || m.type() === 'warning') console.log('console', src, m.type(), m.text().slice(0, 300)); }; page.on('console', m => log('page', m)); page.on('worker', w => { w.on('console', m => log(w.url().split('/').pop().slice(0, 40), m)); }); }
+        await page.goto(base + '/index.html?simtrace=1' + (process.env.URLQ ? '&' + process.env.URLQ : ''), { waitUntil: 'load', timeout: 120000 });
         await page.evaluate(async f => { await restoreSoloGameSnapshot(await readSoloGameSnapshotFile(await (await fetch('tests/' + f)).blob())); }, fixture);
         await page.waitForFunction(() => typeof simClientStats === 'function' && simClientStats().appliedTick >= 5, {}, { timeout: 600000 });
         await sleep(6000);
         await page.evaluate(() => {
             const L = window.__sa = { frames: [], tasks: [], panel: [], label: '' };
+            // (R3D: build3DFrameData's phases summed, renderer.js _r3dPhase; and which GPU the page has.)
+            window.__r3dPhases = {};
+            try { const gl = document.createElement('canvas').getContext('webgl2'); const x = gl && gl.getExtension('WEBGL_debug_renderer_info'); L.gpu = x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : gl ? gl.getParameter(gl.RENDERER) : 'none'; } catch (e) { L.gpu = String(e); }
             new PerformanceObserver(list => { for (const e of list.getEntries()) L.tasks.push({ t: e.startTime, ms: e.duration, label: L.label }); }).observe({ type: 'longtask', buffered: false });
             const up = window.updateInfoPanel;
             window.updateInfoPanel = function (...a) { const t = performance.now(); try { return up.apply(this, a); } finally { if (!a[0]) L.panel.push({ t, ms: performance.now() - t, label: L.label }); } };
@@ -54,8 +59,32 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
         // TRACE=1: a browser timeline over the rounds (what the native time in a long task is: style, layout, paint, GC).
         const tcdp = process.env.TRACE ? await page.context().newCDPSession(page) : null;
         if (tcdp) await tcdp.send('Tracing.start', { categories: 'devtools.timeline,v8,disabled-by-default-v8.gc,blink', transferMode: 'ReturnAsStream' });
+        // PROF=file: a CPU profile of the page over the calm window (Playwright's CDP session).
+        let pcdp = null;
+        if (process.env.PROF && !process.env.PROF_ROUNDS) { pcdp = await page.context().newCDPSession(page); await pcdp.send('Profiler.enable'); await pcdp.send('Profiler.setSamplingInterval', { interval: 500 }); await pcdp.send('Profiler.start'); }
         await mark('calm'); await sleep(4000);
+        // INSPECT=expr: the page's value of expr, printed after the calm window.
+        if (process.env.INSPECT) console.log('inspect', await page.evaluate(e => { try { return JSON.stringify(eval(e)); } catch (err) { return String(err); } }, process.env.INSPECT));
+        if (pcdp) { const { profile } = await pcdp.send('Profiler.stop'); fs.writeFileSync(process.env.PROF, JSON.stringify(profile)); console.log('profile', process.env.PROF); }
         windows.push('calm');
+        // (PROF_ROUNDS=1: the profile over the rounds instead of the calm window.)
+        // (WPROF=file: the simulation worker's CPU profile over the rounds.)
+        let wcdp = null;
+        if (process.env.WPROF) {
+            // (A worker over the browser's session: Target.attachToTarget, messages routed to it.)
+            const bs = await browser.newBrowserCDPSession();
+            const ti = (await bs.send('Target.getTargets')).targetInfos.find(x => x.type === 'worker' && /sim_worker.js/.test(x.url));
+            if (!ti) console.log('no sim worker');
+            else {
+                const { sessionId } = await bs.send('Target.attachToTarget', { targetId: ti.targetId, flatten: false });
+                let seq = 0; const wait = new Map();
+                bs.on('Target.receivedMessageFromTarget', e => { if (e.sessionId !== sessionId) return; const m = JSON.parse(e.message); if (m.id && wait.has(m.id)) { wait.get(m.id)(m.result); wait.delete(m.id); } });
+                const send = (method, params = {}) => new Promise(r => { const id = ++seq; wait.set(id, r); bs.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params }) }); });
+                wcdp = { send };
+                await send('Profiler.enable'); await send('Profiler.setSamplingInterval', { interval: 500 }); await send('Profiler.start');
+            }
+        }
+        if (process.env.PROF && process.env.PROF_ROUNDS) { pcdp = await page.context().newCDPSession(page); await pcdp.send('Profiler.enable'); await pcdp.send('Profiler.setSamplingInterval', { interval: 500 }); await pcdp.send('Profiler.start'); }
         for (let r = 0; r < rounds; r++) {
             const lab = 'round' + r;
             await mark(lab + ':select');
@@ -75,6 +104,8 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
             await sleep(2500);
             windows.push(lab + ':select', lab + ':order', lab + ':clear');
         }
+        if (pcdp && process.env.PROF_ROUNDS) { const { profile } = await pcdp.send('Profiler.stop'); fs.writeFileSync(process.env.PROF, JSON.stringify(profile)); console.log('profile', process.env.PROF); }
+        if (wcdp) { const { profile } = await wcdp.send('Profiler.stop'); fs.writeFileSync(process.env.WPROF, JSON.stringify(profile)); console.log('worker profile', process.env.WPROF); }
         await mark('end');
         if (tcdp) {
             const done = new Promise(r => tcdp.once('Tracing.tracingComplete', r));
@@ -84,6 +115,8 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
             fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out + '.trace.json', t);
         }
         if (cdp) { const { profile } = await cdp.send('Profiler.stop'); fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out + '.page.cpuprofile', JSON.stringify(profile)); }
+        console.log('gpu', await page.evaluate(() => __sa.gpu));
+        console.log('build3DFrameData phases (ms, all frames)', await page.evaluate(() => JSON.stringify(Object.entries(window.__r3dPhases || {}).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => [k, Math.round(v)]))));
         const data = await page.evaluate(() => ({ panelHtml: window.__panelHtml, sa: __sa, trace: __simTrace || [], units: units.length, sel: selectedUnits.length }));
         data.errors = errors; data.fixture = fixture; data.marks = marks;
         fs.mkdirSync(path.dirname(out), { recursive: true });

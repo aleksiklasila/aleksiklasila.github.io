@@ -103,6 +103,11 @@ function simPresentationStart() {
         for(let i=0;i<baseline.cellTypes.length;i++) {cells[i*2]=baseline.cellTypes[i];cells[i*2+1]=baseline.cellOwners[i];}
         p.worker.postMessage({type:'cellBaseline',cells});
     }
+    // (The first cycle whole, now: at a match's start, a restore or a resync. In 1 ms slices between
+    // ticks it took minutes at 1M units and 88k structures, and until it ended the page had no
+    // structure table and drew every structure by its object, ~400 ms a frame.)
+    p.job = simPresentationMetadata();
+    try { while (!p.job.next().done); } catch (err) { _simError('presentation metadata', err); }
     p.job = simPresentationMetadata();
     p.timer = setTimeout(simPresentationPump, 0);
     return true;
@@ -501,7 +506,9 @@ function _simMetaKernel(p) {
     return true;
 }
 // The structure metadata by the kernel (wasm/src/nfs.rs k_meta_structs).
-const _simMetaP = new Float64Array(16);
+const _simMetaP = new Float64Array(24);
+// (A whole pass from this many slots on the helpers: rows in chunks of SIM_META_PER, their ordered lists merged, then the laser links; nfs.rs k_meta_structs_par.)
+let SIM_META_PAR_MIN = 8192, SIM_META_PER = 4096;
 let _simMetaB = null;
 // (list, nl: only those slots' rows (the tick's changed tiles), into F and F2 if given.)
 function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
@@ -561,7 +568,20 @@ function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
     for (const k of SIM_STRUCT_SPEC.u8) args.push(F[k]);
     const LM = typeof _laserMap !== 'undefined' && _laserMap.lslot && simHeapHas(_laserMap.lslot) ? _laserMap : null;
     args.push(T, S.pser, B.gone, B.cnt, list, _ST.val, LM && LM.lslot, LM && LM.pn, LM && LM.part, adj.rml);
-    simRustDirect('k_meta_structs', args, P);
+    if (!list && nslots >= SIM_META_PAR_MIN && typeof SIM_KERNEL_META_STRUCTS === 'number' && typeof _simPool !== 'undefined' && _simPool) {
+        const per = SIM_META_PER, nch = Math.ceil(nslots / per);
+        if (!B.ms || B.ms.length < 4 * nch * per || !simHeapHas(B.ms)) { if (B.ms && simHeapHas(B.ms)) { simHeapFree(B.ms); simHeapFree(B.mc); } B.ms = simHeapArray(Int32Array, 4 * nch * per); B.mc = simHeapArray(Int32Array, 4 * nch + 4); }
+        args.push(B.ms, B.mc);
+        for (let i = 0; i < args.length; i++) simParallelBind('mst.' + i, args[i]);
+        const Q = _simParams;
+        Q.fill(0, 0, 24); Q.set(P.subarray(0, 15)); Q[15] = 0; Q[16] = per;
+        simParallelRun(SIM_KERNEL_META_STRUCTS, nch);
+        P[15] = 1; P[16] = per; P[17] = nch;
+        simRustDirect('k_meta_structs_par', args, P);
+        Q.fill(0, 0, 24); Q.set(P.subarray(0, 15)); Q[15] = 2; Q[16] = per;
+        simParallelRun(SIM_KERNEL_META_STRUCTS, nch);
+        P[15] = 0; P[16] = 0; P[17] = 0;
+    } else simRustDirect('k_meta_structs', args, P);
     // (Spawn cooldowns of keys not in the table for these stats: filled, written.)
     for (let i = 0, nm = B.cnt[2]; i < nm; i++) { const key = B.missK[i]; if (spt[key * 3 + 2] !== _precomputedStatsVersion) _spTabFill(spt, key, _precomputedStatsVersion); const v = spt[key * 3]; F.spawnCooldown[B.missS[i]] = v === v ? v : 0; }
     }

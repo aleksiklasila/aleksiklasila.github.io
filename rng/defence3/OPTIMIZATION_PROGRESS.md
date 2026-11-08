@@ -6266,3 +6266,384 @@ Rebuilt to the user's design: the main panel is one markup string made at the ma
   details doing a full units scan. Page: selection index/markers/id lists
   per frame, effects lookups, frame apply. Details, evidence and directions:
   [PERF_FUZZ_SPIKES_2026-11-07.md](PERF_FUZZ_SPIKES_2026-11-07.md).
+
+### 2026-11-08 — q / e (S1) as batch wasm kernels, unit births without JavaScript
+
+- Plan, stages and numbers: [UNIT_BIRTH_WASM_PLAN.md](UNIT_BIRTH_WASM_PLAN.md).
+  Probe: `node --max-old-space-size=14000 tests/resize-spike-probe.cjs <scene.gz> [helpers]`
+  (`STAGES=1`: wall per kernel; x2 / d2 / x2 on every combat unit of player 0).
+- q / e is now parallel kernels (wasm/src/birth.rs): look / plan / scatter
+  over the selection (d2 kills in the scatter), block placement (per block a
+  64-bit-row fit map of the footprint, bit-parallel ring search, exclusion
+  spans per placement, two rounds), k_birth_alloc (the only serial pass:
+  slots, handles), k_birth_fill (rows, footprints, handle table, id table,
+  id hash by compare-exchange, the template's type columns copied),
+  k_slot_zero, k_spawn_write (core), k_rz_shares (closed-form stacks /
+  levels / energy water fill), k_spawn_spatial, k_upk_bins. No per-unit and
+  no per-group JavaScript; no stat programs; no column growth (births
+  bounded by the reserved slots).
+- Unit objects are lazy (SimOwners.at makes them); the handle stack is a
+  heap array; the slot allocator is Rust (nfs.rs k_slab_take, also used by
+  single births; the JS allocator is gone); dead units' reference fields are
+  released at death.
+- A determinism bug of the interim version (first unit of a group through
+  the JS spawn path only when the peer's stat-program cache missed: ids
+  swapped on a repaired guest) was found by multiplayer-chaos-determinism
+  and removed with the JS path. That suite passes with 0 and 4 host helpers
+  (2,598 tick hashes per map, only forced repairs); unit-resize-kernel now
+  also checks new units' type columns against kept units.
+- chaos-1m-250k (Node 24, 11 helpers): x2 of 239k selected (224k new units)
+  225 ms (2-5 s in the Edge fuzz for 80-170k); x2 of 205k 150 ms; d2 of 423k
+  109 ms. mixed-200k: x2 of 39k 63 ms first / 42 ms after.
+- Left (largest first, 224k births): reused-slot zeroing 44 ms (zero freed
+  slots on a background lane instead), placement 29, k_birth_alloc 8-30,
+  k_spawn_spatial 23 (serial), k_birth_fill 15-22, k_uid_clean 9-17, look
+  4-8. Helper binding stalls (a rebind before a parallel job runs it on the
+  simulation thread alone) need a shared-memory pointer table. Worker
+  subgroups make no new units on x2 yet (worker records not in wasm).
+  S2-S10 of the fuzz report are untouched.
+
+### 2026-11-08 (later) — q / e staged: snapshot at the action, lane, flat commit a tick later
+
+- User rule: stable tick time whatever players do; a tick or two of delay is
+  fine. q / e now records and groups at the action's tick, does placement /
+  slot assignment / zeroing on lane SIM_LANE_RZ, and commits at the end of
+  the next tick with parallel flat writes (UNIT_BIRTH_WASM_PLAN.md "Staged
+  q / e" and its status list: the bugs found on the way and their fixes).
+- chaos-1m-250k (Node 24, 11 helpers; normal ticks 110-250 ms): x2 of 239k
+  selected made 224,914 units (was 2-5 s stalls); its ticks 92 / 214
+  (commit 84 ms + lane wait 40 ms) / 187 / 112 / 155 ms; a second x2 of 206k
+  selected 149 / 121 / 120 / 120 / 202 ms (commit 38 ms); d2 of 418k
+  98 / 196 / 162 / 87 / 126 ms.
+- Correctness: unit-resize-kernel (type columns, slot books, occupancy),
+  unit-resize-staged-snapshot (a pending job through a snapshot),
+  multiplayer-chaos-determinism with 0 and 4 host helpers, checkerboard
+  chaos with 3/0/2 helpers (524 clean comparisons), slot / spawn / storage
+  tests: all pass.
+- Left: the commit's kernels at 225k births (~66 ms: footprint check 14,
+  fill 18, core rows 12, shares 9, spatial 8) and the lane not done by the
+  commit on a first use (40 ms wait): spread the commit over ticks by block
+  or give the lane two ticks; d2's per-unit JavaScript retire pass; the
+  action tick's scatter (38 ms cold / 7 warm) and id cleanup (9-16 ms);
+  worker subgroups (no new units yet); a restore after different histories
+  diverges without q / e too (pre-existing).
+
+### 2026-11-08 (later still) — q / e commit over ticks, retire pass release as a kernel
+
+- The staged q / e's commit runs in 4 sub-commits by block, one a tick,
+  then a final step (shares, kills, slot books); the lane gets a whole tick
+  before the first. Snapshots carry a job in its commit steps. The retire
+  pass's per-removed-slot release (simUnitStateDetachGone, ~20 calls a
+  unit) is now simUnitStateDetachGoneMany: one kernel (nfs.rs
+  k_retire_release) plus a tight JavaScript loop only for existing objects,
+  the pending path list and the two handle-kept references. Details and the
+  three bugs found on the way: UNIT_BIRTH_WASM_PLAN.md.
+- chaos-1m-250k (Node 24, 11 helpers; normal ticks ~90-160 ms in the run):
+  x2 of 239k selected 88 / 132 / 162 / 111 / 156 / 102 / 163 / 98 ms (was
+  92 / 214 / 187 / ...); d2 of 401k 97 / 136 / 205 / 146 / 97 / 98 / 137 / 90
+  (was 98 / 196 / 234 / ...); a second x2 of 180k 85 / 74 / 133 / 104 / 107 /
+  103 / 114 / 90.
+- Tests: unit-resize-kernel, unit-resize-staged-snapshot (before and in
+  the commit), unit-retirement, status-expiry-records, slot tests,
+  multiplayer-chaos-determinism with 0 and 4 host helpers, checkerboard
+  chaos 3/0/2 helpers (524 clean): pass.
+- Left: d2's mass retire (~+60 ms on one tick: k_unit_gone serial ~13-25
+  ms, the retire loop, objects of units made by JavaScript paths), the
+  action tick's scatter/id cleanup at first use, worker subgroups, the
+  pre-existing restore-over-own-history divergence.
+
+### 2026-11-08 (night) — object-free unit release, parallel gone pass, watched details by id
+
+- Unit objects no longer decide anything at a death. Every handle goes back
+  on the free stack at once (the same on every peer, whatever objects a
+  peer made: an earlier step kept handles for live objects until a
+  FinalizationRegistry gave them back, which made handle reuse depend on GC
+  timing and on page-made objects). A per-handle flag byte (S.hobj: 1 has
+  an object, 2 holds a by-handle reference) lets nfs.rs k_retire_release
+  list only the flagged ones as (handle, slot); the JavaScript writes the
+  last id / owner / position onto those few objects, sets their handle to 0,
+  and clears their by-handle references. Unit.prototype._us reads the
+  columns while the handle names a slot. The per-handle gone tables
+  (hgId/hgOwn/hgX/hgY, 16 B a handle) are gone.
+- The retire pass's gone kernel runs in parallel (ord.rs k_unit_gone_par:
+  chunks of 4096, shared counts by atomic adds, occupancy bits by atomic
+  AND, ordered outputs per chunk merged in chunk order).
+- simFrameDetails (S4): a watched unit not at its slot is found through the
+  id index (O(1)) instead of a scan over every unit (up to 512 x 480k reads
+  a tick).
+- chaos-1m-250k, Node 24, 11 helpers, normal ticks ~90-135 ms in the run:
+  - x2 of 182k: 89 / 96 / **175** / 141 / 93 / 112 / 111 / 147 ms. The 175
+    is the commit tick waiting on the lane (simParallelBackgroundWait 69 ms
+    + rzCommitDue 60 ms): open.
+  - d2 of 319k: 101 / 102 / 107 / 134 / 95 / 92 / 91 / 126 (retire pass on
+    the kill tick 49 ms, was 89-152).
+  - stop 147k: 89 / 88 / 95 / 108 / 98 / 82 / 86 / 116; hold 137k: 73 / 71
+    / 71 / 80 / 74 / 67 / 67 / 73; stop 129k: 82 / 67 / 70 / 67 / 73 / 77 /
+    75 / 71. No sim-side spike from stop / hold (S2's 1.76 s gap in Edge is
+    not in the simulation tick here: page or worker messaging, to check in
+    Edge).
+- Tests: unit-gone-objects (new), unit-resize-kernel,
+  unit-resize-staged-snapshot, unit-retirement, slot-zero, slot-relayout,
+  slot-locality, status-expiry-records, unit-spawn-columns,
+  multiplayer-chaos-determinism with 0 and 4 host helpers, checkerboard
+  chaos 3/0/2 helpers (524 clean): pass.
+- Left: the x2 commit's lane wait; the d2 kill tick's retire pass (49 ms
+  for 319k removals); stop / hold's JavaScript fallback after k_unit_cmd
+  (when the id index has loose entries) still exists; S2 in Edge; Edge
+  check of S4.
+
+### 2026-11-08 (night, later) — slots made fresh at release on a lane; no clearing at any birth
+
+- The x2 commit tick's stall (175 ms) was the commit waiting on the q / e
+  lane, whose biggest stage was clearing the birth slots (k_slot_zero over
+  the births: 158 ms CPU, per column over a list of scattered slots) next
+  to the placement (141 ms over 16,900 block chunks); its chunks also
+  pushed the flow lane past its commit (28 ms wait).
+- Slots are now made fresh when let go, not when taken. The retire pass's
+  slots (dead, not live: what every pass reads as no unit) go to a new
+  background lane, SIM_LANE_FREE (lane 15; control words moved past the 16
+  lanes): k_free_mark sets a bit a slot and lists the touched 4096-slot
+  blocks (one job); k_free_zero takes a block a job and, column by column,
+  per 32-slot word of bits, fills a full word as one contiguous slice and
+  a partial one by its set bits (trailing zeros): one or two cache lines a
+  word, no false sharing (blocks are disjoint). The batch goes back on the
+  slab books at the next release call (one more a call per 65,536 slots).
+  So every slot on the books is fresh: no birth clears anything. Removed:
+  simUnitStateAllocate's per-spawn k_slot_zero call and its JavaScript
+  fallback (_simSlotZeroFn), q / e's zeroing stage on the lane and in its
+  restore, the k_rz_bzero variant.
+- The lane leaves the core columns (unit.js _SPB_CORE / _SPB_FINAL: id,
+  owner, position, levels, targets, handle, dead flags, energy) and
+  live / tmOn alone: every birth writes them (its spawn row), and the tick
+  after a death still reads a released slot's position / energy / id
+  (resetting them on the lane made a 0-helper host diverge from helper
+  guests). The single-unit path (simUnitStateAllocate: the Unit
+  constructor, repairs) resets the core itself, straight-line stores.
+  q / e's failed births no longer get their row written (k_rz_crank marks
+  the row skipped): their slots go back untouched.
+- Released slots carry 156 columns, 477 bytes a slot. CPU (0 helpers):
+  the free lane 234 ms over all deaths in the x2 run (was 487 ms with
+  per-run fills), 144 ms for d2's ~188k kills plus battle deaths; on 11
+  helpers ~13 ms wall, off the foreground.
+- chaos-1m-250k, 11 helpers (normal ticks 77-172 ms in this run): first x2
+  of 182k 124 / 101 / 154 / 180 / 133 / 124 / 116 / 170 (no RZ lane wait;
+  +2 has rzCommitDue 43 ms cold and a 26 ms flow-lane wait, +3 a 33 ms
+  index wait); d2 of 317k 142 / 118 / 113 / 135 / 125 / 93 / 137 / 113 (the
+  kill tick's retire pass 52 ms); second x2 of 146k 88 / 126 / 119 / 128 /
+  124 / 140 / 157 / 165.
+- Tests: slot-zero, slot-locality and slot-relayout (call the release twice:
+  the slots come back at the next call), unit-gone-objects,
+  unit-resize-kernel, unit-resize-staged-snapshot, unit-retirement,
+  unit-spawn-columns, status-expiry-records, multiplayer-chaos-determinism
+  with 0 and 4 host helpers (6 maps), checkerboard chaos 3/0/2 (524 clean):
+  pass.
+- Left: the first commit's cold cost and the flow / index lanes it delays;
+  the d2 kill tick's retire pass (52 ms); the free lane writes 156 columns
+  a dead slot (columns every birth overwrites could be left out, birth path
+  by birth path); the slab-free loop at the return is JavaScript per slot.
+
+### 2026-11-08 (night, last) — idle tick variance: deaths O(1), flow looks by size, nothing allocated in the death path
+
+New probe: tests/tick-variance-probe.cjs (idle ticks of a scene, per phase
+mean / min / max / correlation with the tick, page faults, direct kernels,
+background waits by lane and which lanes were busy, the wasm heap's
+allocations in play (simHeapPlayMark), HEAPPROF=file a sampling heap
+profile of the JavaScript allocations). chaos-1m-250k, 536k units, 11
+helpers, Node 24.
+
+- Start: ticks 76-140 ms (mean 96, p95 138). The slowest were battle-death
+  ticks: the retire pass up to 43 ms with ~6,300 page faults, of which
+  k_retire_release 26-33 ms serial (the pooled reference fields reset per
+  dead slot) and ~20 ms of JavaScript writing to the dead units' objects
+  (every unit had one: restore and production spawns make them, 38k on a
+  tick); the flow looks' commit waiting 15-26 ms every 20 ticks; the free
+  lane's return waiting up to 16 ms.
+- Deaths touch no JavaScript object: per handle a generation (unit.hgen)
+  and a gone record (unit.hg: id, owner, x, y, AoS), written by the release
+  kernel. Unit.prototype._us and _gone* read them; SimOwners.at makes a new
+  object when the generation moved on; the by-handle references
+  (attackTarget, _fpPath) keep the generation they were set at and read as
+  unset after. Gone: the per-handle flag byte, the flagged list, the
+  object loop.
+- k_retire_release no longer resets the pooled reference / object fields
+  (the free lane does, with the slot's other columns), and runs in
+  parallel from 4,096 removed slots (k_retire_release_par: chunks of 2,048
+  write their slots' handle, generation, record, worker / status records
+  and list what they free; one merge appends the lists in chunk order, the
+  serial order). Its buffers (handle free stack, pending paths, the
+  chunks' scratch) and the relayout's index scratch are made at match
+  reserve for every slot; nothing in the death path allocates or grows.
+- Free lane: due two calls after its post (no return wait seen since).
+- Flow looks: a job's commit is a tick later per 131,072 looks it lists
+  (the 1 Hz burst lists ~185-215k against 30-110k on other ticks); while
+  one is in flight none is posted. No flow wait since; flow-looks-commit
+  (0 vs 3 helpers the same, 85k exact / 37k approximate): pass. The fl.*
+  buffers are sized for every slot at their first make. (Posting every
+  second tick instead lost the answers: 37k exact / 87k approximate.)
+- Now: ticks 74-127 ms (mean 95, p95 120) on three runs; one run had a
+  185 ms tick. The wasm heap: no allocation in 40 ticks of play. The
+  JavaScript heap: ~0.5 MB a tick (14.4 MB sampled over 30 ticks: damage
+  visuals, direct kernel calls' argument arrays (structStatusTick), the
+  hits pass, spawn objects, towers, sorts...): the GC behind the outlier.
+- q / e and orders now (ticks after): first x2 of 182k 80 / 96 / 154 / 144 /
+  132 / 129 / 123 / 125 (cold); d2 of 316k 115 / 105 / 150 / 119 / ...;
+  second x2 of 145k 95 / 97 / 108 / 95 / 93 / 108 / 106 / 105; stop of 271k
+  97 / 90 / 88 / 99 / ...; hold 99 / 84 / 78 / ... The action's own
+  processActions: x2 64 ms, d2 29, stop 88, hold 41 (a foreground cost of
+  its own).
+- Smoke tests between changes (unit-gone-objects, unit-retirement, slot
+  tests, unit-resize-kernel / staged-snapshot, unit-spawn-columns,
+  status-expiry-records, flow-looks-commit, slab and occupancy audits after
+  each profile): pass. Determinism suites not run since the generation
+  change (left for the end, once ticks are stable).
+- Next: the JavaScript allocations per tick (no GC in play); the action
+  ticks' own cost (stop 88 ms, x2's scatter); the first x2's cold commit;
+  simMoveRun's 31-56 ms by battle load; the retire pass on battle waves
+  (up to 24 ms); the relayout step (0-18 ms on odd ticks) to a lane;
+  objects out of production spawns and the restore.
+
+### 2026-11-08 (night, last+1) — orders on many units in parallel
+
+- An order's per-unit writes (stop, hold, attack, kill: k_unit_cmd) were
+  one serial kernel: 45 ms for 216k ids. Now from 8,192 ids
+  uix.rs k_unit_cmd_par: chunks of 4,096 (a slot's dedupe by an atomic swap
+  of its stamp) write every slot, and list the slots whose paths are let go
+  and the stopped workers; one merge, in id order, pushes the movement
+  paths to their free stack, releases the stored paths (shared, refcounted
+  blocks) and lists the workers: the serial kernel's result. Its buffers
+  are made at match reserve for every slot (unitCmdReserve).
+- chaos-1m-250k, 11 helpers: stop of 216k: action 67 -> 21-25 ms (the
+  kernel 1.9 ms); hold of 160k 12 ms; stop of 140k 9 ms; move of 127k
+  10 ms. Ticks after: within the scene's range.
+- What is left of an order's cost: its id pipeline (sanitizeAction:
+  _actionCleanIdsInto and _actionIds32, JavaScript loops over the ids, a
+  new Int32Array an action; k_uid_clean, serial, ~5-10 ms).
+- Tests: unit-cmd-kernel (the kernel = the setters over 40 steps),
+  unit-retirement, status-expiry-records: pass.
+
+### 2026-11-08 (night, last+2) — order ids on the wire path; q / e off for now
+
+- The probe now sends an order as a peer gets it (ids as uidz, through
+  JSON, prepared before the tick by actionsPrepare). On that path an order's
+  tick cost is small: stop of 216k 0.4-5.4 ms (prepare 2.5 ms, before the
+  tick), hold 0.6, move 2.7, d2 5.8. _actionIds32 takes a decoded Int32Array
+  as it is (was copied id by id). The plain-list path (tests, tools) still
+  cleans in JavaScript and k_uid_clean.
+- q / e (x2 / /2, resizeUnitGroup) is switched off (main.js
+  UNIT_RESIZE_ENABLED = false): no Q / E / * / / keys, no x2 / /2 buttons in
+  the info panels (hud.js, info_panel_static.js), the controls row gone from
+  the settings (index.html), the action ignored by the simulation on every
+  peer, its buffers not reserved (rzReserve). The staged implementation
+  stays for later; open there: the placement lane starved when ordered
+  after the traffic lane (k_rz_place now takes 64 block jobs a chunk, built,
+  not measured), the first commit's cold kernels (bindings now made at the
+  action's tick: still 2-4x on the first step), the action tick's scatter
+  (RZ_PER 4096: 25 -> 5-15 ms), commit due a tick later per 65,536 births.
+  unit-resize-kernel and unit-resize-staged-snapshot skip while it is off;
+  multiplayer-scenarios checks the split / merge only when on.
+- Also: the lane order puts FREE and RZ after TRAFFIC (the traffic wait on
+  an x2's commit tick went from 12 ms to none); heap pages prefaulted at
+  the end of simMatchReserve (simHeapPrefault).
+
+### 2026-11-08 (night, last+3) — S3: the page had no structure table (two regressions of the object-free units)
+
+- Edge, tests/select-all-spike-probe.cjs on chaos-1m-250k (headless, RTX
+  2060 through ANGLE; new options: R3D=1 build3DFrameData's phases, PROF=file
+  a page CPU profile of the calm window, INSPECT=expr, CONSOLE=1 the page's
+  and workers' console errors). Before: every page frame ~420 ms (2 FPS),
+  build3DFrameData's structure phase ~385 ms a frame: every structure
+  (22k towers, 11k barracks, 12k spawners, 43k floor items) through
+  _reuseStatic3DObject / get3DExact2DVisualSignature, the page's own
+  restored objects, because _pageTables.s (the structure table) never came.
+- Cause 1: Unit.prototype._det was a getter only (this session's move of the
+  unit fields to the prototype): a write to _det threw in the worker and
+  the presentation ("Cannot set property _det of #<Unit> which has only a
+  getter"), the presentation's metadata cycle stopped, the page got no
+  presentation frames at all. Fixed: the accessor's setter defines an own
+  field.
+- Cause 2: with x2 / d2 off, the info panel's static update still showed
+  B.x2 / B.d2 (undefined): a render error every few frames. Fixed.
+- The presentation's first metadata cycle now runs whole at
+  simPresentationStart (a match's start, a restore, a resync): in 1 ms
+  slices between ticks it would take minutes at this scale before the page
+  had its structure table.
+- After: frames p50 8-17 ms, p95 33-100 ms, max 100-150 ms through box
+  selects of 106-120k units + 16-18k structures and their orders (was 847 ms
+  in the report, ~420 ms a frame in the first runs here); the structure
+  phase 17 ms over the whole run; the info pack 8-10 ms.
+- Open: page long tasks of 100-150 ms around selects / orders (S5); the
+  first simulation ticks after a restore (365-1,404 ms; tick 4's waiTake
+  280 ms): one-time work to move before the start; sim ticks in Edge p50
+  153 / p95 276 ms at ~200k units.
+
+### 2026-11-08 (night, last+4) — far effects without unit lookups; structure metadata in parallel
+
+- Page, rounds of box select + order on chaos-1m-250k (Edge): the largest
+  page cost was the combat effects' per-record lookup of both ends' drawn
+  positions (pageUnitDrawnAt 3.5 s + _pushCombatRecordFx 2.8 s of 31 s).
+  Effects far away (under _FX_FAR_PPT pixels a tile: dots and lines) keep
+  the record's positions (effects3d.js): the difference is under a pixel.
+  Still on the page: _simClientUpdateStableSlots (a pass over every slot's
+  id per new frame, PageUnit births / freezes), paintMinimapUnitColumns,
+  _freeze, keep (S5).
+- Simulation worker in Edge (profiled over a CDP session attached to the
+  worker, tests/select-all-spike-probe.cjs WPROF=file): k_meta_structs, the
+  presentation's structure rows, was one serial call over ~88k structures
+  between ticks (891 ms in 28 s). Now from 8,192 slots nfs.rs
+  k_meta_structs_par: rows in chunks of 4,096 (their ordered outputs:
+  gone, order, cooldown misses into chunk scratch), one ordered merge, then
+  the laser links in chunks. tests/meta-structs-kernel.test.cjs PAR=1 runs
+  the whole cycles that way on 3 helpers against the reference: pass.
+- Edge ticks now (~200k units, after the first 10): p50 155, p90 211, p95
+  226, max 455 ms. The slow ones: unitEventsRun (to 76 ms), unitHitsResolve
+  (to 86), projectilesAdvance (to 65), _simPostResult (to 34),
+  healerCandidatesStep (27), recalculateUnitEffectiveLevel (24), on top of
+  simMoveRun 56-155.
+
+### 2026-11-08 (night, last+5) — tick variance in Edge: research views kept, the variance ranking
+
+- The worker's trace (?simtrace=1) now also times every parallel kernel by
+  id (kp:<id>), the background waits by lane (w:<lane>) and the result's,
+  events' and retire pass's parts (sim_worker.js SIM_TRACE_FNS). New ranking
+  tool: share of the tick's variance each phase explains (cov / var).
+- Helpers: 11 / 8 / 6 (?simhelpers=) gave p95 265 / 258 / 241 ms on the same
+  scenario: oversubscription is not the main source.
+- simFrameEncodeState (the worker's per-tick state for the page) spiked to
+  41 ms every 10th tick: the research queue's views (~1,450 tasks a
+  player) were dropped at every finished research (the stats version was
+  part of their cache key) and remade with every task's cost and work.
+  Now a stat change rebuilds the order and levels only (cost and work are
+  the stat's and level's alone, from THING_STATS), objects made anew only
+  at a restore; each stat's level read once a rebuild; a kept task's cost
+  not recomputed. Encode on those ticks 11-41 -> 2-7 ms (node, chaos-1m).
+  _simLevelsEncode also diffs one level of nested maps (researchLevels:
+  thing -> { stat: level }) instead of deep-copying the whole map.
+  research-queue test: pass. (sim-frame-replica fails: "k_slab_take: no
+  wasm kernels on this thread", a test without wasm: open.)
+- Edge ranking now (share of tick variance): simMoveRun 27% (of it the
+  occupancy movement kernel 14%, the movement kernel 7%), projectiles 9%,
+  unit events 9%, worker search tier 8%, spawner queue 7%, retire 6%, hits
+  6%, relayout 5%. Kernel 89 (MOVE_OCCUPANCY) 41-109 ms in Edge against
+  17-29 ms in Node on the same scene: likely stragglers (a helper late
+  into a foreground job). Next.
+
+### 2026-11-08 (night, last+6) — the movement's variance is one job: the heaviest occupancy block
+
+- Tracing (?simtrace=1) now also records per parallel kernel this thread's
+  wait for the job's last chunks (tail:<id>), the chunk count (n:<id>), the
+  longest single chunk over every thread (chunkMax:<id>; shared control
+  words SIM_PAR_TRACE_ON / SIM_PAR_TRACE_MAX, sim_parallel.js), and the
+  bindings changed in the tick (binds, bindNames).
+- Edge, chaos-1m-250k (~200k units): kernel 89 (MOVE_OCCUPANCY) 42 / 54 / 71
+  ms (p50 / p95 / max) with ~850 chunks; its tail wait 1.7 / 9.7 / 20.5 ms
+  correlates 0.77 with its time; its longest chunk 6.6 / 12.8 / 20.0 ms
+  against ~0.6 ms average. Kernel 8 (MOVE): longest chunk to 27 ms. The
+  bindings do not explain it (52 of 230 ticks rebind, mostly navigation
+  builds' nav.* swaps; correlation -0.01).
+- Cause: the occupancy movement runs one job per 16x16-tile block (colour
+  phases so a phase's blocks touch disjoint cells, heaviest first): a dense
+  battle block is one long job and its phase waits for it. The block size
+  has a floor of 16 tiles (sim_occupancy.js, SIM_OCCUPANCY_BLOCK_TILES and
+  Math.max(16, ...)), tied to how far a unit may reach past its block in a
+  phase (simDk steps): smaller blocks or splitting a heavy block's units
+  needs that halo rule worked out first. Next.

@@ -233,10 +233,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261105-rl2', base).href;
+    let url = new URL('sim_helper.js?v=20261108-st6', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261105-rl2', 'sim_wasm_bin.js?v=20261105-rl2', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
+    let parts = ['sim_parallel.js?v=20261108-st6', 'sim_wasm_bin.js?v=20261108-st6', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -698,9 +698,15 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
     // (The worker search tier's parts.)
-    '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent'];
+    '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent',
+    // (The result's parts, the movement's, the events' JavaScript.)
+    'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', '_simDeltaEvents', '_simEvTake', 'trafficBeforeMovement',
+    'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
 function _simTraceInstall() {
+    // (Every parallel kernel run by its id, kp:<id>, and the background waits by lane, w:<lane>.)
+    { const pr = simParallelRun; self.simParallelRun = simParallelRun = function (kk) { const cur = _simTraceCur; if (!cur) return pr.apply(this, arguments); const a = performance.now(); try { return pr.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'kp:' + kk; cur.ph[k] = (cur.ph[k] || 0) + d; } } }; }
+    { const bw = simParallelBackgroundWait; self.simParallelBackgroundWait = simParallelBackgroundWait = function (lane = 1) { const cur = _simTraceCur; if (!cur) return bw.apply(this, arguments); const a = performance.now(); try { return bw.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'w:' + lane; cur.ph[k] = (cur.ph[k] || 0) + d; } } }; }
     for (const name of SIM_TRACE_FNS) {
         const f = self[name];
         if (typeof f !== 'function') continue;
@@ -714,9 +720,10 @@ function _simTraceInstall() {
     const inner = _simTick;
     _simTick = function (msg) {
         const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
+        _simParTrace = cur.ph;
         try { return inner.apply(this, arguments); } finally {
             const b = performance.now();
-            cur.total = b - a; _simTraceCur = null; _simTraceEndAt = b;
+            cur.total = b - a; _simTraceCur = null; _simParTrace = null; _simTraceEndAt = b;
             _simTraceRows.push(cur);
             if (_simTraceRows.length >= 40) { _simPost({ type: 'trace', rows: _simTraceRows }); _simTraceRows = []; }
         }

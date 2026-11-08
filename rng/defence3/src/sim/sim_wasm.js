@@ -29,6 +29,17 @@ let _simHeapPeakSnapAt = 256 << 20;
 // any counted here is a budget bug. sites: by call site when on
 // (simHeapPlayMark(true)), else counts only. grown: memory pages grown.
 const _simHeapPlay = { on: false, sites: null, n: 0, bytes: 0, grown: 0 };
+// Every page of the wasm heap in use written once (its value kept), at the match's start (simMatchReserve): the
+// operating system commits a page at its first write, which in play was a cold first use (a q / e's first
+// commit 1.5-2x the next's). Nothing runs beside it. Returns the pages touched.
+function simHeapPrefault() {
+    const H = _simHeap;
+    if (!H || !H.memory) return 0;
+    const u = new Uint8Array(H.memory.buffer), end = Math.min(u.length, H.hw || H.top || u.length);
+    let n = 0;
+    for (let p = 0; p < end; p += 4096) { u[p] = u[p]; n++; }
+    return n;
+}
 function simHeapPlayMark(sites = false) { const P = _simHeapPlay; P.on = true; P.n = 0; P.bytes = 0; P.grown = 0; P.sites = sites ? new Map() : null; }
 function simHeapPlayStats(top = 40) {
     const P = _simHeapPlay, s = P.sites ? [...P.sites].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, top).map(([k, v]) => [v.n, Math.round(v.bytes / 1024), k]) : null;

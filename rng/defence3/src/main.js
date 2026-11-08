@@ -621,7 +621,7 @@ function _unitRetireTotal(blocks) { let n = 0; for (let b = 0; b < blocks; b++) 
 // the removed units' list indices and slots, loose the removed without a slot.
 const _rp = { cap: 0, ord: null, gone: null, snd: null, hdr: null, idx: null, sl: null, loose: [], P: new Float64Array(4) };
 const _retirePlanArgs = new Array(11).fill(null);
-const _unitGoneArgs = new Array(48).fill(null);
+const _unitGoneArgs = new Array(52).fill(null);
 function _retirePlanReserve(cap) {
     const R = _rp;
     if (R.cap < cap || !simHeapHas(R.ord)) {
@@ -647,6 +647,7 @@ const UNIT_DEATH_SOUNDS = 16;
 // The gone kernel's buffers (heap arrays; the list grows only past the most
 // deaths a tick seen so far).
 let _unitGone = null;
+const UNIT_GONE_PER = 4096;
 function _unitGoneRoom(n) {
     let G = _unitGone;
     if (!G || !simHeapHas(G.cnt)) {
@@ -656,8 +657,10 @@ function _unitGoneRoom(n) {
     }
     if (!G.olist || G.olist.length < n || !simHeapHas(G.olist)) {
         const m = simReserveCap(Math.max(n, 1), 4096);
-        if (G.olist && simHeapHas(G.olist)) simHeapFree(G.olist);
-        G.olist = simHeapArray(Int32Array, m);
+        for (const k of ['olist', 'pol', 'ppf', 'ppw', 'pc']) if (G[k] && simHeapHas(G[k])) simHeapFree(G[k]);
+        // (The parallel pass's per-chunk buffers: UNIT_GONE_PER a chunk, 128 words of tallies.)
+        G.olist = simHeapArray(Int32Array, m); G.pol = simHeapArray(Int32Array, m); G.ppf = simHeapArray(Int32Array, m); G.ppw = simHeapArray(Int32Array, m);
+        G.pc = simHeapArray(Int32Array, (Math.ceil(m / UNIT_GONE_PER) + 1) * 128);
     }
     return G;
 }
@@ -699,7 +702,20 @@ function _unitGoneRun(G, list, n, S) {
     P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
     P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
     if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
-    try { simRustDirect('k_unit_gone', arrays, P); } finally { arrays.fill(null); }
+    // (In parallel: per chunk, the shared counts atomic, what has an order in
+    // the chunk's buffers; then those merged in chunk order, ord.rs k_unit_gone_par.)
+    arrays[48] = G.pc; arrays[49] = G.pol; arrays[50] = G.ppf; arrays[51] = G.ppw;
+    const nch = Math.ceil(n / UNIT_GONE_PER);
+    try {
+        for (let i = 0; i < 52; i++) simParallelBind('ug.' + i, arrays[i]);
+        const Q = _simParams;
+        Q.fill(0, 0, 40);
+        for (let i = 0; i < 35; i++) Q[i] = P[i];
+        Q[35] = 0; Q[36] = UNIT_GONE_PER;
+        simParallelRun(SIM_KERNEL_UNIT_GONE, nch);
+        P[35] = 1; P[36] = UNIT_GONE_PER; P[37] = nch;
+        simRustDirect('k_unit_gone_par', arrays, P);
+    } finally { arrays.fill(null); }
     const C = G.cnt;
     for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
     for (let o = 0; o < 64 && o < players.length; o++) if (C[72 + o]) players[o].popCount -= C[72 + o];
@@ -768,7 +784,7 @@ function _unitRetirePass(retireBlocks) {
             // no list to move, the units are the id table.)
             _unitByIdRemovedRows(rmRow, nr, rmSl, ns, loose);
             // (Detached now, at its removal's tick on every peer: no sweep later.)
-            for (let k = 0; k < ns; k++) { const s = rmSl[k]; if (owners.at(s)) simUnitStateDetachGone(DS, s); }
+            simUnitStateDetachGoneMany(DS, rmSl, ns);
         }
     } else {
         const removedUnits = [], selSet = selectedUnits.length ? _selectionSet() : null;
@@ -1006,6 +1022,9 @@ function _gameTickBody() {
     if (typeof SIM_IN_WORKER !== 'undefined' && SIM_IN_WORKER) visibilityGrid = getRawVisibilityGridForPlayer(localPlayerId);
     else updateVisibility(localPlayerId);
     _finalizePathfindPerfTick(_countPendingPathBacklog());
+    // A staged q / e due now: its new units live and its shares written
+    // (before the next unit index, so it holds them).
+    if (typeof rzCommitDue === 'function') rzCommitDue();
     // A share of the units into denser slots, in block order (peer-local:
     // sim_unit_state.js simUnitStateRelayoutStep), before the next index.
     const relaidOut = typeof simUnitStateRelayoutStep === 'function' ? simUnitStateRelayoutStep() : 0;
@@ -2688,12 +2707,6 @@ function initInput() {
         if (e.key === 'f' || e.key === 'F') {
             cycleLevelVisibilityMode();
         }
-        if (e.key === '/' || e.code === 'NumpadDivide' || e.key === 'q' || e.key === 'Q') {
-            queueResizeForEachActiveUnitSubgroup('d2');
-        }
-        if (e.key === '*' || e.code === 'NumpadMultiply' || e.key === 'e' || e.key === 'E') {
-            queueResizeForEachActiveUnitSubgroup('x2');
-        }
         // Control groups
         let num = null;
         if (e.code && e.code.startsWith('Digit')) {
@@ -3497,7 +3510,7 @@ class UnitIdIndex {
         const t = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null ? simSharedArray(Int32Array, cap) : new Int32Array(cap);
         t.fill(-1);
         this.t = t; this.mask = cap - 1; this.used = 0; this.S = S; this.inHeap = typeof simHeapHas === 'function' && simHeapHas(t);
-        if (old && oldS === S && S) { const C = S.columns; for (let i = 0; i < old.length; i++) { const sl = old[i]; if (sl >= 0 && S.owners.at(sl) && S.owners.at(sl)._si === sl && this._at(C.id[sl]) < 0) this._put(C.id[sl], sl); } }
+        if (old && oldS === S && S) { const C = S.columns; for (let i = 0; i < old.length; i++) { const sl = old[i], h = sl >= 0 ? C.hnd[sl] : 0; if (h > 0 && C.hslot[h] === sl && this._at(C.id[sl]) < 0) this._put(C.id[sl], sl); } }
         if (old && typeof simHeapHas === 'function' && simHeapHas(old)) simHeapFree(old);
     }
     _put(id, sl) {
@@ -3511,7 +3524,7 @@ class UnitIdIndex {
         if (this.t === null) return -1;
         const t = this.t, m = this.mask, C = this.S.columns;
         let h = UnitIdIndex._h(id) & m;
-        for (let sl; (sl = t[h]) !== -1; h = (h + 1) & m) if (C.id[sl] === id && this.S.owners.at(sl)) return h;
+        for (let sl; (sl = t[h]) !== -1; h = (h + 1) & m) if (C.id[sl] === id && C.hnd[sl] > 0) return h;
         return -1;
     }
     get(id) {
@@ -4104,6 +4117,8 @@ function _actionRallyTiles(raw) {
 }
 // (A unit command's ids as whole numbers, Int32: a kill's one unitId first.)
 function _actionIds32(ids, one) {
+    // (Decoded from the wire already (_actionIdsDecodeW): whole Int32s, used as they are.)
+    if (ids instanceof Int32Array && !Number.isInteger(one)) return ids;
     const list = Array.isArray(ids) || ArrayBuffer.isView(ids) ? ids : [], extra = Number.isInteger(one) ? 1 : 0, t = new Int32Array(list.length + extra);
     let n = 0;
     if (extra) t[n++] = one;
@@ -4356,6 +4371,7 @@ function _orderDropKernel(a, playerId) {
     if (!c || !(_simWasmX && _simWasmX.k_order_drop) || !(map instanceof UnitIdIndex) || map.loose.size || !map._ok() || map.S.columns !== c) return false;
     const pre = a[_actionPrepared], ids = pre && pre.ids32 ? pre.ids32 : _actionIds32(a.unitIds, a.unitId), n = ids.length;
     if (!n) return true;
+    if (!_unitCmdScr) unitCmdReserve({ slots: S.cap });
     if (!_unitCmdIds || _unitCmdIds.length < n || !simHeapHas(_unitCmdIds)) {
         const m = Math.max(65536, 1 << Math.ceil(Math.log2(n)));
         _unitCmdIds = simHeapArray(Int32Array, m); _unitCmdOut = simHeapArray(Int32Array, m); _unitCmdPaths = simHeapArray(Int32Array, m);
@@ -4436,11 +4452,13 @@ function simMatchReserve() {
         typeof simSpawnBatchReserve === 'function' ? simSpawnBatchReserve : null, typeof simTileChangesReserve === 'function' ? simTileChangesReserve : null,
         typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
         typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
-        typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve]) if (f) f(B);
+        typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve, rzReserve, unitCmdReserve]) if (f) f(B);
     // (The navigation's build slots: flownav.js navReserve.)
     if (typeof navReserve === 'function') navReserve();
     // (The area index for range queries, per layout: unit.js areaRangeIndexEnsure.)
     if (typeof areaRangeIndexEnsure === 'function' && typeof areaNeighborIds !== 'undefined' && areaNeighborIds.length) areaRangeIndexEnsure();
+    // (Last: every page of the heap made so far committed now, not at its first write in play.)
+    if (typeof simHeapPrefault === 'function') simHeapPrefault();
 }
 // Finish world-dependent caches while the match/restore is still loading.
 // Reservations run before entities exist; these need the completed world.
@@ -4983,7 +5001,17 @@ function _toggleOut(n) {
 // The unit commands done by k_unit_cmd (wasm/src/uix.rs): their op codes.
 const _UNIT_CMD_OPS = { hold: 1, stop: 2, attack: 3, attackBuilding: 4, killUnit: 5 };
 const _unitCmdP = new Float64Array(24);
-let _unitCmdIds = null, _unitCmdOut = null, _unitCmdPaths = null, _unitCmdCnt = null, _unitCmdKeys = null;
+let _unitCmdIds = null, _unitCmdOut = null, _unitCmdPaths = null, _unitCmdCnt = null, _unitCmdKeys = null, _unitCmdScr = null, _unitCmdScrN = null;
+const _unitCmdA = [], UNIT_CMD_PAR_MIN = 8192, UNIT_CMD_PER = 4096;
+// (An order's buffers for a selection of every slot: made at the match's start, simMatchReserve.)
+function unitCmdReserve(B) {
+    const m = Math.max(65536, B.slots || 0);
+    if (_unitCmdIds && _unitCmdIds.length >= m && simHeapHas(_unitCmdIds)) return;
+    for (const a of [_unitCmdIds, _unitCmdOut, _unitCmdPaths, _unitCmdScr, _unitCmdScrN]) if (a && simHeapHas(a)) simHeapFree(a);
+    const nch = Math.ceil(m / UNIT_CMD_PER) + 1;
+    _unitCmdIds = simHeapArray(Int32Array, m); _unitCmdOut = simHeapArray(Int32Array, m); _unitCmdPaths = simHeapArray(Int32Array, m);
+    _unitCmdScr = simHeapArray(Int32Array, 2 * nch * UNIT_CMD_PER); _unitCmdScrN = simHeapArray(Int32Array, 4 * nch);
+}
 // Command a's units by op: true when the kernel did it (target: the attack's
 // unit or structure). Workers a stop leaves to the JavaScript (their task).
 function _unitCmdKernel(a, playerId, op, target) {
@@ -4996,6 +5024,7 @@ function _unitCmdKernel(a, playerId, op, target) {
         _unitCmdIds = simHeapArray(Int32Array, m); _unitCmdOut = simHeapArray(Int32Array, m); _unitCmdPaths = simHeapArray(Int32Array, m);
     }
     if (!_unitCmdCnt || !simHeapHas(_unitCmdCnt)) _unitCmdCnt = simHeapArray(Int32Array, 4);
+    if (!_unitCmdScr) unitCmdReserve({ slots: S.cap });
     _unitCmdIds.set(ids);
     if (!_unitCmdKeys) _unitCmdKeys = { hold: _simHKey('holdPosition') };
     _simPptKeys();
@@ -5010,56 +5039,452 @@ function _unitCmdKernel(a, playerId, op, target) {
     if (target) { P[13] = target.slot; P[14] = target.id; P[15] = target.x; P[16] = target.y; P[17] = target.tile; }
     P[18] = simUnitTypeIndex('king'); P[19] = 1; P[20] = H.data.BYTES_PER_ELEMENT;
     const fs = S.pathPool ? S.pathPool.fs : null;
-    simRustDirect('k_unit_cmd', [_unitCmdIds, map.t, c.id, c.live, c.idStp, _unitCmdOut, _unitCmdCnt, c.owner, c.dead, c.isWk, c.upT, c.commandState, c.mvOn, c.holdF, H.data, c.hObj,
+    const A = _unitCmdA;
+    A.length = 0;
+    A.push(_unitCmdIds, map.t, c.id, c.live, c.idStp, _unitCmdOut, _unitCmdCnt, c.owner, c.dead, c.isWk, c.upT, c.commandState, c.mvOn, c.holdF, H.data, c.hObj,
         c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.rkF, c.nvPK, c.pathIndex, c.mvPath, fs, c.mvSteer, c.cmMode, c.mvWk,
-        c.ptSt, c.ptGx, c.ptGy, c.mvPP, c.mvPF, c.energy, _unitCmdPaths, c.pthH, simPathArena().a, SIM_PATH.free], P);
+        c.ptSt, c.ptGx, c.ptGy, c.mvPP, c.mvPF, c.energy, _unitCmdPaths, c.pthH, simPathArena().a, SIM_PATH.free, _unitCmdScr, _unitCmdScrN);
+    if (n < UNIT_CMD_PAR_MIN) simRustDirect('k_unit_cmd', A, P);
+    else {
+        // (In parallel: the per-unit writes in chunks, then the shared stacks (paths, workers) in id order: the serial kernel's.)
+        for (let i = 0; i < A.length; i++) simParallelBind('uc.' + i, A[i]);
+        const nch = Math.ceil(n / UNIT_CMD_PER);
+        P[21] = 0; P[22] = UNIT_CMD_PER;
+        simParallelRun(SIM_KERNEL_UNIT_CMD, nch);
+        P[21] = 1; P[23] = nch;
+        simRustDirect('k_unit_cmd_par', A, P);
+    }
+    A.fill(null);
     const C = _unitCmdCnt, left = C[0], np = C[1];
     // Stopped workers: their tasks let go in the worker kernel (mode 2).
     if (left > 0) _stopWorkersKernel(_unitCmdOut, left, playerId);
     if (op === 5 && C[2] > 0 && typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
     return true;
 }
-// q / e (resizeUnitGroup) by the kernel (wasm/src/k.rs k_unit_resize): its
-// groups and kills, then the new units (spawned beside their templates), then
-// every unit's stacks, levels, maxEnergy and energy. True: done.
-let _resizeBuf = null;
-const _resizeP = new Float64Array(16);
+// q / e (resizeUnitGroup), staged (wasm/src/birth.rs, UNIT_BIRTH_WASM_PLAN.md
+// "Staged q / e"): the tick that applies it does flat parallel writes only.
+// - The action's tick (_rzStart): the selection grouped by subgroup (type,
+//   and base level unless merged) in parallel passes over the ids (look:
+//   each unit's slot, key, position, footprint; plan; scatter: by group, the
+//   x2 templates with their type data captured), the occupancy bits and the
+//   walls copied, whole empty slabs reserved for the new units.
+// - Lane SIM_LANE_RZ, from the snapshot alone (the same result with or
+//   without helpers): block placement in two rounds, the new units' slots
+//   in block order, every new slot zeroed and its row's core written (not
+//   live yet: the reserved slabs read as empty to the passes over slots).
+// - The end of the next tick (_rzCommitDue, the same tick on every peer,
+//   before the next unit index): each new unit's footprint checked against
+//   the live occupancy and marked (block jobs), the ones that stood made
+//   live (id, handle, the template's type columns, id table, id hash,
+//   footprint record, spatial entry, upkeep bin), every unit's shares
+//   (stacks, levels, maxEnergy, energy; units that died since left alone),
+//   d2's kills, the reserved slabs given back to the books.
+// One resize at a time; others wait their turn in order (started at the
+// commit before them).
+// q / e (x2 / /2 of a selection's units, resizeUnitGroup) is off for now: no keys, no buttons, the
+// action ignored by the simulation, its buffers not reserved. The staged implementation below stays
+// (UNIT_BIRTH_WASM_PLAN.md) for when it comes back.
+const UNIT_RESIZE_ENABLED = false;
+const RZ_PER = 4096;
+// (The lane's placement of this many births a tick: a job's commit starts a tick later for each, the same on every peer.)
+const RZ_TICK_BIRTHS = 65536;
+let _rz = null, _rzJob = null;
+// (Tick ends seen (rzCommitDue, once a gameTick): a job is due at the end of the tick after its action's.)
+let _rzTickEnds = 0;
+const _rzQueue = [];
+const _rzP = new Float64Array(16);
+function _rzReady(n, km, nb, words, tiles) {
+    const R = _rz;
+    if (R && R.n >= n && R.km >= km && R.nb >= nb && R.words >= words && R.tiles >= tiles && simHeapHas(R.ids)) return R;
+    if (R) for (const k in R) if (ArrayBuffer.isView(R[k]) && simHeapHas(R[k]) && k !== 'idsU') simHeapFree(R[k]);
+    const m = Math.max(4096, 1 << Math.ceil(Math.log2(Math.max(1, n)))), K = Math.max(km, R ? R.km : 0), NB = Math.max(nb, R ? R.nb : 0);
+    const W = Math.max(words, R ? R.words : 0), T = Math.max(tiles, R ? R.tiles : 0);
+    const nch = Math.ceil(m / RZ_PER), I = k => simHeapArray(Int32Array, k), F = k => simHeapArray(Float64Array, k);
+    const Z = { n: m, km: K, nb: NB, words: W, tiles: T, ids: I(m), slot: I(m), key: I(m), list: I(m), flag: I(nch), hist: I(nch * K), sums: F(nch * K * 2), grp: I(6 * K), gsp: I(K), kg: I(K), cnt: I(4),
+        ex: I(m), ey: I(m), emeta: I(m), spw: I(m), tg: I(m), tx: I(m), ty: I(m), tmeta: I(m), tup: I(m), tr: simHeapArray(Float32Array, m), tcr: simHeapArray(Float32Array, m), tcp: simHeapArray(Uint8Array, 64 * m),
+        pos: I(2 * m), tb: I(m), bhist: I(nch * NB), jobs0: I(3 * NB), jobs1: I(3 * NB), bcnt: I(4), tord0: I(m), tord1: I(m),
+        bt: I(m), bs: I(m), rows: F(12 * m), cj: I(4 * (2 * NB + 8)), aout: I(8), rsl: I(m + 8), rmask: simHeapArray(Uint32Array, 2 * m + 16), rhome: I(m + 8), rslot: I(m + 64), rout: I(4),
+        ok: simHeapArray(Uint8Array, m), brk: I(m), bn: I(m), gofs: I(K), newl: I(m), gsh: F(8 * K), out: I(8), oa: I(m), ob: I(m), rh: I(nch * 256),
+        bsnap: simHeapArray(Uint32Array, W), wsnap: simHeapArray(Uint8Array, T) };
+    Z.idsU = simHeapView(Z.ids, Uint32Array, 0, m);
+    for (const k in Z) if (ArrayBuffer.isView(Z[k])) simParallelBind('rz.' + k, Z[k]);
+    return _rz = Z;
+}
+// q / e's buffers for the match (simMatchReserve): a selection of a player's
+// whole population, every block and occupancy word, made and bound before
+// play (a resize's first use made and bound ~40 arrays, its first passes
+// left to the simulation thread while the helpers took the bindings).
+function rzReserve(B) {
+    if (!UNIT_RESIZE_ENABLED) return;
+    const O = typeof occupancyEnsure === 'function' ? occupancyEnsure() : null;
+    if (!O || typeof unitStatTables !== 'function') return;
+    const n = Math.max(4096, Math.min(Number(getConfiguredMaxPop()) || 0, B.slots || 0));
+    const bw = Math.ceil((O.w + 32) / 64) + 1, bh = Math.ceil((O.h + 32) / 64) + 1;
+    _rzReady(n, Math.max(1, unitStatTables().NT) * 64, bw * bh, O.bits.length, GRID_W * GRID_H);
+    _rzCopyList(_simUnitState);
+}
 function _unitResizeKernel(a, playerId, byLevel) {
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, c = S && S.columns, map = _unitByIdMap();
-    if (!c || !(_simWasmX && _simWasmX.k_unit_resize) || !(map instanceof UnitIdIndex) || map.loose.size || !map._ok() || map.S.columns !== c || !players[playerId]) return false;
-    const pre = a[_actionPrepared], ids = pre && pre.ids32 ? pre.ids32 : _actionIds32(a.unitIds, null), n = ids.length;
-    if (!n) return true;
-    if (!_resizeBuf || _resizeBuf.ids.length < n || !simHeapHas(_resizeBuf.ids)) {
-        const m = Math.max(4096, 1 << Math.ceil(Math.log2(n))), I = k => simHeapArray(Int32Array, k);
-        _resizeBuf = { ids: I(m), list: I(m), tmp: I(m), grp: I(6 * m), cnt: I(4), spw: I(m), newl: I(m) };
-    }
-    const B = _resizeBuf, U = unitStatTables(), P = _resizeP;
-    B.ids.set(ids);
-    const args = [B.ids, map.t, c.id, c.live, c.idStp, c.owner, c.dead, c.upT, B.list, B.tmp, B.grp, B.cnt, c.energy, B.spw, B.newl,
-        c.stackCount, c.unitLevel, c.baseLevel, c.effectiveLevel, c._lastAppliedEffectiveLevel, c.effectiveStacks, _effRowCols.rMaxE, c.maxE, c.jMaxE, U.bRad, c.esRad, c.statRow, c.bsRow, c.esType];
-    P.fill(0);
-    P[0] = n; P[1] = map.mask; P[2] = _actionIdStampNext(); P[3] = 0; P[4] = playerId; P[5] = simUnitTypeIndex('king');
-    P[6] = Math.max(0, getPlayerPopCap(playerId) - (players[playerId].popCount | 0)); P[7] = byLevel ? 1 : 0; P[8] = U.NT; P[9] = U.L1; P[10] = a.mode === 'd2' ? 1 : 0;
-    simRustDirect('k_unit_resize', args, P);
-    // The new units beside their templates (a unit is made where it can stand); none: its group one less.
-    const ng = B.cnt[0], ns = B.cnt[1];
-    if (ns > 0) {
-        let at = 0, w = 0;
-        for (let g = 0; g < ng; g++) {
-            const sp = B.grp[g * 6 + 2];
-            let made = 0;
-            for (let i = 0; i < sp; i++, at++) {
-                const t = S.owners.at(B.spw[at]), nu = t ? spawnUnitNearUnit(t) : null;
-                if (!nu) continue;
-                unitAdded(nu); players[playerId].popCount++;
-                B.newl[w++] = nu._si; made++;
-            }
-            B.grp[g * 6 + 2] = made;
-        }
-    }
-    P[3] = 1;
-    simRustDirect('k_unit_resize', args, P);
+    if (!c || !(_simWasmX && _simWasmX.k_rz_look) || !(map instanceof UnitIdIndex) || map.loose.size || !map._ok() || map.S.columns !== c || !players[playerId]) return false;
+    const pre = a[_actionPrepared], ids = pre && pre.ids32 ? pre.ids32 : _actionIds32(a.unitIds, null);
+    if (!ids.length) return true;
+    // (Its ids kept: an action's are its own.)
+    const job = { ids: ids.slice(), playerId, byLevel: !!byLevel, half: a.mode === 'd2' };
+    if (_rzJob) _rzQueue.push(job); else _rzStart(job);
     return true;
+}
+function _rzStart(job) {
+    const S = _simUnitState, c = S.columns, map = _unitByIdMap(), playerId = job.playerId;
+    if (!map._ok() || !players[playerId]) return;
+    const n = job.ids.length, NT = Math.max(1, unitStatTables().NT), km = NT * 64, O = occupancyEnsure(), half = job.half;
+    const bw = Math.ceil((O.w + 32) / 64) + 1, bh = Math.ceil((O.h + 32) / 64) + 1;
+    const R = _rzReady(n, km, bw * bh, O.bits.length, GRID_W * GRID_H), P = _simParams;
+    R.ids.set(job.ids);
+    if (R.idt !== map.t) { simParallelBind('rz.idt', map.t); R.idt = map.t; }
+    const nch = Math.ceil(n / RZ_PER);
+    const look = ordered => {
+        P.fill(0, 0, 16); P[0] = n; P[1] = RZ_PER; P[2] = map.mask; P[3] = playerId; P[4] = simUnitTypeIndex('king'); P[5] = job.byLevel ? 1 : 0; P[6] = km;
+        simParallelBind('rz.order', ordered ? R.oa : null);
+        simParallelRun(SIM_KERNEL_RZ_LOOK, nch);
+    };
+    look(false);
+    let sorted = true;
+    for (let i = 0; i < nch && sorted; i++) if (R.flag[i]) sorted = false;
+    if (!sorted) { _rzSortIds(R, n); look(true); }
+    _rzP.fill(0); _rzP[1] = nch; _rzP[2] = km; _rzP[3] = half ? 1 : 0; _rzP[4] = Math.max(0, Math.min(getPlayerPopCap(playerId) - (players[playerId].popCount | 0), _rzSlotRoom(S)));
+    simRustDirect('k_rz_plan', [R.hist, R.sums, R.grp, R.gsp, R.kg, R.cnt], _rzP);
+    const ng = R.cnt[0], ns = R.cnt[1];
+    _rzCopyList(S);
+    P.fill(0, 0, 16); P[0] = n; P[1] = RZ_PER; P[2] = km; P[3] = half ? 1 : 0; P[4] = 1; P[5] = _rzCp.n;
+    simParallelRun(SIM_KERNEL_RZ_SCATTER, nch);
+    // (Its first commit step at the end of the tick after next: the lane has a whole tick and the rest of this one.)
+    Object.assign(job, { due: _rzTickEnds + 3 + Math.floor(ns / RZ_TICK_BIRTHS), ng, ns, nsl: 0, bw, bh });
+    // (What the commit's kernels read bound now, at the action's tick: bound at the first commit step, the helpers took the
+    // bindings there and left its jobs to this thread (2-4x the next steps').)
+    if (!half && ns > 0) _rzCommitBind(S, map, ns);
+    _rzJob = job;
+    if (half || ns <= 0) return;
+    // Slabs for the births, the occupancy and walls as of now; the lane's chain.
+    const sl = S.sl;
+    if (!simHeapHas(sl.hdr)) { const h = simHeapArray(Int32Array, 8); h.set(sl.hdr); sl.hdr = h; }
+    sl.hdr[7] = S.owners.length;
+    _rzP.fill(0); _rzP[0] = ns; _rzP[1] = Math.min(S.cap, sl.sfree.length * SIM_SLAB);
+    simRustDirect('k_rz_reserve', [sl.bits, sl.sfree, sl.home, sl.cur, sl.heads, sl.entries, sl.used, sl.ever, sl.hdr, R.rsl, R.rout, R.rmask, R.rhome, R.rslot], _rzP);
+    S.owners.length = sl.hdr[7];
+    job.nsl = R.rout[0]; job.nslots = R.rout[1];
+    simParallelCopyHeap([R.bsnap.subarray(0, O.bits.length), O.bits]);
+    R.wsnap.set(simMoveWallGrid());
+    const ncht = Math.ceil(ns / RZ_PER), nb = bw * bh, L = SIM_LANE_RZ;
+    const stages = [];
+    const st = (kernel, total, fill) => { const Q = simParallelStageParams(L, stages.length); Q.fill(0); fill(Q); stages.push([kernel, total]); };
+    for (let round = 0; round < 2; round++) {
+        const off = round ? 32 : 0;
+        st(SIM_KERNEL_RZ_BHIST, ncht, Q => { Q[0] = ns; Q[1] = RZ_PER; Q[2] = Math.log2(O.cell); Q[4] = bw; Q[5] = nb; Q[6] = round; Q[7] = off; });
+        st(round ? SIM_KERNEL_RZ_BPLAN1 : SIM_KERNEL_RZ_BPLAN0, 1, Q => { Q[1] = ncht; Q[2] = nb; Q[3] = round; });
+        st(round ? SIM_KERNEL_RZ_BSCATTER1 : SIM_KERNEL_RZ_BSCATTER0, ncht, Q => { Q[0] = ns; Q[1] = RZ_PER; Q[5] = nb; });
+        st(round ? SIM_KERNEL_RZ_PLACE1 : SIM_KERNEL_RZ_PLACE0, Math.ceil(nb / 64), Q => { Q[1] = O.w; Q[2] = O.h; Q[3] = O.stride; Q[4] = O.cell; Q[5] = O.planes; Q[6] = GRID_W; Q[7] = SIM_OCCUPANCY_SUBCELLS; Q[8] = 32; Q[9] = bw; Q[10] = off; Q[11] = round; });
+    }
+    st(SIM_KERNEL_RZ_ASSIGN, 1, Q => { Q[0] = job.nslots; Q[1] = ns; Q[3] = playerId; });
+    const Z = _simSlotZeroTable(S);
+    if (!Z) throw new Error('q / e: unit columns not in the heap');
+    _spbKind(Z);
+    if (_spb.prog === null || !simHeapHas(_spb.prog)) _spbProgRoom(0);
+    simParallelBind('spw.kind', _spb.kind); simParallelBind('spw.prog', _spb.prog);
+    // (The reserved slots are fresh: slots go back on the books only so, simUnitStateReleaseFreed.)
+    R.pos.fill(-1, 0, 2 * ns);
+    simParallelBackgroundChain(L, stages);
+}
+// The pending resize at its tick ends (main.js gameTick, before the next
+// unit index; the same ticks on every peer): from its due tick, one step a
+// tick: its births in RZ_COMMIT_PARTS sub-commits by block (each: the
+// footprints checked against the occupancy now and claimed, the ones that
+// stood made live), then the final step (every unit's shares, d2's kills,
+// the reserved slots' books, the upkeep bins). The next waiting resize
+// starts after it.
+const RZ_COMMIT_PARTS = 4;
+function rzCommitDue() {
+    _rzTickEnds++;
+    const job = _rzJob;
+    if (job === null || _rzTickEnds < job.due) return;
+    if (job.parts === undefined) { simParallelBackgroundWait(SIM_LANE_RZ); _rzCommitPlan(job); }
+    if (job.cs < job.parts.length) { _rzSubCommit(job, job.parts[job.cs]); job.cs++; return; }
+    _rzJob = null;
+    _rzCommitFinal(job);
+    while (_rzJob === null && _rzQueue.length) _rzStart(_rzQueue.shift());
+}
+// The sub-commits: the lane's block jobs (cj) cut into RZ_COMMIT_PARTS runs
+// of about equal births (a part: [job from, job to, birth from, birth to]).
+function _rzCommitPlan(job) {
+    const R = _rz, ng = job.ng;
+    job.cs = 0; job.parts = []; job.rdone = job.rdone | 0;
+    job.planned = job.planned || Array.from(R.grp.subarray(0, 6 * ng).filter((v, i) => i % 6 === 2));
+    if (job.half || !(job.ns > 0) || !(R.aout[0] > 0)) { for (let g = 0; g < ng; g++) R.grp[g * 6 + 2] = 0; return; }
+    for (let g = 0; g < ng; g++) R.grp[g * 6 + 2] = 0;
+    const nb = R.aout[0], nj = R.aout[1], parts = nb >= 4096 ? RZ_COMMIT_PARTS : 1;
+    let j = 0;
+    for (let p = 0; p < parts && j < nj; p++) {
+        const want = Math.ceil(nb * (p + 1) / parts), j0 = j;
+        while (j < nj && (R.cj[4 * j + 1] <= want || p === parts - 1)) j++;
+        if (j === j0) j++;
+        job.parts.push([j0, j, R.cj[4 * j0], R.cj[4 * (j - 1) + 1]]);
+    }
+}
+function _rzCommitBind(S, map, ns) {
+    const R = _rz;
+    _uixRoom(_uix.n + ns);
+    if (R.hfree !== S.hfree) { simParallelBind('rz.hfree', S.hfree); R.hfree = S.hfree; }
+    if (R.uids !== _uix.ids) { simParallelBind('rz.uids', _uix.ids); simParallelBind('rz.uslots', _uix.slots); R.uids = _uix.ids; }
+    if (R.idt !== map.t) { simParallelBind('rz.idt', map.t); R.idt = map.t; }
+    simParallelBind('rz.used', S.sl.used); simParallelBind('rz.ever', S.sl.ever);
+}
+function _rzSubCommit(job, part) {
+    const S = _simUnitState, c = S.columns, R = _rz, P = _simParams, O = occupancyEnsure(), ng = job.ng, playerId = job.playerId;
+    const [j0, j1, b0, b1] = part, nj0 = R.aout[2];
+    const map = _unitByIdMap();
+    map._ok();
+    // Footprints against the occupancy now (block jobs; a part's round-0 and round-1 blocks apart: they overlap).
+    simMoveWallGrid();
+    const fill = Q => { Q.fill(0, 0, 16); Q[1] = O.w; Q[2] = O.h; Q[3] = O.stride; Q[4] = O.cell; Q[5] = O.planes; Q[6] = job.bw; Q[7] = GRID_W; Q[8] = SIM_OCCUPANCY_SUBCELLS; Q[9] = 8; };
+    const r0 = Math.min(j1, Math.max(j0, nj0));
+    if (r0 > j0) { fill(P); P[0] = j0; simParallelRun(SIM_KERNEL_RZ_CPLACE, r0 - j0); }
+    if (j1 > r0) { fill(P); P[0] = r0; simParallelRun(SIM_KERNEL_RZ_CPLACE, j1 - r0); }
+    const before = Array.from({ length: ng }, (_, g) => R.grp[g * 6 + 2]);
+    _rzP.fill(0); _rzP[0] = b1; _rzP[1] = ng; _rzP[2] = 0; _rzP[3] = b0; _rzP[4] = b1;
+    simRustDirect('k_rz_crank', [R.ok, R.bt, R.tg, R.brk, R.grp, R.newl, R.out, R.gofs, R.bs, R.rows], _rzP);
+    const born = R.out[0];
+    for (let g = 0; g < ng; g++) { const m = R.grp[g * 6 + 2] - before[g]; if (m > 0) O.expectedBits += O.sizes[R.tmeta[R.gsp[g]] & 255] * m; }
+    // The core columns of the part's slots (their last units' until now: stale references read them), then the units made live.
+    _spbRowsRun(R.rows, b1 - b0, SIM_KERNEL_RZ_SPAWN_WRITE, b0);
+    if (born > 0) {
+        _uixRoom(_uix.n + born);
+        _simHandleGrow(S, S.hnext + born + 1);
+        if (!simHeapHas(S.hfree)) { const h = simHeapArray(Int32Array, Math.max(1024, S.hfree.length)); h.set(S.hfree); S.hfree = h; }
+        if (R.hfree !== S.hfree) { simParallelBind('rz.hfree', S.hfree); R.hfree = S.hfree; }
+        if (R.uids !== _uix.ids) { simParallelBind('rz.uids', _uix.ids); simParallelBind('rz.uslots', _uix.slots); R.uids = _uix.ids; }
+        if (R.idt !== map.t) { simParallelBind('rz.idt', map.t); R.idt = map.t; }
+        _rzCopyList(S);
+        const sl = S.sl;
+        simParallelBind('rz.used', sl.used); simParallelBind('rz.ever', sl.ever);
+        P.fill(0, 0, 16); P[0] = b1 - b0; P[1] = 4096; P[2] = nextUnitId; P[3] = S.hfreeN; P[4] = S.hnext; P[5] = _rzCp.n; P[6] = _uix.n; P[7] = map.mask; P[8] = b0;
+        simParallelRun(SIM_KERNEL_RZ_CFILL, Math.ceil((b1 - b0) / 4096));
+        const fromFree = Math.min(born, S.hfreeN);
+        S.hfreeN -= fromFree; S.hnext += born - fromFree;
+        if (S.objs.length < S.hnext) { const L0 = S.objs.length; S.objs.length = S.hnext; S.objs.fill(null, L0); }
+        nextUnitId += born;
+        _uix.n += born; _uix.ver++;
+        map.used += born; map.size += born;
+        players[playerId].popCount += born;
+        O.spawns += born; O.registered += born;
+        _rzSpatial(R.bs, b1 - b0, b0);
+        _rzUpkeep(R.bs, b1 - b0, c, b0);
+    }
+}
+function _rzCommitFinal(job) {
+    const S = _simUnitState, c = S.columns, R = _rz, P = _simParams, ng = job.ng, playerId = job.playerId;
+    let nl = 0;
+    if (!job.half && job.ns > 0 && job.parts.length) {
+        const nb = R.aout[0];
+        _rzP.fill(0); _rzP[0] = nb; _rzP[1] = ng; _rzP[2] = 1;
+        simRustDirect('k_rz_crank', [R.ok, R.bt, R.tg, R.brk, R.grp, R.newl, R.out, R.gofs, R.bs, R.rows], _rzP);
+        nl = R.out[1];
+        // The reserved slots back to the books.
+        const sl = S.sl;
+        _rzP.fill(0); _rzP[0] = job.nsl; _rzP[1] = nb; _rzP[2] = TILE * 8; _rzP[3] = sl.kw; _rzP[4] = sl.kh; _rzP[5] = job.rdone;
+        simRustDirect('k_rz_cslabs', [sl.bits, sl.sfree, sl.home, sl.cur, sl.heads, sl.entries, sl.used, sl.ever, sl.hdr, R.rsl, R.bs, R.ok, c.x, c.y, R.rmask, R.rhome, R.rslot], _rzP);
+        sl.layout = 0;
+    }
+    // Every unit's shares (a plan per group, the units in parallel), d2's kills, the upkeep bins.
+    const U = unitStatTables();
+    _rzSharesBind(c, U);
+    _rzP.fill(0); _rzP[0] = 0; _rzP[1] = RZ_PER; _rzP[2] = U.NT; _rzP[3] = U.L1; _rzP[4] = playerId;
+    simRustDirect('k_rz_shares', _rzSharesArgs(R, c, U), _rzP);
+    if (R.cnt[3] > 0) { P.fill(0, 0, 16); P[0] = 1; P[1] = 8192; P[2] = U.NT; P[3] = U.L1; P[4] = playerId; simParallelRun(SIM_KERNEL_RZ_SHARES, Math.ceil(R.cnt[3] / 8192)); }
+    if (job.half && R.cnt[2] > 0) { P.fill(0, 0, 16); P[0] = R.cnt[2]; P[1] = 8192; simParallelRun(SIM_KERNEL_RZ_KILL, Math.ceil(R.cnt[2] / 8192)); }
+    _rzUpkeep(R.list, R.cnt[2], c, 0);
+    if (nl > 0) _rzUpkeep(R.newl, nl, c, 0);
+}
+// New units into the spatial index (birth.rs k_spawn_spatial_par: unit.js
+// _spbSpatialList's, in parallel).
+function _rzSpatial(list, n, from = 0) {
+    const S = _simUnitState, c = S.columns;
+    if (CHUNK_SIZE !== 1) throw new Error('q / e: the spatial entries take chunks of one tile');
+    const P = _simParams;
+    _spbSpatialTables();
+    if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
+    simParallelBind('rz.spTy', _spbTy); simParallelBind('rz.spLayer', _spbLayer); simParallelBind('rz.cellArea', cellArea);
+    simParallelBind('rz.spCplx', spatialUnitsComplex); simParallelBind('rz.spTypes', spatialTypeCounts); simParallelBind('rz.spBlocks', spatialBlockCounts);
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
+    P.fill(0, 0, 20);
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE * 8; P[4] = spatialEpoch; P[5] = spatialUnitsComplexStridePerChunk; P[6] = spatialTypeStridePerBlock; P[7] = spatialUnitsComplexUnitTypeCount;
+    P[8] = spatialUnitsComplexPlayerCount; P[9] = spatialNormUnitTypeIndex; P[10] = CHUNKS_W; P[11] = SPATIAL_TYPE_BLOCK; P[12] = spatialTypeBlocksW; P[13] = SPATIAL_BLOCK_SIZE; P[14] = spatialBlockCols; P[16] = 8192; P[17] = from;
+    if (_spatialCountDefer) throw new Error('q / e: spatial entries during the unit pass');
+    simParallelRun(SIM_KERNEL_RZ_SPATIAL, Math.ceil(n / 8192));
+}
+// A staged q / e in a snapshot (utils_snapshot.js; a resync's, a join's):
+// the job not committed yet by ids (its slots are this peer's), its plan, its
+// groups' template data, its templates' placed positions and the lane's
+// order of the births (its block jobs), and the resizes waiting after it.
+// (The lane done first: the placements are what every peer commits.)
+function rzSnapshot() {
+    const q = _rzQueue.map(j => [j.playerId, j.half ? 1 : 0, j.byLevel ? 1 : 0, Array.from(j.ids)]);
+    const job = _rzJob;
+    if (job === null) return q.length ? { q } : null;
+    simParallelBackgroundWait(SIM_LANE_RZ);
+    const R = _rz, c = _simUnitState.columns, ng = job.ng, ns = job.ns, idOf = s => s >= 0 ? c.id[s] : -1;
+    const o = { q, left: job.due - _rzTickEnds, p: job.playerId, half: job.half ? 1 : 0, bl: job.byLevel ? 1 : 0, ng, ns, grp: Array.from(R.grp.subarray(0, 6 * ng)), gsp: Array.from(R.gsp.subarray(0, ng)),
+        list: Array.from(R.list.subarray(0, R.cnt[2]), idOf) };
+    // (In its commit steps: the plan's spawns, the parts and how many are done; the births done so far by their units' ids, -1 none.)
+    if (job.parts !== undefined) {
+        o.planned = job.planned; o.parts = job.parts; o.cs = job.cs;
+        const done = job.cs > 0 ? job.parts[job.cs - 1][3] : 0;
+        o.done = done;
+        o.dok = Array.from(R.ok.subarray(0, done));
+        o.did = Array.from(R.bs.subarray(0, done), s => s >= 0 ? c.id[s] : -1);
+    }
+    const planned = job.parts !== undefined ? job.planned : null;
+    if (!job.half && ns > 0) {
+        const g0 = Array.from(R.gsp.subarray(0, ng));
+        o.gt = g0.map((t, g) => (planned ? planned[g] : R.grp[6 * g + 2]) > 0 ? [R.tmeta[t], R.tup[t], R.tr[t], R.tcr[t], Array.from(R.tcp.subarray(t * 64, t * 64 + 64))] : null);
+        o.spw = Array.from(R.spw.subarray(0, ns), idOf);
+        o.pos = Array.from(R.pos.subarray(0, 2 * ns));
+        o.bt = Array.from(R.bt.subarray(0, R.aout[0]));
+        o.cj = Array.from(R.cj.subarray(0, 4 * R.aout[1]));
+        o.aout = [R.aout[0], R.aout[1], R.aout[2]];
+    }
+    return o;
+}
+// Whether a staged q / e holds reserved slots (the slot relayout waits).
+function rzHoldsSlots() { return _rzJob !== null && _rzJob.nsl > 0; }
+// A decode replaces this peer's pending resize (utils_snapshot.js, before it
+// touches the units): the lane waited for, the slots reserved for births not
+// made yet given back (none stood), the job and the queue dropped (the
+// snapshot's come with rzRestore).
+function rzCancel() {
+    const job = _rzJob;
+    _rzJob = null; _rzQueue.length = 0;
+    if (job === null) return;
+    simParallelBackgroundWait(SIM_LANE_RZ);
+    if (!(job.nsl > 0)) return;
+    const S = _simUnitState, c = S.columns, R = _rz, sl = S.sl, nb = R.aout[0];
+    const done = job.parts !== undefined && job.cs > 0 ? job.parts[job.cs - 1][3] : job.rdone | 0;
+    R.ok.fill(0, done, Math.max(done, nb));
+    _rzP.fill(0); _rzP[0] = job.nsl; _rzP[1] = nb; _rzP[2] = TILE * 8; _rzP[3] = sl.kw; _rzP[4] = sl.kh; _rzP[5] = job.rdone | 0;
+    simRustDirect('k_rz_cslabs', [sl.bits, sl.sfree, sl.home, sl.cur, sl.heads, sl.entries, sl.used, sl.ever, sl.hdr, R.rsl, R.bs, R.ok, c.x, c.y, R.rmask, R.rhome, R.rslot], _rzP);
+}
+// The same restored (utils_snapshot.js, after the units): this peer's slots
+// by the ids, its own reserved slots, the births' rows and the lane's zeroing
+// by the same kernels; the commit at the same tick as the encoding peer's.
+function rzRestore(o) {
+    _rzJob = null; _rzQueue.length = 0;
+    if (!o) return;
+    for (const r of o.q || []) _rzQueue.push({ playerId: r[0] | 0, half: !!r[1], byLevel: !!r[2], ids: Int32Array.from(r[3] || []) });
+    if (!Number.isFinite(o.ns)) return;
+    const S = _simUnitState, c = S.columns, map = _unitByIdMap();
+    map._ok();
+    const O = occupancyEnsure(), NT = Math.max(1, unitStatTables().NT);
+    const bw = Math.ceil((O.w + 32) / 64) + 1, bh = Math.ceil((O.h + 32) / 64) + 1, ng = o.ng | 0, ns = o.ns | 0;
+    const R = _rzReady(Math.max(o.list.length, ns, 1), NT * 64, bw * bh, O.bits.length, GRID_W * GRID_H);
+    const slotOf = id => { if (!(id >= 0)) return -1; const u = map.get(id); return u && u._us === c ? u._si : -1; };
+    R.grp.set(o.grp); R.gsp.set(o.gsp);
+    R.cnt[0] = ng; R.cnt[1] = ns; R.cnt[2] = o.list.length;
+    for (let i = 0; i < o.list.length; i++) R.list[i] = slotOf(o.list[i]);
+    const job = { ids: new Int32Array(0), playerId: o.p | 0, half: !!o.half, byLevel: !!o.bl, due: _rzTickEnds + (o.left | 0), ng, ns, nsl: 0, nslots: 0, bw, bh };
+    if (o.parts) { job.planned = o.planned; job.parts = o.parts; job.cs = o.cs | 0; }
+    const done = o.done | 0;
+    if (!job.half && ns > 0 && o.gt) {
+        for (let g = 0; g < ng; g++) {
+            const d = o.gt[g], t0 = R.gsp[g], m = o.planned ? o.planned[g] : R.grp[6 * g + 2];
+            if (!d) continue;
+            for (let t = t0; t < t0 + m; t++) { R.tg[t] = g; R.tmeta[t] = d[0]; R.tup[t] = d[1]; R.tr[t] = d[2]; R.tcr[t] = d[3]; }
+            R.tcp.set(d[4], t0 * 64);
+        }
+        for (let i = 0; i < ns; i++) R.spw[i] = slotOf(o.spw[i]);
+        R.pos.set(o.pos);
+        R.aout[0] = o.aout[0]; R.aout[1] = o.aout[1]; R.aout[2] = o.aout[2];
+        R.bt.set(o.bt); R.cj.set(o.cj);
+        // (This peer's slots for the births not made yet, in the same order; their rows; the lane's zeroing.
+        // Those made before the snapshot: units already, their slots by their ids, after the zeroing.)
+        const nb = o.aout[0], sl = S.sl;
+        R.bs.fill(-1, 0, done);
+        if (!simHeapHas(sl.hdr)) { const h = simHeapArray(Int32Array, 8); h.set(sl.hdr); sl.hdr = h; }
+        sl.hdr[7] = S.owners.length;
+        _rzP.fill(0); _rzP[0] = nb - done; _rzP[1] = Math.min(S.cap, sl.sfree.length * SIM_SLAB);
+        simRustDirect('k_rz_reserve', [sl.bits, sl.sfree, sl.home, sl.cur, sl.heads, sl.entries, sl.used, sl.ever, sl.hdr, R.rsl, R.rout, R.rmask, R.rhome, R.rslot], _rzP);
+        S.owners.length = sl.hdr[7];
+        job.nsl = R.rout[0]; job.nslots = R.rout[1]; job.rdone = done;
+        if (job.nslots < nb - done) throw new Error('q / e restore: ' + job.nslots + ' slots for ' + (nb - done) + ' units');
+        _rzCopyList(S);
+        _rzP.fill(0); _rzP[0] = nb; _rzP[1] = ns; _rzP[3] = job.playerId; _rzP[4] = done;
+        simRustDirect('k_rz_rows', [R.bt, R.pos, R.rslot, R.bs, R.rows, R.tup, R.tr, R.tcr], _rzP);
+        if (done > 0) { R.ok.set(o.dok); R.bs.set(Int32Array.from(o.did, slotOf)); }
+    }
+    _rzJob = job;
+}
+// New units the slots hold (the free ones and the slabs not opened yet):
+// the columns are the match's, sized at its start, never grown by q / e.
+function _rzSlotRoom(S) { const sl = S.sl; return Math.max(0, sl.nfree + Math.max(0, Math.min(S.cap, sl.sfree.length * SIM_SLAB) - sl.slabs * SIM_SLAB) - 64 * SIM_SLAB); }
+// (The share kernel's arrays: k_rz_shares' order; the helpers' by name.)
+function _rzSharesArgs(R, c, U) { return [R.grp, R.cnt, R.gsh, R.list, R.newl, c.stackCount, c.effectiveStacks, c.unitLevel, c.baseLevel, c.effectiveLevel, c._lastAppliedEffectiveLevel, _effRowCols.rMaxE,
+    c.maxE, c.jMaxE, U.bRad, c.esRad, c.statRow, c.bsRow, c.energy, c.dead]; }
+function _rzSharesBind(c, U) { simParallelBind('rz.bmx', _effRowCols.rMaxE); simParallelBind('rz.brad', U.bRad); }
+// The ids in ascending order (R.oa: their order) by the radix kernels, 8 bits a pass.
+function _rzSortIds(R, n) {
+    const P = _simParams, parts = Math.ceil(n / RZ_PER);
+    for (let pass = 0; pass < 4; pass++) {
+        P.fill(0, 0, 16); P[0] = n; P[1] = RZ_PER; P[2] = pass * 8; P[3] = pass === 0 ? 1 : 0; P[4] = pass & 1; P[6] = 8; P[7] = 1;
+        simParallelRun(SIM_KERNEL_RZ_RADIX_HIST, parts);
+        simParallelRun(SIM_KERNEL_RZ_RADIX_SCATTER, parts);
+    }
+}
+// The upkeep bins of a list of slots (birth.rs k_upk_bins_par).
+function _rzUpkeep(list, n, c, from = 0) {
+    const U = _upkU;
+    if (!U || U.cols !== c || !(n > 0)) return;
+    const P = _simParams;
+    simParallelBind('rz.upk', U.cnt);
+    P.fill(0, 0, 8); P[0] = n; P[1] = U.np; P[2] = U.L1; P[3] = U.cnt.length; P[4] = 8192; P[5] = from;
+    simParallelRun(list === _rz.newl ? SIM_KERNEL_RZ_UPK_NEW : list === _rz.bs ? SIM_KERNEL_RZ_UPK_BS : SIM_KERNEL_RZ_UPK_LIST, Math.ceil(n / 8192));
+}
+// The slot-zero table without the columns a stale reference to a reserved
+// slot's last unit reads (its id, owner, position, flags: the core the
+// commit writes, _SPB_CORE / _SPB_FINAL, and live / tmOn): the lane zeroes
+// the rest while the tick runs, the commit writes these.
+const _rzZt = { tab: null, n: 0, src: null };
+function _rzZeroTable(Z) {
+    if (_rzZt.src === Z.tab && _rzZt.tab && simHeapHas(_rzZt.tab)) return _rzZt;
+    const ix = _spbColIx(), skip = new Set();
+    for (const [k] of [..._SPB_CORE, ..._SPB_FINAL, ['live'], ['tmOn']]) { const e = ix.get(k); if (e !== undefined) skip.add(e[0]); }
+    const keep = [];
+    for (let i = 0; i < Z.n; i++) if (!skip.has(i)) keep.push(i);
+    if (_rzZt.tab && simHeapHas(_rzZt.tab)) { simHeapFree(_rzZt.tab); simHeapFree(_rzZt.defs); }
+    const tab = simHeapArray(Int32Array, keep.length * 3), defs = simHeapArray(Float64Array, keep.length * 2);
+    keep.forEach((c, i) => { tab[3 * i] = Z.tab[3 * c]; tab[3 * i + 1] = Z.tab[3 * c + 1]; tab[3 * i + 2] = Z.tab[3 * c + 2]; defs[2 * i] = Z.defs[2 * c]; defs[2 * i + 1] = Z.defs[2 * c + 1]; });
+    Object.assign(_rzZt, { tab, defs, n: keep.length, src: Z.tab });
+    simParallelBind('rz.ztab', tab); simParallelBind('rz.zdefs', defs);
+    return _rzZt;
+}
+// The columns a new unit takes from its template (the same owner and type:
+// what its type's stats and effective tables give it; its levels, rows,
+// maxEnergy and energy are the shares kernel's, the rest its slot's
+// defaults and its row's core), captured at the action's tick: Z table
+// entries and their byte offsets in a template's 64-byte capture.
+const RZ_COPY_COLUMNS = ['esOk', 'esType', 'esVer', 'jFly', 'lzFlags', 'mvLane', 'mvReachD', 'mvReachA', 'mvShoot', 'mvRangeK', 'atkSty', 'atkWatch'];
+const _rzCp = { Z: null, a: null, n: 0 };
+function _rzCopyList(S) {
+    const Z = _simSlotZeroTable(S);
+    if (!Z) throw new Error('q / e: unit columns not in the heap');
+    if (_rzCp.Z === Z.tab && _rzCp.a && simHeapHas(_rzCp.a)) return;
+    const ix = _spbColIx(), L = [];
+    let off = 0;
+    for (const k of RZ_COPY_COLUMNS) {
+        const e = ix.get(k);
+        if (e === undefined) continue;
+        const bytes = Z.tab[3 * e[0] + 1] * Z.tab[3 * e[0] + 2];
+        if (off + bytes > 64) throw new Error('q / e: the type columns pass 64 bytes');
+        L.push(e[0], off); off += bytes;
+    }
+    if (!_rzCp.a || !simHeapHas(_rzCp.a)) { _rzCp.a = simHeapArray(Int32Array, 64); simParallelBind('rz.cp', _rzCp.a); }
+    _rzCp.a.set(L); _rzCp.n = L.length / 2; _rzCp.Z = Z.tab;
 }
 function processAction(a, playerId) {
     {
@@ -5461,6 +5886,8 @@ function processAction(a, playerId) {
                 for (const id of a.unitIds) kill(byId.get(id));
             }
         } else if (a.action === 'resizeUnitGroup') {
+            // (q / e (x2 / /2) is off for now: UNIT_RESIZE_ENABLED. The action does nothing, on every peer.)
+            if (UNIT_RESIZE_ENABLED) {
             let subgroupFilter = {
                 unitType: a.unitType || null,
                 unitLevel: Number.isFinite(a.unitLevel) ? a.unitLevel : null
@@ -5468,6 +5895,7 @@ function processAction(a, playerId) {
             // (The kernel: its subgroups (type, and base level unless merged),
             // wasm/src/k.rs k_unit_resize; an old command's one subgroup the same.)
             if (!_unitResizeKernel(a, playerId, a.bySub ? !!a.byLevel : Number.isFinite(a.unitLevel))) resizeUnitSubgroup(playerId, a.unitIds || [], a.mode, subgroupFilter);
+            }
         } else if (a.action === 'towerTarget') {
             // Resolve and encode the requested target once for all towers.
             const target = a.target;

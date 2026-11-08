@@ -217,7 +217,8 @@ function _ipsRowsOf(g) {
 // Which buttons a group's kind has.
 function _ipsButtonsOf(g) {
     if (g.kind === 'mine') return [];
-    if (g.kind === 'unit') return ['kill', 'hold', 'x2', 'd2'];
+    // (x2 / d2: q / e is off for now, main.js UNIT_RESIZE_ENABLED.)
+    if (g.kind === 'unit') return typeof UNIT_RESIZE_ENABLED !== 'undefined' && !UNIT_RESIZE_ENABLED ? ['kill', 'hold'] : ['kill', 'hold', 'x2', 'd2'];
     const b = ['salvage', 'build', 'buildOff'];
     if (g.kind !== 'tower' && g.kind !== 'floor') b.push('queue');
     b.push('stack');
@@ -562,7 +563,7 @@ function _ipsUnitButtons(S, g, R, o, n) {
     if (_infoToggleShown.size > 0) { const [a, any] = _infoToggleGroupState('info-hold-group-btn', ref, count > 0 && h === count, h > 0); h = a ? count : any ? h : 0; }
     _ipsShow(B.hold, true); _ipsAttr(B.hold, 'data-ids', ref); _ipsAttr(B.hold, 'data-hold', h === 0 ? '1' : '0');
     _ipsCss(B.hold, _ipsPillCss('hold', h === 0)); _ipsText(B.hold, `🚶 ${h === 0 ? 'ON' : h === count ? 'OFF' : 'MIXED'}`);
-    for (const k of ['x2', 'd2']) { _ipsShow(B[k], true); _ipsAttr(B[k], 'data-ids', ref); }
+    for (const k of ['x2', 'd2']) if (B[k]) { _ipsShow(B[k], true); _ipsAttr(B[k], 'data-ids', ref); }
 }
 // ---- a far view's box selection, in the packer (renderer.js get3DBoxSelection) ----
 // (true: asked; main.js boxSelectionApply takes the result, a few ms later.

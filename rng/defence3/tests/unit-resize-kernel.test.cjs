@@ -6,6 +6,8 @@
 // level is its stacks' and its maxEnergy its type's at that level.
 // Usage: node tests/unit-resize-kernel.test.cjs
 const assert = require('node:assert/strict'), H = require('./net-harness.cjs');
+// (q / e is off for now (main.js UNIT_RESIZE_ENABLED): nothing to test until it comes back.)
+if (!/const UNIT_RESIZE_ENABLED = true;/.test(require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/main.js'), 'utf8'))) { console.log('SKIP: q / e is off (main.js UNIT_RESIZE_ENABLED)'); process.exit(0); }
 globalThis.self = { crossOriginIsolated: true };
 const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '120', 'cfg-map-type': 'arena', 'cfg-max-pop': '20000' };
 const world = new H.World({ controls }), i = world.spawn('rs', { controls, simWorker: false });
@@ -25,13 +27,31 @@ const r = JSON.parse(i.eval(`(() => {
         m.set(key, e); } return Object.fromEntries(m); };
     const before = sub(), room = Math.max(0, getPlayerPopCap(0) - players[0].popCount);
     const ids = () => units.filter(u => u && !u.dead && u.owner === 0 && (u.unitType === 'norm' || u.unitType === 'tank')).map(u => u.id);
+    const before0 = new Set(ids());
+    // (Staged: applied at the end of the tick after the action's, main.js rzCommitDue.)
     processActions([{ action: 'resizeUnitGroup', unitIds: ids(), mode: 'x2', bySub: true, byLevel: false }], 0);
+    const pending = sub();
+    // (Staged: its steps at the ends of the ticks after the action's, main.js rzCommitDue; until it is done.)
+    for (let k = 0; k < 12 && _rzJob !== null; k++) gameTick();
     const afterX2 = sub();
+    const auditX2 = simUnitSlabAudit(), occX2 = occupancyAudit();
     gameTick();
+    // (A new unit's type and stat columns: those of a kept unit of its type and stacks, after a tick.)
+    const C = _simUnitState.columns, cols = ['upT', 'r', 'collisionR', 'bsRow', 'maxE', 'esType', 'esOk', 'jFly', 'mvLane', 'mvReachD', 'mvReachA', 'mvShoot', 'mvRangeK', 'lzFlags', 'unitLevel', 'live', 'tmOn'];
+    const kept = new Map(), colBad = [];
+    for (const u of units) if (u && !u.dead && before0.has(u.id)) kept.set(u.unitType + '/' + u.stackCount, u._si);
+    for (const u of units) {
+        if (!u || u.dead || u.owner !== 0 || before0.has(u.id) || (u.unitType !== 'norm' && u.unitType !== 'tank')) continue;
+        const k = kept.get(u.unitType + '/' + u.stackCount);
+        if (k === undefined) continue;
+        for (const c of cols) if (C[c] && !Object.is(C[c][u._si], C[c][k])) colBad.push(u.id + ':' + c + '=' + C[c][u._si] + '/' + C[c][k]);
+    }
     processActions([{ action: 'resizeUnitGroup', unitIds: ids(), mode: 'd2', bySub: true, byLevel: false }], 0);
+    for (let k = 0; k < 12 && _rzJob !== null; k++) gameTick();
     gameTick();
     const afterD2 = sub();
-    return JSON.stringify({ before, afterX2, afterD2, room }); })()`));
+    const auditD2 = simUnitSlabAudit(), occD2 = occupancyAudit();
+    return JSON.stringify({ before, pending, afterX2, afterD2, room, colBad: colBad.slice(0, 20), colBadN: colBad.length, auditX2, auditD2, occX2, occD2 }); })()`));
 for (const t of ['norm', 'tank']) {
     const b = r.before[t], x = r.afterX2[t], d = r.afterD2[t];
     assert.ok(x.n >= b.n && x.n <= Math.min(b.st, 2 * b.n), t + ' x2 within its stacks and double ' + JSON.stringify(r));
@@ -44,5 +64,8 @@ for (const t of ['norm', 'tank']) {
 }
 const want = Math.min(r.room, ['norm', 'tank'].reduce((s, k) => s + Math.min(r.before[k].st, 2 * r.before[k].n) - r.before[k].n, 0));
 assert.equal(['norm', 'tank'].reduce((s, k) => s + r.afterX2[k].n - r.before[k].n, 0), want, 'x2 spawns what the population room allows');
+assert.ok(r.occX2.ok && r.occD2.ok, 'the occupancy after x2 and d2 ' + JSON.stringify([r.occX2, r.occD2]));
+assert.ok(r.auditX2.ok && r.auditD2.ok, 'the slot books after x2 and d2 ' + JSON.stringify([r.auditX2, r.auditD2]));
+assert.equal(r.colBadN, 0, 'new units carry their type columns ' + JSON.stringify(r.colBad));
 assert.deepEqual(i.errors.map(String), []);
 console.log('PASS: q / e by k_unit_resize', JSON.stringify(r));

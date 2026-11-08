@@ -282,3 +282,127 @@ fn hterm(key: i32, e: i32) -> i32 {
     let t = (key ^ e).wrapping_mul(16777619u32.wrapping_mul(2654435761u32) as i32);
     (t ^ ((t as u32) >> 15) as i32).wrapping_mul(0x2c1b3c6d)
 }
+
+/// k_unit_cmd in parallel (SIM_KERNEL_UNIT_CMD; main.js _unitCmdKernel): its
+/// arrays and P[0..20]. P[21] 0: chunk `chunk` of P[22] ids, each as
+/// k_unit_cmd does it (a slot's dedupe by an atomic swap of its stamp: the
+/// ids are an action's, cleaned, so a slot is in one chunk), but what goes
+/// onto a shared stack in order (the movement path back to its free stack,
+/// the stored path's release: shared, refcounted blocks; the stopped
+/// workers; the listed paths) left to the merge: the chunk's slots that let
+/// go of their paths and its workers into the scratch cs [45] (2 lists of
+/// P[22] a chunk), their counts and the commands' into cc [46] (4 a chunk).
+/// P[21] 1 (one job, P[23] chunks): in chunk order, a path slot's movement
+/// path pushed and its stored path released (k_unit_cmd's let_go_path /
+/// path_release), listed in pout when P[19]; the workers into left; cnt as
+/// k_unit_cmd's.
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_cmd_par(a: u32, chunk: i32) {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    let k = K::new(waddr(a) as *const i32);
+    let (ids, tab, idc, live, stamps, left, cnt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (own, dead, iswk, upt, cmd, on, holdf) = (k.p::<i8>(7), k.p::<u8>(8), k.p::<u8>(9), k.p::<i16>(10), k.p::<u8>(11), k.p::<u8>(12), k.p::<u8>(13));
+    let (hold_ids, hobj, tus, tuid, tbt, acqb, fatf) = (k.p::<u8>(14), k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<u8>(19), k.p::<u8>(20));
+    let (lsx, lsy, amgx, amgy, tgx, tgy, rkf) = (k.p::<f32>(21), k.p::<f32>(22), k.p::<i16>(23), k.p::<i16>(24), k.p::<f32>(25), k.p::<f32>(26), k.p::<u8>(27));
+    let (nvpk, pidx, mpath, pfs, mcd, cmm, mvwk) = (k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31), k.p::<i32>(32), k.p::<u8>(33), k.p::<u8>(34));
+    let (pst, pgx, pgy, mpp, mpf, en, pout) = (k.p::<u8>(35), k.p::<i16>(36), k.p::<i16>(37), k.p::<u8>(38), k.p::<u8>(39), k.p::<f32>(40), k.p::<i32>(41));
+    let (pth, parena, pfree) = (k.p::<i32>(42), k.p::<i32>(43), k.p::<i32>(44));
+    let (cs, cc) = (k.p::<i32>(45), k.p::<i32>(46));
+    let (n, mask, stamp, op, player) = (k.i(0).max(0), k.i(1) as u32, k.i(2), k.i(3), k.i(4));
+    let (cmd_idle, cmd_att) = (k.i(5) as u8, k.i(6) as u8);
+    let (k_hold, k_ppt, k_pfa) = (k.i(7), k.i(8), k.i(9));
+    let (h_undef, h_false, h_true) = (k.i(10) as u32, k.i(11) as u32, k.i(12) as u32);
+    let _ = h_undef;
+    let (t_slot, t_id, t_x, t_y, t_tile, king, list_paths, hw) = (k.i(13), k.i(14), k.f(15) as f32, k.f(16) as f32, k.i(17), k.i(18), k.i(19) != 0, k.i(20));
+    let per = k.i(22).max(1) as usize;
+    if k.i(21) == 1 {
+        let nch = k.i(23).max(0) as usize;
+        let (mut nl, mut np, mut nc) = (0usize, 0usize, 0i32);
+        for c in 0..nch {
+            let b = cs.add(c * 2 * per);
+            let (npq, nlw) = (g(cc, 4 * c) as usize, g(cc, 4 * c + 1) as usize);
+            for i in 0..npq {
+                let q = *b.add(i) as usize;
+                let p = g(mpath, q);
+                if p >= 0 && !pfs.is_null() { let top = g(pfs, 0) + 1; s(pfs, 0, top); s(pfs, top as usize, p); s(mpath, q, -1); }
+                if list_paths && !pout.is_null() { s(pout, np, q as i32); np += 1; }
+                crate::path_release(pth, q, parena, pfree);
+            }
+            for i in 0..nlw { s(left, nl, *b.add(per + i)); nl += 1; }
+            nc += g(cc, 4 * c + 2);
+        }
+        s(cnt, 0, nl as i32); s(cnt, 1, np as i32); s(cnt, 2, nc);
+        return;
+    }
+    let hget = |q: usize| -> u32 { match hw { 2 => *(hold_ids as *const u16).add(q) as u32, 4 => *(hold_ids as *const u32).add(q), _ => *hold_ids.add(q) as u32 } };
+    let hset = |q: usize, v: u32| { match hw { 2 => *(hold_ids as *mut u16).add(q) = v as u16, 4 => *(hold_ids as *mut u32).add(q) = v, _ => *hold_ids.add(q) = v as u8 } };
+    let henc = |id: u32| -> i32 { if id == h_true { 0x3bd } else if id == h_false { 0x2bd } else { H_UNDEF } };
+    let c = chunk.max(0) as usize;
+    let (j0, j1) = super::k::job_range(chunk, per as i32, n);
+    let b = cs.add(c * 2 * per);
+    let (mut npq, mut nlw, mut nc) = (0usize, 0usize, 0i32);
+    // (A slot's path let go here but for the shared stacks: the merge's.)
+    let go = |q: usize| { s(nvpk, q, -1); s(on, q, 0); s(mcd, q * 8, -1); };
+    for j in j0..j1 {
+        let id = g(ids, j);
+        let mut h = (id as u32).wrapping_mul(2654435761u32) & mask;
+        let mut q = usize::MAX;
+        loop {
+            let slot = g(tab, h as usize);
+            if slot < 0 { break; }
+            let sl = slot as usize;
+            if g(idc, sl) == id && g(live, sl) != 0 { q = sl; break; }
+            h = (h + 1) & mask;
+        }
+        if q == usize::MAX { continue; }
+        if (*(stamps.add(q) as *const AtomicI32)).swap(stamp, Ordering::Relaxed) == stamp { continue; }
+        if g(own, q) as i32 != player { continue; }
+        match op {
+            1 => {
+                let o = hget(q);
+                if o != h_true { s(hobj, q, g(hobj, q).wrapping_add(hterm(k_hold, 0x3bd)).wrapping_sub(hterm(k_hold, henc(o)))); hset(q, h_true); }
+                s(holdf, q, 1); s(on, q, 0); nc += 1;
+            }
+            2 => {
+                if g(holdf, q) != 0 {
+                    let o = hget(q);
+                    if o != h_false { s(hobj, q, g(hobj, q).wrapping_add(hterm(k_hold, 0x2bd)).wrapping_sub(hterm(k_hold, henc(o)))); hset(q, h_false); }
+                    s(holdf, q, 0); s(on, q, 0); nc += 1;
+                    continue;
+                }
+                if g(iswk, q) != 0 { *b.add(per + nlw) = q as i32; nlw += 1; continue; }
+                if g(cmd, q) != cmd_idle { s(on, q, 0); s(cmd, q, cmd_idle); }
+                go(q); *b.add(npq) = q as i32; npq += 1;
+                s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0);
+                pending_clear(q, pst, pgx, pgy, hobj, mpp, mpf, k_ppt, k_pfa, false);
+                s(fatf, q, 0); s(lsx, q, f32::NAN); s(lsy, q, f32::NAN); s(amgx, q, -1); s(amgy, q, -1);
+                nc += 1;
+            }
+            3 | 4 => {
+                if g(dead, q) != 0 || g(iswk, q) != 0 { continue; }
+                if g(cmd, q) != cmd_att { s(on, q, 0); s(cmd, q, cmd_att); }
+                s(amgx, q, -1); s(amgy, q, -1);
+                go(q); *b.add(npq) = q as i32; npq += 1;
+                if g(pidx, q) != 0 { s(on, q, 0); s(pidx, q, 0); }
+                s(rkf, q, 0);
+                pending_clear(q, pst, pgx, pgy, hobj, mpp, mpf, k_ppt, k_pfa, true);
+                s(cmm, q, 0); s(on, q, 0); s(mvwk, q, 0);
+                if op == 3 {
+                    s(tus, q, t_slot); s(tuid, q, t_id); s(tbt, q, -1); s(acqb, q, 0); s(fatf, q, 1);
+                    s(lsx, q, t_x); s(lsy, q, t_y);
+                } else {
+                    s(tbt, q, t_tile); s(acqb, q, 1); s(tus, q, -1); s(tuid, q, 0); s(fatf, q, 0);
+                    s(lsx, q, f32::NAN); s(lsy, q, f32::NAN);
+                }
+                s(tgx, q, t_x); s(tgy, q, t_y);
+                nc += 1;
+            }
+            5 => {
+                if g(dead, q) != 0 || g(upt, q) as i32 == king { continue; }
+                s(en, q, 0.0); s(dead, q, 1); nc += 1;
+            }
+            _ => {}
+        }
+    }
+    s(cc, 4 * c, npq as i32); s(cc, 4 * c + 1, nlw as i32); s(cc, 4 * c + 2, nc);
+}

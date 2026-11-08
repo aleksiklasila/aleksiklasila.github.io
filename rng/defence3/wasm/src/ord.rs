@@ -1667,3 +1667,141 @@ pub unsafe extern "C" fn k_rq_op(a: u32, _chunk: i32) {
     s(hdr, 0, n as i32);
     s(hdr, 1, g(hdr, 1).wrapping_add(1));
 }
+
+/// k_unit_gone in parallel (SIM_KERNEL_UNIT_GONE; main.js _unitGoneRun):
+/// P[35] 0, chunks of P[36] removed units: each unit as k_unit_gone does it,
+/// the shared counts (upkeep bins, the spatial index's chunk / type / block
+/// counts, work versions, reservation counts and sums) by atomic adds, its
+/// footprint's occupancy bits cleared by atomic ANDs (footprints of one word
+/// are other jobs' too); what has an order (a queued order's units, path
+/// windows to the pool, the work site grid list's pushes, the per-radius and
+/// per-owner tallies, the work checksum) into the chunk's own buffers (pc
+/// [48]: 128 words a chunk; pol [49], ppf [50], ppw [51]: P[36] a chunk).
+/// P[35] 1 (one job, P[37] chunks): the chunks' buffers merged in chunk
+/// order into cnt / olist, the path pool's free stack and the grid list, as
+/// k_unit_gone writes them. Arrays and the other P as k_unit_gone's.
+#[no_mangle]
+pub unsafe extern "C" fn k_unit_gone_par(a: u32, chunk: i32) {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    let k = K::new(waddr(a) as *const i32);
+    let (pc, pol, ppf, ppw) = (k.p::<i32>(48), k.p::<i32>(49), k.p::<i32>(50), k.p::<i32>(51));
+    let (cnt, olist, mfree, wswl) = (k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(46), k.p::<i32>(41));
+    let per = k.i(36).max(1) as usize;
+    let nwsl = k.i(33);
+    if k.i(35) == 1 {
+        let nch = k.i(37).max(0) as usize;
+        for r in 0..33 { s(cnt, 32 + r, 0); }
+        for p in 0..64 { s(cnt, 72 + p, 0); }
+        let (mut no, mut vsum, mut full) = (0usize, 0i32, 0i32);
+        for c in 0..nch {
+            let b = pc.add(c * 128);
+            for i in 0..g(b, 0) as usize { s(olist, no, g(pol, c * per + i)); no += 1; }
+            if !mfree.is_null() { for i in 0..g(b, 1) as usize { let m = g(mfree, 0); s(mfree, (m + 1) as usize, g(ppf, c * per + i)); s(mfree, 0, m + 1); } }
+            if !wswl.is_null() { for i in 0..g(b, 2) as usize { let m = g(wswl, 0); if m + 1 < nwsl { s(wswl, (m + 1) as usize, g(ppw, c * per + i)); s(wswl, 0, m + 1); } else { full = 1; } } }
+            vsum = vsum.wrapping_add(g(b, 3));
+            for r in 0..33 { s(cnt, 32 + r, g(cnt, 32 + r) + g(b, 4 + r)); }
+            for p in 0..64 { s(cnt, 72 + p, g(cnt, 72 + p) + g(b, 40 + p)); }
+        }
+        s(cnt, 0, no as i32); s(cnt, 1, vsum); s(cnt, 2, full);
+        return;
+    }
+    let add = |p: *mut i32, i: usize, v: i32| { (*(p.add(i) as *const AtomicI32)).fetch_add(v, Ordering::Relaxed); };
+    let (list, own, uid, xs, ys) = (k.p::<i32>(0), k.p::<i8>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
+    let (spep, sepk, sepl, spown, sptype, sptile, sparea) = (k.p::<i32>(7), k.p::<u32>(8), k.p::<u8>(9), k.p::<i8>(10), k.p::<i16>(11), k.p::<i32>(12), k.p::<i32>(13));
+    let (on, mout, live, srow) = (k.p::<u8>(14), k.p::<u8>(15), k.p::<u8>(16), k.p::<i16>(17));
+    let (vsgen, vsr, vsp1, vsp2, vsa) = (k.p::<i32>(18), k.p::<i8>(19), k.p::<i8>(20), k.p::<i8>(21), k.p::<i8>(22));
+    let orec = k.p::<i32>(25);
+    let (cplx, tcnt, bcnt, upb, upk, ordsq) = (k.p::<i32>(26), k.p::<i32>(27), k.p::<i32>(28), k.p::<i32>(29), k.p::<i32>(30), k.p::<i32>(31));
+    let (wks, wkt, wkr, wkix, wbtype, ttab) = (k.p::<u32>(32), k.p::<i32>(33), k.p::<i32>(34), k.p::<i32>(35), k.p::<u8>(36), k.p::<i32>(37));
+    let (resv, rcount, rsum, wver, umids, umslots) = (k.p::<i32>(38), k.p::<i32>(39), k.p::<i32>(40), k.p::<i32>(42), k.p::<i32>(43), k.p::<i32>(44));
+    let (mpath, dead) = (k.p::<i32>(45), k.p::<u8>(47));
+    let n = k.i(0).max(0);
+    let (epoch, absent, np, cstride, cw, tbw, tb, tbstride, ntypes, bcols, bsize, nb) = (k.i(1), k.f(2) as u32, k.i(3), k.i(4), k.i(5).max(1),
+        k.i(6), k.i(7).max(1), k.i(8), k.i(9), k.i(10), k.i(11).max(1), k.i(12));
+    let (vis, vgen) = (k.i(13) != 0, k.i(14));
+    let (ow, oh, ostride, ocell, oplanes) = (k.i(15), k.i(16), k.i(17), k.i(18), k.i(19));
+    let (gw, tile, nt, srt, rcols) = (k.i(20).max(1), k.f(21), k.i(22).max(1), k.i(23).max(1), k.i(24));
+    let (vtypes, vrw, vrh, vnp, wrt, umn, nres, nver, nupk) = (k.i(25), k.i(26), k.i(27), k.i(28), k.i(29).max(1), k.i(30).max(0) as usize,
+        k.i(31).max(0), k.i(32).max(0), k.i(34).max(0));
+    let itile = 1.0 / (tile * 8.0);
+    let tile_of = |q: usize| floor(g(ys, q) as f64 * itile) as i32 * gw + floor(g(xs, q) as f64 * itile) as i32;
+    let c = chunk.max(0) as usize;
+    let (j0, j1) = super::k::job_range(chunk, per as i32, n);
+    let b = pc.add(c * 128);
+    for i in 0..128 { s(b, i, 0); }
+    let (mut no, mut npf, mut npw, mut vsum) = (0usize, 0usize, 0usize, 0i32);
+    for i in j0..j1 {
+        let v = g(list, i);
+        let removed = v < 0;
+        let q = (if removed { !v } else { v }) as usize;
+        let bn = g(upb, q);
+        if bn >= 0 && !upk.is_null() && bn < nupk { add(upk, bn as usize, -1); }
+        s(upb, q, -1);
+        if g(ordsq, q) > 0 { s(pol, c * per + no, q as i32); no += 1; }
+        let h = g(mpath, q);
+        if h >= 0 && !mfree.is_null() { s(ppf, c * per + npf, h); npf += 1; s(mpath, q, -1); }
+        s(srow, q, -1); s(on, q, 0); s(mout, q, 0);
+        if removed { s(live, q, 0); continue; }
+        let owner = g(own, q) as i32;
+        let key = g(sepk, q);
+        if g(spep, q) == epoch && key != absent {
+            let o = g(spown, q) as i32;
+            if o >= 0 && o < np {
+                let key = key as i32;
+                add(cplx, (key * cstride + o) as usize, -1);
+                let (cx, cy) = (irem(key, cw), idiv(key, cw));
+                let ty = g(sptype, q) as i32;
+                if ty >= 0 { add(tcnt, ((idiv(cy, tb) * tbw + idiv(cx, tb)) * tbstride + o * ntypes + ty) as usize, -1); }
+                let bi = (idiv(cy, bsize) * bcols + idiv(cx, bsize)) * np + o;
+                if bi >= 0 && bi < nb { add(bcnt, bi as usize, -1); }
+            }
+            if vis { s(vsgen, q, vgen); s(vsr, q, -1); s(vsp1, q, -1); s(vsp2, q, -1); s(vsa, q, 0); }
+        }
+        if oplanes > 0 && !orec.is_null() {
+            let meta = g(orec, q * 4 + 2);
+            if (meta >> 16) & 255 != 0 {
+                let r = (meta & 255).min(32) as usize;
+                super::occ::occ_release_atomic(k.raw(23), k.raw(24), k.raw(25), ow, oh, ostride, ocell, oplanes, q as i32);
+                s(b, 4 + r, g(b, 4 + r) + 1);
+            }
+        }
+        s(sptile, q, -1); s(sparea, q, -2); s(spep, q, 0); s(sepk, q, absent); s(sepl, q, 0);
+        if owner >= 0 && owner < 64 { s(b, 40 + owner as usize, g(b, 40 + owner as usize) + 1); }
+        let wi = g(wkix, q);
+        let wb = if wi > 0 { g(wbtype, wi as usize) } else { 0 };
+        let w = g(wks, q);
+        let kind = (w >> 10) & 7;
+        if kind >= 2 && wb != 0 {
+            let typ = (g(ttab, wb as usize) >> 8) & 255;
+            let mut tl = -1i32;
+            if kind == 5 {
+                let want = g(wkt, q);
+                let (mut lo, mut hi) = (0usize, umn);
+                while lo < hi { let mid = (lo + hi) >> 1; if g(umids, mid) < want { lo = mid + 1; } else { hi = mid; } }
+                if lo < umn && g(umids, lo) == want {
+                    let ts = g(umslots, lo);
+                    if ts >= 0 && g(dead, ts as usize) == 0 { tl = tile_of(ts as usize); }
+                }
+            } else { tl = g(wkt, q); }
+            if tl >= 0 && owner >= 0 && owner < vnp && typ < vtypes {
+                let (gx, gy) = (irem(tl, gw), idiv(tl, gw));
+                let vi = (owner * vtypes + typ) * (1 + vrw * vrh) + 1 + idiv(gy, wrt).min(vrh - 1) * vrw + idiv(gx, wrt).min(vrw - 1);
+                if vi >= 0 && vi < nver { add(wver, vi as usize, 1); vsum = vsum.wrapping_add(work_mix(vi)); }
+            }
+        }
+        let r = g(wkr, q);
+        let id = g(uid, q);
+        if r >= 0 && r < nres && g(resv, r as usize) == id {
+            s(resv, r as usize, 0);
+            if !rcount.is_null() {
+                let t = idiv(r, nt);
+                let rg = (idiv(idiv(t, gw), srt) * rcols + idiv(irem(t, gw), srt)) as usize;
+                add(rcount, rg, -1);
+                add(rsum, rg, 0i32.wrapping_sub(res_term(r, id)));
+            }
+            s(ppw, c * per + npw, r); npw += 1;
+        }
+        s(live, q, 0);
+    }
+    s(b, 0, no as i32); s(b, 1, npf as i32); s(b, 2, npw as i32); s(b, 3, vsum);
+}

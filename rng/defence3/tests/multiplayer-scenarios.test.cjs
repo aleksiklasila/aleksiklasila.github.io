@@ -253,14 +253,18 @@ const ECONOMY = {
         });
         const ids = inst => JSON.parse(inst.eval(`JSON.stringify(units.filter(u => u.owner === localPlayerId && !u.isKing && u.unitType === 'norm').map(u => u.id))`));
         const count = inst => inst.eval(`units.filter(u => u.owner === localPlayerId && !u.isKing && u.unitType === 'norm').length`);
-        const before = count(host);
-        q(host, { action: 'resizeUnitGroup', unitIds: ids(host), mode: 'x2', unitType: 'norm' });
-        await world.run(1500);
-        const split = count(host);
-        assert.ok(split > before, `split ${before} -> ${split}`);
-        q(host, { action: 'resizeUnitGroup', unitIds: ids(host), mode: 'd2', unitType: 'norm' });
-        await world.run(1500);
-        assert.ok(count(host) < split, 'merged back');
+        // (q / e: only while it is on, main.js UNIT_RESIZE_ENABLED.)
+        const resizeOn = host.eval('typeof UNIT_RESIZE_ENABLED === "undefined" || UNIT_RESIZE_ENABLED');
+        if (resizeOn) {
+            const before = count(host);
+            q(host, { action: 'resizeUnitGroup', unitIds: ids(host), mode: 'x2', unitType: 'norm' });
+            await world.run(1500);
+            const split = count(host);
+            assert.ok(split > before, `split ${before} -> ${split}`);
+            q(host, { action: 'resizeUnitGroup', unitIds: ids(host), mode: 'd2', unitType: 'norm' });
+            await world.run(1500);
+            assert.ok(count(host) < split, 'merged back');
+        }
         // Hold: a held group ignores a move order until released.
         const held = ids(guests[0]).slice(0, 3);
         q(guests[0], { action: 'hold', unitIds: held });
@@ -281,7 +285,7 @@ const ECONOMY = {
         }
         await until(world, () => host.eval('units.length') < deathsBefore - 3 || host.eval('gameOver'), 90000, 'combat kills units');
         assertLockstepClean(world, all, 'split/merge/hold/combat');
-        rows.push(`split ${before}->${split} and merge, hold/stop, and a battle, all in sync`);
+        rows.push(`${resizeOn ? 'split and merge, ' : ''}hold/stop, and a battle, all in sync`);
     }
 
     console.log('PASS: multiplayer scenarios\n  ' + rows.join('\n  '));

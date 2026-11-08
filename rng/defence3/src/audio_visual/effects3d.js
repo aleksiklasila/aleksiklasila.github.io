@@ -377,8 +377,11 @@ function _pushCombatRecordFx() {
         // units as drawn as close up.)
         const ppt = _fxPixelsPerTileAt(x1, z1), farAway = ppt < _FX_FAR_PPT;
         // (A unit's attack between its units as drawn: a beam's ends stay on
-        // the caster and its target as they move; where they stood once gone.)
-        if (ids !== null) {
+        // the caster and its target as they move; where they stood once gone.
+        // Far away, where the record put them: the difference is under a pixel,
+        // and the lookup per record per frame was the page's largest cost in big
+        // fights zoomed out (pageUnitDrawnAt ~3.5 s of 31 s).)
+        if (ids !== null && !farAway) {
             const a = ids[r], b = ids[r + 1];
             if (a > 0 && _fxDrawnAt(a, P)) { x0 = P[0] / TILE; z0 = P[1] / TILE; }
             if (b > 0 && _fxDrawnAt(b, P)) { x1 = P[0] / TILE; z1 = P[1] / TILE; }

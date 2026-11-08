@@ -1632,6 +1632,8 @@ function _snapEncodeGlobals() {
         actionBacklog: typeof actionBacklogSnapshot === 'function' ? actionBacklogSnapshot() : [],
         // (Their arrivals and the units small orders took ahead of them.)
         actionEarly: typeof actionEarlySnapshot === 'function' ? actionEarlySnapshot() : null,
+        // A staged q / e not committed yet and those waiting (main.js rzSnapshot).
+        rz: typeof rzSnapshot === 'function' ? rzSnapshot() : null,
         workVer: typeof workerWorkVersionsSnapshot === 'function' ? workerWorkVersionsSnapshot() : null,
         healers: typeof healerCandidatesSnapshot === 'function' ? healerCandidatesSnapshot() : null,
         // The ground navigation's walls (as differences from the live walls).
@@ -2137,6 +2139,8 @@ function snapDecodeState(S, options = null) {
     // (A prebuilt unit index reads what this rewrites: waited for, dropped.)
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     if (!S || S.v !== SNAP_FORMAT) return null;
+    // (This peer's pending q / e let go first: the snapshot's own comes with it, main.js rzCancel / rzRestore.)
+    if (typeof rzCancel === 'function') rzCancel();
     if (S.rules !== undefined && S.rules !== SIM_RULES_REVISION) { console.error('snapshot of simulation rules ' + S.rules + ', this peer runs ' + SIM_RULES_REVISION); return null; }
     let collect = !!(options && options.collectChanges);
     let partial = !!S.partial;
@@ -2539,6 +2543,8 @@ function snapDecodeState(S, options = null) {
             && !(typeof _simWasmWorkerFailed === 'function' && _simWasmWorkerFailed())
             && !(typeof _simClientPageSimulates === 'function' && _simClientPageSimulates());
         if (!pageOnly && typeof occupancyRebuild === 'function') occupancyRebuild();
+        // A staged q / e pending in the snapshot: after the slots' layout and the occupancy (main.js rzRestore reserves this peer's slots).
+        if (!pageOnly && typeof rzRestore === 'function') rzRestore(S.g ? S.g.rz || null : null);
         if (!pageOnly && typeof navRestoreState === 'function') navRestoreState(S.g ? S.g.nav : null);
         if (!pageOnly && typeof navFieldsRestore === 'function') navFieldsRestore();
         // Rebuilt from the restored world on its first query.

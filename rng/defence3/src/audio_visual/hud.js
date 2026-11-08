@@ -4437,8 +4437,6 @@ function renderUnitInfo(u) {
     if (statuses.length > 0) html += infoRow('Status', statuses.join(' '));
     if (u.owner === localPlayerId) {
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(u.id)}${unitHoldBtn([u])}</div><div style="display:flex;align-items:center;gap:4px;">`;
-        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${u.id}" data-unit-type="${u.unitType}" data-unit-level="${ignoreLevelSubgroups ? '' : getUnitBaseLevel(u)}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
         html += `</div></div>`;
     }
     html += infoDesc(getUnitDescription(u.unitType));
@@ -4622,8 +4620,6 @@ function renderUnitGroupInfo(group, big = null) {
         let ids = big ? big.idsToken : group.map(u => u.id).join(',');
         let subgroupLevel = ignoreLevelSubgroups ? '' : getUnitBaseLevel(u0);
         html += `<div class="info-row info-btn-row" style="justify-content:space-between;align-items:center;gap:6px;"><div style="display:flex;align-items:center;gap:4px;">${infoButtonHelpBtn()}${unitKillBtn(ids)}${unitHoldBtn(group, big)}</div><div style="display:flex;align-items:center;gap:4px;">`;
-        html += `<span class="info-scale-group-btn" data-mode="x2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#8cf">x2</span>`;
-        html += `<span class="info-scale-group-btn" data-mode="d2" data-ids="${ids}" data-unit-type="${u0.unitType}" data-unit-level="${subgroupLevel}" style="cursor:pointer;background:#222;padding:2px 8px;border:1px solid #555;border-radius:3px;font-size:9px;color:#fc8">/2</span>`;
         html += `</div></div>`;
     }
     html += infoDesc(getUnitDescription(u0.unitType));

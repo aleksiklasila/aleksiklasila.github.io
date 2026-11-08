@@ -31,17 +31,17 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // the next one, so a pipeline runs to its end on the helpers. A lane is
 // rewritten only once closed and empty (no claim in flight), so a late
 // claim can never run a chunk of the next job.
-const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 14;
+const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 16;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
-// (Control words: SIM_PAR_BG_BASE + lanes * 8 (8..119), then ERR 120, CAP 121, RUN 122.., FIRST 136, BG_ERR 137..: rounded up.)
-const SIM_PAR_CTL_WORDS = 160;
+// (Control words: SIM_PAR_BG_BASE + lanes * 8 (8..135), then ERR 136, CAP 137, RUN 138..153, FIRST 154, BG_ERR 155..170: rounded up.)
+const SIM_PAR_CTL_WORDS = 192;
 // Bulk lanes (every live field remade over a new navigation build,
 // SIM_LANE_NAVX): at most SIM_PAR_BG_CAP helpers inside their chunks at once
 // (helpers - 3, at least 1; per lane at SIM_PAR_BG_RUN + lane), so the
 // tick's foreground kernels always find helpers (all of them deep in a
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
-const SIM_PAR_BG_CAP = 121, SIM_PAR_BG_RUN = 122;
+const SIM_PAR_BG_CAP = 137, SIM_PAR_BG_RUN = 138;
 // A bulk lane behind its deadline (a navigation rebuild's window ending with
 // its fields not made: flownav.js navTick): its chunks taken right after the
 // tick's own lanes (the first SIM_PAR_BG_RUSH_AT of SIM_PAR_BG_ORDER: tick,
@@ -51,11 +51,11 @@ const SIM_PAR_BG_CAP = 121, SIM_PAR_BG_RUN = 122;
 // the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
 // the helpers busy with the tiers before it.)
 // (7: SIM_PAR_BG_ORDER's first seven, the search tier's lane among them.)
-const SIM_PAR_BG_FIRST = 136, SIM_PAR_BG_RUSH_AT = 7;
+const SIM_PAR_BG_FIRST = 154, SIM_PAR_BG_RUSH_AT = 7;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait. (Foreground jobs
 // only: background lanes have their own flags, SIM_PAR_BG_ERR.)
-const SIM_PAR_ERR = 120;
+const SIM_PAR_ERR = 136;
 // A background lane's chunk threw, on any thread (per lane, at
 // SIM_PAR_BG_ERR + lane): the chunk counts as done, the chain's remaining
 // chunks and stages are skipped (counted done, not run: no stage consumes a
@@ -66,7 +66,7 @@ const SIM_PAR_ERR = 120;
 // other chunks running on helpers after the job was already unlisted; a
 // helper's failure shared the foreground flag, so a foreground job's check
 // could take it and the background wait then reported success.
-const SIM_PAR_BG_ERR = 137;
+const SIM_PAR_BG_ERR = 155;
 const _simBgErrObj = new Array(SIM_PAR_BG_LANES).fill(null);
 function _simParCheckErr(ctl) {
     if (Atomics.load(ctl, SIM_PAR_ERR) !== 0) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw new Error('a simulation helper kernel failed (see the helper log)'); }
@@ -95,13 +95,23 @@ const SIM_LANE_TRAFFIC = 12;
 // SIM_LANE_FLOW: the flow looks the movement left approximate, made exact
 // between the movement and the tick's end (unit.js flowLooksPost / Commit).
 const SIM_LANE_FLOW = 13;
+// SIM_LANE_RZ: a player action's batch work between its snapshot (a tick's
+// end) and its commit (a fixed later tick): q / e's grouping, placement and
+// births (main.js _rz*), so the tick that applies it does only flat writes.
+const SIM_LANE_RZ = 14;
+// SIM_LANE_FREE: slots let go at a tick made fresh (every column but the
+// live / dead flags at their defaults) while they are off the slab books,
+// put back on them at a later tick (sim_unit_state.js simUnitStateReleaseFreed):
+// no birth clears a slot.
+const SIM_LANE_FREE = 15;
 // (T1 right after the index: the worker search tier's scan, worker.js WS_LANE, is waited for one tick after its post.)
 // (The flow looks after the index and the hash: their answers are wanted at the next movement, which the
 // next tick's index comes before; ahead of them the helpers drained every flow claim first and the tick start
 // waited for its index.)
 // (T10 (the acquisition scan, committed two ticks after its post) next: behind T1 / GROW / NAV the
 // commit waited up to 7 ms on some ticks at 1M chaos (wait:2); ahead of them no lane waits more.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
+// (FREE and RZ after the lanes their next tick needs (TRAFFIC): theirs commit two or more ticks on; ahead of TRAFFIC an x2's placement left the traffic's wait 12 ms.)
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_GROW, SIM_LANE_NAV, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD, SIM_LANE_LONG];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -980,6 +990,7 @@ function simParallelBind(name, arr) {
     _simParReg[name] = arr;
     const wptr = _simParWPtr[name] = _simHeapPtrOf !== null ? _simHeapPtrOf(arr) : -1;
     _simParRegVer++; _simParBinds++;
+    if (_simParTrace) { _simParTrace.binds = (_simParTrace.binds || 0) + 1; (_simParTrace.bindNames || (_simParTrace.bindNames = {}))[name] = 1; }
     if (!_simPool) return;
     const value = _simBindValue(arr, wptr);
     if (_simBindBatch !== null) { _simBindBatch.push(name, value, wptr); return; }
@@ -1165,6 +1176,8 @@ function simParallelRun(kernel, total) {
     Atomics.add(ctl, SIM_PAR_GEN, 1);
     for (let a; (a = Atomics.load(ctl, SIM_PAR_ACTIVE)) !== 0;) Atomics.wait(ctl, SIM_PAR_ACTIVE, a, 5);
     ctl[SIM_PAR_KERNEL] = kernel; ctl[SIM_PAR_TOTAL] = total; ctl[SIM_PAR_DONE] = 0; ctl[SIM_PAR_REGVER] = _simParRegVer;
+    // (Tracing: every thread's longest chunk of this job, in microseconds, at SIM_PAR_TRACE_MAX.)
+    ctl[SIM_PAR_TRACE_ON] = _simParTrace ? 1 : 0; ctl[SIM_PAR_TRACE_MAX] = 0;
     Atomics.store(ctl, SIM_PAR_NEXT, 0);
     Atomics.add(ctl, SIM_PAR_GEN, 1);
     Atomics.notify(ctl, SIM_PAR_GEN);
@@ -1177,20 +1190,30 @@ function simParallelRun(kernel, total) {
         for (;;) {
             let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
             if (c >= total) break;
+            const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
             if (!failed) { try { fn(_simParReg, _simParams, c); } catch (err) { failed = err; } }
+            if (t0) _simParTraceChunk(ctl, t0);
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
     // Keep the caller ready to finish movement and post any following
     // occupancy passes instead of letting a background chunk extend this barrier.
     const helpBackground = kernel !== SIM_KERNEL_MOVE && kernel !== SIM_KERNEL_MOVE_OCCUPANCY;
+    // (Tracing (sim_worker.js ?simtrace=1): this thread's wait for the job's last chunks, and its chunk count.)
+    const tr = _simParTrace, tw = tr ? performance.now() : 0;
+    if (tr && (kernel === SIM_KERNEL_MOVE_OCCUPANCY || kernel === SIM_KERNEL_MOVE)) { const h = 'helpers:' + kernel, a = Atomics.load(ctl, SIM_PAR_ACTIVE); tr[h] = Math.min(tr[h] ?? 99, a); }
     for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) {
         if (helpBackground && _simBgHelp(ctl, -1)) continue;
         Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
     }
+    if (tr) { const d = performance.now() - tw; if (d >= .2) tr['tail:' + kernel] = (tr['tail:' + kernel] || 0) + d; tr['n:' + kernel] = total; const mx = ctl[SIM_PAR_TRACE_MAX] / 1000; if (mx > (tr['chunkMax:' + kernel] || 0)) tr['chunkMax:' + kernel] = mx; }
     if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
 }
+const SIM_PAR_TRACE_ON = 180, SIM_PAR_TRACE_MAX = 181;
+function _simParTraceChunk(ctl, t0) { const us = Math.round((performance.now() - t0) * 1000); for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
+// (The current tick's trace phases while tracing, sim_worker.js: tail waits per kernel.)
+let _simParTrace = null;
 
 // ---- background jobs ----
 // A kernel run whose result is needed later (the tick's separation, a
@@ -1329,7 +1352,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
 // or long jobs, whose one chunk could keep the waiter well past its own
 // job's end). True when it ran one. (Their results are taken at their own
 // waits, whoever ran them.)
-const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
+const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
 // (false: waits only wait, an A/B switch.)
 let SIM_BG_HELP = true;
 function _simBgHelp(ctl, except) {
@@ -1494,8 +1517,10 @@ function simParallelHelperMain() {
                 for (;;) {
                     let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
                     if (c >= total) break;
+                    const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
                     try { fn(_simParReg, _simParHelperParams, c); }
                     catch (err) { _simHelperLogFail('kernel ' + ctl[SIM_PAR_KERNEL], err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
+                    if (t0) _simParTraceChunk(ctl, t0);
                     Atomics.add(ctl, SIM_PAR_DONE, 1);
                     Atomics.notify(ctl, SIM_PAR_DONE);
                 }
@@ -1521,7 +1546,7 @@ function simParallelHelperMain() {
                     const b = SIM_PAR_BG_BASE + lane * 8;
                     if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0 || regVer < ctl[b + SIM_PAR_BG_REGVER]) continue;
                     // (A bulk lane: only while under its cap of helpers.)
-                    const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC;
+                    const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
                     try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }
@@ -1900,6 +1925,86 @@ function simRustParallel(sel, arrays, P, jobs) {
 const SIM_KERNEL_SPAWN_PROD = 133;
 const _simSpawnProdW = _simWK(['spr.cls', 'spr.jobs', 'st.brain', 'st.ctab', 'st.rrow', 'st.tim', 'spr.tab', 'spr.out', 'spr.cnt']);
 SIM_KERNELS[SIM_KERNEL_SPAWN_PROD] = function (R, P, chunk) { _simRust(_simSpawnProdW, P, chunk, 'k_spawn_prod', 'SPAWN_PROD'); };
+// q / e's batch passes (main.js _unitResizeKernel; wasm/src/birth.rs).
+const SIM_KERNEL_RZ_LOOK = 158, SIM_KERNEL_RZ_SCATTER = 159, SIM_KERNEL_RZ_BHIST = 160, SIM_KERNEL_RZ_BSCATTER = 161, SIM_KERNEL_RZ_PLACE = 162, SIM_KERNEL_RZ_RADIX_HIST = 163, SIM_KERNEL_RZ_RADIX_SCATTER = 164;
+const _simRzLookW = _simWK(['rz.ids', 'rz.idt', 'unit.id', 'unit.live', 'unit.owner', 'unit.dead', 'unit.upT', 'rz.slot', 'unit.esType', 'unit.baseLevel', 'rz.key', 'rz.hist', 'rz.sums', 'rz.flag', 'unit.stackCount', 'unit.energy', '?rz.order',
+    'rz.ex', 'rz.ey', 'rz.emeta', 'occ.rec', '?unit.jFly', 'unit.x', 'unit.y']);
+const _simRzScatterW = _simWK(['rz.list', 'rz.hist', 'rz.spw', 'rz.gsp', 'rz.slot', 'rz.key', 'rz.kg', 'rz.grp', 'unit.energy', 'unit.dead', 'rz.tg', 'unit.isWk',
+    'rz.tx', 'rz.ty', 'rz.tmeta', 'rz.ex', 'rz.ey', 'rz.emeta', 'unit.upT', 'unit.r', 'unit.collisionR', 'rz.tup', 'rz.tr', 'rz.tcr', 'slz.tab', 'rz.cp', 'rz.tcp']);
+const _simRzBhistW = _simWK(['rz.tb', 'rz.bhist', 'rz.pos', 'rz.tx', 'rz.ty', 'rz.spw']);
+const _simRzBscatterW = _simWK(['rz.tb', 'rz.bhist', 'rz.tord']);
+const _simRzPlaceW = _simWK(['rz.jobs', 'rz.tord', 'rz.tg', 'occ.rec', 'rz.spw', 'mv.wall', 'occ.bits', 'occ.mask', 'rz.pos', 'unit.x', 'unit.y', 'unit.jFly']);
+const _simRzRadixW = _simWK(['rz.idsU', 'rz.oa', 'rz.ob', 'rz.rh']);
+const SIM_KERNEL_RZ_SHARES = 165;
+const _simRzSharesW = _simWK(['rz.grp', 'rz.cnt', 'rz.gsh', 'rz.list', 'rz.newl', 'unit.stackCount', 'unit.effectiveStacks', 'unit.unitLevel', 'unit.baseLevel', 'unit.effectiveLevel', 'unit._lastAppliedEffectiveLevel', 'rz.bmx',
+    'unit.maxE', 'unit.jMaxE', 'rz.brad', 'unit.esRad', 'unit.statRow', 'unit.bsRow', 'unit.energy', 'unit.dead']);
+// (Staged q / e: the lane's and the commit's passes, birth.rs.)
+const SIM_KERNEL_RZ_BPLAN0 = 169, SIM_KERNEL_RZ_BPLAN1 = 170, SIM_KERNEL_RZ_BSCATTER0 = 171, SIM_KERNEL_RZ_BSCATTER1 = 172, SIM_KERNEL_RZ_PLACE0 = 173, SIM_KERNEL_RZ_PLACE1 = 174;
+const SIM_KERNEL_RZ_ASSIGN = 175, SIM_KERNEL_RZ_CPLACE = 177, SIM_KERNEL_RZ_CFILL = 178, SIM_KERNEL_RZ_KILL = 179, SIM_KERNEL_RZ_SPATIAL = 180, SIM_KERNEL_RZ_UPK_LIST = 181, SIM_KERNEL_RZ_UPK_NEW = 182;
+const _simRzBplanW = [_simWK(['rz.bhist', 'rz.jobs0', 'rz.bcnt']), _simWK(['rz.bhist', 'rz.jobs1', 'rz.bcnt'])];
+const _simRzBscW = [_simWK(['rz.tb', 'rz.bhist', 'rz.tord0']), _simWK(['rz.tb', 'rz.bhist', 'rz.tord1'])];
+const _simRzPlW = [0, 1].map(r => _simWK(['rz.jobs' + r, 'rz.tord' + r, 'rz.tg', 'rz.tmeta', 'rz.spw', 'rz.wsnap', 'rz.bsnap', 'occ.mask', 'rz.pos', 'rz.tx', 'rz.ty', '?unit.jFly', 'rz.bcnt']));
+const _simRzAssignW = _simWK(['rz.jobs0', 'rz.bcnt', 'rz.tord0', 'rz.jobs1', 'rz.tord1', 'rz.pos', 'rz.bt', 'rz.rsl', 'rz.bs', 'rz.rows', 'rz.tup', 'rz.tr', 'rz.tcr', 'rz.cj', 'rz.aout', 'rz.rslot']);
+const _simRzCplaceW = _simWK(['rz.cj', 'rz.bt', 'rz.pos', 'rz.tmeta', 'occ.bits', 'occ.mask', 'rz.ok', 'mv.wall']);
+const _simRzCfillW = _simWK(['rz.brk', 'rz.bs', 'rz.bt', 'unit.id', 'unit.live', 'unit.tmOn', 'rz.hfree', 'unit.hnd', 'unit.hslot', 'occ.rec', 'rz.pos', 'rz.tmeta', 'slz.tab', 'rz.cp', 'rz.tcp',
+    'rz.uids', 'rz.uslots', 'rz.idt', 'rz.newl', 'rz.bn', 'rz.used', 'rz.ever', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.x0', 'unit.y0', 'unit.mvEv', 'rz.gsp', 'rz.tg']);
+const _simRzKillW = _simWK(['rz.grp', 'rz.cnt', 'rz.list', 'unit.energy', 'unit.dead']);
+const _simRzSpatialW = _simWK(['rz.bs', 'unit.x', 'unit.y', 'unit.owner', 'unit.upT', 'rz.spTy', 'rz.spLayer', 'rz.cellArea', 'unit.spTile', 'unit.sepKey', 'unit.sepLayer', 'unit.spArea', 'unit.spOwner', 'unit.spEpoch', 'unit.spType', 'unit.mvOn',
+    'rz.spCplx', 'rz.spTypes', 'rz.spBlocks', 'unit.dead']);
+const SIM_KERNEL_RZ_UPK_BS = 183;
+const _simRzUpkW = ['rz.list', 'rz.newl', 'rz.bs'].map(L => _simWK([L, 'unit.owner', 'unit.upT', 'unit.effectiveLevel', 'unit.unitLevel', 'unit.baseLevel', 'unit.stackCount', 'unit.upB', 'rz.upk']));
+for (let r = 0; r < 2; r++) {
+    SIM_KERNELS[SIM_KERNEL_RZ_BPLAN0 + r] = function (R, P, chunk) { _simRust(_simRzBplanW[r], P, chunk, 'k_rz_bplan', 'RZ_BPLAN'); };
+    SIM_KERNELS[SIM_KERNEL_RZ_BSCATTER0 + r] = function (R, P, chunk) { _simRust(_simRzBscW[r], P, chunk, 'k_rz_bscatter', 'RZ_BSCATTER'); };
+    SIM_KERNELS[SIM_KERNEL_RZ_PLACE0 + r] = function (R, P, chunk) { _simRust(_simRzPlW[r], P, chunk, 'k_rz_place', 'RZ_PLACE'); };
+    SIM_KERNELS[SIM_KERNEL_RZ_UPK_LIST + r] = function (R, P, chunk) { _simRust(_simRzUpkW[r], P, chunk, 'k_upk_bins_par', 'RZ_UPK'); };
+}
+SIM_KERNELS[SIM_KERNEL_RZ_UPK_BS] = function (R, P, chunk) { _simRust(_simRzUpkW[2], P, chunk, 'k_upk_bins_par', 'RZ_UPK'); };
+// The retire pass's gone units (main.js _unitGoneRun; ord.rs k_unit_gone_par): chunks of P[36].
+const SIM_KERNEL_UNIT_GONE = 184;
+const _simUnitGoneW = _simWK(Array.from({ length: 52 }, (_, i) => '?ug.' + i));
+SIM_KERNELS[SIM_KERNEL_UNIT_GONE] = function (R, P, chunk) { _simRust(_simUnitGoneW, P, chunk, 'k_unit_gone_par', 'UNIT_GONE'); };
+// Released slots made fresh on SIM_LANE_FREE (sim_unit_state.js _simFreePost; nfs.rs k_slot_zero over the free table).
+// (Stage 1 (one job): the slots as bits and their 4096-slot blocks listed; stage 2: a job a block, runs filled per column: nfs.rs k_free_mark / k_free_zero.)
+const SIM_KERNEL_FREE_MARK = 186, SIM_KERNEL_FREE_ZERO = 185;
+// The retire pass's slot release in parallel (sim_unit_state.js simUnitStateDetachGoneMany; nfs.rs k_retire_release_par: chunks, then the ordered merge).
+const SIM_KERNEL_RETIRE_REL = 187;
+// An order on many units (main.js _unitCmdKernel; uix.rs k_unit_cmd_par: chunks, then the ordered merge of the shared stacks).
+const SIM_KERNEL_UNIT_CMD = 188;
+// The presentation's structure rows in parallel (sim_presentation.js _simMetaStructsRun; nfs.rs k_meta_structs_par).
+const SIM_KERNEL_META_STRUCTS = 189;
+const _simMetaStructsW = _simWK(Array.from({ length: 77 }, (_, i) => '?mst.' + i));
+SIM_KERNELS[SIM_KERNEL_META_STRUCTS] = function (R, P, chunk) { _simRust(_simMetaStructsW, P, chunk, 'k_meta_structs_par', 'META_STRUCTS'); };
+const _simUnitCmdW = _simWK(Array.from({ length: 47 }, (_, i) => '?uc.' + i));
+SIM_KERNELS[SIM_KERNEL_UNIT_CMD] = function (R, P, chunk) { _simRust(_simUnitCmdW, P, chunk, 'k_unit_cmd_par', 'UNIT_CMD'); };
+const _simRetireRelW = _simWK(Array.from({ length: 29 }, (_, i) => '?rr.' + i));
+SIM_KERNELS[SIM_KERNEL_RETIRE_REL] = function (R, P, chunk) { _simRust(_simRetireRelW, P, chunk, 'k_retire_release_par', 'RETIRE_REL'); };
+const _simFreeZeroW = _simWK(['fz.list', 'fz.ztab', 'unit.sepKey', 'unit.sepLayer', 'fz.zdefs', 'fz.bits', 'fz.bfl', 'fz.blist', 'fz.bcnt']);
+SIM_KERNELS[SIM_KERNEL_FREE_MARK] = function (R, P, chunk) { _simRust(_simFreeZeroW, P, chunk, 'k_free_mark', 'FREE_MARK'); };
+SIM_KERNELS[SIM_KERNEL_FREE_ZERO] = function (R, P, chunk) { _simRust(_simFreeZeroW, P, chunk, 'k_free_zero', 'FREE_ZERO'); };
+SIM_KERNELS[SIM_KERNEL_RZ_ASSIGN] = function (R, P, chunk) { _simRust(_simRzAssignW, P, chunk, 'k_rz_assign', 'RZ_ASSIGN'); };
+SIM_KERNELS[SIM_KERNEL_RZ_CPLACE] = function (R, P, chunk) { _simRust(_simRzCplaceW, P, chunk, 'k_rz_cplace', 'RZ_CPLACE'); };
+SIM_KERNELS[SIM_KERNEL_RZ_CFILL] = function (R, P, chunk) { _simRust(_simRzCfillW, P, chunk, 'k_rz_cfill', 'RZ_CFILL'); };
+SIM_KERNELS[SIM_KERNEL_RZ_KILL] = function (R, P, chunk) { _simRust(_simRzKillW, P, chunk, 'k_rz_kill', 'RZ_KILL'); };
+SIM_KERNELS[SIM_KERNEL_RZ_SPATIAL] = function (R, P, chunk) { _simRust(_simRzSpatialW, P, chunk, 'k_spawn_spatial_par', 'RZ_SPATIAL'); };
+SIM_KERNELS[SIM_KERNEL_RZ_SHARES] = function (R, P, chunk) { _simRust(_simRzSharesW, P, chunk, 'k_rz_shares', 'RZ_SHARES'); };
+// (The slot zeroing and the rows' writes of q / e's births: their own
+// names, never rebound between the tick's spawn batch and a resize (a new
+// binding leaves the next job to the simulation thread alone).)
+const SIM_KERNEL_RZ_SLOT_ZERO = 166, SIM_KERNEL_RZ_SPAWN_WRITE = 167, SIM_KERNEL_BIRTH_FILL = 168;
+const _simRzSlotZeroW = _simWK(['rz.reuse', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
+const _simRzSpawnWriteW = _simWK(['rz.rows', 'slz.tab', 'spw.kind', 'spw.prog']);
+const _simBirthFillW = _simWK(['rz.bs', 'rz.bh', 'rz.bt', 'rz.bn', 'rz.pos', 'rz.tg', 'rz.rows', 'rz.gp', 'unit.hslot', 'occ.rec', 'rz.spw', 'rz.uids', 'rz.uslots', 'rz.idt', 'rz.newl', 'slz.tab', 'rz.cp', 'unit.upT', 'unit.r', 'unit.collisionR']);
+SIM_KERNELS[SIM_KERNEL_RZ_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simRzSlotZeroW, P, chunk, 'k_slot_zero', 'RZ_SLOT_ZERO'); };
+SIM_KERNELS[SIM_KERNEL_RZ_SPAWN_WRITE] = function (R, P, chunk) { _simRust(_simRzSpawnWriteW, P, chunk, 'k_spawn_write', 'RZ_SPAWN_WRITE'); };
+SIM_KERNELS[SIM_KERNEL_BIRTH_FILL] = function (R, P, chunk) { _simRust(_simBirthFillW, P, chunk, 'k_birth_fill', 'BIRTH_FILL'); };
+SIM_KERNELS[SIM_KERNEL_RZ_LOOK] = function (R, P, chunk) { _simRust(_simRzLookW, P, chunk, 'k_rz_look', 'RZ_LOOK'); };
+SIM_KERNELS[SIM_KERNEL_RZ_SCATTER] = function (R, P, chunk) { _simRust(_simRzScatterW, P, chunk, 'k_rz_scatter', 'RZ_SCATTER'); };
+SIM_KERNELS[SIM_KERNEL_RZ_BHIST] = function (R, P, chunk) { _simRust(_simRzBhistW, P, chunk, 'k_rz_bhist', 'RZ_BHIST'); };
+SIM_KERNELS[SIM_KERNEL_RZ_BSCATTER] = function (R, P, chunk) { _simRust(_simRzBscatterW, P, chunk, 'k_rz_bscatter', 'RZ_BSCATTER'); };
+SIM_KERNELS[SIM_KERNEL_RZ_PLACE] = function (R, P, chunk) { _simRust(_simRzPlaceW, P, chunk, 'k_rz_place', 'RZ_PLACE'); };
+SIM_KERNELS[SIM_KERNEL_RZ_RADIX_HIST] = function (R, P, chunk) { _simRust(_simRzRadixW, P, chunk, 'k_radix_hist', 'RZ_RADIX_HIST'); };
+SIM_KERNELS[SIM_KERNEL_RZ_RADIX_SCATTER] = function (R, P, chunk) { _simRust(_simRzRadixW, P, chunk, 'k_radix_scatter', 'RZ_RADIX_SCATTER'); };
 // A step's new units' columns (unit.js simSpawnBatchWrite; wasm/src/nfs.rs k_spawn_write).
 const SIM_KERNEL_SPAWN_WRITE = 130;
 const _simSpawnWriteW = _simWK(['spw.rows', 'slz.tab', 'spw.kind', 'spw.prog']);

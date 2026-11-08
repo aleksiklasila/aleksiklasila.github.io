@@ -21,7 +21,7 @@ const result=inst.eval(`(() => {
     const dead = groups[0].filter((u, i) => !u.dead && i % 3 === 0);
     for (const u of dead) u.dead = true;
     for (let t = 1; t <= 64; t++) { gameTime = t; simUnitStateCollect(); }
-    simUnitStateReleaseFreed();
+    simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); /* (the slots made fresh on a lane, back two calls later) */
     out.audit2 = simUnitSlabAudit();
     const fresh = [];
     for (let i = 0; i < dead.length; i++) fresh.push(make(0, 300 + i));
@@ -35,7 +35,7 @@ const result=inst.eval(`(() => {
         let killed = 0;
         for (let g = 0; g < 3; g++) for (const u of groups[g]) if (!u.dead && rnd() < 0.33) { u.dead = true; killed++; }
         for (let t = 1; t <= 64; t++) { gameTime = 1000 + round * 100 + t; simUnitStateCollect(); }
-        simUnitStateReleaseFreed();
+        simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); /* (the slots made fresh on a lane, back two calls later) */
         for (let i = 0; i < killed; i++) make(Math.floor(rnd() * 3), 1000 + round * 1000 + i);
         worst = Math.max(worst, S.sl.nfree); (out.rounds ||= []).push([round, killed, S.sl.nfree, S.owners.length, S.sl.slabs]);
     }

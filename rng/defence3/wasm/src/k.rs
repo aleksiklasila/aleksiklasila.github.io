@@ -1713,7 +1713,7 @@ fn stack_level_f64(st: f64, maxl: i32) -> i32 {
     let k = if v == f64::INFINITY { 1024 } else { ((v.to_bits() >> 52) & 0x7ff) as i32 - 1023 };
     (k + 1).max(1).min(maxl.max(1))
 }
-fn stack_level(st: f32, maxl: i32) -> i32 {
+pub(crate) fn stack_level(st: f32, maxl: i32) -> i32 {
     let v = if st >= 1.0 && st < 4.0e9 { st as u32 } else if st >= 4.0e9 { u32::MAX } else { 1 };
     let k = 31 - v.leading_zeros() as i32;
     (k + 1).max(1).min(maxl.max(1))

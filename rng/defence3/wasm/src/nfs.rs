@@ -356,7 +356,9 @@ pub unsafe extern "C" fn k_spawn_write(a: u32, chunk: i32) {
     let (j0, j1) = super::k::job_range(chunk, k.i(1), k.i(0));
     let w = k.i(2).max(1) as usize;
     let (c0, cn, f0, fnn) = (k.i(3).max(0) as usize, k.i(4).max(0) as usize, k.i(5).max(0) as usize, k.i(6).max(0) as usize);
-    for j in j0..j1 {
+    // (Rows from P[7]: a staged q / e's part.)
+    let r0 = k.i(7).max(0) as usize;
+    for j in r0 + j0..r0 + j1 {
         let row = rows.add(j * w) as *const f64;
         let pn = g(row, 2);
         if pn < 0.0 {
@@ -391,7 +393,10 @@ pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
     // and called a variable-size memset for every scalar.
     for c in 0..nc {
         let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
-        let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
+        // (Elements a slot; negative: that stride, the one element written, none cleared (a strided column's
+        // second default after the column's own entry, sim_unit_state.js _simFreeZeroTable).)
+        let (bytes, pw) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2));
+        let (stride, per) = if pw < 0 { ((-pw) as usize, 1usize) } else { (pw as usize, pw as usize) };
         let (kind, v) = if defs.is_null() { (0, 0.0) } else { (g(defs, 2 * c) as i32, g(defs, 2 * c + 1)) };
         let value = match (kind, bytes) {
             (1, _) => v as i64 as u64,
@@ -406,7 +411,7 @@ pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
                 for j in j0..j1 {
                     let q = if list.is_null() { from + j as i32 } else { g(list, j) };
                     if q < 0 { continue; }
-                    let at = p.add(q as usize * per);
+                    let at = p.add(q as usize * stride);
                     if per > 1 { core::ptr::write_bytes(at, 0, per); }
                     *at = value;
                 }
@@ -1024,31 +1029,36 @@ const MC_LZ: usize = 47; const MC_MV: usize = 48; const MC_MXA: usize = 49; cons
 unsafe fn mcol<T>(cls: *const i32, c: usize, j: usize) -> *mut T { let v = g(cls, c * META_CW + j); if v == 0 { core::ptr::null_mut() } else { waddr(v as u32) as *mut T } }
 #[inline(always)]
 unsafe fn mid(p: *const u8, w: i32, r: usize) -> usize { if p.is_null() { 0 } else if w == 2 { g(p as *const u16, r) as usize } else if w == 4 { g(p as *const u32, r) as usize } else { g(p, r) as usize } }
-#[no_mangle]
-pub unsafe extern "C" fn k_meta_structs(a: u32, _chunk: i32) {
+/// The rows of slots [i0, i1) of k_meta_structs' (rows: the row pass, else the laser links'); the ordered
+/// outputs (gone, order, the cooldown misses) into outs when given (a chunk's scratch), else the kernel's
+/// arrays. Returns (gone, order, misses) counts.
+unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32, *mut i32, *mut i32, *mut i32)>, rows: bool) -> (usize, usize, usize) {
     let k = K::new(waddr(a) as *const i32);
     let (cls, psrc, ctab, rrow, own, brain) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5));
     let (mxe, vis, atk, dmgt, rlv, blx, sptab, res) = (k.p::<f64>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<f32>(9), k.p::<i32>(10), k.p::<i32>(11), k.p::<f64>(12), k.p::<f64>(13));
-    let (miss_k, miss_s) = (k.p::<i32>(14), k.p::<i32>(15));
+    let (mut miss_k, mut miss_s) = (k.p::<i32>(14), k.p::<i32>(15));
     let spver = k.f(13);
     let mut nm = 0usize;
     let f = |i: usize| k.p::<f32>(16 + i);
     let i4 = |i: usize| k.p::<i32>(36 + i);
     let i2 = |i: usize| k.p::<i16>(46 + i);
     let u1 = |i: usize| k.p::<u8>(62 + i);
-    let (order, tslot, serials, gone, cnt) = (k.p::<i32>(45), k.p::<i32>(65), k.p::<i32>(66), k.p::<i32>(67), k.p::<i32>(68));
+    let (mut order, tslot, serials, mut gone, _cnt) = (k.p::<i32>(45), k.p::<i32>(65), k.p::<i32>(66), k.p::<i32>(67), k.p::<i32>(68));
+    let order_ok = !order.is_null();
+    if let Some((og, oo, ok_, os)) = outs { gone = og; order = oo; miss_k = ok_; miss_s = os; }
     // (The owners' researched maximum level per building key: adj.rml [74], (owner + 1) * keys + key.)
     let rml = k.p::<i32>(74);
     let (n, ncls, now, otick, tile, l1, r1, nk, types, smax, gw, ntiles, np) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.f(2), k.i(3), k.f(4), k.i(5).max(2), k.i(6).max(1), k.i(7).max(0),
         k.i(8).max(1), k.i(9), k.i(10).max(1), k.i(11), k.i(12).max(0));
-    if cls.is_null() || psrc.is_null() || order.is_null() { return; }
+    if cls.is_null() || psrc.is_null() || !order_ok { return (0, 0, 0); }
     let (mut ng, mut no) = (0usize, 0usize);
     let maxl = l1 - 1;
     // (A list ([69], P[14] its length): only those slots, the order column and gone list untouched.)
     let list = k.p::<i32>(69);
     let tval = k.p::<f64>(70);
     let nl = if list.is_null() { n } else { k.i(14).max(0) as usize };
-    for ii in 0..nl {
+    let (j0, j1) = (i0.min(nl), i1.min(nl));
+    if rows { for ii in j0..j1 {
         let sl = if list.is_null() { ii } else { let x = g(list, ii); if x < 0 || x as usize >= n { continue; } x as usize };
         let v = g(psrc, sl);
         if v < 0 { continue; }
@@ -1184,16 +1194,16 @@ pub unsafe extern "C" fn k_meta_structs(a: u32, _chunk: i32) {
         if kind <= 3 && !tslot.is_null() && gx >= 0 && gy >= 0 { let tt = (gy * gw + gx) as usize; if (tt as i32) < ntiles { s(tslot, tt, sl as i32); } }
         if list.is_null() { s(order, no, sl as i32); }
         no += 1;
-    }
+    } }
     // The laser towers' links (tower.js laserPartnersOf): their partners' tiles
     // (lz.lslot [71] by tile, lz.pn [72] four counts a laser slot, lz.part [73]
     // four tiles a direction), in tile order, the first four with a structure,
     // as their slots by the tile -> slot map. (After every row: a partner's
     // slot this pass's.)
     let (lslot, lpn, lpart) = (k.p::<i32>(71), k.p::<i32>(72), k.p::<i32>(73));
-    if !lslot.is_null() && !lpn.is_null() && !lpart.is_null() && !tslot.is_null() {
+    if !rows && !lslot.is_null() && !lpn.is_null() && !lpart.is_null() && !tslot.is_null() {
         let mut tl = [0i32; 16];
-        for ii in 0..nl {
+        for ii in j0..j1 {
             let sl = if list.is_null() { ii } else { let x = g(list, ii); if x < 0 || x as usize >= n { continue; } x as usize };
             if g(u1(0), sl) != 1 || g(i2(0), sl) != 0 { continue; }
             let t = g(i2(2), sl) as i32 * gw + g(i2(1), sl) as i32;
@@ -1216,5 +1226,401 @@ pub unsafe extern "C" fn k_meta_structs(a: u32, _chunk: i32) {
             }
         }
     }
+    (ng, no, nm)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn k_meta_structs(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ng, no, nm) = meta_structs_core(a, 0, usize::MAX, None, true);
+    meta_structs_core(a, 0, usize::MAX, None, false);
+    let cnt = k.p::<i32>(68);
     if !cnt.is_null() { s(cnt, 0, ng as i32); s(cnt, 1, no as i32); s(cnt, 2, nm as i32); }
+}
+/// k_meta_structs in parallel (SIM_KERNEL_META_STRUCTS; sim_presentation.js _simMetaStructsRun): its
+/// arrays and P, and P[15] the mode: 0 the row pass of a chunk (P[16] slots a chunk), its ordered
+/// outputs into the scratch ms [75] (4 lists of P[16] a chunk: gone, order, miss keys, miss slots), their
+/// counts into mc [76] (4 a chunk); 1 (one job, P[17] chunks) those merged in chunk order into the
+/// kernel's arrays and cnt [68] (the serial order); 2 the laser links of a chunk, after every row.
+#[no_mangle]
+pub unsafe extern "C" fn k_meta_structs_par(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ms, mc, cnt) = (k.p::<i32>(75), k.p::<i32>(76), k.p::<i32>(68));
+    let per = k.i(16).max(1) as usize;
+    let c = chunk.max(0) as usize;
+    match k.i(15) {
+        0 => {
+            let b = ms.add(c * 4 * per);
+            let (ng, no, nm) = meta_structs_core(a, c * per, (c + 1) * per, Some((b, b.add(per), b.add(2 * per), b.add(3 * per))), true);
+            s(mc, 4 * c, ng as i32); s(mc, 4 * c + 1, no as i32); s(mc, 4 * c + 2, nm as i32);
+        }
+        1 => {
+            let nch = k.i(17).max(0) as usize;
+            let (gone, order, mk, msl) = (k.p::<i32>(67), k.p::<i32>(45), k.p::<i32>(14), k.p::<i32>(15));
+            let list_mode = !k.p::<i32>(69).is_null();
+            let (mut ag, mut ao, mut am) = (0usize, 0usize, 0usize);
+            for c in 0..nch {
+                let b = ms.add(c * 4 * per);
+                let (ng, no, nm) = (g(mc, 4 * c) as usize, g(mc, 4 * c + 1) as usize, g(mc, 4 * c + 2) as usize);
+                if !gone.is_null() && ng > 0 { core::ptr::copy_nonoverlapping(b, gone.add(ag), ng); }
+                ag += ng;
+                if !list_mode && no > 0 { core::ptr::copy_nonoverlapping(b.add(per), order.add(ao), no); }
+                ao += no;
+                if !mk.is_null() && !msl.is_null() && nm > 0 { core::ptr::copy_nonoverlapping(b.add(2 * per), mk.add(am), nm); core::ptr::copy_nonoverlapping(b.add(3 * per), msl.add(am), nm); }
+                am += nm;
+            }
+            if !cnt.is_null() { s(cnt, 0, ag as i32); s(cnt, 1, ao as i32); s(cnt, 2, am as i32); }
+        }
+        _ => { meta_structs_core(a, c * per, (c + 1) * per, None, false); }
+    }
+}
+
+// ---- the unit slot allocator (sim_unit_state.js _simSlab*): its books in the heap ----
+// Slots come in slabs of 64; a unit takes the lowest free slot of the slab
+// its 16x16-tile block is filling (cur), else a slab of its block's list
+// with room, else (more than 1/16 of the slots free) the nearest hole (the
+// blocks around, then any slab with room), else an empty slab, else a new
+// slab at the end. The books: bits (free bits, 2 words a slab), sfree (free
+// count), home (its block, -1 none), cur (per block), heads (per list: the
+// blocks' nk, then "any with room" nk, "empty" nk + 1), entries (pairs:
+// slab, the list's previous head), used / ever (slot bits), hdr ([0] nfree,
+// [1] slabs, [2] entries used, [3] pushes, [4] nk, [5] kw, [6] kh, [7]
+// slots listed, owners.length).
+pub(super) struct Books { pub(super) bits: *mut u32, pub(super) sfree: *mut u8, pub(super) home: *mut i32, pub(super) cur: *mut i32, pub(super) heads: *mut i32, pub(super) entries: *mut i32, pub(super) hdr: *mut i32, pub(super) cap: i32 }
+const SLAB: i32 = 64;
+impl Books {
+    /// The books from a kernel's arrays at i.. (bits, sfree, home, cur, heads, entries, used, ever, hdr: k_slab_take's order); cap slots.
+    pub(super) unsafe fn from(k: &K, i: usize, cap: i32) -> Books { Books { bits: k.p(i), sfree: k.p(i + 1), home: k.p(i + 2), cur: k.p(i + 3), heads: k.p(i + 4), entries: k.p(i + 5), hdr: k.p(i + 8), cap } }
+}
+#[inline(always)]
+unsafe fn slab_take(b: &Books, slab: i32) -> i32 {
+    let w = (slab * 2) as usize;
+    let lo = *b.bits.add(w);
+    let s = if lo != 0 { *b.bits.add(w) = lo & lo.wrapping_sub(1); slab * SLAB + lo.trailing_zeros() as i32 }
+        else { let hi = *b.bits.add(w + 1); *b.bits.add(w + 1) = hi & hi.wrapping_sub(1); slab * SLAB + 32 + hi.trailing_zeros() as i32 };
+    *b.sfree.add(slab as usize) -= 1; *b.hdr -= 1;
+    s
+}
+/// (For birth.rs: a new slab; a list push, as sim_unit_state.js _simSlabListPush.)
+pub(super) unsafe fn slab_fresh_pub(b: &Books) -> i32 { slab_fresh(b) }
+pub(super) unsafe fn list_push(b: &Books, list: i32, slab: i32) {
+    *b.hdr.add(2) += 1; let at = (2 * *b.hdr.add(2)) as usize;
+    *b.entries.add(at) = slab; *b.entries.add(at + 1) = *b.heads.add(list as usize); *b.heads.add(list as usize) = at as i32;
+    *b.hdr.add(3) += 1;
+}
+/// A new slab at the end (-1: past the columns' slots; the caller reserved them).
+unsafe fn slab_fresh(b: &Books) -> i32 {
+    let slab = *b.hdr.add(1);
+    if (slab + 1) * SLAB > b.cap { return -1; }
+    *b.hdr.add(1) = slab + 1;
+    let w = (slab * 2) as usize;
+    *b.bits.add(w) = u32::MAX; *b.bits.add(w + 1) = u32::MAX; *b.sfree.add(slab as usize) = SLAB as u8; *b.home.add(slab as usize) = -1;
+    *b.hdr += SLAB; *b.hdr.add(7) += SLAB;
+    slab
+}
+unsafe fn slab_near_hole(b: &Books, key: i32) -> i32 {
+    let (nk, kw, kh) = (*b.hdr.add(4), *b.hdr.add(5), *b.hdr.add(6));
+    if key < nk - 1 {
+        let kx = irem(key, kw); let ky = idiv(key - kx, kw);
+        for r in 1..=2i32 { for dy in -r..=r { for dx in -r..=r {
+            if dx.abs() != r && dy.abs() != r { continue; }
+            let (x, y) = (kx + dx, ky + dy);
+            if x < 0 || y < 0 || x >= kw || y >= kh { continue; }
+            let k2 = (y * kw + x) as usize;
+            while *b.heads.add(k2) != 0 {
+                let at = *b.heads.add(k2) as usize; let slab = *b.entries.add(at);
+                if *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) == k2 as i32 { return slab_take(b, slab); }
+                *b.heads.add(k2) = *b.entries.add(at + 1);
+            }
+        }}}
+    }
+    let any = nk as usize;
+    while *b.heads.add(any) != 0 {
+        let at = *b.heads.add(any) as usize; let slab = *b.entries.add(at);
+        if *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) != super::birth::RZ_RESERVED { return slab_take(b, slab); }
+        *b.heads.add(any) = *b.entries.add(at + 1);
+    }
+    -1
+}
+pub(super) unsafe fn slab_alloc(b: &Books, key: i32, slack_min: i32, slack_shift: i32) -> i32 {
+    let k = key as usize;
+    let mut slab = *b.cur.add(k);
+    if slab >= 0 && *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) == key { return slab_take(b, slab); }
+    while *b.heads.add(k) != 0 {
+        let at = *b.heads.add(k) as usize; slab = *b.entries.add(at); *b.heads.add(k) = *b.entries.add(at + 1);
+        if *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) == key { *b.cur.add(k) = slab; return slab_take(b, slab); }
+    }
+    if *b.hdr > slack_min.max(*b.hdr.add(7) >> slack_shift) { let s = slab_near_hole(b, key); if s >= 0 { return s; } }
+    let empty = (*b.hdr.add(4) + 1) as usize;
+    while *b.heads.add(empty) != 0 {
+        let at = *b.heads.add(empty) as usize; slab = *b.entries.add(at); *b.heads.add(empty) = *b.entries.add(at + 1);
+        if *b.sfree.add(slab as usize) as i32 == SLAB && *b.home.add(slab as usize) != super::birth::RZ_RESERVED { *b.home.add(slab as usize) = key; *b.cur.add(k) = slab; return slab_take(b, slab); }
+    }
+    slab = slab_fresh(b);
+    if slab < 0 { return -1; }
+    *b.home.add(slab as usize) = key; *b.cur.add(k) = slab;
+    slab_take(b, slab)
+}
+/// A batch birth's slot (birth.rs k_birth_take): its block's current slab
+/// while it has room, else a whole empty slab, else a new one, so a batch
+/// fills slabs end to end (its rows and the zeroing of reused slots stream
+/// through the columns, a slab's 64 slots sharing their lines; a new slab's
+/// slots are fresh, nothing to zero); only with neither the holes
+/// (slab_alloc).
+pub(super) unsafe fn slab_alloc_bulk(b: &Books, key: i32, slack_min: i32, slack_shift: i32) -> i32 {
+    let k = key as usize;
+    let slab = *b.cur.add(k);
+    if slab >= 0 && *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) == key { return slab_take(b, slab); }
+    let empty = (*b.hdr.add(4) + 1) as usize;
+    while *b.heads.add(empty) != 0 {
+        let at = *b.heads.add(empty) as usize; let sl = *b.entries.add(at); *b.heads.add(empty) = *b.entries.add(at + 1);
+        if *b.sfree.add(sl as usize) as i32 == SLAB && *b.home.add(sl as usize) != super::birth::RZ_RESERVED { *b.home.add(sl as usize) = key; *b.cur.add(k) = sl; return slab_take(b, sl); }
+    }
+    let sl = slab_fresh(b);
+    if sl >= 0 { *b.home.add(sl as usize) = key; *b.cur.add(k) = sl; return slab_take(b, sl); }
+    slab_alloc(b, key, slack_min, slack_shift)
+}
+/// Slots for n units (keys [9]: each one's block, sim_unit_state.js
+/// _simSlabKey), in order, into out [10] (-1: no slot left: the caller
+/// reserves the slabs first), their flags into fl [11] (bit 0: the slot
+/// held a unit before (used), bit 1: ever), used / ever then set. Books:
+/// [0] bits, [1] sfree, [2] home, [3] cur, [4] heads, [5] entries, [6] used,
+/// [7] ever, [8] hdr. P: [0] n, [1] slots the columns have, [2] slack
+/// minimum, [3] slack shift.
+#[no_mangle]
+pub unsafe extern "C" fn k_slab_take(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let b = Books { bits: k.p(0), sfree: k.p(1), home: k.p(2), cur: k.p(3), heads: k.p(4), entries: k.p(5), hdr: k.p(8), cap: k.i(1) };
+    let (used, ever, keys, out, fl) = (k.p::<u32>(6), k.p::<u32>(7), k.p::<i32>(9), k.p::<i32>(10), k.p::<u8>(11));
+    let (n, smin, ssh) = (k.i(0).max(0) as usize, k.i(2), k.i(3));
+    for i in 0..n {
+        let sl = slab_alloc(&b, g(keys, i), smin, ssh);
+        s(out, i, sl);
+        if sl < 0 { if !fl.is_null() { s(fl, i, 0); } continue; }
+        let (w, m) = ((sl >> 5) as usize, 1u32 << (sl & 31));
+        let f = (((*used.add(w) & m) != 0) as u8) | ((((*ever.add(w) & m) != 0) as u8) << 1);
+        *used.add(w) |= m; *ever.add(w) |= m;
+        if !fl.is_null() { s(fl, i, f); }
+    }
+}
+
+/// The retire pass's removed units' slots let go (sim_unit_state.js
+/// simUnitStateDetachGoneMany; one job, list [0], P[0] slots): each slot's
+/// handle (unit.hnd [1] -> 0, hslot [2] -1, onto the free stack hfree [3],
+/// its count hh [4][0]), the slot onto the free queue (freeLater [5], count
+/// fl [6][0]), its worker record (unit.wkIx [7] -> 0, onto wfree [8], count
+/// wh [9][0]), its status record (unit.stIx [10] -> 0, its columns zeroed:
+/// st table [13], P[1] pairs (address, bytes); onto sfree [11], st.hdr [12][0]),
+/// and its pooled reference / object fields (table [14], P[2] triples:
+/// address, bytes, 1 a number column (NaN) else id 0: their defaults).
+#[no_mangle]
+pub unsafe extern "C" fn k_retire_release(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, hnd, hslot, hfree, hh, fl, flc, wkix, wfree, wh) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9));
+    let (stix, sfree, sth, stt, sht) = (k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14));
+    let (n, nst, nsh) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(0) as usize);
+    // (Every handle onto the free stack (the same on every peer, whatever objects exist), its
+    // generation (unit.hgen [15]) one more and its gone record (unit.hg [16], 4 words a handle: the
+    // unit's id [25], owner [26], x [27], y [28]): a JavaScript object of the handle's last unit
+    // reads as that dead unit by them (unit.js Unit.prototype._us / _gone*), nothing written to it.
+    // A pending path (unit.ppDue [22] >= 0) onto pl [23], pc [24][0].)
+    let (hgen, hg) = (k.p::<u32>(15), k.p::<i32>(16));
+    let (ppd, pl, pcn) = (k.p::<i32>(22), k.p::<i32>(23), k.p::<i32>(24));
+    let (uid, uown, ux, uy) = (k.p::<i32>(25), k.p::<i8>(26), k.p::<i32>(27), k.p::<i32>(28));
+    for i in 0..n {
+        let sl = g(list, i);
+        if sl < 0 { continue; }
+        let su = sl as usize;
+        let h = g(hnd, su);
+        if !ppd.is_null() && g(ppd, su) >= 0 { let c = g(pcn, 0); s(pl, c as usize, sl); s(pcn, 0, c + 1); }
+        if h > 0 {
+            let hu = h as usize;
+            s(hslot, hu, -1); s(hnd, su, 0);
+            s(hgen, hu, g(hgen, hu).wrapping_add(1));
+            let r = hg.add(4 * hu);
+            *r = g(uid, su); *r.add(1) = g(uown, su) as i32; *r.add(2) = g(ux, su); *r.add(3) = g(uy, su);
+            let c = g(hh, 0); s(hfree, c as usize, h); s(hh, 0, c + 1);
+        }
+        let c = g(flc, 0); s(fl, c as usize, sl); s(flc, 0, c + 1);
+        if !wkix.is_null() { let w = g(wkix, su); if w > 0 { s(wkix, su, 0); let c = g(wh, 0); s(wfree, c as usize, w); s(wh, 0, c + 1); } }
+        if !stix.is_null() {
+            let r = g(stix, su);
+            if r > 0 {
+                s(stix, su, 0);
+                for c in 0..nst { let base = waddr(g(stt, 2 * c) as u32) as *mut u8; let b = g(stt, 2 * c + 1) as usize; core::ptr::write_bytes(base.add(r as usize * b), 0, b); }
+                let c = g(sth, 0); s(sfree, c as usize, r); s(sth, 0, c + 1);
+            }
+        }
+        for c in 0..nsh {
+            let base = waddr(g(sht, 3 * c) as u32) as *mut u8; let (b, num) = (g(sht, 3 * c + 1) as usize, g(sht, 3 * c + 2) != 0);
+            if num { *(base.add(su * 8) as *mut f64) = f64::NAN; } else { core::ptr::write_bytes(base.add(su * b), 0, b); }
+        }
+    }
+}
+
+/// Released slots made fresh on SIM_LANE_FREE (sim_unit_state.js _simFreePost), stage 1 (one job):
+/// the batch's slots (fz.list [0], P[0] of them) as bits (fz.bits [5], a bit a slot), the 4096-slot
+/// blocks they are in listed (fz.bfl [6] a byte a block, cleared again; fz.blist [7], count
+/// fz.bcnt [8][0]); P[4] blocks in all.
+pub const FZ_BLOCK: usize = 4096;
+#[no_mangle]
+pub unsafe extern "C" fn k_free_mark(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, bits, bfl, blist, bcnt) = (k.p::<i32>(0), k.p::<u32>(5), k.p::<u8>(6), k.p::<i32>(7), k.p::<i32>(8));
+    let (n, nbk) = (k.i(0).max(0) as usize, k.i(4).max(0) as usize);
+    for i in 0..n {
+        let q = g(list, i);
+        if q < 0 { continue; }
+        let q = q as usize;
+        s(bits, q >> 5, g(bits, q >> 5) | 1u32 << (q & 31));
+        s(bfl, q / FZ_BLOCK, 1);
+    }
+    let mut m = 0usize;
+    for b in 0..nbk { if g(bfl, b) != 0 { s(bfl, b, 0); s(blist, m, b as i32); m += 1; } }
+    s(bcnt, 0, m as i32);
+}
+/// Stage 2, a job a listed block (chunks past fz.bcnt [8][0] leave): column by column, per 32-slot
+/// word of the block's bits (a full word one contiguous fill, else its set bits) (fz.ztab [1]: encoded address, bytes an element,
+/// elements a slot, negative: that stride with the one element written and none cleared; fz.zdefs
+/// [4]: (kind, value) as k_slot_zero's) each run filled as one contiguous slice, unit.sepKey [2]
+/// absent (P[3]) and unit.sepLayer [3] 0 over the runs; the block's bits cleared. P: [2] columns.
+#[no_mangle]
+pub unsafe extern "C" fn k_free_zero(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (tab, sk, sly, defs, bits, blist, bcnt) = (k.p::<i32>(1), k.p::<u32>(2), k.p::<u8>(3), k.p::<f64>(4), k.p::<u32>(5), k.p::<i32>(7), k.p::<i32>(8));
+    let c = chunk.max(0);
+    if c >= g(bcnt, 0) { return; }
+    let b = g(blist, c as usize) as usize;
+    let (w0, w1) = (b * FZ_BLOCK / 32, (b + 1) * FZ_BLOCK / 32);
+    // (Per column, per 32-slot word of the block's bits: none skipped, all one contiguous fill, else
+    // the set bits alone (trailing zeros); the stores of a word are on one or two cache lines.)
+    let nc = k.i(2).max(0) as usize;
+    for col in 0..nc {
+        let base = waddr(g(tab, 3 * col) as u32) as *mut u8;
+        let (bytes, pw) = (g(tab, 3 * col + 1) as usize, g(tab, 3 * col + 2));
+        let (kind, v) = if defs.is_null() { (0, 0.0) } else { (g(defs, 2 * col) as i32, g(defs, 2 * col + 1)) };
+        let value = match (kind, bytes) {
+            (1, _) => v as i64 as u64,
+            (2, 4) => (v as f32).to_bits() as u64,
+            (3, 8) => v.to_bits(),
+            _ => 0,
+        };
+        macro_rules! fill_words {
+            ($ty:ty) => {{
+                let p = base as *mut $ty;
+                let val = value as $ty;
+                if pw == 1 {
+                    for w in w0..w1 {
+                        let mut x = g(bits, w);
+                        if x == 0 { continue; }
+                        let s0 = w * 32;
+                        if x == u32::MAX { core::slice::from_raw_parts_mut(p.add(s0), 32).fill(val); continue; }
+                        while x != 0 { let j = x.trailing_zeros() as usize; *p.add(s0 + j) = val; x &= x - 1; }
+                    }
+                } else if pw > 1 {
+                    let per = pw as usize;
+                    for w in w0..w1 {
+                        let mut x = g(bits, w);
+                        if x == 0 { continue; }
+                        let s0 = w * 32;
+                        if x == u32::MAX {
+                            core::slice::from_raw_parts_mut(p.add(s0 * per), 32 * per).fill(0 as $ty);
+                            if val != 0 as $ty { for j in 0..32 { *p.add((s0 + j) * per) = val; } }
+                            continue;
+                        }
+                        while x != 0 {
+                            let j = x.trailing_zeros() as usize;
+                            let at = p.add((s0 + j) * per);
+                            core::slice::from_raw_parts_mut(at, per).fill(0 as $ty);
+                            *at = val;
+                            x &= x - 1;
+                        }
+                    }
+                } else {
+                    let stride = (-pw) as usize;
+                    for w in w0..w1 {
+                        let mut x = g(bits, w);
+                        let s0 = w * 32;
+                        while x != 0 { let j = x.trailing_zeros() as usize; *p.add((s0 + j) * stride) = val; x &= x - 1; }
+                    }
+                }
+            }};
+        }
+        match bytes { 1 => fill_words!(u8), 2 => fill_words!(u16), 4 => fill_words!(u32), 8 => fill_words!(u64), _ => {} }
+    }
+    let absent = k.i(3) as u32;
+    for w in w0..w1 {
+        let mut x = g(bits, w);
+        if x == 0 { continue; }
+        let s0 = w * 32;
+        if x == u32::MAX { core::slice::from_raw_parts_mut(sk.add(s0), 32).fill(absent); core::slice::from_raw_parts_mut(sly.add(s0), 32).fill(0); s(bits, w, 0); continue; }
+        while x != 0 { let j = x.trailing_zeros() as usize; s(sk, s0 + j, absent); s(sly, s0 + j, 0); x &= x - 1; }
+        s(bits, w, 0);
+    }
+}
+
+/// k_retire_release in parallel (SIM_KERNEL_RETIRE_REL; sim_unit_state.js
+/// simUnitStateDetachGoneMany), the same arrays and P[0..2]. P[3] 0: chunk
+/// `chunk` of P[4] removed slots, each as k_retire_release does it (its
+/// handle, generation and gone record, worker and status records' columns:
+/// slots, handles and records are each one unit's, so chunks touch none of
+/// another's), what goes onto a free stack into the chunk's lists in the
+/// scratch rs [20] (4 lists of P[4] a chunk: handles, worker records,
+/// status records, pending paths) with their counts rc [21] (4 a chunk).
+/// P[3] 1 (one job, P[5] chunks): the lists appended in chunk order to
+/// hfree, wfree, sfree and pl, the slots (the list's, in order) to fl: the
+/// serial kernel's order.
+#[no_mangle]
+pub unsafe extern "C" fn k_retire_release_par(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (list, hnd, hslot, hfree, hh, fl, flc, wkix, wfree, wh) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9));
+    let (stix, sfree, sth, stt) = (k.p::<i32>(10), k.p::<i32>(11), k.p::<i32>(12), k.p::<i32>(13));
+    let (hgen, hg, rs, rc) = (k.p::<u32>(15), k.p::<i32>(16), k.p::<i32>(20), k.p::<i32>(21));
+    let (ppd, pl, pcn) = (k.p::<i32>(22), k.p::<i32>(23), k.p::<i32>(24));
+    let (uid, uown, ux, uy) = (k.p::<i32>(25), k.p::<i8>(26), k.p::<i32>(27), k.p::<i32>(28));
+    let (n, nst, per) = (k.i(0).max(0), k.i(1).max(0) as usize, k.i(4).max(1) as usize);
+    if k.i(3) == 1 {
+        let nch = k.i(5).max(0) as usize;
+        let (mut a0, mut a1, mut a2, mut a3, mut af) = (g(hh, 0) as usize, if wh.is_null() { 0 } else { g(wh, 0) as usize }, if sth.is_null() { 0 } else { g(sth, 0) as usize }, g(pcn, 0) as usize, g(flc, 0) as usize);
+        for c in 0..nch {
+            let b = rs.add(c * 4 * per);
+            let (n0, n1, n2, n3) = (g(rc, 4 * c) as usize, g(rc, 4 * c + 1) as usize, g(rc, 4 * c + 2) as usize, g(rc, 4 * c + 3) as usize);
+            core::ptr::copy_nonoverlapping(b, hfree.add(a0), n0); a0 += n0;
+            if n1 > 0 { core::ptr::copy_nonoverlapping(b.add(per), wfree.add(a1), n1); a1 += n1; }
+            if n2 > 0 { core::ptr::copy_nonoverlapping(b.add(2 * per), sfree.add(a2), n2); a2 += n2; }
+            if n3 > 0 { core::ptr::copy_nonoverlapping(b.add(3 * per), pl.add(a3), n3); a3 += n3; }
+        }
+        for i in 0..n as usize { let sl = g(list, i); if sl >= 0 { s(fl, af, sl); af += 1; } }
+        s(hh, 0, a0 as i32); if !wh.is_null() { s(wh, 0, a1 as i32); } if !sth.is_null() { s(sth, 0, a2 as i32); } s(pcn, 0, a3 as i32); s(flc, 0, af as i32);
+        return;
+    }
+    let c = chunk.max(0) as usize;
+    let (j0, j1) = super::k::job_range(chunk, per as i32, n);
+    let b = rs.add(c * 4 * per);
+    let (mut n0, mut n1, mut n2, mut n3) = (0usize, 0usize, 0usize, 0usize);
+    for i in j0..j1 {
+        let sl = g(list, i);
+        if sl < 0 { continue; }
+        let su = sl as usize;
+        let h = g(hnd, su);
+        if !ppd.is_null() && g(ppd, su) >= 0 { *b.add(3 * per + n3) = sl; n3 += 1; }
+        if h > 0 {
+            let hu = h as usize;
+            s(hslot, hu, -1); s(hnd, su, 0);
+            s(hgen, hu, g(hgen, hu).wrapping_add(1));
+            let r = hg.add(4 * hu);
+            *r = g(uid, su); *r.add(1) = g(uown, su) as i32; *r.add(2) = g(ux, su); *r.add(3) = g(uy, su);
+            *b.add(n0) = h; n0 += 1;
+        }
+        if !wkix.is_null() { let w = g(wkix, su); if w > 0 { s(wkix, su, 0); *b.add(per + n1) = w; n1 += 1; } }
+        if !stix.is_null() {
+            let r = g(stix, su);
+            if r > 0 {
+                s(stix, su, 0);
+                for q in 0..nst { let base = waddr(g(stt, 2 * q) as u32) as *mut u8; let bb = g(stt, 2 * q + 1) as usize; core::ptr::write_bytes(base.add(r as usize * bb), 0, bb); }
+                *b.add(2 * per + n2) = r; n2 += 1;
+            }
+        }
+    }
+    s(rc, 4 * c, n0 as i32); s(rc, 4 * c + 1, n1 as i32); s(rc, 4 * c + 2, n2 as i32); s(rc, 4 * c + 3, n3 as i32);
 }

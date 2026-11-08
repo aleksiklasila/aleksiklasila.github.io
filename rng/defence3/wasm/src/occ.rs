@@ -484,3 +484,32 @@ pub unsafe extern "C" fn occ_move_one(a:u32,s:i32,nx:i32,ny:i32)->i64 {
     let (x,y)=grid.position(s as usize,nx,ny);
     (x as u32 as i64)|((y as i64)<<32)
 }
+
+// ---- for the batch births (birth.rs) ----
+pub(super) struct OccGrid(Grid);
+pub(super) unsafe fn grid(bits:*mut u32,mask:*const i8,w:i32,h:i32,stride:i32,cell:i32,planes:i32)->OccGrid{OccGrid(Grid{bits,mask,w,h,stride,plane:stride*h,cell,planes,diag:core::ptr::null_mut()})}
+#[inline(always)]
+pub(super) unsafe fn cell_taken(g:&OccGrid,cx:i32,cy:i32,layer:i32)->bool{let g=&g.0;*g.bits.add((layer*g.plane+cy*g.stride+(cx>>5)) as usize)&(1u32<<(cx&31))!=0}
+#[inline(always)]
+pub(super) unsafe fn disk_free(g:&OccGrid,x:i32,y:i32,r:i32,layer:i32)->bool{free(&g.0,x,y,r,layer,0,0,0,-1)}
+#[inline(always)]
+pub(super) unsafe fn disk_mark(g:&OccGrid,x:i32,y:i32,r:i32,layer:i32){clear_or_mark(&g.0,x,y,r,layer,true)}
+
+/// occ_release with atomic word clears (k_unit_gone_par: other jobs' footprints share words).
+pub(super) unsafe fn occ_release_atomic(bits:u32,mask:u32,rec:u32,w:i32,h:i32,stride:i32,cell:i32,planes:i32,s:i32) {
+    use core::sync::atomic::{AtomicU32,Ordering};
+    let p=(waddr(rec) as *mut i32).add(s as usize*4);let meta=*p.add(2);if (meta>>16)&255==0{return;}
+    let g=Grid{bits:waddr(bits) as *mut u32,mask:waddr(mask) as *const i8,w,h,stride,plane:stride*h,cell,planes,diag:core::ptr::null_mut()};
+    let (r,layer)=((meta&255).max(1).min(32),((meta>>8)&255).min(planes-1));
+    let cx=cell_coord(&g,*p);let cy=cell_coord(&g,*p.add(1));
+    for dy in -r..=r {
+        let hw=half(&g,r,dy);if hw<0 {continue;} let yy=cy+dy;
+        if yy<0 || yy>=g.h {continue;}
+        let a=(cx-hw).max(0);let b=(cx+hw).min(g.w-1);
+        for ww in (a>>5)..=(b>>5) {
+            let q=g.bits.add((layer*g.plane+yy*g.stride+ww) as usize) as *const AtomicU32;
+            (*q).fetch_and(!word_mask(a,b,ww),Ordering::Relaxed);
+        }
+    }
+    *p.add(2)=meta&!(255<<16);
+}

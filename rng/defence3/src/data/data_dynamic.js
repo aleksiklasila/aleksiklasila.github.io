@@ -3155,15 +3155,23 @@ function _rqLevel(o, s) { const e = _researchStatList[s]; return e ? getPlayerRe
 const _rqViews = new WeakMap();
 let _rqViewEpoch = 0;
 function researchQueueViewsInvalidate() { _rqViewEpoch++; }
-function _rqViewOf(R) { let V = _rqViews.get(R); if (!V) _rqViews.set(R, V = { qver: -1, tver: -1, ep: -1, queue: [], task: null, objs: new Map(), seen: new Int32Array(16) }); const ep = _rqViewEpoch + (typeof _precomputedStatsVersion === 'number' ? _precomputedStatsVersion * 65536 : 0); if (V.ep !== ep) { V.ep = ep; V.qver = -1; V.tver = -1; V.objs = new Map(); } return V; }
+// (A stat change (_precomputedStatsVersion: every finished research) rebuilds the views' order and levels
+// only: a task's cost and work are its stat's and level's alone, its object kept. A restore (_rqViewEpoch)
+// makes them anew. Dropped at every finished research, ~1,450 tasks a player were remade: 11-18 ms a time.)
+function _rqViewOf(R) { let V = _rqViews.get(R); if (!V) _rqViews.set(R, V = { qver: -1, tver: -1, ep: -1, sv: -1, queue: [], task: null, objs: new Map(), seen: new Int32Array(16) }); const sv = typeof _precomputedStatsVersion === 'number' ? _precomputedStatsVersion : 0; if (V.ep !== _rqViewEpoch) { V.ep = _rqViewEpoch; V.sv = sv; V.qver = -1; V.tver = -1; V.objs = new Map(); } else if (V.sv !== sv) { V.sv = sv; V.qver = -1; V.tver = -1; } return V; }
 function _rqTaskObj(V, o, s, from, done) {
     const e = _researchStatList[s], key = s * 4096 + Math.min(4095, from);
     let t = V.objs.get(key);
-    if (!t) { t = { owner: o, kind: e.kind, key: e.key, statKey: e.statKey, fromLevel: 0, toLevel: 0, cost: 0, workRequired: 0, workDone: 0 }; V.objs.set(key, t); }
-    const cap = from >= MAX_RESEARCH_LEVEL;
-    t.fromLevel = from; t.toLevel = cap ? from : from + 1;
-    t.cost = cap ? 0 : getResearchCost(e.kind, e.key, e.statKey, from);
-    t.workRequired = cap ? 0 : getResearchWork(e.kind, e.key, e.statKey, from);
+    // (A kept object is the same stat and level, and the objects are made anew when the stats change
+    // (_rqViewOf's epoch): its cost and work are as they were. Recomputed for every queued task at each
+    // version (a finished research), ~1,450 a player at chaos-1m: 13-33 ms on those ticks.)
+    if (!t || t.fromLevel !== from) {
+        if (!t) { t = { owner: o, kind: e.kind, key: e.key, statKey: e.statKey, fromLevel: 0, toLevel: 0, cost: 0, workRequired: 0, workDone: 0 }; V.objs.set(key, t); }
+        const cap = from >= MAX_RESEARCH_LEVEL;
+        t.fromLevel = from; t.toLevel = cap ? from : from + 1;
+        t.cost = cap ? 0 : getResearchCost(e.kind, e.key, e.statKey, from);
+        t.workRequired = cap ? 0 : getResearchWork(e.kind, e.key, e.statKey, from);
+    }
     t.workDone = done ? Math.min(t.workRequired, done) : 0;
     return t;
 }
@@ -3188,10 +3196,14 @@ function _rqQueue(p) {
     // (The objects of the tasks still queued kept: old's.)
     const keep = V.objs; V.objs = old;
     const made = new Map();
+    // (Each stat's level once a rebuild: seen[s] is 0 at its first task.)
+    if (!V.lvl || V.lvl.length < stats.length) V.lvl = new Int32Array(stats.length);
+    const lvl = V.lvl;
     for (let i = 0; i < R.n; i++) {
         const s = R.ids[i];
         if (!stats[s]) continue;
-        const from = _rqLevel(o, s) + seen[s]++;
+        if (seen[s] === 0) lvl[s] = _rqLevel(o, s);
+        const from = lvl[s] + seen[s]++;
         const t = _rqTaskObj(V, o, s, from, seen[s] === 1 ? R.prog[s] : 0);
         made.set(s * 4096 + Math.min(4095, from), t);
         if (i === 0) { V.task = t; V.tver = R.ver; } else V.queue.push(t);

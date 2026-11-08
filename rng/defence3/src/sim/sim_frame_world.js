@@ -318,19 +318,38 @@ function _simQueueEncode(C, q, fresh) {
 // (Flat maps of numbers sent as their changed keys: the research levels and
 // multipliers, ~500 keys each, ~35 KB a tick of multipliers.)
 const _SIM_FLAT_KEYS = new Set(['researchLevels', 'researchMultipliers']);
+// (A value may be a flat map of numbers itself (researchLevels: thing -> { stat: level }): kept as a
+// shallow copy and compared by its keys; a changed one goes whole in the patch, which the page merges by
+// key (simFrameApplyState). Before, any object value sent the whole map deep-copied every 10th frame:
+// 14-47 ms on those ticks at chaos-1m's research.)
+function _simLvSameObj(a, b) {
+    let n = 0;
+    for (const k in b) { const v = b[k]; if (v !== null && typeof v === 'object') return null; if (!Object.is(a[k], v)) return false; n++; }
+    let m = 0; for (const k in a) m++;
+    return m === n;
+}
 function _simLevelsEncode(C, lv, fresh) {
     const plainOk = lv && typeof lv === 'object' && !Array.isArray(lv);
     if (!plainOk) { C.lvPrev = null; return _simPlain(lv, 1); }
     let prev = C.lvPrev, patch = null, dels = null, n = 0;
+    const keep = v => v !== null && typeof v === 'object' ? Object.assign({}, v) : v;
     if (fresh || !prev) {
         prev = C.lvPrev = Object.create(null); C.lvN = 0;
-        for (const k in lv) { const v = lv[k]; if (v !== null && typeof v === 'object') { C.lvPrev = null; return _simPlain(lv, 1); } prev[k] = v; C.lvN++; }
+        for (const k in lv) { const v = lv[k]; if (v !== null && typeof v === 'object' && (Array.isArray(v) || _simLvSameObj({}, v) === null)) { C.lvPrev = null; return _simPlain(lv, 1); } prev[k] = keep(v); C.lvN++; }
         return _simPlain(lv, 1);
     }
     let added = 0;
     for (const k in lv) {
         const v = lv[k]; n++;
-        if (v !== null && typeof v === 'object') { C.lvPrev = null; return _simPlain(lv, 1); }
+        if (v !== null && typeof v === 'object') {
+            if (Array.isArray(v)) { C.lvPrev = null; return _simPlain(lv, 1); }
+            const was = prev[k];
+            const same = was !== null && typeof was === 'object' ? _simLvSameObj(was, v) : false;
+            if (same === null) { C.lvPrev = null; return _simPlain(lv, 1); }
+            if (!(k in prev)) added++;
+            if (!same) { (patch || (patch = {}))[k] = _simPlain(v, 1); prev[k] = keep(v); }
+            continue;
+        }
         if (!(k in prev)) { added++; (patch || (patch = {}))[k] = v; prev[k] = v; }
         else if (!Object.is(prev[k], v)) { (patch || (patch = {}))[k] = v; prev[k] = v; }
     }

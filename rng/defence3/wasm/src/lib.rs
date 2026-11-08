@@ -49,6 +49,7 @@ mod info;
 mod spr;
 mod arq;
 mod navg;
+mod birth;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

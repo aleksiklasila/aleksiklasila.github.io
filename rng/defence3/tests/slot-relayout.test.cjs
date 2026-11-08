@@ -25,7 +25,7 @@ const result=inst.eval(`(() => {
     for (const u of live) if (rnd() < 0.25) { const [cx, cy] = centres[Math.floor(rnd() * centres.length)]; u.x = cx + rnd() * 300; u.y = cy + rnd() * 300; u.prevX = u.x; u.prevY = u.y; }
     // Every unit's target: another living unit (its slot and id).
     for (let i = 0; i < live.length; i++) { const t = live[(i * 7 + 3) % live.length]; const c = C(), s = live[i]._si; c.tuS[s] = t._si; c.tuId[s] = t.id; }
-    simUnitStateReleaseFreed();
+    simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); /* (the slots made fresh on a lane, back two calls later) */
     _uixFromList(units.filter(u => !u.dead));
     const before = new Map(live.map(u => [u.id, { x: C().x[u._si], y: C().y[u._si], e: C().energy[u._si], o: C().owner[u._si], t: C().tuId[u._si] }]));
     out.slots0 = S.owners.length; out.slabs0 = slabsInUse(); out.live = live.length;
