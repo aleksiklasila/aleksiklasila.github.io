@@ -46,6 +46,9 @@ const OTHERS = `(() => { const out = {};
         'building:research': { 1: 2 }, 'unit:researcher_unit': { 1: 4 }
     };
     const P = world.spawn('page', { controls });
+    // (The worker takes the match once it has loaded; before that the page would make it, and the page has no kernels.)
+    for (let i = 0; i < 500 && !P.eval('simClientWillTakeMatch()'); i++) await world.run(20);
+    assert.equal(P.eval('simClientWillTakeMatch()'), true, 'the simulation worker loaded');
     // One tick in flight: each result leaves the worker at that tick.
     P.eval(`startingResourcesConfig = ${JSON.stringify({ spawnCounts, researchLevels: {} })}; simClientInFlight = () => _simClient && _simClient.inFlight ? 99 : 0; startSoloGame();`);
     await world.run(1500);

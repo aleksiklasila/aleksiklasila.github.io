@@ -1192,7 +1192,7 @@ function simParallelRun(kernel, total) {
             if (c >= total) break;
             const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
             if (!failed) { try { fn(_simParReg, _simParams, c); } catch (err) { failed = err; } }
-            if (t0) _simParTraceChunk(ctl, t0);
+            if (t0) _simParTraceChunk(ctl, t0, c);
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
@@ -1211,7 +1211,8 @@ function simParallelRun(kernel, total) {
     _simParCheckErr(ctl);
 }
 const SIM_PAR_TRACE_ON = 180, SIM_PAR_TRACE_MAX = 181;
-function _simParTraceChunk(ctl, t0) { const us = Math.round((performance.now() - t0) * 1000); for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
+// (par.ctrace, bound by a probe: per chunk its start (ms since the time origin) and duration.)
+function _simParTraceChunk(ctl, t0, c) { const t1 = performance.now(), us = Math.round((t1 - t0) * 1000); const T = _simParReg['par.ctrace']; if (T !== undefined && c * 2 + 1 < T.length) { T[c * 2] = performance.timeOrigin + t0; T[c * 2 + 1] = t1 - t0; } for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
 // (The current tick's trace phases while tracing, sim_worker.js: tail waits per kernel.)
 let _simParTrace = null;
 
@@ -1320,6 +1321,8 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
         // (After a failure in this chain: skipped, counted done.)
         if (Atomics.load(ctl, SIM_PAR_BG_ERR + lane) === 0) {
             _simParRunning++;
+            // (Tracing, the simulation thread only: its background chunks by lane and kernel, bgc:<lane>:<kernel> and the longest, bgcMax:.)
+            const tr = _simParTrace, t0 = tr ? performance.now() : 0;
             try { SIM_KERNELS[kw & 0xFFFF](_simParReg, paramsByStage[kw >>> 16], c); }
             catch (err) {
                 const onSim = typeof _simPool !== 'undefined' && !!_simPool;
@@ -1327,7 +1330,7 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
                 else _simHelperLogFail('background kernel ' + (kw & 0xFFFF) + ' (registry ' + registryVersion + ', required ' + Atomics.load(ctl, b + SIM_PAR_BG_REGVER) + ')', err);
                 Atomics.store(ctl, SIM_PAR_BG_ERR + lane, 1);
             }
-            finally { _simParRunning--; }
+            finally { _simParRunning--; if (tr) { const d = performance.now() - t0, k = lane + ':' + (kw & 0xFFFF); tr['bgc:' + k] = (tr['bgc:' + k] || 0) + d; if (d > (tr['bgcMax:' + k] || 0)) tr['bgcMax:' + k] = d; } }
         }
         out = 1;
         if (Atomics.add(ctl, b + SIM_PAR_BG_DONE, 1) + 1 === total) {
@@ -1520,7 +1523,7 @@ function simParallelHelperMain() {
                     const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
                     try { fn(_simParReg, _simParHelperParams, c); }
                     catch (err) { _simHelperLogFail('kernel ' + ctl[SIM_PAR_KERNEL], err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
-                    if (t0) _simParTraceChunk(ctl, t0);
+                    if (t0) _simParTraceChunk(ctl, t0, c);
                     Atomics.add(ctl, SIM_PAR_DONE, 1);
                     Atomics.notify(ctl, SIM_PAR_DONE);
                 }

@@ -703,9 +703,26 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', '_simDeltaEvents', '_simEvTake', 'trafficBeforeMovement',
     'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
+// The occupancy movement's jobs (one a spatial block) in a traced tick: their
+// summed time (cpu:89), and those over 2 ms with their blocks' unit counts
+// (slow:89, [ms, units]): a dense block or a stalled thread.
+function _simTraceOccJobs(cur, n) {
+    const T = _simParReg['par.ctrace'], O = typeof _occ !== 'undefined' ? _occ : null;
+    if (!T || !O || !O.jobs) return;
+    const J = O.jobs, F = O.offsets, at = 8 + J[_simParams[4]];
+    let sum = 0;
+    for (let c = 0; c < n && c * 2 + 1 < T.length; c++) {
+        const d = T[c * 2 + 1]; if (!(d > 0)) continue; sum += d;
+        if (d > 2) { const j = J[at + c]; (cur.ph['slow:89'] || (cur.ph['slow:89'] = [])).push([Math.round(d * 10) / 10, F[j + 1] - F[j]]); }
+        T[c * 2 + 1] = 0;
+    }
+    cur.ph['cpu:89'] = (cur.ph['cpu:89'] || 0) + sum;
+}
 function _simTraceInstall() {
     // (Every parallel kernel run by its id, kp:<id>, and the background waits by lane, w:<lane>.)
-    { const pr = simParallelRun; self.simParallelRun = simParallelRun = function (kk) { const cur = _simTraceCur; if (!cur) return pr.apply(this, arguments); const a = performance.now(); try { return pr.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'kp:' + kk; cur.ph[k] = (cur.ph[k] || 0) + d; } } }; }
+    { const pr = simParallelRun; self.simParallelRun = simParallelRun = function (kk) { const cur = _simTraceCur; if (!cur) return pr.apply(this, arguments); const a = performance.now(); try { return pr.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'kp:' + kk; cur.ph[k] = (cur.ph[k] || 0) + d; } if (kk === SIM_KERNEL_MOVE_OCCUPANCY) _simTraceOccJobs(cur, arguments[1]); } }; }
+    // (Per chunk start and duration of the traced jobs: sim_parallel.js _simParTraceChunk.)
+    if (typeof simHeapArray === 'function') simParallelBind('par.ctrace', simHeapArray(Float64Array, 32768));
     { const bw = simParallelBackgroundWait; self.simParallelBackgroundWait = simParallelBackgroundWait = function (lane = 1) { const cur = _simTraceCur; if (!cur) return bw.apply(this, arguments); const a = performance.now(); try { return bw.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'w:' + lane; cur.ph[k] = (cur.ph[k] || 0) + d; } } }; }
     for (const name of SIM_TRACE_FNS) {
         const f = self[name];

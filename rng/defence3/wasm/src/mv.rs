@@ -2637,13 +2637,11 @@ struct MoveP {
     chunk: usize,
 }
 
-/// The block's flow direction: the desired velocities of the first unit of
-/// each tile that walks the flow (summed), which sets the sweep's direction.
-#[cfg_attr(feature="prof",inline(never))]
 /// The tiles x0..x1 (at most 64) of the index row starting at key `row`
 /// whose stamp is the epoch (entries this epoch), as bits from x0: four
 /// stamps a compare.
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn row_live(stamp:*const i32,row:usize,x0:i32,x1:i32,epoch:i32)->u64{
     let n=(x1-x0).max(0) as usize;let p=stamp.add(row+x0 as usize);let e=i32x4_splat(epoch);
     let mut m=0u64;let mut i=0usize;
@@ -2651,6 +2649,9 @@ unsafe fn row_live(stamp:*const i32,row:usize,x0:i32,x1:i32,epoch:i32)->u64{
     while i<n{if *p.add(i)==epoch{m|=1u64<<i;}i+=1;}
     m
 }
+/// The block's flow direction: the desired velocities of the first unit of
+/// each tile that walks the flow (summed), which sets the sweep's direction.
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn leader_dir(m:&Mv,a:*const i32,x0:i32,x1:i32,y0:i32,y1:i32,cw:i32,epoch:i32)->(f64,f64) {
     let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *const i32;
     let mut dx=0.0;let mut dy=0.0;
@@ -3031,7 +3032,8 @@ unsafe fn mark_need(m:&Mv,b0:usize,e:usize){
 /// Whether traffic_yield may move slot s (its early returns otherwise): a
 /// standing unit (not a walker: pushes it answers), or a flow walker short
 /// of its step (short: walker_short); any other walker returns at once.
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn yield_tag(m:&Mv,s:usize,short:bool)->bool{
     let on=*m.on.add(s);
     let walker=on==1||on==4||on==6||on==7||(BRAIN&&rd(m.cmode,s)&3==2);
@@ -3042,7 +3044,8 @@ unsafe fn walker_short(m:&Mv,s:usize)->bool{
 }
 /// walker_short with its tick-start position given (ox, oy in eighths: the
 /// footprint's before the stage, resolve_slot's; unit.x0 / y0 hold the same).
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn walker_short_at(m:&Mv,s:usize,ox:i32,oy:i32)->bool{
     if *m.on.add(s)!=1||rd(m.fl,s)&64==0||(BRAIN&&rd(m.cmode,s)!=0){return false;}
     let (hx,hy)=(rd(m.cvx, (s) * SR),rd(m.cvy, (s) * SR));let hl2=hx*hx+hy*hy;
@@ -3056,7 +3059,8 @@ unsafe fn walker_short_at(m:&Mv,s:usize,ox:i32,oy:i32)->bool{
 /// (unit.x / y, the first stage's) against the exclusive footprints, as the
 /// step resolved it itself before: the pressure's steering, shoulders, swaps,
 /// pushes. Its tile flags (out 1 / 3, spent) for where it ended up.
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn resolve_slot(m:&Mv,s:usize)->(i32,i32){
     let g=&*m.occ;
     if !g.active(s){return (*(m.x0.add(s) as *const i32),*(m.y0.add(s) as *const i32));}
@@ -6370,7 +6374,8 @@ fn epi_none() -> Epi {
     Epi { absent: 0.0, boxsteps: 0, epoch: 0, cwn: 0, csz: 0, np: 0, nt: 0, scale: 0.0, f0: 0, u0: 0, pb: 0, cnt: 0, ne: 0, on: false, push: false }
 }
 /// The chunk's charge sums cleared; the separation's pushes when P[54] 1.
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn epi_begin(m: &Mv, f: *const f64, chunk: i32, b0: usize, end: usize) -> Epi {
     let on = !m.post.is_null() && !m.postc.is_null();
     let np = to_i32(rd(f, 43));
@@ -6501,7 +6506,8 @@ unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
     }
 }
 /// The chunk's list counts.
-#[inline(always)]
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
 unsafe fn epi_end(m: &Mv, e: &Epi, chunk: i32) {
     if !e.on {
         return;

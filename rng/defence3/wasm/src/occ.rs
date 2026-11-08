@@ -288,6 +288,7 @@ impl MoveGrid {
     }
     /// The chunk records of this block and one chunk around it into buf (room for 2 words a cell, `cells` cells): the tick-start
     /// index does not change during the job, so a lookup reads the buffer (a few lines) instead of three tables at the chunk.
+    #[cfg_attr(feature = "prof", inline(never))]
     pub(super) unsafe fn cache_chunks(&mut self,buf:*mut i32,cells:usize,block:i32){
         let n=block+2;
         if self.ix_slot.is_null()||block<1||(n*n) as usize>cells{self.lc=core::ptr::null();return;}
@@ -329,7 +330,8 @@ impl MoveGrid {
         *self.stats.add(4)+=1;
     }
     /// The index entries of tile (cx, cy) (key: its index key; this job's block or the ring around it, indexed this tick) from the job's cache: (first, end).
-    #[inline(always)]
+    #[cfg_attr(not(feature = "prof"), inline(always))]
+    #[cfg_attr(feature = "prof", inline(never))]
     pub(super) unsafe fn tile_range(&self,cx:i32,cy:i32,key:usize)->(i32,i32){
         if !self.lc.is_null(){let o=(((cy-self.lcy)*self.lcn+(cx-self.lcx))*2) as usize;let a=*self.lc.add(o);return (a,a+*self.lc.add(o+1));}
         let a=*self.ix_start.add(key);(a,a+*self.ix_count.add(key))

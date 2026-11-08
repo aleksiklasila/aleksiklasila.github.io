@@ -6647,3 +6647,56 @@ helpers, Node 24.
   Math.max(16, ...)), tied to how far a unit may reach past its block in a
   phase (simDk steps): smaller blocks or splitting a heavy block's units
   needs that halo rule worked out first. Next.
+
+### 2026-11-08 (night, last+7) — the "dense block" was headless Edge: the occupancy jobs measured
+
+- Per job of kernel 89 its time and its block's units (trace-only: par.ctrace,
+  sim_parallel.js _simParTraceChunk; tests/occ-sched-probe.cjs in Node, which
+  also simulates schedules from the measured job times; the worker's
+  ?simtrace=1 now adds cpu:89 and slow:89 [ms, units], and the simulation
+  thread's background help chunks bgc:<lane>:<kernel> / bgcMax:;
+  tests/occ-edge-trace-probe.cjs reads them in Edge).
+- Node, chaos-1m-250k, 11 helpers: ~3,625 jobs a tick, a job ~8 us fixed +
+  ~0.4 us an index entry (474k entries a tick), 231 ms of job time a tick,
+  the kernel 17.5-24 ms. The four colour phases' barriers cost ~1 ms: a
+  dataflow schedule (a block waits only for its lower-phase neighbours, by
+  claim order or a ready queue) simulated from the same times gives 18.8 /
+  22.8 ms p50 / p95 against 19.7 / 23.3; work / threads is 18.8 / 21.8. The
+  dependency chain is 2-9 ms: no block dominates. Slow jobs (1-7 ms) have
+  any unit count (7 units, 2.8 ms) and hit 2-5 threads at once: stalls.
+- Edge headless (the earlier numbers): 2,053 jobs over 2 ms in 160 ticks, up
+  to 30 ms, at 60-600 units each (Node: ~0.1 ms): starved threads, not dense
+  blocks. kp:89 44 / 72 / 131 ms, tail 18 ms p95, tick p95 417 ms.
+- Edge headed (how it is played), same scene: kp:89 36 / 42 / 55 ms, tail
+  3.3 ms p95, longest job 11 ms, tick p50 145 / p95 211 ms over the first
+  window; settled (from tick ~120) tick p50 ~128, p95 ~150, max ~170 ms:
+  no spike stands out. Ticks 40-120 after the restore are slower (movement,
+  the worker search tier, unit events: the battle starting). With 7 helpers
+  cpu:89 is only 8% lower (353 -> 327 ms): Edge's jobs are ~1.5x Node's,
+  not from core contention. The kernel runs ~10.5 threads busy: smaller
+  blocks or another schedule would not shorten it; less work per job would.
+- Headed Edge, settled tick 131 ms mean: simMoveRun 62 (kp:89 34, kp:8 11,
+  traffic 2, block counts 2), worker search tier 14, combat scan 8, relayout
+  7, background waits 7, spawner queue 7, _wsCommit 6, unit events 6.
+- Kernel 89's CPU by part (Node helpers, a named build with --features=prof;
+  move_job's inlined parts now split out under prof): checked_traffic_q
+  17% self (56% with what it calls), move_job 11%, leader_dir 6.4%,
+  resolve_slot 5.9%, motion 5.4%, traffic_swap 5.2%, cache_chunks 4.9%,
+  epi_slot 4.7%, traffic_yield 4.1%, free_r3 4.0%. The per-job setup
+  (leader_dir, cache_chunks, row_live: O(block area), whatever the units)
+  is ~12% of the kernel.
+- One 255 ms tick (headed): kernel 151 (FLOW_PENDING) waited 80 ms for its
+  end while its chunks took ~1 ms: the simulation thread was in a
+  background chunk it took while waiting (_simBgHelp). Not seen again in a
+  280-tick run (longest help chunk 10 ms, lane 3 kernel 31); traced now.
+- tests/sim-frame-replica: the test started the match before its worker had
+  loaded, so the page made the match (and the page has no kernels: no slot
+  allocator since the JS one went). It now waits for the worker: pass.
+  A real start is unaffected (the page skips the starters when the worker
+  takes the match).
+- Determinism suites (deterministic-sort, lockstep-hash-stream,
+  event-route, shared-spatial, tower-simd, chaos-scenario,
+  multiplayer-chaos, and multiplayer-chaos with SIM_WORKER=1 and 4 host
+  helpers): all pass.
+- Next: the per-job setup (leader_dir / cache_chunks once per block row or
+  from the index, not per job over the whole block), then checked_traffic_q.
