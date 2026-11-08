@@ -6700,3 +6700,101 @@ helpers, Node 24.
   helpers): all pass.
 - Next: the per-job setup (leader_dir / cache_chunks once per block row or
   from the index, not per job over the whole block), then checked_traffic_q.
+
+### 2026-11-09 — keep unrelated background chunks off the caller's wait path
+
+- Target: the recorded headed Edge tick 89, 254.5 ms, whose FLOW_PENDING
+  tail was 80.4 ms (kernel 82.7 ms). Neighboring ticks 88/90 took 155.0 /
+  161.0 ms; nearby tick 87's FLOW_PENDING tail was 3.9 ms. Occupancy stayed
+  around 34–39 ms. These idle-scene ticks have no player-action burst.
+  `simParallelRun` excluded only movement from `_simBgHelp`; other kernels
+  and `simParallelBackgroundWait` could claim an unrelated, non-preemptible
+  chunk after exhausting their own work. Its duration then extended the wait.
+- Removed that cross-lane help from both waits. The simulation thread still
+  claims all available work for the dependency it actually needs. Helpers
+  keep running other lanes, and the caller joins each at its own wait.
+  No work is dropped, deferred by a tick budget, or capped. This changes the
+  existing JS worker orchestration only; simulation kernels remain WASM,
+  with no new JS per-item processing or fallback and no binary rebuild.
+- `tests/foreground-wait.test.cjs` uses a real helper and a handshake to
+  leave the final required chunk running while another lane has an 80 ms
+  chunk available. It asserts which thread claimed the unrelated work,
+  rather than imposing a flaky elapsed-time threshold, and verifies that
+  the unrelated chunk still completes exactly once. Both foreground and
+  background-lane waits are covered. Both old paths fail (90.5/92.2 ms;
+  unrelated chunk claimed); both changed paths pass (44.5/45.7 ms;
+  unrelated chunk not claimed). The elapsed values are diagnostic only.
+  Before/after test logs are retained alongside the measurements.
+- Raw measurements and the pre-change scheduler are retained under
+  `tests/test-runs/foreground-wait-20261109/`. Large mixed chaos first:
+  1,000,004 initial units, 65,536 structures, dk=1, 11 helpers, recurring
+  input bursts every 10 ticks. Serial unprofiled runs in A/B/B/A order,
+  240 ticks each, settled window 60–239 (180 samples/run):
+
+  | Run | Wall p50 | p95 | p99 | max | >100 ms | >150 ms |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Before 1 | 75.3 | 91.0 | 102.8 | 125.6 | 3 | 0 |
+  | After 1 | 72.6 | 92.0 | 95.8 | 95.9 | 0 | 0 |
+  | After 2 | 74.4 | 95.6 | 109.8 | 115.4 | 6 | 0 |
+  | Before 2 | 74.0 | 88.3 | 99.1 | 103.0 | 1 | 0 |
+
+  Pooled before/after mean 74.96/74.60, p95 89.37/92.79, p99
+  102.41/101.21, max 125.59/115.43 ms. **No consistent general tail-latency
+  improvement established**: >100 ms counts were 4/360 before and 6/360
+  after; before 1's worst tick included 11.3 ms GC. The guarantee is removal
+  of the particular unrelated-chunk wait extension, not elimination of GC
+  or scheduling stalls. Early gameplay is retained in every raw file;
+  all-gameplay maxima were 2,161/2,115/2,005/1,428 ms in run order, separate
+  from settled timing and from loading/setup.
+- Every run measured the same settled population, 255,480–382,370, with
+  13,650 births and 141,074 deaths. Useful-work counts also matched exactly:
+  4,985 research deposits, 1,688 collector and 1,368 astar deposits, 855
+  construction completions, 1,703 healer deliveries and 86 salvage returns.
+  Before 1 / after 1 / after 2 throughput per wall second: research
+  367.6/375.1/367.5, collector 124.5/127.0/124.4, astar 100.9/102.9/100.8,
+  construction 63.0/64.3/63.0. Required background waits averaged
+  3.25/3.26/3.31 ms per tick, so the first comparisons show no material
+  transfer of cost to those waits. Full per-run throughput is in summary.json.
+- Separate baseline profile: `before-profile.json` plus the simulation
+  and all 11 helper CPU profiles, analyzed with `chaos-spike-profile.cjs`.
+  Previous/slow/next/reference steps 63/64/65/68: 88.5/108.0/89.5/85.1 ms;
+  all non-burst ticks. Movement grew 37.1→46.5 ms, slot movement
+  5.9→9.9 ms, worker search 6.4→10.2 ms. Main-thread GC overlap was zero;
+  helper samples included GC and background navigation/free work. This
+  capture did not reproduce the rare 80 ms caller stall. All per-thread
+  neighboring-tick attribution is retained in the spike-analysis sidecar.
+- The Edge occupancy probe now reads population from the simulation worker;
+  the page's `units.length` incorrectly reported zero in worker mode.
+- Headed Edge, the restored chaos-1m-250k scene, 60 s captures, no input
+  bursts: compare the common settled ticks 120–239. Before/after p50
+  163.6/134.3, p95 206.2/158.8, p99 230.9/169.2, max 269.6/179.6 ms;
+  >200 ms 10/120 versus 0/120. No page errors. The after run ends with
+  214,636 actual units; the before run's old page-side population counter
+  was invalid, so it cannot establish equal browser populations. This is
+  one browser pair with broad phase differences, not proof that the whole
+  gain came from removing caller help. The serial Node A/B/B/A remains the
+  controlled throughput comparison.
+  Previous/slow/next/reference browser rows are saved separately: before
+  ticks 132/133/134/130 took 193.0/269.6/201.1/169.8 ms (spawner queue
+  7.3/72.8/9.1/9.8 ms); after ticks 193/194/195/189 took
+  125.5/179.6/158.8/133.5 ms. The latter slow tick has extra movement,
+  effective-stat and visibility work, not a FLOW_PENDING tail. Full early
+  captures are retained too (maximum 675.3/413.0 ms); the before early
+  outlier included 154.6 ms frame encoding and multiple inflated phases.
+- Remaining: the reproducible caller priority inversion is removed, but
+  movement's occupancy/collision work remains the largest regular cost.
+  A future spike investigation should profile the occasional spawner queue
+  and frame-encoding outliers, separating GC/OS delays from kernel work;
+  these measurements do not establish their cause or claim to fix them.
+- Validation: all 12 serial suites passed: foreground-wait,
+  background-chain, background-failure, nav-background, parallel-kernels,
+  deterministic-sort, lockstep-hash-stream, event-route-determinism,
+  shared-spatial-determinism, tower-simd-determinism,
+  chaos-scenario-determinism and multiplayer-chaos-determinism. Logs:
+  `tests/test-runs/run-all/2026-11-08T22-45-23-033Z/` (UTC directory name).
+  The scheduler tests cover 0/1/7 helpers, including errors, lane reuse,
+  stage ordering and exactly-once work. `git diff --check` passed.
+  The additional `SIM_WORKER=1 CHAOS_HOST_HELPERS=4` multiplayer chaos run
+  also passed: 2,598 tick hashes matched per map across all six maps,
+  including forced-divergence resyncs and host slot relayout. Its log is
+  `tests/test-runs/foreground-wait-20261109/worker-chaos-h4.log`.

@@ -30,7 +30,11 @@ const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length 
         const rows = trace.filter(r => r.ph && r.ph['kp:89']);
         const r1 = x => Math.round(x * 10) / 10;
         const col = k => rows.map(r => r.ph[k] || 0);
-        console.log('ticks', rows.length, 'units', await page.evaluate(() => typeof unitCount === 'function' ? unitCount() : units.length));
+        // The page has no simulation units in worker mode; its units.length
+        // reports zero. Read the actual population from the simulation worker.
+        const worker = page.workers().find(w => /sim_worker\.js/.test(w.url()));
+        const population = worker ? await worker.evaluate(() => units.length) : null;
+        console.log('ticks', rows.length, 'units', population);
         for (const k of ['kp:89', 'tail:89', 'chunkMax:89', 'cpu:89', 'n:89', 'kp:8', 'simMoveRun']) { const v = col(k); console.log(k.padEnd(12), 'p50', r1(pct(v, .5)), 'p95', r1(pct(v, .95)), 'max', r1(pct(v, 1))); }
         const totals = rows.map(r => r.total); console.log('tick total'.padEnd(12), 'p50', r1(pct(totals, .5)), 'p95', r1(pct(totals, .95)), 'max', r1(pct(totals, 1)));
         const slow = rows.flatMap(r => r.ph['slow:89'] || []);

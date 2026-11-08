@@ -1196,14 +1196,13 @@ function simParallelRun(kernel, total) {
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
     } finally { _simParRunning--; }
-    // Keep the caller ready to finish movement and post any following
-    // occupancy passes instead of letting a background chunk extend this barrier.
-    const helpBackground = kernel !== SIM_KERNEL_MOVE && kernel !== SIM_KERNEL_MOVE_OCCUPANCY;
+    // Keep the caller ready to consume this result and post the next job.
+    // An unrelated background chunk cannot be preempted when this job ends;
+    // even normally short chunks can stall and extend the foreground barrier.
     // (Tracing (sim_worker.js ?simtrace=1): this thread's wait for the job's last chunks, and its chunk count.)
     const tr = _simParTrace, tw = tr ? performance.now() : 0;
     if (tr && (kernel === SIM_KERNEL_MOVE_OCCUPANCY || kernel === SIM_KERNEL_MOVE)) { const h = 'helpers:' + kernel, a = Atomics.load(ctl, SIM_PAR_ACTIVE); tr[h] = Math.min(tr[h] ?? 99, a); }
     for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) {
-        if (helpBackground && _simBgHelp(ctl, -1)) continue;
         Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
     }
     if (tr) { const d = performance.now() - tw; if (d >= .2) tr['tail:' + kernel] = (tr['tail:' + kernel] || 0) + d; tr['n:' + kernel] = total; const mx = ctl[SIM_PAR_TRACE_MAX] / 1000; if (mx > (tr['chunkMax:' + kernel] || 0)) tr['chunkMax:' + kernel] = mx; }
@@ -1349,26 +1348,6 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
     }
     return out;
 }
-// A waiting simulation thread's work: a chunk of another pending chain, by
-// lane priority, of the lanes whose chunks are short (the tick's, the hash,
-// the index, the tiers, the traffic: not the navigation builds, heap growth
-// or long jobs, whose one chunk could keep the waiter well past its own
-// job's end). True when it ran one. (Their results are taken at their own
-// waits, whoever ran them.)
-const _SIM_BG_HELP_LANES = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_T1, SIM_LANE_T05];
-// (false: waits only wait, an A/B switch.)
-let SIM_BG_HELP = true;
-function _simBgHelp(ctl, except) {
-    if (!SIM_BG_HELP) return false;
-    for (let i = 0; i < _SIM_BG_HELP_LANES.length; i++) {
-        const l = _SIM_BG_HELP_LANES[i];
-        if (l === except) continue;
-        const J = _simBg[l];
-        if (!J || J.sync) continue;
-        if (_simBgClaim(ctl, l, _simBgChain, _simBgStageParams[l]) === 1) return true;
-    }
-    return false;
-}
 function simParallelBackgroundWait(lane = 1) {
     const J = _simBg[lane];
     if (!J) return;
@@ -1388,8 +1367,8 @@ function simParallelBackgroundWait(lane = 1) {
         // Nothing to claim: the rest is running elsewhere (or a stage is
         // being opened).
         if (Atomics.load(ctl, b + SIM_PAR_BG_ID) === idLast && Atomics.load(ctl, b + SIM_PAR_BG_DONE) >= Atomics.load(ctl, b + SIM_PAR_BG_TOTAL)) break;
-        // (Meanwhile: another lane's chunk, work the helpers would do later anyway.)
-        if (_simBgHelp(ctl, lane)) continue;
+        // Only this dependency belongs on the caller's critical path. Helpers
+        // keep servicing other lanes; the caller joins them at their own wait.
         const d = Atomics.load(ctl, b + SIM_PAR_BG_DONE);
         Atomics.wait(ctl, b + SIM_PAR_BG_DONE, d, 1);
     }
