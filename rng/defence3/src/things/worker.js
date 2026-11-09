@@ -3299,7 +3299,17 @@ function _workerBrainArray(name,Type,n){
 // (list: slot * 8 + code entries, the first n: the tick's events by default.)
 // The brains' event list for the match (main.js startGame): one entry a unit
 // (units: the population the budget holds), so wb.list is made and bound once.
-function workerBrainReserve(B){if(typeof simHeapHas!=='function')return;const units=typeof B==='object'?B.units:B;_workerBrainArray('list',Int32Array,Math.max(1024,units|0));}
+function workerBrainReserve(B){
+    if(typeof simHeapHas!=='function')return;
+    const units=typeof B==='object'?B.units:B;
+    _workerBrainArray('list',Int32Array,Math.max(1024,units|0));
+    // Map-sized scratch belongs to loading too. First-use allocation and
+    // binding used to sit inside the first gameplay event burst.
+    const nb=Math.ceil(GRID_W/8)*Math.ceil(GRID_H/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
+    _workerBrainArray('sites',Uint16Array,nb*64);
+    _workerBrainArray('count',Int32Array,nb*stride);
+    _workerBrainArray('any',Int32Array,np*16);
+}
 function workerBrainsPrepare(n,defer=false,list=null){
     if(_workerBrain.pending)workerBrainsCollect();
     // (The slots copied into one list bound once (wb.list), not the caller's

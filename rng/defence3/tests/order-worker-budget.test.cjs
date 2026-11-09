@@ -15,6 +15,15 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    if(u.dead)throw Error('fixture');u.workerType='healer';u.workerState='IDLE';units.push(u);unitSlotMapPushed(u);updateUnitSpatial(u);ids.push(u.id);
  }
  resetOrderQueue();
+ // Exercise all pending-target/flag encodings. Clearing the references and
+ // their digest must happen inside the order kernel, without a JS repair pass.
+ ids.forEach((id,k)=>{
+   const u=getUnitById(id);
+   u._pendingPathTarget=[undefined,null,{gx:3,gy:4,cmd:CMD_MOVING}][k%3];
+   u.pathIsFallbackAstar=[undefined,false,true][Math.floor(k/3)%3];
+ });
+ const clear=simPendingClear;
+ simPendingClear=()=>{throw Error('worker order returned to JS for pending repair');};
  const run=(n,perTick)=>{
    _queueGroupMoveOrder(sanitizeAction({action:'move',unitIds:ids.slice(0,n),targetX:400,targetY:400}),0,CMD_MOVING);
    for(let tick=0;_orderQueue.length&&tick<20;tick++){const b=simOrderStats.units;runQueuedOrders();perTick.push(simOrderStats.units-b);currentTick++;}
@@ -22,9 +31,14 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  };
  const small=[],got=run(240,small);
  if(_orderQueue.length)throw Error('orders did not drain');
- return {ids,got,small,now:ORDER_NOW,steps:ORDER_DRAIN_STEPS};
+ simPendingClear=clear;
+ return {ids,got,small,now:ORDER_NOW,steps:ORDER_DRAIN_STEPS,
+   digest:ids.every(id=>{const u=getUnitById(id);return simUnitHashDigest(u)===u._us.hObj[u._si];}),
+   pending:ids.every(id=>{const u=getUnitById(id);return !u._pendingPathTarget&&!u.pathIsFallbackAstar;})};
 })())`));
 assert.deepEqual(result.got,result.ids,'every selected worker takes the order: MANUAL_MOVE, moving, its task let go');
 assert.deepEqual(result.small,[240],'a small order applies at once');
+assert.equal(result.digest,true,'native pending repair preserves the unit digest');
+assert.equal(result.pending,true,'pending paths and fallback flags cleared');
 assert.deepEqual(i.errors.map(String),[]);
 console.log('PASS: worker orders through the queue kernels: every worker once, a small one at once');

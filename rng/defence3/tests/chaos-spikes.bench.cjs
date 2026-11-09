@@ -116,7 +116,7 @@ inst.eval(`__scratch.work={spawns:0,armySpawns:0,researchDeposits:0,collectorDep
 }
 //# sourceURL=chaos-bench-instrumentation-work.js
 `);
-inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};
+inst.eval(`simDk=${dk};netStepTicks=()=>${dk};__scratch.phases={};__scratch.intervals=[];
  for(const name of new Set([
   'processActions','gameTick','simMoveRun','simMoveEndTick','runUnitSeparationPass','_forEachUnitInTickOrder','spatialIndexRebuild','simUnitStateCollect',
   '_resolveDeferredPathsByGroup','_runAdjacencyRecalculation','syncVisibilityCoverage','sampleGameStats','recalculateUnitEffectiveLevel','processGlobalSpawnerQueue',
@@ -147,16 +147,20 @@ if(process.argv.includes('--kernels'))inst.eval(`{
 // --mass-at=STEP: the mass command (see the step loop); --mass-team,
 // --mass-gap (steps between clicks), --mass-clicks.
 const massAt=num('mass-at',0),massTeam=num('mass-team',0),massGap=num('mass-gap',2),massClicks=num('mass-clicks',3);
+const followupUnits=num('mass-followup-units',0);
 const MASS_COMMAND=`((click)=>{
  const p=${massTeam},out=[],pts=[];
  for(let k=0;k<=click;k++)pts.push({x:Math.floor(GRID_W*(.35+k*.12))*TILE+16,y:Math.floor(GRID_H*.55)*TILE+16,targetUnitId:null});
  const sel=[];for(const u of units)if(u&&!u.dead&&u.owner===p&&!u.isKing)sel.push(u);
+ if(${followupUnits}>0&&click>0){sel.length=Math.min(sel.length,${followupUnits});pts.splice(0,pts.length-1);}
  const n=sel.length,xs=new Float32Array(n),ys=new Float32Array(n),has=new Uint8Array(n).fill(1);
  for(let i=0;i<n;i++){xs[i]=sel[i].x;ys[i]=sel[i].y;}
  const pick=pts.length>1?assignNearestXY(xs,ys,has,pts):new Int32Array(n),byPt=pts.map(()=>[]);
  for(let i=0;i<n;i++)byPt[pick[i]].push(sel[i].id);
+ if(${followupUnits}>0&&click>0)__scratch.response={click,items:sel.map((u,i)=>({u,x:u.x,y:u.y,target:pts[pick[i]],applied:false,moved:false})),started:0};
  byPt.forEach((ids,j)=>{for(let q=0;q<ids.length;q+=ACTION_MAX_UNIT_IDS){const part=ids.slice(q,q+ACTION_MAX_UNIT_IDS);out.push({action:'move',uidz:actionIdsEncode(part),targetX:pts[j].x,targetY:pts[j].y});}});
  const bs=[];for(const b of barracks)if(b&&b.owner===p&&!b.dead)bs.push(b);for(const b of collectorSpawners)if(b&&b.owner===p&&!b.dead&&isSpawnerEntity(b)&&('rallyX' in b))bs.push(b);
+ if(${followupUnits}>0&&click>0)bs.length=0;
  const m=bs.length,bx=new Float32Array(m),by=new Float32Array(m),bh=new Uint8Array(m).fill(1);
  for(let i=0;i<m;i++){bx[i]=bs[i].x;by[i]=bs[i].y;}
  const bp=pts.length>1?assignNearestXY(bx,by,bh,pts):new Int32Array(m);
@@ -166,6 +170,19 @@ const MASS_COMMAND=`((click)=>{
  __scratch.massSel={units:n,buildings:m};
  return out;
 })`;
+// Diagnostic only: end-of-tick upper bounds from simulation receipt to target
+// application / changed position. Excludes UI, transport and rendering. A unit
+// already at its destination need not move; deaths are reported separately.
+const RESPONSE_PENDING=`(()=>{
+ const r=__scratch.response;if(!r)return null;
+ let applied=0,moved=0,dead=0;
+ for(const e of r.items){const u=e.u;if(u.dead){dead++;continue;}
+  if(u.targetPos&&u.targetPos.x===e.target.x&&u.targetPos.y===e.target.y)e.applied=true;
+  if(e.applied&&(u.x!==e.x||u.y!==e.y))e.moved=true;
+  applied+=e.applied;moved+=e.moved;
+ }
+ return {click:r.click,selected:r.items.length,applied,moved,dead,elapsedMs:__scratch.now()-r.started};
+})()`;
 // (The pending part of the mass command: units still to be ordered, buildings
 // whose rally is not yet the last click's.)
 const MASS_PENDING=`(()=>{
@@ -283,7 +300,7 @@ for(let i=0;i<ticks;i++){
  const cpu0=metrics?process.cpuUsage():null;
  const a=performance.now();
  if(burst)for(let team=0;team<2;team++)inst.eval(`processActions(__scratch.actions${team},${team})`);
- if(massClick>=0)inst.eval(`processActions(__scratch.massActions,${massTeam})`);
+ if(massClick>=0)inst.eval(`if(__scratch.response&&__scratch.response.click===${massClick})__scratch.response.started=__scratch.now();processActions(__scratch.massActions,${massTeam})`);
  inst.eval(workerPost?'gameTick();simPresentTickEnd();{const t=currentTick++;__scratch.W._simPostResult(t,null,null,0);}':'gameTick();currentTick++;');
  const ms=performance.now()-a;
  if(censusSteps.has(i))inst.eval('__scratch.census.end()');
@@ -307,6 +324,7 @@ for(let i=0;i<ticks;i++){
  row.structRows=readStructRows();
  if(eventMetrics)row.events=inst.eval('__scratch.events');
  if(massAt>0&&i>=massAt-1){row.mass=inst.eval(MASS_PENDING);if(massClick>=0)row.mass.click=massClick;}
+ if(followupUnits>0&&i>=massAt)row.response=inst.eval(RESPONSE_PENDING);
  if(timeline)row.intervals=inst.eval('__scratch.intervals');
  if(metrics){const m=process.memoryUsage();row.cpu=process.cpuUsage(cpu0);row.heapUsedMB=m.heapUsed/1048576;row.rssMB=m.rss/1048576;row.externalMB=m.external/1048576;row.arrayBuffersMB=m.arrayBuffers/1048576;row.freeMB=require('node:os').freemem()/1048576;}
  // Census is outside timing and intentionally sparse. Count actual targets and

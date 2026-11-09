@@ -44,6 +44,20 @@ pause's phases and surviving bytes.
 
 Useful options:
 
+- `--mass-at=20 --mass-clicks=2 --mass-gap=1 --mass-followup-units=1000`
+  sends a whole-selection move/rally burst, followed on the next step by a
+  new destination for 1,000 surviving units only. `rows[].response` reports
+  selected, applied, moved and dead counts, plus elapsed milliseconds from
+  simulation receipt. Application checks the requested target; movement
+  requires a changed position after application. These are end-of-tick
+  observations, not sub-tick timestamps or input-to-render latency. Units
+  already at the destination, blocked units and dead units need separate
+  interpretation. The optional per-unit observations are outside the tick
+  timer and add diagnostic overhead; use ordinary runs for acceptance TPS.
+  `mass.queuedUnits`, backlog counts and unapplied rallies still track the
+  larger command. This option changes follow-up clicks to one new point and
+  omits building orders from those clicks.
+
 - `--allocation-survivors` (with `--allocation-profile`) samples only objects that survived a scavenge: what scavenge pauses copy. `--live-heap` writes a `.liveheap` sampling profile of the JavaScript heap still alive at the end, attributed from before match start.
 - `--restore-at=N` (diagnostic) encodes and decodes the whole state in place before step N, outside the timing, as a resync does; the restore lays unit slots out dense. At 1M starting units this did not finish in 40 minutes; 524k starting units took ~13 s.
 

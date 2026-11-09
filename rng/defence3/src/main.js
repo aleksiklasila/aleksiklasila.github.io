@@ -4471,6 +4471,15 @@ function simMatchPrepare() {
     _upkBuildingsStep();
     if (typeof _simMoveWalls === 'function') _simMoveWalls();
     if (typeof _simMoveAreaBoxes === 'function') _simMoveAreaBoxes();
+    // The completed world's query index is derived state. Build and bind it
+    // before multiplayer starts ticking, rather than on the first query.
+    if (typeof spatialIndexEnsure === 'function') spatialIndexEnsure();
+    // Build the actual world caches here, rather than merely executing a
+    // warm-up pass whose answers would be discarded by the first tick.
+    if (typeof _simMoveStructs === 'function') _simMoveStructs();
+    if (typeof _wswStep === 'function') _wswStep(0, false);
+    if (typeof _laserMapBuild === 'function') _laserMapBuild();
+    if (typeof _navProfilesInUse === 'function') for (const p of _navProfilesInUse()) navEnsure(p);
 }
 function orderQueueReserve() {
     if (!_orderEntryPoolReady) {
@@ -4628,7 +4637,7 @@ let _ordW = null;
 // list first; the pending target's columns and the digest after (stop, mode 2).
 function _orderWorkerArgs(list, S, W, V, U, resKept, wsl) {
     const c = S.columns;
-    return [list, W.out, W.fix, W.cnt, W.pd,
+    return [list, W.out, null, W.cnt, W.pd,
         c.owner, c.dead, c.isWk, c.holdF, c.spEpoch, c.x, c.y, S.sepLayer, S.sepKey, c.id,
         c.tuS, c.tuId, c.tbT, c.acqB, c.fatF, c.fLsX, c.fLsY, c.commandState, c.mvOn, c.amGx, c.amGy, c.mvTgX, c.mvTgY, c.agWait, c.mvPP, c.mvPF,
         c.wkS, c.wkT, c.wkR, c.wkN, c.idleFV, null, c.wkIdle, c.wsKind, c.wkIx, c.wbType,
@@ -4641,7 +4650,7 @@ function _orderWorkerArgs(list, S, W, V, U, resKept, wsl) {
 function _ordWReady(m) {
     if (!_ordW || _ordW.out.length !== m || !simHeapHas(_ordW.out)) {
         const I = k => simSharedArray(Int32Array, k);
-        _ordW = { out: I(m), fix: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(24) };
+        _ordW = { out: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(25) };
         // (Worker record types, unit.wbType 1..6: their reservation load and work type indices.)
         ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { _ordW.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
     }
@@ -4670,12 +4679,14 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
     const wsl = _wsw ? _wswResvRoom() : null;
     if (!simHeapHas(workerReservedTiles)) { const t = workerReservedTable(); t.set(workerReservedTiles.subarray(0, Math.min(t.length, workerReservedTiles.length))); workerReservedTiles = t; workerReservedCountsInvalidate(); }
+    _simPptKeys();
     const arrays = _orderWorkerArgs(Q.out2, S, W, V, U, resKept, wsl);
     P.fill(0);
     P[1] = n; P[2] = playerId; P[3] = spatialEpoch; P[4] = gameTime; P[5] = targetGx * TILE + 16; P[6] = targetGy * TILE + 16;
     P[7] = GRID_W; P[8] = TILE; P[9] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[10] = SNAP_REGION_TILES; P[11] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[12] = _WORKER_WORK_TYPES.length; P[13] = V.rw; P[14] = V.rh; P[15] = V.np; P[16] = WORKER_WORK_REGION_TILES; P[17] = U.n;
     P[18] = CMD_MOVING; P[19] = SIM_SEP_ABSENT; P[20] = workerReservedTiles.length; P[21] = V.length; P[22] = wsl ? wsl.length : 0;
+    P[23] = _simPptK; P[24] = _simPfaK;
     P[0] = 0;
     simRustDirect('k_order_workers', arrays, P);
     // Each profile's destination, flow and its readiness (its first worker's).
@@ -4696,8 +4707,6 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     simRustDirect('k_order_workers', arrays, P);
     V.sum = (V.sum + C[2]) | 0;
     if (C[3]) _wsw = null;
-    // Pending ways: their references let go here (their digest terms).
-    for (let i = 0, nf = C[1]; i < nf; i++) { const s = W.fix[i], f = c.mvPF[s]; simPendingClear(c, s); c.mvPF[s] = f; }
     const left = [];
     for (let i = 0, no = C[0]; i < no; i++) { const u = S.owners.at(W.out[i]); if (u) left.push(u); }
     return left;

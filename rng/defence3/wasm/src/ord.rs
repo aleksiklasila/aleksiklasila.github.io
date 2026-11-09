@@ -319,8 +319,9 @@ fn work_mix(i: i32) -> i32 {
 /// Eligible: the player's, alive, a worker, not held, indexed this epoch,
 /// not a shooter; the others listed for the JavaScript (out, cnt[0]), as
 /// are those of a profile without a destination (ow.pd valid 0). Units with
-/// a pending way listed too (fix, cnt[1]): their references the
-/// JavaScript's. The work versions' checksum change at cnt[2]; cnt[3] 1
+/// a pending way have it cleared in the heap, including its digest (P[23/24]
+/// target/flag hash keys; array word 2 reserved). The work versions'
+/// checksum change at cnt[2]; cnt[3] 1
 /// when the work site grid's dirty list was full.
 /// Per profile p, ow.pd[6p..]: destination tile, wide, flow, its
 /// generation, ready, valid. Releases: the work version of the target's
@@ -357,7 +358,7 @@ pub unsafe fn wm_clear(k: &K, at: usize, wr: usize, wb: i32, man: f64) {
 #[no_mangle]
 pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (list, out, fix, cnt, pd) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
+    let (list, out, cnt, pd) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(3), k.p::<i32>(4));
     let (own, dead, iswk, holdf, ep, xs, ys, layer, sepk, uid) = (k.p::<i8>(5), k.p::<u8>(6), k.p::<u8>(7), k.p::<u8>(8), k.p::<i32>(9),
         k.p::<i32>(10), k.p::<i32>(11), k.p::<u8>(12), k.p::<u32>(13), k.p::<i32>(14));
     let (tus, tuid, tbt, acqb, fatf, lsx, lsy, cmdc, on, amgx, amgy, tgx, tgy) = (k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<u8>(18),
@@ -392,7 +393,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         }
         return;
     }
-    let (mut no, mut nf, mut vsum, mut full) = (0usize, 0usize, 0i32, 0i32);
+    let (mut no, mut vsum, mut full) = (0usize, 0i32, 0i32);
     if mode == 2 {
         // Stopped workers (main.js stop, k_unit_cmd's list): its order's
         // fields cleared (commandState P[18], no way, no targets, the
@@ -498,7 +499,20 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         if g(cmdc, q) != cmd_move { s(on, q, 0); s(cmdc, q, cmd_move); }
         s(amgx, q, -1); s(amgy, q, -1); s(tgx, q, px); s(tgy, q, py);
         s(agw, q, 0);
-        if g(mvpp, q) != 0 { s(fix, nf, qv); nf += 1; }
+        if g(mvpp, q) != 0 {
+            let (pst, pgx, pgy, hobj) = (k.p::<u8>(89), k.p::<i16>(90), k.p::<i16>(91), k.p::<i32>(92));
+            let t = g(pst, q) as i32;
+            let mut h = g(hobj, q);
+            if t & 3 != 1 {
+                let e = match t & 3 { 2 => (-16i32).wrapping_sub((g(pgy, q) as i32).wrapping_mul(65536).wrapping_add(g(pgx, q) as i32)), _ => i32::MIN };
+                h = h.wrapping_add(hterm2(k.i(23), -2147483647)).wrapping_sub(hterm2(k.i(23), e));
+            }
+            if (t >> 2) & 3 != 1 {
+                let e = if (t >> 2) & 3 == 2 { 0x3bd } else { i32::MIN };
+                h = h.wrapping_add(hterm2(k.i(24), 0x2bd)).wrapping_sub(hterm2(k.i(24), e));
+            }
+            s(hobj, q, h); s(pst, q, 5); s(mvpp, q, 0);
+        }
         s(mvpf, q, 0);
         // Its task let go (_clearWorkerTarget, clearWorkerTaskMemoryForFreeRetarget).
         let w = g(wks, q);
@@ -574,7 +588,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             s(msteady.add(6), q * 8, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);
         }
     }
-    s(cnt, 0, no as i32); s(cnt, 1, nf as i32); s(cnt, 2, vsum); s(cnt, 3, full);
+    s(cnt, 0, no as i32); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
 }
 
 #[inline(always)]

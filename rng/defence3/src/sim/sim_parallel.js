@@ -1450,6 +1450,7 @@ function simParallelBackgroundDone(lane = 1) {
 // ---- a helper's side (sim_helper.js) ----
 function simParallelHelperMain() {
     let ctl = null, seen = 0, regVer = 0, bgParams = null, bgChain = null;
+    let bindingsChanged = false;
     // (A helper allocates nothing in the wasm heap: the simulation thread
     // owns it; anything made here is plain shared memory.)
     _simHeapAlloc = null; _simHeapAllocAuto = null;
@@ -1468,12 +1469,16 @@ function simParallelHelperMain() {
             _simParWPtr[m.name] = m.wptr >= 0 ? m.wptr : -1;
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
+            bindingsChanged = true;
+            if (ctl) Atomics.notify(ctl, SIM_PAR_GEN);
         } else if (m.type === 'binds') {
             // (A batch: [name, arr, wptr, ...], in order.)
             const L = m.list;
             for (let i = 0; i < L.length; i += 3) { _simParReg[L[i]] = _simBindArray(L[i + 1], L[i + 2]); _simParWPtr[L[i]] = L[i + 2] >= 0 ? L[i + 2] : -1; }
             _simParBinds++;
             if (m.ver > regVer) regVer = m.ver;
+            bindingsChanged = true;
+            if (ctl) Atomics.notify(ctl, SIM_PAR_GEN);
         }
     };
     // A task boundary (bind messages are handled between tasks).
@@ -1488,8 +1493,15 @@ function simParallelHelperMain() {
                 const until = performance.now() + SIM_PAR_SPIN_MS;
                 while (Atomics.load(ctl, SIM_PAR_GEN) === seen && performance.now() < until) { }
             }
-            let r = Atomics.waitAsync(ctl, SIM_PAR_GEN, seen);
-            if (r.async) await r.value;
+            // A job can arrive before its binding messages. Receiving the
+            // arrays makes that existing job runnable, without a new generation.
+            // Remember messages consumed at nextTask too: their notification
+            // can precede this wait. Never change the foreground generation.
+            if (!bindingsChanged) {
+                let r = Atomics.waitAsync(ctl, SIM_PAR_GEN, seen);
+                if (r.async) await r.value;
+            }
+            bindingsChanged = false;
             let g = Atomics.load(ctl, SIM_PAR_GEN);
             seen = g;
             if (g & 1) continue;   // being written

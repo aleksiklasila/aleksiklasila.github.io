@@ -6798,3 +6798,207 @@ helpers, Node 24.
   also passed: 2,598 tick hashes matched per map across all six maps,
   including forced-divergence resyncs and host slot relayout. Its log is
   `tests/test-runs/foreground-wait-20261109/worker-chaos-h4.log`.
+
+### 2026-11-09 — wake helpers when late bindings make pending work runnable
+
+- Priority remains gameplay stalls, not the regular occupancy cost. No
+  occupancy or other WASM kernels were changed in this session. Raw traces,
+  all helper profiles, source snapshots and comparison scripts are under
+  `tests/test-runs/occupancy-20261109/` (the directory was named before the
+  investigation narrowed to the scheduler).
+- Found a lost wake in `simParallelHelperMain`: a helper can observe a job
+  before its binding messages, yield to receive messages, then sleep on the
+  already-observed foreground generation. Later `bind`/`binds` messages
+  updated its registry but did not wake its scheduling loop. A pending
+  background job then depended on another job being posted or the caller
+  executing it at its wait. This can happen during play after a rebind,
+  not just on the first tick.
+- Binding arrivals now notify the wait and set a local flag. The flag also
+  covers bindings delivered during `nextTask`, before a wait is armed.
+  The foreground generation is not changed; work ownership, phase barriers,
+  priorities and exactly-once claims are unchanged. This is JS thread/message
+  orchestration, not per-entity simulation logic or a JS kernel fallback.
+- `tests/background-bind-wake.test.cjs` deterministically withholds bindings
+  until a real helper has observed the pending job and armed its wait. It
+  then delivers the bindings without posting another job or allowing the
+  caller to claim work. The saved old scheduler times out; the fixed one
+  completes exactly once, for both single and batched bindings, without
+  changing the foreground generation. The deadline is a deadlock guard,
+  not a performance threshold.
+- Loading: `workerBrainReserve` now allocates and binds the map-sized
+  sites/count/owner scratch alongside the event list, before the existing
+  setup memory prefault. `simMatchPrepare` also builds the completed world's
+  spatial index. These remove first-use allocation/binding/index setup from
+  gameplay. Preparation still advances no tick, consumes no queued order,
+  and leaves the exact gameplay state hash unchanged; the expanded
+  `match-prepare` test checks that and the prepared buffers/index.
+  **This does not move the entire first simulation step into loading.**
+  Initial combat, movement and newly submitted commands still execute as
+  gameplay. Their remaining cost must not be called loading or omitted.
+- Attribution: the initial mixed settled capture's worst step 89 was
+  119.3 ms, reference 85 was 93.7 ms, with movement 67.5 versus 54.3 ms
+  and no main-isolate GC overlap. The neighboring ticks and all twelve
+  threads are in `before-profile.json.spike-analysis.json`. A separate
+  early capture found step 0 at 2,562.5 ms: 1,193.6 sampled ms in
+  `k_worker_spawners` on the caller while helpers spent much of the tick
+  idle. This is consistent with the binding starvation mechanism, but
+  does not establish that all of the first-tick excess had that cause.
+  Step 0 has no previous gameplay tick; next step 1 and same-burst-status
+  reference 10 are retained in the early analysis.
+- Settled whole-selection command capture, with worker presentation/post
+  enabled: previous/slow/next/reference steps 79/80/81/70 were
+  92.5/128.2/94.8/112.2 ms. Slow and reference both have recurring action
+  bursts; step 80 additionally commands the whole selection. Its
+  `runQueuedOrders` took 25.9 ms, including 16.1 ms in the serial WASM
+  `k_order_workers`. The after diagnostic's corresponding steps were
+  100.3/133.3/110.3/113.5 ms. Both neighboring-tick analyses include all
+  helpers; these profiles do not demonstrate a command-spike improvement.
+- Acceptance measurements ran serially, unprofiled, A/B/B/A: large mixed
+  chaos, 1,000,004 initial units, 65,536 structures, 11 helpers, dk=1,
+  180 steps, measured steps 60–179. Recurring input bursts every ten steps,
+  plus whole-selection clicks at 80/82/84; `--worker-post --no-census`.
+
+  | Run | Wall p50 | p95 | p99 | max | >100 ms | >150 ms |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Before 1 | 77.9 | 99.6 | 106.0 | 119.1 | 5 | 0 |
+  | After 1 | 77.1 | 99.4 | 116.4 | 122.7 | 5 | 0 |
+  | After 2 | 77.4 | 99.6 | 113.1 | 118.5 | 5 | 0 |
+  | Before 2 | 79.5 | 108.2 | 116.4 | 120.2 | 13 | 0 |
+
+  Pooled before/after: mean 80.26/78.81, p95 104.75/99.43,
+  p99 116.43/116.41, max 120.23/122.72 ms; >100 ms 18/240 versus
+  10/240. **No consistent reduction in worst-tick latency established.**
+  The last baseline is slower broadly; the first pair is essentially
+  unchanged and the pooled maximum is slightly worse. The robust result
+  is removal of the tested lost wake, not uniformly stable TPS.
+- Every acceptance run had identical measured population and work:
+  288,743–382,370 units, 2,433 births, 96,594 deaths, 2,522 research
+  deposits, 165 collector deposits, 953 astar deposits, 423 construction
+  completions, 1,468 healer deliveries and 29 salvage returns. The first
+  whole-selection command affected 148,862 units and 10,808 buildings;
+  no queued units, backlog IDs or unapplied rallies remained afterward.
+  Before 1 / after 1 / after 2 / before 2 research throughput was
+  266.77/266.62/266.73/257.09 deposits per wall second, construction
+  44.74/44.72/44.74/43.12 completions/s. Full throughput is in
+  `summary.json`; average required background waits were
+  2.59/2.75/2.76/2.72 ms per step.
+- All first gameplay ticks are retained: 1,553.6/1,509.6/1,432.7/1,584.9
+  ms in run order. Separate world-dependent loading preparation was
+  187.9/204.1/194.0/188.2 ms (other loading/reservations precede that
+  timer). The large initial gameplay spike is **not eliminated**.
+- Validation: 15/15 serial suites passed, including late-binding wake,
+  foreground-wait, background-chain/failure, navigation background,
+  parallel kernels, sorting, lockstep hashes, event routing, spatial and
+  tower determinism, chaos, multiplayer chaos, worker spawner decisions,
+  and loading preparation. Logs:
+  `tests/test-runs/run-all/2026-11-09T09-06-19-238Z/`.
+  A separate four-helper spawner test passed 6,400 exact nearest-site
+  checks. `SIM_WORKER=1 CHAOS_HOST_HELPERS=4` multiplayer chaos also passed:
+  2,598 matching tick hashes per map on all six maps, with forced-divergence
+  resyncs and host relayout. Its log is `worker-chaos-h4.log` beside the
+  measurements. Syntax checks passed; Git's whitespace check passed with
+  `core.whitespace=cr-at-eol` for main.js's existing tracked CRLF format.
+  Old/fixed wake regression logs are `bind-wake-before.log` and
+  `bind-wake-after.log`. No WASM rebuild was needed.
+- Remaining priorities: the measured whole-selection order burst (serial
+  worker task/reservation cleanup), further first-use work that can safely
+  finish before multiplayer readiness, and browser spawner/frame-encoding
+  outliers from the previous session. No new headed-browser timing claim
+  is made here. Gameplay stalls and uniform multiplayer tick durations
+  remain unresolved beyond the two specific scheduler mechanisms fixed.
+
+## 2026-11-09 — loading caches, native pending-path cleanup, response measurements
+
+- `simMatchPrepare` now builds movement structure/block tables, worker search
+  grids, laser link maps and missing navigation profiles before readiness.
+  It uses the existing WASM kernels and heap tables. Repeated preparation
+  reuses valid caches; the regression checks that time, tick, queued input,
+  unit collection phase and authoritative state hash do not change. This
+  moves real reusable world data, not a simulated/discarded gameplay tick.
+- Worker move-order pending-path cleanup and digest repair now run wholly
+  inside `k_order_workers`. Removed the per-worker JS repair loop and its
+  selection-sized output buffer. The regression covers pending-target and
+  fallback-flag encodings, checks field/digest agreement, and rejects calls
+  back into `simPendingClear`. Both WASM32 and WASM64 were rebuilt. This is
+  one removed JS pass, **not** completion of the O(1) command pipeline:
+  reservation/path release is still serial and exceptional order cases
+  still reach the pre-existing JS movement fallback.
+- Rejected experiment: running the worker spawner query during preparation
+  produced scratch answers that gameplay discarded. It did not establish
+  a first-tick improvement and was reverted, including both binaries.
+  `loading-profile.json` records that rejected experiment; do not confuse
+  it with the final `followup-profile.json`.
+- Raw artifacts, source baselines, CPU profiles for main plus all 11 helpers,
+  logs and reproducible comparison/summary scripts are in
+  `tests/test-runs/loading-orders-20261109/`. A/B/B/A measurements ran
+  serially, with 1,000,004 initial units, 65,536 structures, 1024-square
+  map, dk=1, worker presentation enabled, no periodic census, 180 steps,
+  and whole-selection orders at steps 80/82/84. Window: steps 60–179.
+
+  | Run | Loading prepare ms | First tick wall ms | p95 | p99 | max | >100 / >150 ms |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Before 1 | 184.1 | 1506.8 | 107.7 | 132.2 | 190.9 | 9 / 1 |
+  | After 1 | 216.7 | 1184.9 | 97.2 | 116.4 | 125.4 | 5 / 0 |
+  | After 2 | 231.3 | 1099.6 | 111.4 | 146.1 | 153.3 | 11 / 1 |
+  | Before 2 | 191.5 | 1544.5 | 122.5 | 222.0 | 244.4 | 14 / 3 |
+
+  Pooled p95/p99/max: 111.6/200.1/244.4 → 104.5/142.1/153.3 ms.
+  **Not a controlled general gameplay latency improvement claim:** loading
+  navigation earlier changes the synthetic scene's subsequent evolution.
+  Before population was 288,743–382,370; after 288,281–382,309. Repeats
+  within each version have identical population/work counts. Before/after
+  births were 2,433/2,454; deaths 96,594/97,029; research deposits
+  2,522/2,921; construction completions 423/433. Research throughput in
+  run order was 254.35/302.36/300.36/244.07 deposits/s; construction
+  42.66/44.82/44.53/40.94 completions/s. Full work/throughput and raw ticks
+  are retained in `summary.json` and each run. Preparation timing excludes
+  earlier match setup, so it is not total loading time.
+- Added `--mass-followup-units=1000` diagnostic: whole-selection order then
+  one new destination for a subset, with no building orders in the follow-up.
+  `response` reports target application, changed positions, deaths and wall
+  time since simulation receipt. These are end-of-tick upper bounds,
+  excluding UI/network/render latency; diagnostic scans are outside timing.
+  A changed position after target application is not proof that every unit
+  has an unobstructed route. The option and caveats are documented in
+  `tests/CHAOS_SPIKES_BENCHMARK.md`. Also initialized timeline intervals
+  before worker presentation setup can invoke an instrumented kernel.
+- Final diagnostic (`followup-profile.json`): step 20 ordered 236,678 units
+  and 11,735 buildings with 512,156 units alive at tick end. All queue,
+  backlog and rally counts drained that tick, but wall time was 173.9 ms.
+  Step 21 retargeted 1,000 units with 506,822 alive. By the first end-of-tick
+  observation (133.7 ms after receipt), all 988 surviving selected units
+  had the requested target, 897 had changed position, and 12 had died.
+  At the next observation (259.7 ms), 923 surviving selected units had
+  moved. This is a responsiveness baseline, not evidence that priority or
+  starvation protection has been implemented.
+- Neighbor/profile slicing compared step 19 (143.4 ms), slow step 20
+  (173.9), next step 21 (130.2), and normal recurring-burst step 30
+  (129.3). The reference has ordinary recurring actions, not an identical
+  mass selection. Queued-order cost was 0.006/25.42/8.32/2.71 ms;
+  movement 60.74/71.06/74.05/54.83 ms. The large order's worker kernel
+  alone took 17.56 ms. There was no main-isolate GC on steps 19–21;
+  reference GC was 8.01 ms. Helper slices show navigation field and atlas
+  route work expanding on the large command. The next tick's main profile
+  still samples `_makeFallbackPathForUnit` (6.12 ms sampled self time),
+  whereas its native worker order work is only 0.108 ms. Therefore merely
+  moving the native worker loop would not solve every command spike.
+- Remaining startup spike: final profiled first tick is 1,121.8 ms, including
+  358.4 ms unit events, 326.4 ms movement, 125.7 ms tick-chain wait and
+  92.9 ms visibility (inclusive phases overlap). Initial movement structure,
+  worker-grid and laser-link builds no longer appear in that tick.
+  A full readiness barrier still needs useful initial decision preparation,
+  not warmup whose outputs are thrown away. Gameplay command admission,
+  exceptional paths, shared reservation release and background route
+  throughput remain priorities. No arbitrary production work caps or
+  new JS fallback were added. No new headed-browser result is claimed.
+- Validation: 16/16 serial suites passed, covering loading preparation,
+  queued hashes, worker orders, fast/multi-point orders, scene orders,
+  worker walking/work and completion publication, laser updates, navigation,
+  parallel kernels, foreground waits, binding wakes, chaos and multiplayer
+  determinism. Logs: `tests/test-runs/run-all/2026-11-09T14-28-45-965Z/`.
+  The new worker regression fails on the pre-change source/binary and passes
+  on both current WASM32 and WASM64; loading preparation also passes on
+  WASM64. Separate logs are beside the measurements. JavaScript syntax and
+  Git whitespace checks passed (existing main.js CRLF respected).
+  `SIM_WORKER=1 CHAOS_HOST_HELPERS=4` multiplayer chaos also passed; its
+  full peer-hash/resync results are in `worker-chaos-h4.log`. Nothing committed.
