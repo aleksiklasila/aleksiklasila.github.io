@@ -1663,7 +1663,7 @@ SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCo
 const SIM_KERNEL_TOWER_ACQ_SNAP=102,SIM_KERNEL_TOWER_ACQ=103;
 const _simTowerAcqSnapW=_simWK(['twq.stt','st.code','st.uc','st.val','st.brain','st.rrow','st.own','sta.kind','sta.range','?tc.range','acq.agrid',
     'twq.area','twq.own','twq.kind','twq.reach','twq.tile']);
-const _simTowerAcqW=_simWK(['twq.area','twq.own','twq.kind','twq.reach','twq.tile','acq.saOff','acq.saX','acq.saY','acq.saSlot','acq.id','acq.upt','acq.wt',
+const _simTowerAcqW=_simWK(['twq.area','twq.own','twq.kind','twq.reach','twq.tile','acq.saOff','acq.saE','?-','?-','?-','acq.upt','acq.wt',
     'acq.saNearest','acq.saDistance','acq.saStructure','acq.saStructureDistance','twr.slot','twr.id','twr.st',
     'tac.flags','acq.stix','acq.sb0','acq.sb1','acq.sb2','acq.sb3','acq.sb4','acq.sb5']);
 SIM_KERNELS[SIM_KERNEL_TOWER_ACQ_SNAP]=function(R,P,chunk){_simRust(_simTowerAcqSnapW,P,chunk,'k_tower_acq_snap','TOWER_ACQ_SNAP');};
@@ -2139,11 +2139,13 @@ const _simAcqScanW = _simWK(['acq.scls', 'acq.sown', '?acq.hss', 'acq.sout', 'ac
 const SIM_KERNEL_ACQ_AREA_BUILD=90;
 const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x','acq.y','acq.own','acq.flags','acq.cmd','acq.rng','acq.id',
     'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
-    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saX','acq.saY','?-','?-','acq.saSlot',
+    // (acq.saE: the area buckets' entries, a 16-byte record each: x, y, slot, id.)
+    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?-','?-','?-','?-',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
-    // (The build's per-entry key; its stages' histograms by entry range.)
-    '?acq.saKey','?acq.saHist']);
+    // (The build's per-entry key; its stages' histograms by entry range;
+    // the answers packed, 32 bytes a team and area: acq_sample.rs RW.)
+    '?acq.saKey','?acq.saHist','?acq.saRec']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
 // The same build for the area answers in three stages, chunks of entries
 // (acq_sample.rs k_acq_area_count / _prefix / _scatter: the same table),
@@ -2159,6 +2161,9 @@ SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SEED]=function(R,P,chunk){_simRust(_simAcqSample
 // the helpers (one serial pass over every team's was ~290 ms with 8 teams).
 const SIM_KERNEL_ACQ_AREA_ANSWERS=98;
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_ANSWERS]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_answers','ACQ_AREA_ANSWERS');};
+// (The answers into one record a team and area for the scan: P[37] records a job.)
+const SIM_KERNEL_ACQ_AREA_PACK=190;
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_PACK]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_pack','ACQ_AREA_PACK');};
 SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     if(P[24]>0||P[28]===1){_simRust(_simAcqSampleW,P,chunk,'k_acq_sample','ACQ_SAMPLE');return;}
     // (The commands as integers: the snapshot's column is Int32. P[21] 1:

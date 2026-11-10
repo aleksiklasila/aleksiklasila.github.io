@@ -124,8 +124,8 @@ pub unsafe extern "C" fn k_tower_acq_snap(a:u32,chunk:i32){
 /// watched), its watch team acq.wt). None: the nearest visible
 /// enemy structure within reach by class (acq.saStructure, classes in
 /// order). Out: [16] slot, [17] unit id, [18] structure tile (-1 none).
-/// Args [0..4] k_tower_acq_snap's, [5] acq.saOff [6] saX [7] saY [8] saSlot
-/// [9] acq.id [10] acq.upt [11] acq.wt [12] saNearest [13] saDistance
+/// Args [0..4] k_tower_acq_snap's, [5] acq.saOff [6] acq.saE (the entries'
+/// records: x, y, slot, id) [10] acq.upt [11] acq.wt [12] saNearest [13] saDistance
 /// [14] saStructure [15] saStructureDistance, [19] tac.flags [20] acq.stix
 /// [21..26] acq.sb0-5. P: [0] rows, [1] per job, [2] areas, [3] players,
 /// [4] grid width, [5] tile, [6] the post's tick, [7] unit types, [8] an
@@ -134,7 +134,8 @@ pub unsafe extern "C" fn k_tower_acq_snap(a:u32,chunk:i32){
 pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
     let k=K::new(waddr(a) as *const i32);
     let (qa,qo,qk,qr,qt)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<i32>(3),k.p::<i32>(4));
-    let (off,ax,ay,slots,ids,upt,wt)=(k.p::<i32>(5),k.p::<f32>(6),k.p::<f32>(7),k.p::<i32>(8),k.p::<i32>(9),k.p::<i16>(10),k.p::<i8>(11));
+    // (The buckets' entries: acq.saE, 16-byte records x, y, slot, id; acq_sample.rs e_put.)
+    let (off,ent,upt,wt)=(k.p::<i32>(5),k.p::<i32>(6),k.p::<i16>(10),k.p::<i8>(11));
     let (tfl,stix)=(k.p::<u8>(19),k.p::<i32>(20));let sb=[k.p::<u16>(21),k.p::<u16>(22),k.p::<u16>(23),k.p::<u16>(24),k.p::<u16>(25),k.p::<u16>(26)];
     let (nt,unk,nrec)=(k.i(7),k.i(8) as u16,k.i(9).max(0) as usize);
     // (A unit's type flags and statuses, as the old pack's meta bits 0-10.)
@@ -168,10 +169,10 @@ pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
                 if count==0{continue;}
                 let e=lo+if count>4{mix(seed^ta as u32) as usize%(count-3)}else{0};
                 for q in e..e+count.min(4){
-                    let s=*slots.add(q);if s<0{continue;}let su=s as usize;
+                    let er=ent.add(q*4);let s=*er.add(2);if s<0{continue;}let su=s as usize;
                     let m=meta(su);if m&1!=0{continue;}
                     let cls=if m&immune!=0{2}else if m&affected!=0&&(ty!=7||*wt.add(su) as i32==own as i32){1}else{0};
-                    let dx=*ax.add(q)-x;let dy=*ay.add(q)-y;let dd=dx*dx+dy*dy;let id=*ids.add(su);
+                    let dx=f32::from_bits(*er as u32)-x;let dy=f32::from_bits(*er.add(1) as u32)-y;let dd=dx*dx+dy*dy;let id=*er.add(3);
                     if cls<wcls||(cls==wcls&&(dd<wd||(dd==wd&&id<wid))){win=s;wcls=cls;wd=dd;wid=id;}
                 }
                 if win>=0{break;}

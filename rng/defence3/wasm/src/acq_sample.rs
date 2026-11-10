@@ -3,6 +3,24 @@
 use super::*;
 use super::k::K;
 const NEAR:usize=64;
+// The area buckets' entries (acq.saE, [28]): one 16-byte record each, x and y
+// (f32 bits), slot, id: a sample of four is one or two cache lines and its
+// winner needs no slot -> id gather.
+const EW:usize=4;
+#[inline(always)] unsafe fn e_put(E:*mut i32,j:usize,x:f32,y:f32,slot:i32,id:i32){let r=E.add(j*EW);*r=x.to_bits() as i32;*r.add(1)=y.to_bits() as i32;*r.add(2)=slot;*r.add(3)=id;}
+#[inline(always)] unsafe fn e_x(E:*const i32,j:usize)->f32{f32::from_bits(*E.add(j*EW) as u32)}
+#[inline(always)] unsafe fn e_y(E:*const i32,j:usize)->f32{f32::from_bits(*E.add(j*EW+1) as u32)}
+#[inline(always)] unsafe fn e_slot(E:*const i32,j:usize)->i32{*E.add(j*EW+2)}
+#[inline(always)] unsafe fn e_id(E:*const i32,j:usize)->i32{*E.add(j*EW+3)}
+// The area answers packed (acq.saRec, [47]): per (team, area) eight words,
+// one 32-byte line: [0] the nearest area with a visible enemy unit, [1..5]
+// the structure tile of each class, [5..8] their distances as u16 (unit
+// answer, classes 0-3; 0xFFFF none). The scan reads one line a tile instead
+// of one in each of ten arrays. (A distance is at most the answers' depth,
+// the farthest reach in area steps: far below 0xFFFF.)
+pub const RW:usize=8;
+#[inline(always)] fn d_enc(d:i32)->u32{if d<0{0xFFFF}else{d.min(0xFFFE) as u32}}
+#[inline(always)] fn d_dec(v:u32)->i32{let v=v&0xFFFF;if v==0xFFFF{-1}else{v as i32}}
 
 #[inline(always)]
 fn mix(mut x:u32)->u32 {
@@ -49,22 +67,23 @@ pub unsafe extern "C" fn k_acq_area_build(a:u32,_chunk:i32){
         for e in 0..n {if let Some((ar,owner,_,_,_,_))=candidate(&k,e){if ar<na&&owner<players {*counts.add(ar*players+owner)+=1;}}}
     }
     let mut total=0;for key in 0..keys {*off.add(key)=total;*cursor.add(key)=total;total+=*counts.add(key);}*off.add(keys)=total;
-    // (Per entry its slot and position: the owner is its bucket's (key = area * players + owner), the id its slot's (acq.id).)
-    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
+    // (Per entry its record: the owner is its bucket's (key = area * players + owner).)
+    let E=k.p::<i32>(28);
     if !keyv.is_null()&&k.i(30)!=0 {
         // (As candidate's slot-snapshot case: the entry's slot, its owner from the key, its position and id from the slot's columns.)
-        let (es,xs,ys)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5));
+        let (es,xs,ys,sid)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5),k.p::<i32>(10));
         for e in 0..n {let key=*keyv.add(e);if key<0 {continue;}
             let slot=*es.add(e);let s=slot as usize;
             let cur=cursor.add(key as usize);let j=*cur as usize;*cur+=1;
-            *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*slots.add(j)=slot;
+            e_put(E,j,*xs.add(s),*ys.add(s),slot,*sid.add(s));
         }
     }else{
+    // (The id as the samples read it: the slot's in the snapshot, acq.id.)
+    let sid=k.p::<i32>(10);
     for e in 0..n {if let Some((ar,owner,x,y,_id,slot))=candidate(&k,e){if ar>=na||owner>=players {continue;}
         let cur=cursor.add(ar*players+owner);let j=*cur as usize;*cur+=1;
-        *ax.add(j)=x;*ay.add(j)=y;*slots.add(j)=slot;
-    }
-    }
+        e_put(E,j,x,y,slot,if slot>=0 {*sid.add(slot as usize)}else{0});
+    }}
     }
     if k.i(28)==1 {
         prepare_area_answers(&k,na,players,off);
@@ -225,15 +244,17 @@ pub unsafe extern "C" fn k_acq_area_prefix(a:u32,_chunk:i32){
     let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;let keys=na*players;
     let ranges=k.i(33).max(0) as usize;
     let off=k.p::<i32>(27);let counts=k.p::<i32>(35);let cursor=k.p::<i32>(36);let hist=k.p::<i32>(46);
+    // Range-major, every pass a sequential row: a key's ranges are `keys`
+    // apart, so walking them key by key missed the cache on each (5-19 ms
+    // serial at ~500k units, the chain's longest wait). Same outputs.
+    core::ptr::write_bytes(counts,0,keys);
+    for c in 0..ranges {let row=hist.add(c*keys);for key in 0..keys {*counts.add(key)+=*row.add(key);}}
     let mut total=0;
-    for key in 0..keys {
-        *off.add(key)=total;
-        let mut sum=0;
-        for c in 0..ranges {let h=hist.add(c*keys+key);let v=*h;*h=total+sum;sum+=v;}
-        // (Counts and the cursors' ends as the serial build left them.)
-        *counts.add(key)=sum;*cursor.add(key)=total+sum;total+=sum;
-    }
+    for key in 0..keys {*off.add(key)=total;*cursor.add(key)=total;total+=*counts.add(key);}
     *off.add(keys)=total;
+    // (Each range's cursor: its key's offset plus the earlier ranges' counts;
+    // the cursors end as the serial build left them, offset + count.)
+    for c in 0..ranges {let row=hist.add(c*keys);for key in 0..keys {let h=row.add(key);let v=*h;let cur=*cursor.add(key);*h=cur;*cursor.add(key)=cur+v;}}
     if k.i(28)==1 {prepare_area_answers(&k,na,players,off);}
 }
 #[no_mangle]
@@ -244,12 +265,33 @@ pub unsafe extern "C" fn k_acq_area_scatter(a:u32,chunk:i32){
     let per=k.i(34).max(1) as usize;let c=chunk.max(0) as usize;
     let e0=(c*per).min(n);let e1=(e0+per).min(n);
     let cur=k.p::<i32>(46).add(c*keys);let keyv=k.p::<i32>(45);
-    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
-    let (es,xs,ys)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5));
+    let E=k.p::<i32>(28);
+    let (es,xs,ys,sid)=(k.p::<i32>(19),k.p::<f32>(4),k.p::<f32>(5),k.p::<i32>(10));
     for e in e0..e1 {let key=*keyv.add(e);if key<0 {continue;}
         let slot=*es.add(e);let s=slot as usize;
         let at=cur.add(key as usize);let j=*at as usize;*at+=1;
-        *ax.add(j)=*xs.add(s);*ay.add(j)=*ys.add(s);*slots.add(j)=slot;
+        e_put(E,j,*xs.add(s),*ys.add(s),slot,*sid.add(s));
+    }
+}
+
+/// The answers packed into acq.saRec (see RW), records [chunk * P[37], ..)
+/// of the players * areas, after k_acq_area_answers wrote its ten arrays
+/// (which the spreads keep as their own: dist is their visited mark).
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_pack(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;let total=na*players;
+    if na==0 {return;}
+    let per=k.i(37).max(1) as usize;let i0=(chunk.max(0) as usize*per).min(total);let i1=(i0+per).min(total);
+    let (nearest,dist,structs,sdist,rec)=(k.p::<i32>(40),k.p::<i32>(41),k.p::<i32>(43),k.p::<i32>(44),k.p::<i32>(47));
+    for i in i0..i1 {
+        let owner=i/na;let ar=i%na;let r=rec.add(i*RW);
+        *r=*nearest.add(i);
+        let j0=owner*4*na+ar;let (j1,j2,j3)=(j0+na,j0+2*na,j0+3*na);
+        *r.add(1)=*structs.add(j0);*r.add(2)=*structs.add(j1);*r.add(3)=*structs.add(j2);*r.add(4)=*structs.add(j3);
+        *r.add(5)=(d_enc(*dist.add(i))|d_enc(*sdist.add(j0))<<16) as i32;
+        *r.add(6)=(d_enc(*sdist.add(j1))|d_enc(*sdist.add(j2))<<16) as i32;
+        *r.add(7)=(d_enc(*sdist.add(j3))|0xFFFF<<16) as i32;
     }
 }
 
@@ -260,40 +302,39 @@ unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){
     let x0=gx-if rx<0.3 {1}else{0};let x1=gx+if rx>=0.7 {1}else{0};
     let y0=gy-if ry<0.3 {1}else{0};let y1=gy+if ry>=0.7 {1}else{0};
     let reach=ceil(r as f64/(tile*k.f(29).max(1.0))) as i32;
-    let ag=k.p::<i32>(13);let nearest=k.p::<i32>(40);let dist=k.p::<i32>(41);
-    let structures=k.p::<i32>(43);let struct_dist=k.p::<i32>(44);
+    let ag=k.p::<i32>(13);let rec=k.p::<i32>(47);
     let mut target_area=-1;let mut best_steps=i32::MAX;
     let mut structure=[-1i32;4];let mut structure_steps=[i32::MAX;4];
+    let command=*k.p::<u8>(8).add(s) as i32;
+    // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.
+    // Only those take a structure: an attacking unit's eight class reads a
+    // tile were made and dropped.)
+    let wants=command==k.i(8)||command==k.i(9)||(*k.p::<u8>(7).add(s))&16!=0;
     for yy in y0..=y1 {for xx in x0..=x1 {
         if xx<0||yy<0||xx>=gw||yy>=gh {continue;}let ar=*ag.add((yy*gw+xx) as usize);if ar<0||ar as usize>=na {continue;}
-        let ar=ar as usize;let index=owner*na+ar;let d=*dist.add(index);let target=*nearest.add(index);
+        let r=rec.add((owner*na+ar as usize)*RW);let w5=*r.add(5) as u32;
+        let d=d_dec(w5);let target=*r;
         if d>=0&&d<=reach&&(d<best_steps||(d==best_steps&&target<target_area)){target_area=target;best_steps=d;}
-        for class in 0..4 {let index=(owner*4+class)*na+ar;let d=*struct_dist.add(index);let target=*structures.add(index);
+        if !wants {continue;}
+        // (Class c's distance: the record's u16 at 11 + c, after the unit answer's at 10.)
+        let h=r.add(5) as *const u16;
+        for class in 0..4 {let d=d_dec(*h.add(1+class) as u32);let target=*r.add(1+class);
             if d>=0&&d<=reach&&(d<structure_steps[class]||(d==structure_steps[class]&&target<structure[class])){structure[class]=target;structure_steps[class]=d;}
         }
     }}
-    let command=*k.p::<u8>(8).add(s) as i32;
-    // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.)
-    if command==k.i(8)||command==k.i(9)||(*k.p::<u8>(7).add(s))&16!=0 {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
+    if wants {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
     if target_area<0 {return;}
-    let ar=target_area as usize;let off=k.p::<i32>(27);let slots=k.p::<i32>(32);let sid=k.p::<i32>(10);
-    let ids=|e:usize|*sid.add(*slots.add(e) as usize);
-    let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);
+    let ar=target_area as usize;let off=k.p::<i32>(27);let E=k.p::<i32>(28);
     let seed=mix((*k.p::<i32>(10).add(s) as u32)^(k.i(25) as u32).wrapping_mul(0x9e3779b9));
     for j in 0..players {let foe=seed.wrapping_add(j as u32) as usize%players;if foe==owner {continue;}
         let key=ar*players+foe;let lo=*off.add(key) as usize;let hi=*off.add(key+1) as usize;let count=hi-lo;if count==0 {continue;}
         let e=lo+if count>4 {mix(seed^ar as u32) as usize%(count-3)}else{0};
-        let mut winner=e;let mut best=f32::INFINITY;
-        if count>=4 {
-            let dx=f32x4_sub(v128_load(ax.add(e) as *const v128),f32x4_splat(x));
-            let dy=f32x4_sub(v128_load(ay.add(e) as *const v128),f32x4_splat(y));
-            let ds:[f32;4]=core::mem::transmute(f32x4_add(f32x4_mul(dx,dx),f32x4_mul(dy,dy)));
-            for lane in 0..4 {let d=*ds.get_unchecked(lane);if d<best||(d==best&&ids(e+lane)<ids(winner)){best=d;winner=e+lane;}}
-        }else{
-            for lane in 0..count {let dx=*ax.add(e+lane)-x;let dy=*ay.add(e+lane)-y;let d=dx*dx+dy*dy;if d<best||(d==best&&ids(e+lane)<ids(winner)){best=d;winner=e+lane;}}
-        }
+        let mut winner=e;let mut best=f32::INFINITY;let mut wid=e_id(E,e);
+        // (Lane by lane as the four-wide sum was: the same rounding.)
+        for q in e..e+count.min(4) {let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;
+            if d<best||(d==best&&e_id(E,q)<wid){best=d;winner=q;wid=e_id(E,q);}}
         // Distance ranks a fixed batch only. It cannot reject an area-valid unit.
-        *k.p::<i32>(11).add(s)=*slots.add(winner);*k.p::<i32>(12).add(s)=ids(winner);return;
+        *k.p::<i32>(11).add(s)=e_slot(E,winner);*k.p::<i32>(12).add(s)=wid;return;
     }
 }
 
@@ -305,7 +346,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
     let xs=k.p::<f32>(4);let ys=k.p::<f32>(5);let own=k.p::<i8>(6);let flags=k.p::<u8>(7);let cmd=k.p::<u8>(8);
     let ranges=k.p::<f32>(9);let ids=k.p::<i32>(10);let out=k.p::<i32>(11);let tid=k.p::<i32>(12);let sout=k.p::<i32>(3);
     let ag=k.p::<i32>(13);let cov=k.p::<u8>(14);let na=k.i(20).max(0) as usize;
-    let off=k.p::<i32>(27);let ax=k.p::<f32>(28);let ay=k.p::<f32>(29);let slots=k.p::<i32>(32);
+    let off=k.p::<i32>(27);let E=k.p::<i32>(28);
     let near=k.p::<i32>(33);let near_n=k.p::<i32>(34);
     let gw=k.i(15);let gh=k.i(16);let tile=k.f(5);let budget=k.i(24).clamp(4,256) as usize;
     let batch_budget=budget/4;let epoch=k.i(25) as u32;let players=k.i(7).max(1) as usize;
@@ -327,7 +368,6 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
         if gx<0||gy<0||gx>=gw||gy>=gh {continue;}
         let ar=*ag.add((gy*gw+gx) as usize);if ar<0||(ar as usize)>=na {continue;}
         let ar=ar as usize;let nareas=(*near_n.add(ar) as usize).min(NEAR);
-        let ox=f32x4_splat(x);let oy=f32x4_splat(y);
         let seed=mix((*ids.add(s) as u32)^epoch.wrapping_mul(0x9e3779b9));
         let mut best=-1;let mut best_id=0;let mut b2=r*r;
         let mut batches=0;
@@ -340,19 +380,10 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
             if count==0 {continue;}
             if batches==batch_budget {break 'areas;}batches+=1;
             let e=lo+if count>4 {mix(seed^(target_area as u32).wrapping_mul(0x85ebca6b)) as usize%(count-3)}else{0};
-            let take=count.min(4);
-            if take==4 {
-                let dx=f32x4_sub(v128_load(ax.add(e) as *const v128),ox);let dy=f32x4_sub(v128_load(ay.add(e) as *const v128),oy);
-                let d2=f32x4_add(f32x4_mul(dx,dx),f32x4_mul(dy,dy));
-                let mask=f32x4_le(d2,f32x4_splat(b2));
-                let mut bits=i32x4_bitmask(mask);let distances:[f32;4]=core::mem::transmute(d2);
-                while bits!=0 {let l=bits.trailing_zeros() as usize;bits&=bits-1;let d=*distances.get_unchecked(l);let id=*ids.add(*slots.add(e+l) as usize);
-                    if d<=b2&&(best<0||d<b2||id<best_id){best=*slots.add(e+l);best_id=id;b2=d;}
-                }
-            }else{
-                for l in 0..take {let dx=*ax.add(e+l)-x;let dy=*ay.add(e+l)-y;let d=dx*dx+dy*dy;let id=*ids.add(*slots.add(e+l) as usize);
-                    if d<=b2&&(best<0||d<b2||id<best_id){best=*slots.add(e+l);best_id=id;b2=d;}
-                }
+            // (Lane by lane: b2 only falls, so the check against the current
+            // b2 is the four-wide mask's against the first, and the sums round alike.)
+            for q in e..e+count.min(4) {let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;let id=e_id(E,q);
+                if d<=b2&&(best<0||d<b2||id<best_id){best=e_slot(E,q);best_id=id;b2=d;}
             }
             }
         }

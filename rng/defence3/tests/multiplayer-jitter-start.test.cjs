@@ -11,6 +11,7 @@ const H = require('./net-harness.cjs');
 (async () => {
     const rows = [];
     for (let seed = 0; seed < 6; seed++) {
+        if (process.env.SEED !== undefined && seed !== Number(process.env.SEED)) continue;
         const latencyMs = 60 + (seed % 4) * 50, jitterMs = 200 + (seed % 3) * 200;
         const world = new H.World({ network: { latencyMs, jitterMs }, controls: H.SMALL_MATCH_CONTROLS, compressSnapshots: seed % 2 === 0 });
         world.net.rngState = (0x9e3779b9 + (911 + seed) * 7919) >>> 0;

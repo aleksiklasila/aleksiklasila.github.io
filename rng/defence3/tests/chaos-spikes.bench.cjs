@@ -144,6 +144,39 @@ if(process.argv.includes('--kernels'))inst.eval(`{
 }
 //# sourceURL=chaos-bench-instrumentation-kernels.js
 `);
+// --occ-jobs (diagnostic): per occupancy phase (kernel 89) its wall, job count,
+// summed job time, heaviest job and that block's units, in row.occ
+// (par.ctrace, trace-only; as tests/occ-sched-probe.cjs).
+if(process.argv.includes('--occ-jobs'))inst.eval(`{
+ __scratch.ct=simHeapArray(Float64Array,32768);simParallelBind('par.ctrace',__scratch.ct);__scratch.occ=[];
+ const pr=simParallelRun;simParallelRun=function(kk,n){
+  if(kk!==SIM_KERNEL_MOVE_OCCUPANCY)return pr.apply(this,arguments);
+  const T=__scratch.ct;T.fill(-1,0,n*2);const tr=_simParTrace;_simParTrace=tr||{};const a=__scratch.now();
+  try{return pr.apply(this,arguments);}finally{
+   _simParTrace=tr;const wall=__scratch.now()-a,J=_occ.jobs,F=_occ.offsets,ph=_simParams[4],at=8+J[ph];let work=0,heavy=0,hu=0,units=0;
+   for(let c=0;c<n;c++){const d=Math.max(0,T[c*2+1]),u=F[J[at+c]+1]-F[J[at+c]];work+=d;units+=u;if(d>heavy){heavy=d;hu=u;}}
+   __scratch.occ.push({ph,wall:+wall.toFixed(2),n,work:+work.toFixed(2),units,heavy:+heavy.toFixed(2),heavyUnits:hu});
+  }};
+ // (And each background wait over 1 ms: its lane, the chain's stages [kernel, chunks],
+ // the stage still running at the wait and its done / total chunks.)
+ // (ACQ_EAGER=1: the acquisition chain waited for right after its post, every
+ // thread free: its cost alone, as acqEager. Changes the schedule: diagnostic.)
+ if(${!!process.env.ACQ_EAGER}){const post=_acqPost;_acqPost=function(){const r=post.apply(this,arguments);const J=_simBg[ACQ_LANE];if(J){const t=__scratch.now();
+  // (Per stage its wall on the helpers alone: the lane's stage id watched, not helped.)
+  const ctl=_simPool.ctl,b=SIM_PAR_BG_BASE+ACQ_LANE*8,id0=_simBgIds[ACQ_LANE],L=J.stages.length,at=[];let last=-1,t1=t;
+  for(;;){const s=(Atomics.load(ctl,b+SIM_PAR_BG_ID)-id0)&0x7F,dn=Atomics.load(ctl,b+SIM_PAR_BG_DONE)>=Atomics.load(ctl,b+SIM_PAR_BG_TOTAL);const now=__scratch.now();
+   if(s>=L){if(now-t>2000)break;continue;}
+   if(s!==last){if(last>=0)at.push(J.stages[last][0]+':'+(now-t1).toFixed(1));last=s;t1=now;}
+   if(s===L-1&&dn){at.push(J.stages[s][0]+':'+(now-t1).toFixed(1));break;}if(now-t>2000)break;}
+  __scratch.occ.push({acqStages:at.join(' ')});
+  simParallelBackgroundWait(ACQ_LANE);__scratch.occ.push({acqEager:+(__scratch.now()-t).toFixed(1),chain:J.stages.map(s=>s[0]+'x'+s[1]).join(',')});_simBg[ACQ_LANE]=null;}return r;};}
+ const bw=simParallelBackgroundWait;simParallelBackgroundWait=function(lane=1){
+  const J=_simBg[lane];if(!J||J.sync)return bw.apply(this,arguments);
+  const ctl=_simPool.ctl,b=SIM_PAR_BG_BASE+lane*8,at=(Atomics.load(ctl,b+SIM_PAR_BG_ID)-_simBgIds[lane])&0x7F;
+  const st={lane,stage:at,kernel:J.stages[at]?J.stages[at][0]:-1,done:Atomics.load(ctl,b+SIM_PAR_BG_DONE),total:Atomics.load(ctl,b+SIM_PAR_BG_TOTAL)};
+  const a=__scratch.now();try{return bw.apply(this,arguments);}finally{const ms=__scratch.now()-a;if(ms>1)__scratch.occ.push({wait:+ms.toFixed(1),...st,chain:J.stages.map(s=>s[0]+'x'+s[1]).join(',')});}
+ };
+}`);
 // --mass-at=STEP: the mass command (see the step loop); --mass-team,
 // --mass-gap (steps between clicks), --mass-clicks.
 const massAt=num('mass-at',0),massTeam=num('mass-team',0),massGap=num('mass-gap',2),massClicks=num('mass-clicks',3);
@@ -313,6 +346,7 @@ for(let i=0;i<ticks;i++){
  const row={dbgc:typeof __dbgcRow!=="undefined"?__dbgcRow:undefined,step:i,ms,wallMs,gapMs:wallMs-ms,at:a,startMs:a-profileStart,burst,...inst.eval('({tick:gameTime,units:units.length,projectiles:projCount(),phases:__scratch.phases,index:__scratch.index,gameOver,work:{...__scratch.work}})')};
  // (ROWX=<js>: a diagnostic value per tick, outside the timing.)
  if(process.env.ROWX)row.x=inst.eval(process.env.ROWX);
+ if(process.argv.includes('--occ-jobs'))row.occ=inst.eval('(()=>{const r=__scratch.occ;__scratch.occ=[];return r;})()');
  if(process.argv.includes('--memory-stats'))row.memory=inst.eval(`({ ...simMemoryStats(),
   navProfiles:_nav.map(n=>n?{atlas:!!n.atlas?.header,nodes:n.nodeTile.length}:null),
   navFieldBytes:_navFields.pools.reduce((n,f)=>n+(f.pool?.byteLength||0)+(f.rows?.byteLength||0),0) })`);

@@ -3871,6 +3871,9 @@ function _acqTierStep() {
     // its next post.)
     const ph = simStepPhases(SIM_ACQUIRE_TICKS);
     if (ph.includes(0)) _acqCommit();
+    // (At phase 2 the chain, ~350 ms of CPU at 500k units, is 55-70% done at
+    // some commits, which finish it on the tick: +10-26 ms. Posting at phase
+    // 1 moved the starvation to lower lanes and the mean up 18%: 2026-11-10.)
     if (ph.includes(2)) _acqPost();
 }
 // Before the unit index (or the owners per chunk, the hostile tables) is
@@ -4049,8 +4052,9 @@ function _acqPost() {
     // sampled, the scan, the combat brain. Each has its own params slot.
     const answers = areaTargets, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
     // (Sampled with answers: the build's count, offsets and scatter, the
-    // structure seeds and the answers, five stages; sampled only: the build.)
-    const scanSlot = 1 + (sampled ? (answers ? 5 : 1) : 0);
+    // structure seeds, the answers and their pack, six stages; sampled
+    // only: the build.)
+    const scanSlot = 1 + (sampled ? (answers ? 6 : 1) : 0);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
@@ -4083,9 +4087,9 @@ function _acqPost() {
         _acqArray('acq.saOff',Int32Array,A*np+1);
         for(const name of ['saCount','saCursor'])_acqArray('acq.'+name,Int32Array,A*np);
         for(const name of ['saSeen','saNearN'])_acqArray('acq.'+name,Int32Array,A);
-        for(const name of ['saX','saY'])_acqArray('acq.'+name,Float32Array,ecap);
-        // (No owner or id copies: the bucket is the owner's, the slot gives the id.)
-        _acqArray('acq.saSlot',Int32Array,ecap);
+        // (Each entry one record, x, y, slot, id: no owner, the bucket is the
+        // owner's; acq_sample.rs e_put.)
+        _acqArray('acq.saE',Int32Array,4*ecap);
         _acqArray('acq.saKey',Int32Array,ecap);
         const near=_acqArray('acq.saNear',Int32Array,areaTargets?1:A*64);
         const I=simParallelStageParams(ACQ_LANE,1);I.fill(0);I[0]=ne;I[20]=A;I[7]=B[7];
@@ -4097,6 +4101,8 @@ function _acqPost() {
         if(areaTargets){
             for(const name of ['saNearest','saDistance'])_acqArray('acq.'+name,Int32Array,A*np);
             for(const name of ['saStructure','saStructureDistance'])_acqArray('acq.'+name,Int32Array,A*np*4);
+            // (And all five answers of a team and area in one 32-byte record, the scan's.)
+            _acqArray('acq.saRec',Int32Array,A*np*8);
             // (A queue a job: the answers' jobs run side by side.)
             _acqArray('acq.saQueue',Int32Array,A*playersK*5);
         }
@@ -4105,14 +4111,19 @@ function _acqPost() {
             // helper ~20-30 ms), then a tile pass a team seeding the four
             // structure classes, then the answers (spreads only: I[35] 1).
             // (The same params in every stage's own slot.)
-            const ranges=Math.min(24,Math.max(1,Math.ceil(ne/8192)));
+            // (A range's histogram covers every key, areas x teams (~253k at
+            // a 1024 map): 24 of them were 24 MB to zero and for the serial
+            // prefix to walk. Any count keeps the entries' order.)
+            const ranges=Math.min(8,Math.max(1,Math.ceil(ne/8192)));
             I[33]=ranges;I[34]=Math.ceil(ne/ranges);I[35]=1;
             // (The towers look as far: the answers' depth, tower.js towerAcqMaxReach.)
             I[36]=typeof towerAcqMaxReach==='function'?towerAcqMaxReach():0;
             _acqArray('acq.saHist',Int32Array,ranges*A*I[7]);
-            for(let slot=2;slot<=5;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
+            // (The pack's records a job: I[37].)
+            const packPer=8192;I[37]=packPer;
+            for(let slot=2;slot<=6;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
             stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],
-                [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5]);
+                [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5],[SIM_KERNEL_ACQ_AREA_PACK,Math.ceil(A*I[7]/packPer)]);
         }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }
     stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);

@@ -7002,3 +7002,156 @@ helpers, Node 24.
   Git whitespace checks passed (existing main.js CRLF respected).
   `SIM_WORKER=1 CHAOS_HOST_HELPERS=4` multiplayer chaos also passed; its
   full peer-hash/resync results are in `worker-chaos-h4.log`. Nothing committed.
+
+## 2026-11-09 â€” automatic lockstep initialization behind loading
+
+- Replaced the four-tick overlay cutoff with an actual completion barrier.
+  The host seals only one initialization tick at a time and waits for every
+  active player's completed tick, not their pre-sent input packets. Worker
+  autonomous ticking/presealing stays disabled during initialization.
+- Initialization runs real dk=1 simulation and retains all results. Player
+  input remains blocked behind the loading screen. A shared release boundary
+  enables normal gameplay, worker pipelining and adaptive delta ticks.
+- Automatic completion uses two adjacent four-sample work-cost windows:
+  recent mean within 0.8â€“1.25 of the preceding mean, recent maximum at most
+  1.5 times its mean (1 ms noise floor). Eight samples is the observation
+  window, NOT a fixed initialization length or a work budget. If startup
+  costs are still changing, more lockstep ticks run behind loading. There is
+  no target TPS, wall-clock cadence condition, timeout release or delta-tick
+  shortcut. Every peer must satisfy the rule at the same completed tick.
+- The host's release is session-scoped and retried in response to completion
+  reports. Initialization timings are cleared before gameplay's adaptive
+  controller starts. A guest's tick arriving before ALL_READY is recorded;
+  live joins/reloads use the existing running-match recovery path rather
+  than starting another global initialization barrier. Protocol revision 57
+  prevents mixing clients that do not implement the new start protocol.
+- This change is O(1) tick-level network/loading orchestration, not simulation
+  item processing. It adds no JS simulation kernel or per-item fallback.
+- Added `tests/init-loading-report.cjs`: applies the production readiness rule
+  to retained chaos traces and reports the automatically selected boundary,
+  first subsequent tick versus mean, p95/p99/max, slow counts, population,
+  births/deaths and measured worker throughput. Run, for example:
+  `node tests/init-loading-report.cjs tests/test-runs/init-lockstep/large.json`.
+  This is trace replay, not a headed-browser measurement or a claim that
+  later gameplay spikes have been optimized away.
+- First serial large mixed run: 1,000,004 starting units, 65,536 structures,
+  1024 map, 11 helpers, dk=1, worker publication, no census, 80 ticks. The
+  automatic boundary is step 12: first exposed tick 113.14 ms versus the
+  remaining mean 114.76 ms (0.986x). Original first tick: 1,371.25 ms.
+  Post-boundary p95/p99/max: 154.93/197.06/197.06 ms; 5 ticks >150 ms,
+  2 >1.5x mean. Actual measured population 353,447â€“581,539, 4,011 births,
+  237,101 deaths; research deposits 151.65/s, construction completions
+  74.61/s. Raw tick timings, phases and all throughput counts are retained
+  in `tests/test-runs/init-lockstep/large.json` and its JSONL sidecar;
+  boundary statistics are in `summary.json`.
+- Remaining: a readiness detector cannot predict unrelated later command,
+  GC, scheduling or periodic-work spikes. Serial reservation cleanup,
+  exceptional simulation JS paths and background navigation remain separate
+  gameplay optimization work. Startup simulation advances game time and
+  combat/economy as normal; it is not discarded or reset on release.
+- Repeat (2026-11-10, serial, 160 ticks, same large mixed setup):
+  `tests/test-runs/init-lockstep/large-repeat-claude-160.json`. Automatic
+  boundary step 11; first gameplay tick 117.4 ms vs next-20-tick mean
+  121.2 ms (0.97x); whole-run post-boundary mean 95.8 ms (population falls
+  586k -> 292k, so the whole-run mean understates boundary-time cost;
+  `init-loading-report.cjs` now also reports `firstToNext20`). Post-boundary
+  p95/p99/max 128.8/143.9/158.8 ms, 1 tick >150 ms. Behind loading: step 0
+  1173 ms, steps 1-3 302/441/298 ms. The first 80-tick run gives 0.84x vs
+  its next 20 ticks. Note: another session wrote `large-repeat.json` during
+  an earlier repeat, so that file and its overlapping timings are not used.
+
+## 2026-11-10 — initialization boundary confirmed; the acquisition chain misses its commit
+
+- Repeat of the large mixed chaos run (1M start, 65,536 structures, 11
+  helpers, dk=1, worker publication, no census, 80 ticks): the automatic
+  initialization boundary is again step 12 in both runs. First gameplay
+  tick vs post-boundary mean: 113.1/114.8 (0.99), 135.3/117.7 (1.15), and
+  after this session's kernel edits 106.1/108.8 ms (0.98). The 1.15 case is
+  population, not leftover startup work: the battle falls 581k -> 368k
+  units over the run, and tick 12 matches its neighbours (131/135/153 ms).
+  Reload/rematch (multiplayer-stale-loading, page + worker), jitter start,
+  init stability, start wait and delta-tick suites all pass.
+- Remaining gameplay ticks over 150 ms (5-9 of 68) sit in the early battle
+  (ticks 13-30, ~150k deaths). New diagnostics in chaos-spikes.bench.cjs:
+  `--occ-jobs` (per occupancy phase: wall, job count, summed job time,
+  heaviest job and its units, via par.ctrace; and every background wait
+  >1 ms with its lane, chain, running stage and done/total chunks), and
+  `ACQ_EAGER=1` (diagnostic only, changes the schedule: the acquisition
+  chain waited for right after its post, per-stage helper walls; with
+  ROWX re-running each stage serially gives its CPU).
+- Occupancy (kernel 89) is not the cause here: each phase ~7-9 ms, near
+  work / threads. Ticks 20-23 showed 7-10 ms jobs of only 100-450 units on
+  several threads at once: stalls, not dense blocks.
+- Cause of the periodic +10-26 ms: combatScanRun's acquisition commit
+  (phase 0, `wait:2`) finds the chain's scan stage (kernel 33,
+  k_acq_sample area answers, 4,130 chunks) only 55-70% done on some
+  commits (ticks 16, 28, 36) and finishes it on the tick.
+- The chain's serial CPU per round (A = 126,461 areas, 2 teams): scan
+  124-160 ms at 500-600k units (243 ms at 970k: ~250 ns per live unit,
+  memory-bound, chunk overhead negligible), area count 19-38 ms (24 jobs,
+  each zeroing a 1 MB histogram), answers 19-26 ms (10 jobs, up to 6.5 ms
+  each), prefix 6-14 ms (one job, 24 x 253k keys), scatter 5-12 ms.
+  Eager walls with 11 helpers: 37-86 ms the chain.
+- Kept (output-identical; the run's population matches the earlier runs
+  exactly): k_acq_area_prefix range-major (sequential rows; serial time
+  unchanged within noise, ~6 ms); area_answer skips the four structure
+  classes' reads for units that do not take a structure (attacking, not
+  drive-by): no measurable scan change (243 vs 260 ms at 970k).
+- Rejected: posting the chain at phase 1 (three ticks to the commit). Lane-2
+  waits fell to one 5 ms, but the free lane (15, kernel 185 in
+  spatialIndexRebuild, 29-33 ms) and the worker search lane (17 ms) started
+  missing instead, and the 80-tick mean rose 115-118 -> 138 ms (p95 290 ms;
+  simMoveRun 55 -> 67 ms, unitEventsRun 4.8 -> 7.3 ms). The helpers are
+  close to saturated: moving one lane's deadline moves the miss.
+- Next: cut the scan's per-unit memory traffic (one record per
+  (team, area) for the nearest/distance and the four class answers instead
+  of ten arrays; ids packed in the area buckets so the winner needs no
+  slot -> id gather), and the count stage's 24 MB of histograms (fewer
+  ranges or a sparse key space). Then a deadline-aware background order
+  (a lane due at the next commit before one due later), measured with the
+  same 80-tick run and the --occ-jobs waits.
+- Raw data: tests/test-runs/init-lockstep/{large,large-repeat,large-post1,
+  large-final}.json(+.jsonl), early-occ*.json, early-acq-eager*.json,
+  acq-serial*.json; boundary summary in summary.json.
+
+## 2026-11-10 (later) — the acquisition scan's memory layout
+
+- Measured by parts (a temporary P[60] knob in k_acq_sample, removed; the
+  scan stage re-run serially after an eager chain, ~510k live units, 475k
+  eligible, nearly all idle / attack-moving, ~700 attacking): slot loop and
+  filter ~11 ms, area answers over 1-4 tiles ~56 ms (ten arrays read per
+  tile: nearest, distance and four classes' structure and distance), bucket
+  sample ~40 ms, the winner's slot -> id gather ~15 ms; ~123 ms in all.
+- Area answers packed: acq.saRec, one 32-byte record per (team, area):
+  nearest area, the four classes' structure tiles, the five distances as u16
+  (0xFFFF none; a distance is at most the answers' depth, the farthest
+  reach, so the encoding is exact). New stage k_acq_area_pack (kernel 190,
+  8192 records a job, ~3 ms CPU at 126k areas x 2 teams) after the answers;
+  the answers' ten arrays stay their working storage (towers still read them).
+- Bucket entries: acq.saE, one 16-byte record (x, y as f32 bits, slot, id)
+  replaces acq.saX / saY / saSlot for every reader and writer (the serial
+  build, the ranged scatter, area_answer, the opt-in sampled path,
+  k_tower_acq). The four-wide SIMD compares became lane-by-lane scalar ones:
+  the same IEEE sums, and b2 only falls, so the order and results match.
+- Area build: 8 entry ranges (was 24). Each range's histogram covers every
+  key (~253k at a 1024 map): 24 MB -> 8 MB to zero; the serial prefix
+  6 -> 2.9 ms. The scatter keeps entry order for any range count.
+- Exact: the 80-tick large mixed run's per-tick unit counts and every work
+  counter equal the previous build's at all 80 ticks (twice). Tower suites
+  (batch, SIMD determinism 0 vs 3 helpers, kernel cases, structures only,
+  due table), first-tick loading, jitter start (workers) and delta-tick
+  multiplayer pass.
+- Serial scan CPU: 506k units 123 -> 100-104 ms, 970k 243 -> 206-212 ms
+  (-13-17%, two runs). 80-tick run: mean 105.4 / 113.1 ms and p95 131 / 169
+  ms across two runs, against 108.8-117.7 / 155-168 before: inside this
+  machine's noise today (15-62% CPU load from other programs with no bench
+  running), so no tick-time claim. The early-window commit waits remain
+  (14.7, 24.6, 16.4, 8.3 ms; at step 35 the scan had 368 of 4,126 chunks
+  done): the chain is still starved before its scan, not only slow in it.
+- Seen twice at step 19 in bit-identical runs: researchDrainTick 32-38 ms
+  against 3.6-5.4 ms in others (same state): a stall (GC / JIT) landing
+  there, not research work. Open.
+- Next: the chain's remaining cost, ~100 ms scan + ~20 count + ~18 answers
+  per round at 500k (scan ~200 ns a live unit: the bucket sample's random
+  line and the tile records), and the background order (lane 2 behind lanes
+  0, 10, 6, 13) - measure on a quiet machine before any schedule change.

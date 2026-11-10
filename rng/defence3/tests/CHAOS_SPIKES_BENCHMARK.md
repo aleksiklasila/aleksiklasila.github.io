@@ -110,3 +110,22 @@ node tests/chaos-tps-matrix.bench.cjs --scenarios=chaos-dk1,chaos-dk20 --compare
 ```
 
 Comparisons alternate order on repeated runs. `--hash` records legacy state hashes as diagnostics; `--require-match` explicitly makes matching a gate. Correct intended behavior and determinism of the retained implementation are required; historical bit identity is optional. `--reference-dir=DIR` compares saved `baseline-worker.js`, `baseline-projectile.js`, `baseline-tower.js` and `baseline-chunk.js` instead of selecting turret modes. Profiling and timing runs are separate.
+
+Initialization-boundary validation: after a serial run, use
+`node tests/init-loading-report.cjs <run.json> [<repeat.json> ...]` to replay
+production's automatic initialization work-cost rule against the raw ticks.
+It reports the selected first gameplay tick relative to the post-boundary
+mean, tail timings and actual population/work throughput. This replay does
+not include network barrier waits or rendering; multiplayer startup tests
+separately exercise completion acknowledgements, worker dispatch and release.
+Keep the full raw startup rows: do not silently remove the warm-up cost from
+loading totals or describe this as a reduction in steady simulation cost.
+
+Background-lane and occupancy diagnostics (2026-11-10): add `--kernels
+--occ-jobs` to a chaos-spikes run to record, per tick in `row.occ`, each
+occupancy phase's wall / summed job time / heaviest job (par.ctrace) and
+every background-lane wait over 1 ms with the stage it was stuck on (lane,
+chain `kernel x chunks`, running stage, done/total). `ACQ_EAGER=1` waits for
+the acquisition chain right after its post and records per-stage helper
+walls (`acqStages`): it changes the schedule, so use it only to cost the
+chain, never for timing comparisons.

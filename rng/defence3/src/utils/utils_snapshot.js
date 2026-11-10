@@ -194,7 +194,8 @@ const SNAP_FORMAT = 7;
 // (a unit behind its tables keeps its old range); a restore and a resync
 // flush no longer send every unit through the full path; the worker
 // search commits its requests in id order (k_ws_order), not slot order.
-const SIM_RULES_REVISION = 56;
+// 57: lockstep initialization completion barrier.
+const SIM_RULES_REVISION = 57;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

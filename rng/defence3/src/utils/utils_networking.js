@@ -245,18 +245,116 @@ function _updateMatchLoadOverlayPlayers() {
     }
 }
 
-// The large mixed trace builds lazy state across the first four steps
-// (9.0/1.7/1.5/1.0 seconds); subsequent steps enter the normal cost range.
-// These are ordinary sealed ticks, never extra local simulation advances.
-const MATCH_START_LOADING_STEPS = 4;
+// Run real initialization ticks, one at a time across all peers. Readiness
+// compares work with work, never with network waits or a target TPS.
+const MATCH_INIT_WORK_SAMPLES = 8;
+let _matchLoadInputBlocked = false;
+let _matchInit = null;
+function matchInitializationReset() {
+    _matchInit = { released: false, started: false, tick: -1, allowed: 0,
+        samples: [], ready: false, peers: {}, sentAt: -Infinity, releaseTick: -1 };
+}
+matchInitializationReset();
+function matchInitializationActive() { return !!_matchInit && !_matchInit.released; }
+// Two adjacent windows must have comparable mean cost, with no remaining
+// outlier in the most recent window. A slow but settled world can start.
+function matchInitializationWorkSettled(samples) {
+    if (samples.length < MATCH_INIT_WORK_SAMPLES) return false;
+    const n = samples.length, half = MATCH_INIT_WORK_SAMPLES / 2;
+    let previous = 0, recent = 0, peak = 0;
+    for (let i = n - half * 2; i < n - half; i++) previous += samples[i];
+    for (let i = n - half; i < n; i++) { recent += samples[i]; peak = Math.max(peak, samples[i]); }
+    previous = Math.max(1, previous / half); recent = Math.max(1, recent / half);
+    return recent >= previous * 0.8 && recent <= previous * 1.25 && peak <= recent * 1.5;
+}
+function matchInitializationNoteTick(now, workMs) {
+    const s = _matchInit;
+    if (!s || s.released || !gameStarted || gameOver) return;
+    const c = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
+    const tick = c ? c.appliedTick : currentTick;
+    // A committed bundle can reach a guest before ALL_READY on an unordered
+    // link. Record that first completion even before its overlay poll starts.
+    if (!s.started) { s.started = true; s.allowed = tick; s.tick = tick - 1; }
+    if (tick <= s.tick) return;
+    s.tick = tick;
+    s.samples.push(Math.max(0, Number(workMs) || 0));
+    if (s.samples.length > MATCH_INIT_WORK_SAMPLES) s.samples.shift();
+    s.ready = matchInitializationWorkSettled(s.samples);
+    s.sentAt = -Infinity;
+}
+function matchInitializationCanRunTick(tick) {
+    const s = _matchInit;
+    if (!s || !s.started || s.released) return true;
+    // A guest can only run the host's sealed bundle, and cannot queue ahead
+    // of its own completed tick. Hosts seal only the globally granted tick.
+    return tick <= (isMultiplayer && !isHost ? s.tick + 1 : s.allowed);
+}
+function _matchInitializationRelease(tick) {
+    _matchInit.released = true;
+    _matchInit.releaseTick = tick;
+    // Initialization's barrier/network waits are not gameplay capacity.
+    // Start gameplay at dk=1; the ordinary adaptive controller takes over.
+    netResetSimulationPace();
+}
+function _matchInitializationPoll(now) {
+    const s = _matchInit;
+    if (s.released || !s.started) return;
+    if (isMultiplayer && !isHost) {
+        if (now - s.sentAt >= 250) {
+            s.sentAt = now;
+            const c = netGetHostConnection();
+            if (c) try { c.send({ type: 'START_SIM_STATUS', startSessionId: matchStartSessionId,
+                tick: s.tick, ready: s.ready }); } catch { }
+        }
+        return;
+    }
+    if (s.tick < s.allowed) return;
+    let ready = s.ready;
+    for (const pid of isMultiplayer ? getActiveMatchPeerIds() : []) {
+        if (pid === myPeerId) continue;
+        const r = s.peers[pid];
+        if (!r || r.tick !== s.tick) return;
+        ready = ready && r.ready;
+    }
+    if (!ready) { s.allowed = s.tick + 1; return; }
+    _matchInitializationRelease(s.tick + 1);
+    if (isMultiplayer) for (const c of connections) if (c) try {
+        c.send({ type: 'START_SIM_RELEASE', startSessionId: matchStartSessionId, tick: s.releaseTick });
+    } catch { }
+}
+function _matchInitializationMessage(conn, data) {
+    if (!gameStarted || !matchStartSessionId || data.startSessionId !== matchStartSessionId) return;
+    if (!Number.isSafeInteger(data.tick) || data.tick < -1) return;
+    if (data.type === 'START_SIM_RELEASE') {
+        if (!_matchInit.released) _matchInitializationRelease(data.tick);
+        return;
+    }
+    if (!isHost || !conn || !getActiveMatchPeerIds().includes(conn.peer)) return;
+    if (_matchInit.released) {
+        try { conn.send({ type: 'START_SIM_RELEASE', startSessionId: matchStartSessionId, tick: _matchInit.releaseTick }); } catch { }
+        return;
+    }
+    if (data.tick > _matchInit.allowed) return;
+    const old = _matchInit.peers[conn.peer];
+    if (old && data.tick <= old.tick) return;
+    _matchInit.peers[conn.peer] = { tick: data.tick, ready: data.ready === true };
+}
+function matchInitializationBlocksInput() {
+    return gameStarted && !gameOver && _matchLoadInputBlocked;
+}
+function _matchInitializationProgress() {
+    const c = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
+    const ready = !c || simClientWorldReady();
+    return { ready, pending: !ready || !_matchInit.released };
+}
 function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Preparing game state...') {
     // Ready/countdown only releases lockstep. Keep the world covered while
     // its startup ticks build lazy simulation state, on every peer.
-    const sim = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
-    if (!visible && gameStarted && !gameOver && (sim ? !simClientWorldReady() || sim.appliedTick < sim.startTick + MATCH_START_LOADING_STEPS - 1 : currentTick < MATCH_START_LOADING_STEPS)) {
+    if (!visible && gameStarted && !gameOver && _matchInitializationProgress().pending) {
         _matchLoadOverlayUntilRunning();
         return;
     }
+    _matchLoadInputBlocked = !!visible;
     let el = ensureMatchLoadOverlayElement();
     let t = document.getElementById('match-load-overlay-title');
     let d = document.getElementById('match-load-overlay-detail');
@@ -1718,6 +1816,7 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
     if (role === 'spectating') { fullVisibility = true; enterSpectateMode('postgame'); }
 
     let hostConn = netGetHostConnection();
+    if (liveJoin || midMatchJoin) _matchInit.released = true; // Existing match: its startup barrier already ran.
     if (liveJoin) {
         _guestJoinLoadingBeat(-1);
         for (let k in earlyBundles) if (+k >= currentTick && !lockstepBundleByTick[k]) lockstepPendingBundleByTick[k] = earlyBundles[k];
@@ -2587,7 +2686,7 @@ function hostPeerStopsPlaying(pid) { if (isHost && gameStarted && !gameOver) _ho
 // guest's PLAYER_REMOVED_FROM_MATCH removed a player on the host).
 const NET_HOST_ONLY_MESSAGES = new Set(['TICK_BUNDLE', 'TICK_HASHES', 'TICK_COMMIT', 'TICK_UNAVAILABLE', 'RESYNC_AT', 'RESYNC_PATCH', 'JOIN_LIVE_ACK',
     'NET_STATS', 'START_GAME_PREPARE', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'HOST_HANDOVER', 'MATCH_RESULT', 'LOBBY_STATE',
-    'START_GAME_COUNTDOWN', 'START_GAME_ALL_READY', 'SPECTATE_UNAVAILABLE', 'MATCH_STATE_SNAPSHOT', 'LOCKSTEP_RESYNC_PAUSE',
+    'START_SIM_RELEASE', 'START_GAME_COUNTDOWN', 'START_GAME_ALL_READY', 'SPECTATE_UNAVAILABLE', 'MATCH_STATE_SNAPSHOT', 'LOCKSTEP_RESYNC_PAUSE',
     'DUPLICATE_UID_ACTIVE', 'RETURN_TO_LOBBY', 'REMATCH_STATE', 'PLAYER_REMOVED_FROM_MATCH']);
 function _netFromHostOk(conn, type) {
     if (!NET_HOST_ONLY_MESSAGES.has(type)) return true;
@@ -2597,7 +2696,9 @@ function _netFromHostOk(conn, type) {
 function _handleConnectionMessage(conn, data) {
     let type = data.type;
     if (!_netFromHostOk(conn, type)) { netCounters.notFromHostDropped = (netCounters.notFromHostDropped | 0) + 1; return; }
-    if (type === 'TICK_PACKETS') {
+    if (type === 'START_SIM_STATUS' || type === 'START_SIM_RELEASE') {
+        _matchInitializationMessage(conn, data);
+    } else if (type === 'TICK_PACKETS') {
         handleIncomingTickPackets(conn, data);
     } else if (type === 'TICK_BUNDLE') {
         handleIncomingTickBundle(conn, data);
@@ -3304,6 +3405,7 @@ function setLobbyMode(mode) {
 }
 
 function resetWorldState() {
+    matchInitializationReset();
     fitPlayersToTeams();
     simUnitStateReset();
     visibilityHistoryState = null;
@@ -4323,16 +4425,22 @@ function startSoloGame() {
 let _matchFirstTickWait = 0;
 function _matchLoadOverlayUntilRunning() {
     const c = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
+    if (!_matchInit.started) {
+        _matchInit.started = true;
+        _matchInit.allowed = c ? c.startTick : currentTick;
+        _matchInit.tick = _matchInit.allowed - 1;
+    }
     const epoch = c && c.epoch, gen = ++_matchFirstTickWait, loadGen = _matchLoadGen;
-    let stage = 0;
+    let stage = null;
     const wait = () => {
         if (gen !== _matchFirstTickWait || loadGen !== _matchLoadGen || (c && c.epoch !== epoch) || !gameStarted) return;
-        const ready = !c || simClientWorldReady();
-        if (!gameOver && (!ready || (c ? c.appliedTick < c.startTick + MATCH_START_LOADING_STEPS - 1 : currentTick < MATCH_START_LOADING_STEPS))) {
-            const want = ready ? 2 : 1;
+        if (!gameOver) _matchInitializationPoll(performance.now());
+        const { ready, pending } = _matchInitializationProgress();
+        if (!gameOver && pending) {
+            const want = ready ? _matchInit.tick + 1 : -1;
             if (stage !== want) {
                 stage = want;
-                setMatchLoadOverlay(true, 'Loading Match', ready ? 'Starting the simulation\u2026' : 'Loading units and world into the simulation\u2026');
+                setMatchLoadOverlay(true, 'Loading Match', ready ? `Initializing simulation — step ${want}\u2026` : 'Loading units and world into the simulation\u2026');
             }
             setTimeout(wait, 50);
             return;

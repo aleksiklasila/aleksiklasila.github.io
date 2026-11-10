@@ -6300,6 +6300,10 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
             if (due) accumulator = Math.min(accumulator, tickMs);
             break;
         }
+        if (!matchInitializationCanRunTick(currentTick)) {
+            accumulator = Math.min(accumulator, tickMs);
+            break;
+        }
         if (isMultiplayer && processed > 0) driveStrictLockstep(now, currentTick);
         if (isMultiplayer && !isStrictTickReady(currentTick)) {
             if (due) {

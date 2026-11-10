@@ -3410,6 +3410,8 @@ function requeueLocalAction(finalAction) {
 }
 // (Returns the tick it goes in: undefined when it went nowhere.)
 function queueAction(action) {
+    // Player input starts after loading ticks; admin commands have their own route.
+    if (typeof matchInitializationBlocksInput === 'function' && matchInitializationBlocksInput()) return;
     if (localDefeated && action && action.action !== 'resign') return;
     return _queueLocalAction(action);
 }

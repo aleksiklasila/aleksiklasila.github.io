@@ -981,7 +981,7 @@ const SMALL_MATCH_CONTROLS = {
 // [0, 1, 0, 1] is a 2v2. Default: everyone on their own team.
 // `hostSetup` is code run on the host before the start (e.g. starting resources);
 // `simSetup` in the host's simulation worker when it has one (it builds the world).
-async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNames = null, maxMs = 20000, controls = {}, teams = null, hostSetup = '', simSetup = '', guestOptions = [] } = {}) {
+async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNames = null, maxMs = 20000, controls = {}, teams = null, hostSetup = '', simSetup = '', guestOptions = [], waitForInitialization = true } = {}) {
     const teamOf = i => (teams ? teams[i] : i);
     const host = world.spawn(hostName, { controls });
     host.eval('loadOrCreateLocalIdentity(); hostOnlineGame();');
@@ -1011,8 +1011,8 @@ async function startHostedMatch(world, { guests = 1, hostName = 'host', guestNam
     if (hostSetup) host.eval(hostSetup);
     if (simSetup) host.simSetup = simSetup;
     host.eval('startHostedGame()');
-    const started = await world.runUntil(() => [host, ...list].every(i => i.eval('gameStarted') && !i.eval('matchStartWaitingForReady')) && host.eval('currentTick') > 5, maxMs);
-    if (!started) throw new Error('match never started: ' + JSON.stringify([host, ...list].map(i => [i.name, i.eval('gameStarted'), i.eval('matchStartWaitingForReady'), i.eval('currentTick')])));
+    const started = await world.runUntil(() => [host, ...list].every(i => i.eval('gameStarted') && !i.eval('matchStartWaitingForReady') && (!waitForInitialization || i.eval('_matchInit.released || gameOver'))) && host.eval('currentTick') > 5, maxMs);
+    if (!started) throw new Error('match never started: ' + JSON.stringify([host, ...list].map(i => [i.name, i.eval('gameStarted'), i.eval('matchStartWaitingForReady'), i.eval('currentTick'), i.eval('JSON.stringify(_matchInit)'), i.errors.slice(-3)])));
     return { host, guests: list, hostId };
 }
 

@@ -7444,6 +7444,7 @@ function maybeBuildHostBundle(tick, participants = null, sealLate = false) {
     if (lockstepResyncPauseActive || matchStartWaitingForReady) return null;
     let t = Math.floor(Number(tick));
     if (!Number.isFinite(t) || t < 0) return null;
+    if (!matchInitializationCanRunTick(t)) return null;
     if (lockstepBundleByTick[t]) return lockstepBundleByTick[t];
     if (!lockstepHostPacketsByTick[t]) lockstepHostPacketsByTick[t] = {};
     if (myPeerId && !lockstepHostPacketsByTick[t][myPeerId]) {
@@ -7524,6 +7525,7 @@ function buildEmptyTickBundle(tick, participants, dk = 1) {
 // (one with work before it: a resync patch, a join, a flush), none while the
 // match is not simply running.
 function lockstepAutoLimit() {
+    if (matchInitializationActive()) return 0;
     if (!gameStarted || gameOver) return 0;
     if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) return 0;
     if (!isMultiplayer) return 0x7fffffff;

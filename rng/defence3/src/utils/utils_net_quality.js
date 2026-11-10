@@ -344,6 +344,7 @@ function netResetSimulationPace() {
 }
 
 function netNoteSimulationTick(now = performance.now(), workMs = 0) {
+    if (typeof matchInitializationNoteTick === 'function') matchInitializationNoteTick(now, workMs);
     let previous = netSimulationTickTimes[netSimulationTickTimes.length - 1];
     // A reconnect or deliberate pause is not a measurement of CPU capacity.
     if (now - previous > Math.max(1000, netSimulationTickMs() * 5) && workMs < (now - previous) * 0.5) netSimulationTickTimes = [];
@@ -366,6 +367,7 @@ function netCompletedSimulationTps() {
 // game time stays at wall time; past SIM_DK_MAX base ticks a step the match
 // plays slower.
 function netSimulationTickMs() {
+    if (typeof matchInitializationActive === 'function' && matchInitializationActive()) return TICK_MS;
     const ms = netPaceRawMs();
     if (!(ms > TICK_MS) || !SIM_ADAPTIVE_STEPS) return ms;
     const dk = simStepTicksForMs(ms);
@@ -377,7 +379,7 @@ function netPaceRawMs() {
     return Math.max(TICK_MS, netMatchTickMs);
 }
 // The base ticks of a step sealed (or, solo, run) now.
-function netStepTicks() { return SIM_ADAPTIVE_STEPS ? simStepTicksForMs(netSimulationTickMs()) : 1; }
+function netStepTicks() { return SIM_ADAPTIVE_STEPS && !(typeof matchInitializationActive === 'function' && matchInitializationActive()) ? simStepTicksForMs(netSimulationTickMs()) : 1; }
 
 // The mean work of a step (ms) against the time that step has: a step of
 // several base ticks has that many ticks' time (61 ms of work for a step of
@@ -414,6 +416,7 @@ function netSimulationBusy() {
 }
 
 function netHostUpdateSimulationPace(now = performance.now()) {
+    if (typeof matchInitializationActive === 'function' && matchInitializationActive()) return;
     // (Solo too, with adaptive steps: its own machine's pace.)
     if (isMultiplayer ? !isHost : !SIM_ADAPTIVE_STEPS) return;
     if (!gameStarted || gameOver) return;
@@ -662,7 +665,7 @@ function _formatSecs(ms) {
 // Shows who the match is waiting for, reconnect progress and resyncs.
 function netUpdateWaitingOverlay(now = performance.now(), forceHide = false) {
     let el = document.getElementById('net-wait-overlay');
-    if (forceHide || !isMultiplayer || !gameStarted || gameOver || matchStartWaitingForReady) {
+    if (forceHide || !isMultiplayer || !gameStarted || gameOver || matchStartWaitingForReady || (typeof matchInitializationActive === 'function' && matchInitializationActive())) {
         if (el && el.style.display !== 'none') el.style.display = 'none';
         netWaitOverlayState = '';
         return;
