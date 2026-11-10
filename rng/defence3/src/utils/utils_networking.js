@@ -255,7 +255,10 @@ function matchInitializationReset() {
         samples: [], ready: false, peers: {}, sentAt: -Infinity, releaseTick: -1 };
 }
 matchInitializationReset();
-function matchInitializationActive() { return !!_matchInit && !_matchInit.released; }
+// (Active only once a new match's start began it: a path that never runs the
+// barrier (a restored scene, a resumed match) must not keep gameplay at dk=1
+// with the adaptive pace off; it did for restored scenes, 2026-11-10.)
+function matchInitializationActive() { return !!_matchInit && _matchInit.started && !_matchInit.released; }
 // Two adjacent windows must have comparable mean cost, with no remaining
 // outlier in the most recent window. A slow but settled world can start.
 function matchInitializationWorkSettled(samples) {
@@ -274,7 +277,8 @@ function matchInitializationNoteTick(now, workMs) {
     const tick = c ? c.appliedTick : currentTick;
     // A committed bundle can reach a guest before ALL_READY on an unordered
     // link. Record that first completion even before its overlay poll starts.
-    if (!s.started) { s.started = true; s.allowed = tick; s.tick = tick - 1; }
+    // (Guests only: elsewhere the barrier is started by the match start.)
+    if (!s.started) { if (!isMultiplayer || isHost) return; s.started = true; s.allowed = tick; s.tick = tick - 1; }
     if (tick <= s.tick) return;
     s.tick = tick;
     s.samples.push(Math.max(0, Number(workMs) || 0));

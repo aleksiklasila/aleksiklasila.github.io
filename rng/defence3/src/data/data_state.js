@@ -157,8 +157,6 @@ function rebuildAreaDistanceCachesFromAreas() {
     }
 
 
-    let neighborSets = Array.from({ length: areaCount }, () => new Set());
-
 
     for (let y = 0; y < GRID_H; y++) {
         let row = grid[y];
@@ -189,30 +187,28 @@ function rebuildAreaDistanceCachesFromAreas() {
         }
     }
 
-    let neighborTotal = 0;
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            let areaId = areaIdGrid[y][x];
-            if (!(areaId >= 0 && areaId < areaCount)) continue;
-
-            if (x + 1 < GRID_W) {
-                let rightId = areaIdGrid[y][x + 1];
-                if (rightId >= 0 && rightId < areaCount && rightId !== areaId) {
-                    if (!neighborSets[areaId].has(rightId)) neighborTotal++;
-                    neighborSets[areaId].add(rightId);
-                    neighborSets[rightId].add(areaId);
-                }
-            }
-            if (y + 1 < GRID_H) {
-                let downId = areaIdGrid[y + 1] ? areaIdGrid[y + 1][x] : -1;
-                if (downId >= 0 && downId < areaCount && downId !== areaId) {
-                    if (!neighborSets[areaId].has(downId)) neighborTotal++;
-                    neighborSets[areaId].add(downId);
-                    neighborSets[downId].add(areaId);
-                }
+    // The neighbours of every area: each meeting of two areas' tiles (right
+    // and down) as two directed pairs in typed arrays, counted by area, then
+    // per area deduplicated (a stamp) and sorted. (One Set an area, ~126k at
+    // a 1024 map, was ~25 MB of old-generation garbage at every match start.)
+    const pairs = n => { let k = 0; const A = n ? new Int32Array(n) : null, B = n ? new Int32Array(n) : null;
+        for (let y = 0; y < GRID_H; y++) {
+            const row = areaIdGrid[y], below = y + 1 < GRID_H ? areaIdGrid[y + 1] : null;
+            for (let x = 0; x < GRID_W; x++) {
+                const a = row[x];
+                if (!(a >= 0 && a < areaCount)) continue;
+                const r = x + 1 < GRID_W ? row[x + 1] : -1, d = below ? below[x] : -1;
+                if (r >= 0 && r < areaCount && r !== a) { if (A) { A[k] = a; B[k] = r; A[k + 1] = r; B[k + 1] = a; } k += 2; }
+                if (d >= 0 && d < areaCount && d !== a) { if (A) { A[k] = a; B[k] = d; A[k + 1] = d; B[k + 1] = a; } k += 2; }
             }
         }
-    }
+        return { k, A, B };
+    };
+    const E = pairs(pairs(0).k), off = new Int32Array(areaCount + 1), nb = new Int32Array(Math.max(1, E.k));
+    for (let i = 0; i < E.k; i++) off[E.A[i] + 1]++;
+    for (let a = 0; a < areaCount; a++) off[a + 1] += off[a];
+    { const at = off.slice(0, areaCount); for (let i = 0; i < E.k; i++) nb[at[E.A[i]]++] = E.B[i]; }
+    const stamp = new Int32Array(areaCount);
 
 
     areaNeighborIds = new Array(areaCount);
@@ -222,7 +218,11 @@ function rebuildAreaDistanceCachesFromAreas() {
     if (typeof rebuildUnitAreaBuckets === 'function') rebuildUnitAreaBuckets();
 
     for (let source = 0; source < areaCount; source++) {
-        let neighbors = _areaById[source] ? Array.from(neighborSets[source] || []).sort((a, b) => a - b) : [];
+        let neighbors = [];
+        if (_areaById[source]) {
+            for (let j = off[source], e = off[source + 1]; j < e; j++) { const v = nb[j]; if (stamp[v] !== source + 1) { stamp[v] = source + 1; neighbors.push(v); } }
+            neighbors.sort((a, b) => a - b);
+        }
         areaNeighborIds[source] = neighbors;
         if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
         gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];

@@ -6242,7 +6242,12 @@ function startGame() {
 
     rng = mulberry32(gameSeed);
     visualRng = mulberry32(gameSeed ^ 0xDEADBEEF); // separate RNG for visual effects
-    generateAreas();
+    // (A restored scene brings its own terrain, areas and mines (applySoloScene):
+    // a generated map only to be replaced left ~250 MB of old-generation garbage
+    // at 1M units, collected mid-game in 37-65 ms major GCs. Only the rows the
+    // scene's terrain is written into.)
+    if (startGameSkipMap) { areas = []; areaIdGrid = Array.from({ length: GRID_H }, () => new Int32Array(GRID_W).fill(-1)); }
+    else generateAreas();
     let teams = (activeTeamIds && activeTeamIds.length > 0) ? activeTeamIds : [0, 1];
     // Apply capacities before resource generation creates any structure rows.
     _popBudgetApply(teams.length);
@@ -6253,9 +6258,11 @@ function startGame() {
         ASTAR_MINE_COUNT = mineLimit - GOLD_MINE_COUNT;
     }
     let spawns = pickPlayerSpawns(teams.length);
-    generateResourceMinesMixed(spawns);
-    // (Every player starts within reach of both resources: map.js.)
-    spawns = settleSpawnsNearResources(spawns);
+    if (!startGameSkipMap) {
+        generateResourceMinesMixed(spawns);
+        // (Every player starts within reach of both resources: map.js.)
+        spawns = settleSpawnsNearResources(spawns);
+    }
 
     let teamSpawnPos = {};
     let teamStarterSpawnState = {};
@@ -6685,6 +6692,8 @@ function startGame() {
 // simulation worker's): the starting units and buildings are not made (the
 // snapshot brings them; at 200k units they were seconds of work thrown away).
 let startGameSkipStarters = false;
+// (A scene restore: no generated terrain, areas or mines; the scene's replace them.)
+let startGameSkipMap = false;
 
 let _lastTickTime = 0;
 let _tickAccumulator = 0;

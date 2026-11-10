@@ -7155,3 +7155,63 @@ helpers, Node 24.
   per round at 500k (scan ~200 ns a live unit: the bucket sample's random
   line and the tile records), and the background order (lane 2 behind lanes
   0, 10, 6, 13) - measure on a quiet machine before any schedule change.
+
+## 2026-11-10 (night) — rendered runs: pace bug, helper oversubscription, post-load GC
+
+All measured in headed Edge on the real page (simulation worker, helpers,
+presentation worker, WebGL rendering): `.claude/scene_tps_probe.cjs
+scenes/chaos-1m-250k.gz 90` with HEADED=1, QUERY=simtrace=1,
+DUMP=tests/perf-fuzz/simtrace-dump.js; analysed with
+`node tests/simtrace-spikes.cjs <out.txt>` (step totals, chunk stalls, fps,
+each slow step against its neighbours) and, with TRACE=<file>
+TRACE_CATS=devtools.timeline,blink.user_timing,disabled-by-default-v8.gc,
+`node tests/trace-gc-steps.cjs <trace> <out.txt>` (the worker's MinorGC /
+MajorGC per step: the worker marks each traced step, 'simstep <tick>').
+Raw outputs in tests/test-runs/rendered-20261110/.
+
+- Bug (from the initialization barrier): a restored scene (restoreSoloGameSnapshot)
+  re-armed the barrier in startGame and never released it, so
+  matchInitializationActive() stayed true all game: dk pinned at 1 and the
+  adaptive pace off. Now the barrier is active only once a match start began
+  it (guests' early-bundle auto-start only in multiplayer), and a restore
+  releases it as a running match. first-tick-loading has a never-started case.
+- The worker's trace rows now carry dk (`tick` counts steps).
+- Helpers oversubscribed the machine when rendering: simParallelInit's reserve
+  (cores - 5) did not count the presentation worker's own helpers (3 here).
+  Two runs each, 16 threads: 11 helpers had 54-57 steps with one chunk over
+  10 ms (a helper descheduled inside its chunk: kernel 37 dead-marking 41 ms,
+  131 55 ms, occupancy jobs of 60-120 units 6-20 ms), 29-31 steps over 1.5x
+  the mean; 8 helpers 7-9 and 7-16; the same game ticks a second (18.9),
+  33.0-34.8 against 34.3-37.6 ms a base tick, fps 84-103 against 78-90.
+  10 helpers: 17 stalls, 30 slow; 6: 4 stalls, 31 slow (bigger dk swings).
+  Default now max(ceil(cores/2)-1, min(cores - 5 - presentation helpers, 15)):
+  8 here, unchanged at 32 threads. Node benches pass helpers explicitly.
+- Remaining slow steps are V8 major GCs in the simulation worker (37-77 ms):
+  trace-gc-steps attributed 103 of 192 ms and 130 of 234 ms of the slow
+  steps' excess to them. The worker's JS heap is ~570-650 MB right after a
+  scene load and ~245 MB in play: the first one or two major GCs after the
+  load collect it. Earlier "unitHitsResolve +90 ms" and "researchDrainTick
+  +32 ms" one-offs were these collections landing in that phase.
+- Load garbage cut (tickbench SOLO SCENE HEAPPROF_LOAD, new HEAPPROF_MINOR=0
+  (promoted only) and HEAPPROF_LIVE=1 (alive after a full GC); promoted
+  minus live = old-generation garbage, ~261 MB before):
+  * restore no longer generates a random map only to replace it
+    (startGameSkipMap, page and worker): generateAreas, generateResourceMines
+    Mixed, settleSpawns, their area caches (~215 MB promoted garbage);
+  * applySoloScene's rows(): one array a record kind, not a generator (an
+    iterator result a row in every pass, ~40 MB);
+  * rebuildAreaDistanceCachesFromAreas (every match start, joins): typed
+    adjacency pairs counted by area, deduplicated by stamp, sorted, instead
+    of a Set per area (126k Sets, ~25 MB): tests/area-neighbors.test.cjs
+    checks it against the Set version on 40 random maps.
+  Promoted garbage over the in-page load ~261 -> ~50-96 MB (sampling noise).
+  In the worker the post-load heap is still ~570-610 MB: the scene arrives
+  as a structured-cloned message (its rows are JS arrays), restore-only.
+- Steady play: one major GC of 53 ms at a ~250 MB worker heap in one run, 13
+  ms in another: the live JS heap (the tile grid's cell objects, areas' cell
+  lists of {x, y}, unit objects) sets that pause in every match.
+- Next, by size: the tile grid (initGrid: 1M cell objects, ~50 MB live) and
+  area cell lists into typed columns in the wasm heap; the scene sent as
+  binary columns (restore); simUnitStateCollect's whole-world pass over the
+  units proxy at a new units epoch (~18 MB of iterator garbage) by the row
+  index's slots once that equivalence is proven.

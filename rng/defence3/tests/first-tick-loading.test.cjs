@@ -43,11 +43,22 @@ for (const worker of [false,true]) {
 {
     const {c} = setup(true);
     c.matchInitializationReset();
+    c.isMultiplayer = true; c.isHost = false; c.netGetHostConnection = () => null;
     c._simClient.appliedTick = 0;
     c.matchInitializationNoteTick(100, 80);
+    assert.equal(vm.runInContext('_matchInit.started', c), true, 'a guest records its first completion before ALL_READY');
     c.currentTick = 1;
     c.setMatchLoadOverlay(false);
     assert.equal(c.matchInitializationCanRunTick(1), true, 'completion before ALL_READY is retained');
+}
+{
+    // A match the barrier never started (a restored scene, a resumed match):
+    // not initializing, whatever ticks run (it kept dk=1 and the pace off).
+    const {c} = setup(true);
+    c.matchInitializationReset();
+    for (let t = 0; t < 20; t++) { c._simClient.appliedTick = t; c.matchInitializationNoteTick(t * 50, 80); }
+    assert.equal(c.matchInitializationActive(), false, 'never started: gameplay pace and step sizes');
+    assert.equal(c.matchInitializationCanRunTick(20), true);
 }
 {
     const {c,step} = setup(false);
@@ -79,4 +90,4 @@ for (const worker of [false,true]) {
     for(let i=0;i<8;i++)step(10);
     c.queueAction({action:'move'}); assert.equal(calls,1);
 }
-console.log('PASS loading work convergence, worker/page completion, per-tick barrier, stale session, release retry and input gate');
+console.log('PASS loading work convergence, worker/page completion, per-tick barrier, stale session, release retry, input gate and never-started matches');

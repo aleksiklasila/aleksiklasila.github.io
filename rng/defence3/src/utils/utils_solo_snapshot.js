@@ -256,7 +256,15 @@ async function compressSoloGameSnapshot(parts) {
 function applySoloScene(scene) {
     const h = scene.header;
     if (GRID_W !== h.width || GRID_H !== h.height) throw new Error('The scene map dimensions do not match its settings.');
-    const rows = function* (key) { for (const r of scene.records) if (r[key]) yield* r[key]; };
+    // (Each kind's rows in one array, made once: a generator here made an
+    // iterator result a row in every pass, ~40 MB at 1M units that lived into
+    // the old generation and cost a major GC in play.)
+    const rowsOf = {};
+    const rows = key => {
+        let L = rowsOf[key];
+        if (!L) { L = rowsOf[key] = []; for (const r of scene.records) { const part = r[key]; if (part) for (let i = 0; i < part.length; i++) L.push(part[i]); } }
+        return L;
+    };
     const population = new Map(), structures = new Map(), popLimit = getConfiguredMaxPop(), structureLimit = getPlayerStructureLimit();
     for (const row of rows('units')) population.set(row[1], (population.get(row[1]) || 0) + 1);
     for (const row of rows('buildings')) structures.set(row[1], (structures.get(row[1]) || 0) + 1);
@@ -405,8 +413,10 @@ async function restoreSoloGameSnapshot(scene) {
     try {
         isHost = false; isMultiplayer = false; gameSeed = h.seed; localPlayerId = h.player;
         activeTeamIds = h.teams.slice(); teamColorById = { ...h.teamColors };
-        initAudio(); startGameSkipStarters = true;
-        try { startGame(); } finally { startGameSkipStarters = false; }
+        initAudio(); startGameSkipStarters = true; startGameSkipMap = true;
+        try { startGame(); } finally { startGameSkipStarters = false; startGameSkipMap = false; }
+        // (A running match restored: no new match's initialization barrier.)
+        _matchInit.released = true;
         const made = simClientCreateMatch({ scene });
         if (made) { setMatchLoadOverlay(true, 'Importing scene…'); await made; }
         else applySoloScene(scene);

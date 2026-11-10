@@ -129,3 +129,16 @@ chain `kernel x chunks`, running stage, done/total). `ACQ_EAGER=1` waits for
 the acquisition chain right after its post and records per-stage helper
 walls (`acqStages`): it changes the schedule, so use it only to cost the
 chain, never for timing comparisons.
+
+Rendered spike runs (2026-11-10): headed Edge only (headless starves helpers),
+`HEADED=1 QUERY=simtrace=1 DUMP=tests/perf-fuzz/simtrace-dump.js node
+.claude/scene_tps_probe.cjs scenes/chaos-1m-250k.gz 90 > out.txt`, then
+`node tests/simtrace-spikes.cjs out.txt` (per-step totals with dk, chunk
+stalls >10/20 ms, fps; each step over 1.35x its 17-step window median with
+the phases that grew against its previous and next steps). Add `&simhelpers=N`
+to QUERY to compare helper counts. For GC: `TRACE=trace.json
+TRACE_CATS=devtools.timeline,blink.user_timing,disabled-by-default-v8.gc` and
+`node tests/trace-gc-steps.cjs trace.json out.txt` (MinorGC/MajorGC time of
+the simulation worker per step). A chunk taking far longer than its work (a
+dead-mark or 80-unit occupancy chunk at 20-60 ms) is a descheduled thread,
+not content: check helper oversubscription before optimizing that kernel.

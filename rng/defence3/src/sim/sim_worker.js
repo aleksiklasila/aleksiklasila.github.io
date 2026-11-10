@@ -571,7 +571,9 @@ function _simStart(msg) {
     // Otherwise its entities come with the snapshot.
     const create = !!msg.create;
     startGameSkipStarters = !create || !!msg.scene;
-    try { startGame(); } finally { startGameSkipStarters = false; }
+    // (A scene: its own terrain, areas and mines, applySoloScene below.)
+    startGameSkipMap = !!msg.scene;
+    try { startGame(); } finally { startGameSkipStarters = false; startGameSkipMap = false; }
     T.startGame = performance.now() - t0;
     _simStubUi();
     if (msg.scene) applySoloScene(msg.scene);
@@ -701,7 +703,10 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent',
     // (The result's parts, the movement's, the events' JavaScript.)
     'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', '_simDeltaEvents', '_simEvTake', 'trafficBeforeMovement',
-    'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
+    'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', 'workerBrainsPrepare', '_unitNoWayCommit', '_unitNoWay', '_unitWaitEnded',
+    '_unitFloorEvent', '_unitEventSortReserve', '_unitEvSplitRoom', 'flowLooksCommit', '_acqApplyMoves',
+    // (The spawner queue's parts.)
+    'spawnerProductionPass', '_spawnBegin', 'simSpawnBatchWrite', '_spawnEnd', '_spShiftRun', '_spawnBatchDone', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
 // The occupancy movement's jobs (one a spatial block) in a traced tick: their
 // summed time (cpu:89), and those over 2 ms with their blocks' unit counts
@@ -736,8 +741,11 @@ function _simTraceInstall() {
     }
     const inner = _simTick;
     _simTick = function (msg) {
-        const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
+        const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, dk: msg.dk | 0, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
         _simParTrace = cur.ph;
+        // (A user-timing mark a step: in a Chrome trace (blink.user_timing) on the
+        // same clock as V8's GC events, so a slow step's collector work is found.)
+        try { const m = 'simstep ' + msg.tick; performance.mark(m); performance.clearMarks(m); } catch { }
         try { return inner.apply(this, arguments); } finally {
             const b = performance.now();
             cur.total = b - a; _simTraceCur = null; _simParTrace = null; _simTraceEndAt = b;

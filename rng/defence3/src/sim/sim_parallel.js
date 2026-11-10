@@ -931,8 +931,14 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     // Start with roughly one simulation participant per physical core on an
     // SMT machine. Larger CPUs must not be permanently capped at 7 helpers;
     // the explicit override can use the other hardware threads as well.
-    // (One participant per physical core was the start; the SMT threads are worth more: on an 8-core 16-thread laptop 11 helpers took 17% off the step of a 2.1M-unit match against 7, the same results, frames unchanged; the rest are the simulation worker, the page and the presentation workers: cores - 5, at most 15 unless the CPU is larger.)
-    let n = Math.max(0, Math.max(Math.ceil(cores / 2) - 1, Math.min(cores - 5, 15)));
+    // (One participant per physical core was the start; the SMT threads are worth more: on an 8-core 16-thread laptop 11 helpers took 17% off the step of a 2.1M-unit match against 7, the same results, frames unchanged (means only); the rest are the simulation worker, the page, the presentation worker and its helpers: cores - 5 - those helpers, at most 15 unless the CPU is larger.)
+    // The reserve also holds the presentation worker's own helpers (presentation_worker.js presentHelpers:
+    // min(3, cores / 4 - 1)): rendered, 11 helpers on 16 threads oversubscribed the machine. Headed Edge,
+    // chaos-1m-250k, 2026-11-10, two runs each: 11 helpers had 54-57 steps with a chunk over 10 ms (a
+    // helper descheduled inside its chunk, up to 61 ms), 29-31 steps over 1.5x the mean; 8 helpers 7-9 and
+    // 7-16, the same game ticks a second, 33-35 against 34-38 ms a base tick, frames 84-103 against 78-90.
+    const presentHelpers = Math.max(0, Math.min(3, (cores >> 2) - 1));
+    let n = Math.max(0, Math.max(Math.ceil(cores / 2) - 1, Math.min(cores - 5 - presentHelpers, 15)));
     if (Number.isFinite(maxHelpers)) n = Math.min(Math.max(0, cores - 2), Math.max(0, Math.floor(maxHelpers)));
     if (n < 1) return 0;
     let ctl = new Int32Array(new SharedArrayBuffer(SIM_PAR_CTL_WORDS * 4));
