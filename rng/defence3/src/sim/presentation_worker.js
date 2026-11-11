@@ -4,7 +4,7 @@ const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, cellBaseline=null;
 let projectiles=null, projectileRevision=-1, sentProjectileRevision=-1;
-let lastOrder=null, lastOrderN=-1, membership=0, sequence=0;
+let membership=0, sequence=0;
 const buffers=new Map();
 // out: the page's channel (frames out, buffers back). snaps: the
 // simulation's per-tick position snapshots (sim_presentation.js
@@ -51,18 +51,20 @@ function pmInit(simMemory) {
     if ([SIM_META_I32,SIM_META_F32,SIM_META_I16,SIM_META_U8].map(a=>a.join(',')).join('|')!==PM_META_LAYOUT) throw new Error('presentation: the metadata layout is not pres_fill.rs M_*');
     if (!pm.mod) pm.mod=new WebAssembly.Module(pmDecode(PRES_WASM_BIN));
     if (!pm.mem) pm.mem=new WebAssembly.Memory({initial:256,maximum:65536,shared:true});
-    pm.x=new WebAssembly.Instance(pm.mod,{env:{memory:pm.mem,simMemory}}).exports;pm.sim=simMemory;
+    pm.x=new WebAssembly.Instance(pm.mod,{env:{memory:pm.mem,simMemory}}).exports;pm.sim=simMemory;pm.steps=rangeSteps(pm.x);
     if (!pm.args) {
         pm.args=Math.ceil(Number(pm.x.__heap_base.value)/64)*64;pm.top=pm.args+8192;
         pm.I=new Int32Array(pm.mem.buffer,pm.args,1024);pm.P=new Float64Array(pm.mem.buffer,pm.args+4096,512);
-        pm.main={args:pm.args,I:pm.I,P:pm.P,AL:0,CL:0,BK:0,outR:null,outv:null,len:-1};
-        pmThreadOut(pm.main);
+        pm.main={args:pm.args,I:pm.I,P:pm.P,AL:0,CL:0,BK:0,len:-1};
     }
     restartHelpers();
 }
-// A region of at least bytes (64-aligned): a free one that fits, else new at the top.
+// A region of at least bytes (64-aligned): a free one that fits, else new at
+// the top. (A cache line more than asked: arrays of a power-of-two size, one
+// after another, would start at whole multiples of it, all in the same cache
+// sets: a pass reading several of them evicted itself, sim_frame.js simFrameViews.)
 function pmAlloc(bytes) {
-    bytes=Math.ceil(Math.max(1,bytes)/64)*64;
+    bytes=Math.ceil(Math.max(1,bytes)/64)*64+64;
     for (let i=0;i<pm.free.length;i++) if (pm.free[i].size>=bytes) {const r=pm.free[i];pm.free.splice(i,1);return r;}
     const at=pm.top;pm.top+=bytes;
     const have=pm.mem.buffer.byteLength;
@@ -77,8 +79,6 @@ function pmRegion(name,bytes) {
     if (r) pmFree(r);
     return pm.regions[name]=pmAlloc(bytes);
 }
-// A thread's own words for its kernels' results.
-function pmThreadOut(th) {th.outR=pmAlloc(64);th.outv=new Int32Array(pm.mem.buffer,th.outR.base,4);}
 // A thread's fill lists for ranges of up to len slots.
 function pmThreadScratch(th,len) {
     if (th.len>=len) return;
@@ -87,12 +87,13 @@ function pmThreadScratch(th,len) {
     th.AL=th.ALR.base;th.CL=th.CLR.base;th.BK=th.BKR.base;th.len=len;
 }
 // The order's and buckets' state for frames of cap slots (pres.rs).
+// (scratch: the order's, 3 words a slot; lastSlots: the last frame's order, lastN of it.)
 function pmState(cap) {
     if (pm.cap===cap) return;
-    for (const k of ['scratch','prevX','prevY','out']) if (pm[k]) pmFree(pm[k+'R']);
+    for (const k of ['scratch','prevX','prevY','out','lastSlots']) if (pm[k]) pmFree(pm[k+'R']);
     const take=(k,bytes) => {const r=pmAlloc(bytes);pm[k+'R']=r;pm[k]=r.base;};
-    take('scratch',12*cap);take('prevX',4*cap);take('prevY',4*cap);take('out',64);
-    pm.cap=cap;pm.prevReady=false;
+    take('scratch',12*cap);take('prevX',4*cap);take('prevY',4*cap);take('out',64);take('lastSlots',4*cap);
+    pm.cap=cap;pm.prevReady=false;pm.lastN=0;pm.lastView=null;
 }
 // The per-slot state for cap slots (pres_fill.rs T_*): its table, views of
 // each column and of the stamps (the change marks). True when made anew.
@@ -138,12 +139,8 @@ function pmBindSource(C,M) {
     pm.hasPvAt=!!C.pvAt;pm.hasCm=!!(C.cmMode && C.cmT);pm.hasPvOD=!!C.pvOD;
     for (const k of ['x','y','prevX','prevY']) if (!C[k] || C[k].constructor.name!=='Int32Array') throw new Error('presentation: the column '+k+' is not Int32 eighths');
     const mt=pmRegion('M',14*4);pm.M=mt.base;
-    const Mv=new Int32Array(pm.mem.buffer,mt.base,14), cap=M.cap;
-    let o=M.off||0, i=0;
-    for (let k=0;k<SIM_META_I32.length;k++) {Mv[i++]=o;o+=4*cap;}
-    for (let k=0;k<SIM_META_F32.length;k++) {Mv[i++]=o;o+=4*cap;}
-    for (let k=0;k<SIM_META_I16.length;k++) {Mv[i++]=o;o+=2*cap;}
-    for (let k=0;k<SIM_META_U8.length;k++) {Mv[i++]=o;o+=cap;}
+    const Mv=new Int32Array(pm.mem.buffer,mt.base,14), V=simMetaViews(M.buf,M.cap,M.off||0);
+    [...SIM_META_I32,...SIM_META_F32,...SIM_META_I16,...SIM_META_U8].forEach((k,i) => {Mv[i]=V[k].byteOffset;});
 }
 // A unit frame back from the page, by its region id.
 function releaseRegion(rid,gen) {if (gen!==generation) return;const e=buffers.get(rid);if (e && e.kind==='units') e.busy=false;}
@@ -260,22 +257,78 @@ function frameIdOrder(F, count) {
     const I=pm.I, P=pm.P;
     I[512]=F.order.byteOffset;I[513]=F.id.byteOffset;I[514]=pm.scratch;P[0]=count;
     pm.x.k_pres_order(pm.args,0);
+    // (Kept: the next frame's order when the membership did not change. An
+    // order kept and merged with the units new to it was ~5x slower than this
+    // sort at 1M: the ids by slot are random, every look-up a cache miss.)
+    if (!pm.lastView || pm.lastView.length!==pm.cap) pm.lastView=new Int32Array(pm.mem.buffer,pm.lastSlots,pm.cap);
+    pm.lastView.set(F.order.subarray(0,count));
+    pm.lastN=count;
 }
-// The camera's buckets (pres.rs k_pres_buckets): after the frame's columns,
-// head and motion a cell, next an order entry, the moving slots. Offsets
-// absolute in the buffer. (Teleports and stops count as moving too: the
-// positions of the last frame built are kept there.)
+// The last frame's order (frameIdOrder keeps it) into F's: the
+// order when the membership did not change.
+function frameLastOrder(F, count) {
+    if (!pm.lastView || pm.lastView.length!==pm.cap) pm.lastView=new Int32Array(pm.mem.buffer,pm.lastSlots,pm.cap);
+    F.order.set(pm.lastView.subarray(0,count));
+}
+// The camera's buckets (pres.rs k_pres_bucket_part, k_pres_bucket_merge):
+// after the frame's columns, head and motion a cell, next an order entry,
+// the moving slots. Offsets absolute in the buffer. (Teleports and stops
+// count as moving too: the positions of the last frame built are kept
+// there.) In parts of the order (BUCKET_PARTS from BUCKET_PARTS_MIN
+// entries, whatever the threads: the same lists), taken by this thread and
+// the helpers in turn, then joined.
+const BUCKET_PARTS=16, BUCKET_PARTS_MIN=65536;
+const bucketJob={F:null,count:0,columns:0,rows:0,tile:32,cells:0,offset:0,movingOffset:0,parts:1,per:0};
+function bucketParts(cells,parts) {
+    const need=3*cells*parts*4+parts*4;
+    if (!pm.bk || pm.bk.size<need) {
+        if (pm.bk) pmFree(pm.bk.r);
+        const r=pmAlloc(need);pm.bk={r,size:need};
+    }
+    const b=pm.bk.r.base, n=cells*parts*4;
+    return {heads:b,tails:b+n,motion:b+2*n,moved:b+3*n};
+}
+// A part's arguments (all but which part) into a thread's block.
+function writeBucketJob(I,P) {
+    const J=bucketJob, F=J.F, A=bucketParts(J.cells,J.parts);
+    I[512]=F.order.byteOffset;I[513]=F.x.byteOffset;I[514]=F.y.byteOffset;I[515]=F.px.byteOffset;I[516]=F.py.byteOffset;
+    I[517]=J.offset+J.cells*8;I[518]=J.movingOffset;I[519]=pm.prevX;I[520]=pm.prevY;I[521]=A.heads;I[522]=A.tails;I[523]=A.motion;I[524]=A.moved;
+    P[2]=J.columns;P[3]=J.rows;P[4]=J.tile;P[5]=pm.prevReady ? 1 : 0;
+}
+// Parts taken until none is left (ctl[4] the next; ctl[5] parts, ctl[6] a
+// part's entries, ctl[7] count).
+function runBucketParts(x,args,P,ctl) {
+    const parts=ctl[5], per=ctl[6], count=ctl[7];
+    for (;;) {
+        const c=Atomics.add(ctl,4,1);
+        if (c>=parts) return;
+        P[0]=c*per;P[1]=Math.min(count,(c+1)*per);P[6]=c;
+        x.k_pres_bucket_part(args,0);
+    }
+}
+const BUCKET_MSG={type:'buckets'};
 function buildRenderBuckets(F, count, columns, rows, tile) {
     pmState(F.cap);
-    const cells = columns * rows, offset = F.base + F.cap * SIM_FRAME_SLOT_BYTES;
-    const movingOffset = offset + cells * 8 + F.cap * 4;
-    const I=pm.I, P=pm.P;
-    I[512]=F.order.byteOffset;I[513]=F.x.byteOffset;I[514]=F.y.byteOffset;I[515]=F.px.byteOffset;I[516]=F.py.byteOffset;
-    I[517]=offset;I[518]=offset+cells*4;I[519]=offset+cells*8;I[520]=movingOffset;I[521]=pm.prevX;I[522]=pm.prevY;I[523]=pm.out;
-    P[0]=count;P[1]=columns;P[2]=rows;P[3]=tile;P[4]=pm.prevReady ? 1 : 0;
-    pm.x.k_pres_buckets(pm.args,0);
-    pm.prevReady=true;
-    return { columns, rows, tile, offset, movingOffset, movingCount: new Int32Array(pm.mem.buffer, pm.out, 1)[0] };
+    const J=bucketJob, cells=columns*rows, offset=F.base+simFrameBytes(F.cap);
+    const parts=count>=BUCKET_PARTS_MIN ? BUCKET_PARTS : 1, per=Math.max(1,Math.ceil(count/parts));
+    J.F=F;J.count=count;J.columns=columns;J.rows=rows;J.tile=tile;J.cells=cells;J.offset=offset;J.movingOffset=offset+cells*8+F.cap*4;J.parts=parts;J.per=per;
+    const ctl=pmChunks().v;
+    ctl[5]=parts;ctl[6]=per;ctl[7]=count;Atomics.store(ctl,4,0);
+    // (The helpers the ranges had, when there are parts for them.)
+    const H=parts>1 && rangeHelpers>0 ? helpers : null, nh=H ? rangeHelpers : 0;
+    if (nh) {
+        Atomics.store(helperDone,0,0);
+        for (let r=0;r<nh;r++) {writeBucketJob(H[r].th.I,H[r].th.P);H[r].worker.postMessage(BUCKET_MSG);}
+    }
+    writeBucketJob(pm.I,pm.P);
+    runBucketParts(pm.x,pm.args,pm.P,ctl);
+    if (nh && !waitHelpers(nh)) return null;
+    const A=bucketParts(cells,parts), I=pm.I, P=pm.P;
+    I[512]=offset;I[513]=offset+cells*4;I[514]=offset+cells*8;I[515]=J.movingOffset;I[516]=A.heads;I[517]=A.tails;I[518]=A.motion;I[519]=A.moved;I[520]=pm.out;
+    P[0]=parts;P[1]=cells;P[2]=per;
+    pm.x.k_pres_bucket_merge(pm.args,0);
+    pm.prevReady=true;J.F=null;
+    return { columns, rows, tile, offset, movingOffset: J.movingOffset, movingCount: new Int32Array(pm.mem.buffer, pm.out, 1)[0] };
 }
 // Which parts of the renderer's unit columns changed, so the page uploads
 // only those (renderer3d.js _columnStoreUpload). Per column and block of
@@ -303,13 +356,46 @@ function dirtyEnd(F,n,offset,seq,tick) {
 }
 // The frame's job (one a frame, its fields rewritten: no objects a frame).
 const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0};
-// A range's call (pres_fill.rs k_pres_range) into a thread's argument block.
-function writeJob(th,F,Pf,s0,s1) {
+// A range's kernels, in turn (pres_fill.rs: which slots, the filled ones pass
+// by pass, the order, ghosts and marks; each its own function: as one, V8
+// compiled the passes ~10x slower), over a thread's argument block.
+const RANGE_STEPS=['k_pres_select','k_pres_p0','k_pres_p1','k_pres_p2','k_pres_p3','k_pres_p4','k_pres_p5','k_pres_p6','k_pres_p7','k_pres_p8','k_pres_p9','k_pres_finish','k_pres_tail'];
+function rangeSteps(x) {return RANGE_STEPS.map(k => x[k]);}
+function runRange(steps,args) {for (let i=0;i<steps.length;i++) steps[i](args,0);}
+// (This thread's range, each step timed: the frame reports them, phases 8.. .)
+const stepMs=new Float64Array(RANGE_STEPS.length);
+function runRangeTimed(steps,args) {let t=performance.now();for (let i=0;i<steps.length;i++) {steps[i](args,0);const u=performance.now();stepMs[i]+=u-t;t=u;}}
+// A range's arguments (the kernels' block) for a thread.
+function writeJob(th,F,Pf) {
     const I=th.I, P=th.P, J=job;
-    I[512]=F.tab;I[513]=Pf ? Pf.tab : 0;I[514]=pm.S;I[515]=pm.M;I[516]=pm.st.T;I[517]=th.AL;I[518]=th.CL;I[519]=th.BK;I[520]=th.outR.base;I[521]=J.light;
-    P[0]=s0;P[1]=s1;P[2]=J.nn;P[3]=J.n;P[4]=J.player;P[5]=J.areaUnit;P[6]=J.metaCopy?1:0;P[7]=J.mode;P[8]=J.seq;P[9]=J.bseq;P[10]=PRESENT_DELTA_ROUNDS;
+    I[512]=F.tab;I[513]=Pf ? Pf.tab : 0;I[514]=pm.S;I[515]=pm.M;I[516]=pm.st.T;I[517]=th.AL;I[518]=th.CL;I[519]=th.BK;I[521]=J.light;
+    P[2]=J.nn;P[3]=J.n;P[4]=J.player;P[5]=J.areaUnit;P[6]=J.metaCopy?1:0;P[7]=J.mode;P[8]=J.seq;P[9]=J.bseq;P[10]=PRESENT_DELTA_ROUNDS;
     P[11]=J.phase;P[12]=J.ta;P[13]=visFollow;P[14]=visTurn;P[15]=faceVel;P[16]=lightFull;P[17]=0;P[18]=pm.hasCm?1:0;P[19]=pm.hasPvOD?1:0;
-    P[20]=J.ghosts?1:0;P[21]=J.gw;P[22]=J.gh;P[23]=J.tile;P[24]=J.marks?1:0;P[25]=J.pn;P[26]=J.nb;P[27]=th.outv[2];
+    P[20]=J.ghosts?1:0;P[21]=J.gw;P[22]=J.gh;P[23]=J.tile;P[24]=J.marks?1:0;P[25]=J.pn;P[26]=J.nb;
+}
+// ---- chunks ----
+// A frame's slots in chunks (whole blocks of DIRTY_BLOCK slots), each taken
+// by the next thread free (this one and the helpers: Atomics on chunk[0]),
+// so they finish together however the filled units lie (with a range a
+// thread, the slowest took ~35 ms where this thread's took ~15). Each chunk
+// has its words (pres_fill.rs out: count, changed, by marks, filled) at
+// 64 + 64 * c in this region: chunk[1] chunks, chunk[2] slots each, chunk[3] n.
+const CHUNK_MAX=64, CHUNKS_A_THREAD=4;
+function pmChunks() {
+    if (!pm.chunks) {const r=pmAlloc(64+64*CHUNK_MAX);pm.chunks={base:r.base,v:new Int32Array(pm.mem.buffer,r.base,16+16*CHUNK_MAX)};}
+    return pm.chunks;
+}
+// This thread's share: chunks taken until none is left. (ctl: the region's
+// Int32 view; I, P: this thread's argument block.)
+function runChunks(steps,args,I,P,ctl,base,timed) {
+    const nch=ctl[1], per=ctl[2], n=ctl[3];
+    for (;;) {
+        const c=Atomics.add(ctl,0,1);
+        if (c>=nch) return;
+        const s0=c*per;
+        P[0]=s0;P[1]=Math.min(n,s0+per);I[520]=base+64+64*c;P[27]=ctl[16+16*c+2];
+        if (timed) runRangeTimed(steps,args); else runRange(steps,args);
+    }
 }
 // ---- helpers: this script again, named present-helper ----
 // From PRESENT_HELPER_MIN slots a frame's ranges are split over this thread
@@ -347,12 +433,11 @@ function presentHelpers(nn) {
             let worker;
             try {worker=new Worker(self.location.href,{name:'present-helper'});} catch (err) {break;}
             const a=pmAlloc(8192), stack=pmAlloc(HELPER_STACK);
-            const th={args:a.base,I:new Int32Array(pm.mem.buffer,a.base,1024),P:new Float64Array(pm.mem.buffer,a.base+4096,512),AL:0,CL:0,BK:0,outR:null,outv:null,len:-1};
-            pmThreadOut(th);
+            const th={args:a.base,I:new Int32Array(pm.mem.buffer,a.base,1024),P:new Float64Array(pm.mem.buffer,a.base+4096,512),AL:0,CL:0,BK:0,len:-1};
             const h={worker,ready:false,th};
             worker.onmessage=ev=>{const m=ev.data||{};if (m.type==='helperReady') h.ready=true;else if (m.type==='error') console.warn(m.message);};
             worker.onerror=ev=>{if (ev && ev.preventDefault) ev.preventDefault();stopHelpers(String(ev && ev.message || 'a helper failed'));};
-            worker.postMessage({type:'helperInit',module:pm.mod,memory:pm.mem,simMemory:pm.sim,stackTop:stack.base+HELPER_STACK,args:a.base,slot:i,done:helperDone,results:helperResults});
+            worker.postMessage({type:'helperInit',module:pm.mod,memory:pm.mem,simMemory:pm.sim,stackTop:stack.base+HELPER_STACK,args:a.base,slot:i,done:helperDone,results:helperResults,chunks:pmChunks().base});
             helpers.push(h);
         }
         if (!helpers.length) {helpers=null;helpersOff=true;return null;}
@@ -363,69 +448,94 @@ function presentHelpers(nn) {
 // The frame's ranges (this thread the last): the count listed, F.order
 // made contiguous, fillChanged; -1 when the helpers failed (the frame is
 // dropped, the helpers off).
-let fillChanged=false, rangeThreads=1;
+let fillChanged=false, rangeThreads=1, helperWait=0, helperWork=0, filledAll=0, byMarks=0, rangeHelpers=0;
+// The helpers' jobs done (helperDone), or false: they failed or took 2 s (turned off).
+function waitHelpers(nh) {
+    const deadline=performance.now()+2000;
+    for (;;) {
+        const d=Atomics.load(helperDone,0);
+        if (d>=nh) break;
+        if (performance.now()>deadline) {stopHelpers('no answer in 2 s');return false;}
+        Atomics.wait(helperDone,0,d,100);
+    }
+    for (let r=0;r<nh;r++) if (helperResults[r]<0) {stopHelpers('a job failed');return false;}
+    return true;
+}
 const rangeAt=new Int32Array(10);
 function runRanges(F,Pf) {
     // (Paced, a frame has some ticks' time: fewer threads at once beside a
     // simulation short of them. Millions of slots: every helper whatever the pace.)
     const J=job, all=presentHelpers(J.nn);
     const nh=!all ? 0 : pacing.pace>1 && J.nn<PRESENT_ALL_HELPERS_MIN ? (pacing.pace===2 ? 1 : 0) : all.length;
-    const B=DIRTY_BLOCK, parts=nh+1;
-    const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/parts))*B;
-    let nr=0;
-    for (let s=0;s<J.n;s+=per) {rangeAt[2*nr]=s;rangeAt[2*nr+1]=Math.min(J.n,s+per);nr++;}
-    if (!nr) {fillChanged=false;return 0;}
-    const sent=nr-1;
-    if (sent) {
+    const B=DIRTY_BLOCK, parts=nh+1, want=nh ? Math.min(CHUNK_MAX,parts*CHUNKS_A_THREAD) : 1;
+    const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/want))*B, nch=Math.ceil(J.n/per);
+    stepMs.fill(0);
+    if (!nch) {fillChanged=false;return 0;}
+    const K=pmChunks(), ctl=K.v;
+    ctl[1]=nch;ctl[2]=per;ctl[3]=J.n;Atomics.store(ctl,0,0);
+    if (nh) {
         Atomics.store(helperDone,0,0);
-        for (let r=0;r<sent;r++) {
+        for (let r=0;r<nh;r++) {
             const th=all[r].th;
             pmThreadScratch(th,per);
-            writeJob(th,F,Pf,rangeAt[2*r],rangeAt[2*r+1]);
+            writeJob(th,F,Pf);
             all[r].worker.postMessage(FILL_MSG);
         }
     }
     const M=pm.main;
-    pmThreadScratch(M,F.cap);
-    writeJob(M,F,Pf,rangeAt[2*sent],rangeAt[2*sent+1]);
-    pm.x.k_pres_range(M.args,0);
-    if (sent) {
-        const deadline=performance.now()+2000;
-        for (;;) {
-            const d=Atomics.load(helperDone,0);
-            if (d>=sent) break;
-            if (performance.now()>deadline) {stopHelpers('no answer in 2 s');return -1;}
-            Atomics.wait(helperDone,0,d,100);
-        }
-        for (let r=0;r<sent;r++) if (helperResults[r]<0) {stopHelpers('a range failed');return -1;}
+    pmThreadScratch(M,per);
+    writeJob(M,F,Pf);
+    runChunks(pm.steps,M.args,M.I,M.P,ctl,K.base,true);
+    rangeHelpers=nh;
+    if (nh) {
+        const waitAt=performance.now();
+        if (!waitHelpers(nh)) return -1;
+        // (The helpers: the longest one's work and this thread's wait for them.)
+        helperWait=performance.now()-waitAt;helperWork=0;
+        for (let r=0;r<nh;r++) helperWork=Math.max(helperWork,(helperResults[r]-1)/1000);
     }
+    // F.order contiguous: each chunk's listed slots from its start on.
     const FORD=F.order;
     let total=0, changed=false;
-    for (let r=0;r<nr;r++) {
-        const o=r===sent ? M.outv : all[r].th.outv, c=o[0];
-        if (o[1]) changed=true;
-        if (rangeAt[2*r]!==total && c) FORD.copyWithin(total,rangeAt[2*r],rangeAt[2*r]+c);
-        total+=c;
+    filledAll=0;
+    for (let c=0;c<nch;c++) {
+        const o=16+16*c, cnt=ctl[o];
+        if (ctl[o+1]) changed=true;
+        filledAll+=ctl[o+3];
+        if (c*per!==total && cnt) FORD.copyWithin(total,c*per,c*per+cnt);
+        total+=cnt;
     }
-    fillChanged=changed;rangeThreads=nr;
+    byMarks=ctl[16+2];
+    fillChanged=changed;rangeThreads=parts;
     return total;
 }
 // A helper: its instance (the module over the two memories, its own stack), then ranges.
-const helper={x:null,args:0,slot:0,done:null,results:null};
+const helper={x:null,steps:null,args:0,slot:0,done:null,results:null,I:null,P:null,ctl:null,chunks:0};
 function onHelperMessage(event) {
     const m=event.data;
     if (m.type==='helperInit') {
         try {
             helper.x=new WebAssembly.Instance(m.module,{env:{memory:m.memory,simMemory:m.simMemory}}).exports;
-            helper.x.__stack_pointer.value=m.stackTop;
-            helper.args=m.args;helper.slot=m.slot;helper.done=m.done;helper.results=m.results;
+            helper.x.__stack_pointer.value=m.stackTop;helper.steps=rangeSteps(helper.x);
+            helper.args=m.args;helper.slot=m.slot;helper.done=m.done;helper.results=m.results;helper.chunks=m.chunks;
+            helper.I=new Int32Array(m.memory.buffer,m.args,1024);helper.P=new Float64Array(m.memory.buffer,m.args+4096,512);
+            helper.ctl=new Int32Array(m.memory.buffer,m.chunks,16+16*CHUNK_MAX);
             postMessage({type:'helperReady'});
         } catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
         return;
     }
+    if (m.type==='buckets') {
+        let res=-1;
+        try {runBucketParts(helper.x,helper.args,helper.P,helper.ctl);res=1;}
+        catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
+        finally {helper.results[helper.slot]=res;Atomics.add(helper.done,0,1);Atomics.notify(helper.done,0);}
+        return;
+    }
     if (m.type!=='fill') return;
     let res=-1;
-    try {helper.x.k_pres_range(helper.args,0);res=1;}
+    // (res: 1 + the microseconds it took, for the frame's report.)
+    const t0=performance.now();
+    try {runChunks(helper.steps,helper.args,helper.I,helper.P,helper.ctl,helper.chunks,false);res=1+Math.round((performance.now()-t0)*1000);}
     catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
     finally {helper.results[helper.slot]=res;Atomics.add(helper.done,0,1);Atomics.notify(helper.done,0);}
 }
@@ -469,7 +579,7 @@ function draw() {
     const columns = tick.n >= 5000 && tick.gw > 0 ? Math.ceil(tick.gw / 16) : 0;
     const rows = columns ? Math.ceil(tick.gh / 16) : 0;
     const indexBytes = columns * rows ? columns * rows * 8 + cap * 8 : 0;
-    const frameBytes=cap*SIM_FRAME_SLOT_BYTES + indexBytes + dirtyBytes(cap);
+    const frameBytes=simFrameBytes(cap) + indexBytes + dirtyBytes(cap);
     if (pmStateFor(cap)) membershipReset=true;
     const e=acquireUnits(frameBytes,cap);
     if (!e) return;
@@ -514,15 +624,18 @@ function draw() {
     // Stable simulation identity order even after authoritative slot reuse.
     // (Sorted again when membership changed; else the last order, kept.)
     const FORD=F.order;
-    if(changed || !lastOrder || lastOrderN!==count) {
-        frameIdOrder(F,count);
-        if (!lastOrder || lastOrder.length<F.cap) lastOrder=new Int32Array(F.cap);
-        lastOrder.set(FORD.subarray(0,count));lastOrderN=count;
-    } else FORD.set(lastOrder.subarray(0,count));
+    if (changed || pm.lastN!==count || pm.cap!==F.cap) frameIdOrder(F,count);
+    else frameLastOrder(F,count);
     const t3=performance.now();
     const world={units:{buf:pm.mem.buffer,base:e.base,bytes:frameBytes,rid:e.rid,gen:generation,cap,n:tick.n,count,mver:membership},strings:[0,strings]};
-    if (indexBytes) world.units.renderBuckets = buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
-    world.units.dirty = dirtyEnd(F, tick.n, cap * SIM_FRAME_SLOT_BYTES + indexBytes, D.seq, tick.tick);
+    if (indexBytes) {
+        const B=buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
+        if (!B) {e.busy=false;dirty.prev=null;e.metaRev=-1;e.seq=0;membershipReset=true;return;}
+        world.units.renderBuckets=B;
+    }
+    const tb=performance.now();
+    world.units.dirty = dirtyEnd(F, tick.n, simFrameBytes(cap) + indexBytes, D.seq, tick.tick);
+    const tm=performance.now();
     if(structure && structureRevision!==sentStructureRevision) {
         // (Its block only: the table is in the wasm heap's memory.)
         const bytes=structure.bytes||structure.buf.byteLength, off=structure.off||0;
@@ -533,12 +646,13 @@ function draw() {
         const b=acquire(projectiles.buf.byteLength,'projectiles');
         if(b) {new Uint8Array(b,0,projectiles.buf.byteLength).set(new Uint8Array(projectiles.buf));world.projectiles={...projectiles,buf:b};sentProjectileRevision=projectileRevision;}
     }
+    const tt=performance.now();
     if(cells) {const d=cellChanges();if (d) world.state={cells:d};cells=null;}
     const t4=performance.now();
     // (phases: the snapshot, the ranges (fill, ghosts, marks), the order,
     // the rest; then how many threads made the ranges, the pace, the slots
     // filled on this thread and whether by the simulation's marks.)
-    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,pm.main.outv[3],pm.main.outv[2]]});
+    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,filledAll,byMarks,...stepMs,helperWork,helperWait,tb-t3,tm-tb,tt-tm,t4-tt]});helperWait=helperWork=0;
     schedule();
 }
 // The tiles whose type or owner changed since the last frame (pres_fill.rs

@@ -59,7 +59,7 @@ assert.deepEqual(markers(), [], 'building subgroup toggles update immediately');
 // including destinations found only after the first 300 selected units.
 run(`
     resetOrderMarkers(); activeSubGroups = {}; selectedEntities = [];
-    __scratch.F = simFrameViews(new ArrayBuffer(512 * SIM_FRAME_SLOT_BYTES), 512);
+    __scratch.F = simFrameViews(new ArrayBuffer(simFrameBytes(512)), 512);
     __scratch.F.n = __scratch.F.count = 400; __scratch.F.mver = 1;
     _pageFrame = __scratch.F; _pageFrameSerial++;
     simClientCurrentUnitVis = () => __scratch.F;

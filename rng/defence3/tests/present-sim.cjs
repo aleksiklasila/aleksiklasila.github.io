@@ -37,8 +37,7 @@ module.exports = function presentSim(ctx, cap, opts = {}) {
     // (opts.pixels: x, y, prevX, prevY read and written in pixels here, as
     // eighths in the heap, rounded as the simulation's setters round.)
     if (opts.pixels) for (const k of ['x', 'y', 'prevX', 'prevY']) C[k] = pixelView(C[k]);
-    const slot = require('node:vm').runInContext('SIM_META_SLOT_BYTES', ctx);
-    const mb = arr(Uint8Array, cap * slot);
+    const mb = arr(Uint8Array, require('node:vm').runInContext('simMetaBytes', ctx)(cap));
     const M = ctx.simMetaViews(memory.buffer, cap, mb.byteOffset);
     return { memory, C, M, arr, bind: extra => ({ type: 'bind', simMemory: memory, columns: C, meta: { buf: memory.buffer, cap, off: mb.byteOffset }, ...extra }) };
 };

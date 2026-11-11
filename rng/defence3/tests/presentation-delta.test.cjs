@@ -105,7 +105,7 @@ for (let tick = 1; tick <= 90; tick++) {
                 assert.fail(`tick ${tick}: slot ${s} (id ${Fa.id[s]}) ${k} ${Fa[k][s]} / ${Fb[k][s]}`);
             }
         }
-        const tail = cap * SLOT, bytes = ua.bytes;
+        const tail = vm.runInContext('simFrameBytes', B.ctx)(cap), bytes = ua.bytes;
         assert.equal(bytes, ub.bytes);
         if (Buffer.compare(Buffer.from(new Uint8Array(ua.buf, ua.base + tail, bytes - tail)), Buffer.from(new Uint8Array(ub.buf, ub.base + tail, bytes - tail))) !== 0) {
             const xa = new Uint8Array(ua.buf, ua.base + tail, bytes - tail), xb = new Uint8Array(ub.buf, ub.base + tail, bytes - tail);

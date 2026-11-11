@@ -20,7 +20,7 @@ const tick=n=>send({type:'tick',epoch:2,tick:n,time:n,rate:20,player:0,areaUnit:
 tick(0);assert.equal(messages.length,0,'wait for initial metadata before replacing the complete startup frame');
 send({type:'ready'});
 assert.equal(messages.length,1);
-const U=m=>m.world.units, V=m=>c.simFrameViews(U(m).buf,64,U(m).base), bytes=m=>Buffer.from(new Uint8Array(U(m).buf,U(m).base,64*c.SIM_FRAME_SLOT_BYTES));
+const U=m=>m.world.units, V=m=>c.simFrameViews(U(m).buf,64,U(m).base), bytes=m=>Buffer.from(new Uint8Array(U(m).buf,U(m).base,c.simFrameBytes(64)));
 const rel=m=>send({type:'release',rid:U(m).rid,gen:U(m).gen});
 const first=messages[0], f=V(first);
 assert.equal(first.world.units.count,4);assert.equal(f.x[0],100);

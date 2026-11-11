@@ -56,7 +56,8 @@ if (!process.argv.includes('--no-build')) {
     const feats = [...(feat ? feat.slice(11).split(',') : []), ...(PRES ? ['pres'] : [])].filter(Boolean);
     if (feats.length) args.push('--features', feats.join(','));
     // (--keep-names: the function names kept, for profiles: not stripped.)
-    if (process.argv.includes('--keep-names')) env.CARGO_PROFILE_RELEASE_STRIP = 'false';
+    // (--pres: always, the rewrite below finds its stand-in loads by name.)
+    if (process.argv.includes('--keep-names') || PRES) env.CARGO_PROFILE_RELEASE_STRIP = 'false';
     const r = cp.spawnSync('cargo', args, { cwd: here, env, stdio: 'inherit', shell: process.platform === 'win32' });
     if (r.status !== 0) { console.error('cargo build failed (is rustup installed, with `rustup target add wasm32-unknown-unknown`?)'); process.exit(r.status || 1); }
 }
@@ -77,15 +78,16 @@ function findWasmOpt() {
 }
 const WASM_OPT_LEVEL = process.env.WASM_OPT_LEVEL || '-O3';
 let wasmIn = wasmPath;
-if (!process.argv.includes('--no-wasm-opt')) {
+// (--pres: not before the rewrite: it would inline the stand-in loads.)
+if (!process.argv.includes('--no-wasm-opt') && !PRES) {
     const wo = findWasmOpt();
     if (wo) {
         const tmp = path.join(os.tmpdir(), 'defence3_sim.opt.' + process.pid + '.wasm');
-        const args = [wasmPath, '-o', tmp, WASM_OPT_LEVEL, '--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int',
+        // (WASM_OPT_EXTRA before the level: passes such as --no-inline=pattern act on the optimizing ones.)
+        const args = [wasmPath, '-o', tmp, ...(process.env.WASM_OPT_EXTRA ? process.env.WASM_OPT_EXTRA.split(' ').filter(Boolean) : []), WASM_OPT_LEVEL, '--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int',
             '--enable-sign-ext', '--enable-mutable-globals', '--strip-debug', '--strip-producers'];
         if (W64) args.push('--enable-memory64');
         // (WASM_OPT_EXTRA="--converge ...": more passes, for experiments.)
-        if (process.env.WASM_OPT_EXTRA) args.push(...process.env.WASM_OPT_EXTRA.split(' ').filter(Boolean));
         if (process.argv.includes('--keep-names')) args.push('--debuginfo');
         const r = cp.spawnSync(wo, args, { stdio: 'inherit' });
         if (r.status !== 0) { console.error('wasm-opt failed'); process.exit(r.status || 1); }
@@ -94,31 +96,30 @@ if (!process.argv.includes('--no-wasm-opt')) {
     } else console.log('(wasm-opt not found: the module as linked)');
 }
 // ---- --pres: the loads from the simulation's memory ----
-// wasm-opt prints the module as text; each env.pres_sim_<type> import is
-// dropped and every call of it becomes that load from memory 1 (a new
-// import, env.simMemory, shared); both memories shared; then optimized
-// again with multi-memory (the loads' address arithmetic folds into their
-// offsets as for any load).
+// wasm-opt prints the module as linked as text (names kept); every call of
+// a pres_sim_<type> stand-in (pres_fill.rs: a load of memory 0, never
+// inlined, so LLVM sees a call that only reads) becomes that load from
+// memory 1 (a new import, env.simMemory, shared); both memories shared;
+// then optimized with multi-memory (the stand-ins, now unused, dropped; the
+// loads' address arithmetic folded into their offsets as for any load).
 if (PRES) {
     const wo = findWasmOpt();
-    if (!wo || wasmIn === wasmPath) throw new Error('--pres needs wasm-opt (wasm/tools/binaryen-*/bin)');
+    if (!wo) throw new Error('--pres needs wasm-opt (wasm/tools/binaryen-*/bin)');
     const feats = ['--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-multimemory'];
-    const wat = wasmIn + '.wat', wat2 = wasmIn + '.2.wat', fin = wasmIn + '.2.wasm';
-    let r = cp.spawnSync(wo, [wasmIn, '-S', '-o', wat, ...feats], { stdio: 'inherit' });
+    const wat0 = path.join(os.tmpdir(), 'defence3_pres.' + process.pid), wat = wat0 + '.wat', wat2 = wat0 + '.2.wat', fin = wat0 + '.2.wasm';
+    let r = cp.spawnSync(wo, [wasmIn, '-S', '-o', wat, ...feats, '--debuginfo'], { stdio: 'inherit' });
     if (r.status !== 0) throw new Error('wasm-opt (text) failed');
     let text = fs.readFileSync(wat, 'utf8');
     const LOADS = { i32: 'i32.load', f32: 'f32.load', u8: 'i32.load8_u', i8: 'i32.load8_s', u16: 'i32.load16_u', i16: 'i32.load16_s' };
     const names = {};
-    text = text.replace(/^ *\(import "env" "pres_sim_(\w+)" \(func (\$\S+)[^\n]*\n/gm, (all, ty, name) => {
-        if (!LOADS[ty]) throw new Error('unknown load pres_sim_' + ty);
-        names[name] = LOADS[ty]; return '';
-    });
-    if (!Object.keys(names).length) throw new Error('--pres: no pres_sim_* imports found');
+    for (const m of text.matchAll(/\(func (\$[^\s()]*pres_sim_(i32|f32|u8|i8|u16|i16))[\s)]/g)) names[m[1]] = LOADS[m[2]];
+    if (Object.keys(names).length !== 6) throw new Error('--pres: the six pres_sim_* stand-ins not found (' + Object.keys(names).join(', ') + ')');
+    if (/\(import "env" "[^"]*" \(func/.test(text)) throw new Error('--pres: function imports in the module');
     let calls = 0;
     for (const [name, load] of Object.entries(names)) {
         const esc = name.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&');
         text = text.replace(new RegExp('\\(call ' + esc + '(?=[\\s)])', 'g'), () => { calls++; return '(' + load + ' $simmem'; });
-        if (new RegExp(esc + '(?=[\\s)])').test(text)) throw new Error('--pres: ' + name + ' used other than called');
+        if ((text.match(new RegExp(esc + '(?=[\\s)])', 'g')) || []).length !== 1) throw new Error('--pres: ' + name + ' used other than called');
     }
     // (The worker's memory: shared; the simulation's after it, index 1.)
     let mems = 0;
@@ -128,9 +129,12 @@ if (PRES) {
     });
     if (mems !== 1) throw new Error('--pres: the memory import not found in the text');
     fs.writeFileSync(wat2, text);
-    r = cp.spawnSync(wo, [wat2, '-o', fin, WASM_OPT_LEVEL, ...feats, '--strip-debug', '--strip-producers'], { stdio: 'inherit' });
+    // (--keep-names: names kept, for profiles; WASM_OPT_EXTRA as for the first pass, e.g. --no-inline=p_*.)
+    const keep = process.argv.includes('--keep-names') ? ['--debuginfo'] : ['--strip-debug', '--strip-producers'];
+    const extra = process.env.WASM_OPT_EXTRA ? process.env.WASM_OPT_EXTRA.split(' ').filter(Boolean) : [];
+    r = cp.spawnSync(wo, [wat2, '-o', fin, ...extra, WASM_OPT_LEVEL, ...feats, ...keep], { stdio: 'inherit' });
     if (r.status !== 0) throw new Error('wasm-opt (multi-memory) failed');
-    for (const x of [wat, wat2, wasmIn]) fs.unlinkSync(x);
+    for (const x of [wat, wat2]) fs.unlinkSync(x);
     wasmIn = fin;
     console.log('--pres: ' + calls + ' loads from the simulation\'s memory (' + Object.values(names).join(', ') + ')');
 }

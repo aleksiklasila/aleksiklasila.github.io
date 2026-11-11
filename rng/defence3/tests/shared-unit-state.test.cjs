@@ -7,13 +7,14 @@ inst.eval('startSoloGame();');
 inst.eval(`__scratch.referenceFrame = (() => { const _simVisPhase = [0,0]; return (${require('./unit-frame-reference.cjs')}); })();`);
 const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const fail = msg => { throw new Error(msg); };
-    const layout = simFrameViews(new ArrayBuffer(64 * SIM_FRAME_SLOT_BYTES), 64);
+    const layout = simFrameViews(new ArrayBuffer(simFrameBytes(64)), 64);
     let offset = 0;
-    // (4-byte columns, then 2-byte, then bytes: every view aligned for any cap.)
+    // (4-byte columns, then 2-byte, then bytes: every view aligned for any cap;
+    // each SIM_FRAME_SKEW past the last one's end, sim_frame.js.)
     for (const [keys, bytes] of [[SIM_FRAME_F32,4], [[...SIM_FRAME_I32,'order'],4], [SIM_FRAME_I16,2], [SIM_FRAME_U8,1]])
-        for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64; }
+        for (const k of keys) { if (layout[k].byteOffset !== offset) fail('frame layout '+k); offset += bytes*64 + SIM_FRAME_SKEW; }
     // (The slot's bytes rounded up to 4: what follows the frame is read as 4-byte arrays.)
-    if (Math.ceil(offset / 64 / 4) * 4 * 64 !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
+    if (offset > simFrameBytes(64) || Math.ceil((offset - SIM_FRAME_COLUMNS * SIM_FRAME_SKEW) / 64 / 4) * 4 * 64 !== 64 * SIM_FRAME_SLOT_BYTES) fail('frame size');
     // Growth must update every live accessor, including objects that existed
     // before reallocation. Positions are Int32 eighths of a pixel (rules 6).
     const first = units[0]; first.x = 123.1234567890123; const x = Math.round(123.1234567890123 * 8) / 8;

@@ -799,7 +799,9 @@ function _simClientShowPresentation(c, msg, at) {
     c.arrivedAt = at; c.drawnAlpha = -1; c.presentationTick = msg.tick;
     c.presentationBuildMs = msg.buildMs; c.presentationPhases = msg.phases; c.presentationTorn = msg.torn;
     // (Sums for probes: frames, build ms, its phases 0-3, the largest build.)
-    const S = c.presentationSums || (c.presentationSums = new Float64Array(7));
+    // (Then this thread's range steps, presentation_worker.js stepMs; and its filled slots.)
+    const S = c.presentationSums || (c.presentationSums = new Float64Array(7 + 13 + 1 + 2 + 4));
+    if (msg.phases) { for (let i = 0; i < 13; i++) S[7 + i] += msg.phases[8 + i] || 0; S[20] += msg.phases[6] || 0; S[21] += msg.phases[21] || 0; S[22] += msg.phases[22] || 0; for (let i = 0; i < 4; i++) S[23 + i] += msg.phases[23 + i] || 0; }
     S[0]++; S[1] += msg.buildMs; if (msg.phases) for (let i = 0; i < 4; i++) S[2 + i] += msg.phases[i]; if (msg.buildMs > S[6]) S[6] = msg.buildMs;
 }
 function _simPlayShow(c, P, msg, at) {

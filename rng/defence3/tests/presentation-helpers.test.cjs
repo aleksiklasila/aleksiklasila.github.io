@@ -101,7 +101,7 @@ for (let tick = 1; tick <= 60; tick++) {
         assert.equal(bytes, ub.bytes);
         // (F.order past the count listed is not read: what the ranges left there.)
         const xa = new Uint8Array(ua.buf).slice(ua.base, ua.base + bytes), xb = new Uint8Array(ub.buf).slice(ub.base, ub.base + bytes);
-        const order = vm.runInContext('simFrameViews', B.ctx)(new SharedArrayBuffer(cap * SLOT), cap).order.byteOffset;
+        const order = vm.runInContext('simFrameViews', B.ctx)(new SharedArrayBuffer(vm.runInContext('simFrameBytes', B.ctx)(cap)), cap).order.byteOffset;
         xa.fill(0, order + ua.count * 4, order + cap * 4); xb.fill(0, order + ub.count * 4, order + cap * 4);
         if (Buffer.compare(Buffer.from(xa), Buffer.from(xb)) !== 0) {
             let k = 0; while (xa[k] === xb[k]) k++;

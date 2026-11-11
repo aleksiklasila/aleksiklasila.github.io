@@ -11,6 +11,8 @@ const src = fs.readFileSync(path.join(__dirname, '../src/sim/sim_frame_world.js'
 function instance() {
     const ctx = { Unit: class Unit { }, players: [], console, Math, Object, Array, JSON, Float64Array, Int32Array, Map, Set, WeakMap, Number, String, dirtyAreas: false, areas: [], gameTime: 0, gameOver: false, winner: null, resignedTeams: new Set(), activeTeamIds: [], pathfindBudgetByPlayer: null, astarNodeBudgetRemainingByPlayer: null, localDefeated: false };
     vm.createContext(ctx);
+    // (sim_frame.js first, as the page and the worker load them: its gone-unit rings.)
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/sim/sim_frame.js'), 'utf8'), ctx);
     vm.runInContext(src, ctx);
     return ctx;
 }

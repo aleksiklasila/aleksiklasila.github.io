@@ -169,7 +169,7 @@ function simPresentationBind() {
             // a released slot's row reset, a moved unit's row moved with it,
             // sim_unit_state.js _simSlotZeroTable. A replaced one given back
             // later: the reader may still read it.)
-            const hb = typeof simHeapArray === 'function' && typeof _simHeap !== 'undefined' && _simHeap.ready ? simHeapArray(Uint8Array, S.cap * SIM_META_SLOT_BYTES) : null;
+            const hb = typeof simHeapArray === 'function' && typeof _simHeap !== 'undefined' && _simHeap.ready ? simHeapArray(Uint8Array, simMetaBytes(S.cap)) : null;
             if (!hb || !simHeapHas(hb)) throw new Error('presentation: the metadata table needs the wasm heap');
             p.meta = simMetaViews(hb.buffer, S.cap, hb.byteOffset);
             p.meta.heap = hb;

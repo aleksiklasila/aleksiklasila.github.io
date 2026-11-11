@@ -7494,3 +7494,65 @@ what stays expensive. Data in tests/test-runs/render-iso-20261111/.
 - Next: the remaining 'rest' (buckets 17 ms a frame at 1M: SIMD or only the
   moved cells), the fill's per-slot cost (~170 ns a filled slot: profile the
   passes), structure/projectile table copies, the simulation worker's GC.
+- Fill profiled (2026-11-11, later). Node bench, one thread, 1M slots, heavy
+  battle (~880k filled a frame): ranges 147 -> ~90 ms.
+  * The cause: cache-set aliasing. A frame's columns started at multiples of
+    4 MB (cap 2^20), so the change marks (13 columns of two frames a slot, 26
+    streams) evicted themselves on every slot: 81 ms, as slow warm as cold.
+    Each frame and metadata column now starts SIM_FRAME_SKEW (64) bytes past
+    the last one's end (sim_frame.js simFrameBytes / simMetaBytes; every size
+    from those); presentation memory regions get a cache line of padding.
+    Marks 81 -> 20 ms. The simulation heap's power-of-two columns have the
+    same layout: worth checking for the simulation's own kernels.
+  * Not the cause: loads from the second memory (as fast as memory 0), the
+    extern-call model of them (now Rust stand-in loads LLVM sees as read-only,
+    turned into memory-1 loads by the build: no change), one big function
+    (the range is now kernels in turn, k_pres_select, k_pres_p0..p9,
+    k_pres_finish, k_pres_tail: no change). The packed column lists use
+    64-bit words (128-bit shifts were a call per slot and column).
+  * Still identical to the old JS fill (both modes, byte for byte).
+- Edge, 1M chaos: the worker now reports each step of its own range and the
+  helpers' work and wait (tests/probes/present-phases.js). Ranges ~36-40 ms
+  wall: this thread ~22-31 ms (select 4-6, facing 3-5, meta 3-5, tail 3-4),
+  the slowest helper ~35 ms, ~8 ms waiting. Per filled slot ~3-4x the Node
+  figure: memory shared with the simulation's 8 helpers. Helpers off: build
+  113 ms (63 with), simulation unchanged (32.8 vs 32.4 ms a tick): kept.
+- Next on the presentation thread: buckets (~16-18 ms a frame at 1M, serial)
+  and the id order (~6.5 ms, sorted every frame in the chaos scene).
+- Simulation heap checked for the same aliasing (1M chaos scene, headless
+  tickbench, the 242 unit columns of 1 MB or more by address): none. Each heap
+  array already ends SIM_HEAP_PAD (64) bytes later than its size (sim_wasm.js,
+  for SIMD over-reads), so arrays allocated one after another start a cache
+  line apart: by L1 set (64 sets) at most 5 columns share one (~3.8 on
+  average: even), by L2 set (1024) at most 3. A power-of-two cap shifts each
+  allocation by the same 64 bytes: spread the same way. Nothing to change.
+  (The frames had no such gap: their columns were packed end to end.)
+
+## Presentation: chunks, buckets in parts, order (2026-11-12)
+
+- Edge, 1M chaos, the presentation thread's "rest" broken down
+  (tests/probes/present-phases.js: buckets, marks copy, tables, cells):
+  buckets 14 ms a frame, structure/projectile tables 3, cells 1.5; the id
+  order 6-7. The helpers waited up to 23 ms: a range a thread, equal slots,
+  unequal filled units (this thread ~16 ms of work, the slowest helper 35).
+- Chunks: a frame's slots in parts*4 chunks (whole blocks), each taken by
+  the next free thread (Atomics on a counter in the presentation memory;
+  per-chunk result words). Wait 23 -> ~1-5 ms. The range phase stayed
+  ~28-38 ms (run to run): every thread is now busy ~30 ms; the work is
+  memory-bound beside the simulation's helpers. Frames byte-identical
+  across thread counts (presentation-helpers).
+- Buckets in parts (pres.rs k_pres_bucket_part / k_pres_bucket_merge): 16
+  parts of the order from 65536 entries (whatever the threads: the same
+  result), taken by this thread and the helpers, each its own lists a cell
+  (and tails), largest move, moving slots; the merge joins a cell's lists
+  last part first (k descending, as one pass), the largest move (f32 of the
+  largest distance: rounding is monotonic, order-free), the moving slots in
+  part order. Equal to the original JS bit for bit (2.1M entries, 16 parts).
+  Edge: 14.5 -> ~6 ms a frame.
+- The id order kept from the last frame and merged with the units new to
+  it (instead of a sort): ~5x slower at 1M (74 vs 14 ms in Node, any churn):
+  ids by slot are random, every look-up a cache miss; the radix sort's
+  passes are cache-friendly. Reverted; the order is kept only for a frame
+  whose membership did not change (as before).
+- Frame build in Edge ~66 -> 50-54 ms (one run each; FPS 85-87, simulation
+  31-33 ms a tick: within the spread).

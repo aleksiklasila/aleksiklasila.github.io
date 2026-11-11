@@ -17,13 +17,13 @@ module.exports = function presentPm(ctx) {
     vm.runInContext('pmInit(new WebAssembly.Memory({ initial: 1, maximum: 65536, shared: true }))', w);
     ctx.frameIdOrder = (F, count) => w.frameIdOrder(F, count);
     ctx.buildRenderBuckets = (F, count, columns, rows, tile) => w.buildRenderBuckets(F, count, columns, rows, tile);
-    const pm = vm.runInContext('pm', w), slot = vm.runInContext('SIM_FRAME_SLOT_BYTES', w);
+    const pm = vm.runInContext('pm', w), frameBytes = vm.runInContext('simFrameBytes', w);
     return {
         // F's x, y, px, py, id and order (as they are) into a region of cap
         // slots and the buckets of cells; F's views replaced; F.buf, F.base set.
         frame(F, cells) {
             const cap = F.cap;
-            const r = w.pmAlloc(cap * slot + cells * 8 + cap * 8);
+            const r = w.pmAlloc(frameBytes(cap) + cells * 8 + cap * 8);
             const buf = pm.mem.buffer;
             COLS.forEach((k, i) => {
                 const T = k === 'id' || k === 'order' ? Int32Array : Float32Array, v = new T(buf, r.base + i * 4 * cap, cap);

@@ -48,30 +48,40 @@ const _simUnitStatusCode = { walk: 0, angry: 1, work: 2, sleep: 3 };
 const SIM_META_I32 = ['id', 'flags', 'orderDest', 'orderTick'], SIM_META_F32 = ['maxEnergy', 'cargo', 'tx', 'ty'],
     SIM_META_I16 = ['type', 'wtype', 'wstate', 'style', 'watchedBy'], SIM_META_U8 = ['vision'];
 const SIM_META_SLOT_BYTES = Math.ceil((4 * (SIM_META_I32.length + SIM_META_F32.length) + 2 * SIM_META_I16.length + SIM_META_U8.length) / 4) * 4;
-// (off: where in buf it starts, the table in the wasm heap.)
+// (off: where in buf it starts, the table in the wasm heap. Each column
+// SIM_FRAME_SKEW past the last one's end, as a frame's: simMetaBytes its size.)
+const SIM_META_COLUMNS = SIM_META_I32.length + SIM_META_F32.length + SIM_META_I16.length + SIM_META_U8.length;
+function simMetaBytes(cap) { return Math.ceil((cap * SIM_META_SLOT_BYTES + SIM_META_COLUMNS * SIM_FRAME_SKEW) / 64) * 64; }
 function simMetaViews(buf, cap, off = 0) {
     const v = { buf, cap, off };
     let o = off;
-    for (const k of SIM_META_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
-    for (const k of SIM_META_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
-    for (const k of SIM_META_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
-    for (const k of SIM_META_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap; }
+    for (const k of SIM_META_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap + SIM_FRAME_SKEW; }
+    for (const k of SIM_META_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap + SIM_FRAME_SKEW; }
+    for (const k of SIM_META_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap + SIM_FRAME_SKEW; }
+    for (const k of SIM_META_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap + SIM_FRAME_SKEW; }
     return v;
 }
 
 // Typed-array views of a frame buffer laid out for `cap` slots: the 4-byte
 // columns (floats, ints, the order entry), the 2-byte ones, the bytes last
-// (every view aligned for any cap).
+// (every view aligned for any cap). Each column SIM_FRAME_SKEW bytes past
+// the last one's end: with a power-of-two cap every column started at a
+// multiple of 4 MB (1M slots), all in the same cache sets, and a pass
+// reading a slot's columns of two frames (the change marks: 26 of them)
+// evicted itself on every slot (~10x slower). simFrameBytes: its size.
+const SIM_FRAME_SKEW = 64;
+const SIM_FRAME_COLUMNS = SIM_FRAME_F32.length + SIM_FRAME_I32.length + 1 + SIM_FRAME_I16.length + SIM_FRAME_U8.length;
+function simFrameBytes(cap) { return Math.ceil((cap * SIM_FRAME_SLOT_BYTES + SIM_FRAME_COLUMNS * SIM_FRAME_SKEW) / 64) * 64; }
 // (base: the frame's byte offset in buf; the presentation worker's frames
 // are regions of its wasm memory.)
 function simFrameViews(buf, cap, base = 0) {
     const v = { buf, cap, base };
     let o = base;
-    for (const k of SIM_FRAME_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
-    for (const k of SIM_FRAME_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
-    v.order = new Int32Array(buf, o, cap); o += 4 * cap;
-    for (const k of SIM_FRAME_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap; }
-    for (const k of SIM_FRAME_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap; }
+    for (const k of SIM_FRAME_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap + SIM_FRAME_SKEW; }
+    for (const k of SIM_FRAME_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap + SIM_FRAME_SKEW; }
+    v.order = new Int32Array(buf, o, cap); o += 4 * cap + SIM_FRAME_SKEW;
+    for (const k of SIM_FRAME_I16) { v[k] = new Int16Array(buf, o, cap); o += 2 * cap + SIM_FRAME_SKEW; }
+    for (const k of SIM_FRAME_U8) { v[k] = new Uint8Array(buf, o, cap); o += cap + SIM_FRAME_SKEW; }
     return v;
 }
 
@@ -242,7 +252,7 @@ function simFrameEncode() {
     for (let i = 0; i < count; i++) { let u = list[i]; if (!u._us.dead[u._si]) { _simRenderSlotOf(u); live++; } }
     let n = R.owner.length;
     let cap = Math.max(64, n);
-    let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES, SIM_PAR_SHARED);
+    let buf = _simFrameAcquire(simFrameBytes(cap), SIM_PAR_SHARED);
     let F = simFrameViews(buf, cap);
     let input = _simFrameGrowInput(cap);
     if (R.stamp.length < n) { let grown = new Int32Array(Math.max(1024, Math.ceil(n * 1.125 / 4096) * 4096)); grown.set(R.stamp); R.stamp = grown; }

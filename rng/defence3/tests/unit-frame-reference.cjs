@@ -8,7 +8,7 @@ module.exports = function simFrameEncode() {
     for (let i = 0; i < count; i++) { let u = list[i]; if (!u.dead) { _simRenderSlotOf(u); live++; } }
     let n = R.owner.length;
     let cap = Math.max(64, n);
-    let buf = _simFrameAcquire(cap * SIM_FRAME_SLOT_BYTES);
+    let buf = _simFrameAcquire(simFrameBytes(cap));
     let F = simFrameViews(buf, cap);
     if (R.stamp.length < n) { let grown = new Int32Array(Math.max(1024, n * 2)); grown.set(R.stamp); R.stamp = grown; }
     let order = F.order, k = 0, orderChanged = !_simFrameOrderLast || _simFrameOrderLast.length !== live;
