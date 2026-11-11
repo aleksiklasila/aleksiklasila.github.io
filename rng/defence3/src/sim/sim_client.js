@@ -90,6 +90,8 @@ function _simClientCreate() {
     // ?simhelpers=N: at most N helper workers for the parallel jobs (0: none).
     let maxHelpers = null;
     try { let q = new URLSearchParams(location.search).get('simhelpers'); if (q !== null && q !== '') maxHelpers = Math.max(0, Math.floor(Number(q)) || 0); } catch { }
+    // ?simbgonly=N: the first N helpers run background lanes only, never a tick's own jobs (sim_parallel.js SIM_PAR_BG_ONLY).
+    try { let q = new URLSearchParams(location.search).get('simbgonly'); if (q !== null && q !== '') c.bgOnly = Math.max(0, Math.floor(Number(q)) || 0); } catch { }
     _simClientSpawn(c, false, maxHelpers);
     return c;
 }
@@ -121,15 +123,15 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
             ev.preventDefault();
             worker.terminate();
             console.warn('[sim worker] could not start from its URL (served as text/plain?); retrying from a blob');
-            try { _simClientSpawn(c, true, maxHelpers); } catch (err) { c.failed = String(err.message || err); console.error('[sim worker]', c.failed); }
+            try { _simClientSpawn(c, true, maxHelpers); } catch (err) { c.failed = String(err.message || err); console.error('[sim worker]', c.failed); _simClientLoadSettled(c); }
             return;
         }
         // No message: a script failed to load (the worker's, or a nested one's).
         let where = ev.filename ? ` (${ev.filename}:${ev.lineno}:${ev.colno})` : '';
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
-        c.errors.push(text); if (!c.loaded) c.failed = text; console.error('[sim worker]', text, ev);
+        c.errors.push(text); if (!c.loaded) { c.failed = text; _simClientLoadSettled(c); } console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search),
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, bgOnly: c.bgOnly | 0, noPresent: /[?&]present=0(?:&|$)/.test(location.search), ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search),
         // (The kernel build, as the page picks it: sim_wasm.js SIM_WASM64_ENABLED.)
         wasm64: typeof SIM_WASM64_ENABLED !== 'undefined' ? !!SIM_WASM64_ENABLED : false });
 }
@@ -160,6 +162,24 @@ function simClientWorldReady() {
 // its matches did not tick at all.)
 function _simClientPageSimulates() {
     return lockstepStrictDebugMode && typeof _simHeap !== 'undefined' && !!_simHeap.ready;
+}
+// Whether the worker is still loading (enabled, not loaded, not failed): a
+// match started now would be made on the page, which has no kernels.
+function simClientWorkerLoading() {
+    if (!simClientEnabled || _simClientPageSimulates()) return false;
+    simClientPreload();
+    const c = _simClient;
+    return !!(c && !c.loaded && !c.failed);
+}
+// Resolves once the worker loaded or failed to.
+function simClientWhenLoaded() {
+    const c = _simClient;
+    if (!simClientWorkerLoading()) return Promise.resolve();
+    return new Promise(resolve => (c.loadWaiters || (c.loadWaiters = [])).push(resolve));
+}
+function _simClientLoadSettled(c) {
+    const w = c.loadWaiters; c.loadWaiters = null;
+    if (w) for (const resolve of w) resolve();
 }
 function simClientWillTakeMatch() {
     if (!simClientEnabled || _simClientPageSimulates()) return false;
@@ -267,6 +287,9 @@ function simClientCreateMatch(opts = {}) {
     c.replies.clear();
     const promise = new Promise((resolve, reject) => { c.creating = { epoch: c.epoch, resolve, reject, scene: !!opts.scene, onFail: opts.onFail || null }; });
     promise.catch(() => { });
+    // (A scene's typed columns move to the worker: no copy, no clone on its JS heap.)
+    const transfer = [];
+    if (opts.scene && opts.scene.cols) for (const v of Object.values(opts.scene.cols)) if (ArrayBuffer.isView(v)) transfer.push(v.buffer);
     c.worker.postMessage({
         type: 'start', mode: 'authority', epoch: c.epoch, create: true, startText: !!opts.startText, scene: opts.scene || null, controls,
         globals: {
@@ -274,7 +297,7 @@ function simClientCreateMatch(opts = {}) {
             editableConfig: typeof serializeEditableRuntimeConfigForTransport === 'function' ? serializeEditableRuntimeConfigForTransport() : null,
             startingResources: typeof startingResourcesConfig !== 'undefined' ? startingResourcesConfig : null
         }
-    });
+    }, transfer);
     _simClientResetUnits();
     _visCoverSimContext = false;
     c.startTick = currentTick;
@@ -676,7 +699,7 @@ function _simClientOnMessage(msg) {
     let c = _simClient;
     if (!c) return;
     switch (msg.type) {
-        case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; break;
+        case 'loaded': c.loaded = true; c.helpers = msg.helpers || 0; c.shared = !!msg.shared; _simClientLoadSettled(c); break;
         case 'startState':
             if (msg.epoch === c.epoch && c.creating && c.creating.epoch === msg.epoch) _simClientCreated(c, msg);
             break;
@@ -730,7 +753,7 @@ function _simClientOnMessage(msg) {
             break;
         case 'error': {
             if (c.errors.length < 50) c.errors.push(msg.where + ': ' + msg.message);
-            if (msg.where === 'load') c.failed = msg.message || 'load error';
+            if (msg.where === 'load') { c.failed = msg.message || 'load error'; _simClientLoadSettled(c); }
             // (It could not start this match: the page runs it.)
             if (msg.where === 'start' && c.active && c.startedEpoch !== c.epoch) { _simClientStartFailed(String(msg.message || 'start error')); break; }
             // A tick that threw in the worker counts (and logs) as it would
@@ -775,6 +798,9 @@ function _simClientShowPresentation(c, msg, at) {
     _simClientApplyWorld(msg.world, 1);
     c.arrivedAt = at; c.drawnAlpha = -1; c.presentationTick = msg.tick;
     c.presentationBuildMs = msg.buildMs; c.presentationPhases = msg.phases; c.presentationTorn = msg.torn;
+    // (Sums for probes: frames, build ms, its phases 0-3, the largest build.)
+    const S = c.presentationSums || (c.presentationSums = new Float64Array(7));
+    S[0]++; S[1] += msg.buildMs; if (msg.phases) for (let i = 0; i < 4; i++) S[2 + i] += msg.phases[i]; if (msg.buildMs > S[6]) S[6] = msg.buildMs;
 }
 function _simPlayShow(c, P, msg, at) {
     P.k0 = P.started ? P.k1 : msg.tick - 1;
@@ -850,8 +876,12 @@ function _simClientDropHeld(c) {
     for (const msg of queue) _simClientReturnBufs(_simClientWorldBufs(msg.world));
 }
 
+// The worker's latest minimap picture (sim_presentation.js simMinimapMake):
+// { buf, off, size, seq }, or null.
+function simClientMinimapPicture() { const c = _simClient; return c && c.active && c.minimap && c.minimap.epoch === c.epoch ? c.minimap : null; }
 function _simClientApplyTick(msg) {
     let c = _simClient;
+    if (msg.minimap && msg.epoch === c.epoch) { msg.minimap.epoch = msg.epoch; c.minimap = msg.minimap; }
     if (msg.epoch !== c.epoch) {
         c.stats.dropped++;
         let bufs = _simClientWorldBufs(msg.world);
@@ -929,9 +959,21 @@ function _simClientIsPresentBuf(b) {
     return typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer && b.byteLength >= 12
         && new DataView(b, b.byteLength - 4).getInt32(0, true) === 0x50524553;
 }
-function _simClientReturnBufs(bufs) {
+// (Items: buffers, or tables / frames with buf; the presentation worker's
+// unit frames (rid) go back by region id.)
+function _simClientReturnBufs(items) {
     let c = _simClient;
-    bufs = bufs.filter(b => b && b.byteLength);
+    let bufs = [], rel = null;
+    for (const t of items) {
+        if (!t) continue;
+        if (t.rid > 0) { (rel || (rel = [])).push({ rid: t.rid, gen: t.gen }); continue; }
+        const b = t.buf !== undefined ? t.buf : t;
+        if (b && b.byteLength) bufs.push(b);
+    }
+    if (c && rel) {
+        if (c.presentationPort) for (const r of rel) c.presentationPort.postMessage({ type: 'release', rid: r.rid, gen: r.gen });
+        else c.worker.postMessage({ type: 'frameReturn', bufs: [], rel });
+    }
     if (c && c.presentationPort && bufs.length) {
         const rest = [];
         for (const b of bufs) { if (_simClientIsPresentBuf(b)) c.presentationPort.postMessage({ type: 'release', buf: b }); else rest.push(b); }
@@ -950,7 +992,7 @@ function _simClientResetUnits() {
     _pageUnitsById = new PageUnitIdMap();
     _pageSlotViews = [];
     let bufs = pageResetWorldTables(c);
-    if (_pageFrame) { bufs.push(_pageFrame.buf); _pageFrame = null; }
+    if (_pageFrame) { bufs.push(_pageFrame); _pageFrame = null; }
     _simClientReturnBufs(bufs);
     unitsSetView([]);
     simUnitStateReset();
@@ -960,9 +1002,9 @@ function _simClientResetUnits() {
     _pageFrameStringsVersion++;
 }
 
-// The buffers of a world frame (to hand back).
+// The tables of a world frame (to hand back: _simClientReturnBufs).
 function _simClientWorldBufs(w) {
-    return w ? [w.units, w.structures, w.projectiles].filter(t => t && t.buf).map(t => t.buf) : [];
+    return w ? [w.units, w.structures, w.projectiles].filter(t => t && t.buf) : [];
 }
 
 // A world frame: string codes, units, structures, projectiles, the state and
@@ -986,7 +1028,7 @@ function _simClientApplyWorld(w, shown) {
         selectedEntities = selectedEntities.map(e => {
             if (!e || !e._structView || !e.dead) return e;
             let cell = grid[e.gy] && grid[e.gy][e.gx];
-            let now = getTileEntityRef(e.gx, e.gy) || (cell && cell.item) || null;
+            let now = getTileEntityRef(e.gx, e.gy) || (cell && cellItemGet(cell)) || null;
             return now && now._structView && !now.dead ? now : null;
         }).filter(Boolean);
     }
@@ -1006,24 +1048,37 @@ function _simClientUpdateStableSlots(F, old) {
     let nc = 0;
     for (let s = 0; s < n; s++) {
         const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
-        if (id === before) continue;
-        // A restore can move an existing ID between slots. Leave it to the
-        // general path, which preserves object identity across that remap.
-        if (id >= 0 && _pageUnitsById.has(id)) return false;
-        changed[nc++] = s;
+        if (id !== before) changed[nc++] = s;
+    }
+    // Units moved to other slots (the simulation's relayout moves some every
+    // step, a restore many) keep their views: marked first (their id is in a
+    // changed slot), so only the views of units gone are frozen. (A moved id
+    // sent every frame to the whole rebuild: a list of every unit and its
+    // pass, most of the page's garbage after the frozen records.)
+    const mark = ++_simStableMark;
+    for (let i = 0; i < nc; i++) {
+        const s = changed[i], id = s < F.n ? F.id[s] : -1;
+        if (id >= 0) { const v = _pageUnitsById.get(id); if (v && !v.dead) v._mv = mark; }
     }
     for (let i = 0; i < nc; i++) {
-        const s = changed[i];
-        const v = _pageSlotViews[s];
-        if (v && !v.dead) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
-        const id = s < F.n ? F.id[s] : -1;
-        if (id >= 0) {
-            const next = new PageUnit(id, s);
-            _pageUnitsById.set(id, next); _pageSlotViews[s] = next;
-        } else _pageSlotViews[s] = undefined;
+        const s = changed[i], v = _pageSlotViews[s];
+        if (v && !v.dead && v._s === s && v._mv !== mark) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+        _pageSlotViews[s] = undefined;
     }
+    let moved = false;
+    for (let i = 0; i < nc; i++) {
+        const s = changed[i], id = s < F.n ? F.id[s] : -1;
+        if (id < 0) continue;
+        let v = _pageUnitsById.get(id);
+        if (v && !v.dead && v._mv === mark) { if (v._s !== s) moved = true; v._s = s; }
+        else { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
+        _pageSlotViews[s] = v;
+    }
+    // (Slots of the selected units found again.)
+    if (moved && typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
     return true;
 }
+let _simStableMark = 0;
 let _simStableChanged = new Int32Array(0);
 // The page's units list: one array, filled from the current frame when
 // read (data_state.js units; a list of every unit at each membership change
@@ -1098,8 +1153,8 @@ function _simClientRebaseFrame(F, old, shown) {
 }
 function _simClientApplyFrame(frame, shown) {
     let c = _simClient;
-    let F = simFrameViews(frame.buf, frame.cap);
-    F.n = frame.n; F.count = frame.count;
+    let F = simFrameViews(frame.buf, frame.cap, frame.base || 0);
+    F.n = frame.n; F.count = frame.count; F.rid = frame.rid || 0; F.gen = frame.gen;
     if (frame.renderBuckets) {
         const B = frame.renderBuckets, cells = B.columns * B.rows;
         F.renderBuckets = { ...B, head: new Int32Array(F.buf, B.offset, cells),
@@ -1166,7 +1221,7 @@ function _simClientApplyFrame(frame, shown) {
     }
     _pageFrame = F;
     _pageFrameSerial++;
-    if (old) _simClientReturnBufs([old.buf]);
+    if (old) _simClientReturnBufs([old]);
 }
 
 // Details of watched units (their paths, targets and stats), and which
@@ -1243,7 +1298,7 @@ function _simClientResolve(ref) {
     if (ref[0] === 'u') return _pageUnitsById.get(ref[1]) || null;
     let gx = ref[1], gy = ref[2];
     let cell = grid[gy] && grid[gy][gx];
-    return getTileEntityRef(gx, gy) || (cell && cell.item) || null;
+    return getTileEntityRef(gx, gy) || (cell && cellItemGet(cell)) || null;
 }
 
 // (Packed by the worker: sim_worker.js _simEv. Decoded into one scratch

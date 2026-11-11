@@ -32,14 +32,14 @@ const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', '
 let C = null, M = null, cap = 0, n = 0, nextId = 1;
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
 function bind(newCap) {
-    const C2 = {};
-    for (const k of COLS) C2[k] = k === 'id' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(newCap * 4)) : new Float32Array(new SharedArrayBuffer((newCap + 1) * 4));
+    // (A new simulation heap: the reader reads the columns there in place.)
+    const H = require('./present-sim.cjs')(W, newCap, { pixels: true }), C2 = H.C;
     for (let s = 0; s < newCap; s++) C2.stIx[s] = s + 1;
-    const M2 = W.simMetaViews(new SharedArrayBuffer(newCap * vm.runInContext("SIM_META_SLOT_BYTES", W)), newCap);
+    const M2 = H.M;
     M2.id.fill(-1); C2.id.fill(-1);
     if (C) { for (const k of COLS) if (k !== 'stIx') C2[k].set(C[k].subarray(0, ST.includes(k) ? n + 1 : n)); for (const k of ['id', 'type', 'vision', 'watchedBy']) M2[k].set(M[k].subarray(0, n)); }
     C = C2; M = M2; cap = newCap;
-    send({ type: 'bind', epoch: 1, generation: 1, columns: C, meta: { buf: M.buf, cap }, metaRev });
+    send(H.bind({ epoch: 1, generation: 1, metaRev }));
 }
 function spawn(s) {
     const id = nextId++;
@@ -77,7 +77,7 @@ R.gl = {
 R.columnStores = [{}, {}];
 // (As sim_client.js _simClientApplyFrame makes the page's frame.)
 function pageFrame(m) {
-    const u = m.world.units, F = W.simFrameViews(u.buf, u.cap);
+    const u = m.world.units, F = W.simFrameViews(u.buf, u.cap, u.base);
     F.n = u.n; F.count = u.count;
     const D = u.dirty;
     F.dirty = { seq: D.seq, stream: D.stream, block: D.block, nb: D.nb, cols: D.cols, stamps: new Int32Array(F.buf, D.offset, D.cols.length * D.nb) };
@@ -142,8 +142,8 @@ for (tick = 1; tick <= 500; tick++) {
         lastSeen = m.tick;
         // The page draws some frames; every frame is shown, then given back.
         if (rnd() < .65) { const F = pageFrame(m); R._columnStoreUpload(1, F); check(F); }
-        held.push(m.world.units.buf);
-        while (held.length > 1 + (rnd() < .3 ? 1 : 0)) send({ type: 'release', buf: held.shift() });
+        held.push(m.world.units);
+        while (held.length > 1 + (rnd() < .3 ? 1 : 0)) { const h = held.shift(); send({ type: 'release', rid: h.rid, gen: h.gen }); }
     }
 }
 assert.ok(lastSeen > 450 && checked > 250, `frames drawn: ${checked}`);

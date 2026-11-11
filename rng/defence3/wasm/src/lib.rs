@@ -50,6 +50,12 @@ mod spr;
 mod arq;
 mod navg;
 mod birth;
+mod world_map;
+// The presentation worker's module only (wasm/build.cjs --pres: two memories).
+#[cfg(feature = "pres")]
+mod pres;
+#[cfg(feature = "pres")]
+mod pres_fill;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

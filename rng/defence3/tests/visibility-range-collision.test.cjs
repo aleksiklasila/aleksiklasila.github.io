@@ -53,7 +53,8 @@ const dense=Array.from({length:10000},(_,i)=>({x:i%100,y:Math.floor(i/100)}));
 assert.equal(rc.buildRangeBoundary(dense,100,100).length,4,'10,000 covered tiles become four lines');
 
 // Pushing is bounded and deterministic even at diagonal caps.
-const uc=vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,areaSearchEnabled:()=>false});
+// (unit.js alone: sim_unit_state.js's detached-unit accessor, which it installs at load, as a stand-in.)
+const uc=vm.createContext({TILE:32,UNIT_POSITION_QUANTIZATION:1024,gameTime:0,areaSearchEnabled:()=>false,_simGoneAccessor:{configurable:true,get(){return null;},set(v){}}});
 vm.runInContext(read('src/things/unit.js'),uc);
 let blocked=new Set(['1,0','0,1']);
 uc.canUnitOccupyTile=(_u,x,y)=>!blocked.has(`${x},${y}`);

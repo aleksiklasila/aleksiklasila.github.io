@@ -83,7 +83,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                 // (The target tile and where the flow approaches it from the unit's tile.)
                 const why = q(`(() => { const u = units.find(x => x.id === ${w.id}), t = ${JSON.stringify(target)}, p = u ? navProfileOf(u) : -1;
                     const at = u ? Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) : -1, ap = p >= 0 ? navApproachTile(p, t[1] * GRID_W + t[0]) : -1;
-                    return { wall: grid[t[1]][t[0]].type === TYPE_WALL, entity: getTileEntityType(t[0], t[1]), profile: p, approach: ap >= 0 ? [ap % GRID_W, Math.floor(ap / GRID_W)] : null,
+                    return { wall: cellType[(grid[t[1]][t[0]]) - 1] === TYPE_WALL, entity: getTileEntityType(t[0], t[1]), profile: p, approach: ap >= 0 ? [ap % GRID_W, Math.floor(ap / GRID_W)] : null,
                         reachable: p >= 0 && ap >= 0 ? navReachable(p, at, ap) : null }; })()`);
                 fails.push(`${kind} ${JSON.stringify([dx, dy])}: came no closer than ${best} tiles to ${JSON.stringify(target)} from ${JSON.stringify(at.slice(0, 2))} (last ${JSON.stringify(last)}; ${JSON.stringify(why)})`);
             }
@@ -101,7 +101,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
         for (let d = 4; d < 12 && !site; d++) for (let k = 0; k < 8 * d && !site; k++) {
             const a = k / (8 * d) * Math.PI * 2, x = Math.round(b.gx + Math.cos(a) * d), y = Math.round(b.gy + Math.sin(a) * d);
             if (x < 2 || y < 2 || x >= GRID_W - 2 || y >= GRID_H - 2) continue;
-            const c = grid[y][x]; if (c.type !== TYPE_FLOOR || c.item || getTileEntityRef(x, y)) continue;
+            const c = grid[y][x]; if (cellType[(c) - 1] !== TYPE_FLOOR || cellItemGet(c) || getTileEntityRef(x, y)) continue;
             if (units.some(u => !u.dead && Math.floor(u.x / TILE) === x && Math.floor(u.y / TILE) === y)) continue;
             site = [x, y];
         }
@@ -162,7 +162,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
     if (kinds.includes('collector')) {
         const cl = q(`(() => {
             const s = collectorSpawners.find(x => x.owner === 0 && x.type === 'spawner');
-            const free = (x, y) => x > 1 && y > 1 && x < GRID_W - 2 && y < GRID_H - 2 && grid[y][x].type === TYPE_FLOOR && !grid[y][x].item && !getTileEntityRef(x, y)
+            const free = (x, y) => x > 1 && y > 1 && x < GRID_W - 2 && y < GRID_H - 2 && cellType[(grid[y][x]) - 1] === TYPE_FLOOR && !cellItemGet(grid[y][x]) && !getTileEntityRef(x, y)
                 && !units.some(u => !u.dead && Math.floor(u.x / TILE) === x && Math.floor(u.y / TILE) === y);
             for (let d = 4; d < 14; d++) for (let k = 0; k < 8 * d; k++) {
                 const a = k / (8 * d) * Math.PI * 2, x = Math.round(s.gx + Math.cos(a) * d), y = Math.round(s.gy + Math.sin(a) * d);
@@ -179,7 +179,7 @@ const data = require(path.join(__dirname, 'oneofall.json'));
                     const gx = cx + dx, gy = cy + dy, x = gx * TILE + 16, y = gy * TILE + 16;
                     if (dx === 0 && dy === 0) { const m = Object.assign(new GoldMine(), { gx, gy, gold: 5000, maxGold: 5000, x, y }); goldMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, m); }
                     else { const m = Object.assign(new AstarMine(), { gx, gy, astar: 5000, maxAstar: 5000, x, y }); astarMines.push(m); setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, m); }
-                    grid[gy][gx].type = TYPE_WALL; simMoveTileTypeChanged(gx, gy);
+                    cellType[(grid[gy][gx]) - 1] = TYPE_WALL; simMoveTileTypeChanged(gx, gy);
                 } })()`);
             for (let k = 0; k < 40 && q(`!getGoldMineAt(${cl[0]}, ${cl[1]})`); k++) await world.run(250);
             host.eval(`(() => { const ids = units.filter(u => !u.dead && u.owner === localPlayerId && u.workerType === 'collector').map(u => u.id);

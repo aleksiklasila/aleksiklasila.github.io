@@ -17,6 +17,9 @@ prof = []
 # Contact replay counters through the otherwise unused mover argument.
 # Only the standalone diagnostic replay supplies a counter address.
 sepdiag = []
+# The presentation worker's module (wasm/build.cjs --pres): pres.rs, pres_fill.rs,
+# reading the simulation's heap as a second memory.
+pres = []
 
 [profile.release]
 opt-level = 3

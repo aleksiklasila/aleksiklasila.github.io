@@ -40,7 +40,7 @@ for (const pid of JSON.parse(game.eval('JSON.stringify(activeTeamIds)'))) {
     assert.equal(game.eval(`players[${pid}].popCount`), 16384, 'startup uses configured population cap');
     assert.equal(game.eval(`units.filter(u => u.owner === ${pid} && u.unitType === 'norm' && getUnitBaseLevel(u) === 1).length`), 11000);
     assert.equal(game.eval(`units.filter(u => u.owner === ${pid} && u.unitType === 'norm' && getUnitBaseLevel(u) === 2).length`), 16384 - 11000);
-    assert.equal(game.eval(`getCellItemsRowMajor().filter(b => b.type === 'house' && grid[b.gy][b.gx].owner === ${pid}).length`), 1025);
+    assert.equal(game.eval(`getCellItemsRowMajor().filter(b => b.type === 'house' && cellOwner[(grid[b.gy][b.gx]) - 1] === ${pid}).length`), 1025);
 }
 assert.deepEqual(game.errors, []);
 console.log('PASS: unrestricted building settings, units above 10k, shared population limit, and actual match startup.');

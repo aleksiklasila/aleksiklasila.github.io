@@ -11,11 +11,11 @@ const inst = world.spawn('structinst', { simWorker: false });
 inst.eval('startSoloGame();');
 const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     gameTick();
-    const free = (gx, gy) => { const c = grid[gy][gx]; return c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy); };
+    const free = (gx, gy) => { const c = grid[gy][gx]; return cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
     const place = (gx, gy, type, owner, energy) => {
         while (!free(gx, gy)) gx--;
         placeBuilding(gx, gy, type, owner, { ignorePlacementRules: true, silent: true });
-        const b = getTileEntityRef(gx, gy) || grid[gy][gx].item;
+        const b = getTileEntityRef(gx, gy) || cellItemGet(grid[gy][gx]);
         b.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(b); b.energy = energy > 0 ? energy : b.maxEnergy;
         return b;
     };

@@ -263,9 +263,11 @@ self.onmessage = (ev) => {
             _simStubUi();
             _simLoaded = true;
             if (msg.trace) _simTraceInstall();
+            // (?present=0, a measurement: the presentation worker builds no frames.)
+            self.SIM_NO_PRESENT = !!msg.noPresent;
             // Helpers for the parallel jobs (with shared memory; sim_parallel.js).
             let helpers = 0;
-            try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers); } catch (err) { _simError('helpers', err); }
+            try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers, msg.bgOnly | 0); } catch (err) { _simError('helpers', err); }
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {
             _simStreamClear(false);
@@ -290,6 +292,7 @@ self.onmessage = (ev) => {
         } else if (msg.type === 'frameReturn') {
             // The page is done with these buffers: the next frames reuse them.
             for (let b of msg.bufs || []) if (!simPresentationReturn(b)) simFrameReturn(b);
+            for (let r of msg.rel || []) simPresentationRelease(r);
         } else if (msg.type === 'watch') {
             simFrameWatch(msg.list);
             simFrameWatchStructures(msg.structures);
@@ -867,7 +870,10 @@ function _simPostResult(tick, hash, lock, simMs, report = null) {
             transfer.push(buf);
         }
     } catch (err) { sight = null; _simError('sight', err); }
-    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightId, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report,
+    // (The minimap's units, every few ticks: sim_presentation.js simMinimapMake.)
+    let minimap = null;
+    if (_simPresentation && typeof simMinimapMake === 'function') { try { minimap = simMinimapMake(tick); } catch (err) { _simError('minimap', err); } }
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world, presentation:!!_simPresentation, hash, lockHashes: lock, events, sight, sightId, sightPlayer: localPlayerId, simMs, encodeMs: performance.now() - t1, report, minimap,
         lateMs: _simTickLateMs, doneAt: _simNowAbs() }, transfer);
     _simEvPosted();
 }

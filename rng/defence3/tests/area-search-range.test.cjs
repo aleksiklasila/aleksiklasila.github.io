@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const world=new H.World({controls:H.SMALL_MATCH_CONTROLS}),inst=world.spawn('area-search',{simWorker:false});
 const result=inst.eval(`(()=>{
     SIM_ACQ_AREA_TARGETS=true;startSoloGame();
-    const cells=gridCellsByArea.find(c=>c&&c.length>=2),a=cells[0],b=cells[cells.length-1];
+    const cells=gridCellsByArea.find(c=>c&&c.length>=2),tile=t=>({x:t%GRID_W,y:Math.floor(t/GRID_W)}),a=tile(cells[0]),b=tile(cells[cells.length-1]);
     const source=new Unit('norm',0,(a.x+.5)*TILE,(a.y+.5)*TILE);
     const target=new Unit('norm',0,(b.x+.5)*TILE,(b.y+.5)*TILE);
     units.push(source,target);target.energy=target.maxEnergy*.5;

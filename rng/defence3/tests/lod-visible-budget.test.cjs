@@ -4,6 +4,7 @@ const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const c = vm.createContext({window:{}, console, TILE:32, GRID_W:1000,GRID_H:1000,viewW:1280,viewH:800,camera:{zoom:3},tickAlpha:1,
     fullVisibility:true,visibilityGrid:[],visibilityVersion:1,gameTime:1,localPlayerId:0,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
     SIM_UF_GHOST:65536,SIM_UF_HIDDEN:1024,get3DRenderOwnerColor:()=> '#fff',_isLiveRenderGrid:()=>true});
+vm.runInContext('var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;',c);
 vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 const R=c.renderer3dInstance=Object.create(c.window.Defence3Renderer3D.prototype);
 Object.assign(R,{cssWidth:1280,cssHeight:800,pixelRatio:1,sceneTargetSize:{width:1280,height:800},orbitPitch:.18,orbitYaw:0});
@@ -42,9 +43,8 @@ const F=populate(points);
 // Worker-owned buckets must agree with the fallback for camera rotations and
 // a long rebased interpolation. They share the frame's buffer lifetime.
 const worker=read('src/sim/presentation_worker.js');
-vm.runInContext(worker.slice(worker.indexOf('function buildRenderBuckets('),worker.indexOf('function draw()')),c);
 c.SIM_FRAME_SLOT_BYTES=108;
-F.buf=new ArrayBuffer(F.cap*108+63*63*8+F.cap*8);
+require('./present-pm.cjs')(c).frame(F,63*63);
 const B=c.buildRenderBuckets(F,F.count,63,63,32), cells=B.columns*B.rows;
 F.renderBuckets={...B,head:new Int32Array(F.buf,B.offset,cells),motion:new Float32Array(F.buf,B.offset+cells*4,cells),next:new Int32Array(F.buf,B.offset+cells*8,F.cap)};
 const indexed=[];

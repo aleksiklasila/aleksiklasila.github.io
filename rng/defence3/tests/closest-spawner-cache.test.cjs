@@ -15,13 +15,13 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     let seed = 99;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const type = 'healer_spawner';
-    const free = (gx, gy) => { const c = grid[gy][gx]; return c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy); };
+    const free = (gx, gy) => { const c = grid[gy][gx]; return cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
     const place = owner => {
         for (let tries = 0; tries < 50; tries++) {
             const gx = 3 + Math.floor(rnd() * (GRID_W - 6)), gy = 3 + Math.floor(rnd() * (GRID_H - 6));
             if (!free(gx, gy)) continue;
             if (!placeBuilding(gx, gy, type, owner, { ignorePlacementRules: true, silent: true })) continue;
-            const e = getTileEntityRef(gx, gy) || grid[gy][gx].item;
+            const e = getTileEntityRef(gx, gy) || cellItemGet(grid[gy][gx]);
             if (e) { e.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(e); e.energy = e.maxEnergy; return e; }
         }
         return null;

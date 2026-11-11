@@ -12,7 +12,7 @@ const out = JSON.parse(i.eval(`(() => {
     startSoloGame();
     const spots = [];
     for (let gy = 4; gy < GRID_H - 4 && spots.length < 2; gy++) for (let gx = 4; gx < GRID_W - 4 && spots.length < 2; gx++)
-        if (!getTileEntityRef(gx, gy) && grid[gy][gx].type !== TYPE_WALL) spots.push([gx, gy]);
+        if (!getTileEntityRef(gx, gy) && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL) spots.push([gx, gy]);
     const placed = spots.map(([gx, gy]) => { placeBuilding(gx, gy, 'pistol', 0, { silent: true, ignorePlacementRules: true }); return getTileEntityRef(gx, gy); });
     const a = new Unit('builder_unit', 0, 5 * TILE, 5 * TILE), b = new Unit('builder_unit', 0, 6 * TILE, 6 * TILE);
     for (const u of [a, b]) { units.push(u); unitSlotMapPushed(u); }

@@ -335,12 +335,12 @@ function _getFloorItemSprite(item) {
 }
 
 function drawFloorItem(ctx, cell, px, py) {
-    let item = cell.item;
+    let item = renderCellItem(cell);
     if (!item || item.draw) return;
     let x = px + 16, y = py + 16;
     // Owner border
-    if (cell.owner >= 0) {
-        ctx.strokeStyle = (typeof get2DRenderOwnerColor === 'function' ? get2DRenderOwnerColor(cell.owner) : '#c8ced8'); ctx.lineWidth = 1;
+    if (renderCellValue(cell, 'owner') >= 0) {
+        ctx.strokeStyle = (typeof get2DRenderOwnerColor === 'function' ? get2DRenderOwnerColor(renderCellValue(cell, 'owner')) : '#c8ced8'); ctx.lineWidth = 1;
         ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
     }
     let floorSprite = _getFloorItemSprite(item);
@@ -756,7 +756,7 @@ function getCurrentBuildPreviewData() {
     let buildTileVisible = isTileActuallyVisibleToPlayer(localPlayerId, gx, gy);
 
     if (selectedBuildItem === 'area_upgrader') {
-        let aId = grid[gy][gx].areaId;
+        let aId = renderCellValue(grid[gy][gx], 'areaId');
         let area = getAreaById(aId);
         if (!area) return preview;
         let areaCells = _getCanonicalAreaCellsById(aId, area);
@@ -765,14 +765,14 @@ function getCurrentBuildPreviewData() {
         let filledCount = 0;
         let cells = [];
         for (let cp of areaCells) {
-            let c = grid[cp.y][cp.x];
+            let c = grid[Math.floor(cp / GRID_W)][(cp % GRID_W)];
             let occupied = false;
-            if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) occupied = true;
-            else if (c.item) occupied = true;
-            else if (getBarrackAtTile(cp.x, cp.y)) occupied = true;
-            else if (getSpawnerAtTile(cp.x, cp.y)) occupied = true;
+            if (renderCellValue(c, 'type') === TYPE_WALL && getTowerAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) occupied = true;
+            else if (renderCellItem(c)) occupied = true;
+            else if (getBarrackAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) occupied = true;
+            else if (getSpawnerAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) occupied = true;
             if (occupied) filledCount++;
-            cells.push({ x: cp.x, y: cp.y, occupied });
+            cells.push({ x: (cp % GRID_W), y: Math.floor(cp / GRID_W), occupied });
         }
         preview.areaCells = cells;
         preview.filledCount = filledCount;
@@ -859,7 +859,21 @@ function _clampTileRect(minGx, minGy, maxGx, maxGy, out = {}) {
     return out;
 }
 
+// The ground's walls a tile for the GPU on large maps (renderer.js
+// getGroundTilesForGpu, renderer3d.js drawBackground): a byte a tile (255 a
+// wall), its rows to upload since the renderer last took them. Marked with
+// the terrain's own dirty rects.
+const _groundTiles = { mask: null, w: 0, h: 0, version: 0, full: true, dirtyY0: -1, dirtyY1: -1, upY0: -1, upY1: -1, floor: null, wall: null };
+// Whether the WebGL ground draws the tiles now (the 2D background is then not
+// made: renderer.js's background commit skips it; the 2D view clears this).
+let _groundTilesActive = false;
+function _markGroundTileRows(y0, y1) {
+    const G = _groundTiles;
+    if (G.dirtyY0 < 0 || y0 < G.dirtyY0) G.dirtyY0 = Math.max(0, y0);
+    if (y1 > G.dirtyY1) G.dirtyY1 = Math.min(GRID_H - 1, y1);
+}
 function _markCombinedTerrainFullDirty() {
+    _groundTiles.full = true;
     _combinedTerrainDirty = true;
     _combinedTerrainDirtyFull = true;
     _combinedTerrainDirtyBounds = null;
@@ -869,6 +883,7 @@ function _markCombinedTerrainRectDirty(minGx, minGy, maxGx, maxGy) {
     // Pad by one tile so neighboring wall borders/outlines stay coherent.
     let rect = _clampTileRect(minGx - 1, minGy - 1, maxGx + 1, maxGy + 1);
     if (!rect) return;
+    _markGroundTileRows(rect.minGy, rect.maxGy);
     _combinedTerrainDirty = true;
     if (_combinedTerrainDirtyFull) return;
     if (_combinedTerrainDirtyBounds) {
@@ -1193,7 +1208,7 @@ function rebuildCombinedTerrainCache() {
         };
         const floor = parse(C_FLOOR), wall = parse(C_WALL);
         for (let y = rect.minGy; y <= rect.maxGy; y++) for (let x = rect.minGx; x <= rect.maxGx; x++) {
-            const color = grid[y][x].type === TYPE_WALL ? wall : floor, i = (y * GRID_W + x) * 4;
+            const color = renderCellValue(grid[y][x], 'type') === TYPE_WALL ? wall : floor, i = (y * GRID_W + x) * 4;
             pixels[i] = color[0]; pixels[i + 1] = color[1]; pixels[i + 2] = color[2]; pixels[i + 3] = 255;
         }
         const w = rect.maxGx - rect.minGx + 1, h = rect.maxGy - rect.minGy + 1;
@@ -1213,21 +1228,21 @@ function rebuildCombinedTerrainCache() {
     c.fillStyle = C_FLOOR;
     for (let y = rect.minGy; y <= rect.maxGy; y++) {
         for (let x = rect.minGx; x <= rect.maxGx; x++) {
-            if (grid[y][x].type !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
+            if (renderCellValue(grid[y][x], 'type') !== TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE);
         }
     }
 
     c.fillStyle = '#222';
     for (let y = rect.minGy; y <= rect.maxGy; y++) {
         for (let x = rect.minGx; x <= rect.maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL) c.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
         }
     }
 
     c.fillStyle = C_WALL;
     for (let y = rect.minGy; y <= rect.maxGy; y++) {
         for (let x = rect.minGx; x <= rect.maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL) c.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
         }
     }
 
@@ -1236,7 +1251,7 @@ function rebuildCombinedTerrainCache() {
     c.beginPath();
     for (let y = rect.minGy; y <= rect.maxGy; y++) {
         for (let x = rect.minGx; x <= rect.maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL) c.rect(x * TILE, y * TILE, TILE, TILE - 4);
         }
     }
     c.stroke();
@@ -1342,6 +1357,8 @@ function getBackgroundMip(scale) {
 }
 
 function drawCombinedBackground(ctx, minGx, minGy, maxGx, maxGy) {
+    // (The 2D view draws the 2D background: made again from here on.)
+    _groundTilesActive = false;
     ensureCombinedBgCanvas();
     if (_staticCacheCommitVersion < 0) commitStaticCaches(true);
     let sx = minGx * TILE, sy = minGy * TILE;
@@ -1455,16 +1472,16 @@ function rebuildAreaOutlinePathCache() {
 
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
-            let aid = grid[y][x].areaId;
+            let aid = renderCellValue(grid[y][x], 'areaId');
             if (aid === -1) continue;
             let p = paths[aid];
             if (!p) p = paths[aid] = new Path2D();
 
             let px = x * TILE, py = y * TILE;
-            if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) { p.moveTo(px + TILE - 1, py); p.lineTo(px + TILE - 1, py + TILE); }
-            if (x === 0 || grid[y][x - 1].areaId !== aid) { p.moveTo(px + 1, py); p.lineTo(px + 1, py + TILE); }
-            if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) { p.moveTo(px, py + TILE - 1); p.lineTo(px + TILE, py + TILE - 1); }
-            if (y === 0 || grid[y - 1][x].areaId !== aid) { p.moveTo(px, py + 1); p.lineTo(px + TILE, py + 1); }
+            if (x === GRID_W - 1 || renderCellValue(grid[y][x + 1], 'areaId') !== aid) { p.moveTo(px + TILE - 1, py); p.lineTo(px + TILE - 1, py + TILE); }
+            if (x === 0 || renderCellValue(grid[y][x - 1], 'areaId') !== aid) { p.moveTo(px + 1, py); p.lineTo(px + 1, py + TILE); }
+            if (y === GRID_H - 1 || renderCellValue(grid[y + 1][x], 'areaId') !== aid) { p.moveTo(px, py + TILE - 1); p.lineTo(px + TILE, py + TILE - 1); }
+            if (y === 0 || renderCellValue(grid[y - 1][x], 'areaId') !== aid) { p.moveTo(px, py + 1); p.lineTo(px + TILE, py + 1); }
         }
     }
 
@@ -1477,21 +1494,21 @@ function drawGridDirect(ctx, minGx, minGy, maxGx, maxGy) {
     ctx.fillStyle = C_FLOOR;
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].type !== TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+            if (renderCellValue(grid[y][x], 'type') !== TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
         }
     }
     // Wall shadow
     ctx.fillStyle = '#222';
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE + 4, TILE, TILE - 4);
         }
     }
     // Wall face
     ctx.fillStyle = C_WALL;
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) ctx.fillRect(x * TILE, y * TILE, TILE, TILE - 4);
         }
     }
     // Wall border (batched)
@@ -1499,7 +1516,7 @@ function drawGridDirect(ctx, minGx, minGy, maxGx, maxGy) {
     ctx.beginPath();
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].type === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
+            if (renderCellValue(grid[y][x], 'type') === TYPE_WALL && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
                 let px = x * TILE, py = y * TILE;
                 ctx.rect(px, py, TILE, TILE - 4);
             }
@@ -1638,7 +1655,7 @@ function draw() {
     setFrameDrawImageDepth(DRAW_Z_STRUCTURES);
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
-            if (grid[y][x].item && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
+            if (renderCellItem(grid[y][x]) && (fullVisibility || (visibilityGrid[y] && visibilityGrid[y][x] > 0))) {
 
                 let drawScale = 1;
                 drawWithTrackedContextTransform(ctx, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, 0, 0, drawScale, () => {
@@ -1764,11 +1781,11 @@ function draw() {
         for (let x = minGx; x <= maxGx; x++) {
             if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
             let cell = grid[y][x];
-            if (!cell || !cell.item) continue;
-            if (!(Number(cell.item._damageFlashUntil) > gameTime + tickAlpha) || !(Number(cell.item._damageFlashStrength) > 0)) continue;
+            if (!cell || !renderCellItem(cell)) continue;
+            if (!(Number(renderCellItem(cell)._damageFlashUntil) > gameTime + tickAlpha) || !(Number(renderCellItem(cell)._damageFlashStrength) > 0)) continue;
 
             let scaleAmount = 1;
-            draw2DDamageFlashOverlay(ctx, cell.item, x * TILE + 16, y * TILE + 16, 16 * scaleAmount, true);
+            draw2DDamageFlashOverlay(ctx, renderCellItem(cell), x * TILE + 16, y * TILE + 16, 16 * scaleAmount, true);
         }
     }
     for (let u of units) {

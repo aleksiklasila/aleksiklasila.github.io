@@ -8,8 +8,8 @@ function _refAdjSig(gx, gy) {
     let ref = getTileEntityRef(gx, gy);
     if (!ref || !_isOperationalAdjacencyEntity(ref)) return null;
     if (ref instanceof Tower) {
-        if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_WALL) return null;
-        let owner = Number.isFinite(ref.owner) ? ref.owner : grid[gy][gx].owner;
+        if (!grid[gy] || !grid[gy][gx] || cellType[grid[gy][gx] - 1] !== TYPE_WALL) return null;
+        let owner = Number.isFinite(ref.owner) ? ref.owner : cellOwner[grid[gy][gx] - 1];
         if (!Number.isFinite(owner) || owner < 0) return null;
         let type = String(ref.type || '');
         if (!type) return null;
@@ -24,7 +24,7 @@ function _refAdjSig(gx, gy) {
     }
 
     if (getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE) return null;
-    let owner = Number.isFinite(ref.owner) ? ref.owner : (grid[gy] && grid[gy][gx] ? grid[gy][gx].owner : -1);
+    let owner = Number.isFinite(ref.owner) ? ref.owner : (grid[gy] && grid[gy][gx] ? cellOwner[grid[gy][gx] - 1] : -1);
     if (!Number.isFinite(owner) || owner < 0) return null;
     let type = String(ref.type || '');
     if (!type) return null;
@@ -91,7 +91,7 @@ function _refAdjRecalc() {
             let gy = Math.floor(key / GRID_W);
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) continue;
             let cell = grid[gy] && grid[gy][gx];
-            if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) touchedAreaIds.add(cell.areaId);
+            if (cell && cellArea[cell - 1] >= 0) touchedAreaIds.add(cellArea[cell - 1]);
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                     pushSeedAt(gx + dx, gy + dy);
@@ -121,8 +121,8 @@ function _refAdjRecalc() {
             }
             let firstKey = null;
             for (let cp of areaCells) {
-                let cx = cp?.x;
-                let cy = cp?.y;
+                let cx = cp % GRID_W;
+                let cy = Math.floor(cp / GRID_W);
                 if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
                     areaSignatureCache.set(aId, null);
                     return null;
@@ -171,9 +171,9 @@ function _refAdjRecalc() {
             queue.push({ x: tx, y: ty });
             group.push(sig.obj);
             let cell = grid[ty] && grid[ty][tx];
-            if (cell && Number.isFinite(cell.areaId) && cell.areaId >= 0) {
-                touchedAreas.add(cell.areaId);
-                touchedAreaIds.add(cell.areaId);
+            if (cell && cellArea[cell - 1] >= 0) {
+                touchedAreas.add(cellArea[cell - 1]);
+                touchedAreaIds.add(cellArea[cell - 1]);
             }
         };
 

@@ -45,7 +45,7 @@ for (const helpers of [0, 3]) {
             simDk=dk;
             while(_navJob) {gameTime+=dk;navTick();}
             // A real wall change, on both profiles, with ground selected first.
-            const x=8,y=8,c=grid[y][x];c.type=c.type===TYPE_WALL?TYPE_FLOOR:TYPE_WALL;simMoveTileTypeChanged(x,y);
+            const x=8,y=8,c=grid[y][x];cellType[(c) - 1]=cellType[(c) - 1]===TYPE_WALL?TYPE_FLOOR:TYPE_WALL;simMoveTileTypeChanged(x,y);
             _navLastJobProfile=NAV_PROFILE_BUILD;
             for(let n=0;n<20;n++) {gameTime+=dk;navTick();if(_navJob&&_navJob.si===boundary)break;}
             check(_navJob&&_navJob.si===boundary,'missing snapshot boundary');

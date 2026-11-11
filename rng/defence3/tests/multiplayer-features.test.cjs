@@ -117,10 +117,10 @@ const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawne
             for (let r = 2; r <= 4; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
                 if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
                 const gx = kx + dx, gy = ky + dy;
-                if (gx < 1 || gy < 1 || gx >= GRID_W - 1 || gy >= GRID_H - 1 || grid[gy][gx].type === TYPE_WALL || grid[gy][gx].item || getTileEntityRef(gx, gy)) continue;
+                if (gx < 1 || gy < 1 || gx >= GRID_W - 1 || gy >= GRID_H - 1 || cellType[(grid[gy][gx]) - 1] === TYPE_WALL || cellItemGet(grid[gy][gx]) || getTileEntityRef(gx, gy)) continue;
                 const type = ringTypes[r][(dx + dy + 100) % 2];
                 if (!placeBuilding(gx, gy, type, ${hostTeam}, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: false, buildEnabled: true })) continue;
-                const it = grid[gy][gx].item;
+                const it = cellItemGet(grid[gy][gx]);
                 if (it) { it.underConstruction = false; if (typeof structureWallSync === 'function') structureWallSync(it); it.energy = it.maxEnergy; it.level = 1; }
                 n++;
             }
@@ -154,7 +154,7 @@ const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawne
             assert.ok(seen[kind] > 0, `${kind} applies ${effectOf[kind]}: ${seen[kind]}`);
         }
         assert.ok(probes.mine, 'probe placed on mine');
-        assert.equal(host.eval(`(g => !!(g && g.item && g.item.type === 'mine'))(grid[${probes.mine.gy}][${probes.mine.gx}])`), false, 'mine exploded');
+        assert.equal(host.eval(`(g => !!(g && cellItemGet(g) && cellItemGet(g).type === 'mine'))(grid[${probes.mine.gy}][${probes.mine.gx}])`), false, 'mine exploded');
         // Then an ordinary assault through the rings.
         const attackers = own(guests[0], `units.filter(u => u.owner === localPlayerId && !u.isKing && !u.workerState && !u.dead).map(u => u.id)`);
         q(guests[0], { action: 'stop', unitIds: attackers });

@@ -48,8 +48,10 @@ const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', '
     'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stIx', 'cmMode', 'cmT'];
 const cap = 90000, SLOT = vm.runInContext('SIM_FRAME_SLOT_BYTES', B.ctx);
 const C = {};
-for (const k of COLS) C[k] = k === 'id' || k === 'cmT' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer((cap + 1) * 4));
-const M = B.ctx.simMetaViews(new SharedArrayBuffer(cap * 48), cap);
+// (The simulation's heap: the readers read its columns there in place; positions in eighths of a pixel.)
+const H = require('./present-sim.cjs')(B.ctx, cap, { cols: COLS.filter(k => ['cmMode', 'cmT', 'pvAt'].includes(k)) });
+Object.assign(C, H.C);
+const M = H.M;
 C.id.fill(-1); M.id.fill(-1); C.cmT.fill(-1);
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
 let seed = 777, nextId = 1, n = 70000;
@@ -57,24 +59,24 @@ const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647
 function spawn(s) {
     const id = nextId++;
     C.id[s] = id; C.live[s] = 1; C.dead[s] = 0; C.owner[s] = rnd() < .5 ? 0 : 1; C.energy[s] = 20; C.r[s] = 8;
-    C.x[s] = C.prevX[s] = 16 + rnd() * 2000; C.y[s] = C.prevY[s] = 16 + rnd() * 2000; C.effectiveLevel[s] = 1; C.unitLevel[s] = 1;
+    C.x[s] = C.prevX[s] = 8 * (16 + rnd() * 2000); C.y[s] = C.prevY[s] = 8 * (16 + rnd() * 2000); C.effectiveLevel[s] = 1; C.unitLevel[s] = 1;
     M.id[s] = id; M.type[s] = 1 + Math.floor(rnd() * 5); M.vision[s] = 2 + Math.floor(rnd() * 3); M.watchedBy[s] = -1;
     Atomics.add(metaRev, 0, 1);
 }
 for (let s = 0; s < n; s++) spawn(s);
-both({ type: 'bind', epoch: 1, generation: 1, columns: C, meta: { buf: M.buf, cap }, metaRev });
+both(H.bind({ epoch: 1, generation: 1, metaRev }));
 both({ type: 'strings', strings: [''] });
 both({ type: 'ready' });
-const sight64 = new Float32Array(64 * 64), sight32 = new Float32Array(32 * 32);
+const sight64 = H.arr(Float32Array, 64 * 64), sight32 = H.arr(Float32Array, 32 * 32);
 let frames = 0, threads = 0;
 for (let tick = 1; tick <= 60; tick++) {
     for (let s = 0; s < n; s++) { C.prevX[s] = C.x[s]; C.prevY[s] = C.y[s]; C.vx[s] = 0; C.vy[s] = 0; if (C.attackFlash[s] > 0) C.attackFlash[s]--; }
     // Squads moving (nearby slots), some with fire targets; strays.
     for (let g = 0; g < 6; g++) {
         const s0 = Math.floor(rnd() * n), len = 500 + Math.floor(rnd() * 3000), dx = (rnd() - .5) * 4, dy = (rnd() - .5) * 4;
-        for (let s = s0; s < Math.min(n, s0 + len); s++) if (C.live[s]) { C.x[s] += dx; C.y[s] += dy; C.vx[s] = dx; C.vy[s] = dy; C.cmMode[s] = s % 3 ? 0 : 4; C.cmT[s] = s % 3 ? -1 : (s * 7919) % n; }
+        for (let s = s0; s < Math.min(n, s0 + len); s++) if (C.live[s]) { C.x[s] += 8 * dx; C.y[s] += 8 * dy; C.vx[s] = dx; C.vy[s] = dy; C.cmMode[s] = s % 3 ? 0 : 4; C.cmT[s] = s % 3 ? -1 : (s * 7919) % n; }
     }
-    for (let k = 0; k < 200; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += rnd() * 3; C.vx[s] = 1; } }
+    for (let k = 0; k < 200; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += 8 * rnd() * 3; C.vx[s] = 1; } }
     for (let k = 0; k < 50; k++) C.attackFlash[Math.floor(rnd() * n)] = 8;
     for (let k = 0; k < 100; k++) C.energy[Math.floor(rnd() * n)] -= 1;
     for (let k = 0; k < 20; k++) { const s = Math.floor(rnd() * n); C.stIx[s] = s + 1; C.stBu[s + 1] = rnd() < .5 ? 3 : 0; }
@@ -95,10 +97,10 @@ for (let tick = 1; tick <= 60; tick++) {
     for (let i = 0; i < ma.length; i++) {
         const ua = ma[i].world.units, ub = mb[i].world.units;
         assert.equal(ua.count, ub.count, `tick ${tick}: listed`); assert.equal(ua.mver, ub.mver, `tick ${tick}: membership`); assert.equal(ua.n, ub.n);
-        const bytes = ua.buf.byteLength - 12;
-        assert.equal(bytes, ub.buf.byteLength - 12);
+        const bytes = ua.bytes;
+        assert.equal(bytes, ub.bytes);
         // (F.order past the count listed is not read: what the ranges left there.)
-        const xa = new Uint8Array(ua.buf.slice(0, bytes)), xb = new Uint8Array(ub.buf.slice(0, bytes));
+        const xa = new Uint8Array(ua.buf).slice(ua.base, ua.base + bytes), xb = new Uint8Array(ub.buf).slice(ub.base, ub.base + bytes);
         const order = vm.runInContext('simFrameViews', B.ctx)(new SharedArrayBuffer(cap * SLOT), cap).order.byteOffset;
         xa.fill(0, order + ua.count * 4, order + cap * 4); xb.fill(0, order + ub.count * 4, order + cap * 4);
         if (Buffer.compare(Buffer.from(xa), Buffer.from(xb)) !== 0) {
@@ -107,9 +109,9 @@ for (let tick = 1; tick <= 60; tick++) {
         }
         threads = Math.max(threads, ma[i].phases[4]);
         frames++;
-        A.held.push(ua.buf); B.held.push(ub.buf);
+        A.held.push(ua); B.held.push(ub);
     }
-    while (A.held.length > 1) { A.send({ type: 'release', buf: A.held.shift() }); B.send({ type: 'release', buf: B.held.shift() }); }
+    while (A.held.length > 1) { { const a = A.held.shift(), b = B.held.shift(); A.send({ type: 'release', rid: a.rid, gen: a.gen }); B.send({ type: 'release', rid: b.rid, gen: b.gen }); } }
 }
 assert.equal(helperCount, 3, 'three helpers on 16 cores');
 assert.equal(threads, 4, 'frames made by four threads');

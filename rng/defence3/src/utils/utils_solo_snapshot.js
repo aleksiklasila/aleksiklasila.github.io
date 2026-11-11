@@ -30,13 +30,13 @@ function buildSoloGameSnapshotParts(context) {
             const runs = [];
             for (const c of grid[y]) {
                 const n = runs.length;
-                if (n && runs[n-4] === c.type && runs[n-3] === c.owner && runs[n-2] === c.areaId) runs[n-1]++;
-                else runs.push(c.type, c.owner, c.areaId, 1);
+                if (n && runs[n-4] === cellType[(c) - 1] && runs[n-3] === cellOwner[(c) - 1] && runs[n-2] === cellArea[(c) - 1]) runs[n-1]++;
+                else runs.push(cellType[(c) - 1], cellOwner[(c) - 1], cellArea[(c) - 1], 1);
             }
             yield runs;
         }
     })());
-    batch('areas', areas.map(a => ({ id: a.id, type: a.type, cells: a.cells,
+    batch('areas', areas.map(a => ({ id: a.id, type: a.type, cells: Array.from(a.cells, t => ({ x: t % GRID_W, y: Math.floor(t / GRID_W) })),
         multiplierLevel: a.multiplierLevel || 0, minGx: a.minGx, minGy: a.minGy, maxGx: a.maxGx, maxGy: a.maxGy })));
     batch('mines', (function* () {
         for (const m of goldMines) yield ['energy', m.gx, m.gy, m.gold, m.maxGold];
@@ -95,10 +95,47 @@ async function captureSoloGameSnapshotParts() {
 
 // Parse a line at a time both from files and worker transport. No file.text(),
 // giant JSON.parse or recovery-format / simulation-version dependency.
+// Rows are packed into typed columns as they are read: no record is kept, so
+// the page holds no millions of small arrays, and the worker gets the scene as
+// transferred buffers instead of a structured clone (that clone was ~500 MB of
+// the worker's JS heap after a 1M-unit load, freed by major GCs during play).
+const SCENE_UNIT_W = 11, SCENE_BUILDING_W = 11, SCENE_MINE_W = 5, SCENE_AREA_W = 3;
 function soloSceneReader() {
-    const scene = { header: null, records: [] }, counts = { terrain: 0, areas: 0, mines: 0, buildings: 0, units: 0 };
+    const scene = { header: null, cols: null }, counts = { terrain: 0, areas: 0, mines: 0, buildings: 0, units: 0 };
     let ended = false;
     const fail = () => { throw new Error('The scene snapshot is incomplete or damaged.'); };
+    const col = (T, w) => ({ T, w, a: new T(1024 * w), n: 0 });
+    const add = c => { const at = c.n * c.w; if (at + c.w > c.a.length) { const b = new c.T(c.a.length * 2); b.set(c.a); c.a = b; } c.n++; return at; };
+    const put = (c, v) => { const at = add(c); c.a[at] = v; };
+    const C = { terrain: col(Int32Array, 1), terrainEnd: col(Int32Array, 1), areaMeta: col(Int32Array, SCENE_AREA_W), areaEnd: col(Int32Array, 1),
+        areaTiles: col(Int32Array, 1), mines: col(Float64Array, SCENE_MINE_W), buildings: col(Float64Array, SCENE_BUILDING_W), units: col(Float64Array, SCENE_UNIT_W) };
+    const uTypes = [], bTypes = [], uType = new Map(), bType = new Map(), bWork = [];
+    const typeIndex = (map, list, name) => { let i = map.get(name); if (i === undefined) { i = list.length; list.push(name); map.set(name, i); } return i; };
+    const pack = (key, row) => {
+        const W = scene.header.width;
+        if (key === 'terrain') {
+            for (let i = 0; i < row.length; i++) put(C.terrain, row[i]);
+            put(C.terrainEnd, C.terrain.n);
+        } else if (key === 'areas') {
+            const o = add(C.areaMeta), M = C.areaMeta.a;
+            M[o] = row.id; M[o + 1] = row.type | 0; M[o + 2] = row.multiplierLevel | 0;
+            for (const c of row.cells) put(C.areaTiles, c.y * W + c.x);
+            put(C.areaEnd, C.areaTiles.n);
+        } else if (key === 'mines') {
+            const o = add(C.mines), M = C.mines.a;
+            M[o] = row[0] === 'energy' ? 0 : 1; M[o + 1] = row[1]; M[o + 2] = row[2]; M[o + 3] = row[3]; M[o + 4] = row[4];
+        } else if (key === 'buildings') {
+            const i = C.buildings.n, o = add(C.buildings), B = C.buildings.a;
+            B[o] = typeIndex(bType, bTypes, row[0]); B[o + 1] = row[1]; B[o + 2] = row[2]; B[o + 3] = row[3]; B[o + 4] = row[4]; B[o + 5] = row[5];
+            B[o + 6] = row[6] ? 1 : 0; B[o + 7] = row[7] != null ? row[7] : NaN; B[o + 8] = row[7] != null ? row[8] : NaN;
+            B[o + 9] = row[9] === false ? 0 : 1; B[o + 10] = row[10] === false ? 0 : 1;
+            if (row[11]) bWork.push(i, row[11]);
+        } else {
+            const o = add(C.units), U = C.units.a, ord = row[7];
+            U[o] = typeIndex(uType, uTypes, row[0]); U[o + 1] = row[1]; U[o + 2] = row[2]; U[o + 3] = row[3]; U[o + 4] = row[4]; U[o + 5] = row[5]; U[o + 6] = row[6];
+            U[o + 7] = row[8] ? 1 : 0; U[o + 8] = ord ? (ord[0] === 'attackMove' ? 1 : 0) : -1; U[o + 9] = ord ? ord[1] : 0; U[o + 10] = ord ? ord[2] : 0;
+        }
+    };
     return {
         line(line) {
             if (!line.trim()) return;
@@ -162,11 +199,19 @@ function soloSceneReader() {
                         }
                     }
                 }
+                pack(key, row);
                 counts[key]++;
             }
-            scene.records.push(r);
         },
-        finish() { if (!ended) fail(); return scene; }
+        finish() {
+            if (!ended) fail();
+            if (!scene.cols) {
+                const cols = { uTypes, bTypes, bWork };
+                for (const k of Object.keys(C)) cols[k] = C[k].a.slice(0, C[k].n * C[k].w);
+                scene.cols = cols;
+            }
+            return scene;
+        }
     };
 }
 function parseSoloGameSnapshotParts(parts) {
@@ -256,43 +301,43 @@ async function compressSoloGameSnapshot(parts) {
 function applySoloScene(scene) {
     const h = scene.header;
     if (GRID_W !== h.width || GRID_H !== h.height) throw new Error('The scene map dimensions do not match its settings.');
-    // (Each kind's rows in one array, made once: a generator here made an
-    // iterator result a row in every pass, ~40 MB at 1M units that lived into
-    // the old generation and cost a major GC in play.)
-    const rowsOf = {};
-    const rows = key => {
-        let L = rowsOf[key];
-        if (!L) { L = rowsOf[key] = []; for (const r of scene.records) { const part = r[key]; if (part) for (let i = 0; i < part.length; i++) L.push(part[i]); } }
-        return L;
-    };
+    // (The scene's typed columns, soloSceneReader: rows by index, no row objects.)
+    const S = scene.cols, U = S.units, B = S.buildings, M = S.mines;
+    const nU = U.length / SCENE_UNIT_W, nB = B.length / SCENE_BUILDING_W, nM = M.length / SCENE_MINE_W;
     const population = new Map(), structures = new Map(), popLimit = getConfiguredMaxPop(), structureLimit = getPlayerStructureLimit();
-    for (const row of rows('units')) population.set(row[1], (population.get(row[1]) || 0) + 1);
-    for (const row of rows('buildings')) structures.set(row[1], (structures.get(row[1]) || 0) + 1);
+    for (let i = 0; i < nU; i++) { const o = U[i * SCENE_UNIT_W + 1]; population.set(o, (population.get(o) || 0) + 1); }
+    for (let i = 0; i < nB; i++) { const o = B[i * SCENE_BUILDING_W + 1]; structures.set(o, (structures.get(o) || 0) + 1); }
     for (const [owner, count] of population) if (count > popLimit)
         throw new Error('Scene team ' + owner + ' has ' + count + ' units; this match permits ' + popLimit + ' per team within the WASM32 memory budget.');
     for (const [owner, count] of structures) if (count > structureLimit)
         throw new Error('Scene team ' + owner + ' has ' + count + ' buildings; this match permits ' + structureLimit + ' per team within the WASM32 memory budget.');
     let energyMines = 0, starMines = 0;
-    for (const row of rows('mines')) { if (row[0] === 'energy') energyMines++; else starMines++; }
+    for (let i = 0; i < nM; i++) { if (M[i * SCENE_MINE_W] === 0) energyMines++; else starMines++; }
     const mineLimit = memoryBudgetMines(popLimit, _structTeams(), GRID_W * GRID_H);
     if (energyMines + starMines > mineLimit)
         throw new Error('Scene has ' + (energyMines + starMines) + ' resource mines; this match permits ' + mineLimit + ' within the WASM32 memory budget.');
     GOLD_MINE_COUNT = energyMines; ASTAR_MINE_COUNT = starMines;
     structTablesReserve();
-    for (const row of rows('units')) if (!Object.hasOwn(BASE_UNIT_STATS, row[0])) throw new Error('Unknown scene unit type: ' + row[0]);
-    for (const row of rows('buildings')) if (!Object.hasOwn(BASE_CARD_TYPES, row[0])) throw new Error('Unknown scene building type: ' + row[0]);
+    for (const t of S.uTypes) if (!Object.hasOwn(BASE_UNIT_STATS, t)) throw new Error('Unknown scene unit type: ' + t);
+    for (const t of S.bTypes) if (!Object.hasOwn(BASE_CARD_TYPES, t)) throw new Error('Unknown scene building type: ' + t);
     goldMines.length = 0; astarMines.length = 0;
     initTileEntityLookup();
-    let y = 0;
-    for (const runs of rows('terrain')) {
-        let x = 0;
-        for (let i = 0; i < runs.length; i += 4) for (let n = 0; n < runs[i+3]; n++, x++) {
-            Object.assign(grid[y][x], { type: runs[i], owner: runs[i+1], areaId: runs[i+2], item: null });
-            areaIdGrid[y][x] = runs[i+2];
-        }
-        y++;
+    const terrainRuns = _mapArray(Int32Array, GRID_W * 4);
+    for (let y = 0, at = 0; y < S.terrainEnd.length; y++) {
+        const end = S.terrainEnd[y];
+        terrainRuns.set(S.terrain.subarray(at, end));
+        _mapKernel('k_map_terrain', [cellType, cellOwner, cellArea, terrainRuns], [y * GRID_W, end - at, GRID_W * GRID_H]);
+        at = end;
     }
-    areas = Array.from(rows('areas'), a => ({ ...a, active: false }));
+    if (simWasmInit()) simHeapFree(terrainRuns);
+    // (Cells as views of the scene's tile column: rebuildAreaDistanceCachesFromAreas copies them into the map's own.)
+    const AM = S.areaMeta, AE = S.areaEnd, nA = AE.length;
+    areas = new Array(nA);
+    for (let i = 0, at = 0; i < nA; i++) {
+        const o = i * SCENE_AREA_W, end = AE[i];
+        areas[i] = { id: AM[o], type: AM[o + 1], cells: S.areaTiles.subarray(at, end), active: false, multiplierLevel: AM[o + 2], minGx: 0, minGy: 0, maxGx: 0, maxGy: 0 };
+        at = end;
+    }
     _areaById = []; for (const a of areas) _areaById[a.id] = a;
     rebuildAreaDistanceCachesFromAreas();
     // (A file of eight slots, a match of fewer: the slots of the teams.)
@@ -308,28 +353,30 @@ function applySoloScene(scene) {
         }
     }
     rebuildPrecomputedStatsMapPlayer();
-    for (const [type, gx, gy, amount, max] of rows('mines')) {
-        const m = Object.assign(type === 'energy' ? new GoldMine() : new AstarMine(), { gx, gy, x: gx*TILE+16, y: gy*TILE+16 });
-        if (type === 'energy') { m.gold = amount; m.maxGold = max; goldMines.push(m); }
+    for (let i = 0; i < nM; i++) {
+        const o = i * SCENE_MINE_W, energy = M[o] === 0, gx = M[o + 1], gy = M[o + 2], amount = M[o + 3], max = M[o + 4];
+        const m = Object.assign(energy ? new GoldMine() : new AstarMine(), { gx, gy, x: gx*TILE+16, y: gy*TILE+16 });
+        if (energy) { m.gold = amount; m.maxGold = max; goldMines.push(m); }
         else { m.astar = amount; m.maxAstar = max; astarMines.push(m); }
-        setTileEntity(gx, gy, type === 'energy' ? TILE_ENTITY_GOLDMINE : TILE_ENTITY_ASTARMINE, m);
+        setTileEntity(gx, gy, energy ? TILE_ENTITY_GOLDMINE : TILE_ENTITY_ASTARMINE, m);
     }
-    for (const r of rows('buildings')) {
-        if (!placeBuilding(r[2],r[3],r[0],r[1], { silent: true, ignorePlacementRules: true, autoUpgradeEnabled: r[9], buildEnabled: r[10] }))
-            throw new Error('Could not place scene building: ' + r[0]);
-        const e = getTileEntityRef(r[2],r[3]) || grid[r[3]][r[2]].item;
-        e.stacks = e.manualStacks = e.effectiveStacks = r[4]; e.level = e.effectiveLevel = stackCountToLevel(r[4]);
-        e.underConstruction = !!r[6];
+    for (let i = 0, w = 0; i < nB; i++) {
+        const o = i * SCENE_BUILDING_W, type = S.bTypes[B[o]], owner = B[o + 1], gx = B[o + 2], gy = B[o + 3];
+        if (!placeBuilding(gx, gy, type, owner, { silent: true, ignorePlacementRules: true, autoUpgradeEnabled: B[o + 9] !== 0, buildEnabled: B[o + 10] !== 0 }))
+            throw new Error('Could not place scene building: ' + type);
+        const e = getTileEntityRef(gx, gy) || cellItemGet(grid[gy][gx]);
+        e.stacks = e.manualStacks = e.effectiveStacks = B[o + 4]; e.level = e.effectiveLevel = stackCountToLevel(B[o + 4]);
+        e.underConstruction = B[o + 6] !== 0;
         if (typeof e.updateStats === 'function') e.updateStats();
-        e.energy = r[5];
-        if (r[7] != null) { e.rallyX = r[7]*TILE; e.rallyY = r[8]*TILE; }
-        if(r[11]) {
-            const work=r[11];
+        e.energy = B[o + 5];
+        if (B[o + 7] === B[o + 7]) { e.rallyX = B[o + 7]*TILE; e.rallyY = B[o + 8]*TILE; }
+        if (w < S.bWork.length && S.bWork[w] === i) {
+            const work = S.bWork[w + 1]; w += 2;
             e.markedForSalvage=!!work.markedForSalvage;
             e.queueEnabled=work.queueEnabled!==false;
             e.autoResearchEnabled=work.autoResearchEnabled!==false;
             if(work.spawnQueue?.length) {
-                if(!Array.isArray(e.spawnQueue)) throw new Error('This scene building cannot queue units: '+r[0]);
+                if(!Array.isArray(e.spawnQueue)) throw new Error('This scene building cannot queue units: '+type);
                 e.spawnQueue=work.spawnQueue.map(q=>{
                     if(!Object.hasOwn(BASE_UNIT_STATS,q[0]) || q[1]>MAX_THING_LEVEL) throw new Error('Invalid scene production queue.');
                     return getQueuedSpawnInfo({unitType:q[0],level:q[1],energyPaid:q[2]},getSpawnerFallbackUnitType(e),getThingBaseLevel(e),e.owner);
@@ -358,9 +405,7 @@ function applySoloScene(scene) {
     // (The unit columns made for every unit at once: each growth made a new set of every column and gave the old one
     // back, ~4.3 GB allocated and 2.9 GB of it freed at 2.3M units, a heap of 3.3 GB committed and unused.)
     if (typeof simUnitStateReserve === 'function') {
-        let n = 0;
-        for (const r of scene.records) if (r.units) n += r.units.length;
-        if (n > 0) simUnitStateReserve(n, simUnitPopulationSlots());
+        if (nU > 0) simUnitStateReserve(nU, simUnitPopulationSlots());
         const capacity = getConfiguredMaxPop() * activeTeamIds.length;
         if (typeof simUnitWkReserve === 'function') simUnitWkReserve(capacity);
         if (typeof simUnitStReserve === 'function') simUnitStReserve(capacity);
@@ -370,24 +415,24 @@ function applySoloScene(scene) {
     // neighbouring slots, see sim_unit_state.js. Ids and the list stay in the file's order.)
     let slotPlan = null, planAt = 0;
     if (typeof simUnitStatePlanSlots === 'function') {
-        let n = 0;
-        for (const r of scene.records) if (r.units) n += r.units.length;
-        const xs = new Float64Array(n), ys = new Float64Array(n);
-        let i = 0;
-        for (const r of rows('units')) { xs[i] = r[2]*TILE; ys[i] = r[3]*TILE; i++; }
-        slotPlan = simUnitStatePlanSlots(xs, ys, n); simUnitStatePlanBegin();
+        const xs = new Float64Array(nU), ys = new Float64Array(nU);
+        for (let i = 0; i < nU; i++) { xs[i] = U[i * SCENE_UNIT_W + 2]*TILE; ys[i] = U[i * SCENE_UNIT_W + 3]*TILE; }
+        slotPlan = simUnitStatePlanSlots(xs, ys, nU); simUnitStatePlanBegin();
     }
     const groups = new Map();
-    for (const r of rows('units')) {
+    for (let i = 0; i < nU; i++) {
+        const o = i * SCENE_UNIT_W;
         if (slotPlan !== null) simUnitStateWantSlot(slotPlan[planAt++]);
-        const u = simSpawnUnit(r[0],r[1],r[2]*TILE,r[3]*TILE);
-        configureWorkerUnitFromType(u); u.baseLevel = r[5]; u.stackCount = r[6]; applyUnitLevelScaling(u,r[5]);
-        u.energy = r[4]; u.holdPosition = !!r[8];
+        const u = simSpawnUnit(S.uTypes[U[o]], U[o + 1], U[o + 2]*TILE, U[o + 3]*TILE);
+        configureWorkerUnitFromType(u); u.baseLevel = U[o + 5]; u.stackCount = U[o + 6]; applyUnitLevelScaling(u, U[o + 5]);
+        u.energy = U[o + 4]; u.holdPosition = U[o + 7] !== 0;
         unitAdded(u); players[u.owner].popCount++;
-        if (r[7] && !u.holdPosition) {
-            const key = u.owner + ':' + r[7].join(':'), group = groups.get(key);
+        const act = U[o + 8];
+        if (act >= 0 && !u.holdPosition) {
+            // (One group a team, action and destination tile, in first-seen order.)
+            const tx = U[o + 9], ty = U[o + 10], key = ((u.owner * 2 + act) * GRID_H + ty) * GRID_W + tx, group = groups.get(key);
             if (group) group.unitIds.push(u.id);
-            else groups.set(key, { owner: u.owner, action: r[7][0], targetX: (r[7][1]+.5)*TILE, targetY: (r[7][2]+.5)*TILE, unitIds: [u.id], distinct: true });
+            else groups.set(key, { owner: u.owner, action: act ? 'attackMove' : 'move', targetX: (tx+.5)*TILE, targetY: (ty+.5)*TILE, unitIds: [u.id], distinct: true });
         }
     }
     if (slotPlan !== null) simUnitStatePlanEnd();

@@ -31,8 +31,8 @@ function chaosSetup(o) {
     const W = GRID_W, H = GRID_H, np = Math.min(o.teams || 2, players.length);
     const zeros = () => Array(np).fill(0);
     const st = { buildings: zeros(), collectorBuildings: zeros(), queued: 0, research: 0, rallies: 0, towerSites: zeros(), salvage: 0, army: zeros(), traps: 0, armyTowers: 0, healersPlaced: 0, errors: [] };
-    const free = (gx, gy) => { if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2) return false; const c = grid[gy][gx]; return c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
-    const entityAt = (gx, gy) => getTileEntityRef(gx, gy) || (grid[gy][gx] && grid[gy][gx].item) || null;
+    const free = (gx, gy) => { if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2) return false; const c = grid[gy][gx]; return cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
+    const entityAt = (gx, gy) => getTileEntityRef(gx, gy) || (grid[gy][gx] && cellItemGet(grid[gy][gx])) || null;
     // As main.js completeStarterBuilding: built, at a level, full.
     const complete = (item, key, owner, lvl) => {
         const stacks = getRequiredStacksForLevel(lvl);
@@ -124,7 +124,7 @@ function chaosSetup(o) {
             // Area upgrades: small areas of the band filled with houses (an
             // upgrader needs every cell built), then 1-3 levels up.
             for (let a = 0, areasDone = 0; a < areas.length && areasDone < 80; a++) {
-                const cells = gridCellsByArea[a];
+                const cells = Array.from(gridCellsByArea[a] || [], t => ({ x: t % GRID_W, y: Math.floor(t / GRID_W) }));
                 if (!Array.isArray(cells) || cells.length < 2 || cells.length > 12 || !cells.every(c => c.y >= y0 && c.y < y1)) continue;
                 if (!cells.every(c => entityAt(c.x, c.y) || free(c.x, c.y))) continue;
                 for (const c of cells) if (!entityAt(c.x, c.y)) place(c.x, c.y, 'house', p);
@@ -291,7 +291,7 @@ function chaosSetup(o) {
         while (y + np * 10 - 4 < y1 && teams.some((a,p)=>next[p]<a.length)) {
             for (let p = 0; p < np; p++) {
                 const ys = y + p * 10;
-                for (let r = 0; r < 4; r++) for (let gx = 6; gx < W - 6; gx++) { const u = teams[p][next[p]]; if (!u) break; if (grid[ys + r][gx].type === TYPE_WALL) continue; next[p]++; put(u, gx, ys + r); }
+                for (let r = 0; r < 4; r++) for (let gx = 6; gx < W - 6; gx++) { const u = teams[p][next[p]]; if (!u) break; if (cellType[(grid[ys + r][gx]) - 1] === TYPE_WALL) continue; next[p]++; put(u, gx, ys + r); }
             }
             // Between the blocks: towers of both teams, then traps.
             for (let gx = 6 + (pair & 1); gx < W - 6; gx += 4) { if (place(gx, y + 5, towerKeys[(gx >> 2) % towerKeys.length], gx & 4 ? 1 : 0)) st.armyTowers++; }
@@ -426,7 +426,7 @@ function chaosBurst(o, k) {
     const towerKeys = BUILD_CATEGORIES.towers.filter(x => x !== 'watch_tower');
     for (let i = 0; i < 20 && mineB.length; i++) {
         const b = mineB[Math.floor(rnd() * mineB.length)], gx = b.gx + Math.floor(rnd() * 7) - 3, gy = b.gy + Math.floor(rnd() * 7) - 3;
-        if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2 || grid[gy][gx].type !== TYPE_FLOOR || grid[gy][gx].item || getTileEntityRef(gx, gy)) continue;
+        if (gx < 2 || gy < 2 || gx >= W - 2 || gy >= H - 2 || cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR || cellItemGet(grid[gy][gx]) || getTileEntityRef(gx, gy)) continue;
         queueAction({ action: 'place', gx, gy, itemType: towerKeys[(k + i) % towerKeys.length], count: 1 }); out.place++;
     }
     // Mixed and mega: the army ordered by turns (attack-move across, then

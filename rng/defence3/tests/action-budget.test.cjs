@@ -13,7 +13,7 @@ const a = world.spawn('budgetA', { simWorker: false }), b = world.spawn('budgetB
 for (const inst of [a, b]) inst.eval('startSoloGame();');
 const r = JSON.parse(a.eval(`JSON.stringify((() => {
     const ids = [];
-    for (let i = 0; i < 3000; i++) { const gx = 20 + (i % 100), gy = 30 + Math.floor(i / 100); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
+    for (let i = 0; i < 3000; i++) { const gx = 20 + (i % 100), gy = 30 + Math.floor(i / 100); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
     for (let t = 0; t < 3; t++) gameTick();
     // The burst: 300 small actions (stops, holds of a unit each), then two
     // move orders of every unit (the second to another corner), then more.
@@ -115,8 +115,9 @@ assert.ok(packedRally.lists[0].length >= 5100, 'every valid rally tile: ' + pack
 assert.deepEqual(packedRally.lists[1], packedRally.lists[0], 'immediate rally packing preserves validation and order');
 assert.equal(packedRally.unchanged, true, 'rally packing leaves packet coordinates intact');
 const largeSelection = JSON.parse(a.eval(`JSON.stringify((() => {
-    const saved = localInputBuffer;
-    localInputBuffer = {};
+    // (This synchronous test never presents the frames that end loading, which blocks input until then: the match as running.)
+    const saved = localInputBuffer, blocked = _matchLoadInputBlocked;
+    localInputBuffer = {}; _matchLoadInputBlocked = false;
     try {
         const ids = Array.from({ length: 200000 }, (_, i) => i + 1);
         queueAction({ action: 'move', unitIds: ids, targetX: 10, targetY: 20 });
@@ -126,7 +127,7 @@ const largeSelection = JSON.parse(a.eval(`JSON.stringify((() => {
             if (id !== ++seen) ordered = false;
         });
         return { pieces: pieces.length, seen, ordered };
-    } finally { localInputBuffer = saved; }
+    } finally { localInputBuffer = saved; _matchLoadInputBlocked = blocked; }
 })())`));
 // (One piece: no cap on the ids an action carries.)
 assert.deepEqual(largeSelection, { pieces: 1, seen: 200000, ordered: true },

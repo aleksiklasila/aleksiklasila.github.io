@@ -16,7 +16,7 @@ const setup = JSON.parse(i.eval('JSON.stringify(' + chaos.setup({ mode: 'mega', 
 assert.deepEqual(setup.errors, []);
 i.eval('__scratch.ref = (function () {' + fs.readFileSync(path.join(__dirname, '_meta_structs_reference.js'), 'utf8') + ';return _simWriteStructure; })();');
 // (Lasers in rows and columns: their links.)
-i.eval(`(() => { const free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
+i.eval(`(() => { const free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
     const built = (e, lvl) => { e.underConstruction = false; structureWallSync(e); e.buildProgress = 1; e.stacks = e.effectiveStacks = getRequiredStacksForLevel(lvl); e.level = e.effectiveLevel = e.potentialEffectiveLevel = lvl; e.updateStats(); e.energy = e.maxEnergy; };
     for (let k = 0; k < 160; k++) { const line = k % 8, along = 10 + Math.floor(k / 8) * 4, gx = line < 4 ? along : 20 + line * 9, gy = line < 4 ? 20 + line * 9 : along;
         if (!free(gx, gy) || !placeBuilding(gx, gy, 'laser', k % 3 === 0 ? 1 : 0, { ignorePlacementRules: true, silent: true })) continue;

@@ -2573,6 +2573,12 @@
                 uniform highp sampler2D uAreaColors;
                 uniform bool uHasAreas;
                 uniform vec2 uAreaSize;
+                // The ground's walls a tile (large maps: renderer.js
+                // getGroundTilesForGpu): floor to wall by the filtered mask.
+                uniform sampler2D uGround;
+                uniform bool uHasGround;
+                uniform vec3 uFloorColor;
+                uniform vec3 uWallColor;
                 int areaAt(ivec2 t) {
                     if (t.x < 0 || t.y < 0 || t.x >= int(uAreaSize.x) || t.y >= int(uAreaSize.y)) return -1;
                     vec4 v = texelFetch(uAreaTiles, t, 0) * 255.0;
@@ -2594,7 +2600,7 @@
                     return result;
                 }
                 void main() {
-                    outColor = texture(uTexture, vUv);
+                    outColor = uHasGround ? vec4(mix(uFloorColor, uWallColor, texture(uGround, vec2(vUv.x, 1.0 - vUv.y)).r), 1.0) : texture(uTexture, vUv);
                     if (uHasAreas) {
                         vec2 t = vec2(vUv.x, 1.0 - vUv.y) * uAreaSize;
                         ivec2 c = ivec2(floor(t));
@@ -2688,7 +2694,11 @@
                 areaTiles: gl.getUniformLocation(this.planeProgram, 'uAreaTiles'),
                 areaColors: gl.getUniformLocation(this.planeProgram, 'uAreaColors'),
                 hasAreas: gl.getUniformLocation(this.planeProgram, 'uHasAreas'),
-                areaSize: gl.getUniformLocation(this.planeProgram, 'uAreaSize')
+                areaSize: gl.getUniformLocation(this.planeProgram, 'uAreaSize'),
+                ground: gl.getUniformLocation(this.planeProgram, 'uGround'),
+                hasGround: gl.getUniformLocation(this.planeProgram, 'uHasGround'),
+                floorColor: gl.getUniformLocation(this.planeProgram, 'uFloorColor'),
+                wallColor: gl.getUniformLocation(this.planeProgram, 'uWallColor')
             };
             this.presentUniforms = {
                 packDepth: gl.getUniformLocation(this.presentProgram, 'uPackDepth'),
@@ -5127,6 +5137,29 @@
                 gl.uniform1i(this.planeUniforms.areaColors, 4);
             }
             gl.uniform1i(this.planeUniforms.hasAreas, AG ? 1 : 0);
+            // The ground's walls (texture 5): the rows changed since the last upload, then mipmaps.
+            const GT = snapshot.groundTiles || null;
+            gl.activeTexture(gl.TEXTURE5);
+            if (GT) {
+                if (!this.groundTexture) this.groundTexture = createTexture(gl);
+                gl.bindTexture(gl.TEXTURE_2D, this.groundTexture);
+                if (this.groundTilesW !== GT.w || this.groundTilesH !== GT.h) {
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, GT.w, GT.h, 0, gl.RED, gl.UNSIGNED_BYTE, GT.mask);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.generateMipmap(gl.TEXTURE_2D);
+                    this.groundTilesW = GT.w; this.groundTilesH = GT.h; GT.upY0 = GT.upY1 = -1;
+                } else if (GT.upY0 >= 0) {
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, GT.upY0, GT.w, GT.upY1 - GT.upY0 + 1, gl.RED, gl.UNSIGNED_BYTE, GT.mask, GT.upY0 * GT.w);
+                    gl.generateMipmap(gl.TEXTURE_2D);
+                    GT.upY0 = GT.upY1 = -1;
+                }
+                gl.uniform3f(this.planeUniforms.floorColor, GT.floor[0], GT.floor[1], GT.floor[2]);
+                gl.uniform3f(this.planeUniforms.wallColor, GT.wall[0], GT.wall[1], GT.wall[2]);
+            } else gl.bindTexture(gl.TEXTURE_2D, this.fogTexture);
+            gl.uniform1i(this.planeUniforms.ground, 5);
+            gl.uniform1i(this.planeUniforms.hasGround, GT ? 1 : 0);
             gl.activeTexture(gl.TEXTURE0);
             gl.uniformMatrix4fv(this.planeUniforms.viewProjection, false, this.tmpViewProjection);
             composeModelMatrix(

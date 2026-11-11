@@ -25,8 +25,8 @@ const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a.buf
             inst.eval(`(() => { let seed = ${round + 1} * 7919;
                 const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
                 for (let i = 0; i < 60; i++) { const x = 2 + Math.floor(rnd() * (GRID_W - 4)), y = 2 + Math.floor(rnd() * (GRID_H - 4)), c = grid[y][x];
-                    if (c.item || getTileEntityRef(x, y)) continue;
-                    c.type = c.type === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); } })()`);
+                    if (cellItemGet(c) || getTileEntityRef(x, y)) continue;
+                    cellType[(c) - 1] = cellType[(c) - 1] === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); } })()`);
             const v0 = inst.eval('_navVersion');
             for (let t = 0; t < NAV_TICKS() && inst.eval('_navVersion') === v0; t++) inst.eval('gameTick()');
             assert.ok(inst.eval('_navVersion') > v0, `round ${round}: a new build installed`);

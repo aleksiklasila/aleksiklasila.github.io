@@ -13,25 +13,22 @@ function reader(n) {
     ctx.self = ctx; ctx.presentPacing = false;
     ctx.importScripts = (...files) => { for (const f of files) vm.runInContext(fs.readFileSync(path.join(dir, f.split('?')[0]), 'utf8'), ctx); };
     vm.runInContext(code, ctx);
-    const C = {};
-    for (const k of ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', 'r', 'commandState', 'attackFlash', 'stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh', 'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE']) C[k] = new Float32Array(n);
-    for (const k of ['stBu', 'stPo', 'stFr', 'stWe', 'stSa', 'stWa', 'stTh']) C[k] = new Float32Array(n + 1);
-    C.stIx = new Int32Array(n);
-    const M = ctx.simMetaViews(new SharedArrayBuffer(n * 48), n);
+    // (The simulation's heap: the reader reads the columns there in place; positions in pixels here, eighths there.)
+    const H = require('./present-sim.cjs')(ctx, n, { pixels: true }), C = H.C, M = H.M;
     for (let s = 0; s < n; s++) { C.id[s] = M.id[s] = s + 1; C.live[s] = 1; C.energy[s] = 20; C.r[s] = 8; M.type[s] = 1; }
     const send = data => { ctx.onmessage({ data }); while (jobs.length) jobs.shift()(); };
-    send({ type: 'bind', epoch: 1, generation: 1, columns: C, meta: { buf: M.buf, cap: n } });
+    send(H.bind({ epoch: 1, generation: 1 }));
     send({ type: 'ready' });
     let held;
     return { C, M, tick(tick) {
-        if (held) send({ type: 'release', buf: held });
+        if (held) send({ type: 'release', rid: held.rid, gen: held.gen });
         messages.length = 0;
         send({ type: 'tick', epoch: 1, tick, time: tick, rate: 20, player: 0, areaUnit: 2, n });
         assert.equal(messages.some(m => m.type === 'error'), false, JSON.stringify(messages));
         const msg = messages.find(m => m.type === 'presentation');
         assert.ok(msg, 'reader published a frame');
-        held = msg.world.units.buf;
-        const F = ctx.simFrameViews(held, n);
+        held = msg.world.units;
+        const F = ctx.simFrameViews(held.buf, n, held.base);
         return ['x', 'y', 'px', 'py'].map(k => Array.from(F[k]));
     } };
 }

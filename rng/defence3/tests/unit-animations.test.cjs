@@ -37,7 +37,7 @@ for (const kind of ["'rider:dual_blades'", "'pegasus:bow'", "'pegasus:lance'", "
 }
 assert.match(renderer3d, /if \(\/_resistant\$\/\.test\(type\)\) return `mage:/, 'every elemental caster is a mage');
 assert.match(renderer, /collector: '#f0a52b', healer_unit: '#d8403a', researcher_unit: '#3f74d8'/, 'workers have their own 3D body colors');
-assert.match(renderer, /cell\.item\.type === 'house' \? 0\.82 : isFarmItem \? 0\.72 : 0\.14/);
+assert.match(renderer, /renderCellItem\(cell\)\.type === 'house' \? 0\.82 : isFarmItem \? 0\.72 : 0\.14/);
 assert.doesNotMatch(renderer3d, /serpent:car|snake_segment/, 'snakes render their head only');
 assert.match(renderer3d, /return 'serpent:engine'/);
 assert.match(renderer3d, /return 'item:house'/);

@@ -15,11 +15,11 @@ const inst = world.spawn('sitedrive', { simWorker: false });
 inst.eval('startSoloGame();');
 const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     gameTick();
-    const free = (gx, gy) => { const c = grid[gy][gx]; return c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy); };
+    const free = (gx, gy) => { const c = grid[gy][gx]; return cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
     const place = (gx, gy, type, owner, built = true) => {
         if (!free(gx, gy)) return null;
         placeBuilding(gx, gy, type, owner, { ignorePlacementRules: true, silent: true });
-        const b = getTileEntityRef(gx, gy) || grid[gy][gx].item;
+        const b = getTileEntityRef(gx, gy) || cellItemGet(grid[gy][gx]);
         if (b && built) markConstructionComplete(b);
         if (b && built) b.energy = b.maxEnergy;
         return b;
@@ -68,12 +68,12 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     // Seal the ends: navigation may legitimately prefer a broad route around
     // a short wall over its narrow gap. Here the site must be the only route.
     for (let gy = 0; gy < GRID_H; gy++) if (gy < top || gy > top + 20) {
-        grid[gy][col].type = TYPE_WALL; simMoveTileTypeChanged(col, gy);
+        cellType[(grid[gy][col]) - 1] = TYPE_WALL; simMoveTileTypeChanged(col, gy);
     }
     for (let gy = top; gy <= top + 20; gy++) if (gy !== gap) place(col, gy, towerKey, 0);
     const site = place(col, gap, towerKey, 0, false);
     out.bSite = !!site;
-    out.siteWall = [grid[gap][col].type === TYPE_WALL, simMoveWallGrid()[gap * GRID_W + col]];
+    out.siteWall = [cellType[(grid[gap][col]) - 1] === TYPE_WALL, simMoveWallGrid()[gap * GRID_W + col]];
     const walkers = [];
     for (let i = 0; i < 4; i++) walkers.push(mk(col - 8, gap - 2 + i, 'norm'));
     processActions([{ action: 'move', unitIds: walkers.map(u => u.id), targetX: (col + 8) * TILE + 16, targetY: gap * TILE + 16 }], 0);
@@ -88,7 +88,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     for (let t = 0; t < 5; t++) gameTick();
     markConstructionComplete(site);
     for (let t = 0; t < 5; t++) gameTick();
-    out.bBuiltWall = [grid[gap][col].type === TYPE_WALL, simMoveWallGrid()[gap * GRID_W + col]];
+    out.bBuiltWall = [cellType[(grid[gap][col]) - 1] === TYPE_WALL, simMoveWallGrid()[gap * GRID_W + col]];
     out.bStanders = standers.map(u => [Math.floor(u.x / TILE) - col, Math.floor(u.y / TILE) - gap]);
     return out;
 })())`));

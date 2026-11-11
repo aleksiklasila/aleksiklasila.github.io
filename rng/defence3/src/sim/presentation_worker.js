@@ -1,589 +1,296 @@
 "use strict";
-importScripts('sim_frame.js?v=20261025-st1','sim_frame_world.js?v=20261025-st1');
+importScripts('sim_frame.js?v=20261025-st1','sim_frame_world.js?v=20261025-st1','pres_wasm_bin.js?v=20261111-pm');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
-let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, oldCells=null;
+let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, cellBaseline=null;
 let projectiles=null, projectileRevision=-1, sentProjectileRevision=-1;
-let last=null, lastOrder=null, membership=0, sequence=0;
+let lastOrder=null, lastOrderN=-1, membership=0, sequence=0;
 const buffers=new Map();
 // out: the page's channel (frames out, buffers back). snaps: the
 // simulation's per-tick position snapshots (sim_presentation.js
-// simPresentTickEnd), the newest at snapCtl[0]. mot: this worker's copy of
-// the newest (and the live velocities: facing only).
+// simPresentTickEnd, in its heap), the newest at snapCtl[0].
 let out=null, snapCtl=null, snaps=null, torn=0;
 // The simulation's metadata revision (sim_presentation.js simPresentationBind)
 // and the buffer being filled (its entry: the revision its metadata holds).
 let metaRev=null, filling=null;
-const mot={x:null,y:null,px:null,py:null,vx:null,vy:null};
-// The simulation publishes a snapshot only while snapCtl[1] is 1 (this
-// worker asks for the next one when it took the newest, or found it older
-// than the tick it draws: then it waits for the next tick, -3; a newer one
-// is drawn, as before).
-// (split: the copy left to the frame's ranges, each its own slots (a pass
-// of every slot on this thread was ~110 ms a frame at 8M units); motSrc
-// what they copy from, the snapshot's head checked after them.)
-let motSrc=null, motHead=null, motTick=0;
-function copyMotion(C,n,want,split) {
-    const i=snapCtl ? Atomics.load(snapCtl,0) : -1, q=i>=0 && snaps ? snaps[i] : null;
-    const src=q ? [['x',q.x],['y',q.y],['px',q.px],['py',q.py],['vx',C.vx],['vy',C.vy]] : [['x',C.x],['y',C.y],['px',C.prevX],['py',C.prevY],['vx',C.vx],['vy',C.vy]];
-    const tick=q ? Atomics.load(q.head,0) : 0;
-    if (q && tick<0) return -2;
-    if (snapCtl) Atomics.store(snapCtl,1,1);
-    if (q && tick<want) return -3;
-    for (const [k,a] of src) if (!mot[k] || mot[k].length<a.length) mot[k]=sharedArray(Float32Array,a.length);
-    motSrc=split ? src : null; motHead=q ? q.head : null; motTick=tick;
-    if (!split) {
-        copyMotionRange(src,0,n);
-        // (Rewritten while copied: dropped.)
-        if (q && Atomics.load(q.head,0)!==tick) return -2;
+
+// ---- this worker's wasm (wasm/src/pres.rs, pres_fill.rs; wasm/build.cjs --pres) ----
+// Two memories. Memory 0 is this worker's own: the unit frames (regions of
+// it), the per-slot state (last ids, drawn positions, facings, ghosts, when
+// each slot was filled, the change marks), the fog's grids, the kernels'
+// scratch and tables of addresses. Memory 1 is the simulation's heap (sent
+// with 'bind'), read in place: its unit columns, the presentation metadata,
+// the position snapshots, the sight and cell grids. Nothing is copied from
+// it and no slot is touched in JS: each frame is one kernel call a range
+// (fill, ghosts, change marks), then the id order and the camera's buckets.
+// A frame goes out as {buf: the memory's buffer, base, rid, gen} and comes
+// back by its region id (release). Regions are kept and reused (first fit);
+// the memory never shrinks.
+const pm={mod:null,mem:null,sim:null,x:null,args:0,top:0,free:[],I:null,P:null,
+    cap:-1,scratch:0,prevX:0,prevY:0,out:0,prevReady:false,regions:{},
+    st:null,S:0,Sv:null,M:0,hasPvAt:false,hasCm:false,hasPvOD:false,main:null,cells:null};
+function pmDecode(b64) {
+    const T=new Uint8Array(128), A='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    for (let i=0;i<64;i++) T[A.charCodeAt(i)]=i;
+    let n=b64.length;
+    while (n>0 && b64.charCodeAt(n-1)===61) n--;
+    const o8=new Uint8Array((n*3)>>2);
+    let o=0, acc=0, bits=0;
+    for (let i=0;i<n;i++) {acc=(acc<<6)|T[b64.charCodeAt(i)];bits+=6;if (bits>=8) {bits-=8;o8[o++]=(acc>>bits)&255;acc&=(1<<bits)-1;}}
+    return o8;
+}
+// (pres_fill.rs F_* / M_*: the layouts its tables follow.)
+const PM_FRAME_LAYOUT='x,y,px,py,vx,vy,energy,maxEnergy,tx,ty,facing,amount,phase,prate,light,sig,r,cargo|id,flags,orderDest,orderTick|owner,watchedBy,level,blevel,type,wtype,wstate,style|mode,status,flash,cmd,vision';
+const PM_META_LAYOUT='id,flags,orderDest,orderTick|maxEnergy,cargo,tx,ty|type,wtype,wstate,style,watchedBy|vision';
+// The instance over this worker's memory and the simulation's (again for
+// another simulation memory: the helpers then start anew).
+function pmInit(simMemory) {
+    if (!simMemory || typeof simMemory.grow!=='function') throw new Error('presentation: the simulation\'s wasm memory is needed (bind.simMemory)');
+    if (pm.x && pm.sim===simMemory) return;
+    if ([SIM_FRAME_F32,SIM_FRAME_I32,SIM_FRAME_I16,SIM_FRAME_U8].map(a=>a.join(',')).join('|')!==PM_FRAME_LAYOUT) throw new Error('presentation: the frame layout is not pres_fill.rs F_*');
+    if ([SIM_META_I32,SIM_META_F32,SIM_META_I16,SIM_META_U8].map(a=>a.join(',')).join('|')!==PM_META_LAYOUT) throw new Error('presentation: the metadata layout is not pres_fill.rs M_*');
+    if (!pm.mod) pm.mod=new WebAssembly.Module(pmDecode(PRES_WASM_BIN));
+    if (!pm.mem) pm.mem=new WebAssembly.Memory({initial:256,maximum:65536,shared:true});
+    pm.x=new WebAssembly.Instance(pm.mod,{env:{memory:pm.mem,simMemory}}).exports;pm.sim=simMemory;
+    if (!pm.args) {
+        pm.args=Math.ceil(Number(pm.x.__heap_base.value)/64)*64;pm.top=pm.args+8192;
+        pm.I=new Int32Array(pm.mem.buffer,pm.args,1024);pm.P=new Float64Array(pm.mem.buffer,pm.args+4096,512);
+        pm.main={args:pm.args,I:pm.I,P:pm.P,AL:0,CL:0,BK:0,outR:null,outv:null,len:-1};
+        pmThreadOut(pm.main);
     }
-    return q ? Math.min(n,q.head[1]) : n;
+    restartHelpers();
 }
-// Slots s0..s1 of the motion copy from src ([name, array]...).
-function copyMotionRange(src,s0,s1) {
-    for (const [k,a] of src) {
-        const D=mot[k], e=Math.min(s1,a.length);
-        // (Positions are Int32 eighths of a pixel: scaled here.)
-        if (a instanceof Int32Array) {for (let s=s0;s<e;s++) D[s]=a[s]*.125;}
-        else if (s0<e) D.set(a.subarray(s0,e),s0);
-    }
+// A region of at least bytes (64-aligned): a free one that fits, else new at the top.
+function pmAlloc(bytes) {
+    bytes=Math.ceil(Math.max(1,bytes)/64)*64;
+    for (let i=0;i<pm.free.length;i++) if (pm.free[i].size>=bytes) {const r=pm.free[i];pm.free.splice(i,1);return r;}
+    const at=pm.top;pm.top+=bytes;
+    const have=pm.mem.buffer.byteLength;
+    if (pm.top>have) pm.mem.grow(Math.ceil((pm.top-have)/65536));
+    return {base:at,size:bytes};
 }
-// Where a fire target is (facing): its own copy, or with the copy split
-// over the ranges the snapshot itself (the target's range may not have
-// copied it yet).
-const motTarget={x:null,y:null,k:1};
-function motTargetFor(src) {
-    if (!src) {motTarget.x=mot.x;motTarget.y=mot.y;motTarget.k=1;return;}
-    const X=src[0][1], Y=src[1][1];
-    motTarget.x=X;motTarget.y=Y;motTarget.k=X instanceof Int32Array ? .125 : 1;
+function pmFree(r) {if (r && r.size>0) pm.free.push(r);}
+// A named region of at least bytes (kept while it is big enough).
+function pmRegion(name,bytes) {
+    let r=pm.regions[name];
+    if (r && r.size>=bytes) return r;
+    if (r) pmFree(r);
+    return pm.regions[name]=pmAlloc(bytes);
 }
+// A thread's own words for its kernels' results.
+function pmThreadOut(th) {th.outR=pmAlloc(64);th.outv=new Int32Array(pm.mem.buffer,th.outR.base,4);}
+// A thread's fill lists for ranges of up to len slots.
+function pmThreadScratch(th,len) {
+    if (th.len>=len) return;
+    for (const k of ['ALR','CLR','BKR']) if (th[k]) pmFree(th[k]);
+    th.ALR=pmAlloc(4*len);th.CLR=pmAlloc(4*len);th.BKR=pmAlloc(Math.ceil(len/DIRTY_BLOCK)+2);
+    th.AL=th.ALR.base;th.CL=th.CLR.base;th.BK=th.BKR.base;th.len=len;
+}
+// The order's and buckets' state for frames of cap slots (pres.rs).
+function pmState(cap) {
+    if (pm.cap===cap) return;
+    for (const k of ['scratch','prevX','prevY','out']) if (pm[k]) pmFree(pm[k+'R']);
+    const take=(k,bytes) => {const r=pmAlloc(bytes);pm[k+'R']=r;pm[k]=r.base;};
+    take('scratch',12*cap);take('prevX',4*cap);take('prevY',4*cap);take('out',64);
+    pm.cap=cap;pm.prevReady=false;
+}
+// The per-slot state for cap slots (pres_fill.rs T_*): its table, views of
+// each column and of the stamps (the change marks). True when made anew.
+const PM_STATE=[['last',Int32Array,-1],['vx',Float32Array,0],['vy',Float32Array,0],['vid',Int32Array,-1],['fa',Float32Array,0],['fid',Int32Array,-1],
+    ['fvx',Float32Array,0],['fvy',Float32Array,0],['full',Int32Array,0],['ease',Uint8Array,0],['gx',Float32Array,0],['gy',Float32Array,0],['gid',Int32Array,-1]];
+function pmStateFor(cap) {
+    const old=pm.st;
+    if (old && old.cap===cap) return false;
+    const st={cap,regions:[],T:0,views:{},stamps:null}, nb=Math.ceil(cap/DIRTY_BLOCK);
+    const tab=pmAlloc(64);st.regions.push(tab);st.T=tab.base;
+    const T=new Int32Array(pm.mem.buffer,tab.base,16);
+    PM_STATE.forEach(([k,A,fill],i) => {
+        const r=pmAlloc(cap*A.BYTES_PER_ELEMENT);st.regions.push(r);T[i]=r.base;
+        const v=st.views[k]=new A(pm.mem.buffer,r.base,cap);
+        // (The drawn places and facings carried over from a smaller state.)
+        const keep=old ? Math.min(cap,old.cap) : 0;
+        if (keep) v.set(old.views[k].subarray(0,keep));
+        v.fill(fill,keep);
+    });
+    const sr=pmAlloc(DIRTY_COLS.length*nb*4);st.regions.push(sr);T[13]=sr.base;
+    st.stamps=new Int32Array(pm.mem.buffer,sr.base,DIRTY_COLS.length*nb);
+    st.views.last.fill(-1);
+    if (old) for (const r of old.regions) pmFree(r);
+    pm.st=st;
+    dirty.cap=-1;
+    return true;
+}
+// The simulation's columns and metadata (pres_fill.rs S_*, M_*): their
+// addresses in its memory, of the types the kernels read them as.
+const PM_SOURCE=[['id','Int32Array'],['live','Uint8Array'],['dead','Uint8Array'],['pvAt','Int32Array',1],['vx','Float32Array'],['vy','Float32Array'],
+    ['attackFlash','Uint8Array'],['stIx','Int32Array'],['workerTransferCooldown','Uint16Array'],['cmMode','Uint8Array',1],['energy','Float32Array'],
+    ['owner','Int8Array'],['commandState','Uint8Array'],['pvOD','Int32Array',1],['r','Float32Array'],['effectiveLevel','Int8Array'],['unitLevel','Int8Array'],
+    ['cmT','Int32Array',1],['stBu','Uint16Array'],['stPo','Uint16Array'],['stFr','Uint16Array'],['stWe','Uint16Array'],['stSa','Uint16Array'],
+    ['stWa','Uint16Array'],['stTh','Uint16Array']];
+function pmBindSource(C,M) {
+    const tab=pmRegion('S',29*4);pm.S=tab.base;pm.Sv=new Int32Array(pm.mem.buffer,tab.base,29);
+    PM_SOURCE.forEach(([k,type,optional],i) => {
+        const a=C[k];
+        if (!a) {if (!optional) throw new Error('presentation: the column '+k+' is missing');pm.Sv[i]=0;return;}
+        if (a.constructor.name!==type) throw new Error('presentation: the column '+k+' is '+a.constructor.name+', not '+type);
+        pm.Sv[i]=a.byteOffset;
+    });
+    pm.hasPvAt=!!C.pvAt;pm.hasCm=!!(C.cmMode && C.cmT);pm.hasPvOD=!!C.pvOD;
+    for (const k of ['x','y','prevX','prevY']) if (!C[k] || C[k].constructor.name!=='Int32Array') throw new Error('presentation: the column '+k+' is not Int32 eighths');
+    const mt=pmRegion('M',14*4);pm.M=mt.base;
+    const Mv=new Int32Array(pm.mem.buffer,mt.base,14), cap=M.cap;
+    let o=M.off||0, i=0;
+    for (let k=0;k<SIM_META_I32.length;k++) {Mv[i++]=o;o+=4*cap;}
+    for (let k=0;k<SIM_META_F32.length;k++) {Mv[i++]=o;o+=4*cap;}
+    for (let k=0;k<SIM_META_I16.length;k++) {Mv[i++]=o;o+=2*cap;}
+    for (let k=0;k<SIM_META_U8.length;k++) {Mv[i++]=o;o+=cap;}
+}
+// A unit frame back from the page, by its region id.
+function releaseRegion(rid,gen) {if (gen!==generation) return;const e=buffers.get(rid);if (e && e.kind==='units') e.busy=false;}
 function release(buf) {const t=new DataView(buf,buf.byteLength-12);if(t.getInt32(0,true)!==generation)return;const e=buffers.get(t.getInt32(4,true));if(e)e.busy=false;}
-function acquire(bytes, kind='units') {
-    for (const entry of buffers.values()) if (entry.kind===kind && !entry.busy && entry.buf.byteLength >= bytes+12) {entry.busy=true;filling=entry;return entry.buf;}
+// A unit frame's region entry ({base, rid, F: its views (F.tab: its
+// columns' table)}) for cap slots, or null.
+function acquireUnits(bytes,cap) {
+    for (const [id,e] of buffers) if (e.kind==='units' && !e.busy && e.size>=bytes && e.cap===cap) {e.busy=true;filling=e;e.rid=id;return e;}
     // Three page-owned snapshots maximum. No growing queue when rendering stops.
-    // (Two of a frame past 512 MB, millions of units: the page holds one, the
-    // next is filled; a third was a gigabyte at 8M units.)
-    // (A frame of 192 MB or more, ~1.3M units: two, 345 MB a frame at 2.3M units were a gigabyte with a third.)
+    // (Two of a frame of 192 MB or more, ~1.3M units: three were a gigabyte at 2.3M.)
     const most = bytes > (192 << 20) ? 2 : 3;
-    if ([...buffers.values()].filter(e=>e.kind===kind && e.busy).length >= most) return null;
+    let busy=0;
+    for (const e of buffers.values()) if (e.kind==='units' && e.busy) busy++;
+    if (busy >= most) return null;
+    for (const [id,e] of buffers) if (e.kind==='units' && !e.busy) {pmFree(e.r);pmFree(e.tr);buffers.delete(id);}
+    const r=pmAlloc(bytes), tr=pmAlloc(4*36), id=++sequence;
+    const F=simFrameViews(pm.mem.buffer,cap,r.base), T=new Int32Array(pm.mem.buffer,tr.base,36);
+    [...SIM_FRAME_F32,...SIM_FRAME_I32,'order',...SIM_FRAME_I16,...SIM_FRAME_U8].forEach((k,i) => {T[i]=F[k].byteOffset;});
+    F.tab=tr.base;
+    filling={busy:true,kind:'units',r,tr,base:r.base,size:r.size,cap,F,rid:id,metaRev:-1,metaN:0,seq:0};buffers.set(id,filling);
+    return filling;
+}
+function acquire(bytes, kind) {
+    for (const entry of buffers.values()) if (entry.kind===kind && !entry.busy && entry.buf.byteLength >= bytes+12) {entry.busy=true;return entry.buf;}
+    let busy=0;
+    for (const e of buffers.values()) if (e.kind===kind && e.busy) busy++;
+    if (busy >= 3) return null;
     for (const [id,e] of buffers) if (e.kind===kind && !e.busy) buffers.delete(id);
     const buf=new SharedArrayBuffer(bytes+12), id=++sequence;
     const trailer=new DataView(buf,buf.byteLength-12);trailer.setInt32(0,generation,true);trailer.setInt32(4,id,true);trailer.setInt32(8,PRESENT_MAGIC,true);
-    filling={buf,busy:true,kind,metaRev:-1,metaN:0};buffers.set(id,filling);return buf;
+    buffers.set(id,{buf,busy:true,kind});return buf;
 }
 function schedule() {
     if (scheduled || !latest || !source || !ready) return;
     scheduled=true;setTimeout(draw,0);
 }
-// Per-slot state of this worker (last ids, drawn positions, facings,
-// ghosts, the motion copy) is on shared memory: with helpers each thread
-// writes the slots of its range (presentHelpers). stateVersion: one was
-// made anew (the helpers get it again).
 const SHARED=typeof SharedArrayBuffer==='function';
-let stateVersion=0;
-function sharedArray(T,n,fill) {
-    const a=new T(SHARED ? new SharedArrayBuffer(n*T.BYTES_PER_ELEMENT) : n);
-    if (fill!==undefined) a.fill(fill);
-    stateVersion++;
-    return a;
+
+// ---- motion ----
+// The newest position snapshot (in the simulation's heap): its columns'
+// addresses into the source table (pres_fill.rs S_MX..S_MPY), read by the
+// ranges in place. The simulation publishes a snapshot only while
+// snapCtl[1] is 1 (this worker asks for the next one when it took the
+// newest, or found it older than the tick it draws: then it waits for the
+// next tick, -3). Without snapshots: the position columns themselves. The
+// slots it covers, or -2 (being written).
+let motHead=null, motTick=0;
+function takeSnapshot(want,n) {
+    const i=snapCtl ? Atomics.load(snapCtl,0) : -1, q=i>=0 && snaps ? snaps[i] : null;
+    const tick=q ? Atomics.load(q.head,0) : 0;
+    if (q && tick<0) return -2;
+    if (snapCtl) Atomics.store(snapCtl,1,1);
+    if (q && tick<want) return -3;
+    const S=pm.Sv;
+    S[25]=(q ? q.x : source.x).byteOffset;S[26]=(q ? q.y : source.y).byteOffset;
+    S[27]=(q ? q.px : source.prevX).byteOffset;S[28]=(q ? q.py : source.prevY).byteOffset;
+    motHead=q ? q.head : null;motTick=tick;
+    return q ? Math.min(n,q.head[1]) : n;
 }
-// Slots s0..s1 of a frame (n listed in all) from the columns and this
-// worker's motion copy: the listed ones in F.order from s0 on, their count
-// returned; rangeChanged: a slot's unit changed. Column by column: each
-// loop reads one or two columns and writes one (memcpy for the metadata,
-// which has the frame's layout), ~10x faster than one loop writing all ~30
-// columns of a unit (~60 ms a frame at 200k units, so frames reached the
-// page a few times a second: units stood, then jumped). Slots not listed
-// (FID -1) are not read, whatever they hold. (Its own function: as a long
-// loop inside draw() it was compiled on the stack before draw's later code
-// had run, and fell back to the interpreter at its end every frame.)
-let rangeChanged=false;
-// The drawn positions per slot (and whose they are), VIS_FOLLOW: the share
-// of the way to the simulation's position a drawn unit goes each tick (a
-// steady lag of about two steps behind it, a third of its step's
-// variation: smooth before prompt, the user's choice). VIS_LAG bounds the
-// remaining offset: long low-TPS steps catch up without resetting the start
-// of the segment. A distance threshold cannot distinguish walking from a
-// teleport when one simulation step covers a second of movement.
-const vis={x:null,y:null,id:null}, VIS_FOLLOW=.35, VIS_LAG=64;
-// (VIS_FOLLOW is the share per tick: a frame made some ticks after the last
-// one goes the share those ticks add up to, so the drawn pace is the same
-// whether a frame is made every tick or every third.)
+
+// The drawn positions per slot: VIS_FOLLOW, the share of the way to the
+// simulation's position a drawn unit goes each tick (a steady lag of about
+// two steps behind it: smooth before prompt); the rest bounded (VIS_LAG,
+// pres_fill.rs). visFollow: the share for the ticks a frame covers.
+const VIS_FOLLOW=.35;
 let visFollow=VIS_FOLLOW, lastBuiltTick=-1;
 // (The fog's full light, VISIBILITY_LIGHT_NORMALIZATION_RANGE: with each tick.)
 let lightFull=6;
-// Facing (presentation only: the simulation keeps none): toward the unit's
-// fire target (the combat brain's, cmMode bit 4) when it has one, else its
-// movement, else as it was. The movement is its velocity smoothed over a few
-// ticks (FACE_VEL a tick): in a crowd one tick's sideways shove or shoulder
-// step, then back, must not turn it there and back. Below FACE_MIN_SPEED
-// (smoothed, px a base tick) it keeps its facing; within FACE_DEAD of it,
-// too. It turns VIS_TURN of the way a tick (visTurn: per frame, by the ticks
-// it covers), so a few ticks' change of mind is not a snap.
-const face={a:null,id:null,vx:null,vy:null}, VIS_TURN=.3, TAU=Math.PI*2, INV_TAU=1/TAU;
-const FACE_VEL=.3, FACE_MIN_SPEED=.2, FACE_DEAD=.04;
+// Facing (pres_fill.rs): toward the fire target, else the movement smoothed
+// over a few ticks (FACE_VEL a tick), else as it was; turning VIS_TURN of
+// the way a tick.
+const VIS_TURN=.3, FACE_VEL=.3;
 let visTurn=VIS_TURN, faceVel=FACE_VEL;
-// atan2(y, x) within ~1e-5 rad, a few times faster than Math.atan2 (a third
-// of the fill at 400k slots; facing is drawn only).
-function fastAtan2(y,x) {
-    const ax=x<0 ? -x : x, ay=y<0 ? -y : y, mx=ax>ay ? ax : ay, mn=ax>ay ? ay : ax;
-    if (mx===0) return 0;
-    const a=mn/mx, z=a*a;
-    let r=(((((-0.0117212*z+0.05265332)*z-0.11643287)*z+0.19354346)*z-0.33262347)*z+0.99997726)*a;
-    if (ay>ax) r=1.5707963267948966-r;
-    if (x<0) r=3.141592653589793-r;
-    return y<0 ? -r : r;
-}
-function ensureState(cap,history) {
-    if (!vis.x || vis.x.length<cap) {vis.x=sharedArray(Float32Array,cap);vis.y=sharedArray(Float32Array,cap);vis.id=sharedArray(Int32Array,cap,-1);}
-    if (!face.a || face.a.length<cap) {face.a=sharedArray(Float32Array,cap);face.id=sharedArray(Int32Array,cap,-1);face.vx=sharedArray(Float32Array,cap);face.vy=sharedArray(Float32Array,cap);}
-    if (!fullAt || fullAt.length<cap) fullAt=sharedArray(Int32Array,cap);
-    if (!easing || easing.length<cap) easing=sharedArray(Uint8Array,cap);
-    if (history && (!ghost.x || ghost.x.length<cap)) {ghost.x=sharedArray(Float32Array,cap);ghost.y=sharedArray(Float32Array,cap);ghost.id=sharedArray(Int32Array,cap,-1);}
-}
-// Columns the fill writes (besides id and order): what a frame by changes
-// copies forward from the newest frame for slots it does not fill.
-const FILL_COLS=['x','y','px','py','vx','vy','owner','energy','r','cmd','level','blevel','flash','flags','light','mode','status','amount','facing','phase','prate'];
-// (A frame by the simulation's marks copies the id and the metadata too: it
-// lists slots and copies metadata only where it fills.)
-const STAMP_COPY=FILL_COLS.concat(['id','type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty','orderDest','orderTick']);
-// Per slot: still easing to its place (1) or turning (2) here: filled
-// again while so (frames by marks). With the other per-slot state.
-let easing=null;
-const FILL_STATUS=SIM_UF_BURNING|SIM_UF_POISONED|SIM_UF_FROZEN|SIM_UF_WET|SIM_UF_SANDY|SIM_UF_WATCHED|SIM_UF_HIDDEN|SIM_UF_TRANSFER;
-// (A drawn position within this of the simulation's: there, at rest, so a
-// still unit is not filled again.)
-const VIS_REST=.02;
-// A frame by changes (dl: the newest frame A, this buffer's last build bseq,
-// this frame's seq, every K-th block of slots refilled anyway at `phase`):
-// this buffer was whole as of bseq, so a slot is filled when it may have
-// changed since the newest frame (in or out of the frame, moving or still
-// easing, turning, its energy, owner or command changed, a flash, a status
-// timer, or its block's turn), copied from A when it was filled after bseq,
-// else left. (95% of millions of units stand still: a frame wrote ~25
-// columns of every slot, 0.5-2 s of threads a frame at 2M-8M units.)
-// fullAt: per slot the frame it was last filled in. A thread's own lists:
-// fillList (filled), copyList (copied), fillBlocks (blocks with a fill).
-let fullAt=null, fillList=null, copyList=null, fillBlocks=null, lastStamped=false, lastFilled=0;
-function fillRange(F,C,meta,s0,s1,n,player,areaUnit,metaCopy,dl,frameSeq) {
-    let count=0, changed=false;
-    const stamped=!!dl && !!C.pvAt && dl.ta>=0 && !!easing;
-    lastStamped=false;lastFilled=0;
-    const L=last, FID=F.id, FORD=F.order, CID=C.id, CLIVE=C.live, CDEAD=C.dead, MID=meta.id, len=Math.max(0,s1-s0);
-    if (!fillList || fillList.length<len) {fillList=new Int32Array(len);copyList=new Int32Array(len);}
-    const nbk=Math.ceil(len/DIRTY_BLOCK)+1;
-    if (!fillBlocks || fillBlocks.length<nbk) fillBlocks=new Uint8Array(nbk);
-    const AL=fillList, CL=copyList, BK=fillBlocks;
-    let na=0, nc=0;
-    if (!dl) {
-        for (let s=s0;s<s1;s++) {
-            const id=CID[s];
-            AL[na++]=s;
-            if (!CLIVE[s] || CDEAD[s] || MID[s] !== id) {FID[s]=-1;if(L[s]!==-1) {changed=true;L[s]=-1;}continue;}
-            FID[s]=id;FORD[s0+count++]=s;
-            if(L[s]!==id) {changed=true;L[s]=id;}
-        }
-        BK.fill(1,0,nbk);
-        if (fullAt) {const FA=fullAt, seq=frameSeq|0;for (let s=s0;s<s1;s++) FA[s]=seq;}
-    } else if (stamped) {
-        // (By the simulation's marks: a slot changed after the newest frame's
-        // tick dl.ta, one still easing or turning here, one whose metadata
-        // came, or its block's turn; four reads a slot.)
-        const CA=C.pvAt, ES=easing, ta=dl.ta, FA=fullAt, bseq=dl.bseq, seq=dl.seq, K=dl.K, ph=dl.phase, B=DIRTY_BLOCK;
-        BK.fill(0,0,nbk);
-        for (let s=s0;s<s1;s++) {
-            const m=MID[s];
-            if (CA[s]>ta || ES[s]!==0 || (m!==L[s] && m===CID[s]) || ((s>>8)%K)===ph) {
-                AL[na++]=s;FA[s]=seq;BK[((s-s0)/B)|0]=1;
-                const id=CID[s];
-                if (!CLIVE[s] || CDEAD[s] || m !== id) {FID[s]=-1;if (L[s]!==-1) {changed=true;L[s]=-1;}}
-                else {FID[s]=id;if (L[s]!==id) {changed=true;L[s]=id;}}
-            } else if (FA[s]>bseq) CL[nc++]=s;
-        }
-        const A=dl.A;
-        for (let c=0;c<STAMP_COPY.length;c++) {const D=F[STAMP_COPY[c]], S=A[STAMP_COPY[c]];for (let i=0;i<nc;i++) {const s=CL[i];D[s]=S[s];}}
-    } else {
-        const VX=vis.x, VY=vis.y, VI=vis.id, SX=mot.x, SY=mot.y, CVX=C.vx, CVY=C.vy, AF=C.attackFlash, ON=C.stIx, TC=C.workerTransferCooldown, CM=C.cmMode;
-        const A=dl.A, PF=A.flash, PFL=A.flags, PVX=A.vx, PVY=A.vy, PEN=A.energy, POW=A.owner, PCM=A.cmd, CEN=C.energy, COW=C.owner, CCM=C.commandState;
-        const FA=fullAt, bseq=dl.bseq, seq=dl.seq, K=dl.K, ph=dl.phase, B=DIRTY_BLOCK;
-        BK.fill(0,0,nbk);
-        for (let s=s0;s<s1;s++) {
-            const id=CID[s];
-            if (!CLIVE[s] || CDEAD[s] || MID[s] !== id) {
-                FID[s]=-1;
-                if (L[s]!==-1) {changed=true;L[s]=-1;AL[na++]=s;BK[((s-s0)/B)|0]=1;FA[s]=seq;}
-                else if (FA[s]>bseq) CL[nc++]=s;
-                continue;
-            }
-            FID[s]=id;FORD[s0+count++]=s;
-            let act=L[s]!==id;
-            if (act) {changed=true;L[s]=id;}
-            else act=VI[s]!==id || VX[s]!==SX[s] || VY[s]!==SY[s] || CVX[s]!==0 || CVY[s]!==0 || PVX[s]!==0 || PVY[s]!==0 || AF[s]>0 || PF[s]>0 || (ON && ON[s]!==0) || TC[s]>0
-                || (PFL[s]&FILL_STATUS)!==0 || CEN[s]!==PEN[s] || COW[s]!==POW[s] || CCM[s]!==PCM[s] || (CM && (CM[s]&4)!==0) || ((s>>8)%K)===ph;
-            if (act) {AL[na++]=s;FA[s]=seq;BK[((s-s0)/B)|0]=1;}
-            else if (FA[s]>bseq) CL[nc++]=s;
-        }
-        // (Copied forward: as the newest frame has them.)
-        for (let c=0;c<FILL_COLS.length;c++) {const D=F[FILL_COLS[c]], S=A[FILL_COLS[c]];for (let i=0;i<nc;i++) {const s=CL[i];D[s]=S[s];}}
-    }
-    // Motion, smoothed for the eye (this worker's own state, never the
-    // simulation's): each unit is drawn moving from where it was drawn last
-    // tick toward VIS_FOLLOW of the way to where the simulation has it. A
-    // tick's step varies with the pushes of a crowd (1.9, 3.9, 2.1 px...);
-    // drawn as is, units sped up and stalled tick to tick. A unit new to its
-    // slot starts with its simulation segment. Real portal teleports carry
-    // a hidden flag; a restore starts a new reader. Ordinary movement always
-    // continues from the preceding visual endpoint, including large steps.
-    {
-        const DX=F.x, DY=F.y, DPX=F.px, DPY=F.py, SX=mot.x, SY=mot.y, SPX=mot.px, SPY=mot.py, VX=vis.x, VY=vis.y, VI=vis.id, ES=easing, HT=C.stTh, HX=C.stIx;
-        for (let i=0;i<na;i++) {
-            const s=AL[i], id=FID[s], h=HT[HX[s]];
-            if (id<0) {VI[s]=-1;if (ES) ES[s]=0;continue;}
-            const x=SX[s], y=SY[s];
-            const ox=VX[s], oy=VY[s], gap=Math.abs(x-ox)+Math.abs(y-oy);
-            if (VI[s]!==id || h>0) {DPX[s]=h>0?x:SPX[s];DPY[s]=h>0?y:SPY[s];DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;VI[s]=id;if (ES) ES[s]&=~1;continue;}
-            if (gap<VIS_REST) {DPX[s]=x;DPY[s]=y;DX[s]=x;DY[s]=y;VX[s]=x;VY[s]=y;if (ES) ES[s]&=~1;continue;}
-            // The usual crowd filter is unchanged. Beyond its lag budget,
-            // increase only the endpoint's catch-up, never jump the start.
-            // O(1) in this existing fill; no new columns or render-frame work.
-            const follow=gap>VIS_LAG ? Math.max(visFollow,1-VIS_LAG/gap) : visFollow;
-            const nx=ox+(x-ox)*follow, ny=oy+(y-oy)*follow;
-            DPX[s]=ox;DPY[s]=oy;DX[s]=nx;DY[s]=ny;VX[s]=nx;VY[s]=ny;
-            if (ES) ES[s]|=1;
-        }
-    }
-    {const D=F.vx,S=mot.vx;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    {const D=F.vy,S=mot.vy;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    // Metadata (the pump's table, the frame's own layout): copied whole, when
-    // it changed since this buffer last had it (or covers more slots now).
-    if (stamped) {for (const k of META_COPY) {const D=F[k], S=meta[k];for (let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}}
-    else if (metaCopy) for (const k of META_COPY) F[k].set(meta[k].subarray(s0,s1),s0);
-    // (The order destinations from the units' column, made each tick by the
-    // marks kernel: the metadata pass over every unit showed new orders late.)
-    if (C.pvOD) {
-        if (stamped) {const D=F.orderDest,S=C.pvOD;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-        else F.orderDest.set(C.pvOD.subarray(s0,s1),s0);
-    }
-    {const D=F.owner,S=C.owner;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    {const D=F.energy,S=C.energy;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    {const D=F.r,S=C.r;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    {const D=F.cmd,S=C.commandState;for(let i=0;i<na;i++) {const s=AL[i];D[s]=S[s];}}
-    // (Levels into int16: as integers, -1 when not a number.)
-    {const D=F.level,S=C.effectiveLevel;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
-    {const D=F.blevel,S=C.unitLevel;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>=0 && v<32767 ? v|0 : -1;}}
-    {const D=F.flash,S=C.attackFlash;for(let i=0;i<na;i++) {const s=AL[i], v=S[s];D[s]=v>255?255:v>0?v:0;}}
-    {
-        // (The status timers only of units with a status record (stIx, the
-        // timers by record): the rest read one word instead of seven columns.)
-        const D=F.flags, M=meta.flags, B=C.stBu, P=C.stPo, Z=C.stFr, W=C.stWe, Y=C.stSa, V=C.stWa, H=C.stTh, T=C.workerTransferCooldown, ON=C.stIx;
-        for (let i=0;i<na;i++) {const s=AL[i], r=ON[s];D[s]=M[s] | (T[s]>0?SIM_UF_TRANSFER:0) | (r===0 ? 0 : (B[r]>0?SIM_UF_BURNING:0) | (P[r]>0?SIM_UF_POISONED:0) | (Z[r]>0?SIM_UF_FROZEN:0) | (W[r]>0?SIM_UF_WET:0)
-            | (Y[r]>0?SIM_UF_SANDY:0) | (V[r]>0?SIM_UF_WATCHED:0) | (H[r]>0?SIM_UF_HIDDEN:0));}
-    }
-    {
-        // The light a unit is drawn with at least: a unit that is a light
-        // source for the viewing player (its own, or one it watches) lights
-        // its own area to the full whatever its range, so it is drawn at the
-        // full at once. (Its range in tiles before: a unit seeing only its
-        // own area got half, and the fog's light of an area it had just
-        // walked into rises over most of a second: it dimmed and brightened
-        // at every border it crossed.)
-        const D=F.light, O=F.owner, V=C.stWa, WB=F.watchedBy, VIS=F.vision, ON=C.stIx, full=lightFull;
-        for (let i=0;i<na;i++) {const s=AL[i], r=ON[s];D[s]=O[s]===player || (r!==0 && V[r]>0 && WB[s]===player) ? Math.max(VIS[s]*areaUnit,full) : 0;}
-    }
-    {
-        const X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flash, MO=F.mode, ST=F.status, AM=F.amount;
-        for (let i=0;i<na;i++) {
-            const s=AL[i], dx=X[s]-PX[s], dy=Y[s]-PY[s], moving=dx*dx+dy*dy>.0001, flash=FL[s]>0;
-            MO[s]=flash?1:moving?0:7;ST[s]=flash?1:moving?0:3;AM[s]=moving || flash ? 1 : .7;
-        }
-    }
-    {
-        const D=F.facing, VX=F.vx, VY=F.vy, CM=C.cmMode, CT=C.cmT, SX=mot.x, SY=mot.y, FA=face.a, FI=face.id, FVX=face.vx, FVY=face.vy, TX=motTarget.x, TY=motTarget.y, TK=motTarget.k, ES=easing;
-        const kv=faceVel, kt=visTurn, min2=FACE_MIN_SPEED*FACE_MIN_SPEED;
-        for (let i=0;i<na;i++) {
-            const s=AL[i], id=FID[s];
-            if (id<0) {FI[s]=-1;continue;}
-            const fresh=FI[s]!==id;
-            let vx=fresh ? VX[s] : FVX[s]+(VX[s]-FVX[s])*kv, vy=fresh ? VY[s] : FVY[s]+(VY[s]-FVY[s])*kv, settle=false;
-            // (Within a hair of its velocity: settled; else filled again next
-            // frame, as turning is, so frames made by changes stay the same.)
-            if (!fresh) {const ex=VX[s]-vx, ey=VY[s]-vy;if (ex*ex+ey*ey<1e-6) {vx=VX[s];vy=VY[s];} else settle=true;}
-            FVX[s]=vx;FVY[s]=vy;
-            let want=NaN;
-            if (CM && (CM[s]&20)===4) {const q=CT[s];if (q>=0 && q<n) {const dx=TX[q]*TK-SX[s], dy=TY[q]*TK-SY[s];if (dx || dy) want=fastAtan2(dx,dy);}}
-            if (want!==want && vx*vx+vy*vy>min2) want=fastAtan2(vx,vy);
-            let f=fresh ? (want===want ? want : 0) : FA[s], turning=false;
-            if (want===want) {let d=want-f;d-=Math.round(d*INV_TAU)*TAU;if (Math.abs(d)>FACE_DEAD) {f+=d*kt;turning=true;}}
-            FA[s]=f;FI[s]=id;D[s]=f;
-            if (ES) ES[s]=turning || settle ? ES[s]|2 : ES[s]&~2;
-        }
-    }
-    {const D=F.phase,I=F.id,R=F.prate,FL=F.flash;
-        for(let i=0;i<na;i++) {
-            const s=AL[i], p=I[s]*2.399;
-            D[s]=FL[s]>0?Math.max(0,(8-FL[s])/8)*Math.PI:p-Math.floor(p*INV_TAU)*TAU;
-            R[s]=FL[s]>0?Math.PI/8:0;
-        }
-    }
-    if (!dl) F.sig.fill(0,s0,s1);
-    if (stamped) {
-        for (let i=0;i<na;i++) {const s=AL[i], id=FID[s];if (id>=0 && (CID[s]!==id || MID[s]!==id || CDEAD[s])) {FID[s]=-1;L[s]=-1;changed=true;}}
-        for (let s=s0;s<s1;s++) if (FID[s]>=0) FORD[s0+count++]=s;
-        rangeChanged=changed;lastStamped=true;lastFilled=na;
-        return count;
-    }
-    // The simulation may recycle a slot during the scan: dropped rather than
-    // shown with the old unit's metadata at the new one's place.
-    for (let k=s0;k<s0+count;k++) {
-        const s=FORD[k], id=FID[s];
-        if (CID[s]!==id || MID[s]!==id || CDEAD[s]) {FID[s]=-1;L[s]=-1;changed=true;}
-    }
-    if (changed) {let j=s0;for(let k=s0;k<s0+count;k++) {const s=FORD[k];if(FID[s]>=0) FORD[j++]=s;}count=j-s0;}
-    rangeChanged=changed;
-    return count;
-}
-// Team + history: what the player does not see now is drawn as it was
-// last seen, frozen until its tile is seen again (the same as full
-// visibility, but for the frozen ones outside the seen tiles). Per slot its
-// unit's last seen position (while its tile was seen); a unit not seen now
-// is drawn there (SIM_UF_GHOST) while that place is unseen, else hidden.
-// One pass a tick here, nothing per unit on the page. (A unit that dies or
-// whose slot is reused unseen loses its ghost: rare, harmless.)
-const ghost={x:null,y:null,id:null};
-// (Seen = the fog's eased light, as the page and the GPU see it: the raw
-// sight flickers at vision's edges, units there went live, ghost, live.)
-function ghostSight(T) {
-    const gw=T.gw|0, gh=T.gh|0;
-    const S=fogState.light && fogState.w===gw && fogState.h===gh ? fogState.light : T.sight;
-    return S && S.length>=gw*gh ? {gw,gh,tile:T.tile||32,player:T.player,light:S} : null;
-}
-function applyGhosts(F,s0,s1,G) {
-    const gw=G.gw, gh=G.gh, it=1/G.tile, player=G.player, S=G.light;
-    const GX=ghost.x, GY=ghost.y, GI=ghost.id, FID=F.id, X=F.x, Y=F.y, PX=F.px, PY=F.py, FL=F.flags, OWN=F.owner;
-    for (let s=s0;s<s1;s++) {
-        const id=FID[s];
-        if (id<0) {GI[s]=-1;continue;}
-        if (OWN[s]===player) continue;
-        let tx=Math.floor(X[s]*it), ty=Math.floor(Y[s]*it);
-        tx=tx<0?0:tx>=gw?gw-1:tx; ty=ty<0?0:ty>=gh?gh-1:ty;
-        if (S[ty*gw+tx]>0) {GX[s]=X[s];GY[s]=Y[s];GI[s]=id;continue;}
-        if (GI[s]===id) {
-            let gx=Math.floor(GX[s]*it), gy=Math.floor(GY[s]*it);
-            gx=gx<0?0:gx>=gw?gw-1:gx; gy=gy<0?0:gy>=gh?gh-1:gy;
-            if (!(S[gy*gw+gx]>0)) {X[s]=PX[s]=GX[s];Y[s]=PY[s]=GY[s];FL[s]|=SIM_UF_GHOST;continue;}
-        }
-        FL[s]|=SIM_UF_HIDDEN;GI[s]=-1;
-    }
-}
+
+// ---- the fog ----
 // The fog's light (each tile's light easing toward what is seen: up at
 // T.rise a second, down at T.fall after a second's hold) and the fog's own
-// grid (the light, plus with history a floor where once explored), as
-// visibility_history.js updateVisualVisibility made them on the page each
-// tick (a pass over every tile there). Shared: the page reads them as its
-// grids (and the GPU's fog); head[0] the version (the tick made for).
-const fogState={w:0,h:0,light:null,fog:null,explored:null,hold:null,head:null,tick:-1,history:null,bound:false};
+// grid (the light, plus with history a floor where once explored), from
+// the simulation's sight grid (pres_fill.rs k_pres_fog). Shared: the page
+// reads them as its grids (and the GPU's fog); head[0] the version.
+const fogState={w:0,h:0,light:null,fog:null,explored:null,head:null,tick:-1,history:null,bound:false,at:null};
 function updateFog(T) {
     const S=T.sight, W=T.gw|0, H=T.gh|0, n=W*H;
     if (!S || S.length<n) return;
+    if (S.constructor.name!=='Float32Array') throw new Error('presentation: the sight grid is not Float32');
     const st=fogState;
     let reset=false;
     if (st.w!==W || st.h!==H || !st.light) {
-        st.w=W;st.h=H;
-        st.light=new Float32Array(new SharedArrayBuffer(n*4));st.fog=new Float32Array(new SharedArrayBuffer(n*4));
-        st.explored=new Uint8Array(new SharedArrayBuffer(n));st.hold=new Int32Array(n).fill(-1);st.head=new Int32Array(new SharedArrayBuffer(8));
+        if (st.at) for (const r of st.at) pmFree(r);
+        const L=pmAlloc(4*n), G=pmAlloc(4*n), E=pmAlloc(n), HD=pmAlloc(4*n);
+        st.at=[L,G,E,HD];st.w=W;st.h=H;
+        st.light=new Float32Array(pm.mem.buffer,L.base,n).fill(0);st.fog=new Float32Array(pm.mem.buffer,G.base,n).fill(0);
+        st.explored=new Uint8Array(pm.mem.buffer,E.base,n).fill(0);new Int32Array(pm.mem.buffer,HD.base,n).fill(-1);
+        st.head=new Int32Array(new SharedArrayBuffer(8));
         st.tick=T.time;st.bound=false;reset=true;
     }
     const now=T.time, holdTicks=Math.max(1,T.rate|0);
-    if (now<st.tick) {const back=st.tick-now;for(let i=0;i<n;i++) st.hold[i]-=back;st.tick=now;}
-    const dt=Math.min(2,Math.max(0,now-st.tick))/holdTicks, rise=T.rise*dt, fall=T.fall*dt;
-    const full=reset || st.history!==!!T.history, hist=!!T.history, range=T.lightRange||6, floor=range*(T.historyFloor||.14);
+    let back=0;
+    if (now<st.tick) {back=st.tick-now;st.tick=now;}
+    const dt=Math.min(2,Math.max(0,now-st.tick))/holdTicks, hist=!!T.history, full=reset || st.history!==hist, range=T.lightRange||6;
     st.history=hist;
-    const L=st.light, G=st.fog, E=st.explored, HD=st.hold;
-    for (let i=0;i<n;i++) {
-        const target=S[i], current=L[i];
-        if (target===0 && current===0 && !full) continue;
-        if (target>0) {HD[i]=now+holdTicks;E[i]=1;}
-        let next=target;
-        if (!reset) {
-            if (target===0 && now<=HD[i]) next=current;
-            else {const d=target-current;next=current+(d>rise?rise:d<-fall?-fall:d);}
-        }
-        L[i]=next;
-        let f=L[i];
-        if (hist && E[i]) {const dark=1-Math.min(1,f/range);f+=floor*dark*dark*dark;}
-        G[i]=f;
-    }
+    const I=pm.I, P=pm.P, A=st.at;
+    I[512]=S.byteOffset;I[513]=A[0].base;I[514]=A[1].base;I[515]=A[2].base;I[516]=A[3].base;
+    P[0]=n;P[1]=now;P[2]=holdTicks;P[3]=T.rise*dt;P[4]=T.fall*dt;P[5]=full?1:0;P[6]=reset?1:0;P[7]=hist?1:0;P[8]=range;P[9]=range*(T.historyFloor||.14);P[10]=back;
+    pm.x.k_pres_fog(pm.args,0);
     st.tick=now;
     Atomics.store(st.head,0,now);
     if (!st.bound) {(out || self).postMessage({type:'fogBind',epoch,light:st.light,fog:st.fog,explored:st.explored,head:st.head,width:W,height:H});st.bound=true;}
 }
-// The metadata columns copied whole each frame (the pump writes them).
-const META_COPY=['type','wtype','wstate','style','watchedBy','vision','maxEnergy','cargo','tx','ty','orderDest','orderTick'];
-// Append the render-only spatial index to the immutable presentation buffer.
-// Its lifetime follows the existing three-buffer pool; no extra messages or
-// population-sized indexing pass on the animation thread.
-// A frame's first count order entries (slots) by unit id: a native numeric
-// sort of id * 2^b + slot, not a comparator over 200k slots. b covers every
-// slot of the frame (cap): a fixed 21 bits gave the slots past 2,097,152 of
-// a 4M match another slot's number, so those units (the second team's) were
-// missing from the page's list and the camera's buckets and never got a
-// model, only glyphs. (ids stay below 2^53 / 2^b.)
-function frameIdOrder(FORD, FID, count, cap) {
-    const SB = 2 ** Math.max(21, Math.ceil(Math.log2(cap + 1))), keys = new Float64Array(count);
-    for (let k = 0; k < count; k++) { const sl = FORD[k]; keys[k] = FID[sl] * SB + sl; }
-    keys.sort();
-    for (let k = 0; k < count; k++) FORD[k] = keys[k] % SB;
+// A frame's first count order entries (slots) by unit id (pres.rs
+// k_pres_order: a radix sort in this worker's memory; F is a frame there).
+function frameIdOrder(F, count) {
+    pmState(F.cap);
+    const I=pm.I, P=pm.P;
+    I[512]=F.order.byteOffset;I[513]=F.id.byteOffset;I[514]=pm.scratch;P[0]=count;
+    pm.x.k_pres_order(pm.args,0);
 }
+// The camera's buckets (pres.rs k_pres_buckets): after the frame's columns,
+// head and motion a cell, next an order entry, the moving slots. Offsets
+// absolute in the buffer. (Teleports and stops count as moving too: the
+// positions of the last frame built are kept there.)
 function buildRenderBuckets(F, count, columns, rows, tile) {
-    const cells = columns * rows, offset = F.cap * SIM_FRAME_SLOT_BYTES;
-    const head = new Int32Array(F.buf, offset, cells);
-    const motion = new Float32Array(F.buf, offset + cells * 4, cells);
-    const next = new Int32Array(F.buf, offset + cells * 8, F.cap);
+    pmState(F.cap);
+    const cells = columns * rows, offset = F.base + F.cap * SIM_FRAME_SLOT_BYTES;
     const movingOffset = offset + cells * 8 + F.cap * 4;
-    const moving = new Int32Array(F.buf, movingOffset, F.cap);
-    let previous = buildRenderBuckets.previous;
-    if (!previous || previous.x.length !== F.cap) previous = buildRenderBuckets.previous = {
-        x:new Float32Array(F.cap),y:new Float32Array(F.cap),ready:false
-    };
-    let movingCount = 0;
-    head.fill(-1); motion.fill(0);
-    const invCell = 1 / (tile * 16), invTile = 1 / tile;
-    for (let k = 0; k < count; k++) {
-        const s = F.order[k], x = F.x[s], y = F.y[s];
-        const bx = Math.max(0, Math.min(columns - 1, Math.floor(x * invCell)));
-        const by = Math.max(0, Math.min(rows - 1, Math.floor(y * invCell)));
-        const b = by * columns + bx;
-        next[k] = head[b]; head[b] = k;
-        const distance = Math.max(Math.abs(F.px[s] - x), Math.abs(F.py[s] - y)) * invTile;
-        if (distance > motion[b]) motion[b] = distance;
-        // Include teleports/stops even when the simulation's previous position
-        // already equals its destination. The page merges with its old movers.
-        if (distance > 0 || (previous.ready && (previous.x[s] !== x || previous.y[s] !== y))) moving[movingCount++] = s;
-        previous.x[s] = x; previous.y[s] = y;
-    }
-    previous.ready = true;
-    return { columns, rows, tile, offset, movingOffset, movingCount };
+    const I=pm.I, P=pm.P;
+    I[512]=F.order.byteOffset;I[513]=F.x.byteOffset;I[514]=F.y.byteOffset;I[515]=F.px.byteOffset;I[516]=F.py.byteOffset;
+    I[517]=offset;I[518]=offset+cells*4;I[519]=offset+cells*8;I[520]=movingOffset;I[521]=pm.prevX;I[522]=pm.prevY;I[523]=pm.out;
+    P[0]=count;P[1]=columns;P[2]=rows;P[3]=tile;P[4]=pm.prevReady ? 1 : 0;
+    pm.x.k_pres_buckets(pm.args,0);
+    pm.prevReady=true;
+    return { columns, rows, tile, offset, movingOffset, movingCount: new Int32Array(pm.mem.buffer, pm.out, 1)[0] };
 }
 // Which parts of the renderer's unit columns changed, so the page uploads
-// only those (renderer3d.js _columnStoreUpload: all ~16 columns of every
-// slot were ~11 MB a tick at 100k a team, and a GPU process busy for a
-// moment held the page in bufferSubData for 70-200 ms). Per column and
-// block of DIRTY_BLOCK slots: the last frame (seq) it changed in, kept here
-// and copied into each frame, so a page that skipped frames still knows
-// what changed since the one its GPU holds. Changed: a slot whose unit is
-// live and was not in the last frame (or past its count: the GPU holds
-// something else there), or whose value differs; dead slots are not drawn,
-// what they hold does not count (the id column: every difference).
-// (~40% of slots move in a battle, in squads of nearby slots: ~70-80% less
-// a tick; most columns change only where units die or are made.) Columns
-// made from others are marked where those changed: phase and prate from
-// the id and the attack flash, amount from the mode (fillRange).
+// only those (renderer3d.js _columnStoreUpload). Per column and block of
+// DIRTY_BLOCK slots: the last frame (seq) it changed in (pres_fill.rs
+// marks), kept here and copied into each frame, so a page that skipped
+// frames still knows what changed since the one its GPU holds.
 const DIRTY_COLS=['x','y','px','py','r','energy','owner','flags','id','type','facing','phase','prate','vision','mode','amount'], DIRTY_BLOCK=256;
-const DIRTY_FROM={phase:'flash',prate:'flash',amount:'mode'};
 const dirty={stream:(Math.random()*2147483647)|0,seq:0,cap:-1,stamps:null,prev:null,prevN:0,prevTick:-1};
-// (A thread's own per-block scratch: blocks new to a unit, and per column
-// the blocks changed.)
-const dirtyWork={nb:-1,born:null,masks:null};
 function dirtyBytes(cap) {return DIRTY_COLS.length*Math.ceil(cap/DIRTY_BLOCK)*4;}
-// Columns compared 8 bytes at a time (a word: `per` slots), as integers
-// slot by slot only in words that differ: most words are equal. Equal words
-// are equal slots but for +0 / -0 (the sign in the word's top slot). (4-byte
-// columns as Int32: bit for bit; no words when a column is not 8-byte aligned.)
-function dirtyInts(a) {return a.BYTES_PER_ELEMENT===4 && !(a instanceof Int32Array) ? new Int32Array(a.buffer,a.byteOffset,a.length) : a;}
-function dirtyWords(a) {return (a.byteOffset&7)===0 ? new Float64Array(a.buffer,a.byteOffset,a.byteLength>>3) : null;}
-function dirtyHalves(a) {return new Int32Array(a.buffer,a.byteOffset,a.length*2);}
-// Per block b0..b1 (HIT): a live slot changed, or a unit is new there (BORN).
-// (a, q: the words; ah, qh: their halves as Int32, the sign in the upper
-// one: only these in the loop over equal words, one element type each.)
-function dirtyScan(A,Q,a,q,ah,qh,per,I,HIT,BORN,b0,b1,n) {
-    const B=DIRTY_BLOCK;
-    for (let b=b0;b<b1;b++) {
-        if (BORN[b]) {HIT[b]=1;continue;}
-        const s0=b*B, e=s0+B<n?s0+B:n;
-        let hit=false, k=s0;
-        if (a) {
-            for (let w=(s0/per)|0, we=(e/per)|0;w<we;w++) {
-                const x=a[w];
-                if (x===q[w] && (x!==0 || ah[2*w+1]===qh[2*w+1])) continue;
-                for (let j=w*per, je=j+per;j<je;j++) if (A[j]!==Q[j] && I[j]>=0) {hit=true;break;}
-                if (hit) break;
-            }
-            k=e-e%per;
-        }
-        if (!hit) for (;k<e;k++) if (A[k]!==Q[k] && I[k]>=0) {hit=true;break;}
-        HIT[b]=hit?1:0;
-    }
-}
-// The id column (every difference) and the blocks with a unit new to its slot.
-function dirtyIds(I,J,HIT,BORN,b0,b1,n,pn) {
-    const B=DIRTY_BLOCK;
-    for (let b=b0;b<b1;b++) {
-        const s0=b*B, e=s0+B<n?s0+B:n;
-        let born=e>pn, hit=born;
-        if (!born) for (let s=s0;s<e;s++) if (I[s]!==J[s]) {hit=true;if (I[s]>=0) {born=true;break;}}
-        BORN[b]=born?1:0;HIT[b]=hit?1:0;
-    }
-}
-// Blocks b0..b1 of frame F against the last one, P (n slots now, pn then):
-// the changed ones get seq in the stamps (ST, nb blocks a column).
-// (ACT: per block from b0 whether the fill wrote a slot there, a frame by
-// changes: the others equal the last frame but in the metadata columns,
-// compared where the metadata was copied, metaAll.)
-const DIRTY_META=new Set(['type','vision']);
-function markDirtyRange(F,P,n,pn,b0,b1,seq,ST,nb,ACT,metaAll) {
-    if (!ACT) {markDirtyRun(F,P,n,pn,b0,b1,seq,ST,nb,false);return;}
-    for (let b=b0;b<b1;) {
-        let e=b+1;
-        const on=ACT[b-b0]!==0;
-        while (e<b1 && (ACT[e-b0]!==0)===on) e++;
-        if (on) markDirtyRun(F,P,n,pn,b,e,seq,ST,nb,false);
-        else if (metaAll) markDirtyRun(F,P,n,pn,b,e,seq,ST,nb,true);
-        b=e;
-    }
-}
-// The marks of a frame by the simulation's marks: only its filled slots
-// (AL, na of them) may differ from the last frame P, so they are compared
-// slot by slot, with the same result as the blocks' compare (a live slot
-// that differs, bit for bit; a unit new to its slot, or a block past the
-// last frame's count when it grew, every column; the id column at every
-// difference). b0..b1 the range's blocks.
-const DIRTY_FROM_COLS=DIRTY_COLS.map(c => DIRTY_FROM[c] || c);
-function markDirtySlots(F,P,AL,na,n,pn,b0,b1,seq,ST,nb) {
-    const B=DIRTY_BLOCK, nc=DIRTY_COLS.length, I=F.id, J=P.id, A=DIRTY_FROM_COLS.map(c => dirtyInts(F[c])), Q=DIRTY_FROM_COLS.map(c => dirtyInts(P[c])), idc=DIRTY_COLS.indexOf('id');
-    const all=b => {for (let c=0;c<nc;c++) ST[c*nb+b]=seq;};
-    if (n>pn) for (let b=Math.max(b0,Math.floor(pn/B));b<b1;b++) if ((b+1)*B>pn && b*B<n) all(b);
-    for (let i=0;i<na;i++) {
-        const s=AL[i], b=(s/B)|0, id=I[s];
-        if (s>=n) continue;
-        if (id!==J[s]) {ST[idc*nb+b]=seq;if (id>=0) {all(b);continue;}}
-        if (id<0) continue;
-        for (let c=0;c<nc;c++) if (A[c][s]!==Q[c][s]) ST[c*nb+b]=seq;
-    }
-}
-function markDirtyRun(F,P,n,pn,b0,b1,seq,ST,nb,metaOnly) {
-    const W=dirtyWork;
-    if (W.nb!==nb) {W.nb=nb;W.born=new Uint8Array(nb);W.masks=new Map();}
-    const mask=name => {let M=W.masks.get(name);if (!M) W.masks.set(name,M=new Uint8Array(nb));return M;};
-    const I=F.id, scanned=new Set(['id']);
-    if (metaOnly) W.born.fill(0,b0,b1);
-    else dirtyIds(I,P.id,mask('id'),W.born,b0,b1,n,pn);
-    for (let c=0;c<DIRTY_COLS.length;c++) {
-        if (metaOnly && !DIRTY_META.has(DIRTY_COLS[c])) continue;
-        const from=DIRTY_FROM[DIRTY_COLS[c]] || DIRTY_COLS[c], M=mask(from);
-        if (!scanned.has(from)) {
-            const A=dirtyInts(F[from]), Q=dirtyInts(P[from]), a=dirtyWords(A), q=a && dirtyWords(Q);
-            dirtyScan(A,Q,q ? a : null,q,q && dirtyHalves(a),q && dirtyHalves(q),8/A.BYTES_PER_ELEMENT,I,M,W.born,b0,b1,n);
-            scanned.add(from);
-        }
-        for (let b=b0,base=c*nb;b<b1;b++) if (M[b]) ST[base+b]=seq;
-    }
-}
 // A frame's marks begin (this frame's seq; the last frame to compare with,
 // or none: every block marked) and end (copied into the frame: its record).
 function dirtyBegin(F,n) {
     const nc=DIRTY_COLS.length, nb=Math.ceil(F.cap/DIRTY_BLOCK), used=Math.ceil(n/DIRTY_BLOCK), D=dirty;
-    if (D.cap!==F.cap) {D.cap=F.cap;D.stamps=sharedArray(Int32Array,nc*nb);D.prev=null;}
-    const seq=++D.seq, P=D.prev && D.prev.buf!==F.buf ? D.prev : null;
+    if (D.cap!==F.cap) {D.cap=F.cap;D.stamps=pm.st.stamps;D.prev=null;}
+    const seq=++D.seq, P=D.prev && D.prev.base!==F.base ? D.prev : null;
     if (!P) for (let c=0;c<nc;c++) D.stamps.fill(seq,c*nb,c*nb+used);
     return {seq,prev:P,pn:Math.min(D.prevN,n),nb};
 }
@@ -591,102 +298,97 @@ function dirtyBegin(F,n) {
 function dirtyEnd(F,n,offset,seq,tick) {
     const D=dirty, nb=Math.ceil(F.cap/DIRTY_BLOCK);
     D.prev=F;D.prevN=n;D.prevTick=Number.isFinite(tick) ? tick : -1;
-    new Int32Array(F.buf,offset,D.stamps.length).set(D.stamps);
-    return {offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS};
+    new Int32Array(F.buf,F.base+offset,D.stamps.length).set(D.stamps);
+    return {offset:F.base+offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS};
 }
-// A frame's slot ranges, split for this worker and its helpers (whole
-// blocks of DIRTY_BLOCK slots each): a range's fill (J.nn slots listed of
-// J.n), its ghosts and its change marks. Returns its count listed (from
-// F.order[s0] on), rangeChanged as it left it.
-function frameRange(J,F,P) {
-    const s1=Math.min(J.s1,J.nn);
-    let count=0;
-    rangeChanged=false;
-    // (By changes: J.delta, from the last frame P, this buffer whole as of J.bseq.)
-    const dl=J.delta && P ? {A:P,bseq:J.bseq,seq:J.seq,K:J.K,phase:J.phase,ta:J.ta} : null;
-    if (J.msrc) copyMotionRange(J.msrc,J.s0,J.s1);
-    motTargetFor(J.msrc);
-    if (J.s0<s1) count=fillRange(F,source,meta,J.s0,s1,J.nn,J.player,J.areaUnit,J.metaCopy,dl,J.seq);
-    else if (dl && fillBlocks) fillBlocks.fill(0);
-    const changed=rangeChanged;
-    if (J.ghosts && J.s0<s1) applyGhosts(F,J.s0,s1,J.ghosts);
-    if (J.marks && P) {
-        if (lastStamped && J.s0<s1) markDirtySlots(F,P,fillList,lastFilled,J.n,J.pn,(J.s0/DIRTY_BLOCK)|0,Math.ceil(J.s1/DIRTY_BLOCK),J.seq,dirty.stamps,J.nb);
-        else markDirtyRange(F,P,J.n,J.pn,(J.s0/DIRTY_BLOCK)|0,Math.ceil(J.s1/DIRTY_BLOCK),J.seq,dirty.stamps,J.nb,dl && J.s0<s1 ? fillBlocks : null,J.metaCopy);
-    }
-    rangeChanged=changed;
-    return count;
+// The frame's job (one a frame, its fields rewritten: no objects a frame).
+const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0};
+// A range's call (pres_fill.rs k_pres_range) into a thread's argument block.
+function writeJob(th,F,Pf,s0,s1) {
+    const I=th.I, P=th.P, J=job;
+    I[512]=F.tab;I[513]=Pf ? Pf.tab : 0;I[514]=pm.S;I[515]=pm.M;I[516]=pm.st.T;I[517]=th.AL;I[518]=th.CL;I[519]=th.BK;I[520]=th.outR.base;I[521]=J.light;
+    P[0]=s0;P[1]=s1;P[2]=J.nn;P[3]=J.n;P[4]=J.player;P[5]=J.areaUnit;P[6]=J.metaCopy?1:0;P[7]=J.mode;P[8]=J.seq;P[9]=J.bseq;P[10]=PRESENT_DELTA_ROUNDS;
+    P[11]=J.phase;P[12]=J.ta;P[13]=visFollow;P[14]=visTurn;P[15]=faceVel;P[16]=lightFull;P[17]=0;P[18]=pm.hasCm?1:0;P[19]=pm.hasPvOD?1:0;
+    P[20]=J.ghosts?1:0;P[21]=J.gw;P[22]=J.gh;P[23]=J.tile;P[24]=J.marks?1:0;P[25]=J.pn;P[26]=J.nb;P[27]=th.outv[2];
 }
 // ---- helpers: this script again, named present-helper ----
 // From PRESENT_HELPER_MIN slots a frame's ranges are split over this thread
 // and up to 3 helpers (a quarter of the cores less one), each range written
-// by one thread: the frame, the columns and the per-slot state are shared.
-// (One thread at 400k slots: 60-80 ms a frame, a frame every 2-3 ticks.)
-// Jobs go by message; they report through helperDone (Atomics), which this
-// thread waits on after its own range. A helper is used once it said it is
-// ready (its script loaded); one that fails turns the helpers off.
+// by one thread. A helper has its own instance of the module over the same
+// two memories, its own stack and argument block; this thread writes a
+// job's arguments there and posts it a trigger; it reports through
+// helperDone (Atomics), which this thread waits on after its own range.
 const HELPER=typeof self==='object' && self.name==='present-helper';
+const NO_PRESENT=typeof self==='object' && !!self.location && /[?&]present=0(?:&|$)/.test(self.location.search || '');
 const PRESENT_HELPER_MIN=60000;
 const PRESENT_ALL_HELPERS_MIN=1000000;
 // Frames by changes from this many slots; every slot refilled at least every
 // PRESENT_DELTA_ROUNDS frames (a change the rules miss shows that late).
 let PRESENT_DELTA_MIN=100000;
 const PRESENT_DELTA_ROUNDS=32;
-let helpers=null, helpersOff=false, helperBound='', helperDone=null, helperResults=null, bindVersion=0;
+const HELPER_STACK=256*1024;
+let helpers=null, helpersOff=false, helperDone=null, helperResults=null;
+const FILL_MSG={type:'fill'};
 function stopHelpers(why) {
     if (helpers) for (const h of helpers) {try {h.worker.terminate();} catch {}}
     helpers=null;helpersOff=true;
-    helperBound='';
     if (why) console.warn('presentation helpers off: '+why);
 }
+// (Another simulation memory: helpers made anew, on it.)
+function restartHelpers() {if (helpers) {stopHelpers(null);helpersOff=false;}}
 function presentHelpers(nn) {
     if (helpersOff || HELPER || nn<PRESENT_HELPER_MIN || !SHARED || typeof Worker!=='function' || !(self.location && self.location.href)) return null;
     if (!helpers) {
         const cores=(self.navigator && navigator.hardwareConcurrency) || 4, want=Math.max(0,Math.min(3,(cores>>2)-1));
         if (!want) {helpersOff=true;return null;}
-        helperDone=new Int32Array(new SharedArrayBuffer(4));helperResults=new Int32Array(new SharedArrayBuffer(8*want));
+        helperDone=new Int32Array(new SharedArrayBuffer(4));helperResults=new Int32Array(new SharedArrayBuffer(4*want));
         helpers=[];
         for (let i=0;i<want;i++) {
             let worker;
             try {worker=new Worker(self.location.href,{name:'present-helper'});} catch (err) {break;}
-            const h={worker,ready:false};
+            const a=pmAlloc(8192), stack=pmAlloc(HELPER_STACK);
+            const th={args:a.base,I:new Int32Array(pm.mem.buffer,a.base,1024),P:new Float64Array(pm.mem.buffer,a.base+4096,512),AL:0,CL:0,BK:0,outR:null,outv:null,len:-1};
+            pmThreadOut(th);
+            const h={worker,ready:false,th};
             worker.onmessage=ev=>{const m=ev.data||{};if (m.type==='helperReady') h.ready=true;else if (m.type==='error') console.warn(m.message);};
             worker.onerror=ev=>{if (ev && ev.preventDefault) ev.preventDefault();stopHelpers(String(ev && ev.message || 'a helper failed'));};
+            worker.postMessage({type:'helperInit',module:pm.mod,memory:pm.mem,simMemory:pm.sim,stackTop:stack.base+HELPER_STACK,args:a.base,slot:i,done:helperDone,results:helperResults});
             helpers.push(h);
         }
         if (!helpers.length) {helpers=null;helpersOff=true;return null;}
-        helperBound='';
     }
-    if (!helpers.every(h=>h.ready)) return null;
-    const key=stateVersion+':'+bindVersion;
-    if (helperBound!==key) {
-        for (const h of helpers) h.worker.postMessage({type:'helperBind',columns:source,meta:{buf:meta.buf,cap:meta.cap,off:meta.off||0},last,vis,face,ghost,mot,fullAt,easing,stamps:dirty.stamps,done:helperDone,results:helperResults});
-        helperBound=key;
-    }
+    for (let i=0;i<helpers.length;i++) if (!helpers[i].ready) return null;
     return helpers;
 }
 // The frame's ranges (this thread the last): the count listed, F.order
 // made contiguous, fillChanged; -1 when the helpers failed (the frame is
 // dropped, the helpers off).
 let fillChanged=false, rangeThreads=1;
-function runRanges(J,F,P) {
+const rangeAt=new Int32Array(10);
+function runRanges(F,Pf) {
     // (Paced, a frame has some ticks' time: fewer threads at once beside a
-    // simulation short of them. Four at a time cost it ~1.5 TPS more at 600k
-    // than one, at the same frames a second.)
-    // (Millions of slots: every helper whatever the pace; one thread took
-    // ~260 ms a frame at 2M units, frames 1.5 s behind the simulation.)
-    const all=presentHelpers(J.nn), H=all && pacing.pace>1 && J.nn<PRESENT_ALL_HELPERS_MIN ? (pacing.pace===2 ? all.slice(0,1) : null) : all;
-    const B=DIRTY_BLOCK, parts=H ? H.length+1 : 1;
-    const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/parts))*B, R=[];
-    for (let s=0;s<J.n;s+=per) R.push([s,Math.min(J.n,s+per)]);
-    if (!R.length) {fillChanged=false;return 0;}
-    const sent=R.length-1;
+    // simulation short of them. Millions of slots: every helper whatever the pace.)
+    const J=job, all=presentHelpers(J.nn);
+    const nh=!all ? 0 : pacing.pace>1 && J.nn<PRESENT_ALL_HELPERS_MIN ? (pacing.pace===2 ? 1 : 0) : all.length;
+    const B=DIRTY_BLOCK, parts=nh+1;
+    const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/parts))*B;
+    let nr=0;
+    for (let s=0;s<J.n;s+=per) {rangeAt[2*nr]=s;rangeAt[2*nr+1]=Math.min(J.n,s+per);nr++;}
+    if (!nr) {fillChanged=false;return 0;}
+    const sent=nr-1;
     if (sent) {
         Atomics.store(helperDone,0,0);
-        for (let r=0;r<sent;r++) H[r].worker.postMessage({...J,type:'fill',s0:R[r][0],s1:R[r][1],slot:r,buf:F.buf,prevBuf:P ? P.buf : null,cap:F.cap,visFollow,visTurn,faceVel,lightFull});
+        for (let r=0;r<sent;r++) {
+            const th=all[r].th;
+            pmThreadScratch(th,per);
+            writeJob(th,F,Pf,rangeAt[2*r],rangeAt[2*r+1]);
+            all[r].worker.postMessage(FILL_MSG);
+        }
     }
-    const own=frameRange({...J,s0:R[sent][0],s1:R[sent][1]},F,P);
-    let changed=rangeChanged;
+    const M=pm.main;
+    pmThreadScratch(M,F.cap);
+    writeJob(M,F,Pf,rangeAt[2*sent],rangeAt[2*sent+1]);
+    pm.x.k_pres_range(M.args,0);
     if (sent) {
         const deadline=performance.now()+2000;
         for (;;) {
@@ -695,45 +397,45 @@ function runRanges(J,F,P) {
             if (performance.now()>deadline) {stopHelpers('no answer in 2 s');return -1;}
             Atomics.wait(helperDone,0,d,100);
         }
-        for (let r=0;r<sent;r++) if (helperResults[2*r]<0) {stopHelpers('a range failed');return -1;}
+        for (let r=0;r<sent;r++) if (helperResults[r]<0) {stopHelpers('a range failed');return -1;}
     }
     const FORD=F.order;
-    let total=0;
-    for (let r=0;r<R.length;r++) {
-        const c=r===sent ? own : helperResults[2*r];
-        if (r<sent && helperResults[2*r+1]) changed=true;
-        if (R[r][0]!==total && c) FORD.copyWithin(total,R[r][0],R[r][0]+c);
+    let total=0, changed=false;
+    for (let r=0;r<nr;r++) {
+        const o=r===sent ? M.outv : all[r].th.outv, c=o[0];
+        if (o[1]) changed=true;
+        if (rangeAt[2*r]!==total && c) FORD.copyWithin(total,rangeAt[2*r],rangeAt[2*r]+c);
         total+=c;
     }
-    fillChanged=changed;rangeThreads=R.length;
+    fillChanged=changed;rangeThreads=nr;
     return total;
 }
+// A helper: its instance (the module over the two memories, its own stack), then ranges.
+const helper={x:null,args:0,slot:0,done:null,results:null};
 function onHelperMessage(event) {
     const m=event.data;
-    if (m.type==='helperBind') {
-        source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap,m.meta.off||0);last=m.last;
-        Object.assign(vis,m.vis);Object.assign(face,m.face);Object.assign(ghost,m.ghost);Object.assign(mot,m.mot);fullAt=m.fullAt;easing=m.easing;
-        dirty.stamps=m.stamps;helperDone=m.done;helperResults=m.results;
+    if (m.type==='helperInit') {
+        try {
+            helper.x=new WebAssembly.Instance(m.module,{env:{memory:m.memory,simMemory:m.simMemory}}).exports;
+            helper.x.__stack_pointer.value=m.stackTop;
+            helper.args=m.args;helper.slot=m.slot;helper.done=m.done;helper.results=m.results;
+            postMessage({type:'helperReady'});
+        } catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
         return;
     }
     if (m.type!=='fill') return;
-    let count=-1, changed=0;
-    try {
-        // (After the job's post, which follows the motion copy: read it after this.)
-        Atomics.load(helperDone,0);
-        visFollow=m.visFollow;visTurn=m.visTurn;faceVel=m.faceVel;lightFull=m.lightFull;
-        count=frameRange(m,simFrameViews(m.buf,m.cap),m.prevBuf ? simFrameViews(m.prevBuf,m.cap) : null);
-        changed=rangeChanged ? 1 : 0;
-    } catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
-    finally {helperResults[2*m.slot]=count;helperResults[2*m.slot+1]=changed;Atomics.add(helperDone,0,1);Atomics.notify(helperDone,0);}
+    let res=-1;
+    try {helper.x.k_pres_range(helper.args,0);res=1;}
+    catch (err) {postMessage({type:'error',message:'presentation helper: '+String(err.stack || err)});}
+    finally {helper.results[helper.slot]=res;Atomics.add(helper.done,0,1);Atomics.notify(helper.done,0);}
 }
 // Frames yield to the simulation: while ticks come slower than their rate
 // (the simulation short of time), a frame is made only every `pace` ticks
 // (up to PACE_MAX), back a step toward every tick after 3 s at the rate.
 // (At 600k units the simulation ran 18.7 TPS beside 3-4 frames a second,
 // 15.5 beside one a tick: frames cost the threads it needs.) The tick
-// before a frame's asks for its snapshot (copyMotion: else the frame waits
-// a tick more). self.presentPacing = false: a frame every tick (tests).
+// before a frame's asks for its snapshot (else the frame waits a tick
+// more). self.presentPacing = false: a frame every tick (tests).
 const PACE_MAX=4, PACE_FRAME_MS=250;
 const pacing={pace:1,ticks:[],times:[],at:0,good:0};
 function paceDue(m) {
@@ -756,69 +458,69 @@ function paceDue(m) {
     if (m.tick+1-lastBuiltTick>=P.pace && snapCtl) Atomics.store(snapCtl,1,1);
     return false;
 }
+// (A new source or state: the next frame's membership counts as changed.)
+let membershipReset=true;
 function draw() {
     const started=performance.now();
     scheduled=false;
     const tick=latest;
-    if (!tick || !source) return;
+    if (!tick || !source || !pm.x) return;
     const cap=source.id.length;
     const columns = tick.n >= 5000 && tick.gw > 0 ? Math.ceil(tick.gw / 16) : 0;
     const rows = columns ? Math.ceil(tick.gh / 16) : 0;
     const indexBytes = columns * rows ? columns * rows * 8 + cap * 8 : 0;
-    const buf=acquire(cap*SIM_FRAME_SLOT_BYTES + indexBytes + dirtyBytes(cap));
-    if (!buf) return;
+    const frameBytes=cap*SIM_FRAME_SLOT_BYTES + indexBytes + dirtyBytes(cap);
+    if (pmStateFor(cap)) membershipReset=true;
+    const e=acquireUnits(frameBytes,cap);
+    if (!e) return;
     latest=null;
-    const C=source;
     const t0=performance.now();
-    const split=tick.n>=PRESENT_DELTA_MIN;
-    const got=copyMotion(C,tick.n,tick.tick,split);
+    const got=takeSnapshot(tick.tick,tick.n);
     const t1=performance.now();
-    if (got===-3) {release(buf);return;}
-    if (got<0) {torn++;release(buf);return;}
-    const F=simFrameViews(buf,cap), nn=Math.min(tick.n,got);
-    let changed=!last || last.length !== cap;
-    if (!last || last.length !== cap) last=sharedArray(Int32Array,cap,-1);
-    ensureState(cap,!!tick.history);
+    if (got===-3) {e.busy=false;return;}
+    if (got<0) {torn++;e.busy=false;return;}
+    let changed=membershipReset;
+    membershipReset=false;
+    const F=e.F, nn=Math.min(tick.n,got);
     {const dk=lastBuiltTick>=0 ? Math.max(1,Math.min(16,tick.tick-lastBuiltTick)) : 1;visFollow=1-Math.pow(1-VIS_FOLLOW,dk);visTurn=1-Math.pow(1-VIS_TURN,dk);faceVel=1-Math.pow(1-FACE_VEL,dk);lastBuiltTick=tick.tick;}
     if (tick.lightRange>0) lightFull=tick.lightRange;
-    // (The metadata: copied when this buffer's is older, fillRange.)
-    let metaCopy=true;
-    {
-        const rev=metaRev ? Atomics.load(metaRev,0) : -2, e=filling;
-        metaCopy=!e || e.metaRev!==rev || rev===-2 || e.metaN<nn;
-        if (metaCopy && e) {e.metaRev=rev;e.metaN=nn;}
-    }
-    // Ghosts and marks in the ranges, but for ghosts from a grid the
-    // helpers do not share (then both here after them).
-    const G=tick.history ? ghostSight(tick) : null, gShared=!G || G.light.buffer instanceof SharedArrayBuffer;
+    // (The metadata: copied when this buffer's is older.)
+    const rev=metaRev ? Atomics.load(metaRev,0) : -2;
+    const metaCopy=e.metaRev!==rev || rev===-2 || e.metaN<nn;
+    if (metaCopy) {e.metaRev=rev;e.metaN=nn;}
+    // Team + history: ghosts by the fog's light (made for this tick).
+    const ghosts=!!tick.history && !!fogState.light && fogState.w===(tick.gw|0) && fogState.h===(tick.gh|0);
     const D=dirtyBegin(F,tick.n);
-    // By changes (fillRange): from PRESENT_DELTA_MIN slots, this buffer built
-    // before at this size, the last frame another buffer, no ghosts.
-    const e=filling, bseq=e && e.cap===cap && e.seq>0 ? e.seq : 0;
-    const delta=nn>=PRESENT_DELTA_MIN && !G && !!D.prev && bseq>0 && D.prev.cap===cap;
-    const J={n:tick.n,nn,player:tick.player,areaUnit:tick.areaUnit,metaCopy,ghosts:gShared ? G : null,marks:gShared && !!D.prev,pn:D.pn,seq:D.seq,nb:D.nb,
-        delta,bseq,K:PRESENT_DELTA_ROUNDS,phase:D.seq%PRESENT_DELTA_ROUNDS,msrc:motSrc,ta:dirty.prevTick};
-    const count=runRanges(J,F,D.prev);
-    if (count<0) {release(buf);dirty.prev=null;if (filling) {filling.metaRev=-1;filling.seq=0;}return;}
-    if (e) {e.seq=D.seq;e.cap=cap;}
-    // (The snapshot rewritten while the ranges copied it: positions of two
+    // By changes: from PRESENT_DELTA_MIN slots, this buffer built before at
+    // this size, the last frame another buffer, no ghosts; by the
+    // simulation's marks when it keeps them (pvAt).
+    const bseq=e.seq>0 ? e.seq : 0;
+    const delta=nn>=PRESENT_DELTA_MIN && !ghosts && !!D.prev && bseq>0 && D.prev.cap===cap;
+    const J=job;
+    J.n=tick.n;J.nn=nn;J.player=tick.player;J.areaUnit=tick.areaUnit;J.metaCopy=metaCopy;
+    J.mode=!delta ? 0 : pm.hasPvAt && dirty.prevTick>=0 ? 2 : 1;
+    J.seq=D.seq;J.bseq=bseq;J.phase=D.seq%PRESENT_DELTA_ROUNDS;J.ta=dirty.prevTick;
+    J.ghosts=ghosts;J.gw=tick.gw|0;J.gh=tick.gh|0;J.tile=tick.tile||32;J.light=ghosts ? fogState.at[0].base : 0;
+    J.marks=!!D.prev;J.pn=D.pn;J.nb=D.nb;
+    const count=runRanges(F,D.prev);
+    if (count<0) {e.busy=false;dirty.prev=null;e.metaRev=-1;e.seq=0;membershipReset=true;return;}
+    e.seq=D.seq;
+    // (The snapshot rewritten while the ranges read it: positions of two
     // ticks in this frame, a glitch of a frame; counted.)
-    if (motSrc && motHead && Atomics.load(motHead,0)!==motTick) torn++;
+    if (motHead && Atomics.load(motHead,0)!==motTick) torn++;
     if (fillChanged) changed=true;
-    if (!gShared) {
-        applyGhosts(F,0,nn,G);
-        if (D.prev) markDirtyRange(F,D.prev,tick.n,D.pn,0,Math.ceil(tick.n/DIRTY_BLOCK),D.seq,dirty.stamps,D.nb);
-    }
     const t2=performance.now();
     if(changed) membership++;
     // Stable simulation identity order even after authoritative slot reuse.
+    // (Sorted again when membership changed; else the last order, kept.)
     const FORD=F.order;
-    if(changed || !lastOrder || lastOrder.length!==count) {
-        frameIdOrder(FORD,F.id,count,F.cap);
-        lastOrder=FORD.slice(0,count);
-    } else FORD.set(lastOrder);
+    if(changed || !lastOrder || lastOrderN!==count) {
+        frameIdOrder(F,count);
+        if (!lastOrder || lastOrder.length<F.cap) lastOrder=new Int32Array(F.cap);
+        lastOrder.set(FORD.subarray(0,count));lastOrderN=count;
+    } else FORD.set(lastOrder.subarray(0,count));
     const t3=performance.now();
-    const world={units:{buf,cap,n:tick.n,count,mver:membership},strings:[0,strings]};
+    const world={units:{buf:pm.mem.buffer,base:e.base,bytes:frameBytes,rid:e.rid,gen:generation,cap,n:tick.n,count,mver:membership},strings:[0,strings]};
     if (indexBytes) world.units.renderBuckets = buildRenderBuckets(F, count, columns, rows, tick.tile || 32);
     world.units.dirty = dirtyEnd(F, tick.n, cap * SIM_FRAME_SLOT_BYTES + indexBytes, D.seq, tick.tick);
     if(structure && structureRevision!==sentStructureRevision) {
@@ -831,40 +533,48 @@ function draw() {
         const b=acquire(projectiles.buf.byteLength,'projectiles');
         if(b) {new Uint8Array(b,0,projectiles.buf.byteLength).set(new Uint8Array(projectiles.buf));world.projectiles={...projectiles,buf:b};sentProjectileRevision=projectileRevision;}
     }
-    if(cells) {
-        // (The simulation's own cell columns, shared: type and owner a tile.)
-        const delta=[], ct=cells.type, co=cells.owner, n=Math.min(ct.length,co.length);
-        if(!oldCells || oldCells.length!==n*2) oldCells=new Int32Array(n*2).fill(-2147483648);
-        for(let i=0;i<n;i++) { const a=ct[i], b=co[i]; if(a!==oldCells[i*2] || b!==oldCells[i*2+1]) {
-            oldCells[i*2]=a;oldCells[i*2+1]=b;delta.push(i,a,b);
-        } }
-        if(delta.length) world.state={cells:delta};
-        cells=null;
-    }
+    if(cells) {const d=cellChanges();if (d) world.state={cells:d};cells=null;}
     const t4=performance.now();
-    // (phases: the motion copy, the ranges (fill, ghosts, marks), the order,
-    // the rest; then how many threads made the ranges, and the pace.)
-    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,lastFilled,lastStamped?1:0]});
+    // (phases: the snapshot, the ranges (fill, ghosts, marks), the order,
+    // the rest; then how many threads made the ranges, the pace, the slots
+    // filled on this thread and whether by the simulation's marks.)
+    (out || self).postMessage({type:'presentation',epoch,tick:tick.tick,world,buildMs:t4-started,torn,phases:[t1-t0,t2-t1,t3-t2,t4-t3,rangeThreads,pacing.pace,pm.main.outv[3],pm.main.outv[2]]});
     schedule();
 }
-// Units the simulation moved to other slots (sim_unit_state.js
-// simUnitStateRelayoutStep: pairs from, to; their ids): their drawn
-// position, facing, easing and last-seen ghost follow them (else a moved
-// unit turned anew and an unseen one lost its ghost). The frames' own
-// per-slot records (last ids, fullAt) stay: the new slot is filled anew.
-// (Only where the old slot still holds that unit's state: a frame drawn
-// meanwhile may have let it go.)
-function slotMoves(P) {
-    if (!P || !source || !source.id) return;
-    const ID=source.id;
-    for (let j=0;2*j+1<P.length;j++) {
-        const f=P[2*j],t=P[2*j+1],id=t<ID.length ? ID[t] : -1;
-        if (!(id>0)) continue;
-        if (vis.id && f<vis.id.length && t<vis.id.length && vis.id[f]===id) {vis.x[t]=vis.x[f];vis.y[t]=vis.y[f];vis.id[t]=id;vis.id[f]=-1;}
-        if (face.id && f<face.id.length && t<face.id.length && face.id[f]===id) {face.a[t]=face.a[f];face.vx[t]=face.vx[f];face.vy[t]=face.vy[f];face.id[t]=id;face.id[f]=-1;}
-        if (ghost.id && f<ghost.id.length && t<ghost.id.length && ghost.id[f]===id) {ghost.x[t]=ghost.x[f];ghost.y[t]=ghost.y[f];ghost.id[t]=id;ghost.id[f]=-1;}
-        if (easing && f<easing.length && t<easing.length) {easing[t]=easing[f];easing[f]=0;}
+// The tiles whose type or owner changed since the last frame (pres_fill.rs
+// k_pres_cells over the map's columns in the simulation's heap; from the
+// baseline the simulation sent, else every tile): (tile, type, owner)
+// triples, or null.
+function cellChanges() {
+    const ct=cells.type, co=cells.owner, n=Math.min(ct.length,co.length);
+    if (ct.constructor.name!=='Uint8Array' || co.constructor.name!=='Int8Array') throw new Error('presentation: the cell columns are not Uint8 / Int8');
+    if (!pm.cells || pm.cells.n!==n) {
+        if (pm.cells) {pmFree(pm.cells.oldR);pmFree(pm.cells.outR);pmFree(pm.cells.cntR);}
+        const oldR=pmAlloc(8*n), outR=pmAlloc(12*n), cntR=pmAlloc(64);
+        pm.cells={n,oldR,outR,cntR,old:new Int32Array(pm.mem.buffer,oldR.base,2*n).fill(-2147483648),out:new Int32Array(pm.mem.buffer,outR.base,3*n),cnt:new Int32Array(pm.mem.buffer,cntR.base,1)};
     }
+    const K=pm.cells;
+    if (cellBaseline) {if (cellBaseline.length===2*n) K.old.set(cellBaseline);cellBaseline=null;}
+    const I=pm.I, P=pm.P;
+    I[512]=ct.byteOffset;I[513]=co.byteOffset;I[514]=K.oldR.base;I[515]=K.outR.base;I[516]=K.cntR.base;P[0]=n;
+    pm.x.k_pres_cells(pm.args,0);
+    const m=K.cnt[0];
+    return m ? K.out.slice(0,3*m) : null;
+}
+// Units the simulation moved to other slots (sim_unit_state.js
+// simUnitStateRelayoutStep: pairs from, to): their drawn position, facing,
+// easing and last-seen ghost follow them (pres_fill.rs k_pres_moves). The
+// frames' own per-slot records (last ids, when filled) stay: the new slot
+// is filled anew.
+function slotMoves(pairs) {
+    if (!pairs || !source || !source.id || !pm.st || !pm.x) return;
+    const np=pairs.length>>1;
+    if (!np) return;
+    const r=pmRegion('moves',8*np);
+    new Int32Array(pm.mem.buffer,r.base,2*np).set(pairs.subarray(0,2*np));
+    const I=pm.I, P=pm.P;
+    I[512]=r.base;I[513]=source.id.byteOffset;I[514]=pm.st.T;P[0]=np;P[1]=pm.st.cap;P[2]=1;
+    pm.x.k_pres_moves(pm.args,0);
 }
 function onMessage(event) {
     const m=event.data;
@@ -872,28 +582,36 @@ function onMessage(event) {
         if(m.type==='port') {out=m.port;out.onmessage=onMessage;return;}
         if(m.type==='snaps') {
             snapCtl=m.ctl;
-            // (Views into the simulation's wasm heap, or buffers of their own.)
-            snaps=m.snaps ? m.snaps : m.bufs.map(buf=>({head:new Int32Array(buf,0,2),x:new Int32Array(buf,8,m.cap),y:new Int32Array(buf,8+m.cap*4,m.cap),px:new Int32Array(buf,8+m.cap*8,m.cap),py:new Int32Array(buf,8+m.cap*12,m.cap)}));
+            // (Views into the simulation's wasm heap: read there in place.)
+            if (!m.snaps) throw new Error('presentation: the snapshots must be in the simulation\'s heap');
+            snaps=m.snaps;
             return;
         }
-        // A tick's end: its frame at once (no timer between: the copy must
-        // be taken before the next tick starts).
+        // A tick's end: its frame at once (no timer between: the snapshot
+        // must be taken before the next tick starts).
         if(m.type==='tick') {
+            // (?present=0, a measurement: no frames.)
+            if (NO_PRESENT) return;
             // (The fog first: cheap, and the frame's ghosts read the same tick.)
-            if (m.fog) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
+            if (m.fog && pm.x) {try {updateFog(m);} catch(err) {postMessage({type:'error',message:String(err.stack || err)});}}
             if (!paceDue(m)) return;
             latest=m;if(!scheduled && source && ready) {scheduled=true;draw();}return;
         }
-        if(m.type==='bind') {bindVersion++;epoch=m.epoch;generation=m.generation;source=m.columns;meta=simMetaViews(m.meta.buf,m.meta.cap,m.meta.off||0);metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;last=null;lastBuiltTick=-1;buildRenderBuckets.previous=null;schedule();}
+        if(m.type==='bind') {
+            pmInit(m.simMemory);pm.prevReady=false;epoch=m.epoch;generation=m.generation;source=m.columns;
+            meta={buf:m.meta.buf,cap:m.meta.cap,off:m.meta.off||0};pmBindSource(source,meta);
+            metaRev=m.metaRev||null;for(const e of buffers.values()) e.metaRev=-1;
+            if (pm.st) pm.st.views.last.fill(-1);
+            membershipReset=true;lastBuiltTick=-1;schedule();
+        }
         else if(m.type==='strings') strings=m.strings;
         else if(m.type==='slotMoves') slotMoves(m.pairs);
         else if(m.type==='ready') {ready=true;schedule();}
         else if(m.type==='structures') {structure=m.table;structureRevision=m.revision;}
         else if(m.type==='projectiles') {projectiles=m.table;projectileRevision=m.revision;}
-        else if(m.type==='cellBaseline') oldCells=m.cells.slice();
+        else if(m.type==='cellBaseline') cellBaseline=m.cells;
         else if(m.type==='cells') cells={type:m.ctype,owner:m.cowner};
-        else if(m.type==='release') {release(m.buf);if(snapCtl)Atomics.store(snapCtl,1,1);schedule();}
+        else if(m.type==='release') {if (m.rid>0) releaseRegion(m.rid,m.gen); else release(m.buf);if(snapCtl)Atomics.store(snapCtl,1,1);schedule();}
     } catch(err) {postMessage({type:'error',message:String(err.stack || err)});}
 }
 self.onmessage=HELPER ? onHelperMessage : onMessage;
-if (HELPER) postMessage({type:'helperReady'});

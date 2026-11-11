@@ -15,10 +15,10 @@ assert.deepEqual(setup.errors, []);
 i.eval(`__scratch.actions=[];queueAction=a=>__scratch.actions.push(a);
 __scratch.check = () => { _simMoveStructs();
     // (The JavaScript's rules, from the objects.)
-    const code = (gx, gy) => { const e = getTileEntityRef(gx, gy); if (!e || e._stMine) return -1; const cell = grid[gy] && grid[gy][gx]; const co = cell && cell.item === e ? cell.owner : e.owner;
+    const code = (gx, gy) => { const e = getTileEntityRef(gx, gy); if (!e || e._stMine) return -1; const cell = grid[gy] && grid[gy][gx]; const co = cell && cellItemGet(cell) === e ? cellOwner[(cell) - 1] : e.owner;
         return Number.isInteger(e.owner) && e.owner >= 0 && e.owner === co && e.owner < 127 ? e.owner : -2; };
     const cls = (gx, gy) => { const e = getTileEntityRef(gx, gy); if (!e || e._stMine) return 0; if (e instanceof Tower) return String(e.type || '').startsWith('cloud') ? 5 : 1;
-        if (e instanceof Barrack || isSpawnerEntity(e)) return 3; const cell = grid[gy] && grid[gy][gx]; if (cell && cell.item === e) return isTrapItem(e) ? 2 : 4; return 0; };
+        if (e instanceof Barrack || isSpawnerEntity(e)) return 3; const cell = grid[gy] && grid[gy][gx]; if (cell && cellItemGet(cell) === e) return isTrapItem(e) ? 2 : 4; return 0; };
     const players = spatialUnitsComplexPlayerCount, B = SPATIAL_BLOCK_SIZE * CHUNK_SIZE, blk = new Int32Array(_simMoveStructBlocks.length);
     let bad = [], n = 0;
     for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) {

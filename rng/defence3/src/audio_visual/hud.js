@@ -719,7 +719,7 @@ function _getOwnedInfoPanelBuildings(owner) {
 
     for (const item of getCellItemsRowMajor()) {
         const cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (cell && cell.owner === owner && cell.item === item) tryAdd(item);
+        if (cell && renderCellValue(cell, 'owner') === owner && renderCellItem(cell) === item) tryAdd(item);
     }
     _ownedBuildingPresentation.set(owner, {tick:gameTime,grid,version:_tileEntityVersion,towers,barracks,spawners:collectorSpawners,out});
     return out;
@@ -816,7 +816,7 @@ function getFrameBuildingSummary(owner) {
         if(kind>3||!F.alive[s]||F.owner[s]!==owner||!(F.energy[s]>0||(flags&1)))continue;
         if(kind===3) {
             const cell=grid[F.gy[s]]?.[F.gx[s]];
-            if(!cell||cell.owner!==owner||cell.item!==_pageStructViews[s])continue;
+            if(!cell||renderCellValue(cell, 'owner')!==owner||renderCellItem(cell)!==_pageStructViews[s])continue;
         }
         const type=_pageFrameStrings[kind===1?F.utype[s]:F.type[s]]||'',statsKey=kind===1?'barrack_'+type:type;
         const key=kind===1?'barrack:'+type:kind===0?'tower:'+type:type||'unknown';
@@ -2338,7 +2338,7 @@ function _infoPanelDropGoneEntities() {
     // its getter: 191k getters were ~33 ms a refresh.)
     const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null, EN = T ? T.energy : null;
     const gone = e => {
-        if (EN && e && e._kind !== undefined) { if (e._kind >= 4) return false; const s = e._s; return (s >= 0 ? EN[s] : (e._last ? e._last.energy : 0)) <= 0; }
+        if (EN && e && e._kind !== undefined) { if (e._kind >= 4) return false; const s = e._s; return (s >= 0 ? EN[s] : _pageStructCol(e, 'energy')) <= 0; }
         return _infoPanelEntityGone(e);
     };
     if (selectedEntities.some(gone)) {
@@ -3300,7 +3300,7 @@ function infoHeader(name, obj, opts = null) {
     let gx = obj.gx !== undefined ? obj.gx : obj._gx;
     let gy = obj.gy !== undefined ? obj.gy : obj._gy;
     if (gx !== undefined && gy !== undefined && gy >= 0 && gy < GRID_H && gx >= 0 && gx < GRID_W) {
-        let aId = grid[gy][gx].areaId;
+        let aId = renderCellValue(grid[gy][gx], 'areaId');
         if (aId !== -1) {
             let area = getAreaById(aId);
             if (area) { areaSize = area.cells.length; areaLevel = area.multiplierLevel || 0; }

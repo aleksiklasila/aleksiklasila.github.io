@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const src=fs.readFileSync(path.join(__dirname,'../src/audio_visual/hud.js'),'utf8');
 const c=vm.createContext({_pageFrameStrings:['','norm','builder','IDLE','WORK','tower','house'],CMD_IDLE:0,_prettyUnitTypeLabel:x=>x,getBuildingDisplayName:x=>x,grid:[[]],_tileEntityVersion:1});
+vm.runInContext('var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;',c);
 vm.runInContext(src.slice(src.indexOf('let _frameUnitSummaries'),src.indexOf('function _getInfoPanelBuildingTypeKey')),c);
 const n=10000,F={n,count:n,order:Int32Array.from({length:n},(_,i)=>i)};
 for(const k of ['owner','energy','flags','type','wtype','wstate','cmd'])F[k]=new Int32Array(n);

@@ -1,0 +1,62 @@
+src\main.js:2042:            let aId = grid[gy][gx].areaId;
+src\game\map.js:7:// grid's cells views over them (grid[y][x].type, .owner, .areaId read and
+src\game\map.js:10:class GridCell {
+src\game\map.js:28:    toJSON() { return { type: this.type, item: this.item, owner: this.owner, areaId: this.areaId }; }
+src\game\map.js:48:        for (let x = 0; x < GRID_W; x++) row.push(new GridCell(y * GRID_W + x));
+src\game\map.js:82:                grid[cur.y][cur.x].areaId = areaId;
+src\game\chunk.js:702:function forEachGridCellInAreaRange(wx, wy, rangeAreaUnits, visitor) {
+src\game\chunk.js:708:    let cells = getGridCellsWithinDistanceOfSources(sources, maxDistance);
+src\data\data_state.js:24:let gridCellsByArea = []; // [areaId] -> [{x,y}]
+src\data\data_state.js:132:    gridCellsByArea = [];
+src\data\data_state.js:167:            let areaId = Math.floor(Number(cell.areaId));
+src\data\data_state.js:178:        if (Array.isArray(area.cells)) {
+src\data\data_state.js:179:            for (let i = 0; i < area.cells.length; i++) {
+src\data\data_state.js:180:                let c = area.cells[i];
+src\data\data_state.js:183:                    if (grid[c.y] && grid[c.y][c.x]) grid[c.y][c.x].areaId = aid;
+src\data\data_state.js:215:    gridCellsByArea = new Array(areaCount);
+src\data\data_state.js:228:        gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
+src\data\data_state.js:440:function getGridCellsWithinDistanceOfSources(sources, distance) {
+src\data\data_state.js:443:        let areaCells = gridCellsByArea[out[i]];
+src\data\data_state.js:1617:    const same = _structuresByArea && _structuresByAreaSet === _activeTileEntities && _structuresByAreaCells === gridCellsByArea;
+src\data\data_state.js:1631:    let byArea = new Array(gridCellsByArea.length);
+src\data\data_state.js:1644:    _structuresByAreaCells = gridCellsByArea;
+src\utils\utils_solo_snapshot.js:33:                if (n && runs[n-4] === c.type && runs[n-3] === c.owner && runs[n-2] === c.areaId) runs[n-1]++;
+src\utils\utils_solo_snapshot.js:34:                else runs.push(c.type, c.owner, c.areaId, 1);
+src\utils\utils_solo_snapshot.js:39:    batch('areas', areas.map(a => ({ id: a.id, type: a.type, cells: a.cells,
+src\things\things_utils.js:25:    if (aId >= 0 && Array.isArray(gridCellsByArea) && Array.isArray(gridCellsByArea[aId]) && gridCellsByArea[aId].length > 0) {
+src\things\things_utils.js:26:        return gridCellsByArea[aId];
+src\things\things_utils.js:29:    if (!area || !Array.isArray(area.cells) || area.cells.length <= 0) return [];
+src\things\things_utils.js:30:    return area.cells.filter(cp => cp && Number.isFinite(cp.x) && Number.isFinite(cp.y));
+src\things\things_utils.js:266:    if (L.cfor !== gridCellsByArea || !L.coff || L.coff.length < A + 1) {
+src\things\things_utils.js:268:        L.cfor = gridCellsByArea; L.layoutVer = (L.layoutVer | 0) + 1;
+src\things\things_utils.js:731:    const canonical = Array.isArray(gridCellsByArea) ? gridCellsByArea[aId] : null;
+src\things\things_utils.js:857:        let aId = grid[gy][gx].areaId;
+src\things\things_utils.js:1611:    return getGridCellsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0)));
+src\things\unit.js:3370:        for(const c of gridCellsByArea[a]||[]){x0=Math.min(x0,c.x);y0=Math.min(y0,c.y);x1=Math.max(x1,c.x);y1=Math.max(y1,c.y);}
+src\things\worker.js:1217:    forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
+src\things\worker.js:1796:    let targetAreaId = Number.isFinite(target.areaId)
+src\things\worker.js:1797:        ? Math.floor(target.areaId)
+src\audio_visual\hud.js:3303:        let aId = grid[gy][gx].areaId;
+src\audio_visual\hud.js:3306:            if (area) { areaSize = area.cells.length; areaLevel = area.multiplierLevel || 0; }
+src\audio_visual\info_panel_static.js:493:    if (own && own.gx >= 0 && own.gy >= 0 && own.gy < GRID_H && own.gx < GRID_W) { const aId = grid[own.gy][own.gx].areaId; if (aId !== -1) { const a = getAreaById(aId); if (a) { areaSize = a.cells.length; areaLevel = a.multiplierLevel || 0; } } }
+src\audio_visual\renderer.js:3204:                const id = row[x].areaId, o = (y * GRID_W + x) * 4, v = id >= 0 ? id + 1 : 0;
+src\audio_visual\renderer.js:5515:            let cells = gridCellsByArea[targetAreaId] || [];
+src\audio_visual\renderer.js:5633:            && pool.areaGrid === areaIdGrid && pool.areaCells === gridCellsByArea
+src\audio_visual\renderer.js:5658:    pool.areaCells = gridCellsByArea;
+src\audio_visual\renderer.js:5685:    if (key && key.grid === areaIdGrid && key.cells === gridCellsByArea && key.nb === areaNeighborIds && key.byId === _areaById
+src\audio_visual\renderer.js:5688:    let count = Math.max(_areaById.length, gridCellsByArea.length, areaNeighborIds.length);
+src\audio_visual\renderer.js:5707:    _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
+src\audio_visual\renderer.js:6116:// again when the areas are (gridCellsByArea replaced or resized).
+src\audio_visual\renderer.js:6119:    const Z = _visAreaCsr, G = gridCellsByArea;
+src\audio_visual\renderer2d.js:759:        let aId = grid[gy][gx].areaId;
+src\audio_visual\renderer2d.js:994:    if (!area || !area.cells || area.cells.length <= 0) return;
+src\audio_visual\renderer2d.js:1458:            let aid = grid[y][x].areaId;
+src\audio_visual\renderer2d.js:1464:            if (x === GRID_W - 1 || grid[y][x + 1].areaId !== aid) { p.moveTo(px + TILE - 1, py); p.lineTo(px + TILE - 1, py + TILE); }
+src\audio_visual\renderer2d.js:1465:            if (x === 0 || grid[y][x - 1].areaId !== aid) { p.moveTo(px + 1, py); p.lineTo(px + 1, py + TILE); }
+src\audio_visual\renderer2d.js:1466:            if (y === GRID_H - 1 || grid[y + 1][x].areaId !== aid) { p.moveTo(px, py + TILE - 1); p.lineTo(px + TILE, py + TILE - 1); }
+src\audio_visual\renderer2d.js:1467:            if (y === 0 || grid[y - 1][x].areaId !== aid) { p.moveTo(px, py + 1); p.lineTo(px + TILE, py + 1); }
+src\audio_visual\renderer3d.js:4121:            if (R && R.areaIds) { this.drawRangeAreas(R); return; }
+src\audio_visual\renderer3d.js:4344:            if (this.rangeAreaIdsVersion !== R.areaIdsVersion || this.rangeAreaIdsData !== R.areaIds || this.rangeAreaWidth !== R.width || this.rangeAreaHeight !== R.height) {
+src\audio_visual\renderer3d.js:4346:                if (this.rangeAreaWidth !== R.width || this.rangeAreaHeight !== R.height) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32I, R.width, R.height, 0, gl.RED_INTEGER, gl.INT, R.areaIds);
+src\audio_visual\renderer3d.js:4347:                else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, R.width, R.height, gl.RED_INTEGER, gl.INT, R.areaIds);
+src\audio_visual\renderer3d.js:4348:                this.rangeAreaIdsVersion = R.areaIdsVersion; this.rangeAreaIdsData = R.areaIds; this.rangeAreaWidth = R.width; this.rangeAreaHeight = R.height;

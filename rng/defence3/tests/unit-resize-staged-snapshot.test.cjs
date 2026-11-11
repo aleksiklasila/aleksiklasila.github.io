@@ -16,7 +16,7 @@ for (const p of [a, b]) p.eval('startSoloGame();');
 // (Both fresh: a restore after different histories diverges without q / e too (2026-11-08, open: UNIT_BIRTH_WASM_PLAN.md).)
 const r = JSON.parse(a.eval(`JSON.stringify((() => {
     const ids = [];
-    for (let i = 0; i < 1600; i++) { const gx = 20 + (i % 80), gy = 30 + Math.floor(i / 80); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit(i % 4 ? 'norm' : 'tank', 0, gx * TILE + 16, gy * TILE + 16); u.stackCount = 4; units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
+    for (let i = 0; i < 1600; i++) { const gx = 20 + (i % 80), gy = 30 + Math.floor(i / 80); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit(i % 4 ? 'norm' : 'tank', 0, gx * TILE + 16, gy * TILE + 16); u.stackCount = 4; units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
     for (let t = 0; t < 3; t++) gameTick();
     const before = units.filter(u => u && !u.dead && u.owner === 0).length;
     processActions([{ action: 'resizeUnitGroup', unitIds: ids, mode: 'x2', bySub: true, byLevel: false }], 0);
@@ -55,7 +55,7 @@ console.log('PASS: staged q / e through a snapshot', JSON.stringify({ before: r.
     for (const p of [e, c, d]) { p.eval('startSoloGame();'); p.eval('{ const f = getPlayerPopCap; getPlayerPopCap = p => f(p) + 100000; }'); }
     const r2 = JSON.parse(e.eval(`JSON.stringify((() => {
         const ids = [];
-        for (let i = 0; i < 6400; i++) { const gx = 10 + (i % 100), gy = 20 + Math.floor(i / 100); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); u.stackCount = 4; units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
+        for (let i = 0; i < 6400; i++) { const gx = 10 + (i % 100), gy = 20 + Math.floor(i / 100); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); u.stackCount = 4; units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
         for (let t = 0; t < 3; t++) gameTick();
         const before = units.filter(u => u && !u.dead && u.owner === 0).length;
         processActions([{ action: 'resizeUnitGroup', unitIds: ids, mode: 'x2', bySub: true, byLevel: false }], 0);

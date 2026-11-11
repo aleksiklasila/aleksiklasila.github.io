@@ -33,7 +33,7 @@ const H = require('./net-harness.cjs');
         const open = [];
         for (let gy = 2; gy < GRID_H - 2 && open.length < 3000; gy += 3) for (let gx = 2; gx < GRID_W - 2 && open.length < 3000; gx += 3) {
             const c = grid[gy] && grid[gy][gx];
-            if (c && !c.item && c.type === 0 && !getTileEntityRef(gx, gy)) open.push([gx, gy]);
+            if (c && !cellItemGet(c) && cellType[(c) - 1] === 0 && !getTileEntityRef(gx, gy)) open.push([gx, gy]);
         }
         const diffs = [], made = { n: 0, batch: 0, kernel: 0 };
         // (The same tiles for every type and level: the last one's units

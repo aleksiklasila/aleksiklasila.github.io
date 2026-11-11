@@ -19,15 +19,15 @@ function carve(type) {
     const W = GRID_W, H = GRID_H;
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const set = (x, y) => { if (x > 0 && y > 0 && x < W - 1 && y < H - 1 && !getTileEntityRef(x, y)) grid[y][x].type = TYPE_WALL; };
+    const set = (x, y) => { if (x > 0 && y > 0 && x < W - 1 && y < H - 1 && !getTileEntityRef(x, y)) cellType[grid[y][x] - 1] = TYPE_WALL; };
     if (type === 'blobs') for (let i = 0; i < W * H / 40; i++) { const x = Math.floor(rnd() * W), y = Math.floor(rnd() * H); for (let dy = 0; dy < 3; dy++) for (let dx = 0; dx < 3; dx++) set(x + dx, y + dy); }
     if (type === 'rooms') {
         const R = 12;
         for (let y = 0; y < H; y += R) for (let x = 0; x < W; x++) set(x, y);
         for (let x = 0; x < W; x += R) for (let y = 0; y < H; y++) set(x, y);
         for (let y = 0; y < H; y += R) for (let x = 0; x < W; x += R) {
-            if (rnd() < 0.8) { const d = x + 1 + Math.floor(rnd() * (R - 2)); if (grid[y]) grid[y][Math.min(W - 1, d)].type = 0; }
-            if (rnd() < 0.8) { const d = y + 1 + Math.floor(rnd() * (R - 2)); if (grid[Math.min(H - 1, d)]) grid[Math.min(H - 1, d)][x].type = 0; }
+            if (rnd() < 0.8) { const d = x + 1 + Math.floor(rnd() * (R - 2)); if (grid[y]) cellType[grid[y][Math.min(W - 1, d)] - 1] = 0; }
+            if (rnd() < 0.8) { const d = y + 1 + Math.floor(rnd() * (R - 2)); if (grid[Math.min(H - 1, d)]) cellType[grid[Math.min(H - 1, d)][x] - 1] = 0; }
         }
     }
     if (type === 'walls') for (let x = 10; x < W - 5; x += 14) { const gap = 2 + Math.floor(rnd() * (H - 4)); for (let y = 1; y < H - 1; y++) if (Math.abs(y - gap) > 1) set(x, y); }

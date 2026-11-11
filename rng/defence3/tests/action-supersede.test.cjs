@@ -14,7 +14,7 @@ const a = world.spawn('supA', { simWorker: false }), b = world.spawn('supB', { s
 for (const inst of [a, b]) inst.eval('startSoloGame(); checkWinCondition = function () {};');
 const r = JSON.parse(a.eval(`JSON.stringify((() => {
     const ids = [];
-    for (let i = 0; i < 4000; i++) { const gx = 20 + (i % 100), gy = 30 + Math.floor(i / 100); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
+    for (let i = 0; i < 4000; i++) { const gx = 20 + (i % 100), gy = 30 + Math.floor(i / 100); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); ids.push(u.id); }
     for (let t = 0; t < 3; t++) gameTick();
     // (Big enough that the backlog holds most of them: an action of 100 ids costs 2.25.)
     const acts = [];

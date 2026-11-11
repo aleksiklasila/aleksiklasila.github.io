@@ -8,7 +8,7 @@ for(const [batch,helpers] of [[false,0],[true,0],[true,3]]){
  const world=new H.World({controls}),i=world.spawn('routes-'+batch+'-'+helpers,{controls,simWorker:false});
  if(helpers){i.scratch.Worker=require('./real-sim-helper.cjs');i.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=16;simParallelInit('',${helpers});`);}
  i.eval(`startSoloGame();UNIT_EVENT_ROUTE_BATCH=${batch};simDk=20;netStepTicks=()=>20;
-  for(let y=0;y<GRID_H;y++){grid[y][64].type=TYPE_WALL;simMoveTileTypeChanged(64,y);}
+  for(let y=0;y<GRID_H;y++){cellType[(grid[y][64]) - 1]=TYPE_WALL;simMoveTileTypeChanged(64,y);}
   navEnsure(NAV_PROFILE_GROUND);navEnsure(NAV_PROFILE_AIR);__scratch.actors=[];__scratch.fast=0;
   {const f=_unitNoWayCommit;_unitNoWayCommit=function(){const r=f.apply(this,arguments);if(r)__scratch.fast++;return r;};}
   for(let j=0;j<2400;j++){

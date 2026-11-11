@@ -22,7 +22,6 @@ let astarMines = []; // {gx, gy, astar, maxAstar}
 let areaNeighborIds = []; // [areaId] -> [neighborAreaId]
 let areaIdGrid = []; // 2D lookup [y][x] -> areaId
 let gridCellsByArea = []; // [areaId] -> [{x,y}]
-let spatialUnitsByArea = []; // [areaId] -> [Unit]
 
 const TILE_ENTITY_NONE = '';
 const TILE_ENTITY_GOLDMINE = 'goldmine';
@@ -70,7 +69,23 @@ class TileEntitySet {
         this._list = out; this._ver = _tileEntityVersion;
         return out;
     }
-    *[Symbol.iterator]() { yield* this._tabledList(); yield* this._loose; }
+    // (One iterator object a loop, its result object reused: the generator with yield*
+    // made one a value, ~1.5 MB a second of the page's garbage in a battle.)
+    [Symbol.iterator]() { return new _TileEntityIter(this._tabledList(), this._loose); }
+}
+class _TileEntityIter {
+    constructor(list, loose) { this.list = list; this.i = 0; this.loose = loose; this.li = null; this.r = { value: undefined, done: false }; }
+    next() {
+        const r = this.r;
+        if (this.i < this.list.length) { r.value = this.list[this.i++]; return r; }
+        if (this.loose.size) {
+            if (!this.li) this.li = this.loose.values();
+            const n = this.li.next();
+            if (!n.done) { r.value = n.value; return r; }
+        }
+        r.value = undefined; r.done = true; return r;
+    }
+    [Symbol.iterator]() { return this; }
 }
 const _NO_TILE_ENTITIES = Object.freeze([]), _teP = new Float64Array(2);
 let _activeTileEntities = new TileEntitySet();
@@ -130,7 +145,6 @@ function resetAreaDistanceCaches() {
     areaNeighborIds = [];
     areaIdGrid = [];
     gridCellsByArea = [];
-    spatialUnitsByArea = [];
 }
 
 function _ensureArrayBucketsLength(list, length, factory) {
@@ -141,92 +155,39 @@ function _ensureArrayBucketsLength(list, length, factory) {
 
 function rebuildAreaDistanceCachesFromAreas() {
     _areaById = [];
-    let maxId = -1;
-    if (Array.isArray(areas)) {
-        for (let a of areas) {
-            if (!a) continue;
-            let aid = Number(a.id);
-            if (Number.isFinite(aid)) maxId = Math.max(maxId, aid);
-        }
+    let count = 0, total = 0;
+    for (const a of areas) if (a && Number.isInteger(a.id) && a.id >= 0) {
+        count = Math.max(count, a.id + 1); _areaById[a.id] = a;
     }
-    let areaCount = maxId + 1;
-    areaIdGrid = Array.from({ length: GRID_H }, () => new Int32Array(GRID_W).fill(-1));
-    if (areaCount <= 0) {
-        resetAreaDistanceCaches();
-        return;
+    for (const a of _areaById) if (a) total += a.cells.length;
+    const off = _mapArray(Int32Array, count + 1), tiles = _mapArray(Int32Array, Math.max(1, total));
+    const exists = _mapArray(Uint8Array, count), bounds = _mapArray(Int32Array, count * 4);
+    let at = 0;
+    // Import is a serialization boundary: legacy scene/network records have
+    // {x,y} cells. They are decoded once, never retained by the live world.
+    for (let id = 0; id < count; id++) {
+        off[id] = at;
+        const a = _areaById[id]; if (!a) continue;
+        exists[id] = 1;
+        if (ArrayBuffer.isView(a.cells)) { tiles.set(a.cells, at); at += a.cells.length; }
+        else for (const c of a.cells) tiles[at++] = c.y * GRID_W + c.x;
+        a.cells = tiles.subarray(off[id], at);
     }
-
-
-
-    for (let y = 0; y < GRID_H; y++) {
-        let row = grid[y];
-        if (!row) continue;
-        for (let x = 0; x < GRID_W; x++) {
-            let cell = row[x];
-            if (!cell) continue;
-            let areaId = Math.floor(Number(cell.areaId));
-            areaIdGrid[y][x] = areaId;
-        }
+    off[count] = at;
+    const n = GRID_W * GRID_H, nbOff = _mapArray(Int32Array, count + 1), nb = _mapArray(Int32Array, 4 * n);
+    const tmpOff = _mapArray(Int32Array, count + 1), tmp = _mapArray(Int32Array, 4 * n), stamp = _mapArray(Int32Array, count);
+    _mapKernel('k_map_topology', [cellArea, off, tiles, exists, bounds, nbOff, nb, tmpOff, tmp, stamp], [GRID_W, GRID_H, count]);
+    _mapAreas = { off, tiles, exists, bounds, nbOff, nb, count };
+    areaIdGrid = Array.from({ length: GRID_H }, (_, y) => cellArea.subarray(y * GRID_W, (y + 1) * GRID_W));
+    areaNeighborIds = new Array(count); gridCellsByArea = new Array(count);
+    for (let id = 0; id < count; id++) {
+        const a = _areaById[id], neighbors = nb.subarray(nbOff[id], nbOff[id + 1]);
+        areaNeighborIds[id] = neighbors;
+        gridCellsByArea[id] = tiles.subarray(off[id], off[id + 1]);
+        if (a) { a.neighborAreaIds = neighbors; a.minGx = bounds[id*4]; a.minGy = bounds[id*4+1]; a.maxGx = bounds[id*4+2]; a.maxGy = bounds[id*4+3]; }
     }
-
-    // Authoritatively populate areaId mapping from the snapshotted areas.
-    // This is critical for multiplayer resyncs where the grid may have lost its areaId properties.
-    for (let area of areas) {
-        let aid = Number(area && area.id);
-        if (!Number.isFinite(aid)) continue;
-        _areaById[aid] = area;
-        if (Array.isArray(area.cells)) {
-            for (let i = 0; i < area.cells.length; i++) {
-                let c = area.cells[i];
-                if (!c) continue;
-                if (c.x >= 0 && c.x < GRID_W && c.y >= 0 && c.y < GRID_H) {
-                    if (grid[c.y] && grid[c.y][c.x]) grid[c.y][c.x].areaId = aid;
-                    if (areaIdGrid[c.y]) areaIdGrid[c.y][c.x] = aid;
-                }
-            }
-        }
-    }
-
-    // The neighbours of every area: each meeting of two areas' tiles (right
-    // and down) as two directed pairs in typed arrays, counted by area, then
-    // per area deduplicated (a stamp) and sorted. (One Set an area, ~126k at
-    // a 1024 map, was ~25 MB of old-generation garbage at every match start.)
-    const pairs = n => { let k = 0; const A = n ? new Int32Array(n) : null, B = n ? new Int32Array(n) : null;
-        for (let y = 0; y < GRID_H; y++) {
-            const row = areaIdGrid[y], below = y + 1 < GRID_H ? areaIdGrid[y + 1] : null;
-            for (let x = 0; x < GRID_W; x++) {
-                const a = row[x];
-                if (!(a >= 0 && a < areaCount)) continue;
-                const r = x + 1 < GRID_W ? row[x + 1] : -1, d = below ? below[x] : -1;
-                if (r >= 0 && r < areaCount && r !== a) { if (A) { A[k] = a; B[k] = r; A[k + 1] = r; B[k + 1] = a; } k += 2; }
-                if (d >= 0 && d < areaCount && d !== a) { if (A) { A[k] = a; B[k] = d; A[k + 1] = d; B[k + 1] = a; } k += 2; }
-            }
-        }
-        return { k, A, B };
-    };
-    const E = pairs(pairs(0).k), off = new Int32Array(areaCount + 1), nb = new Int32Array(Math.max(1, E.k));
-    for (let i = 0; i < E.k; i++) off[E.A[i] + 1]++;
-    for (let a = 0; a < areaCount; a++) off[a + 1] += off[a];
-    { const at = off.slice(0, areaCount); for (let i = 0; i < E.k; i++) nb[at[E.A[i]]++] = E.B[i]; }
-    const stamp = new Int32Array(areaCount);
-
-
-    areaNeighborIds = new Array(areaCount);
-    gridCellsByArea = new Array(areaCount);
-    // A new layout: fresh buckets, every indexed unit in its tile's area.
-    spatialUnitsByArea = Array.from({ length: areaCount }, () => []);
+    if (simWasmInit()) { simHeapFree(tmpOff); simHeapFree(tmp); simHeapFree(stamp); }
     if (typeof rebuildUnitAreaBuckets === 'function') rebuildUnitAreaBuckets();
-
-    for (let source = 0; source < areaCount; source++) {
-        let neighbors = [];
-        if (_areaById[source]) {
-            for (let j = off[source], e = off[source + 1]; j < e; j++) { const v = nb[j]; if (stamp[v] !== source + 1) { stamp[v] = source + 1; neighbors.push(v); } }
-            neighbors.sort((a, b) => a - b);
-        }
-        areaNeighborIds[source] = neighbors;
-        if (_areaById[source]) _areaById[source].neighborAreaIds = neighbors;
-        gridCellsByArea[source] = (_areaById[source] && Array.isArray(_areaById[source].cells)) ? _areaById[source].cells.slice() : [];
-    }
 }
 
 // ---- range queries over the area graph (whole area steps) ----
@@ -240,12 +201,8 @@ const _aq = { for: null, off: null, nb: null, stamp: null, out: null, ep: 0, src
 function _aqLayout() {
     const Q = _aq, L = areaNeighborIds, A = L.length;
     if (Q.for === L) return;
-    let total = 0;
-    for (let a = 0; a < A; a++) total += L[a] ? L[a].length : 0;
-    Q.off = new Int32Array(A + 1); Q.nb = new Int32Array(Math.max(1, total)); Q.stamp = new Int32Array(Math.max(1, A)); Q.out = new Int32Array(Math.max(1, A)); Q.ep = 0;
-    let k = 0;
-    for (let a = 0; a < A; a++) { Q.off[a] = k; const l = L[a]; if (l) for (let i = 0; i < l.length; i++) Q.nb[k++] = l[i]; }
-    Q.off[A] = k;
+    Q.off = _mapAreas.nbOff; Q.nb = _mapAreas.nb;
+    Q.stamp = _mapArray(Int32Array, Math.max(1, A)); Q.out = _mapArray(Int32Array, Math.max(1, A)); Q.ep = 0;
     Q.for = L;
 }
 // The kernel's way, when this thread has the index (its src/out heap arrays
@@ -438,12 +395,12 @@ function getAreaIdsWithinDistanceOfSources(sources, distance) {
 }
 
 function getGridCellsWithinDistanceOfSources(sources, distance) {
-    const n = _areaQuery(sources, distance), out = _aq.out, cells = [];
-    for (let i = 0; i < n; i++) {
-        let areaCells = gridCellsByArea[out[i]];
-        if (areaCells) for (let cell of areaCells) if (cell) cells.push(cell);
-    }
-    return cells;
+    const n = _areaQuery(sources, distance), M = _mapAreas;
+    if (!M.queryTiles) { M.queryTiles = _mapArray(Int32Array, M.tiles.length); M.queryCount = _mapArray(Int32Array, 1); }
+    _mapKernel('k_map_gather', [_aq.out, M.off, M.tiles, M.queryTiles, M.queryCount], [n]);
+    // Borrowed until the next tile-range query; the parent allocation stays
+    // owned by the map. Neither caller retains it beyond its immediate pass.
+    return M.queryTiles.subarray(0, M.queryCount[0]);
 }
 
 // Whether a target at a world position is within `maxDistance` area steps of
@@ -761,7 +718,7 @@ function structTableSet(gx, gy, prev, ref) {
     if (ref._stMine) _stMineAdd(t);
     _stWrite(ref, t);
 }
-function _stCellOwner(t) { const gx = t % GRID_W, row = typeof grid !== 'undefined' && grid ? grid[(t - gx) / GRID_W] : null; return row && row[gx] ? row[gx].owner : undefined; }
+function _stCellOwner(t) { const gx = t % GRID_W, row = typeof grid !== 'undefined' && grid ? grid[(t - gx) / GRID_W] : null; return row && row[gx] ? cellOwner[(row[gx]) - 1] : undefined; }
 function _stWrite(ref, t) {
     const T = _ST;
     if (ref._stMine) { T.own[t] = ST_OWNER_NONE; _stMineVal(t, Number(ref._mv)); T.tim[t] = 0; }
@@ -1571,7 +1528,7 @@ const _cellItemsCursor = { epoch: -1, pos: 0 };
 // The cell item standing on tile t (the tile's cell item, an active tile
 // entity placed there), or null.
 function _cellItemAtTile(t) {
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, cell = grid[gy] && grid[gy][gx], item = cell ? cell.item : null;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W, cell = grid[gy] && grid[gy][gx], item = cell ? cellItemGet(cell) : null;
     return item && _activeTileEntities.has(item) && item.gx === gx && item.gy === gy ? item : null;
 }
 function getCellItemsRowMajor() {
@@ -1589,7 +1546,7 @@ function getCellItemsRowMajor() {
     let list = [];
     for (let item of _activeTileEntities) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (cell && cell.item === item) list.push(item);
+        if (cell && cellItemGet(cell) === item) list.push(item);
     }
     list.sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx));
     _cellItemsRowMajor = list;
@@ -1663,8 +1620,8 @@ function _getHostileStructureSat(owner) {
         let gx = e.gx, gy = e.gy;
         if (getTileEntityRef(gx, gy) !== e || e._stMine) continue;
         let cell = grid[gy] && grid[gy][gx];
-        let cellOwner = cell && cell.item === e ? cell.owner : e.owner;
-        if (!(e.owner === owner && cellOwner === owner)) sat[(gy + 1) * stride + gx + 1]++;
+        const tileOwner = cell && cellItemGet(cell) === e ? cellOwner[cell - 1] : e.owner;
+        if (!(e.owner === owner && tileOwner === owner)) sat[(gy + 1) * stride + gx + 1]++;
     }
     for (let y = 1; y <= GRID_H; y++) {
         let row = y * stride, above = row - stride, run = 0;

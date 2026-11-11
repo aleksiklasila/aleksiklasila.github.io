@@ -11,7 +11,7 @@ const run = cold => {
     const w = new H.World({ controls }), i = w.spawn('cache-wall' + cold, { simWorker: false });
     return i.eval(`(()=>{
  startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{},researchLevels:{}});applyMainMenuControlsToRuntimeState();startSoloGame();
- const wall=(x,y,on)=>{grid[y][x].type=on?TYPE_WALL:TYPE_FLOOR;simMoveTileTypeChanged(x,y);};
+ const wall=(x,y,on)=>{cellType[(grid[y][x]) - 1]=on?TYPE_WALL:TYPE_FLOOR;simMoveTileTypeChanged(x,y);};
  for(let y=16;y<112;y++)for(let x=16;x<112;x++)wall(x,y,false);
  wall(70,57,true);
  const u=new Unit('tank',0,24*TILE+16,56*TILE+16);units.push(u);unitByIdAdded(u);players[0].popCount++;for(let t=0;t<NAV_BUILD_TICKS+4;t++)gameTick();

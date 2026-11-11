@@ -31,7 +31,7 @@ for(const indexed of [false,true])for(const shown of [0,.15,.5,.999,1]) {
 const context=vm.createContext({SIM_FRAME_SLOT_BYTES:108});
 vm.runInContext(source.slice(source.indexOf('let _simRebaseMarks'),source.indexOf('function _simClientApplyFrame(')),context);
 const worker=fs.readFileSync(path.join(__dirname,'../src/sim/presentation_worker.js'),'utf8');
-vm.runInContext(worker.slice(worker.indexOf('function buildRenderBuckets('),worker.indexOf('function draw()')),context);
+const PM=require('./present-pm.cjs')(context);
 const N=512,sim=frame(N);let lastFrame=null,lastReference=null,stamp=1000;
 for(let s=0;s<N;s++){sim.x[s]=s*32;sim.y[s]=(s%50)*32;}
 for(let tick=0;tick<30;tick++) {
@@ -45,7 +45,7 @@ for(let tick=0;tick<30;tick++) {
     }
     sim.x.set(F.x);sim.y.set(F.y);sim.id.set(F.id);
     F.order=Int32Array.from(Array.from({length:N},(_,s)=>s).filter(s=>F.id[s]>=0));F.count=F.order.length;
-    F.buf=new ArrayBuffer(N*108+64*64*8+N*8);
+    PM.frame(F,64*64);
     const B=context.buildRenderBuckets(F,F.count,64,64,32);F.renderBuckets=B;
     F.renderMoving=new Int32Array(F.buf,B.movingOffset,N);F.renderMovingCount=B.movingCount;
     const expected=copy(F);

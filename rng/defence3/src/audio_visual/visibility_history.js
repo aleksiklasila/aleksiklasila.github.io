@@ -178,7 +178,7 @@ function updateLocalVisibilityHistory(h) {
     const first = !h.memories;
     if (first) {
         h.memories = Object.fromEntries(HISTORY_LISTS.concat('floorItems').map(name => [name, new Map()]));
-        h.view = { grid: grid.map(row => row.map(cell => ({ type: cell.type, owner: cell.owner, item: null }))) };
+        h.view = { grid: grid.map(row => Array.from(row, cell => ({ type: renderCellValue(cell, 'type'), owner: renderCellValue(cell, 'owner'), item: null }))) };
         for (const name of HISTORY_LISTS) h.view[name] = [];
     }
     // Units: the live ones (seen ones only are drawn).
@@ -203,16 +203,16 @@ function updateLocalVisibilityHistory(h) {
         if (!e || e.energy <= 0 || !visible(gx, gy)) return;
         _historyObserve(memory, e, gx, gy, gy * GRID_W + gx, generation);
         const cell = h.view.grid[gy][gx], liveCell = grid[gy][gx];
-        cell.type = liveCell.type; cell.owner = liveCell.owner; cell.item = e;
+        cell.type = renderCellValue(liveCell, 'type'); cell.owner = renderCellValue(liveCell, 'owner'); cell.item = e;
     };
     if (typeof _activeTileEntities !== 'undefined') {
         // Most indexed entities are mines; only cell items are floor items.
         for (const e of _getVisibilityFloorItemCandidates()) {
             const cell = grid[e.gy] && grid[e.gy][e.gx];
-            if (cell && cell.item === e) observeFloor(e, e.gx, e.gy);
+            if (cell && renderCellItem(cell) === e) observeFloor(e, e.gx, e.gy);
         }
     } else {
-        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) observeFloor(grid[y][x].item, x, y);
+        for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) observeFloor(renderCellItem(grid[y][x]), x, y);
     }
     for (const [key, record] of memory) {
         if (record.generation === generation) continue;
@@ -562,7 +562,7 @@ function _historyColumnsCanvasView(h) {
     const H = historyStructureFrame(h), key = H ? H.ver + '|' + visibilityVersion : 'none|' + visibilityVersion;
     if (h.canvasView && h.canvasKey === key && h.canvasView.units === units) return h.canvasView;
     if (!h.canvasCells || h.canvasCells.length !== GRID_H) {
-        h.canvasCells = grid.map(row => row.map(cell => ({ type: cell.type, owner: cell.owner, item: null })));
+        h.canvasCells = grid.map(row => Array.from(row, cell => ({ type: renderCellValue(cell, 'type'), owner: renderCellValue(cell, 'owner'), item: null })));
         h.canvasItems = [];
     }
     for (const cell of h.canvasItems) cell.item = null;
@@ -573,7 +573,7 @@ function _historyColumnsCanvasView(h) {
         if (!e || !H.alive[s] || k > 5 || !(H.flags[s] & HISTORY_GHOST_FLAG) && !seen(gx, gy)) continue;
         if (k !== 3) lists[k].push(e);
         const cell = k >= 1 && k <= 3 && h.canvasCells[gy] && h.canvasCells[gy][gx];
-        if (cell) { cell.item = e; if (!e._historyGhost) { cell.owner = grid[gy][gx].owner; cell.type = grid[gy][gx].type; } h.canvasItems.push(cell); }
+        if (cell) { cell.item = e; if (!e._historyGhost) { cell.owner = renderCellValue(grid[gy][gx], 'owner'); cell.type = renderCellValue(grid[gy][gx], 'type'); } h.canvasItems.push(cell); }
     }
     const visibleNow = e => seen(Math.floor(e.x / TILE), Math.floor(e.y / TILE));
     h.canvasKey = key;

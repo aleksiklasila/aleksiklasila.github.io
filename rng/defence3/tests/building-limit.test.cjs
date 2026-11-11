@@ -10,7 +10,7 @@ const out = JSON.parse(i.eval(`(() => {
     const scan = pid => { let n = 0; for (let gy = 0; gy < GRID_H; gy++) for (let gx = 0; gx < GRID_W; gx++) { const e = getTileEntityRef(gx, gy); if (e && !e._stMine && e.owner === pid && e._stT >= 0) n++; } return n; };
     const spots = [];
     for (let gy = 2; gy < GRID_H - 2 && spots.length < 20; gy++) for (let gx = 2; gx < GRID_W - 2 && spots.length < 20; gx++)
-        if (!getTileEntityRef(gx, gy) && grid[gy][gx].type !== TYPE_WALL) spots.push([gx, gy]);
+        if (!getTileEntityRef(gx, gy) && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL) spots.push([gx, gy]);
     const start = { count: playerStructureCount(0), scan: scan(0) };
     const placed = spots.slice(0, 10).map(([gx, gy]) => { placeBuilding(gx, gy, 'pistol', 0, { silent: true, ignorePlacementRules: true }); return getTileEntityRef(gx, gy); }).filter(Boolean);
     const afterPlace = { count: playerStructureCount(0), scan: scan(0) };

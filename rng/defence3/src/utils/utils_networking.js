@@ -343,8 +343,11 @@ function _matchInitializationMessage(conn, data) {
     if (old && data.tick <= old.tick) return;
     _matchInit.peers[conn.peer] = { tick: data.tick, ready: data.ready === true };
 }
+// Only during a new match's initialization (its barrier begun, not released):
+// a reload, resync or recovery mid-match also shows the overlay, and a
+// command given meanwhile is queued for a later tick, not dropped.
 function matchInitializationBlocksInput() {
-    return gameStarted && !gameOver && _matchLoadInputBlocked;
+    return gameStarted && !gameOver && _matchLoadInputBlocked && !!_matchInit && _matchInit.started && !_matchInit.released;
 }
 function _matchInitializationProgress() {
     const c = typeof _simClient !== 'undefined' && _simClient && _simClient.active ? _simClient : null;
@@ -1195,9 +1198,9 @@ function resolveSnapshotEntityRef(ref, context) {
         let gy = Math.floor(Number(ref.gy) || 0);
         if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return null;
         let cell = grid[gy] && grid[gy][gx];
-        let item = cell ? cell.item : null;
+        let item = cell ? cellItemGet(cell) : null;
         if (!item) return null;
-        if (Math.floor(Number(cell.owner) || 0) !== Math.floor(Number(ref.owner) || 0)) return null;
+        if (Math.floor(Number(cellOwner[(cell) - 1]) || 0) !== Math.floor(Number(ref.owner) || 0)) return null;
         if (String(item.type || '') !== String(ref.type || '')) return null;
         return item;
     }
@@ -1379,7 +1382,7 @@ function buildHostAuthoritativeStateSnapshot(options = null) {
         lockstepCarry: Object.fromEntries(Object.entries(lockstepHostCarryByPeer || {}).filter(([, a]) => Array.isArray(a) && a.length).map(([p, a]) => [p, a.map(x => cloneSnapshotValue(x))]))
     };
     if (includeConfig) snapshot.editableConfig = serializeEditableRuntimeConfigForTransport();
-    if (includeStaticMapState) snapshot.areas = cloneSnapshotValue(areas);
+    if (includeStaticMapState) snapshot.areas = areas.map(a => ({ ...a, cells: Array.from(a.cells, t => ({ x: t % GRID_W, y: Math.floor(t / GRID_W) })), neighborAreaIds: Array.from(a.neighborAreaIds || []) }));
     return snapshot;
 }
 
@@ -4419,7 +4422,10 @@ function startSoloGame() {
         else if(worker)onPage();
         else setMatchLoadOverlay(false);
     };
-    const preparation=prepareRendererLodAssets(true);
+    // (A worker still loading takes the match once loaded: the page cannot make one, it has no kernels.)
+    const loading=typeof simClientWorkerLoading==='function'&&simClientWorkerLoading();
+    let preparation=prepareRendererLodAssets(true);
+    if(loading)preparation=(preparation||Promise.resolve()).then(()=>simClientWhenLoaded());
     if(!preparation){begin();return;}
     return _soloStartPreparation=preparation.then(begin).finally(()=>{_soloStartPreparation=null;});
 }

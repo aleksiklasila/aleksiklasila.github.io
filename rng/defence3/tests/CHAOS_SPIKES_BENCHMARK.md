@@ -142,3 +142,10 @@ TRACE_CATS=devtools.timeline,blink.user_timing,disabled-by-default-v8.gc` and
 the simulation worker per step). A chunk taking far longer than its work (a
 dead-mark or 80-unit occupancy chunk at 20-60 ms) is a descheduled thread,
 not content: check helper oversubscription before optimizing that kernel.
+`node tests/trace-thread-load.cjs trace.json out.txt [factor]` (same trace)
+gives every traced thread's busy share of the step window (page, presentation
+worker, compositor, thread pool), slow steps against normal ones: what else
+ran while a step was slow. (Helpers running only wasm show no events; the GPU
+process is not in the renderer trace.) Rendered runs vary a lot run to run
+(one of three identical runs had p95 251 ms against 195/197): repeat a run
+before comparing.

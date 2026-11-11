@@ -29,8 +29,9 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
     const retired = units.pop(), oldX = retired.x, oldY = retired.y, oldId = retired.id, oldOwner = retired.owner, slot = retired._si;
     for(const [name,value]of cacheValues)retired[name]=value;
     removeUnitSpatial(retired); retired.dead = true; simUnitStateCollect(true);
-    // (Freed slots are reused from the next unit index rebuild on.)
-    simUnitStateReleaseFreed();
+    // (Freed slots are zeroed on a background lane and put back two calls
+    // after they were posted (_simFreePost / _simFreeReturn): one call a tick.)
+    for (let k = 0; k < 3; k++) simUnitStateReleaseFreed();
     // (Slots go by place; this one is asked for by number, as a plan does: simUnitStateWantSlot.)
     const rx = 300;
     simUnitStateWantSlot(slot);

@@ -13,7 +13,8 @@ function fixture(settings,health,house,towerHealth,kind){
  const units=[];for(let owner=0;owner<(kind==='units'?2:1);owner++)for(let i=0;i<100;i++)units.push(['norm',owner,(owner?55:5)+i%10+.5,30+Math.floor(i/10)+.5,health,1,1,['attackMove',35,35],false]);
  const buildings=[['house',0,2,2,1,house,false,null,null,false,false],['house',1,77,77,1,house,false,null,null,false,false],...towers.map(([x,y])=>['pistol',1,x,y,1,towerHealth,false,null,null,false,false])];
  const header={kind:'defence3-scene',version:1,settings,seed:123,width:80,height:80,teams:[0,1],teamColors:{0:'#4488ff',1:'#ff4444'},player:0,camera:{x:35,y:35,zoom:1},players:[0,1].map(()=>({energy:1e12,astar:1e12,researchLevels:{}}))};
- return {header,records:[{terrain},{areas},{buildings},{units}]};
+ // (As a file's records: the reader packs them into the scene's typed columns.)
+ return [header,{terrain},{areas},{buildings},{units},{end:{terrain:terrain.length,areas:areas.length,mines:0,buildings:buildings.length,units:units.length}}];
 }
 async function main(){
  const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'80','cfg-full-vis':'full'}});
@@ -22,7 +23,8 @@ async function main(){
  const health=source.eval('getUnitStatForOwner(0,"norm",1,"energy")'),house=source.eval('calculateItemStats("house",1,0).maxEnergy'),towerHealth=source.eval('calculateItemStats("pistol",1,0).maxEnergy');
  for(const kind of ['units','towers'])for(const worker of [false,true]){
   world.simWorker=worker;
-  const target=world.spawn('orders-'+kind+'-'+worker,{simWorker:worker});target.scratch.scene=fixture(settings,health,house,towerHealth,kind);
+  const target=world.spawn('orders-'+kind+'-'+worker,{simWorker:worker});target.scratch.records=fixture(settings,health,house,towerHealth,kind);
+  target.scratch.scene=target.eval('(()=>{const r=soloSceneReader();for(const a of __scratch.records)r.line(JSON.stringify(a));return r.finish();})()');
   target.eval('startMainThreadLoops=()=>{};document.getElementById("starting-resources-popup").classList.add("hidden")');
   await settle(world,target.eval('restoreSoloGameSnapshot(__scratch.scene)'));
   // Keep running through initial approach and combat: merely moving a few

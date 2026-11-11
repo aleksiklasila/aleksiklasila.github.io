@@ -6,6 +6,8 @@ const result=inst.eval(`(() => {
     // scan, including type swaps, repeated edits, no-op tiles and resets.
     GRID_W=64; GRID_H=64;
     grid=Array.from({length:GRID_H},()=>Array.from({length:GRID_W},()=>({item:null})));
+    // (This grid holds object cells: items read from them, not the tile table.)
+    const realCellItemGet=cellItemGet; cellItemGet=c=>c&&c.item;
     _activeTileEntities=new Set(); tileEntityIndexesReset();
     let seed=7919,id=0,checks=0;
     const rnd=n=>{seed=Math.imul(seed,1664525)+1013904223|0;return Math.floor((seed>>>0)/4294967296*n);};
@@ -51,6 +53,7 @@ const result=inst.eval(`(() => {
         const next=_cellItemsOfType(type);
         if(next===list||next.length!==list.length||!next.every((x,j)=>x===list[j]))throw Error('Metadata invalidation lost');
     }
+    cellItemGet=realCellItemGet;
     return checks;
 })()`);
 assert.equal(result,800);

@@ -15,6 +15,7 @@ function nested(name) {
 const fixture = new Function(`
     let selectedUnits=[], selectedEntities=[], units=[], towers=[], barracks=[], collectorSpawners=[], goldMines=[], astarMines=[];
     let localPlayerId=0,TILE=32,GRID_W=120,GRID_H=120,items=[],grid=Array.from({length:120},()=>[]);
+    let cellOwner=new Int8Array(120*120).fill(-1),itemAt=[],cellItemGet=h=>itemAt[h]||null;
     let isTileVisible=(x,y)=>x!==5,createCurrentViewPointTester=()=>((x,y)=>y<1000);
     let getCellItemsRowMajor=()=>items;
     ${nested('getVisibleSameTypeUnits')}
@@ -22,7 +23,7 @@ const fixture = new Function(`
     ${nested('toggleVisibleSameTypeSelectionFromHit')}
     return {run:toggleVisibleSameTypeSelectionFromHit,
         set(u,b,t,s,f){units=u;barracks=b;towers=t;collectorSpawners=s;items=f;
-          for(const e of f) grid[e.gy][e.gx]={item:e,owner:e.owner};selectedUnits=[];selectedEntities=[];},
+          for(const e of f){const h=e.gy*GRID_W+e.gx+1;grid[e.gy][e.gx]=h;itemAt[h]=e;cellOwner[h-1]=e.owner;}selectedUnits=[];selectedEntities=[];},
         get:()=>({units:selectedUnits,entities:selectedEntities}),
         mines(g,a){goldMines=g;astarMines=a;},
         seed(u,e){selectedUnits=u;selectedEntities=e;}};
@@ -64,7 +65,7 @@ game.eval(`
     camera={x:0,y:0,zoom:.1};viewW=1280;viewH=720;
     for(let gy=1;gy<100;gy++)for(let gx=1;gx<100;gx++){
         const item={gx,gy,x:gx*TILE+16,y:gy*TILE+16,type:'house',owner:(gx===90?1:0),energy:10};
-        grid[gy][gx].item=item;grid[gy][gx].owner=item.owner;setTileEntity(gx,gy,'house',item);
+        cellOwner[(grid[gy][gx]) - 1]=item.owner;setTileEntity(gx,gy,'house',item);
         if(gx%3===0){barracks.push(item);item.type='barrack';}
     }
 `);

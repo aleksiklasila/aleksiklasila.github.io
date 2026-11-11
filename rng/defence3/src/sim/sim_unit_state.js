@@ -122,7 +122,7 @@ function simWtEncode(v) {
     if (Number.isInteger(gx) && Number.isInteger(gy) && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
         const t = gy * GRID_W + gx;
         if (getTileEntityRef(gx, gy) === v) return [SIM_WT_TILE, t];
-        if (grid[gy] && grid[gy][gx] && grid[gy][gx].item === v) return [SIM_WT_ITEM, t];
+        if (grid[gy] && grid[gy][gx] && cellItemGet(grid[gy][gx]) === v) return [SIM_WT_ITEM, t];
     }
     // (Not in the world: gone, as the getter would read it.)
     return [SIM_WT_NULL, 0];
@@ -134,7 +134,7 @@ function simWtDecode(k, t) {
     if (k === SIM_WT_UNIT) { const u = getUnitById(t); return u && !u.dead ? u : null; }
     const gx = t % GRID_W, gy = (t - gx) / GRID_W;
     if (k === SIM_WT_TILE) return getTileEntityRef(gx, gy);
-    if (k === SIM_WT_ITEM) return (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
+    if (k === SIM_WT_ITEM) return (grid[gy] && grid[gy][gx] && cellItemGet(grid[gy][gx])) || null;
     return null;
 }
 // (Statements a field's setter runs too, with c the columns, s the slot, v

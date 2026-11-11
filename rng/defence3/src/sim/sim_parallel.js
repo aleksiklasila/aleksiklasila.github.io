@@ -496,6 +496,10 @@ function _simFlowArgs(R, P) {
     I[480] = _simWEnc(a.byteOffset); I[481] = _simWEnc(b.byteOffset); I[482] = _simWEnc(c.byteOffset);
     // (The commit's id index: unit.js flowLooksCommit binds it.)
     I[483] = ids ? _simWEnc(ids.byteOffset) : 0; I[484] = slots ? _simWEnc(slots.byteOffset) : 0;
+    // (Word 478: each profile's walls as at the post, the exact looks' (unit.js _flowWallSnap); 0 none.)
+    const ws = R['fl.wsTab']; I[478] = ws ? _simWEnc(ws.byteOffset) : 0;
+    // (Words 477 / 479: the ground walls' change counts per 8x8 block now (mv.wallBlk) and as at the post (fl.wb).)
+    const wb = R['fl.wb'], wbl = R['mv.wallBlk']; I[479] = wb && wbl && wb.length === wbl.length ? _simWEnc(wb.byteOffset) : 0; I[477] = I[479] ? _simWEnc(wbl.byteOffset) : 0;
     return true;
 }
 SIM_KERNELS[SIM_KERNEL_FLOW_PENDING] = function (R, P, chunk) {
@@ -521,6 +525,11 @@ SIM_KERNELS[SIM_KERNEL_MOVE] = function (R, P, chunk) {
 const _simSatRowsW = _simWK(['mv.hostile', 'mv.hstruct', 'ix.bcount', 'mv.stblk']), _simSatColsW = _simWK(['mv.hostile', 'mv.hstruct']);
 SIM_KERNELS[SIM_KERNEL_SAT_ROWS] = function (R, P, chunk) { _simRust(_simSatRowsW, P, chunk, 'k_sat_rows', 'SAT_ROWS'); };
 SIM_KERNELS[SIM_KERNEL_SAT_COLS] = function (R, P, chunk) { _simRust(_simSatColsW, P, chunk, 'k_sat_cols', 'SAT_COLS'); };
+// The minimap's units from the per-tile per-player counts (k.rs k_minimap): a
+// band of pixel rows a job. P as there.
+const SIM_KERNEL_MINIMAP = 191;
+const _simMinimapW = _simWK(['ix.complex', 'mm.out']);
+SIM_KERNELS[SIM_KERNEL_MINIMAP] = function (R, P, chunk) { _simRust(_simMinimapW, P, chunk, 'k_minimap', 'MINIMAP'); };
 
 // The movement kernel's chunk moves into the counts (chunk.js
 // spatialCountsDeferEnd): per slot with one (spMvOwn), its owner's total of
@@ -923,7 +932,7 @@ let _simPool = null;
 let _simThreadSlot = 0;
 
 // Starts the helpers (simulation worker, with shared memory and 3+ cores).
-function simParallelInit(helperUrl, maxHelpers = null) {
+function simParallelInit(helperUrl, maxHelpers = null, bgOnly = 0) {
     // Helpers idle on Atomics.waitAsync (missing in some browsers, e.g. older
     // Firefox): without it the worker runs every chunk itself.
     if (_simPool || !SIM_PAR_SHARED || typeof Worker !== 'function' || typeof Atomics.waitAsync !== 'function') return 0;
@@ -943,6 +952,8 @@ function simParallelInit(helperUrl, maxHelpers = null) {
     if (n < 1) return 0;
     let ctl = new Int32Array(new SharedArrayBuffer(SIM_PAR_CTL_WORDS * 4));
     for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) ctl[SIM_PAR_BG_BASE + lane * 8 + SIM_PAR_BG_ID] = -1;
+    // (At least one helper for the tick's jobs.)
+    ctl[SIM_PAR_BG_ONLY] = Math.max(0, Math.min(n - 1, bgOnly | 0));
     // (The wasm heap first: the helpers instantiate the kernels over it.)
     if (typeof simWasmInit === 'function') simWasmInit();
     let helpers = [];
@@ -1077,7 +1088,7 @@ function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R =
 const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvPath', 'unit.energy', 'unit.sepKey', 'unit.dead',
     'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvSteer', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
     'unit.mvDest', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
-    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', '?-', '?-', '?-', 'unit.mvWk',
+    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.wkS', '?-', '?-', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.stFr', 'unit.stSa',
     '?-', '?-', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
@@ -1216,6 +1227,11 @@ function simParallelRun(kernel, total) {
     _simParCheckErr(ctl);
 }
 const SIM_PAR_TRACE_ON = 180, SIM_PAR_TRACE_MAX = 181;
+// (Tracing: background chunks helpers ran (any lane, lane 4), and lane-4 claims a helper skipped with its registry behind.)
+const SIM_PAR_TRACE_HBG = 182, SIM_PAR_TRACE_HBG4 = 183, SIM_PAR_TRACE_HSKIP4 = 184;
+// Helpers 0 .. this - 1 run background lanes only (never a tick's own jobs): the
+// lanes progress while the tick runs, the tick's jobs have the other helpers.
+const SIM_PAR_BG_ONLY = 185;
 // (par.ctrace, bound by a probe: per chunk its start (ms since the time origin) and duration.)
 function _simParTraceChunk(ctl, t0, c) { const t1 = performance.now(), us = Math.round((t1 - t0) * 1000); const T = _simParReg['par.ctrace']; if (T !== undefined && c * 2 + 1 < T.length) { T[c * 2] = performance.timeOrigin + t0; T[c * 2 + 1] = t1 - t0; } for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
 // (The current tick's trace phases while tracing, sim_worker.js: tail waits per kernel.)
@@ -1260,7 +1276,7 @@ function simParallelBackgroundChain(lane, stages, eager = false) {
     const slots = [];
     for (let i = 0; i < stages.length; i++) if (stages[i][1] > 0) slots.push(i);
     const pool = _simPool;
-    _simBg[lane] = { stages: list, slots, sync: !pool };
+    _simBg[lane] = { stages: list, slots, sync: !pool, at: _simParTrace ? performance.now() : 0 };
     _simBgPosted[lane]++;
     if (!pool) { if (eager) simParallelBackgroundWait(lane); return; }
     const ctl = pool.ctl, b = SIM_PAR_BG_BASE + lane * 8, CT = _simBgChain, cb = lane * (1 + 2 * SIM_PAR_BG_STAGES);
@@ -1364,6 +1380,12 @@ function simParallelBackgroundWait(lane = 1) {
         return;
     }
     const ctl = _simPool.ctl, b = SIM_PAR_BG_BASE + lane * 8, last = J.stages.length - 1, id0 = _simBgIds[lane];
+    // (Tracing: at the wait, the job's age (ms since its post: bgAge:<lane>) and the stages and chunks still
+    // unclaimed (bgLeft:<lane>, stages left + the open stage's unclaimed share): background progress or none.)
+    if (_simParTrace && J.at) { const tr = _simParTrace, st = Atomics.load(ctl, b + SIM_PAR_BG_STAGE), tot = Atomics.load(ctl, b + SIM_PAR_BG_TOTAL), nx = Atomics.load(ctl, b + SIM_PAR_BG_NEXT) & 0xFFFFFF, idNow = Atomics.load(ctl, b + SIM_PAR_BG_ID);
+        const left = idNow < 0 ? last + 1 : (last - st) + Math.max(0, tot - Math.min(nx, tot)) / Math.max(1, tot);
+        tr['bgAge:' + lane] = Math.max(tr['bgAge:' + lane] || 0, performance.now() - J.at); tr['bgLeft:' + lane] = Math.max(tr['bgLeft:' + lane] || 0, Math.round(left * 100) / 100);
+        tr.hbg = (tr.hbg || 0) + Atomics.exchange(ctl, SIM_PAR_TRACE_HBG, 0); tr.hbg4 = (tr.hbg4 || 0) + Atomics.exchange(ctl, SIM_PAR_TRACE_HBG4, 0); tr.hskip4 = (tr.hskip4 || 0) + Atomics.exchange(ctl, SIM_PAR_TRACE_HSKIP4, 0); }
     // (The last stage's id: one more per stage.)
     const idLast = (id0 + last) & 0x7F;
     for (;;) {
@@ -1511,8 +1533,9 @@ function simParallelHelperMain() {
             let g = Atomics.load(ctl, SIM_PAR_GEN);
             seen = g;
             if (g & 1) continue;   // being written
-            Atomics.add(ctl, SIM_PAR_ACTIVE, 1);
-            if (Atomics.load(ctl, SIM_PAR_GEN) === g && regVer >= ctl[SIM_PAR_REGVER]) {
+            const fg = (_simThreadSlot - 1) >= ctl[SIM_PAR_BG_ONLY];
+            if (fg) Atomics.add(ctl, SIM_PAR_ACTIVE, 1);
+            if (fg && Atomics.load(ctl, SIM_PAR_GEN) === g && regVer >= ctl[SIM_PAR_REGVER]) {
                 let fn = SIM_KERNELS[ctl[SIM_PAR_KERNEL]], total = ctl[SIM_PAR_TOTAL];
                 for (;;) {
                     let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
@@ -1525,8 +1548,7 @@ function simParallelHelperMain() {
                     Atomics.notify(ctl, SIM_PAR_DONE);
                 }
             }
-            Atomics.sub(ctl, SIM_PAR_ACTIVE, 1);
-            Atomics.notify(ctl, SIM_PAR_ACTIVE);
+            if (fg) { Atomics.sub(ctl, SIM_PAR_ACTIVE, 1); Atomics.notify(ctl, SIM_PAR_ACTIVE); }
             // Missing arrays of the latest jobs: take the messages bringing them.
             let behind = regVer < ctl[SIM_PAR_REGVER];
             for (let lane = 0; lane < SIM_PAR_BG_LANES && !behind; lane++) behind = regVer < ctl[SIM_PAR_BG_BASE + lane * 8 + SIM_PAR_BG_REGVER];
@@ -1535,7 +1557,8 @@ function simParallelHelperMain() {
             // between chunks), by lane priority (SIM_PAR_BG_ORDER). A ticket
             // of another job (posted after this one's last chunk was taken)
             // is past its end.
-            while (bgParams && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
+            // (A background-only helper does not stop for a new tick job: it is not one of its takers.)
+            while (bgParams && (!fg || Atomics.load(ctl, SIM_PAR_GEN) === seen)) {
                 let ran = false;
                 // (A rushed lane right after the tick's own ones.)
                 const first = Atomics.load(ctl, SIM_PAR_BG_FIRST), R = SIM_PAR_BG_RUSH_AT;
@@ -1544,11 +1567,12 @@ function simParallelHelperMain() {
                         : li < R ? SIM_PAR_BG_ORDER[li] : li === R ? first : SIM_PAR_BG_ORDER[li - 1];
                     if (lane < 0 || (li > R && lane === first)) continue;
                     const b = SIM_PAR_BG_BASE + lane * 8;
-                    if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0 || regVer < ctl[b + SIM_PAR_BG_REGVER]) continue;
+                    if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0) continue;
+                    if (regVer < ctl[b + SIM_PAR_BG_REGVER]) { if (lane === 4 && ctl[SIM_PAR_TRACE_ON]) Atomics.add(ctl, SIM_PAR_TRACE_HSKIP4, 1); continue; }
                     // (A bulk lane: only while under its cap of helpers.)
                     const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
-                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; }
+                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && ctl[SIM_PAR_TRACE_ON]) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); } }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }
                 }
                 if (!ran) break;

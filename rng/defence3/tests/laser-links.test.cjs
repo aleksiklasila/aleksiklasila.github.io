@@ -24,7 +24,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
             if (a.owner !== b.owner || (a.gx !== b.gx && a.gy !== b.gy)) continue;
             const col = a.gx === b.gx, lo = col ? Math.min(a.gy, b.gy) : Math.min(a.gx, b.gx), hi = col ? Math.max(a.gy, b.gy) : Math.max(a.gx, b.gx);
             let blocked = false;
-            for (let c = lo + 1; c < hi && !blocked; c++) if ((col ? grid[c][a.gx] : grid[a.gy][c]).type === TYPE_WALL) blocked = true;
+            for (let c = lo + 1; c < hi && !blocked; c++) if (cellType[(col ? grid[c][a.gx] : grid[a.gy][c]) - 1] === TYPE_WALL) blocked = true;
             const lv = e => e.effectiveLevel !== undefined ? e.effectiveLevel : e.level !== undefined ? Math.max(1, e.level) : 1;
             const gap = hi - lo - 1, limit = Math.min(lv(a), lv(b));
             if (blocked || gap < 1 || gap > limit) continue;
@@ -37,13 +37,13 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     const walls = [];
     for (let round = 0; round < 60; round++) {
         for (const t of towers.slice()) destroyBuilding(t);
-        for (const t of walls) if (grid[(t / GRID_W) | 0][t % GRID_W].type === TYPE_WALL && !getTileEntityRef(t % GRID_W, (t / GRID_W) | 0)) { grid[(t / GRID_W) | 0][t % GRID_W].type = TYPE_FLOOR; simMoveTileTypeChanged(t % GRID_W, (t / GRID_W) | 0); }
+        for (const t of walls) if (cellType[(grid[(t / GRID_W) | 0][t % GRID_W]) - 1] === TYPE_WALL && !getTileEntityRef(t % GRID_W, (t / GRID_W) | 0)) { cellType[(grid[(t / GRID_W) | 0][t % GRID_W]) - 1] = TYPE_FLOOR; simMoveTileTypeChanged(t % GRID_W, (t / GRID_W) | 0); }
         walls.length = 0;
         const x0 = 5, y0 = 5, W = 20 + Math.floor(rand() * 25), Hh = 20 + Math.floor(rand() * 25);
         for (let k = 0, n = Math.floor(rand() * 160); k < n; k++) {
             const gx = x0 + Math.floor(rand() * W), gy = y0 + Math.floor(rand() * Hh), c = grid[gy] && grid[gy][gx];
-            if (!c || c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy)) continue;
-            if (rand() < 0.1) { c.type = TYPE_WALL; simMoveTileTypeChanged(gx, gy); walls.push(gy * GRID_W + gx); continue; }
+            if (!c || cellType[(c) - 1] !== TYPE_FLOOR || cellItemGet(c) || getTileEntityRef(gx, gy)) continue;
+            if (rand() < 0.1) { cellType[(c) - 1] = TYPE_WALL; simMoveTileTypeChanged(gx, gy); walls.push(gy * GRID_W + gx); continue; }
             const key = rand() < 0.7 ? 'laser' : 'pistol', owner = Math.floor(rand() * 2);
             if (!placeBuilding(gx, gy, key, owner, { ignorePlacementRules: true, silent: true })) continue;
             const e = getTileEntityRef(gx, gy);
@@ -68,9 +68,9 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
             const t = lasers.length ? lasers[Math.floor(rand() * lasers.length)] : null;
             if (!t) break;
             const d = Math.floor(rand() * 4), dist = 1 + Math.floor(rand() * 6), gx = t.gx + [1, -1, 0, 0][d] * dist, gy = t.gy + [0, 0, 1, -1][d] * dist, c = grid[gy] && grid[gy][gx];
-            if (!c || c.item || getTileEntityRef(gx, gy)) continue;
-            c.type = c.type === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(gx, gy);
-            if (c.type === TYPE_WALL) walls.push(gy * GRID_W + gx);
+            if (!c || cellItemGet(c) || getTileEntityRef(gx, gy)) continue;
+            cellType[(c) - 1] = cellType[(c) - 1] === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(gx, gy);
+            if (cellType[(c) - 1] === TYPE_WALL) walls.push(gy * GRID_W + gx);
         }
         compare('walls');
         lasersSeen += lasers.length; rounds++;

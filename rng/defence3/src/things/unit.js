@@ -207,8 +207,8 @@ function _unitFloorEvent(u) {
     const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
     if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return false;
     u._floorTile = gy * GRID_W + gx;
-    const cell = grid[gy][gx], item = cell.item;
-    if (!item || cell.owner === u.owner || item.underConstruction) return false;
+    const cell = grid[gy][gx], item = cellItemGet(cell);
+    if (!item || cellOwner[(cell) - 1] === u.owner || item.underConstruction) return false;
     const itemLevel = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
     switch (item.type) {
         case 'sand': applyStatusEffect(u, 'sand', itemLevel, 0, item.owner, item.type); break;
@@ -972,8 +972,7 @@ class Unit {
 
         createExplosion(this.x, this.y, "#f80", 15);
         playSound('mine_explode', this.x, this.y);
-        clearTileEntity(cell.item.gx, cell.item.gy, cell.item);
-        cell.item = null;
+        clearTileEntity(cellItemGet(cell).gx, cellItemGet(cell).gy, cellItemGet(cell));
         if (this.energy <= 0) this.dead = true;
     }
 
@@ -1273,7 +1272,7 @@ function _isHitBuildingStanding(tb) {
     if (!(tb.energy > 0)) return false;
     if (getTileEntityRef(tb.gx, tb.gy) === tb) return true;
     const row = grid[tb.gy], cell = row && row[tb.gx];
-    return !!cell && cell.item === tb;
+    return !!cell && cellItemGet(cell) === tb;
 }
 // The tick's hits. On units, on the helpers and in no order: SIM_KERNEL_HITS
 // takes the queued attacks (_hitQ, as entries) and the movement kernel's
@@ -3360,19 +3359,7 @@ function simAreaRangeFast(x, y, tx, ty, k) {
 function _simAreaCsr() {
     if (_simAreaCsrFor === areaNeighborIds) return;
     _simAreaLayoutVer = (_simAreaLayoutVer + 1) | 0;
-    const L = Array.isArray(areaNeighborIds) ? areaNeighborIds : [], A = L.length;
-    let total = 0;
-    for (let a = 0; a < A; a++) total += L[a] ? L[a].length : 0;
-    const off = simHeapArrayAuto(Int32Array, A + 1), nb = simHeapArrayAuto(Int32Array, Math.max(1, total));
-    const bounds=simHeapArrayAuto(Int32Array,Math.max(1,A*4));
-    for(let a=0;a<A;a++){
-        let x0=GRID_W,y0=GRID_H,x1=-1,y1=-1;
-        for(const c of gridCellsByArea[a]||[]){x0=Math.min(x0,c.x);y0=Math.min(y0,c.y);x1=Math.max(x1,c.x);y1=Math.max(y1,c.y);}
-        bounds.set([x0,y0,x1,y1],a*4);
-    }
-    let k = 0;
-    for (let a = 0; a < A; a++) { off[a] = k; const l = L[a]; if (l) for (let i = 0; i < l.length; i++) nb[k++] = l[i]; }
-    off[A] = k;
+    const { nbOff: off, nb, bounds } = _mapAreas;
     simParallelBind('area.off', off); simParallelBind('area.nb', nb);
     simParallelBind('area.bounds',bounds);
     _simAreaCsrFor = areaNeighborIds;
@@ -3481,7 +3468,34 @@ const SIM_FLOW_SPLIT = 32;
 // many records miss at once): calls counts the posts' ticks, due the one it commits at; while one is in flight no other is
 // posted, the records keep the O(1) answers. The same ticks on every peer: the count is the state's.)
 const SIM_FLOW_TICK_LOOKS = 131072;
-const _flowLooks = { posted: false, jobs: 0, P: new Float64Array(64), calls: 0, due: 0, pend: 0 };
+const _flowLooks = { posted: false, jobs: 0, P: new Float64Array(64), calls: 0, due: 0, pend: 0, ws: [], wsTab: null };
+// The live walls of every navigation profile, copied at a post (in parallel:
+// simParallelCopyHeap): the exact looks on the helpers read these copies
+// (mv.rs flow_wall_snap, the table at word 478), so an answer is the state of
+// its post whichever thread makes it and when, and its commit may keep it
+// when walls changed since, if its way is still open then (mv_flow_commit).
+// One copy a profile, made once and reused.
+function _flowWallSnap() {
+    const L = _flowLooks, R = _simParReg;
+    if (!L.wsTab || !simHeapHas(L.wsTab)) { L.wsTab = simHeapArray(Int32Array, _SIM_MOVE_NAV); simParallelBind('fl.wsTab', L.wsTab); }
+    const T = L.wsTab, pairs = [];
+    for (let p = 0; p < _SIM_MOVE_NAV; p++) {
+        const src = R[p === 0 ? 'mv.wall' : p === 1 ? 'mv.airwall' : 'mv.cwall.' + p];
+        if (!src || !simHeapHas(src)) { T[p] = 0; continue; }
+        let snap = L.ws[p];
+        if (!snap || snap.length !== src.length || !simHeapHas(snap)) { snap = L.ws[p] = simHeapArray(Uint8Array, src.length); simParallelBind('fl.ws.' + p, snap); }
+        pairs.push(snap, src);
+        T[p] = _simWEnc(snap.byteOffset);
+    }
+    if (pairs.length) simParallelCopyHeap(pairs);
+    // (And the ground walls' change count per 8x8 block (mv.wallBlk) as at the post: a commit
+    // keeps an answer whose blocks have not changed since without a line test, mv.rs walls_same_since_post.)
+    const B = R['mv.wallBlk'];
+    if (B && simHeapHas(B)) {
+        if (!L.wb || L.wb.length !== B.length || !simHeapHas(L.wb)) { L.wb = simHeapArray(Int32Array, B.length); simParallelBind('fl.wb', L.wb); }
+        L.wb.set(B);
+    }
+}
 let _simMoveRanTick = -1;
 // (The movement's first stage chunking this tick: slots a chunk, chunks.)
 const simMovePick = { per: 0, jobs: 0 };
@@ -3508,10 +3522,14 @@ function flowLooksPost() {
     _flowLooks.P.set(P);
     simParallelRun(SIM_KERNEL_FLOW_PENDING, jobs);
     { const cnt = _simParReg['fl.cnt']; let m = 0; for (let j = 0; j < jobs; j++) m += cnt[j]; _flowLooks.pend = m; }
+    // (Tracing (sim_worker.js ?simtrace=1): the looks listed this step.)
+    if (typeof _simTraceCur !== 'undefined' && _simTraceCur) _simTraceCur.ph.flowPend = (_simTraceCur.ph.flowPend || 0) + _flowLooks.pend;
     const Q = simParallelStageParams(SIM_LANE_FLOW, 0);
     Q.set(P);
     _flowLooks.posted = true; _flowLooks.jobs = jobs; _flowLooks.due = _flowLooks.calls + Math.floor(_flowLooks.pend / SIM_FLOW_TICK_LOOKS);
     // (Eager: without helpers made now, not at a later wait, after the state they read changed.)
+    // (The walls as at this post, for the looks: the lane is idle here, its last job committed.)
+    simParallelBackgroundWait(SIM_LANE_FLOW); _flowWallSnap();
     simParallelBackgroundChain(SIM_LANE_FLOW, [[SIM_KERNEL_FLOW_EXACT, jobs * SIM_FLOW_SPLIT]], true);
 }
 // (The helpers' answers waited for; still to commit.)
@@ -3526,7 +3544,8 @@ function flowLooksCommit() {
     if (!U || !simHeapHas(U.ids) || !simHeapHas(U.slots)) return;
     if (_simParReg['um.ids'] !== U.ids || _simParReg['um.slots'] !== U.slots) { simParallelBind('um.ids', U.ids); simParallelBind('um.slots', U.slots); }
     _simParams.set(L.P); _simParams[63] = U.n;
-    simParallelRun(SIM_KERNEL_FLOW_COMMIT, L.jobs);
+    // (Each job's answers in SIM_FLOW_SPLIT parts, as the exact kernel's: mv.rs mv_flow_commit.)
+    simParallelRun(SIM_KERNEL_FLOW_COMMIT, L.jobs * SIM_FLOW_SPLIT);
 }
 // (A resync, on every peer: nothing listed is committed.)
 function flowLooksDrop() { if (_flowLooks.posted) { simParallelBackgroundWait(SIM_LANE_FLOW); _flowLooks.posted = false; } }
@@ -3794,8 +3813,8 @@ function _acqStructureHit(u, range) {
     if (!(t >= 0)) return null;
     const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
     if (!e || !(e.energy > 0)) return null;
-    const cell = grid[gy] && grid[gy][gx], isItem = !!cell && cell.item === e;
-    const owner = isItem ? cell.owner : e.owner;
+    const cell = grid[gy] && grid[gy][gx], isItem = !!cell && cellItemGet(cell) === e;
+    const owner = isItem ? cellOwner[(cell) - 1] : e.owner;
     if (owner === u.owner || (isItem && e.underConstruction)) return null;
     if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return null;
     return e;
@@ -4351,7 +4370,7 @@ function pushUnitOutOfBlockedTile(unit) {
     // (Any tile not a wall: canUnitOccupyTile's first answer, read before the
     // unit's cache fields, which miss whenever any tile changed anywhere.)
     const row = gx >= 0 && gx < GRID_W ? grid[gy] : null, cell = row ? row[gx] : null;
-    if (cell && cell.type !== TYPE_WALL) return;
+    if (cell && cellType[(cell) - 1] !== TYPE_WALL) return;
     if (canUnitOccupyTileCached(unit, gx, gy, 0)) return;
 
     let fromGx = Number.isFinite(unit.prevX) ? Math.floor(unit.prevX / TILE) : gx;

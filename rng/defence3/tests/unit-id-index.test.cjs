@@ -26,7 +26,8 @@ const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
 // Slotted units: the hash table of slots, ids from the id column, slots
 // reused by later units, deaths (backward-shift deletes), a relayout.
 {
-    const cap=4096,columns={id:new Int32Array(cap)},S={cap,columns,owners:new Array(cap).fill(null)};
+    // (A live slot holds a unit handle: hnd[slot] > 0, hslot[handle] === slot.)
+    const cap=4096,columns={id:new Int32Array(cap),hnd:new Int32Array(cap),hslot:new Int32Array(cap+1)},S={cap,columns,owners:new Array(cap).fill(null)};
     ctx._simUnitState=S;
     const index=new ctx.Index(),reference=new Map(),free=[];
     for(let s=cap-1;s>=0;s--)free.push(s);
@@ -35,11 +36,11 @@ const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
     for(let n=0;n<200000;n++) {
         if(live.length<3000&&(n%3||live.length<10)) {
             const s=free.pop(),id=nextId++,u={id,_us:columns,_si:s};
-            columns.id[s]=id;S.owners[s]=u;index.set(id,u);reference.set(id,u);live.push(u);
+            columns.id[s]=id;columns.hnd[s]=s+1;columns.hslot[s+1]=s;S.owners[s]=u;index.set(id,u);reference.set(id,u);live.push(u);
         } else {
             const k=random()%live.length,u=live[k];live[k]=live[live.length-1];live.pop();
             assert.equal(index.delete(u.id),true);reference.delete(u.id);
-            S.owners[u._si]=null;free.push(u._si);
+            columns.hnd[u._si]=0;S.owners[u._si]=null;free.push(u._si);
         }
         if(n%997===0)for(const [id,u] of reference)assert.equal(index.get(id),u,'id '+id+' at '+n);
         assert.equal(index.size,reference.size);
@@ -48,9 +49,9 @@ const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
     for(let id=nextId;id<nextId+100;id++)assert.equal(index.get(id),undefined);
     assert.equal(index.used,reference.size);
     // A relayout: every unit in another slot; the table made again from the list.
-    const S2={cap,columns:{id:new Int32Array(cap)},owners:new Array(cap).fill(null)};
+    const S2={cap,columns:{id:new Int32Array(cap),hnd:new Int32Array(cap),hslot:new Int32Array(cap+1)},owners:new Array(cap).fill(null)};
     ctx.units=[];let s=0;
-    for(const u of reference.values()){u._us=S2.columns;u._si=s;S2.columns.id[s]=u.id;S2.owners[s]=u;s++;ctx.units.push(u);}
+    for(const u of reference.values()){u._us=S2.columns;u._si=s;S2.columns.id[s]=u.id;S2.columns.hnd[s]=s+1;S2.columns.hslot[s+1]=s;S2.owners[s]=u;s++;ctx.units.push(u);}
     ctx._simUnitState=S2;index.stale=true;
     for(const [id,u] of reference)assert.equal(index.get(id),u);
     assert.equal(index.used,reference.size);

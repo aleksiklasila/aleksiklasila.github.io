@@ -71,7 +71,7 @@ for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map
         const before = ask(), first = check(before);
         // A rebuild: walls changed; fields asked for in its window; installed.
         for (let i = 0; i < 40; i++) { const x = 2 + Math.floor(rnd() * (GRID_W - 4)), y = 2 + Math.floor(rnd() * (GRID_H - 4)), c = grid[y][x];
-            if (c.item || getTileEntityRef(x, y)) continue; c.type = c.type === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); }
+            if (cellItemGet(c) || getTileEntityRef(x, y)) continue; cellType[(c) - 1] = cellType[(c) - 1] === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); }
         const seq = _nav[0].seq;
         let n = 0;
         while (!_navNext.nav && n++ < NAV_BUILD_TICKS) gameTick();
@@ -101,7 +101,7 @@ for (const [helpers, side] of [[3, 0], [3, 1], [0, -1], [0, 1]]) for (const [map
         // (_navNextCopyFlush); every field still its own search after the
         // install.
         for (let i = 0; i < 40; i++) { const x = 2 + Math.floor(rnd() * (GRID_W - 4)), y = 2 + Math.floor(rnd() * (GRID_H - 4)), c = grid[y][x];
-            if (c.item || getTileEntityRef(x, y)) continue; c.type = c.type === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); }
+            if (cellItemGet(c) || getTileEntityRef(x, y)) continue; cellType[(c) - 1] = cellType[(c) - 1] === TYPE_WALL ? TYPE_FLOOR : TYPE_WALL; simMoveTileTypeChanged(x, y); }
         let m = 0;
         while (!_navNext.nav && m++ < 4 * NAV_BUILD_TICKS) gameTick();
         const realFlush = _navNextCopyFlush;

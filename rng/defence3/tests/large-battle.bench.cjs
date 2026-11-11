@@ -45,22 +45,23 @@ players = Array.from({length:2}, () => ({energy:1e9, astar:1e9, popCount:0, rese
 activeTeamIds = [0,1];
 rebuildPrecomputedStatsMap(); initGrid(); initTileEntityLookup(); generateAreas(); initSpatialHash();
 rebuildPrecomputedStatsMapPlayer();
+// (A match start's reservation: every slot and work array for the whole population, main.js startGame.)
+simUnitStateReserve(CONFIG_MAX_POP * 2, simUnitPopulationSlots()); simUnitWkReserve(CONFIG_MAX_POP * 2); simUnitStReserve(CONFIG_MAX_POP * 2); simMatchReserve();
 const types = ['norm','fast','tank','flying','mole','snake','collector','astar_collector','salvager_unit','builder_unit','healer_unit','researcher_unit'];
 for (let owner=0; owner<2; owner++) {
   const gx=owner?120:32, gy=100, stacks=getRequiredStacksForLevel(20);
   const stats=calculateItemStats('house',20,owner);
   const house={type:'house',owner,gx,gy,x:gx*TILE+16,y:gy*TILE+16,stacks,manualStacks:stacks,level:20,
     energy:stats.maxEnergy,maxEnergy:stats.maxEnergy,preComputed:stats};
-  grid[gy][gx].item=house; grid[gy][gx].owner=owner; setTileEntity(gx,gy,'house',house);
+  cellOwner[(grid[gy][gx]) - 1]=owner; setTileEntity(gx,gy,'house',house);
   for (let i=0; i<500; i++) {
     const gx = 4 + i%25 + owner*90, gy = 4 + Math.floor(i/25)*(scenario==='lasers'?2:3);
     let b;
-    if (scenario==='lasers' || i%4===0) { b = new Tower(gx,gy,scenario==='lasers'?'laser':['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5],owner); towers.push(b); grid[gy][gx].type = TYPE_WALL; }
+    if (scenario==='lasers' || i%4===0) { b = new Tower(gx,gy,scenario==='lasers'?'laser':['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5],owner); towers.push(b); cellType[(grid[gy][gx]) - 1] = TYPE_WALL; }
     else if (i%4===1) { b = new Barrack(gx,gy,owner,'norm'); barracks.push(b); }
     else { const C = [CollectorSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner, AstarSpawner, SalvagerSpawner][Math.floor(i/4)%6]; b = new C(gx,gy,owner); collectorSpawners.push(b); }
     setTileEntity(gx,gy,b.type,b);
-    grid[gy][gx].owner = owner;
-    if (!(b instanceof Tower)) grid[gy][gx].item = b;
+    cellOwner[(grid[gy][gx]) - 1] = owner;
     b.underConstruction=false;
     if (scenario==='working' && i%5===0) { b.underConstruction=true; b.buildProgress=0; b.energy=1; }
     if (scenario==='working' && i%19===0 && !b.underConstruction) b.markedForSalvage=true;

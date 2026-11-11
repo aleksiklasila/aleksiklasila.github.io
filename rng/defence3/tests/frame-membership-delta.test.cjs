@@ -26,7 +26,11 @@ c._pageFrame=reuse;c._simPageUnitListFill();
 const reused=vm.runInContext('_simPageUnitList',c);
 assert.equal(reused[n-8].id,n+1);assert.equal(c._pageUnitsById.get(50),retained);
 const remap={...reuse,id:reuse.id.slice()};[remap.id[49],remap.id[50]]=[remap.id[50],remap.id[49]];
-assert.equal(c._simClientUpdateStableSlots(remap,reuse),false,'restores that remap existing IDs use the general identity-preserving path');
+// (Units moved between slots (the relayout, a restore) keep their views in place: no freeze, identity kept, the new slots.)
+const frozeBefore=freezes, at49=c._pageSlotViews[49];
+assert.equal(c._simClientUpdateStableSlots(remap,reuse),true,'slot moves stay on the stable path');
+assert.equal(freezes,frozeBefore,'moved units are not frozen');
+assert.equal(c._pageSlotViews[49],retained);assert.equal(retained._s,49);assert.equal(c._pageSlotViews[50],at49);assert.equal(at49._s,50);
 assert.equal(retained.dead,false,'fallback detection mutates nothing');
 const previous={n:3,id:new Int32Array([1,2,3]),x:new Float32Array([100,200,300]),y:new Float32Array([30,40,50]),px:new Float32Array([0,100,200]),py:new Float32Array([10,20,30])};
 const rebased={n:3,id:new Int32Array([1,9,-1]),x:new Float32Array([150,900,0]),y:new Float32Array([30,0,0]),px:new Float32Array([100,900,0]),py:new Float32Array([30,0,0]),renderBuckets:{}};

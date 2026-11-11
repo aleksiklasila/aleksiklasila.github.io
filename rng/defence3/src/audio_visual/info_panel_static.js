@@ -98,8 +98,8 @@ function _infoPackSync() {
     if (strings && strings.length !== S.strings) { w.postMessage({ type: 'strings', list: strings.slice() }); S.strings = strings.length; }
     if (S.local !== localPlayerId) { w.postMessage({ type: 'local', player: localPlayerId }); S.local = localPlayerId; }
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
-    if (F && F.buf !== S.frame) {
-        S.frame = F.buf;
+    if (F && F !== S.frame) {
+        S.frame = F;
         w.postMessage({ type: 'frame', cols: { type: F.type, owner: F.owner, blevel: F.blevel, level: F.level, flags: F.flags, energy: F.energy, maxEnergy: F.maxEnergy, wtype: F.wtype, wstate: F.wstate, cmd: F.cmd, x: F.x, y: F.y, px: F.px, py: F.py, id: F.id } });
     }
     const ents = selectedEntities, us = selectedUnits;
@@ -490,7 +490,7 @@ function _ipsGroup(S, g, R, o, n, X) {
     if (g.kind === 'mine') { _ipsText(S.ha, ''); _ipsText(S.hm, ''); return; }
     const own = _ipsRepView(g.i), local = R[o + IPF.local] > 0;
     let areaSize = 0, areaLevel = 0;
-    if (own && own.gx >= 0 && own.gy >= 0 && own.gy < GRID_H && own.gx < GRID_W) { const aId = grid[own.gy][own.gx].areaId; if (aId !== -1) { const a = getAreaById(aId); if (a) { areaSize = a.cells.length; areaLevel = a.multiplierLevel || 0; } } }
+    if (own && own.gx >= 0 && own.gy >= 0 && own.gy < GRID_H && own.gx < GRID_W) { const aId = renderCellValue(grid[own.gy][own.gx], 'areaId'); if (aId !== -1) { const a = getAreaById(aId); if (a) { areaSize = a.cells.length; areaLevel = a.multiplierLevel || 0; } } }
     _ipsText(S.ha, areaSize > 0 ? ` A${areaSize}` : '');
     _ipsText(S.hm, ` M${areaLevel}`); _ipsColor(S.hm, AREA_LEVEL_COLORS[areaLevel] || '#888');
     const rmax = own ? getThingResearchedMaxLevel(own) : MAX_THING_LEVEL;

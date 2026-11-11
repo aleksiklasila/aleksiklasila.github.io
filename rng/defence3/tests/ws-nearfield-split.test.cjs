@@ -17,7 +17,7 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
         let placed = 0;
         for (let gy = 4; gy < GRID_H - 4 && placed < 12; gy += 9) for (let gx = 4; gx < GRID_W - 4 && placed < 12; gx += 11) {
             const c = grid[gy] && grid[gy][gx];
-            if (!c || c.type !== 0 || c.item || getTileEntityRef(gx, gy)) continue;
+            if (!c || cellType[(c) - 1] !== 0 || cellItemGet(c) || getTileEntityRef(gx, gy)) continue;
             if (placeBuilding(gx, gy, 'spawner', 0, { ignorePlacementRules: true, silent: true })) { const b = getTileEntityRef(gx, gy); if (b && b.underConstruction) markConstructionComplete(b); placed++; }
         }
         const out = [];

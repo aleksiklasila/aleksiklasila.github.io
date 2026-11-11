@@ -21,6 +21,7 @@ const c = vm.createContext({
     towers:[],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[],droppedItems:[],projectiles:[],particles:[],
     document:{createElement(){throw Error('visual hold cannot create terrain canvases');}}
 });
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",c); // (Object cells: this fixture's grid.)
 vm.runInContext(read('src/audio_visual/visibility_history.js')+'\nteamVisibilityHistory=true;',c);
 const renderer=read('src/audio_visual/renderer.js');
 c.getRawVisibilityGridForPlayer=()=>c.raw;

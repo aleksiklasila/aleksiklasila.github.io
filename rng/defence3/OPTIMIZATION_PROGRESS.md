@@ -7215,3 +7215,282 @@ Raw outputs in tests/test-runs/rendered-20261110/.
   binary columns (restore); simUnitStateCollect's whole-world pass over the
   units proxy at a new units epoch (~18 MB of iterator garbage) by the row
   index's slots once that equivalence is proven.
+
+## 2026-11-11 — map cells and areas in the wasm heap, scenes as typed columns, rendered runs
+
+All rendered numbers: headed Edge, `.claude/scene_tps_probe.cjs
+scenes/chaos-1m-250k.gz 90` with simtrace + GC trace, 8 helpers; raw data in
+tests/test-runs/map-wasm-20261111/ (before*, after*, cols*, cols2*, cols3*).
+
+- The tile grid holds numeric handles (one-based tile index) in a heap
+  Int32Array; rows are views of it. cellType / cellOwner / cellArea are the
+  only cell state; items come from the structure table (cellItemGet). Area
+  generation (k_map_generate) and topology (k_map_topology, world_map.rs)
+  run in wasm; the page uses a small map-only heap with the same exports.
+  Area cells are tile indices (views of one tiles array). Same map, area
+  neighbour order, cell order and RNG state as before (checked on 192 arena
+  and 200 random maps against the last commit).
+- Scenes: soloSceneReader packs rows into typed columns as it reads (units,
+  buildings, mines: Float64 rows; terrain runs, area tiles: Int32; type names
+  in small tables; rare building extras sparse). No records are kept; the
+  worker gets the columns as transferred buffers (sim_client.js). Before,
+  the scene was a structured clone of millions of small arrays held until
+  the restore ended.
+- spatialUnitsByArea (126k empty arrays a match start) removed: its only
+  reader tested for a Set and never ran.
+- Fixed: a shadowed `cellOwner` local in the hostile-structure table
+  (data_state.js, TDZ error whenever a tile held the entity); cellColumnsRehome
+  (a page taking over from a failed worker) now also rebuilds the area tables
+  and their views in the new heap (they stayed in the map heap: kernels
+  refused them, sim-worker-failure); it only runs with a simulation heap.
+- Tests: many fixtures and helpers still read cells as objects or area cells
+  as {x, y} and silently got undefined (chaos-spikes-scenario's area
+  upgraders were never placed, so the flow test's scenario changed; the
+  adjacency oracle; crowd-traffic's wall). All converted; flow-looks-commit
+  gives exactly the last commit's numbers again. New failures from the
+  conversion: all fixed. 16 tests also fail at the last commit (aff84ec):
+  action-budget, deltatick-fairness, heap-grow-ahead,
+  history-structure-columns, mixed-rally-move, multiplayer-desync-recovery,
+  multiplayer-input-overflow, multiplayer-recovery-authority / -late /
+  -order, multiplayer-reload-input, multiplayer-scenarios, shared-unit-state,
+  unit-hidden-class, unit-id-index, visibility-range-collision: open.
+- Worker heap (trace MajorGC events), previous session's run vs three runs now:
+  first major GC after load 44 ms at 657 MB -> 33-54 ms at 323-431 MB; the
+  compaction after it 95 ms -> 39-43 ms; live heap ~162 -> ~160 MB; steady
+  play major GC 11 -> 13-14 ms.
+- Steps (ms, p50 / p95 / p99 / max, steps > 1.5x mean): previous 123 / 213 /
+  276 / 321, 26; now 146 / 251 / 382 / 467, 24 (one bad run), 130 / 195 /
+  226 / 300, 17 and 126 / 197 / 259 / 310, 19. Base tick ~33-35 ms (same).
+  Slow steps (simtrace-spikes): 2, 2 in the good runs; GC share of their
+  excess 57 of 163 ms and 0 of 181 ms (was 88 of 88).
+- Remaining: the occupancy kernel (89) is the largest cost (~355 ms of
+  helper CPU a step, kp:89 ~44 ms wall) and its slow steps keep the same job
+  count with ~50% more time per job, together with the other parallel
+  kernels of that step (combat scan kp:20 correlates 0.57): every helper
+  slower at once, not one stalled. tests/trace-thread-load.cjs (new) shows
+  the traced threads (page, presentation worker, compositor) less busy in
+  slow steps, so the contention is outside the trace (GPU process, OS, SMT
+  siblings). Per-job cost also rises over a run (0.45 -> 0.72 ms) as fights
+  concentrate into fewer blocks. Less work per occupancy job is the lever
+  (checked_traffic_q 56% with callees, per-job O(block area) setup 12%:
+  see 2026-11-08). Post-load garbage still 160-270 MB (unit objects at
+  restore?), live heap 160 MB: a heap census next.
+
+## 2026-11-11 (later) — every test passing; why slow steps are slow; reserved helpers measured
+
+- The 16 tests that failed at the last commit, and render-frame-stability, all
+  pass (281/281). Real fixes among them:
+  * startSoloGame waited for nothing: started while the worker was still
+    loading, the page made the match itself (it has no kernels: k_slab_take
+    failed). It now waits for the worker's load (simClientWorkerLoading /
+    simClientWhenLoaded).
+  * Input was dropped whenever any loading overlay showed: a mid-match
+    reload, resync or recovery threw away the player's commands.
+    matchInitializationBlocksInput is now only the new match's
+    initialization (its barrier begun, not released).
+  * Builders stood forever at a site whose only free side held idle
+    builders: a blocked mover never swaps with a worker (mvWk 1 for any
+    worker state, IDLE too) nor with a unit of its own crowd. The move
+    kernel now reads unit.wkS (word 36, W_WKS): idle workers give way, and a
+    worker on its way passes idle workers of its crowd. traffic-pressure
+    (strict speed) still passes; a first version exempting every flag-128
+    mover from the crowd rule gave walkers 1.85x speed in the wall case.
+  * Test-side: fixtures without unit handles, slot release that now returns
+    slots two calls later, a threshold off by the heap's initial free space,
+    a bench without the match's slot reservation, a browser test ordering
+    units before the match's initialization ended.
+- Slow steps (tests/slow-step-attribution.cjs, new: growth per phase over
+  every slow step of several runs against its neighbours): over 71 slow
+  steps of four runs, 1.7 s of excess, spread: simMoveRun +662 ms (kp:89
+  only +194), background waits +368 (39 steps), worker search tier +247,
+  combat scan +199, relayout +171, visibility +143, spawner queue +129. The
+  biggest single ones: a navigation build's install (lane 1) waited 89 ms,
+  the worker search commit (lane 4) 83 ms, retirement prep + relayout 70 ms.
+- Background lanes (new trace fields bgAge / bgLeft at each wait, and the
+  helpers' background chunk counts hbg / hbg4 / hskip4): helpers do run
+  background work (~8,800 chunks a step, 1-2k of lane 4); the worker search
+  (lane 4, WS_SCAN 39 / NEARFIELD 99 / ELIGIBLE 108 / RETURN_SPAWNERS 136)
+  is still 2.5-3 of its 6 stages short at its commit a step after its post,
+  and the simulation thread runs 18-25 ms of its scan then. Not a starved
+  lane: more work than the helpers' spare time.
+- Reserved background helpers (?simbgonly=N: helpers 0..N-1 take background
+  lanes only, SIM_PAR_BG_ONLY), headed Edge, 1M chaos, 90 s runs:
+  0 of 8 (4 runs): 30.6-33.4 ms a tick (32.0 mean), waits 5.7-6.6 ms a step,
+  p95 178-209, p99 214-228, max 243-303, fps 86-99. 1 of 8 (3 runs):
+  31.8-33.0 (32.4), waits 2.6-6.0, p95 186-219, p99 205-260, max 237-405,
+  fps 75-85. 2 of 8: occupancy wall 46 -> 56 ms, bigger steps; 3 of 8
+  similar; 10 helpers with 2 reserved: 36.6 ms a tick (oversubscribed).
+  The waits shrink but the tick does not: on 16 threads every core is busy
+  (simulation, its helpers, presentation and its helpers, page, GPU), so a
+  reserved thread moves work and costs frames. Default stays 0; the knob
+  stays for bigger machines. The lever is less work: occupancy, then the
+  worker search scan.
+- Tools: tests/compare-runs.cjs (runs side by side: ms a tick, step
+  quantiles, slow steps and excess, waits, fps), tests/slow-step-attribution.cjs.
+- Helper CPU by kernel (Node, chaos-1m-250k, 8 real helpers, a prof build
+  --features=prof --keep-names; tests/test-runs/occ-prof-20261111/): of 21.3 s
+  busy, occupancy (mv_move_occupancy) 23%, exact flow looks (mv_flow_exact,
+  lane 13) 18%, movement (mv_move) 11%, then acquisition sample, status, slot
+  move, nav fields, effective stats, free-slot zeroing, worker scan (each
+  1.5-3%); the helpers' spin-wait 2%. By function it is flat: atlas_step 5%,
+  seg_open 5%, flow_look_vals 4%, checked_traffic_q 4%, move_job 4%.
+- Exact flow looks: the shared look cache (2^18 entries) hits 3.6% (dbgc
+  counters 110-112 in mv_flow_exact; 250k chaos, no helpers): ~28k answers
+  computed a step. tests/probes/flow-keys.js (chaos-spikes.bench.cjs
+  --step-eval=@file, new) shows why: 30-50k pending keys a step, nearly all
+  distinct (tile, destination) pairs, ~100 destinations, the build and wall
+  versions merge none, almost none repeat from the step before. The work is
+  unique per step: the lever is a cheaper answer (atlas stepping,
+  flow_look_vals) or fewer units needing one, not the cache.
+- The per-chunk clearing of the atlas step and exit caches (16 KB) in
+  mv_flow_exact is ~1 us a chunk: not worth changing.
+
+## 2026-11-11 (evening) — exact flow looks: why they were wasted, and what was kept
+
+- Debug counters (dbgc 100-128 in mv_flow_exact / mv_flow_commit /
+  look_keep; chaos-spikes.bench.cjs --dbgc, 250k, no helpers) showed the real
+  waste: of ~33.7k exact looks made a step, ~1.2k were committed. The commit
+  dropped every answer whose look wall key (lwv, the walls of 11x11 blocks
+  around it) had changed since the post: in a battle nearly all of them,
+  a few ticks later. Walkers then never held an exact record, approximated
+  at every tile and listed a new 32-step look each time.
+- Kept now (all deterministic, 0 and 3 helpers equal in flow-looks-commit,
+  chaos-scenario-determinism, multiplayer-chaos-determinism):
+  * The exact looks read a copy of each profile's walls made at the post
+    (unit.js _flowWallSnap, parallel heap copy; mv.rs flow_wall_snap, word
+    478): an answer is the post's state whichever helper makes it, when.
+  * The commit keeps an answer whose wall key changed if its way still
+    holds now: for ground looks, unchanged 8x8 wall-block counts around it
+    since the post (mv.wallBlk now vs a copy at the post, words 477 / 479:
+    walls_same_since_post) - no line test; else look_way_open (its block
+    and straight line to its far tile; a short look's next tiles). Answers
+    of no way still need an exact match.
+  * The commit runs in SIM_FLOW_SPLIT parts a job (a burst of answers to
+    revalidate had made one 50-67 ms chunk).
+  * At a steer (flow_look), look_keep: a record whose wall version only
+    changed is revalidated (same tile), and a walker that left an open
+    look's tile toward its far tile carries it (nearer, >= 3 tiles out,
+    block open, line open) instead of approximating.
+  * Tried and removed: look_keep in the pending pass (foreground: its line
+    tests cost 0.7 -> 2.4 ms a base tick in Edge, more than it saved).
+- Numbers. Node 250k, single thread: exact looks made 27.9k -> 4.8k a step
+  (with the pending keep), step 369 -> 324 ms. Node 1M, 8 helpers (prof
+  build, tests/test-runs/occ-prof-20261111/keep3): mv_flow_exact helper time
+  3,708 -> 2,611 ms (-30%), pending 449 -> 458, commit 258 -> 282, helpers'
+  total 20.6 -> 19.5 s. Headed Edge 1M, interleaved A/B (A = these changes
+  switched off, a scratchpad build via WASM32_OVERRIDE): ms a base tick A
+  37.3 (dk 3.5) / 34.0, B 32.5 / 33.7 / 34.1; exact-lane waits A up to 12-13 ms,
+  B none; commit chunk max A 8.7-16.9, B 4.1-12.6. The exact looks were
+  background work, off the tick's path, so the tick barely moves: the
+  saving is helper CPU and the lane's waits.
+- Also: FPS fell over the session (86-99 early, 65-82 late) in A and B alike:
+  the machine, not the code (interleave A/B runs).
+
+## 2026-11-11 (night) — rendering apart from the simulation: measured, then garbage out
+
+Goal (user): rendering costs the simulation as little as possible; no GC
+spikes (no per-frame allocation); GPU and caches where they can; wasm/SIMD for
+what stays expensive. Data in tests/test-runs/render-iso-20261111/.
+
+- Measurement switches: ?render=0 (no frame drawn; the simulation's heartbeat
+  and ticks as on a left-out frame) and ?present=0 (the presentation worker
+  builds no frames). scene_tps_probe: WPROF now profiles the page too
+  (<prefix>-page.cpuprofile), PAGEHEAPSAMP=file samples the page's
+  allocations (collected objects included).
+- What rendering costs the simulation (headed Edge, 1M chaos, interleaved,
+  two runs each): full 32.5-33.5 ms a tick, no drawing 29.9-30.5 (the
+  occupancy kernel's helper CPU 86 -> 74 ms a tick), neither drawing nor frames
+  ran smaller steps at the same 20 TPS (headroom). Drawing ~9% of the tick.
+- Where the CPU goes (60 s, profiles): page main thread ~39% busy (minimap
+  ~20% of it: paintMinimapUnitColumns over every unit, its static layer and 2D
+  calls, alerts; 2D terrain cache rebuilds 5%; frame apply 5%; combat effects
+  4%; uploads 3.5%); presentation worker main ~36-55% + one helper ~17%
+  (frameIdOrder sort, fillRange, buildRenderBuckets, markDirtySlots).
+- Garbage (page allocation sampling, 40 s): 2.8 GB -> 550 MB.
+  * Gone units' and structures' last values: a ~40-field object a death
+    (1.7 GB of it) -> a ring of typed columns (pageGonePut / pageGoneGet,
+    65,536 records, the record names its view).
+  * The page's unit views on the fast path for slot moves (the relayout moves
+    units every step; each move sent the page to the whole rebuild: a list of
+    every unit and its pass) - _simClientUpdateStableSlots moves views.
+  * TileEntitySet's generator iterator -> one iterator a loop, result reused.
+  * Area colours array reused; Math.hypot in effects -> sqrt (argument
+    lists); minimap alerts with fixed colours and globalAlpha (no rgba strings).
+  * Presentation worker: the id sort's key array kept (8 MB a frame).
+    (A kept-order attempt failed: the relayout moves slots every step.)
+  * Simulation worker: simFrameReleaseBuffers ran at every returned frame,
+    rebuilding its lists: now nothing when nothing is left.
+- GC (trace, 60 s): page main thread 44 minor + 2 major, 360 ms, longest 81 ms
+  -> 29 minor + 0 major, 79 ms, longest 5.5 ms. The simulation worker's major
+  GCs (up to 29 ms) remain: its garbage is ~2.5 MB/s now (99 MB in 40 s, spread).
+- Next: minimap from the GPU's unit columns (no CPU pass over units); the
+  presentation worker's fill / dirty marks / buckets in wasm (frames in the
+  heap) or on the GPU; 2D terrain cache rebuilds; the remaining page garbage
+  (effects, building stat entries, area colour cache, cell item sort).
+- Minimap units from the simulation (k.rs k_minimap, kernel 191): every 5
+  ticks the worker paints a 160x160 picture of player numbers from the per-
+  tile per-player counts (ix.complex) and the viewer's sight, a band of pixel
+  rows a job on the helpers, into shared memory (two pictures in turn); the
+  page maps it through its palette (renderer.js _minimapPaintWorkerPicture).
+  No pass over the units anywhere (the page's was ~10% of its frame time).
+  Checked in Edge: tests/probes/minimap-check.js (both armies' pixels).
+- Ground tiles on the GPU for large maps (> 4096 px): an R8 wall mask a tile,
+  only its changed rows uploaded (texSubImage2D + mipmaps), coloured in the
+  ground shader; the 2D background is not rebuilt while the WebGL ground
+  draws (its 2D redraw, mip and whole-texture upload at each wall change were
+  ~5% of the page). The canvas 2D view rebuilds it when it draws.
+- scene_tps_probe: SHOT=file.png (a screenshot at the end).
+- Rendering's cost to the simulation after the page changes (headed Edge, 1M
+  chaos, interleaved): full 30.5 / 31.7 ms a tick (before 33.5 / 32.5), no
+  drawing 30.5 / 31.0: ~9% -> ~2-3%. p99 203 / 196 (before 215 / 292), max
+  234 / 207 (237 / 389). FPS fell over the session in every variant; judge it
+  by interleaved A/B only.
+- Next: the presentation worker (~0.5 core: frame fill, dirty marks, id sort,
+  buckets) into wasm kernels on the simulation's shared memory, its frames a
+  pool in the heap made at match start; then the remaining page garbage.
+
+## Presentation worker in wasm, multi-memory (2026-11-11)
+
+- The presentation worker no longer touches a slot or tile in JS. Its module
+  (wasm/build.cjs --pres -> src/sim/pres_wasm_bin.js; feature `pres`:
+  wasm/src/pres.rs, pres_fill.rs; not in the simulation's module) has two
+  memories: 0 its own (the unit frames as regions, the per-slot state: last
+  ids, drawn positions, facings, ghosts, fill seq, easing, change stamps; the
+  fog grids; scratch and address tables), 1 the simulation's heap
+  (env.simMemory, sent with 'bind'), read in place: unit columns, metadata
+  table, position snapshots, sight and cell grids. Nothing copied, nothing
+  added to the simulation's heap budget.
+- How: Rust can't emit loads from a second memory, so pres_fill.rs reads
+  simulation data through imported `pres_sim_<type>(addr)` functions; the
+  build prints the module as text (wasm-opt -S), drops those imports, turns
+  every call into the load from memory 1 (`i32.load $simmem` ...), adds the
+  import and optimizes again with --enable-multimemory (75-78 load sites).
+  V8 (Node 24): loads from memory 1 as fast as from memory 0 (16M sequential
+  10.8 vs 12.0 ms, indexed 17.1 vs 15.7 ms).
+- Kernels: k_pres_range (a range's fill in its three modes, ghosts, change
+  marks: one call a range, helpers each with their own instance, stack and
+  argument block, the job's arguments written there by the presentation
+  thread), k_pres_order (radix sort by id), k_pres_buckets, k_pres_fog,
+  k_pres_moves (relayout), k_pres_cells (tile changes). Frames go out as
+  {buf, base, rid, gen}; the page returns them by region id.
+- The simulation side refuses a presentation that isn't in the heap
+  (sim_presentation.js _simPresentMemory: columns, metadata, snapshots;
+  wasm32 heaps only). Column types are checked by name in the worker.
+- Equal to the old JS: the worker saved before the rewrite vs the kernels on
+  the presentation-delta ticks, byte for byte (every live slot's columns, the
+  order, buckets, marks; 90 frames, whole and by changes). Tests moved to a
+  real simulation memory (tests/present-sim.cjs: the simulation's types,
+  positions as eighths; tests/present-pm.cjs runs the worker in a context of
+  its own).
+- Speed, one thread, 1M slots, a heavy battle (~880k slots filled a frame:
+  easing and turning after squads move): old JS fill 1830 ms, kernels 147 ms
+  (~12x). Id order 210 -> 17.5 ms, buckets 27 -> 17 ms (when needed / a frame).
+  Tried: the fill's ~12 passes over the filled list fused into one loop:
+  3.5x slower in V8 (515 ms), reverted.
+- Edge, 1M chaos, rendered, 60 s (one run each, tests/probes/present-phases.js):
+  frame build 94.9 -> 62.4 ms mean, ranges 71.6 -> 37.8 ms, order 5.7 -> 6.5,
+  rest 17.4 -> 17.7 (buckets ~17), max 983 -> 559 ms; 33.8 ms a tick, p99 205,
+  80 FPS (variance as before: not an A/B).
+- Next: the remaining 'rest' (buckets 17 ms a frame at 1M: SIMD or only the
+  moved cells), the fill's per-slot cost (~170 ns a filled slot: profile the
+  passes), structure/projectile table copies, the simulation worker's GC.

@@ -18,7 +18,7 @@ async function run(parallel) {
         WAI_PARALLEL = ${parallel};
         const key = Object.keys(BASE_CARD_TYPES).find(k => k === 'tower') || Object.keys(BASE_CARD_TYPES).find(k => !BASE_CARD_TYPES[k].notBuildable && /tower/.test(k));
         // A row of open floor: sites on every other tile, builders on the row below.
-        const open = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && c.type === 0 && !c.item && !getTileEntityRef(gx, gy); };
+        const open = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && cellType[(c) - 1] === 0 && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
         let row = null;
         for (let gy = 3; gy < GRID_H - 4 && !row; gy++) for (let gx = 2; gx + 22 < GRID_W && !row; gx++) {
             let ok = true;

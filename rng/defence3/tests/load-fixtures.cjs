@@ -70,7 +70,7 @@ function inspectLoadWorld(expected, withHash = true) {
         const key = 'unit:' + u.unitType;
         row.types[key] = (row.types[key] || 0) + 1;
         const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE), cell = grid[gy]?.[gx];
-        if (!Number.isFinite(u.x) || !Number.isFinite(u.y) || !cell || cell.type === TYPE_WALL) fail(`Illegal unit placement ${u.id}`);
+        if (!Number.isFinite(u.x) || !Number.isFinite(u.y) || !cell || cellType[cell - 1] === TYPE_WALL) fail(`Illegal unit placement ${u.id}`);
         if (getUnitById(u.id) !== u) fail(`Broken unit lookup ${u.id}`);
         if (u.targetUnit && getUnitById(u.targetUnit.id) !== u.targetUnit) fail(`Broken target reference ${u.id}`);
         if (u.workerTarget != null) fail(`Unexpected initial worker target ${u.id}`);
@@ -81,8 +81,8 @@ function inspectLoadWorld(expected, withHash = true) {
         const cell = grid[e.gy]?.[e.gx], key = e.gx + ',' + e.gy;
         if (occupied.has(key)) fail(`Duplicate static placement ${key}`);
         occupied.add(key);
-        if (!cell || (list === 'f' ? cell.item !== e : getTileEntityRef(e.gx, e.gy) !== e)) fail(`Broken static reference ${key}`);
-        const owner = list === 'f' ? cell?.owner : e.owner, row = byOwner[owner];
+        if (!cell || (list === 'f' ? cellItemGet(cell) !== e : getTileEntityRef(e.gx, e.gy) !== e)) fail(`Broken static reference ${key}`);
+        const owner = list === 'f' ? cellOwner[cell - 1] : e.owner, row = byOwner[owner];
         if (!row) { fail(`Unknown static owner ${owner}`); continue; }
         if (list === 'f') { floor++; row.floor++; } else { buildings++; row.buildings++; }
         const type = 'building:' + (list === 'b' ? 'barrack_' + e.unitType : e.type);

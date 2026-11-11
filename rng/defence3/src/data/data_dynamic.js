@@ -1263,7 +1263,7 @@ function isTeamAliveByAssets(pid) {
     for (let s of collectorSpawners) if (s.owner === pid) return true;
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
-            if (grid[y][x].item && grid[y][x].owner === pid) return true;
+            if (cellItemGet(grid[y][x]) && cellOwner[(grid[y][x]) - 1] === pid) return true;
         }
     }
     return false;
@@ -1286,8 +1286,8 @@ function eliminateTeamAssets(pid) {
         if (t.owner !== pid) continue;
         clearTileEntity(t.gx, t.gy, t); towerJoinedOrLeft(t);
         if (grid[t.gy] && grid[t.gy][t.gx]) {
-            grid[t.gy][t.gx].type = TYPE_FLOOR;
-            grid[t.gy][t.gx].owner = -1;
+            cellType[(grid[t.gy][t.gx]) - 1] = TYPE_FLOOR;
+            cellOwner[(grid[t.gy][t.gx]) - 1] = -1;
             if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(t.gx, t.gy);
             _markCombinedBgTileDirty(t.gx, t.gy, 0, true);
         }
@@ -1296,25 +1296,22 @@ function eliminateTeamAssets(pid) {
         if (b.owner !== pid) continue;
         clearTileEntity(b.gx, b.gy, b); barracksChanged();
         if (grid[b.gy] && grid[b.gy][b.gx]) {
-            grid[b.gy][b.gx].item = null;
-            grid[b.gy][b.gx].owner = -1;
+            cellOwner[(grid[b.gy][b.gx]) - 1] = -1;
         }
     }
     for (let s of collectorSpawners.slice()) {
         if (s.owner !== pid) continue;
         clearTileEntity(s.gx, s.gy, s); collectorSpawnersChanged();
         if (grid[s.gy] && grid[s.gy][s.gx]) {
-            grid[s.gy][s.gx].item = null;
-            grid[s.gy][s.gx].owner = -1;
+            cellOwner[(grid[s.gy][s.gx]) - 1] = -1;
         }
     }
     for (let y = 0; y < GRID_H; y++) {
         for (let x = 0; x < GRID_W; x++) {
             let cell = grid[y][x];
-            if (cell.item && cell.owner === pid) {
-                clearTileEntity(x, y, cell.item);
-                cell.item = null;
-                cell.owner = -1;
+            if (cellItemGet(cell) && cellOwner[(cell) - 1] === pid) {
+                clearTileEntity(x, y, cellItemGet(cell));
+                cellOwner[(cell) - 1] = -1;
             }
         }
     }
@@ -1497,9 +1494,9 @@ function countTeamStructures(pid) {
         for (let x = 0; x < GRID_W; x++) {
             let cell = grid[y][x];
             if (!cell) continue;
-            let item = cell.item;
+            let item = cellItemGet(cell);
             if (!item) continue;
-            if (cell.owner !== pid) continue;
+            if (cellOwner[(cell) - 1] !== pid) continue;
             if (!(Number(item.energy) > 0)) continue;
             n++;
         }
@@ -1543,8 +1540,8 @@ function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
     let items = getCellItemsRowMajor();
     for (let i = k, n = items.length; i < n; i += step) {
         let item = items[i], cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || !(Number(item.energy) > 0)) continue;
-        add(a.structures, cell.owner);
+        if (!cell || cellItemGet(cell) !== item || !(Number(item.energy) > 0)) continue;
+        add(a.structures, cellOwner[(cell) - 1]);
     }
     return a;
 }

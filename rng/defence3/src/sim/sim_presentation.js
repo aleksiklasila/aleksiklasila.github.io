@@ -30,7 +30,8 @@ function simPresentTickEnd() {
             // by the presentation worker. In the wasm heap: the helpers copy
             // them, simParallelCopyHeap; one thread's memcpy of four columns
             // was ~8 ms a tick at 2M units, ~30 at 8M.)
-            const all = typeof simHeapArray === 'function' ? simHeapArray(Int32Array, 4 + cap * 4) : new Int32Array(new SharedArrayBuffer(16 + cap * 16));
+            // (In the heap: the presentation worker reads them there in place.)
+            const all = simHeapArray(Int32Array, 4 + cap * 4);
             Q.snaps.push({ all, head: all.subarray(0, 2), x: all.subarray(4, 4 + cap), y: all.subarray(4 + cap, 4 + 2 * cap),
                 px: all.subarray(4 + 2 * cap, 4 + 3 * cap), py: all.subarray(4 + 3 * cap, 4 + 4 * cap) });
             Q.snaps[i].head[0] = -1;
@@ -62,6 +63,32 @@ const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','ene
     'attackFlash','stBu','stPo','stFr','stWe','stSa','stWa','stTh',
     'workerTransferCooldown','effectiveLevel','unitLevel','live','dead','maxE','stIx','cmMode','cmT','pvAt','pvOD'];
 
+// The minimap's units (k.rs k_minimap), made here every SIM_MINIMAP_TICKS
+// ticks from the per-tile counts, for the viewing player's sight: a picture of
+// player numbers (+1) in shared memory, two in turn; the page paints it by its
+// palette (renderer.js drawMinimap). No pass over the units anywhere (the
+// page's was ~10% of its frame time at 1M units). Null when none is made now.
+const SIM_MINIMAP_TICKS = 5;
+const _simMinimap = { out: null, size: 0, pic: 0, lastTick: -1e9, seq: 0 };
+function simMinimapMake(tick) {
+    const M = _simMinimap;
+    if (tick - M.lastTick < SIM_MINIMAP_TICKS && tick >= M.lastTick) return null;
+    if (typeof spatialUnitsComplex === 'undefined' || !spatialUnitsComplex || !spatialUnitsComplex.length || !simHeapHas(spatialUnitsComplex)) return null;
+    const size = MINIMAP_SIZE | 0, n = size * size;
+    if (!(size > 0)) return null;
+    let sight = 0;
+    if (!fullVisibility) {
+        const rows = visibilityGridRawByPlayerCache.get(localPlayerId), flat = rows && rows._flat;
+        if (!flat || !simHeapHas(flat)) return null;
+        sight = _simWEnc(_simHeapPtrOf(flat));
+    }
+    if (!M.out || M.size !== size || !simHeapHas(M.out)) { M.out = simSharedArray(Uint8Array, 2 * n); M.size = size; simParallelBind('mm.out', M.out); }
+    M.pic ^= 1; M.lastTick = tick;
+    const per = 8, P = _simParams;
+    P[0] = GRID_W; P[1] = GRID_H; P[2] = spatialUnitsComplexPlayerCount; P[3] = size; P[4] = localPlayerId; P[5] = fullVisibility ? 1 : 0; P[6] = per; P[7] = M.pic; P[8] = sight;
+    simParallelRun(SIM_KERNEL_MINIMAP, Math.ceil(size / per));
+    return { buf: M.out.buffer, off: M.out.byteOffset + M.pic * n, size, seq: ++M.seq };
+}
 function simPresentationStop() {
     const p = _simPresentation;
     if (!p) return;
@@ -72,7 +99,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261105-cells', base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261111-pm' + (self.SIM_NO_PRESENT ? '&present=0' : ''), base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -113,6 +140,17 @@ function simPresentationStart() {
     return true;
 }
 
+// The heap's memory for the presentation worker (presentation_worker.js
+// pmInit: its kernels read the simulation's arrays there in place, as a
+// second memory), after checking that what it reads is there: the
+// presented columns, the metadata table. (wasm32 heaps only.)
+function _simPresentMemory(columns, metaHeap) {
+    if (typeof _simHeap === 'undefined' || !_simHeap.ready || !_simHeap.memory) throw new Error('presentation: needs the wasm heap');
+    if (SIM_WASM64) throw new Error('presentation: wasm32 heaps only');
+    for (const k of Object.keys(columns)) if (columns[k] && !simHeapHas(columns[k])) throw new Error('presentation: the column ' + k + ' is not in the wasm heap');
+    if (!metaHeap) throw new Error('presentation: the metadata table is not in the wasm heap');
+    return _simHeap.memory;
+}
 function simPresentationBind() {
     const p = _simPresentation, S = _simUnitState;
     if (!p || !S) return;
@@ -132,8 +170,9 @@ function simPresentationBind() {
             // sim_unit_state.js _simSlotZeroTable. A replaced one given back
             // later: the reader may still read it.)
             const hb = typeof simHeapArray === 'function' && typeof _simHeap !== 'undefined' && _simHeap.ready ? simHeapArray(Uint8Array, S.cap * SIM_META_SLOT_BYTES) : null;
-            p.meta = hb && simHeapHas(hb) ? simMetaViews(hb.buffer, S.cap, hb.byteOffset) : simMetaViews(new SharedArrayBuffer(S.cap * SIM_META_SLOT_BYTES), S.cap);
-            p.meta.heap = hb && simHeapHas(hb) ? hb : null;
+            if (!hb || !simHeapHas(hb)) throw new Error('presentation: the metadata table needs the wasm heap');
+            p.meta = simMetaViews(hb.buffer, S.cap, hb.byteOffset);
+            p.meta.heap = hb;
             if (old && old.heap) _simStructTableRetired.push({ heap: old.heap, at: performance.now() });
             if (typeof _simSharedVer !== 'undefined') _simSharedVer++;
             p.meta.id.fill(-1);
@@ -145,7 +184,7 @@ function simPresentationBind() {
             if (!p.metaRev) p.metaRev = new Int32Array(new SharedArrayBuffer(4));
             Atomics.add(p.metaRev, 0, 1);
         }
-        p.worker.postMessage({type:'bind', epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap,off:p.meta.off||0}, metaRev:p.metaRev});
+        p.worker.postMessage({type:'bind', simMemory:_simPresentMemory(columns, p.meta.heap), epoch:p.epoch, generation:p.generation, columns, meta:{buf:p.meta.buf,cap:p.meta.cap,off:p.meta.off||0}, metaRev:p.metaRev});
     }
     const strings = _simFrameStrings.list;
     if (p.strings !== strings.length) {
@@ -311,8 +350,8 @@ function _simPresentStructureChanges(p) {
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
         const cell = grid[gy] && grid[gy][gx];
         // (A floor item is its tile's entity and its cell's item: kind 3; a mine, none here.)
-        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : hasSpawnQueue(e) ? 2 : cell && cell.item === e ? 3 : -1;
-        else if (cell && cell.item) { e = cell.item; kind = 3; }
+        if (e) kind = typeof Tower !== 'undefined' && e instanceof Tower ? 0 : typeof Barrack !== 'undefined' && e instanceof Barrack ? 1 : hasSpawnQueue(e) ? 2 : cell && cellItemGet(cell) === e ? 3 : -1;
+        else if (cell && cellItemGet(cell)) { e = cellItemGet(cell); kind = 3; }
         if (kind < 0) e = null;
         // The structure shown on this tile is gone (destroyed, salvaged, or
         // another there now): off the table at once, not at the cycle's end.
@@ -405,6 +444,10 @@ function simPresentationSeedMetadata(M) {
         seeded++;
     }
     return seeded;
+}
+// A unit frame of the presentation worker back (its region id).
+function simPresentationRelease(r) {
+    if (_simPresentation && r && r.rid > 0) _simPresentation.worker.postMessage({type:'release', rid:r.rid, gen:r.gen});
 }
 function simPresentationReturn(buf) {
     if (!buf || buf.byteLength < 12 || typeof SharedArrayBuffer !== 'function' || !(buf instanceof SharedArrayBuffer)) return false;

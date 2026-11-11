@@ -292,7 +292,7 @@ function _updateRangeShownAreas(selectedBuildings, selected) {
                 // Only cell items can be owned sources here (mines never are).
                 let items = typeof _getVisibilityFloorItemCandidates === 'function' ? _getVisibilityFloorItemCandidates() : _activeTileEntities;
                 for (let e of items) add(e, false);
-            } else for (let row of grid) for (let c of row) if (c.item) add(c.item, false);
+            } else for (let row of grid) for (let c of row) if (renderCellItem(c)) add(renderCellItem(c), false);
         }
     }
     // Integer simulation ticks avoid floating-point drift at the expiry tick.

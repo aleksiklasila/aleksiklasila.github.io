@@ -32,7 +32,9 @@ const COLS = ['id', 'owner', 'x', 'y', 'prevX', 'prevY', 'vx', 'vy', 'energy', '
     'workerTransferCooldown', 'effectiveLevel', 'unitLevel', 'live', 'dead', 'maxE', 'stIx', 'cmMode', 'cmT', 'pvAt'];
 const cap = 30000, SLOT = vm.runInContext('SIM_FRAME_SLOT_BYTES', B.ctx);
 const C = {};
-for (const k of COLS) C[k] = k === 'id' || k === 'cmT' || k === 'pvAt' || k === 'stIx' ? new Int32Array(new SharedArrayBuffer(cap * 4)) : new Float32Array(new SharedArrayBuffer((cap + 1) * 4));
+// (The simulation's heap: the readers read its columns there in place; positions in eighths of a pixel.)
+const H = require('./present-sim.cjs')(B.ctx, cap, { cols: COLS.filter(k => ['cmMode', 'cmT', 'pvAt'].includes(k)) });
+Object.assign(C, H.C);
 // The simulation's marks (wasm/src/k.rs k_pv_marks), as the kernel makes them
 // at a tick's end: the tick of each slot's last visible change.
 const PV = { id: new Int32Array(cap).fill(0), e: new Float32Array(cap), o: new Float32Array(cap), c: new Float32Array(cap), l: new Int16Array(cap), v: new Uint8Array(cap) };
@@ -45,7 +47,7 @@ function marks(tick) {
         if (changed) { C.pvAt[s] = tick; PV.v[s] = vel; PV.id[s] = idv; PV.e[s] = C.energy[s]; PV.o[s] = C.owner[s]; PV.c[s] = C.commandState[s]; PV.l[s] = li; }
     }
 }
-const M = B.ctx.simMetaViews(new SharedArrayBuffer(cap * 48), cap);
+const M = H.M;
 C.id.fill(-1); M.id.fill(-1); C.cmT.fill(-1);
 const metaRev = new Int32Array(new SharedArrayBuffer(4));
 let seed = 4242, nextId = 1, n = 20000;
@@ -53,12 +55,12 @@ const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647
 function spawn(s) {
     const id = nextId++;
     C.id[s] = id; C.live[s] = 1; C.dead[s] = 0; C.owner[s] = rnd() < .5 ? 0 : 1; C.energy[s] = 20; C.r[s] = 8;
-    C.x[s] = C.prevX[s] = 16 + rnd() * 2000; C.y[s] = C.prevY[s] = 16 + rnd() * 2000; C.effectiveLevel[s] = 1; C.unitLevel[s] = 1;
+    C.x[s] = C.prevX[s] = 8 * (16 + rnd() * 2000); C.y[s] = C.prevY[s] = 8 * (16 + rnd() * 2000); C.effectiveLevel[s] = 1; C.unitLevel[s] = 1;
     M.id[s] = id; M.type[s] = 1 + Math.floor(rnd() * 5); M.vision[s] = 2 + Math.floor(rnd() * 3); M.watchedBy[s] = -1;
     Atomics.add(metaRev, 0, 1);
 }
 for (let s = 0; s < n; s++) spawn(s);
-both({ type: 'bind', epoch: 1, generation: 1, columns: C, meta: { buf: M.buf, cap }, metaRev });
+both(H.bind({ epoch: 1, generation: 1, metaRev }));
 both({ type: 'strings', strings: [''] });
 both({ type: 'ready' });
 let frames = 0, deltas = 0;
@@ -67,11 +69,11 @@ for (let tick = 1; tick <= 90; tick++) {
     // Squads moving for a while, then standing (their drawn places ease to rest).
     for (let g = 0; g < 3; g++) {
         const s0 = Math.floor(rnd() * n), len = 200 + Math.floor(rnd() * 800), dx = (rnd() - .5) * 4, dy = (rnd() - .5) * 4;
-        if (tick % 20 < 12) for (let s = s0; s < Math.min(n, s0 + len); s++) if (C.live[s]) { C.x[s] += dx; C.y[s] += dy; C.vx[s] = dx; C.vy[s] = dy; C.cmMode[s] = s % 3 ? 0 : 4; C.cmT[s] = s % 3 ? -1 : (s * 7919) % n; }
+        if (tick % 20 < 12) for (let s = s0; s < Math.min(n, s0 + len); s++) if (C.live[s]) { C.x[s] += 8 * dx; C.y[s] += 8 * dy; C.vx[s] = dx; C.vy[s] = dy; C.cmMode[s] = s % 3 ? 0 : 4; C.cmT[s] = s % 3 ? -1 : (s * 7919) % n; }
     }
     // (Fire targets end: their facing stays.)
     if (tick % 7 === 0) for (let s = 0; s < n; s++) if (C.cmMode[s] && rnd() < .3) C.cmMode[s] = 0;
-    for (let k = 0; k < 30; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += rnd() * 3; C.vx[s] = 1; } }
+    for (let k = 0; k < 30; k++) { const s = Math.floor(rnd() * n); if (C.live[s]) { C.x[s] += 8 * rnd() * 3; C.vx[s] = 1; } }
     for (let k = 0; k < 30; k++) C.attackFlash[Math.floor(rnd() * n)] = 8;
     for (let k = 0; k < 60; k++) C.energy[Math.floor(rnd() * n)] -= 1;
     for (let k = 0; k < 10; k++) { const s = Math.floor(rnd() * n), on = rnd() < .5; C.stBu[s + 1] = on ? 3 : 0; C.stIx[s] = on ? s + 1 : C.stIx[s]; }
@@ -89,7 +91,7 @@ for (let tick = 1; tick <= 90; tick++) {
     for (let i = 0; i < ma.length; i++) {
         const ua = ma[i].world.units, ub = mb[i].world.units;
         assert.equal(ua.count, ub.count, `tick ${tick}: listed`); assert.equal(ua.mver, ub.mver, `tick ${tick}: membership`);
-        const Fa = B.ctx.simFrameViews(ua.buf, cap), Fb = B.ctx.simFrameViews(ub.buf, cap);
+        const Fa = B.ctx.simFrameViews(ua.buf, cap, ua.base), Fb = B.ctx.simFrameViews(ub.buf, cap, ub.base);
         // Live slots' columns (a dead slot is not drawn nor compared for
         // change marks: what it holds is not read), the order as listed,
         // then the render index and change marks after the columns, whole.
@@ -103,18 +105,18 @@ for (let tick = 1; tick <= 90; tick++) {
                 assert.fail(`tick ${tick}: slot ${s} (id ${Fa.id[s]}) ${k} ${Fa[k][s]} / ${Fb[k][s]}`);
             }
         }
-        const tail = cap * SLOT, bytes = ua.buf.byteLength - 12;
-        assert.equal(bytes, ub.buf.byteLength - 12);
-        if (Buffer.compare(Buffer.from(new Uint8Array(ua.buf, tail, bytes - tail)), Buffer.from(new Uint8Array(ub.buf, tail, bytes - tail))) !== 0) {
-            const xa = new Uint8Array(ua.buf, tail, bytes - tail), xb = new Uint8Array(ub.buf, tail, bytes - tail);
+        const tail = cap * SLOT, bytes = ua.bytes;
+        assert.equal(bytes, ub.bytes);
+        if (Buffer.compare(Buffer.from(new Uint8Array(ua.buf, ua.base + tail, bytes - tail)), Buffer.from(new Uint8Array(ub.buf, ub.base + tail, bytes - tail))) !== 0) {
+            const xa = new Uint8Array(ua.buf, ua.base + tail, bytes - tail), xb = new Uint8Array(ub.buf, ub.base + tail, bytes - tail);
             let k = 0; while (xa[k] === xb[k]) k++;
             assert.fail(`tick ${tick}: render index / change marks differ at byte ${k} past the columns`);
         }
         frames++;
-        A.held.push(ua.buf); B.held.push(ub.buf);
+        A.held.push(ua); B.held.push(ub);
     }
     if (tick > 3) deltas++;
-    while (A.held.length > 1) { A.send({ type: 'release', buf: A.held.shift() }); B.send({ type: 'release', buf: B.held.shift() }); }
+    while (A.held.length > 1) { { const a = A.held.shift(), b = B.held.shift(); A.send({ type: 'release', rid: a.rid, gen: a.gen }); B.send({ type: 'release', rid: b.rid, gen: b.gen }); } }
 }
 assert.ok(frames >= 85, `frames compared: ${frames}`);
 console.log(`PASS presentation-delta: ${frames} frames of ${n} slots by changes equal whole frames byte for byte`);

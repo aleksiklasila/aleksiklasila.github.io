@@ -17,7 +17,7 @@ const r=i.eval(`(()=>{
  ${arg('scenario','plug')==='open'?'':`for(let y=0;y<32;y++)for(let x=0;x<24;x++){
   const u=new Unit('norm',0,(70+x*.4)*TILE,(82+y*.4)*TILE);units.push(u);plug.push(u);players[0].popCount++;
  }`}
- ${arg('scenario','plug')==='wall'?'for(let y=0;y<GRID_H;y++){grid[y][90].type=TYPE_WALL;simMoveTileTypeChanged(90,y);}':''}
+ ${arg('scenario','plug')==='wall'?'for(let y=0;y<GRID_H;y++){cellType[grid[y][90]-1]=TYPE_WALL;simMoveTileTypeChanged(90,y);}':''}
  for(let t=0;t<NAV_BUILD_TICKS+5;t++)gameTick();
  processAction({action:'move',unitIds:us.map(u=>u.id),targetX:190*TILE,targetY:88*TILE},0);simDk=${dk};
  ${arg('scenario','plug')==='counter'?'processAction({action:"move",unitIds:plug.map(u=>u.id),targetX:10*TILE,targetY:88*TILE},0);':''}
@@ -25,7 +25,7 @@ const r=i.eval(`(()=>{
  for(let t=0;t<${ticks};t++){
   const a=performance.now();gameTick();currentTick++;ms+=performance.now()-a;
   for(const u of us){const ratio=Math.hypot(u.x-u.prevX,u.y-u.prevY)/(simUnitStatValue(u._us,u._si,0)*simDk);maxSpeedRatio=Math.max(maxSpeedRatio,ratio);
-   if(grid[Math.floor(u.y/TILE)]?.[Math.floor(u.x/TILE)]?.type===TYPE_WALL)wallViolations++;
+   if(cellType[(grid[Math.floor(u.y/TILE)]?.[Math.floor(u.x/TILE)]) - 1]===TYPE_WALL)wallViolations++;
   }
   if((t+1)%10===0){let demand=0,flowing=0,moving=0,speedSum=0,progress=0;
    for(let k=0;k<us.length;k++){

@@ -86,7 +86,7 @@ assert.ok(unionStart >= 0 && unionEnd > unionStart);
 const referenceVisibility = visibility.slice(0, unionStart) + `
     for (const [areaId, range] of areaRangeBySourceArea) {
         for (const cell of getGridCellsWithinAreaDistance(areaId, Math.floor(Math.max(0, Number(range) || 0)))) {
-            if (cell) includedTiles[cell.y][cell.x] = 1;
+            includedTiles[Math.floor(cell / GRID_W)][cell % GRID_W] = 1;
         }
     }
     const inc = (x, y) => x >= 0 && y >= 0 && x < GRID_W && y < GRID_H && includedTiles[y][x];
@@ -105,7 +105,7 @@ const referenceVisibility = visibility.slice(0, unionStart) + `
 }
 `;
 const areas = Array.from({ length: 64 }, () => []);
-for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) areas[Math.floor(y / 8) * 8 + Math.floor(x / 8)].push({ x, y });
+for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) areas[Math.floor(y / 8) * 8 + Math.floor(x / 8)].push(y * 64 + x);
 const world = {
     TILE: 32, GRID_W: 64, GRID_H: 64, AREA_UNIT_TILE_EQUIVALENT: 4,
     // (Area steps: data_static.js areaSteps / areaStepsVisionTiles.)
@@ -131,6 +131,8 @@ world.barracks = world.units.slice(200, 400).map(u => ({ ...u, energy: 10, range
 world.collectorSpawners = world.units.slice(400, 600).map(u => ({ ...u, energy: 10, range: 2 }));
 for (let i = 0; i < 64; i++) world.grid[i][i] = { owner: i % 3, item: { gx:i, gy:i, energy: 10, watched: i % 2, watchedByTeam: (i + 1) % 3 } };
 const vc = vm.createContext({ ...world }), refVc = vm.createContext({ ...world });
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",vc); // (Object cells: this fixture's grid.)
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",refVc); // (Object cells: this fixture's grid.)
 const sourceAreas = functionSource(read('src/data/data_state.js'), 'addVisibilitySourceAreas');
 vm.runInContext(sourceAreas, vc);
 vm.runInContext(sourceAreas, refVc);

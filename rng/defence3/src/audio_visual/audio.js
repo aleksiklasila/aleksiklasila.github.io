@@ -208,9 +208,13 @@ function pushHostileDamageAlert(target, dmg, sourceOwner) {
     pushDamageAlert(target, dmg);
 }
 
+// (Fixed colours, the fade by globalAlpha: three rgba strings an alert a frame were
+// ~1 MB a second of the page's garbage in a battle.)
+const _MAP_ALERT_RGB = { king: 'rgb(255,58,58)', other: 'rgb(255,140,80)' };
 function drawMinimapAlerts(ctx, scale) {
     if (!mapAlerts.length) return;
     let now = gameTime + tickAlpha;
+    const alpha0 = ctx.globalAlpha;
     for (let i = mapAlerts.length - 1; i >= 0; i--) {
         let a = mapAlerts[i];
         let age = now - a.start;
@@ -224,27 +228,28 @@ function drawMinimapAlerts(ctx, scale) {
         let worldRadius = 6 + p * (a.kind === 'king' ? 54 : 40);
         let radius = (worldRadius / TILE) * scale;
         let alpha = Math.pow(1 - p, 1.4);
-        let rgb = a.kind === 'king' ? '255,58,58' : '255,140,80';
+        const rgb = a.kind === 'king' ? _MAP_ALERT_RGB.king : _MAP_ALERT_RGB.other;
         let mx = (a.x / TILE) * scale;
         let my = (a.y / TILE) * scale;
 
-        ctx.strokeStyle = `rgba(${rgb},${0.9 * alpha})`;
+        ctx.strokeStyle = rgb; ctx.globalAlpha = alpha0 * 0.9 * alpha;
         ctx.lineWidth = a.kind === 'king' ? 1.4 : 1.1;
         ctx.beginPath();
         ctx.arc(mx, my, radius, 0, Math.PI * 2);
         ctx.stroke();
 
-        ctx.strokeStyle = `rgba(${rgb},${0.45 * alpha})`;
+        ctx.globalAlpha = alpha0 * 0.45 * alpha;
         ctx.lineWidth = 0.9;
         ctx.beginPath();
         ctx.arc(mx, my, Math.max(0.8, radius * 0.52), 0, Math.PI * 2);
         ctx.stroke();
 
-        ctx.fillStyle = `rgba(${rgb},${0.35 * alpha})`;
+        ctx.fillStyle = rgb; ctx.globalAlpha = alpha0 * 0.35 * alpha;
         ctx.beginPath();
         ctx.arc(mx, my, a.kind === 'king' ? 1.6 : 1.2, 0, Math.PI * 2);
         ctx.fill();
     }
+    ctx.globalAlpha = alpha0;
 }
 
 function isControlGroupSelected(num) {

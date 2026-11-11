@@ -11,6 +11,7 @@ const fn = (text, name) => {
 let lookups = 0;
 const c = vm.createContext({TILE:32, GRID_W:8, GRID_H:8, AREA_UNIT_TILE_EQUIVALENT:5,
     areaIdGrid:Array.from({length:8},(_,y)=>Array.from({length:8},(_,x)=>(y<4?0:2)+(x<4?0:1)))});
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",c); // (Object cells: this fixture's grid.)
 // (Area steps: data_static.js, its lines by text.)
 { const ds = read('src/data/data_static.js'), line = k => ds.split(/\r?\n/).find(l => l.startsWith(k)); vm.runInContext([line('const AREA_STEPS_MAX'), line('function areaSteps('), line('function areaStepsVisionTiles(')].join('\n'), c); }
 const state = read('src/data/data_state.js');
@@ -55,7 +56,7 @@ c.units=[{owner:0,x:3.9*32,y:2.5*32,preComputedEffective:{visionRangeArea:.6}}];
 c.towers=[];c.barracks=[];c.collectorSpawners=[];
 c.grid=Array.from({length:8},()=>Array.from({length:8},()=>({})));
 c.gridCellsByArea=Array.from({length:4},()=>[]);
-for(let y=0;y<8;y++) for(let x=0;x<8;x++) c.gridCellsByArea[lookup(x,y)].push({x,y});
+for(let y=0;y<8;y++) for(let x=0;x<8;x++) c.gridCellsByArea[lookup(x,y)].push(y*8+x);
 c.getAreaIdsWithinDistance=(id,range)=>range>=1?[0,1,2,3]:[id];
 vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);\n'+fn(read('src/audio_visual/renderer.js'),'computeVisibilityGridForPlayer'),c);
 c.computeVisibilityGridForPlayer(0,light);

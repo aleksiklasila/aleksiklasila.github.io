@@ -14,7 +14,7 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
     host.eval('startSoloGame();');
     await world.run(1500);
     const r = JSON.parse(host.eval(`(() => {
-        const open = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && c.type === 0 && !c.item && !getTileEntityRef(gx, gy); };
+        const open = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && cellType[(c) - 1] === 0 && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
         const made = [];
         for (let gy = 2; gy < GRID_H - 2 && made.length < 150; gy += 2) for (let gx = 2; gx < GRID_W - 2 && made.length < 150; gx += 2) {
             if (!open(gx, gy) || !open(gx + 1, gy) || !open(gx, gy + 1)) continue;

@@ -708,9 +708,8 @@ function forEachGridCellInAreaRange(wx, wy, rangeAreaUnits, visitor) {
     let cells = getGridCellsWithinDistanceOfSources(sources, maxDistance);
     if (!cells || cells.length <= 0) return false;
     for (let i = 0; i < cells.length; i++) {
-        let cell = cells[i];
-        if (!cell) continue;
-        if (visitor(cell, grid[cell.y] && grid[cell.y][cell.x], sourceAreaId) === true) return true;
+        const tile = cells[i];
+        if (visitor(tile, tile + 1, sourceAreaId) === true) return true;
     }
     return false;
 }

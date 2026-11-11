@@ -43,7 +43,7 @@ const placed = JSON.parse(a.eval(`JSON.stringify((() => {
     for (let gy = 4; gy < GRID_H - 10 && !found; gy++) for (let gx = 4; gx < GRID_W - 10 && !found; gx++) {
         let ok = true;
         for (let y = gy; y < gy + 3 && ok; y++) for (let x = gx; x < gx + 6 && ok; x++)
-            if (grid[y][x].type === TYPE_WALL || grid[y][x].item || getTileEntityRef(x, y)) ok = false;
+            if (cellType[(grid[y][x]) - 1] === TYPE_WALL || cellItemGet(grid[y][x]) || getTileEntityRef(x, y)) ok = false;
         if (ok) found = { gx, gy };
     }
     const kinds = ['pistol', 'barrack_norm', 'lava', 'sand'];
@@ -52,7 +52,7 @@ const placed = JSON.parse(a.eval(`JSON.stringify((() => {
         const gx = found.gx + i, gy = found.gy;
         out.push([k, placeBuilding(gx, gy, k, 0, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: false, buildEnabled: true }), gx, gy]);
     });
-    return { found, out, mines: goldMines.length + astarMines.length, floorClass: (grid[found.gy][found.gx + 2].item || {}).constructor.name };
+    return { found, out, mines: goldMines.length + astarMines.length, floorClass: (cellItemGet(grid[found.gy][found.gx + 2]) || {}).constructor.name };
 })())`));
 console.log('placed', JSON.stringify(placed));
 assert.ok(placed.out.every(p => p[1]), 'all placed');

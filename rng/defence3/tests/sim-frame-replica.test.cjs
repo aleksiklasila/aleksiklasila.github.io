@@ -28,7 +28,7 @@ const OTHERS = `(() => { const out = {};
     out.p = JSON.stringify((_pj.cap ? projSnapshotRecords().map(r => [Math.fround(r.x), Math.fround(r.y), r.type]) : projectiles.map(p => [Math.fround(p.x), Math.fround(p.y), p.type]))
         .sort((a, b) => a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)));
     out.pn = _pj.cap ? projCount() : projectiles.length;
-    let g = 0; for (const row of grid) for (const c of row) g = Math.imul(g ^ (String(c.type).length * 131 + (typeof c.type === 'number' ? c.type : 0) * 31 + c.owner + 7), 16777619);
+    let g = 0; for (const row of grid) for (const c of row) g = Math.imul(g ^ (String(cellType[(c) - 1]).length * 131 + (typeof cellType[(c) - 1] === 'number' ? cellType[(c) - 1] : 0) * 31 + cellOwner[(c) - 1] + 7), 16777619);
     out.grid = g >>> 0;
     out.globals = JSON.stringify([gameTime, !!gameOver, winner, [...resignedTeams]]);
     return JSON.stringify(out); })()`;

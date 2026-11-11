@@ -587,7 +587,7 @@ function getCloudTowerAt(gx, gy, owner = null) {
 function canUnitOccupyTile(unit, gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
     if (unit && unit.isFlying) return true;
-    if (grid[gy][gx].type !== TYPE_WALL) return true;
+    if (cellType[(grid[gy][gx]) - 1] !== TYPE_WALL) return true;
 
     // Allow units to walk through tiles where the building is still under construction (L0)
     let tileEntity = getTileEntityRef(gx, gy);
@@ -615,7 +615,7 @@ function canUnitOccupyTile(unit, gx, gy) {
 function isWalkableTileFor(unit, gx, gy) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
     if (unit) return canUnitOccupyTile(unit, gx, gy);
-    return grid[gy][gx].type !== TYPE_WALL;
+    return cellType[(grid[gy][gx]) - 1] !== TYPE_WALL;
 }
 
 

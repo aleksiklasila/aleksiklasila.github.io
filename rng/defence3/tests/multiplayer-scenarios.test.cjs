@@ -57,7 +57,7 @@ function freeTilesNear(inst, count, skip = 0, origin = null) {
                 const gx = kx + dx, gy = ky + dy;
                 if (gx < 1 || gy < 1 || gx >= GRID_W - 1 || gy >= GRID_H - 1) continue;
                 const c = grid[gy][gx];
-                if (c.type === TYPE_WALL || c.item || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) continue;
+                if (cellType[(c) - 1] === TYPE_WALL || cellItemGet(c) || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) continue;
                 if (!isTileActuallyVisibleToPlayer(localPlayerId, gx, gy)) continue;
                 if (out.length < ${count + skip}) out.push({ gx, gy });
             }
@@ -131,9 +131,9 @@ const ECONOMY = {
             const kx = Math.floor(king.x / TILE), ky = Math.floor(king.y / TILE);
             let best = null;
             for (const a of areas) {
-                const cells = _getCanonicalAreaCellsById(a.id, a);
+                const cells = Array.from(_getCanonicalAreaCellsById(a.id, a), t => ({ x: t % GRID_W, y: Math.floor(t / GRID_W) }));
                 if (cells.length < 3 || cells.length > 14) continue;
-                if (!cells.every(c => grid[c.y][c.x].type !== TYPE_WALL && !grid[c.y][c.x].item && !getTileEntityRef(c.x, c.y) && !getGoldMineAt(c.x, c.y) && !getAstarMineAt(c.x, c.y) && isTileActuallyVisibleToPlayer(localPlayerId, c.x, c.y))) continue;
+                if (!cells.every(c => cellType[(grid[c.y][c.x]) - 1] !== TYPE_WALL && !cellItemGet(grid[c.y][c.x]) && !getTileEntityRef(c.x, c.y) && !getGoldMineAt(c.x, c.y) && !getAstarMineAt(c.x, c.y) && isTileActuallyVisibleToPlayer(localPlayerId, c.x, c.y))) continue;
                 const d = Math.min(...cells.map(c => Math.abs(c.x - kx) + Math.abs(c.y - ky)));
                 if (!best || d < best.d) best = { id: a.id, d, cells: cells.map(c => ({ gx: c.x, gy: c.y })) };
             }

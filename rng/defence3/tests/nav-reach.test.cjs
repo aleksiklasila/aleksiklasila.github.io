@@ -17,7 +17,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     const out = {};
     // An open area in the map's middle (walls cleared, nothing on it).
     const x0 = 24, y0 = 24, x1 = 72, y1 = 72;
-    const setWall = (x, y, on) => { const c = grid[y][x]; if (c.item || getTileEntityRef(x, y)) return false; c.type = on ? TYPE_WALL : TYPE_FLOOR; simMoveTileTypeChanged(x, y); return true; };
+    const setWall = (x, y, on) => { const c = grid[y][x]; if (cellItemGet(c) || getTileEntityRef(x, y)) return false; cellType[(c) - 1] = on ? TYPE_WALL : TYPE_FLOOR; simMoveTileTypeChanged(x, y); return true; };
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) setWall(x, y, false);
     // (The match's own units and buildings are at its corners, out of the way.)
     // A: a wall across cluster (2, 2) (tiles 32..47 with 16-tile clusters)

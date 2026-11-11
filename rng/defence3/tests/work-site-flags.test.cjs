@@ -21,10 +21,10 @@ const r = JSON.parse(inst.eval(REF + `;JSON.stringify((() => {
     const placed = [];
     for (let gy = 10; gy < 190; gy += 2) for (let gx = 10; gx < 190; gx += 2) {
         const c = grid[gy] && grid[gy][gx];
-        if (!c || c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy)) continue;
+        if (!c || cellType[(c) - 1] !== TYPE_FLOOR || cellItemGet(c) || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy)) continue;
         const key = keys[Math.floor(rnd() * keys.length)], p = rnd() < 0.5 ? 0 : 1;
         if (!placeBuilding(gx, gy, key, p, { ignorePlacementRules: true, silent: true })) continue;
-        const e = getTileEntityRef(gx, gy) || c.item;
+        const e = getTileEntityRef(gx, gy) || cellItemGet(c);
         if (!e) continue;
         const k = rnd();
         if (k < 0.75) {

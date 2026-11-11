@@ -709,7 +709,7 @@ function _wsGroupBuild(G, cfg) {
 // A group's site i: its object (null: gone since the post) and its type name.
 function _wsSiteTarget(g, i) {
     const t = g.tile[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
-    return g.st[i] === 1 ? getTileEntityRef(gx, gy) : (grid[gy] && grid[gy][gx] && grid[gy][gx].item) || null;
+    return g.st[i] === 1 ? getTileEntityRef(gx, gy) : (grid[gy] && grid[gy][gx] && cellItemGet(grid[gy][gx])) || null;
 }
 // Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
 // at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
@@ -1107,7 +1107,7 @@ function _getResourceCollectorGatherTargetAt(gx, gy, owner, resourceCfg, preferr
     if (preferredType === resourceCfg.farmKey || preferredType === null) {
         if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
             let cell = grid[gy][gx];
-            let item = cell && cell.item;
+            let item = cell && cellItemGet(cell);
             if (item && item.type === resourceCfg.farmKey && item.owner === owner && !item.underConstruction && item.energy > 0) {
                 return { target: item, type: resourceCfg.farmKey };
             }
@@ -1142,7 +1142,7 @@ function _getResourceCollectorGatherTargetNear(worldX, worldY, owner, resourceCf
     for (let y = minGy; y <= maxGy; y++) {
         for (let x = minGx; x <= maxGx; x++) {
             let cell = grid[y][x];
-            let item = cell && cell.item;
+            let item = cell && cellItemGet(cell);
             if (!item || item.type !== resourceCfg.farmKey || item.owner !== owner || item.underConstruction || item.energy <= 0) continue;
             let d = detHypot(item.x - worldX, item.y - worldY);
             if (d <= bestDist) {
@@ -1215,10 +1215,10 @@ function _collectorFindTarget(u, myGx, myGy) {
     let conflictCache = {};
 
     forEachGridCellInAreaRange(origin.x, origin.y, maxSearchArea, (tileRef, cell) => {
-        if (!tileRef || !cell) return false;
+        if (!cell) return false;
 
-        let x = tileRef.x;
-        let y = tileRef.y;
+        let x = tileRef % GRID_W;
+        let y = Math.floor(tileRef / GRID_W);
         let worldX = x * TILE + TILE * 0.5;
         let worldY = y * TILE + TILE * 0.5;
         let dx = worldX - origin.x;
@@ -1226,7 +1226,7 @@ function _collectorFindTarget(u, myGx, myGy) {
         let originDistSq = dx * dx + dy * dy;
 
         let mine = getGoldMineAt(x, y);
-        let item = cell.item;
+        let item = cellItemGet(cell);
 
         let candidate = null;
         let candidateType = null;
@@ -1326,13 +1326,13 @@ function _rebuildActiveBuilderWorkCache() {
     if (typeof _activeTileEntities !== 'undefined') {
         for (const item of _activeTileEntities) {
             const cell = grid[item.gy] && grid[item.gy][item.gx];
-            if (cell && cell.item === item) consider(item);
+            if (cell && cellItemGet(cell) === item) consider(item);
         }
     } else for (let y = 0; y < GRID_H; y++) {
         let row = grid[y];
         for (let x = 0; x < GRID_W; x++) {
             let cell = row[x];
-            if (cell && cell.item) consider(cell.item);
+            if (cell && cellItemGet(cell)) consider(cellItemGet(cell));
         }
     }
 
@@ -2170,9 +2170,9 @@ function _salvageMarksCurrent() {
         // Marked cell items other than barracks and spawners (towers too),
         // by their cell's owner.
         const spawners = _collectorSpawnerSet();
-        const cellItem = (item, cell) => { if (cell && cell.item === item && !(item instanceof Barrack) && !spawners.has(item)) list(item, 3, cell.owner); };
+        const cellItem = (item, cell) => { if (cell && cellItemGet(cell) === item && !(item instanceof Barrack) && !spawners.has(item)) list(item, 3, cellOwner[(cell) - 1]); };
         if (typeof _activeTileEntities !== 'undefined') { for (const item of _activeTileEntities) if (item && item.markedForSalvage) cellItem(item, grid[item.gy] && grid[item.gy][item.gx]); }
-        else for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { let cell = grid[y][x]; if (cell && cell.item && cell.item.markedForSalvage) cellItem(cell.item, cell); }
+        else for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) { let cell = grid[y][x]; if (cell && cellItemGet(cell) && cellItemGet(cell).markedForSalvage) cellItem(cellItemGet(cell), cell); }
     }
     return c;
 }
@@ -2218,7 +2218,7 @@ function _salvagerFindTarget(u, myGx, myGy) {
     // Marked cell items in the search box (in the owner's cells).
     _forEachStructureInTileBox(marked[3], box[0],box[1],box[2],box[3], (item) => {
         const cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || cell.owner !== owner || !item.markedForSalvage) return;
+        if (!cell || cellItemGet(cell) !== item || cellOwner[(cell) - 1] !== owner || !item.markedForSalvage) return;
         let d = detHypot(item.x - u.x, item.y - u.y);
         if ((!areaSearchEnabled()&&d > maxSearch) || !(d < bestDist)) return;
         if (!_isTargetWithinWorkerSearchLimits(u, u.x, u.y, item, maxSearchArea)) return;
@@ -4100,7 +4100,7 @@ function _waiMineGone(t, cfg) {
     _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
     dirtyGrid = true;
     {
-        grid[mine.gy][mine.gx].type = TYPE_FLOOR;
+        cellType[(grid[mine.gy][mine.gx]) - 1] = TYPE_FLOOR;
         simMoveTileTypeChanged(mine.gx, mine.gy);
         _bumpPathTopologyVersion();
         const mineArray = _getResourceCollectorMineArray(cfg), idx = mineArray ? mineArray.indexOf(mine) : -1;

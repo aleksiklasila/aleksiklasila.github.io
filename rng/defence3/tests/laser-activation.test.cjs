@@ -26,7 +26,7 @@ const CONTROLS = {
     // Three free floor tiles in a row near the host's starting units, inside
     // one area, so the only thing gating the link is construction/level.
     const spot = host.eval(`(() => {
-        const free = (gx, gy) => grid[gy] && grid[gy][gx] && grid[gy][gx].type !== TYPE_WALL && !grid[gy][gx].item && !getTileEntityRef(gx, gy);
+        const free = (gx, gy) => grid[gy] && grid[gy][gx] && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL && !cellItemGet(grid[gy][gx]) && !getTileEntityRef(gx, gy);
         const mine = units.filter(u => u.owner === localPlayerId);
         const cx = mine.reduce((s, u) => s + u.x, 0) / mine.length / TILE, cy = mine.reduce((s, u) => s + u.y, 0) / mine.length / TILE;
         let best = null;

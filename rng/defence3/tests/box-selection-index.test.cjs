@@ -3,6 +3,7 @@ const source=fs.readFileSync(path.join(__dirname,'../src/audio_visual/renderer.j
 // (With the far view's unit pass and its slots, kept right before it.)
 const start=source.indexOf('let _box3dSlots ='),end=source.indexOf('\nfunction ',source.indexOf('function get3DBoxSelection(')+1);
 const setup=new Function(`let TILE=32,localPlayerId=0,tickAlpha=.5,units=[],barracks=[],towers=[],collectorSpawners=[],goldMines=[],astarMines=[],items=[],grid=[];
+    let renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;
     let reads=0,visible=(x,y)=>x%7!==0;
     const isTileVisible=(x,y)=>{reads++;return visible(x,y);};
     const get3DProjectionSnapshot=()=>({}),get3DVisibleWorldBounds=()=>({minGx:0,minGy:0,maxGx:119,maxGy:119});

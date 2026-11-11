@@ -29,7 +29,7 @@ startingResourcesConfig = ${JSON.stringify({ researchLevels: {}, spawnCounts: {
     recomputePlayerPopCaps = function (...args) {
         if (!placed && gameTime === 0 && units.length > 0) {
             placed = true;
-            const floor = (gx, gy) => grid[gy] && grid[gy][gx] && grid[gy][gx].type !== TYPE_WALL && !grid[gy][gx].item && !getTileEntityRef(gx, gy);
+            const floor = (gx, gy) => grid[gy] && grid[gy][gx] && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL && !cellItemGet(grid[gy][gx]) && !getTileEntityRef(gx, gy);
             const borders = [];
             for (let gy = 3; gy < GRID_H - 3; gy += 2) for (let gx = 3; gx < GRID_W - 4; gx++) {
                 const a = getAreaIdAtTile(gx, gy), b = getAreaIdAtTile(gx + 1, gy);

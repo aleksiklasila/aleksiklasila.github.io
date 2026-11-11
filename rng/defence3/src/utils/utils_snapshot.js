@@ -278,7 +278,7 @@ function _snapFloorItemsView() {
         for (let item of rows) {
             if (!item || _snapIsBuilding(item)) continue;
             let cell = grid[item.gy] && grid[item.gy][item.gx];
-            if (!cell || cell.item !== item) continue;
+            if (!cell || cellItemGet(cell) !== item) continue;
             out.push(item);
         }
         _snapFloorItemsFor = rows; _snapFloorItemsList = out;
@@ -961,7 +961,7 @@ function _snapTickHashStatic(t, slice, allSlices, regions, push) {
             if (!row) continue;
             for (let gx = 0; gx < GRID_W; gx++) {
                 let c = row[gx];
-                h = Math.imul(Math.imul(h ^ c.type, 16777619) ^ c.owner, 16777619);
+                h = Math.imul(Math.imul(h ^ cellType[(c) - 1], 16777619) ^ cellOwner[(c) - 1], 16777619);
             }
         }
         push(SNAP_PART_GRID * SNAP_CODE_SHIFT, h >>> 0);
@@ -1331,10 +1331,10 @@ function _snapRootRef(v) {
     if (typeof gx === 'number' && typeof gy === 'number' && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
         if (v instanceof Tower) return getTileEntityRef(gx, gy) === v ? '~t' + gx + ',' + gy : null;
         let cell = grid[gy][gx];
-        if (v instanceof Barrack) return cell.item === v ? '~b' + gx + ',' + gy : null;
-        if (isSpawnerEntity(v)) return cell.item === v ? '~s' + gx + ',' + gy : null;
+        if (v instanceof Barrack) return cellItemGet(cell) === v ? '~b' + gx + ',' + gy : null;
+        if (isSpawnerEntity(v)) return cellItemGet(cell) === v ? '~s' + gx + ',' + gy : null;
         {
-            if (cell.item === v) return '~f' + gx + ',' + gy;
+            if (cellItemGet(cell) === v) return '~f' + gx + ',' + gy;
             if (getTileEntityRef(gx, gy) === v) {
                 let type = getTileEntityType(gx, gy);
                 if (type === TILE_ENTITY_GOLDMINE) return '~g' + gx + ',' + gy;
@@ -1567,7 +1567,7 @@ function _snapEncodeGridTypes() {
     for (let gy = 0; gy < GRID_H; gy++) {
         let row = grid[gy];
         for (let gx = 0; gx < GRID_W; gx++) {
-            let t = row && row[gx] ? row[gx].type : 0;
+            let t = row && row[gx] ? cellType[(row[gx]) - 1] : 0;
             if (t === prev) { run++; continue; }
             if (run > 0) out.push(_snapE(prev), run);
             prev = t; run = 1;
@@ -1584,7 +1584,7 @@ function _snapEncodeCellOwners() {
         if (!row) continue;
         for (let gx = 0; gx < GRID_W; gx++) {
             let c = row[gx];
-            if (c && c.owner !== -1) out.push(gy * GRID_W + gx, _snapE(c.owner));
+            if (c && cellOwner[(c) - 1] !== -1) out.push(gy * GRID_W + gx, _snapE(cellOwner[(c) - 1]));
         }
     }
     return out;
@@ -1598,7 +1598,7 @@ function _snapEncodeRegionCells(regions) {
         for (let gy = ry * rt, gy1 = Math.min(GRID_H, gy + rt); gy < gy1; gy++) {
             let row = grid[gy];
             if (!row) continue;
-            for (let gx = rx * rt, gx1 = Math.min(GRID_W, gx + rt); gx < gx1; gx++) out.push(gy * GRID_W + gx, _snapE(row[gx].type), _snapE(row[gx].owner));
+            for (let gx = rx * rt, gx1 = Math.min(GRID_W, gx + rt); gx < gx1; gx++) out.push(gy * GRID_W + gx, _snapE(cellType[(row[gx]) - 1]), _snapE(cellOwner[(row[gx]) - 1]));
         }
     }
     return out;
@@ -1852,9 +1852,9 @@ function _snapEntityAtTile(list, gx, gy) {
     let e;
     switch (list) {
         case 't': e = getTileEntityRef(gx, gy); return e instanceof Tower ? e : undefined;
-        case 'b': e = grid[gy][gx].item; return e instanceof Barrack ? e : undefined;
-        case 's': e = grid[gy][gx].item; return isSpawnerEntity(e) ? e : undefined;
-        case 'f': e = grid[gy][gx].item; return (e && !_snapIsBuilding(e)) ? e : undefined;
+        case 'b': e = cellItemGet(grid[gy][gx]); return e instanceof Barrack ? e : undefined;
+        case 's': e = cellItemGet(grid[gy][gx]); return isSpawnerEntity(e) ? e : undefined;
+        case 'f': e = cellItemGet(grid[gy][gx]); return (e && !_snapIsBuilding(e)) ? e : undefined;
         case 'g': return getTileEntityType(gx, gy) === TILE_ENTITY_GOLDMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
         case 'a': return getTileEntityType(gx, gy) === TILE_ENTITY_ASTARMINE ? (getTileEntityRef(gx, gy) || undefined) : undefined;
     }
@@ -2417,7 +2417,7 @@ function snapDecodeState(S, options = null) {
                 let t = _snapD(S.grid[j]), n = S.grid[j + 1];
                 for (let k = 0; k < n; k++, idx++) {
                     let row = grid[Math.floor(idx / GRID_W)];
-                    if (row) row[idx % GRID_W].type = t;
+                    if (row) cellType[(row[idx % GRID_W]) - 1] = t;
                 }
             }
             if (typeof simMoveWallsDirty === 'function') simMoveWallsDirty();
@@ -2428,8 +2428,8 @@ function snapDecodeState(S, options = null) {
                 let row = Number.isInteger(idx) && idx >= 0 ? grid[Math.floor(idx / GRID_W)] : null;
                 if (!row) continue;
                 let c = row[idx % GRID_W];
-                c.type = _snapD(S.cells[j + 1]);
-                c.owner = _snapD(S.cells[j + 2]);
+                cellType[(c) - 1] = _snapD(S.cells[j + 1]);
+                cellOwner[(c) - 1] = _snapD(S.cells[j + 2]);
             }
             // Indexes built from cell owners (hostile structures) rebuild.
             _tileEntityVersion++;
@@ -2437,20 +2437,18 @@ function snapDecodeState(S, options = null) {
             if (typeof simMoveStructsReset === 'function') simMoveStructsReset();
         }
         if (Array.isArray(S.owners)) {
-            for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) row[gx].owner = -1; }
+            for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) cellOwner[(row[gx]) - 1] = -1; }
             for (let j = 0; j < S.owners.length; j += 2) {
                 let idx = S.owners[j];
                 let row = grid[Math.floor(idx / GRID_W)];
-                if (row) row[idx % GRID_W].owner = _snapD(S.owners[j + 1]);
+                if (row) cellOwner[(row[idx % GRID_W]) - 1] = _snapD(S.owners[j + 1]);
             }
         }
         const tileLists = ['t', 'b', 's', 'f', 'g', 'a'];
         if (!partial) {
-            for (let gy = 0; gy < GRID_H; gy++) { let row = grid[gy]; if (row) for (let gx = 0; gx < GRID_W; gx++) { row[gx].item = null; } }
             initTileEntityLookup();
             for (let list of tileLists) {
                 for (let e of finals[list]) {
-                    if (list === 'b' || list === 's' || list === 'f') { let row = grid[e.gy]; if (row && row[e.gx]) row[e.gx].item = e; }
                     _snapSetTile(e.gx, e.gy, _snapTileTypeOf(list, e), e);
                 }
             }
@@ -2459,12 +2457,10 @@ function snapDecodeState(S, options = null) {
                 for (let e of removed[list]) {
                     if (getTileEntityRef(e.gx, e.gy) === e) _snapSetTile(e.gx, e.gy, TILE_ENTITY_NONE, null);
                     let row = grid[e.gy];
-                    if (row && row[e.gx] && row[e.gx].item === e) row[e.gx].item = null;
                 }
             }
             for (let list of tileLists) {
                 for (let e of shells[list]) {
-                    if (list === 'b' || list === 's' || list === 'f') { let row = grid[e.gy]; if (row && row[e.gx]) row[e.gx].item = e; }
                     _snapSetTile(e.gx, e.gy, _snapTileTypeOf(list, e), e);
                 }
             }

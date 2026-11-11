@@ -11,7 +11,7 @@ const out = JSON.parse(i.eval(`(() => {
     startSoloGame();
     const spots = [];
     for (let gy = 2; gy < GRID_H - 2 && spots.length < 60; gy++) for (let gx = 2; gx < GRID_W - 2 && spots.length < 60; gx++)
-        if (!getTileEntityRef(gx, gy) && grid[gy][gx].type !== TYPE_WALL) spots.push([gx, gy]);
+        if (!getTileEntityRef(gx, gy) && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL) spots.push([gx, gy]);
     const place = () => spots.map(([gx, gy]) => { placeBuilding(gx, gy, 'pistol', 0, { silent: true, ignorePlacementRules: true }); return getTileEntityRef(gx, gy); }).filter(Boolean);
     const T = _sTables.get(Tower), cap0 = T.cap, grown0 = structRowStats.grown;
     const first = place(), n1 = T.n;

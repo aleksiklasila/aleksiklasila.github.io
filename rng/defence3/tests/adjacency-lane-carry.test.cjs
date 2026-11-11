@@ -20,9 +20,9 @@ const r = JSON.parse(inst.eval(REF + `;JSON.stringify((() => {
     const placed = [];
     const put = (gx, gy, key, p) => {
         const c = grid[gy] && grid[gy][gx];
-        if (!c || c.type !== TYPE_FLOOR || c.item || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy)) return;
+        if (!c || cellType[(c) - 1] !== TYPE_FLOOR || cellItemGet(c) || getTileEntityRef(gx, gy) || getGoldMineAt(gx, gy)) return;
         if (!placeBuilding(gx, gy, key, p, { ignorePlacementRules: true, silent: true })) return;
-        const e = getTileEntityRef(gx, gy) || c.item;
+        const e = getTileEntityRef(gx, gy) || cellItemGet(c);
         if (!e) return;
         // (Built at level 1, as main.js completeStarterBuilding: under
         // construction, its effective level is 0 and it is in no group.)
@@ -82,7 +82,7 @@ const r = JSON.parse(inst.eval(REF + `;JSON.stringify((() => {
     const CO = _simParReg['adj.coff'], CT = _simParReg['adj.ctile'];
     let areaDiff = 0;
     for (let a = 0; a < areas.length; a++) {
-        const want = (gridCellsByArea[a] || []).map(c => c.y * GRID_W + c.x).sort((x, y) => x - y).join();
+        const want = Array.from(gridCellsByArea[a] || []).sort((x, y) => x - y).join();
         if (Array.from(CT.subarray(CO[a], CO[a + 1])).join() !== want) areaDiff++;
     }
     return { buildings: live.length, ticks: t, diff, first, sigDiff, areaDiff, areas: areas.length, groups: new Set(sync.map(s => s.split(',')[0])).size };

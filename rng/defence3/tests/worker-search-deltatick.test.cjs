@@ -21,7 +21,7 @@ const result = JSON.parse(i.eval(`JSON.stringify((()=>{
  _wswStep=function(){ writes++; if(_wsPosted&&simParallelBackgroundPending(WS_LANE)){ bad++; if(!badAt) badAt={gameTime,simDk}; } return step.apply(this,arguments); };
  _wsPost=function(){ const r=post.apply(this,arguments); if(_wsPosted) posts++; return r; };
  // Workers with nothing to do search again and again.
- for(let k=0;k<200;k++){ const gx=30+(k%20)*2, gy=30+Math.floor(k/20)*2; if(grid[gy][gx].type===TYPE_WALL) continue; for(const t of ['builder_unit','energy_collector','researcher']){ const u=new Unit(t,k&1,gx*TILE+16,gy*TILE+16); units.push(u); unitSlotMapPushed(u); } }
+ for(let k=0;k<200;k++){ const gx=30+(k%20)*2, gy=30+Math.floor(k/20)*2; if(cellType[(grid[gy][gx]) - 1]===TYPE_WALL) continue; for(const t of ['builder_unit','energy_collector','researcher']){ const u=new Unit(t,k&1,gx*TILE+16,gy*TILE+16); units.push(u); unitSlotMapPushed(u); } }
  const seq=[1,1,1,20,1,1,3,8,5,2,7,4,19,1,8,8,3,20,20,1,5,9,6,13,2,1,11,4];
  let ticks=0;
  for(let rep=0;rep<6;rep++) for(const dk of seq){ simDk=dk; gameTick(); currentTick++; ticks++; }

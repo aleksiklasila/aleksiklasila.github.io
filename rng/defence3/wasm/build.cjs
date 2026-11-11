@@ -32,9 +32,16 @@ if (!process.argv.includes('--wasm64') && !process.argv.includes('--wasm32')) {
 // and usize parameters are i64 (BigInt from JavaScript: SIM_WASM64_I64 lists
 // them, read from the module's types below).
 const W64 = process.argv.includes('--wasm64');
-const out = process.argv.find(a=>a.startsWith('--out='))?.slice(6) || path.join(here, '..', 'src', 'sim', W64 ? 'sim_wasm64_bin.js' : 'sim_wasm_bin.js');
+// --pres: the presentation worker's module (feature pres: wasm/src/pres.rs,
+// pres_fill.rs) into src/sim/pres_wasm_bin.js. Two memories: 0 the worker's
+// own, 1 the simulation's heap (env.simMemory), read in place: each call of
+// an env.pres_sim_* import becomes a load from memory 1 (wasm-opt's text,
+// below). wasm32 only; needs wasm-opt.
+const PRES = process.argv.includes('--pres');
+if (PRES && W64) throw new Error('--pres: wasm32 only');
+const out = process.argv.find(a=>a.startsWith('--out='))?.slice(6) || path.join(here, '..', 'src', 'sim', PRES ? 'pres_wasm_bin.js' : W64 ? 'sim_wasm64_bin.js' : 'sim_wasm_bin.js');
 // A separate target directory also avoids transient Windows mapped-file locks.
-const targetDir=process.argv.find(a=>a.startsWith('--target-dir='))?.slice(13)||(W64?'target64':'target');
+const targetDir=process.argv.find(a=>a.startsWith('--target-dir='))?.slice(13)||(PRES?'target-pres':W64?'target64':'target');
 const wasmPath = W64 ? path.join(here, targetDir, 'wasm64-unknown-unknown', 'release', 'defence3_sim.wasm')
     : path.join(here, targetDir, 'wasm32-unknown-unknown', 'release', 'defence3_sim.wasm');
 
@@ -46,7 +53,8 @@ if (!process.argv.includes('--no-build')) {
     const args = W64 ? ['+nightly', 'build', '--release', '--target', 'wasm64-unknown-unknown', '-Zbuild-std=core,panic_abort', '--target-dir', targetDir] : ['build', '--release', '--target-dir', targetDir];
     // (--features=a,b: cargo features, e.g. prof (the movement passes as functions, with --keep-names for profiles by pass).)
     const feat = process.argv.find(x => x.startsWith('--features='));
-    if (feat) args.push('--features', feat.slice(11));
+    const feats = [...(feat ? feat.slice(11).split(',') : []), ...(PRES ? ['pres'] : [])].filter(Boolean);
+    if (feats.length) args.push('--features', feats.join(','));
     // (--keep-names: the function names kept, for profiles: not stripped.)
     if (process.argv.includes('--keep-names')) env.CARGO_PROFILE_RELEASE_STRIP = 'false';
     const r = cp.spawnSync('cargo', args, { cwd: here, env, stdio: 'inherit', shell: process.platform === 'win32' });
@@ -85,6 +93,47 @@ if (!process.argv.includes('--no-wasm-opt')) {
         console.log('wasm-opt ' + WASM_OPT_LEVEL + ': ' + fs.statSync(wasmPath).size + ' -> ' + fs.statSync(tmp).size + ' bytes');
     } else console.log('(wasm-opt not found: the module as linked)');
 }
+// ---- --pres: the loads from the simulation's memory ----
+// wasm-opt prints the module as text; each env.pres_sim_<type> import is
+// dropped and every call of it becomes that load from memory 1 (a new
+// import, env.simMemory, shared); both memories shared; then optimized
+// again with multi-memory (the loads' address arithmetic folds into their
+// offsets as for any load).
+if (PRES) {
+    const wo = findWasmOpt();
+    if (!wo || wasmIn === wasmPath) throw new Error('--pres needs wasm-opt (wasm/tools/binaryen-*/bin)');
+    const feats = ['--enable-simd', '--enable-threads', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-multimemory'];
+    const wat = wasmIn + '.wat', wat2 = wasmIn + '.2.wat', fin = wasmIn + '.2.wasm';
+    let r = cp.spawnSync(wo, [wasmIn, '-S', '-o', wat, ...feats], { stdio: 'inherit' });
+    if (r.status !== 0) throw new Error('wasm-opt (text) failed');
+    let text = fs.readFileSync(wat, 'utf8');
+    const LOADS = { i32: 'i32.load', f32: 'f32.load', u8: 'i32.load8_u', i8: 'i32.load8_s', u16: 'i32.load16_u', i16: 'i32.load16_s' };
+    const names = {};
+    text = text.replace(/^ *\(import "env" "pres_sim_(\w+)" \(func (\$\S+)[^\n]*\n/gm, (all, ty, name) => {
+        if (!LOADS[ty]) throw new Error('unknown load pres_sim_' + ty);
+        names[name] = LOADS[ty]; return '';
+    });
+    if (!Object.keys(names).length) throw new Error('--pres: no pres_sim_* imports found');
+    let calls = 0;
+    for (const [name, load] of Object.entries(names)) {
+        const esc = name.replace(/[$.*+?^{}()|[\]\\]/g, '\\$&');
+        text = text.replace(new RegExp('\\(call ' + esc + '(?=[\\s)])', 'g'), () => { calls++; return '(' + load + ' $simmem'; });
+        if (new RegExp(esc + '(?=[\\s)])').test(text)) throw new Error('--pres: ' + name + ' used other than called');
+    }
+    // (The worker's memory: shared; the simulation's after it, index 1.)
+    let mems = 0;
+    text = text.replace(/^( *)\(import "env" "memory" \(memory (\$\S+) (\d+)(?: (\d+))?(?: shared)?\)\)/m, (all, ind, nm, lo, hi) => {
+        mems++;
+        return ind + '(import "env" "memory" (memory ' + nm + ' ' + lo + ' ' + (hi || 65536) + ' shared))\n' + ind + '(import "env" "simMemory" (memory $simmem 1 65536 shared))';
+    });
+    if (mems !== 1) throw new Error('--pres: the memory import not found in the text');
+    fs.writeFileSync(wat2, text);
+    r = cp.spawnSync(wo, [wat2, '-o', fin, WASM_OPT_LEVEL, ...feats, '--strip-debug', '--strip-producers'], { stdio: 'inherit' });
+    if (r.status !== 0) throw new Error('wasm-opt (multi-memory) failed');
+    for (const x of [wat, wat2, wasmIn]) fs.unlinkSync(x);
+    wasmIn = fin;
+    console.log('--pres: ' + calls + ' loads from the simulation\'s memory (' + Object.values(names).join(', ') + ')');
+}
 const bytes = new Uint8Array(fs.readFileSync(wasmIn));
 if (wasmIn !== wasmPath) fs.unlinkSync(wasmIn);
 
@@ -111,6 +160,7 @@ for (let i = 0; i < count; i++) {
     if (kind === 1) { o++; const fl = bytes[o++]; o = leb(bytes, o)[1]; if (fl & 1) o = leb(bytes, o)[1]; continue; }
     if (kind === 3) { o += 2; continue; }
     if (kind !== 2) throw new Error('unexpected import kind ' + kind);
+    if (PRES) { if ((name !== 'memory' && name !== 'simMemory') || bytes[o] !== 3) throw new Error('--pres: memory import ' + name + ' flags ' + bytes[o]); patched = true; o++; o = leb(bytes, o)[1]; o = leb(bytes, o)[1]; continue; }
     if (name !== 'memory') throw new Error('unexpected memory import ' + name);
     // (Limits flags: 1 a maximum, 2 shared, 4 64-bit addresses.)
     const fl = bytes[o], want = W64 ? 7 : 3;
@@ -183,7 +233,12 @@ if (W64) {
     const exp = WebAssembly.Module.exports(mod).map(e => e.name);
     for (const need of ['__stack_pointer', '__heap_base']) if (!exp.includes(need)) throw new Error('missing export ' + need);
     const memory = new WebAssembly.Memory({ initial: 256, maximum: 65536, shared: true });
-    const inst = new WebAssembly.Instance(mod, { env: { memory } });
+    const env = { memory };
+    if (PRES) {
+        env.simMemory = new WebAssembly.Memory({ initial: 1, maximum: 65536, shared: true });
+        if (WebAssembly.Module.imports(mod).some(i => i.kind === 'function')) throw new Error('--pres: function imports left');
+    }
+    const inst = new WebAssembly.Instance(mod, { env });
     fns = exp.filter(n => typeof inst.exports[n] === 'function').sort();
 }
 
@@ -191,11 +246,10 @@ const b64 = Buffer.from(bytes).toString('base64');
 const hash = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16);
 const lines = [];
 for (let i = 0; i < b64.length; i += 120) lines.push("'" + b64.slice(i, i + 120) + "'");
-const P = W64 ? 'SIM_WASM64' : 'SIM_WASM';
+const P = PRES ? 'PRES_WASM' : W64 ? 'SIM_WASM64' : 'SIM_WASM';
 const src = `"use strict";
 // GENERATED by wasm/build.cjs from wasm/src/lib.rs: do not edit by hand.
-// The simulation's Rust kernels (${W64 ? 'wasm64: memory64' : 'wasm32'} + simd128; memory import shared),
-// loaded by src/sim/sim_wasm.js. Exports: ${fns.join(', ')}.
+// ${PRES ? "The presentation worker's Rust kernels (wasm32 + simd128, multi-memory: env.memory its own, env.simMemory the simulation's heap; both shared),\n// loaded by src/sim/presentation_worker.js." : "The simulation's Rust kernels (" + (W64 ? 'wasm64: memory64' : 'wasm32') + " + simd128; memory import shared),\n// loaded by src/sim/sim_wasm.js."} Exports: ${fns.join(', ')}.
 const ${P}_HASH = '${hash}';
 ${W64 ? 'const SIM_WASM64_I64 = ' + JSON.stringify(i64Params) + ';\n' : ''}const ${P}_BIN = ${lines.join(' +\n    ')};
 `;

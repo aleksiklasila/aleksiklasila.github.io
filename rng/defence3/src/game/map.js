@@ -7,120 +7,105 @@
 // grid's cells views over them (grid[y][x].type, .owner, .areaId read and
 // write the columns; .item comes from the structure table on a tabled tile). (MAIN_THREAD_SERIAL_PLAN.md, world model.)
 let cellType = new Uint8Array(0), cellOwner = new Int8Array(0), cellArea = new Int32Array(0);
-class GridCell {
-    constructor(t) { this.t = t; this._item = null; }
-    // Its item: a tabled tile's from the structure table (the structure there
-    // when it is not a tower or a mine: world model W3); else its own field
-    // (the page's views; a cleared tile).
-    get item() {
-        const T = _ST, t = this.t;
-        if (T.ctab && T.n === cellType.length && T.ctab[t] !== 0) { const e = getTileEntityRef(t % GRID_W, (t / GRID_W) | 0); return e && !e._stMine && e._stCode !== 0x22 ? e : null; }
-        return this._item;
+// The presentation page needs map generation too, but has no simulation
+// heap. It runs the same WASM exports in a small, separate map heap. There
+// is no JavaScript topology implementation on either thread.
+let _pageMapHeap = null;
+function _mapArray(T, n) {
+    if (simWasmInit()) return simSharedArray(T, n);
+    let H = _pageMapHeap;
+    if (!H) {
+        const memory = new WebAssembly.Memory({ initial: 256, maximum: 65536, shared: true });
+        const module = new WebAssembly.Module(_simWasmDecode(SIM_WASM_BIN));
+        const exports = new WebAssembly.Instance(module, { env: { memory } }).exports;
+        const args = Math.ceil(Number(exports.__heap_base.value) / 64) * 64;
+        H = _pageMapHeap = { memory, exports, args, top: args + 8192 };
     }
-    set item(v) { this._item = v; }
-    get type() { return cellType[this.t]; }
-    set type(v) { cellType[this.t] = v; }
-    get owner() { return cellOwner[this.t]; }
-    set owner(v) { cellOwner[this.t] = v; }
-    get areaId() { return cellArea[this.t]; }
-    set areaId(v) { cellArea[this.t] = v; }
-    // (A plain record of its values: copies, snapshots of a cell.)
-    toJSON() { return { type: this.type, item: this.item, owner: this.owner, areaId: this.areaId }; }
+    const at = H.top; H.top = Math.ceil((at + Math.max(1, n) * T.BYTES_PER_ELEMENT) / 64) * 64;
+    if (H.top > H.memory.buffer.byteLength) H.memory.grow(Math.ceil((H.top - H.memory.buffer.byteLength) / 65536));
+    return new T(H.memory.buffer, at, n);
+}
+function _mapKernel(name, arrays, params) {
+    if (simWasmInit()) return simRustDirect(name, arrays, params);
+    const H = _pageMapHeap, I = new Int32Array(H.memory.buffer, H.args, 1024);
+    for (let i = 0; i < arrays.length; i++) I[512 + i] = arrays[i].byteOffset;
+    new Float64Array(H.memory.buffer, H.args + 4096, 512).set(params);
+    H.exports[name](H.args, 0);
+}
+let _mapAreas = null;
+// Tile handles are one-based so existing bounds guards reject zero. Items
+// have a single authority: the structure table (or the page's tile index).
+// No per-tile object or second retained item reference exists.
+function cellItemGet(cell) {
+    if (!cell) return null;
+    const t = cell - 1, e = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
+    return e && !e._stMine && e._stCode !== 0x22 && e._kind !== 0 && e._kind !== 4 && e._kind !== 5 ? e : null;
+}
+// Rendering accepts both live handles and historical UI records.
+function renderCellItem(cell) { return typeof cell === 'number' ? cellItemGet(cell) : cell && cell.item; }
+function renderCellValue(cell, field) {
+    if (typeof cell !== 'number') return cell && cell[field];
+    return (field === 'type' ? cellType : field === 'owner' ? cellOwner : cellArea)[cell - 1];
 }
 function _cellColumn(T, n, name) {
     const heap = typeof simSharedArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null;
-    const a = heap ? simSharedArray(T, n) : new T(n);
+    const a = _mapArray(T, n);
     if (heap && typeof simParallelBind === 'function') simParallelBind(name, a);
     return a;
 }
 function initGrid() {
+    _pageMapHeap = null; _mapAreas = null;
     grid = [];
     areaIdGrid = [];
     workerReservedTiles = workerReservedTable();
     const n = GRID_W * GRID_H;
     if (typeof simHeapHas === 'function') for (const a of [cellType, cellOwner, cellArea]) if (a.length && simHeapHas(a)) simHeapFree(a);
     cellType = _cellColumn(Uint8Array, n, 'cell.type'); cellOwner = _cellColumn(Int8Array, n, 'cell.owner'); cellArea = _cellColumn(Int32Array, n, 'cell.area');
-    if (TYPE_FLOOR !== 0) cellType.fill(TYPE_FLOOR);
-    cellOwner.fill(-1); cellArea.fill(-1);
+    const handles = _mapArray(Int32Array, n);
+    // The heap allocator owns the parent view; row subarrays alone do not
+    // keep its allocation registered against finalizer-driven reuse.
+    grid._handles = handles;
+    _mapKernel('k_map_init', [cellType, cellOwner, cellArea, handles], [n, TYPE_FLOOR]);
     for (let y = 0; y < GRID_H; y++) {
-        let row = [];
-        let areaRow = new Int32Array(GRID_W).fill(-1);
-        for (let x = 0; x < GRID_W; x++) row.push(new GridCell(y * GRID_W + x));
-        grid.push(row);
-        areaIdGrid.push(areaRow);
+        grid.push(handles.subarray(y * GRID_W, (y + 1) * GRID_W));
+        areaIdGrid.push(cellArea.subarray(y * GRID_W, (y + 1) * GRID_W));
     }
 }
-// After a worker restart (a new heap): the cell columns moved into it.
+// After a worker restart, or a page taking over from a failed worker (a new
+// simulation heap; the map was made in the page's map heap): the cell columns
+// and the area tables move into it. (Only with that heap: elsewhere each call
+// would copy them again.)
 function cellColumnsRehome() {
-    if (typeof simHeapHas !== 'function') return;
+    if (typeof simHeapHas !== 'function' || !simWasmInit()) return;
     const n = cellType.length;
     if (!n || simHeapHas(cellType)) return;
     const t = _cellColumn(Uint8Array, n, 'cell.type'), o = _cellColumn(Int8Array, n, 'cell.owner'), a = _cellColumn(Int32Array, n, 'cell.area');
     t.set(cellType); o.set(cellOwner); a.set(cellArea);
     cellType = t; cellOwner = o; cellArea = a;
+    // (areaIdGrid's rows are views of cellArea; the area lists views of the tables.)
+    if (Array.isArray(areas) && areas.length) rebuildAreaDistanceCachesFromAreas();
 }
 
 function generateAreas() {
-    areas = [];
-    _areaById = [];
-    let visited = Array.from({ length: GRID_H }, () => new Array(GRID_W).fill(false));
-    let areaId = 0;
-
-    for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-            if (visited[y][x]) continue;
-            let targetSize = 5 + Math.floor(rng() * 8);
-            let cells = [];
-            let queue = [{ x, y }];
-            visited[y][x] = true;
-            let cellType = grid[y][x].type;
-            let minAreaGx = x, minAreaGy = y, maxAreaGx = x, maxAreaGy = y;
-
-            while (queue.length > 0 && cells.length < targetSize) {
-                let cur = queue.shift();
-                cells.push({ x: cur.x, y: cur.y });
-                grid[cur.y][cur.x].areaId = areaId;
-                if (areaIdGrid[cur.y]) areaIdGrid[cur.y][cur.x] = areaId;
-                if (cur.x < minAreaGx) minAreaGx = cur.x;
-                if (cur.y < minAreaGy) minAreaGy = cur.y;
-                if (cur.x > maxAreaGx) maxAreaGx = cur.x;
-                if (cur.y > maxAreaGy) maxAreaGy = cur.y;
-
-                let dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-                for (let i = dirs.length - 1; i > 0; i--) {
-                    let j = Math.floor(rng() * (i + 1));
-                    [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
-                }
-                for (let [dx, dy] of dirs) {
-                    let nx = cur.x + dx, ny = cur.y + dy;
-                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H && !visited[ny][nx] && grid[ny][nx].type === cellType) {
-                        visited[ny][nx] = true;
-                        queue.push({ x: nx, y: ny });
-                    }
-                }
-            }
-            // Un-visit cells left in queue so they can form their own areas
-            for (let rem of queue) visited[rem.y][rem.x] = false;
-            let area = {
-                id: areaId,
-                type: cellType,
-                cells,
-                active: false,
-                multiplierLevel: 0,
-                minGx: minAreaGx,
-                minGy: minAreaGy,
-                maxGx: maxAreaGx,
-                maxGy: maxAreaGy
-            };
-            areas.push(area);
-            _areaById[areaId] = area;
-            areaId++;
-        }
-    }
-
+    const n = GRID_W * GRID_H;
+    const off = _mapArray(Int32Array, n + 1), tiles = _mapArray(Int32Array, n);
+    const bounds = _mapArray(Int32Array, n * 4), visited = _mapArray(Uint8Array, n);
+    // The flood emits at most twelve cells; at most four neighbours a cell
+    // are queued. This is a proven storage bound, not a gameplay budget.
+    const queue = _mapArray(Int32Array, 49), result = _mapArray(Uint32Array, 2);
+    _mapKernel('k_map_generate', [cellType, cellArea, off, tiles, bounds, visited, queue, result], [GRID_W, GRID_H, rng.getState()]);
+    rng.setState(result[1]);
+    const count = result[0];
+    _mapAreas = { off, tiles, bounds, count };
+    areas = new Array(count);
+    for (let id = 0; id < count; id++) areas[id] = {
+        id, type: cellType[tiles[off[id]]], cells: tiles.subarray(off[id], off[id + 1]),
+        active: false, multiplierLevel: 0,
+        minGx: bounds[id * 4], minGy: bounds[id * 4 + 1], maxGx: bounds[id * 4 + 2], maxGy: bounds[id * 4 + 3]
+    };
+    if (simWasmInit()) { simHeapFree(visited); simHeapFree(queue); simHeapFree(result); }
     rebuildAreaDistanceCachesFromAreas();
-    _areaColorCache = null;
-    _areaOutlinePathCache = null;
+    _areaColorCache = null; _areaOutlinePathCache = null;
     _markCombinedBgFullDirty();
 }
 
@@ -251,7 +236,7 @@ function generateResourceMinesMixed() {
         let row = grid[gy];
         if (!row) continue;
         for (let gx = margin; gx < GRID_W - margin; gx++) {
-            if (!row[gx] || row[gx].type !== TYPE_FLOOR) continue;
+            if (!row[gx] || cellType[(row[gx]) - 1] !== TYPE_FLOOR) continue;
             if (MAP_TYPE !== 'arena' && spawnTiles && spawnTiles.length > 0 && spawnTiles.some(sp => detHypot(gx - sp.gx, gy - sp.gy) <= spawnSafeRadius)) continue;
             let o = order(gx, gy);
             if (o < Infinity) tiles.push({ gx, gy, o, s: 0 });
@@ -282,7 +267,7 @@ function generateResourceMinesMixed() {
             goldMines.push(mine);
             setTileEntity(t.gx, t.gy, TILE_ENTITY_GOLDMINE, mine);
         }
-        grid[t.gy][t.gx].type = TYPE_WALL;
+        cellType[(grid[t.gy][t.gx]) - 1] = TYPE_WALL;
         if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(t.gx, t.gy);
     }
 }
@@ -326,7 +311,7 @@ function settleSpawnsNearResources(spawns) {
     const sum = new Int32Array((W + 1) * (H + 1));
     for (let y = 0; y < H; y++) for (let x = 0, run = 0; x < W; x++) {
         const c = grid[y] && grid[y][x];
-        run += c && c.type === TYPE_FLOOR ? 1 : 0;
+        run += c && cellType[(c) - 1] === TYPE_FLOOR ? 1 : 0;
         sum[(y + 1) * (W + 1) + x + 1] = sum[y * (W + 1) + x + 1] + run;
     }
     const open = (gx, gy) => {
@@ -339,7 +324,7 @@ function settleSpawnsNearResources(spawns) {
             const x = gx + dx, y = gy + dy;
             if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) return false;
             const c = grid[y] && grid[y][x];
-            if (!c || c.type !== TYPE_FLOOR) return false;
+            if (!c || cellType[(c) - 1] !== TYPE_FLOOR) return false;
         }
         return true;
     };
@@ -420,7 +405,7 @@ function generateGoldMines() {
     let addMine = (gx, gy) => {
         if (gx < margin || gx >= GRID_W - margin || gy < margin || gy >= GRID_H - margin) return false;
         if (placed.has(`${gx},${gy}`)) return false;
-        if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_FLOOR) return false;
+        if (!grid[gy] || !grid[gy][gx] || cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) return false;
         if (!isAllowedByShape(gx, gy)) return false;
         if (MAP_TYPE !== 'arena' && nearAnySpawn(gx, gy)) return false;
         placed.add(`${gx},${gy}`);
@@ -428,7 +413,7 @@ function generateGoldMines() {
         let mine = Object.assign(new GoldMine(), { gx, gy, gold, maxGold: gold, x: gx * TILE + 16, y: gy * TILE + 16 });
         goldMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_GOLDMINE, mine);
-        grid[gy][gx].type = TYPE_WALL;
+        cellType[(grid[gy][gx]) - 1] = TYPE_WALL;
         if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(gx, gy);
         return true;
     };
@@ -491,7 +476,7 @@ function generateGoldMines() {
             for (let att = 0; att < 100; att++) {
                 let gx = margin + Math.floor(rng() * Math.max(1, GRID_W - margin * 2));
                 let gy = margin + Math.floor(rng() * Math.max(1, GRID_H - margin * 2));
-                if (!placed.has(`${gx},${gy}`) && !nearAnySpawn(gx, gy) && isAllowedByShape(gx, gy) && grid[gy][gx].type === TYPE_FLOOR) {
+                if (!placed.has(`${gx},${gy}`) && !nearAnySpawn(gx, gy) && isAllowedByShape(gx, gy) && cellType[(grid[gy][gx]) - 1] === TYPE_FLOOR) {
                     seedGx = gx; seedGy = gy;
                     break;
                 }
@@ -626,7 +611,7 @@ function generateAstarMines() {
     let addMine = (gx, gy) => {
         if (gx < margin || gx >= GRID_W - margin || gy < margin || gy >= GRID_H - margin) return false;
         if (placed.has(`${gx},${gy}`)) return false;
-        if (!grid[gy] || !grid[gy][gx] || grid[gy][gx].type !== TYPE_FLOOR) return false;
+        if (!grid[gy] || !grid[gy][gx] || cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) return false;
         if (MAP_TYPE !== 'arena' && nearAnySpawn(gx, gy)) return false;
         if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
         placed.add(`${gx},${gy}`);
@@ -634,7 +619,7 @@ function generateAstarMines() {
         let mine = Object.assign(new AstarMine(), { gx, gy, astar, maxAstar: astar, x: gx * TILE + 16, y: gy * TILE + 16 });
         astarMines.push(mine);
         setTileEntity(gx, gy, TILE_ENTITY_ASTARMINE, mine);
-        grid[gy][gx].type = TYPE_WALL;
+        cellType[(grid[gy][gx]) - 1] = TYPE_WALL;
         if (typeof simMoveTileTypeChanged === 'function') simMoveTileTypeChanged(gx, gy);
         return true;
     };
@@ -656,7 +641,7 @@ function pickRandomPlayerSpawns(teamCount = 2) {
         for (let i = 0; i < 120; i++) {
             let gx = margin + Math.floor(rng() * Math.max(1, GRID_W - margin * 2));
             let gy = margin + Math.floor(rng() * Math.max(1, GRID_H - margin * 2));
-            if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && grid[gy][gx].type === TYPE_FLOOR) {
+            if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H && cellType[(grid[gy][gx]) - 1] === TYPE_FLOOR) {
                 return { gx, gy };
             }
         }
@@ -692,7 +677,7 @@ function pickEdgePlayerSpawns(teamCount = 2) {
     let candidates = [];
     for (let gy = margin; gy < GRID_H - margin; gy++) {
         for (let gx = margin; gx < GRID_W - margin; gx++) {
-            if (grid[gy][gx].type !== TYPE_FLOOR) continue;
+            if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) continue;
             let edgeDist = Math.min(gx - margin, gy - margin, (GRID_W - 1 - margin) - gx, (GRID_H - 1 - margin) - gy);
             if (edgeDist <= 1) candidates.push({ gx, gy });
         }
@@ -738,7 +723,7 @@ function pickIslandPlayerSpawns(teamCount = 2) {
         let gy = Math.round(centerY + detSin(ang) * radius);
         gx = Math.max(1, Math.min(GRID_W - 2, gx));
         gy = Math.max(1, Math.min(GRID_H - 2, gy));
-        if (grid[gy][gx].type !== TYPE_FLOOR) {
+        if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) {
             let n = findNearestWalkable(gx, gy, centerX, centerY);
             gx = n.x; gy = n.y;
         }
@@ -753,7 +738,7 @@ function pickIslandsPlayerSpawns(teamCount = 2) {
     let candidates = [];
     for (let gy = margin; gy < GRID_H - margin; gy++) {
         for (let gx = margin; gx < GRID_W - margin; gx++) {
-            if (grid[gy][gx].type !== TYPE_FLOOR) continue;
+            if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) continue;
             let edgeDist = Math.min(gx - margin, gy - margin, (GRID_W - 1 - margin) - gx, (GRID_H - 1 - margin) - gy);
             if (edgeDist <= 1) candidates.push({ gx, gy });
         }
@@ -798,7 +783,7 @@ function pickArenaPlayerSpawns(teamCount = 2) {
 
     for (let gy = margin; gy < GRID_H - margin; gy++) {
         for (let gx = margin; gx < GRID_W - margin; gx++) {
-            if (grid[gy][gx].type !== TYPE_FLOOR) continue;
+            if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) continue;
             let edgeDist = Math.min(gx, gy, GRID_W - 1 - gx, GRID_H - 1 - gy);
             if (edgeDist === targetEdgeDist) candidates.push({ gx, gy });
         }
@@ -807,7 +792,7 @@ function pickArenaPlayerSpawns(teamCount = 2) {
     if (!candidates.length) {
         for (let gy = margin; gy < GRID_H - margin; gy++) {
             for (let gx = margin; gx < GRID_W - margin; gx++) {
-                if (grid[gy][gx].type !== TYPE_FLOOR) continue;
+                if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) continue;
                 let edgeDist = Math.min(gx, gy, GRID_W - 1 - gx, GRID_H - 1 - gy);
                 if (Math.abs(edgeDist - targetEdgeDist) <= 1) candidates.push({ gx, gy });
             }
@@ -856,7 +841,7 @@ function pickCrossroadsPlayerSpawns(teamCount = 2) {
         let c = detCos(ang), sn = detSin(ang), k = off / Math.max(Math.abs(c), Math.abs(sn), 1e-6) * Math.SQRT1_2 * Math.SQRT2;
         let gx = Math.max(2, Math.min(GRID_W - 3, Math.round(L.cx + c * k)));
         let gy = Math.max(2, Math.min(GRID_H - 3, Math.round(L.cy + sn * k)));
-        if (grid[gy][gx].type !== TYPE_FLOOR) { let n = findNearestWalkable(gx, gy, L.cx, L.cy); gx = n.x; gy = n.y; }
+        if (cellType[(grid[gy][gx]) - 1] !== TYPE_FLOOR) { let n = findNearestWalkable(gx, gy, L.cx, L.cy); gx = n.x; gy = n.y; }
         picks.push({ gx, gy });
     }
     return picks;

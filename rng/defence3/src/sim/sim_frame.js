@@ -62,9 +62,11 @@ function simMetaViews(buf, cap, off = 0) {
 // Typed-array views of a frame buffer laid out for `cap` slots: the 4-byte
 // columns (floats, ints, the order entry), the 2-byte ones, the bytes last
 // (every view aligned for any cap).
-function simFrameViews(buf, cap) {
-    const v = { buf, cap };
-    let o = 0;
+// (base: the frame's byte offset in buf; the presentation worker's frames
+// are regions of its wasm memory.)
+function simFrameViews(buf, cap, base = 0) {
+    const v = { buf, cap, base };
+    let o = base;
     for (const k of SIM_FRAME_F32) { v[k] = new Float32Array(buf, o, cap); o += 4 * cap; }
     for (const k of SIM_FRAME_I32) { v[k] = new Int32Array(buf, o, cap); o += 4 * cap; }
     v.order = new Int32Array(buf, o, cap); o += 4 * cap;
@@ -120,6 +122,9 @@ function _simFrameCode(s) {
 // the per-slot inputs (~1 GB at 8M units, held for good before), made again
 // by the next simFrameEncode.
 function simFrameReleaseBuffers() {
+    // (Nothing left to give up: the page returns each frame here, and each
+    // release made its lists again: ~0.4 MB a second of this worker's garbage.)
+    if (_simFramePool.length === 0 && _simFrameLastViews === null && _simRenderSlots.owner.length === 0 && _simSharedFrames.size === 0 && !_simFrameInput.cap) return;
     _simFramePool.length = 0;
     _simFrameLastViews = null;
     // (Its render slots too: nothing reads them once the presentation worker makes the frames, and every unit that died since stayed in
@@ -375,6 +380,29 @@ const _pageFrameStrings = [''];
 // (Moves when a code of the table gets another string: renderer.js getColumnLodCatalog.)
 let _pageFrameStringsVersion = 0;
 
+// The last values of gone views (units, structures), kept for whatever still
+// holds the view: a ring of typed columns of the source table's kinds, made
+// once and written in turn (an object of ~40 values for every unit that died
+// was 60% of the page's garbage in a battle, ~40 MB a second, and its GC
+// pauses). A view keeps its record's index (_last); the record names its view,
+// so a view whose record was written over since (gone long ago) reads 0.
+const PAGE_GONE_RING = 1 << 16;
+function pageGoneRing() { return { mask: PAGE_GONE_RING - 1, at: 0, keys: null, cols: null, owner: null }; }
+function pageGonePut(G, T, keys, s, view) {
+    if (!G.cols) {
+        G.cols = {}; G.keys = keys; G.owner = new Array(PAGE_GONE_RING).fill(null);
+        for (let i = 0; i < keys.length; i++) G.cols[keys[i]] = new T[keys[i]].constructor(PAGE_GONE_RING);
+    }
+    const r = G.at, K = G.keys, C = G.cols;
+    G.at = (r + 1) & G.mask;
+    for (let i = 0; i < K.length; i++) { const k = K[i]; C[k][r] = T[k][s]; }
+    G.owner[r] = view;
+    return r;
+}
+function pageGoneGet(G, view, r, k) { return r >= 0 && G.owner && G.owner[r] === view ? G.cols[k][r] : 0; }
+const _pageUnitGone = pageGoneRing();
+const _PAGE_UNIT_GONE_KEYS = [...SIM_FRAME_F32, ...SIM_FRAME_I32, ...SIM_FRAME_I16, ...SIM_FRAME_U8];
+
 // A unit as the page sees it: bound to its frame slot while it lives;
 // afterwards (dead) its last values. Page-only state (render caches,
 // flashes) is set on it as on a unit.
@@ -386,25 +414,20 @@ class PageUnit {
     constructor(id, slot) {
         Object.defineProperty(this, 'id', { value: id, writable: true, enumerable: true });
         this._s = slot;
-        this._last = null;   // last values, once dead
+        this._last = -1;     // its gone record, once dead (pageGonePut)
         this._det = null;    // detail record (watched units)
         this._at = null;     // attackTarget's point, made at its first read
         this._ox = undefined; this._oy = undefined;
+        this._mv = 0;        // (_simClientUpdateStableSlots: its unit still in the frame)
     }
-    _col(k) { let s = this._s; return s >= 0 ? _pageFrame[k][s] : (this._last ? this._last[k] : 0); }
+    _col(k) { let s = this._s; return s >= 0 ? _pageFrame[k][s] : pageGoneGet(_pageUnitGone, this, this._last, k); }
     _flag(bit) { return (this._col('flags') & bit) !== 0; }
     _str(k) { return _pageFrameStrings[this._col(k)] || undefined; }
     _detail(k) { let d = this._det; return d ? d[k] : undefined; }
     // Its values now, kept when it dies.
     _freeze() {
-        let s = this._s, F = _pageFrame, last = {};
-        if (s >= 0 && F) {
-            for (let k of SIM_FRAME_F32) last[k] = F[k][s];
-            for (let k of SIM_FRAME_I32) last[k] = F[k][s];
-            for (let k of SIM_FRAME_I16) last[k] = F[k][s];
-            for (let k of SIM_FRAME_U8) last[k] = F[k][s];
-        }
-        this._last = last;
+        let s = this._s, F = _pageFrame;
+        this._last = s >= 0 && F ? pageGonePut(_pageUnitGone, F, _PAGE_UNIT_GONE_KEYS, s, this) : -1;
         this._s = -1;
     }
     // A position set on the page (the 2D pass draws units at their
@@ -569,5 +592,5 @@ function _pageResolveDetailRef(u, k) {
     if (ref[0] === 'u') return _pageUnitsById.get(ref[1]) || null;
     let gx = ref[1], gy = ref[2];
     let cell = grid[gy] && grid[gy][gx];
-    return (typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null) || (cell && cell.item) || null;
+    return (typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null) || (cell && cellItemGet(cell)) || null;
 }

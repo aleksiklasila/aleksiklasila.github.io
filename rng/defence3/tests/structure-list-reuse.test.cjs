@@ -20,7 +20,7 @@ const result=inst.eval(`(() => {
     };
     const tiles=[];
     for(let gy=4;gy<GRID_H-4&&tiles.length<12;gy++)for(let gx=4;gx<GRID_W-4&&tiles.length<12;gx++)
-        if(grid[gy][gx].type===TYPE_FLOOR&&!grid[gy][gx].item&&!getTileEntityRef(gx,gy))tiles.push([gx,gy]);
+        if(cellType[(grid[gy][gx]) - 1]===TYPE_FLOOR&&!cellItemGet(grid[gy][gx])&&!getTileEntityRef(gx,gy))tiles.push([gx,gy]);
     if(tiles.length<12)throw Error('not enough placement tiles');
     const kinds=['pistol','barrack_norm','research'];
     check();

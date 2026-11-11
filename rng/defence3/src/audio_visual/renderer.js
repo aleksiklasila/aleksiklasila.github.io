@@ -1554,7 +1554,7 @@ function get3DBoxSelection(screenRect) {
         if (gy > bounds.maxGy) break;
         if (gx < bounds.minGx || gx > bounds.maxGx || seenItems.has(item)) continue;
         let cell = grid[gy] && grid[gy][gx];
-        if (!cell || cell.item !== item || cell.owner !== localPlayerId || !isTileVisible(gx, gy)) continue;
+        if (!cell || renderCellItem(cell) !== item || renderCellValue(cell, 'owner') !== localPlayerId || !isTileVisible(gx, gy)) continue;
         seenItems.add(item);
         consider(entityCandidates, item, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 0.08, item => { item._gx = gx; item._gy = gy; item._cell = cell; });
     }
@@ -2464,7 +2464,7 @@ function buildScaleFrameData(flat2d, view) {
         if (_isLiveRenderGrid(view.grid)) {
             for (const e of getCellItemsRowMajor()) {
                 const cell = view.grid[e.gy] && view.grid[e.gy][e.gx];
-                if (cell && cell.item === e) push(structures, e, 2, e.gx, e.gy, cell.owner);
+                if (cell && renderCellItem(cell) === e) push(structures, e, 2, e.gx, e.gy, renderCellValue(cell, 'owner'));
             }
         } else if (visibilityHistoryState && visibilityHistoryState.memories) {
             for (const record of visibilityHistoryState.memories.floorItems.values()) {
@@ -3035,7 +3035,7 @@ function _siteMarkLists() {
     }
     for (const item of _activeTileEntities) {
         const cell = item && grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item) continue;
+        if (!cell || renderCellItem(cell) !== item) continue;
         if (item.markedForSalvage) C.salvage.push(item);
         if (item.underConstruction) C.build.push(item);
     }
@@ -3089,7 +3089,7 @@ function siteMarkInstances() {
         if (seen.has(t)) continue;
         if (!o.on || now - o.at > SALVAGE_SHOWN_MS) { _salvageShownAhead.delete(t); continue; }
         const gx = t % GRID_W, gy = (t - gx) / GRID_W;
-        if (getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] && grid[gy][gx].item)) put(gx, gy, 1);
+        if (getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] && renderCellItem(grid[gy][gx]))) put(gx, gy, 1);
     }
     G.n = n;
     return G;
@@ -3117,7 +3117,7 @@ function _salvageMarksShown() {
     }
     for (const [t, o] of _salvageShownAhead) {
         if (seen.has(t)) continue;
-        const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] ? grid[gy][gx].item : null);
+        const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy) || (grid[gy] && grid[gy][gx] ? renderCellItem(grid[gy][gx]) : null);
         if (!o.on || !e || now - o.at > SALVAGE_SHOWN_MS) { _salvageShownAhead.delete(t); continue; }
         out.push(e);
     }
@@ -3192,6 +3192,7 @@ function getFogGridForGpu() {
 const AREA_OUTLINES_ON_GPU = true;
 let _areaColorVersion = 0;
 let _areaGridGpu = { grid: null, w: 0, h: 0, tiles: null, colors: null, colorVersion: -1, count: 0 };
+const _AREA_INACTIVE_RGBA = [128, 128, 128, 26];
 const _AREA_LEVEL_RGBA = [[0, 255, 0, 153], [0, 255, 0, 204], [70, 170, 255, 204], [200, 0, 255, 204], [255, 150, 0, 204], [255, 220, 0, 230]];
 function getAreaGridForGpu() {
     if (!AREA_OUTLINES_ON_GPU || !Array.isArray(areas) || !grid || !grid.length) return null;
@@ -3201,22 +3202,51 @@ function getAreaGridForGpu() {
         for (let y = 0; y < GRID_H; y++) {
             const row = grid[y];
             for (let x = 0; x < GRID_W; x++) {
-                const id = row[x].areaId, o = (y * GRID_W + x) * 4, v = id >= 0 ? id + 1 : 0;
+                const id = renderCellValue(row[x], 'areaId'), o = (y * GRID_W + x) * 4, v = id >= 0 ? id + 1 : 0;
                 tiles[o] = v & 255; tiles[o + 1] = (v >> 8) & 255; tiles[o + 2] = (v >> 16) & 255; tiles[o + 3] = 255;
             }
         }
         A.grid = grid; A.w = GRID_W; A.h = GRID_H; A.tiles = tiles; A.tilesVersion = (A.tilesVersion || 0) + 1; A.colorVersion = -1;
     }
     if (A.colorVersion !== _areaColorVersion || !A.colors || A.count !== areas.length) {
-        const n = Math.max(1, areas.length), rows = Math.ceil(n / 1024), colors = new Uint8Array(1024 * rows * 4);
-        for (const a of areas) {
+        // (The array kept while it fits: area colours change often in a battle, and a new
+        // one a change was ~2 MB a second of the page's garbage.)
+        const n = Math.max(1, areas.length), rows = Math.ceil(n / 1024);
+        let colors = A.colors;
+        if (!colors || colors.length !== 1024 * rows * 4) colors = new Uint8Array(1024 * rows * 4); else colors.fill(0);
+        for (let i = 0; i < areas.length; i++) {
+            const a = areas[i];
             if (!a) continue;
-            const c = a.active ? (_AREA_LEVEL_RGBA[a.multiplierLevel || 0] || _AREA_LEVEL_RGBA[_AREA_LEVEL_RGBA.length - 1]) : [128, 128, 128, 26], o = a.id * 4;
+            const c = a.active ? (_AREA_LEVEL_RGBA[a.multiplierLevel || 0] || _AREA_LEVEL_RGBA[_AREA_LEVEL_RGBA.length - 1]) : _AREA_INACTIVE_RGBA, o = a.id * 4;
             if (o + 3 < colors.length) { colors[o] = c[0]; colors[o + 1] = c[1]; colors[o + 2] = c[2]; colors[o + 3] = c[3]; }
         }
         A.colors = colors; A.colorRows = rows; A.count = areas.length; A.colorVersion = _areaColorVersion; A.colorsVersion = (A.colorsVersion || 0) + 1;
     }
     return { tiles: A.tiles, tilesVersion: A.tilesVersion, colors: A.colors, colorRows: A.colorRows, colorsVersion: A.colorsVersion, width: A.w, height: A.h };
+}
+
+// The ground's walls for the GPU on large maps (more than 4096 px a side,
+// where the 2D background is one floor or wall colour a tile anyway): the
+// changed rows of a wall mask made from the cell types, nothing else. (The 2D
+// background's redraw, its mip and a whole-texture upload with mipmaps at every
+// wall change was ~5% of the page's frame time in a battle.) Null elsewhere.
+function getGroundTilesForGpu() {
+    if (!(WORLD_W > 4096 || WORLD_H > 4096) || typeof cellType === 'undefined' || !cellType || cellType.length !== GRID_W * GRID_H) return null;
+    const G = _groundTiles, n = GRID_W * GRID_H;
+    if (!G.mask || G.w !== GRID_W || G.h !== GRID_H) { G.mask = new Uint8Array(n); G.w = GRID_W; G.h = GRID_H; G.full = true; G.upY0 = G.upY1 = -1; }
+    if (!G.floor) { const f = _parseHexColor(C_FLOOR), w = _parseHexColor(C_WALL); G.floor = [f.r / 255, f.g / 255, f.b / 255]; G.wall = [w.r / 255, w.g / 255, w.b / 255]; }
+    let y0 = -1, y1 = -1;
+    if (G.full) { y0 = 0; y1 = GRID_H - 1; G.full = false; }
+    else if (G.dirtyY0 >= 0) { y0 = G.dirtyY0; y1 = G.dirtyY1; }
+    G.dirtyY0 = G.dirtyY1 = -1;
+    if (y0 >= 0) {
+        const M = G.mask, T = cellType, WALL = TYPE_WALL;
+        for (let i = y0 * GRID_W, e = (y1 + 1) * GRID_W; i < e; i++) M[i] = T[i] === WALL ? 255 : 0;
+        // (Rows the renderer has not uploaded yet: theirs and these.)
+        G.upY0 = G.upY0 < 0 ? y0 : Math.min(G.upY0, y0); G.upY1 = Math.max(G.upY1, y1);
+        G.version++;
+    }
+    return G;
 }
 
 // The sight grid the page has for this player (the worker's, shared), as
@@ -3339,6 +3369,9 @@ function build3DFrameData(flat2d = false) {
     let backgroundMinX = 0, backgroundMinY = 0;
     let backgroundMaxX = WORLD_W, backgroundMaxY = WORLD_H;
     let backgroundCanvasFor3D = getBackgroundMip(Math.min(1, 4096 / Math.max(WORLD_W, WORLD_H)));
+    // (Large maps: the ground's tiles on the GPU; the 2D background is then left as it is.)
+    const groundTiles = getGroundTilesForGpu();
+    _groundTilesActive = !!groundTiles;
     let backgroundVersionFor3D = _backgroundContentVersion;
     _ph = _r3dPhase('startPre', _ph);
     const fogGrid = getFogGridForGpu();
@@ -3573,32 +3606,32 @@ function build3DFrameData(flat2d = false) {
         // their own passes below (drawFloorItem leaves their panel blank).
         // Both passes share the per-entity static object cache, so pushing
         // them here would let the blank floor object replace the real one.
-        if (typeof cell.item.draw === 'function') return;
+        if (typeof renderCellItem(cell).draw === 'function') return;
 
-        if (_reuseStatic3DObject(objects, cell.item, x, y)) { _pushStructureActivity(objects, cell.item, flat2d); return; }
-        let item2DTexture = get3DExact2DFloorTexture(cell.item, cell.owner);
-        let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(cell.item);
-        let isFarmItem = cell.item.type === 'farm' || cell.item.type === 'astar_farm';
+        if (_reuseStatic3DObject(objects, renderCellItem(cell), x, y)) { _pushStructureActivity(objects, renderCellItem(cell), flat2d); return; }
+        let item2DTexture = get3DExact2DFloorTexture(renderCellItem(cell), renderCellValue(cell, 'owner'));
+        let itemStatus = item2DTexture ? null : get3DBuildingTextureStatus(renderCellItem(cell));
+        let isFarmItem = renderCellItem(cell).type === 'farm' || renderCellItem(cell).type === 'astar_farm';
         push3DRenderObject(objects, {
-            modelKey: `item_${cell.item.type || 'floor'}`,
+            modelKey: `item_${renderCellItem(cell).type || 'floor'}`,
             x: x + 0.5,
-            y: get3DConstructionLift(cell.item),
+            y: get3DConstructionLift(renderCellItem(cell)),
             z: y + 0.5,
             scaleX: 0.84,
-            scaleY: (cell.item.type === 'house' ? 0.82 : isFarmItem ? 0.72 : 0.14),
+            scaleY: (renderCellItem(cell).type === 'house' ? 0.82 : isFarmItem ? 0.72 : 0.14),
             overlapFade: isFarmItem ? null : getOverlapFadeForTile(x, y),
             scaleZ: 0.84,
-            preserveModelHeight: cell.item.type === 'house' || isFarmItem,
-            visibilitySource: cell.item,
-            rotationY: -(Number(cell.item.angle) || 0),
-            tint: get3DDamageFlashTint(cell.item, get3DRenderOwnerColor(cell.owner)),
-            alpha: get3DConstructionAlpha(cell.item),
-            topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${cell.item.type}:${cell.owner}:${itemStatus.keySuffix}`,
-            topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(cell.item, itemStatus),
-            sideTint: get3DDamageFlashTint(cell.item, (BASE_CARD_TYPES[cell.item.type] || {}).color || get3DRenderOwnerColor(cell.owner))
+            preserveModelHeight: renderCellItem(cell).type === 'house' || isFarmItem,
+            visibilitySource: renderCellItem(cell),
+            rotationY: -(Number(renderCellItem(cell).angle) || 0),
+            tint: get3DDamageFlashTint(renderCellItem(cell), get3DRenderOwnerColor(renderCellValue(cell, 'owner'))),
+            alpha: get3DConstructionAlpha(renderCellItem(cell)),
+            topTextureKey: item2DTexture ? item2DTexture._renderer3DExactKey : `item:${renderCellItem(cell).type}:${renderCellValue(cell, 'owner')}:${itemStatus.keySuffix}`,
+            topTextureCanvas: item2DTexture || get3DTopTextureForFloorItem(renderCellItem(cell), itemStatus),
+            sideTint: get3DDamageFlashTint(renderCellItem(cell), (BASE_CARD_TYPES[renderCellItem(cell).type] || {}).color || get3DRenderOwnerColor(renderCellValue(cell, 'owner')))
         });
-        _rememberStatic3DObject(objects, cell.item, x, y, !item2DTexture);
-        _pushStructureActivity(objects, cell.item, flat2d);
+        _rememberStatic3DObject(objects, renderCellItem(cell), x, y, !item2DTexture);
+        _pushStructureActivity(objects, renderCellItem(cell), flat2d);
     };
     // Floor items in row-major order. The live tile index lists them, so
     // only a remembered (history) grid needs a scan of every visible tile.
@@ -3613,7 +3646,7 @@ function build3DFrameData(flat2d = false) {
             // (A remembered view in columns has no cells: its floor items
             // are its frame's sources.)
             let cell = grid[y][x];
-            if (cell ? cell.item !== item : !sourceView.historyColumns) continue;
+            if (cell ? renderCellItem(cell) !== item : !sourceView.historyColumns) continue;
             if (!fullVisibility && (!visibilityGrid[y] || visibilityGrid[y][x] === 0)) continue;
             // (Floor items are flat buildings: past the split's threshold,
             // the GPU's glyphs, as buildings.)
@@ -3627,11 +3660,11 @@ function build3DFrameData(flat2d = false) {
             if (!gridRow) continue;
             for (let x = sBounds.minGx; x <= sBounds.maxGx; x++) {
                 let cell = gridRow[x];
-                if (!cell || !cell.item) continue;
+                if (!cell || !renderCellItem(cell)) continue;
                 if (!fullVisibility && (!visRow || visRow[x] === 0)) continue;
                 // (Past the split's threshold: the glyph layer's.)
-                if (farFloorItems && structDetail.pxAt(x, y) <= structDetail.T) { farFloorItems.push([cell.item, x, y, cell.owner]); continue; }
-                structureStep(cell.item, pushCellItemStep, x, y);
+                if (farFloorItems && structDetail.pxAt(x, y) <= structDetail.T) { farFloorItems.push([renderCellItem(cell), x, y, renderCellValue(cell, 'owner')]); continue; }
+                structureStep(renderCellItem(cell), pushCellItemStep, x, y);
             }
         }
     }
@@ -4132,7 +4165,7 @@ function build3DFrameData(flat2d = false) {
         viewPad: getRenderViewPad(),
         worldWidth: GRID_W,
         worldHeight: GRID_H,
-        backgroundCanvas: backgroundCanvasFor3D, areaGrid: getAreaGridForGpu(),
+        backgroundCanvas: backgroundCanvasFor3D, areaGrid: getAreaGridForGpu(), groundTiles,
         backgroundVersion: backgroundVersionFor3D,
         fogCanvas: fullVisibility || fogGrid ? null : _visibilityMaskCanvas, fogGrid,
         fogVersion: _visibilityMaskCanvas ? _visibilityMaskCanvas._visibilityContentVersion || 0 : 0,
@@ -4718,7 +4751,7 @@ function _ghostTileStillBuildable(g) {
 const _pendingBuildGhosts = new Map();
 function _tileHoldsStructure(gx, gy) {
     const c = grid[gy] && grid[gy][gx];
-    return !!(c && (c.item || (typeof getTileEntityRef === 'function' && getTileEntityRef(gx, gy))));
+    return !!(c && (renderCellItem(c) || (typeof getTileEntityRef === 'function' && getTileEntityRef(gx, gy))));
 }
 function notePendingBuildGhost(gx, gy, key, tick = NaN) {
     _pendingBuildGhosts.set(gx + ',' + gy, { gx, gy, key, at: performance.now(), onTop: _tileHoldsStructure(gx, gy), tick: Number.isFinite(tick) ? tick : NaN, answeredAt: 0 });
@@ -4958,7 +4991,7 @@ function rebuildMinimapStaticLayer(scale, tilePx) {
             let owner = -1;
             if (x < GRID_W) {
                 let cell = grid[y][x];
-                if (cell.item && cell.owner >= 0) owner = cell.owner;
+                if (renderCellItem(cell) && renderCellValue(cell, 'owner') >= 0) owner = renderCellValue(cell, 'owner');
             }
 
             if (owner >= 0) {
@@ -5098,7 +5131,7 @@ function _minimapStaticTilesDrain() {
                 const e = getTileEntityRef(x, y);
                 if (e && (e instanceof Tower || e instanceof Barrack || (typeof isSpawnerEntity === 'function' && isSpawnerEntity(e)))) { c.fillStyle = ownerColor(e.owner); cellRect(x, y); }
             } else if (pass === 1) {
-                if (cell.item && cell.owner >= 0) { c.fillStyle = ownerColor(cell.owner) + '4d'; cellRect(x, y); }
+                if (renderCellItem(cell) && renderCellValue(cell, 'owner') >= 0) { c.fillStyle = ownerColor(renderCellValue(cell, 'owner')) + '4d'; cellRect(x, y); }
             } else {
                 const gm = getGoldMineAt(x, y), am = gm ? null : getAstarMineAt(x, y);
                 if (gm && gm.gold > 0) { c.fillStyle = '#fd0'; cellRect(x, y); }
@@ -5193,6 +5226,40 @@ function _minimapFogPicture(scale, vis, explored) {
     M.canvas.getContext('2d').putImageData(M.image, 0, 0);
     return M.canvas;
 }
+// The worker's minimap picture (player numbers + 1 a pixel) by the owners'
+// colours into the units' canvas: the picture's pixels, not the units. Its
+// image, views and palette kept; painted again only for a newer picture or
+// other colours.
+const _minimapWorkerPaint = { image: null, pixels: null, seq: -1, colorsKey: '', palette: new Uint32Array(9), views: new Map() };
+function _minimapPaintWorkerPicture(pic) {
+    const W = _minimapWorkerPaint, size = pic.size, n = size * size;
+    if (!_minimapUnitCanvas || _minimapUnitCanvas.width !== size) {
+        _minimapUnitCanvas = document.createElement('canvas');
+        _minimapUnitCanvas.width = _minimapUnitCanvas.height = size;
+    }
+    if (!W.image || W.image.width !== size) {
+        W.image = _minimapUnitCanvas.getContext('2d').createImageData(size, size);
+        W.pixels = new Uint32Array(W.image.data.buffer, W.image.data.byteOffset, n);
+        W.seq = -1; W.views.clear();
+    }
+    let key = '';
+    for (let owner = 0; owner < 8; owner++) key += get3DRenderOwnerColor(owner);
+    if (key === W.colorsKey && pic.seq === W.seq) return;
+    if (key !== W.colorsKey) {
+        const bytes = new Uint8Array(W.palette.buffer);
+        for (let owner = -1; owner < 8; owner++) {
+            const c = _parseHexColor(get3DRenderOwnerColor(owner)), o = (owner + 1) * 4;
+            bytes[o] = c.r; bytes[o + 1] = c.g; bytes[o + 2] = c.b; bytes[o + 3] = 255;
+        }
+        W.colorsKey = key;
+    }
+    let src = W.views.get(pic.off);
+    if (!src || src.buffer !== pic.buf) { src = new Uint8Array(pic.buf, pic.off, n); W.views.set(pic.off, src); }
+    const P = W.pixels, pal = W.palette;
+    for (let i = 0; i < n; i++) { const v = src[i]; P[i] = v ? pal[v] : 0; }
+    _minimapUnitCanvas.getContext('2d').putImageData(W.image, 0, 0);
+    W.seq = pic.seq;
+}
 // An army's units on the minimap: a slice of them a frame into pixels of
 // their own, shown when all are in (every unit in one go was ~13 ms at 600k
 // units, four times a second: a long frame each time). The picture is of
@@ -5241,7 +5308,9 @@ function drawMinimap() {
     let minimapCompose = minimapTimed || minimapForced;
     // (Army scale, the frame's columns: the units a slice a frame; the
     // content is put together when their picture is whole.)
-    const slicedF = units.length > MINIMAP_UNIT_SLICE && _isLiveUnitList(getLiveRenderView().units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
+    // (The worker's picture when it makes one: no pass over the units here.)
+    const workerPic = typeof simClientMinimapPicture === 'function' ? simClientMinimapPicture() : null;
+    const slicedF = !workerPic && units.length > MINIMAP_UNIT_SLICE && _isLiveUnitList(getLiveRenderView().units) && typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (slicedF) {
         const P = _minimapUnitPaint;
         if (minimapTimed && !P.running) { _minimapUnitPaintStart(P); _minimapLastDrawMs = nowMs; _minimapContentTick = gameTime; }
@@ -5287,7 +5356,10 @@ function drawMinimap() {
 
     // At army scale, compose directly into minimap pixels. Overlapping units
     // no longer issue hundreds of thousands of Canvas draw commands.
-    if (slicedF) {
+    if (workerPic) {
+        _minimapPaintWorkerPicture(workerPic);
+        minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
+    } else if (slicedF) {
         // (Painted a slice a frame, above: its last whole picture.)
         if (_minimapUnitPaint.painted) minimapCtx.drawImage(_minimapUnitCanvas, 0, 0);
     } else if (units.length > 5000) {
@@ -5482,9 +5554,9 @@ function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLen
         addWorldVisibilitySource(s.x, s.y, getEntityEffectiveVisibilityRangeArea(s));
     }
     const revealFloorItem = (cell, x, y) => {
-        if (!cell || !cell.item || !(cell.item.energy > 0) || cell.item.underConstruction) return;
-        if (!shouldRevealForPlayer(cell.owner, cell.item.watched || 0, cell.item.watchedByTeam)) return;
-        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(cell.item));
+        if (!cell || !renderCellItem(cell) || !(renderCellItem(cell).energy > 0) || renderCellItem(cell).underConstruction) return;
+        if (!shouldRevealForPlayer(renderCellValue(cell, 'owner'), renderCellItem(cell).watched || 0, renderCellItem(cell).watchedByTeam)) return;
+        addWorldVisibilitySource(x * TILE + TILE * 0.5, y * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(renderCellItem(cell)));
     };
     if (typeof _activeTileEntities !== 'undefined') {
         // The live tile index includes floor items; avoid a world scan for
@@ -5493,7 +5565,7 @@ function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLen
         // keep the floor-item subset per index version rather than per player.
         for (let item of _getVisibilityFloorItemCandidates()) {
             let cell = grid[item.gy] && grid[item.gy][item.gx];
-            if (cell && cell.item === item) revealFloorItem(cell, item.gx, item.gy);
+            if (cell && renderCellItem(cell) === item) revealFloorItem(cell, item.gx, item.gy);
         }
     } else {
         for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) revealFloorItem(grid[y][x], x, y);
@@ -5514,7 +5586,7 @@ function computeVisibilityGridForPlayer(playerId, vis, sources = null, sourceLen
             includedAreas.add(targetAreaId);
             let cells = gridCellsByArea[targetAreaId] || [];
             for (let cell of cells) {
-                if (cell) includedTiles[cell.y][cell.x] = 1;
+                includedTiles[Math.floor(cell / GRID_W)][cell % GRID_W] = 1;
             }
         }
     }
@@ -5690,19 +5762,7 @@ function _visibilityKernelAreas() {
     // order by the kernel, tch.rs k_area_cells.)
     if (!simHeapHas(cellArea) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
     let areaGrid = cellArea;
-    let nbOff = simSharedArray(Int32Array, count + 1), cellOff = simSharedArray(Int32Array, count + 1), exists = simSharedArray(Uint8Array, count);
-    let nbTotal = 0;
-    for (let a = 0; a < count; a++) nbTotal += (areaNeighborIds[a] || []).length;
-    let nb = simSharedArray(Int32Array, nbTotal), cells = simSharedArray(Int32Array, Math.max(1, W * H));
-    let j = 0;
-    for (let a = 0; a < count; a++) {
-        nbOff[a] = j;
-        for (let n of (areaNeighborIds[a] || [])) nb[j++] = n;
-        exists[a] = _areaById[a] ? 1 : 0;
-    }
-    nbOff[count] = j;
-    _visAreaP[0] = W * H; _visAreaP[1] = count;
-    simRustDirect('k_area_cells', [cellArea, cellOff, cells], _visAreaP);
+    const { nbOff, nb, off: cellOff, tiles: cells, exists } = _mapAreas;
     for (let [name, arr] of [['vis.areaGrid', areaGrid], ['vis.nbOff', nbOff], ['vis.nb', nb], ['vis.cellOff', cellOff], ['vis.cells', cells], ['vis.areaExists', exists]]) simParallelBind(name, arr);
     _visibilityKernelAreaKey = { grid: areaIdGrid, cells: gridCellsByArea, nb: areaNeighborIds, byId: _areaById, w: W, h: H, count };
     return count;
@@ -5794,7 +5854,7 @@ function _collectVisibilitySourceSignature(playerId, out, sources = null, source
     }
     for (let item of _getVisibilityFloorItemCandidates()) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction || !reveals(item, cell.owner)) continue;
+        if (!cell || renderCellItem(cell) !== item || !(item.energy > 0) || item.underConstruction || !reveals(item, renderCellValue(cell, 'owner'))) continue;
         push(item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5, getEntityEffectiveVisibilityRangeArea(item));
     }
     return length;
@@ -5837,14 +5897,14 @@ function _buildVisibilitySourceLists() {
     if (typeof _activeTileEntities !== 'undefined') {
         for (let item of _getVisibilityFloorItemCandidates()) {
             let cell = grid[item.gy] && grid[item.gy][item.gx];
-            if (!cell || cell.item !== item || !(item.energy > 0) || item.underConstruction) continue;
-            add(cell.owner, item, item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5);
+            if (!cell || renderCellItem(cell) !== item || !(item.energy > 0) || item.underConstruction) continue;
+            add(renderCellValue(cell, 'owner'), item, item.gx * TILE + TILE * 0.5, item.gy * TILE + TILE * 0.5);
         }
     } else {
         for (let y = 0; y < GRID_H; y++) for (let x = 0; x < GRID_W; x++) {
-            let cell = grid[y][x], item = cell && cell.item;
+            let cell = grid[y][x], item = cell && renderCellItem(cell);
             if (!item || !(item.energy > 0) || item.underConstruction) continue;
-            add(cell.owner, item, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
+            add(renderCellValue(cell, 'owner'), item, x * TILE + TILE * 0.5, y * TILE + TILE * 0.5);
         }
     }
     return S;
@@ -6116,15 +6176,7 @@ function _visCoverVT(np) { if (!_visVT || _visVT.length < np || !simHeapHas(_vis
 // again when the areas are (gridCellsByArea replaced or resized).
 const _visAreaCsr = { for: null, n: -1, off: null, tiles: null };
 function _visAreaTiles() {
-    const Z = _visAreaCsr, G = gridCellsByArea;
-    if (Z.for === G && Z.n === G.length && simHeapHas(Z.off)) return Z;
-    let total = 0;
-    for (let a = 0; a < G.length; a++) if (G[a]) total += G[a].length;
-    Z.off = simSharedArray(Int32Array, G.length + 1); Z.tiles = simSharedArray(Int32Array, Math.max(1, total));
-    let w = 0;
-    for (let a = 0; a < G.length; a++) { Z.off[a] = w; const L = G[a]; if (L) for (const c of L) if (c) Z.tiles[w++] = c.y * GRID_W + c.x; }
-    Z.off[G.length] = w; Z.for = G; Z.n = G.length;
-    return Z;
+    return _mapAreas;
 }
 
 function _visCoverActive() {
@@ -6711,9 +6763,10 @@ function processRenderFrame(timestamp) {
         commitStaticCaches(false, 'minimap');
     }
     // Refresh combined background/static terrain every ~30 frames on a third phase.
+    // (Not while the GPU draws the ground's tiles: the 2D background is not shown.)
     if (++_backgroundCacheRefreshCounter >= 30) {
         _backgroundCacheRefreshCounter = 0;
-        commitStaticCaches(false, 'background');
+        if (!_groundTilesActive) commitStaticCaches(false, 'background');
     }
 }
 
@@ -6907,11 +6960,18 @@ function presentGuardRate() {
     return _presentGuard.rate;
 }
 
+// ?render=0 (measurement): no frame drawn, the simulation's heartbeat and ticks as on a left-out frame.
+const _renderOff = typeof location !== 'undefined' && /[?&]render=0(?:&|$)/.test(location.search);
 function _rafLoopFrame(ts) {
     _renderFrameHandle = 0;
     _rafLastGapMs = _rafLastTs ? ts - _rafLastTs : 0;
     _noteRafTimestamp(ts);
     queueRenderFrame();
+    if (_renderOff) {
+        if (typeof simClientAutoBeat === 'function') simClientAutoBeat(performance.now());
+        _scheduleSimulationUpTo(ts + _rafIntervalMs);
+        return;
+    }
     if (_presentGuardStep(ts)) {
         // (Not drawn; the simulation and its heartbeat go on. The frame left
         // out is one frame fewer: its time is spent, the pacer below does not

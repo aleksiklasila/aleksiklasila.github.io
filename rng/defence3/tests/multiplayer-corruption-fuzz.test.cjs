@@ -68,8 +68,8 @@ const KINDS = {
     buildingLevel: `(() => { const b = barracks.find(b => b.level < 5); if (!b) return ''; b.level += 1; return 'barrack level'; })()`,
     buildingTimer: `(() => { const b = [...barracks, ...collectorSpawners].find(b => Number.isFinite(b.spawnTimer)); if (!b) return ''; b.spawnTimer += 7; return b.type + ' timer'; })()`,
     towerGone: `(() => { const i = towers.findIndex(t => t.energy > 0 && !t.underConstruction); if (i < 0) return ''; const t = towers[i]; towers.splice(i, 1); clearTileEntity(t.gx, t.gy, t); recalculateLaserConnections(); return 'tower gone at ' + t.gx + ',' + t.gy; })()`,
-    cellOwner: `(() => { const s = collectorSpawners.find(s => s.owner >= 0); if (!s) return ''; grid[s.gy][s.gx].owner = -1; return 'cell owner at ' + s.gx + ',' + s.gy; })()`,
-    cellType: `(() => { for (let gy = 2; gy < GRID_H; gy += 3) for (let gx = 2; gx < GRID_W; gx += 3) { const c = grid[gy][gx]; if (!c.item && !getTileEntityRef(gx, gy) && c.type !== TYPE_WALL) { c.type = TYPE_WALL; return 'wall at ' + gx + ',' + gy; } } return ''; })()`,
+    cellOwner: `(() => { const s = collectorSpawners.find(s => s.owner >= 0); if (!s) return ''; cellOwner[(grid[s.gy][s.gx]) - 1] = -1; return 'cell owner at ' + s.gx + ',' + s.gy; })()`,
+    cellType: `(() => { for (let gy = 2; gy < GRID_H; gy += 3) for (let gx = 2; gx < GRID_W; gx += 3) { const c = grid[gy][gx]; if (!cellItemGet(c) && !getTileEntityRef(gx, gy) && cellType[(c) - 1] !== TYPE_WALL) { cellType[(c) - 1] = TYPE_WALL; return 'wall at ' + gx + ',' + gy; } } return ''; })()`,
     // (Through workerReservedSet, as every write of the game's: it keeps the
     // per-region counts the tick hash uses to skip empty regions.)
     reservation: `(() => { const w = units.find(u => !u.dead && u.workerType); if (!w) return ''; for (let s = 5; s < workerReservedTiles.length; s += 97) if (!workerReservedTiles[s]) { workerReservedSet(s, w); return 'reservation ' + s + ' -> u' + w.id; } return ''; })()`,

@@ -23,7 +23,7 @@ function match(name, localAs = 0) {
     if (localAs) inst.eval('localPlayerId = ' + localAs + ';');
     // Helpers in the instance: an open block of tiles, a built structure, a collector.
     inst.eval(`
-        __scratch.free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return !!c && c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy) && !getAstarMineAt(gx, gy); };
+        __scratch.free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return !!c && cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy) && !getAstarMineAt(gx, gy); };
         __scratch.block = (w, h) => {
             for (let gy = 4; gy < GRID_H - h - 4; gy++) for (let gx = 4; gx < GRID_W - w - 4; gx++) {
                 let ok = true;

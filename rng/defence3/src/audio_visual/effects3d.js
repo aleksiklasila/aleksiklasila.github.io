@@ -12,6 +12,8 @@
 // flattened so only arcs and hops stand out.
 
 const _fxRgbCache = new Map();
+// (Two-argument length without Math.hypot: its argument list was ~37 MB a minute of the page's garbage in a battle.)
+function _fxLen(a, b) { return Math.sqrt(a * a + b * b); }
 function _fxRgb(color) {
     let rgb = _fxRgbCache.get(color);
     if (rgb) return rgb;
@@ -86,7 +88,7 @@ function _fxBox(x, y, z, yaw, sx, sy, sz, pitch, color, alpha, pattern = 0, roll
 // A beam as a box from (ax, ay, az) to (bx, by, bz).
 function _fxBeam(ax, ay, az, bx, by, bz, width, color, alpha, additive = 1) {
     let dx = bx - ax, dy = by - ay, dz = bz - az;
-    let flatLen = Math.hypot(dx, dz), len = Math.hypot(flatLen, dy);
+    let flatLen = _fxLen(dx, dz), len = _fxLen(flatLen, dy);
     if (len < .001) return;
     _fxPush(_FXM.BOX, (ax + bx) * .5, (ay + by) * .5, (az + bz) * .5, Math.atan2(dx, dz), width, width, len,
         -Math.atan2(dy, flatLen), _fxRgb(color), alpha, _FXP.GLOW_SOLID, 0, 0, additive);
@@ -116,7 +118,7 @@ function _fxEnvelope(q, fadeIn, fadeOut) {
 
 function _fxEvent(kind, x0, z0, x1, z1, style, seed, q) {
     const rest = _fx.rest, detail = _fxDetailAt(x1, z1);
-    let dx = x1 - x0, dz = z1 - z0, dist = Math.hypot(dx, dz) || .001;
+    let dx = x1 - x0, dz = z1 - z0, dist = _fxLen(dx, dz) || .001;
     let yaw = Math.atan2(dx, dz), nx = dx / dist, nz = dz / dist;
     let fade = 1 - q;
     switch (kind) {
@@ -322,7 +324,7 @@ function _fxVolleyTicks(n, distPx) { return (Math.min(_FX_VOLLEY_MAX, n) - 1) * 
 function _fxVolley(n, x0, z0, x1, z1, style, seed, age, typeName) {
     const ts = _fx.tickScale;
     n = Math.min(_FX_VOLLEY_MAX, n);
-    const dx = x1 - x0, dz = z1 - z0, dist = Math.hypot(dx, dz) || .001, flight = dist * TILE / _FX_PROJ_SPEED;
+    const dx = x1 - x0, dz = z1 - z0, dist = _fxLen(dx, dz) || .001, flight = dist * TILE / _FX_PROJ_SPEED;
     for (let i = 0; i < n; i++) {
         const t = age - i * _FX_VOLLEY_GAP * ts;
         if (t < 0) break;
@@ -366,7 +368,7 @@ function _pushCombatRecordFx() {
         // beside the worker: drawn by its volley.)
         const volley = kind === 10 && volleys && ids !== null && ids[r] < 0 ? -ids[r] : 0;
         if (kind === 11 && volleys) { data[o] = 0; continue; }
-        let duration = volley ? _fxVolleyTicks(volley, Math.hypot(data[o + 3] - data[o + 1], data[o + 4] - data[o + 2])) * tickScale : (_FX_DURATION[kind] || 8) * tickScale;
+        let duration = volley ? _fxVolleyTicks(volley, _fxLen(data[o + 3] - data[o + 1], data[o + 4] - data[o + 2])) * tickScale : (_FX_DURATION[kind] || 8) * tickScale;
         if (age >= duration) { data[o] = 0; continue; }
         if (age < 0) continue;
         let x1 = data[o + 3] / TILE, z1 = data[o + 4] / TILE;
@@ -451,7 +453,7 @@ function _fxEventFar(kind, x0, z0, x1, z1, style, q, ppt) {
             return;
         }
         case 10: // a muzzle flash at the barrel
-            if (q < .5) _fxFarDot(x0 + dx / (Math.hypot(dx, dz) || 1) * .42, z0 + dz / (Math.hypot(dx, dz) || 1) * .42, .3, color, 1 - q * 2, ppt);
+            if (q < .5) _fxFarDot(x0 + dx / (_fxLen(dx, dz) || 1) * .42, z0 + dz / (_fxLen(dx, dz) || 1) * .42, .3, color, 1 - q * 2, ppt);
             return;
         default: { // a blow or a hit: a flash at the target (melee blows,
             // white, smaller and fainter: they hid the coloured shots)
@@ -478,7 +480,7 @@ function _pushProjectileFx(p, px, pz) {
     let style = _fxStyleOf(p.type);
     let sx = p.startX / TILE, sz = p.startY / TILE;
     let aim = (Number(p.aimDist) || 160) / TILE;
-    let traveled = Math.hypot(px - sx, pz - sz);
+    let traveled = _fxLen(px - sx, pz - sz);
     let t = Math.max(0, Math.min(1, traveled / Math.max(.05, aim)));
     let arc = _FX_ARC[style] || _FX_ARC[0];
     let apex = Math.min(arc[1], arc[0] * aim);
@@ -488,7 +490,7 @@ function _pushProjectileFx(p, px, pz) {
     let elevation = Math.atan(slope);
     let vx = Number(p.vx) || 0, vz = Number(p.vy) || 1;
     let yaw = Math.atan2(vx, vz);
-    let speed = Math.hypot(vx, vz) || 1, ux = vx / speed, uz = vz / speed;
+    let speed = _fxLen(vx, vz) || 1, ux = vx / speed, uz = vz / speed;
     let color = _FX_SHOT_COLOR[style] || (BASE_CARD_TYPES[p.type] || {}).color || '#fff';
     if (apex > .02 || !_fx.flat) _fxShadow(px, pz, .2, .28);
     // A point `back` tiles behind along the same arc.
@@ -593,10 +595,10 @@ function pushStructureActivityFx(entity, x, z, roof, ownerColor) {
 // Steam from a moving snake engine's stack, dust behind heavy walkers.
 function pushUnitMotionFx(u, x, z, footprint, scaleY) {
     if (!_fx.batch || _fx.flat || !_fxDetailAt(x, z)) return;
-    let moving = Math.hypot(u.x - u.prevX, u.y - u.prevY) > .01;
+    let moving = _fxLen(u.x - u.prevX, u.y - u.prevY) > .01;
     if (!moving) return;
     let now = _fx.now / _fx.tickScale;
-    let vx = Number(u.vx) || 0, vz = Number(u.vy) || 0, speed = Math.hypot(vx, vz) || 1;
+    let vx = Number(u.vx) || 0, vz = Number(u.vy) || 0, speed = _fxLen(vx, vz) || 1;
     let fx = vx / speed, fz = vz / speed;
     if (u.isSnake) {
         for (let k = 0; k < 2; k++) {

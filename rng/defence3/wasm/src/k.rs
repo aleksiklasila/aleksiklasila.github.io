@@ -6031,3 +6031,54 @@ pub unsafe extern "C" fn k_unit_stats_apply(a: u32, _chunk: i32) {
 }
 #[inline(always)]
 unsafe fn s_<T>(p: *mut T, i: usize, v: T) { if !p.is_null() { *p.add(i) = v; } }
+
+/// The minimap's units (renderer.js drawMinimap): for each pixel of a size x
+/// size picture, the player (+1, 0 none) with units on a tile of that pixel
+/// the viewing player sees (full visibility, its own units, or its sight > 0
+/// there); the last player of the last tile wins a pixel. From the per-tile
+/// per-player unit counts (ix.complex), a pass over the tiles, not the units:
+/// the page paints the picture by palette, with no pass of its own. A job is
+/// a band of pixel rows (its tiles' rows, its own pixels: cleared first, no
+/// other job writes them). Arrays: 0 ix.complex (i32, tiles x players),
+/// 1 mm.out (u8, two pictures). P: 0 tiles wide, 1 tiles high, 2 players,
+/// 3 size, 4 viewer, 5 full visibility, 6 pixel rows a job, 7 picture (0, 1),
+/// 8 the viewer's sight grid (f32 a tile; encoded address, 0 none).
+#[no_mangle]
+pub unsafe extern "C" fn k_minimap(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let cnt = k.p::<i32>(0);
+    let (w, h, players, size) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(1) as usize, k.i(3).max(1) as usize);
+    let (viewer, full, per, pic) = (k.i(4), k.i(5) != 0, k.i(6).max(1) as usize, k.i(7).clamp(0, 1) as usize);
+    let sw = k.f(8);
+    let sight = if sw != 0.0 { waddr(sw as i64 as u32) as *const f32 } else { core::ptr::null() };
+    let out = k.p::<u8>(1).add(pic * size * size);
+    if w == 0 || h == 0 || cnt.is_null() || (sight.is_null() && !full) {
+        return;
+    }
+    let py0 = (chunk.max(0) as usize) * per;
+    if py0 >= size {
+        return;
+    }
+    let py1 = size.min(py0 + per);
+    core::ptr::write_bytes(out.add(py0 * size), 0, (py1 - py0) * size);
+    // (Tile row y is on pixel row y * size / h: the rows whose pixel row is in the band.)
+    let ty0 = (py0 * h + size - 1) / size;
+    let ty1 = h.min((py1 * h + size - 1) / size);
+    for ty in ty0..ty1 {
+        let prow = out.add((ty * size / h) * size);
+        let trow = ty * w;
+        for tx in 0..w {
+            let t = trow + tx;
+            let c = cnt.add(t * players);
+            let mut win = 0u8;
+            for p in 0..players {
+                if *c.add(p) > 0 && (full || p as i32 == viewer || *sight.add(t) > 0.0) {
+                    win = (p + 1) as u8;
+                }
+            }
+            if win != 0 {
+                *prow.add(tx * size / w) = win;
+            }
+        }
+    }
+}

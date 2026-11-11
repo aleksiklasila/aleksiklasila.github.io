@@ -59,7 +59,8 @@ for (const helpers of [7, 0]) {
     console.log(helpers + ' helpers: ' + JSON.stringify(r));
     assert.equal(r.bad, 0, 'the helpers copy over memory a helper grew');
     assert.equal(r.lost, 0, 'every array keeps its contents');
-    assert.ok(r.endMB >= r.startMB + 480, 'the memory grew');
+    // (30 kept arrays of 16 MB: the memory holds all of them; some may fit in what was free at the start.)
+    assert.ok(r.endMB > r.startMB && r.endMB >= 480, 'the memory grew to hold every kept array');
     assert.equal(r.pendingFrees, 0, 'freed arrays went back to the heap');
     if (helpers) {
         assert.ok(r.aheadSeen > 0, 'grows went to the helpers');

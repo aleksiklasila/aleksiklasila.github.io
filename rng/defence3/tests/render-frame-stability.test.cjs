@@ -206,7 +206,8 @@ function flickers(frames, field) {
         // (The match starts once the model views are baked, ~30 s before the
         // game on purpose: no baking hitches in it. Polled from here: one
         // evaluation may take 30 s at most.)
-        for (let i = 0; i < 600 && !(await b.ev(`gameStarted && gameTime > 10 && units.length > 0`)); i++) await sleep(500);
+        // (And past the match's initialization, which drops input until it ends.)
+        for (let i = 0; i < 600 && !(await b.ev(`gameStarted && gameTime > 10 && units.length > 0 && !matchInitializationBlocksInput()`)); i++) await sleep(500);
         assert.ok(await b.ev(`gameStarted && gameTime > 10`), 'the match started within 300 s');
         await b.ev(`(async () => {
             setRenderDimensionMode('3d');
@@ -260,7 +261,7 @@ function flickers(frames, field) {
                 // (Open for the 4 tiles it walks and more; of those, the one with the
                 // fewest units near its way: the crowd's pushes are the crowd
                 // tests' to judge, not the drawing's.)
-                const open = u => { const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE); for (let d = 0; d <= 6; d++) { if (gy - d < 1 || grid[gy - d][gx].type === TYPE_WALL || getTileEntityRef(gx, gy - d)) return false; } return true; };
+                const open = u => { const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE); for (let d = 0; d <= 6; d++) { if (gy - d < 1 || cellType[(grid[gy - d][gx]) - 1] === TYPE_WALL || getTileEntityRef(gx, gy - d)) return false; } return true; };
                 const near = u => units.filter(o => o !== u && !o.dead && Math.abs(o.x - u.x) < 2 * TILE && o.y < u.y + TILE && o.y > u.y - 5 * TILE).length;
                 const ks = units.filter(u => !u.dead && u.owner === localPlayerId && !u.workerType && !u.isKing && open(u)).map(u => [near(u), u.id, u]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
                 const k = ks.length ? ks[0][2] : units.find(u => !u.dead && u.owner === localPlayerId && !u.workerType);

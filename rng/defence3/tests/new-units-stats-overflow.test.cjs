@@ -17,7 +17,7 @@ const make = save => `JSON.stringify((() => {
     let n = 0;
     for (let i = 0; n < 70000 && i < 200000; i++) {
         const gx = 10 + (i % 280), gy = 10 + Math.floor(i / 280) % 280, owner = i & 1;
-        if (grid[gy][gx].type === TYPE_WALL) continue;
+        if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue;
         const u = new Unit(owner ? 'fast' : 'norm', owner, gx * TILE + 8 + (i % 3) * 6, gy * TILE + 8 + (i % 5) * 4);
         configureWorkerUnitFromType(u); applyUnitLevelScaling(u, 1); u.energy = u.maxEnergy;
         units.push(u); unitSlotMapPushed(u); players[owner].popCount++; n++;

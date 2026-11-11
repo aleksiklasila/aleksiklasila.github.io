@@ -100,6 +100,8 @@ const W_AB: usize = 32;
 const W_ABOK: usize = 33;
 const W_HS: usize = 34;
 const W_AT: usize = 35;
+/// unit.wkS: bits 0-4 the worker state (sim_unit_state.js SIM_WS_NAMES, 1 IDLE).
+const W_WKS: usize = 36;
 const W_WK: usize = 39;
 const W_WTC: usize = 40;
 const W_FLOW: usize = 41;
@@ -412,6 +414,7 @@ struct Mv {
     hs: *const i32,
     at: *const F32,
     wk: *const u8,
+    wks: *const u32,
     wtc: *const U16I32,
     flow: *const i32,
     fgen: *mut i32,
@@ -747,6 +750,7 @@ impl Mv {
             hs: p!(W_HS),
             at: p!(W_AT),
             wk: p!(W_WK),
+            wks: p!(W_WKS),
             wtc: p!(W_WTC),
             flow: p!(W_FLOW),
             fgen: p!(W_FGEN),
@@ -1626,6 +1630,10 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
     if look_direct(m, v, s, tl, gx, gy, dk, wl, nav_ver, wv, fgen) {
         return 1;
     }
+    // (Its last exact look still holds on today's walls, or it walks on toward that look's far tile: kept, no new one.)
+    if look_keep(m, s, tl, gx, gy, dk, wl, v.w, v.h, nav_ver, wv, fgen) != 0 {
+        return 1;
+    }
     // Else O(1), never the look itself: along its last answer, or a step
     // toward the destination (flow_look_approx); the exact answer is made on
     // the helpers and committed into its record at the tick's end (unit.js
@@ -1693,6 +1701,92 @@ unsafe fn look_direct(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: 
         }
     }
     false
+}
+/// A look kept without a new one (look_keep), when its record is an exact
+/// look (not an approximation, not a code) to the same destination, kind
+/// and navigation build:
+/// - Revalidated (1): the walker still on the look's tile, only the wall
+///   version of its neighbourhood changed: its way still open on the live
+///   walls (an open look: its block and the straight line to its far tile;
+///   a short one: its next tiles). In a battle some wall changes near most
+///   walkers every step, and each change threw away every look within 24
+///   tiles: ~36k 32-step looks a step at 250k units, nearly all distinct
+///   keys, ~18% of the helpers' time at 1M. A new build (another route)
+///   still makes a new look.
+/// - Carried (2): the walker left the look's tile toward an open look's
+///   far tile: nearer it (Manhattan) than the look's tile was, still
+///   LOOK_CARRY_MIN tiles from it (Chebyshev; nearer, a new look extends the
+///   way), its block open and the straight line to the far tile open: it
+///   steers on at that tile, its record moved to this tile.
+/// The record is rewritten here (its wall version; for a carry its tile and
+/// next tile). A function of the unit's own record and the live walls: the
+/// same on every peer and with any number of helpers; the shared looks
+/// (look_get / look_put) are untouched. 0: neither, a new look.
+// (3: a look's far tile is often a few tiles ahead in a built-up battle (a
+// turn, a blocked straight line). Three tiles out (96 px) a new look comes
+// before the walker needs the tile after.)
+const LOOK_CARRY_MIN: i32 = 3;
+/// Whether a look's way from tile tl at (gx, gy) (next tile n1, the one
+/// after n2 (-1 none), its far tile, open) is still open on the live walls
+/// wl: an open look its block and the straight line to its far tile (its
+/// taut test, flow_look_vals); a short one its next tiles.
+#[inline(never)]
+unsafe fn look_way_open(m: &Mv, wl: *const u8, w: i32, h: i32, gx: i32, gy: i32, tl: i32, n1: i32, n2: i32, far: i32, open: bool) -> bool {
+    if n1 < 0 || n1 >= w * h {
+        return false;
+    }
+    if open {
+        if far < 0 || far >= w * h || !open_block(wl, gx, gy, w, h) {
+            return false;
+        }
+        if far == tl {
+            return true;
+        }
+        let fx = irem_f(far, w);
+        let fy = idiv(far - fx, w);
+        return seg_open(wl, w, h, gx as f64 * m.tile + 16.0, gy as f64 * m.tile + 16.0, fx as f64 * m.tile + 16.0, fy as f64 * m.tile + 16.0, m.itile, m.tile);
+    }
+    rd(wl, n1 as usize) == 0 && (n2 < 0 || (n2 < w * h && rd(wl, n2 as usize) == 0))
+}
+#[inline(never)]
+unsafe fn look_keep(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, w: i32, h: i32, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
+    let r = m.nv.add(s * NV_STRIDE);
+    let t0 = *r;
+    if t0 < 0 || t0 >= w * h || *r.add(NV_D) != dk || *r.add(NV_G) != fgen || *r.add(NV_V) != nav_ver {
+        #[cfg(feature="dbgc")]{ if *r.add(NV_G) & LOOK_APPROX != 0 { dbgc!(m, 122); } else if *r.add(NV_D) != dk { dbgc!(m, 123); } else if *r.add(NV_G) != fgen { dbgc!(m, 124); } else if *r.add(NV_V) != nav_ver { dbgc!(m, 125); } }
+        dbgc!(m, 113); return 0;
+    }
+    let n1 = *r.add(NV_N1);
+    if n1 <= LOOK_CODE_BASE || n1 < 0 || n1 >= w * h {
+        dbgc!(m, 114); return 0;
+    }
+    let fo = *r.add(NV_FO);
+    let open = fo & 1 != 0;
+    let far = fo >> 1;
+    let line_open = |fx: i32, fy: i32| seg_open(wl, w, h, gx as f64 * m.tile + 16.0, gy as f64 * m.tile + 16.0, fx as f64 * m.tile + 16.0, fy as f64 * m.tile + 16.0, m.itile, m.tile);
+    if t0 == tl {
+        // Revalidated: the same look, its way open on today's walls.
+        if !look_way_open(m, wl, w, h, gx, gy, tl, n1, *r.add(NV_N2), far, open) { dbgc!(m, 115); return 0; }
+        *r.add(NV_W) = wv;
+        dbgc!(m, 120);
+        return 1;
+    }
+    // Carried: on toward the open look's far tile.
+    if !open || far < 0 || far >= w * h || far == tl {
+        dbgc!(m, 118); return 0;
+    }
+    let fx = irem_f(far, w);
+    let fy = idiv(far - fx, w);
+    let (ax, ay) = ((fx - gx).abs(), (fy - gy).abs());
+    let x0 = irem_f(t0, w);
+    let y0 = idiv(t0 - x0, w);
+    if ax.max(ay) < LOOK_CARRY_MIN || ax + ay >= (fx - x0).abs() + (fy - y0).abs() || !open_block(wl, gx, gy, w, h) || !line_open(fx, fy) {
+        dbgc!(m, 119); return 0;
+    }
+    let n = if ax >= ay { tl + if fx > gx { 1 } else { -1 } } else { tl + if fy > gy { w } else { -w } };
+    nv_put(m, s, tl, dk, nav_ver, wv, fgen, n, -1, far, true);
+    dbgc!(m, 121);
+    2
 }
 /// look_direct's test alone (no record written): the prewarm's.
 #[inline(always)]
@@ -3308,12 +3402,15 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             // (A worker standing at its work keeps its spot; one walking the
             // other way swaps as any walker: two workers meeting in a one-unit
             // pocket otherwise pushed against each other for good.)
-            if rd(m.dead,b)!=0||rd(m.own,b)!=own||(rd(m.wk,b)!=0&&!walkers)||(BRAIN&&rd(m.cmode,b)!=0){continue;}
+            // (An idle worker (worker state 1) is not at its work: it gives way as any
+            // standing unit; builders idle beside the site left the last one unreachable.)
+            if rd(m.dead,b)!=0||rd(m.own,b)!=own||(rd(m.wk,b)!=0&&!walkers&&(*m.wks.add(b)&31)!=1)||(BRAIN&&rd(m.cmode,b)!=0){continue;}
             if walkers{
                 if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx, (b) * SR),rd(m.cvy, (b) * SR));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
             }else if ob!=0&&ob!=2{continue;}
             let re=rd(m.rte,b);
-            if mine>=0&&re>=0&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
+            // (A worker on its way passes idle workers of its crowd: its task is at its tile.)
+            if mine>=0&&re>=0&&!(rd(m.wk,s)!=0&&rd(m.wk,b)!=0&&(*m.wks.add(b)&31)==1)&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
             let score=along+lat*0.6+if rb!=rq{4096.0}else{0.0};
             dbgc!(m,70);
             let mut j=3;while j>0&&cand[j-1].0>score{j-=1;}
@@ -5151,12 +5248,52 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
         if look_direct_ok(&v, k.tl, k.gx, k.gy, k.dk, wl) {
             continue;
         }
+        // (No look_keep here: this pass is the tick's own (foreground) and its line tests
+        // cost more than they saved. A walker whose look still holds keeps it at its next
+        // steer (flow_look); listed, its new look is made beside the tick.)
         let e = pend.add((base + n) * FLOW_W);
         *e = rd(m.id, s); *e.add(1) = k.tl; *e.add(2) = k.dk; *e.add(3) = k.fid;
         *e.add(4) = k.kp; *e.add(5) = k.ver; *e.add(6) = k.lwv; *e.add(7) = k.fgen;
         n += 1;
     }
     *cnt.add(chunk.max(0) as usize) = n as i32;
+}
+/// Whether no ground wall changed since the looks' post in the 8x8 blocks
+/// around the tiles (x0, y0)-(x1, y1) (one tile more each way: the look's
+/// block tests): the blocks' change counts now (word 477, mv.wallBlk) equal
+/// those at the post (word 479, unit.js _flowWallSnap). Then the walls there
+/// are the post's copy an answer was made on: it holds as made, no line test.
+/// (wbw: blocks a row.)
+#[inline(always)]
+unsafe fn walls_same_since_post(a: *const i32, wbw: i32, w: i32, h: i32, x0: i32, y0: i32, x1: i32, y1: i32) -> bool {
+    if rd(a, 477) == 0 || rd(a, 479) == 0 || wbw <= 0 {
+        return false;
+    }
+    let (live, snap) = (word(a, 477) as *const i32, word(a, 479) as *const i32);
+    let (bx0, bx1) = ((x0.min(x1) - 1).max(0) >> 3, (x0.max(x1) + 1).min(w - 1) >> 3);
+    let (by0, by1) = ((y0.min(y1) - 1).max(0) >> 3, (y0.max(y1) + 1).min(h - 1) >> 3);
+    for by in by0..=by1 {
+        for bx in bx0..=bx1 {
+            let i = (by * wbw + bx) as usize;
+            if *live.add(i) != *snap.add(i) {
+                return false;
+            }
+        }
+    }
+    true
+}
+/// The walls an exact look reads: its profile's copy made at the post (word
+/// 478, a table of _SIM_MOVE_NAV encoded addresses, 0 none: unit.js
+/// _flowWallSnap), so its answer is the post's state whichever thread makes it
+/// and when (the live walls may have changed since: a battle changes some
+/// every tick); the live walls without one.
+#[inline(always)]
+unsafe fn flow_wall_snap(a: *const i32, np: usize, live: *const u8) -> *const u8 {
+    if rd(a, 478) == 0 || np >= NAV_PROFILES {
+        return live;
+    }
+    let e = *(word(a, 478) as *const i32).add(np);
+    if e == 0 { live } else { waddr(e as u32) as *const u8 }
 }
 #[no_mangle]
 pub unsafe extern "C" fn mv_flow_exact(a: u32, chunk: i32) {
@@ -5186,14 +5323,16 @@ pub unsafe extern "C" fn mv_flow_exact(a: u32, chunk: i32) {
             ver: *e.add(5), wv: 0, lwv: *e.add(6), fgen: *e.add(7) };
         let o = res.add((base + i) * 4);
         let (code, n1, n2, far, open) = match look_get(&m, k.tl, k.dk, k.kp, k.ver, k.lwv) {
-            Some((c, n1, n2, far, open)) => (c, n1, n2, far, open != 0),
+            Some((c, n1, n2, far, open)) => { dbgc!(m, 110); (c, n1, n2, far, open != 0) },
             None => {
                 // (Its field and build as listed before and after: else the
                 // answer may be of another's, neither kept nor committed.)
                 if !flow_inputs_same(&m, &k) {
-                    (FLOW_STALE, 0, 0, 0, false)
+                    dbgc!(m, 112); (FLOW_STALE, 0, 0, 0, false)
                 } else {
+                    dbgc!(m, 111);
                     let (v, wl) = flow_nav(&m, &k);
+                    let wl = flow_wall_snap(a, k.np, wl);
                     let r = flow_look_vals(&m, &v, k.tl, k.gx, k.gy, k.dk, wl);
                     if !flow_inputs_same(&m, &k) {
                         (FLOW_STALE, 0, 0, 0, false)
@@ -5223,9 +5362,12 @@ pub unsafe extern "C" fn mv_flow_commit(a: u32, chunk: i32) {
     if uids.is_null() || uslots.is_null() {
         return;
     }
-    let c = chunk.max(0) as usize;
+    // (A FLOW_SPLIT-th of a job's answers a chunk, as mv_flow_exact claims them: a burst of
+    // answers to revalidate is spread over every thread, not one job's on one; each entry is
+    // another unit, so the parts write disjoint records.)
+    let (c, part) = ((chunk.max(0) as usize) / FLOW_SPLIT, (chunk.max(0) as usize) % FLOW_SPLIT);
     let (n, base) = (*cnt.add(c) as usize, c * FLOW_PER);
-    for i in 0..n {
+    for i in n * part / FLOW_SPLIT..n * (part + 1) / FLOW_SPLIT {
         let e = pend.add((base + i) * FLOW_W);
         let s = flow_id_slot(uids, uslots, nid, *e);
         if s < 0 || *res.add((base + i) * 4) == FLOW_STALE {
@@ -5233,11 +5375,35 @@ pub unsafe extern "C" fn mv_flow_commit(a: u32, chunk: i32) {
         }
         let s = s as usize;
         let k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
-        if k.tl != *e.add(1) || k.dk != *e.add(2) || k.fid != *e.add(3) || k.kp != *e.add(4) || k.ver != *e.add(5) || k.lwv != *e.add(6) || k.fgen != *e.add(7) {
+        if k.tl != *e.add(1) || k.dk != *e.add(2) || k.fid != *e.add(3) || k.kp != *e.add(4) || k.ver != *e.add(5) || k.fgen != *e.add(7) {
+            #[cfg(feature="dbgc")]{ if k.tl != *e.add(1) { dbgc!(m, 101); } else if k.ver != *e.add(5) { dbgc!(m, 105); } else { dbgc!(m, 107); } }
             continue;
         }
         let o = res.add((base + i) * 4);
         let code = *o;
+        // (Walls changed within the look's reach since its post (its wall key, lwv): in a battle
+        // nearly always, after the few ticks to the commit; dropping those threw away ~97% of the
+        // looks made (a walker then approximated and asked again at every tile). A way is kept
+        // when it is still open on today's walls (look_way_open, as look_keep revalidates); a
+        // look of no way is not (a wall gone may have opened one).)
+        if k.lwv != *e.add(6) {
+            let (v, wl) = flow_nav(&m, &k);
+            // (Ground looks: unchanged blocks around its way since the post need no line test;
+            // the far tile's corner of the box, or the next tiles' for a short look.)
+            let (n1, n2, far) = (*o.add(1), *o.add(2), *o.add(3) >> 1);
+            let reach = if (*o.add(3) & 1) != 0 { far } else if n2 >= 0 { n2 } else { n1 };
+            let same = code == 1 && k.np == 0 && wl == m.wall && reach >= 0 && reach < v.w * v.h && {
+                let rx = irem_f(reach, v.w);
+                walls_same_since_post(a, wbw, v.w, v.h, k.gx, k.gy, rx, idiv(reach - rx, v.w))
+            };
+            if same { dbgc!(m, 109); }
+            if code != 1 || (!same && !look_way_open(&m, wl, v.w, v.h, k.gx, k.gy, k.tl, n1, n2, far, (*o.add(3) & 1) != 0)) {
+                dbgc!(m, 106);
+                continue;
+            }
+            dbgc!(m, 108);
+        }
+        dbgc!(m, 100);
         if code == 1 {
             nv_put(&m, s, k.tl, k.dk, k.ver, k.wv, k.kind, *o.add(1), *o.add(2), *o.add(3) >> 1, (*o.add(3) & 1) != 0);
         } else {

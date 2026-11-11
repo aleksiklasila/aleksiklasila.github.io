@@ -15,7 +15,7 @@ const r = JSON.parse(i.eval(`JSON.stringify((() => {
     for (let k = 0; k < 4; k++) gameTick();
     const run = n => { for (let k = 0; k < n; k++) gameTick(); };
     let gx = -1, gy = -1;
-    for (let y = 30; y < 50 && gx < 0; y++) for (let x = 30; x < 50; x++) { const c = grid[y][x]; if (c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(x, y)) { gx = x; gy = y; break; } }
+    for (let y = 30; y < 50 && gx < 0; y++) for (let x = 30; x < 50; x++) { const c = grid[y][x]; if (cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(x, y)) { gx = x; gy = y; break; } }
     const before = [_visCoverTileVisible(0, gx, gy), _visCoverTileVisible(1, gx, gy)];
     placeBuilding(gx, gy, 'pistol', 0, { ignorePlacementRules: true, silent: true });
     const t = getTileEntityRef(gx, gy);

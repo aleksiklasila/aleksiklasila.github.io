@@ -14,7 +14,7 @@ inst.eval('startSoloGame();');
 const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     let s = 7;
     const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-    const free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && c.type === TYPE_FLOOR && !c.item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
+    const free = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && cellType[(c) - 1] === TYPE_FLOOR && !cellItemGet(c) && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy); };
     // (Built as construction ends: a tower's tile a wall from then, structureWallSync.)
     const built = (e, lvl) => { e.underConstruction = false; structureWallSync(e); e.buildProgress = 1; e.stacks = e.effectiveStacks = getRequiredStacksForLevel(lvl); e.level = e.effectiveLevel = e.potentialEffectiveLevel = lvl; e.updateStats(); e.energy = e.maxEnergy; };
     const sig = () => _laserTowerList().map(t => t.gx + ',' + t.gy + ':' + (t.connectedLasers || []).map(o => o.gx + ',' + o.gy).join(' ')).join('|');

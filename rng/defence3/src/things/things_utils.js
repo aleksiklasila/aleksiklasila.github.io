@@ -20,14 +20,8 @@ function _isOperationalAdjacencyEntity(obj) {
     return true;
 }
 
-function _getCanonicalAreaCellsById(areaId, fallbackArea = null) {
-    let aId = Math.floor(Number(areaId));
-    if (aId >= 0 && Array.isArray(gridCellsByArea) && Array.isArray(gridCellsByArea[aId]) && gridCellsByArea[aId].length > 0) {
-        return gridCellsByArea[aId];
-    }
-    let area = fallbackArea || getAreaById(aId);
-    if (!area || !Array.isArray(area.cells) || area.cells.length <= 0) return [];
-    return area.cells.filter(cp => cp && Number.isFinite(cp.x) && Number.isFinite(cp.y));
+function _getCanonicalAreaCellsById(areaId) {
+    return gridCellsByArea[Math.floor(Number(areaId))] || [];
 }
 
 // Adjacency now (outside a match's ticks: placements before the start,
@@ -720,22 +714,14 @@ function _areaHasForeignBuildPresence(areaId, playerId) {
     let aId = Math.floor(Number(areaId));
     if (!(aId >= 0)) return false;
 
-    let unitBucket = spatialUnitsByArea[aId];
-    if (unitBucket instanceof Set) {
-        for (let u of unitBucket) {
-            if (!u || u.dead || u.owner === playerId) continue;
-            return true;
-        }
-    }
-
     const canonical = Array.isArray(gridCellsByArea) ? gridCellsByArea[aId] : null;
-    const hasCanonical = Array.isArray(canonical) && canonical.length > 0;
+    const hasCanonical = !!canonical && canonical.length > 0;
     const areaCells = hasCanonical ? canonical : getAreaById(aId)?.cells;
-    if (!Array.isArray(areaCells)) return false;
+    if (!areaCells) return false;
     for (let i = 0; i < areaCells.length; i++) {
         const cellPos = areaCells[i];
-        if (!hasCanonical && (!cellPos || !Number.isFinite(cellPos.x) || !Number.isFinite(cellPos.y))) continue;
-        let ref = getTileEntityRef(cellPos.x, cellPos.y);
+        
+        let ref = getTileEntityRef((cellPos % GRID_W), Math.floor(cellPos / GRID_W));
         if (!ref) continue;
         if (!Number.isFinite(ref.owner) || ref.owner < 0 || ref.owner === playerId) continue;
         return true;
@@ -751,8 +737,8 @@ function canBuildAt(gx, gy, playerId) {
     if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
     if (!isTileActuallyVisibleToPlayer(playerId, gx, gy)) return false;
     if (!(isMultiplayer && gameStarted) && _isBuildAreaContested(gx, gy, playerId)) return false;
-    if (grid[gy][gx].type === TYPE_WALL) return false;
-    if (grid[gy][gx].item) return false;
+    if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) return false;
+    if (cellItemGet(grid[gy][gx])) return false;
     // (A tower under construction stands on a floor tile.)
     if (getTileEntityRef(gx, gy)) return false;
     // Don't allow building on gold mines
@@ -810,9 +796,9 @@ function canStackAt(gx, gy, itemKey, playerId) {
     }
     // Floor items
     let cell = grid[gy][gx];
-    let ok = !!(cell.item && cell.item.type === itemKey && Math.floor(Number(cell.owner)) === pid);
-    if (!ok && cell.item && cell.item.type === itemKey && simStepCrosses(0, 20)) {
-         console.warn(`canStackAt: owner mismatch for floor item. cell.owner: ${cell.owner}, pid: ${pid}`);
+    let ok = !!(cellItemGet(cell) && cellItemGet(cell).type === itemKey && Math.floor(Number(cellOwner[(cell) - 1])) === pid);
+    if (!ok && cellItemGet(cell) && cellItemGet(cell).type === itemKey && simStepCrosses(0, 20)) {
+         console.warn(`canStackAt: owner mismatch for floor item. cell.owner: ${cellOwner[(cell) - 1]}, pid: ${pid}`);
     }
     return ok;
 }
@@ -854,7 +840,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
 
     // Area upgrader: special handling
     if (itemKey === 'area_upgrader') {
-        let aId = grid[gy][gx].areaId;
+        let aId = cellArea[(grid[gy][gx]) - 1];
         if (aId === -1) return false;
         if (_areaHasForeignBuildPresence(aId, playerId)) return false;
         let area = getAreaById(aId);
@@ -863,17 +849,17 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         if (areaCells.length <= 0) return false;
         // Check if ALL cells in area are occupied by any building/item (any owner)
         let allFilled = areaCells.every(cp => {
-            if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) return false;
-            let c = grid[cp.y][cp.x];
+            
+            let c = grid[Math.floor(cp / GRID_W)][(cp % GRID_W)];
             if (!c) return false;
-            if (c.type === TYPE_WALL) {
-                let t = getTowerAtTile(cp.x, cp.y);
+            if (cellType[(c) - 1] === TYPE_WALL) {
+                let t = getTowerAtTile((cp % GRID_W), Math.floor(cp / GRID_W));
                 if (t && !t.underConstruction && getDisplayLevel(t) > 0) return true;
             }
-            if (c.item && !c.item.underConstruction && getDisplayLevel(c.item) > 0) return true;
-            let b = getBarrackAtTile(cp.x, cp.y);
+            if (cellItemGet(c) && !cellItemGet(c).underConstruction && getDisplayLevel(cellItemGet(c)) > 0) return true;
+            let b = getBarrackAtTile((cp % GRID_W), Math.floor(cp / GRID_W));
             if (b && !b.underConstruction && getDisplayLevel(b) > 0) return true;
-            let s = getSpawnerAtTile(cp.x, cp.y);
+            let s = getSpawnerAtTile((cp % GRID_W), Math.floor(cp / GRID_W));
             if (s && !s.underConstruction && getDisplayLevel(s) > 0) return true;
             return false;
         });
@@ -887,8 +873,8 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         markAreaDirtyId(area.id);
         _markCombinedBgAreaDirty(aId, 1);
         for (let cp of areaCells) {
-            if (!cp || !Number.isFinite(cp.x) || !Number.isFinite(cp.y)) continue;
-            requestAdjacencyRecalc(cp.x, cp.y, 0);
+            
+            requestAdjacencyRecalc((cp % GRID_W), Math.floor(cp / GRID_W), 0);
         }
         recalculateAdjacency({ passiveRefresh: true });
         if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
@@ -910,7 +896,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         else {
             // (Its tile turns into a wall when it is built: structureWallSync.
             // Under construction every unit walks over it.)
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             let t = new Tower(gx, gy, itemKey, playerId);
             t.underConstruction = true; t.energy = 1;
             t.autoUpgradeEnabled = useDefaultAutoUpgrade;
@@ -937,8 +923,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
             updateItemTextCache(b);
             barracksChanged();
-            grid[gy][gx].item = b;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, b);
             placedNewStructure = true;
         }
@@ -956,8 +941,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
@@ -975,8 +959,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
@@ -994,8 +977,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
@@ -1014,8 +996,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
@@ -1033,8 +1014,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
@@ -1052,21 +1032,19 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
             updateItemTextCache(s);
             collectorSpawnersChanged();
-            grid[gy][gx].item = s;
-            grid[gy][gx].owner = playerId;
+            cellOwner[(grid[gy][gx]) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, s);
             placedNewStructure = true;
         }
     } else {
         // Floor item
         let cell = grid[gy][gx];
-        if (cell.item && cell.item.type === itemKey && cell.owner === playerId) {
-            addManualStackToThing(cell.item, 1);
+        if (cellItemGet(cell) && cellItemGet(cell).type === itemKey && cellOwner[(cell) - 1] === playerId) {
+            addManualStackToThing(cellItemGet(cell), 1);
         } else {
             let stats = calculateItemStats(itemKey, 1, playerId);
             let item = Object.assign(new FloorItem(), { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild });
-            cell.item = item;
-            cell.owner = playerId;
+            cellOwner[(cell) - 1] = playerId;
             setTileEntity(gx, gy, itemKey, item);
             updateItemTextCache(item);
             placedNewStructure = true;
@@ -1144,7 +1122,6 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     let adj = false, kinds = 0;
     for (let i = 0; i < m; i++) {
         const ct = D.rows[2 * i], k = _STL_KIND[ct], t = D.tiles[i], gx = t % GRID_W;
-        grid[(t - gx) / GRID_W][gx]._item = null;
         if (k >= 0) { kinds |= 1 << k; adj = adj || k <= 1; }
         if (k === 0) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
     }
@@ -1452,8 +1429,8 @@ function recomputePlayerPopCaps() {
         }
     } else for (let item of (typeof _cellItemsOfType === 'function' ? _cellItemsOfType('house') : getCellItemsRowMajor())) {
         let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item || item.type !== 'house') continue;
-        let owner = cell.owner;
+        if (!cell || cellItemGet(cell) !== item || item.type !== 'house') continue;
+        let owner = cellOwner[(cell) - 1];
         if (owner < 0 || owner >= players.length) continue;
         if (item.energy <= 0 || item.underConstruction) continue;
         let level = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
@@ -1608,7 +1585,8 @@ function getUnitRenderActionRangePx(u) {
 function getAreaRangeCellsAtWorld(wx, wy, rangeArea) {
     let sources = getSourceAreaIdsAtWorld(wx, wy);
     if (sources.length === 0) return [];
-    return getGridCellsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0)));
+    // Coordinate records belong only to the canvas overlay boundary.
+    return Array.from(getGridCellsWithinDistanceOfSources(sources, Math.floor(Math.max(0, Number(rangeArea) || 0))), t => ({ x: t % GRID_W, y: Math.floor(t / GRID_W) }));
 }
 
 // A structure's tile wall follows its construction: wall-type things
@@ -1622,8 +1600,8 @@ function structureWallSync(item) {
     const gx = item.gx, gy = item.gy;
     if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) || getTileEntityRef(gx, gy) !== item) return;
     const cell = grid[gy][gx], want = item.underConstruction ? TYPE_FLOOR : TYPE_WALL;
-    if (cell.type === want) return;
-    cell.type = want;
+    if (cellType[(cell) - 1] === want) return;
+    cellType[(cell) - 1] = want;
     simMoveTileTypeChanged(gx, gy);
     // (Indexes kept from the tile journal see it: the laser beam map's
     // blocking walls, tower.js laserBeamsTick.)

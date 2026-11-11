@@ -1250,8 +1250,8 @@ function initInput() {
         for (let y = 0; y < GRID_H; y++) {
             for (let x = 0; x < GRID_W; x++) {
                 let cell = grid[y][x];
-                if (!cell || !cell.item) continue;
-                consider(cell.item);
+                if (!cell || !cellItemGet(cell)) continue;
+                consider(cellItemGet(cell));
             }
         }
         return best;
@@ -1593,10 +1593,10 @@ function initInput() {
                 : { kind, ref: e, x: e.x, y: e.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let addEnemyFloorItem = (cell, gx, gy) => {
-            if (cell && cell.item && cell.item.energy > 0 && cell.owner !== localPlayerId && isGameplayTargetVisibleToPlayer(localPlayerId, gx, gy)) {
+            if (cell && cellItemGet(cell) && cellItemGet(cell).energy > 0 && cellOwner[(cell) - 1] !== localPlayerId && isGameplayTargetVisibleToPlayer(localPlayerId, gx, gy)) {
                 out.push({
                     kind: 'item',
-                    ref: cell.item,
+                    ref: cellItemGet(cell),
                     x: gx * TILE + TILE * 0.5,
                     y: gy * TILE + TILE * 0.5,
                     hitShape: { kind: 'rect', hw: 14, hh: 14 },
@@ -1651,16 +1651,16 @@ function initInput() {
             candidates.push({ kind: 'entity', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let addOwnedFloorItem = (cell, gx, gy) => {
-            if (cell.item && cell.owner === localPlayerId) {
+            if (cellItemGet(cell) && cellOwner[(cell) - 1] === localPlayerId) {
                 candidates.push({
                     kind: 'entity',
-                    ref: cell.item,
+                    ref: cellItemGet(cell),
                     x: gx * TILE + TILE * 0.5,
                     y: gy * TILE + TILE * 0.5,
                     hitShape: { kind: 'rect', hw: 14, hh: 14 },
                     hitRadius: 20,
                     hitZ: 10,
-                    post: () => { cell.item._gx = gx; cell.item._gy = gy; cell.item._cell = cell; }
+                    post: () => { cellItemGet(cell)._gx = gx; cellItemGet(cell)._gy = gy; cellItemGet(cell)._cell = cell; }
                 });
             }
         };
@@ -1819,7 +1819,7 @@ function initInput() {
         for (let item of getCellItemsRowMajor()) {
             let gx = item.gx, gy = item.gy;
             let cell = grid[gy] && grid[gy][gx];
-            if (!cell || cell.item !== item || cell.owner !== localPlayerId || item.energy <= 0) continue;
+            if (!cell || cellItemGet(cell) !== item || cellOwner[(cell) - 1] !== localPlayerId || item.energy <= 0) continue;
             if (item.type !== sampleType || !isTileVisible(gx, gy)) continue;
             if (!isPointInView(gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5, 14, 0.08)) continue;
             item._gx = gx; item._gy = gy; item._cell = cell;
@@ -2039,7 +2039,7 @@ function initInput() {
         if (gx < 0 || gy < 0 || gx >= GRID_W || gy >= GRID_H) return false;
         let _cd = BASE_CARD_TYPES[selectedBuildItem];
         if (selectedBuildItem === 'area_upgrader') {
-            let aId = grid[gy][gx].areaId;
+            let aId = cellArea[(grid[gy][gx]) - 1];
             if (_areaHasForeignBuildPresence(aId, localPlayerId)) return false;
             let area = getAreaById(aId);
             if (!area) return false;
@@ -2047,11 +2047,11 @@ function initInput() {
             if (areaCells.length <= 0) return false;
             let filledCount = 0;
             for (let cp of areaCells) {
-                let c = grid[cp.y][cp.x];
-                if (c.type === TYPE_WALL && getTowerAtTile(cp.x, cp.y)) filledCount++;
-                else if (c.item) filledCount++;
-                else if (getBarrackAtTile(cp.x, cp.y)) filledCount++;
-                else if (getSpawnerAtTile(cp.x, cp.y)) filledCount++;
+                let c = grid[Math.floor(cp / GRID_W)][(cp % GRID_W)];
+                if (cellType[(c) - 1] === TYPE_WALL && getTowerAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) filledCount++;
+                else if (cellItemGet(c)) filledCount++;
+                else if (getBarrackAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) filledCount++;
+                else if (getSpawnerAtTile((cp % GRID_W), Math.floor(cp / GRID_W))) filledCount++;
             }
             return filledCount === areaCells.length && (area.multiplierLevel || 0) < 5;
         }
@@ -2509,7 +2509,7 @@ function initInput() {
                             if (gy > maxGy) break;
                             if (gx < minGx || gx > maxGx || seenItems.has(item)) continue;
                             let cell = grid[gy] && grid[gy][gx];
-                            if (!cell || cell.item !== item || cell.owner !== localPlayerId || !isTileVisible(gx, gy)) continue;
+                            if (!cell || cellItemGet(cell) !== item || cellOwner[(cell) - 1] !== localPlayerId || !isTileVisible(gx, gy)) continue;
                             item._gx = gx; item._gy = gy; item._cell = cell;
                             newEntities.push(item);
                             seenItems.add(item);
@@ -6279,7 +6279,7 @@ function startGame() {
         let isBuildableStarterTile = (gx, gy) => {
             if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return false;
             let cell = grid[gy][gx];
-            if (!cell || cell.type === TYPE_WALL || cell.item || getTileEntityRef(gx, gy)) return false;
+            if (!cell || cellType[(cell) - 1] === TYPE_WALL || cellItemGet(cell) || getTileEntityRef(gx, gy)) return false;
             if (getGoldMineAt(gx, gy) || getAstarMineAt(gx, gy)) return false;
             return true;
         };
@@ -6373,7 +6373,7 @@ function startGame() {
             let s = getSpawnerAtTile(gx, gy);
             return (s && s.owner === owner && s.type === itemKey) ? s : null;
         }
-        return (grid[gy] && grid[gy][gx]) ? grid[gy][gx].item : null;
+        return (grid[gy] && grid[gy][gx]) ? cellItemGet(grid[gy][gx]) : null;
     };
 
     let spawnStartingBuilding = (pid, origin, itemKey, level) => {
@@ -6414,8 +6414,8 @@ function startGame() {
                 if (foreign) continue;
             }
             const cell = grid[gy] ? grid[gy][gx] : null;
-            const isFloorTile = !!cell && cell.type !== TYPE_WALL;
-            if (isFloorTile && (!cell.item || floorItems) && !getGoldMineAt(gx, gy)) out.push({ gx, gy });
+            const isFloorTile = !!cell && cellType[(cell) - 1] !== TYPE_WALL;
+            if (isFloorTile && (!cellItemGet(cell) || floorItems) && !getGoldMineAt(gx, gy)) out.push({ gx, gy });
             if (!isFloorTile && !(cell && getTileEntityRef(gx, gy))) continue;
             if (gx + 1 < W && !seen[t + 1]) { seen[t + 1] = 1; q[qt++] = t + 1; }
             if (gx > 0 && !seen[t - 1]) { seen[t - 1] = 1; q[qt++] = t - 1; }
@@ -7842,8 +7842,8 @@ function _computeLockstepPopCaps() {
     for (let i = 0; i < houses.length; i++) {
         let item = houses[i];
         let cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cell.item !== item) continue;
-        let owner = Math.floor(Number(cell.owner) || 0);
+        if (!cell || cellItemGet(cell) !== item) continue;
+        let owner = Math.floor(Number(cellOwner[(cell) - 1]) || 0);
         if (!(owner >= 0 && owner < housePop.length)) continue;
         if (!(Number(item.energy) > 0) || !!item.underConstruction) continue;
         let lvl = Math.max(1, Math.floor(getThingBaseLevel(item) || 1));
@@ -7952,10 +7952,10 @@ function computeLockstepStateHashFast(tick, partsOut = null) {
     for (let gy = 0; gy < GRID_H; gy++) {
         for (let gx = 0; gx < GRID_W; gx++) {
             let cell = grid[gy][gx];
-            if (!cell || !cell.item) continue;
-            let item = cell.item;
+            if (!cell || !cellItemGet(cell)) continue;
+            let item = cellItemGet(cell);
             if ((item instanceof Tower) || (item instanceof Barrack) || isSpawnerEntity(item)) continue;
-            mixInt(gx); mixInt(gy); mixInt(int(cell.owner)); mixStr(item.type);
+            mixInt(gx); mixInt(gy); mixInt(int(cellOwner[(cell) - 1])); mixStr(item.type);
             mixInt(Math.floor(Number(item.level) || 1)); mixNum(q3(item.energy));
             mixInt(item.underConstruction ? 1 : 0); mixInt(item.isUpgrading ? 1 : 0);
             mixInt(Math.max(0, int(item.watched))); mixInt(watchedTeam(item));
@@ -8073,19 +8073,19 @@ function computeLockstepStateDigest(tick) {
     for (let gy = 0; gy < GRID_H; gy++) {
         for (let gx = 0; gx < GRID_W; gx++) {
             let cell = grid[gy][gx];
-            if (!cell || !cell.item) continue;
-            if ((cell.item instanceof Tower) || (cell.item instanceof Barrack) || isSpawnerEntity(cell.item)) continue;
+            if (!cell || !cellItemGet(cell)) continue;
+            if ((cellItemGet(cell) instanceof Tower) || (cellItemGet(cell) instanceof Barrack) || isSpawnerEntity(cellItemGet(cell))) continue;
             digest.floorItems.push({
                 gx,
                 gy,
-                owner: Math.floor(Number(cell.owner) || 0),
-                type: String(cell.item.type || ''),
-                level: Math.floor(Number(cell.item.level) || 1),
-                energy: quantizeLockstepNumber(cell.item.energy),
-                underConstruction: !!cell.item.underConstruction,
-                isUpgrading: !!cell.item.isUpgrading,
-                watched: Math.max(0, Math.floor(Number(cell.item.watched) || 0)),
-                watchedByTeam: Number.isFinite(Number(cell.item.watchedByTeam)) ? Math.floor(Number(cell.item.watchedByTeam)) : -1
+                owner: Math.floor(Number(cellOwner[(cell) - 1]) || 0),
+                type: String(cellItemGet(cell).type || ''),
+                level: Math.floor(Number(cellItemGet(cell).level) || 1),
+                energy: quantizeLockstepNumber(cellItemGet(cell).energy),
+                underConstruction: !!cellItemGet(cell).underConstruction,
+                isUpgrading: !!cellItemGet(cell).isUpgrading,
+                watched: Math.max(0, Math.floor(Number(cellItemGet(cell).watched) || 0)),
+                watchedByTeam: Number.isFinite(Number(cellItemGet(cell).watchedByTeam)) ? Math.floor(Number(cellItemGet(cell).watchedByTeam)) : -1
             });
         }
     }

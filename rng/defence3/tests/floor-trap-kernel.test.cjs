@@ -23,7 +23,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     for (let gy = 4; gy < GRID_H - 20 && !found; gy++) for (let gx = 4; gx < GRID_W - 30 && !found; gx++) {
         let ok = true;
         for (let y = gy; y < gy + kinds.length * 2 + 2 && ok; y++) for (let x = gx; x < gx + 20 && ok; x++)
-            if (grid[y][x].type === TYPE_WALL || grid[y][x].item || getTileEntityRef(x, y)) ok = false;
+            if (cellType[(grid[y][x]) - 1] === TYPE_WALL || cellItemGet(grid[y][x]) || getTileEntityRef(x, y)) ok = false;
         // (Away from the bases: next to one the lanes' units are not left to walk their rows.)
         if (ok && [...towers, ...barracks, ...collectorSpawners].some(b => Math.abs(b.gx - (gx + 10)) < 26 && Math.abs(b.gy - (gy + 6)) < 20)) ok = false;
         if (ok) found = { gx, gy };
@@ -38,7 +38,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         for (const dx of [6, 10]) {
             const gx = found.gx + dx;
             if (!placeBuilding(gx, gy, kind, 1, { ignorePlacementRules: true, silent: true, autoUpgradeEnabled: false, buildEnabled: true })) return;
-            const it = grid[gy][gx].item;
+            const it = cellItemGet(grid[gy][gx]);
             it.underConstruction = false; it.energy = it.maxEnergy; it.level = 1; markConstructionComplete(it);
             traps.push(gy * GRID_W + gx);
         }

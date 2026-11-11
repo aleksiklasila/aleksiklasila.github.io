@@ -12,7 +12,7 @@ const world = new H.World({ controls }), i = world.spawn('go', { controls, simWo
 i.eval('startSoloGame();');
 const r = JSON.parse(i.eval(`JSON.stringify((() => {
     const made = [];
-    for (let k = 0; k < 400; k++) { const gx = 20 + (k % 40), gy = 30 + Math.floor(k / 40); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); made.push(u); }
+    for (let k = 0; k < 400; k++) { const gx = 20 + (k % 40), gy = 30 + Math.floor(k / 40); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); made.push(u); }
     for (let t = 0; t < 3; t++) gameTick();
     // (Held: the first 100; their last values noted.)
     __scratch.held = made.slice(0, 100);
@@ -24,7 +24,7 @@ const r = JSON.parse(i.eval(`JSON.stringify((() => {
     const heldH = new Set(last.map(l => l[4]));
     // New units take the freed handles: held objects still read their dead units.
     const fresh = [];
-    for (let k = 0; k < 300; k++) { const gx = 20 + (k % 40), gy = 50 + Math.floor(k / 40); if (grid[gy][gx].type === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); fresh.push(u); }
+    for (let k = 0; k < 300; k++) { const gx = 20 + (k % 40), gy = 50 + Math.floor(k / 40); if (cellType[(grid[gy][gx]) - 1] === TYPE_WALL) continue; const u = new Unit('norm', 0, gx * TILE + 16, gy * TILE + 16); units.push(u); unitSlotMapPushed(u); fresh.push(u); }
     gameTick();
     const reused = held.filter(u => u._us !== null || u._si !== -1 || !u.dead).length;
     const audit = simUnitSlabAudit(), occ = occupancyAudit();

@@ -21,9 +21,9 @@ async function settle(world, promise) {
             for (const type of ['barrack_tank','pistol','house']) {
                 let found=false;
                 for(let y=2;y<GRID_H-2&&!found;y++)for(let x=2;x<GRID_W-2&&!found;x++) {
-                    if(getTileEntityRef(x,y)||grid[y][x].item||grid[y][x].type!==TYPE_FLOOR)continue;
+                    if(getTileEntityRef(x,y)||cellItemGet(grid[y][x])||cellType[(grid[y][x]) - 1]!==TYPE_FLOOR)continue;
                     placeBuilding(x,y,type,1,{silent:true,ignorePlacementRules:true,autoUpgradeEnabled:false});
-                    const e=getTileEntityRef(x,y)||grid[y][x].item;
+                    const e=getTileEntityRef(x,y)||cellItemGet(grid[y][x]);
                     e.manualStacks=e.stacks=4;e.underConstruction=type==='house';e.energy=83;found=true;
                 }
             }
@@ -40,6 +40,8 @@ async function settle(world, promise) {
         const parts = await settle(world,source.eval('captureSoloGameSnapshotParts()'));
         source.scratch.parts = parts;
         const scene = source.eval('parseSoloGameSnapshotParts(__scratch.parts)');
+        // (The file's own records: the parsed scene keeps typed columns, not rows.)
+        const sceneRecords = parts.flatMap(p=>p.split('\n')).filter(s=>s.trim()).map(s=>JSON.parse(s)).slice(1);
         source.scratch.file = await source.eval('compressSoloGameSnapshot(__scratch.parts)');
         assert.equal(new Uint8Array(await source.scratch.file.slice(0,2).arrayBuffer())[0],0x1f);
         const zipped = await source.eval('readSoloGameSnapshotFile(__scratch.file)');
@@ -59,7 +61,7 @@ async function settle(world, promise) {
         await assert.rejects(source.eval('readSoloGameSnapshotFile(__scratch.file)'));
         assert.equal(scene.header.kind,'defence3-scene');
         assert.equal(scene.header.players[0].energy,123456);
-        assert.ok(scene.records.some(r=>r.units?.some(u=>u[7]?.[0]==='attackMove')));
+        assert.ok(sceneRecords.some(r=>r.units?.some(u=>u[7]?.[0]==='attackMove')));
         assert.ok(!parts.some(p=>p.includes('pendingPathTarget')||p.includes('SIM_RULES_REVISION')));
         const a = world.spawn('import-a'), b = world.spawn('import-b'); await world.run(200);
         for (const inst of [a,b]) {
@@ -72,14 +74,14 @@ async function settle(world, promise) {
         assert.equal(state(a),state(b),'independent imports are repeatable');
         assert.equal(a.eval('simClientActive()'),worker);
         assert.equal(a.evalSim('players[0].energy'),123456);
-        const rows = scene.records.flatMap(r=>r.units||[]);
+        const rows = sceneRecords.flatMap(r=>r.units||[]);
         assert.equal(a.evalSim('units.length'),rows.length);
         const restored = JSON.parse(a.evalSim('JSON.stringify(units.map(u=>[u.unitType,u.owner,u.x/TILE,u.y/TILE,u.energy]))'));
         assert.deepEqual(restored,rows.map(r=>r.slice(0,5)),'positions/types/owners/health survive');
         a.scratch.context={settings:scene.header.settings,player:0,camera:scene.header.camera,teamColors:scene.header.teamColors};
         const reexport=JSON.parse(a.evalSim('JSON.stringify(buildSoloGameSnapshotParts(__scratch.context))'));
         const records=reexport.map(s=>JSON.parse(s));
-        for(const key of ['buildings','mines','terrain']) assert.deepEqual(records.flatMap(r=>r[key]||[]),scene.records.flatMap(r=>r[key]||[]),key+' survives import');
+        for(const key of ['buildings','mines','terrain']) assert.deepEqual(records.flatMap(r=>r[key]||[]),sceneRecords.flatMap(r=>r[key]||[]),key+' survives import');
         for(let t=0;t<10;t++) {
             for(const inst of [a,b]) inst.evalSim(worker ? '_simTick({tick:currentTick,actions:[],teams:activeTeamIds,dk:1})' : 'runOneTick()');
             assert.equal(state(a),state(b),'same continuation '+t);

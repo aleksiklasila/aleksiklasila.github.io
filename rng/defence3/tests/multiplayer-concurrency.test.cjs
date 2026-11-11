@@ -54,7 +54,7 @@ const START = {
     // 2. Teammates build on the same tile on the same tick: same type stacks,
     // different types -> the first applied wins, identically everywhere.
     {
-        const tiles = own(host, `(() => { const k = units.find(u => u.owner === localPlayerId && u.isKing); const out = []; for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) { const gx = Math.floor(k.x / TILE) + dx, gy = Math.floor(k.y / TILE) + dy; if (gx > 0 && gy > 0 && gx < GRID_W - 1 && gy < GRID_H - 1 && grid[gy][gx].type !== TYPE_WALL && !grid[gy][gx].item && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy) && !getAstarMineAt(gx, gy)) out.push({ gx, gy }); } return out.slice(0, 4); })()`);
+        const tiles = own(host, `(() => { const k = units.find(u => u.owner === localPlayerId && u.isKing); const out = []; for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) { const gx = Math.floor(k.x / TILE) + dx, gy = Math.floor(k.y / TILE) + dy; if (gx > 0 && gy > 0 && gx < GRID_W - 1 && gy < GRID_H - 1 && cellType[(grid[gy][gx]) - 1] !== TYPE_WALL && !cellItemGet(grid[gy][gx]) && !getTileEntityRef(gx, gy) && !getGoldMineAt(gx, gy) && !getAstarMineAt(gx, gy)) out.push({ gx, gy }); } return out.slice(0, 4); })()`);
         assert.ok(tiles.length >= 3);
         const T = future();
         host.queueAt(T, { action: 'place', gx: tiles[0].gx, gy: tiles[0].gy, itemType: 'pistol', count: 1, autoUpgradeEnabled: true, buildEnabled: true });

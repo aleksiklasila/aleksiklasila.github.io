@@ -43,6 +43,7 @@ const visCtx = {
     getGridCellsWithinAreaDistance: () => []
 };
 vm.createContext(visCtx);
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",visCtx); // (Object cells: this fixture's grid.)
 const stateSource = read('src/data/data_state.js');
 vm.runInContext(stateSource.slice(stateSource.indexOf('function addVisibilitySourceAreas('), stateSource.indexOf('function getAreaDistance(')), visCtx);
 vm.runInContext('let visibilityIncludedTilesScratch = [], visibilityStampScratch = [], visibilityRowSpanMinScratch = new Int32Array(0), visibilityRowSpanMaxScratch = new Int32Array(0);\n' + renderer.slice(renderer.indexOf('function computeVisibilityGridForPlayer('), renderer.indexOf('function getVisibilityGridForPlayer(')), visCtx);
@@ -84,6 +85,7 @@ function canvasContext(name) {
 const layer = canvasContext('layer');
 const queueCtx = { renderer3dLayerContexts: new Map([[300, layer]]), renderer3dLayerStats: new Map([[300, { commandCount: 0 }]]) };
 vm.createContext(queueCtx);
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",queueCtx); // (Object cells: this fixture's grid.)
 vm.runInContext(renderer.slice(renderer.indexOf('let _frameDrawImageQueueActive'), renderer.indexOf('function ensureRenderer3DLayerCanvas')), queueCtx);
 const c = canvasContext('main'), images = [{ id: 0 }, { id: 1 }];
 const commands = [];

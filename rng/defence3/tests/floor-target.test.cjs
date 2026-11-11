@@ -16,7 +16,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
     const traps = [];
     for (let y = 30; y < 50; y++) for (const [x, type] of [[40, 'lava'], [41, 'poison_puddle']]) {
         placeBuilding(x, y, type, 1, { silent: true, ignorePlacementRules: true });
-        const it = grid[y][x].item; if (it) { it.energy = it.maxEnergy; markConstructionComplete(it); if (it.updateStats) it.updateStats(); traps.push(it); }
+        const it = cellItemGet(grid[y][x]); if (it) { it.energy = it.maxEnergy; markConstructionComplete(it); if (it.updateStats) it.updateStats(); traps.push(it); }
     }
     // Owner 0: a group attack-moving across, and idle units beside the traps.
     const spawn = (x, y) => { const u = new Unit('norm', 0, x * TILE + 16, y * TILE + 16); units.push(u); players[0].popCount++; updateUnitSpatial(u); return u; };
@@ -33,7 +33,7 @@ const r = JSON.parse(inst.eval(`JSON.stringify((() => {
         const e = traps.reduce((s, t) => s + Math.max(0, t.energy), 0);
         if (firstHitSec < 0 && e < e0) firstHitSec = (t + 1) * simDk / 20;
     }
-    const left = traps.filter(t => t.energy > 0 && grid[t.gy][t.gx].item === t).length;
+    const left = traps.filter(t => t.energy > 0 && cellItemGet(grid[t.gy][t.gx]) === t).length;
     return { traps: traps.length, left, attacksOnTraps, firstHitSec, energy0: e0, energy1: traps.reduce((s, t) => s + Math.max(0, t.energy), 0),
         moversAlive: movers.filter(u => !u.dead).length, idleAlive: idle.filter(u => !u.dead).length };
 })())`));

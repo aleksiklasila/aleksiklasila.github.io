@@ -93,7 +93,7 @@ for (const type of ['arena','island','islands','solar_system','crossroads','rand
 }
 // Crowded layouts retain the selected amount per mine, without redistributing totals.
 choose(8000, 32000, 20);
-run("MAP_TYPE='random'; rng=mulberry32(1); resetWorldState(); generateAreas(); for(let y=0;y<GRID_H;y++) for(let x=0;x<GRID_W;x++) grid[y][x].type=TYPE_WALL; grid[5][5].type=TYPE_FLOOR; grid[5][6].type=TYPE_FLOOR; generateResourceMinesMixed();");
+run("MAP_TYPE='random'; rng=mulberry32(1); resetWorldState(); generateAreas(); for(let y=0;y<GRID_H;y++) for(let x=0;x<GRID_W;x++) cellType[grid[y][x]-1]=TYPE_WALL; cellType[grid[5][5]-1]=TYPE_FLOOR; cellType[grid[5][6]-1]=TYPE_FLOOR; generateResourceMinesMixed();");
 assert.equal(run('goldMines.length'), 1);
 assert.equal(run('astarMines.length'), 1);
 assert.equal(run('goldMines[0].gold'), 8000);

@@ -82,6 +82,7 @@ const scene = vm.createContext({
     get3DRenderOwnerColor:()=>'#fff', get3DDamageFlashTint:(_,c)=>c,
     getOverlapFadeForTile:()=>{throw Error('walkable structures must not flatten');}
 });
+vm.runInContext("var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;",scene); // (Object cells: this fixture's grid.)
 const pushStart=renderer.indexOf('function push3DRenderObject(');
 vm.runInContext(renderer.slice(pushStart,renderer.indexOf('function drawWithTrackedContextTransform(',pushStart)),scene);
 for (const name of ['pushSpawner','pushBarrack','pushCellItem']) {

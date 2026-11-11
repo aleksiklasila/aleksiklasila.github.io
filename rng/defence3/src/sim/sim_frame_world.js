@@ -476,7 +476,7 @@ function simFrameStructureDetails() {
     for (let j = 0; j + 1 < _simWatchedStructures.length; j += 2) {
         let gx = _simWatchedStructures[j], gy = _simWatchedStructures[j + 1];
         let cell = grid[gy] && grid[gy][gx];
-        let e = getTileEntityRef(gx, gy) || (cell && cell.item);
+        let e = getTileEntityRef(gx, gy) || (cell && cellItemGet(cell));
         if (!e) continue;
         let d = { gx, gy };
         for (let k in e) {
@@ -496,7 +496,8 @@ let _pageStructViews = [];      // by slot
 let _pageProjViews = [];        // by slot
 
 // Accessors of structure views over the table's columns.
-function _pageStructCol(v, k) { let s = v._s; return s >= 0 ? _pageTables.s[k][s] : (v._last ? v._last[k] : 0); }
+const _pageStructGone = pageGoneRing();
+function _pageStructCol(v, k) { let s = v._s; return s >= 0 ? _pageTables.s[k][s] : pageGoneGet(_pageStructGone, v, v._last, k); }
 function _pageStructFlag(v, bit) { return (_pageStructCol(v, 'flags') & bit) !== 0; }
 function _pageStructDetail(v, k) { let d = v._det; return d ? d[k] : undefined; }
 function _pageNum(v, col) { let x = _pageStructCol(v, col); return x >= 0 ? x : undefined; }
@@ -622,19 +623,19 @@ function _pageStructProto(kind, type) {
 }
 function _pageNewStructView(kind, type, s, serial) {
     let v = Object.create(_pageStructProto(kind, type));
-    v._s = s; v._serial = serial; v._kind = kind; v.dead = false; v._last = null; v._det = null;
+    v._s = s; v._serial = serial; v._kind = kind; v.dead = false; v._last = -1; v._det = null;
     return v;
 }
+let _PAGE_STRUCT_GONE_KEYS = null;
 function _pageFreezeStruct(v) {
-    let F = _pageTables.s, s = v._s, last = {};
+    let F = _pageTables.s, s = v._s, r = -1;
     if (F && s >= 0) {
-        for (let k of SIM_STRUCT_SPEC.f32) last[k] = F[k][s];
-        for (let k of SIM_STRUCT_SPEC.i32) last[k] = F[k][s];
-        for (let k of SIM_STRUCT_SPEC.i16) last[k] = F[k][s];
-        for (let k of SIM_STRUCT_SPEC.u8) last[k] = F[k][s];
+        if (!_PAGE_STRUCT_GONE_KEYS) _PAGE_STRUCT_GONE_KEYS = [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8];
+        r = pageGonePut(_pageStructGone, F, _PAGE_STRUCT_GONE_KEYS, s, v);
+        // (Gone: no energy left, whatever its last frame said.)
+        if (_pageStructGone.cols.energy) _pageStructGone.cols.energy[r] = 0;
     }
-    last.energy = 0;
-    v._last = last; v._s = -1; v.dead = true;
+    v._last = r; v._s = -1; v.dead = true;
 }
 
 // A structure view's page list (towers, barracks, ...; cell items have none:
@@ -664,13 +665,11 @@ function _pageStructListRemove(v) {
 }
 // A view onto its tile (the cell's item, the tile index), and off it.
 function _pageStructPlace(v) {
-    const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy];
-    if ((kind === 1 || kind === 2 || kind === 3) && row && row[gx]) row[gx].item = v;
+    const kind = v._kind, gx = v.gx, gy = v.gy;
     setTileEntity(gx, gy, _snapTileTypeOf(SIM_STRUCT_KINDS[kind], v), v);
 }
 function _pageStructUnplace(v) {
-    const kind = v._kind, gx = v.gx, gy = v.gy, row = grid[gy], cell = row ? row[gx] : null;
-    if (cell && cell.item === v) cell.item = null;
+    const gx = v.gx, gy = v.gy;
     clearTileEntity(gx, gy, v);
 }
 // (Probes: how membership changes were applied.)
@@ -781,12 +780,10 @@ function pageApplyStructures(table, c) {
         astarMines.length = 0; for (let m of lists[5]) astarMines.push(m);
         // The tile index and the cells' items.
         initTileEntityLookup();
-        for (let row of grid) for (let cell of row) cell.item = null;
         for (let kind = 0; kind <= 5; kind++) {
             let list = SIM_STRUCT_KINDS[kind];
             for (let v of lists[kind]) {
                 let row = grid[v.gy];
-                if ((kind === 1 || kind === 2 || kind === 3) && row && row[v.gx]) row[v.gx].item = v;
                 setTileEntity(v.gx, v.gy, _snapTileTypeOf(list, v), v);
             }
         }
@@ -995,15 +992,15 @@ function pageApplyState(st) {
             // (Its piece of the cached background again: a wall or a mine
             // that became floor, a tile that changed hands. The flag below
             // alone redraws nothing: a mined-out mine kept its rock.)
-            if (cell.type !== type || cell.owner !== owner) {
+            if (cellType[(cell) - 1] !== type || cellOwner[(cell) - 1] !== owner) {
                 ++redrawn;
                 if (redrawn <= 256) {
-                    if (typeof _markCombinedBgTileDirty === 'function') _markCombinedBgTileDirty(idx % GRID_W, Math.floor(idx / GRID_W), 0, cell.type !== type);
+                    if (typeof _markCombinedBgTileDirty === 'function') _markCombinedBgTileDirty(idx % GRID_W, Math.floor(idx / GRID_W), 0, cellType[(cell) - 1] !== type);
                     // (The tile indexes follow the tile, by the journal.)
                     noteTileEntityChanged(idx % GRID_W, Math.floor(idx / GRID_W));
                 } else if (redrawn === 257 && typeof _markCombinedBgFullDirty === 'function') _markCombinedBgFullDirty();
             }
-            cell.type = type; cell.owner = owner;
+            cellType[(cell) - 1] = type; cellOwner[(cell) - 1] = owner;
         }
         if (redrawn) {
             _tileEntityVersion++;
@@ -1024,7 +1021,7 @@ function pageApplyStructureDetails(details, c) {
     if (!details) return;
     for (let d of details) {
         let cell = grid[d.gy] && grid[d.gy][d.gx];
-        let v = getTileEntityRef(d.gx, d.gy) || (cell && cell.item);
+        let v = getTileEntityRef(d.gx, d.gy) || (cell && cellItemGet(cell));
         if (!v || !v._structView) continue;
         _pageResolveRefs(d);
         v._det = d;

@@ -19,7 +19,7 @@ const result = inst.eval(`(() => {
  startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{},researchLevels:{}});
  applyMainMenuControlsToRuntimeState();startSoloGame();
  for(let y=1;y<GRID_H-1;y++)for(let x=1;x<GRID_W-1;x++){
-  grid[y][x].type=TYPE_FLOOR;simMoveTileTypeChanged(x,y);
+  cellType[(grid[y][x]) - 1]=TYPE_FLOOR;simMoveTileTypeChanged(x,y);
  }
  const us=[];
  for(let y=0;y<${rows};y++)for(let x=0;x<${cols};x++){

@@ -7,7 +7,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
     const unit={unitType:'norm',owner:0,x:48,y:80,energy:37,baseLevel:2,stackCount:1};
     const c=vm.createContext({console,TextDecoder,Blob,Response,CompressionStream,DecompressionStream,gameStarted:true,isMultiplayer:false,gameSeed:123,GRID_W:8,GRID_H:8,TILE:32,MAP_SIZE_MAX:1024,
         currentTick:120,activeTeamIds:[0,1],players:[{energy:1000,astar:500,researchLevels:{}},{energy:1000,astar:500,researchLevels:{}}],
-        grid:Array.from({length:8},()=>Array.from({length:8},()=>({type:0,owner:-1,areaId:0}))),areas:[],goldMines:[],astarMines:[],
+        grid:Array.from({length:8},(_,y)=>Int32Array.from({length:8},(_,x)=>y*8+x+1)),cellType:new Uint8Array(64),cellOwner:new Int8Array(64).fill(-1),cellArea:new Int32Array(64),areas:[],goldMines:[],astarMines:[],
         towers:[],barracks:[],collectorSpawners:[],getCellItemsRowMajor:()=>[],units:new Array(count).fill(unit),getUnitOrderDestinationCode:()=>-55});
     vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/utils/utils_file_io.js'),'utf8'),c);
     vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/utils/utils_solo_snapshot.js'),'utf8'),c);
@@ -21,7 +21,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
         const bytes=fs.statSync(filename).size;
         const scene=await c.readSoloGameSnapshotFile(await fs.openAsBlob(filename));
         let imported=0;
-        for(const record of scene.records)for(const row of record.units||[]){assert.equal(row[0],'norm');assert.equal(row[2],1.5);assert.equal(row[3],2.5);assert.equal(row[7][0],'attackMove');imported++;}
+        const U=scene.cols.units,W=c.SCENE_UNIT_W??11;assert.equal(JSON.stringify(scene.cols.uTypes),'["norm"]');
+        for(let o=0;o<U.length;o+=W){assert.equal(U[o],0);assert.equal(U[o+2],1.5);assert.equal(U[o+3],2.5);assert.equal(U[o+8],1);imported++;}
         assert.equal(imported,count);
         const raw=parts.reduce((n,p)=>n+Buffer.byteLength(p),0);
         console.log('PASS gzip file export / streaming import: '+count.toLocaleString()+' units, '+(raw/1048576).toFixed(1)+' MiB raw, '+(bytes/1048576).toFixed(2)+' MiB gzip');
