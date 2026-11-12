@@ -434,11 +434,11 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (SIM_KERNEL_SP_COUNTS, see spatialCountsDeferEnd). mvBlk: a node step
     // its owner's budget could not cover (the budget glyph, set after it).
     ['spMvOld', Int32Array, 1], ['spMvNew', Int32Array, 1], ['spMvOwn', Int8Array, 1], ['mvBlk', Uint8Array, 1],
-    // Flow movement's committed step (SIM_STEER_TICKS): its destination tile
-    // (-1 none), the tick and the step its last steer committed.
-    // (The steering record, mv.rs SR: [destination tile (cd), tick (ct), tile (ctl), velocity x, y (f32 bits),
-    // floor tile, steady steps, ticks (cn)] a slot: the movement's per-mover words, one cache line half,
-    // not eight columns (~350k lines a tick at 1M).)
+    // Flow movement's steer (mv.rs STEER_TICKS): its destination tile (-1 none), end tick, tile, step and target.
+    // (The steering record, mv.rs SR: [destination tile (cd), end tick (ct; i32 max: none by time), tile (ctl),
+    // velocity x, y a base tick (f32 bits), floor tile, steady until this tick (negative: aim at the target
+    // again first), target point (cn: packed, -1 none)] a slot: the movement's per-mover words, one cache line
+    // half, not eight columns (~350k lines a tick at 1M).)
     ['mvSteer', Int32Array, 8],
     // (The tile it steered in, and for how many ticks the step holds.)
 

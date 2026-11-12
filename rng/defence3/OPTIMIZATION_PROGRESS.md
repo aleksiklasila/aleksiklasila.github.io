@@ -7060,7 +7060,7 @@ helpers, Node 24.
   its next 20 ticks. Note: another session wrote `large-repeat.json` during
   an earlier repeat, so that file and its overlapping timings are not used.
 
-## 2026-11-10 — initialization boundary confirmed; the acquisition chain misses its commit
+## 2026-11-10 ï¿½ initialization boundary confirmed; the acquisition chain misses its commit
 
 - Repeat of the large mixed chaos run (1M start, 65,536 structures, 11
   helpers, dk=1, worker publication, no census, 80 ticks): the automatic
@@ -7114,7 +7114,7 @@ helpers, Node 24.
   large-final}.json(+.jsonl), early-occ*.json, early-acq-eager*.json,
   acq-serial*.json; boundary summary in summary.json.
 
-## 2026-11-10 (later) — the acquisition scan's memory layout
+## 2026-11-10 (later) ï¿½ the acquisition scan's memory layout
 
 - Measured by parts (a temporary P[60] knob in k_acq_sample, removed; the
   scan stage re-run serially after an eager chain, ~510k live units, 475k
@@ -7156,7 +7156,7 @@ helpers, Node 24.
   line and the tile records), and the background order (lane 2 behind lanes
   0, 10, 6, 13) - measure on a quiet machine before any schedule change.
 
-## 2026-11-10 (night) — rendered runs: pace bug, helper oversubscription, post-load GC
+## 2026-11-10 (night) ï¿½ rendered runs: pace bug, helper oversubscription, post-load GC
 
 All measured in headed Edge on the real page (simulation worker, helpers,
 presentation worker, WebGL rendering): `.claude/scene_tps_probe.cjs
@@ -7556,3 +7556,103 @@ what stays expensive. Data in tests/test-runs/render-iso-20261111/.
   whose membership did not change (as before).
 - Frame build in Edge ~66 -> 50-54 ms (one run each; FPS 85-87, simulation
   31-33 ms a tick: within the spread).
+
+## 2026-11-12 - movement / occupancy kernels: analysis and plan (no code change)
+
+- Plan: MOVE_OCCUPANCY_OPTIMIZATION_PLAN.md. Raw data: tests/test-runs/move-occ-plan-20261112/
+  (prof-build helper profiles, occ-sched-probe output, dbgc counters, counters.cjs).
+- Node, chaos-1m-250k, 8 helpers, 30 ticks: tick 129 / 159 / 209 ms (p50 / p95 / max, prof build);
+  helper CPU a tick: mv_move_occupancy 246 ms (24% of helpers), mv_move 113 ms (11%), all 1,023 ms.
+- Kernel 89 a tick: 3,624 jobs, 521k index entries read, 350k units past the need mark, 189k resolved
+  at ~740 ns each (15-20 cache lines of unit columns in spatial order), 633k motion calls (3.4 a unit:
+  blocked diagonal -> x -> y -> four shoulders), 491k footprint tests, 72k shoulder searches, 38k swap
+  looks (748 done), 56k yields. Per-job fixed work ~8 us (leader_dir, cache_chunks, zeroed buffers,
+  Mv::load) = ~29 ms. Every footprint in play is a 1x1 / 3x3 / 5x5 square.
+- Kernel 8 is flat (step4 16%, combat4 16%, move_flow 16%, move_pre0 13%, step_slot 11%): 308k of
+  816k lanes one by one; only ~60k of 300k walkers on the steady vector step.
+- Planned: mover records made by the first stage (32 bytes, per block bucket, sorted by tile and id),
+  the second stage resolving from records and a 49-bit window word (8 direction masks, no repeated
+  footprint tests), steering vectorized in the first stage, a slot-order apply pass. Estimate: kernel
+  89 246 -> 40-70 ms CPU, movement 359 -> 180-230 ms. Remaining after that: kernel 8 (own pass).
+- Later the same day (plan rev 2; outcomes need not match bit for bit, determinism and approximate
+  behaviour must hold): measured at dk 4 too (DK=4, new option of occ-sched-probe and the counter probe):
+  step 197 / 252 / 258 ms, mv_move_occupancy 321 ms and mv_move 132 ms helper CPU a step; 1.19M footprint
+  tests, 121k shoulder searches, 45k swap looks for 1,345 swaps (97% futile), 101k epilogue slots; only
+  161-996 units a step end fully blocked. Kernel 8 at dk 4: move_flow 38%, 68k of 150k steers in the
+  tile of the last steer, step4 finishes ~10k of 300k walkers.
+- Rev 2 design: A (mv_move: requests, vector steering, same-cell steps finished) -> B (block jobs:
+  bucket radix-sorted by position along the heading and id, window word + preference table per cell
+  step, integers only) -> C (mv_move_apply by slot chunks: columns, epilogue, index; the JS tail gone).
+  Then steering by target instead of ticks, a wake wheel for parked units. Estimate: movement ~2x,
+  2-2.5x with the steering rework; kernel 89 4-6x.
+- Plan rev 3 (no half measures): helper CPU by family, dk 1 / dk 4: occupancy 246 / 321 ms, steering looks
+  (mv_flow_*) 169 / 281, mv_move 113 / 132: movement in all 545 / 760 ms = 53 / 47% of the helpers; then
+  acquisition 57 / 208, worker search 33 / 127, visibility 29 / 93.
+- Tick-based windows collapse at dk 4: SIM_FLOW_REFRESH_TICKS 4 makes refresh true every step, the steer
+  window (16 base ticks, 4 near) is 4 steps or 1: 150k move_flow calls and 71k exact looks a step.
+- Prototype (tests/test-runs/move-occ-plan-20261112/mvproto, Rust wasm32 simd128, one thread, 484k units all
+  walking, block-ordered rows, 4-lane step, radix order, window word + preference table, publish):
+  33 ms a step at dk 1 (69 ns a unit), 47 ms at dk 4 (97 ns); parts: step 3.4 ns, order 14, resolve
+  45-70, publish 6-10 (shuffled slots +10). Today 740-940 ns a unit for kernels 8 + 89.
+- Rev 3 design: a persistent block-ordered mover table (~38 bytes a row, SoA slabs of 64 a block, dirty
+  marks + audit), one job a block (step, order, resolve, publish), everything else as events (steering by
+  look not ticks, wheels for wakes and shots, epilogue in block batches). Estimate: kernels 8 + 89 4-7x,
+  movement with looks 3-5x, the helpers total 1.5-1.7x (movement cannot give more than ~2x alone).
+
+## 2026-11-12 - movement plan stage 1: steers by look, not by ticks (mv.rs)
+
+- Plan: MOVE_OCCUPANCY_OPTIMIZATION_PLAN.md, stage 1. Raw data: tests/test-runs/move-occ-stage1-20261112/
+  (builds by step, counters, helper profiles in prof/ and final/, behaviour/ old against new).
+- A steer (the record SR) now holds until its look ends, not for 16 / 4 base ticks: SR_CN is its target
+  point (the look's far tile and side offset, packed), SR_CT an end tick only within 64 tiles of the
+  destination (8 base ticks, 4 within 8 tiles: the arrival in a crowd), SR_STEADY negative = diverted by
+  the footprints, aimed at the target again by the vector step. The vector step (step4) heads for the
+  target (re-aim in f32, exact operations), crosses tiles at any step size (seg_open at several base
+  ticks a step), carries the steer and the floor look over a tile change itself (steer_hold) and stops
+  a step short of the target. The scalar step (held_step: step_flow and move_flow's head) does the same
+  with the unit's speed. SIM_FLOW_REFRESH_TICKS is gone (a steer always checks its record).
+- Looks: a unit on a held steer is not listed (mv_flow_pending) until it is within LOOK_CARRY_MIN tiles
+  of its far tile (the next look asked ahead) or needs one; an answer that names the far tile the steer
+  already heads for leaves the steer standing (mv_flow_commit), any other ends it.
+- Helper CPU a step, chaos-1m-250k, 8 helpers, prof build (tests/profile-families.cjs over
+  occ-sched-probe PROF= profiles; the plan's baseline reproduced by the same script):
+
+  | | dk 1 before -> after | dk 4 before -> after |
+  |---|---|---|
+  | steering looks (mv_flow_*) | 169 -> 87 ms | 281 -> 127 ms |
+  | mv_move (8) | 113 -> 94 | 132 -> 102 |
+  | mv_move_occupancy (89) | 246 -> 206 | 321 -> 285 |
+  | all helpers | 1,012 -> 811 | 1,596 -> 1,281 |
+
+  Step time, release build (tests/move-step-probe.cjs, 30 steps): dk 4 p50 / p95 / max 155 / 194 / 205
+  -> 134 / 167 / 168 ms; dk 1 93 / 114 / 118 -> 87 / 114 / 118 ms. Looks listed a step 95.7k -> 48.0k
+  (dk 4), 54.0k -> 35.1k (dk 1). move_flow calls a step at dk 4: 150k -> 64k; lanes done four at a time
+  341k -> 433k.
+- Two faults found by the checks and fixed:
+  * multiplayer-chaos-determinism diverged at tick 7 (host against guests): the steer's carry compared
+    its record's wall key with another 8x8 block's. The keys (mv.wallBlk9) are each peer's own change
+    counts; only "the same block, unchanged since" is the same on every peer. The carry now stays in the
+    look's block; another block is move_flow's (look_keep, by the line test).
+  * rally-pulse --dk=4: the crowd settled 4x slower with the destination windows in steps (the arrival
+    is tested at a timed steer). Back to base ticks (4 near, 8 further out: at 16 a crowd settled ~25%
+    slower at dk 1 too, a walker used to steer at every tile). Idle at 10 s: dk 1 99.5% before, 99.6%
+    now; dk 4 97.1% / 93.5% (99.7% / 99.1% at 15 s).
+- Checks passing on the final build: flow-looks-commit, nav-look-cache-wall, nav-flow-width,
+  traffic-pressure, occupancy-grid, occupancy-shapes, worker-approach-occupancy, deterministic-sort,
+  lockstep-hash-stream, chaos-scenario-determinism and multiplayer-chaos-determinism (both also with
+  SIM_WORKER=1); crowd-flow.bench advance 1575 / 1575 (dk 1), 6260 / 6258 (dk 4).
+- Tried, not kept (stage 2's first half): the resolve reading a mover's bitmap neighbourhood once
+  (16 rows of 64 cells, own cells cleared) and testing every candidate sweep against it. Outcomes
+  identical (the same position hash over 484k units, 20 steps, dk 1 and dk 4), no gain: kernel 89's
+  wall 32.1 -> 33.5 ms (dk 4), 22.5 -> 24.8 (dk 1). The footprint tests are not what costs; the unit
+  columns read in spatial order are (finding 1 of the plan). Source kept beside the data
+  (occ-window-resolve-not-kept.rs).
+- Remaining, by helper CPU at dk 4: mv_move_occupancy 285 ms (checked_traffic_q's own lines 41, motion
+  and the footprint leaves ~70, traffic_swap 22, move_job's visit 20, epi_slot 20, leader_dir 13,
+  resolve_slot 12, traffic_yield 11, cache_chunks 10), acquisition 178, looks 127, worker search 112,
+  mv_move 102 (step4 27). The looks left are short ones in built-up ground: ~25k units a step within
+  three tiles of an open look's far tile, ~9k on approximations. Not done: plan stages 0 (prototype
+  questions), 2 (preference table), 3 (the mover table), 4 (events and wheels), 5, 6.
+- New tools: tests/move-step-probe.cjs (step time, kernel walls, looks listed, a position hash for
+  comparing builds), tests/profile-families.cjs and tests/profile-self.cjs (helper profiles by kernel
+  family / by function under a kernel).

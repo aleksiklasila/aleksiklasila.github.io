@@ -58,7 +58,12 @@ const W_FLOOR: usize = 13;
 /// The steering record (unit.mvSteer, sim_unit_state.js SIM_STEER_W): SR
 /// words a slot, its fields' words SR_*; the Mv fields point at their word,
 /// a slot's at its index * SR. Words W_FLOOR, W_CD..W_CN and W_STEADY all
-/// bind the record.
+/// bind the record. A steer (see STEER_TICKS): SR_CD its destination tile
+/// (-1 none), SR_CT its end tick (i32::MAX: none by time), SR_CTL the tile
+/// it was made or last carried in, SR_CVX / SR_CVY its step a base tick,
+/// SR_CN its target point (tgt_pack; TGT_NONE: ended by its look's answer),
+/// SR_STEADY the tick before which the vector step takes it (0: not;
+/// negative: the same, aimed at the target again first).
 const SR: usize = 8;
 const SR_CD: usize = 0;
 const SR_CT: usize = 1;
@@ -300,9 +305,44 @@ const W_FMWN: usize = 265;
 const W_COVP: usize = 266;
 const W_COVS: usize = 267;
 
-const SIM_FLOW_REFRESH_TICKS: i32 = 4;
-const SIM_STEER_TICKS: u8 = 16;
-const SIM_STEER_NEAR_TICKS: u8 = 4;
+// A steer holds by its look, not by ticks (the record SR): the unit heads for
+// the steer's target point (SR_CN: the look's far tile and its side offset,
+// packed, tgt_pack) from wherever it is, tile after tile, until it comes
+// within a step of it, enters the look's far tile, the walls around it
+// change (the record's wall key at a tile change), or its look is answered
+// (mv_flow_commit). Diverted by the footprints it keeps its steer and is
+// aimed at the point again (SR_STEADY negative: step4's re-aim). Only within
+// STEER_CROWD_TILES of its destination a steer also ends by time (SR_CT its
+// end tick): STEER_TICKS base ticks, STEER_NEAR_TICKS within 8 tiles, for the
+// arrival in a crowd (the progress since the last timed steer; in base
+// ticks, so a crowd settles as fast at several base ticks a step: by steps
+// it took four times as long at four a step, rally-pulse.bench --dk=4).
+// (8: a walker further out used to steer at every tile, about every ten
+// base ticks: at 16 the arrival came later, a crowd settled ~25% slower.)
+const STEER_TICKS: i32 = 8;
+const STEER_NEAR_TICKS: i32 = 4;
+const STEER_CROWD_TILES: i32 = 64;
+/// SR_CN of a steer without a target point (ended at its look's answer).
+const TGT_NONE: i32 = -1;
+/// The target point's grid: whole pixels << sh, 15 bits an axis.
+#[inline(always)]
+fn tgt_shift(m: &Mv) -> u32 {
+    let px = (m.w.max(m.h) as f64 * m.tile) as u32;
+    (32 - px.leading_zeros()).saturating_sub(15)
+}
+/// (x, y) in pixels on the target grid, packed.
+#[inline(always)]
+fn tgt_pack(m: &Mv, x: f64, y: f64) -> i32 {
+    let sh = tgt_shift(m);
+    let k = 1.0 / (1u32 << sh) as f64;
+    let q = |v: f64| { let r = floor(v * k + 0.5); (if r < 0.0 { 0.0 } else if r > 32767.0 { 32767.0 } else { r }) as i32 };
+    q(x) | (q(y) << 16)
+}
+#[inline(always)]
+fn tgt_xy(m: &Mv, v: i32) -> (f64, f64) {
+    let sh = tgt_shift(m);
+    (((v & 0xffff) << sh) as f64, (((v >> 16) & 0xffff) << sh) as f64)
+}
 /// A full crowd's units in 3x3 tiles (unit.js NAV_CROWD_FULL).
 const SIM_CROWD_FULL: u16 = 18;
 /// sim_parallel.js SIM_REROUTE_TICKS.
@@ -352,6 +392,8 @@ struct Mv {
     /// The step's base ticks (simDk, P[58]; at least 1) and as a double.
     dk: i32,
     dkf: f64,
+    /// (8x8 wall blocks a row: the wall keys' index, P[30].)
+    wbw: i32,
     /// The profiles' atlas headers (null: none).
     atlh: [*const i32; NAV_PROFILES],
     atl: *mut u8,
@@ -687,6 +729,7 @@ impl Mv {
             pair_holds: true,
             dk: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) } else { 1 } },
             dkf: { let k = to_i32(rd(f, 58)); if k > 1 { k.min(64) as f64 } else { 1.0 } },
+            wbw: to_i32(rd(f, 30)),
             atlh: {
                 let mut h = [0 as *const i32; NAV_PROFILES];
                 for (p, e) in h.iter_mut().enumerate() {
@@ -2072,7 +2115,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
     }
     // (Diverted (the pressure, a shoulder, a swap, the footprints): its steady window ends; its steering stands,
     // the flow's heading from its tile is the same: re-steering every blocked unit every tick was ~350k steers a tick at 1M.)
-    if tx!=nx || ty!=ny {wr(m.steady, (s) * SR,0);}
+    if tx!=nx || ty!=ny {let st=rd(m.steady, (s) * SR);if st>0{wr(m.steady, (s) * SR,-st);}}
     if tx!=original_nx || ty!=original_ny {
         wr(m.vx,s,(tx-ox) as f64/(8.0*m.dkf));wr(m.vy,s,(ty-oy) as f64/(8.0*m.dkf));
     }
@@ -2230,7 +2273,9 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
         let on1 = i32x4_bitmask(v128_and(i32x4_eq(on, one), i32x4_eq(v128_and(fl, i32x4_splat(64)), zero))) as i32;
         dbgc!(m, 25, on1.count_ones());
     }
-    ok = v128_and(ok, i32x4_lt(ti, sr_ld4(m.steady as *const i32, s)));
+    // (Negative: the footprints diverted its last step; aimed again below.)
+    let steady = sr_ld4(m.steady as *const i32, s);
+    ok = v128_and(ok, i32x4_lt(ti, i32x4_abs(steady)));
     #[cfg(feature = "dbgc")]
     let cand1 = i32x4_bitmask(ok) as i32;
     #[cfg(feature = "dbgc")]
@@ -2249,16 +2294,65 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     ok = v128_and(ok, v128_and(i32x4_ge(gx, zero), i32x4_lt(gx, i32x4_splat(m.w))));
     ok = v128_and(ok, v128_and(i32x4_ge(gy, zero), i32x4_lt(gy, i32x4_splat(m.h))));
     let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
-    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.ctl as *const i32, s)));
-    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.floor as *const i32, s)));
-    // (The committed step is per base tick: dk of them this step.)
-    let mut vx = sr_ld4(m.cvx as *const i32, s);
-    let mut vy = sr_ld4(m.cvy as *const i32, s);
-    if m.dk > 1 {
-        let k = f32x4_splat(m.dk as f32);
-        vx = f32x4_mul(vx, k);
-        vy = f32x4_mul(vy, k);
+    // In another tile than its steer's or its floor's (its last step crossed
+    // one): the steer carried on (steer_hold), the tile's floor looked at
+    // (nothing hostile built there: the floor's tile moved on; else the lane
+    // is step_slot's), one by one: a lane crosses a tile every few steps.
+    {
+        let at = v128_and(i32x4_eq(tl, sr_ld4(m.ctl as *const i32, s)), i32x4_eq(tl, sr_ld4(m.floor as *const i32, s)));
+        let off = i32x4_bitmask(v128_andnot(ok, at)) as i32;
+        if off != 0 {
+            let (tla, gxa, gya): ([i32; 4], [i32; 4], [i32; 4]) = (core::mem::transmute(tl), core::mem::transmute(gx), core::mem::transmute(gy));
+            let mut drop = 0i32;
+            for l in 0..4usize {
+                if off & (1 << l) == 0 {
+                    continue;
+                }
+                let q = s + l;
+                let dk = rd(m.dest, q);
+                if tla[l] == dk || !steer_hold(m, q, tla[l], gxa[l], gya[l], dk) {
+                    drop |= 1 << l;
+                    continue;
+                }
+                if rd(m.floor, q * SR) != tla[l] {
+                    let code = rd(m.sc, tla[l] as usize) as i32;
+                    if code != -1 && code != rd(m.own, q) as i32 {
+                        drop |= 1 << l;
+                        continue;
+                    }
+                    wr(m.floor, q * SR, tla[l]);
+                }
+            }
+            ok = v128_andnot(ok, i32x4_ne(v128_and(i32x4_splat(drop), i32x4(1, 2, 4, 8)), zero));
+        }
     }
+    // (The committed step is per base tick: dk of them this step.)
+    let cvx0 = sr_ld4(m.cvx as *const i32, s);
+    let cvy0 = sr_ld4(m.cvy as *const i32, s);
+    // Its way to the steer's target point (SR_CN), in pixels: a step that
+    // would reach it ends the steer (move_flow looks again); a diverted lane
+    // heads for the point from where it is now, at its step's speed (exact
+    // f32 operations: the same on every peer).
+    let dkf4 = f32x4_splat(m.dk as f32);
+    let tg = sr_ld4(m.cn as *const i32, s);
+    let tsh = tgt_shift(m);
+    let m16 = i32x4_splat(0xffff);
+    let ddx = f32x4_sub(f32x4_convert_i32x4(i32x4_shl(v128_and(tg, m16), tsh)), px4(x));
+    let ddy = f32x4_sub(f32x4_convert_i32x4(i32x4_shl(v128_and(u32x4_shr(tg, 16), m16), tsh)), px4(y));
+    let d2 = f32x4_add(f32x4_mul(ddx, ddx), f32x4_mul(ddy, ddy));
+    let sp2 = f32x4_add(f32x4_mul(cvx0, cvx0), f32x4_mul(cvy0, cvy0));
+    let step2 = f32x4_mul(sp2, f32x4_mul(dkf4, dkf4));
+    ok = v128_and(ok, v128_and(i32x4_ne(tg, i32x4_splat(TGT_NONE)), f32x4_gt(d2, step2)));
+    let aim = v128_and(ok, i32x4_lt(steady, zero));
+    let (mut cvx, mut cvy) = (cvx0, cvy0);
+    if v128_any_true(aim) {
+        let k = f32x4_div(f32x4_sqrt(sp2), f32x4_sqrt(d2));
+        cvx = v128_bitselect(f32x4_mul(ddx, k), cvx0, aim);
+        cvy = v128_bitselect(f32x4_mul(ddy, k), cvy0, aim);
+    }
+    // (The committed step is per base tick: dk of them this step.)
+    let vx = f32x4_mul(cvx, dkf4);
+    let vy = f32x4_mul(cvy, dkf4);
     let nx = i32x4_add(x, q8x4(vx));
     let ny = i32x4_add(y, q8x4(vy));
     let stay = v128_and(i32x4_eq(tile4(m, nx), gx), i32x4_eq(tile4(m, ny), gy));
@@ -2282,20 +2376,25 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     // (Ground lanes stepping into another tile: taken when that tile is open
     // to them (step_flow's commit without a slide, flow_slide 0), checked
     // one by one: few lanes cross on a tick.)
-    // (Several base ticks a step: no crossing here, move_flow steers it.)
-    let cross = if m.dk > 1 { 0 } else { i32x4_bitmask(v128_andnot(ok, v128_or(stay, fly4))) as i32 };
+    // (Several base ticks a step: every tile the step passes open, seg_open.
+    // The lane is in another tile than its steer's then: its next step is
+    // step_flow's, which carries the steer on, steer_hold.)
+    let cross = i32x4_bitmask(v128_andnot(ok, v128_or(stay, fly4))) as i32;
     ok = v128_and(ok, v128_or(stay, fly4));
     let mut bits = i32x4_bitmask(ok) as i32;
     if cross != 0 {
         let ngx: [i32; 4] = core::mem::transmute(tile4(m, nx));
         let ngy: [i32; 4] = core::mem::transmute(tile4(m, ny));
+        let (xa, ya, nxa, nya): ([i32; 4], [i32; 4], [i32; 4], [i32; 4]) = (core::mem::transmute(x), core::mem::transmute(y), core::mem::transmute(nx), core::mem::transmute(ny));
         for l in 0..4usize {
             if cross & (1 << l) == 0 || ngx[l] < 0 || ngx[l] >= m.w || ngy[l] < 0 || ngy[l] >= m.h {
                 continue;
             }
             let np = rd(m.npr, s + l) as usize;
             let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else { m.wall };
-            if rd(wl, (ngy[l] * m.w + ngx[l]) as usize) == 0 {
+            let open = if m.dk > 1 { seg_open(wl, m.w, m.h, xa[l] as f64 * 0.125, ya[l] as f64 * 0.125, nxa[l] as f64 * 0.125, nya[l] as f64 * 0.125, m.itile, m.tile) }
+                else { rd(wl, (ngy[l] * m.w + ngx[l]) as usize) == 0 };
+            if open {
                 bits |= 1 << l;
                 dbgc!(m, 30);
             }
@@ -2379,6 +2478,19 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     if v128_any_true(v128_and(mk, v128_or(v128_xor(ovx, vx), v128_xor(ovy, vy)))) {
         mv_store32(m,pvx,vx,mk);
         mv_store32(m,pvy,vy,mk);
+    }
+    // (The lanes aimed again: their step and window into the record.)
+    let aimed = v128_and(aim, mk);
+    if v128_any_true(aimed) {
+        let ab = i32x4_bitmask(aimed) as i32;
+        let (ax, ay, sa): ([i32; 4], [i32; 4], [i32; 4]) = (core::mem::transmute(cvx), core::mem::transmute(cvy), core::mem::transmute(i32x4_abs(steady)));
+        for l in 0..4usize {
+            if ab & (1 << l) != 0 {
+                *(m.cvx as *mut i32).add((s + l) * SR) = ax[l];
+                *(m.cvy as *mut i32).add((s + l) * SR) = ay[l];
+                *m.steady.add((s + l) * SR) = sa[l];
+            }
+        }
     }
     let (nx,ny)=checked_positions4(m,s,nx,ny,bits);
     let stay=v128_and(i32x4_eq(tile4(m,nx),gx),i32x4_eq(tile4(m,ny),gy));
@@ -2607,7 +2719,7 @@ unsafe fn step_flow(
     let f = rd(m.fl, s);
     let id = rd(m.id, s);
     let dk = rd(m.dest, s);
-    if rd(m.cd, (s) * SR) != dk || t - rd(m.ct, (s) * SR) >= rd(m.cn, (s) * SR) as i32 {
+    if rd(m.cd, (s) * SR) != dk || t >= rd(m.ct, (s) * SR) || rd(m.cn, (s) * SR) == TGT_NONE {
         return;
     }
     if !(rd(m.en, s) > 0.0) || rd(m.sep, s) as f64 == absent || rd(m.dead, s) != 0 {
@@ -2623,7 +2735,7 @@ unsafe fn step_flow(
     }
     let (gx, gy) = (gxf as i32, gyf as i32);
     let tl = gy * w + gx;
-    if tl == dk || tl != rd(m.ctl, (s) * SR) {
+    if tl == dk {
         return;
     }
     let tw = t.wrapping_add(id);
@@ -2654,37 +2766,120 @@ unsafe fn step_flow(
     if t < rd(m.rdy, s) {
         return;
     }
-    let mut vx = rd(m.cvx, (s) * SR) * m.dkf;
-    let mut vy = rd(m.cvy, (s) * SR) * m.dkf;
-    let sgx = floor((x + vx) * itile);
-    let sgy = floor((y + vy) * itile);
-    // (Several base ticks a step leaving the tile: steered by move_flow.)
-    if m.dk > 1 && (sgx != gx as f64 || sgy != gy as f64) {
+    let np = rd(m.npr, s) as usize;
+    let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else if (f & 32) != 0 { m.airw } else { m.wall };
+    if !held_step(m, s, x, y, gx, gy, tl, dk, f, wl, q, iq) {
         return;
     }
-    if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
-        let np = rd(m.npr, s) as usize;
-        let wl = if np < NAV_PROFILES && !m.nav.get_unchecked(np).walls.is_null() { m.nav.get_unchecked(np).walls } else { m.wall };
-        let sl = flow_slide(wl, w, h, gx, gy, sgx, sgy);
-        if sl != 0 {
-            if sl & 1 != 0 {
-                vx = 0.0;
-            }
-            if sl & 2 != 0 {
-                vy = 0.0;
-            }
-            wr(m.cd, (s) * SR, -1);
-            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
-        }
-    }
-    commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
     wr(m.stept, s - m.stepbase, 1);
-    // (Its window again, to the step's end or its next look: the steady step
-    // takes the next ticks. Not after a slide: the step ends.)
+    // (Its window again, to the steer's end or its next look: the steady step
+    // takes the next steps. Not after a slide: the steer ended.)
     if !m.steady.is_null() && rd(m.cd, (s) * SR) == dk {
-        let end = rd(m.ct, (s) * SR).wrapping_add(rd(m.cn, (s) * SR) as i32);
+        let end = rd(m.ct, (s) * SR);
         wr(m.steady, (s) * SR, if end > t + 1 { steady_until(m, s, t, end, f, tr, acq_t, wcheck) } else { 0 });
     }
+}
+
+/// Whether slot s's steer holds at tile tl = (gx, gy) toward dk (the caller
+/// has checked its destination, end tick and target point): in the tile it
+/// was made or last carried in; else carried on into this tile when its look
+/// is an open one (straight at its far tile), toward the same destination,
+/// this is not that far tile, and the walls around this tile are as the look
+/// knew them (its record's wall key; another 8x8 block's key differs: there
+/// move_flow carries the look itself, by its line test, look_keep). A short
+/// look's steer (to the next tile) and an approximation's end with their tile.
+#[inline(always)]
+unsafe fn steer_hold(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32) -> bool {
+    if tl == rd(m.ctl, (s) * SR) {
+        return true;
+    }
+    let r = m.nv.add(s * NV_STRIDE);
+    let fo = *r.add(NV_FO);
+    if *r.add(NV_D) != dk || *r.add(NV_N1) < 0 || (fo & 1) == 0 || (fo >> 1) == tl || (*r.add(NV_G) & LOOK_APPROX) != 0 {
+        return false;
+    }
+    // (The wall key is a count of this peer's own history: a record's is
+    // compared with its own block's later value only, never another block's:
+    // peers that joined at different times hold different counts.)
+    let t0 = *r;
+    if t0 < 0 {
+        return false;
+    }
+    let x0 = irem_f(t0, m.w);
+    if (x0 >> 3) != (gx >> 3) || (idiv(t0 - x0, m.w) >> 3) != (gy >> 3) {
+        return false;
+    }
+    if !m.wblk9.is_null() && rd(m.wblk9, ((gy >> 3) * m.wbw + (gx >> 3)) as usize) != *r.add(NV_W) {
+        return false;
+    }
+    dbgc!(m, 40);
+    wr(m.ctl, (s) * SR, tl);
+    true
+}
+
+/// A held steer's step for slot s at (x, y) in tile tl = (gx, gy): toward its
+/// target point at its speed (aimed from where it is: a diverted unit heads
+/// for the same point), written (commit_step). False, nothing written: no
+/// steer that holds here (steer_hold), the point within this step's reach
+/// (the look's end: move_flow looks again), or several base ticks' step
+/// through a tile that is not open. A ground step of one base tick into a
+/// wall slides along it and ends the steer.
+#[cfg_attr(not(feature = "prof"), inline(always))]
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn held_step(m: &Mv, s: usize, x: f64, y: f64, gx: i32, gy: i32, tl: i32, dk: i32, f: u8, wl: *const u8, q: f64, iq: f64) -> bool {
+    let tg = rd(m.cn, (s) * SR);
+    if rd(m.cd, (s) * SR) != dk || m.t >= rd(m.ct, (s) * SR) || tg == TGT_NONE || !steer_hold(m, s, tl, gx, gy, dk) {
+        return false;
+    }
+    let (tx, ty) = tgt_xy(m, tg);
+    let (dx, dy) = (tx - x, ty - y);
+    let dist = sqrt(dx * dx + dy * dy);
+    let mut spd = mv_stat(m, s, 0, m.spd);
+    if st_frz(m, s) > 0 {
+        spd *= 0.5;
+    }
+    if st_snd(m, s) > 0 {
+        spd *= 0.5;
+    }
+    if !(spd > 0.0) || !(dist > spd * m.dkf) {
+        return false;
+    }
+    // (As the record holds it: f32, the vector step's values.)
+    let cvx = ((dx / dist) * spd) as f32;
+    let cvy = ((dy / dist) * spd) as f32;
+    let mut vx = cvx as f64 * m.dkf;
+    let mut vy = cvy as f64 * m.dkf;
+    let itile = m.itile;
+    let sgx = floor((x + vx) * itile);
+    let sgy = floor((y + vy) * itile);
+    let mut slid = false;
+    if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
+        if m.dk > 1 {
+            if !seg_open(wl, m.w, m.h, x, y, x + vx, y + vy, itile, m.tile) {
+                return false;
+            }
+        } else {
+            let sl = flow_slide(wl, m.w, m.h, gx, gy, sgx, sgy);
+            if sl != 0 {
+                if sl & 1 != 0 {
+                    vx = 0.0;
+                }
+                if sl & 2 != 0 {
+                    vy = 0.0;
+                }
+                slid = true;
+            }
+        }
+    }
+    if slid {
+        wr(m.cd, (s) * SR, -1);
+        if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
+    } else {
+        wr(m.cvx, (s) * SR, cvx as f64);
+        wr(m.cvy, (s) * SR, cvy as f64);
+    }
+    commit_step(m, s, x, y, vx, vy, gx, gy, tl, q, iq);
+    true
 }
 
 /// The look's box clamped to the map, as the kernels clamp it.
@@ -5240,8 +5435,33 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
         let k = match flow_key(&m, s, wver, wbw) { Some(k) => { s += 1; k }, None => { s += 1; continue } };
         let s = s - 1;
         let r = m.nv.add(s * NV_STRIDE);
-        if *r == k.tl && *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) == k.ver && *r.add(NV_W) == k.wv {
+        // (Its record this tile's exact look: as the walls around are now, or
+        // with a steer made on it that holds here: changed walls matter at
+        // its next tile, where its step tests them and its turn looks again.)
+        if *r == k.tl && *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) == k.ver
+            && (*r.add(NV_W) == k.wv || (*r.add(NV_N1) >= 0 && rd(m.cd, (s) * SR) == k.dk && rd(m.ctl, (s) * SR) == k.tl && rd(m.cn, (s) * SR) != TGT_NONE)) {
             continue;
+        }
+        // (On a held steer of an exact open look of this build, its far tile
+        // still LOOK_CARRY_MIN tiles off or its destination: nothing to ask.
+        // Nearer, its next look is asked here, ahead of the far tile: the
+        // answer ends the steer, mv_flow_commit.)
+        // (In whichever tile along it: where the steer is not carried on as
+        // it is (another block's walls, steer_hold), its next turn carries
+        // the look by its line test or approximates, and is listed then.)
+        if rd(m.cd, (s) * SR) == k.dk && rd(m.cn, (s) * SR) != TGT_NONE
+            && *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) == k.ver && *r.add(NV_N1) >= 0 && (*r.add(NV_FO) & 1) != 0 {
+            let far = *r.add(NV_FO) >> 1;
+            let fx = irem_f(far, m.w);
+            let fy = idiv(far - fx, m.w);
+            // (A look made that near its far tile already (the open ground
+            // ends there): a newer one from here names the same tile; the
+            // next is asked at the far tile.)
+            let rx = irem_f(*r, m.w);
+            let made_near = *r >= 0 && (fx - rx).abs().max((fy - idiv(*r - rx, m.w)).abs()) < LOOK_CARRY_MIN;
+            if far != k.tl && (far == k.dk || made_near || (fx - k.gx).abs().max((fy - k.gy).abs()) >= LOOK_CARRY_MIN) {
+                continue;
+            }
         }
         // (Straight at its destination: its turn makes that exactly, in O(1).)
         let (v, wl) = flow_nav(&m, &k);
@@ -5251,6 +5471,20 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
         // (No look_keep here: this pass is the tick's own (foreground) and its line tests
         // cost more than they saved. A walker whose look still holds keeps it at its next
         // steer (flow_look); listed, its new look is made beside the tick.)
+        // (Counters: the listed by their record. 87 none or another
+        // destination's, 88 an approximation, 89 a code, 102 this tile's (its
+        // build, kind or walls changed), 103 another tile's open look, 104
+        // another tile's short look; 116 of all: no steer.)
+        #[cfg(feature = "dbgc")]
+        {
+            if *r < 0 || *r.add(NV_D) != k.dk { dbgc!(m, 87); }
+            else if (*r.add(NV_G) & LOOK_APPROX) != 0 { dbgc!(m, 88); }
+            else if *r.add(NV_N1) < 0 { dbgc!(m, 89); }
+            else if *r == k.tl { dbgc!(m, 102); }
+            else if (*r.add(NV_FO) & 1) != 0 { dbgc!(m, 103); }
+            else { dbgc!(m, 104); }
+            if rd(m.cd, (s) * SR) != k.dk || rd(m.cn, (s) * SR) == TGT_NONE { dbgc!(m, 116); }
+        }
         let e = pend.add((base + n) * FLOW_W);
         *e = rd(m.id, s); *e.add(1) = k.tl; *e.add(2) = k.dk; *e.add(3) = k.fid;
         *e.add(4) = k.kp; *e.add(5) = k.ver; *e.add(6) = k.lwv; *e.add(7) = k.fgen;
@@ -5404,10 +5638,24 @@ pub unsafe extern "C" fn mv_flow_commit(a: u32, chunk: i32) {
             dbgc!(m, 108);
         }
         dbgc!(m, 100);
+        // (The answer's far tile is the one its steer heads for (its record's:
+        // an approximation's next tile that the short look confirms, an open
+        // look made again): the steer stands.)
+        let agrees = {
+            let r = m.nv.add(s * NV_STRIDE);
+            code == 1 && *r.add(NV_D) == k.dk && *r.add(NV_N1) >= 0 && *r.add(NV_FO) == *o.add(3) && rd(m.cd, (s) * SR) == k.dk
+        };
+        if agrees { dbgc!(m, 61); }
         if code == 1 {
             nv_put(&m, s, k.tl, k.dk, k.ver, k.wv, k.kind, *o.add(1), *o.add(2), *o.add(3) >> 1, (*o.add(3) & 1) != 0);
         } else {
             nv_put(&m, s, k.tl, k.dk, k.ver, k.wv, k.kind, LOOK_CODE_BASE + code, -1, -1, false);
+        }
+        // (Its steer ends at the answer: its next step steers by it. Its
+        // timed window stays: the target point alone is dropped.)
+        if !agrees {
+            wr(m.cn, (s) * SR, TGT_NONE);
+            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
         }
     }
 }
@@ -5485,35 +5733,31 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     if !on_atl && rd(fmeta, dm + 7) != 1 {
         back!();
     }
-    // (The committed step is per base tick; several a step leaving the tile
-    // are steered again below.)
-    if rd(m.cd, (s) * SR) == dk && rd(m.ctl, (s) * SR) == tl && t - rd(m.ct, (s) * SR) < rd(m.cn, (s) * SR) as i32
-        && (m.dk == 1 || (floor((x + rd(m.cvx, (s) * SR) * m.dkf) * itile) == gx as f64 && floor((y + rd(m.cvy, (s) * SR) * m.dkf) * itile) == gy as f64)) {
-        if tl == dk {
-            back!();
-        }
-        let mut vx = rd(m.cvx, (s) * SR) * m.dkf;
-        let mut vy = rd(m.cvy, (s) * SR) * m.dkf;
-        let sgx = floor((x + vx) * itile);
-        let sgy = floor((y + vy) * itile);
-        if (f & 32) == 0 && (sgx != gx as f64 || sgy != gy as f64) {
-            let sl = flow_slide(wl, w, h, gx, gy, sgx, sgy);
-            if sl != 0 {
-                if sl & 1 != 0 {
-                    vx = 0.0;
-                }
-                if sl & 2 != 0 {
-                    vy = 0.0;
-                }
-                wr(m.cd, (s) * SR, -1);
-            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
-            }
-        }
-        commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
+    // (Its steer holds: on toward its target point, held_step.)
+    if tl == dk {
+        back!();
+    }
+    if held_step(m, s, x, y, gx, gy, tl, dk, f, wl, p.q, p.iq) {
         return;
     }
+    // (Counters: why it steers. 56 no steer (none, a slide's, another
+    // destination), 57 its timed window over, 58 its look answered, 59 in
+    // another tile where the steer is not carried, 60 its target reached.)
+    #[cfg(feature = "dbgc")]
+    {
+        if rd(m.cd, (s) * SR) != dk { dbgc!(m, 56); }
+        else if t >= rd(m.ct, (s) * SR) { dbgc!(m, 57); }
+        else if rd(m.cn, (s) * SR) == TGT_NONE { dbgc!(m, 58); }
+        else if rd(m.ctl, (s) * SR) != tl { dbgc!(m, 59); }
+        else { dbgc!(m, 60); }
+    }
+    // (A steer inside its timed window: this one is not the window's end (its
+    // look was answered, another block's walls, its far tile): the window and
+    // the progress sample stay the last timed steer's.)
+    let timed = rd(m.cd, (s) * SR) == dk && t < rd(m.ct, (s) * SR);
+    let timed_end = rd(m.ct, (s) * SR);
     wr(m.cd, (s) * SR, -1);
-            if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
+    if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
     let nv = match navp {
         Some(n) => n,
         None => back!(),
@@ -5526,9 +5770,6 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let n_c = rd(nv.meta, 0);
     let ncw = rd(nv.meta, 1);
     let span = if wide { 3 * n_c } else { n_c };
-    if tl == dk {
-        back!();
-    }
     let nld = rd(m.nld, s);
     if nld == (-2 - dk) as f64 {
         let look = (tw & 15) < m.dk;
@@ -5538,7 +5779,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         wr(m.nld, s, -1.0);
     }
     let mut nav_ld = -1.0;
-    if (f & 128) == 0 && (dx0 - gx).abs() <= 64 && (dy0 - gy).abs() <= 64 {
+    let crowd = (f & 128) == 0 && (dx0 - gx).abs() <= STEER_CROWD_TILES && (dy0 - gy).abs() <= STEER_CROWD_TILES;
+    let near_dest = (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8;
+    if crowd {
         let ex = dx0 as f64 * tile + 16.0 - x;
         let ey = dy0 as f64 * tile + 16.0 - y;
         let now = sqrt(ex * ex + ey * ey);
@@ -5557,9 +5800,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             wc(m.wk, s, 5);
             back!();
         }
-        // (The progress expected since the last look: its base ticks, at
-        // least a step's.)
-        if last >= 0.0 && last - now < es * 0.3 * (SIM_STEER_NEAR_TICKS as i32).max(m.dk) as f64 {
+        // (The progress expected since the last timed steer: a part of the
+        // near window's way, at least a step's.)
+        if !timed && last >= 0.0 && last - now < es * 0.3 * STEER_NEAR_TICKS.max(m.dk) as f64 {
             // (Held at a full crowd's edge: arrived, however far its middle
             // is: a big crowd is wider than `near`.)
             if (near || (rd(m.cwd, s) >= SIM_CROWD_FULL && rd(m.cwn, s) == 2)) && rd(m.cwt, s) == t && rd(m.cwn, s) != 0 {
@@ -5571,7 +5814,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
                 stand!();
             }
         }
-        nav_ld = now;
+        nav_ld = if timed { last } else { now };
     }
     // The look-ahead (simFlowLook): clusters of 2^cs tiles.
     let cs = 31 - (n_c as u32).leading_zeros() as i32;
@@ -5600,7 +5843,8 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
     };
     let wv = if m.wblk9.is_null() { p.wver } else { rd(m.wblk9, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
-    let refresh = (tw & (SIM_FLOW_REFRESH_TICKS - 1)) < m.dk;
+    // (A steer is a look's end now, not a tick's: its record always checked against today's build and walls.)
+    let refresh = true;
     // (The shared looks' wall key: the walls within their reach (32 steps and one tile: +-5 blocks), not every wall of the map:
     // in a battle some wall changes every step, and every look was made again each step.)
     let lwv = if m.wblk81.is_null() { p.wver } else { rd(m.wblk81, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
@@ -5682,6 +5926,18 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             stand!();
         }
     }
+    // (The target point as the record holds it, the held steps' aim.)
+    let tg = tgt_pack(m, tx, ty);
+    {
+        let (qx, qy) = tgt_xy(m, tg);
+        let (ex, ey) = (qx - x, qy - y);
+        let ed = sqrt(ex * ex + ey * ey);
+        if ed > 0.0 {
+            dx = ex;
+            dy = ey;
+            dist = ed;
+        }
+    }
     let mut spd = mv_stat(m, s, 0, m.spd);
     if st_frz(m, s) > 0 {
         spd *= 0.5;
@@ -5703,6 +5959,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             vy = ay;
         }
     }
+    let mut slid = false;
     if (f & 32) == 0 {
         let sl = flow_slide(wl, w, h, gx, gy, floor((x + vx) * itile), floor((y + vy) * itile));
         if sl & 1 != 0 {
@@ -5713,21 +5970,25 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             vy = 0.0;
             cvy = 0.0;
         }
+        slid = sl != 0;
     }
     if rd(m.ctl, (s) * SR) == tl { dbgc!(m, 33); }
+    // The steer's end tick: none by time out of its destination's reach; in
+    // it the window of the last timed steer, or a new one. A step that slides
+    // along a wall is this step's alone (its heading is not the target's).
+    let end = if slid { t } else if !crowd { i32::MAX } else if timed { timed_end } else { t + (if near_dest { STEER_NEAR_TICKS } else { STEER_TICKS }) };
     wr(m.cd, (s) * SR, dk);
-    wr(m.ct, (s) * SR, t);
+    wr(m.ct, (s) * SR, end);
     wr(m.cvx, (s) * SR, cvx);
     wr(m.cvy, (s) * SR, cvy);
     wr(m.ctl, (s) * SR, tl);
-    let cn = if (*nr.add(NV_G) & LOOK_APPROX) != 0 { 1 } else if (dx0 - gx).abs() <= 8 && (dy0 - gy).abs() <= 8 { SIM_STEER_NEAR_TICKS } else { SIM_STEER_TICKS };
     // (Counters: 31 steers near the destination, 32 far, 33 steers in the
     // tile the last one was made in.)
-    dbgc!(m, if cn == SIM_STEER_NEAR_TICKS { 31 } else { 32 });
-    wr(m.cn, (s) * SR, cn as i32);
+    dbgc!(m, if near_dest { 31 } else { 32 });
+    wr(m.cn, (s) * SR, tg);
     commit_step(m, s, x, y, vx, vy, gx, gy, tl, p.q, p.iq);
     if !m.steady.is_null() {
-        wr(m.steady, (s) * SR, if tl != dk { steady_until(m, s, t, t + cn as i32, f, p.tr, p.acq_t, p.wcheck) } else { 0 });
+        wr(m.steady, (s) * SR, if tl != dk && end > t + 1 { steady_until(m, s, t, end, f, p.tr, p.acq_t, p.wcheck) } else { 0 });
     }
 }
 

@@ -268,23 +268,19 @@ SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
 // alike: the next tile n1 (a wall the navigation predates in the way: the
 // open side neighbour toward where the flow leads past it), the one after
 // (n2), and on open ground up to 6 tiles ahead (Far; Open 1). Cached per
-// tile; a new build or a nearby wall change makes it again only on the
-// unit's refresh tick (`refresh`: a build does not redo every unit's at
-// once; until then it steers by the old one, and slides along walls). 1: in
-// LC; 0: no way there; -1: walled in on every side; -2: a step that is not
-// to a neighbouring tile (a bad build).
-const SIM_FLOW_REFRESH_TICKS = 4;
+// tile; a new build or a nearby wall change makes it again when the unit
+// next steers. 1: in LC; 0: no way there; -1: walled in on every side; -2:
+// a step that is not to a neighbouring tile (a bad build).
 // Flow movement steers (the look-ahead, the side offset, the crowd) when it
-// has no committed step, in another tile than the one it steered in (the
-// look-ahead goes by tile), and when its step's time is up: SIM_STEER_TICKS
-// ticks, SIM_STEER_NEAR_TICKS within 8 tiles of its destination (a crowd
-// there); between, it goes on along the step its last steer committed
-// (unit.mvCD destination, mvCTl tile, mvCT tick, mvCN ticks, mvCVx/y),
-// sliding along a wall it runs into (then it steers next tick). The
-// movement kernel and Unit._followNavNode alike. (Its crowd check compares
-// the distance made good since its last steer: SIM_STEER_NEAR_TICKS ticks'
-// worth.)
-const SIM_STEER_TICKS = 16, SIM_STEER_NEAR_TICKS = 4;
+// has no steer that holds: a steer (the record unit.mvSteer, mv.rs SR and
+// STEER_TICKS) holds until the unit comes within a step of its target point
+// (the look's far tile and side offset), enters that tile, leaves the
+// look's 8x8 wall block or finds its walls changed, or its look is
+// answered; within 64 tiles of the destination also by time (8 base ticks,
+// 4 within 8 tiles: the arrival in a crowd, by the distance made good
+// since the last timed steer). Between steers it heads for the target
+// point from wherever it is, sliding along a wall it runs into (then it
+// steers next step).
 // Tile n's column and row, n a step from tile t (column tx, row ty): a
 // side neighbour's from the difference, anything else (a portal's pair)
 // divided out.
@@ -443,7 +439,7 @@ function _simAcqHit(CBTK, CBT, CTI, CRS, RNG, ID, DEAD, s, stamp) {
     return q >= 0 && !DEAD[q] && (ID[q] | 0) === CTI[s];
 }
 
-// Flow movement between steers (SIM_STEER_TICKS), the common case of the
+// Flow movement between steers (mv.rs STEER_TICKS), the common case of the
 // movement kernel on its own (run just before it, the same parameters): a
 // flow unit off its steer tick with a committed step, whose every per-tick
 // check passes as SIM_KERNEL_MOVE's would (alive, indexed, on the map, its

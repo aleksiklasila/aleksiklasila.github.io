@@ -35,6 +35,8 @@ const out = process.argv[5] || '';
     host.scratch.scene = null;
     host.scratch.Worker = require('./real-sim-helper.cjs');
     host.eval(`Worker = __scratch.Worker; navigator.hardwareConcurrency = 32; simParallelInit('', ${helpers})`);
+    // DK=n: n base ticks a step (as play at low TPS).
+    if (process.env.DK) host.eval('simDk=' + Number(process.env.DK) + ';netStepTicks=()=>' + Number(process.env.DK));
     for (let i = 0; i < WARM; i++) host.eval('gameTick()');
     host.eval(`{ __scratch.ct = simHeapArray(Float64Array, 32768); simParallelBind('par.ctrace', __scratch.ct); __scratch.rec = [];
         const pr = simParallelRun; simParallelRun = function (kk, n) {
