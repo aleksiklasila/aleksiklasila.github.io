@@ -5,60 +5,6 @@ use super::*;
 struct Grid { bits:*mut u32, mask:*const i8, w:i32, h:i32, stride:i32, plane:i32, cell:i32, planes:i32, diag:*mut u32 }
 macro_rules! occdiag {($g:expr,$n:expr)=>{#[cfg(feature="dbgc")] {if !$g.diag.is_null(){let p=$g.diag.add($n);*p=(*p).wrapping_add(1);}}};}
 
-// Output-list ranges for spatial jobs. SIMD over tile counts, no unit or
-// bitmap traversal. Kept on the main thread: only 4096 prefix entries at 4M.
-#[no_mangle]
-pub unsafe extern "C" fn occ_prepare(a:u32,_chunk:i32) {
-    let a=waddr(a) as *const i32;
-    let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *mut i32;
-    let cfg=ptr(33);let bw=*cfg.add(5);let bh=*cfg.add(6);let block=*cfg.add(7);
-    let cw=*cfg.add(9);let ch=*cfg.add(10);let epoch=i32x4_splat(*cfg.add(11));
-    let counts=ptr(26);let stamps=ptr(27);let offsets=ptr(32);let mut total=0;
-    for by in 0..bh {for bx in 0..bw {
-        *offsets.add((by*bw+bx) as usize)=total;let mut sum=i32x4_splat(0);
-        for y in by*block..((by+1)*block).min(ch) {
-            let mut x=bx*block;let end=((bx+1)*block).min(cw);
-            while x+4<=end {
-                let k=(y*cw+x) as usize;
-                let valid=i32x4_eq(v128_load(stamps.add(k) as *const v128),epoch);
-                sum=i32x4_add(sum,v128_and(valid,v128_load(counts.add(k) as *const v128)));x+=4;
-            }
-            while x<end {let k=(y*cw+x) as usize;if *stamps.add(k)==*cfg.add(11){total+=*counts.add(k);}x+=1;}
-        }
-        sum=i32x4_add(sum,i32x4_shuffle::<2,3,0,1>(sum,sum));
-        sum=i32x4_add(sum,i32x4_shuffle::<1,0,3,2>(sum,sum));total+=i32x4_extract_lane::<0>(sum);
-    }}
-    *offsets.add((bw*bh) as usize)=total;
-}
-// The same, by block (OCC_COUNT_BLOCKS a chunk): each block's own count into
-// occ.offsets (the simulation thread then sums them up), on the helpers.
-pub(super) const OCC_COUNT_BLOCKS:i32=64;
-#[no_mangle]
-pub unsafe extern "C" fn occ_block_counts(a:u32,chunk:i32) {
-    let a=waddr(a) as *const i32;
-    let ptr=|i:usize|waddr(*a.add(512+i) as u32) as *mut i32;
-    let per=OCC_COUNT_BLOCKS;
-    let cfg=ptr(33);let bw=*cfg.add(5);let bh=*cfg.add(6);let block=*cfg.add(7);
-    let cw=*cfg.add(9);let ch=*cfg.add(10);let ep=*cfg.add(11);let epoch=i32x4_splat(ep);
-    let counts=ptr(26);let stamps=ptr(27);let offsets=ptr(32);
-    let j0=chunk.max(0)*per;let j1=(j0+per).min(bw*bh);
-    for job in j0..j1 {
-        let bx=irem(job,bw);let by=idiv(job,bw);
-        let mut total=0;let mut sum=i32x4_splat(0);
-        for y in by*block..((by+1)*block).min(ch) {
-            let mut x=bx*block;let end=((bx+1)*block).min(cw);
-            while x+4<=end {
-                let k=(y*cw+x) as usize;
-                let valid=i32x4_eq(v128_load(stamps.add(k) as *const v128),epoch);
-                sum=i32x4_add(sum,v128_and(valid,v128_load(counts.add(k) as *const v128)));x+=4;
-            }
-            while x<end {let k=(y*cw+x) as usize;if *stamps.add(k)==ep{total+=*counts.add(k);}x+=1;}
-        }
-        sum=i32x4_add(sum,i32x4_shuffle::<2,3,0,1>(sum,sum));
-        sum=i32x4_add(sum,i32x4_shuffle::<1,0,3,2>(sum,sum));
-        *offsets.add(job as usize)=total+i32x4_extract_lane::<0>(sum);
-    }
-}
 #[inline(always)]
 fn cell_coord(g:&Grid,x:i32)->i32 {x>>g.cell.trailing_zeros()}
 // A padding word at each row end permits a single unaligned 64-bit access
@@ -178,24 +124,37 @@ unsafe fn free(g:&Grid,x:i32,y:i32,r:i32,layer:i32,ox:i32,oy:i32,orr:i32,ol:i32)
     }
     true
 }
+/// A spawn's footprint place (occ_spawn's search, nothing marked): the free place nearest (x, y) by rings of cells, at most
+/// search rings out; None when there is none. (spr.rs k_spawn_births: the place found before the slot is taken.)
+pub(crate) unsafe fn occ_find(bits:*mut u32,mask:*const i8,w:i32,h:i32,stride:i32,cell:i32,planes:i32,x:i32,y:i32,r:i32,layer:i32,search:i32)->Option<(i32,i32)> {
+    let g=Grid{bits,mask,w,h,stride,plane:stride*h,cell,planes,diag:core::ptr::null_mut()};
+    let layer=layer.max(0).min(planes-1);let r=r.max(1).min(32);
+    if free(&g,x,y,r,layer,0,0,0,-1) {return Some((x,y));}
+    for d in 1..=search {
+        for dy in -d..=d {for dx in -d..=d {
+            if dx.abs()!=d && dy.abs()!=d {continue;}
+            let (tx,ty)=(x+dx*cell,y+dy*cell);
+            if free(&g,tx,ty,r,layer,0,0,0,-1){return Some((tx,ty));}
+        }}
+    }
+    None
+}
+/// The footprint marked at (x, y) and slot s's record written (occ_spawn's end).
+pub(crate) unsafe fn occ_mark(bits:*mut u32,mask:*const i8,rec:*mut i32,w:i32,h:i32,stride:i32,cell:i32,planes:i32,s:usize,x:i32,y:i32,r:i32,layer:i32) {
+    let g=Grid{bits,mask,w,h,stride,plane:stride*h,cell,planes,diag:core::ptr::null_mut()};
+    let layer=layer.max(0).min(planes-1);let r=r.max(1).min(32);
+    clear_or_mark(&g,x,y,r,layer,true);
+    let p=rec.add(s*4);
+    *p=x;*p.add(1)=y;*p.add(2)=(r&255)|((layer&255)<<8)|(1<<16)|(*p.add(2)&(255<<24));
+}
 #[no_mangle]
 pub unsafe extern "C" fn occ_spawn(bits:u32,mask:u32,rec:u32,
     w:i32,h:i32,stride:i32,cell:i32,planes:i32,s:i32,x:i32,y:i32,r:i32,layer:i32,search:i32)->i32 {
-    let g=Grid{bits:waddr(bits) as *mut u32,mask:waddr(mask) as *const i8,w,h,stride,plane:stride*h,cell,planes,diag:core::ptr::null_mut()};
-    let layer=layer.max(0).min(planes-1);let r=r.max(1).min(32);let s=s as usize;
-    let mut tx=x;let mut ty=y;let mut found=free(&g,x,y,r,layer,0,0,0,-1);
-    'seek:for d in 1..=search {
-        if found {break;}
-        for dy in -d..=d {for dx in -d..=d {
-            if dx.abs()!=d && dy.abs()!=d {continue;}
-            tx=x+dx*cell;ty=y+dy*cell;
-            if free(&g,tx,ty,r,layer,0,0,0,-1){found=true;break 'seek;}
-        }}
+    let (b,m)=(waddr(bits) as *mut u32,waddr(mask) as *const i8);
+    match occ_find(b,m,w,h,stride,cell,planes,x,y,r,layer,search) {
+        Some((tx,ty))=>{occ_mark(b,m,waddr(rec) as *mut i32,w,h,stride,cell,planes,s as usize,tx,ty,r,layer);1}
+        None=>0,
     }
-    if !found {return 0;}
-    clear_or_mark(&g,tx,ty,r,layer,true);
-    let p=(waddr(rec) as *mut i32).add(s*4);
-    *p=tx;*p.add(1)=ty;*p.add(2)=(r&255)|((layer&255)<<8)|(1<<16)|(*p.add(2)&(255<<24));1
 }
 #[no_mangle]
 pub unsafe extern "C" fn occ_release(bits:u32,mask:u32,rec:u32,
@@ -261,6 +220,9 @@ unsafe fn horizontal_motion(g:&Grid,ox:i32,oy:i32,nx:i32,ny:i32,r:i32,layer:i32,
 
 // Loaded once per spatial movement job, then used at each position write.
 pub(super) struct MoveGrid {
+    // The mover table (mvt.rs): its rows' positions are written where the footprint records are (commit_preview, swap).
+    // cur: the slot the job is at and its row (the job walks rows: no look-up for its own).
+    pub(super) rows:super::mvt::Rows, cur:core::cell::Cell<(usize,i32)>,
     g:Grid, rec:*mut i32, stats:*mut i32, blockq:i32, bx:i32, by:i32,
     // The tick-start unit index (per chunk: slots, start, count, stamp).
     ix_slot:*const i32, ix_start:*const i32, ix_count:*const i32, ix_stamp:*const i32,
@@ -269,29 +231,38 @@ pub(super) struct MoveGrid {
     xsw:*mut i32,
     // The (start, count) of every chunk of this block and the ring around it, made once per job (cache_chunks): the
     // swap's look at 3x3 chunks read three index tables at each of them, nine lines a call.
-    lc:*const i32, lcx:i32, lcy:i32, lcn:i32,
+    // (Made at the job's first look: most jobs' units never look for a swap.)
+    lc:core::cell::Cell<*const i32>, lcx:core::cell::Cell<i32>, lcy:core::cell::Cell<i32>, lcn:core::cell::Cell<i32>,
+    lcb:*mut i32, lcc:usize, lcbk:i32, lcm:core::cell::Cell<bool>,
 }
 impl MoveGrid {
-    pub(super) unsafe fn load(a:*const i32,bx:i32,by:i32,job:i32)->Self {
+    /// (rows: the caller's argument block holds the mover table's arrays (the movement's jobs); a single move from the page's code does not: its writer marks the slot, sim_unit_state.js mvtM.)
+    pub(super) unsafe fn load(a:*const i32,bx:i32,by:i32,job:i32,rows:bool)->Self {
         let cfg=waddr(*a.add(512+33) as u32) as *const i32;
         let get=|i| *cfg.add(i);
         let ptr=|i:usize|waddr(*a.add(512+i) as u32);
         let g=Grid{bits:ptr(0) as *mut u32,mask:ptr(1) as *const i8,
             w:get(0),h:get(1),stride:get(2),cell:get(3),planes:get(4),plane:get(2)*get(1),diag:(a as *mut u32).add(1536)};
         let stats=(ptr(28) as *mut i32).add(job as usize*16);
-        Self{g,rec:ptr(2) as *mut i32,stats,
+        Self{rows:if rows{super::mvt::Rows::load(a)}else{super::mvt::Rows::none()},cur:core::cell::Cell::new((usize::MAX,-1)),g,rec:ptr(2) as *mut i32,stats,
             blockq:get(7)*get(15)*get(14),bx,by,
             ix_slot:ptr(24) as *const i32,ix_start:ptr(25) as *const i32,ix_count:ptr(26) as *const i32,ix_stamp:ptr(27) as *const i32,
             cw:get(9),ch:get(10),epoch:get(11),chq:get(15)*get(14),
             xsw:if *a.add(512+34)==0{core::ptr::null_mut()}else{(ptr(34) as *mut i32).add(job as usize*48)},
-            lc:core::ptr::null(),lcx:0,lcy:0,lcn:0}
+            lc:core::cell::Cell::new(core::ptr::null()),lcx:core::cell::Cell::new(0),lcy:core::cell::Cell::new(0),lcn:core::cell::Cell::new(0),
+            lcb:core::ptr::null_mut(),lcc:0,lcbk:0,lcm:core::cell::Cell::new(true)}
     }
     /// The chunk records of this block and one chunk around it into buf (room for 2 words a cell, `cells` cells): the tick-start
     /// index does not change during the job, so a lookup reads the buffer (a few lines) instead of three tables at the chunk.
-    #[cfg_attr(feature = "prof", inline(never))]
     pub(super) unsafe fn cache_chunks(&mut self,buf:*mut i32,cells:usize,block:i32){
+        self.lcb=buf;self.lcc=cells;self.lcbk=block;self.lcm.set(false);
+    }
+    #[inline(never)]
+    unsafe fn fill_chunks(&self){
+        self.lcm.set(true);
+        let (buf,cells,block)=(self.lcb,self.lcc,self.lcbk);
         let n=block+2;
-        if self.ix_slot.is_null()||block<1||(n*n) as usize>cells{self.lc=core::ptr::null();return;}
+        if self.ix_slot.is_null()||block<1||(n*n) as usize>cells{self.lc.set(core::ptr::null());return;}
         let cx0=self.bx*block-1;let cy0=self.by*block-1;
         // (Inside the map: a row four tiles a step, the stamps' compare masking start and count, interleaved.)
         if cx0>=0&&cy0>=0&&cx0+n<=self.cw&&cy0+n<=self.ch{
@@ -312,7 +283,7 @@ impl MoveGrid {
                     *buf.add(o+2*i)=a;*buf.add(o+2*i+1)=c;i+=1;
                 }
             }
-            self.lc=buf;self.lcx=cx0;self.lcy=cy0;self.lcn=n;
+            self.lc.set(buf);self.lcx.set(cx0);self.lcy.set(cy0);self.lcn.set(n);
             return;
         }
         for j in 0..n{for i in 0..n{
@@ -323,18 +294,16 @@ impl MoveGrid {
             }
             let o=((j*n+i)*2) as usize;*buf.add(o)=a;*buf.add(o+1)=c;
         }}
-        self.lc=buf;self.lcx=cx0;self.lcy=cy0;self.lcn=n;
+        self.lc.set(buf);self.lcx.set(cx0);self.lcy.set(cy0);self.lcn.set(n);
     }
+    /// The unit the job is at: slot s, row h.
+    #[inline(always)]
+    pub(super) fn at(&self,s:usize,h:i32){self.cur.set((s,h));}
+    #[inline(always)]
+    unsafe fn row_moved(&self,s:usize,x:i32,y:i32){let (cs,ch)=self.cur.get();self.rows.moved(s,if cs==s{ch}else{-1},x,y);}
     pub(super) unsafe fn visit(&self,n:usize){
         *self.stats+=n as i32;
         *self.stats.add(4)+=1;
-    }
-    /// The index entries of tile (cx, cy) (key: its index key; this job's block or the ring around it, indexed this tick) from the job's cache: (first, end).
-    #[cfg_attr(not(feature = "prof"), inline(always))]
-    #[cfg_attr(feature = "prof", inline(never))]
-    pub(super) unsafe fn tile_range(&self,cx:i32,cy:i32,key:usize)->(i32,i32){
-        if !self.lc.is_null(){let o=(((cy-self.lcy)*self.lcn+(cx-self.lcx))*2) as usize;let a=*self.lc.add(o);return (a,a+*self.lc.add(o+1));}
-        let a=*self.ix_start.add(key);(a,a+*self.ix_count.add(key))
     }
     pub(super) unsafe fn scalar_lane(&self){*self.stats.add(7)+=1;}
     pub(super) unsafe fn reset(&self){core::ptr::write_bytes(self.stats,0,8);if !self.xsw.is_null(){*self.xsw=0;}}
@@ -356,10 +325,12 @@ impl MoveGrid {
         let e=self.chq;
         if self.ix_slot.is_null()||x<0||y<0||x<self.bx*self.blockq-e||x>=(self.bx+1)*self.blockq+e||y<self.by*self.blockq-e||y>=(self.by+1)*self.blockq+e{return (0,0);}
         let cx=idiv(x,self.chq);let cy=idiv(y,self.chq);if cx>=self.cw||cy>=self.ch{return (0,0);}
-        if !self.lc.is_null(){
+        if !self.lcm.get(){self.fill_chunks();}
+        let lc=self.lc.get();
+        if !lc.is_null(){
             // (The bounds above keep (cx, cy) in the cached block and ring: block + 2 chunks a side.)
-            let o=(((cy-self.lcy)*self.lcn+(cx-self.lcx))*2) as usize;
-            let a=*self.lc.add(o);return (a,a+*self.lc.add(o+1));
+            let o=(((cy-self.lcy.get())*self.lcn.get()+(cx-self.lcx.get()))*2) as usize;
+            let a=*lc.add(o);return (a,a+*lc.add(o+1));
         }
         let k=(cy*self.cw+cx) as usize;if *self.ix_stamp.add(k)!=self.epoch{return (0,0);}
         let a=*self.ix_start.add(k);(a,a+*self.ix_count.add(k))
@@ -408,6 +379,7 @@ impl MoveGrid {
                 if free(&self.g,tx,ty,rb,l,0,0,0,-1){
                     clear_or_mark(&self.g,tx,ty,rb,l,true);
                     *pa=bx;*pa.add(1)=by;*pb=tx;*pb.add(1)=ty;
+                    self.row_moved(a,bx,by);self.row_moved(b,tx,ty);
                     *self.stats.add(6)+=2;return Some((tx,ty));
                 }
             }
@@ -466,6 +438,7 @@ impl MoveGrid {
                 clear_or_mark(&self.g,tx,ty,r,layer,true);*self.stats.add(6)+=1;
             }
             *p=tx;*p.add(1)=ty;*self.stats.add(2)+=1;
+            self.row_moved(s,tx,ty);
         }
         if tx!=nx || ty!=ny {*self.stats.add(3)+=1;}
         (tx,ty)
@@ -481,7 +454,7 @@ pub unsafe extern "C" fn occ_move_one(a:u32,s:i32,nx:i32,ny:i32)->i64 {
     let blockq=*cfg.add(7)* *cfg.add(15)* *cfg.add(14);
     let bx=idiv(*rec.add(s as usize*4),blockq);let by=idiv(*rec.add(s as usize*4+1),blockq);
     // A dedicated scratch stats job, so JS moves do not reset a block's stats.
-    let grid=MoveGrid::load(a,bx,by,*cfg.add(5)* *cfg.add(6));
+    let grid=MoveGrid::load(a,bx,by,*cfg.add(5)* *cfg.add(6),false);
     grid.visit(1);
     let (x,y)=grid.position(s as usize,nx,ny);
     (x as u32 as i64)|((y as i64)<<32)

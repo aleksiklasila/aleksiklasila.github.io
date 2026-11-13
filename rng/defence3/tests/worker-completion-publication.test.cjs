@@ -31,10 +31,11 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
   for(let b=0;b<nb;b++){const expected=[];for(let p=A.bs[b];p<A.bs[b]+A.bc[b];p++){const s=A.bi[p];if(A.sready[s]<=epoch)expected.push(s);}
    const actual=Array.from(A.abi.subarray(A.bs[b],A.bs[b]+A.abc[b]));if(JSON.stringify(actual)!==JSON.stringify(expected))throw Error('eligible bucket '+b);}
   if(slot<0)throw Error('owner field slot');
-  for(let t=0;t<GRID_W*GRID_H;t+=31){let best=0xffffffff;
+  // (A field holds its nearest spawner's tile, by (steps, tile order: ro), all ones for none: k.rs nearfield.)
+  for(let t=0;t<GRID_W*GRID_H;t+=31){let best=0xffffffff,bq=-1;
    for(let q=0;q<A.meta[1];q++)if(A.po[q]===0&&A.pready[q]<=epoch){
-    const d=Math.abs(A.pgx[q]-t%GRID_W)+Math.abs(A.pgy[q]-Math.floor(t/GRID_W));best=Math.min(best,d*65536+A.ro[q]);}
-   if(A.nf[slot*GRID_W*GRID_H+t]!==best)throw Error('eligibility field '+epoch+' tile '+t);queries++;
+    const d=Math.abs(A.pgx[q]-t%GRID_W)+Math.abs(A.pgy[q]-Math.floor(t/GRID_W));const k=d*65536+A.ro[q];if(k<best){best=k;bq=q;}}
+   const want=bq<0?0xffffffff:A.pid[bq];if(A.nf[slot*GRID_W*GRID_H+t]!==want)throw Error('eligibility field '+epoch+' tile '+t);queries++;
   }};
  check(10);
  const same=_wsCollectorGroup(cfg);

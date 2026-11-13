@@ -621,7 +621,7 @@ function _unitRetireTotal(blocks) { let n = 0; for (let b = 0; b < blocks; b++) 
 // the removed units' list indices and slots, loose the removed without a slot.
 const _rp = { cap: 0, ord: null, gone: null, snd: null, hdr: null, idx: null, sl: null, loose: [], P: new Float64Array(4) };
 const _retirePlanArgs = new Array(11).fill(null);
-const _unitGoneArgs = new Array(52).fill(null);
+const _unitGoneArgs = new Array(53).fill(null);
 function _retirePlanReserve(cap) {
     const R = _rp;
     if (R.cap < cap || !simHeapHas(R.ord)) {
@@ -714,6 +714,8 @@ function _unitGoneRun(G, list, n, S) {
         Q[35] = 0; Q[36] = UNIT_GONE_PER;
         simParallelRun(SIM_KERNEL_UNIT_GONE, nch);
         P[35] = 1; P[36] = UNIT_GONE_PER; P[37] = nch;
+        // (52: the mover table's marks, mvt.rs.)
+        arrays[52] = _mvtDirty;
         simRustDirect('k_unit_gone_par', arrays, P);
     } finally { arrays.fill(null); }
     const C = G.cnt;
@@ -3671,7 +3673,7 @@ function _ordClearFast(c, s, K, cmd, amGx, amGy, tAmx, tAmy, targetPos, tTp) {
     let h = c.hObj[s];
     c.tuS[s] = -1; c.tuId[s] = 0; c.tbT[s] = -1; c.acqB[s] = 0; c.fatF[s] = 0;
     c.fLsX[s] = NaN; c.fLsY[s] = NaN;
-    if (c.commandState[s] !== cmd) { c.mvOn[s] = 0; c.commandState[s] = cmd; }
+    if (c.commandState[s] !== cmd) { c.mvOn[mvtM(s)] = 0; c.commandState[s] = cmd; }
     c.amGx[s] = amGx === null ? -1 : amGx; c.amGy[s] = amGy === null ? -1 : amGy;
     c.mvTgX[s] = targetPos.x; c.mvTgY[s] = targetPos.y;
     c.agWait[s] = 0;
@@ -3727,14 +3729,14 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             if (K && c && (!ws || ws === SIM_WS_MANUAL)) {
                 const wk = !!ws;
                 c.rkF[s] = 1;
-                c.rtEnd[s] = destKey; c.nvProf[s] = profile; c.navRdy[s] = ready;
-                if (c.pathIndex[s] !== 0) { c.mvOn[s] = 0; c.pathIndex[s] = 0; }
+                c.rtEnd[mvtM(s)] = destKey; c.nvProf[s] = profile; c.navRdy[s] = ready;
+                if (c.pathIndex[s] !== 0) { c.mvOn[mvtM(s)] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
                 c.nvPK[s] = at ? -1 : pk;
                 simUnitPathRelease(c, s);
                 // (The group's one path array: stored once, its units' handles, sim_unit_state.js simPathStore.)
                 { const h = at ? 0 : simPathStore(navPath); simPathRelease(c.pthH, s); c.pthH[s] = h; }
-                c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1;
+                c.mvOn[mvtM(s)] = 0; c.mvSteer[mvtS(s * SIM_STEER_W)] = -1;
                 c.rsEnd[s] = at ? -1 : destKey;
                 c.mvNavLD[s] = group && !at && !wk ? _ordNavLD(c, s, destKey) : -1;
                 if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, wk ? CMD_MOVING : cmd, flying, ready, wk || !group, wk ? 2 : 0, profile);

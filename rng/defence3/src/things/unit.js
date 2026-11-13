@@ -254,7 +254,7 @@ function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
     if ((c.ptSt[s] & 3) === 2) { c.ptVer[s] = 0; c.ptAt[s] = -1; c.ptSub[s] = 0; }
     else { _unitNoWayPt.gx = dest % GRID_W; _unitNoWayPt.gy = Math.floor(dest / GRID_W); _unitNoWayPt.cmd = c.commandState[s]; simPendingTargetSet(c, s, _unitNoWayPt); }
     c.nvPK[s] = -1; simUnitPathRelease(c, s); simPathRelease(c.pthH, s);
-    c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
+    c.mvOn[mvtM(s)] = 0; c.mvSteer[mvtS(s * SIM_STEER_W)] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
     simPendingFlagSet(c, s, true);
     const pt = u._pendingPathTarget;
     if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
@@ -361,7 +361,7 @@ function unitAttackOrder(u) {
     u.path = null; u.pathIndex = 0; u._routeKey = null;
     u._pendingPathTarget = null; u.pathIsFallbackAstar = false;
     const c = u._us;
-    if (c) { const s = u._si; c.cmMode[s] = 0; c.mvOn[s] = 0; c.mvWk[s] = 0; }
+    if (c) { const s = u._si; c.cmMode[mvtM(s)] = 0; c.mvOn[mvtM(s)] = 0; c.mvWk[s] = 0; }
 }
 function unitPassBegin() { _unitPassOn = true; spatialCountsDeferBegin(); astarPassStart(); }
 function unitPassEnd() {
@@ -572,13 +572,13 @@ class Unit {
     }
 
     get id() { return this._us ? this._us.id[this._si] : (this._goneRecord ? this._goneRecord.id : this._goneId); }
-    set id(v) { if (this._us) this._us.id[this._si] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set id(v) { if (this._us) this._us.id[mvtM(this._si)] = v; else if (this._det) this._det.id = v; else Object.defineProperty(this, 'id', { value: v, writable: true, enumerable: true, configurable: true }); }
     get owner() { return this._us ? this._us.owner[this._si] : (this._goneRecord ? this._goneRecord.owner : this._goneOwner); }
-    set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.owner[this._si] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set owner(v) { if (this._us) { if (this._us.owner[this._si] !== v) this._us.mvOn[mvtM(this._si)] = 0; this._us.owner[mvtM(this._si)] = v; if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(this); } else if (this._det) this._det.owner = v; else Object.defineProperty(this, 'owner', { value: v, writable: true, enumerable: true, configurable: true }); }
     get x() { return this._us ? this._us.x[this._si] * 0.125 : this._goneRecord ? this._goneRecord.x : this._si === -1 ? this._goneX8 * 0.125 : undefined; }
-    set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[this._si] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set x(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,Math.round(v*8),this._us.y[this._si]); else this._us.x[mvtM(this._si)] = Math.round(v * 8); } else if (this._det) this._det.x = v; else Object.defineProperty(this, 'x', { value: v, writable: true, enumerable: true, configurable: true }); }
     get y() { return this._us ? this._us.y[this._si] * 0.125 : this._goneRecord ? this._goneRecord.y : this._si === -1 ? this._goneY8 * 0.125 : undefined; }
-    set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[this._si] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set y(v) { if (this._us) { if(typeof SIM_OCCUPANCY_ENABLED!=='undefined' && SIM_OCCUPANCY_ENABLED && occupancyTracks(this._si)) occupancyMovePosition(this,this._us.x[this._si],Math.round(v*8)); else this._us.y[mvtM(this._si)] = Math.round(v * 8); } else if (this._det) this._det.y = v; else Object.defineProperty(this, 'y', { value: v, writable: true, enumerable: true, configurable: true }); }
     // A jump (a portal): both coordinates at once, placed at the nearest free
     // spot there in the occupancy grid (sim_occupancy.js occupancyTeleport),
     // not swept through it.
@@ -601,9 +601,9 @@ class Unit {
     get energy() { return this._us ? this._us.energy[this._si] : this._goneRecord ? this._goneRecord.energy : this._si === -1 ? 0 : undefined; }
     set energy(v) { if (this._us) this._us.energy[this._si] = v; else if (this._det) this._det.energy = v; else Object.defineProperty(this, 'energy', { value: v, writable: true, enumerable: true, configurable: true }); }
     get pathIndex() { return this._us ? this._us.pathIndex[this._si] : (this._det ? this._det.pathIndex : undefined); }
-    set pathIndex(v) { if (this._us) { if (this._us.pathIndex[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.pathIndex[this._si] = v; } else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set pathIndex(v) { if (this._us) { if (this._us.pathIndex[this._si] !== v) this._us.mvOn[mvtM(this._si)] = 0; this._us.pathIndex[this._si] = v; } else if (this._det) this._det.pathIndex = v; else Object.defineProperty(this, 'pathIndex', { value: v, writable: true, enumerable: true, configurable: true }); }
     get commandState() { return this._us ? this._us.commandState[this._si] : (this._det ? this._det.commandState : undefined); }
-    set commandState(v) { if (this._us) { if (this._us.commandState[this._si] !== v) this._us.mvOn[this._si] = 0; this._us.commandState[this._si] = v; } else if (this._det) this._det.commandState = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
+    set commandState(v) { if (this._us) { if (this._us.commandState[this._si] !== v) this._us.mvOn[mvtM(this._si)] = 0; this._us.commandState[this._si] = v; } else if (this._det) this._det.commandState = v; else Object.defineProperty(this, 'commandState', { value: v, writable: true, enumerable: true, configurable: true }); }
     // Spatial index and visibility registration (columns; see SIM_MOVE_COLUMNS).
     get _spatialTile() { const c = this._us; return c ? c.spTile[this._si] : -1; }
     set _spatialTile(v) { const c = this._us; if (c) c.spTile[this._si] = v; else if (c === undefined) Object.defineProperty(this, '_spatialTile', { value: v, writable: true, configurable: true }); }
@@ -645,7 +645,7 @@ class Unit {
     // The tile whose floor it last checked (Unit.update's floor items): a
     // column (mvFloor) the movement kernel keeps as it moves the unit.
     get _floorTile() { const c = this._us; return c ? c.mvSteer[this._si * SIM_STEER_W + SIM_ST_FLOOR] : (this._det ? this._det._floorTile : this._flt); }
-    set _floorTile(v) { const c = this._us; if (c) c.mvSteer[this._si * SIM_STEER_W + SIM_ST_FLOOR] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
+    set _floorTile(v) { const c = this._us; if (c) c.mvSteer[mvtS(this._si * SIM_STEER_W + SIM_ST_FLOOR)] = v; else if (this._det) this._det._floorTile = v; else Object.defineProperty(this, '_flt', { value: v, writable: true, configurable: true }); }
     // Arriving in a crowd (see _followNavNode): a column (mvNavLD) the kernel shares.
     get _sepMoved() { const c = this._us; return c ? c.sepMov[this._si] & 1 : (this._det ? this._det._sepMoved : (this._smv | 0)); }
     set _sepMoved(v) { const c = this._us; if (c) c.sepMov[this._si] = v ? 1 : 0; else if (this._det) this._det._sepMoved = v ? 1 : 0; else Object.defineProperty(this, '_smv', { value: v ? 1 : 0, writable: true, configurable: true }); }
@@ -693,7 +693,7 @@ class Unit {
         // (Outside a tick, an action's or a restore's: the prebuilt unit
         // index no longer holds.)
         if (typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
-        if (c) c.dead[this._si] = v ? 1 : 0;
+        if (c) c.dead[mvtM(this._si)] = v ? 1 : 0;
         else if (this._det) this._det.dead = !!v;
         else Object.defineProperty(this, '_deadv', { value: !!v, writable: true, configurable: true });
     }
@@ -707,13 +707,13 @@ class Unit {
         if (c) {
             const s = this._si, w = c.wkS[s], code = simWsCode(v);
             // (A change only: the same state set again keeps a parked worker.)
-            if ((w & 31) !== code) { c.mvOn[s] = 0; if (code !== SIM_WS_IDLE) c.wsKind[s] = 0; c.wkIdle[s] = code === SIM_WS_IDLE ? 1 : 0; c.wkS[s] = (w & ~31) | code; }
+            if ((w & 31) !== code) { c.mvOn[mvtM(s)] = 0; if (code !== SIM_WS_IDLE) c.wsKind[s] = 0; c.wkIdle[s] = code === SIM_WS_IDLE ? 1 : 0; c.wkS[s] = (w & ~31) | code; }
         } else _unitWkPre(this, 'workerState', v);
     }
     get _workerNextIdleRetargetTick() { const c = this._us; if (c) return _unitWkNum(c.wkN[this._si]); return this._det ? this._det._workerNextIdleRetargetTick : this._wkv && this._wkv._workerNextIdleRetargetTick; }
     set _workerNextIdleRetargetTick(v) {
         const c = this._us;
-        if (c) { const s = this._si, n = _unitWkNumOf(v); if (c.wkN[s] !== n) { c.mvOn[s] = 0; c.wkN[s] = n; } }
+        if (c) { const s = this._si, n = _unitWkNumOf(v); if (c.wkN[s] !== n) { c.mvOn[mvtM(s)] = 0; c.wkN[s] = n; } }
         else _unitWkPre(this, '_workerNextIdleRetargetTick', v);
     }
     get workerTarget() { const c = this._us; if (c) { const s = this._si; return simWtDecode((c.wkS[s] >>> 10) & 7, c.wkT[s]); } return this._det ? this._det.workerTarget : this._wkv && this._wkv.workerTarget; }
@@ -879,7 +879,7 @@ class Unit {
         if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_unitStatView(this, oldColumns, this._si));
         if (!('_pc' in this)) Object.defineProperty(this, '_pc', { value: v, writable: true, configurable: true }); else this._pc = v;
         const c = this._us;
-        if (c) c.statRow[this._si] = -1;
+        if (c) c.statRow[mvtM(this._si)] = -1;
     }
     get preComputedEffective() { const c = this._us; if (c) { const r = c.statRow[this._si]; if (r >= 0) return _unitStatView(this, c, this._si); } return this._pce; }
     set preComputedEffective(v) {
@@ -887,7 +887,7 @@ class Unit {
         if (oldColumns && oldColumns.statRow[this._si] >= 0) this._effRowKeep(_unitStatView(this, oldColumns, this._si));
         if (!('_pce' in this)) Object.defineProperty(this, '_pce', { value: v, writable: true, configurable: true }); else this._pce = v;
         const c = this._us;
-        if (c) c.statRow[this._si] = -1;
+        if (c) c.statRow[mvtM(this._si)] = -1;
     }
     // (Its row's tables as its own: the row is going away.)
     _effRowKeep(t) {
@@ -908,7 +908,7 @@ class Unit {
     get _routeEnd() { const c = this._us; return c ? c.rtEnd[this._si] : (this._det ? this._det._routeEnd : this._ree); }
     set _routeEnd(v) {
         const c = this._us;
-        if (c) { const s = this._si; c.rtEnd[s] = typeof v === 'number' && v >= 0 ? v : -1; c.nvProf[s] = navProfileOf(this); }
+        if (c) { const s = this._si; c.rtEnd[mvtM(s)] = typeof v === 'number' && v >= 0 ? v : -1; c.nvProf[s] = navProfileOf(this); }
         else if (this._det) this._det._routeEnd = v;
         else Object.defineProperty(this, '_ree', { value: v, writable: true, configurable: true });
     }
@@ -939,7 +939,7 @@ class Unit {
         const h = simPathStore(v);
         simPathRelease(c.pthH, s);
         c.pthH[s] = h;
-        c.mvOn[s] = 0; c.mvSteer[s * SIM_STEER_W] = -1;
+        c.mvOn[mvtM(s)] = 0; c.mvSteer[mvtS(s * SIM_STEER_W)] = -1;
     }
 
     getCollisionLayer() {
@@ -1831,10 +1831,10 @@ function simSpawnUnit(unitType, owner, x, y, level = 1, prepare = null) {
     // unit index no longer holds, as the constructor's dead setter told it.)
     if (typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
     const px = Math.round(x * 8), py = Math.round(y * 8);
-    C.id[s] = nextUnitId++;
-    C.owner[s] = owner;
+    C.id[mvtM(s)] = nextUnitId++;
+    C.owner[mvtM(s)] = owner;
     u.unitType = unitType;
-    C.x[s] = px; C.y[s] = py; C.prevX[s] = px; C.prevY[s] = py; C.x0[s] = px; C.y0[s] = py;
+    C.x[mvtM(s)] = px; C.y[mvtM(s)] = py; C.prevX[s] = px; C.prevY[s] = py; C.x0[s] = px; C.y0[s] = py;
     C.upT[s] = simUnitTypeIndex(unitType);
     C.energy[s] = Math.max(1, Math.floor(Number(def.energy) || 1));
     u.r = def.r;
@@ -1888,7 +1888,7 @@ function _spawnStats(u, C, s, owner, unitType, level) {
     for (let i = 0; i < names.length; i++) { const c = C[names[i]]; before[i] = !c ? undefined : ArrayBuffer.isView(c) ? (c.length === S_CAP_OF(C) ? c[s] : undefined) : typeof c.get === 'function' ? c.get(s) : undefined; }
     applyUnitLevelScaling(u, lvl);
     // (Kept as lists, written by a loop: _spawnTplWrite. Also split for the
-    // batch (simSpawnBatchAdd): the per-slot heap columns as a program
+    // q / e's rows: the per-slot heap columns as a program
     // k_spawn_write runs (pc, pv), the rest (jn/jv, the references) here.
     // Was a generated function, compiled again at every miss: templates go
     // stale whenever their owner's research of the type finishes.)
@@ -1925,25 +1925,9 @@ function _spawnTplWrite(T, C, s, jsOnly) {
 // (A spawned unit's energy: its maxEnergy, NaN when unset (as the energy column stores undefined).)
 function _spawnMaxE(u) { const v = u.maxEnergy; return v === undefined ? NaN : Number(v);
 }
-// The valid template of a unit's key, or null (_spawnStats' check).
-function _spawnStatsHit(u, C, s, owner, level) {
-    const lvl = Math.max(1, Math.floor(level || 1)), ver = typeof _unitStatsVerOf === 'function' ? _unitStatsVerOf(u) : 0, epoch = typeof _effRowEpoch === 'number' ? _effRowEpoch : 0;
-    const T = _spawnStatTemplates.get((((owner + 1) * 2 + (u.workerType ? 1 : 0)) * 4096 + C.upT[s]) * 64 + Math.min(63, lvl));
-    return T !== undefined && T.ver === ver && T.epoch === epoch && T.C === C && T.lvl === lvl ? T : null;
-}
-
-// ---- spawns as a batch (TABLES_CONVERSION_PLAN.md U3) ----
-// A step's spawns from the spawners (barrack.js processGlobalSpawnerQueue):
-// each takes its slot, handle and id in order (simSpawnBatchAdd); one wasm
-// kernel then writes every new unit's columns, on the helpers when many
-// (simSpawnBatchWrite: k_spawn_write, wasm/src/nfs.rs: its own values, its
-// stat template's, its energy; at a million units each column of a slot is
-// a cache miss, ~40 a spawn); then each is finished in order
-// (simSpawnBatchFinish: upkeep bin, occupancy, spatial index). A unit gets
-// what simSpawnUnit gives it, then energy = maxEnergy (a spawner's)
-// (tests/unit-spawn-columns.test.cjs). The first unit of a template key is
-// written by the full path at once (its template made from it); the kernel
-// skips its row.
+// ---- birth rows (q / e: main.js _rz*) ----
+// A new unit's core columns written from a row (k_spawn_write, wasm/src/nfs.rs; q / e's staged births, _spbRowsRun):
+// its own values, a program's, then its energy. (The spawners' spawns: barrack.js _spawnBirths, spr.rs k_spawn_births.)
 const _SPB_ROW = 12;
 // (Row: [0] slot, [1] its template program's first triple, [2] its triples
 // (-1: written already), [3] id, [4] owner, [5] type index, [6] x, [7] y
@@ -1958,16 +1942,10 @@ const _SPB_CORE = [['id', 3], ['owner', 4], ['upT', 5], ['x', 6], ['y', 7], ['pr
     // (Alive: a staged birth's reserved slot keeps its last unit's dead flags until the commit, main.js _rzZeroTable.)
     ['dead', -1, 0], ['dead0', -1, 0]];
 const _SPB_FINAL = [['energy', 10]];
-// (mode per unit: 0 the kernel writes it, 1 written already (the first of
-// its template), 2 made whole by simSpawnUnit (no kernels here).)
-// (A batch's most spawns: its buffers are made once, at the match's start
-// (simSpawnBatchReserve); the spawners' passes begin a spawn only below it
-// (simSpawnBatchFull: the rest in the next batch). The templates' programs:
-// SPB_PROG triples, started again at each batch; a template whose program
-// finds no room is written whole at once (as the first of its key).)
+// (The rows' programs: the core and final ones first, SPB_PROG triples; the row buffer and the column kinds made at the
+// match's start, simSpawnBatchReserve.)
 const SPB_CAP = 16384, SPB_PROG = 65536;
-const _spb = { sp: null, spN: 0, n: 0, units: new Array(SPB_CAP).fill(null), mode: new Int8Array(SPB_CAP), rows: null, prog: null, progN: 0, base: 0, gen: 0, colIx: null, kind: null, P: new Float64Array(8), off: false };
-function simSpawnBatchFull() { return _spb.n >= SPB_CAP; }
+const _spb = { rows: null, prog: null, progN: 0, base: 0, gen: 0, colIx: null, kind: null, kindN: 0, boundRows: null };
 function simSpawnBatchReserve() {
     const B = _spb;
     if (B.rows === null || !simHeapHas(B.rows)) B.rows = simSharedArray(Float64Array, SPB_CAP * _SPB_ROW);
@@ -2009,87 +1987,6 @@ function _spbProgRoom(n) {
     B.base = base.length / 3; B.prog = a;
     return (B.progN + n) * 3 <= B.prog.length;
 }
-// The batch's next row (its index in rows, grown with the batch kept).
-function _spbRow(B) {
-    if (B.rows === null || !simHeapHas(B.rows)) B.rows = simSharedArray(Float64Array, SPB_CAP * _SPB_ROW);
-    return B.n * _SPB_ROW;
-}
-function _spbPush(B, u, mode) { B.mode[B.n] = mode; B.units[B.n] = u; B.n++; }
-// A new unit of the step's batch (simSpawnUnit's arguments): its handle, its
-// slot and its id now, its owner, type and worker set-up (prepare: what
-// decides its template); its other columns by simSpawnBatchWrite, then
-// simSpawnBatchFinish.
-function simSpawnBatchAdd(unitType, owner, x, y, level = 1, prepare = null) {
-    const B = _spb;
-    if (B.n >= SPB_CAP) throw new Error('spawn batch full: SPB_CAP spawns (callers check simSpawnBatchFull)');
-    if (B.off || !_unitFieldsMutable || !SIM_SPAWN_DIRECT || !SPAWN_STAT_TEMPLATES || typeof SIM_KERNEL_SPAWN_WRITE !== 'number' || _simWasmX === null) {
-        // (No kernels (a page's world, tests without wasm): one by one.)
-        const u = simSpawnUnit(unitType, owner, x, y, level, prepare);
-        _spbPush(B, u, 2);
-        return u;
-    }
-    // (Programs of templates gone or replaced: the buffer started again, between batches.)
-    if (B.n === 0 && B.prog !== null && B.progN > B.base) { B.progN = B.base; B.gen++; }
-    const u = Object.create(Unit.prototype);
-    simUnitStateAllocate(u, x, y);
-    const C = u._us, s = u._si, def = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm;
-    if (typeof _inGameTick !== 'undefined' && !_inGameTick && typeof _sxPre !== 'undefined' && _sxPre) spatialIndexInvalidate();
-    const ti = simUnitTypeIndex(unitType), id = nextUnitId++;
-    // (What its worker set-up and its template key read.)
-    C.owner[s] = owner; C.upT[s] = ti;
-    if (prepare) prepare(u);
-    const T = _spawnStatsHit(u, C, s, owner, level);
-    const r = _spbRow(B), R = B.rows;
-    R[r] = s;
-    if (T === null) {
-        // (The first of its template key: the full path now, as simSpawnUnit's.)
-        const px = Math.round(x * 8), py = Math.round(y * 8);
-        C.id[s] = id; C.x[s] = px; C.y[s] = py; C.prevX[s] = px; C.prevY[s] = py; C.x0[s] = px; C.y0[s] = py;
-        C.energy[s] = Math.max(1, Math.floor(Number(def.energy) || 1));
-        u.r = def.r; u.collisionR = Number.isFinite(def.collisionR) ? def.collisionR : def.r;
-        C.unitLevel[s] = 1; C.stackCount[s] = 1; C.effectiveStacks[s] = 1; C.effectiveLevel[s] = 1; C.baseLevel[s] = 1;
-        C.tuS[s] = -1; C.tuId[s] = 0; C.tbT[s] = -1; C.acqB[s] = 0; C.mvTgX[s] = NaN; C.mvTgY[s] = NaN;
-        _spawnStats(u, C, s, owner, unitType, level);
-        u.energy = u.maxEnergy;
-        R[r + 1] = 0; R[r + 2] = -1;
-        _spbPush(B, u, 1);
-        return u;
-    }
-    if (T.pGen !== B.gen && !_spbProgRoom(T.pc.length)) {
-        // (No room for its program in this batch: written whole now.)
-        const px = Math.round(x * 8), py = Math.round(y * 8);
-        C.id[s] = id; C.x[s] = px; C.y[s] = py; C.prevX[s] = px; C.prevY[s] = py; C.x0[s] = px; C.y0[s] = py;
-        C.r[s] = def.r; C.collisionR[s] = Number.isFinite(def.collisionR) ? def.collisionR : def.r;
-        C.unitLevel[s] = 1; C.stackCount[s] = 1; C.effectiveStacks[s] = 1; C.effectiveLevel[s] = 1; C.baseLevel[s] = 1;
-        C.tuS[s] = -1; C.tuId[s] = 0; C.tbT[s] = -1; C.acqB[s] = 0; C.mvTgX[s] = NaN; C.mvTgY[s] = NaN;
-        _spawnTplWrite(T, C, s, false);
-        C.energy[s] = T.e;
-        R[r + 1] = 0; R[r + 2] = -1;
-        _spbPush(B, u, 1);
-        return u;
-    }
-    if (T.pGen !== B.gen) {
-        const P = B.prog; let at = B.progN * 3;
-        for (let i = 0; i < T.pc.length; i++) { P[at] = T.pc[i]; P[at + 1] = -1; P[at + 2] = T.pv[i]; at += 3; }
-        T.pAt = B.progN; B.progN += T.pc.length; T.pGen = B.gen;
-    }
-    if (T.jn.length || T.rn.length) _spawnTplWrite(T, C, s, true);
-    R[r + 1] = T.pAt; R[r + 2] = T.pc.length; R[r + 3] = id; R[r + 4] = owner; R[r + 5] = ti;
-    R[r + 6] = Math.round(x * 8); R[r + 7] = Math.round(y * 8);
-    R[r + 8] = def.r; R[r + 9] = Number.isFinite(def.collisionR) ? def.collisionR : def.r; R[r + 10] = T.e; R[r + 11] = C.hnd[s];
-    _spbPush(B, u, 0);
-    return u;
-}
-// The batch's columns written (k_spawn_write; on the helpers when many).
-function simSpawnBatchWrite() {
-    const B = _spb, n = B.n;
-    let any = false;
-    for (let i = 0; i < n && !any; i++) any = B.mode[i] === 0;
-    if (!any) return;
-    const S = _simUnitState, Z = _simSlotZeroTable(S);
-    if (!Z) throw new Error('spawn batch: unit columns not in the heap');
-    _spbWriteRows(B.rows, n, Z);
-}
 // Rows bound by their own name (kernel: the spawn write kernel registered
 // over it, q / e's SIM_KERNEL_RZ_SPAWN_WRITE), on the helpers.
 function _spbRowsRun(rows, n, kernel, from = 0) {
@@ -2102,39 +1999,8 @@ function _spbRowsRun(rows, n, kernel, from = 0) {
     P[0] = n; P[1] = 1024; P[2] = _SPB_ROW; P[3] = 0; P[4] = _SPB_CORE.length; P[5] = _SPB_CORE.length; P[6] = _SPB_FINAL.length; P[7] = from;
     simParallelRun(kernel, Math.ceil(n / 1024));
 }
-// Rows (12 f64 a unit: _SPB_ROW) written by k_spawn_write, on the helpers when many.
-function _spbWriteRows(rows, n, Z = _simSlotZeroTable(_simUnitState)) {
-    const B = _spb;
-    if (!Z) throw new Error('spawn batch: unit columns not in the heap');
-    _spbKind(Z);
-    if (B.prog === null || !simHeapHas(B.prog)) _spbProgRoom(0);
-    if (B.boundRows !== rows) { simParallelBind('spw.rows', rows); B.boundRows = rows; }
-    simParallelBind('spw.kind', B.kind); simParallelBind('spw.prog', B.prog);
-    // (The helpers' params are _simParams, which simParallelRun hands them.)
-    const per = n >= 512 ? Math.max(32, Math.ceil(n / 48)) : n, P = per < n ? _simParams : B.P;
-    P[0] = n; P[1] = per; P[2] = _SPB_ROW; P[3] = 0; P[4] = _SPB_CORE.length; P[5] = _SPB_CORE.length; P[6] = _SPB_FINAL.length; P[7] = 0;
-    if (per < n) simParallelRun(SIM_KERNEL_SPAWN_WRITE, Math.ceil(n / per));
-    else simRustDirect('k_spawn_write', [rows, Z.tab, B.kind, B.prog], P);
-}
-// The batch's unit i finished (in the batch's order, after its write): its
-// upkeep bin, its place in the occupancy grid (none free: dead, its slot let
-// go) and in the spatial index. Returns it.
-function simSpawnBatchFinish(i) {
-    const B = _spb, u = B.units[i];
-    if (B.mode[i] === 2) { if (!u.dead) u.energy = u.maxEnergy; return u; }
-    if (typeof upkeepUnitRefresh === 'function') upkeepUnitRefresh(u);
-    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && !occupancySpawn(u)) { u.dead = true; simUnitStateDetach(_simUnitState, u._si); return u; }
-    // (Into the spatial index with the batch's others: simSpawnBatchClear.)
-    if (!B.sp || !simHeapHas(B.sp)) B.sp = simSharedArray(Int32Array, SPB_CAP);
-    B.sp[B.spN++] = u._si;
-    return u;
-}
-// The batch emptied (its units finished): those finished into the spatial
-// index at once (tch.rs k_spawn_spatial: as updateUnitSpatial does a new unit).
-function simSpawnBatchClear() { const B = _spb; if (B.spN) _spbSpatial(B); B.units.fill(null, 0, B.n); B.n = 0; }
 let _spbLayer = null, _spbLayerN = -1, _spbTy = null, _spbTyN = -1;
 const _spbSpP = new Float64Array(16);
-function _spbSpatial(B) { const n = B.spN; B.spN = 0; _spbSpatialList(B.sp, n); }
 // New units (n slots of list) into the spatial index (k_spawn_spatial).
 function _spbSpatialList(list, n) {
     const S = _simUnitState, c = S.columns;
@@ -2434,7 +2300,7 @@ const _simMoveAreaSource = [0];
 
 function simMoveDisarm(u) {
     const c = u && u._us;
-    if (c) c.mvOn[u._si] = 0;
+    if (c) c.mvOn[mvtM(u._si)] = 0;
 }
 
 // Every unit's movement stat columns from its stats (after a restore, whose
@@ -2459,7 +2325,7 @@ function simMoveDisarmAll() {
     const S = _simUnitState;
     if (!S) return;
     const c = S.columns;
-    c.mvOn.fill(0);
+    c.mvOn.fill(0); mvtInvalidate();
     for (const k of SIM_MOVE_ARM_COLUMNS) if (c[k]) c[k].fill(0);
     // (The steering records: all but the floor tile, which is not an arming's; no destination.)
     const R = c.mvSteer;
@@ -2514,24 +2380,24 @@ function simMoveStatsChanged(u, previousRow) {
     if (on === 3 || on === 5) {
         const k = Math.floor(Math.max(0, Number(_getUnitAttackRangeArea(u)) || 0));
         if (pc && pc.attackDamage > 0 && k === c.mvReach[s]) { return; }
-        c.mvOn[s] = 0; return;
+        c.mvOn[mvtM(s)] = 0; return;
     }
     // Parked or chasing: its checks were made with the old stats (a parked
     // one's only with a look of its own: drive-by 1, search reach 2, aggro 16).
     if (on === 2 && (c.mvFlags[s] & 19) === 0) return;
     // (An attack-mover's park (its aggro look, 16, alone): its new reach.)
-    if (on === 2 && (c.mvFlags[s] & 19) === 16) { if (c.mvReachA[s] !== 255) { c.mvReach[s] = c.mvReachA[s]; return; } c.mvOn[s] = 0; return; }
-    if (on >= 2) { c.mvOn[s] = 0; return; }
+    if (on === 2 && (c.mvFlags[s] & 19) === 16) { if (c.mvReachA[s] !== 255) { c.mvReach[s] = c.mvReachA[s]; return; } c.mvOn[mvtM(s)] = 0; return; }
+    if (on >= 2) { c.mvOn[mvtM(s)] = 0; return; }
     if (c.mvOn[s] !== 1) return;
     let reach = 0, ok = spd >= 0;
     if (ok && (f & 16)) reach = Math.ceil(Math.max(TILE, pc.visionRange * TILE) / TILE) + 1;
     else if (ok && (f & 1)) reach = Math.ceil(_getUnitAttackRangeArea(u)) + 1;
     // A drive-by shooter that no longer shoots (or the reverse), or reaches
     // out of its tables: Unit.update decides.
-    if (!ok || ((f & 16) === 0 && ((f & 1) !== 0) !== (pc.attackDamage > 0)) || !(reach >= 0 && reach < ((f & 16) ? 256 : SIM_MOVE_BOX_STEPS))) { c.mvOn[s] = 0; return; }
+    if (!ok || ((f & 16) === 0 && ((f & 1) !== 0) !== (pc.attackDamage > 0)) || !(reach >= 0 && reach < ((f & 16) ? 256 : SIM_MOVE_BOX_STEPS))) { c.mvOn[mvtM(s)] = 0; return; }
     if ((f & 1) && reach !== c.mvReach[s]) {
         const area = u._spatialAreaId;
-        if (!(area >= 0)) { c.mvOn[s] = 0; return; }
+        if (!(area >= 0)) { c.mvOn[mvtM(s)] = 0; return; }
         _simMoveEnsureAreaBox(area, reach);
     }
     c.mvReach[s] = reach; 
@@ -2574,12 +2440,12 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         _simMoveEnsureAreaBox(area, reach);
         flags |= 1;
     }
-    c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[s] = dest; c.mvReady[s] = ready; c.mvNP[s] = profile; c.mvSteer[s * SIM_STEER_W + SIM_ST_STEADY] = 0;
+    c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[mvtM(s)] = dest; c.mvReady[s] = ready; c.mvNP[mvtM(s)] = profile; c.mvSteer[mvtS(s * SIM_STEER_W + SIM_ST_STEADY)] = 0;
     // (1: a worker at its task, which stands where the way ends; 2: one the
     // player sent, handed back there.)
     c.mvWk[s] = isWorker === 2 || isWorker === 3 ? isWorker : (isWorker ? 1 : 0);
     c.mvSpent[s] = 0;
-    c.mvOn[s] = 1;
+    c.mvOn[mvtM(s)] = 1;
     return true;
 }
 
@@ -2706,9 +2572,9 @@ function simMoveTryParkWait(u, cmd) {
         _simMoveEnsureAreaBox(area, reach);
         flags = 1;
     }
-    c.mvWake[s] = wake; c.mvFlags[s] = flags; c.mvReach[s] = reach;
+    c.mvWake[s] = wake; c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach;
     if (!u.workerState) c.mvWk[s] = 0;
-    c.mvOn[s] = 2;
+    c.mvOn[mvtM(s)] = 2;
 }
 // A unit with orders to move waiting for its way (no path, a pending target
 // of that order: the pending resolver, main.js, gives it one, and the path
@@ -2735,8 +2601,8 @@ function simMoveTryParkRoute(u, cmd) {
     if (u.sandy > 0) spd *= 0.5;
     c.mvTgX[s] = Number(t.x); c.mvTgY[s] = Number(t.y); c.mvTgTol[s] = Math.max(8, Math.min(TILE, Math.floor((Number(spd) || 1) * 2)));
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
-    c.mvOn[s] = 2;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
+    c.mvOn[mvtM(s)] = 2;
     return true;
 }
 // A held unit with orders to move (hold keeps its orders, path and
@@ -2768,8 +2634,8 @@ function simMoveTryParkHeld(u, cmd) {
         flags = 1;
     }
     const P = SIM_IDLE_PARK_TICKS, ph = (((gameTime + (u.id | 0)) % P) + P) % P;
-    c.mvWake[s] = gameTime + P - ph; c.mvFlags[s] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
-    c.mvOn[s] = 2;
+    c.mvWake[s] = gameTime + P - ph; c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach; c.mvWk[s] = 0;
+    c.mvOn[mvtM(s)] = 2;
 }
 // A worker at its work (its path done, nothing pending) whose transfer
 // cooldown runs: Unit.update only stands it there until the cooldown runs
@@ -2781,8 +2647,8 @@ function simMoveTryParkWork(u) {
     if ((u.path && u.pathIndex < u.path.length) || u._pendingPathTarget) return;
     const s = u._si;
     if (u._spatialEpoch !== spatialEpoch || c.sepKey[s] === SIM_SEP_ABSENT) return;
-    c.mvWake[s] = gameTime + Math.ceil(u.workerTransferCooldown); c.mvFlags[s] = 0;
-    c.mvOn[s] = 2;
+    c.mvWake[s] = gameTime + Math.ceil(u.workerTransferCooldown); c.mvFlags[mvtM(s)] = 0;
+    c.mvOn[mvtM(s)] = 2;
 }
 // A tick bound for an Int32 column the kernels compare as t < bound: the
 // same answer for every integer tick t (NaN: never, Infinity: always).
@@ -2804,9 +2670,9 @@ function simMoveTryPark(u) {
         }
         if (!(wake > gameTime + 1)) return;
         // (A builder's watchdog samples: the kernel's, mvFlags 4.)
-        c.mvWake[s] = wake; c.mvFlags[s] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
+        c.mvWake[s] = wake; c.mvFlags[mvtM(s)] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
         void watchStill;
-        c.mvOn[s] = 2;
+        c.mvOn[mvtM(s)] = 2;
         return;
     }
     const next = u._workerNextIdleRetargetTick;
@@ -2842,7 +2708,7 @@ function simMoveTryPark(u) {
         if (((t + id) % delay) === 0 && (Math.floor((t + id) / delay) % per) === 0) { wake = t; break; }
     }
     if (!(wake > gameTime + 1)) return;
-    c.mvWake[s] = wake; c.mvFlags[s] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
+    c.mvWake[s] = wake; c.mvFlags[mvtM(s)] = u.workerType === 'builder' && Number.isFinite(u._builderLastWatchX) && Number.isFinite(u._builderLastWatchY) ? 4 : 0;
     void watchStill;
     // Its search ticks while nothing changed (its last search failed at work
     // version wkFail, until wkUntil): the kernel checks the version and keeps
@@ -2854,9 +2720,9 @@ function simMoveTryPark(u) {
         c.wkOx[w] = Math.floor(org.x / TILE); c.wkOy[w] = Math.floor(org.y / TILE);
         c.wkTwice[w] = org !== u ? 1 : 0;
         c.wkFail[w] = failVer | 0; c.wkUntil[w] = _simTickBound(failUntil); c.wkSched[w] = _simTickBound(sched);
-        c.mvFlags[s] |= 2;
+        c.mvFlags[mvtM(s)] |= 2;
     }
-    c.mvOn[s] = 2;
+    c.mvOn[mvtM(s)] = 2;
 }
 
 // Drive-by boxes: per area and steps, the tile box of the areas within
@@ -2949,6 +2815,9 @@ let _simMoveWall = null, _simMoveWallGrid = null, _simMoveWallDirty = true;
 let _simMoveWallBlk = null, _simMoveWallBlkW = 0;
 // Bumped whenever a wall changes (the kernel's cached look-aheads check it).
 let _simMoveWallVer = 0;
+// (Counts the runs that write a wall table (mv.wall, the class walls, mv.wallBlk): the tile changes' kernel and the
+// whole rebuild. A snapshot taken at one count is good until the next: _flowWallSnap.)
+let _simWallsEpoch = 0;
 // During the unit pass the wall table stands still (the kernel and every
 // Unit.update see the walls of the pass's start): tile type changes are
 // applied at its end, in order. (Holds and chases check _simMoveWallQNear.)
@@ -3030,6 +2899,7 @@ function simTileChangesFlush() {
     const P = T.P;
     P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TYPE_WALL; P[4] = NAV_PROFILES; P[5] = NAV_PROFILE_BUILD; P[6] = NAV_PROFILE_BUILD;
     P[7] = _simMoveWallBlkW; P[8] = 0x66; P[9] = 0x77;
+    _simWallsEpoch = (_simWallsEpoch + 1) | 0;
     simRustDirect('k_tile_changes', [T.list, cellType, _simMoveWall, _simMoveWallBlk, b9, null, diff, T.tabN, T.tabC, _ST.code, _ST.own, _ST.val, T.hdr, T.nw, b81], P);
     _simMoveWallVer = (_simMoveWallVer + T.hdr[0]) | 0;
     if (_simMoveWallBlk9 && (!b9 || !b81)) _simMoveWallBlk9All();
@@ -3082,6 +2952,7 @@ function _simMoveWalls() {
     // (From the cell types: tch.rs k_walls_from_types.)
     if (!simHeapHas(cellType) && typeof cellColumnsRehome === 'function') cellColumnsRehome();
     _simWallsP[0] = GRID_W * GRID_H; _simWallsP[1] = TYPE_WALL;
+    _simWallsEpoch = (_simWallsEpoch + 1) | 0;
     simRustDirect('k_walls_from_types', [cellType, _simMoveWall], _simWallsP);
     _simMoveWallGrid = grid; _simMoveWallDirty = false; _simMoveWallVer = (_simMoveWallVer + 1) | 0;
     simMoveLookCacheClear();
@@ -3111,6 +2982,9 @@ let _simStructCls = null;
 // the drive-by look ranks them with the buildings).
 // (The tiles whose structure changed since: a heap list; full: all again.)
 let _simMoveStructDirty = null, _simMoveStructDirtyN = 0;
+// (Counts the writes of mv.struct / mv.scls: here and the destroy kernel's, things_utils.js. A copy made at one count
+// is good until the next: _acqPost.)
+let _simMoveStructVer = 0;
 // Cell owners replaced (a restore): every tile's code again.
 function simMoveStructsReset() { _simMoveStructW = -1; }
 function simMoveTileEntityChanged(gx, gy) {
@@ -3151,6 +3025,7 @@ function _simMoveStructs() {
     if (T.code && !simHeapHas(T.code)) structTablesRehome();
     const ok = T.code && T.n === GRID_W * GRID_H, P = _simMoveStructsP;
     P[0] = full ? GRID_W * GRID_H : _simMoveStructDirtyN; P[1] = GRID_W; P[2] = spatialBlockCols; P[3] = players; P[4] = SPATIAL_BLOCK_SIZE * CHUNK_SIZE; P[5] = nty; P[6] = full ? 1 : 0; P[7] = GRID_W * GRID_H;
+    _simMoveStructVer = (_simMoveStructVer + 1) | 0;
     simRustDirect('k_move_structs', [ok ? T.code : null, ok ? T.own : null, cellOwner, ok ? T.brain : null, _simStructTyCls, _simMoveStruct, _simStructCls, _simMoveStructBlocks, full ? null : _simMoveStructDirty, _trap.dirty, _trap.hdr], P);
     // (The changed tiles' traps looked at again, as simTrapDirty.)
     if (full) { _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; }
@@ -3484,7 +3359,10 @@ function _flowWallSnap() {
         if (!src || !simHeapHas(src)) { T[p] = 0; continue; }
         let snap = L.ws[p];
         if (!snap || snap.length !== src.length || !simHeapHas(snap)) { snap = L.ws[p] = simHeapArray(Uint8Array, src.length); simParallelBind('fl.ws.' + p, snap); }
-        pairs.push(snap, src);
+        // (Copied when a wall table was written since its last copy, or either array is another: a megabyte a
+        // profile at a 1024 map, at every post 0.6 ms of this thread.)
+        const K = L.wsOf || (L.wsOf = []), k = K[p] || (K[p] = { e: -1, src: null, snap: null });
+        if (k.e !== _simWallsEpoch || k.src !== src || k.snap !== snap) { pairs.push(snap, src); k.e = _simWallsEpoch; k.src = src; k.snap = snap; }
         T[p] = _simWEnc(snap.byteOffset);
     }
     if (pairs.length) simParallelCopyHeap(pairs);
@@ -3492,8 +3370,8 @@ function _flowWallSnap() {
     // keeps an answer whose blocks have not changed since without a line test, mv.rs walls_same_since_post.)
     const B = R['mv.wallBlk'];
     if (B && simHeapHas(B)) {
-        if (!L.wb || L.wb.length !== B.length || !simHeapHas(L.wb)) { L.wb = simHeapArray(Int32Array, B.length); simParallelBind('fl.wb', L.wb); }
-        L.wb.set(B);
+        if (!L.wb || L.wb.length !== B.length || !simHeapHas(L.wb)) { L.wb = simHeapArray(Int32Array, B.length); simParallelBind('fl.wb', L.wb); L.wbE = -1; }
+        if (L.wbE !== _simWallsEpoch || L.wbOf !== B) { L.wb.set(B); L.wbE = _simWallsEpoch; L.wbOf = B; }
     }
 }
 let _simMoveRanTick = -1;
@@ -3659,6 +3537,8 @@ function simMoveRun() {
         // phases the wanted positions against the exclusive footprints (the
         // pressure's steering, shoulders, swaps, pushes) and the epilogue.
         P[4]=-1;simParallelRun(SIM_KERNEL_MOVE,stepChunks);
+        // (The mover table's marked slots, scanned by that stage's chunks: their rows into their blocks, occ.offsets.)
+        mvtAfterFirstStage(n);
         // (Each phase's blocks with units, heaviest first: occupancyJobs.)
         const J=occupancyJobs(_simMovePostC,P[54]===1&&_sep?_sep.exc:null,_simMoveChFix,NPa+1);
         for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase]);}}
@@ -3698,6 +3578,7 @@ function simMoveRun() {
     if (occupancy) occupancyAfterMovement(c);
     if (P[54] === 1) _simMoveSepListed(chunks, CH);
     if(occupancy&&typeof trafficAfterMovement==='function')trafficAfterMovement();
+    if (occupancy && SIM_MVT) mvtAfterMovement();
 }
 
 // The pushed units the epilogue listed (sep.ex per chunk): blocked on the way
@@ -3906,7 +3787,7 @@ function acqTierIndexWait() {
 // (A resync: every peer's combat instructions dropped on the same tick.)
 function combatBrainReset() {
     const S = _simUnitState;
-    if (S) S.columns.cmMode.fill(0);
+    if (S) { S.columns.cmMode.fill(0); mvtInvalidate(); }
 }
 // The units' slots moved (sim_unit_state.js simUnitStateCompact: map old
 // slot -> new, -1 gone; runs [to, from, count]): a posted run's results,
@@ -3989,6 +3870,7 @@ function acqTierReset() {
     _acqMoves = [];
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0; _acqCommitTick = -1; _acqStepTick = -1;
+    _acqKept.sver = -1; _acqKept.aver = -1;
     if (typeof towerAcqDrop === 'function') towerAcqDrop();
 }
 function _acqArray(name, Type, n) {
@@ -4000,6 +3882,10 @@ function _acqArray(name, Type, n) {
 // The job's own arrays (never another's: these names were bound to live
 // arrays once), bound under their names.
 const _acqOwn = {};
+// The job's copies that are still good (their sources not written since they were made): the structure tables
+// (2 MB at a 1024 map: written when a structure is made or goes, _simMoveStructVer) and the area graph (17 MB:
+// made once a layout, _simAreaLayoutVer). Copied at every post they were 6 ms a post of this thread.
+const _acqKept = { sver: -1, s0: null, s1: null, d0: null, d1: null, aver: -1, a0: null, a1: null, e0: null, e1: null };
 function _acqOwnArray(name, Type, n) {
     let a = _acqOwn[name];
     if (!a || a.constructor !== Type || a.length < n) { const old = a; a = _acqOwn[name] = simHeapArray(Type, Math.max(1024, n)); if (old) simHeapFree(old); }
@@ -4049,7 +3935,13 @@ function _acqPost() {
     // (The copies in one job on the helpers.)
     const NT = GRID_W * GRID_H, cp = [_acqOwnArray('acq.hs', Int32Array, _simMoveHostile.length).subarray(0, _simMoveHostile.length), _simMoveHostile];
     if (_simMoveHostStruct) cp.push(_acqOwnArray('acq.hss', Int32Array, _simMoveHostStruct.length).subarray(0, _simMoveHostStruct.length), _simMoveHostStruct);
-    cp.push(_acqArray('acq.sown', Int8Array, NT).subarray(0, NT), _simMoveStruct.subarray(0, NT), _acqArray('acq.scls', Int8Array, NT).subarray(0, NT), _simStructCls.subarray(0, NT));
+    {
+        const K = _acqKept, d0 = _acqArray('acq.sown', Int8Array, NT), d1 = _acqArray('acq.scls', Int8Array, NT);
+        if (K.sver !== _simMoveStructVer || K.s0 !== _simMoveStruct || K.s1 !== _simStructCls || K.d0 !== d0 || K.d1 !== d1) {
+            cp.push(d0.subarray(0, NT), _simMoveStruct.subarray(0, NT), d1.subarray(0, NT), _simStructCls.subarray(0, NT));
+            K.sver = _simMoveStructVer; K.s0 = _simMoveStruct; K.s1 = _simStructCls; K.d0 = d0; K.d1 = d1;
+        }
+    }
     const cov = _acqArray('acq.cover', Uint8Array, Math.max(1, np * A));
     for (let p = 0; p < np; p++) cp.push(cov.subarray(p * A, p * A + A), C.visible[p].subarray(0, A));
     simParallelCopyHeap(cp);
@@ -4096,8 +3988,11 @@ function _acqPost() {
         areaRangeIndexEnsure();
         // (The sampled acquisition's own copy of the area graph.)
         if (sampled) {
-            _acqArray('acq.aoff', Int32Array, _simParReg['area.off'].length).set(_simParReg['area.off']);
-            _acqArray('acq.anb', Int32Array, _simParReg['area.nb'].length).set(_simParReg['area.nb']);
+            const K = _acqKept, a0 = _simParReg['area.off'], a1 = _simParReg['area.nb'], e0 = _acqArray('acq.aoff', Int32Array, a0.length), e1 = _acqArray('acq.anb', Int32Array, a1.length);
+            if (K.aver !== _simAreaLayoutVer || K.a0 !== a0 || K.a1 !== a1 || K.e0 !== e0 || K.e1 !== e1) {
+                e0.set(a0); e1.set(a1);
+                K.aver = _simAreaLayoutVer; K.a0 = a0; K.a1 = a1; K.e0 = e0; K.e1 = e1;
+            }
         }
         C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A; C3[9] = CMD_ATTACKING;
     }

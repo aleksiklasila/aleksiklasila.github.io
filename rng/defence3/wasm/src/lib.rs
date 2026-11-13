@@ -28,6 +28,7 @@ mod mv;
 mod k;
 mod atlas;
 mod occ;
+mod mvt;
 mod traffic;
 mod acq_sample;
 mod tower;

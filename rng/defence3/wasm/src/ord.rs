@@ -1163,7 +1163,7 @@ pub unsafe extern "C" fn k_unit_gone(a: u32, _chunk: i32) {
         let h = g(mpath, q);
         if h >= 0 && !mfree.is_null() { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
         s(srow, q, -1); s(on, q, 0); s(mout, q, 0);
-        if removed { s(live, q, 0); continue; }
+        if removed { s(live, q, 0); let d = k.p::<u8>(52); if !d.is_null() { s(d, q, 1); } continue; }
         let owner = g(own, q) as i32;
         // The spatial index's counts and registrations.
         let key = g(sepk, q);
@@ -1238,6 +1238,7 @@ pub unsafe extern "C" fn k_unit_gone(a: u32, _chunk: i32) {
             }
         }
         s(live, q, 0);
+        { let d = k.p::<u8>(52); if !d.is_null() { s(d, q, 1); } }
     }
     s(cnt, 0, no as i32); s(cnt, 1, vsum); s(cnt, 2, full);
 }
@@ -1755,7 +1756,7 @@ pub unsafe extern "C" fn k_unit_gone_par(a: u32, chunk: i32) {
         let h = g(mpath, q);
         if h >= 0 && !mfree.is_null() { s(ppf, c * per + npf, h); npf += 1; s(mpath, q, -1); }
         s(srow, q, -1); s(on, q, 0); s(mout, q, 0);
-        if removed { s(live, q, 0); continue; }
+        if removed { s(live, q, 0); let d = k.p::<u8>(52); if !d.is_null() { s(d, q, 1); } continue; }
         let owner = g(own, q) as i32;
         let key = g(sepk, q);
         if g(spep, q) == epoch && key != absent {
@@ -1816,6 +1817,7 @@ pub unsafe extern "C" fn k_unit_gone_par(a: u32, chunk: i32) {
             s(ppw, c * per + npw, r); npw += 1;
         }
         s(live, q, 0);
+        { let d = k.p::<u8>(52); if !d.is_null() { s(d, q, 1); } }
     }
     s(b, 0, no as i32); s(b, 1, npf as i32); s(b, 2, npw as i32); s(b, 3, vsum);
 }

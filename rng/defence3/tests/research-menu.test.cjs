@@ -50,10 +50,13 @@ const server = http.createServer((req, res) => {
             check(selectedUnits.length === 0, 'zero idle must clear the previous selection');
             unitsSetView(null);
             updateInfoPanel = savedUpdate;
-            const labView = { _s: -1, _last: { flags: SIM_SF_RESEARCHING } };
+            // (A gone structure's view: its last values in the page's ring, sim_frame.js pageGonePut; _last its record.)
+            const labView = { _s: -1, _last: -1 };
+            if (!_PAGE_STRUCT_GONE_KEYS) _PAGE_STRUCT_GONE_KEYS = [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8];
+            { const T = {}; for (const k of _PAGE_STRUCT_GONE_KEYS) T[k] = (_pageStructGone.cols && _pageStructGone.cols[k] ? new _pageStructGone.cols[k].constructor(1) : new Float64Array(1)); T.flags[0] = SIM_SF_RESEARCHING; labView._last = pageGonePut(_pageStructGone, T, _PAGE_STRUCT_GONE_KEYS, 0, labView); }
             Object.defineProperty(labView, 'isResearching', _PAGE_STRUCT_ACCESSORS.isResearching);
             check(!_isInfoPanelBuildingIdleLike(labView), 'active research lab is busy in frame views');
-            labView._last.flags = 0;
+            _pageStructGone.cols.flags[labView._last] = 0;
             check(_isInfoPanelBuildingIdleLike(labView), 'paused research lab is idle');
             labView.spawnQueue = [{}];
             check(!_isInfoPanelBuildingIdleLike(labView), 'queued production is busy');

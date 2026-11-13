@@ -602,7 +602,7 @@ function _effRowAttach(u) {
     if (!c || typeof simSharedArray !== 'function') return;
     const U = unitStatTables(), s = u._si, o = c.owner[s], ty = spatialUnitTypeToIndex[u.unitType], bl = Math.max(1, c.baseLevel[s]), el = Math.max(1, c.effectiveLevel[s]);
     if (!(o >= 0 && o < U.NP && ty >= 0 && ty < U.NT && bl < U.L1 && el < U.L1) || bl !== Math.floor(bl) || el !== Math.floor(el)) return;
-    c.statRow[s] = (o * U.NT + ty) * U.L1 + el;
+    c.statRow[mvtM(s)] = (o * U.NT + ty) * U.L1 + el;
     c.bsRow[s] = (o * U.NT + ty) * U.L1 + bl;
     // (Its tables are the rows': no handles of its own.)
     c.jr__pc.clear(s); c.jr__pce.clear(s); c.jr_preComputedBase.clear(s); c.jr_basePreComputed.clear(s);
@@ -1113,6 +1113,8 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     A[23] = resvOk ? workerReservedTiles : null;
     A[24] = D.hdr; A[25] = D.walls; A[26] = D.resv; A[27] = D.ocnt; A[28] = D.rows; A[29] = D.tiles;
     _dstClassArgs(D, 30);
+    // (It writes mv.struct / mv.scls: unit.js _simMoveStructVer.)
+    if (mvOk) _simMoveStructVer = (_simMoveStructVer + 1) | 0;
     simRustDirect('k_struct_destroy', A, P);
     const H = D.hdr, m = H[8];
     if (m === 0) return 0;

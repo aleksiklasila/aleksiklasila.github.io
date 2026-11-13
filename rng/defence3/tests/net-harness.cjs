@@ -508,6 +508,8 @@ function createInstance(world, name, options = {}) {
     // (A world or instance that says which mode wins over SIM_WORKER: tests that run both modes themselves.)
     // (WASM64=1: the memory64 kernels, as the page's ?wasm64=1.)
     if (process.env.WASM64 === '1') location.searchParams.set('wasm64', '1');
+    // (MVT=1: the mover table kept; MVT=2: audited before every movement, as the page's ?mvt=2.)
+    if (process.env.MVT) location.searchParams.set('mvt', String(Number(process.env.MVT) | 0));
     location.searchParams.set('simworker', (world.simWorker === true || (world.simWorker !== false && process.env.SIM_WORKER === '1')) && options.simWorker !== false ? '1' : '0');
     const window = {
         innerWidth: 1280, innerHeight: 720, devicePixelRatio: 1,
@@ -587,7 +589,7 @@ function createInstance(world, name, options = {}) {
                 MessageChannel: class { constructor() { this.port1 = { onmessage: null, unref() { } }; this.port2 = { postMessage() { }, unref() { } }; } },
                 performance: { now: () => sched.now }, setTimeout: () => 0, clearTimeout() { }, setInterval: () => 0, clearInterval() { },
                 Date: HarnessDate, Math: options.foreignMath ? makeForeignMath() : Math, structuredClone, URLSearchParams, URL, TextEncoder, TextDecoder,
-                location: { search: process.env.WASM64 === '1' ? '?wasm64=1' : '', href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
+                location: { search: (process.env.WASM64 === '1' ? '?wasm64=1' : '') + (process.env.MVT ? (process.env.WASM64 === '1' ? '&' : '?') + 'mvt=' + (Number(process.env.MVT) | 0) : ''), href: 'http://localhost/rng/defence3/src/sim/sim_worker.js' }, navigator: { userAgent: 'harness-worker' },
                 crypto: window.crypto,
                 // (A worker's global scope is an event target: UI scripts
                 // loaded with the game's bind their listeners on it, idle.)
@@ -692,6 +694,8 @@ function createInstance(world, name, options = {}) {
     inst.set = (n, v) => inst.game.set(n, v);
     // Shared object for passing values into eval'd code: inst.scratch.x -> __scratch.x
     inst.scratch = inst.eval('__scratch');
+    // (MVT=3: the mover table's differences this instance met, printed when the process ends.)
+    if (process.env.MVT === '3') process.on('exit', () => { for (const r of inst.scratch.mvtSeen || []) process.stderr.write('[mvt] ' + JSON.stringify(r) + String.fromCharCode(10)); try { process.stderr.write('[mvt-audits] ' + inst.name + ' ' + inst.eval('_mvt ? (_mvt.audits | 0) + " audits, " + _mvt.rowsSeen + " rows at the last" : "no table"') + String.fromCharCode(10)); } catch (e) { } });
     // DIVTRACE=1: each tick's fingerprint of every unit, player and structure
     // (the last DIVTRACE_TICKS ticks, page-side simulation only), so a failed
     // comparison (checkHealthy) names the first tick and fields that differ.

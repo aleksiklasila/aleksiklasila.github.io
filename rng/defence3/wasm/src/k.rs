@@ -1196,6 +1196,9 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
     let b = k.raw(0);
     match k.i(0) {
         1 => super::wsw::k_wsw_set(b, chunk),
+        // (The mover table's sync, mvt.rs.)
+        4 => super::mvt::mvt_sync_scan(b, chunk),
+        5 => super::mvt::mvt_sync_apply(b, chunk),
         _ => {}
     }
 }
@@ -3411,7 +3414,8 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
             let nbk = (bcols * brows).max(0) as usize;
             let ocnt = if owner >= 0 && owner < 16 { g(meta, 5 + 2 * nbk + owner as usize) } else { 0 };
             // (The nearest one per tile of each owner's field when there is one: k_ws_nearfield, exactly the
-            // ring search's answer: the least (steps, row, column, id), by rank in the field's low half.)
+            // ring search's answer: the least (steps, row, column, id), as the spawner's tile: its place in
+            // tile order found by halving (rk: tile order -> bucket order, pid: bucket order -> tile).)
             let mut fast = false;
             if ocnt > 0 && np > 0 && owner >= 0 && owner < 16 && utx >= 0 && uty >= 0 && utx < w && uty < h {
                 let nfs = g(meta, 5 + 2 * nbk + 16 + owner as usize);
@@ -3420,8 +3424,10 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                     fast = true;
                     kc!(a, 95, 1);
                     let v = g(nf, nfs as usize * (w * h) as usize + (uty * w + utx) as usize);
-                    if v != u32::MAX {
-                        best = g(rk, (v & 0xffff) as usize);
+                    if v < NF_CLR {
+                        let (mut lo, mut hi) = (0usize, np as usize);
+                        while lo < hi { let m = (lo + hi) >> 1; if (g(pid, g(rk, m) as usize) as u32) < v { lo = m + 1; } else { hi = m; } }
+                        if lo < np as usize && g(pid, g(rk, lo) as usize) as u32 == v { best = g(rk, lo); }
                     }
                 }
             }
@@ -3602,6 +3608,9 @@ unsafe fn nearfield_part(k: &K, c: usize, mode: i32) {
     let (np, nb) = (g(meta, 1).max(0) as usize, (g(meta, 3) * g(meta, 4)).max(0) as usize);
     let slot = g(meta, 5 + 2 * nb + 16 + owner as usize);
     if slot < 0 { return; }
+    // (Made whole only when the incremental stage (mode 3) could not: its flag.)
+    let nfa = k.p::<i32>(200 + gid);
+    if !nfa.is_null() && g(nfa, slot as usize * NFA_W + 2) == 0 { return; }
     let f = nf.add(slot as usize * w * h);
     const STEP: u32 = 0x10000;
     // (Saturating: none (all ones) stays none.)
@@ -3641,6 +3650,165 @@ unsafe fn nearfield_part(k: &K, c: usize, mode: i32) {
         let (r, dn) = (f.add(y * w), f.add((y + 1) * w));
         for x in x0..x1 { let v = g(r, x).min(inc(g(dn, x))); s(r, x, v); }
     }
+    // (The block's columns are final: (steps, rank) -> the spawner's tile.)
+    nf_rank_to_tile(&k, gid, f, w, h, x0, x1);
+}
+
+// The near fields' values: the nearest spawner's tile (NF_NONE: none). Their
+// order (steps from the tile, then the spawner's tile: row, column) is the
+// ring search's; the sweeps carry (steps << 16 | rank) and end in tiles.
+pub const NFA_CAP: usize = 65536;
+/// Per field slot in wsg<g>.nfa: [0] owner + 1 (0: none yet), [1] spawners applied, [2] made whole this post,
+/// [3] width | height << 16, then the applied spawners' tiles, ascending (NFA_CAP).
+pub const NFA_W: usize = 4 + NFA_CAP;
+const NF_NONE: u32 = u32::MAX;
+const NF_CLR: u32 = u32::MAX - 1;
+unsafe fn nf_rank_to_tile(k: &K, gid: usize, f: *mut u32, w: usize, h: usize, x0: usize, x1: usize) {
+    let gb = 30 + 14 * gid;
+    let (pid, rk) = (k.p::<i32>(gb + 8), k.p::<i32>(152 + gid));
+    if pid.is_null() || rk.is_null() { return; }
+    for y in 0..h {
+        let r = f.add(y * w);
+        for x in x0..x1 { let v = g(r, x); if v != NF_NONE { s(r, x, g(pid, g(rk, (v & 0xffff) as usize) as usize) as u32); } }
+    }
+}
+#[inline(always)]
+fn nf_key(lab: u32, x: i32, y: i32, w: i32) -> u64 {
+    if lab >= NF_CLR { return u64::MAX; }
+    let (lx, ly) = ((lab as i32) % w, (lab as i32) / w);
+    ((((lx - x).abs() + (ly - y).abs()) as u64) << 32) | lab as u64
+}
+/// The field updated in place for spawners gone (rem) and come (add), each list of tiles: a gone one's cell
+/// (the tiles whose nearest it was: connected, every tile's way to its nearest spawner stays in its cell)
+/// cleared, each of its tiles given the nearest of the spawners seen beyond the cleared tiles' edges (a tile's
+/// nearest is its neighbour's one step towards it); then each new one's cell flooded from its tile (the tiles
+/// it is nearer to than their own). The same field as made whole. false: past the scratch (q, qcap) or the
+/// edge's spawners (512): made whole instead.
+unsafe fn nf_apply(f: *mut u32, w: usize, h: usize, rem: *const i32, nr: usize, add: *const i32, na: usize, q: *mut i32, qcap0: usize) -> bool {
+    // (The edge's spawners at the scratch's end: tile, column, row.)
+    if qcap0 < 2048 { return false; }
+    let qcap = qcap0 - 1536;
+    let (lab, lx, ly) = (q.add(qcap) as *mut u32, q.add(qcap + 512), q.add(qcap + 1024));
+    let wi = w as i32;
+    let mut qn = 0usize;
+    macro_rules! nbrs { ($t:expr, $n:ident, $body:block) => {{
+        let t = $t; let (x, y) = (t % w, t / w);
+        if x > 0 { let $n = t - 1; $body }
+        if x + 1 < w { let $n = t + 1; $body }
+        if y > 0 { let $n = t - w; $body }
+        if y + 1 < h { let $n = t + w; $body }
+    }}; }
+    for i in 0..nr {
+        let r = g(rem, i) as u32;
+        let t0 = r as usize;
+        if t0 >= w * h || g(f, t0) != r { return false; }
+        if qn >= qcap { return false; }
+        s(f, t0, NF_CLR); s(q, qn, t0 as i32); qn += 1;
+        let mut head = qn - 1;
+        while head < qn {
+            let t = g(q, head) as usize; head += 1;
+            nbrs!(t, n, { if g(f, n) == r { if qn >= qcap { return false; } s(f, n, NF_CLR); s(q, qn, n as i32); qn += 1; } });
+        }
+    }
+    if qn > 0 {
+        let mut ln = 0usize;
+        let mut last = NF_NONE;
+        for i in 0..qn {
+            let t = g(q, i) as usize;
+            nbrs!(t, n, {
+                let v = g(f, n);
+                if v < NF_CLR && v != last {
+                    last = v;
+                    let mut seen = false;
+                    for j in 0..ln { if g(lab, j) == v { seen = true; break; } }
+                    if !seen { if ln >= 512 { return false; } s(lab, ln, v); s(lx, ln, (v as i32) % wi); s(ly, ln, (v as i32) / wi); ln += 1; }
+                }
+            });
+        }
+        for i in 0..qn {
+            let t = g(q, i) as usize;
+            let (x, y) = ((t % w) as i32, (t / w) as i32);
+            let mut best = u64::MAX;
+            for j in 0..ln { let kk = ((((g(lx, j) - x).abs() + (g(ly, j) - y).abs()) as u64) << 32) | g(lab, j) as u64; if kk < best { best = kk; } }
+            s(f, t, if best == u64::MAX { NF_NONE } else { best as u32 });
+        }
+    }
+    for i in 0..na {
+        let a = g(add, i) as u32;
+        let t0 = a as usize;
+        if t0 >= w * h { return false; }
+        let (ax, ay) = ((t0 % w) as i32, (t0 / w) as i32);
+        if nf_key(g(f, t0), ax, ay, wi) <= (a as u64) { continue; }
+        s(f, t0, a);
+        qn = 0; s(q, 0, t0 as i32); qn += 1;
+        let mut head = 0usize;
+        while head < qn {
+            let t = g(q, head) as usize; head += 1;
+            nbrs!(t, n, {
+                let (nx, ny) = ((n % w) as i32, (n / w) as i32);
+                let ka = ((((ax - nx).abs() + (ay - ny).abs()) as u64) << 32) | a as u64;
+                if ka < nf_key(g(f, n), nx, ny, wi) { if qn >= qcap { return false; } s(f, n, a); s(q, qn, n as i32); qn += 1; }
+            });
+        }
+    }
+    true
+}
+/// k_ws_nearfield mode 3 (a job a pair, before the whole-field stages): the owner's working spawners now
+/// (tile order) against those its field was made for (wsg<g>.nfa); the field updated for the difference
+/// (nf_apply), or flagged to be made whole (a new slot owner or grid, more changes than half of them, past the
+/// scratch). Records the spawners now either way.
+unsafe fn nearfield_incr(k: &K, a: *const i32, c: usize) {
+    if c >= k.i(0).max(0) as usize { return; }
+    let (w, h) = (k.i(1).max(0) as usize, k.i(2).max(0) as usize);
+    let pair = k.i(3 + c);
+    let (gid, owner) = ((pair >> 4) as usize, pair & 15);
+    if gid >= 8 || w == 0 || h == 0 { return; }
+    let gb = 30 + 14 * gid;
+    let meta = k.p::<i32>(gb);
+    let (nf, rk, nfa) = (k.p::<u32>(144 + gid), k.p::<i32>(152 + gid), k.p::<i32>(200 + gid));
+    let (pid, po, pready) = (k.p::<i32>(gb + 8), k.p::<i32>(gb + 7), k.p::<i32>(176 + gid));
+    if meta.is_null() || nf.is_null() || rk.is_null() || nfa.is_null() || pid.is_null() || po.is_null() { return; }
+    let (np, nb) = (g(meta, 1).max(0) as usize, (g(meta, 3) * g(meta, 4)).max(0) as usize);
+    let slot = g(meta, 5 + 2 * nb + 16 + owner as usize);
+    if slot < 0 { return; }
+    let epoch = k.i(63);
+    let hd = nfa.add(slot as usize * NFA_W);
+    let f = nf.add(slot as usize * w * h);
+    let (sc, sw) = scratch(a);
+    let dims = (w as i32) | ((h as i32) << 16);
+    // (No room to record the spawners: made whole, and so next time.)
+    if sc.is_null() || sw < 3 * NFA_CAP + 4096 || np > NFA_CAP { s(hd, 0, 0); s(hd, 2, 1); return; }
+    let mut full = false;
+    let (cur, rem, add) = (sc, sc.add(NFA_CAP), sc.add(2 * NFA_CAP));
+    let mut nc = 0usize;
+    {
+        for r in 0..np {
+            let p = g(rk, r) as usize;
+            if g(po, p) != owner || !ws_ready(pready, p, epoch) { continue; }
+            let t = g(pid, p);
+            if t < 0 || t as usize >= w * h { continue; }
+            s(cur, nc, t); nc += 1;
+        }
+    }
+    let m = g(hd, 1).max(0) as usize;
+    full = full || g(hd, 0) != owner + 1 || g(hd, 3) != dims || m > NFA_CAP;
+    let (mut nr, mut na) = (0usize, 0usize);
+    if !full {
+        let ap = hd.add(4);
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < m || j < nc {
+            let (x, y) = (if i < m { g(ap, i) } else { i32::MAX }, if j < nc { g(cur, j) } else { i32::MAX });
+            if x == y { i += 1; j += 1; } else if x < y { s(rem, nr, x); nr += 1; i += 1; } else { s(add, na, y); na += 1; j += 1; }
+        }
+        if nr + na > 8usize.max(m / 2) { full = true; }
+    }
+    if !full && nr + na > 0 {
+        let q = sc.add(3 * NFA_CAP) as *mut i32;
+        full = !nf_apply(f, w, h, rem, nr, add, na, q, sw - 3 * NFA_CAP);
+    }
+    for i in 0..nc { s(hd, 4 + i, g(cur, i)); }
+    s(hd, 0, owner + 1); s(hd, 1, nc as i32); s(hd, 3, dims);
+    s(hd, 2, full as i32);
 }
 
 /// SIM_KERNEL_WS_NEARFIELD (a job a pair): for a collectors' group and an owner, every tile's nearest working
@@ -3662,6 +3830,10 @@ pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
     let mode = k.i(62);
     if mode == 1 || mode == 2 {
         nearfield_part(&k, chunk.max(0) as usize, mode);
+        return;
+    }
+    if mode == 3 {
+        nearfield_incr(&k, a, chunk.max(0) as usize);
         return;
     }
     let c = chunk.max(0) as usize;
@@ -3733,6 +3905,7 @@ pub unsafe extern "C" fn k_ws_nearfield(a: u32, chunk: i32) {
             s(f, i, v);
         }
     }
+    nf_rank_to_tile(&k, gid, f, w, h, 0, w);
 }
 
 /// SIM_KERNEL_WS_ORDER (one job): the requests with a result, in their order
@@ -5721,6 +5894,9 @@ pub unsafe extern "C" fn k_stat_fill(a: u32, _chunk: i32) {
     let (rver, rspd, rcost, rrd, rra, rrk, rlzw) = (k.p::<i32>(5), k.p::<f32>(6), k.p::<f32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10), k.p::<u8>(11));
     let (rcb, rcd, rdmg, rvis, rchs, rvsa, rmaxe) = (k.p::<f32>(12), k.p::<f32>(13), k.p::<f32>(14), k.p::<f32>(15), k.p::<f32>(16), k.p::<i8>(17), k.p::<f32>(18));
     let (hot, brad, brow) = (k.p::<f32>(19), k.p::<i32>(20), k.p::<i32>(21));
+    // (eff.rWch [22]: a scout's watch from its swoop, ticks (unit.js _unitWatchTicks: secondsToTicks(watchDuration)); the
+    // kernels take it for the swoop style only. Was never filled: units whose stats were applied in a kernel watched 0.)
+    let rwch = k.p::<i32>(22);
     if t.is_null() || rl.is_null() || bl.is_null() || rver.is_null() || hot.is_null() { return; }
     let (p, ty1, nt, l1, ns, r1) = (k.i(0), k.i(1), k.i(2).max(1), k.i(3).max(2), k.i(4).max(1), k.i(5).max(1));
     let (tps, tile, smax, aute, wmax, ntv) = (k.f(6), k.f(7), k.f(8), k.f(9), k.i(10), k.i(11).max(1));
@@ -5767,6 +5943,7 @@ pub unsafe extern "C" fn k_stat_fill(a: u32, _chunk: i32) {
             for (i, x) in hv.iter().enumerate() { s(hot, h + i, *x as f32); }
             if !brad.is_null() { s(brad, e, (vra as i32).min(wmax)); }
             if !brow.is_null() { s(brow, e, e as i32); }
+            if !rwch.is_null() { let w = v(7); s(rwch, e, js_round((if w.is_nan() { 0.0 } else { w.max(0.0) }) * tps).max(1.0) as i32); }
         }
     }
 }

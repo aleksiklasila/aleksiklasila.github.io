@@ -174,16 +174,9 @@ function _spawnerCooldownTicksCompute(s, lvl) {
 // its queue switch changed, construction done): its timer and, once its
 // front is paid, its ready order (barracks and spawners have no tick of
 // their own: spawnerStructuresTick).
-function spawnerProductionChanged(s) {
-    if (!s || !hasSpawnQueue(s) || !(s.energy > 0) || s.underConstruction) return;
-
-    const had = Number.isFinite(s._spawnReadyOrder);
-    if (spawnQueueCount(s) > 0) updateSpawnerProductionProgress(s);
-    else { s.spawnTimer = 0; s._spawnReadyOrder = undefined; }
-    // (Ready already: listed again, its entry may have been passed while it
-    // could not spawn.)
-    if (had && Number.isFinite(s._spawnReadyOrder)) spawnerReadyNoted(s);
-}
+// (A spawner's production moved on (a payment, its queue, construction done): the production pass (spr.rs
+// k_spawn_prod) brings every barrack's and spawner's row up to date each step; nothing to do now.)
+function spawnerProductionChanged(s) { }
 // A tick of the barracks and spawners: the players' research moves on.
 function spawnerStructuresTick() {
     // (Their statuses: the status kernel's, main.js; removals there too.)
@@ -209,203 +202,12 @@ function researchAdvanceTick() {
 // energy, production switched off) is what the player has to see, so its
 // track is light enough to read on a dark building.
 const QUEUE_BAR_TRACK = '#6a6a6a';
-function updateSpawnerProductionProgress(spawner) {
-    if (!spawner) return;
-    // (The production pass does this for every spawner each step.)
-    if (_spProdOn()) return;
-    if (!(spawnQueueCount(spawner) > 0)) {
-        spawner.spawnTimer = 0;
-        spawner._spawnReadyOrder = undefined;
-        return;
-    }
-    let front = spawnQueueFront(spawner);
+// (The production pass's: spr.rs k_spawn_prod.)
+function updateSpawnerProductionProgress(spawner) { }
 
-    let cooldown = Math.max(1, Math.round(spawner.spawnCooldown || 1));
-
-    let paidPct = front.energyRequired > 0 ? (front.energyPaid / front.energyRequired) : 0;
-    spawner.spawnTimer = Math.max(0, Math.min(cooldown, Math.round(cooldown * paidPct)));
-    if (front.energyPaid >= front.energyRequired && !Number.isFinite(spawner._spawnReadyOrder)) {
-        spawner._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-        spawnerReadyNoted(spawner);
-    } else if (front.energyPaid < front.energyRequired) {
-        spawner._spawnReadyOrder = undefined;
-    }
-}
-
-// (A spawner's rally path from its exit: spawnQueuedUnitFromSpawner. Weak: no property on the structure.)
-const _spawnerRallyTpl = new WeakMap();
-// A step's spawns are one batch (unit.js simSpawnBatchAdd/Write/Finish): the
-// scheduler (processGlobalSpawnerQueue) begins each in order (_spawnBegin:
-// its checks, its exit, its unit's slot and id), the batch's columns are
-// written at once, then each ends in the same order (_spawnEnd: the unit
-// finished (occupancy, spatial index), the queue moved on, the rally).
-// Exits by batch index (tile x, y).
-// (Room for a batch's spawns: unit.js SPB_CAP, which loads after this file.)
-const _spawnBatch = { ex: new Int32Array(2 * 16384), n: 0, exit: { x: 0, y: 0 } };
-// A spawner's next unit begun: false when it may not spawn. Its owner's
-// population counts it at once (given back when it finds no room at its
-// exit): a step's spawns are decided before any is placed.
-function _spawnBegin(spawner) {
-    if (!spawner || !(spawnQueueCount(spawner) > 0)) return false;
-    if (spawner.energy <= 0 || spawner.underConstruction) return false;
-    if (!isQueueEnabled(spawner)) return false;
-    const owner = spawner.owner;
-    if (!(players[owner].popCount < getPlayerPopCap(owner))) return false;
-    const front = spawnQueueFront(spawner), unitType = front.unitType, level = front.level;
-    const B = _spawnBatch;
-    const p = findNearestWalkable(spawner.gx, spawner.gy, undefined, undefined, null, B.exit), k = B.n++;
-    B.ex[2 * k] = p.x; B.ex[2 * k + 1] = p.y;
-    simSpawnBatchAdd(unitType, owner, p.x * TILE + 16, p.y * TILE + 16, level, configureWorkerUnitFromType);
-    players[owner].popCount++;
-    return true;
-}
-// One spawner's spawn alone (a batch of one): whether it spawned.
-function spawnQueuedUnitFromSpawner(spawner) {
-    if (_spawnBatch.n !== 0) throw new Error('spawnQueuedUnitFromSpawner during a spawn batch');
-    if (!_spawnBegin(spawner)) return false;
-    simSpawnBatchWrite();
-    const ok = _spawnEnd(0, spawner);
-    _spawnBatch.n = 0; simSpawnBatchClear();
-    return ok;
-}
-// The batch's spawn k (spawner's) ended: false when its unit found no room.
-function _spawnEnd(k, spawner) {
-    const u = simSpawnBatchFinish(k), owner = spawner.owner;
-    const sx = _spawnBatch.ex[2 * k], sy = _spawnBatch.ex[2 * k + 1];
-    if (u.dead) { players[owner].popCount--; return false; }
-    // (In the production pass: the queues move on together after the batch, spr.rs k_spawn_shift.)
-    if (_spp.on) _spShiftNote(spawner); else spawnQueueShift(spawner);
-    // The queue moved on: its next item may need healers' energy.
-    if (typeof workerWorkChanged === 'function') workerWorkChanged(spawner.owner, 'healer', spawner.gx, spawner.gy);
-    if (typeof workSiteDirty === 'function') workSiteDirty(spawner.gx, spawner.gy);
-    unitAdded(u);
-
-    // For worker units, rally is a direct move order that must be followed before auto-search resumes.
-    if (u.workerType && typeof applyWorkerRallyFromSpawner === 'function') {
-        if (applyWorkerRallyFromSpawner(u, spawner)) {
-            spawner.spawnTimer = 0;
-            spawner._spawnReadyOrder = undefined;
-            return true;
-        }
-    }
-
-    if (_refreshSpawnerRallyTarget(spawner)) {
-        const rgx = Math.floor(spawner.rallyX / TILE), rgy = Math.floor(spawner.rallyY / TILE);
-        let rallyPath = null;
-        if (_noteSpawnPathfindRequest(u.owner)) {
-            // (The spawner's own: its exit, its rally tile and the unit's
-            // movement profile as of the path topology's version, for
-            // SPAWNER_RALLY_TEMPLATE_TTL_TICKS. Was a shared map by a ten-part
-            // string key made each spawn: ~1.1k spawns a tick in a big match.)
-            const canWalk = getPathCanWalkForUnit(u), prof = _resolveMovementProfile(!!u.isFlying, canWalk, null) || 'dynamic';
-            let T = _spawnerRallyTpl.get(spawner);
-            if (T && T.sx === sx && T.sy === sy && T.ex === rgx && T.ey === rgy && T.prof === prof && T.version === pathTopologyVersion
-                && !(gameTime - T.tick > SPAWNER_RALLY_TEMPLATE_TTL_TICKS)) rallyPath = T.path;
-            if (!rallyPath) {
-                rallyPath = navPathReach(u, sx, sy, rgx, rgy, T?.path);
-                if (!T) _spawnerRallyTpl.set(spawner, T = { sx, sy, ex: rgx, ey: rgy, prof, version: pathTopologyVersion, tick: gameTime, path: rallyPath });
-                else {
-                    T.sx = sx; T.sy = sy; T.ex = rgx; T.ey = rgy; T.prof = prof;
-                    T.version = pathTopologyVersion; T.tick = gameTime; T.path = rallyPath;
-                }
-            }
-        }
-
-        if (spawner.type === 'barrack') {
-            if (!rallyPath || rallyPath.length <= 0) {
-                rallyPath = _makeFallbackPathForUnit(u, sx, sy, rgx, rgy, CMD_ATTACK_MOVING, 'spawner_rally');
-            }
-            u.path = rallyPath;
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === sx && u.path[0].y === sy) ? 1 : 0;
-            if (u.path && u.path.length > 0) u.commandState = CMD_ATTACK_MOVING;
-        } else {
-            if (!rallyPath || rallyPath.length <= 0) {
-                rallyPath = _makeFallbackPathForUnit(u, sx, sy, rgx, rgy, CMD_MOVING, 'spawner_rally');
-            }
-            u.path = rallyPath;
-            u.pathIndex = (u.path && u.path.length > 1 && u.path[0].x === sx && u.path[0].y === sy) ? 1 : 0;
-            u.commandState = CMD_MOVING;
-            u.workerState = 'MANUAL_MOVE';
-            u.targetPos = { x: rgx * TILE + 16, y: rgy * TILE + 16 };
-            u._manualMoveIssuedTick = gameTime;
-        }
-    }
-
-    spawner.spawnTimer = 0;
-    spawner._spawnReadyOrder = undefined;
-    return true;
-}
-
-// Spawners whose queue front is paid, by ready order (_spawnReadyOrder,
-// assigned from an increasing counter: appended, each owner's list stays
-// sorted): per owner its entries (spawner, order) from a head index. An
-// entry whose spawner no longer holds that order (spawned, dequeued,
-// removed) is dropped when reached. Made anew from the spawners on every
-// peer after a resync (spawnerReadyReset).
-let _spawnReady = null;
-function spawnerReadyReset() { _spawnReady = null; }
-// After s._spawnReadyOrder was assigned.
-function spawnerReadyNoted(s) {
-    if (_spProdOn()) return;
-    const R = _spawnReady;
-    if (!R || !s || !Number.isFinite(s._spawnReadyOrder)) return;
-    const o = Number.isFinite(s.owner) ? s.owner : -1;
-    let L = R.byOwner.get(o);
-    if (!L) R.byOwner.set(o, L = { e: [], head: 0 });
-    const order = s._spawnReadyOrder, e = L.e;
-    if (e.length <= L.head || e[e.length - 1] <= order) e.push(s, order);
-    else {
-        // (An older order again, e.g. its queue enabled again: in its place.)
-        let lo = L.head >> 1, hi = e.length >> 1;
-        while (lo < hi) { const mid = (lo + hi) >> 1; if (e[mid * 2 + 1] <= order) lo = mid + 1; else hi = mid; }
-        e.splice(lo * 2, 0, s, order);
-    }
-    // (Stale entries pile up only behind an owner at its cap: compacted now and then.)
-    if (L.e.length - L.head > 4 * structLiveRows(1, 2) + 64) _spawnReadyCompact(L);
-}
-function _spawnReadyCompact(L) {
-    const e = [];
-    for (let k = L.head; k < L.e.length; k += 2) if (L.e[k]._spawnReadyOrder === L.e[k + 1]) e.push(L.e[k], L.e[k + 1]);
-    L.e = e; L.head = 0;
-}
-function _spawnReadyBuild() {
-    const R = _spawnReady = { byOwner: new Map() }, all = [];
-    for (const b of barracks) if (b && Number.isFinite(b._spawnReadyOrder)) all.push(b);
-    for (const s of collectorSpawners) if (s && Number.isFinite(s._spawnReadyOrder)) all.push(s);
-    all.sort((a, b) => a._spawnReadyOrder - b._spawnReadyOrder);
-    for (const s of all) spawnerReadyNoted(s);
-    return R;
-}
-// Whether s (holding a ready order) may spawn: in the world, alive, built,
-// its queue enabled and its front paid.
-function _spawnReadyValid(s) {
-    if (!s || s.energy <= 0 || s.underConstruction || !isQueueEnabled(s)) return false;
-    if (!(spawnQueueCount(s) > 0)) return false;
-    if (typeof getTileEntityRef === 'function' && getTileEntityRef(s.gx, s.gy) !== s) return false;
-    const front = spawnQueueFront(s);
-    return front.energyPaid >= front.energyRequired;
-}
-// An owner's first entry that may spawn now: its order (its list's head
-// moved past the stale ones), Infinity when none or the owner is at its
-// population cap.
-function _spawnHeadOrder(o, L) {
-    if (L.head >= L.e.length) return Infinity;
-    if (!(o >= 0 && players[o] && players[o].popCount < getPlayerPopCap(o))) return Infinity;
-    while (L.head < L.e.length) {
-        const s = L.e[L.head], order = L.e[L.head + 1];
-        if (s._spawnReadyOrder === order && _spawnReadyValid(s)) return order;
-        L.head += 2;
-    }
-    L.e = []; L.head = 0;
-    return Infinity;
-}
-// (Per owner taking part this tick: its list and its head's order. A spawn
-// changes only its own owner's head (that spawner, that owner's population):
-// the others' are found once a tick, not again for every spawn.)
-const _spawnPickL = [], _spawnPickO = [], _spawnPicked = [], _spawnBlocked = [];
-// (The batch emptied.)
-function _spawnBatchDone() { _spawnBatch.n = 0; simSpawnBatchClear(); }
-let _spawnPickOrd = new Float64Array(64);
+// (Ready orders: each spawner row's c__spawnReadyOrder, given by the production pass, spr.rs k_spawn_select; a resync
+// keeps the rows.)
+function spawnerReadyReset() { }
 // ---- production as table passes (TABLES_CONVERSION_PLAN.md S2; wasm/src/spr.rs) ----
 // Each step every barrack's and spawner's row is brought up to date on the
 // helpers (k_spawn_prod: its spawn timer from its front's payment, not ready
@@ -458,12 +260,6 @@ function spawnCountsKernel(tiles, counts, n, playerId, worker) {
     P[6] = 1; simRustDirect('k_spawn_counts', args, P);
     return cnt[0];
 }
-// A spawner that spawned: its queue moves on after the batch.
-function _spShiftNote(s) {
-    const k = _spp.ix.get(s.constructor), L = _spp.shift;
-    if (k === undefined || !(s._sr >= 0) || !L || _spp.ns >= L.length) { spawnQueueShift(s); return; }
-    L[_spp.ns++] = (k << 24) | s._sr;
-}
 // The table entry of a key: the cooldown (barrack.js _spawnerCooldownTicksCompute) and the next unit's cost (_spawnQueueFrontNew) of its spawner type, owner and base level.
 function _spTabFill(tab, key, ver) {
     const types = SPAWN_PROD_TYPES, lv = key % 64, ty = Math.floor(key / 64) % types, o = Math.floor(key / (64 * types)) - 1, raw = _stationaryTypes[ty];
@@ -482,6 +278,10 @@ function _spClsBuild() {
     const CL = _spClasses();
     if (typeof structRallyClasses === 'function') structRallyClasses();
     const cls = _spArr('cls', Int32Array, CL.length * 16);
+    // (Every class's columns in the heap, the rally ones too (the births read them): moved there when one is not. A class
+    // left out would neither produce nor rally on this peer alone.)
+    const need = [..._SP_COLS, ..._SPAWN_RALLY_COLS];
+    if (CL.some(C => { const T = _sTables.get(C); return T && T.n > 0 && need.some(nm => !T[nm] || !simHeapHas(T[nm])); })) structTablesRehome();
     let J = 0;
     for (let k = 0; k < CL.length; k++) {
         const C = CL[k];
@@ -494,7 +294,7 @@ function _spClsBuild() {
             if (!a || !simHeapHas(a)) break;
             cls[b + 2 + j] = _simWEnc(_simHeapPtrOf(a));
         }
-        if (j !== _SP_COLS.length) { cls.fill(0, b + 2, b + 2 + j); continue; }
+        if (j !== _SP_COLS.length) throw new Error('spawner production: a column of ' + C.name + ' not in the heap: ' + _SP_COLS[j]);
         cls[b] = T.n;
         cls[b + 1] = _stAllIx.get(C) || 0;
         J += Math.ceil(T.n / SPAWN_PROD_ROWS);
@@ -557,85 +357,206 @@ function _spShiftRun() {
     }
     S.ns = 0;
 }
+// The step's spawns: the production pass and the births (kernels). (A world without the simulation's kernels, a page beside
+// its simulation worker, spawns nothing.)
 function processGlobalSpawnerQueue() {
-    if (_spProdOn()) { _processSpawnsByTables(); return; }
-    _spp.on = false;
-    _processGlobalSpawnerQueueJs();
+    if (_spProdOn()) _processSpawnsByTables();
 }
-// The production pass's spawns: its list in order, one batch.
+// The production pass's spawns: its picks made units by one kernel (spr.rs
+// k_spawn_births: checks, exit, footprint, slot, handle, id, columns, stats
+// from the effective rows, worker set-up, id table, the spawners' own
+// changes), then their spatial entries, upkeep bins and the queues' shifts
+// (kernels) and the counters the JavaScript keeps (O(1)). Unit objects are
+// made when JavaScript asks for one (SimOwners.at).
 function _processSpawnsByTables() {
     const S = _spp;
-    S.on = true; S.ns = 0;
-    const sel = spawnerProductionPass(), n = sel[0], blocked = _spawnBlocked, picked = _spawnPicked;
-    let nBlocked = 0;
-    // (In batches of at most SPB_CAP spawns, each written and ended before
-    // the next begins: the batch's buffers are the match's, made once.)
-    for (let i = 1; i <= n;) {
-        for (; i <= n && !(typeof simSpawnBatchFull === 'function' && simSpawnBatchFull()); i++) {
-            const t = sel[i], s = getTileEntityRef(t % GRID_W, Math.floor(t / GRID_W));
-            if (!s) continue;
-            if (!_spawnBegin(s)) { blocked[nBlocked++] = s; continue; }
-            s._spawnReadyOrder = undefined;
-            picked.push(s);
-        }
-        simSpawnBatchWrite();
-        // (Room for every spawner's shift first: _spShiftNote fills it.)
-        _spArr('shift', Int32Array, SPB_CAP + 1);
-        for (let k = 0; k < picked.length; k++) { const s = picked[k]; if (!_spawnEnd(k, s)) blocked[nBlocked++] = s; }
-        _spShiftRun();
-        picked.length = 0; _spawnBatchDone();
-    }
-    // (A full exit: its turn again behind those ready now, on a later step.)
-    for (let i = 0; i < nBlocked; i++) blocked[i]._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-    blocked.fill(null, 0, nBlocked);
+    S.ns = 0;
+    const sel = spawnerProductionPass();
+    if (sel[0] > 0) _spawnBirths(sel);
 }
-function _processGlobalSpawnerQueueJs() {
-    // The ready spawners in ready order across owners (each owner's list is
-    // sorted; owners at their population cap are passed over whole), every
-    // ready one (no cap a tick); a spawner ready again after spawning goes to
-    // the end (a new order: the next tick's), as ever.
-    const R = _spawnReady || _spawnReadyBuild();
-    const Ls = _spawnPickL, Os = _spawnPickO;
-    let m = 0;
-    for (const [o, L] of R.byOwner) {
-        if (m >= _spawnPickOrd.length) { const g = new Float64Array(m * 2); g.set(_spawnPickOrd); _spawnPickOrd = g; }
-        Ls[m] = L; Os[m] = o; _spawnPickOrd[m] = _spawnHeadOrder(o, L); m++;
+// The columns k_spawn_births writes, in spr.rs C_* order (their places in the slot table).
+const _SPAWN_BIRTH_COLS = ['id', 'owner', 'upT', 'x', 'y', 'prevX', 'prevY', 'x0', 'y0', 'r', 'collisionR', 'unitLevel', 'stackCount', 'effectiveStacks',
+    'effectiveLevel', 'baseLevel', 'tuS', 'tuId', 'tbT', 'acqB', 'mvTgX', 'mvTgY', 'hnd', 'dead', 'dead0', 'energy', 'live', 'tmOn',
+    'maxE', 'jMaxE', '_lastAppliedEffectiveLevel', 'statRow', 'bsRow', 'esOk', 'esRad', 'esType', 'esVer', 'jFly', 'lzFlags', 'mvLane', 'mvReachD', 'mvReachA',
+    'mvShoot', 'mvRangeK', 'atkSty', 'atkWatch', 'wkS', 'wkR', 'wkIx', 'isWk', 'hObj', 'wkIdle', 'oc_workerType', 'sepD0', 'sepR0', 'sepL0', 'nvPK', 'pathIndex', 'commandState'];
+const SPAWN_UT_W = 12;
+// The rally columns the births read and write (spr.rs RW_W words a class).
+const _SPAWN_RALLY_COLS = ['c_rallyX', 'c_rallyY', 'c_rallyTargetUnitId', 'c__rallyLastSeenX', 'c__rallyLastSeenY', 'c__pendingRallyDetach'];
+// (The spawners' structure types besides the barracks: getSpawnerFallbackUnitType's.)
+const _SPAWNER_KEYS = new Set(['spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
+// The births' tables (heap): made at the match's start and again where what they hold changed (the slot table, the
+// worker records' columns, unit or structure types added, the occupancy's planes).
+const _sb = { Z: null, colix: null, sty: null, styN: -1, ut: null, utN: -1, utPlanes: -1, stk: null, wtab: null, wkind: null, wdefs: null, wFor: null,
+    out: null, list: null, dirty: null, A: [], P: new Float64Array(64), UP: new Float64Array(8) };
+function _spawnBirthTables(S, n) {
+    const B = _sb, C = S.columns, Z = _simSlotZeroTable(S);
+    if (!Z) throw new Error('spawn births: unit columns not in the heap');
+    if (typeof _spbKind === 'function') _spbKind(Z);
+    if (B.Z !== Z.tab || B.ZN !== Z.n) {
+        // (Each name's place in the slot table: the unit columns, the movement ones, then the shared ids' arrays.)
+        const names = [...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0])];
+        for (const nm of _simUnitSharedJs()) { const c = C[nm]; if (c && c.data && simHeapHas(c.data)) names.push(nm); }
+        if (!B.colix || !simHeapHas(B.colix)) B.colix = simHeapArray(Int32Array, 64);
+        _SPAWN_BIRTH_COLS.forEach((k, i) => { B.colix[i] = names.indexOf(k); });
+        for (const k of _SPAWN_BIRTH_COLS) if (names.indexOf(k) < 0 && !['oc_workerType'].includes(k)) throw new Error('spawn births: no slot column ' + k);
+        B.Z = Z.tab; B.ZN = Z.n;
     }
-    const ord = _spawnPickOrd;
-    const blocked = [], picked = _spawnPicked;
-    // (Those ready now: one spawn each this tick, its next front the next tick.)
-    const again = [];
-    while (blocked.length < 64 && !(typeof simSpawnBatchFull === 'function' && simSpawnBatchFull())) {
-        let bi = -1, bestOrder = Infinity;
-        for (let i = 0; i < m; i++) if (ord[i] < bestOrder) { bestOrder = ord[i]; bi = i; }
-        if (bi < 0) break;
-        const best = Ls[bi], s = best.e[best.head];
-        best.head += 2;
-        if (!_spawnBegin(s)) blocked.push(s);
-        else {
-            // (Taken this tick: its other entries are stale.)
-            s._spawnReadyOrder = undefined;
-            picked.push(s);
-            if (best.head > 4096 && best.head * 2 > best.e.length) { best.e = best.e.slice(best.head); best.head = 0; }
+    // Per stationary type (st.brain's type): the unit type its spawner makes (unit.upT), -1 none.
+    _stationaryTypesSeed();
+    const nst = _stationaryTypes.length;
+    if (B.styN !== nst || B.styFor !== _stationaryTypes || B.styCols !== C || !B.sty || !simHeapHas(B.sty)) {
+        if (!B.sty || B.sty.length < nst + 1 || !simHeapHas(B.sty)) B.sty = simHeapArray(Int32Array, Math.max(256, nst * 2));
+        for (let i = 0; i < nst; i++) {
+            const key = _stationaryTypes[i];
+            let ty = null;
+            if (key.startsWith('barrack_')) ty = key.slice(8);
+            else if (_SPAWNER_KEYS.has(key)) ty = getSpawnedUnitTypeForBuildingKey(key) || getSpawnerFallbackUnitType({ type: key });
+            B.sty[i] = ty && BASE_UNIT_STATS[ty] ? simUnitTypeIndex(ty) : -1;
         }
-        ord[bi] = _spawnHeadOrder(Os[bi], best);
+        B.styN = nst; B.styFor = _stationaryTypes; B.styCols = C;
     }
-    for (let i = 0; i < m; i++) Ls[i] = null;
-    // The batch's units written, then each spawn ended in order. (A full
-    // occupancy footprint at one exit must not stop production at every
-    // other spawner: retried once on a later tick, in order.)
-    simSpawnBatchWrite();
-    for (let k = 0; k < picked.length; k++) {
-        const s = picked[k];
-        if (!_spawnEnd(k, s)) { blocked.push(s); continue; }
-        // Its next front, if paid already: ready again (a new order).
-        if (_spawnReadyValid(s) && !Number.isFinite(s._spawnReadyOrder)) again.push(s);
+    // Per unit type its spawn words (spr.rs UT_*).
+    const O = typeof occupancyEnsure === 'function' && SIM_OCCUPANCY_ENABLED ? occupancyEnsure() : null, planes = O ? O.planes : 1;
+    simUnitTypeIndex('norm');
+    const nut = _simUnitTypeNames.length;
+    // (Per peer: the type indices and the shared column's pool ids are its own; a restore makes new columns and pools.)
+    if (B.utN !== nut || B.utPlanes !== planes || B.utCols !== C || B.utPool !== (C.oc_workerType && C.oc_workerType.pool) || B.utTy !== spatialUnitTypeToIndex || !B.ut || !simHeapHas(B.ut)) {
+        if (!B.ut || B.ut.length < nut * SPAWN_UT_W || !simHeapHas(B.ut)) B.ut = simHeapArray(Float64Array, Math.max(64, nut * 2) * SPAWN_UT_W);
+        const wtKey = _simHKey('workerType'), wtCol = C.oc_workerType;
+        for (let i = 0; i < nut; i++) {
+            const name = _simUnitTypeNames[i], def = BASE_UNIT_STATS[name] || BASE_UNIT_STATS.norm || {}, b = i * SPAWN_UT_W;
+            const r = Number(def.r) || 0, cr = Number.isFinite(def.collisionR) ? def.collisionR : r, fly = !!def.isFlying;
+            const rc = getResourceTypeByCollectorUnit(name);
+            const wt = rc ? rc.collectorUnitKey : name === 'salvager_unit' ? 'salvager' : name === 'builder_unit' ? 'builder' : name === 'healer_unit' ? 'healer' : name === 'researcher_unit' ? 'researcher' : null;
+            const wb = !wt ? 0 : wt === 'collector' ? 1 : wt === 'astar_collector' ? 2 : wt === 'salvager' ? 3 : wt === 'builder' ? 4 : wt === 'healer' ? 5 : 6;
+            // (configureWorkerUnitFromType's columns: IDLE, no target, its material false.)
+            const mat = wt === 'builder' ? 1 << 13 : wt === 'healer' ? 1 << 15 : wt === 'researcher' ? 1 << 17 : 0;
+            const ty = spatialUnitTypeToIndex[name];
+            B.ut[b] = ty >= 0 ? ty : -1; B.ut[b + 1] = r; B.ut[b + 2] = cr;
+            B.ut[b + 3] = Math.max(1, Math.min(32, Math.ceil((cr || r || 1) / (TILE / SIM_OCCUPANCY_SUBCELLS))));
+            B.ut[b + 4] = planes === 1 ? 0 : Math.min(planes - 1, fly ? 1 : name === 'mole' ? 2 : 0);
+            B.ut[b + 5] = wb;
+            B.ut[b + 6] = wt ? (SIM_WS_IDLE | (simWttCode(null) << 5) | (SIM_WT_NULL << 10) | mat) : 0;
+            B.ut[b + 7] = wt ? (_simHTerm(wtKey, wt) - _simHTerm(wtKey, undefined)) | 0 : 0;
+            B.ut[b + 8] = wt && wtCol && wtCol.pool ? _simSharedIdOf(wtCol, wt) : 0;
+            B.ut[b + 9] = fly ? 1 : 0;
+            B.ut[b + 10] = ty >= 0 && Number.isFinite(Number(def.visionRange)) && Number(def.visionRange) !== 0 ? 1 : 0;
+            B.ut[b + 11] = 0;
+        }
+        B.utN = nut; B.utPlanes = planes; B.utCols = C; B.utPool = C.oc_workerType && C.oc_workerType.pool; B.utTy = spatialUnitTypeToIndex;
     }
-    picked.length = 0; _spawnBatchDone();
-    for (const s of again) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
-    for (const s of blocked) { s._spawnReadyOrder = globalSpawnerReadyOrderCounter++; spawnerReadyNoted(s); }
+    if (!B.stk || !simHeapHas(B.stk)) { B.stk = simHeapArray(Float64Array, 256); for (let l = 0; l < 256; l++) B.stk[l] = l >= 1 ? getRequiredStacksForLevel(l) : 1; }
+    // The worker records' columns (sim_unit_state.js SIM_UNIT_WK_SIDE) as a slot table, their defaults; wbType's and wbTick's places last.
+    if (B.wFor !== C.wbType) {
+        const L = SIM_UNIT_WK_SIDE.filter(([k]) => C[k] && simHeapHas(C[k]));
+        const m = L.length;
+        for (const a of [B.wtab, B.wkind, B.wdefs]) if (a && simHeapHas(a)) simHeapFree(a);
+        B.wtab = simHeapArray(Int32Array, 3 * m + 3); B.wkind = simHeapArray(Int32Array, m + 4); B.wdefs = simHeapArray(Float64Array, m + 2);
+        L.forEach(([k], j) => {
+            const a = C[k];
+            B.wtab[3 * j] = _simWEnc(_simHeapPtrOf(a)); B.wtab[3 * j + 1] = a.BYTES_PER_ELEMENT; B.wtab[3 * j + 2] = 1;
+            B.wkind[j] = a instanceof Float64Array ? 3 : a instanceof Float32Array ? 2 : 1;
+            B.wdefs[j] = k in SIM_WK_DEFAULTS ? SIM_WK_DEFAULTS[k] : 0;
+        });
+        B.wkind = (() => { const a = simHeapArray(Int32Array, m + 8); a.set(B.wkind.subarray(0, m)); simHeapFree(B.wkind); return a; })();
+        ['wbType', 'wbTick', 'wmCarry', 'wmPinTy', 'wmWty', 'wmMineTy'].forEach((nm, j) => { B.wkind[m + j] = L.findIndex(([k]) => k === nm); });
+        B.wN = m; B.wFor = C.wbType;
+    }
+    // Its outs: the list (births, then the blocked), the shifts, the dirty tiles.
+    const room = Math.max(1024, n * 2 + 16);
+    if (!B.out || !simHeapHas(B.out)) B.out = simHeapArray(Int32Array, 160);
+    if (!B.list || B.list.length < room || !simHeapHas(B.list)) { B.list = simHeapArray(Int32Array, room * 2); B.dirty = simHeapArray(Int32Array, room); B.evl = simHeapArray(Int32Array, room); }
+    // (The rally classes' columns, in the spawner classes' order (spr.cls, _spClasses); the players' visibility covers.)
+    if (!B.rally || !simHeapHas(B.rally)) B.rally = simHeapArray(Int32Array, 16 * 8);
+    B.rally.fill(0);
+    _spClasses().forEach((K, k) => {
+        const T = _sTables.get(K);
+        if (!T || !(T.n > 0)) return;
+        _SPAWN_RALLY_COLS.forEach((nm, j) => { if (!T[nm] || !simHeapHas(T[nm])) throw new Error('spawn births: rally column ' + nm + ' of ' + K.name + ' not in the heap'); B.rally[k * 8 + j] = _simWEnc(_simHeapPtrOf(T[nm])); });
+    });
+    if (!B.cover || !simHeapHas(B.cover)) B.cover = simHeapArray(Int32Array, 64);
+    B.cover.fill(0); B.ncov = 0;
+    if (!matchFullVisibility && typeof _visCoverReady === 'function' && _visCoverReady()) { const V = _visCover; B.ncov = Math.min(64, V.players); for (let p = 0; p < B.ncov; p++) { const a = V.cover[p]; if (a && simHeapHas(a)) B.cover[p] = _simWEnc(_simHeapPtrOf(a)); } }
+    return B;
 }
-
+// The id of value v in a shared column's pool (sim_unit_state.js SimSharedColumn), made when it has none.
+function _simSharedIdOf(col, v) {
+    const P = col.pool;
+    let id = P.ids.get(v);
+    if (id === undefined) { id = P.values.length; P.values.push(v); P.ids.set(v, id); }
+    return id;
+}
+function _spawnBirths(sel) {
+    const S = _simUnitState, C = S.columns, n = sel[0];
+    // (Room made first, as the match's budget holds it: worker records (their columns may be made anew: the tables below
+    // name them), handles, the id table and hash, the spawners' shifts.)
+    simUnitWkReserve(n);
+    const B = _spawnBirthTables(S, n), sl = S.sl;
+    _simHandleGrow(S, S.hnext + n + 1);
+    if (!simHeapHas(S.hfree)) { const h = simHeapArray(Int32Array, Math.max(1024, S.hfree.length)); h.set(S.hfree); S.hfree = h; }
+    _uixRoom(_uix.n + n);
+    // (The id index brought up to date on every peer alike: a rally following a unit looks it up there; and the births go into it.)
+    const map = _unitByIdMap(), mapOn = map instanceof UnitIdIndex && map._ok() && simHeapHas(map.t);
+    if (!mapOn) throw new Error('spawn births: the unit id index is not in the heap');
+    if (mapOn && (map.used + n) * 2 > map.t.length) map._make(n);
+    const shift = _spArr('shift', Int32Array, n + 1);
+    if (sl.gw !== GRID_W || sl.gh !== GRID_H) { _simSlabKeys(sl); for (let i = 0; i < sl.slabs; i++) sl.home[i] = -1; _simSlabRelist(sl); }
+    _simSlabReserve(sl, Math.ceil(S.cap / SIM_SLAB));
+    if (!simHeapHas(sl.hdr)) { const h = simHeapArray(Int32Array, 8); h.set(sl.hdr); sl.hdr = h; }
+    sl.hdr[7] = S.owners.length;
+    const O = SIM_OCCUPANCY_ENABLED && typeof occupancyEnsure === 'function' ? occupancyEnsure() : null, OA = O ? _occupancyAddresses() : null;
+    const U = unitStatTables(), W = _simWkPool(S), V = _workerWorkTable();
+    const A = B.A;
+    A.length = 0;
+    A.push(sel, _spp.cls, _ST.brain, _ST.ctab, _ST.rrow, _ST.tim, simMoveWallGrid(),
+        sl.bits, sl.sfree, sl.home, sl.cur, sl.heads, sl.entries, sl.used, sl.ever, sl.hdr,
+        _simSlotZeroTable(S).tab, _spb.kind, B.colix, B.sty, B.ut, B.stk,
+        C.hslot, S.hfree, _uix.ids, _uix.slots, mapOn ? map.t : null,
+        O ? O.bits : null, O ? O.mask : null, O ? O.rec : null, null,
+        _effRowCols.rMaxE, _effHot, U.tys, _effRowCols.rWch, U.bRad, _unitStatsVerTable(spatialUnitsComplexPlayerCount),
+        W.free, B.wtab, B.wdefs, V,
+        B.out, shift, B.list, B.dirty, S.sepKey, _mvtDirty && simHeapHas(_mvtDirty) ? _mvtDirty : null, B.wkind,
+        B.rally, B.evl, typeof _airWallTable === 'function' ? _airWallTable() : null, B.cover, simHeapHas(cellArea) ? cellArea : null);
+    const P = B.P;
+    P.fill(0);
+    P[0] = n; P[1] = GRID_W; P[2] = GRID_H; P[3] = TILE; P[4] = Math.min(S.cap, sl.sfree.length * SIM_SLAB); P[5] = SIM_SLAB_SLACK_MIN; P[6] = SIM_SLAB_SLACK_SHIFT;
+    P[7] = SIM_SLAB_KEY_TILES; P[8] = sl.kw; P[9] = sl.kh; P[10] = nextUnitId; P[11] = S.hfreeN; P[12] = S.hnext;
+    if (O) { P[13] = O.w; P[14] = O.h; P[15] = O.stride; P[16] = O.cell; P[17] = O.planes; }
+    P[18] = W.freeCount; P[19] = W.used; P[20] = W.cap; P[21] = U.NT; P[22] = U.L1; P[23] = U.NP;
+    P[25] = globalSpawnerReadyOrderCounter; P[26] = mapOn ? map.mask : 0; P[27] = _uix.n; P[28] = SIM_SEP_ABSENT;
+    P[29] = WORKER_WORK_REGION_TILES; P[30] = _WORKER_WORK_TYPES.length; P[31] = _workerWorkType('healer'); P[32] = B.styN; P[33] = B.utN; P[34] = B.wN; P[35] = SIM_MOVE_BOX_STEPS; P[36] = simWttCode(null);
+    P[37] = matchFullVisibility ? 1 : 0; P[38] = CMD_ATTACK_MOVING; P[39] = B.ncov;
+    try { simRustDirect('k_spawn_births', A, P); } finally { A.length = 0; }
+    const out = B.out, nb = out[0];
+    if (out[10]) throw new Error('spawn births: a worker record past the pool (simUnitWkReserve)');
+    S.owners.length = sl.hdr[7]; sl.layout = 0;
+    globalSpawnerReadyOrderCounter = out[6];
+    V.sum = (V.sum + out[7]) | 0;
+    if (out[8] > 0) workSiteDirtyList(B.dirty, out[8]);
+    if (nb > 0) {
+        nextUnitId += nb;
+        S.hfreeN -= out[2]; S.hnext += out[3];
+        if (S.objs.length < S.hnext) { const L0 = S.objs.length; S.objs.length = S.hnext; S.objs.fill(null, L0); }
+        W.freeCount -= out[4]; W.used += out[5];
+        _uix.n += nb; _uix.ver++;
+        if (mapOn) { map.used += nb; map.size += nb; }
+        for (let o = 0; o < players.length && o < 64; o++) if (out[16 + o]) players[o].popCount += out[16 + o];
+        if (O) { O.spawns += nb; O.registered += nb; O.relocated += out[9]; for (let r = 1; r < 48; r++) if (out[80 + r]) O.expectedBits += O.sizes[r] * out[80 + r]; }
+        // Their spatial entries and upkeep bins (kernels over the births' slots).
+        _spbSpatialList(B.list, nb);
+        _spawnUpkeep(B.list, nb, C);
+    }
+    _spp.ns = out[11]; _spShiftRun();
+    if (out[12] > 0) { playerResourceBatchBegin(); try { if (!waiAvailable()) throw new Error('spawn births: the worker pass is not available for the rally events'); waiOutEvents(waiRun(B.evl, out[12])); } finally { playerResourceBatchEnd(); } }
+}
+// The upkeep bins of n new units (birth.rs k_upk_bins, the slots of list).
+function _spawnUpkeep(list, n, C) {
+    const U = _upkU;
+    if (!U || U.cols !== C || !(n > 0)) return;
+    const P = _sb.UP;
+    P.fill(0); P[0] = n; P[1] = U.np; P[2] = U.L1; P[3] = U.cnt.length;
+    simRustDirect('k_upk_bins', [list, C.owner, C.upT, C.effectiveLevel, C.unitLevel, C.baseLevel, C.stackCount, C.upB, U.cnt], P);
+}
 class Barrack {
     constructor(gx, gy, owner, unitType = 'norm', stacks = 1) {
         if (typeof structTableInit === 'function') structTableInit(this);
@@ -1145,38 +1066,5 @@ Object.defineProperties(ResearchSpawner.prototype, {
     isResearching: { configurable: true, get() { const t = this.researchTask; return !!(t && !this.isUpgrading && isAutoResearchEnabled(this) && (t.workDone || 0) < t.workRequired); }, set(v) {} },
 });
 
-function _makeSpawnerRallyTemplateKey(spawner, startGx, startGy, endGx, endGy, unit) {
-    let movementProfile = _resolveMovementProfile(!!(unit && unit.isFlying), getPathCanWalkForUnit(unit), null) || 'dynamic';
-    return [
-        spawner.type,
-        spawner.owner,
-        spawner.gx,
-        spawner.gy,
-        startGx,
-        startGy,
-        endGx,
-        endGy,
-        movementProfile,
-        pathTopologyVersion
-    ].join('|');
-}
-
-function _getSpawnerRallyTemplatePath(cacheKey) {
-    let entry = sharedSpawnerRallyTemplateCache.get(cacheKey);
-    if (entry && !_isPathCacheExpired(entry, SPAWNER_RALLY_TEMPLATE_TTL_TICKS)) {
-        return entry.path;
-    }
-    if (entry) sharedSpawnerRallyTemplateCache.delete(cacheKey);
-    return null;
-}
-
-function _setSpawnerRallyTemplatePath(cacheKey, path) {
-    sharedSpawnerRallyTemplateCache.set(cacheKey, {
-        path,
-        tick: gameTime,
-        version: pathTopologyVersion
-    });
-    _trimPathCacheIfNeeded(sharedSpawnerRallyTemplateCache, SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES);
-}
 // (The interface's copy of a queue: see spawnQueueCount.)
 for (const C of [Barrack, CollectorSpawner, AstarSpawner, SalvagerSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner]) Object.defineProperty(C.prototype, 'spawnQueue', _SPAWN_QUEUE_PROP);

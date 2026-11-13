@@ -2137,6 +2137,8 @@ function _snapResetWorkerCaches() {
 // patching this peer's own objects so references from untouched entities
 // stay valid. Returns { unitsById, missingRefs, statMapsRebuilt, changed }.
 function snapDecodeState(S, options = null) {
+    // (A decoded state writes the units' columns as it finds them: the mover table made whole at the next movement.)
+    if (typeof mvtInvalidate === 'function') mvtInvalidate();
     // (A prebuilt unit index reads what this rewrites: waited for, dropped.)
     if (typeof spatialIndexInvalidate === 'function') spatialIndexInvalidate();
     if (!S || S.v !== SNAP_FORMAT) return null;

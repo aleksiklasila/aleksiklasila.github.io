@@ -1483,8 +1483,6 @@ const PATH_CACHE_MAX_ENTRIES = 3000;
 const PATH_CACHE_TRIM_CHUNK = 96;
 const PARTIAL_PATH_CACHE_TTL_TICKS = 36;
 const PARTIAL_PATH_CACHE_MAX_ENTRIES = 2000;
-const SPAWNER_RALLY_TEMPLATE_TTL_TICKS = 20;
-const SPAWNER_RALLY_TEMPLATE_MAX_ENTRIES = 1000;
 const ASTAR_MAX_ITERS_BASE = 2048;
 const ASTAR_MAX_ITERS_HARD = 18000;
 const ASTAR_NODE_BUDGET_PER_PATH = 360;
@@ -1497,7 +1495,6 @@ let astarNodeBudgetPerTickByPlayer = new Int32Array(0);
 let astarNodeBudgetRemainingByPlayer = new Int32Array(0);
 let sharedPathCache = new Map();
 let sharedPartialPathCache = new Map();
-let sharedSpawnerRallyTemplateCache = new Map();
 
 const PATH_SOURCE_UNSPECIFIED = 'unspecified';
 let _activePathfindSource = PATH_SOURCE_UNSPECIFIED;

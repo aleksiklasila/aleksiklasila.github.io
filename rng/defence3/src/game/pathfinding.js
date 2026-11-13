@@ -31,22 +31,6 @@ function _getPlayerAstarBudgetRemaining(owner) {
 
 
 
-// Each successful spawn can request a rally path once. It has a fresh
-// unit ID, so there is no duplicate requester to remember for this tick.
-function _noteSpawnPathfindRequest(owner) {
-    if (isMultiplayer && gameStarted) return true;
-    const pid = _normalizeOwnerId(owner);
-    if (pid < 0) {
-        if (!(pathfindBudget < MAX_PATHS_PER_TICK)) return false;
-        pathfindBudget++;
-    } else {
-        pathfindBudgetByPlayer[pid] = Math.max(0, Number(pathfindBudgetByPlayer[pid]) || 0) + 1;
-    }
-    return true;
-}
-
-
-
 // Movement spends A* on every tile step of every unit. Apply those spends
 // once per tick boundary (see gameTick) in the same fixed-point units, so the
 // stockpile ends each tick exactly where per-step updates would leave it.
@@ -452,7 +436,6 @@ function _bumpPathTopologyVersion() {
     if (pathTopologyVersion > 1000000000) pathTopologyVersion = 1;
     if (sharedPathCache.size > 0) sharedPathCache.clear();
     if (sharedPartialPathCache.size > 0) sharedPartialPathCache.clear();
-    if (sharedSpawnerRallyTemplateCache.size > 0) sharedSpawnerRallyTemplateCache.clear();
 }
 
 function _isPathCacheExpired(entry, ttlTicks) {

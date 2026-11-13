@@ -31,7 +31,46 @@ counters at dk 1 / dk 4, `counters.cjs`, the prototype in `mvproto/`).
 - **Stage 2, first half tried and not kept**: testing every candidate sweep against one read of the
   bitmap around the mover gave identical outcomes and no gain. The preference table (a behaviour
   change) is not made yet; it belongs with stage 3b, where the rows make the reads cheap.
-- Stages 0, 3, 4, 5, 6: not started. The numbers of section 1 are the state before stage 1.
+- **Stage 3a done** (wasm/src/mvt.rs, sim_occupancy.js mvt*): the table, the marks at the writers outside
+  the movement, sync, rebuild at a restore, the audit (tests: MVT=2; page: ?mvt=2).
+- **Stage 3b, first part done** (the table is live, always on): kernel 89's block job walks its block's
+  rows (not the tile index), ordered by LSD radix (tile from the far end of the block's heading, then id);
+  the movement writes the rows' positions where it writes the footprint records; occ.offsets come from the
+  blocks' row counts (occ_prepare / occ_block_counts, leader_dir, row_live, tile_range deleted). A row is
+  one a live unit and holds only what is exact when read: x, y, slot, id, radius | layer | footprint, owner
+  (the stats row and the navigation profile were dropped again: kernels write them without marks; they
+  come back with the step, whose job is then their reader). Speed: parity (k89 wall 24.9 / 33.5-36 ms a
+  step at dk 1 / 4 against 22.5-24.8 / 32-33.5; step p50 within run variance), plus 4.2 ms a step of
+  serial mvt_sync at dk 4 (11k marked rows a step) on the simulation thread: to the helpers with the next
+  part. Details in OPTIMIZATION_PROGRESS.md; data in tests/test-runs/move-occ-stage3b-20261112/.
+- **Stage 3b, second part done** (outcome-identical: the same position hash as the first part): the
+  table's sync off the simulation thread (its scan in kernel 8's slot chunks, a small plan, the block pass on
+  the helpers between the two stages: 4.2 ms serial -> ~0.5 ms serial + a short dispatch); the first stage's
+  marks as a bit a slot and its results as one word beside the footprint (the block job reads no class /
+  flags / profile / output columns for a unit it resolves); the job's chunk cache made at its first swap
+  look. Measured effect on kernel 89: small (~-10 ms of ~325 ms helper CPU a step at dk 4): its time is not
+  in those columns. What is left of it: footprint sweeps ~95 ms, the resolve's arithmetic and its position /
+  steer-record lines ~55, the gather, order and second pass ~45, swaps ~28, epilogue ~22.
+- **The resolve as a cell walk (3.2 step 3), tried and not kept** (2026-11-13; the code is in
+  tests/test-runs/move-occ-stage3b-20261112/walk-resolve-not-kept.*.rs): cell steps against one window word,
+  wanted move / slides / shoulders by masks, on the present row-major bitmap. Kernel 89 322 -> 294-304 ms
+  helper CPU a step at dk 4 (the walk itself 91-101 ms, what the sweeps cost), a dense march +5% progress,
+  two crowds head-on at dk 4 -5.5%, tests/traffic-pressure failing (90% of the units moving, 95 asked).
+  Ruled out as the walk's cost, each by a build: the rows read a cell step (kept as 64-bit words over the
+  walk: no change), the rows outside the footprint's reach (no change), cold bitmap lines (read up front
+  a job: 10 ms spent, 8 saved). 250k walks a step make 935k cell iterations at ~100 ns: the next thing to
+  measure is the iteration's own arithmetic (the reach test's 64-bit products, the per-walk divisions in
+  the row's block test) with the loop split into profiled pieces, before another attempt. Section 2's
+  63-87 ns a unit came from one thread on a bitmap that stayed in L1: it does not carry over as it is.
+- **The step from rows, sized (2026-11-13), not started**: kernel 8's steady step is ~35 of its 114 ms helper
+  CPU, ~3 ms of the step's wall; it is bound by its checks (steer record, flow field, energy, floor), not by
+  memory, so rows only help once those checks are events (stage 4). Meanwhile a third of the step (50 ms) is
+  serial work on the simulation thread: see OPTIMIZATION_PROGRESS.md, the last entry.
+- **Stage 3b, left**: the step from the rows (target, speed, class, due in the row; kernel 8's intent mode
+  replaced: 115 ms) needs stage 4's events first (above); the resolve needs the walk's cost understood first (above)
+  and the head-on case kept. The block pass of the sync could ride in kernel 89's jobs (needs a rule for a
+  neighbour's swap partner whose row is not in yet). Then 3c.
+- Stages 0, 3c, 4, 5, 6: not started. The numbers of section 1 are the state before stage 1.
 
 ## 1. Measured now
 

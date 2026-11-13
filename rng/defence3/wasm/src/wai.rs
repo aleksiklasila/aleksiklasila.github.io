@@ -46,6 +46,8 @@ const CMD_IDLE: u8 = 0;
 const CMD_MOVING: u8 = 1;
 // Unit event codes (mv.rs EV_*).
 const EV_NOWAY: i32 = 2;
+/// A new worker of a spawner with a rally point (spr.rs k_spawn_births; unit.js UNIT_EV_RALLY).
+const EV_RALLY: i32 = 6;
 // Out events.
 const OUT_SOUND_RESEARCH: i32 = 1;
 const OUT_RESEARCH_ADVANCE: i32 = 2;
@@ -172,6 +174,8 @@ struct W {
     // flags (data_state.js _ST.mineSum, mineAt: a take's term moves there).
     psum: *mut f64, minesum: *mut i32, mineat: *mut i32,
     take_spawners: *const i32,
+    /// (A worker's manual move's tick: its record's wmMan, [156].)
+    wmman: *mut f32,
 }
 
 impl W {
@@ -213,7 +217,7 @@ impl W {
             recheck: k.i(70), stuck: k.i(71),
             mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
             psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
-            take_spawners: k.p(155),
+            take_spawners: k.p(155), wmman: k.p(156),
         }
     }
 }
@@ -1103,6 +1107,7 @@ impl<'a> Ctx<'a> {
     unsafe fn event(&mut self, q: usize, code: i32) {
         let w = self.w;
         if g(w.dead, q) != 0 { return; }
+        if code == EV_RALLY { self.rally(q); self.sync_cmd(q); if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); } return; }
         // (What the pass does not take yet: back to the JavaScript.)
         let wb = self.wb(q);
         if wb == 0 || self.st(q) == WS_MANUAL || g(w.mvpp, q) != 0 || g(w.mshoot, q) != 0 {
@@ -2396,6 +2401,97 @@ impl<'a> Ctx<'a> {
         }
         let (px, ak) = self.search(q);
         self.ws_register(q, WSR_GRID, WSW_SALVAGE, px, ak, false);
+    }
+    // ---- A spawner's rally (spr.rs k_spawn_births lists its new workers with EV_RALLY; worker.js applyWorkerRallyFromSpawner) ----
+    /// The collector's gather site nearest the point (x, y) px within a tile's width (_getResourceCollectorGatherTargetNear:
+    /// its type's mines with something left, then its owner's working farms, around the point's tile; the later of equals).
+    unsafe fn gather_near(&mut self, q: usize, x: f64, y: f64) -> (i32, u32) {
+        let w = self.w;
+        let rz = self.res(q);
+        let (gx, gy) = (floor(x / w.tile) as i32, floor(y / w.tile) as i32);
+        let (mut bt, mut btt, mut bd) = (-1i32, 0u32, w.tile);
+        for pass in 0..2 {
+            for ty in (gy - 1).max(0)..=(gy + 1).min(w.gh - 1) {
+                for tx in (gx - 1).max(0)..=(gx + 1).min(w.gw - 1) {
+                    let t = ty * w.gw + tx;
+                    let tt = if pass == 0 { w.tt_mine[rz] } else { w.tt_farm[rz] };
+                    if !self.coll_valid(q, t, tt) { continue; }
+                    let (cx, cy) = (tx as f64 * w.tile + w.tile * 0.5, ty as f64 * w.tile + w.tile * 0.5);
+                    let d = sqrt((cx - x) * (cx - x) + (cy - y) * (cy - y));
+                    if d <= bd { bd = d; bt = t; btt = tt; }
+                }
+            }
+        }
+        (bt, btt)
+    }
+    /// A new worker sent to its spawner's rally point (its targetPos, unit.mvTgX / mvTgY): the work there its type does
+    /// (a collector its gather site near it, pinned; a builder the structure there to build, building enabled; a healer
+    /// the queue there, pinned and committed; a researcher the research there; a salvager the marked structure there)
+    /// when it may take it (one of its owner's and type held by another stays theirs), else a manual move there.
+    unsafe fn rally(&mut self, q: usize) {
+        let w = self.w;
+        let (rx, ry) = (g(w.tgx, q) as f64, g(w.tgy, q) as f64);
+        if rx != rx || ry != ry { return; }
+        let (gx, gy) = ((floor(rx / w.tile) as i32).max(0).min(w.gw - 1), (floor(ry / w.tile) as i32).max(0).min(w.gh - 1));
+        let t = gy * w.gw + gx;
+        let o = g(w.own, q) as i32;
+        let r = self.rec(q);
+        let done = match self.wb(q) {
+            WB_COLLECTOR | WB_ASTAR => {
+                let (ct, tt) = self.gather_near(q, rx, ry);
+                if ct >= 0 && self.can_assign(q, ct, tt) {
+                    s(w.wmpin, r, ct * 8 + WT_TILE as i32); s(w.wmpinty, r, tt as u8);
+                    self.coll_assign(q, ct, tt);
+                    self.targets(q, ct, tt)
+                } else { false }
+            }
+            WB_BUILDER => {
+                // (_getBuilderWorkTargetAt(..., allowDisabledBuild): building enabled there.)
+                let mut ok = false;
+                if let Some((c, rr)) = self.brow(t) {
+                    let p = waddr(g(w.wstab, c * 7 + 1) as u32) as *mut u8;
+                    let off = !p.is_null() && g(p, rr) == 1;
+                    if off { self.wr(p, rr, 2u8); }
+                    ok = self.b_valid(t, o) && self.can_assign(q, t, 1);
+                    if !ok && off { self.wr(p, rr, 1u8); }
+                }
+                if ok { self.b_assign(q, t); self.targets(q, t, 1) } else { false }
+            }
+            WB_HEALER => {
+                if self.heal_anchor_ok(t, o) && self.can_assign(q, t, w.tt_queue) {
+                    self.clear_target(q, false);
+                    s(w.wmpin, r, t * 8 + WT_TILE as i32);
+                    if self.heal_queue_ok(t, o) { self.heal_commit_set(q, t); } else { self.heal_commit_clear(q); }
+                    true
+                } else { false }
+            }
+            WB_RESEARCHER => {
+                if self.research_valid(t, o) && self.can_assign(q, t, w.research_tt) && self.set_target(q, t, WT_TILE, w.research_tt) {
+                    self.set_state(q, WS_MOVING_TO_RESEARCH);
+                    let key = self.path_to(q, t);
+                    self.set_path(q, key); self.set_pidx(q, 0); self.set_cmd(q, if key >= 0 { CMD_MOVING } else { CMD_IDLE });
+                    true
+                } else { false }
+            }
+            WB_SALVAGER => {
+                let m = self.ccol::<u8>(t as usize, CT_MARKED);
+                let marked = !m.is_null() && g(w.stown, t as usize) == o && self.rd(m, g(w.rrow, t as usize).max(0) as usize) == 2;
+                if marked && self.can_assign(q, t, 1) && self.set_target(q, t, WT_TILE, 1) {
+                    let key = self.path_to(q, t);
+                    self.set_path(q, key);
+                    if key >= 0 { self.set_state(q, WS_MOVING_TO); self.set_pidx(q, 0); self.set_cmd(q, CMD_MOVING); }
+                    else { self.clear_auto_route(q); self.clear_target(q, false); self.set_state(q, WS_IDLE); self.set_cmd(q, CMD_IDLE); }
+                    true
+                } else { false }
+            }
+            _ => false,
+        };
+        if done { self.set_next(q, w.now); s(w.idlefv, q, -1); return; }
+        // (No work there for it: it walks there, the player's move as it were.)
+        self.set_state(q, WS_MANUAL);
+        let key = self.path_to(q, t);
+        self.set_path(q, key); self.set_pidx(q, 0); self.set_cmd(q, CMD_MOVING);
+        s(w.wmman, r, w.now as f32);
     }
     /// _researcherSearch in a take: the grid's pick.
     unsafe fn research_take(&mut self, q: usize) {

@@ -311,7 +311,7 @@ pub unsafe extern "C" fn k_retire_plan(a: u32, _chunk: i32) {
 /// would: kind 2 an f32, 3 an f64, else an integer of the column's width
 /// (truncated, two's complement; not finite: 0).
 #[inline(always)]
-unsafe fn spawn_put(tab: *const i32, kind: *const i32, c: usize, q: usize, v: f64) {
+pub(super) unsafe fn spawn_put(tab: *const i32, kind: *const i32, c: usize, q: usize, v: f64) {
     let base = waddr(g(tab, 3 * c) as u32) as *mut u8;
     let (bytes, per) = (g(tab, 3 * c + 1) as usize, g(tab, 3 * c + 2) as usize);
     let at = base.add(q * per * bytes);
@@ -425,12 +425,15 @@ pub unsafe extern "C" fn k_slot_zero(a: u32, chunk: i32) {
             _ => {}
         }
     }
+    // (The mover table's mark, mvt.rs: the slot's columns are another unit's or none's now.)
+    let dirty = k.p::<u8>(5);
     for j in j0..j1 {
         let q = if list.is_null() { from + j as i32 } else { g(list, j) };
         if q < 0 { continue; }
         let q = q as usize;
         s(sk, q, absent);
         s(sly, q, 0);
+        if !dirty.is_null() { s(dirty, q, 1); }
     }
 }
 
@@ -524,6 +527,8 @@ pub unsafe extern "C" fn k_slot_move(a: u32, chunk: i32) {
             for w in 0..4 { s(rec as *mut i32, 4 * t + w, g(rec, 4 * f + w)); s(rec as *mut i32, 4 * f + w, 0); }
         }
         if !hsl.is_null() && !hnd.is_null() { let h = g(hnd, t); if h > 0 { s(hsl, h as usize, t as i32); } }
+        // (The mover table's marks, mvt.rs ([16], unbound: no table): the row is the old slot's, the unit the new one's.)
+        { let d = k.p::<u8>(16); if !d.is_null() { s(d, f, 1); s(d, t, 1); } }
         if !fwd.is_null() && !fst.is_null() { s(fwd, f, t as i32); s(fst, f, stamp); }
         if !mbits.is_null() { (*(mbits.add(f as usize >> 5) as *const core::sync::atomic::AtomicU32)).fetch_or(1u32 << (f & 31), core::sync::atomic::Ordering::Relaxed); }
         if !pvs.is_null() { s(pvs, t, 0); }

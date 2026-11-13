@@ -31,7 +31,7 @@ const result = inst.eval(`(() => {
         bind('slz.list',mode==='contiguous'?null:list);bind('slz.defs',mode==='no-defaults'?null:defs);
         _simParams[0]=n;_simParams[1]=per;_simParams[2]=specs.length;_simParams[3]=SIM_SEP_ABSENT;_simParams[4]=from;
         if(mode==='sparse')simParallelRun(SIM_KERNEL_SLOT_ZERO,Math.ceil(n/per));
-        else {_simParams[1]=n;simRustDirect('k_slot_zero',[mode==='contiguous'?null:list,tab,keys,layers,mode==='no-defaults'?null:defs],_simParams);}
+        else {_simParams[1]=n;simRustDirect('k_slot_zero',[mode==='contiguous'?null:list,tab,keys,layers,mode==='no-defaults'?null:defs,null],_simParams);}
         specs.forEach(([T,width,value],c)=>{
             const converted=new T(1);converted[0]=value===undefined?0:value;
             for(let s=0;s<cap;s++)for(let j=0;j<width;j++){

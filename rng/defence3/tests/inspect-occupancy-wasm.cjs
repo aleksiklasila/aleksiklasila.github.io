@@ -14,7 +14,7 @@ const bodies=functions.filter(x=>/^ \(func [^\n]*occ[^\n]*(free_r\d+|mark_r\d+|f
  loops:(x.match(/\(loop\b/g)||[]).length,dispatches:(x.match(/\(br_table\b/g)||[]).length,
  loads32:(x.match(/\(i32.load\b/g)||[]).length,loads64:(x.match(/\(i64.load\b/g)||[]).length,
  stores64:(x.match(/\(i64.store\b/g)||[]).length}));
-const vectorOps=functions.filter(x=>/^ \(func [^\n]*(move_job|combat4|step4|occ_prepare)/.test(x)).map(x=>({name:x.split('\n')[0],
+const vectorOps=functions.filter(x=>/^ \(func [^\n]*(move_job|combat4|step4|mvt_sync_scan)/.test(x)).map(x=>({name:x.split('\n')[0],
  f32x4Ops:(x.match(/\(f32x4\./g)||[]).length,i32x4Ops:(x.match(/\(i32x4\./g)||[]).length}));
 fs.writeFileSync(out+'.instructions.json',JSON.stringify({w64,bodies,vectorOps},null,2));
 console.log(JSON.stringify({w64,shapeFunctions:bodies.length,fringe:bodies.filter(x=>x.name.includes('free_step_r2')),vectorOps},null,2));

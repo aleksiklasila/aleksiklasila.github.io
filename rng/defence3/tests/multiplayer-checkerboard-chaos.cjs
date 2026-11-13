@@ -35,8 +35,8 @@ const controls=require('./menu-limits.cjs').controls({...H.SMALL_MATCH_CONTROLS,
 const options={mode:'mega',layout:'mixed',teams:teamCount,seed,buildings:Math.max(30,Math.floor(map/3)),level:6,towerSites:Math.floor(map/4),collectorBuildings:Math.floor(map/6),structures,keepKings:true};
 const metrics=`__scratch.stressWork={spawns:0,armySpawns:0,researchDeposits:0,collectorDeposits:0,astarDeposits:0,constructionCompleted:0,destroyedStructures:0,placed:0,healerDeliveries:0,salvagerReturns:0,contestedPlacements:0};{
  __scratch.actionKinds={};const action=processAction;processAction=function(a,p){if(a?.netId)__scratch.actionKinds[a.action]=(__scratch.actionKinds[a.action]||0)+1;return action.apply(this,arguments);};
- const spawn=_spawnEnd,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=structDestroyTiles,place=placeBuilding;
- _spawnEnd=function(k,s){const r=spawn.apply(this,arguments);if(r){__scratch.stressWork.spawns++;if(s.type==='barrack')__scratch.stressWork.armySpawns++;}return r;};
+ const spawn=_spawnBirths,deposit=_depositResourceCollectorPayload,complete=markConstructionComplete,destroy=structDestroyTiles,place=placeBuilding;
+ _spawnBirths=function(sel){const r=spawn.apply(this,arguments);const o=_sb.out;__scratch.stressWork.spawns+=o[0];__scratch.stressWork.armySpawns+=o[0]-o[4]-o[5];return r;};
  // Count the real kernel transfers and completion events; these no longer
  // pass through the historical JavaScript worker callbacks.
  {const run=waiRun,keys=['researchDeposits','collectorDeposits','astarDeposits'];waiRun=function(){const was=keys.map(k=>_wai[k]||0);const r=run.apply(this,arguments);keys.forEach((k,j)=>{__scratch.stressWork[k]+=(_wai[k]||0)-was[j];});return r;};}

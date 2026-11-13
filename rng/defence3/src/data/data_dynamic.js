@@ -1321,40 +1321,7 @@ function eliminateTeamAssets(pid) {
     updateInfoPanel();
 }
 
-function getSpawnerRallyTargetWorld(spawner) {
-    return _refreshSpawnerRallyTarget(spawner) ? { x: spawner.rallyX, y: spawner.rallyY } : null;
-}
 
-function _refreshSpawnerRallyTarget(spawner) {
-    if (spawner.rallyTargetUnitId != null) {
-        // (By id: a search of every unit per spawner per frame stalled the
-        // page with thousands of spawners selected.)
-        let tu = typeof getUnitById === 'function' ? getUnitById(spawner.rallyTargetUnitId) : units.find(u => u.id === spawner.rallyTargetUnitId);
-        if (tu && (tu.dead || tu.owner === spawner.owner)) tu = null;
-        if (tu) {
-            let tgx = Math.floor(tu.x / TILE), tgy = Math.floor(tu.y / TILE);
-            if (isTileVisibleToPlayer(spawner.owner, tgx, tgy)) {
-                spawner.rallyX = tu.x;
-                spawner.rallyY = tu.y;
-                spawner._rallyLastSeenX = tu.x;
-                spawner._rallyLastSeenY = tu.y;
-                spawner._pendingRallyDetach = false;
-                return true;
-            }
-
-            let lockX = Number.isFinite(spawner._rallyLastSeenX) ? spawner._rallyLastSeenX : spawner.rallyX;
-            let lockY = Number.isFinite(spawner._rallyLastSeenY) ? spawner._rallyLastSeenY : spawner.rallyY;
-            if (Number.isFinite(lockX) && Number.isFinite(lockY)) {
-                spawner.rallyX = lockX;
-                spawner.rallyY = lockY;
-            }
-            // Stop following when target leaves owner's visibility.
-            spawner.rallyTargetUnitId = null;
-            spawner._pendingRallyDetach = false;
-        }
-    }
-    return Number.isFinite(spawner.rallyX) && Number.isFinite(spawner.rallyY);
-}
 
 function normalizeTowerTargetSpec(spec) {
     if (!spec || typeof spec !== 'object' || typeof spec.type !== 'string') return null;

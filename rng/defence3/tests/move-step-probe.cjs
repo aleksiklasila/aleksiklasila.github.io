@@ -39,19 +39,35 @@ const helpers = process.argv[3] !== undefined ? Number(process.argv[3]) : 8, N =
     host.eval(`{ __scratch.kw = {}; const pr = simParallelRun, now = __scratch.now; simParallelRun = function (kk) { const a = now(); try { return pr.apply(this, arguments); } finally { __scratch.kw[kk] = (__scratch.kw[kk] || 0) + now() - a; } }; }`);
     const s0 = state();
     const ms = [], pend = [], kw = {};
+    // MAINPROF=file: this (the simulation's) thread's CPU profile over the measured steps (tests/profile-self.cjs reads prefix.helperN: name it so, or use main-self below).
+    let session = null;
+    if (process.env.MAINPROF) {
+        session = new (require('node:inspector').Session)(); session.connect();
+        const post = (m, p) => new Promise((ok, bad) => session.post(m, p || {}, (e, r) => e ? bad(e) : ok(r)));
+        await post('Profiler.enable'); await post('Profiler.setSamplingInterval', { interval: 200 }); await post('Profiler.start');
+        session.stop = async () => fs.writeFileSync(process.env.MAINPROF, JSON.stringify((await post('Profiler.stop')).profile));
+    }
+    // TRACE=1: the parallel layer's per-step trace (sim_parallel.js _simParTrace: the simulation thread's
+    // background chunks by lane:kernel (bgc:), the lanes' age and unclaimed share at their waits (bgAge:, bgLeft:)), summed / max over the steps.
+    const trace = {};
     for (let i = 0; i < N; i++) {
         host.eval('__scratch.kw = {}');
+        if (process.env.TRACE) { if (i === 0) host.eval('performance.now = __scratch.now; simParallelBind("par.bgus", new Int32Array(new SharedArrayBuffer(4 * 272)))'); host.eval('_simParTrace = {}'); }
         const a = performance.now(); host.eval('gameTick()'); ms.push(performance.now() - a);
+        if (process.env.TRACE) { host.eval('{ const B = _simParReg["par.bgus"]; for (let l = 0; l < B.length; l++) { const v = Atomics.exchange(B, l, 0); if (v) _simParTrace[(l < 16 ? "hbgms:" + l : "hbgk:" + (l - 16))] = v / 1000; } }'); const t = JSON.parse(host.eval('JSON.stringify(_simParTrace || {})')); host.eval('_simParTrace = null'); if (process.env.TRACEKEYS) { const re = new RegExp(process.env.TRACEKEYS), o = {}; for (const k in t) if (re.test(k) && typeof t[k] === 'number') o[k] = Math.round(t[k] * 100) / 100; console.log('step ' + i + ' ' + ms[i].toFixed(1) + ' ' + JSON.stringify(o)); }
+            for (const k in t) { if (typeof t[k] !== 'number') continue; if (/Max|Age|Left/.test(k)) { (trace[k] ||= []).push(Math.round(t[k] * 100) / 100); } else trace[k] = (trace[k] || 0) + t[k]; } }
         pend.push(host.eval('_flowLooks.pend|0'));
         const k = JSON.parse(host.eval('JSON.stringify(__scratch.kw)'));
         for (const id in k) kw[id] = (kw[id] || 0) + k[id];
     }
+    if (session) await session.stop();
     const s1 = state();
     const sorted = ms.slice().sort((a, b) => a - b), q = p => sorted[Math.min(N - 1, Math.floor(p * N))], r1 = v => Math.round(v * 10) / 10;
     const kernels = Object.entries(kw).map(([id, v]) => [Number(id), r1(v / N)]).sort((a, b) => b[1] - a[1]);
     const res = { scene: path.basename(scene), helpers, steps: N, dk: Number(process.env.DK) || 1, stepMs: { p50: r1(q(.5)), p95: r1(q(.95)), max: r1(q(1)), mean: r1(ms.reduce((a, b) => a + b, 0) / N) },
         looksListedAStep: Math.round(pend.reduce((a, b) => a + b, 0) / N), kernelWallMsAStep: Object.fromEntries(kernels.slice(0, 14).map(([id, v]) => ['k' + id, v])),
         before: s0, after: s1, meanDistGain: r1(s0.meanDist - s1.meanDist) };
+    if (process.env.TRACE) res.trace = Object.fromEntries(Object.entries(trace).sort().map(([k, v]) => [k, Array.isArray(v) ? (/Left/.test(k) ? v.join(' ') : 'max ' + r1(Math.max(...v)) + ' p50 ' + r1(v.slice().sort((a, b) => a - b)[v.length >> 1])) : r1(v / N)]));
     console.log(JSON.stringify(res, null, 1));
     if (process.env.OUT) fs.writeFileSync(process.env.OUT, JSON.stringify({ res, ms, pend }));
     process.exit(0);

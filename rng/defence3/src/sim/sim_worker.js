@@ -709,7 +709,7 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', 'workerBrainsPrepare', '_unitNoWayCommit', '_unitNoWay', '_unitWaitEnded',
     '_unitFloorEvent', '_unitEventSortReserve', '_unitEvSplitRoom', 'flowLooksCommit', '_acqApplyMoves',
     // (The spawner queue's parts.)
-    'spawnerProductionPass', '_spawnBegin', 'simSpawnBatchWrite', '_spawnEnd', '_spShiftRun', '_spawnBatchDone', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
+    'spawnerProductionPass', '_spawnBirths', '_spawnUpkeep', '_spShiftRun', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
 // The occupancy movement's jobs (one a spatial block) in a traced tick: their
 // summed time (cpu:89), and those over 2 ms with their blocks' unit counts

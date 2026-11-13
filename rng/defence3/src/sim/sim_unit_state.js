@@ -315,6 +315,14 @@ const SIM_MOVE_WINDOW = 16;
 // Words of a slot's flow look-ahead record (unit.mvNav).
 const SIM_NAV_STRIDE = 8;
 // The steering record's words (mvSteer; mv.rs SR_*): a slot's at slot * SIM_STEER_W.
+// The mover table's marks (sim_occupancy.js mvtEnsure; wasm/src/mvt.rs): a write of a column its rows are made
+// from (x, y, id, live, dead, owner, mvOn, mvFlags, cmMode, mvDest, statRow, rtEnd, mvNP, the steer record) goes
+// through mvtM(slot) / mvtS(steer word index) in its index: the slot is marked, the index returned. No table: nothing.
+let _mvtDirty = null, _mvtWhole = true;
+function mvtM(s) { const D = _mvtDirty; if (D !== null && s >= 0) D[s] = 1; return s; }
+function mvtS(i) { const D = _mvtDirty; if (D !== null && i >= 0) D[i >> 3] = 1; return i; }
+// (Many slots or unknown ones: the table made whole at its next use.)
+function mvtInvalidate() { _mvtWhole = false; }
 const SIM_STEER_W = 8, SIM_ST_CD = 0, SIM_ST_CT = 1, SIM_ST_CTL = 2, SIM_ST_CVX = 3, SIM_ST_CVY = 4, SIM_ST_FLOOR = 5, SIM_ST_STEADY = 6, SIM_ST_CN = 7;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
     ['mvLane', Float32Array, 1], ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
@@ -1042,7 +1050,7 @@ function _simSlotFreshRange(S, from, to) {
     const D = simSlotDefaults(), C = S.columns;
     for (const k in D) { const per = C[k].length / Math.max(1, S.cap); if (per === 1) C[k].fill(D[k], from, to); else for (let s = from; s < to; s++) C[k][s * per] = D[k]; }
     // (The steering record's floor tile: none, as the destination word above.)
-    for (let s = from; s < to; s++) C.mvSteer[s * SIM_STEER_W + SIM_ST_FLOOR] = -1;
+    for (let s = from; s < to; s++) C.mvSteer[mvtS(s * SIM_STEER_W + SIM_ST_FLOOR)] = -1;
 }
 
 // The columns live in the wasm heap (simHeapArray: the Rust kernels read
@@ -1728,7 +1736,10 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
     if (!(_simStPool(S).cap > 0)) _simStGrow(S, 4096);
 }
 // Slot s taken by unit u: its defaults, and u's accessors pointed at it.
-const _simSlotDesc = { value: null, writable: true };
+// (Not enumerable, said so: a field a JavaScript path had set on the object first (a plain, enumerable one) stays
+// enumerable when redefined without it, and the snapshot encoder lists the object's own fields: a peer's encoding
+// then had one field more than another's.)
+const _simSlotDesc = { value: null, writable: true, enumerable: false };
 // (The slot is fresh: zero and simSlotDefaults' values, by k_slot_zero, a
 // growth or simUnitStateAllocate's zeroing. Only the unit's own values here.)
 function _simUnitSlotStart(S, s, u, held = true) {
@@ -1748,7 +1759,7 @@ function _simUnitSlotStart(S, s, u, held = true) {
         if (typeof u._bmt === 'number' && u._bmt === Math.floor(u._bmt)) S.columns.wkLmt[w] = u._bmt;
     }
     const h = _simHandleTake(S, s, u);
-    S.columns.live[s] = 1; S.columns.tmOn[s] = 1;
+    S.columns.live[mvtM(s)] = 1; S.columns.tmOn[s] = 1;
     S.columns.maxE[s] = Number(u.maxEnergy);
     if (u.workerType) S.columns.isWk[s] = 1;
     // (Its object fields unset: their digest that of none, simSlotDefaults'
@@ -1817,7 +1828,7 @@ function simUnitStateDetach(S, s) {
     const u = S.owners.at(s);
     if (!u) return;
     const C = S.columns;
-    C.statRow[s] = -1; C.bsRow[s] = -1;
+    C.statRow[mvtM(s)] = -1; C.bsRow[s] = -1;
     if (C.ppDue[s] >= 0 && typeof pendingPathUnlink === 'function') pendingPathUnlink(C, s);
     _simCaptureGone(u, C, s);
     _simJsRelease(S.columns, s);
@@ -1830,7 +1841,7 @@ function simUnitStateDetach(S, s) {
     u._us = null;
     _simUnitObjClear(S.columns, s);
     S.sepKey[s] = SIM_SEP_ABSENT;
-    S.columns.mvOn[s] = 0; S.columns.mvOut[s] = 0; S.columns.live[s] = 0;
+    S.columns.mvOn[mvtM(s)] = 0; S.columns.mvOut[s] = 0; S.columns.live[mvtM(s)] = 0;
     // (Reused from the next unit index rebuild on: its entries name units
     // by slot for the rest of the tick, see simUnitStateReleaseFreed.)
     _simUnitDeferFree(S, s);
@@ -2107,6 +2118,8 @@ function simUnitStateCompact(force = false) {
     if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
     // (The pending wheel's links named the old slots.)
     if (typeof pendingPathRelink === 'function') pendingPathRelink();
+    // (The mover table's rows named the old slots.)
+    mvtInvalidate();
     return true;
 }
 

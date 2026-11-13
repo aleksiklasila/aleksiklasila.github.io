@@ -361,7 +361,7 @@ function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
     _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false;
     _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
-    _wsw = null; _wswDirty = []; _wswResvRoom()[0] = 0;
+    _wsw = null; _wswDirtyN = 0; _wswResvRoom()[0] = 0; _wswHeldN = 0;
     // (And the failed searches' counts, not in snapshots: a restoring peer starts from none, so every peer does.)
     if (typeof _simUnitState !== 'undefined' && _simUnitState) { _simUnitState.columns.wsKind.fill(0); _simUnitState.columns.wsFail.fill(0); }
 }
@@ -392,15 +392,26 @@ function workerSearchTierStep() {
     // before these writes, with slow ones or none it read them (audit
     // 2026-10-30, A). (This step's own order waited for it anyway.)
     if (simDk > WS_TICKS && _wsPosted) simParallelBackgroundWait(WS_LANE);
+    // A search is never taken in the step that posted it (a step of three or
+    // four base ticks holds the post and the commit's base tick both: the
+    // commit then waited for a search posted a moment before, and this
+    // thread ran all of it, ~3 ms a step at 1M units): it is taken at the
+    // next step's start instead, the same step on every peer (a step's base
+    // ticks are the bundle's). The grid's sweep slices of the base ticks it
+    // is in flight over are held and run right after its commit.
+    if (_wsPosted && _wsPosted.step !== gameTime && _wsPosted.due <= gameTime - simDk) { _wsOrder(); _wsCommit(); _wswHeldRun(); }
     for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
         const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
-        if (cycle && ph === (WS_POST_PHASE + 1) % WS_TICKS) _wsOrder();
-        if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS) _wsCommit();
+        if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS && _wsPosted && _wsPosted.step !== gameTime) { _wsOrder(); _wsCommit(); _wswHeldRun(); }
         // (Past WSW_SLOW_UNITS units the sweep takes only every WSW_SLOW-th cycle's slices, each
         // visiting the next ones: the same coverage WSW_SLOW times slower. Stateless: by the tick.)
         const wswSlow = units.length >= WSW_SLOW_UNITS ? WSW_SLOW : 1, wswCycle = Math.floor(b / WS_TICKS);
-        if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) _wswStep((Math.floor(wswCycle / wswSlow) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP, wswCycle % wswSlow === 0);
-        if (cycle && ph === WS_POST_PHASE) _wsPost();
+        if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) {
+            const slice = (Math.floor(wswCycle / wswSlow) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP, on = wswCycle % wswSlow === 0;
+            // (This step's own search reads the grid from its post on.)
+            if (_wsPosted && _wsPosted.step === gameTime) _wswHold(slice, on); else _wswStep(slice, on);
+        }
+        if (cycle && ph === WS_POST_PHASE) { _wsPost(); if (_wsPosted) { _wsPosted.step = gameTime; _wsPosted.due = b + 2; } }
     }
 }
 
@@ -423,7 +434,12 @@ const WSW_BUILD = 1, WSW_SALVAGE = 2, WSW_QUEUE = 4, WSW_RESEARCH = 8, WSW_AUTOR
 // a tick; what the sweep finds (damage, an upgrade come due) may wait.)
 const WSW_SWEEP = 90, WSW_MAXOWN = 16;
 const WSW_SLOW_UNITS = 250000, WSW_SLOW = 4;
-let _wsw = null, _wswDirty = [];
+let _wsw = null;
+// Tiles marked since the grid's last step (workSiteDirty, the spawns' births: workSiteDirtyList): a typed list, doubled when full.
+let _wswDirtyA = new Int32Array(65536), _wswDirtyN = 0;
+function _wswDirtyRoom(k) { if (_wswDirtyN + k > _wswDirtyA.length) { const a = new Int32Array(Math.max(_wswDirtyA.length * 2, _wswDirtyN + k)); a.set(_wswDirtyA.subarray(0, _wswDirtyN)); _wswDirtyA = a; } }
+// n tiles (gy * GRID_W + gx) of a list marked at once.
+function workSiteDirtyList(list, n) { if (!_wsw || !(n > 0)) return; _wswDirtyRoom(n); _wswDirtyA.set(list.subarray(0, n), _wswDirtyN); _wswDirtyN += n; }
 // Reservation slots changed since the work site grid's last step: a heap list
 // ([0] the count, the slots from 1) sized by the population (each unit at most
 // once a tick; full: the grid is made again).
@@ -449,7 +465,7 @@ function _wsTileRow(L, n, t) {
     return lo < n && L[lo] === t ? lo : -1;
 }
 function workSiteDirty(gx, gy) {
-    if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) _wswDirty.push(gy * _wsw.w + gx);
+    if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) { _wswDirtyRoom(1); _wswDirtyA[_wswDirtyN++] = gy * _wsw.w + gx; }
 }
 function workSiteBuilt(item) {
     if (!item || typeof item.type !== 'string') return;
@@ -540,7 +556,7 @@ function _wswBuild() {
     W.own.fill(-1); W.area.fill(-1);
     for (const k of ['flags', 'own', 'area', 'resv', 'cnt']) simParallelBind('wsw.' + k, W[k]);
     tileEntityChangesSince(W.cursor);
-    _wswDirty = []; _wswResvRoom()[0] = 0;
+    _wswDirtyN = 0; _wswResvRoom()[0] = 0;
     // Every live reservation (mines and drops too), then every structure.
     const RS = workerReservedTiles, NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
     // (By the kernel: tch.rs k_wsw_resv, the reservers by the unit id index.)
@@ -559,12 +575,12 @@ function _wswStep(step, sweepOn = true) {
     if (!W || W.w !== GRID_W || W.h !== GRID_H || W.set !== _activeTileEntities || W.areaFor !== areaIdGrid || W.resvFor !== workerReservedTiles) { _wswBuild(); return; }
     const ch = tileEntityChangesSince(W.cursor);
     if (ch === null) { _wswBuild(); return; }
-    const d = _wswDirty, occ = sweepOn ? _activeTileEntities.tileList() : 0, sw = occ > step ? Math.ceil((occ - step) / WSW_SWEEP) : 0;
-    const L = _wswTiles(ch.length + d.length + sw), OT = _activeTileEntities._tiles;
+    const nd = _wswDirtyN, occ = sweepOn ? _activeTileEntities.tileList() : 0, sw = occ > step ? Math.ceil((occ - step) / WSW_SWEEP) : 0;
+    const L = _wswTiles(ch.length + nd + sw), OT = _activeTileEntities._tiles;
     let n = 0;
     for (let i = 0; i < ch.length; i++) L[n++] = ch[i];
-    for (let i = 0; i < d.length; i++) L[n++] = d[i];
-    _wswDirty = [];
+    if (nd) { L.set(_wswDirtyA.subarray(0, nd), n); n += nd; }
+    _wswDirtyN = 0;
     for (let i = step; i < occ; i += WSW_SWEEP) L[n++] = OT[i];
     _wswRun(W, L, n, 0);
     // Reservations changed since the last step; the collectors' sites', in turn (a reserver that died since).
@@ -718,6 +734,8 @@ function _wsSiteTarget(g, i) {
 // ring search: both give the least (steps, row, column, id).
 // (Off: the ring search as before; the same results either way, which the tests compare.)
 let WS_NEARFIELD = true;
+// (k.rs NFA_W: a field slot's record, 4 words and 65536 spawners' tiles.)
+const WS_NFA_W = 4 + 65536;
 function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
     G.nfBuild = false; G.nfList = [];
     if (!WS_NEARFIELD || !(np > 0 && np <= 65535)) { G.nfSetKey = null; return; }
@@ -733,6 +751,10 @@ function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
     const need = fieldOwners.length * tiles;
     let NF = G.arrays.nf, fresh = false;
     if (!NF || NF.length < need) { NF = G.arrays.nf = simSharedArray(Uint32Array, need); simParallelBind(pre + 'nf', NF); fresh = true; }
+    // (Each field slot's record: its owner and the spawners it was made for, k.rs nearfield_incr; 16 slots, made once.)
+    let NFA = G.arrays.nfa;
+    if (!NFA) { NFA = G.arrays.nfa = simSharedArray(Int32Array, 16 * WS_NFA_W); simParallelBind(pre + 'nfa', NFA); fresh = true; }
+    if (fresh) for (let s = 0; s < 16; s++) NFA[s * WS_NFA_W] = 0;
     // (rk / ro, the spawners by (gy, gx): tile order, one a tile: the kernel's.)
     const fkey = fieldOwners.join(',');
     G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey || !!G.nfEligibilityDirty;
@@ -812,7 +834,7 @@ function _wsPost() {
     CNT[0] = total; // Compact requests are one logical region for ordering.
     // Stage 2 scans after eligibility compaction and near-field preparation.
     // (Stages: 0 eligibility, 1 and 2 the near fields' rows and columns, 3 the scan, 4 its list.)
-    const Bp = _simBgStageParams[WS_LANE][3];
+    const Bp = _simBgStageParams[WS_LANE][4];
     // The collectors' groups, per resource type.
     const groups = [], nfSeen = new Set(), nfPairs = [];
     for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
@@ -845,11 +867,12 @@ function _wsPost() {
     Bp[5] = np; Bp[15] = _simParReg['ws.aoff'] ? _simParReg['ws.aoff'].length - 1 : 0;
     Bp[56]=areaSearchEnabled()?1:0;
     Bp[57]=_wsPostEpoch;
-    // Near fields use stage 1; stage 0 compacts the eligible bucket rows.
-    // (Each field in two stages of many jobs, k.rs k_ws_nearfield modes 1 and 2:
-    // a pair's field was one job, the scan's chain waited on its slowest.)
+    // Near fields use stages 1-3; stage 0 compacts the eligible bucket rows.
+    // (Stage 1, k.rs k_ws_nearfield mode 3, a job a field: updated for the spawners gone and come since it
+    // was made (the cells of those alone); a field it cannot update is made whole by stages 2 and 3 (modes 1
+    // and 2, many jobs a field: rows, then columns).)
     const nfRowJobs = Math.min(64, GRID_H), nfColJobs = Math.ceil(GRID_W / WS_NF_COLS), nfPer = Math.max(nfRowJobs, nfColJobs);
-    for (const [slot, mode] of [[1, 1], [2, 2]]) {
+    for (const [slot, mode] of [[1, 3], [2, 1], [3, 2]]) {
         const Np = _simBgStageParams[WS_LANE][slot];
         Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
         Np[63] = _wsPostEpoch; Np[62] = mode; Np[61] = Math.ceil(GRID_H / nfRowJobs); Np[60] = WS_NF_COLS; Np[59] = nfPer;
@@ -863,17 +886,32 @@ function _wsPost() {
     for (let g = 0; g < eligibleGroups.length; g++) Ep[4 + g] = eligibleGroups[g];
     // (Then the requests that found something listed, k.rs k_ws_order: one job in the same chain.)
     _wsArr('ws.order', Int32Array, total); _wsArr('ws.otmp', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
-    const Op = _simBgStageParams[WS_LANE][4]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
+    const Op = _simBgStageParams[WS_LANE][5]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
     const spawners = _wsSnapshotReturnSpawners(total, np);
-    const Sp = _simBgStageParams[WS_LANE][5];
+    const Sp = _simBgStageParams[WS_LANE][6];
     Sp[0] = 128; Sp[1] = np; Sp[2] = GRID_W; Sp[3] = GRID_H; Sp[4] = TILE;
     Sp[5] = WSR_GRID; Sp[6] = WSR_HEAL; Sp[7] = WSW_BUILD;
-    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
+    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
         [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1], [SIM_KERNEL_WS_RETURN_SPAWNERS, spawners ? Math.ceil(total / Sp[0]) : 0]]);
-    _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false, moved: typeof _rl !== 'undefined' ? _rl.moved : 0 };
+    if (typeof _simParTrace !== 'undefined' && _simParTrace) { const tr = _simParTrace; tr['ws:total'] = total; tr['ws:nfPairs'] = nfPairs.length; tr['ws:nfPer'] = nfPer; tr['ws:elig'] = eligibleGroups.length * bucketJobs; }
+    _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false, moved: typeof _rl !== 'undefined' ? _rl.moved : 0, step: -1, due: -1 };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups
 // in place, which the unit pass may change; not chained with the ordering.)
+// The grid's sweep slices held while this step's search is in flight (slice,
+// sweep on), run in order after its commit: a step has at most its base
+// ticks of them.
+const _wswHeld = new Int32Array(512);
+let _wswHeldN = 0;
+function _wswHold(slice, on) {
+    if (_wswHeldN * 2 >= _wswHeld.length) throw new Error('worker search: more held sweep slices than a step has base ticks');
+    _wswHeld[2 * _wswHeldN] = slice; _wswHeld[2 * _wswHeldN + 1] = on ? 1 : 0; _wswHeldN++;
+}
+function _wswHeldRun() {
+    const n = _wswHeldN;
+    _wswHeldN = 0;
+    for (let i = 0; i < n; i++) _wswStep(_wswHeld[2 * i], _wswHeld[2 * i + 1] === 1);
+}
 function _wsOrder() {
     const J = _wsPosted;
     if (!J || J.ordered) return;
@@ -3578,100 +3616,6 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
     }
 }
 
-function applyWorkerRallyFromSpawner(u, spawner) {
-    if (!u || u.dead || !u.workerType || !spawner) return false;
-    if (!_refreshSpawnerRallyTarget(spawner)) return false;
-    const rallyX = spawner.rallyX, rallyY = spawner.rallyY;
-    if (!Number.isFinite(rallyX) || !Number.isFinite(rallyY)) return false;
-
-    let targetGx = Math.max(0, Math.min(GRID_W - 1, Math.floor(rallyX / TILE)));
-    let targetGy = Math.max(0, Math.min(GRID_H - 1, Math.floor(rallyY / TILE)));
-    let myGx = Math.floor(u.x / TILE);
-    let myGy = Math.floor(u.y / TILE);
-    u.targetPos = { x: targetGx * TILE + 16, y: targetGy * TILE + 16 };
-
-    if (isResourceCollectorWorkerType(u.workerType)) {
-        let resourceCfg = getResourceCollectorConfigByWorkerType(u.workerType);
-        let gather = resourceCfg ? _getResourceCollectorGatherTargetNear(rallyX, rallyY, u.owner, resourceCfg, TILE) : null;
-        if (!(gather && gather.target && _isResourceCollectorTargetValid(gather.target, gather.type, u.owner, resourceCfg))) return false;
-        _releaseManualWorkerAssignmentConflicts(u, gather.target, gather.type);
-        if (!_canAssignWorkerTargetExclusive(u, gather.target, gather.type)) return false;
-        _clearWorkerTarget(u, 'manual_rally_change');
-        _setResourceCollectorPinnedTarget(u, gather.target, gather.type, resourceCfg);
-        _resourceCollectorAssignTarget(u, gather.target, gather.type, resourceCfg);
-        u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
-        return true;
-    }
-
-    if (u.workerType === 'builder') {
-        let target = _getBuilderWorkTargetAt(targetGx, targetGy, u.owner, true);
-        if (!target) return false;
-        _releaseManualWorkerAssignmentConflicts(u, target, null);
-        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
-        target.buildEnabled = true;
-        _clearWorkerTarget(u, 'manual_rally_change');
-        _builderAssignTarget(u, target, myGx, myGy);
-        u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
-        return true;
-    }
-
-    if (u.workerType === 'healer') {
-        let qTarget = getTileEntityRef(targetGx, targetGy);
-        if (!_isHealerQueueAnchorTarget(qTarget, u.owner)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, qTarget, 'queue');
-        if (!_canAssignWorkerTargetExclusive(u, qTarget, 'queue')) return false;
-        _clearWorkerTarget(u, 'manual_rally_change');
-        u._healerPinnedQueueTarget = qTarget;
-        if (_isHealerQueueTarget(qTarget, u.owner)) _setHealerQueueCommit(u, qTarget);
-        else _clearHealerQueueCommit(u);
-        // (Its target from the pinned queue by the worker kernel at its check, due now: wai.rs healer.)
-        u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
-        return true;
-    }
-
-    if (u.workerType === 'researcher') {
-        let rTarget = getTileEntityRef(targetGx, targetGy);
-        if (!_isResearcherTargetBuilding(rTarget, u.owner)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, rTarget, 'research');
-        if (!_canAssignWorkerTargetExclusive(u, rTarget, 'research')) return false;
-        _clearWorkerTarget(u, 'manual_rally_change');
-        if (!_setWorkerTarget(u, rTarget, 'research')) return false;
-        u.workerState = 'MOVING_TO_RESEARCH';
-        u._researchSpawnerTarget = null;
-        u.path = _requestWorkerPath(u, myGx, myGy, rTarget.gx, rTarget.gy, null, null);
-        u.pathIndex = 0;
-        u.commandState = u.path && u.path.length > 0 ? CMD_MOVING : CMD_IDLE;
-        u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
-        return true;
-    }
-
-    if (u.workerType === 'salvager') {
-        let target = getTileEntityRef(targetGx, targetGy) || getFloorItemAtTile(targetGx, targetGy);
-        if (!(target && target.owner === u.owner && target.markedForSalvage)) return false;
-        _releaseManualWorkerAssignmentConflicts(u, target, null);
-        if (!_canAssignWorkerTargetExclusive(u, target, null)) return false;
-        _clearWorkerTarget(u, 'manual_rally_change');
-        if (!_setWorkerTarget(u, target, null)) return false;
-        let canWalk = (nx, ny) => nx === target.gx && ny === target.gy;
-        u.path = _requestWorkerPath(u, myGx, myGy, target.gx, target.gy, canWalk, null, true);
-        if (u.path) {
-            u.workerState = 'MOVING_TO';
-            u.pathIndex = 0;
-            u.commandState = CMD_MOVING;
-        } else if (_workerHasPendingAutoRouteToTarget(u, target)) {
-            u.workerState = 'MOVING_TO';
-        } else {
-            _clearWorkerAutoRoute(u);
-            _clearWorkerTarget(u);
-            u.workerState = 'IDLE';
-            u.commandState = CMD_IDLE;
-        }
-        u._workerNextIdleRetargetTick = gameTime; u._idleFailVer = -1;
-        return true;
-    }
-
-    return false;
-}
 
 // ---- The worker state machine as a kernel (wasm/src/wai.rs k_worker_ai) ----
 // The tick's worker events, after the others (unit.js unitEventsRun): one
@@ -3704,7 +3648,7 @@ const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
 const WAI_CTAB_COLS = ['c_markedForSalvage', 'c_stacks', 'c_level', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c__uc'];
 const _wai = { tver: -1, tablePlayers: 0, tableLevels: 0, P: new Float64Array(80), declined: 0 };
-const _waiNativeArgs = new Array(156).fill(null);
+const _waiNativeArgs = new Array(157).fill(null);
 function _waiArr(name, Type, n) {
     let a = _wai[name];
     if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
@@ -3915,8 +3859,10 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     WA[arg++] = psum; WA[arg++] = _ST.mineSum && simHeapHas(_ST.mineSum) ? _ST.mineSum : null;
     WA[arg++] = _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null;
     WA[arg++] = take?.spawners ? R2['ws.spawnResult'] : null;
+    WA[arg++] = c.wmMan;
     try {
-        if (WAI_PARALLEL && mode === 0) _waiParallel(WA, P, n, mode, list);
+        // (The tier's takes too (mode 1): decided on the helpers, settled by the apply's rounds; serial they were ~3 ms a step on this thread at 1M units.)
+        if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);
         else simRustDirect('k_worker_ai', WA, P);
     } finally {
         WA.fill(null);

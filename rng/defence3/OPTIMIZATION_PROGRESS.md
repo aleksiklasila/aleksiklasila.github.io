@@ -7656,3 +7656,337 @@ what stays expensive. Data in tests/test-runs/render-iso-20261111/.
 - New tools: tests/move-step-probe.cjs (step time, kernel walls, looks listed, a position hash for
   comparing builds), tests/profile-families.cjs and tests/profile-self.cjs (helper profiles by kernel
   family / by function under a kernel).
+
+## 2026-11-12 - movement plan stage 3a: the mover table, its marks and audit (nothing reads it yet)
+
+- wasm/src/mvt.rs: the table (one row a unit with a footprint, 8 words: x, y, the steer's target, slot, id,
+  rtEnd, statRow | radius | layer | mvNP, mvOn | mvFlags | cmMode | owner), slabs of 64 rows as arrays, a
+  chain of slabs a block (the occupancy's blocks), mvt.hrow by slot. Kernels: mvt_rebuild (whole, from the
+  columns), mvt_sync (the slots marked in mvt.dirty: rows written in place, moved to another block, made or
+  taken away; sixteen marks a compare), mvt_audit (every row against the columns, every chain against its
+  count). The class, the wake and the hand are not in the row yet: they come with the block job (3b).
+- JS (sim_occupancy.js mvtEnsure / mvtBeforeMovement / mvtAfterMovement / mvtCheck): the arrays in the wasm
+  heap, sized once from the slots' capacity (slots / 64 + blocks slabs); the sync before the movement's
+  kernels. Kept only when asked for (?mvt=1; ?mvt=2 audits before every movement and throws; the tests'
+  MVT=1 / 2; MVT=3 collects one of each kind of difference and prints them at exit, tests/mvt-seen.cjs):
+  without the flag nothing is allocated or run, the marks are a null test. The movement's own writes are
+  not marked one by one yet: every slot is marked after it (so the table costs a full remake a step while
+  on: 3b makes the block job the rows' writer).
+- The marks: a write of a column a row is made from goes through mvtM(slot) / mvtS(steer word) in its index
+  in JS (78 writes in unit.js, main.js, sim_unit_state.js, sim_occupancy.js, things_utils.js: the index
+  wrapper cannot be left out at a branch); in kernels k_slot_zero (a slot made fresh), k_unit_gone_par (let
+  go), k_slot_move (both slots) take '?mvt.dirty'; a compaction and a decoded snapshot make the table whole.
+  A unit that died is not marked (seven kernels set unit.dead): the sync counts dead-and-live slots as
+  marked (two more byte columns in its compare).
+- What the audit found on the way (each a desync-in-waiting once rows are read): births without a mark;
+  deaths set by seven kernels; slots moved by the relayout; marks of released slots past the count of slots
+  in use (the sync and the audit now scan the capacity, not the count); a rebuild after a smaller state
+  left row indices at slots past the count (cleared by capacity).
+- Checks: tests/mover-table.test.cjs (audited battle; an unmarked write and an unmarked move across a
+  block's edge are found, marked ones synced and re-homed; the table kept step by step equals one made
+  whole; a dead unit loses its row). Every tests/*.test.cjs with MVT=2: 281 / 282 (research-menu fails
+  without the table too, and on the build before these changes); the same without the flag; chaos and
+  multiplayer chaos determinism with SIM_WORKER=1 MVT=2. chaos-1m-250k, 8 helpers, dk 4, 45 steps: the
+  audit passes every step, the position hash is the same with the table off, on and audited.
+- Cost while on (chaos-1m-250k, dk 4, step p50): 137 ms off, 146 ms kept (the serial remake of ~480k rows a
+  step), 166 ms audited. Off is the default: no change in play.
+- Not done (3b / 3c): the block job reading rows, the marks inside the movement kernels (or rows written
+  there), sync and re-homing by block on the helpers, the permuted-row-order test, the old paths deleted.
+
+## 2026-11-12 - movement plan stage 3b, first part: the block job walks the mover table
+
+- The table is live (no flag): mvtBeforeMovement runs from occupancyPrepareMovement (rebuild after a restore,
+  else mvt_sync of the marked slots), and writes occ.offsets (each block's rows before it) itself. The count
+  kernel (97, occ_block_counts) and occ_prepare are deleted.
+- mv.rs move_job (kernel 89): the block's rows gathered from its slab chain (those with the first stage's
+  mark, a push at their tile, or no footprint), entries [id, tile key, slot, row] in the thread's scratch,
+  LSD radix (8-bit passes, constant digits skipped) by tile from the far end of the block's heading (the
+  integer sum of the wanted steps), then id; visited in that order. leader_dir, row_live, the index visit
+  loop, tile_range and the unlisted second-pass loop are deleted. Behaviour change: inside a tile the order
+  is by id (was the index's order).
+- occ.rs: MoveGrid holds the table (Rows); commit_preview and the swap write the row's position with the
+  footprint record. A move into another block leaves the row where it is and marks the slot: the next sync
+  re-homes it. A unit without a footprint gets its row's position at the gather.
+- The row is now one a live unit: x, y, slot, id, radius | layer | footprint, owner. statRow and mvNP were
+  in it after 3a and are out again: with rows no longer remade every step the audit is a real check, and it
+  found kernels writing both without marks (level scaling, the controller's arms). Nothing read them.
+  (3a's audit ran after a blanket mark of every slot, so it could only find births, deaths and slot moves.)
+- A desync found and fixed on the way (tests/shared-spatial-determinism, flaky): the job takes its scratch
+  from words 1000 / 1001 of the argument block, which only _simRust's kernels set; a helper whose first
+  kernel was 89 had none and returned without resolving its blocks. The kernel's wrapper sets the words;
+  the job traps (unreachable) on no table, no scratch or more rows than the scratch holds, never skips.
+- ?mvt=2 / MVT=2 now audits before and after every movement; ?mvt=3 collects differences.
+- Checks: tests/mover-table.test.cjs (real move orders now: issueMoveOrder never existed), new
+  tests/mover-table-order.test.cjs (every block's rows reversed before each movement, the table made whole
+  every tenth tick: positions equal at six checkpoints over 300 ticks of two crowds crossing). All
+  tests/*.test.cjs: 282 / 283 plain, 281 / 283 with MVT=2 (research-menu fails before these changes too;
+  multiplayer-snapshot under MVT=2 corrupts unit.x on purpose, which the audit reports), the chaos /
+  determinism / restore tests with SIM_WORKER=1: 11 / 11.
+- Measured (chaos-1m-250k, 8 helpers, 15 warm-up + 30 steps, tests/move-step-probe.cjs; data in
+  tests/test-runs/move-occ-stage3b-20261112/):
+
+  | | stage 1 final | rows (two runs at dk 4) |
+  |---|---|---|
+  | dk 1 step p50 / p95 / max | 87 / 114 / 118 ms | 89.6 / 115 / 115 |
+  | dk 1 k89 / k8 wall a step | 22.5-24.8 / 9.7 | 24.9 / 10 |
+  | dk 4 step p50 / p95 / max | 131-134 / 167 / 168-170 | 144 / 180 / 183 and 137 / 167 / 172 |
+  | dk 4 k89 / k8 wall a step | 32.1-33.5 / 10.8 | 36.2 / 11.8 and 33.5 / 10.9 |
+
+  No gain yet, as expected of this part: the job still resolves each unit from its record and columns;
+  only the visit's source changed. New serial cost: mvt_sync 4.2 ms a step at dk 4 (11,050 marked rows a
+  step: block changes, deaths, births) on the simulation thread.
+- Remaining: the sync / re-homing by block on the helpers (the 4.2 ms); the gather reads the need byte in
+  each unit's footprint record (one scattered line a row): the class in the row removes it; then the step
+  and the resolve from rows (the plan's 4-7x on kernels 8 + 89 is all there).
+
+## 2026-11-12 - movement plan stage 3b, second part: the sync off the simulation thread, the first stage's results in one word
+
+Outcome-identical to the first part (position hash by id after 17 steps at dk 4, no helpers: 395310288, 412,089
+alive, both builds).
+
+- **The mover table's sync** (was mvt_sync, 4.2 ms a step at dk 4 on the simulation thread). First tried as two
+  helper dispatches before the movement: 3 ms, no better: an empty dispatch costs 0.01 ms, but at that point of
+  the tick the helpers are in background lanes and the simulation thread ran most chunks itself. Now:
+  - the scan is part of kernel 8 (mv.rs move_job, first stage: each slot chunk's marks at the chunk's start,
+    before its units step; mvt.rs scan_chunk, the table's addresses in mvt.cfg[16..]): a row in the same block
+    written in place, else marked gone (slot word -1) and the slot listed with its position (two words);
+  - mvt_sync_plan, one job on the simulation thread after kernel 8 (marks past the slots in use, the blocks with
+    changes, the entries by block, occ.offsets from the counts the block pass will leave): 0.3-0.5 ms unloaded;
+  - mvt_sync_apply on the helpers (k_block 5, 16 blocks a job): a block's gone rows closed up from its tail, its
+    listed rows put in at their listed positions (the columns hold wanted positions by then). Free slabs under
+    a spin lock; the pool has a slab a block more; when it could still run short the pass runs in two rounds
+    (rows out, then in: tests/mover-table.test.cjs runs both).
+  - A row's position is its footprint record's (the columns' only without a footprint); the audit between the
+    stages (?mvt=2: 'between the movement's stages' and 'after the movement') compares accordingly, and outside
+    the movement also checks the columns against the record.
+  - Pitfall met: simRustParallel writes its selector to _simParams[0], the movement's own params by then.
+- **The first stage's results for the second**: occ.needb, a bit a slot (was a byte in each footprint record: a
+  scattered line a row of the gather), and the record's word 3 (mv.rs FW_*: class, flags, brain mode, profile,
+  output code, spent). resolve_slot, checked_traffic_q, walker_short_at and yield_tag take that word; the
+  position and output columns are written only where they change.
+- **MoveGrid's chunk cache** is filled at the job's first swap look, not at its start.
+- Checks: the table / determinism / restore / snapshot / multiplayer-chaos tests with MVT=2: 15 / 15 (the
+  multiplayer-snapshot failure under MVT=2 is gone: the audit reads the record). All tests/*.test.cjs plain:
+  282 / 283 (research-menu fails as before these changes).
+- Measured (helper CPU profile, dk 4, chaos-1m-250k, 30 steps; another program held ~40% of the machine during
+  the later runs: all kernels read ~14% high, so the second column is also given scaled by the total's ratio):
+
+  | under mv_move_occupancy | first part | second part | scaled |
+  |---|---|---|---|
+  | all | 326 ms | 367 | 322 |
+  | move_job self (gather, order, second pass) | 40.3 | 51.1 | 44.8 |
+  | checked_traffic_q self | 45.3 | 50.6 | 44.4 |
+  | resolve_slot + walker_short_at | 25.0 | 24.0 | 21.1 |
+  | chunk cache | 12.6 | 7.9 | 6.9 |
+  | sync on the helpers (scan in kernel 8 + block pass) | - | 9.6 | 8.4 |
+
+  Step wall times of this session are not comparable with the first part's (machine load): 152-181 ms p50 at
+  dk 4 against 137-144; rerun both builds on a quiet machine before quoting a step time.
+- What this says: kernel 89's time is not in the class / flag / output columns. It is the footprint sweeps
+  (motion, free_*, horizontal_motion, preview, commit: ~95 ms), the resolve's own arithmetic and its remaining
+  lines (the wanted position columns, the steer record, the record), swaps (~28), the epilogue (~22). The plan's
+  gain needs the new resolve (window word, preference table) and the step from rows, not more column packing.
+
+## 2026-11-13 - movement plan: the resolve as a cell walk, tried and not kept
+
+The tree is the second part's (the kernels' binary byte-identical to it). The attempt is kept as source in
+tests/test-runs/move-occ-stage3b-20261112/walk-resolve-not-kept.occ.rs / .mv.rs (MoveGrid::walk, its call in
+checked_traffic_q), its profile in prof-walk-dk4.json.
+
+- What it was: a step resolved cell by cell (radius <= 3): the unit's own cells cleared, per cell step the 7 x 7
+  cells around it as one word, the wanted move (toward the target's cell) and then the moves an eighth and a
+  quarter turn to either side as masks of that word (the hand side first), refused into walls, past the halo
+  or farther than the step's length; marked where it ends. It replaced preview / motion / the shoulder search
+  / commit_preview in checked_traffic_q. Integers only (one exact sqrt pair for a sub-cell move).
+- Measured (helper CPU profile, dk 4, chaos-1m-250k, quiet machine): kernel 89 322 ms (second part, scaled)
+  -> 297 (walk 91) -> 304 with the rows kept over the walk (walk 101) -> 294 with the job's rows read up
+  front (walk 94, the reads 10). 250,707 walks and 934,615 cell iterations a step (3.7 a walk).
+- Behaviour (tests/crowd-traffic.bench.cjs, progress summed over 3,200 units): open march at dk 4 +5%
+  (1,458k against 1,384k at tick 60); plug at dk 20 equal; counter at dk 20 -0.7%, at dk 1 +3%, at dk 4 -5.5%
+  (4,528k against 4,790k at tick 200, 72-79% of the units moving a step against 96-98%). tests/traffic-pressure
+  fails on the counter case (90% moving at tick 80, 95 asked). Two things the old code does that matter there
+  and that the walk had to copy: a blocked unit closes up inside its cell along its step, and a unit whose free
+  side cell is farther than its step moves toward it inside its cell (short steps cross over after a few).
+  Limiting side moves to steps short of four fifths of their length (the old shoulder's rule) did not help.
+- Not the walk's cost (each tested by a build): re-reading the rows a cell step; the rows a footprint cannot
+  reach; the first read of the block's bitmap lines. So it is the iteration's arithmetic, not memory: to be
+  split into profiled pieces before another attempt.
+- Pitfalls met: the module may have no data segments (a static table fails the build: tables as packed
+  constants or arithmetic); the bench's default is --dk=20, the test's case too.
+- Next: the step from the rows (kernel 8's 115 ms) rather than the resolve.
+
+## 2026-11-13 - the step from rows sized before starting; where the simulation thread's step goes
+
+Nothing changed in the kernels. Two measurements on the second part's build (chaos-1m-250k, dk 4, 8 helpers, 30
+steps; tests/move-step-probe.cjs MAINPROF=file gives the simulation thread's profile).
+
+- **The step from rows** (kernel 8's steady step, step4, in the block job). Kernel 8 is 114 ms of helper CPU and
+  ~11 ms of the step's wall; step4 is 33-37 ms of that CPU (29%): moving it is worth about 3 ms of a ~137 ms
+  step. step4 is not memory-bound (its ~25 streams are read in slot order) but check-bound: per walker the
+  steer record (steady, target, committed step, its tile, the floor's tile), the flow field as made (its
+  generation, destination, ready), energy, the index entry, the tile's hostile structure once a second. A row
+  could only replace those reads if the row were the walker's state and every one of those checks an event
+  (the plan's stage 4: wheels, field and wall events): the steer record is written at ~30 places in mv.rs. So
+  it cannot be done as a part on its own, and its gain is small until stage 4 exists.
+- **The simulation thread, a step** (profiler on: 153 ms p50): 94 ms inside parallel dispatches (shared with
+  the helpers: kernel 89 ~34, kernel 8 ~11, the rest), 11.5 ms waiting for background lanes, and **50 ms
+  serial: 35.5 ms JavaScript, 14 ms wasm called directly**. Serial time is wall time one for one. Its owners:
+
+  | ms a step | where |
+  |---|---|
+  | 6.6 | processGlobalSpawnerQueue > _processSpawnsByTables |
+  | 5.4 | simMoveRun > combatScanRun (its serial part) |
+  | ~7 | unitHitsResolve (recordDamageVisual 2.2, _structHitsApply 2.1, own 1.8, recordUnitAttackFx 0.7) |
+  | 5.4 | workerSearchTierStep (_wsCommit 3.6, _wsPost 1.8) |
+  | 2.8 | k_worker_ai (direct) |
+  | 2.2 | unitEventsRun > waiOutEvents |
+  | 1.2 each | researchQueueSpend, towersTick, navFieldsSweepStep, simUnitStateDetachGoneMany |
+  | 0.8 | mvtAfterFirstStage (the table's sync: was 4.2 serial) |
+
+  A third of the step is serial work on the simulation thread; that is a larger and surer target than either
+  movement kernel's remaining parts (tests/test-runs/move-occ-stage3b-20261112/main-thread-dk4.txt).
+
+## 2026-11-13 - the acquisition post's copies made only when their source changed
+
+The largest single serial item on the simulation thread at dk 4 (chaos-1m-250k): unit.js _acqPost, 5.4 ms a
+post, and a post runs every step at dk 4 (every fourth tick at dk 1).
+
+- By source line (tests/profile-main-serial.cjs for the owners; the cpuprofile's positionTicks for the lines):
+  4.3 ms was `acq.anb.set(area.nb)`, the area graph's neighbour list copied whole into the job's own array at
+  every post: 16.8 MB at this map, and the areas are made once a layout. 1.8 ms was simParallelCopyHeap on its
+  serial path (2.6 MB, under SIM_COPY_PAR_MIN): 2 MB of it the per-tile structure tables (mv.struct, mv.scls),
+  which change when a structure is made or goes.
+- Now (_acqKept): the area graph is copied when _simAreaLayoutVer or one of the four arrays is another; the
+  structure tables when _simMoveStructVer (new: counted at their two writers, k_move_structs in unit.js and
+  k_struct_destroy in things_utils.js) or an array is another. acqTierReset forgets both.
+- Outcome-identical (position hash by id, no helpers, dk 4: 395310288, 412,089 alive, as before); the
+  acquisition / tower / combat / area / determinism tests 15 / 15; all tests/*.test.cjs: 282 / 283
+  (research-menu fails as before).
+- Measured (the simulation thread's profile, 30 steps, quiet machine): combatScanRun's serial part 5.36 ->
+  1.61 ms a step; the thread's serial time 49.6 -> 44.5 ms a step (JavaScript 35.5 -> 31.3). Step p50 142.5-145
+  ms in three runs; the step's run-to-run spread (about 5%) is larger than the 3.7 ms.
+- Left in it: simParallelCopyHeap 1.0 ms (the hostile tables and the cover, 0.5 MB, and the structure tables on
+  the steps a structure changed: in this scene most).
+- The simulation thread's serial owners now, ms a step: the spawner queue 6.4 (_processSpawnsByTables: a unit at
+  a time in JavaScript: _spawnStats 0.9, _simUnitObjInit 0.4, _spawnEnd, simSpawnBatchAdd, occupancySpawn...:
+  the batch births of UNIT_BIRTH_WASM_PLAN.md do not cover it yet), the worker search's commit and post 5.4,
+  k_worker_ai 2.8, waiOutEvents 2.2, _structHitsApply 2.3. Caution reading this profile: the probe runs the page
+  and the simulation in one context; in the browser the per-hit visuals (recordDamageVisual, recordUnitAttackFx,
+  playSound) are the worker's event recorders (sim_worker.js _simRecord*), not these functions.
+
+## 2026-11-13 - the spawner queue sized; the flow looks' wall snapshots copied on change
+
+- **The spawner queue** (barrack.js _processSpawnsByTables, 6.4-6.8 ms a step at dk 4 on chaos-1m-250k): 195
+  spawns a step (5,857 in 30), ~35 us each, no single waste. _spawnBegin 3.3 ms (simSpawnBatchAdd 2.8: the unit
+  object and its slot, its worker set-up 0.4, _simUnitObjInit 0.4; _spawnStats 1.0: 6.7 template misses a step
+  at ~150 us, each a research finishing for that owner and type, 53 keys live), _spawnEnd 2.0 ms (the batch's
+  finish with the footprint 0.4, the rally: its target, its path template, the path's store), the production
+  pass itself 0.7. It is a conversion (spawns as rows through the batch-birth kernels with lazy unit objects,
+  the rally as a queued order), not a removal: not started.
+- **The flow looks' wall snapshots** (unit.js _flowWallSnap, 0.6 ms a post): a megabyte a profile and the wall
+  blocks' counts copied at every post; now when a wall table was written since (_simWallsEpoch: counted at the
+  tile changes' kernel and the whole rebuild) or an array is another. Outcome-identical (hash 395310288 at dk 4,
+  no helpers); wall / flow / nav / restore / determinism tests 20 / 20. In this scene structures change every
+  step, so the snapshot (and _acqPost's structure tables) is still copied on most steps: the gain is in
+  calmer play. To cut it here the copies would have to follow the changed tiles (the tile changes' list).
+- Tried and reverted: the small heap copies through the copy kernel on this thread instead of TypedArray.set:
+  the same time (2.2 ms a step for ~3 MB): the copies are bound by memory (lines last written by other
+  threads), not by the call.
+- **The simulation thread now** (30 steps, quiet machine): serial 42.3 ms a step (JavaScript 29.7, wasm 12.6),
+  from 49.6 at the start of the day; parallel dispatches 87.6, background waits 13.4; step p50 141.7, p95 172.7
+  (tests/test-runs/move-occ-stage3b-20261112/main-thread-dk4-after.txt).
+
+## 2026-11-13 - the worker search's takes on the helpers; where the simulation thread's background spikes come from
+
+- **The takes in the parallel pass.** The search tier's commit (worker.js waiTake) ran the worker kernel over
+  every found request on the simulation thread (k_worker_ai mode 1, serial: ~3 ms a step at dk 4 on
+  chaos-1m-250k: heal_find, take_one, can_assign...). The parallel pass (k_wai_decide on the helpers, then
+  k_wai_apply with its rounds for contended sites) has supported takes since it was written; the dispatch was
+  narrowed to the events (mode 0) on 2026-11-04 when the return spawners' results were added, with no reason
+  logged. The take path writes only the worker's own columns directly (wsfail, its record) and the rest
+  through the overlay, so: `WAI_PARALLEL && mode !== 2`. _wsCommit's serial time 3.9 -> 1.6 ms a step.
+  Behaviour: contended takes settle by the apply's rule (lowest id keeps a site, the others try again, up to
+  16 rounds) instead of the search's order: worker-take-rounds matches 8 of 10 sites by its end in 4 rounds
+  (serial: 7); the test now asserts the rounds are used and match at least as many as the serial pass, not
+  equality with it. Tests: the 15 worker tests; multiplayer-chaos-determinism (six maps, 2610 tick hashes)
+  without helpers and with the host on 4 real helpers.
+- **The commit deferred a step** (the session before: a search posted in a step of three or four base ticks
+  was taken in the same step, so its commit waited for a chain posted moments before and this thread ran it;
+  now taken at the next step's start, the grid's sweep slices of the base ticks in flight held and run after
+  the commit): in place, with the takes above.
+- **Tooling.** tests/move-step-probe.cjs TRACE=1: the parallel layer's per-step trace (sim_parallel.js
+  _simParTrace) on a real clock (the harness's performance is virtual: every bgc / bgAge in it read 0), the
+  helpers' background time per lane and per kernel (new probe-bound par.bgus, counted in the helper loop only
+  while tracing: hbgms:<lane>, hbgk:<kernel>); TRACEKEYS=regex prints the matching keys per step. _wsPost adds
+  ws:total / ws:nfPairs to a trace. tests/test-runs/ws-commit-20261113/sumtrace.cjs sums the simulation
+  thread's own background chunks (bgc:) per step and lane.
+- **Why the simulation thread runs background work** (chaos-1m-250k, dk 4, 8 helpers; trace-*.txt there):
+  the helpers are saturated. Background lanes take ~550 ms of helper CPU a step (by kernel: flow looks' exact
+  pass 152 ~92, nav build 135 ~70, acquisition scan 33 ~65 + area answers 98 ~31 + counts 137 ~17, worker
+  search scan 39 ~42 + nearfield 99 ~29 + return spawners 136 ~19, visibility seed 28 ~41, combat brain 62
+  ~24), beside the foreground dispatches (~95 ms a step on 9 threads). Whatever lane is lowest in
+  SIM_PAR_BG_ORDER when its wait comes is left to this thread: 13.5-16 ms a step on average, in spikes:
+  - every 8 steps (32 ticks) 22-35 ms of the worker search's scan (lane T1) plus 10-15 ms of the traffic
+    solve: on the step before, the flow looks' lane takes ~200 ms of helper time (25-50 on other steps; three
+    steps in a row of bursts) and it is ahead of T1. Not the search's size (its posts are 9-32k requests with
+    no pattern) and not stale bindings (hskip4 0).
+  - every 4 steps 18-40 ms of the nav build chain (lane LONG, last in the order): its stage gap is 1-2 steps
+    at dk 4 (_navStageGap) and the lanes ahead use all of it.
+  Reordering lanes only moves the leftover (every lane here is due the next step); the fix is less helper
+  work: the collectors' groups and their nearfields remade at every post in a scene whose structures change
+  every step (incremental from the tile journal), the flow looks' bursts, the acquisition scan.
+- Measured (30 steps each, same machine; step p50 varies ~5% run to run): the simulation thread's serial owners
+  (main-serial-before/after.txt): _wsCommit 3.9 -> 1.6 ms; serial total 47.0 -> 47.2 (the spawner queue read
+  6.7 -> 7.5 and recordDamageVisual 1.9 -> 2.4 in this run: noise and the scene's own variation; the take is
+  the only change). Trace runs: step p50 151.3 -> 144.5, mean 154.2 -> 152.0, p95 191.2 -> 191.0, max 192.2 ->
+  215.6 (a nav-chain step, 40 ms on this thread); its background chunks 13.5 -> 16.3 ms a step (lane T1 2.3 ->
+  4.8: the takes' decide is now a foreground job on the helpers the scan shared). Net: not distinguishable from
+  noise in step time; the serial part is gone from this thread, the spikes are the next target.
+- The serial owners now (ms a step): the spawner queue 7.5 (a conversion: UNIT_BIRTH_WASM_PLAN.md),
+  _structHitsApply 2.4, waiOutEvents 2.2, _wsPost 1.9, unitHitsResolve's own 1.8, researchQueueSpend 1.3,
+  combatScanRun 1.3, navFieldsSweepStep 1.3.
+
+## 2026-11-13 (later) - the near fields kept up to date; the spawner queue as births in wasm
+
+- **The worker search's nearest-spawner fields incremental** (k.rs nearfield_incr, k_ws_nearfield mode 3, a job a
+  field, before the whole-field stages): a field holds its nearest spawner's tile (was steps << 16 | rank: every
+  value changed when the set did, so each post made both fields whole: ~29 ms of helper CPU a step at
+  chaos-1m-250k). Per field slot (wsg<g>.nfa) its owner, grid and the spawners it was made for; at a post the
+  spawners now against them: a gone one's cell (connected: every tile's way to its nearest stays in its cell)
+  cleared and given the nearest of the spawners on the cleared tiles' edge; a new one's cell flooded from its tile.
+  Made whole (modes 1 and 2, then ranks turned into tiles) only for a new slot owner or grid, changes past half of
+  the spawners, or past the thread's scratch. The scan finds the spawner by halving its tile in tile order (rk, pid).
+  ws-nearfield-split: the kept fields equal the one-job whole form tile by tile over eight rounds of spawners placed
+  and destroyed (one round made whole). Helper CPU of kernel 99: ~29 ms a step -> gone from the top of the list.
+- **The spawner queue as births** (UNIT_BIRTH_WASM_PLAN.md "Production spawns"): spr.rs k_spawn_births does every
+  spawn of the step (checks, exit, footprint before the slot, slot, handle, id, core, stats from the effective rows,
+  worker set-up, id index, the spawner's own changes, the rally); units have no objects until JavaScript asks; the
+  workers' rallies are a worker-pass event (wai.rs rally, code 6). The JavaScript path is gone (_spawnBegin /
+  _spawnEnd, the one-by-one spawn, the JS ready lists and scheduler, batch spawns, rally templates,
+  applyWorkerRallyFromSpawner, the per-owner spawn path budget). The sweep's dirty tiles are a typed list
+  (workSiteDirtyList). Fixed on the way: k_stat_fill never filled eff.rWch (a scout's watch was 0 after a kernel
+  stats change); the production pass skipped a class whose columns were outside the heap, silently (now moved there,
+  else thrown). Simulation thread (chaos-1m-250k, dk 4, 8 helpers): the spawner queue 7.5 -> 1.4 ms a step.
+- **A desync found and fixed** (multiplayer-chaos-determinism, arena, host vs every restored guest from tick 392): the
+  births' tables were made before simUnitWkReserve, which may make the worker records' columns anew; the births then
+  initialised records in the freed arrays, and a restored peer's (smaller pool) new healers carried a collector's
+  memory. The tables are made after every reserve now.
+- **The unit object's own fields** (sim_unit_state.js _simSlotDesc): defined not enumerable, said so; a field a
+  JavaScript path had set first stayed enumerable when redefined, and the snapshot encoder (which lists an object's
+  own fields) gave one peer's unit a field more than another's (multiplayer-patch, crossroads).
+- **Tests**: new spawn-births-columns (every spawner type's birth = the constructor, column by column) and
+  spawn-rally; worker-take-rounds, ws-nearfield-split, worker-completion-publication (the fields' tile labels),
+  unit-spawn-columns (its batch half went with the batch), research-menu (the page's gone records are a ring now:
+  pre-existing failure), chaos tools counting births; spawner-queue-performance deleted (it tested the removed JS
+  scheduler; the kernel's order: spawner-production-pass). Full functional run (tests/test-runs/full/
+  2026-11-13T09-26-17-911Z, fuzzers 15 / 10 min): 594 / 597, the three failures fixed during the run and passing
+  since in both modes; multiplayer-chaos-determinism on six maps with 4 host helpers and without.
+- **Measured** (30 steps, two runs; ~5% run-to-run spread): step p50 151.5 / 144.9 ms, mean 156.4 / 149.1 (start of
+  the day: ~151 / 154). Within the noise: the helpers are saturated (background lanes ~550 ms of helper CPU a step),
+  so time freed on the simulation thread goes to the background chunks it takes at its waits (~17 ms a step).
+- **Where the time is now** (fin2 run): foreground walls a step: 89 MOVE_OCCUPANCY 35.9, 8 MOVE 12.5, 32 ACQ_SNAP 4.5,
+  131 WAI_DECIDE 3.1, 151 FLOW_PENDING 3.0, 30 VIS_SNAP 2.9, 184 UNIT_GONE 2.8, 24 STATUS 2.7; background helper CPU
+  a step: 152 flow-look exact 108, 33 acquisition scan 63, 135 nav build 60, 39 worker-search scan 47, 28 visibility
+  seed 41, 98 acquisition answers 25, 62 combat brain 24, 136 return spawners 21. Next: less background work (the
+  flow looks' bursts, the acquisition kernels ~130 ms together), then the collectors' group rebuild at each post
+  (~1.8 ms of serial kernels: candidates, group, buckets).

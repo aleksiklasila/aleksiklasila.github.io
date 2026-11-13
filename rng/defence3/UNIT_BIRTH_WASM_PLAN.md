@@ -206,3 +206,40 @@ only k_slot_zero. Batch births prefer whole empty / never-used slabs
 Stage times at 223k births (ms): placement 30, k_birth_take 38, k_spawn_write
 44, k_spawn_spatial 23, shares 32 (serial, since made parallel), k_slot_zero
 16, k_uid_clean 11 (action preparation), look 7.
+
+## Production spawns through the births (done 2026-11-13)
+
+Before: barrack.js _processSpawnsByTables was ~8 ms a step on the simulation thread at chaos-1m-250k, dk 4
+(~195 spawns a step, ~40 us each): every piece a wasm call, the time the per-unit JavaScript around them.
+Now one direct kernel, spr.rs k_spawn_births (barrack.js _spawnBirths), serial in the production pass's order:
+
+- per picked spawner: its checks from the class tables (spr.cls), the exit (the map's walls, findNearestWalkable's
+  rings), the footprint's place (occ.rs occ_find, before any slot is taken: no place, no slot), the slot (nfs.rs
+  slab_alloc by the place's block), its handle (the free stack), its id, the core columns, its stats from the
+  effective rows (as k_unit_stats_apply: levels, stacks, rows, maxEnergy, energy, the movement columns), a worker's
+  set-up (a record at its columns' defaults, wbType, wkS, workerType's shared id and its digest term, carrying 0,
+  a collector's task memory null), the footprint, the id table row and hash; the spawner's timer, ready order, its
+  queue's shift (k_spawn_shift), its healers' work version, its tile on the sweep's dirty list (workSiteDirtyList);
+  the blocked get new ready orders.
+- the rally: the spawner's point (following a hostile unit while its owner sees it: the cover by area, else locked
+  where last seen); a barrack's unit gets its one navigation node (unit.nvPK: the point's open tile, wai.rs
+  approach) and attack-moves; a worker gets the point as its targetPos and a rally event (code 6) for one worker pass
+  after the births (wai.rs rally: a collector its gather site near the point, pinned; a builder the structure there,
+  building enabled; a healer the queue there, pinned and committed; a researcher the research there; a salvager the
+  marked structure there; else a manual move to the point). Behaviour changes: no A* rally templates (the node, as
+  every kernel path); a target another worker of the owner and type holds stays theirs (the JS evicted it).
+- the units have no objects until JavaScript asks (SimOwners.at); spatial entries and upkeep bins by their kernels
+  over the births' slots; the JavaScript keeps only counters (ids, handles, records, the id table, population,
+  occupancy).
+- tables (barrack.js _spawnBirthTables, made where what they hold changed): stationary type -> unit type, per unit
+  type its spawn words (spr.rs UT_*), stacks by level, the worker records' columns as a slot table, the rally
+  columns by class. Pitfalls found: tables of a column set must be made after the reserves that may replace the
+  columns (a grown worker pool left the births writing freed arrays: a restored peer's healers took collector
+  memory, a desync); a peer's own ids (shared pool ids, type indices) cached by column identity.
+- Removed: _spawnBegin/_spawnEnd, the one-by-one spawn, the JS ready lists and scheduler, the batch spawns
+  (simSpawnBatchAdd/Write/Finish), the rally templates, applyWorkerRallyFromSpawner. Fixed on the way: k_stat_fill
+  never filled eff.rWch (a scout's watch was 0 after any kernel stats change).
+- Tests: spawn-births-columns (every spawner type's birth = the constructor, column by column), spawn-rally,
+  spawner-production-pass, multiplayer-chaos-determinism (six maps, with 4 host helpers and without).
+- Measured (chaos-1m-250k, dk 4, 8 helpers, 30 steps): the spawner queue on the simulation thread 7.5 -> 1.4 ms a
+  step (the production pass's kernels ~0.9 of it).

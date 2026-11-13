@@ -228,18 +228,17 @@ const _simOccW = _simWK(['occ.bits','occ.mask','occ.rec','?-','?-','?-','?-',
     // 35: per job's range (as mv.post's), the units its second pass looks at;
     // 36: the phases' blocks with units, heaviest first: occupancyJobs;
     // 37: the first stage's per-slot marks, mv.rs mark_need.)
-    'occ.xswap', '?occ.work', '?occ.jobs', '?occ.rec']);
-// Per spatial block its index entries (occ.offsets, summed up after; occ.rs occ_block_counts), 64 blocks a chunk.
-const SIM_KERNEL_OCC_COUNTS = 97;
-SIM_KERNELS[SIM_KERNEL_OCC_COUNTS] = function(R,P,c){
-    const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('OCC_COUNTS');
-    for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
-    _simWasmX.occ_block_counts(_simWasmArgsW,c);
-};
+    'occ.xswap', '?occ.work', '?occ.jobs', '?occ.rec',
+    // (38..44: the mover table, mvt.rs Rows: the jobs walk their block's rows and keep the rows' positions.
+    // 45: the first stage's marks, a bit a slot, mv.rs mark_need.)
+    'mvt.cfg', 'mvt.hrow', 'mvt.dirty', 'mvt.bhead', 'mvt.snext', 'mvt.bcount', 'mvt.rows', '?occ.needb']);
 SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
     if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
     const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
     for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
+    // (The thread's scratch: the job's rows gathered and ordered there, mv.rs move_job. Set here: a helper whose
+    // first kernel is this one has no other call's words.)
+    _simWasmArgI[1000]=_simWEnc(_simWasmScratch);_simWasmArgI[1001]=_simWasmScratchWords;_simWasmArgI[1002]=_simThreadSlot;
     _simWasmX.mv_move_occupancy(_simWasmArgsW,c);
 };
 
@@ -1167,14 +1166,17 @@ function _simMoveWasm(R, P) {
     _simWasmArgI[458]=rte&&simHeapHas(rte)?_simWEnc(rte.byteOffset):0;
     // (Words 463..: the unit controller's columns, mv.rs W_CTLX; the scout's type index: one word.)
     for(let i=0;i<_SIM_MOVE_CTLX.length;i++){const a=R[_SIM_MOVE_CTLX[i]];_simWasmArgI[463+i]=_simUnitCtlOn&&a&&simHeapHas(a)?_simWEnc(a.byteOffset):0;}
-    // (Words 459-460: the occupancy's footprint records, whose byte 3 holds the marks for its second stage, and
-    // their positions, mv.rs mark_need; 0 without the occupancy.)
+    // (Words 459-461: the mover table's header; the occupancy's footprint records (their word 3: the first stage's results for the second) and
+    // that stage's marks, a bit a slot, mv.rs mark_need; 0 without the occupancy.)
     // (Words 485-497: the queued move orders' pickup, mv.rs ord_pickup.)
     for(let i=0;i<_SIM_MOVE_ORD.length;i++){const x=R[_SIM_MOVE_ORD[i]];_simWasmArgI[485+i]=x&&simHeapHas(x)?_simWEnc(x.byteOffset):0;}
     const occRec=R['occ.rec'];
     if(occRec&&simHeapHas(occRec)){
-        _simWasmArgI[459]=_simWEnc(occRec.byteOffset);_simWasmArgI[460]=_simWEnc(occRec.byteOffset);
-        _simWasmArgI[461]=0;_simWasmArgI[462]=0;
+        const needb=R['occ.needb'];
+        // (459: the mover table, mvt.rs scan_chunk: the first stage's chunks scan their slots' marks.)
+        {const mc=R['mvt.cfg'];_simWasmArgI[459]=mc&&simHeapHas(mc)?_simWEnc(mc.byteOffset):0;}
+        _simWasmArgI[460]=_simWEnc(occRec.byteOffset);
+        _simWasmArgI[461]=needb&&simHeapHas(needb)?_simWEnc(needb.byteOffset):0;_simWasmArgI[462]=0;
     }else _simWasmArgI.fill(0,459,463);
     return true;
 }
@@ -1228,6 +1230,7 @@ const SIM_PAR_TRACE_HBG = 182, SIM_PAR_TRACE_HBG4 = 183, SIM_PAR_TRACE_HSKIP4 = 
 // Helpers 0 .. this - 1 run background lanes only (never a tick's own jobs): the
 // lanes progress while the tick runs, the tick's jobs have the other helpers.
 const SIM_PAR_BG_ONLY = 185;
+// (par.bgus, bound by a probe: per lane (0..15) and per kernel (16 + id) the helpers' background chunk time (us) while tracing.)
 // (par.ctrace, bound by a probe: per chunk its start (ms since the time origin) and duration.)
 function _simParTraceChunk(ctl, t0, c) { const t1 = performance.now(), us = Math.round((t1 - t0) * 1000); const T = _simParReg['par.ctrace']; if (T !== undefined && c * 2 + 1 < T.length) { T[c * 2] = performance.timeOrigin + t0; T[c * 2 + 1] = t1 - t0; } for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
 // (The current tick's trace phases while tracing, sim_worker.js: tail waits per kernel.)
@@ -1568,7 +1571,8 @@ function simParallelHelperMain() {
                     // (A bulk lane: only while under its cap of helpers.)
                     const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
-                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && ctl[SIM_PAR_TRACE_ON]) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); } }
+                    const tq = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0, tk = tq ? Atomics.load(ctl, b + SIM_PAR_BG_KERNEL) & 0xFFFF : 0;
+                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && tq) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); const BU = _simParReg['par.bgus']; if (BU !== undefined) { const us = Math.round((performance.now() - tq) * 1000); Atomics.add(BU, lane, us); if (16 + tk < BU.length) Atomics.add(BU, 16 + tk, us); } } }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }
                 }
                 if (!ran) break;
@@ -1836,7 +1840,9 @@ const _simWsScanW = _simWK(['ws.rkind', 'ws.rowner', 'ws.rox', 'ws.roy', 'ws.rux
     '?wsg0.sready','?wsg1.sready','?wsg2.sready','?wsg3.sready','?wsg4.sready','?wsg5.sready','?wsg6.sready','?wsg7.sready',
     '?wsg0.pready','?wsg1.pready','?wsg2.pready','?wsg3.pready','?wsg4.pready','?wsg5.pready','?wsg6.pready','?wsg7.pready',
     '?wsg0.abc','?wsg1.abc','?wsg2.abc','?wsg3.abc','?wsg4.abc','?wsg5.abc','?wsg6.abc','?wsg7.abc',
-    '?wsg0.abi','?wsg1.abi','?wsg2.abi','?wsg3.abi','?wsg4.abi','?wsg5.abi','?wsg6.abi','?wsg7.abi']);
+    '?wsg0.abi','?wsg1.abi','?wsg2.abi','?wsg3.abi','?wsg4.abi','?wsg5.abi','?wsg6.abi','?wsg7.abi',
+    // (200 + g: the near fields' records, k.rs nearfield_incr: per field slot its owner, the spawners it was made for.)
+    '?wsg0.nfa','?wsg1.nfa','?wsg2.nfa','?wsg3.nfa','?wsg4.nfa','?wsg5.nfa','?wsg6.nfa','?wsg7.nfa']);
 const SIM_KERNEL_WS_ELIGIBLE = 108;
 SIM_KERNELS[SIM_KERNEL_WS_ELIGIBLE] = function(R,P,chunk){_simRust(_simWsScanW,P,chunk,'k_ws_eligible','WS_ELIGIBLE');};
 SIM_KERNELS[SIM_KERNEL_WS_SCAN] = function (R, P, chunk) { _simRust(_simWsScanW, P, chunk, 'k_ws_scan', 'WS_SCAN'); };
@@ -1889,13 +1895,13 @@ SIM_KERNELS[SIM_KERNEL_UNIT_RETIRE] = function (R, P, chunk) { _simRust(_simReti
 // Slots let go this tick back to a fresh slot's state (sim_unit_state.js
 // simUnitStateReleaseFreed; wasm/src/nfs.rs k_slot_zero).
 const SIM_KERNEL_SLOT_ZERO = 128;
-const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
+const _simSlotZeroW = _simWK(['slz.list', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?mvt.dirty']);
 SIM_KERNELS[SIM_KERNEL_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simSlotZeroW, P, chunk, 'k_slot_zero', 'SLOT_ZERO'); };
 // The online relayout (sim_unit_state.js simUnitStateRelayoutStep; wasm/src/
 // nfs.rs): units' columns moved to other slots, the references to the moved
 // slots following them, and the slabs' scores that choose what moves.
 const SIM_KERNEL_SLOT_MOVE = 141, SIM_KERNEL_SLOT_REMAP = 142, SIM_KERNEL_SLAB_SCORE = 143;
-const _simSlotMoveW = _simWK(['rl.pairs', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?occ.rec', 'unit.hslot', 'unit.hnd', 'rl.fwd', 'rl.fst', '?unit.pvS', '?rl.uid', 'unit.id', '?rl.uids', '?rl.rows', '?rl.mbits']);
+const _simSlotMoveW = _simWK(['rl.pairs', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?occ.rec', 'unit.hslot', 'unit.hnd', 'rl.fwd', 'rl.fst', '?unit.pvS', '?rl.uid', 'unit.id', '?rl.uids', '?rl.rows', '?rl.mbits', '?mvt.dirty']);
 SIM_KERNELS[SIM_KERNEL_SLOT_MOVE] = function (R, P, chunk) { _simRust(_simSlotMoveW, P, chunk, 'k_slot_move', 'SLOT_MOVE'); };
 const _simSlotRemapW = _simWK(['rl.fwd', 'unit.tuS', 'unit.cmT', 'unit.cmMode', 'unit.ppNext', 'unit.ppPrev', '?rl.rows', 'unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?rl.uid', '?ord.ring', '?rl.pph', 'rl.fst', '?rl.mbits', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_SLOT_REMAP] = function (R, P, chunk) { _simRust(_simSlotRemapW, P, chunk, 'k_slot_remap', 'SLOT_REMAP'); };
@@ -1923,7 +1929,7 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
@@ -1982,7 +1988,7 @@ for (let r = 0; r < 2; r++) {
 SIM_KERNELS[SIM_KERNEL_RZ_UPK_BS] = function (R, P, chunk) { _simRust(_simRzUpkW[2], P, chunk, 'k_upk_bins_par', 'RZ_UPK'); };
 // The retire pass's gone units (main.js _unitGoneRun; ord.rs k_unit_gone_par): chunks of P[36].
 const SIM_KERNEL_UNIT_GONE = 184;
-const _simUnitGoneW = _simWK(Array.from({ length: 52 }, (_, i) => '?ug.' + i));
+const _simUnitGoneW = _simWK([...Array.from({ length: 52 }, (_, i) => '?ug.' + i), '?mvt.dirty']);
 SIM_KERNELS[SIM_KERNEL_UNIT_GONE] = function (R, P, chunk) { _simRust(_simUnitGoneW, P, chunk, 'k_unit_gone_par', 'UNIT_GONE'); };
 // Released slots made fresh on SIM_LANE_FREE (sim_unit_state.js _simFreePost; nfs.rs k_slot_zero over the free table).
 // (Stage 1 (one job): the slots as bits and their 4096-slot blocks listed; stage 2: a job a block, runs filled per column: nfs.rs k_free_mark / k_free_zero.)
@@ -2012,7 +2018,7 @@ SIM_KERNELS[SIM_KERNEL_RZ_SHARES] = function (R, P, chunk) { _simRust(_simRzShar
 // names, never rebound between the tick's spawn batch and a resize (a new
 // binding leaves the next job to the simulation thread alone).)
 const SIM_KERNEL_RZ_SLOT_ZERO = 166, SIM_KERNEL_RZ_SPAWN_WRITE = 167, SIM_KERNEL_BIRTH_FILL = 168;
-const _simRzSlotZeroW = _simWK(['rz.reuse', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs']);
+const _simRzSlotZeroW = _simWK(['rz.reuse', 'slz.tab', 'unit.sepKey', 'unit.sepLayer', 'slz.defs', '?mvt.dirty']);
 const _simRzSpawnWriteW = _simWK(['rz.rows', 'slz.tab', 'spw.kind', 'spw.prog']);
 const _simBirthFillW = _simWK(['rz.bs', 'rz.bh', 'rz.bt', 'rz.bn', 'rz.pos', 'rz.tg', 'rz.rows', 'rz.gp', 'unit.hslot', 'occ.rec', 'rz.spw', 'rz.uids', 'rz.uslots', 'rz.idt', 'rz.newl', 'slz.tab', 'rz.cp', 'unit.upT', 'unit.r', 'unit.collisionR']);
 SIM_KERNELS[SIM_KERNEL_RZ_SLOT_ZERO] = function (R, P, chunk) { _simRust(_simRzSlotZeroW, P, chunk, 'k_slot_zero', 'RZ_SLOT_ZERO'); };
@@ -2025,7 +2031,7 @@ SIM_KERNELS[SIM_KERNEL_RZ_BSCATTER] = function (R, P, chunk) { _simRust(_simRzBs
 SIM_KERNELS[SIM_KERNEL_RZ_PLACE] = function (R, P, chunk) { _simRust(_simRzPlaceW, P, chunk, 'k_rz_place', 'RZ_PLACE'); };
 SIM_KERNELS[SIM_KERNEL_RZ_RADIX_HIST] = function (R, P, chunk) { _simRust(_simRzRadixW, P, chunk, 'k_radix_hist', 'RZ_RADIX_HIST'); };
 SIM_KERNELS[SIM_KERNEL_RZ_RADIX_SCATTER] = function (R, P, chunk) { _simRust(_simRzRadixW, P, chunk, 'k_radix_scatter', 'RZ_RADIX_SCATTER'); };
-// A step's new units' columns (unit.js simSpawnBatchWrite; wasm/src/nfs.rs k_spawn_write).
+// New units' columns from rows (unit.js _spbRowsRun, q / e; wasm/src/nfs.rs k_spawn_write).
 const SIM_KERNEL_SPAWN_WRITE = 130;
 const _simSpawnWriteW = _simWK(['spw.rows', 'slz.tab', 'spw.kind', 'spw.prog']);
 SIM_KERNELS[SIM_KERNEL_SPAWN_WRITE] = function (R, P, chunk) { _simRust(_simSpawnWriteW, P, chunk, 'k_spawn_write', 'SPAWN_WRITE'); };
