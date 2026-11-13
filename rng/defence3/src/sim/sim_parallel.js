@@ -177,7 +177,10 @@ let _simParRegVer = 0;
 // Every binding made in this thread (the simulation thread's or a helper's):
 // caches of registry lookups go by it (_simNavArrays).
 let _simParBinds = 0;
-const _simParams = simSharedArray(Float64Array, 64);
+// (let: while a job's local task runs, this thread's _simParams is a scratch array: the helpers read the job's
+// parameters from the shared one (m.params), which a task writing its own would change under them. simParallelRun.)
+let _simParams = simSharedArray(Float64Array, 64);
+const _simParamsShared = _simParams, _simParamsLocal = new Float64Array(64);
 // The background jobs' parameters, per lane and stage (their own:
 // foreground jobs rewrite _simParams): _simBgStageParams[lane][stage], views
 // of one shared buffer per lane. _simBgParamsByLane[lane] is stage 0's;
@@ -620,7 +623,9 @@ function simParallelZeroHeap(buf, off, bytes) {
 // 40+ MB at 50k slots) or of the navigation's field pools (~100 MB of
 // rows) was 6-40 ms on this thread alone. Call it before binding the new
 // arrays: helpers behind on bindings sit a job out.
-const SIM_KERNEL_COPY = 73, SIM_COPY_PAR_MIN = 1 << 22, SIM_COPY_PER = 1 << 20;
+// (512 KB / 256 KB: the flow looks' wall snapshots, ~1 MB a navigation profile, ~3 MB a post, were under the old 4 MB and
+// copied on the simulation thread, ~1.6 ms a step at chaos-1m-250k, 2026-11-13.)
+const SIM_KERNEL_COPY = 73, SIM_COPY_PAR_MIN = 1 << 19, SIM_COPY_PER = 1 << 18;
 const _simCopyW = _simWK(['heap.copytab']);
 SIM_KERNELS[SIM_KERNEL_COPY] = function (R, P, chunk) { _simRust(_simCopyW, P, chunk, 'k_copy', 'COPY'); };
 // The same over a table of its own (heap.copytab.bg), for a background
@@ -1182,10 +1187,13 @@ function _simMoveWasm(R, P) {
 }
 
 // Runs a kernel over chunks 0..total-1 (with the helpers when there are).
-function simParallelRun(kernel, total) {
+// (local: a function this thread runs after posting the job, before it takes chunks: simParallelStage.)
+// (Inside a job's local task the job's control block is in use: a job posted there runs on this thread alone.)
+let _simInLocal = 0;
+function simParallelRun(kernel, total, local = null) {
     let fn = SIM_KERNELS[kernel];
     let pool = _simPool;
-    if (!pool || total <= 1) { _simParRunning++; try { for (let c = 0; c < total; c++) fn(_simParReg, _simParams, c); } finally { _simParRunning--; } return; }
+    if (!pool || total <= 1 || _simInLocal > 0) { if (local) local(); _simParRunning++; try { for (let c = 0; c < total; c++) fn(_simParReg, _simParams, c); } finally { _simParRunning--; } return; }
     let ctl = pool.ctl;
     // Closed (odd) while this job is written; the last one's helpers leave.
     Atomics.add(ctl, SIM_PAR_GEN, 1);
@@ -1200,6 +1208,7 @@ function simParallelRun(kernel, total) {
     // error waits until every helper has left the job: thrown at once, the
     // caller went on while helpers still wrote its outputs.)
     let failed = null;
+    if (local) { _simInLocal++; _simParams = _simParamsLocal; try { local(); } catch (err) { failed = err; } finally { _simInLocal--; if (!_simInLocal) _simParams = _simParamsShared; } }
     _simParRunning++;
     try {
         for (;;) {
@@ -1223,6 +1232,79 @@ function simParallelRun(kernel, total) {
     if (tr) { const d = performance.now() - tw; if (d >= .2) tr['tail:' + kernel] = (tr['tail:' + kernel] || 0) + d; tr['n:' + kernel] = total; const mx = ctl[SIM_PAR_TRACE_MAX] / 1000; if (mx > (tr['chunkMax:' + kernel] || 0)) tr['chunkMax:' + kernel] = mx; }
     if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
+}
+
+// ---- stages: one parallel job of several entries ----
+// The foreground as a few parallel stages (user, 2026-11-13): a stage is one
+// job whose chunks are several entries' chunks, in the given order (the
+// longest single pieces first, then the big kernels' many small chunks, so
+// threads that finish a long piece fill in with small ones and the stage ends
+// balanced). An entry is a kernel of SIM_KERNELS with its own parameters, or
+// a block kernel (wasm/src/k.rs k_block) with its own argument area: a
+// kernel that ran on the simulation thread alone becomes one chunk of a
+// stage beside the others. Entries of a stage must not read what another
+// writes (they run at once on any threads): each caller states that where it
+// adds one. local: run by the simulation thread right after posting, before
+// it takes chunks (JavaScript that must stay here, independent of the
+// entries). Without helpers: local, then every entry's chunks in order.
+const SIM_KERNEL_STAGE = 192, SIM_STAGE_MAX = 16, SIM_STAGE_PW = 64, SIM_STAGE_BLKW = 2048;
+// (stage.T: [0] entries, [1 + i] kernel id (-1 a block entry), [17 + i] its first chunk, [33 + i] its block selector,
+// [49] chunks in all. stage.P: SIM_STAGE_PW doubles an entry. stage.blk: SIM_STAGE_BLKW words an entry: arrays from
+// word 512, parameters (doubles) from word 1024: k_block's argument layout.)
+let _simStageT = null, _simStageP = null, _simStageB = null;
+const _simStageViews = { buf: null, P: [] };
+function _simStageArrays() {
+    if (_simStageT && simHeapHas(_simStageT) && simHeapHas(_simStageP) && simHeapHas(_simStageB)) return;
+    _simStageT = simSharedArray(Int32Array, 64); _simStageP = simSharedArray(Float64Array, SIM_STAGE_MAX * SIM_STAGE_PW);
+    _simStageB = simSharedArray(Int32Array, SIM_STAGE_MAX * SIM_STAGE_BLKW);
+    simParallelBind('stage.T', _simStageT); simParallelBind('stage.P', _simStageP); simParallelBind('stage.blk', _simStageB);
+}
+SIM_KERNELS[SIM_KERNEL_STAGE] = function (R, P, chunk) {
+    const T = R['stage.T'], n = T[0];
+    let i = n - 1;
+    while (i > 0 && T[17 + i] > chunk) i--;
+    const c = chunk - T[17 + i], kid = T[1 + i];
+    if (kid >= 0) {
+        const PP = R['stage.P'], V = _simStageViews;
+        if (V.buf !== PP) { V.buf = PP; V.P = []; for (let j = 0; j < SIM_STAGE_MAX; j++) V.P.push(PP.subarray(j * SIM_STAGE_PW, (j + 1) * SIM_STAGE_PW)); }
+        SIM_KERNELS[kid](R, V.P[i], c);
+        return;
+    }
+    const B = R['stage.blk'], I = _simWasmArgI;
+    if (I === null || _simWasmX === null) throw new Error('SIM_KERNEL_STAGE: no wasm kernels on this thread');
+    I[SIM_RUST_W0] = _simWEnc(B.byteOffset + i * SIM_STAGE_BLKW * 4);
+    I[1000] = _simWEnc(_simWasmScratch); I[1001] = _simWasmScratchWords; I[1002] = _simThreadSlot;
+    _simWasmArgF[0] = T[33 + i];
+    _simWasmX.k_block(_simWasmArgsW, c);
+};
+// entries: { k: kernel id, n: chunks, P: its parameters (up to SIM_STAGE_PW) } or { blk: block selector, n: chunks,
+// A: its arrays, P: its parameters }.
+function simParallelStage(entries, local = null) {
+    const list = entries.filter(e => e && e.n > 0);
+    if (list.length > SIM_STAGE_MAX) throw new Error('simParallelStage: more than ' + SIM_STAGE_MAX + ' entries');
+    if (!list.length) { if (local) local(); return; }
+    _simStageArrays();
+    const T = _simStageT, PP = _simStageP, B = _simStageB;
+    let total = 0;
+    T[0] = list.length;
+    for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        T[17 + i] = total; total += e.n;
+        if (e.blk !== undefined) {
+            T[1 + i] = -1; T[33 + i] = e.blk;
+            const w0 = i * SIM_STAGE_BLKW;
+            B.fill(0, w0 + 512, w0 + 1024);
+            for (let j = 0; j < e.A.length; j++) { const a = e.A[j], p = a ? _simHeapPtrOf(a) : 0; if (a && !(p >= 0)) throw new Error('simParallelStage: entry ' + i + ' argument ' + j + ' not in the wasm heap'); B[w0 + 512 + j] = a ? _simWEnc(p) : 0; }
+            const F = new Float64Array(B.buffer, B.byteOffset + (w0 + 1024) * 4, 512);
+            F.fill(0); F.set(e.P.length > 512 ? e.P.subarray(0, 512) : e.P);
+        } else {
+            T[1 + i] = e.k; T[33 + i] = 0;
+            const p = PP.subarray(i * SIM_STAGE_PW, (i + 1) * SIM_STAGE_PW);
+            p.fill(0); p.set(e.P.length > SIM_STAGE_PW ? e.P.subarray(0, SIM_STAGE_PW) : e.P);
+        }
+    }
+    T[49] = total;
+    simParallelRun(SIM_KERNEL_STAGE, total, local);
 }
 const SIM_PAR_TRACE_ON = 180, SIM_PAR_TRACE_MAX = 181;
 // (Tracing: background chunks helpers ran (any lane, lane 4), and lane-4 claims a helper skipped with its registry behind.)
@@ -1365,7 +1447,10 @@ function _simBgClaim(ctl, lane, CT, paramsByStage, registryVersion = _simParRegV
         }
     } finally {
         Atomics.sub(ctl, b + SIM_PAR_BG_READERS, 1);
-        Atomics.notify(ctl, b + SIM_PAR_BG_READERS);
+        // (Only a closing lane (id -1, _simBgClose) waits for its readers: a notify every claim took V8's
+        // process-wide futex lock from every helper at once, ~30 ms of helper CPU a step at 1M units. Either the
+        // closer's load sees this decrement, or this load sees its id -1 and wakes it; its wait times out anyway.)
+        if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0) Atomics.notify(ctl, b + SIM_PAR_BG_READERS);
     }
     return out;
 }
@@ -1543,11 +1628,13 @@ function simParallelHelperMain() {
                     try { fn(_simParReg, _simParHelperParams, c); }
                     catch (err) { _simHelperLogFail('kernel ' + ctl[SIM_PAR_KERNEL], err); Atomics.store(ctl, SIM_PAR_ERR, 1); }
                     if (t0) _simParTraceChunk(ctl, t0, c);
-                    Atomics.add(ctl, SIM_PAR_DONE, 1);
-                    Atomics.notify(ctl, SIM_PAR_DONE);
+                    // (The simulation thread waits for the count to reach the total (simParallelRun): only the last
+                    // chunk wakes it; a notify a chunk took the futex lock thousands of times a step.)
+                    if (Atomics.add(ctl, SIM_PAR_DONE, 1) + 1 >= total) Atomics.notify(ctl, SIM_PAR_DONE);
                 }
             }
-            if (fg) { Atomics.sub(ctl, SIM_PAR_ACTIVE, 1); Atomics.notify(ctl, SIM_PAR_ACTIVE); }
+            // (The simulation thread waits for no helper inside the last job (0): the last one out wakes it.)
+            if (fg && Atomics.sub(ctl, SIM_PAR_ACTIVE, 1) === 1) Atomics.notify(ctl, SIM_PAR_ACTIVE);
             // Missing arrays of the latest jobs: take the messages bringing them.
             let behind = regVer < ctl[SIM_PAR_REGVER];
             for (let lane = 0; lane < SIM_PAR_BG_LANES && !behind; lane++) behind = regVer < ctl[SIM_PAR_BG_BASE + lane * 8 + SIM_PAR_BG_REGVER];
@@ -1700,10 +1787,10 @@ SIM_KERNELS[SIM_KERNEL_TOWER_ACQ_SNAP]=function(R,P,chunk){_simRust(_simTowerAcq
 SIM_KERNELS[SIM_KERNEL_TOWER_ACQ]=function(R,P,chunk){_simRust(_simTowerAcqW,P,chunk,'k_tower_acq','TOWER_ACQ');};
 const SIM_KERNEL_TOWER_PREPARE=110;
 const SIM_KERNEL_WORKER_SITES=112,SIM_KERNEL_WORKER_SPAWNERS=113;
-const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any']);
+const _simWorkerSitesW=_simWK(['st.code','st.own','st.uc','st.val','st.brain','wb.sites','wb.count','wb.any','wb.dist']);
 // (wb.list: the slots asked for, slot * 8 + code: the tick's events, or the search tier's takes.)
 const _simWorkerSpawnersW=_simWK(['wb.list','unit.isWk','unit.wkIx','unit.wbType','unit.wbTick','unit.wbSpawner','unit.x','unit.y','unit.owner',
-    'wb.sites','wb.count','wb.any','st.brain','st.own','unit.workerTransferCooldown','unit.wsKind']);
+    'wb.sites','wb.count','wb.any','st.brain','st.own','unit.workerTransferCooldown','unit.wsKind','wb.dist']);
 SIM_KERNELS[SIM_KERNEL_WORKER_SITES]=function(R,P,chunk){_simRust(_simWorkerSitesW,P,chunk,'k_worker_sites','WORKER_SITES');};
 SIM_KERNELS[SIM_KERNEL_WORKER_SPAWNERS]=function(R,P,chunk){_simRust(_simWorkerSpawnersW,P,chunk,'k_worker_spawners','WORKER_SPAWNERS');};
 // Projectiles (projectile.js projectilesAdvance; wasm/src/proj.rs): the
@@ -1791,7 +1878,7 @@ SIM_KERNELS[SIM_KERNEL_ADJ_POST] = function (R, P, chunk) { _simRust(_simAdjPost
 const _simWsSelectW = _simWK(['unit.wsKind', 'unit.wsCfg', 'unit.wsT', 'unit.wsOU', 'unit.wsOx', 'unit.wsOy', 'unit.wsR', 'unit.wsAx', 'unit.wsAy', 'unit.wsAk',
     'unit.wsNeed', 'unit.wsJid', 'unit.wsCur', 'unit.wsMy', 'unit.x', 'unit.y', 'unit.owner', 'unit.id', 'unit.dead',
     '?ws.rslot', '?ws.rid', '?ws.rwt', '?ws.rkind', '?ws.rowner', '?ws.rox', '?ws.roy', '?ws.rux', '?ws.ruy', '?ws.rr', '?ws.rak', '?ws.rax', '?ws.ray', '?ws.rgrp',
-    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail', 'unit.wkIx']);
+    '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail', 'unit.wkIx', '?ws.rsel']);
 SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSelectW, P, chunk, 'k_ws_select', 'WS_SELECT'); };
 // SIM_KERNEL_WS_GROUP (worker.js _wsGroupBuild): a collectors' group's sites
 // and spawners from the candidate structures, P[10] candidates a job: mode 2
@@ -1929,11 +2016,12 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_NAV_SWEEP = 7, SIM_BLOCK_IXD_RELAYOUT = 8;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
 function simRustParallel(sel, arrays, P, jobs) {
+    // (In a job's local task: the block's own kernel here, on this thread (k_block over the same arguments).)
     if (!_simBlk || !simHeapHas(_simBlk)) { _simBlk = simSharedArray(Int32Array, 2048); simParallelBind('blk.args', _simBlk); }
     if (!_simBlkF || _simBlkF.buffer !== _simBlk.buffer) _simBlkF = new Float64Array(_simBlk.buffer, _simBlk.byteOffset + 4096, 512);
     const B = _simBlk;
@@ -2142,7 +2230,9 @@ const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'u
     'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.rng', 'acq.id', 'acq.out', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'unit.isWk', '?-' , 'unit.mvRangeK',
     'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'unit.statRow', 'eff.hot', 'unit.holdF', 'unit.tuS', 'unit.tuId', 'unit.tbT',
     // (The towers' look at a unit, 35-47: k.rs k_acq_snap's copies.)
-    '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt', '?sl.sfree']);
+    '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt', '?sl.sfree',
+    // (The last run's commit in the same pass, 49-54: k.rs acq_commit_range.)
+    'unit.cbS', 'unit.cbTick', 'unit.cbRangeS', 'acq.bm', 'acq.bt', 'acq.btid']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of

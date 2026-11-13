@@ -221,6 +221,11 @@ function simStepCrosses(phase, period) {
 // The phases (base tick % period) of the base ticks the step covers, in
 // their order, one period's at most (each once): a sweep of a slice a base
 // tick visits all of them (at one base tick a step: [gameTime % period]).
+// Damage flashes (renderer.js recordDamageVisual: a target tinted when hit) off
+// for now (user, 2026-11-13: to be rethought; as slot columns the presentation
+// reads, not per-hit JavaScript): no flash is recorded, sent or drawn, and the
+// simulation makes no unit object for one.
+let SIM_DAMAGE_FLASH = false;
 function simStepPhases(period) {
     const n = Math.max(1, Math.min(simDk, period)), out = new Array(n);
     for (let i = 0; i < n; i++) { const b = gameTime - n + 1 + i; out[i] = ((b % period) + period) % period; }

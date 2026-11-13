@@ -160,12 +160,14 @@ function _simEvTake(transfer) {
     const f = E.buf.slice(0, E.n);
     transfer.push(f.buffer);
     out.f = f; out.s = E.strs; out.x = E.extra;
+    // (The hits' looks: one buffer of records, unit.js simHitLooksTake.)
+    out.l = typeof simHitLooksTake === 'function' ? simHitLooksTake(transfer) : null;
     E.n = 0;
     return out;
 }
 function _simEvPosted() {
     const E = _simEvents, out = _simEvOut;
-    out.f = null; out.s = null; out.x = null;
+    out.f = null; out.s = null; out.x = null; out.l = null;
     E.n = 0; E.strs.length = 0; E.strIx.clear(); E.extra.length = 0;
 }
 // Set when the simulation's win check found this player defeated (and
@@ -197,8 +199,10 @@ function _simStubUi() {
     self.reviewLocalDefeat = (alive = null) => { if (!gameStarted || gameOver) return; if (alive === null) alive = isTeamAliveNow(localPlayerId); _simLocalDefeat = alive ? '' : (_simLocalDefeat || 'defeated'); };
     self.noteTeamsDefeated = list => { _simDefeatedTeams = Array.isArray(list) ? list.slice() : []; };
     self.hostBroadcastMatchResult = () => { };
+    // (The hits' looks go to the page as records with the step's result: unit.js SIM_LOOKS_DEFER.)
+    try { self.eval('SIM_LOOKS_DEFER = true'); } catch { }
     self._simRecordSound = (type, x, y, sub) => { _simEv('s', 4, type, x, y, sub === undefined ? '' : sub); };
-    self._simRecordDamage = (target, amount, owner) => { if (_simIsRef(target)) _simEv('d', 3, target, amount, owner === undefined ? null : owner); };
+    self._simRecordDamage = (target, amount, owner) => { if (SIM_DAMAGE_FLASH && _simIsRef(target)) _simEv('d', 3, target, amount, owner === undefined ? null : owner); };
     self._simRecordAlert = (target, dmg, owner) => { if (_simIsRef(target)) _simEv('h', 3, target, dmg, owner); };
     self._simRecordExplosion = (x, y, c, n) => { _simEv('x', 4, x, y, c, n); };
     self._simRecordDirected = (fx, fy, tx, ty, c, n) => { _simEv('p', 6, fx, fy, tx, ty, c, n); };

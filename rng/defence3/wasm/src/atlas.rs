@@ -837,10 +837,17 @@ pub unsafe fn atlas_step_h(a: &Atl, pl: *const u16, pb: *const i32, nt: *const i
     if t == dest || t < 0 || dest < 0 {
         return -1;
     }
+    atlas_step_xy(a, pl, pb, nt, np, fields, w, t, irem(t, w), idiv(t, w), dest, irem(dest, w), idiv(dest, w), hint)
+}
+/// atlas_step_h with the tiles' coordinates given (t at (x, y), dest at (dx, dy), both
+/// tiles of the map): a run of steps (mv.rs flow_look_vals) tracks them, no divisions a step.
+#[inline(always)]
+pub unsafe fn atlas_step_xy(a: &Atl, pl: *const u16, pb: *const i32, nt: *const i32, np: *const i32, fields: *const u16, w: i32, t: i32, x: i32, y: i32, dest: i32, dx: i32, dy: i32, hint: *mut [i32; 3]) -> i32 {
+    if t == dest || t < 0 || dest < 0 {
+        return -1;
+    }
     let cc = a.c;
     let cs = 31 - (cc as u32).leading_zeros() as i32;
-    let (x, y) = (irem(t, w), idiv(t, w));
-    let (dx, dy) = (irem(dest, w), idiv(dest, w));
     let ls = g(pl, t as usize);
     let ld = g(pl, dest as usize);
     if ls == 0xFFFF || ld == 0xFFFF {

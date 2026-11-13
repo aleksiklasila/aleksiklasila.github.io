@@ -519,17 +519,20 @@ pub unsafe extern "C" fn k_spawn_spatial(a: u32, _chunk: i32) {
 /// every source read first (scratch [5], 3 a pair), cleared, then written
 /// at its target (swaps and cycles alike).
 #[no_mangle]
-pub unsafe extern "C" fn k_ixd_relayout(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_ixd_relayout(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (fwd, es, dk, did, down, scr, pairs, fst) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i8>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7));
     let stamp = k.i(4);
     let (listed, nf, np, ds) = (k.i(0).max(0) as usize, k.i(1).max(0), k.i(2).max(0) as usize, k.i(3).max(0));
     if fwd.is_null() || es.is_null() || fst.is_null() { return; }
-    for p in 0..listed {
+    // (P[5] > 1: this chunk's share of the entries alone (block 8, on the helpers); the pairs then in a call of their own.)
+    let jobs = k.i(5).max(1) as usize;
+    let (p0, p1) = if jobs > 1 { (listed * chunk.max(0) as usize / jobs, listed * (chunk.max(0) as usize + 1) / jobs) } else { (0, listed) };
+    for p in p0..p1 {
         let s = g(es, p);
         if s >= 0 && s < nf && g(fst, s as usize) == stamp { let t = g(fwd, s as usize); if t >= 0 { s_(es, p, t); } }
     }
-    if dk.is_null() || did.is_null() || down.is_null() || scr.is_null() || pairs.is_null() || ds == 0 { return; }
+    if jobs > 1 || dk.is_null() || did.is_null() || down.is_null() || scr.is_null() || pairs.is_null() || ds == 0 { return; }
     let ok = |x: i32| x >= 0 && x < ds;
     for i in 0..np {
         let f = g(pairs, 2 * i);

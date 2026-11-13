@@ -45,11 +45,14 @@ pub unsafe extern "C" fn k_ws_buckets(a: u32, _chunk: i32) {
         let bx = clampi(g(sx, i) as f64 / tile / wsb, bcols - 1);
         (by * bcols + bx) as usize
     };
+    // (Each site's bucket once, [25] its scratch: two f64 divisions a coordinate.)
+    let bki = k.p::<i32>(25);
     for b in 0..nb {
         s(bc, b, 0);
     }
     for i in 0..cap {
         let b = bk(i);
+        s(bki, i, b as i32);
         s(bc, b, g(bc, b) + 1);
     }
     let mut fill = 0;
@@ -59,7 +62,7 @@ pub unsafe extern "C" fn k_ws_buckets(a: u32, _chunk: i32) {
         s(bc, b, 0);
     }
     for i in 0..cap {
-        let b = bk(i);
+        let b = g(bki, i) as usize;
         let c = g(bc, b);
         s(bi, (g(bs, b) + c) as usize, i as i32);
         s(bc, b, c + 1);

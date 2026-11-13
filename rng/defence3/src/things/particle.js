@@ -96,7 +96,10 @@ function clearCombatFx() {
 // units of one purpose share a look and others are told apart at a glance.
 // (unitTarget: the target is a unit, followed as drawn with the attacker.)
 function recordUnitAttackFx(unit, target, unitTarget = false, ax = unit.x, ay = unit.y, tx = target.x, ty = target.y) {
-    let style = unit.attackStyle, type = unit.unitType;
+    recordUnitAttackFxBy(unit.attackStyle, unit.unitType, unit.id, unitTarget ? target.id : 0, ax, ay, tx, ty);
+}
+// The same by the attacker's style and type and the two ids (dst 0: not a unit target): the hit looks' records (unit.js simHitLooksReplay).
+function recordUnitAttackFxBy(style, type, src, dst, ax, ay, tx, ty) {
     let kind = COMBAT_FX.SLASH, variant = 'default';
     if (style === 'fire' || style === 'water' || style === 'ice' || style === 'poison') { kind = COMBAT_FX.CAST; variant = style; }
     else if (style === 'laser') { kind = COMBAT_FX.BEAM; variant = 'laser'; }
@@ -106,5 +109,5 @@ function recordUnitAttackFx(unit, target, unitTarget = false, ax = unit.x, ay = 
     else if (type === 'fast') kind = COMBAT_FX.DUAL;
     else if (type === 'tank' || type === 'boss') { kind = COMBAT_FX.SMASH; variant = type; }
     else if (type === 'king') { kind = COMBAT_FX.CLEAVE; variant = 'king'; }
-    recordCombatFx(kind, ax, ay, tx, ty, variant, unit.id, unitTarget ? target.id : 0);
+    recordCombatFx(kind, ax, ay, tx, ty, variant, src, dst);
 }

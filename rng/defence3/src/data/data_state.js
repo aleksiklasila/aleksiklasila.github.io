@@ -1198,18 +1198,46 @@ function _sRowRuns(R, n) {
     for (let i = 0; i < n;) { const s0 = a[i]; let e = s0 + 1; i++; while (i < n && a[i] <= e) { if (a[i] === e) e++; i++; } _sRunS[m] = s0; _sRunE[m] = e; m++; }
     return m;
 }
+// The heap columns (numbers, the shared columns' pool indices, the tokens) by
+// one kernel (wasm/src/uix.rs k_rows_fill: the runs filled with each column's
+// empty value, vector stores); here only the JavaScript references (the
+// presentation's caches, the token entries, the row's structure) and the
+// derived maps.
+const _sFillP = new Float64Array(4), _sFillBits = new DataView(new ArrayBuffer(8));
+let _sFillCols = null, _sFillRS = null, _sFillRE = null;
+function _sFillDesc(D, i, a, per, v) {
+    const w = a.BYTES_PER_ELEMENT, B = _sFillBits;
+    if (w === 8) B.setFloat64(0, v, true); else if (a instanceof Float32Array) B.setFloat32(0, v, true); else B.setInt32(0, w === 4 ? v : w === 2 ? v & 0xFFFF : v & 0xFF, true);
+    if (w < 8) B.setInt32(4, 0, true);
+    D[5 * i] = _simWEnc(_simHeapPtrOf(a)); D[5 * i + 1] = w; D[5 * i + 2] = per; D[5 * i + 3] = B.getInt32(0, true); D[5 * i + 4] = B.getInt32(4, true);
+}
 function _sRowsFree(T, R, n) {
     if (!(n > 0)) return;
     for (const name of T.derived) { const m = T.unique[name]; if (m.size) for (let i = 0; i < n; i++) m.delete(R[i]); }
     const runs = _sRowRuns(R, n), RS = _sRunS, RE = _sRunE;
+    if (!_sColsInHeap(T)) _sTableGrow(T, T.cap);
+    // (The kernel's lists: every heap column once, the runs.)
+    const nc = T.fields.length + 1;
+    if (!_sFillCols || _sFillCols.length < 5 * nc || !simHeapHas(_sFillCols)) { if (_sFillCols) simHeapFreeAuto(_sFillCols); _sFillCols = simSharedArray(Int32Array, 5 * Math.max(nc, 96)); }
+    if (!_sFillRS || _sFillRS.length < runs || !simHeapHas(_sFillRS)) { if (_sFillRS) { simHeapFreeAuto(_sFillRS); simHeapFreeAuto(_sFillRE); } const c = Math.max(1024, runs * 2); _sFillRS = simSharedArray(Int32Array, c); _sFillRE = simSharedArray(Int32Array, c); }
+    const D = _sFillCols;
+    let k = 0;
     for (const f of T.fields) {
         const a = T[f.col];
-        if (f.shared) { for (let i = 0; i < n; i++) a.set(R[i], undefined); continue; }
-        const nk = f.kind === 'r' ? null : _S_NUM_KINDS[f.kind], v = f.kind === 'r' ? undefined : nk ? nk[1] : 0;
-        for (let j = 0; j < runs; j++) a.fill(v, RS[j], RE[j]);
+        if (f.shared) { _sFillDesc(D, k++, a.data, 1, 0); continue; }
+        if (f.kind === 'r') { for (let j = 0; j < runs; j++) for (let r = RS[j], e = RE[j]; r < e; r++) a[r] = undefined; continue; }
+        const nk = _S_NUM_KINDS[f.kind];
+        _sFillDesc(D, k++, a, 1, nk ? nk[1] : 0);
     }
-    const tok = T.mTok, ent = T.mEnt, obj = T.rowObj;
-    for (let j = 0; j < runs; j++) { const s0 = RS[j], e = RE[j]; tok.fill(0, s0 * 3, e * 3); ent.fill(undefined, s0 * 3, e * 3); obj.fill(null, s0, e); }
+    _sFillDesc(D, k++, T.mTok, 3, 0);
+    _sFillRS.set(RS.subarray(0, runs)); _sFillRE.set(RE.subarray(0, runs));
+    // (A large wave: a job a column on the helpers; a few rows: one call here.)
+    const P = _sFillP, par = n >= 256 && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && !!_simPool;
+    P[0] = k; P[1] = runs; P[2] = par ? 1 : 0;
+    if (par) simRustParallel(SIM_BLOCK_ROWS_FILL, [D, _sFillRS, _sFillRE], P, k); else simRustDirect('k_rows_fill', [D, _sFillRS, _sFillRE], P);
+    // (A shared column cleared: its rows pool index 0, its default (undefined), as set(r, undefined) leaves it.)
+    const ent = T.mEnt, obj = T.rowObj;
+    for (let j = 0; j < runs; j++) { const s0 = RS[j], e = RE[j]; for (let r = s0 * 3, re = e * 3; r < re; r++) ent[r] = undefined; for (let r = s0; r < e; r++) obj[r] = null; }
     const free = T.freeRows;
     for (let i = 0; i < n; i++) free[T.nfree++] = R[i];
 }

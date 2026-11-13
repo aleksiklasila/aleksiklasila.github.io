@@ -3371,6 +3371,17 @@ function applyUnitResearchUpgradeToExistingUnits(owner, unitType, statKey) {
 function applyBuildingResearchUpgradeToExisting(owner,buildingKey,statKey) {
     rebuildPrecomputedStatsMapPlayerThingStat(owner,'building',buildingKey,statKey);
 }
+// The research drain's completions published at its end, once per (owner, kind, key, stat) in first-completion
+// order (nothing in the drain reads the stat tables: its costs and work come from the levels, set at once).
+let _researchPubOpen = false;
+const _researchPubKeys = new Set(), _researchPubList = [];
+function researchPublishBatchBegin() { _researchPubOpen = true; }
+function researchPublishBatchEnd() {
+    _researchPubOpen = false;
+    const L = _researchPubList;
+    for (let i = 0; i < L.length; i += 2) _researchPublish(L[i], L[i + 1]);
+    L.length = 0; _researchPubKeys.clear();
+}
 function applyResearchCompletion(owner, task) {
     if (!task) return;
     let levels = ensurePlayerResearchLevels(owner);
@@ -3381,6 +3392,12 @@ function applyResearchCompletion(owner, task) {
     if (nextLevel <= prevLevel) return;
     levels[id] = nextLevel;
     mults[id] = detPow(getResearchBonusExpForStat(task.kind, task.statKey, task.key), nextLevel);
+    // (In a batch (the research drain): published once per stat at its end, researchPublishBatchEnd.)
+    if (_researchPubOpen) { const k = owner + '|' + task.kind + '|' + task.key + '|' + task.statKey; if (!_researchPubKeys.has(k)) { _researchPubKeys.add(k); _researchPubList.push(owner, task); } return; }
+    _researchPublish(owner, task);
+}
+// A completed research's stat published: the tables of its thing (every level), and what depends on them.
+function _researchPublish(owner, task) {
     if (task.kind === 'unit') applyUnitResearchUpgradeToExistingUnits(owner, task.key, task.statKey);
     if (task.kind === 'building') applyBuildingResearchUpgradeToExisting(owner, task.key, task.statKey);
     if (task.kind === 'building' && task.key === 'house' && task.statKey === 'popCap') {

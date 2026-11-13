@@ -734,7 +734,79 @@ pub unsafe extern "C" fn k_pv_marks(a: u32, chunk: i32) {
     let dest = !tgx.is_null() && !tgy.is_null() && !od.is_null();
     let tick = k.i(2);
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
-    for sv in s0..s1 {
+    // (A slot without a live unit: its signature's low 31 bits are those of id -1 alone, and nothing else counts: sixteen
+    // such slots whose marks already hold it are passed over by reading live, dead and pvS only (6 bytes a slot, not ~30).)
+    let empty31 = { let mut h = (-1i32) as u32 ^ 0x9e37_79b9; h ^= h >> 16; h = h.wrapping_mul(0x7feb352d); h ^= h >> 15; h = h.wrapping_mul(0x846ca68b); (h ^ (h >> 16)) & 0x7fff_ffff };
+    let (e31, m31, z16) = (u32x4_splat(empty31), u32x4_splat(0x7fff_ffff), i8x16_splat(0));
+    let mut sv = s0;
+    while sv < s1 {
+        if sv & 15 == 0 && sv + 16 <= s1 {
+            let al = v128_andnot(i8x16_ne(v128_load(live.add(sv) as *const v128), z16), i8x16_ne(v128_load(dead.add(sv) as *const v128), z16));
+            if !v128_any_true(al) {
+                let p = sg.add(sv) as *const v128;
+                let same = v128_and(v128_and(i32x4_eq(v128_and(v128_load(p), m31), e31), i32x4_eq(v128_and(v128_load(p.add(1)), m31), e31)),
+                    v128_and(i32x4_eq(v128_and(v128_load(p.add(2)), m31), e31), i32x4_eq(v128_and(v128_load(p.add(3)), m31), e31)));
+                if i32x4_all_true(same) { sv += 16; continue; }
+            }
+        }
+        // Four slots at once: the signatures (the same mixing in i32 lanes), the change tests as masks; the order
+        // destination's code and the writes per lane.
+        if sv & 3 == 0 && sv + 4 <= s1 {
+            let u8x4 = |p: *const u8| u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(p as *const u32)));
+            let fin4 = |mut h: v128| { h = v128_xor(h, u32x4_shr(h, 16)); h = i32x4_mul(h, u32x4_splat(0x7feb352d)); h = v128_xor(h, u32x4_shr(h, 15));
+                h = i32x4_mul(h, u32x4_splat(0x846ca68b)); v128_xor(h, u32x4_shr(h, 16)) };
+            let z = i32x4_splat(0);
+            let alive4 = v128_andnot(i32x4_ne(u8x4(live.add(sv)), z), i32x4_ne(u8x4(dead.add(sv)), z));
+            let idv4 = v128_bitselect(v128_load(id.add(sv) as *const v128), i32x4_splat(-1), alive4);
+            let vxz = f32x4_ne(v128_load(vxs.add(sv) as *const v128), f32x4_splat(0.0));
+            let vyz = f32x4_ne(v128_load(vys.add(sv) as *const v128), f32x4_splat(0.0));
+            let flz = i32x4_ne(u8x4(fl.add(sv)), z);
+            let velany = v128_or(v128_or(vxz, vyz), flz);
+            let mut h = fin4(v128_xor(idv4, u32x4_splat(0x9e37_79b9)));
+            let h1 = fin4(v128_xor(h, v128_load(en.add(sv) as *const v128)));
+            // (Owner as an unsigned byte, the command, the level as a sign-extended 16-bit value.)
+            let lv = i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero(lvl.add(sv) as *const u32)));
+            let ocl = v128_or(v128_or(u8x4(own.add(sv) as *const u8), i32x4_shl(u8x4(cmd.add(sv)), 8)), i32x4_shl(v128_and(lv, i32x4_splat(0xFFFF)), 16));
+            let h2 = fin4(v128_xor(h1, ocl));
+            h = v128_bitselect(h2, h, alive4);
+            let sig4 = v128_or(v128_and(h, u32x4_splat(0x7fff_ffff)), v128_and(velany, u32x4_splat(0x8000_0000)));
+            let old4 = v128_load(sg.add(sv) as *const v128);
+            let moved = v128_or(i32x4_ne(v128_load(xs.add(sv) as *const v128), v128_load(pxs.add(sv) as *const v128)),
+                i32x4_ne(v128_load(ys.add(sv) as *const v128), v128_load(pys.add(sv) as *const v128)));
+            let busy = v128_or(v128_or(moved, i32x4_ne(v128_load(st.add(sv) as *const v128), z)),
+                v128_or(i32x4_ne(u8x4(tm.add(sv)), z), i32x4_ne(v128_and(u8x4(cm.add(sv)), i32x4_splat(4)), z)));
+            let busy = v128_or(v128_or(busy, velany), i32x4_ne(u32x4_shr(old4, 31), z));
+            let ch4 = v128_or(i32x4_ne(v128_and(v128_xor(sig4, old4), u32x4_splat(0x7fff_ffff)), z), v128_and(alive4, busy));
+            let (chm, alm) = (i32x4_bitmask(ch4), i32x4_bitmask(alive4));
+            let sigs: [u32; 4] = core::mem::transmute(sig4);
+            for l in 0..4usize {
+                let q = sv + l;
+                let mut changed = chm & (1 << l) != 0;
+                if dest && alm & (1 << l) != 0 {
+                    let c = g(cmd, q);
+                    let (x, y) = (g(tgx, q), g(tgy, q));
+                    let code = if (c == 1 || c == 2) && x == x && y == y && x >= 0.0 && y >= 0.0 {
+                        let t = floorf(y * itile) as i32 * gw + floorf(x * itile) as i32 + 1;
+                        if c == 2 { -t } else { t }
+                    } else {
+                        0
+                    };
+                    if code != g(od, q) {
+                        s(od, q, code);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    s(at, q, tick);
+                    s(sg, q, sigs[l]);
+                }
+            }
+            sv += 4;
+            continue;
+        }
+        let sv_ = sv;
+        sv += 1;
+        let sv = sv_;
         let alive = g(live, sv) != 0 && g(dead, sv) == 0;
         let idv = if alive { g(id, sv) } else { -1 };
         let lv = g(lvl, sv);
@@ -1199,6 +1271,12 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
         // (The mover table's sync, mvt.rs.)
         4 => super::mvt::mvt_sync_scan(b, chunk),
         5 => super::mvt::mvt_sync_apply(b, chunk),
+        // (Structure rows cleared, a job a column: uix.rs.)
+        6 => super::uix::k_rows_fill(b, chunk),
+        // (The navigation fields' sweep marks: nfs.rs.)
+        7 => super::nfs::k_nav_sweep_mark(b, chunk),
+        // (A relayout's index entries renamed, shares: tch.rs.)
+        8 => super::tch::k_ixd_relayout(b, chunk),
         _ => {}
     }
 }
@@ -1583,15 +1661,52 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
         return;
     }
     let (sfree, slabs) = (k.p::<u8>(48), k.i(8).max(0) as usize);
+    // (The last run's answers committed first, slot by slot, in the same pass (they read the snapshot this
+    // rewrites: acq.out / id / rng / sout, the brain's acq.bm / bt / btid): P[9] the slots the last snapshot
+    // had (0: no commit), P[10] 1 the brain's too, P[11] the tick. By sub-blocks the cache holds.)
+    let (nc, brain_c, tick) = (k.i(9).max(0) as usize, k.i(10) == 1, k.i(11));
+    let (sf, outa) = (k.p::<u8>(14), k.p::<i32>(18));
+    let mut run = |r0: usize, r1: usize, empty: bool| {
+        let mut b0 = r0;
+        while b0 < r1 {
+            let b1 = (b0 + 1024).min(r1);
+            if b0 < nc { acq_commit_range(&k, b0, b1.min(nc), brain_c, tick); }
+            if empty { for q in b0..b1 { s(sf, q, 3); s(outa, q, -2); } } else { acq_snap_range(&k, b0, b1); }
+            b0 = b1;
+        }
+    };
     if sfree.is_null() || slabs == 0 {
-        acq_snap_range(&k, s0, s1);
+        run(s0, s1, false);
         return;
     }
-    let (sf, outa) = (k.p::<u8>(14), k.p::<i32>(18));
-    slab_runs(sfree, slabs, s0, s1, |r0, r1, empty| {
-        if !empty { acq_snap_range(&k, r0, r1); return; }
-        for q in r0..r1 { s(sf, q, 3); s(outa, q, -2); }
-    });
+    slab_runs(sfree, slabs, s0, s1, |r0, r1, empty| run(r0, r1, empty));
+}
+/// The acquisition tier's answers and the combat brain's instructions into the units' columns (k_acq_commit,
+/// k_combat_commit as they were: the same unit still in the slot), for slots s0..s1 of the last snapshot.
+/// Arrays (k_acq_snap's): [7] unit.id, [3] unit.dead, [16] acq.rng, [17] acq.id, [18] acq.out, [10] acq.sout,
+/// [19] / [20] / [21] unit.cmMode / cmT / cmTId, [49] unit.cbS, [50] unit.cbTick, [51] unit.cbRangeS, [52] acq.bm,
+/// [53] acq.bt, [54] acq.btid.
+#[inline(always)]
+unsafe fn acq_commit_range(k: &K, s0: usize, s1: usize, brain: bool, tick: i32) {
+    let (id, dead, sr, si, outa, sout) = (k.p::<i32>(7), k.p::<u8>(3), k.p::<f32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(10));
+    let (cm, ct, ctid) = (k.p::<u8>(19), k.p::<i32>(20), k.p::<i32>(21));
+    let (cbs, ctk, crs, bm, bt, btid) = (k.p::<i32>(49), k.p::<i32>(50), k.p::<f32>(51), k.p::<u8>(52), k.p::<i32>(53), k.p::<i32>(54));
+    for q in s0..s1 {
+        if g(id, q) != g(si, q) { continue; }
+        if g(outa, q) != -2 {
+            s(crs, q, g(sr, q));
+            s(ctk, q, tick);
+            s(cbs, q, g(sout, q));
+        }
+        if brain {
+            let m = g(bm, q);
+            if m != 255 && g(dead, q) == 0 {
+                s(cm, q, m);
+                s(ct, q, if m != 0 { g(bt, q) } else { -1 });
+                s(ctid, q, if m != 0 { g(btid, q) } else { 0 });
+            }
+        }
+    }
 }
 unsafe fn acq_snap_range(k: &K, s0: usize, s1: usize) {
     let (x0, y0, own, dead, sep, cmd, rng, id, acqb) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i8>(2), k.p::<u8>(3), k.p::<u32>(4), k.p::<u8>(5),
@@ -2486,7 +2601,55 @@ pub unsafe extern "C" fn k_vis_snap(a: u32, chunk: i32) {
 #[inline(always)]
 unsafe fn vis_snap_range(xs: *const i32, ys: *const i32, dead: *const u8, sk: *const u32, srow: *const i16, rvsa: *const i8, own: *const i8, wteam: *const i8,
     tp: *mut i32, stix: *const i32, key: *mut i32, stwa: *const u16, np: i32, absent: u32, itile: f32, w: i32, h: i32, s0: usize, s1: usize) {
-    for q in s0..s1 {
+    // Four slots a lane (vis_tile_of's arithmetic in f32 lanes, the same
+    // results; the sight key's table reads per lane), the rest one by one.
+    let mut q = s0;
+    let (it, zero, m1) = (f32x4_splat(itile), i32x4_splat(0), i32x4_splat(-1));
+    let (lo, hi, p3, p7) = (f32x4_splat(-1e9), f32x4_splat(1e9), f32x4_splat(0.3), f32x4_splat(0.7));
+    let (wv, hv, npv, absv) = (i32x4_splat(w), i32x4_splat(h), i32x4_splat(np), i32x4_splat(absent as i32));
+    let have_rv = !rvsa.is_null();
+    while q + 4 <= s1 {
+        let fx = f32x4_mul(f32x4_convert_i32x4(v128_load(xs.add(q) as *const v128)), it);
+        let fy = f32x4_mul(f32x4_convert_i32x4(v128_load(ys.add(q) as *const v128)), it);
+        let fin = v128_and(v128_and(f32x4_gt(fx, lo), f32x4_lt(fx, hi)), v128_and(f32x4_gt(fy, lo), f32x4_lt(fy, hi)));
+        let (gxf, gyf) = (f32x4_floor(fx), f32x4_floor(fy));
+        let (gx, gy) = (i32x4_trunc_sat_f32x4(gxf), i32x4_trunc_sat_f32x4(gyf));
+        let inb = v128_and(v128_and(i32x4_ge(gx, zero), i32x4_ge(gy, zero)), v128_and(i32x4_lt(gx, wv), i32x4_lt(gy, hv)));
+        let (rx, ry) = (f32x4_sub(fx, gxf), f32x4_sub(fy, gyf));
+        let fl = v128_or(v128_or(v128_and(f32x4_lt(rx, p3), i32x4_splat(1)), v128_and(f32x4_ge(rx, p7), i32x4_splat(2))),
+            v128_or(v128_and(f32x4_lt(ry, p3), i32x4_splat(4)), v128_and(f32x4_ge(ry, p7), i32x4_splat(8))));
+        let t = v128_or(i32x4_shl(i32x4_add(i32x4_mul(gy, wv), gx), 4), fl);
+        v128_store(tp.add(q) as *mut v128, v128_bitselect(t, m1, v128_and(fin, inb)));
+        // (Sight: not dead, in the index, a stat row with a range.)
+        let d = u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(dead.add(q) as *const u32)));
+        let rw = i32x4_extend_low_i16x8(v128_load64_zero(srow.add(q) as *const u64));
+        let cand = v128_and(v128_and(i32x4_eq(d, zero), i32x4_ne(v128_load(sk.add(q) as *const v128), absv)), i32x4_ge(rw, zero));
+        if !have_rv || !v128_any_true(cand) {
+            v128_store(key.add(q) as *mut v128, m1);
+            q += 4;
+            continue;
+        }
+        let r4 = |l: usize| { let r = g(srow, q + l) as i32; if r >= 0 { g(rvsa, r as usize) as i32 } else { -1 } };
+        let st = i32x4(r4(0), r4(1), r4(2), r4(3));
+        let o = i32x4_extend_low_i16x8(i16x8_extend_low_i8x16(v128_load32_zero(own.add(q) as *const u32)));
+        let p1 = v128_bitselect(o, m1, v128_and(i32x4_ge(o, zero), i32x4_lt(o, npv)));
+        // (A watching team: only slots with a status record.)
+        let ix = v128_load(stix.add(q) as *const v128);
+        let p2 = if v128_any_true(i32x4_gt(ix, zero)) {
+            let w4 = |l: usize| {
+                let ix = g(stix, q + l);
+                let p1l = { let o = g(own, q + l) as i32; if o >= 0 && o < np { o } else { -1 } };
+                if ix > 0 && g(stwa, ix as usize) > 0 { let t = g(wteam, q + l) as i32; if t >= 0 && t < np && t != p1l { return t; } }
+                -1
+            };
+            i32x4(w4(0), w4(1), w4(2), w4(3))
+        } else { m1 };
+        let kv = v128_or(v128_or(v128_and(st, i32x4_splat(63)), i32x4_shl(i32x4_add(p1, i32x4_splat(1)), 8)), i32x4_shl(i32x4_add(p2, i32x4_splat(1)), 16));
+        let ok = v128_and(v128_and(cand, i32x4_ge(st, zero)), v128_or(i32x4_ge(p1, zero), i32x4_ge(p2, zero)));
+        v128_store(key.add(q) as *mut v128, v128_bitselect(kv, m1, ok));
+        q += 4;
+    }
+    for q in q..s1 {
         s(tp, q, vis_tile_of(g(xs, q), g(ys, q), itile, w, h));
         let r = g(srow, q) as i32;
         let st = if r >= 0 && !rvsa.is_null() { g(rvsa, r as usize) as i32 } else { -1 };
@@ -2783,6 +2946,105 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         if gx < 0 || gy < 0 || gx >= gw || gy >= gh { -1 } else { g(ag, (gy * gw + gx) as usize) }
     };
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    let nsl = k.i(0).max(0) as usize;
+    let tiles = (gw.max(0) * gh.max(0)) as usize;
+    // The in-range questions in batches (CB): first every unit's choice of
+    // target (a unit tq, or a structure sg at area ta), the units with a
+    // question queued; then the batch's windows (a stage: the reads of the
+    // queued units' and their targets' positions and tiles in flight
+    // together, no branch on where in its tile a unit stands), the searches,
+    // the instructions. The rest take theirs at once (in range: false).
+    const CB: usize = 32;
+    let (mut bq, mut btq, mut bsg, mut bta) = ([0usize; CB], [0i32; CB], [0i32; CB], [0i32; CB]);
+    let mut nb = 0usize;
+    // The instruction of unit q (its target tq, or the structure sg).
+    let finish = |q: usize, tq: i32, sg: i32, in_range: bool| {
+        let fl = g(flg, q);
+        let c = g(cmd, q);
+        let mover = fl & 16 != 0;
+        let order = c == cmd_atk && cmd_atk != 0 && g(cm, q) & 32 != 0;
+        let held = fl & 32 != 0;
+        let cur = g(ct, q);
+        let had_struct = g(cm, q) & 16 != 0;
+        let tu = if sg >= 0 { 0usize } else { tq as usize };
+        if order {
+            s(bm, q, 32 | if had_struct { 16 } else { 0 } | if in_range { 1 } else { 2 });
+            s(bt, q, cur);
+            s(btid, q, g(ctid, q));
+            return;
+        }
+        if mover {
+            // (Fire only, 4; on a structure 16|4: mv.rs move_struct fires and
+            // leaves the unit its own move.)
+            s(bm, q, if !in_range { 0 } else if sg >= 0 { 16 | 4 } else { 4 });
+            if in_range {
+                s(bt, q, if sg >= 0 { sg } else { tq });
+                s(btid, q, if sg >= 0 { 0 } else { g(id, tu) });
+            }
+            return;
+        }
+        // (A unit holding position never chases: it stands and fires in range, else its order's own, still.)
+        if held && !in_range {
+            s(bm, q, 0);
+            return;
+        }
+        if sg >= 0 {
+            s(bm, q, 16 | if in_range { 5 } else { 2 });
+            s(bt, q, sg);
+            s(btid, q, 0);
+            return;
+        }
+        s(bm, q, if in_range { 5 } else { 2 });
+        s(bt, q, tq);
+        s(btid, q, g(id, tu));
+    };
+    // The areas of a unit's +-0.3 tile window (at most four, row by row; a
+    // tile once, as the window's loop over x0..=x1, y0..=y1 took them), and
+    // whether the unit's own tile has an area.
+    let window = |x: f32, y: f32| -> ([i32; 4], usize, bool) {
+        let fx = x * itile;
+        let fy = y * itile;
+        let (gxf, gyf) = (floorf(fx), floorf(fy));
+        let (gx, gy) = (gxf as i32, gyf as i32);
+        let (rx, ry) = (fx - gxf, fy - gyf);
+        let (xa, xb) = (gx - (rx < 0.3) as i32, gx + (rx >= 0.7) as i32);
+        let (ya, yb) = (gy - (ry < 0.3) as i32, gy + (ry >= 0.7) as i32);
+        let mut out = [-1i32; 4];
+        let mut n = 0usize;
+        let mut own = false;
+        for t in 0..4usize {
+            let (xx, yy) = (if t & 1 == 0 { xa } else { xb }, if t < 2 { ya } else { yb });
+            let inb = (xx as u32) < (gw as u32) && (yy as u32) < (gh as u32);
+            let ar = g(ag, if inb { (yy * gw + xx) as usize } else { 0 });
+            let take = inb && ar >= 0 && (t & 1 == 0 || xb != xa) && (t < 2 || yb != ya);
+            *out.as_mut_ptr().add(n) = ar;
+            n += take as usize;
+            own = if xx == gx && yy == gy { inb && ar >= 0 } else { own };
+        }
+        (out, n, own)
+    };
+    let flush = |nb: usize, arq: &mut Option<super::arq::Arq>, bq: &[usize; CB], btq: &[i32; CB], bsg: &[i32; CB], bta: &[i32; CB]| {
+        let mut wins = [([-1i32; 4], 0usize, [-1i32; 4], 0usize); CB];
+        for i in 0..nb.min(CB) {
+            let q = bq[i];
+            let src = window(g(xs, q), g(ys, q));
+            // (A unit target by its window too: in range of each other alike,
+            // whichever of the two looks; a structure by its tile.)
+            // (A unit target off any area: none, as its tile's area -1 was.)
+            let tgt = if bsg[i] >= 0 { ([bta[i], -1, -1, -1], 1usize, true) } else { let tu = btq[i] as usize; window(g(xs, tu), g(ys, tu)) };
+            wins[i] = (src.0, src.1, tgt.0, if tgt.2 { tgt.1 } else { 0 });
+        }
+        for i in 0..nb.min(CB) {
+            let (src, ns, tgt, nt) = wins[i];
+            let mut in_range = false;
+            if ns > 0 && nt > 0 {
+                if let Some(x) = arq.as_mut() {
+                    in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, bq[i]) as i32);
+                }
+            }
+            finish(bq[i], btq[i], bsg[i], in_range);
+        }
+    };
     for q in s0..s1 {
         s(bm, q, 255);
         let fl = g(flg, q);
@@ -2800,19 +3062,18 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         if !(owner >= 0 && owner < players) {
             continue;
         }
-        let held = fl & 32 != 0;
         let mut tq = -1i32;
         let cur = g(ct, q);
         let had_struct = g(cm, q) & 16 != 0;
         if order {
             if had_struct {
-                if !(cur >= 0 && cur < gw * gh) {
+                if !(cur >= 0 && (cur as usize) < tiles) {
                     continue;
                 }
-            } else if !(cur >= 0 && (cur as usize) < k.i(0).max(0) as usize) || g(flg, cur as usize) & 1 != 0 || g(id, cur as usize) != g(ctid, q) {
+            } else if !(cur >= 0 && (cur as usize) < nsl) || g(flg, cur as usize) & 1 != 0 || g(id, cur as usize) != g(ctid, q) {
                 continue;
             }
-        } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 && (cur as usize) < k.i(0).max(0) as usize {
+        } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 && (cur as usize) < nsl {
             // (Within the snapshot: past its slots the copies hold an older
             // post's values, a unit gone since that still read as alive with
             // its id: the slots given up at the end by the relayout,
@@ -2826,9 +3087,7 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             }
         }
         if order {
-            if had_struct {
-                // (Below: sg the structure.)
-            } else {
+            if !had_struct {
                 tq = cur;
             }
         } else if tq < 0 && g(outa, q) >= 0 {
@@ -2843,7 +3102,7 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                 sg = cur;
             }
         } else if tq < 0 && !mover {
-            if had_struct && cur >= 0 && !sown.is_null() && cur < gw * gh {
+            if had_struct && cur >= 0 && !sown.is_null() && (cur as usize) < tiles {
                 let code = g(sown, cur as usize) as i32;
                 if code != -1 && code != owner {
                     let ar = g(ag, cur as usize);
@@ -2871,77 +3130,25 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                 continue;
             }
         }
-        let tu = if sg >= 0 { 0usize } else { tq as usize };
-        let ta = if sg >= 0 { g(ag, sg as usize) } else { area_of(g(xs, tu), g(ys, tu)) };
-        let mut in_range = false;
-        // The areas of a unit's +-0.3 tile window (at most four).
-        let window = |x: f32, y: f32| -> ([i32; 4], usize) {
-            let fx = x * itile;
-            let fy = y * itile;
-            let (gxf, gyf) = (floorf(fx), floorf(fy));
-            let (gx, gy) = (gxf as i32, gyf as i32);
-            let (rx, ry) = (fx - gxf, fy - gyf);
-            let x0 = if rx < 0.3 { gx - 1 } else { gx };
-            let x1 = if rx < 0.7 { gx } else { gx + 1 };
-            let y0 = if ry < 0.3 { gy - 1 } else { gy };
-            let y1 = if ry < 0.7 { gy } else { gy + 1 };
-            let mut out = [0i32; 4];
-            let mut n = 0usize;
-            for yy in y0..=y1 {
-                for xx in x0..=x1 {
-                    if xx < 0 || yy < 0 || xx >= gw || yy >= gh || n >= 4 {
-                        continue;
-                    }
-                    let ar = g(ag, (yy * gw + xx) as usize);
-                    if ar >= 0 {
-                        *out.as_mut_ptr().add(n) = ar;
-                        n += 1;
-                    }
-                }
-            }
-            (out, n)
-        };
+        // (A unit target's area is its window's business, in the batch; a
+        // structure's its tile's.)
+        let ta = if sg >= 0 { g(ag, sg as usize) } else { 0 };
         if ta >= 0 && have_bfs {
-            let (src, ns) = window(g(xs, q), g(ys, q));
-            // (A unit target by its window too: in range of each other alike,
-            // whichever of the two looks; a structure by its tile.)
-            let (tgt, nt) = if sg >= 0 { ([ta, 0, 0, 0], 1usize) } else { window(g(xs, tu), g(ys, tu)) };
-            if ns > 0 && nt > 0 {
-                if let Some(x) = arq.as_mut() {
-                    in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, q) as i32);
-                }
-            }
-        }
-        if order {
-            s(bm, q, 32 | if had_struct { 16 } else { 0 } | if in_range { 1 } else { 2 });
-            s(bt, q, cur);
-            s(btid, q, g(ctid, q));
-            continue;
-        }
-        if mover {
-            // (Fire only, 4; on a structure 16|4: mv.rs move_struct fires and
-            // leaves the unit its own move.)
-            s(bm, q, if !in_range { 0 } else if sg >= 0 { 16 | 4 } else { 4 });
-            if in_range {
-                s(bt, q, if sg >= 0 { sg } else { tq });
-                s(btid, q, if sg >= 0 { 0 } else { g(id, tu) });
+            *bq.as_mut_ptr().add(nb) = q;
+            *btq.as_mut_ptr().add(nb) = tq;
+            *bsg.as_mut_ptr().add(nb) = sg;
+            *bta.as_mut_ptr().add(nb) = ta;
+            nb += 1;
+            if nb == CB {
+                flush(nb, &mut arq, &bq, &btq, &bsg, &bta);
+                nb = 0;
             }
             continue;
         }
-        // (A unit holding position never chases: it stands and fires in range, else its order's own, still.)
-        if held && !in_range {
-            s(bm, q, 0);
-            continue;
-        }
-        if sg >= 0 {
-            s(bm, q, 16 | if in_range { 5 } else { 2 });
-            s(bt, q, sg);
-            s(btid, q, 0);
-            continue;
-        }
-        s(bm, q, if in_range { 5 } else { 2 });
-        s(bt, q, tq);
-        s(btid, q, g(id, tu));
+        finish(q, tq, sg, false);
+    }
+    if nb > 0 {
+        flush(nb, &mut arq, &bq, &btq, &bsg, &bta);
     }
 }
 
@@ -2959,9 +3166,13 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
 /// unit.wsJid, unit.wsCur, unit.wsMy, unit.x, unit.y, unit.owner, unit.id,
 /// unit.dead, ws.rslot, ws.rid, ws.rwt, ws.rkind, ws.rowner, ws.rox,
 /// ws.roy, ws.rux, ws.ruy, ws.rr, ws.rak, ws.rax, ws.ray, ws.rgrp,
-/// ws.rneed, ws.rjid, ws.rcur, ws.rmy, ws.rcnt, ?ws.rpre.
-/// P: [0] slots, [1] per job, [2] tick, [3] WS_TICKS, [4] retry ticks, [5] mode,
-/// [6] the retry's doublings at most.
+/// ws.rneed, ws.rjid, ws.rcur, ws.rmy, ws.rcnt, ?ws.rpre, unit.wsFail, unit.wkIx,
+/// ?ws.rsel. P: [0] slots, [1] per job, [2] tick, [3] WS_TICKS, [4] retry ticks,
+/// [5] mode, [6] the retry's doublings at most.
+/// With ws.rsel (a slot a request, chunk * P[1] on): the count (mode 1) lists the
+/// due slots there; the payload (mode 2) writes only those (in their order, the
+/// same requests): one pass over every slot, not two. Sixteen slots without a
+/// live registered worker passed over by one vector test.
 #[no_mangle]
 pub unsafe extern "C" fn k_ws_select(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -2975,15 +3186,28 @@ pub unsafe extern "C" fn k_ws_select(a: u32, chunk: i32) {
     let (cnt, pre, fails) = (k.p::<i32>(37), k.p::<i32>(38), k.p::<u8>(39));
     // (Its worker record: the ws* arrays are by record, unit.wkIx.)
     let wix = k.p::<i32>(40);
+    let sel = k.p::<i32>(41);
     let (t, wt4, retry, mode) = (k.i(2), k.i(3), k.i(4).max(1), k.i(5));
     // (P[6]: the doubling's cap: 3, or more with millions of units.)
     let most = if k.i(6) > 0 { k.i(6).min(8) as u8 } else { 3u8 };
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     let base = if mode == 2 { g(pre, chunk as usize) as usize } else { s0 };
     let mut m = 0usize;
-    for q in s0..s1 {
+    // (The payload of the listed slots: no test again, they were due at the count, and nothing changed since.)
+    let listed = mode == 2 && !sel.is_null();
+    let (l0, l1) = if listed { (0usize, g(cnt, chunk as usize).max(0) as usize) } else { (s0, s1) };
+    let mut li = l0;
+    while li < l1 {
+        let q = if listed { g(sel, s0 + li) as usize } else { li };
+        li += 1;
+        if !listed && q & 15 == 0 && q + 16 <= s1 {
+            // (Sixteen slots: a kind byte set and a dead byte clear, any?)
+            let kv = v128_load(kind.add(q) as *const v128);
+            let dv = v128_load(dead.add(q) as *const v128);
+            if !v128_any_true(v128_andnot(i8x16_ne(kv, i8x16_splat(0)), i8x16_ne(dv, i8x16_splat(0)))) { li = q + 16; continue; }
+        }
         let kd = g(kind, q);
-        if kd == 0 || g(dead, q) != 0 {
+        if !listed && (kd == 0 || g(dead, q) != 0) {
             continue;
         }
         let uid = g(id, q);
@@ -2992,12 +3216,13 @@ pub unsafe extern "C" fn k_ws_select(a: u32, chunk: i32) {
         // to 8 times: workers in excess of their sites stop searching every
         // retry.)
         let rq = (retry as i64) << (g(fails, q).min(most) as i64);
-        if !(t - g(wt, w) < wt4 || ((t as i64 + uid as i64).rem_euclid(rq) as i32) < wt4) {
+        if !listed && !(t - g(wt, w) < wt4 || ((t as i64 + uid as i64).rem_euclid(rq) as i32) < wt4) {
             continue;
         }
         let rank = m;
         m += 1;
         if mode == 1 {
+            if !sel.is_null() { s(sel, s0 + rank, q as i32); }
             continue;
         }
         let i = base + rank;
@@ -3278,12 +3503,34 @@ pub unsafe extern "C" fn k_ws_scan(a: u32, chunk: i32) {
                 let (gx0,gy0,gx1,gy1)=(x0,y0,x1,y1);
                 if gx0 <= gx1 && gy0 <= gy1 {
                     // One 8x8 block of the work grid: its tiles offering the need.
+                    // (A row's eight tiles tested at once: their flag and owner bytes
+                    // compared in one vector, then the matching tiles in column order.)
+                    let (needv, ownv, own_ok) = (u8x16_splat(need), i8x16_splat(owner as i8), owner >= -128 && owner <= 127);
                     let block = |bx: i32, by: i32| {
                         if !wcnt.is_null() && g(wcnt, ((by * gbw + bx) * 8 + ci) as usize) == 0 {
                             return;
                         }
+                        if !own_ok {
+                            return;
+                        }
+                        let (cx0, cx1) = (gx0.max(bx << 3), gx1.min((bx << 3) + 7));
+                        if cx0 > cx1 {
+                            return;
+                        }
+                        let whole = (bx << 3) + 8 <= w;
+                        let span = (((1u32 << (cx1 - cx0 + 1)) - 1) << (cx0 - (bx << 3))) as u32;
                         for ty in gy0.max(by << 3)..=gy1.min((by << 3) + 7) {
-                            for tx in gx0.max(bx << 3)..=gx1.min((bx << 3) + 7) {
+                            let mut bits = span;
+                            if whole {
+                                let r = (ty * w + (bx << 3)) as usize;
+                                let fv = v128_load64_zero(wf.add(r) as *const u64);
+                                let ov = v128_load64_zero(wo.add(r) as *const u64);
+                                let m = v128_and(i8x16_eq(v128_and(fv, needv), needv), i8x16_eq(ov, ownv));
+                                bits &= (i8x16_bitmask(m) as u32) & 255;
+                            }
+                            while bits != 0 {
+                                let tx = (bx << 3) + bits.trailing_zeros() as i32;
+                                bits &= bits - 1;
                                 let t = (ty * w + tx) as usize;
                                 if g(wf, t) & need != need || g(wo, t) as i32 != owner {
                                     continue;

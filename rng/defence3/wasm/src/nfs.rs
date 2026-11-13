@@ -75,16 +75,21 @@ unsafe fn del(ht: *mut i32, n: u32, key: i32) {
 /// unit.rtEnd, [4] unit.rkF, [5] unit.nvProf, [6] unit.nvPK, [7] the narrow
 /// pool's table, [8] its marks, [9] the wide pool's table, [10] its marks.
 /// P: [0] k, [1] step, [2] count, [3] units, [4] mark, [5] / [6] the tables'
-/// pairs (narrow, wide).
+/// pairs (narrow, wide), [7] jobs (0 or 1: one call; else this chunk's share of the
+/// runs, contiguous: the marks are the same value from any thread).
 #[no_mangle]
-pub unsafe extern "C" fn k_nav_sweep_mark(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_nav_sweep_mark(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (sl, live, dead, re, rk, pr, pk) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<i8>(5), k.p::<i32>(6));
     let (htn, seenn, htw, seenw) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
     let (k0, step, count, n, mark) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2).max(1) as usize, k.i(3).max(0) as usize, k.i(4));
     let (nn, nw) = (k.i(5).max(0) as u32, k.i(6).max(0) as u32);
-    let mut base = k0;
-    while base < n {
+    let jobs = k.i(7).max(1) as usize;
+    let runs = if n > k0 { (n - k0 + step - 1) / step } else { 0 };
+    let (r0, r1) = if jobs > 1 { (runs * chunk.max(0) as usize / jobs, runs * (chunk.max(0) as usize + 1) / jobs) } else { (0, runs) };
+    let mut base = k0 + r0 * step;
+    let stop = k0 + r1 * step;
+    while base < n && base < stop {
         let end = (base + count).min(n);
         for i in base..end {
             let q = g(sl, i);
@@ -495,16 +500,20 @@ pub unsafe extern "C" fn k_slot_move(a: u32, chunk: i32) {
                         let (f, t) = (g(pairs, 2 * j), g(pairs, 2 * j + 1));
                         if f < 0 || t < 0 { continue; }
                         let (src, dst) = (p.add(f as usize), p.add(t as usize));
-                        *dst = *src;
-                        *src = value;
+                        // (The old slot reset only where it differs: a store dirties its line, and most columns of
+                        // most units hold their default (rare features): their lines are read, not written back.)
+                        let v = *src;
+                        *dst = v;
+                        if v != value { *src = value; }
                     }
                 } else {
                     for j in j0..j1 {
                         let (f, t) = (g(pairs, 2 * j), g(pairs, 2 * j + 1));
                         if f < 0 || t < 0 { continue; }
                         let (src, dst) = (p.add(f as usize * per), p.add(t as usize * per));
-                        for e in 0..per { *dst.add(e) = *src.add(e); *src.add(e) = 0 as $ty; }
-                        *src = value;
+                        let mut any = false;
+                        for e in 0..per { let v = *src.add(e); *dst.add(e) = v; any |= v != (if e == 0 { value } else { 0 as $ty }); }
+                        if any { for e in 0..per { *src.add(e) = 0 as $ty; } *src = value; }
                     }
                 }
             }};

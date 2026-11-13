@@ -1322,7 +1322,9 @@ function _simClientReplayEvents(events) {
         _simClientReplayOne(e);
     }
     if (events.x) for (const x of events.x) _simClientReplayOne(x);
+    if (events.l && typeof simHitLooksReplay === 'function') simHitLooksReplay(events.l, _simClientUnitById);
 }
+function _simClientUnitById(id) { return _pageUnitsById.get(id) || null; }
 function _simClientReplayOne(e) {
     {
         switch (e[0]) {

@@ -611,7 +611,24 @@ function _effRowAttach(u) {
 
 function effSharedTablesChanged(owner, unitType) {
     const U = unitStatTables(), ty = spatialUnitTypeToIndex[unitType];
-    if (ty >= 0) unitStatFill(owner, ty);
+    if (!(ty >= 0)) return;
+    if (_effFillOpen) { _effFillKeys.add(owner * 65536 + ty); return; }
+    unitStatFill(owner, ty);
+}
+// A batch of table changes (the research drain's completions): each (owner, type)'s rows filled once at its end,
+// in (owner, type) order. The set is kept (no allocation a drain).
+let _effFillOpen = false;
+const _effFillKeys = new Set(), _effFillList = [];
+function effFillBatchBegin() { _effFillOpen = true; }
+function effFillBatchEnd() {
+    _effFillOpen = false;
+    if (!_effFillKeys.size) return;
+    const L = _effFillList; L.length = 0;
+    for (const k of _effFillKeys) L.push(k);
+    _effFillKeys.clear();
+    L.sort((a, b) => a - b);
+    for (let i = 0; i < L.length; i++) unitStatFill(Math.floor(L[i] / 65536), L[i] % 65536);
+    L.length = 0;
 }
 
 

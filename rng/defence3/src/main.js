@@ -647,7 +647,8 @@ const UNIT_DEATH_SOUNDS = 16;
 // The gone kernel's buffers (heap arrays; the list grows only past the most
 // deaths a tick seen so far).
 let _unitGone = null;
-const UNIT_GONE_PER = 4096;
+// (512: a battle step removes 2-8k units; 4096 a chunk made 2 jobs, ~3.9 ms with the other helpers idle, 2026-11-13.)
+const UNIT_GONE_PER = 512;
 function _unitGoneRoom(n) {
     let G = _unitGone;
     if (!G || !simHeapHas(G.cnt)) {
@@ -846,7 +847,9 @@ function _gameTickBody() {
     // (The grid's cell columns in the heap: made before it was there, they move in now.)
     if (typeof cellColumnsRehome === 'function') cellColumnsRehome();
     // (Destroyed structures' rows past their keep: back to the pool, see STRUCT_ROW_KEEP_TICKS.)
-    if (typeof structRowsExpire === 'function') structRowsExpire();
+    // (Beside the movement's first stage: it touches retired rows only (no tile names them, the kernels reach
+    // structures by tile) and the retired objects; unit.js simMoveCompanion.)
+    if (typeof structRowsExpire === 'function') { if (typeof simMoveCompanion === 'function') simMoveCompanion(0, structRowsExpire); else structRowsExpire(); }
     // (The unit columns' next size allocated ahead, a share a tick.)
     if (typeof simUnitStatePrepareStep === 'function') simUnitStatePrepareStep();
     // The unit index for this tick's queries and collision pass, from the
@@ -943,6 +946,8 @@ function _gameTickBody() {
     unitPassBegin();
     try {
         simMoveRun();
+        // (Its companions it did not run: a step without movement.)
+        if (typeof simMoveCompanionsFlush === 'function') simMoveCompanionsFlush();
         // The queued move orders the movement took (mv.rs ord_pickup): settled, the few it left the JavaScript's.
         orderPickupFinish();
         // The looks its turns took approximate, made exact on the helpers
@@ -1008,7 +1013,7 @@ function _gameTickBody() {
     }
     // The tick's damage into the shrines, and their drain (see shrineTick).
     shrineTick();
-    // Research pools into the research queues (every RESEARCH_DRAIN_TICKS).
+    // Research pools into the research queues (every step).
     researchDrainTick();
     flushPendingMovementAstarSpend();
     resourceTick();

@@ -236,7 +236,7 @@ function getDamageFlashColor(target, sourceOwner = null) {
 }
 
 function recordDamageVisual(target, amount, sourceOwner = null) {
-    if (!target) return;
+    if (!target || !SIM_DAMAGE_FLASH) return;
     // (A building's or floor item's energy may have run out: see gameTick.)
     let dmg = Math.max(0, Number(amount) || 0);
     if (dmg <= 0.01) return;

@@ -13,6 +13,26 @@ unsafe fn s<T>(p: *mut T, i: usize, v: T) {
     *p.add(i) = v;
 }
 
+/// k_slots_by_id: a list of (slot, id) pairs whose units may have moved to
+/// other slots (the online relayout) made current: a slot whose unit is
+/// live and still has the id stays; else the id's slot by the id index (a
+/// hole, a unit without columns or no such id: -1). Arrays: [0] slots
+/// (in / out), [1] ids, [2] unit.id, [3] unit.live, [4] index ids, [5]
+/// index slots. P: [0] pairs, [1] index entries, [2] slots (columns' length).
+#[no_mangle]
+pub unsafe extern "C" fn k_slots_by_id(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (rs, ri, cid, live, xid, xsl) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u8>(3), k.p::<i32>(4), k.p::<i32>(5));
+    let (n, nx, ns) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(0));
+    for i in 0..n {
+        let (sl, id) = (g(rs, i), g(ri, i));
+        if sl >= 0 && sl < ns && g(live, sl as usize) != 0 && g(cid, sl as usize) == id { continue; }
+        let (mut lo, mut hi) = (0usize, nx);
+        while lo < hi { let m = (lo + hi) >> 1; if g(xid, m) < id { lo = m + 1; } else { hi = m; } }
+        s(rs, i, if lo < nx && g(xid, lo) == id { let q = g(xsl, lo); if q >= 0 && q < ns { q } else { -1 } } else { -1 });
+    }
+}
+
 /// k_uix_remove. Arrays: [0] ids, [1] slots, [2] the removed ids (P[0] of
 /// them), [3] header in/out ([0] entries, [1] holes). P[1] 1: every hole
 /// squeezed out now (main.js unitRows: the rows the passes read).
@@ -405,4 +425,47 @@ pub unsafe extern "C" fn k_unit_cmd_par(a: u32, chunk: i32) {
         }
     }
     s(cc, 4 * c, npq as i32); s(cc, 4 * c + 1, nlw as i32); s(cc, 4 * c + 2, nc);
+}
+
+/// k_rows_fill: row runs of many columns set to each column's empty value
+/// (data_state.js _sRowsFree: a structure table's expired rows). Arrays: [0]
+/// the columns, five words each: the column's encoded address, its element
+/// bytes (1, 2, 4, 8), its elements a row, the value's low and high 32 bits;
+/// [1] the runs' first rows, [2] their ends (exclusive). P: [0] columns, [1]
+/// runs, [2] 1: a job a column (chunk), else every column in one call. Each run is
+/// a byte range filled with the value's 16-byte pattern: vector stores in
+/// the middle, element stores at the ends.
+#[no_mangle]
+pub unsafe extern "C" fn k_rows_fill(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (cols, rs, re) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2));
+    let (nc, nr) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize);
+    let (c0, c1) = if k.i(2) != 1 { (0, nc) } else { (chunk.max(0) as usize, (chunk.max(0) as usize + 1).min(nc)) };
+    for c in c0..c1 {
+        let d = cols.add(5 * c);
+        let (base, w, per) = (waddr(*d as u32) as *mut u8, (*d.add(1)).max(1) as usize, (*d.add(2)).max(1) as usize);
+        let bits = (*d.add(3) as u32 as u64) | ((*d.add(4) as u32 as u64) << 32);
+        if base.is_null() { continue; }
+        let v = match w { 1 => u8x16_splat(bits as u8), 2 => u16x8_splat(bits as u16), 4 => u32x4_splat(bits as u32), _ => u64x2_splat(bits) };
+        let pat: [u8; 16] = core::mem::transmute(v);
+        for r in 0..nr {
+            let (s0, s1) = ((*rs.add(r)).max(0) as usize, (*re.add(r)).max(0) as usize);
+            if s1 <= s0 { continue; }
+            let (b0, b1) = (s0 * per * w, s1 * per * w);
+            let mut p = base.add(b0);
+            let end = base.add(b1);
+            // (Elements up to a 16-byte boundary: the pattern's phase is the element's.)
+            while (p as usize) & 15 != 0 && p < end {
+                *p = pat[(p as usize - base as usize) & 15];
+                p = p.add(1);
+            }
+            while (end as usize) - (p as usize) >= 64 {
+                v128_store(p as *mut v128, v); v128_store(p.add(16) as *mut v128, v);
+                v128_store(p.add(32) as *mut v128, v); v128_store(p.add(48) as *mut v128, v);
+                p = p.add(64);
+            }
+            while (end as usize) - (p as usize) >= 16 { v128_store(p as *mut v128, v); p = p.add(16); }
+            while p < end { *p = pat[(p as usize - base as usize) & 15]; p = p.add(1); }
+        }
+    }
 }

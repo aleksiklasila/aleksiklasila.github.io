@@ -5,7 +5,7 @@
 // rest by id), the flow looks listed a step, and where the units ended up
 // (alive, walking a flow, a hash of the positions by id in slot order, their mean distance to their destination: the
 // progress made, for comparing behaviour between builds).
-// DK=n: n base ticks a step. WARM=n warm-up steps (15). OUT=file: raw JSON.
+// KTOP=n: kernels listed (14). DK=n: n base ticks a step. WARM=n warm-up steps (15). OUT=file: raw JSON.
 // Usage: node --max-old-space-size=14000 tests/move-step-probe.cjs [scene.gz] [helpers] [steps]
 const path = require('node:path'), fs = require('node:fs');
 globalThis.self = { crossOriginIsolated: true };
@@ -34,6 +34,8 @@ const helpers = process.argv[3] !== undefined ? Number(process.argv[3]) : 8, N =
         for (let s = 0; s < n; s++) { if (c.dead0[s] || !_simUnitState.owners.at(s)) continue; alive++; hash = (Math.imul(hash, 16777619) ^ (c.x[s] * 8 | 0) ^ Math.imul(c.y[s] * 8 | 0, 40503) ^ Math.imul(c.id[s], 2654435761)) | 0; const on = c.mvOn[s]; if (on === 2) park++; if (on !== 1 || !(c.mvFlags[s] & 64)) continue; walk++;
             const d = c.mvDest[s], k = c.x instanceof Int32Array ? 0.125 : 1, dx = (d % W) * TILE + 16 - c.x[s] * k, dy = ((d / W) | 0) * TILE + 16 - c.y[s] * k; sum += Math.hypot(dx, dy); }
         return { alive, walk, park, meanDist: walk ? sum / walk : 0, hash }; })())`));
+    // EVAL=code: evaluated in the host before the warm-up (A/B switches, e.g. SIM_RELAYOUT=false).
+    if (process.env.EVAL) host.eval(process.env.EVAL);
     for (let i = 0; i < WARM; i++) host.eval('gameTick()');
     host.scratch.now = () => performance.now();
     host.eval(`{ __scratch.kw = {}; const pr = simParallelRun, now = __scratch.now; simParallelRun = function (kk) { const a = now(); try { return pr.apply(this, arguments); } finally { __scratch.kw[kk] = (__scratch.kw[kk] || 0) + now() - a; } }; }`);
@@ -50,6 +52,9 @@ const helpers = process.argv[3] !== undefined ? Number(process.argv[3]) : 8, N =
     // TRACE=1: the parallel layer's per-step trace (sim_parallel.js _simParTrace: the simulation thread's
     // background chunks by lane:kernel (bgc:), the lanes' age and unclaimed share at their waits (bgAge:, bgLeft:)), summed / max over the steps.
     const trace = {};
+    // PROF=prefix: the helpers' CPU profiles over the measured steps (prefix.helperN.cpuprofile; tests/profile-self.cjs).
+    const profHelpers = process.env.PROF ? (require('./real-sim-helper.cjs').instances || []) : [];
+    if (profHelpers.length) await Promise.all(profHelpers.map(w => w.benchProfile('start', 200)));
     for (let i = 0; i < N; i++) {
         host.eval('__scratch.kw = {}');
         if (process.env.TRACE) { if (i === 0) host.eval('performance.now = __scratch.now; simParallelBind("par.bgus", new Int32Array(new SharedArrayBuffer(4 * 272)))'); host.eval('_simParTrace = {}'); }
@@ -61,11 +66,12 @@ const helpers = process.argv[3] !== undefined ? Number(process.argv[3]) : 8, N =
         for (const id in k) kw[id] = (kw[id] || 0) + k[id];
     }
     if (session) await session.stop();
+    if (profHelpers.length) await Promise.all(profHelpers.map(async (w, i) => { const r = await w.benchProfile('stop'); fs.writeFileSync(process.env.PROF + '.helper' + i + '.cpuprofile', JSON.stringify(r.profile)); }));
     const s1 = state();
     const sorted = ms.slice().sort((a, b) => a - b), q = p => sorted[Math.min(N - 1, Math.floor(p * N))], r1 = v => Math.round(v * 10) / 10;
     const kernels = Object.entries(kw).map(([id, v]) => [Number(id), r1(v / N)]).sort((a, b) => b[1] - a[1]);
     const res = { scene: path.basename(scene), helpers, steps: N, dk: Number(process.env.DK) || 1, stepMs: { p50: r1(q(.5)), p95: r1(q(.95)), max: r1(q(1)), mean: r1(ms.reduce((a, b) => a + b, 0) / N) },
-        looksListedAStep: Math.round(pend.reduce((a, b) => a + b, 0) / N), kernelWallMsAStep: Object.fromEntries(kernels.slice(0, 14).map(([id, v]) => ['k' + id, v])),
+        looksListedAStep: Math.round(pend.reduce((a, b) => a + b, 0) / N), kernelWallMsAStep: Object.fromEntries(kernels.slice(0, Number(process.env.KTOP) || 14).map(([id, v]) => ['k' + id, v])),
         before: s0, after: s1, meanDistGain: r1(s0.meanDist - s1.meanDist) };
     if (process.env.TRACE) res.trace = Object.fromEntries(Object.entries(trace).sort().map(([k, v]) => [k, Array.isArray(v) ? (/Left/.test(k) ? v.join(' ') : 'max ' + r1(Math.max(...v)) + ' p50 ' + r1(v.slice().sort((a, b) => a - b)[v.length >> 1])) : r1(v / N)]));
     console.log(JSON.stringify(res, null, 1));

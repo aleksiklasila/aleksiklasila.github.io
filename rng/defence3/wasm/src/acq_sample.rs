@@ -112,7 +112,7 @@ pub unsafe extern "C" fn k_acq_area_build(a:u32,_chunk:i32){
 // What the answers' jobs share, from the packed table: per area the set of
 // teams holding units there (a bit each; acq.saSeen), and how many area steps
 // the farthest-looking unit reaches (acq.saNearN[0]): an answer farther than
-// that is never asked for (area_answer takes d<=reach), so the searches stop
+// that is never asked for (the scan takes d<=reach, area_batch), so the searches stop
 // there. P[31] the slots, P[29] the tiles an area step stands for.
 unsafe fn prepare_area_answers(k:&K,na:usize,players:usize,off:*const i32){
     let mask=k.p::<i32>(37);
@@ -133,7 +133,7 @@ unsafe fn prepare_area_answers(k:&K,na:usize,players:usize,off:*const i32){
 // nonempty visible enemy area. Population affects the CSR build, not queries.
 // Structure answers use the same area rule, separately for each priority.
 // Stops when every area has its answer, or past `maxd` steps (no query asks
-// farther: area_answer's d<=reach).
+// farther: area_batch's d<=reach).
 #[inline(always)]
 unsafe fn spread_answers(na:usize,answers:*mut i32,dist:*mut i32,queue:*mut i32,go:*const i32,gn:*const i32,maxd:i32){
     let mut head=0;let mut tail=0;
@@ -295,46 +295,85 @@ pub unsafe extern "C" fn k_acq_area_pack(a:u32,chunk:i32){
     }
 }
 
-unsafe fn area_answer(k:&K,s:usize,x:f32,y:f32,owner:usize,r:f32){
+
+// The area answers of a batch of units, a stage a memory level: the window's
+// tiles (agrid), the records (acq.saRec), the target's bucket (acq.saOff), its
+// entries (acq.saE). Each unit's reads hang on the one before (one chain: a
+// unit at a time, ~150 ns of misses one after another); a stage's sixteen
+// are independent, in flight together. The window's tiles two by two (a tile
+// twice when the unit is not near that edge: a minimum takes it once), each
+// answer the least (distance, target) as one u64 key, u64::MAX none.
+const AB:usize=32;
+#[cfg_attr(feature = "prof", inline(never))]
+unsafe fn area_batch(k:&K,bs:&[usize;AB],nb:usize){
     let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;
-    let tile=k.f(5);let gw=k.i(15);let gh=k.i(16);let fx=x as f64/tile;let fy=y as f64/tile;
-    let gx=floor(fx) as i32;let gy=floor(fy) as i32;let rx=fx-gx as f64;let ry=fy-gy as f64;
-    let x0=gx-if rx<0.3 {1}else{0};let x1=gx+if rx>=0.7 {1}else{0};
-    let y0=gy-if ry<0.3 {1}else{0};let y1=gy+if ry>=0.7 {1}else{0};
-    let reach=ceil(r as f64/(tile*k.f(29).max(1.0))) as i32;
-    let ag=k.p::<i32>(13);let rec=k.p::<i32>(47);
-    let mut target_area=-1;let mut best_steps=i32::MAX;
-    let mut structure=[-1i32;4];let mut structure_steps=[i32::MAX;4];
-    let command=*k.p::<u8>(8).add(s) as i32;
-    // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.
-    // Only those take a structure: an attacking unit's eight class reads a
-    // tile were made and dropped.)
-    let wants=command==k.i(8)||command==k.i(9)||(*k.p::<u8>(7).add(s))&16!=0;
-    for yy in y0..=y1 {for xx in x0..=x1 {
-        if xx<0||yy<0||xx>=gw||yy>=gh {continue;}let ar=*ag.add((yy*gw+xx) as usize);if ar<0||ar as usize>=na {continue;}
-        let r=rec.add((owner*na+ar as usize)*RW);let w5=*r.add(5) as u32;
-        let d=d_dec(w5);let target=*r;
-        if d>=0&&d<=reach&&(d<best_steps||(d==best_steps&&target<target_area)){target_area=target;best_steps=d;}
-        if !wants {continue;}
-        // (Class c's distance: the record's u16 at 11 + c, after the unit answer's at 10.)
-        let h=r.add(5) as *const u16;
-        for class in 0..4 {let d=d_dec(*h.add(1+class) as u32);let target=*r.add(1+class);
-            if d>=0&&d<=reach&&(d<structure_steps[class]||(d==structure_steps[class]&&target<structure[class])){structure[class]=target;structure_steps[class]=d;}
+    let tile=k.f(5);let gw=k.i(15);let gh=k.i(16);let step=tile*k.f(29).max(1.0);
+    let (xs,ys,own,flags,cmd,ranges,ids)=(k.p::<f32>(4),k.p::<f32>(5),k.p::<i8>(6),k.p::<u8>(7),k.p::<u8>(8),k.p::<f32>(9),k.p::<i32>(10));
+    let (out,tid,sout,ag,rec,off,E)=(k.p::<i32>(11),k.p::<i32>(12),k.p::<i32>(3),k.p::<i32>(13),k.p::<i32>(47),k.p::<i32>(27),k.p::<i32>(28));
+    let (c8,c9)=(k.i(8),k.i(9));let epoch=k.i(25) as u32;
+    let mut ar=[[u32::MAX;4];AB];let mut lim=[0i64;AB];let mut wants=[false;AB];
+    // The window's areas (u32::MAX none).
+    for i in 0..nb.min(AB) {let s=bs[i];
+        let fx=*xs.add(s) as f64/tile;let fy=*ys.add(s) as f64/tile;
+        let gx=floor(fx) as i32;let gy=floor(fy) as i32;let rx=fx-gx as f64;let ry=fy-gy as f64;
+        let wx=[gx-(rx<0.3) as i32,gx+(rx>=0.7) as i32];let wy=[gy-(ry<0.3) as i32,gy+(ry>=0.7) as i32];
+        // (A distance counts up to the reach; 0xFFFF none: above any.)
+        lim[i]=(ceil(*ranges.add(s) as f64/step) as i32).clamp(-1,0xFFFE) as i64;
+        let command=*cmd.add(s) as i32;
+        // (A moving shooter too, flag 16: its drive-by's structure, k_combat_brain.
+        // Only those take a structure: an attacking unit's eight class reads a
+        // tile were made and dropped.)
+        wants[i]=command==c8||command==c9||(*flags.add(s))&16!=0;
+        for t in 0..4 {let (xx,yy)=(wx[t&1],wy[t>>1]);
+            let inb=(xx as u32)<(gw as u32)&&(yy as u32)<(gh as u32);
+            let a=*ag.add(if inb {(yy*gw+xx) as usize}else{0}) as u32;
+            ar[i][t]=if inb&&a<(na as u32) {a}else{u32::MAX};
         }
-    }}
-    if wants {for class in 0..4 {if structure[class]>=0 {*k.p::<i32>(3).add(s)=structure[class];break;}}}
-    if target_area<0 {return;}
-    let ar=target_area as usize;let off=k.p::<i32>(27);let E=k.p::<i32>(28);
-    let seed=mix((*k.p::<i32>(10).add(s) as u32)^(k.i(25) as u32).wrapping_mul(0x9e3779b9));
-    for j in 0..players {let foe=seed.wrapping_add(j as u32) as usize%players;if foe==owner {continue;}
-        let key=ar*players+foe;let lo=*off.add(key) as usize;let hi=*off.add(key+1) as usize;let count=hi-lo;if count==0 {continue;}
-        let e=lo+if count>4 {mix(seed^ar as u32) as usize%(count-3)}else{0};
-        let mut winner=e;let mut best=f32::INFINITY;let mut wid=e_id(E,e);
-        // (Lane by lane as the four-wide sum was: the same rounding.)
-        for q in e..e+count.min(4) {let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;
-            if d<best||(d==best&&e_id(E,q)<wid){best=d;winner=q;wid=e_id(E,q);}}
-        // Distance ranks a fixed batch only. It cannot reject an area-valid unit.
-        *k.p::<i32>(11).add(s)=e_slot(E,winner);*k.p::<i32>(12).add(s)=wid;return;
+    }
+    // The records: the nearest enemy unit's area; the structure (sout) at once.
+    #[inline(always)] fn key(d:u32,t:i32,ok:bool)->u64{if ok {(d as u64)<<32|t as u32 as u64}else{u64::MAX}}
+    let mut unit=[u64::MAX;AB];
+    for i in 0..nb.min(AB) {let s=bs[i];let base=(*own.add(s) as usize)*na;let lim=lim[i];let wants=wants[i];
+        let mut u=u64::MAX;let mut st=[u64::MAX;4];
+        for t in 0..4 {let a=ar[i][t];let ok=a!=u32::MAX;
+            let r=rec.add((base+if ok {a as usize}else{0})*RW);
+            let w5=*r.add(5) as u32;let du=w5&0xFFFF;
+            u=u.min(key(du,*r,ok&&(du as i64)<=lim));
+            if wants {
+                // (Class c's distance: the record's u16 at 11 + c, after the unit answer's at 10.)
+                let w6=*r.add(6) as u32;let w7=*r.add(7) as u32;
+                let ds=[w5>>16,w6&0xFFFF,w6>>16,w7&0xFFFF];
+                for c in 0..4 {st[c]=st[c].min(key(ds[c],*r.add(1+c),ok&&(ds[c] as i64)<=lim));}
+            }
+        }
+        if wants {for c in 0..4 {if st[c]!=u64::MAX {*sout.add(s)=st[c] as u32 as i32;break;}}}
+        unit[i]=u;
+    }
+    // The target area's bucket of an enemy (the first with any, from a seeded
+    // player), a fixed batch of four in it (as the unit's id and the epoch seed).
+    let mut e0=[0usize;AB];let mut e1=[0usize;AB];
+    for i in 0..nb.min(AB) {if unit[i]==u64::MAX {continue;}
+        let s=bs[i];let a=unit[i] as u32 as usize;let owner=*own.add(s) as usize;
+        let seed=mix((*ids.add(s) as u32)^epoch.wrapping_mul(0x9e3779b9));
+        let f0=((seed as u64*players as u64)>>32) as usize;
+        for j in 0..players {let mut foe=f0+j;if foe>=players {foe-=players;}if foe==owner {continue;}
+            let key=a*players+foe;let lo=*off.add(key) as usize;let hi=*off.add(key+1) as usize;let count=hi-lo;if count==0 {continue;}
+            let e=lo+if count>4 {((mix(seed^a as u32) as u64*(count-3) as u64)>>32) as usize}else{0};
+            e0[i]=e;e1[i]=e+count.min(4);break;
+        }
+    }
+    // The batch's nearest, lowest id on a tie: the least (distance bits, id)
+    // (non-negative distances order as their bits; lane by lane as the
+    // four-wide sum was, the same rounding). Distance ranks a fixed batch
+    // only: it cannot reject an area-valid unit.
+    for i in 0..nb.min(AB) {let (e,end)=(e0[i],e1[i]);if end==0 {continue;}
+        let s=bs[i];let x=*xs.add(s);let y=*ys.add(s);
+        let mut best=u64::MAX;let mut win=e;
+        for j in 0..4 {let q=e+j;let q=if q<end {q}else{e};
+            let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;
+            let kq=(d.to_bits() as u64)<<32|e_id(E,q) as u32 as u64;
+            let b=kq<best;best=if b {kq}else{best};win=if b {q}else{win};}
+        *out.add(s)=e_slot(E,win);*tid.add(s)=best as u32 as i32;
     }
 }
 
@@ -350,6 +389,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
     let near=k.p::<i32>(33);let near_n=k.p::<i32>(34);
     let gw=k.i(15);let gh=k.i(16);let tile=k.f(5);let budget=k.i(24).clamp(4,256) as usize;
     let batch_budget=budget/4;let epoch=k.i(25) as u32;let players=k.i(7).max(1) as usize;
+    let mut bs=[0usize;AB];let mut nb=0;
     for s in start..end {
         let fl=*flags.add(s);let command=*cmd.add(s) as i32;
         if fl&7!=0 || (command!=k.i(8)&&command!=k.i(9)&&command!=k.i(18)&&fl&16==0) {continue;}
@@ -357,7 +397,7 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
         if owner<0||owner>=k.i(7)||!(r>0.0){continue;}
         *out.add(s)=-1;*tid.add(s)=0;*sout.add(s)=-1;
         let x=*xs.add(s);let y=*ys.add(s);
-        if k.i(28)==1 {area_answer(&k,s,x,y,owner as usize,r);continue;}
+        if k.i(28)==1 {*bs.get_unchecked_mut(nb)=s;nb+=1;if nb==AB {area_batch(&k,&bs,nb);nb=0;}continue;}
         // Structure selection is still exact, to isolate the unit-target tradeoff.
         if command==k.i(8)||command==k.i(9)||fl&16!=0 {
             let bc=k.i(11);let br=k.i(12);let stride=bc+1;let plane=stride*(br+1);
@@ -389,4 +429,5 @@ pub unsafe extern "C" fn k_acq_sample(a:u32,chunk:i32){
         }
         *out.add(s)=best;*tid.add(s)=if best>=0 {best_id}else{0};
     }
+    if nb>0 {area_batch(&k,&bs,nb);}
 }

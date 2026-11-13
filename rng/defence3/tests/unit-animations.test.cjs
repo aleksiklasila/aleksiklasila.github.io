@@ -55,8 +55,8 @@ for (const cue of ['attack_swing', 'attack_cast', 'collector_work', 'astar_work'
 for (const weaponCue of ['weapon_sword', 'weapon_axe', 'weapon_hammer', 'weapon_daggers']) {
     assert.match(audio, new RegExp(`${weaponCue}: \\[`));
 }
-// (The kernels' attacks sound where their hits are applied: unitHitsResolve.)
-assert.match(unit, /playSound\(sty >= 1 && sty <= 4 \|\| a\.attackStyle === 'laser' \? 'attack_cast' : 'attack_swing', ax, ay, a\.unitType\)/);
+// (The kernels' attacks sound where their looks are replayed: unit.js simHitLooksReplay, from k_hit_looks' records.)
+assert.match(unit, /playSound\(code >= 1 && code <= 4 \|\| style === 'laser' \? 'attack_cast' : 'attack_swing', ax, ay, tn\)/);
 // (Workers' sounds: the worker kernel's sound events, wasm/src/wai.rs
 // OUT_SOUND_UNIT, played by worker.js through WAI_UNIT_SOUNDS.)
 const wai = read('wasm/src/wai.rs');

@@ -325,13 +325,23 @@ SIM_KERNELS[SIM_KERNEL_NAV_CHAIN] = function (R, P, chunk) {
         X[stage === 10 ? 'k_atl_blocks' : 'k_atl_tables'](_simWasmArgsW, chunk);
     }
 };
+// Whether a view is on the simulation's heap still: the current memory's buffer, or (shared
+// memory) an earlier SharedArrayBuffer of it: a grow makes a new buffer object, the views made
+// before stay good (same memory). Requiring the current buffer turned the installed build's
+// field reuse off for the rest of a match after the first grow: every build made every node's
+// field again (~9k a build at a 1024 map, ~48 ms of helper time a step at chaos-1m-250k).
+function _navOnHeap(a) {
+    if (!a || !a.byteLength || !_simWasmMem) return false;
+    const B = _simWasmMem.buffer;
+    return a.buffer === B || (typeof SharedArrayBuffer === 'function' && B instanceof SharedArrayBuffer && a.buffer instanceof SharedArrayBuffer && a.byteOffset + a.byteLength <= B.byteLength);
+}
 function navBuildChain(b, background = true) {
     const lane = _navBuildLane(), groups = Math.min(128, Math.max(1, b.nc));
     // (The installed build of the profile, the same grid and clusters, its
     // arrays in the wasm heap: its unchanged clusters' fields are kept. It
     // stays installed until this build is.)
     const q = _nav[b.profile], prev = NAV_FIELD_REUSE && background && q && q !== b && q.W === b.W && q.H === b.H && q.C === b.C && q.nc === b.nc && !!q.cost === !!b.withCosts
-        && q.wall && q.nodeBase && q.nodeTile && q.fields && q.wall.buffer === _simWasmMem.buffer && q.fields.buffer === _simWasmMem.buffer ? q : null;
+        && _navOnHeap(q.wall) && _navOnHeap(q.nodeBase) && _navOnHeap(q.nodeTile) && _navOnHeap(q.fields) ? q : null;
     const rows = b.withCosts ? Math.ceil(b.H / NAV_COST_ROWS) : 0, blocks = b.withAtlas ? Math.ceil(b.nc / NAV_ATLAS_CLUSTERS_PER_JOB) : 0;
     const counts = [rows, rows, Math.ceil(b.nc / NAV_NODES_PER_JOB), 1, groups, groups, 1, groups,
         Math.ceil(b.nc / NAV_PARTS_PER_JOB), 1, blocks, 1, b.withAtlas ? groups : 0, 1, blocks, 1];
@@ -864,7 +874,11 @@ function _navFieldsSweepSlice(k, step, mark, count = 1) {
     if (!S || !slots || !Fn.ht || !Fw.ht) return;
     const C = S.columns, P = _navSweepP;
     P[0] = k; P[1] = step; P[2] = count; P[3] = units.length; P[4] = mark; P[5] = Fn.ht.length >> 1; P[6] = Fw.ht.length >> 1;
-    simRustDirect('k_nav_sweep_mark', [slots, C.live, C.dead, C.rtEnd, C.rkF, C.nvProf, C.nvPK, Fn.ht, Fn.seen, Fw.ht, Fw.seen], P);
+    // (Its runs split over the helpers from 64k units: the marks are one value whichever thread writes them.)
+    const A = [slots, C.live, C.dead, C.rtEnd, C.rkF, C.nvProf, C.nvPK, Fn.ht, Fn.seen, Fw.ht, Fw.seen];
+    const jobs = units.length >= 65536 && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && _simPool ? 16 : 1;
+    P[7] = jobs;
+    if (jobs > 1) simRustParallel(SIM_BLOCK_NAV_SWEEP, A, P, jobs); else simRustDirect('k_nav_sweep_mark', A, P);
 }
 const _navSweepP = new Float64Array(8);
 let _navDropList = null, _navDropHdr = null;

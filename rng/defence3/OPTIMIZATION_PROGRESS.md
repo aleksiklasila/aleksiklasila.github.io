@@ -7990,3 +7990,321 @@ post, and a post runs every step at dk 4 (every fourth tick at dk 1).
   seed 41, 98 acquisition answers 25, 62 combat brain 24, 136 return spawners 21. Next: less background work (the
   flow looks' bursts, the acquisition kernels ~130 ms together), then the collectors' group rebuild at each post
   (~1.8 ms of serial kernels: candidates, group, buckets).
+
+## 2026-11-13 (evening) - background work: flow looks, nav field reuse, worker search, relayout at dk > 1
+
+Plan input: 10x_BACKGROUND.md (audit from another session). Workload: chaos-1m-250k, dk 4, 8 helpers, Node
+(tests/move-step-probe.cjs TRACE=1; raw in tests/test-runs/bg-10x-20261113/). Baseline background helper CPU
+578 / 593 ms a step (two runs), step p50 158.5 / 163.1, p95 225.8 / 207.4, 4 of 30 steps > 200 ms.
+
+- **Flow looks' exact pass (mv.rs, kernel 152)**, profile: atlas route steps 38%, the look's line test seg_open 25%
+  (quarter-tile f64 samples, a division each pair), flow_look_vals 24%. Counters (dbgc, per step): 36k looks
+  computed, ~30 route steps each (1.0M), 33k line tests; 13.5k answers dropped at the commit because the walker
+  had left the listed tile (a step passes tiles at dk 4).
+  * tile_line_open: the look's line from tile centre to tile centre by an integer grid traversal (Amanatides-Woo
+    between centres, the next edge as (1 + 2i) * span, a corner pass needs both side tiles open: seg_open's
+    diagonal rule). Used by flow_look_vals, look_way_open, look_keep. Not bit-identical to the sampling (it is
+    exact; sampling could skip a corner).
+  * The route walk without divisions: atlas.rs atlas_step_xy (coordinates given), flow_look_vals tracks the tile's
+    and reads the atlas header once a look. Same answers.
+  * Commit: an open way's answer of a walker that moved on is committed as its record at the listed tile (wall key
+    never equal), so its next turn carries it (look_keep) instead of approximating and listing again.
+  Result: looks computed 36.3k -> 29.2k a step, committed 43k -> 48k, carries 3.9k -> 12.3k; kernel 152 helper
+  CPU 113 -> 51 ms a step. Walkers' progress on the scene (helpers 0, 20 steps): mean distance gain -652.7 (old)
+  vs -638.5 (new): same behaviour. rally-pulse (open map, dk 1 / 4) identical.
+- **Nav field reuse was off for the rest of every match** (flownav.js navBuildChain): the installed build's arrays
+  had to be views on the *current* _simWasmMem.buffer; after any shared-memory grow the old views hold the earlier
+  SharedArrayBuffer object (same memory, still good), so every build made every node's local field again (~8-10k
+  a build). _navOnHeap accepts an earlier SAB of the shared memory. Now: profile 2's build 8,184 -> 14 fields, the
+  ground profile ~10k -> ~6.1k (602 of 1,140 clusters really changed in this battle).
+  nav_field's Dial queue holds (ly << 16 | lx): no division a tile. Nav family 78 -> 42 ms a step, nav_field 48 -> 10.
+- **Worker search** (identical results): k_ws_return_spawners searched every eligible spawner of its bucket (two
+  divisions each) per request: now from the request's row (binary search in the tile-sorted bucket) outward both
+  ways, stopping where the row distance passes the best (min distance, then lowest tile). k_ws_scan tested every
+  tile of a visited 8x8 work-grid block (4.5M tests a step, ~23k requests, 113k blocks): a block row's 8 flag and
+  owner bytes in one vector compare, then only the matching tiles in column order.
+- **Relayout never ran at dk > 1** (sim_unit_state.js simUnitStateRelayoutStep): it tested gameTime % 2 ==
+  phase, and a step of even dk keeps gameTime's parity: at dk 4, no step ever. Now it counts the step's base
+  ticks on the phase and moves that many shares. A/B on the same tree (WARM 45, 30 steps): relayout off / on step
+  mean 146.8 / 143.7, p95 172.5 / 166.1, background 426 / 407, k89 wall 39.3 / 36.5; the same live population at
+  the end (262,610) both ways.
+- **Measured** (after flow looks only, two runs, WARM 15): step p50 146.1 / 147.2, p95 177.2 / 180.7, max
+  182.4 / 184.5, 0 steps > 200 ms, background 510 / 509 ms a step.
+- **Found, not fixed: slot order is random at tile scale.** Acquisition's area_answer (~37 ms a step, 87 ns a unit)
+  and visibility seed are per unit in slot order with tile -> area -> record reads: consecutive candidate slots
+  share a tile ~3% and an area ~22% of the time (a memo of the last unit's answer hit 0.4%: tried, reverted).
+  The relayout keeps units in their 16x16 slab, not in tile order within it. Next lever for acquisition /
+  visibility: iterate in spatial order (index entries or area buckets) or order slots within a slab by tile.
+- Remaining background (helper CPU a step, relayout on): acquisition scan 53, flow looks 48, nav build 46,
+  visibility seed 36, worker scan 31, area answers 26, combat brain 13.
+- Tests run between slices (smoke): flow-looks-commit, nav-look-cache-wall, nav-atlas, mixed-rally-move,
+  separation-rally, chaos-scenario-determinism, shared-spatial-determinism, event-route-determinism,
+  nav-flow-width, area-worker-search, worker-brain-spawners, collector-farms, worker-completion-publication,
+  worker-search-deltatick, worker-take-rounds, ws-nearfield-split, nav-background, nav-build-interleaving,
+  nav-shared-build: all pass. Full / multiplayer determinism rounds not run yet (user: at the end).
+
+## 2026-11-13 (night) - serial JavaScript off the simulation thread: hit looks, worker search remap, structure rows, retire, nav sweep
+
+User: get all serial JS off the simulation thread into parallel wasm + SIMD; tables SIMD-ready and narrow; what must stay
+JavaScript optimized too. Measured with tests/move-step-probe.cjs (chaos-1m-250k, dk 4, 8 helpers, WARM 45, EVAL=
+'SIM_LOOKS_DEFER=true' as in the browser worker) and tests/test-runs/bg-10x-20261113/serial-top.cjs (serial time by
+top-level owner and self). Start: serial JS 37.1 ms a step, serial wasm 13.6.
+
+- **Hit looks as records** (wasm/src/looks.rs k_hit_looks; unit.js _hitLooksMake / simHitLooksTake / simHitLooksReplay):
+  the presentation of a step's hits (attack effect, sounds, damage flash, alert) was a JS loop on the simulation thread
+  that made Unit objects for both sides (owners.at, then id / owner / x / unitType getters) and called five recorders
+  per hit (in the worker each became a string-tagged event with ['u', id] arrays). Now a kernel writes SoA records
+  (kind / style / type u8, owner i8, damage f32, ids and positions i32 eighths) from the hits kernel's look list, the
+  shots' hits and the units' structure hits; the worker transfers them as one buffer with the step's events
+  (sim_worker.js _simEvTake, out.l), the page replays them (sim_client.js). Type: the spatial type index (spType),
+  style: atkSty, else the type's base attackStyle. The dead JS hit queue (_hitQ, _unitHitQueue: no callers),
+  _unitHitUnit, _unitHitBuilding and their fallbacks deleted. unitHitsResolve serial 12.9 -> < 0.8 ms a step.
+- **Worker search commit's slot remap** (uix.rs k_slots_by_id): with the relayout now running every step, _wsCommit
+  remapped every request by id in JS (owners.at(s).id, getUnitById); now one kernel over the id index.
+- **Structure rows' expiry** (uix.rs k_rows_fill; data_state.js _sRowsFree): every heap column (numbers, the shared
+  columns' pool indices, the tokens) of the expired runs filled with its empty value by splatted 16-byte stores (a
+  job a column on the helpers from 256 rows: block 6); JS keeps only the reference columns (presentation caches: 2-3
+  a table), the token entries, rowObj and the derived maps, as plain loops. New test structure-rows-fill (expired rows
+  equal never-used rows in every column; passes on the old JS too).
+- **Retire release in parallel from 512 slots** (was 4096: a battle step retires 2-4k units, all serial ~1.1 ms).
+- **Nav field sweep marks** (nfs.rs k_nav_sweep_mark, block 7): contiguous shares of the runs on 16 jobs from 64k
+  units (idempotent marks).
+- Measured (two runs each, WARM 45, 30 steps; HEAD = commit 6e5ff4b's wasm + JS):
+  HEAD mean 148.6 p50 144.4 p95 177.7 max 200.9; after the background work 143.7 / 143.3 / 166.1 / 170.4; now
+  132.0 / 129.6 / 156.1 / 159.9 and 128.1 / 124.3 / 152.6 / 158.2. Same live population at the end (262,610).
+  Serial JS 37.1 -> 18.6 ms a step, serial wasm 13.6 -> 14.8 (k_hit_looks, k_rows_fill, k_slots_by_id added).
+- Serial wasm left (direct calls, ms a step): k_relayout_plan 1.2, k_retire_release 1.1 (now parallel), k_nav_sweep_mark
+  1.1 (now parallel), k_ixd_relayout 1.0, mvt_sync_plan 1.0, k_ws_buckets 0.9, k_struct_status 0.8, k_tower_fire 0.7,
+  k_rows_fill 0.6, k_uix_remove 0.6, k_spawn_births 0.6. JS left: many items under 1 ms (status prepass's damage
+  visuals, research level lookups, unit events glue, heap copies in simMoveRun / flowLooksPost).
+- Tests (smoke): combat-effects, sim-event-pack, structure-instruction, team-watch-effects and unit-animations (their
+  source assertions moved to the new code), pending-damage-restore, projectile-pool, tower-kernel-cases,
+  structure-row-expiry-snapshot, structure-row-reuse, starter-building-cap, structure-rows-fill, nav-field-sweep,
+  unit-gone-objects, unit-retirement, chaos-scenario-determinism, shared-spatial-determinism,
+  multiplayer-chaos-determinism: pass. Not yet: the parallel row fill under real helpers, browser (Edge) runs.
+
+## 2026-11-13 (late night) - flashes off, more single-threaded work parallel, the foreground as stages (first part)
+
+- **Damage flashes off** (user: to be rethought): SIM_DAMAGE_FLASH = false (data_static.js); recordDamageVisual and the
+  worker's recorder return at once; the status pre-pass makes no unit object for a damage tick's flash.
+- **Single-threaded kernels on the helpers:** the parallel heap copy from 512 KB in 256 KB jobs (was 4 MB / 1 MB: the
+  flow looks' wall snapshots, ~1 MB a profile, were copied on the simulation thread, ~1.6 ms a step); the relayout's
+  index entries renamed in 16 shares (tch.rs k_ixd_relayout, block 8; its pairs' moves stay one call).
+- **Stages** (sim_parallel.js simParallelStage, SIM_KERNEL_STAGE 192): one parallel job of up to 16 entries (kernels with
+  their own params, or block kernels with their own argument areas: stage.T / stage.P / stage.blk), longest pieces
+  first; simParallelRun takes a local task the simulation thread runs after posting, before it takes chunks. While a
+  local task runs, this thread's _simParams is a scratch array (the helpers read the job's parameters from the shared
+  one: a task writing _simParams corrupted the running movement, a helper kernel failed at 1M) and a job posted inside it
+  runs on this thread alone (_simInLocal).
+- **Movement companions** (unit.js simMoveCompanion / _simMoveCompanionTask / simMoveCompanionsFlush): JavaScript run
+  beside the movement's stages (0 the first stage, 1-4 the occupancy's phases); the first: structRowsExpire (retired rows
+  only, which no tile names). Not research drain: its spend refreshes the stat tables (k_stat_fill -> eff.hot) the
+  movement reads. multiplayer-chaos-determinism with 4 host helpers: six maps, 2610 tick hashes each, pass.
+- **Measured** (WARM 45, 30 steps, SIM_LOOKS_DEFER): mean 122.9 / 125.8, p50 121.7 / 122.8, p95 145.6 / 155.9, max 149 /
+  160 (HEAD 148.6 / 144.4 / 177.7 / 200.9); kernel walls k89 33.3, k8 11.7-12.4. Run variance is large: two runs of the
+  same tree minutes earlier gave 140.5 and 156 with every kernel slower (machine load): repeat before comparing.
+- **Where the foreground goes now** (wall a step): k89 occupancy ~33, k8 movement ~12, slot moves 4, mover-table sync
+  blocks 3, acquisition snapshot 2.6, worker decide 2.3, flow-look listing 2, spatial counts 2, traffic capture 2,
+  statuses, effective stats, visibility snapshot, unit gone ~1.7 each, worker-search select 1.6; ~34 ms single-threaded.
+  Total foreground CPU ~600-800 ms a step: ~70-90 ms on 9 threads at best, so under 60 ms needs less work too.
+- **Next (user's direction):** no serial parts on the foreground: each item a stage entry or a fused pass. Fuse the
+  per-slot sweeps that read the same columns (snapshots for acquisition / visibility / statuses / spatial counts /
+  flow-look listing / worker select) into the movement's own passes, memory being the bound; snapshots by flipping
+  buffers (the movement writes the next positions into the other buffer, the last one is the snapshot) instead of
+  copying columns; then the occupancy kernel's own work (half the foreground CPU).
+
+## 2026-11-13 (late night, 2) - the step's foreground mapped; unit-gone chunks; worker select in one sweep
+
+- **The step's parallel jobs in order** (tests/test-runs/bg-10x-20261113/order-driver.cjs: kernel, chunks, wall, caller, one
+  dk-4 step at chaos-1m-250k, 8 helpers): 62 jobs, ~106 ms inside them. Before the movement: effective stats 1.9, visibility
+  snapshot 3.1, statuses 2.4, worker select 2.4 + 2.8, worker groups 4 x ~0.3, flow commit 1.5, acquisition commit 1.4 +
+  combat commit 1.1, acquisition snapshot 3.7; the movement 13.2 + mover-table blocks 1.5 + occupancy 8.5 / 9.4 / 9.2 / 10.4;
+  after: traffic capture 1.5, flow listing 2.8, worker decide 1.4, spatial counts 1.8, hits 1.7, unit gone 3.9 (2 chunks),
+  adjacency post 1.0, slab score 1.1, slot moves 4.7, slot remap 1.8.
+- **Unit gone**: UNIT_GONE_PER 4096 -> 512 (2-8k removed a battle step: 2 jobs, the other helpers idle; per-chunk buffers
+  merged in chunk order, the same result). Now under 1.6 ms.
+- **Worker select in one sweep** (k.rs k_ws_select, ws.rsel): the count pass lists each chunk's due slots; the payload pass
+  writes only those (same requests, same order); sixteen slots without a live registered worker skipped by one vector test.
+  2.4 + 2.8 ms -> under 1.6 together. Worker tests pass.
+- Timing on this machine varies a lot between runs (kernel 89, untouched, 33.3 -> 36.1 ms between runs minutes apart):
+  stg-c/d 122.9 / 125.8 ms mean, stg-e/f 132.4 / 129.4 after these changes; compare kernel walls, not step means.
+- Left: per-slot snapshot sweeps are SIMD already and memory-bound (acquisition ~70 B a slot read+write); kernel 89 (~34 ms
+  wall, half the foreground CPU) is the lever for the sub-60 ms goal (MOVE_OCCUPANCY_OPTIMIZATION_PLAN.md: profile the
+  resolve's arithmetic in pieces before another rework).
+
+## 2026-11-13 (late night, 3) - unit column census; presentation marks in vectors; MEMORY_FUSION_PLAN.md
+
+- **Census** (tests/test-runs/bg-10x-20261113/colcensus.cjs, colbytes.cjs): 790 bytes of unit columns a slot at
+  chaos-1m-250k; the per-step sweeps name 24-104 B a slot each (statuses 104, effective stats 83, worker select 65,
+  presentation marks 64, acquisition snapshot 53, occupancy 49, visibility snapshot 24); dead / x / y / owner / live / stIx
+  / sepKey / energy / id / statRow are re-read by 4-10 of them a step. mvNav and mvSteer are 32 B each; ~30 four-byte
+  columns are constant over every live unit of the scene: mostly rare-feature columns (explicit paths: mvBase / mvPlen /
+  mvScan / mvWlen / mvPath, mv.rs move_path; lasers; attack orders; chases; separation carries), not dead: to sparse
+  records (they cost residency and every per-unit copy: births, slot moves, resets). Truly unused now: the three
+  damage-flash JS-field columns (flashes off).
+- **Presentation marks (k_pv_marks, every step in the browser: 3.4-5.2 ms at 8 helpers measured in Node)**: sixteen slots
+  without a live unit whose marks hold the empty signature (low 31 bits of id -1's hash: nothing else counts for them)
+  passed over reading live / dead / pvS only; live slots four at a time (the mixing in i32 lanes, the change tests as
+  masks, the order destination's code and the writes per lane). Bit-identical (pvAt / pvS / pvOD hash, tests/test-runs/
+  bg-10x-20261113/pvcheck.cjs); single-threaded 25-30 -> 12-17 ms.
+- **False sharing audit**: per-chunk count words are one write a chunk (thousands of slots): negligible; shared-table
+  atomics in unit gone, hits, the visibility seed (background): unit gone got faster spread over more threads. Rule for
+  every fusion / stage: per-job outputs on their own 128-byte lines, no two entries of a stage writing one table.
+- Timing (WARM 45, 30 steps): mean 129.4 / 124.5, p95 159.4 / 151.7 (noise as before; the marks are not in Node's step).
+- Plan: MEMORY_FUSION_PLAN.md (stages: cheap skips, rare-feature columns to sparse records, a hot state word, packed
+  records (mvNav / mvSteer 64 -> ~28 B), fused step-start and post-movement sweeps, false sharing per stage).
+
+## 2026-11-14 - sweeps: visibility snapshot in vectors, acquisition commits fused into the snapshot; dead copies and columns out; research every step
+
+Data and tools: tests/test-runs/fusion-20261114/ (snapcheck.cjs: per-step hashes of the visibility snapshot, status copies,
+energy, acquisition snapshot and positions, plus the sweeps' walls, for comparing builds; rcprobe.cjs: research
+completions / stat refills / drain time a step). tests/move-step-probe.cjs takes KTOP=n (kernels listed).
+
+- **Which sweeps are memory-bound** (all kernels at 8 vs 2 helpers, 9 vs 3 threads, Ryzen 7 4800H, DDR4-3200): ACQ_SNAP
+  scales 1.36x, EFF_UNITS 1.59x, WS_SELECT 1.6x, COPY / BLOCK ~1.0-1.1x (bandwidth or dispatch); VIS_SNAP 2.35x and
+  SP_COUNTS 2.4x (compute); occupancy 89 and movement 8 2.4x. The swept slots are ~72% live (no 16-slot group empty in
+  the scene): skipping empty slots gains nothing more here.
+- **Visibility snapshot (k.rs vis_snap_range) four slots a lane**: tile and edge flags in f32 lanes, the sight key's table
+  reads per lane (the watch team only where a lane has a status record). Bit-identical (vt.p / vt.key hashes); wall
+  2.0 -> 0.9-1.0 ms.
+- **Status pass: no separation copies with the occupancy** (unit.js statusPrepassRun P[4] = 0): sepD0 / sepR0 / sepL0 are
+  read only by sep_pack, which never runs with SIM_OCCUPANCY_ENABLED. Wall 1.7 -> 1.4. (Found because those copies
+  differed run to run on odd steps, only in released slots (live 0, dead 1): a background release racing the bulk copy
+  of slots nobody reads; dead / r / collisionR before the step and every read column were identical.)
+- **Acquisition commits in the snapshot's pass** (k.rs k_acq_snap + acq_commit_range; unit.js _acqCommit(defer),
+  _acqCommitFlush, P[9..11]): the tier commits at phase 0 and posts at phase 2 of its 4 ticks, so at dk 4 every step ran
+  ACQ_COMMIT, COMBAT_COMMIT and ACQ_SNAP back to back over the same slots. Now one pass in 1024-slot sub-blocks: each
+  slot's answers committed (acq.out / id / rng / sout, the brain's bm / bt / btid) then snapshotted. Alone as before
+  when no post follows (dk 1, early returns) and before the snapshot arrays grow. Identical hashes on every step;
+  4.2 -> 3.6-3.7 ms, two jobs fewer.
+- **Worker-search buckets** (wsb.rs k_ws_buckets): each site's bucket computed once into a scratch (wsg.bki), not twice
+  (two f64 divisions a coordinate each time); 0.9 ms serial a step before.
+- **Damage-flash unit columns removed** (j__damageFlashStart / Until / Strength, the jr__damageFlashColor JS array, and the
+  constructor's fields): flashes are off (SIM_DAMAGE_FLASH) until redesigned as slot columns; 12 B a slot less in every
+  slot move, birth and reset, and a slot-long JS array less. SNAP_SKIP_KEYS keeps the names.
+- **Research drained every step** (user: absolute tick periods are worse than per-step work; worker.js researchDrainTick):
+  was every 10 ticks, so at dk 4 one step in 2-3 did all completions at once (~4.6 ms of serial JS: up to 64
+  completions a player, each refilling its (owner, type)'s stat rows). Spending is rate-free, so research now lands
+  sooner and evenly. Within a drain each completed stat is published once (data_dynamic.js researchPublishBatch*:
+  levels / multipliers set at once, the tables and their follow-ups at the drain's end) and each (owner, type)'s rows
+  filled once (things_utils.js effFillBatch*). Drain 0.5-3.6 ms a step (13-64 completions, 5-43 distinct stats).
+  Gameplay changes: the chaos scene's battle goes differently (248k vs 263k alive after 75 steps), and occupancy /
+  movement cost ~1-1.5 ms more each in that battle. Same-time A/B (old gate via EVAL, two runs each): mean 113.4 / 112.5
+  (10 ticks) vs 117.5 / 115.2 (every step), p95 135.8 / 133.1 vs 143.8 / 135.6.
+- Tests: local-visual-snapshot, unit-animations, team-watch-effects, combat-effects, worker-take-rounds,
+  area-worker-search, ws-nearfield-split, worker-walk, worker-brain-spawners, slot-relayout, unit-gone-objects,
+  structure-instruction, chaos-scenario-determinism, the five research tests; multiplayer-chaos-determinism with 4 host
+  helpers (six maps, 2610 tick hashes each) pass, the last after all changes.
+- Timing caveat: this machine's step mean moved 125 -> 138 -> 113 ms between runs of the same tree within the hour;
+  compare same-time A/B and kernel walls only.
+- Not done (MEMORY_FUSION_PLAN.md): mvNav / mvSteer packing and the hot state word belong to kernels 8 / 89 (the
+  occupancy plan's session); sparse records for the rare-feature columns; a STATUS + VIS_SNAP fusion (~0.5 ms: vis
+  reads the pre-status dead, so the order must hold). The 64-completions-a-call guard in researchQueueSpend is a
+  per-call cap left as it was.
+
+## 2026-11-14 (later) - tick gates audited: the lumps are starved background lanes; helper notify traffic; spawner rings by a distance field
+
+Scope (user): everything but the occupancy (k89; the movement k8 belongs to that plan too), most time first. Tools in
+tests/test-runs/fusion-20261114/: phaseprobe.cjs (per step, every top-level call of _gameTickBody and every parallel
+kernel timed; means by step index mod P: periodic costs; WRAPFILE / WRAPRE wrap more functions), and
+tests/move-step-probe.cjs PROF=prefix (the helpers' CPU profiles, tests/profile-self.cjs).
+
+- **Gates** (every-N-ticks, global): research drain (now every step), boost debt check (20, cheap), adjacency lane (8),
+  nav-array sweep (32 free-clock steps), healer cache (10), work list (20), builder cache, log / effect throttles.
+  Per-step times at dk 4 show 8- and 32-tick patterns, but none of these gates is what costs: **the lumps are the
+  simulation thread waiting at fixed commit steps for background lanes that the helpers did not finish**: navBuildCollect
+  13-35 ms every 4th step (the nav build chain, lane LONG, last in SIM_PAR_BG_ORDER, 4-11 shares left at its collect),
+  _wsCommit 15 ms one step in 8 (the worker search lane). A 3-step nav gap only spaced the waits out (12-24 ms each);
+  rushing the build lane removed them but moved the wait to the adjacency lane (12-14 ms twice in 8 steps), mean and
+  p95 no better: reverted. The helpers' background demand (~410 ms CPU a step: acquisition tier 138, flow exact looks
+  50, nav chain 45, visibility seeds 36, worker search scan 30, worker spawners 28) is about what they have free
+  beside the foreground. Less background CPU is the fix, not scheduling.
+- **Helper notifies** (sim_parallel.js): a background claim notified the lane's readers every time, a foreground chunk
+  notified DONE every time, every helper leaving a job notified ACTIVE: each takes V8's process-wide futex lock. Now
+  only a closing lane's readers, the job's last chunk and the last helper out notify (the waiters re-check counts and
+  time out anyway). _simBgClaim self 32 -> 19-20 ms of helper CPU a step.
+- **Worker spawners** (worker_brain.rs; worker.js workerBrainsPrepare): a chain stage (k_worker_sites P[2] 2, a job per
+  owner x kind) makes each block's chessboard distance to the nearest block with such a site (two chamfer passes,
+  wb.dist, u8); k_worker_spawners starts its rings there (the rings before hold none: the same answer). 30.4 -> 10.7 ms
+  (+2.6 for the field) of helper CPU a step. Identical wbSpawner / wbTick hashes on every step.
+- **Slot moves** (nfs.rs k_slot_move): the old slot's value reset only where it differs from the default (a store
+  dirties the line; most columns of most units hold the default). 40.6 -> 36.6 ms CPU a step; same hashes.
+- Tried and reverted (no gain, measured): a per-job cache of visibility seed cells (k_vis_seed 39 -> 42: repeats are
+  not its cost); bucket-local sample windows in the acquisition (55 -> 57: the entry reads are not its cost); a per-job
+  cache of area answers by (tile, edges, team, reach) (37 -> 39: exact, but no gain). The acquisition sample is
+  600k units a step (94% also look for structures) at ~62 ns each in area_answer's tile / record loop (2 teams x 126k
+  areas x 32 B records = 8 MB, about this CPU's L3; agrid 4 MB); prof builds now keep area_answer / area_sample apart.
+- Tests: worker-brain-spawners, worker-take-rounds, area-worker-search, worker-walk, ws-nearfield-split, slot-relayout,
+  unit-gone-objects, nav-background, nav-build-interleaving, nav-shared-build, chaos-scenario-determinism,
+  shared-spatial-determinism, research-queue, multiplayer-chaos-determinism with 4 host helpers: pass.
+- Helper CPU by function now (1.1-1.2 s a step, 16-step profiles): movement / occupancy family (the other session),
+  then k_acq_sample 53-58, k_vis_seed ~40, k_slot_move ~37, k_acq_area_answers 26-30, k_acq_snap ~30 (foreground),
+  k_ws_scan ~29, k_sp_counts ~20, k_atl_route ~19, k_vis_spread ~18, k_acq_area_count ~16, k_eff_units ~15, combat
+  brain ~12, helper spin ~26.
+
+## 2026-11-14 (night) - acquisition lane: the sample in stages, the combat brain batched; flow looks and nav installs
+
+Scene chaos-1m-250k, dk 4. Background CPU is what starves the fixed commits
+(entry above), so this round cut the acquisition lane, the biggest.
+
+**Tools (tests/test-runs/fusion-20261114/):**
+- `bgkprobe.cjs`: every kernel's CPU a step on one thread (no helpers: the
+  chains run at their waits), `EVAL` / `AFTER` host code (e.g. reading the
+  `--features=dbgc` counters at argI word 1536).
+- `kbench.cjs`: one kernel's whole run timed again and again with `P[60]`
+  modes, outputs hashed (`HASH=`). The reruns happen inside the background
+  wait that ran the kernel (its lane complete, nothing committed or posted
+  since): rerunning after the step read the next post's snapshot (`acq.out`
+  reset to -2) and timed the combat brain at 22 ms instead of its 61.
+- `build.sh`: the wasm build failing loudly. **Pitfall:** `node wasm/build.cjs
+  | grep ^error` hid a failed build ("the module has data segments": a bounds
+  check's panic location from `bs[nb]` indexing) and several experiments ran
+  on the previous binary. Check the exit status; index scratch arrays with
+  `get_unchecked`.
+
+**k_acq_sample (acq_sample.rs area_batch): 79 -> 55 ms a step (one thread).**
+Split by modes on the same snapshot: loop and gate 10 ms, target window 25
+(of which the variable 1-4 tile loop ~14 with no memory at all), structures
+15, the sample 30. A branch-free rewrite alone gained nothing; the batch did:
+units in batches of 32, a stage a memory level (window tiles -> records ->
+target bucket -> its entries), each stage's loads independent, the window
+always 2x2 (a minimum takes a duplicate tile once), answers as u64 (distance,
+target) keys. Output identical (hash). Then the two integer divisions of the
+sample (`% players`, `% (count - 3)`) as multiply-high reductions: -2.7 ms;
+other entries sampled, as uniform, deterministic (the scene's end hash
+changes once). Chunks of 1024 instead of 256: nothing (empty chunks cost
+~0.4 us each).
+
+**k_combat_brain (k.rs): batched in-range questions, output identical; 61 ->
+59 ms.** Split: base 17 (decisions; random reads of the current target's
+columns), windows 23, area-hop search (`arq.within`) 19. Batching the windows
+(branch-free, the target's own tile checked as `area_of` did) barely helps:
+what remains is the random target-slot reads. Not Liftoff (`--no-liftoff`
+the same), not page faults (78 in a run).
+
+**Same-time A/B, 8 helpers, 30 steps (old = previous session's binary):**
+mean 132.7 / 130.5 old vs 130.0 / 128.8 new; p50 131.5 / 130.4 vs 127.4 /
+127.7; p95 ~159 both. Each binary repeats its own end hash.
+
+**Flow looks (dbgc counters a step):** ~106k listed, 24.7k from the shared
+look cache, 81.4k made (~0.33 us each), 32.3k answers dropped at the commit
+because the profile's build version changed (counter 105). A post's commit
+waits floor(pend / 131072) + 1 steps (~3-5 at this scale); the nav job that
+installs inside that window usually starts after the post, so skipping by the
+nav schedule cannot be predicted at the post (tried with the mask at the
+exact stage: no change; reverted). The real cost: every install
+(`navPublish`, `_navVersion++`) invalidates every look and walker record of
+its profile (keys hold the build version), so each install re-lists the
+profile's walkers. Open (a behaviour choice): keep a look across an install
+while its way is still open (as the commit already does across wall changes,
+`look_way_open`), or a version per region of the build.
+
+**Tests:** multiplayer-chaos-determinism (4 host helpers, six maps, 2610
+hashes each), chaos-scenario-determinism, structure-instruction,
+combat-effects, shared-spatial-determinism, slot-relayout,
+unit-gone-objects, tower-simd-determinism, event-route-determinism: pass.
+
+**Next by single-thread CPU a step (k89/k8 occupancy and movement aside):**
+k33 acquisition sample 55, k62 combat brain 51, k39 worker search scan 42,
+k152/k153/k151 flow looks 27/19/15, k32 acquisition snapshot 22, k28 vis seed
+21, k135 nav chain 21, k98 area answers 18, k185 free zero 17.

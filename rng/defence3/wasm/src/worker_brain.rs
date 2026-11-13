@@ -31,12 +31,30 @@ pub unsafe extern "C" fn k_ws_return_spawners(a: u32, chunk: i32) {
         let (ux, uy) = (floor(*x.add(i) as f64 / tile) as i32, floor(*y.add(i) as f64 / tile) as i32);
         if ux < 0 || ux >= w || uy < 0 || uy >= h { continue; }
         let b = (role * owners + o) as usize;
+        // (The nearest by Manhattan distance, the lowest tile on a tie: the bucket is in tile
+        // order, so from the first tile of the worker's row outward both ways, each way ending
+        // where the row distance alone passes the best: what a pass over all of them finds.)
+        let (lo, hi) = (*off.add(b) as usize, *off.add(b + 1) as usize);
+        let row0 = uy * w;
+        let (mut l, mut r) = (lo, hi);
+        while l < r { let m = (l + r) >> 1; if *tiles.add(m) < row0 { l = m + 1; } else { r = m; } }
         let mut best = -1;
         let mut best_dist = i32::MAX;
-        for j in *off.add(b)..*off.add(b + 1) {
-            let t = *tiles.add(j as usize);
-            let dist = (irem(t, w) - ux).abs() + (idiv(t, w) - uy).abs();
+        for j in l..hi {
+            let t = *tiles.add(j);
+            let ty = idiv(t, w);
+            if ty - uy >= best_dist { break; }
+            let dist = (t - ty * w - ux).abs() + (ty - uy);
             if dist < best_dist { best = t; best_dist = dist; }
+        }
+        let mut j = l;
+        while j > lo {
+            j -= 1;
+            let t = *tiles.add(j);
+            let ty = idiv(t, w);
+            if uy - ty > best_dist { break; }
+            let dist = (t - ty * w - ux).abs() + (uy - ty);
+            if dist < best_dist || (dist == best_dist && t < best) { best = t; best_dist = dist; }
         }
         *out.add(i) = best;
     }
@@ -48,6 +66,26 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
     let code=k.p::<u8>(0);let owner=k.p::<i32>(1);let uc=k.p::<u8>(2);let en=k.p::<f64>(3);let brain=k.p::<u32>(4);
     let sites=k.p::<u16>(5);let cnt=k.p::<i32>(6);let any=k.p::<i32>(7);
     let np=k.i(6).max(0) as usize;let stride=k.i(7).max(16) as usize;
+    // Stage 2: job (owner * 6 + kind): the blocks' chessboard distance (in blocks, 255 at most: [8] wb.dist) to the
+    // nearest block holding a site of that owner and kind (two chamfer passes: exact for unit steps in 8
+    // directions). k_worker_spawners starts its rings there: the rings before hold none of them.
+    if k.i(2)==2 {
+        let job=chunk.max(0) as usize;let (own,kind)=(job/6,job%6);if own>=np{return;}
+        if *any.add(own*16)&(1<<kind)==0 {return;}
+        let cols=k.i(5).max(1) as usize;let rows=((k.i(4)+7)/8).max(0) as usize;let nb=cols*rows;
+        let d=k.p::<u8>(8).add(job*nb);
+        for b in 0..nb {*d.add(b)=if *cnt.add(b*stride+1+own)&(1<<kind)!=0 {0}else{255};}
+        let relax=|d:*mut u8,b:usize,o:usize|{let v=(*d.add(o)).saturating_add(1);if v<*d.add(b){*d.add(b)=v;}};
+        for y in 0..rows {for x in 0..cols {let b=y*cols+x;
+            if x>0 {relax(d,b,b-1);}
+            if y>0 {relax(d,b,b-cols);if x>0 {relax(d,b,b-cols-1);}if x+1<cols {relax(d,b,b-cols+1);}}
+        }}
+        for y in (0..rows).rev() {for x in (0..cols).rev() {let b=y*cols+x;
+            if x+1<cols {relax(d,b,b+1);}
+            if y+1<rows {relax(d,b,b+cols);if x+1<cols {relax(d,b,b+cols+1);}if x>0 {relax(d,b,b+cols-1);}}
+        }}
+        return;
+    }
     if k.i(2)==1 {
         let own=chunk.max(0) as usize;if own>=np{return;}
         let mut mask=0;for b in 0..k.i(0).max(0) as usize {mask|=*cnt.add(b*stride+1+own);}
@@ -137,7 +175,9 @@ pub unsafe extern "C" fn k_worker_spawners(a:u32,chunk:i32){
         let mut best= -1;let mut distance=i32::MAX;
         if *any.add(own as usize*16)&(1<<kind)!=0 {
             let cx=ux/8;let cy=uy/8;
-            for r in 0..cols.max(rows) {
+            // (From the first ring a site of this owner and kind can be in: k_worker_sites' distance field [16].)
+            let r0=*k.p::<u8>(16).add((own as usize*6+kind as usize)*(cols*rows) as usize+(cy*cols+cx) as usize) as i32;
+            for r in r0..cols.max(rows) {
                 let x0=(cx-r).max(0);let x1=(cx+r).min(cols-1);let y0=(cy-r).max(0);let y1=(cy+r).min(rows-1);
                 if cy-r>=0 {for bx in x0..=x1 {visit(&k,bx,cy-r,own,kind,ux,uy,&mut best,&mut distance);}}
                 if r>0&&cy+r<rows {for bx in x0..=x1 {visit(&k,bx,cy+r,own,kind,ux,uy,&mut best,&mut distance);}}

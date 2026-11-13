@@ -48,8 +48,9 @@ assert.equal(target.watched, 0);
 assert.equal(target.watchedByTeam, -1, 'expired reveal should clear its team');
 
 assert.match(renderer, /watchedByTeam\)\) === targetId/);
-assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(target, 'watch'/);
-assert.match(unit, /(this|a)\.unitType === 'scout'\) applyStatusEffect\(tb, 'watch'/);
+// (Scouts' watches come from their hits in the kernels: style code 5, the watch key in the slot's columns.)
+assert.match(unit, /st === 'swoop' && a\.unitType === 'scout'\) \? 5/);
+assert.match(unit, /c\.atkSty\[s\] = _hitStyleCode\(u\); c\.atkWatch\[s\] = _unitWatchTicks\(u\)/);
 // (A watch tower prefers units its own team does not watch: the kernel's.)
 assert.match(towerRs, /m&affected!=0&&\(ty!=7\|\|\*wt\.add\(su\) as i32==own as i32\)/);
 assert.match(dataStatic, /scout: \{[\s\S]*?watchDuration: \{base: 5/);

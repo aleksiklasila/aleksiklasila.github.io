@@ -553,10 +553,6 @@ class Unit {
         this.researcherHasMaterial = undefined;
         this._astarBudgetRetryTick = undefined;
         // (The workers' and other roles' memory: UNIT_ROLE_FIELDS, below.)
-        this._damageFlashStart = 0;
-        // Same meaning as unset (no flash); typed like the values set later
-        // (see the widening note above): -0 is a fractional-kind zero.
-        this._damageFlashUntil = 0; this._damageFlashStrength = -0; this._damageFlashColor = '';
         this._scoutTarget = undefined;
 
         this._spatialKey = undefined; this._spatialAreaId = undefined; this._spatialTile = -1; this._spatialOwner = -1; this._spatialEpoch = 0;
@@ -1252,22 +1248,95 @@ Object.defineProperty(Unit.prototype, 'isKing', { configurable: true, enumerable
     get() { return this.unitType === 'king'; },
     set(v) { if (v !== (this.unitType === 'king')) Object.defineProperty(this, 'isKing', { value: v, writable: true, enumerable: true, configurable: true }); } });
 
-// The tick's attacks (see Unit._performAttackOnUnit): attacker, target,
-// whether the target is a building, the damage and where the attacker
-// stood, in the order they were made.
-const _hitQ = { n: 0, a: [], t: [], b: new Uint8Array(1024), dmg: new Float64Array(1024), x: new Float64Array(1024), y: new Float64Array(1024) };
-function _unitHitQueue(attacker, target, building) {
-    const Q = _hitQ, i = Q.n++;
-    if (i >= Q.b.length) {
-        const grow = (A, T) => { const r = new T(A.length * 2); r.set(A); return r; };
-        Q.b = grow(Q.b, Uint8Array); Q.dmg = grow(Q.dmg, Float64Array); Q.x = grow(Q.x, Float64Array); Q.y = grow(Q.y, Float64Array);
+// The hits' looks (presentation only) as SoA heap records, made by a kernel
+// (wasm/src/looks.rs k_hit_looks) from the hit kernels' look lists and the
+// unit columns: no unit objects, no JavaScript per hit on the simulation
+// thread. A worker sends them to the page as one buffer (simHitLooksTake,
+// sim_worker.js _simEvTake); the page replays them (simHitLooksReplay). Run
+// on the page itself (no worker: tests, tools) they are replayed at once.
+// Columns: kind (0 unit on unit, 1 a shot on a unit, 2 unit on structure),
+// attacker id, target id (kind 2: tile), positions (eighths), damage, the
+// attacker's owner, style code, type (spatial type index).
+const _lk = { cap: 0, kind: null, aid: null, tid: null, ax: null, ay: null, tx: null, ty: null, dmg: null, own: null, sty: null, typ: null, hdr: null, P: new Float64Array(12) };
+// (Set by sim_worker.js: the records go to the page with the step's result.)
+let SIM_LOOKS_DEFER = false;
+function _hitLooksArrays() {
+    const L = _lk, cap = SIM_HITS_PRESENT_MAX + SIM_HITS_OUT + SIM_STRUCT_HIT_LOOKS;
+    if (L.cap !== cap || !simHeapHas(L.hdr) || !simHeapHas(L.kind)) {
+        for (const k of ['kind', 'aid', 'tid', 'ax', 'ay', 'tx', 'ty', 'dmg', 'own', 'sty', 'typ', 'hdr']) if (L[k]) simHeapFreeAuto(L[k]);
+        // (Every column whole 16-byte vectors long.)
+        const pad = (cap + 15) & ~15;
+        L.kind = simSharedArray(Uint8Array, pad); L.sty = simSharedArray(Uint8Array, pad); L.typ = simSharedArray(Uint8Array, pad); L.own = simSharedArray(Int8Array, pad);
+        L.aid = simSharedArray(Int32Array, pad); L.tid = simSharedArray(Int32Array, pad); L.ax = simSharedArray(Int32Array, pad); L.ay = simSharedArray(Int32Array, pad);
+        L.tx = simSharedArray(Int32Array, pad); L.ty = simSharedArray(Int32Array, pad); L.dmg = simSharedArray(Float32Array, pad); L.hdr = simSharedArray(Int32Array, 4);
+        L.cap = cap;
     }
-    Q.a[i] = attacker; Q.t[i] = target; Q.b[i] = building;
-    Q.dmg[i] = _attackShots > 1 ? attacker.preComputed.attackDamage * _attackShots : attacker.preComputed.attackDamage; Q.x[i] = attacker.x; Q.y[i] = attacker.y;
-    _attackShots = 1;
+    return L;
 }
-// The shots of the attack being made (Unit._attackerSide), for its hit.
-let _attackShots = 1;
+const _hitLooksArgs = new Array(28).fill(null);
+// The looks of plist's entries (np in view, no others from offset off; the first nq queued, then npj shots, then the
+// kernel's hits HA / HT) and of the structure hits' looks (ns triples sl), appended to the records.
+function _hitLooksMake(plist, np, no, off, nq, npj, HA, HT, sl, ns) {
+    if (!(np + no + ns > 0)) return;
+    const S = _simUnitState, C = S && S.columns;
+    if (!C) return;
+    const L = _hitLooksArrays(), A = _hitLooksArgs, PJ = _pj, P = L.P;
+    A[0] = plist; A[1] = HA; A[2] = HT; A[3] = npj ? PJ.uev : null; A[4] = npj ? PJ.a.arg : null; A[5] = npj ? PJ.a.dmg : null; A[6] = npj ? PJ.a.own : null;
+    A[7] = C.x; A[8] = C.y; A[9] = C.id; A[10] = C.owner; A[11] = C.atkSty; A[12] = C.spType; A[13] = C.statRow;
+    A[14] = _effHot && simHeapHas(_effHot) ? _effHot : null; A[15] = ns ? sl : null;
+    A[16] = L.kind; A[17] = L.aid; A[18] = L.tid; A[19] = L.ax; A[20] = L.ay; A[21] = L.tx; A[22] = L.ty; A[23] = L.dmg; A[24] = L.own; A[25] = L.sty; A[26] = L.typ; A[27] = L.hdr;
+    P[0] = np; P[1] = no; P[2] = off; P[3] = nq; P[4] = npj; P[5] = EFF_HOT_WIDTH; P[6] = ns; P[7] = L.cap; P[8] = GRID_W; P[9] = TILE;
+    try { simRustDirect('k_hit_looks', A, P); } finally { A.fill(null); }
+    if (!SIM_LOOKS_DEFER) simHitLooksReplay(simHitLooksTake(null), _hitLooksSimUnit);
+}
+function _hitLooksSimUnit(id) { return typeof getUnitById === 'function' ? getUnitById(id) : null; }
+// The records so far as one buffer (transfer: the worker's list to transfer it in; null: the page's own), emptied.
+// Layout: n, then the i32 columns (aid tid ax ay tx ty), dmg (f32), kind sty typ (u8) own (i8), n each.
+function simHitLooksTake(transfer) {
+    const L = _lk;
+    if (!L.hdr || !simHeapHas(L.hdr)) return null;
+    const n = Math.min(L.hdr[0] | 0, L.cap);
+    L.hdr[0] = 0;
+    if (!(n > 0)) return null;
+    const buf = new ArrayBuffer(4 + n * 32), I = new Int32Array(buf, 0, 1 + 6 * n);
+    I[0] = n;
+    I.set(L.aid.subarray(0, n), 1); I.set(L.tid.subarray(0, n), 1 + n); I.set(L.ax.subarray(0, n), 1 + 2 * n);
+    I.set(L.ay.subarray(0, n), 1 + 3 * n); I.set(L.tx.subarray(0, n), 1 + 4 * n); I.set(L.ty.subarray(0, n), 1 + 5 * n);
+    new Float32Array(buf, 4 + 24 * n, n).set(L.dmg.subarray(0, n));
+    const B = new Uint8Array(buf, 4 + 28 * n, 4 * n);
+    B.set(L.kind.subarray(0, n), 0); B.set(L.sty.subarray(0, n), n); B.set(L.typ.subarray(0, n), 2 * n); B.set(new Uint8Array(L.own.buffer, L.own.byteOffset, n), 3 * n);
+    if (transfer) transfer.push(buf);
+    return buf;
+}
+// The unit type names by spatial type index (chunk.js: BASE_UNIT_STATS's keys, then 'norm').
+let _lookTypeNames = null;
+function _lookTypeName(c) {
+    if (!_lookTypeNames) { const k = Object.keys(typeof BASE_UNIT_STATS !== 'undefined' ? BASE_UNIT_STATS : {}); if (!k.includes('norm')) k.push('norm'); _lookTypeNames = k; }
+    return c < _lookTypeNames.length ? _lookTypeNames[c] : '';
+}
+const _LOOK_STY = [null, 'fire', 'water', 'ice', 'poison', 'swoop'];
+// The page's side: each record's attack effect and sound, the target's flash and alert. unit(id): the target unit.
+function simHitLooksReplay(buf, unit) {
+    if (!buf) return;
+    const n = new Int32Array(buf, 0, 1)[0];
+    if (!(n > 0)) return;
+    const I = new Int32Array(buf, 4, 6 * n), D = new Float32Array(buf, 4 + 24 * n, n), B = new Uint8Array(buf, 4 + 28 * n, 4 * n);
+    for (let i = 0; i < n; i++) {
+        const kind = B[i], aid = I[i], tid = I[n + i], ax = I[2 * n + i] * 0.125, ay = I[3 * n + i] * 0.125, tx = I[4 * n + i] * 0.125, ty = I[5 * n + i] * 0.125;
+        const dmg = D[i], code = B[n + i], tn = _lookTypeName(B[2 * n + i]), own = (B[3 * n + i] << 24) >> 24;
+        let t;
+        if (kind === 2) { const gx = tid % GRID_W; t = getTileEntityRef(gx, (tid - gx) / GRID_W); }
+        else t = unit(tid);
+        if (kind !== 1) {
+            // (As recordUnitAttackFx: the style by its code, else its type's.)
+            const base = typeof BASE_UNIT_STATS !== 'undefined' && BASE_UNIT_STATS[tn], style = _LOOK_STY[code] || (base && base.attackStyle) || '';
+            recordUnitAttackFxBy(style, tn, aid, kind === 0 ? tid : 0, ax, ay, tx, ty);
+            playSound(code >= 1 && code <= 4 || style === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, tn);
+        }
+        if (t) { pushHostileDamageAlert(t, dmg, own); if (SIM_DAMAGE_FLASH) recordDamageVisual(t, dmg, own); }
+        if (kind !== 1 && dmg > 0) playSound('melee_hit', tx, ty, tn);
+    }
+}
 function _isHitBuildingStanding(tb) {
     if (!(tb.energy > 0)) return false;
     if (getTileEntityRef(tb.gx, tb.gy) === tb) return true;
@@ -1275,7 +1344,7 @@ function _isHitBuildingStanding(tb) {
     return !!cell && cellItemGet(cell) === tb;
 }
 // The tick's hits. On units, on the helpers and in no order: SIM_KERNEL_HITS
-// takes the queued attacks (_hitQ, as entries) and the movement kernel's
+// takes the movement kernel's
 // per-chunk attack lists in place (_simMoveHitA...), each hit into its
 // target's sums (damage in 1/16ths: integers, the same sum in any order;
 // statuses and their tick damage by max; a scout's watch, the longest);
@@ -1403,7 +1472,7 @@ function _structHitsRun(fn, head, P, cap, tail = null) {
 // presentation only), the watches' vision cover, the destroyed in hit order.
 function _structHitsAfter(K, look) {
     const at = t => { const gx = t % GRID_W; return getTileEntityRef(gx, (t - gx) / GRID_W); };
-    for (let i = 0, n = K.cnt[1]; i < n; i++) { const tb = at(K.looks[3 * i + 1]); if (tb) look(K.looks[3 * i], tb, K.looks[3 * i + 2] / 1024); }
+    if (look) for (let i = 0, n = K.cnt[1]; i < n; i++) { const tb = at(K.looks[3 * i + 1]); if (tb) look(K.looks[3 * i], tb, K.looks[3 * i + 2] / 1024); }
     if (typeof visCoverOnEntityChanged === 'function') for (let i = 0, n = K.cnt[2]; i < n; i++) { const tb = at(K.watch[i]); if (tb) visCoverOnEntityChanged(tb); }
     structDestroyTiles(K.dead, K.cnt[0], true);
 }
@@ -1414,13 +1483,9 @@ function _structHitsApply(KC, HC, HA, HT, CH) {
     P[0] = KC; P[1] = CH; P[4] = EFF_HOT_WIDTH;
     const K = _structHitsRun('k_struct_hits', [HC, HA, HT, 'keys', C.id, C.owner, C.atkN, C.atkSty, _effHot, C.statRow, C.unitLevel, C.baseLevel, C.effectiveLevel, C.atkWatch], P, KC * CH);
     if (!K) return;
-    _structHitsAfter(K, (s, tb, dmg) => {
-        const a = owners.at(s);
-        if (!a) return;
-        recordUnitAttackFx(a, tb); playSound(C.atkSty[s] >= 1 && C.atkSty[s] <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', a.x, a.y, a.unitType);
-        pushHostileDamageAlert(tb, dmg, a.owner); recordDamageVisual(tb, dmg, a.owner);
-        if (dmg > 0) playSound('melee_hit', tb.x, tb.y, a.unitType);
-    });
+    // (Its looks as records first: the destroys below clear the tiles.)
+    _hitLooksMake(null, 0, 0, 0, 0, 0, null, null, K.looks, K.cnt[1]);
+    _structHitsAfter(K, null);
 }
 // The hits' status sub-records (unit.hSx: status bits, fire / poison tick
 // damage, a watch key, five timers), room for ns: zeros between ticks, the
@@ -1438,7 +1503,7 @@ function _hitStArrays(ns) {
     return K.scap;
 }
 function unitHitsResolve() {
-    const Q = _hitQ, n = Q.n, S = _simUnitState;
+    const S = _simUnitState;
     const KC = _simMoveHitChunks, HC = _simMoveHitC, HA = _simMoveHitA, HT = _simMoveHitT, CH = SIM_MOVE_CHUNK;
     _simMoveHitChunks = 0;
     if (KC > 0 && S && HT) _structHitsApply(KC, HC, HA, HT, CH);
@@ -1449,158 +1514,56 @@ function unitHitsResolve() {
     const PJ = _pj, npj = PJ.cap && S ? PJ.unitHits : 0;
     PJ.unitHits = 0;
     const room = npj > 0 ? projBlastRoom(npj) : null;
-    const total = n + nk + npj + (room ? room[0] : 0);
-    if (total === 0) return;
-    if (!S || typeof SIM_KERNEL_HITS !== 'number') {
-        for (let i = 0; i < n; i++) {
-            const a = Q.a[i], t = Q.t[i];
-            Q.a[i] = null; Q.t[i] = null;
-            if (Q.b[i] === 0) _unitHitUnit(a, t, Q.dmg[i], Q.x[i], Q.y[i]);
-            else _unitHitBuilding(a, t, Q.dmg[i]);
-        }
-        Q.n = 0;
-        return;
+    const total = nk + npj + (room ? room[0] : 0);
+    if (total === 0 || !S) return;
+    const owners = S.owners, K = _hitArrays(0, total);
+    const CNT = K.cnt;
+    CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0; CNT[4] = 0; CNT[5] = 0;
+    // (Status sub-records for every hit with a status style: the movement
+    // kernel's counts, mv.hitsc, and the shots'.)
+    let ns = 0;
+    const HSC = _simMoveHitSC;
+    if (HSC) for (let k = 0; k < KC; k++) ns += HSC[k];
+    if (npj) ns += PJ.hdr[7] + room[1];
+    const scap = _hitStArrays(ns);
+    const P = _simParams;
+    const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
+    const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
+    P[0] = 0; P[1] = SIM_HITS_PER_JOB; P[2] = looks; P[3] = 0; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
+    P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0; P[13] = scap;
+    const ppj = Math.max(SIM_HITS_PER_JOB / 4, Math.ceil(npj / 32)), pjj = npj ? Math.ceil(npj / ppj) : 0;
+    P[14] = npj; P[15] = ppj; P[16] = pjj;
+    if (npj) {
+        P[17] = GRID_W; P[18] = GRID_H; P[19] = TILE; P[20] = _sxEpoch; P[21] = (projUnitFlagsTable(), _pj.tflN); P[22] = _projUnitFlags(BASE_UNIT_STATS.norm); P[23] = TICK_RATE;
     }
-    const C = S.columns, owners = S.owners, K = _hitArrays(n, total);
-    const HQ = K.q, HD = K.dmg, HS = K.sty, HW = K.wk, CNT = K.cnt;
-    // (Structures and units without columns: here, below.)
-    let nl = 0, ns = 0;
-    for (let i = 0; i < n; i++) {
-        const t = Q.t[i];
-        if (Q.b[i] !== 0 || t._us !== C || !(t._si >= 0)) { HQ[i] = -1; nl++; continue; }
-        const a = Q.a[i], sty = _hitStyleCode(a);
-        HQ[i] = t._si; HD[i] = Q.dmg[i]; HS[i] = sty; HW[i] = sty === 5 ? _hitWatchKey(a) : 0;
-        if (sty >= 1 && sty <= 5) ns++;
-    }
-    if (nl < total) {
-        CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0; CNT[4] = 0; CNT[5] = 0;
-        // (Status sub-records for every hit with a status style: the JS
-        // entries' and the movement kernel's counts, mv.hitsc.)
-        const HSC = _simMoveHitSC;
-        if (HSC) for (let k = 0; k < KC; k++) ns += HSC[k];
-        if (npj) ns += PJ.hdr[7] + room[1];
-        const scap = _hitStArrays(ns);
-        const P = _simParams;
-        const per = Math.max(SIM_HITS_PER_JOB, Math.ceil(n / 16)), jj = n ? Math.ceil(n / per) : 0;
-        const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
-        const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
-        P[0] = n; P[1] = per; P[2] = looks; P[3] = jj; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
-        P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0; P[13] = scap;
-        const ppj = Math.max(SIM_HITS_PER_JOB / 4, Math.ceil(npj / 32)), pjj = npj ? Math.ceil(npj / ppj) : 0;
-        P[14] = npj; P[15] = ppj; P[16] = pjj;
-        if (npj) {
-            P[17] = GRID_W; P[18] = GRID_H; P[19] = TILE; P[20] = _sxEpoch; P[21] = (projUnitFlagsTable(), _pj.tflN); P[22] = _projUnitFlags(BASE_UNIT_STATS.norm); P[23] = TICK_RATE;
+    simParallelRun(SIM_KERNEL_HITS, pjj + kj);
+    if (CNT[5] > 0) console.warn('hits: ' + CNT[5] + ' status sub-records past the count of hits with a status style');
+    const nt = CNT[0];
+    if (nt > 0) {
+        const NO = Math.max(16, players.length), pa = Math.max(SIM_HITS_PER_JOB, Math.ceil(nt / 48)), ja = Math.min(64, Math.ceil(nt / pa));
+        P[0] = nt; P[1] = pa; P[2] = NO; P[3] = RESOURCE_FIXED_POINT_SCALE;
+        // (A status record for each unit with a status sub-record at most: taken on the helpers.)
+        if (typeof simUnitStReserve === 'function') simUnitStReserve(Math.min(CNT[4], scap));
+        simParallelRun(SIM_KERNEL_HITS_APPLY, ja);
+        if (typeof simUnitStSettle === 'function') simUnitStSettle();
+        // (The shrines' share: integers, any order.)
+        const SHR = K.shr;
+        for (let j = 0; j < ja; j++) for (let o = 0; o < NO; o++) {
+            const v = SHR[j * NO + o];
+            if (!v) continue;
+            if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
+            _shrinePendingFixed[o] += v;
         }
-        simParallelRun(SIM_KERNEL_HITS, jj + pjj + kj);
-        if (CNT[5] > 0) console.warn('hits: ' + CNT[5] + ' status sub-records past the count of hits with a status style');
-        const nt = CNT[0];
-        if (nt > 0) {
-            const NO = Math.max(16, players.length), pa = Math.max(SIM_HITS_PER_JOB, Math.ceil(nt / 48)), ja = Math.min(64, Math.ceil(nt / pa));
-            P[0] = nt; P[1] = pa; P[2] = NO; P[3] = RESOURCE_FIXED_POINT_SCALE;
-            // (A status record for each unit with a status sub-record at most: taken on the helpers.)
-            if (typeof simUnitStReserve === 'function') simUnitStReserve(Math.min(CNT[4], scap));
-            simParallelRun(SIM_KERNEL_HITS_APPLY, ja);
-            if (typeof simUnitStSettle === 'function') simUnitStSettle();
-            // (The shrines' share: integers, any order.)
-            const SHR = K.shr;
-            for (let j = 0; j < ja; j++) for (let o = 0; o < NO; o++) {
-                const v = SHR[j * NO + o];
-                if (!v) continue;
-                if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
-                _shrinePendingFixed[o] += v;
-            }
-            // (Newly watched: their vision cover; each its own.)
-            const WL = K.wlist, nw = CNT[2];
-            if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners.at(WL[i]); if (u) visCoverOnEntityChanged(u); }
-        }
-        // The looks (presentation only: which hits differs between peers).
-        const PL = K.plist, np = Math.min(CNT[1], looks), no = V[0] <= V[2] ? Math.min(CNT[3], SIM_HITS_OUT) : 0;
-        for (let p = 0; p < np + no; p++) {
-            const e = PL[p < np ? p : looks + p - np];
-            let a, t, ax, ay, dmg, sty;
-            if (e < n) { a = Q.a[e]; t = Q.t[e]; ax = Q.x[e]; ay = Q.y[e]; dmg = Q.dmg[e]; sty = HS[e]; }
-            else if (e < n + npj) {
-                // (A shot's: its impact's look is the projectile phase's.)
-                const sl = PJ.uev[e - n], tu = owners.at(PJ.a.arg[sl]), own = PJ.a.own[sl];
-                if (tu) { pushHostileDamageAlert(tu, PJ.a.dmg[sl], own); recordDamageVisual(tu, PJ.a.dmg[sl], own); }
-                continue;
-            }
-            else { const j = e - n - npj, s = HA[j]; a = owners.at(s); t = owners.at(HT[j]); ax = C.x[s] * 0.125; ay = C.y[s] * 0.125; dmg = simUnitStatValue(C,s,5); sty = C.atkSty[s]; }
-            if (!a || !t) continue;
-            // (A kernel attack's own look and sound, as _attackerSide's.)
-            let tx, ty;
-            if (e >= n || dmg > 0) {
-                const tc = t._us, ts = t._si;
-                tx = tc === C ? C.x[ts] * 0.125 : t.x;
-                ty = tc === C ? C.y[ts] * 0.125 : t.y;
-            }
-            if (e >= n) { recordUnitAttackFx(a, t, true, ax, ay, tx, ty); playSound(sty >= 1 && sty <= 4 || a.attackStyle === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, a.unitType); }
-            pushHostileDamageAlert(t, dmg, a.owner);
-            recordDamageVisual(t, dmg, a.owner);
-            if (dmg > 0) playSound('melee_hit', tx, ty, a.unitType);
-        }
+        // (Newly watched: their vision cover; each its own.)
+        const WL = K.wlist, nw = CNT[2];
+        if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners.at(WL[i]); if (u) visCoverOnEntityChanged(u); }
     }
-    if (nl) for (let i = 0; i < n; i++) {
-        if (HQ[i] >= 0) continue;
-        const a = Q.a[i], t = Q.t[i];
-        if (Q.b[i] === 0) _unitHitUnit(a, t, Q.dmg[i], Q.x[i], Q.y[i]);
-        else _unitHitBuilding(a, t, Q.dmg[i]);
-    }
-    for (let i = 0; i < n; i++) { Q.a[i] = null; Q.t[i] = null; }
-    Q.n = 0;
+    // The looks (presentation only: which hits differs between peers): records by a kernel (k_hit_looks).
+    const np = Math.min(CNT[1], looks), no = V[0] <= V[2] ? Math.min(CNT[3], SIM_HITS_OUT) : 0;
+    _hitLooksMake(K.plist, np, no, looks, 0, npj, HA, HT, null, 0);
 }
 // Dropped (a restore replaces the world between ticks).
-function unitHitsReset() { const Q = _hitQ; for (let i = 0; i < Q.n; i++) { Q.a[i] = null; Q.t[i] = null; } Q.n = 0; }
-function _unitHitUnit(a, target, dmg, ax, ay) {
-    if (target.dead) return;
-    let before = target.energy;
-    target.energy -= dmg;
-    pushHostileDamageAlert(target, before - target.energy, a.owner);
-    recordDamageVisual(target, before - target.energy, a.owner); shrineDamageTaken(target, before - target.energy);
-    if (before > target.energy) playSound('melee_hit', target.x, target.y, a.unitType);
-    let style = a.attackStyle;
-    if (style === 'fire') {
-        target.burning = Math.max(target.burning, 45);
-        target.burnTickDamage = Math.max(target.burnTickDamage, dmg * 0.04);
-    } else if (style === 'water') {
-        target.wet = Math.max(target.wet, 60);
-    } else if (style === 'ice') {
-        target.frozen = Math.max(target.frozen, 40);
-    } else if (style === 'poison') {
-        target.poisoned = Math.max(target.poisoned, 50);
-        target.poisonTickDamage = Math.max(target.poisonTickDamage, dmg * 0.04);
-    } else if (style === 'swoop') {
-        if (a.unitType === 'scout') applyStatusEffect(target, 'watch', getUnitEffectiveLevel(a), 0, a.owner, a.unitType);
-    }
-    if (target.energy <= 0) target.dead = true;
-}
-function _unitHitBuilding(a, tb, dmg) {
-    if (!_isHitBuildingStanding(tb)) return;
-    let before = tb.energy, style = a.attackStyle;
-    if (style === 'fire') {
-        applyStatusEffect(tb, 'fire', getUnitBaseLevel(a), dmg * 0.04);
-        if (!isEffectImmune(tb, 'fire')) tb.energy -= dmg;
-    } else if (style === 'water') {
-        applyStatusEffect(tb, 'water', getUnitBaseLevel(a));
-        if (!isEffectImmune(tb, 'water')) tb.energy -= dmg;
-    } else if (style === 'ice') {
-        applyStatusEffect(tb, 'ice', getUnitBaseLevel(a), dmg * 0.2);
-        if (!isEffectImmune(tb, 'ice')) tb.energy -= dmg;
-    } else if (style === 'poison') {
-        applyStatusEffect(tb, 'poison', getUnitBaseLevel(a), dmg * 0.04);
-        if (!isEffectImmune(tb, 'poison')) tb.energy -= dmg;
-    } else if (style === 'swoop') {
-        if (a.unitType === 'scout') applyStatusEffect(tb, 'watch', getUnitEffectiveLevel(a), 0, a.owner, a.unitType);
-        tb.energy -= dmg;
-    } else {
-        tb.energy -= dmg;
-    }
-    pushHostileDamageAlert(tb, before - tb.energy, a.owner);
-    recordDamageVisual(tb, before - tb.energy, a.owner); shrineDamageTaken(tb, before - tb.energy);
-    if (before > tb.energy) playSound('melee_hit', tb.x, tb.y, a.unitType);
-    if (tb.energy <= 0) destroyBuilding(tb);
-}
-
+function unitHitsReset() { if (_lk.hdr && simHeapHas(_lk.hdr)) _lk.hdr[0] = 0; }
 // The state hash's object fields (SIM_UNIT_OBJ_FIELDS): per-slot arrays
 // beside the columns (columns.oc_<field>); a set that changes the value
 // moves the slot's digest (hObj) by the change of its term.
@@ -1698,8 +1661,9 @@ function statusPrepassRun() {
     const P = _simParams;
     P[0] = n; P[1] = STATUS_PREPASS_CHUNK; P[2] = gameTime; P[3] = STATUS_DOT_REPORT_TICKS; P[8] = simDk;
     // (The separation's tick-start copy only when separationStart, next,
-    // will not take the prebuilt one.)
-    P[4] = _sepPrebuiltForTick() ? 0 : 1;
+    // will not take the prebuilt one; none with the occupancy, which has no
+    // separation chain: its only reader (sep_pack) never runs then.)
+    P[4] = (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED) || _sepPrebuiltForTick() ? 0 : 1;
     // (The shrines' share per job, fixed point; looks of the first few a job.)
     const NO = Math.max(16, players.length);
     if (!_statusShr || _statusShr.length < chunks * NO) { _statusShr = simSharedArray(Float64Array, Math.max(1024, chunks * NO * 2)); simParallelBind('st.shr', _statusShr); }
@@ -1728,9 +1692,11 @@ function statusPrepassRun() {
             const s = LIST[j], r = IX[s], ev = EV[r];
             if (ev === 0) continue;
             EV[r] = 0;
+            // (A damage tick's event is only its flash: SIM_DAMAGE_FLASH.)
+            if (!(ev & 2) && !SIM_DAMAGE_FLASH) continue;
             const u = owners.at(s);
             if (!u || u._si !== s) continue;
-            if (ev & 1) recordDamageVisual(u, DOT[r]);
+            if ((ev & 1) && SIM_DAMAGE_FLASH) recordDamageVisual(u, DOT[r]);
             if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
         }
     }
@@ -3427,6 +3393,21 @@ function flowLooksCommit() {
 }
 // (A resync, on every peer: nothing listed is committed.)
 function flowLooksDrop() { if (_flowLooks.posted) { simParallelBackgroundWait(SIM_LANE_FLOW); _flowLooks.posted = false; } }
+// Work beside the movement's stages (the foreground without serial parts: user, 2026-11-13): JavaScript that must stay
+// on this thread, run as a stage's local task while the helpers take the movement's chunks (sim_parallel.js
+// simParallelRun local). Stage 0 the first stage (SIM_KERNEL_MOVE), 1-4 the occupancy's phases. A companion must
+// neither read what the movement kernels write (positions, occupancy, steering, the mover table, unit columns) nor
+// write what they read (walls, structure tiles and rows in use, stat tables, orders): each one added says why it may.
+// Whatever a step's movement did not run (none, or fewer phases) runs at its end, in stage order.
+const _simMoveComp = [[], [], [], [], []];
+function simMoveCompanion(stage, fn) { _simMoveComp[Math.max(0, Math.min(4, stage | 0))].push(fn); }
+function _simMoveCompanionTask(stage) {
+    const L = _simMoveComp[stage];
+    if (!L.length) return null;
+    const list = L.splice(0, L.length);
+    return () => { for (const fn of list) fn(); };
+}
+function simMoveCompanionsFlush() { for (let st = 0; st < 5; st++) { const t = _simMoveCompanionTask(st); if (t) t(); } }
 function simMoveRun() {
     // (The last movement's looks made exact on the helpers, into the records first.)
     flowLooksCommit();
@@ -3536,13 +3517,14 @@ function simMoveRun() {
         // vector paths, the attacks; P[4] -1), then by spatial block in four
         // phases the wanted positions against the exclusive footprints (the
         // pressure's steering, shoulders, swaps, pushes) and the epilogue.
-        P[4]=-1;simParallelRun(SIM_KERNEL_MOVE,stepChunks);
+        P[4]=-1;simParallelRun(SIM_KERNEL_MOVE,stepChunks,_simMoveCompanionTask(0));
         // (The mover table's marked slots, scanned by that stage's chunks: their rows into their blocks, occ.offsets.)
         mvtAfterFirstStage(n);
         // (Each phase's blocks with units, heaviest first: occupancyJobs.)
         const J=occupancyJobs(_simMovePostC,P[54]===1&&_sep?_sep.exc:null,_simMoveChFix,NPa+1);
-        for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase]);}}
-    }else simParallelRun(SIM_KERNEL_MOVE, chunks);
+        for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase],_simMoveCompanionTask(1+phase));}}
+    }else simParallelRun(SIM_KERNEL_MOVE, chunks, _simMoveCompanionTask(0));
+    simMoveCompanionsFlush();
     if (typeof simUnitStSettle === 'function') simUnitStSettle();
     _simMoveRunWallVer = _simMoveWallVer; _simDead0Tick = gameTime; _simMoveRanTick = gameTime;
     _spatialKernelMoves = true;
@@ -3770,11 +3752,13 @@ function _acqTierStep() {
     // (The phases of the step's base ticks: with several, its commit before
     // its next post.)
     const ph = simStepPhases(SIM_ACQUIRE_TICKS);
-    if (ph.includes(0)) _acqCommit();
+    // (Committed in the snapshot's own pass when the step posts too: k.rs k_acq_snap, P[9..11]; else alone.)
+    if (ph.includes(0)) _acqCommit(ph.includes(2));
     // (At phase 2 the chain, ~350 ms of CPU at 500k units, is 55-70% done at
     // some commits, which finish it on the tick: +10-26 ms. Posting at phase
     // 1 moved the starvation to lower lanes and the mean up 18%: 2026-11-10.)
     if (ph.includes(2)) _acqPost();
+    _acqCommitFlush();
 }
 // Before the unit index (or the owners per chunk, the hostile tables) is
 // made again: a posted scan reads them in place, so it is waited for here
@@ -3904,6 +3888,8 @@ function _acqPost() {
     if ((!n && !tw) || !_combatScanOwnerMask) return;
     const cap = simReserveCap(n);
     if (_acq.cap < n) {
+        // (The commit reads the arrays made again here: first.)
+        _acqCommitFlush();
         _acqArray('acq.x', Float32Array, cap); _acqArray('acq.y', Float32Array, cap); _acqArray('acq.own', Int8Array, cap); _acqArray('acq.flags', Uint8Array, cap);
         _acqArray('acq.cmd', Uint8Array, cap); _acqArray('acq.rng', Float32Array, cap); _acqArray('acq.id', Int32Array, cap);
         _acqArray('acq.out', Int32Array, cap); _acqArray('acq.tid', Int32Array, cap); _acqArray('acq.sout', Int32Array, cap);
@@ -3919,6 +3905,9 @@ function _acqPost() {
     if (typeof towerAcqUnitMeta === 'function') towerAcqUnitMeta(P, cap);
     // (Empty slabs only marked: k.rs k_acq_snap.)
     P[8] = simUnitStateSlabsBind();
+    // (The last run's commit in the same pass, slot by slot before the snapshot's writes.)
+    const D = _acqCommitDue; _acqCommitDue = null;
+    P[9] = D ? D.n : 0; P[10] = D && D.brain ? 1 : 0; P[11] = D ? D.tick : 0;
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index
@@ -4048,20 +4037,30 @@ function _acqPost() {
     _acqBrain = SIM_COMBAT_BRAIN;
     _acqStage = 1; _acqN = n;
 }
-function _acqCommit() {
+// The answers' commit (units' columns) when the step's snapshot will take it in its own pass: { n, brain, tick }.
+let _acqCommitDue = null;
+function _acqCommit(defer) {
     if (_acqStage !== 1) return;
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0;
     if (_acqMoves.length) _acqApplyMoves();
     const S = _simUnitState;
     if (!S) return;
-    const n = Math.min(_acqN, S.owners.length), P = _simParams;
-    P[0] = n; P[1] = 8192; P[2] = gameTime;
-    simParallelRun(SIM_KERNEL_ACQ_COMMIT, Math.ceil(n / 8192));
-    if (_acqBrain) { P[0] = n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(n / 8192)); }
-    // (The towers' answers into their rows.)
+    _acqCommitDue = { n: Math.min(_acqN, S.owners.length), brain: _acqBrain, tick: gameTime };
+    if (!defer) _acqCommitFlush();
+    // (The towers' answers into their rows: no unit column, nothing the units' commit reads.)
     if (typeof towerAcqCommit === 'function') towerAcqCommit();
     _acqCommitTick = gameTime;
+}
+// The units' commit on its own (no snapshot this step, or before the snapshot's arrays are made again).
+function _acqCommitFlush() {
+    const D = _acqCommitDue;
+    if (!D) return;
+    _acqCommitDue = null;
+    const P = _simParams;
+    P[0] = D.n; P[1] = 8192; P[2] = D.tick;
+    simParallelRun(SIM_KERNEL_ACQ_COMMIT, Math.ceil(D.n / 8192));
+    if (D.brain) { P[0] = D.n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(D.n / 8192)); }
 }
 
 // How far a unit may have moved within a tick since the unit index was

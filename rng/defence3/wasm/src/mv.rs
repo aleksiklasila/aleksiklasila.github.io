@@ -1787,7 +1787,8 @@ unsafe fn look_way_open(m: &Mv, wl: *const u8, w: i32, h: i32, gx: i32, gy: i32,
         }
         let fx = irem_f(far, w);
         let fy = idiv(far - fx, w);
-        return seg_open(wl, w, h, gx as f64 * m.tile + 16.0, gy as f64 * m.tile + 16.0, fx as f64 * m.tile + 16.0, fy as f64 * m.tile + 16.0, m.itile, m.tile);
+let _ = m;
+        return tile_line_open(wl, w, h, gx, gy, fx, fy);
     }
     rd(wl, n1 as usize) == 0 && (n2 < 0 || (n2 < w * h && rd(wl, n2 as usize) == 0))
 }
@@ -1806,7 +1807,7 @@ unsafe fn look_keep(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *c
     let fo = *r.add(NV_FO);
     let open = fo & 1 != 0;
     let far = fo >> 1;
-    let line_open = |fx: i32, fy: i32| seg_open(wl, w, h, gx as f64 * m.tile + 16.0, gy as f64 * m.tile + 16.0, fx as f64 * m.tile + 16.0, fy as f64 * m.tile + 16.0, m.itile, m.tile);
+    let line_open = |fx: i32, fy: i32| tile_line_open(wl, w, h, gx, gy, fx, fy);
     if t0 == tl {
         // Revalidated: the same look, its way open on today's walls.
         if !look_way_open(m, wl, w, h, gx, gy, tl, n1, *r.add(NV_N2), far, open) { dbgc!(m, 115); return 0; }
@@ -1889,10 +1890,17 @@ unsafe fn flow_look_vals(m: &Mv, v: &Nav, tl: i32, gx: i32, gy: i32, dk: i32, wl
         let mut short = n1;
         let lim = if open { 32 } else { 2 };
         let mut k = 1;
-        // (The run's exit hint: atlas_step_h.)
+        // (The run's exit hint: atlas_step_h. Its atlas read once, the
+        // destination's coordinates once, the tiles' tracked: no division a step.)
         let mut hint = [-1i32; 3];
+        let atl = if v.atl.is_null() { None } else { crate::atlas::Atl::from(v.atl).map(|mut a| { a.exit_cache = exit_cache; a }) };
+        let dkx = irem_f(dk, w);
+        let dky = idiv(dk - dkx, w);
         while k < lim {
-            let nx = nav_step_run(v, cur, cx, cy, dk, exit_cache, &mut hint);
+            let nx = if v.atl.is_null() { nav_step_run(v, cur, cx, cy, dk, exit_cache, &mut hint) }
+                else if cur == dk { -1 }
+                else if rd(v.pl, cur as usize) == 0xFFFF { wall_step_out(v, cx, cy) }
+                else { match &atl { Some(a) => crate::atlas::atlas_step_xy(a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, cur, cx, cy, dk, dkx, dky, &mut hint), None => -1 } };
             if nx < 0 || rd(wl, nx as usize) != 0 {
                 break;
             }
@@ -1918,11 +1926,49 @@ unsafe fn flow_look_vals(m: &Mv, v: &Nav, tl: i32, gx: i32, gy: i32, dk: i32, wl
         // One segment check per cached tile/destination, never per unit.
         if open && far != short {
             let fx=irem_f(far,w);let fy=idiv(far-fx,w);
-            if !seg_open(wl,w,h,gx as f64*m.tile+16.0,gy as f64*m.tile+16.0,
-                fx as f64*m.tile+16.0,fy as f64*m.tile+16.0,m.itile,m.tile) {far=short;}
+            if !tile_line_open(wl,w,h,gx,gy,fx,fy) {far=short;}
         }
     }
     (1, n1, n2, far, open)
+}
+
+/// Whether the straight line from tile (ax, ay)'s centre to tile (bx, by)'s
+/// centre stays on open tiles of `wl` (in the map): a look's taut test
+/// (flow_look_vals, look_way_open, look_keep). The tiles it passes, by an
+/// integer grid traversal (Amanatides and Woo between centres: the next
+/// edge crossed compared as (1 + 2 i) * other span, no floats); a line
+/// through a tile corner exactly needs both tiles beside the corner open
+/// (seg_open's diagonal rule). The start tile is not tested (seg_open's
+/// samples start past it).
+#[inline(never)]
+unsafe fn tile_line_open(wl: *const u8, w: i32, h: i32, ax: i32, ay: i32, bx: i32, by: i32) -> bool {
+    let (nx, ny) = ((bx - ax).abs(), (by - ay).abs());
+    let (sx, sy) = (if bx > ax { 1 } else { -1 }, if by > ay { 1 } else { -1 });
+    if bx < 0 || by < 0 || bx >= w || by >= h || ax < 0 || ay < 0 || ax >= w || ay >= h {
+        return false;
+    }
+    let (mut ix, mut iy) = (0i32, 0i32);
+    let mut t = (ay * w + ax) as isize;
+    let (sxw, syw) = (sx as isize, (sy * w) as isize);
+    while ix < nx || iy < ny {
+        // (The x edge's crossing (1 + 2 ix) / 2nx against the y edge's (1 + 2 iy) / 2ny.)
+        let c = (1 + 2 * ix as i64) * ny as i64 - (1 + 2 * iy as i64) * nx as i64;
+        if iy >= ny || (ix < nx && c < 0) {
+            ix += 1; t += sxw;
+        } else if ix >= nx || c > 0 {
+            iy += 1; t += syw;
+        } else {
+            // (Through the corner: both tiles beside it, then the diagonal one.)
+            if *wl.offset(t + sxw) != 0 || *wl.offset(t + syw) != 0 {
+                return false;
+            }
+            ix += 1; iy += 1; t += sxw + syw;
+        }
+        if *wl.offset(t) != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 // ---- the movement kernels ----
@@ -5660,9 +5706,26 @@ pub unsafe extern "C" fn mv_flow_commit(a: u32, chunk: i32) {
             continue;
         }
         let s = s as usize;
-        let k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
-        if k.tl != *e.add(1) || k.dk != *e.add(2) || k.fid != *e.add(3) || k.kp != *e.add(4) || k.ver != *e.add(5) || k.fgen != *e.add(7) {
-            #[cfg(feature="dbgc")]{ if k.tl != *e.add(1) { dbgc!(m, 101); } else if k.ver != *e.add(5) { dbgc!(m, 105); } else { dbgc!(m, 107); } }
+        let mut k = match flow_key(&m, s, wver, wbw) { Some(k) => k, None => continue };
+        // (A walker that left the listed tile since (at dk 4 a step passes tiles: ~a quarter of
+        // the answers): an open way's answer is still its record, at the listed tile, its wall
+        // key unknown (never equal): its next turn carries it from where it is now (look_keep:
+        // nearer the far tile, its block and line open) or lists a new look; a short look's or
+        // a code's is not.)
+        let moved = k.tl != *e.add(1);
+        if moved {
+            if *res.add((base + i) * 4) != 1 || (*res.add((base + i) * 4 + 3) & 1) == 0 {
+                dbgc!(m, 101);
+                continue;
+            }
+            k.tl = *e.add(1);
+            k.gx = irem_f(k.tl, m.w);
+            k.gy = idiv(k.tl - k.gx, m.w);
+            k.wv = i32::MIN;
+            k.lwv = !*e.add(6);
+        }
+        if k.dk != *e.add(2) || k.fid != *e.add(3) || k.kp != *e.add(4) || k.ver != *e.add(5) || k.fgen != *e.add(7) {
+            #[cfg(feature="dbgc")]{ if k.ver != *e.add(5) { dbgc!(m, 105); } else { dbgc!(m, 107); } }
             continue;
         }
         let o = res.add((base + i) * 4);

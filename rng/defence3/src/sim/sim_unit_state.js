@@ -568,7 +568,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The numeric fields JavaScript alone reads (SIM_UNIT_JS_FIELDS, through
     // SIM_UNIT_JS_COL_ALIAS): heap columns as the rest, so a slot's whole
     // numeric state moves, zeroes and grows with the kernels' columns.
-    ['j__damageFlashStart', Int32Array, 1], ['j__rslot', Int32Array, 1], ['j__damageFlashUntil', Int32Array, 1], ['j__damageFlashStrength', Float32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1]];
+    ['j__rslot', Int32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 // Worker records: the worker columns are a pool with a record a worker (a
@@ -779,13 +779,14 @@ function simUnitStUsed() { const S = _simUnitState, T = S && S.st; return T && T
 const SIM_UNIT_JS_FIELDS = [
     ['_removedNow', 'b', false, true], ['isFlying', 'b', false, true],
     ['_okTile', 'i', -1, true], ['_okVer', 'i', 0, true], ['_okNodeTile', 'i', -1, true],
-    ['_okNodeVer', 'i', 0, true], ['_damageFlashStart', 'i', 0, true],
+    ['_okNodeVer', 'i', 0, true],
     // (Its frame slot: sim_frame.js _simRenderSlotOf; every unit has one.)
     ['_rslot', 'i', -1, false],
     ['_effectiveStatsStamp', 'i', 0, true],
-    ['_damageFlashUntil', 'i', 0, true], ['_damageFlashStrength', 'f', -0, true], ['maxEnergy', 'u', undefined, true],
+    ['maxEnergy', 'u', undefined, true],
     ['preComputedBase', 'r', null, false], ['basePreComputed', 'r', null, false], ['_pce', 'r', null, false], ['_pc', 'r', null, false],
-    ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true], ['_damageFlashColor', 'r', '', true],
+    ['_fpPath', 'r', null, true], ['attackTarget', 'r', null, true],
+    // (No damage flash fields: flashes are off (SIM_DAMAGE_FLASH) until redesigned as slot columns the presentation reads.)
     // (Backing fields of accessors with their own logic: unit.js.)
     ];
 const _SIM_JS_TYPED = { b: Uint8Array, i: Int32Array, f: Float32Array, d: Float64Array, u: Float32Array };
@@ -823,7 +824,7 @@ function _simSparseIntGrow(old,cap,def,used){const a=new SimSparseIntColumn(cap,
 function _simSparseIntCopy(old,cap,def,runs){const a=new SimSparseIntColumn(cap,def);for(let j=0;j<runs.length;j+=3)a.copyFrom(old,runs[j+1],runs[j+2],runs[j]);return a;}
 // (JavaScript fields kept in a movement column of the heap: the kernels write them.)
 const SIM_UNIT_JS_COL_ALIAS = { maxEnergy: 'jMaxE', _removedNow: 'jRmNow', isFlying: 'jFly',
-    _damageFlashStart: 'j__damageFlashStart', _rslot: 'j__rslot', _damageFlashUntil: 'j__damageFlashUntil', _damageFlashStrength: 'j__damageFlashStrength', _okTile: 'j__okTile', _okVer: 'j__okVer', _okNodeTile: 'j__okNodeTile', _okNodeVer: 'j__okNodeVer', _effectiveStatsStamp: 'j__effectiveStatsStamp' };
+    _rslot: 'j__rslot', _okTile: 'j__okTile', _okVer: 'j__okVer', _okNodeTile: 'j__okNodeTile', _okNodeVer: 'j__okNodeVer', _effectiveStatsStamp: 'j__effectiveStatsStamp' };
 const _simJsName = (k, kind) => SIM_UNIT_JS_COL_ALIAS[k] || (kind === 'r' ? 'jr_' : 'j_') + k;
 // (Stored values: booleans 1/0, undefined NaN for 'u'.)
 const _simJsDefault = (kind, def) => kind === 'b' ? (def ? 1 : 0) : kind === 'u' ? (def === undefined ? NaN : def) : def;
@@ -991,7 +992,7 @@ function simSlotDefaults() {
         wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
         cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1 };
     for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
-    d.j__rslot = -1; d.j__damageFlashStrength = -0; d.j__okTile = -1; d.j__okNodeTile = -1;
+    d.j__rslot = -1; d.j__okTile = -1; d.j__okNodeTile = -1;
     for (const k in SIM_SPATIAL_DEFAULTS) d[k] = SIM_SPATIAL_DEFAULTS[k];
     for (const [, k, v] of SIM_UNIT_KCOL_FIELDS) d[k] = v;
     const known = new Set([...SIM_UNIT_COLUMNS, ...SIM_MOVE_COLUMNS.map(c => c[0])]);
@@ -1856,7 +1857,8 @@ function simUnitStateDetach(S, s) {
 // k_retire_release).
 const _simRetP = new Float64Array(8), _simRetA = [];
 // (Below this many removed slots the release runs on this thread alone.)
-const SIM_RETIRE_PAR_MIN = 4096, SIM_RETIRE_PER = 2048;
+// (512: a step of a battle retires 2-4k units at 1M; at 4096 they all ran here, ~1.1 ms a step, 2026-11-13.)
+const SIM_RETIRE_PAR_MIN = 512, SIM_RETIRE_PER = 512;
 let _simRetTab = null;
 function simUnitStateDetachGoneMany(S, L, n) {
     if (!(n > 0)) return;
@@ -2225,7 +2227,14 @@ function simUnitStateRelayoutStep() {
     // and landed on 0 and 2.
     // Not on a tick that applied orders (a burst): peer-local, so skipped
     // there; the next step's share is the same.)
-    if (SIM_RELAYOUT_EVERY > 1 && (((gameTime % SIM_RELAYOUT_EVERY) + SIM_RELAYOUT_EVERY) % SIM_RELAYOUT_EVERY) !== SIM_RELAYOUT_PHASE % SIM_RELAYOUT_EVERY) return 0;
+    // (A step of several base ticks (simDk) runs once at its end: it counts the base ticks of the
+    // step on the phase and moves that many shares. Testing gameTime alone never matched at an even
+    // dk (gameTime's parity is fixed then): at dk 4 no relayout ran at all, and slot order decayed
+    // until consecutive slots shared a tile ~3% of the time (every slot-ordered kernel's reads random).)
+    const every = Math.max(1, SIM_RELAYOUT_EVERY), dk = Math.max(1, typeof simDk === 'number' ? simDk | 0 : 1);
+    let shares = 0;
+    for (let i = 0; i < dk; i++) { const b = gameTime - i; if ((((b % every) + every) % every) === SIM_RELAYOUT_PHASE % every) shares++; }
+    if (!shares) return 0;
     if (typeof orderAppliedTick === 'number' && orderAppliedTick === gameTime) { _rl.skipped++; return 0; }
     if (!_simRelayoutReady(S)) { if (SIM_RELAYOUT && S) _rl.skipped++; return 0; }
     const R = _simRelayoutArrays(S), Z0 = R ? _simSlotZeroTable(S) : null;
@@ -2255,7 +2264,7 @@ function simUnitStateRelayoutStep() {
     const Q = R.P;
     Q.fill(0);
     Q[0] = nsl; Q[1] = sl.nk; Q[2] = sl.kw; Q[3] = sl.kh; Q[4] = TILE * SIM_SLAB_KEY_TILES * SIM_POS_SCALE;
-    Q[5] = Math.max(SIM_SLAB, Math.ceil(live * Math.max(1, SIM_RELAYOUT_EVERY) / Math.max(1, SIM_RELAYOUT_PERIOD)));
+    Q[5] = Math.max(SIM_SLAB, Math.ceil(shares * live * Math.max(1, SIM_RELAYOUT_EVERY) / Math.max(1, SIM_RELAYOUT_PERIOD)));
     Q[6] = SIM_SLAB_SLACK_SHIFT; Q[7] = slabLimit; Q[8] = SIM_RELAYOUT_STRESS ? 1 : 0; Q[9] = R.steps & 1; Q[10] = R.maxPairs; Q[11] = R.scr.length;
     simRustDirect('k_relayout_plan', [sl.sfree, sl.home, sl.bits, sl.used, sl.ever, sl.cur, R.score, C.live, C.dead, C.x, C.y, R.pairs, R.scr, sl.heads, sl.entries, R.hdr], Q);
     const H = R.hdr, n = H[0];
@@ -2283,8 +2292,14 @@ function _simRelayoutIndex(R, n) {
     if (ok && ns > D.hw) { D.k.fill(-1, D.hw, ns); D.id.fill(0, D.hw, ns); D.own.fill(0, D.hw, ns); D.hw = ns; }
     const P = _simRlIxP;
     // (rl.fwd holds where rl.fst is this step's stamp: R.steps + 1 during the step.)
-    P[0] = _sxListed; P[1] = R.fwd.length; P[2] = n; P[3] = ok ? D.slots : 0; P[4] = R.steps + 1;
-    simRustDirect('k_ixd_relayout', [R.fwd, _sxESlot, ok ? D.k : null, ok ? D.id : null, ok ? D.own : null, _simRlIxScr, R.pairs, R.fst], P);
+    P[0] = _sxListed; P[1] = R.fwd.length; P[2] = n; P[3] = ok ? D.slots : 0; P[4] = R.steps + 1; P[5] = 0;
+    const A = [R.fwd, _sxESlot, ok ? D.k : null, ok ? D.id : null, ok ? D.own : null, _simRlIxScr, R.pairs, R.fst];
+    // (Many entries: their renaming in shares on the helpers (block 8), then the pairs' moves here.)
+    if (_sxListed >= 65536 && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && _simPool) {
+        P[5] = 16; simRustParallel(SIM_BLOCK_IXD_RELAYOUT, A, P, 16);
+        P[0] = 0; P[5] = 0;
+    }
+    simRustDirect('k_ixd_relayout', A, P);
 }
 function _simRelayoutApply(S, R, n) {
     const C = S.columns, pairs = R.pairs, stamp = R.steps + 1;

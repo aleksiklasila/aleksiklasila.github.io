@@ -52,6 +52,7 @@ mod arq;
 mod navg;
 mod birth;
 mod world_map;
+mod looks;
 // The presentation worker's module only (wasm/build.cjs --pres: two memories).
 #[cfg(feature = "pres")]
 mod pres;
@@ -1250,7 +1251,11 @@ pub unsafe extern "C" fn nav_field(
         }
         let l0 = (ly0 * bw + lx0) as usize;
         *out.add(l0) = 0;
-        *qs = l0 as i32;
+        // (A queue entry is its tile's box coordinates, ly << 16 | lx: no division a tile.)
+        if bw > 0xFFFF || bh > 0x7FFF {
+            return 0;
+        }
+        *qs = (ly0 << 16) | lx0;
         *qn = 1;
         let mut pending = 1usize;
         let mut d: u32 = 0;
@@ -1259,14 +1264,14 @@ pub unsafe extern "C" fn nav_field(
             let qb = qs.add(b * qcap);
             let mut i = 0usize;
             while i < *qn.add(b) as usize {
-                let l = *qb.add(i) as usize;
+                let q = *qb.add(i);
                 i += 1;
                 pending -= 1;
+                let (ly, lx) = (q >> 16, q & 0xFFFF);
+                let l = (ly * bw + lx) as usize;
                 if *out.add(l) as u32 != d {
                     continue;
                 }
-                let ly = idiv(l as i32, bw);
-                let lx = l as i32 - ly * bw;
                 let (x, y) = (bx + lx, by + ly);
                 let t = (y * w + x) as usize;
                 let nd = d + if cost.is_null() { 1 } else { *cost.add(t) as u32 };
@@ -1278,12 +1283,12 @@ pub unsafe extern "C" fn nav_field(
                 let nq = qs.add(nbk * qcap);
                 let nc_ = qn.add(nbk);
                 macro_rules! push {
-                    ($l:expr) => {{ *out.add($l) = ndv; *nq.add(*nc_ as usize) = $l as i32; *nc_ += 1; pending += 1; }};
+                    ($l:expr, $q:expr) => {{ *out.add($l) = ndv; *nq.add(*nc_ as usize) = $q; *nc_ += 1; pending += 1; }};
                 }
-                if lx + 1 < bw && x + 1 < w && *wall.add(t + 1) == 0 && ndv < *out.add(l + 1) { push!(l + 1); }
-                if lx > 0 && *wall.add(t - 1) == 0 && ndv < *out.add(l - 1) { push!(l - 1); }
-                if ly + 1 < bh && y + 1 < h && *wall.add(t + w as usize) == 0 && ndv < *out.add(l + bwu) { push!(l + bwu); }
-                if ly > 0 && *wall.add(t - w as usize) == 0 && ndv < *out.add(l - bwu) { push!(l - bwu); }
+                if lx + 1 < bw && x + 1 < w && *wall.add(t + 1) == 0 && ndv < *out.add(l + 1) { push!(l + 1, q + 1); }
+                if lx > 0 && *wall.add(t - 1) == 0 && ndv < *out.add(l - 1) { push!(l - 1, q - 1); }
+                if ly + 1 < bh && y + 1 < h && *wall.add(t + w as usize) == 0 && ndv < *out.add(l + bwu) { push!(l + bwu, q + 0x10000); }
+                if ly > 0 && *wall.add(t - w as usize) == 0 && ndv < *out.add(l - bwu) { push!(l - bwu, q - 0x10000); }
             }
             *qn.add(b) = 0;
             d += 1;

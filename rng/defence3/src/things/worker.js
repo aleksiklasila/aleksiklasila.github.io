@@ -5,22 +5,35 @@
 // player's researchPoints every transfer cooldown, paying energy at the
 // active task's cost per work, while the pool does not already cover that
 // task (wasm/src/wai.rs research_deposit); researchDrainTick moves the pool
-// into the research queue every RESEARCH_DRAIN_TICKS.
+// into the research queue every step.
 // Whether the active task still needs points beyond the pool's.
 function _researchNeedsPoints(owner, task) {
     const p = players[owner];
     return !!task && (Number(task.workDone) || 0) + (Number(p && p.researchPoints) || 0) < (Number(task.workRequired) || 0);
 }
-const RESEARCH_DRAIN_TICKS = 10;
-// Every RESEARCH_DRAIN_TICKS: each player's research pool into its queue
-// (tasks completed in turn; what is left waits for the next task).
+// Every step: each player's research pool into its queue (tasks completed in
+// turn; what is left waits for the next task). (Every 10 ticks before: the
+// step that crossed one did all completions of 2-3 steps at once, a lump of
+// ~4.6 ms at dk 4 in the 1M chaos scene; spending is rate-free, so a step's
+// share is the same work spread evenly and research lands sooner.)
+// The completions' stats are published once per (owner, kind, key, stat) and
+// their unit rows (k_stat_fill) filled once per (owner, type) at the drain's
+// end (data_dynamic.js researchPublishBatch*, things_utils.js effFillBatch*):
+// nothing in the drain reads them.
 function researchDrainTick() {
-    if (!simStepCrosses(0, RESEARCH_DRAIN_TICKS)) return;
-    for (let pid = 0; pid < players.length; pid++) {
-        const p = players[pid];
-        let pts = Number(p && p.researchPoints) || 0;
-        if (!(pts > 0)) continue;
-        p.researchPoints = researchQueueSpend(pid, pts);
+    if (typeof effFillBatchBegin === 'function') effFillBatchBegin();
+    researchPublishBatchBegin();
+    try {
+        for (let pid = 0; pid < players.length; pid++) {
+            const p = players[pid];
+            let pts = Number(p && p.researchPoints) || 0;
+            if (!(pts > 0)) continue;
+            p.researchPoints = researchQueueSpend(pid, pts);
+        }
+    } finally {
+        // (The stats published once each (data_dynamic.js), then their units' rows filled once each.)
+        researchPublishBatchEnd();
+        if (typeof effFillBatchEnd === 'function') effFillBatchEnd();
     }
 }
 
@@ -717,7 +730,7 @@ function _wsGroupBuild(G, cfg) {
     // (And the near field's: rk / ro the spawners' tile order and back, hs the set's hashes.)
     const RK = arr('rk', Int32Array, np), RO = arr('ro', Int32Array, np), HS = arr('hs', Int32Array, 2);
     P[0] = cap; P[1] = np; P[2] = bcols; P[3] = brows; P[4] = TILE; P[5] = WS_BUCKET;
-    simRustDirect('k_ws_buckets', [SX, SY, BS, BC, BI, QGX, QGY, QO, QID, QX, QY, QR, PGX, PGY, PO, PID, PX, PY, PR, QP, sb, meta, RK, RO, HS], P);
+    simRustDirect('k_ws_buckets', [SX, SY, BS, BC, BI, QGX, QGY, QO, QID, QX, QY, QR, PGX, PGY, PO, PID, PX, PY, PR, QP, sb, meta, RK, RO, HS, arr('bki', Int32Array, cap)], P);
     G.np = np;
     _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta);
     G.n = cap;
@@ -807,6 +820,8 @@ function _wsPost() {
     if (!n) return;
     const CH = WS_SEL_CHUNK, chunks = Math.ceil(n / CH);
     const CNT = _wsArr('ws.rcnt', Int32Array, chunks), PRE = _wsArr('ws.rpre', Int32Array, chunks + 1);
+    // (The count lists each chunk's due slots here: the payload pass visits only those, wasm k_ws_select.)
+    _wsArr('ws.rsel', Int32Array, chunks * CH);
     const P = _simParams;
     // (Workers registered since the last post made, P[3]; the retry slots as wide.)
     // (Steps of more base ticks than a cycle (simDk) post once a step: its
@@ -922,6 +937,7 @@ function _wsOrder() {
 }
 // The commit: every request that found something takes its result now, in
 // the order's order, in the worker kernel (worker.js waiTake).
+const _wsRemapP = new Float64Array(4);
 function _wsCommit() {
     if (!_wsPosted || !_wsPosted.ordered) return;
     simParallelBackgroundWait(WS_LANE);
@@ -932,14 +948,11 @@ function _wsCommit() {
     // (Workers moved to other slots while the search ran (the online
     // relayout, sim_unit_state.js): each request's slot found again by its
     // id; a worker gone names none, as its slot's id check would have.)
+    // (wasm/src/uix.rs k_slots_by_id, over the id index.)
     if (typeof _rl !== 'undefined' && J.moved !== _rl.moved) {
-        const RS = _simParReg['ws.rslot'], RI = _simParReg['ws.rid'], S = _simUnitState, O = S.owners;
-        for (let i = 0, m = Math.min(J.CH | 0, RS.length); i < m; i++) {
-            const s = RS[i];
-            if (s >= 0) { const o = O.at(s); if (o && o.id === RI[i]) continue; }
-            const u = getUnitById(RI[i]);
-            RS[i] = u && u._us === S.columns && u._si >= 0 ? u._si : -1;
-        }
+        const RS = _simParReg['ws.rslot'], RI = _simParReg['ws.rid'], S = _simUnitState, U = unitIdIndex(), P = _wsRemapP;
+        P[0] = Math.min(J.CH | 0, RS.length); P[1] = U.n; P[2] = S.owners.length;
+        simRustDirect('k_slots_by_id', [RS, RI, S.columns.id, S.columns.live, U.ids, U.slots], P);
     }
     const n = _simParReg['ws.orderCount'][0];
     if (n > 0) waiTake(J, _simParReg['ws.order'], n);
@@ -3347,6 +3360,8 @@ function workerBrainReserve(B){
     _workerBrainArray('sites',Uint16Array,nb*64);
     _workerBrainArray('count',Int32Array,nb*stride);
     _workerBrainArray('any',Int32Array,np*16);
+    // (Per owner and spawner kind, each block's distance in blocks to the nearest such site: worker_brain.rs.)
+    _workerBrainArray('dist',Uint8Array,np*6*nb);
 }
 function workerBrainsPrepare(n,defer=false,list=null){
     if(_workerBrain.pending)workerBrainsCollect();
@@ -3358,16 +3373,16 @@ function workerBrainsPrepare(n,defer=false,list=null){
     // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
     if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.freeCount<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
     const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
-    _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);
+    _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);_workerBrainArray('dist',Uint8Array,np*6*nb);
     for(const key of ['code','own','uc','val','brain'])simParallelBind('st.'+key,_ST[key]);
     const lane=SIM_LANE_TICK;
-    for(let stage=0;stage<3;stage++){
+    for(let stage=0;stage<4;stage++){
         const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=nb;P[1]=32;P[2]=stage;P[3]=w;P[4]=h;P[5]=cols;P[6]=np;P[7]=stride;
         for(let k=0;k<6;k++)P[16+k]=(_stationaryTypeIds.get(_workerBrainSpawnerTypes[k])??-1)+1;
-        if(stage===2){P[0]=n;P[1]=256;P[2]=gameTime;P[8]=TILE*8;}
+        if(stage===3){P[0]=n;P[1]=256;P[2]=gameTime;P[8]=TILE*8;}
     }
     B.pending={tick:gameTime,n};
-    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/32)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
+    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/32)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SITES,np*6],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
     if(!defer)workerBrainsCollect();
 }
 function workerBrainsCollect(){
