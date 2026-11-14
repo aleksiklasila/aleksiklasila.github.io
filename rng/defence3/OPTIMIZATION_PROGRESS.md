@@ -8308,3 +8308,131 @@ unit-gone-objects, tower-simd-determinism, event-route-determinism: pass.
 k33 acquisition sample 55, k62 combat brain 51, k39 worker search scan 42,
 k152/k153/k151 flow looks 27/19/15, k32 acquisition snapshot 22, k28 vis seed
 21, k135 nav chain 21, k98 area answers 18, k185 free zero 17.
+
+## 2026-11-13 (night) - OCCUPACY_OPTIMIZATION.md, first round: legal-centre fields, bitmap margins, kept traffic counts
+
+Scene chaos-1m-250k, dk 4, 8 helpers (tests/move-step-probe.cjs). Data and tools in tests/test-runs/occ-simd-20261113/:
+ab.sh (alternating base / current runs: the session-start binary and occupancy / traffic JS through source
+overrides), audit.cjs (occupancyAudit every step with real helpers), run-tests.sh (tests one after another),
+pf*.helper*.cpuprofile (prof builds; pf9 = the kept state).
+
+Start (counters a step, dk 4): 193k resolves, 1.33M footprint tests (free), 815k motion() calls (4.2 a resolve,
+190k of them past 3 cells), 125k shoulder searches, 27k swap scans reading 154k candidate records (4.5k eligible).
+k89 helper CPU ~330 ms a step (prof build): preview / motion / free ~100, checked_traffic_q's own 45, move_job's own
+42, traffic_swap 30, epilogue 20, commit and marks 24.
+
+Kept (each checked by the position hash, helpers 0, dk 4: identical to the step before unless noted):
+- **Legal-centre fields** (occ.rs field8 / field16, Field, MoveGrid::field_of): for a radius 1-3 mover (all
+  footprints in play: 1x1 / 3x3 / 5x5), the centres its footprint fits at around its cell: 8 x 8 (offsets -3..+4,
+  steps up to 3 cells) or 16 x 16 (-7..+8, up to 7; dk 4 steps reach 4-7 cells). One patch of 8+2H / 16+2H rows, one
+  unaligned 64-bit read a row straight into i16x8 / i32x4 lanes, the own footprint masked out by a constant, dilated
+  across by lane shifts and down by fixed shuffles. Cached per (slot, position) in the job's MoveGrid; every bitmap
+  write of the job drops it. motion_f answers motion()'s three cases from it (one cell: a bit; same row: the first
+  taken bit of the row, then the sweep's discrete position; swept: four sweep points a vector, f32 quotient (exact
+  here), field byte / bit by swizzles). free() calls 1.33M -> 72k a step, off-field fallbacks 6k. A first build
+  (branchy per-row edge tests) cost ~140 ns; straight-line ~25 ns hot (fieldx2 diagnostic build: each field built
+  twice), ~65 ns in place.
+- **Bitmap margins** (user's suggestion instead of an edge path): OCC_MY = 16 taken rows above and below each plane;
+  each row's padding word taken (its right margin, and read at word -1 the next row's left margin); cells past the
+  map's last column in its last word taken. Every grid addresses from the map's origin (occ.rs origin / occ_plane /
+  mkgrid); the field reads need no edge tests. occ_margins (wasm) fills them at allocation and rebuild;
+  sim_occupancy.js checks occ_layout() (a stale binary throws). Changed with it: every occ.rs grid, birth.rs's own
+  row reads (grid_row: they still used the old origin until this change), traffic capture, the audit's count
+  (occ_count over map cells only), tests/occupancy-shapes.test.cjs.
+- **Kept traffic counts** (plan: stop recounting the bitmap): after the planes an i32 a coarse traffic cell (32 x 32
+  cells, exactly one bitmap word wide), kept by every bitmap write from the written words' popcount before / after
+  (occ.rs rows64 / tally; atomic adds outside the movement, whose phases own their coarse cells; a move whose old and
+  new footprints lie in one coarse cell skips counting). traffic_capture reads them: k93 ~7.5 ms -> under 1 ms a
+  step on one thread; ~1.9 ms of foreground wall with 8 helpers -> gone. occ_counts_bad() = 0 is now part of
+  occupancyAudit (audit.cjs: every step of 10, 8 helpers, through parallel deaths: OK; occupancy-shapes checks it
+  after every case).
+- **Delta commit** (move_footprint): the rows of the old and new footprints' union written once each (old bits
+  cleared, new set), not cleared and marked again.
+- **Swap partner class filter** (traffic_swap): the candidates' first-stage words (record word 3, already loaded by
+  the 4-lane broad phase) reject non-standing / non-walker / brain-mode partners in one vector compare before any of
+  their columns is read. Identical hash.
+- **Pressure steering algebra** (steer_pressure): the part across the step as one scalar along the step's normal
+  (keep-right and the 1.2-step cap applied to it); the steered step's length from sqrt(len^2 + s^2): two square
+  roots and two divisions fewer. Positions change by rounding only (hash differs; walkers' mean distance equal to
+  1e-12 over 12 steps).
+- **Job gather / order as functions** (occ_gather / occ_order: profiled apart), the chunk division a shift (chunk
+  size checked to be a power of two), rows not rewritten when their position did not change.
+
+Tried, not kept:
+- **Four rays a sweep** (motion4 / MoveGrid::preview4: the wanted step and both slides as three lanes; the four
+  shoulders as four lanes): identical positions, but k89 helper CPU 4658 -> 5185 ms over 16 steps (+11%): per-lane
+  masks, bitselects and speculative slides cost more than the one-ray sweeps' early exits. Source in
+  tests/test-runs/occ-simd-20261113/multiray-not-kept.occ.rs.
+
+Measured (ab.sh, alternating base / current, 8 helpers, 30 steps each; machine load 12-35% this evening):
+
+| | base | current |
+|---|---|---|
+| dk 4 step mean / p50 / p95 / max (3 rounds, means) | 132.0 / 129.3 / 158.4 / 161.4 | 130.6 / 129.4 / 156.4 / 163.0 |
+| dk 4 k89 wall a step | 36.7 / 35.8 / 35.4 | 35.2 / 34.0 / 33.1 (-5%) |
+| dk 4 k93 (traffic capture) wall | 1.8 / 1.9 / 2.0 | under the top 14 (~0) |
+| dk 1 step mean / p95 (2 rounds) | 85.2 / 102.4 | 83.9 / 98.2 |
+| dk 1 k89 wall | 24.5 / 25.1 | 24.2 / 23.8 |
+
+k89 helper CPU (prof build, 16 steps) 5289 -> 4658 ms (-12%), but the prof build keeps the small replaced functions
+out of line and overstates it: release k89 on one thread 235 -> ~212-217 ms (-8%), with 8 helpers -5%. Not block
+imbalance (blocks.cjs: ~900 blocks a phase, the heaviest ~800 rows against ~22k rows a helper; k89 wall ~ helper CPU
+/ 9 threads). The plan's target (occupancy <= 25% of baseline) is far off; the footprint tests are no longer the
+largest part.
+
+Tests (current state): occupancy-grid, occupancy-shapes (2560 cases incl. field moves at word seams and map edges),
+traffic-pressure, mover-table, mover-table-order, spawn-births-columns, unit-spawn-columns, spawn-rally,
+starting-spawn-limits, worker-approach-occupancy, separation-rally, mixed-rally-move, nav-flow-width,
+unit-gone-objects, slot-relayout, shared-spatial-determinism, chaos-scenario-determinism, event-route-determinism,
+spawn-counts, worker-brain-spawners, multiplayer-chaos-determinism (no host helpers; with 4: see below): pass.
+multiplayer-chaos-determinism with CHAOS_HOST_HELPERS=4 (six maps, 2610 hashes each): pass. audit.cjs (8 helpers, dk 4,
+10 steps): bitmap = footprints, counts = bitmap, every step.
+
+Not done from the plan:
+- 16 x 8 v128 bitmap words: the field reads its rows from the row layout with one load each and costs ~25 ns hot;
+  the change touches every consumer for an unmeasured gain.
+- Exact boundary-crossing events instead of the sweep's discrete points: would change behaviour (blocked movers
+  would close up further; the walk tried 2026-11-13 failed the counterflow case); the field answers the same points
+  the sweep always tested.
+- 32-byte records (requested position, eligibility, revision), SoA mover packets, cached per-block ID order patched by
+  slot moves, vector-held swap ranks (4.5k eligible candidates a step: not a cost), tile owner summaries, private
+  change bitsets (k89 has no atomic changed-slot bitset: the mover table uses dirty bytes), cached floor capacity,
+  packed deposit vectors, the exceptional-envelope batch, Edge measurements.
+
+Where k89's helper CPU goes now (pf9, ms over 16 steps, self): motion_f 462, checked_traffic_q 451, traffic_swap
+407, epi_slot 336, field 304, occ_gather 256, move_job 241, move_footprint 220, traffic_yield 213, preview 210,
+commit_preview 208, seg_open 181, walker_short_at 162, steer_pressure 157, resolve_slot 155, shoulders 144,
+push_deposit 123, fill_chunks 119, occ_order 107, sample 103. No single part above 10%: what is left is spread over the per-resolve
+path (column reads and writes by slot, the steer record, the epilogue): the plan's records / SoA packets are next.
+
+## 2026-11-14 (night) - occupancy round 2: stacked small cuts; MOVEMENT_SIMD_PLAN.md
+
+User rules this round: batch changes, measure once, keep what helps (even ~5% if free), revert what hurts, tests
+at the end. One-thread k89 / k8 (helpers 0, dk 4, WARM 5, 8 steps) for each batch; back-to-back repeats agree
+within ~1% on a quiet machine, ~3% under load.
+
+Kept (one-thread k89 230.6 -> ~208-211 ms; 8-helper A/B after batch 3: k89 37.3 -> 33.2 ms, step mean 135.5 ->
+131.2):
+- Yield moves take no shoulder search (-19 ms one-thread); long-step swap scans every other step by id (-13);
+  movers ordered by projection on the block heading at cell resolution (-22, progress equal or better).
+- Open-ring walls: a job checks once per wall grid whether its block + 6-tile ring has a wall; segments inside are
+  open without the tile walk (seg_open in k89 181 -> 57 ms CPU over 16 steps).
+- pdiv: power-of-two divisions as shifts in the mover table's block() and the sweeps.
+- Chunk cache filled by row on demand; one-cell wanted steps tested directly before any field is built;
+  walker_short_at without its square root; traffic deposit's divisions folded; footprint moves as clear + mark
+  (the union-row delta write measured slower); swap chunk summaries (owner / class bits per chunk, made at the
+  chunk's first look in a job); yield steering as one lateral scalar.
+
+Measured and reverted: 32-byte occupancy records (k8 +1.1 ms: mark_need writes 16 more bytes a slot, k89 no
+gain; source records-not-kept.*.rs); step4 reading whole steer records by vectors (k8 unchanged, identical hash);
+shoulder search only below 60% (no CPU gain, worse progress); walker retry only below 50% (no clear gain).
+
+Where k89 stays: ~75% scalar per-unit code, ~15% SIMD; nothing above ~10%; crowd behaviour ~60% of it. The way to
+remove the scalar work is a redesign, written as `MOVEMENT_SIMD_PLAN.md`: rows as the movement's SoA state,
+block-local grids (static occupancy with walls, dilated per footprint class; owner; claims), K resolve rounds
+(propose all candidates, legality by bit lookup, max-priority claims, vacating propagation, commit), reductions per
+tile, epilogue by index rebuild, k8 as masked intent passes + events. First gate: a prototype of the rounds on
+dumped blocks and the crowd benches.
+
+Not yet done for round 2's kept changes: the end-of-round test pass (traffic-pressure, rally-pulse, crowd benches,
+occupancy audit, multiplayer chaos determinism with helpers).

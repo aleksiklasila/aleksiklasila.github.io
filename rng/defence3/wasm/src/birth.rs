@@ -261,14 +261,13 @@ unsafe fn rz_place_job(a: u32, chunk: i32) {
     let (blk, t0, t1) = (g(jobs, 3 * j), g(jobs, 3 * j + 1) as usize, g(jobs, 3 * j + 2) as usize);
     let (csh, tsh) = (cell.trailing_zeros(), ctile.trailing_zeros());
     let gd = super::occ::grid(bits, mask, w, h, stride, cell, planes);
-    let plane = stride * h;
     // (The block's cells: [bx0, bx0 + 64) x [by0, by0 + 64).)
     let bx0 = irem(blk, bw) * BC - off; let by0 = idiv(blk, bw) * BC - off;
     // (A row's free cells: bit i = cell bx0 + i; outside the map none.)
     let row_free = |y: i32, layer: i32| -> u64 {
         let cy = by0 + y;
         if cy < 0 || cy >= h { return 0; }
-        let base = bits.add((layer * plane + cy * stride) as usize);
+        let base = super::occ::grid_row(&gd, layer, cy);
         let wd = |c: i32| -> u64 { if c < 0 || c >= w { 0 } else { (!*base.add((c >> 5) as usize)) as u64 } };
         let mut f = wd(bx0) | (wd(bx0 + 32) << 32);
         // (Cells past the map's edge: not free.)

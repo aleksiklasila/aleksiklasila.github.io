@@ -11,12 +11,17 @@ const result=i.eval(`(()=>{
  O.config[7]=64;
  const disk=(x,y,r)=>{const a=[];for(let dy=1-r;dy<r;dy++)for(let dx=1-r;dx<r;dx++)if(dx*dx+dy*dy<r*r)a.push([x+dx,y+dy]);return a;};
  const spawn=(s,x,y,r,px=0,py=0)=>_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,C,O.planes,s,x*C+px,y*C+py,r,0,0);
+ // (The bitmap's map rows start after the margin rows; each row's last word is its margin (taken); the coarse
+ // cells' kept counts must equal the bitmap's.)
+ const M=SIM_OCCUPANCY_MARGIN_ROWS;
  const verify=(expected,label)=>{
-  let n=0;for(let y=0;y<O.h;y++)for(let w=0;w<O.stride;w++){
-   let bits=O.bits[y*O.stride+w]>>>0;while(bits){const bit=31-Math.clz32(bits&-bits),x=w*32+bit;
-    if(!expected.has(fold(x,y)))throw Error(label+': unexpected bit '+x+','+y);n++;bits=(bits&(bits-1))>>>0;}
+  let n=0;for(let y=0;y<O.h;y++)for(let w=0;w<O.stride-1;w++){
+   let bits=O.bits[(M+y)*O.stride+w]>>>0;while(bits){const bit=31-Math.clz32(bits&-bits),x=w*32+bit;
+    if(x<O.w){if(!expected.has(fold(x,y)))throw Error(label+': unexpected bit '+x+','+y);n++;}bits=(bits&(bits-1))>>>0;}
   }
   if(n!==expected.size)throw Error(label+': missing bits '+n+' / '+expected.size);
+  const bad=_simWasmX.occ_counts_bad(_simWEnc(O.bits.byteOffset),O.w,O.h,O.stride,O.planes);
+  if(bad!==0)throw Error(label+': '+bad+' coarse counts differ from the bitmap');
  };
  // (The kernel's swept move itself: occupancyMovePosition sends a move beyond a step's reach (24 tiles) as a jump, which ignores obstacles.)
  const moveOne=(s,x,y)=>{for(let i=0;i<_occNames.length;i++)_simWasmArgI[512+i]=_simWEnc(_simParReg[_occNames[i]].byteOffset);
@@ -24,7 +29,7 @@ const result=i.eval(`(()=>{
   const pos=_simWasmX.occ_move_one(_simWasmArgsW,s,x,y),c=_simUnitState.columns;c.x[s]=Number(BigInt.asIntN(32,pos));c.y[s]=Number(BigInt.asIntN(32,pos>>32n));};
  let cases=0;
  for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
-  O.bits.fill(0);O.rec.fill(0);const cy=32;
+  O.bits.fill(0);_occupancyMargins(O);O.rec.fill(0);const cy=32;
   if(!spawn(0,cx,cy,r,phase[0],phase[1]))throw Error('legal spawn rejected r='+r);
   const own=new Set(disk(cx,cy,r).map(([x,y])=>fold(x,y))),obstacle=new Set();
   const bx=dy>100?cx:cx+(dx>32?64:dx< -32?-64:r+3),by=dy>100?cy+256:cy+1;

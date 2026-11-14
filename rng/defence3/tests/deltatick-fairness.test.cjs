@@ -8,9 +8,11 @@ const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
 
 const sizes = ((process.argv.find(a => a.startsWith('--sizes=')) || '').split('=')[1] || '1,4,10').split(',').map(Number);
+// (Rates averaged over scenes: one fight is chaotic (a 50-a-side fight's damage swung 0.67-0.82x with unrelated changes).)
+const maps = ((process.argv.find(a => a.startsWith('--maps=')) || '').split('=')[1] || 'arena,random').split(',');
 
-async function run(K) {
-    const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '48', 'cfg-map-type': 'arena', 'cfg-max-pop': '5000', 'cfg-full-vis': 'all' };
+async function run(K, map) {
+    const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '48', 'cfg-map-type': map, 'cfg-max-pop': '5000', 'cfg-full-vis': 'all' };
     const world = new H.World({ simWorker: true, controls });
     const inst = world.spawn('solo', { controls });
     inst.eval(`netStepTicks = () => ${K};`);
@@ -73,22 +75,31 @@ async function run(K) {
 
 (async () => {
     const rows = [];
-    for (const K of sizes) {
-        const r = await run(K);
-        rows.push(r);
-        console.log(`dk ${K}: ${r.perStep.toFixed(2)} base ticks a step; px a base tick norm ${r.norm.toFixed(3)} fast ${r.fast.toFixed(3)}; fight over ${r.fightTicks} base ticks lost ${JSON.stringify(Object.fromEntries(Object.entries(r.lost).map(([k, v]) => [k, Math.round(v)])))}`);
+    for (const map of maps) for (const K of sizes) {
+        const r = await run(K, map);
+        r.map = map; rows.push(r);
+        console.log(`${map} dk ${K}: ${r.perStep.toFixed(2)} base ticks a step; px a base tick norm ${r.norm.toFixed(3)} fast ${r.fast.toFixed(3)}; fight over ${r.fightTicks} base ticks lost ${JSON.stringify(Object.fromEntries(Object.entries(r.lost).map(([k, v]) => [k, Math.round(v)])))}`);
         assert.deepEqual(r.errors, [], 'no errors at dk ' + K);
-    }
-    const base = rows[0];
-    for (const r of rows) {
         assert.ok(Math.abs(r.perStep - r.K) < 0.01, `game time moves on by the step size (dk ${r.K}: ${r.perStep})`);
-        for (const t of ['norm', 'fast']) {
-            const q = r[t] / base[t];
-            assert.ok(q > 0.85 && q < 1.15, `${t} units cover the same ground a base tick at dk ${r.K} as at dk ${base.K}: ${q.toFixed(3)}x`);
-        }
-        const dmg = Object.values(r.lost).reduce((s, v) => s + v, 0) / r.fightTicks, dmg0 = Object.values(base.lost).reduce((s, v) => s + v, 0) / base.fightTicks;
         assert.ok(r.fightTicks >= 400 && r.fightTicks < 400 + r.K, 'the fight ran its 400 base ticks');
-        assert.ok(dmg / dmg0 > 0.75 && dmg / dmg0 < 1.33, `a fight deals about the same damage a base tick at dk ${r.K}: ${(dmg / dmg0).toFixed(3)}x`);
+    }
+    const dmgOf = r => Object.values(r.lost).reduce((s, v) => s + v, 0) / r.fightTicks;
+    const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
+    for (const K of sizes.slice(1)) {
+        // (Each scene's ratio to its own first-size run, then the mean over scenes.)
+        const q = { norm: [], fast: [], dmg: [] };
+        for (const map of maps) {
+            const a = rows.find(r => r.map === map && r.K === sizes[0]), b = rows.find(r => r.map === map && r.K === K);
+            q.norm.push(b.norm / a.norm); q.fast.push(b.fast / a.fast); q.dmg.push(dmgOf(b) / dmgOf(a));
+        }
+        const [n, fst, dmg] = [avg(q.norm), avg(q.fast), avg(q.dmg)], speed = (n + fst) / 2;
+        console.log(`dk ${K} / dk ${sizes[0]} over ${maps.length} scenes: speed ${speed.toFixed(3)} (norm ${n.toFixed(3)} fast ${fst.toFixed(3)}), fight damage ${dmg.toFixed(3)}`);
+        // Movement is calibrated (data_static.js SIM_DK_KNOBS, tests/dk-calibrate.cjs): the mean of the types near 1.
+        assert.ok(Math.abs(speed - 1) < 0.05, `units cover the same ground a base tick at dk ${K} (types averaged): ${speed.toFixed(3)}x`);
+        for (const [t, v] of [['norm', n], ['fast', fst]]) assert.ok(v > 0.85 && v < 1.15, `${t} units' ground a base tick at dk ${K}: ${v.toFixed(3)}x`);
+        // (Interim: fights engage later at large steps (acquisition's post-to-commit lag is a step); not calibrated
+        // yet, see data_static.js SIM_DK_KNOBS. The old bound until that is fixed.)
+        assert.ok(dmg > 0.75 && dmg < 1.33, `a fight deals about the same damage a base tick at dk ${K}: ${dmg.toFixed(3)}x`);
     }
     console.log('PASS: steps of several base ticks keep movement and damage per game time.');
     process.exit(0);

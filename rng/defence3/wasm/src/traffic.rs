@@ -26,9 +26,20 @@ pub(super) unsafe fn deposit(c:*const i32,x:i32,y:i32,layer:i32,mass:i32,dx:f64,
     let w=*c.add(1);let h=*c.add(2);let gx=x>>*c.add(3);let gy=y>>*c.add(3);
     if gx<0||gy<0||gx>=w||gy>=h{return;}
     let k=((layer*h+gy)*w+gx) as usize;
+    let f=mass as f64/dk;
     for (i,v) in [(18,dx),(19,dy),(29,loss)]{
-        let p=ptr::<i32>(c,i).add(k);*p=(*p).saturating_add(js_round(v/dk*mass as f64) as i32);
+        let p=ptr::<i32>(c,i).add(k);*p=(*p).saturating_add(js_round(v*f) as i32);
     }
+}
+/// The step-size movement compensation at (x, y) (Q8): the knob ([44], data_static.js simDkKnob('move')) times the
+/// coarse cell's density (the last capture's taken share, [22]); 0 without either.
+pub(super) unsafe fn move_comp(c:*const i32,x:i32,y:i32,layer:i32)->f64{
+    if c.is_null()||*c<2{return 0.0;}
+    let k=f32::from_bits(*c.add(44) as u32) as f64;if !(k>0.0){return 0.0;}
+    let d=ptr::<f32>(c,22);if d.is_null(){return 0.0;}
+    let w=*c.add(1);let h=*c.add(2);let gx=x>>*c.add(3);let gy=y>>*c.add(3);
+    if gx<0||gy<0||gx>=w||gy>=h{return 0.0;}
+    k*(*d.add(((layer*h+gy)*w+gx) as usize)).max(0.0).min(1.0) as f64
 }
 pub(super) unsafe fn sample(c:*const i32,x:i32,y:i32,layer:i32)->(f64,f64){
     if c.is_null()||*c<2||*c.add(5)==0{return (0.0,0.0);}
@@ -138,21 +149,17 @@ pub(super) unsafe fn push_response(c:*const i32,x:i32,y:i32,own:i32)->(f64,f64,i
 #[no_mangle]
 pub unsafe extern "C" fn traffic_capture(a:u32,chunk:i32){
     let (a,f,c)=args(a);let (start,end)=range(f,chunk);
-    let bits=waddr(*a.add(513) as u32) as *const u32;let wall=waddr(*a.add(514) as u32) as *const u8;
+    let wall=waddr(*a.add(514) as u32) as *const u8;
     let w=*c.add(1);let h=*c.add(2);let stride=*c.add(6);let rows=*c.add(7);
+    // (The bitmap from the map's origin, planes [margin][rows][margin] (occ.rs); the cells past the map's last column
+    // (taken: its margin) masked out of the last word.)
+    // (The occupied cells of each coarse cell: the bitmap's kept counts (occ.rs occ_counts, the same cells, indexed as here).)
+    if *c.add(43)!=super::occ::OCC_MY{unreachable();}
+    let counts=super::occ::occ_counts(waddr(*a.add(513) as u32) as *mut u32,stride,rows,*c.add(4)) as *const i32;
     let gw=*c.add(8);let gh=*c.add(9);
     for k in start..end{
         let x=irem(k as i32,w);let y=irem(idiv(k as i32,w),h);let l=idiv(k as i32,w*h);
-        let mut sum=i32x4_splat(0);let mut yy=y*32;
-        let maxy=((y+1)*32).min(rows);
-        while yy+4<=maxy{
-            let p=bits.add(((l*rows+yy)*stride+x) as usize);
-            let v=u32x4(*p,*p.add(stride as usize),*p.add(stride as usize*2),*p.add(stride as usize*3));
-            let bytes=i8x16_popcnt(v);let pairs=i16x8_extadd_pairwise_u8x16(bytes);sum=i32x4_add(sum,i32x4_extadd_pairwise_u16x8(pairs));yy+=4;
-        }
-        sum=i32x4_add(sum,i32x4_shuffle::<2,3,0,1>(sum,sum));sum=i32x4_add(sum,i32x4_shuffle::<1,0,3,2>(sum,sum));
-        let mut occupied=i32x4_extract_lane::<0>(sum);
-        while yy<maxy{occupied+=(*bits.add(((l*rows+yy)*stride+x) as usize)).count_ones() as i32;yy+=1;}
+        let occupied=*counts.add(k);
         let mut floor=0;
         for ty in y*4..((y+1)*4).min(gh){for tx in x*4..((x+1)*4).min(gw){if wall.is_null()||*wall.add((ty*gw+tx) as usize)==0{floor+=1;}}}
         let rho=occupied as f32/1024.0;let cap=floor as f32/16.0;

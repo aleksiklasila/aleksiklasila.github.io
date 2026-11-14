@@ -35,7 +35,9 @@ function trafficEnsure(O){
         for(const [i,key]of [[16,'x'],[17,'y'],[18,'workX'],[19,'workY'],[20,'snapX'],[21,'snapY'],[22,'density'],[23,'p0'],[24,'p1'],[25,'capacity'],[26,'source'],[27,'nextX'],[28,'nextY'],[29,'workLoss'],[30,'snapLoss']])C[i]=ptr(T[key]);
         C[32]=ptr(T.mask);C[33]=ptr(T.nextMask);
         C[34]=ptr(T.pushA);C[35]=ptr(T.pushB);C[36]=2;C[37]=GRID_W;C[38]=GRID_H;C[39]=Math.round(Math.log2(TILE*8));
-        C[40]=ptr(T.pushBitsA);C[41]=ptr(T.pushBitsB);
+        C[40]=ptr(T.pushBitsA);C[41]=ptr(T.pushBitsB);C[42]=O.w;C[43]=SIM_OCCUPANCY_MARGIN_ROWS;
+        // ([44]: the step-size movement knob's value, f32 bits, written each movement: trafficStepKnob.)
+        T.configF=new Float32Array(C.buffer,C.byteOffset,C.length);
         simParallelBind('traffic.config',C);
     }
     _traffic.config[0]=SIM_TRAFFIC_MODE;
@@ -57,6 +59,8 @@ function trafficBeforeMovement(){
         [C[32],C[33]]=[C[33],C[32]];
     }
 }
+// The step's movement compensation (data_static.js simDkKnob('move')) into the config (mv.rs checked_traffic_q).
+function trafficStepKnob(){const T=_traffic;if(T&&T.configF)T.configF[44]=simDkKnob('move');}
 function trafficAfterMovement(){
     const T=_traffic;if(!T||SIM_TRAFFIC_MODE<2||T.pending)return;
     const P=_simParams;P.fill(0);P[0]=T.n;P[1]=256;

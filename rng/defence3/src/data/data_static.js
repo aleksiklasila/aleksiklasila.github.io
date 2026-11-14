@@ -226,6 +226,26 @@ function simStepCrosses(phase, period) {
 // reads, not per-hit JavaScript): no flash is recorded, sent or drawn, and the
 // simulation makes no unit object for one.
 let SIM_DAMAGE_FLASH = false;
+// Step-size compensation (deltatick fairness): a step of several base ticks (simDk) loses some of what the same
+// base ticks give at one a step: a crowd mover's long step is cut at the first taken point along it (move: the wanted
+// step of a mover in a crowd scaled by 1 + move x the local density, occ / traffic). Calibrated so the rates a base
+// tick average those at dk 1 over a set of scenes: tests/dk-calibrate.cjs rewrites the table between the markers.
+// (Open: fights engage later at large steps: acquisition's post-to-commit lag is a step, not ~2 base ticks. Tried as
+// knobs without a controllable effect: unit damage times a factor (+15% moved the fight's tempo 2%), the range the
+// scan looks in (quantized into area steps). OPTIMIZATION_PROGRESS.md 2026-11-14.)
+// Values by dk, interpolated linearly between the listed step sizes; the same on every peer.
+// DK-KNOBS-BEGIN
+const SIM_DK_KNOBS = { dk: [1, 2, 4, 8, 16], move: [0, 0.093, 0.221, 0.441, 1.045] };
+// DK-KNOBS-END
+// (The calibrator's trial values: { move } forced whatever the step size; null: the table.)
+let SIM_DK_KNOB_OVERRIDE = null;
+function simDkKnob(name) {
+    if (SIM_DK_KNOB_OVERRIDE && SIM_DK_KNOB_OVERRIDE[name] !== undefined) return SIM_DK_KNOB_OVERRIDE[name];
+    const T = SIM_DK_KNOBS, v = T[name], d = T.dk, k = Math.max(1, typeof simDk === 'number' ? simDk : 1);
+    if (k <= d[0]) return v[0];
+    for (let i = 1; i < d.length; i++) if (k <= d[i]) return v[i - 1] + (v[i] - v[i - 1]) * (k - d[i - 1]) / (d[i] - d[i - 1]);
+    return v[v.length - 1];
+}
 function simStepPhases(period) {
     const n = Math.max(1, Math.min(simDk, period)), out = new Array(n);
     for (let i = 0; i < n; i++) { const b = gameTime - n + 1 + i; out[i] = ((b % period) + period) % period; }

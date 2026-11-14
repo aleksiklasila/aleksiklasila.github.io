@@ -113,7 +113,7 @@ impl Rows {
     }
     #[inline(always)]
     fn block(&self, x: i32, y: i32) -> i32 {
-        idiv(y.max(0), self.blockq).min(self.bh - 1).max(0) * self.bw + idiv(x.max(0), self.blockq).min(self.bw - 1).max(0)
+        pdiv(y.max(0), self.blockq).min(self.bh - 1).max(0) * self.bw + pdiv(x.max(0), self.blockq).min(self.bw - 1).max(0)
     }
     /// The unit of slot s now stands at (x, y) (its footprint record was
     /// written): its row's position (row h when the caller has it, else by
@@ -224,8 +224,8 @@ impl T {
     /// The block of a position (clamped into the map's blocks).
     #[inline(always)]
     fn block(&self, x: i32, y: i32) -> usize {
-        let bx = idiv(x.max(0), self.blockq).min(self.bw - 1).max(0);
-        let by = idiv(y.max(0), self.blockq).min(self.bh - 1).max(0);
+        let bx = pdiv(x.max(0), self.blockq).min(self.bw - 1).max(0);
+        let by = pdiv(y.max(0), self.blockq).min(self.bh - 1).max(0);
         (by * self.bw + bx) as usize
     }
     #[inline(always)]

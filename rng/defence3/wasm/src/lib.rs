@@ -140,6 +140,11 @@ fn to_i32(x: f64) -> i32 {
 fn idiv(a: i32, b: i32) -> i32 {
     if b == 0 { 0 } else { a.wrapping_div(b) }
 }
+/// a / b for a >= 0: a shift when b is a power of two (the occupancy's cell, block and chunk sizes), else idiv.
+#[inline(always)]
+fn pdiv(a: i32, b: i32) -> i32 {
+    if b > 0 && b & (b - 1) == 0 { a >> b.trailing_zeros() } else { idiv(a, b) }
+}
 #[inline(always)]
 fn irem(a: i32, b: i32) -> i32 {
     if b == 0 { 0 } else { a.wrapping_rem(b) }

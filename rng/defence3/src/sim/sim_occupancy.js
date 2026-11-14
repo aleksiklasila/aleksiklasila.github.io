@@ -3,6 +3,13 @@
 // Identity queries keep the existing index; contacts use only this grid.
 let SIM_OCCUPANCY_ENABLED = !(typeof location!=='undefined'&&location&&/[?&]occupancy=0(?:&|$)/.test(String(location.search||'')));
 let SIM_OCCUPANCY_PLANES = 1, SIM_OCCUPANCY_SUBCELLS = 8, SIM_OCCUPANCY_BLOCK_TILES = 16;
+// The bitmap's margins (occ.rs OCC_MY, occ_margins): per plane this many rows above and below the map, all taken, and
+// each row's last word (past the map's columns) taken: reads near the edge need no tests (the movers' legal-centre
+// fields). The array is [margin][map rows][margin] a plane; the kernels address from the map's origin.
+const SIM_OCCUPANCY_MARGIN_ROWS = 16;
+// After the planes: a count of taken cells a coarse traffic cell (32 x 32 cells: a bitmap word's columns), kept by
+// every bitmap write (occ.rs tally); the traffic's capture reads them. occ.rs occ_layout: margins | counts << 8.
+const SIM_OCCUPANCY_LAYOUT = SIM_OCCUPANCY_MARGIN_ROWS | (1 << 8);
 // Per movement job: idle units it swapped with across its block's edge
 // (mv.rs traffic_swap; their index entries are moved after the phases).
 const SIM_OCCUPANCY_XSWAP = 32;
@@ -11,11 +18,13 @@ let _occ = null;
 // The footprint of a slot is one 16-byte record in occ.rec (Int32 x4: x, y, meta = radius | layer << 8 | active << 16; the fourth word the movement's first stage's results for its second, mv.rs FW_*):
 // the second stage's neighbour scans read one line a unit, not one for each of x, y, radius, layer and active.
 const _occNames = ['occ.bits','occ.mask','occ.rec'];
+function _occupancyMargins(O){_simWasmX.occ_margins(_simWEnc(O.bits.byteOffset),O.w,O.h,O.stride,O.planes);}
 function _occActive(O,s){return (O.rec[s*4+2]>>16&255)!==0;}
 function _occRadius(O,s){return O.rec[s*4+2]&255;}
 function _occLayer(O,s){return O.rec[s*4+2]>>8&255;}
 function occupancyEnsure() {
-    if (!SIM_OCCUPANCY_ENABLED || typeof _simUnitState === 'undefined' || !_simUnitState) return null;
+    // (The grid exists where its kernels run: a world with the wasm module.)
+    if (!SIM_OCCUPANCY_ENABLED || typeof _simUnitState === 'undefined' || !_simUnitState || typeof _simWasmX === 'undefined' || !_simWasmX) return null;
     // (Nothing changed since the last full pass: its arrays bound, as many as the columns have slots. Every spawn made it again:
     // eight bind names and an array of them a unit, 1.4 GB of garbage at 2.3M units.)
     { const F = _occ; if (F !== null && F.fast === _simParRegVer && F.fastCap === _simUnitState.cap && F.epoch === spatialEpoch && F.w === GRID_W * SIM_OCCUPANCY_SUBCELLS && F.h === GRID_H * SIM_OCCUPANCY_SUBCELLS && F.planes === SIM_OCCUPANCY_PLANES) return F; }
@@ -24,7 +33,11 @@ function occupancyEnsure() {
         if(_occ)for(const a of Object.values(_occ))if(ArrayBuffer.isView(a))simHeapFree(a);
         _occ={w,h,stride,planes,epoch:spatialEpoch,cell:Math.round(TILE*8/SIM_OCCUPANCY_SUBCELLS),cap:0,spawns:0,rejected:0,relocated:0,expectedBits:0,registered:0};
         if(_occ.cell<1 || (_occ.cell&(_occ.cell-1)))throw Error('Occupancy cell size must be a power of two');
-        _occ.bits=simHeapArray(Uint32Array,stride*h*planes);
+        if(_simWasmX.occ_layout()!==SIM_OCCUPANCY_LAYOUT)throw Error('Occupancy bitmap layout differs from the wasm module (stale binary)');
+        // (A coarse traffic cell is one bitmap word wide: 4 tiles of SUBCELLS cells.)
+        if(SIM_OCCUPANCY_SUBCELLS*4!==32)throw Error('Occupancy counts need 8 cells a tile');
+        _occ.bits=simHeapArray(Uint32Array,stride*(h+2*SIM_OCCUPANCY_MARGIN_ROWS)*planes+Math.ceil(w/32)*Math.ceil(h/32)*planes);_occ.bits.fill(0);
+        _occupancyMargins(_occ);
         const block=Math.max(16,SIM_OCCUPANCY_BLOCK_TILES),bw=Math.ceil(CHUNKS_W/block),bh=Math.ceil(CHUNKS_H/block);
         _occ.config=simHeapArray(Int32Array,16);
         _occ.config.set([w,h,stride,_occ.cell,planes,bw,bh,block,0,CHUNKS_W,CHUNKS_H,_sxEpoch,GRID_W,GRID_H,TILE*8,CHUNK_SIZE]);
@@ -82,7 +95,7 @@ function occupancyRelease(u) {
 function occupancyRebuild() {
     if(!SIM_OCCUPANCY_ENABLED)return;
     const O=occupancyEnsure();if(!O)return;
-    O.bits.fill(0);O.rec.fill(0);
+    O.bits.fill(0);_occupancyMargins(O);O.rec.fill(0);
     O.registered=0;O.expectedBits=0;
     if(typeof mvtInvalidate==='function')mvtInvalidate();
     for(const u of units)if(u&&!u.dead&&u._us)occupancySpawn(u);
@@ -92,6 +105,7 @@ function occupancyPrepareMovement() {
     simParallelBind('occ.eslot',_sxESlot);simParallelBind('occ.start',_sxStart);simParallelBind('occ.count',_sxCount);simParallelBind('occ.stamp',_sxStamp);
     simParallelBind('occ.areaGrid',_spatialAreaGridFlat());
     C[11]=_sxEpoch;
+    if(typeof trafficStepKnob==='function')trafficStepKnob();
     O.stats.fill(0,bw*bh*16);
     // The mover table's rows of the slots written since the last movement,
     // and each block's first place in the jobs' lists (occ.offsets: the
@@ -174,10 +188,12 @@ function occupancyMovePosition(u,x,y) {
 }
 function occupancyAudit() {
     const O=_occ;if(!O)return null;
-    const actualBits=_simWasmX.occ_count(_simWEnc(O.bits.byteOffset),O.bits.length);
+    const actualBits=_simWasmX.occ_count(_simWEnc(O.bits.byteOffset),O.w,O.h,O.stride,O.planes);
     const c=_simUnitState.columns;let activeUnits=0,positionMismatches=0;
     for(let s=0;s<O.cap;s++)if(_occActive(O,s)){activeUnits++;if(c.x[s]!==O.rec[s*4]||c.y[s]!==O.rec[s*4+1])positionMismatches++;}
-    return {actualBits,expectedBits:O.expectedBits,registered:O.registered,activeUnits,positionMismatches,ok:actualBits===O.expectedBits&&activeUnits===O.registered&&positionMismatches===0};
+    // (The coarse cells' kept counts against the bitmap: 0.)
+    const countsBad=_simWasmX.occ_counts_bad(_simWEnc(O.bits.byteOffset),O.w,O.h,O.stride,O.planes);
+    return {actualBits,expectedBits:O.expectedBits,registered:O.registered,activeUnits,positionMismatches,countsBad,ok:actualBits===O.expectedBits&&activeUnits===O.registered&&positionMismatches===0&&countsBad===0};
 }
 function occupancyStats() {
     const O=_occ;if(!O)return null;const counts=new Array(8).fill(0);
