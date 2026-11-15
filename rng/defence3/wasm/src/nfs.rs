@@ -942,7 +942,7 @@ unsafe fn s_(p: *mut i32, i: usize, v: i32) { *p.add(i) = v; }
 /// as one the run did not cover; the forward map stamped P[3] (for
 /// SIM_KERNEL_ACQ_REMAP). Arrays: [0] acq.mlog, [1] acq.out, [2] acq.tid,
 /// [3] acq.id, [4] acq.rng, [5] acq.sout, [6] acq.bm, [7] acq.bt, [8]
-/// acq.btid, [9] rl.fwd, [10] rl.fst. P: [0] pairs, [1] per job, [2] the
+/// acq.btid, [9] rl.fwd, [10] rl.fst, [11] acq.bf. P: [0] pairs, [1] per job, [2] the
 /// run's slots, [3] stamp, [4] the step's first pair, [5] rl.fwd's length.
 #[no_mangle]
 pub unsafe extern "C" fn k_acq_replay(a: u32, chunk: i32) {
@@ -950,6 +950,7 @@ pub unsafe extern "C" fn k_acq_replay(a: u32, chunk: i32) {
     let log = k.p::<i32>(0);
     let (out, tid, id, rng, sout, bm, bt, btid) = (k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<u32>(4), k.p::<i32>(5), k.p::<u8>(6), k.p::<i32>(7), k.p::<i32>(8));
     let (fwd, fst) = (k.p::<i32>(9), k.p::<i32>(10));
+    let bf = k.p::<u8>(11);
     if log.is_null() || out.is_null() { return; }
     let (j0, j1) = super::k::job_range(chunk, k.i(1), k.i(0));
     let n = k.i(2).max(0) as usize;
@@ -960,7 +961,7 @@ pub unsafe extern "C" fn k_acq_replay(a: u32, chunk: i32) {
         let (f, t) = (g(log, 2 * (base + j)) as usize, g(log, 2 * (base + j) + 1) as usize);
         let had = f < n;
         macro_rules! mv { ($p:expr, $d:expr) => {{ if !$p.is_null() { let v = if had { g($p, f) } else { $d }; s($p, t, v); s($p, f, $d); } }}; }
-        mv!(out, -2i32); mv!(tid, 0i32); mv!(id, -1i32); mv!(rng, 0u32); mv!(sout, 0i32); mv!(bm, 255u8); mv!(bt, 0i32); mv!(btid, 0i32);
+        mv!(out, -2i32); mv!(tid, 0i32); mv!(id, -1i32); mv!(rng, 0u32); mv!(sout, 0i32); mv!(bm, 255u8); mv!(bt, 0i32); mv!(btid, 0i32); mv!(bf, 0u8);
         if f < fl && !fwd.is_null() && !fst.is_null() { s(fwd, f, t as i32); s(fst, f, stamp); }
     }
 }

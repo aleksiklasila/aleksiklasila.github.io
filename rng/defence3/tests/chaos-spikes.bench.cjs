@@ -54,6 +54,9 @@ inst.scratch.now=()=>performance.now();
 inst.eval(`MAX_THING_LEVEL=20; MAX_RESEARCH_LEVEL=10;
  startingResourcesConfig=normalizeStartingResourcesConfig(${JSON.stringify(data.startingResources)});
  applyMainMenuControlsToRuntimeState();applyEditableRuntimeConfigObject(${JSON.stringify(data.editableConfig)},{fromTransport:true});`);
+// --research=max: every starting thing's every research stat at MAX_RESEARCH_LEVEL (shorter cooldowns, more damage:
+// the step-size fairness at the other end; tests/deltatick-scene-fairness.cjs).
+if(process.argv.includes('--research=max'))inst.eval(`(()=>{const R={};for(const id of Object.keys(startingResourcesConfig.spawnCounts||{})){const p=parseStartingThingId(id);const th=p&&getResearchThing(p.kind,p.key);if(!th||!th.stats)continue;R[id]={};for(const s of th.stats)R[id][s.statKey]=MAX_RESEARCH_LEVEL;}startingResourcesConfig.researchLevels=R;})()`);
 assert.ok(count<=inst.eval('memoryBudgetPop(CONFIG_MAX_POP,2,GRID_W*GRID_H)*2'),'requested units exceed the menu match population limit');
 if(helpers){inst.scratch.Worker=require('./real-sim-helper.cjs');inst.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=32;simParallelInit('',${helpers});`);}
 // --live-heap: what the JavaScript heap holds at the end, by allocation site,

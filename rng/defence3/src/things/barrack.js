@@ -103,7 +103,7 @@ function spawnQueueFront(s) {
     if (!(spawnQueueCount(s) > 0)) return null;
     if (s._qN === undefined) return getQueuedSpawnInfo(s.spawnQueue[0], getSpawnerFallbackUnitType(s), getThingBaseLevel(s), s.owner);
     const F = _sqFront;
-    F.unitType = spawnQueueUnitType(s); F.level = s._qLv; F.energyRequired = s._qReq; F.energyPaid = s._qPaid;
+    F.unitType = spawnQueueUnitType(s); F.level = s._qLv; F.energyRequired = s._qReq; F.energyPaid = Math.min(s._qReq, s._qPaid);
     return F;
 }
 function spawnQueuePay(s, amount) { s._qPaid = Math.min(s._qReq, s._qPaid + amount); }

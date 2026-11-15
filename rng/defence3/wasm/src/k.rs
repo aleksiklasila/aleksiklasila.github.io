@@ -1145,13 +1145,19 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
             ev |= 4;
         } else if g(ton, s_) != 0 {
             let a0 = g(at, s_);
+            // (Ran out this step: visited at the next too, whose carry is then all of it.)
+            let mut ran = false;
             if a0 > 0.0 {
                 let a = a0 - dkf;
                 s(at, s_, a);
                 // (Ran out this step: the base ticks it stood ready since.)
                 if dk > 1 && a <= 0.0 && !atl.is_null() {
                     s(atl, s_, (-a).min((dk - 1) as f32) as u8);
+                    ran = true;
                 }
+            } else if dk > 1 && !atl.is_null() {
+                // (Ready since before this step, its last attack's or the last step's: all of it, mv.rs fire.)
+                s(atl, s_, (dk - 1) as u8);
             }
             let f0 = g(af, s_);
             if f0 > 0 { s(af, s_, f0 - f0.min(dk.min(255) as u8)); }
@@ -1170,7 +1176,7 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                     s(wtc, s_, w0 - w0.min(dku));
                 }
             }
-            if !(g(at, s_) > 0.0 || g(af, s_) > 0 || g(wtc, s_) > 0) {
+            if !(ran || g(at, s_) > 0.0 || g(af, s_) > 0 || g(wtc, s_) > 0) {
                 s(ton, s_, 0);
             }
         }
@@ -1491,16 +1497,33 @@ pub unsafe extern "C" fn k_combat_commit(a: u32, chunk: i32) {
     let k = K::new(a);
     let (bm, bt, btid, sid, id, dead, cm, ct, ctid) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<u8>(5),
         k.p::<u8>(6), k.p::<i32>(7), k.p::<i32>(8));
+    let (outa, tid, bf) = (k.p::<i32>(9), k.p::<i32>(10), k.p::<u8>(11));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
     for q in s0..s1 {
         let m = g(bm, q);
         if m == 255 || g(id, q) != g(sid, q) || g(dead, q) != 0 {
             continue;
         }
+        let (m, t, tid) = brain_pick(m, g(bt, q), g(btid, q), q, id, dead, outa, tid, bf);
         s(cm, q, m);
-        s(ct, q, if m != 0 { g(bt, q) } else { -1 });
-        s(ctid, q, if m != 0 { g(btid, q) } else { 0 });
+        s(ct, q, if m != 0 { t } else { -1 });
+        s(ctid, q, if m != 0 { tid } else { 0 });
     }
+}
+/// The brain's instruction (m, its target t, id tid) as committed: a unit target that fell since the snapshot
+/// (dead, or another unit in its slot) gives way to the fallback (acq.bf: the scan's answer acq.out / acq.tid, judged
+/// by the brain) while that one stands; else as it is (the unit waits for the next word, mv.rs CM_WAIT).
+#[inline(always)]
+unsafe fn brain_pick(m: u8, t: i32, tid: i32, q: usize, id: *const i32, dead: *const u8, outa: *const i32, otid: *const i32, bf: *const u8) -> (u8, i32, i32) {
+    if m == 0 || m == 255 || (m & 48) != 0 || t < 0 || bf.is_null() || (g(dead, t as usize) == 0 && g(id, t as usize) == tid) {
+        return (m, t, tid);
+    }
+    let f = g(bf, q);
+    let o = g(outa, q);
+    if f == 0 || o < 0 || g(dead, o as usize) != 0 || g(id, o as usize) != g(otid, q) {
+        return (m, t, tid);
+    }
+    (f, o, g(otid, q))
 }
 
 /// Whether two route ends (tiles, -1 none) are of one crowd: within
@@ -1701,9 +1724,10 @@ unsafe fn acq_commit_range(k: &K, s0: usize, s1: usize, brain: bool, tick: i32) 
         if brain {
             let m = g(bm, q);
             if m != 255 && g(dead, q) == 0 {
+                let (m, t, tid) = brain_pick(m, g(bt, q), g(btid, q), q, id, dead, outa, k.p::<i32>(9), k.p::<u8>(55));
                 s(cm, q, m);
-                s(ct, q, if m != 0 { g(bt, q) } else { -1 });
-                s(ctid, q, if m != 0 { g(btid, q) } else { 0 });
+                s(ct, q, if m != 0 { t } else { -1 });
+                s(ctid, q, if m != 0 { tid } else { 0 });
             }
         }
     }
@@ -2154,13 +2178,15 @@ impl UHit {
     /// A unit's attack in its style (st: 1 fire, 2 water, 3 ice, 4 poison, 5
     /// a scout's swoop), as Unit._unitHitUnit: fixed timers, tick damage 4%.
     #[inline(always)]
-    fn melee(dmg: f32, st: i32, wk: i32) -> UHit {
+    /// (shot: one shot's damage, the statuses' tick damage: an attack of several shots in a step of several base ticks
+    /// burns as one shot at one base tick a step does.)
+    fn melee(dmg: f32, shot: f32, st: i32, wk: i32) -> UHit {
         let mut h = UHit { dmg, fx: 0, dur: [0; 5], bd: 0.0, pd: 0.0, wk: 0 };
         match st {
-            1 => { h.fx = FX_FIRE; h.dur[0] = 45; h.bd = dmg * 0.04; }
+            1 => { h.fx = FX_FIRE; h.dur[0] = 45; h.bd = shot * 0.04; }
             2 => { h.fx = FX_WATER; h.dur[1] = 60; }
             3 => { h.fx = FX_ICE; h.dur[2] = 40; }
-            4 => { h.fx = FX_POISON; h.dur[3] = 50; h.pd = dmg * 0.04; }
+            4 => { h.fx = FX_POISON; h.dur[3] = 50; h.pd = shot * 0.04; }
             5 => { h.wk = wk; }
             _ => {}
         }
@@ -2381,7 +2407,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             if q < 0 {
                 continue;
             }
-            hit_one(q as usize, &UHit::melee(g(hd, i), g(hs, i) as i32, g(hw, i)), i as i32, &lv, &o);
+            hit_one(q as usize, &UHit::melee(g(hd, i), g(hd, i), g(hs, i) as i32, g(hw, i)), i as i32, &lv, &o);
         }
         return;
     }
@@ -2452,8 +2478,9 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             let st = g(ast, at) as i32;
             let wk = if st == 5 { let w = g(awt, at); if w > 0 { (w.min(2047) << 20) | ((g(uid, at) & 0xFFFF) << 4) | ((g(own, at) as i32 + 1) & 15) } else { 0 } } else { 0 };
             let shots = if atn.is_null() { 1 } else { g(atn, at).max(1) };
-            let dmg = if shots > 1 { flat_stat(rows,hot,at,5) * shots as f32 } else { flat_stat(rows,hot,at,5) };
-            hit_one(q as usize, &UHit::melee(dmg, st, wk), n + npj + j as i32, &lv, &o);
+            let shot = flat_stat(rows,hot,at,5);
+            let dmg = if shots > 1 { shot * shots as f32 } else { shot };
+            hit_one(q as usize, &UHit::melee(dmg, shot, st, wk), n + npj + j as i32, &lv, &o);
         }
     }
 }
@@ -2933,6 +2960,9 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let sout = k.p::<i32>(18);
     // (The structures' owners per tile, a copy: -1 none, the owner, -2 mixed.)
     let sown = k.p::<i8>(19);
+    // (The fallback's instruction: for a unit that keeps its target, the scan's own answer (acq.out) judged
+    // too: 5 in range, 2 chase, 0 none; the commit takes it when the kept target fell after the snapshot.)
+    let bf = k.p::<u8>(20);
     let (cmd_idle, cmd_am, cmd_atk) = (k.i(2) as u8, k.i(3) as u8, k.i(9) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
@@ -3042,11 +3072,18 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                     in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, bq[i]) as i32);
                 }
             }
-            finish(bq[i], btq[i], bsg[i], in_range);
+            if bsg[i] == -2 {
+                // (A fallback question: the scan's answer for a unit that kept its target.)
+                let q = bq[i];
+                s(bf, q, if in_range { 5 } else if g(flg, q) & 32 != 0 { 0 } else { 2 });
+            } else {
+                finish(bq[i], btq[i], bsg[i], in_range);
+            }
         }
     };
     for q in s0..s1 {
         s(bm, q, 255);
+        s(bf, q, 0);
         let fl = g(flg, q);
         if fl & 11 != 0 {
             continue;
@@ -3128,6 +3165,21 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             if sg < 0 {
                 s(bm, q, 0);
                 continue;
+            }
+        }
+        // The fallback: kept its target, the scan answered another unit (alive and hostile in the snapshot).
+        if !order && !mover && tq >= 0 && sg < 0 && have_bfs {
+            let o = g(outa, q);
+            if o >= 0 && o != tq && (o as usize) < nsl && g(flg, o as usize) & 1 == 0 && g(own, o as usize) as i32 != owner {
+                *bq.as_mut_ptr().add(nb) = q;
+                *btq.as_mut_ptr().add(nb) = o;
+                *bsg.as_mut_ptr().add(nb) = -2;
+                *bta.as_mut_ptr().add(nb) = 0;
+                nb += 1;
+                if nb == CB {
+                    flush(nb, &mut arq, &bq, &btq, &bsg, &bta);
+                    nb = 0;
+                }
             }
         }
         // (A unit target's area is its window's business, in the batch; a

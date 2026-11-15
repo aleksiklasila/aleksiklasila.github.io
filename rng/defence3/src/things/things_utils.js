@@ -661,17 +661,23 @@ function recalculateUnitEffectiveLevel() {
     // without them this tick takes the full path, which makes both, and the
     // kernel runs again for the rest (no cap: the whole share this tick; which
     // path takes one decides nothing).
-    let step = Math.max(1, intervalTicks | 0), phase = tick % step, n = units.length;
+    // (Several base ticks a step: dk 1's share a base tick, so dk's shares a step (stride interval / dk) and each unit
+    // refreshed every interval base ticks as at dk 1; its phase the step's count: every unit in turn. The same share a
+    // step left levels dk times staler: dk 4 fights at 1.37x dk 1's damage with max research (0.89x with this), no
+    // measurable step time at 1M units. By the tick's phase a step's start ticks met only the phases of their
+    // multiples (dk 16, interval 100: 25 of 100): three units in four never took their effective level.)
+    const interval = Math.max(1, intervalTicks | 0), dk = Math.max(1, simDk | 0);
+    const step = dk > 1 ? Math.max(1, Math.round(interval / dk)) : interval, phase = dk > 1 ? Math.floor(tick / dk) % step : tick % step, n = units.length;
     const m = phase < n ? Math.ceil((n - phase) / step) : 0;
-    if (m > 0 && S) _effUnitsRun(tick, step, phase, m, stamp);
+    if (m > 0 && S) _effUnitsRun(tick, step, phase, m, stamp, interval);
 }
 // The effective-levels kernel over a strided share of the units (m entries
 // from phase, every step-th), then the new levels' tables and movement
 // columns (k_unit_stats_apply).
 let _effApplyL = null;
 const _effApplyP = new Float64Array(8);
-function _effUnitsRun(tick, step, phase, m, stamp) {
-    const S = _simUnitState, hist = _effAreaHistEnsure(tick, step);
+function _effUnitsRun(tick, step, phase, m, stamp, interval = step) {
+    const S = _simUnitState, hist = _effAreaHistEnsure(tick, interval);
     {
         const slots = _unitSlotMapEnsure(), c = S.columns;
         if (!_effFlags || _effFlags.length < m) { _effFlags = simSharedArray(Uint8Array, Math.max(1024, m * 2)); simParallelBind('eff.flag', _effFlags); }

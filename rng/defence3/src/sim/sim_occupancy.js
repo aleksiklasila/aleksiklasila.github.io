@@ -105,7 +105,6 @@ function occupancyPrepareMovement() {
     simParallelBind('occ.eslot',_sxESlot);simParallelBind('occ.start',_sxStart);simParallelBind('occ.count',_sxCount);simParallelBind('occ.stamp',_sxStamp);
     simParallelBind('occ.areaGrid',_spatialAreaGridFlat());
     C[11]=_sxEpoch;
-    if(typeof trafficStepKnob==='function')trafficStepKnob();
     O.stats.fill(0,bw*bh*16);
     // The mover table's rows of the slots written since the last movement,
     // and each block's first place in the jobs' lists (occ.offsets: the

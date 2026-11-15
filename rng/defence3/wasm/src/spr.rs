@@ -194,8 +194,8 @@ pub unsafe extern "C" fn k_spawn_select(a: u32, _chunk: i32) {
 }
 
 /// The queues of the spawners that spawned moved on (spawnQueueShift): one
-/// less; the next front's level (the base level), cost (spr.tab) and nothing
-/// paid. Arrays: [0] spr.cls, [1] the spawners (class << 24 | row), [2]
+/// less; the next front's level (the base level), cost (spr.tab) and what was
+/// paid past the last one (wai.rs queue_due). Arrays: [0] spr.cls, [1] the spawners (class << 24 | row), [2]
 /// st.brain, [3] spr.tab. P: [0] count, [1] types.
 #[no_mangle]
 pub unsafe extern "C" fn k_spawn_shift(a: u32, _chunk: i32) {
@@ -211,6 +211,8 @@ pub unsafe extern "C" fn k_spawn_shift(a: u32, _chunk: i32) {
         let left = q - 1;
         s(qn, r, left);
         if left <= 0 { s(qlv, r, 0.0); s(qreq, r, 0.0); s(qpaid, r, 0.0); continue; }
+        // (Paid past the front: the next one's (wai.rs queue_due).)
+        let over = js_max(0.0, g(qpaid, r) - g(qreq, r));
         let t = g(col::<i32>(cls, c, SC_ST), r);
         let o = g(col::<i8>(cls, c, SC_OW), r) as i32;
         let b = if t >= 0 { g(brain, t as usize) } else { 0 };
@@ -219,7 +221,7 @@ pub unsafe extern "C" fn k_spawn_shift(a: u32, _chunk: i32) {
         let cost = if key >= 0 { g(tab, key as usize * 3 + 1) } else { f64::NAN };
         s(qlv, r, lv);
         s(qreq, r, js_max(1.0, floor(if cost.is_finite() { cost } else { 1.0 })));
-        s(qpaid, r, 0.0);
+        s(qpaid, r, over);
     }
 }
 

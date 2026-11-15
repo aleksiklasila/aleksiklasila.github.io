@@ -2285,7 +2285,7 @@ function simMoveRefreshAllStats() {
 // earlier arming made the two peers' units move differently.)
 const SIM_MOVE_ARM_COLUMNS = ['mvFlags', 'mvReach', 'mvBase', 'mvWlen', 'mvPlen', 'mvScan', 'mvWake', 'mvFlow', 'mvFGen', 'mvDest', 'mvReady', 'mvNP',
     'mvHT', 'mvHTId', 'mvTgX', 'mvTgY', 'mvTgTol',
-    'mvWk', 'mvSpent', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
+    'mvWk', 'mvSpent', 'mvCar', 'mvOut', 'spMvOld', 'spMvNew', 'mvNav'];
 function simMoveDisarmAll() {
     if (typeof flowLooksDrop === 'function') flowLooksDrop();
     const S = _simUnitState;
@@ -3783,7 +3783,7 @@ function combatBrainReset() {
 function acqTierRemapSlots(map, runs, n0, ns) {
     if (_acqStage !== 1) return;
     const n = Math.min(_acqN, n0);
-    for (const name of ['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid']) {
+    for (const name of ['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid', 'acq.bf']) {
         const a = _simParReg[name];
         if (!a) continue;
         const old = a.slice(0, n);
@@ -3895,7 +3895,7 @@ function _acqPost() {
         _acqArray('acq.out', Int32Array, cap); _acqArray('acq.tid', Int32Array, cap); _acqArray('acq.sout', Int32Array, cap);
         // (The combat brain's: its inputs and its instructions.)
         _acqArray('acq.cm', Uint8Array, cap); _acqArray('acq.ct', Int32Array, cap); _acqArray('acq.ctid', Int32Array, cap); _acqArray('acq.rk', Uint8Array, cap);
-        _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap);
+        _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap); _acqArray('acq.bf', Uint8Array, cap);
         _acq.cap = cap;
     }
     simUnitTargetsResolve();

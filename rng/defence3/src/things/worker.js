@@ -416,13 +416,14 @@ function workerSearchTierStep() {
     for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
         const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
         if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS && _wsPosted && _wsPosted.step !== gameTime) { _wsOrder(); _wsCommit(); _wswHeldRun(); }
-        // (Past WSW_SLOW_UNITS units the sweep takes only every WSW_SLOW-th cycle's slices, each
-        // visiting the next ones: the same coverage WSW_SLOW times slower. Stateless: by the tick.)
-        const wswSlow = units.length >= WSW_SLOW_UNITS ? WSW_SLOW : 1, wswCycle = Math.floor(b / WS_TICKS);
+        // (Past WSW_SLOW_UNITS units the sweep visits WSW_SLOW times as many slices, each that much smaller: the
+        // same coverage WSW_SLOW times slower, a share every cycle (it was every WSW_SLOW-th cycle's slices whole:
+        // a lump every fourth step at dk 4). Stateless: by the tick.)
+        const stride = WSW_SWEEP * (units.length >= WSW_SLOW_UNITS ? WSW_SLOW : 1), wswCycle = Math.floor(b / WS_TICKS);
         if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) {
-            const slice = (Math.floor(wswCycle / wswSlow) * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % WSW_SWEEP, on = wswCycle % wswSlow === 0;
+            const slice = (wswCycle * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % stride;
             // (This step's own search reads the grid from its post on.)
-            if (_wsPosted && _wsPosted.step === gameTime) _wswHold(slice, on); else _wswStep(slice, on);
+            if (_wsPosted && _wsPosted.step === gameTime) _wswHold(slice, stride); else _wswStep(slice, true, stride);
         }
         if (cycle && ph === WS_POST_PHASE) { _wsPost(); if (_wsPosted) { _wsPosted.step = gameTime; _wsPosted.due = b + 2; } }
     }
@@ -519,7 +520,7 @@ function _wswClassColumns() {
     }
     return out;
 }
-const _wswP = new Float64Array(16);
+const _wswP = new Float64Array(32);
 let _wswList = null;
 function _wswTiles(n) { if (!_wswList || _wswList.length < n || !simHeapHas(_wswList)) _wswList = simSharedArray(Int32Array, Math.max(4096, n * 2)); return _wswList; }
 function _wswRun(W, list, n, mode) {
@@ -534,6 +535,8 @@ function _wswRun(W, list, n, mode) {
     const rtype = _stationaryTypeIds.get('research'), P = _wswP;
     P[0] = n; P[1] = GRID_W; P[2] = MAX_THING_LEVEL; P[3] = NT; P[4] = S.nk; P[5] = X.np; P[6] = S.L1; P[7] = S.R1; P[8] = W.bw; P[9] = WSW_MAXOWN;
     P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = idt ? idt.length : 1; P[12] = mode; P[13] = rtype === undefined ? 0 : rtype + 1;
+    // (The step's base ticks: wai.rs queue_due.)
+    P[16] = Math.max(1, simDk | 0);
     const par = n >= WSW_PAR_MIN && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && !!_simPool;
     const tmp = (k, Type) => { let a = _wswTmp[k]; if (!a || a.length < n || !simHeapHas(a)) a = _wswTmp[k] = simSharedArray(Type, Math.max(4096, n * 2)); return a; };
     const A = [list, _ST.stab, _ST.rrow, _ST.uc, _ST.brain, CT, WC, R['adj.tykey'], R['adj.rml'], S.mxe, R['adj.rlv'],
@@ -582,31 +585,31 @@ function _wswBuild() {
 // One step: the grid made (first, or after its sources were replaced), the
 // journal's and marked tiles, reservations, and the sweep's share (every
 // structure in tile order once in WSW_SWEEP steps).
-function _wswStep(step, sweepOn = true) {
+function _wswStep(step, sweepOn = true, stride = WSW_SWEEP) {
     if (typeof _activeTileEntities === 'undefined' || typeof tileEntityChangesSince !== 'function') return;
     let W = _wsw;
     if (!W || W.w !== GRID_W || W.h !== GRID_H || W.set !== _activeTileEntities || W.areaFor !== areaIdGrid || W.resvFor !== workerReservedTiles) { _wswBuild(); return; }
     const ch = tileEntityChangesSince(W.cursor);
     if (ch === null) { _wswBuild(); return; }
-    const nd = _wswDirtyN, occ = sweepOn ? _activeTileEntities.tileList() : 0, sw = occ > step ? Math.ceil((occ - step) / WSW_SWEEP) : 0;
+    const nd = _wswDirtyN, occ = sweepOn ? _activeTileEntities.tileList() : 0, sw = occ > step ? Math.ceil((occ - step) / stride) : 0;
     const L = _wswTiles(ch.length + nd + sw), OT = _activeTileEntities._tiles;
     let n = 0;
     for (let i = 0; i < ch.length; i++) L[n++] = ch[i];
     if (nd) { L.set(_wswDirtyA.subarray(0, nd), n); n += nd; }
     _wswDirtyN = 0;
-    for (let i = step; i < occ; i += WSW_SWEEP) L[n++] = OT[i];
+    for (let i = step; i < occ; i += stride) L[n++] = OT[i];
     _wswRun(W, L, n, 0);
     // Reservations changed since the last step; the collectors' sites', in turn (a reserver that died since).
     const RL = _wswResvRoom(), NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
     let groups = 0;
-    if (sweepOn) for (const G of _wsGroups.values()) groups += G.n > step ? Math.ceil((G.n - step) / WSW_SWEEP) : 0;
+    if (sweepOn) for (const G of _wsGroups.values()) groups += G.n > step ? Math.ceil((G.n - step) / stride) : 0;
     const L2 = _wswTiles(RL[0] + groups);
     let m = 0;
     for (let i = 1; i <= RL[0]; i++) { const t = Math.floor(RL[i] / NT); if (t < W.n) L2[m++] = t; }
     RL[0] = 0;
     if (sweepOn) for (const G of _wsGroups.values()) {
         const SX = G.arrays.sx, SY = G.arrays.sy;
-        for (let s = step; s < G.n; s += WSW_SWEEP) {
+        for (let s = step; s < G.n; s += stride) {
             const gx = Math.floor(SX[s] / TILE), gy = Math.floor(SY[s] / TILE);
             if (gx >= 0 && gy >= 0 && gx < W.w && gy < W.h) L2[m++] = gy * W.w + gx;
         }
@@ -914,18 +917,18 @@ function _wsPost() {
 // (Waited for here, the next phase: the scan reads the collectors' groups
 // in place, which the unit pass may change; not chained with the ordering.)
 // The grid's sweep slices held while this step's search is in flight (slice,
-// sweep on), run in order after its commit: a step has at most its base
+// the sweep's stride), run in order after its commit: a step has at most its base
 // ticks of them.
 const _wswHeld = new Int32Array(512);
 let _wswHeldN = 0;
-function _wswHold(slice, on) {
+function _wswHold(slice, stride) {
     if (_wswHeldN * 2 >= _wswHeld.length) throw new Error('worker search: more held sweep slices than a step has base ticks');
-    _wswHeld[2 * _wswHeldN] = slice; _wswHeld[2 * _wswHeldN + 1] = on ? 1 : 0; _wswHeldN++;
+    _wswHeld[2 * _wswHeldN] = slice; _wswHeld[2 * _wswHeldN + 1] = stride; _wswHeldN++;
 }
 function _wswHeldRun() {
     const n = _wswHeldN;
     _wswHeldN = 0;
-    for (let i = 0; i < n; i++) _wswStep(_wswHeld[2 * i], _wswHeld[2 * i + 1] === 1);
+    for (let i = 0; i < n; i++) _wswStep(_wswHeld[2 * i], true, _wswHeld[2 * i + 1]);
 }
 function _wsOrder() {
     const J = _wsPosted;
@@ -3663,7 +3666,7 @@ const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
 const WAI_CTAB_COLS = ['c_markedForSalvage', 'c_stacks', 'c_level', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c__uc'];
 const _wai = { tver: -1, tablePlayers: 0, tableLevels: 0, P: new Float64Array(80), declined: 0 };
-const _waiNativeArgs = new Array(157).fill(null);
+const _waiNativeArgs = new Array(158).fill(null);
 function _waiArr(name, Type, n) {
     let a = _wai[name];
     if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
@@ -3875,6 +3878,8 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     WA[arg++] = _ST.mineAt && simHeapHas(_ST.mineAt) ? _ST.mineAt : null;
     WA[arg++] = take?.spawners ? R2['ws.spawnResult'] : null;
     WA[arg++] = c.wmMan;
+    // (The transfer cooldown's carry: several deposits a step, wai.rs cd_batch.)
+    WA[arg++] = c.wtcL || null;
     try {
         // (The tier's takes too (mode 1): decided on the helpers, settled by the apply's rounds; serial they were ~3 ms a step on this thread at 1M units.)
         if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);

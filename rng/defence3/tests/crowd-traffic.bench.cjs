@@ -21,10 +21,14 @@ const r=i.eval(`(()=>{
  for(let t=0;t<NAV_BUILD_TICKS+5;t++)gameTick();
  processAction({action:'move',unitIds:us.map(u=>u.id),targetX:190*TILE,targetY:88*TILE},0);simDk=${dk};
  ${arg('scenario','plug')==='counter'?'processAction({action:"move",unitIds:plug.map(u=>u.id),targetX:10*TILE,targetY:88*TILE},0);':''}
- const starts=us.map(u=>[u.x,u.y]),ps=plug.map(u=>[u.x,u.y]),samples=[];let ms=0,maxSpeedRatio=0,wallViolations=0;
+ const starts=us.map(u=>[u.x,u.y]),ps=plug.map(u=>[u.x,u.y]),samples=[];let ms=0,maxSpeedRatio=0,maxStepRatio=0,wallViolations=0;
+ // (Speed against the stat: each unit's path over the run (a step may carry what an earlier one lost, unit.mvCar: its own
+ // average, not one step, is what no unit may exceed), and the largest single step for information.)
+ const pathLen=new Float64Array(us.length);let baseTicks=0;
  for(let t=0;t<${ticks};t++){
   const a=performance.now();gameTick();currentTick++;ms+=performance.now()-a;
-  for(const u of us){const ratio=Math.hypot(u.x-u.prevX,u.y-u.prevY)/(simUnitStatValue(u._us,u._si,0)*simDk);maxSpeedRatio=Math.max(maxSpeedRatio,ratio);
+  baseTicks+=simDk;
+  for(let i=0;i<us.length;i++){const u=us[i];const d=Math.hypot(u.x-u.prevX,u.y-u.prevY),sp=simUnitStatValue(u._us,u._si,0);((__scratch.stp||(__scratch.stp=[]))[i]||(__scratch.stp[i]=[])).push(+(d/(sp*simDk)).toFixed(3));pathLen[i]+=d/sp;maxStepRatio=Math.max(maxStepRatio,d/(sp*simDk));
    if(cellType[(grid[Math.floor(u.y/TILE)]?.[Math.floor(u.x/TILE)]) - 1]===TYPE_WALL)wallViolations++;
   }
   if((t+1)%10===0){let demand=0,flowing=0,moving=0,speedSum=0,progress=0;
@@ -39,7 +43,8 @@ const r=i.eval(`(()=>{
     yielded:plug.filter((u,k)=>Math.hypot(u.x-ps[k][0],u.y-ps[k][1])>TILE).length});
   }
  }
- return {mode:SIM_TRAFFIC_MODE,msPerTick:ms/${ticks},maxSpeedRatio,wallViolations,maxX:Math.max(...us.map(u=>u.x)),samples,audit:occupancyAudit(),traffic:_traffic?{publications:_traffic.config[5],bytes:Object.values(_traffic).filter(ArrayBuffer.isView).reduce((s,a)=>s+a.byteLength,0)}:null};
+ let worst=-1;for(let i=0;i<us.length;i++){if(pathLen[i]/baseTicks>maxSpeedRatio){maxSpeedRatio=pathLen[i]/baseTicks;worst=i;}}const worstSteps=worst>=0?__scratch.stp[worst]:null;
+ return {mode:SIM_TRAFFIC_MODE,msPerTick:ms/${ticks},maxSpeedRatio,maxStepRatio,worstSteps,wallViolations,maxX:Math.max(...us.map(u=>u.x)),samples,audit:occupancyAudit(),traffic:_traffic?{publications:_traffic.config[5],bytes:Object.values(_traffic).filter(ArrayBuffer.isView).reduce((s,a)=>s+a.byteLength,0)}:null};
 })()`);
 console.log(JSON.stringify(r,null,2));if(arg('out',null))fs.writeFileSync(arg('out'),JSON.stringify(r,null,2));
 if(!r.audit.ok||i.errors.length)throw Error(JSON.stringify(i.errors));

@@ -908,10 +908,10 @@ pub unsafe extern "C" fn k_struct_hits(a: u32, _chunk: i32) {
         let mut h = SHit { t: -g(ht, j) - 2, dmg, fx: 0, gate: true, dur: [0; 6], td: [0.0; 3], team: -1, look: sl as i32 };
         let tick = |d: f64, lo: f64| (if d > 0.0 { d } else { 0.5 }).max(lo) as f32;
         match g(sty, sl) {
-            1 => { h.fx = FX_FIRE; h.dur[0] = sec_ticks(3.0 + lv * 0.5, rate); h.td[0] = tick((dmg * 0.04).max(0.0), 0.1); }
+            1 => { h.fx = FX_FIRE; h.dur[0] = sec_ticks(3.0 + lv * 0.5, rate); h.td[0] = tick((base * 0.04).max(0.0), 0.1); }
             2 => { h.fx = FX_WATER; h.dur[1] = sec_ticks(6.0 + lv, rate); }
-            3 => { h.fx = FX_ICE; h.dur[2] = sec_ticks(3.0 + lv * 0.5, rate); h.td[1] = tick(dmg * 0.2, 0.2); }
-            4 => { h.fx = FX_POISON; h.dur[3] = sec_ticks(5.0 + lv, rate); h.td[2] = tick(dmg * 0.04, 0.1); }
+            3 => { h.fx = FX_ICE; h.dur[2] = sec_ticks(3.0 + lv * 0.5, rate); h.td[1] = tick(base * 0.2, 0.2); }
+            4 => { h.fx = FX_POISON; h.dur[3] = sec_ticks(5.0 + lv, rate); h.td[2] = tick(base * 0.04, 0.1); }
             5 => {
                 let el = (g(elvl, sl) as i32).max(1) as f64;
                 let aw = g(awatch, sl);

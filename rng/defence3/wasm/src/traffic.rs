@@ -31,16 +31,6 @@ pub(super) unsafe fn deposit(c:*const i32,x:i32,y:i32,layer:i32,mass:i32,dx:f64,
         let p=ptr::<i32>(c,i).add(k);*p=(*p).saturating_add(js_round(v*f) as i32);
     }
 }
-/// The step-size movement compensation at (x, y) (Q8): the knob ([44], data_static.js simDkKnob('move')) times the
-/// coarse cell's density (the last capture's taken share, [22]); 0 without either.
-pub(super) unsafe fn move_comp(c:*const i32,x:i32,y:i32,layer:i32)->f64{
-    if c.is_null()||*c<2{return 0.0;}
-    let k=f32::from_bits(*c.add(44) as u32) as f64;if !(k>0.0){return 0.0;}
-    let d=ptr::<f32>(c,22);if d.is_null(){return 0.0;}
-    let w=*c.add(1);let h=*c.add(2);let gx=x>>*c.add(3);let gy=y>>*c.add(3);
-    if gx<0||gy<0||gx>=w||gy>=h{return 0.0;}
-    k*(*d.add(((layer*h+gy)*w+gx) as usize)).max(0.0).min(1.0) as f64
-}
 pub(super) unsafe fn sample(c:*const i32,x:i32,y:i32,layer:i32)->(f64,f64){
     if c.is_null()||*c<2||*c.add(5)==0{return (0.0,0.0);}
     let w=*c.add(1);let h=*c.add(2);let shift=*c.add(3);let half=1<<(shift-1);

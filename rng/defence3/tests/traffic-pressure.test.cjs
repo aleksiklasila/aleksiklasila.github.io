@@ -5,7 +5,8 @@ for(const scenario of ['plug','counter','wall']){
  const r=run(scenario,scenario==='wall'?160:80),s=r.samples.at(-1);
  assert(r.audit.ok,scenario+' exclusive bitmap remains consistent');
  assert.equal(r.wallViolations,0,scenario+' terrain remains solid');
- assert(r.maxSpeedRatio<1.01,scenario+' no extra speed from yielding');
+ // (Each unit's average over the run: a step may carry what an earlier one lost at a look's end, unit.mvCar.)
+ assert(r.maxSpeedRatio<1.01,scenario+' no extra speed from yielding: '+r.maxSpeedRatio.toFixed(3)+' (largest step '+r.maxStepRatio.toFixed(3)+')');
  if(scenario!=='wall'){
   assert(s.moving/s.demand>.95,scenario+' most ordered units move');
   assert(s.flowing/s.demand>.85,scenario+' most ordered units reach half stat speed');

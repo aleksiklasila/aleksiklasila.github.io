@@ -325,7 +325,10 @@ function mvtS(i) { const D = _mvtDirty; if (D !== null && i >= 0) D[i >> 3] = 1;
 function mvtInvalidate() { _mvtWhole = false; }
 const SIM_STEER_W = 8, SIM_ST_CD = 0, SIM_ST_CT = 1, SIM_ST_CTL = 2, SIM_ST_CVX = 3, SIM_ST_CVY = 4, SIM_ST_FLOOR = 5, SIM_ST_STEADY = 6, SIM_ST_CN = 7;
 const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['mvFlags', Uint8Array, 1],
-    ['mvLane', Float32Array, 1], ['mvSpent', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
+    ['mvLane', Float32Array, 1], ['mvSpent', Uint8Array, 1],
+    // The step left unused at its steer's target point (a look's end, not its destination) at several base ticks a
+    // step, in 255ths of a full step: added to its next flow step (mv.rs move_flow), as unit.atkL carries an attack.
+    ['mvCar', Uint8Array, 1], ['mvReach', Uint8Array, 1], ['mvBase', Int32Array, 1], ['mvWlen', Uint8Array, 1],
     ['mvPlen', Int32Array, 1], ['mvScan', Int32Array, 1], ['mvPath', Int32Array, 1],
     // Parked idle workers (mvOn 2): the tick their Unit.update next does anything.
     ['mvWake', Int32Array, 1],

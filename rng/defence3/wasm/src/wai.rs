@@ -176,6 +176,8 @@ struct W {
     take_spawners: *const i32,
     /// (A worker's manual move's tick: its record's wmMan, [156].)
     wmman: *mut f32,
+    /// (unit.wtcL, [157]: the base ticks of the step its transfer cooldown left (k.rs k_status), cd_batch.)
+    wtl: *mut u8,
 }
 
 impl W {
@@ -217,7 +219,7 @@ impl W {
             recheck: k.i(70), stuck: k.i(71),
             mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
             psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
-            take_spawners: k.p(155), wmman: k.p(156),
+            take_spawners: k.p(155), wmman: k.p(156), wtl: k.p(157),
         }
     }
 }
@@ -661,6 +663,16 @@ impl<'a> Ctx<'a> {
     unsafe fn wb(&self, q: usize) -> u8 { g(self.w.wbt, self.rec(q)) }
     #[inline(always)]
     unsafe fn st(&self, q: usize) -> u32 { g(self.w.wks, q) & 31 }
+    /// Whether the base tick of q's AI is its own heavy tick (one in delay): for a decision taken once, at an event (a
+    /// deposit's: on at once, else wait out its cooldown), not work due once in delay base ticks (crosses: at dk >= delay
+    /// every step's, so every deposit went on at once: collectors 1.12x, A* 1.08x at dk 4). At dk 1 the same as crosses.
+    #[inline(always)]
+    unsafe fn heavy_tick(&self, q: usize) -> bool {
+        let d = self.w.delay;
+        if d <= 1 { return true; }
+        let p = irem(self.w.now.wrapping_add(g(self.w.id, q)), d);
+        (if p < 0 { p + d } else { p }) == 0
+    }
     #[inline(always)]
     unsafe fn crosses(&self, phase: i32, period: i32) -> bool {
         if period <= 1 { return true; }
@@ -1148,18 +1160,40 @@ impl<'a> Ctx<'a> {
         let st = self.st(q);
         if st == 0 { return; }
         let id = g(w.id, q);
-        // (isWorkerBetweenMoveChecks: on its way, looked at every 128 ticks.)
-        if ws_moving(st) && !self.path_done(q) && g(w.holdf, q) == 0 && !self.crosses(id, 128) { return; }
-        if g(w.cool, q) > 0 && st != WS_MANUAL { return; }
+        // (isWorkerBetweenMoveChecks: on its way, looked at every 128 ticks. Several base ticks a step: not once it stands
+        // (mvOn 0): a long step that ended in its destination's tile left its path unfinished, and it stood up to 128
+        // ticks at the mine or the drop before finish_approach; the economy ~0.5x at 16.)
+        if ws_moving(st) && !self.path_done(q) && g(w.holdf, q) == 0 && (w.dk <= 1 || g(w.on, q) != 0) && !self.crosses(id, 128) { return; }
+        if g(w.cool, q) > 0 && st != WS_MANUAL {
+            // (Several base ticks a step: its cooldown covered by the base ticks it stood ready before the step's end, in
+            // place (its way done): out now, as below.)
+            let (cd, l) = (g(w.cool, q) as i32, if w.wtl.is_null() { 0 } else { g(w.wtl, q) as i32 });
+            if w.dk <= 1 || l < cd + 1 || !self.path_done(q) { return; }
+            s(w.wtl, q, (l - cd - 1) as u8);
+            s(w.cool, q, 0);
+        }
         self.finish_approach(q);
         let heavy = self.crosses(id, w.delay);
-        match self.wb(q) {
-            WB_RESEARCHER => self.researcher(q, heavy),
-            WB_SALVAGER => self.salvager(q, heavy),
-            WB_COLLECTOR | WB_ASTAR => self.collector(q, heavy),
-            WB_HEALER => self.healer(q, heavy),
-            WB_BUILDER => self.builder(q, heavy),
-            _ => {}
+        // (Several base ticks a step: while the base ticks it stood ready before the step's end (unit.wtcL) cover the
+        // cooldown its action set (+ 1: one base tick a step acts the tick after it is out) and its next action is where it
+        // stands (no way to walk), that one too, as the step's base ticks would: a healer between a spawner and a queue
+        // in reach of both paid once a step at 16 against every cooldown + 1 at 1. At most AI_REPEAT.)
+        let mut k = 0;
+        loop {
+            match self.wb(q) {
+                WB_RESEARCHER => self.researcher(q, heavy),
+                WB_SALVAGER => self.salvager(q, heavy),
+                WB_COLLECTOR | WB_ASTAR => self.collector(q, heavy),
+                WB_HEALER => self.healer(q, heavy),
+                WB_BUILDER => self.builder(q, heavy),
+                _ => {}
+            }
+            k += 1;
+            if w.dk <= 1 || w.wtl.is_null() || k > AI_REPEAT { break; }
+            let (cd, l) = (g(w.cool, q) as i32, g(w.wtl, q) as i32);
+            if cd <= 0 || l < cd + 1 || !self.path_done(q) || self.st(q) == WS_IDLE || self.st(q) == WS_MANUAL { break; }
+            s(w.wtl, q, (l - cd - 1) as u8);
+            s(w.cool, q, 0);
         }
     }
     /// _workerFinishApproachInRange.
@@ -1487,7 +1521,9 @@ impl<'a> Ctx<'a> {
                 self.set_cooldown(q, w.coll_cd[rz]);
             }
             s(w.wmcarry, r, ((0.0) as f32) as f32);
-            if !heavy { return; }
+            // (Right after its deposit: on at once on its own heavy tick only, heavy_tick; else it waits out the deposit's
+            // cooldown there.)
+            if !(if carry > 0.0 && at { self.heavy_tick(q) } else { heavy }) { return; }
             let t = self.target_tile(q);
             let tt = self.ttype(q);
             if self.coll_valid(q, t, tt) && self.owns_reserved(q, t) { self.coll_assign(q, t, tt); return; }
@@ -2052,7 +2088,7 @@ impl<'a> Ctx<'a> {
         if t < 0 { return false; }
         let tu = t as usize;
         if g(w.stown, tu) != o || !(self.rd(w.stval, tu) > 0.0) || self.rd(w.stuc, tu) != 0 || !self.queue_on(t) { return false; }
-        match self.queue_of(t) { Some((n, req, paid)) => n > 0 && paid < req, None => false }
+        match self.queue_of(t) { Some((n, req, paid)) => n > 0 && paid < queue_due(n, req, w.dk), None => false }
     }
     /// _isHealerQueueAnchorTarget.
     unsafe fn heal_anchor_ok(&self, t: i32, o: i32) -> bool {
@@ -2064,7 +2100,10 @@ impl<'a> Ctx<'a> {
     unsafe fn heal_trip_cost(&self, q: usize, t: i32) -> f64 {
         let (n, req, paid) = match self.queue_of(t) { Some(v) => v, None => return 0.0 };
         if !(n > 0) || !self.queue_on(t) { return 0.0; }
-        let rem = js_max(0.0, floor(req - paid));
+        // (A trip carries what one front still needs, as one base tick a step's (the front then is the next one's past the
+        // fronts paid already, queue_due): sized to the whole queue one trip paid for several units, births 2x at dk 4.)
+        let r1 = if req > 0.0 { req - (paid - req * floor(paid / req)) } else { 0.0 };
+        let rem = js_max(0.0, floor(js_min(queue_due(n, req, self.w.dk) - paid, r1)));
         if rem <= 0.0 { return 0.0; }
         js_max(0.0, js_min(js_max(1.0, self.heal_dps_round(q)), rem))
     }
@@ -2247,9 +2286,12 @@ impl<'a> Ctx<'a> {
                 let work = js_max(1.0, floor(if tr != 0.0 && tr == tr { tr } else { self.heal_dps_round(q) }));
                 let mut did = false;
                 if let Some((n, req, paid)) = self.queue_of(tq) {
-                    if n > 0 && paid < req {
+                    // (Paid toward the queue, not its front alone (queue_due): a payment past the front is the next
+                    // ones', k_spawn_shift carries it.)
+                    let due = queue_due(n, req, w.dk);
+                    if n > 0 && paid < due {
                         let p = self.ccol::<f64>(tq as usize, CT_QPAID);
-                        self.wr(p, g(w.rrow, tq as usize).max(0) as usize, js_min(req, paid + work));
+                        self.wr(p, g(w.rrow, tq as usize).max(0) as usize, js_min(due, paid + work));
                         did = true;
                     }
                 }
@@ -2384,7 +2426,7 @@ impl<'a> Ctx<'a> {
                 if o == w.local { self.emit(OUT_SOUND_UNIT, q as i32, 0, SND_SALVAGE_COLLECTED); }
             }
             s(w.wmcarry, r, ((0.0) as f32) as f32);
-            if !heavy { return; }
+            if !(if carry > 0.0 { self.heavy_tick(q) } else { heavy }) { return; }
             self.salvager_find(q);
         }
     }
@@ -2668,6 +2710,24 @@ impl<'a> Ctx<'a> {
     }
     /// The transfer cooldown: a Uint16 timer, saturated as its setter
     /// stores it (tmOn: counted down by the status pre-pass).
+    /// An action of cooldown base (set_cooldown's) done now, as often as one base tick a step does it in the step's
+    /// base ticks: several a step, once and then once every cooldown of the base ticks it stood ready before the step's
+    /// end (unit.wtcL, k.rs k_status), at most most; the cooldown past the last one (its carry taken). How many.
+    unsafe fn cd_batch(&self, q: usize, base: i32, most: i32) -> i32 {
+        let w = self.w;
+        let cd = { let c = self.hot(q, 15) as i32; if c > 0 { c } else { base } };
+        if w.dk <= 1 || w.wtl.is_null() || cd <= 0 || most <= 1 { self.set_cooldown(q, base); return 1; }
+        let l = (g(w.wtl, q) as i32).min(w.dk - 1);
+        // (One base tick a step acts every cooldown + 1: parked till its cooldown is out (park_work), it wakes that tick
+        // and acts at the next; at exactly the cooldown research deposits were 1.12x.)
+        let per = cd + 1;
+        let n = (1 + l / per).min(most);
+        s(w.wtl, q, 0);
+        let left = per * n - l;
+        s(w.cool, q, left.max(0).min(65535) as u16);
+        if left > 0 { s(w.tmon, q, 1); }
+        n
+    }
     unsafe fn set_cooldown(&self, q: usize, base: i32) {
         let w = self.w;
         let cd = self.hot(q, 15) as i32;
@@ -2755,18 +2815,30 @@ impl<'a> Ctx<'a> {
         if !(dps != 0.0 && dps == dps) { dps = g(w.tdps, ti); }
         if !(dps != 0.0 && dps == dps) { dps = w.fallback_rdps; }
         let work = js_max(0.1, dps * g(w.teff, ti));
+        // (Several base ticks a step: a deposit each cooldown of them, no more than the task needs, cd_batch.)
+        let need = req - self.rd(w.rs, b + 2) - self.rd(w.rs, b + 4);
+        let n = self.cd_batch(q, w.base_cd, if need > 0.0 { ceil(need / work).min(65535.0) as i32 } else { 1 }) as f64;
         let trip = if req > 0.0 { work * cost / req } else { 0.0 };
         if trip > 0.0 {
-            self.pay(o, 0, -trip);
-            self.energy_log(o, ES_RESEARCH, -trip);
+            self.pay(o, 0, -trip * n);
+            self.energy_log(o, ES_RESEARCH, -trip * n);
         }
-        self.add_f64(w.rs, b + 4, work);
-        self.add_i32(w.cnt, 4, 1);
-        self.set_cooldown(q, w.base_cd);
+        self.add_f64(w.rs, b + 4, work * n);
+        self.add_i32(w.cnt, 4, n as i32);
         if g(w.stown, t as usize) == w.local { self.emit(OUT_SOUND_RESEARCH, q as i32, t, 0); }
     }
 }
 
+/// What a spawn queue of n units, its front's cost req, takes in payments at dk base ticks a step. One: its front's
+/// (it spawns at the next production pass, spr.rs k_spawn_prod, a base tick on, and the next front is paid from there).
+/// Several: all of them (the units behind its front, of its front's type and level, cost the same): the front spawns a
+/// step on, and the payments one base tick a step would make to the next fronts meanwhile are theirs, not refused
+/// (k_spawn_shift carries them; at 16 base ticks a step births were 0.45x). Also wsw.rs's healer queue flag.
+#[inline(always)]
+pub fn queue_due(n: i32, req: f64, dk: i32) -> f64 { if dk > 1 { req * n.max(0) as f64 } else { req } }
+/// The actions one AI call of a worker makes in a step at most past its first (ai: in place, its carry covering each one's
+/// cooldown).
+const AI_REPEAT: i32 = 8;
 /// stackCountToLevel (a whole count).
 fn stack_level(n: i32, max: i32) -> i32 {
     let v = if n == 0 { 1 } else { n };

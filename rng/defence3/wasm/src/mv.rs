@@ -107,6 +107,11 @@ const W_HS: usize = 34;
 const W_AT: usize = 35;
 /// unit.wkS: bits 0-4 the worker state (sim_unit_state.js SIM_WS_NAMES, 1 IDLE).
 const W_WKS: usize = 36;
+/// unit.mvCar: the step a flow walker left at its steer's target point (255ths of a full step), move_flow.
+const W_CAR: usize = 37;
+/// unit.wtcL: a worker's base ticks of the step left when its transfer cooldown ran out (k.rs k_status), or set here: what
+/// its arriving step left, off its next cooldown.
+const W_WTL: usize = 38;
 const W_WK: usize = 39;
 const W_WTC: usize = 40;
 const W_FLOW: usize = 41;
@@ -448,6 +453,8 @@ struct Mv {
     vx: *mut F32,
     vy: *mut F32,
     spent: *mut u8,
+    car: *mut u8,
+    wtl: *mut u8,
     wall: *const u8,
     area: *mut i32,
     reach: *const u8,
@@ -785,6 +792,8 @@ impl Mv {
             vx: p!(W_VX),
             vy: p!(W_VY),
             spent: p!(W_SPENT),
+            car: p!(W_CAR),
+            wtl: p!(W_WTL),
             wall: p!(W_WALL),
             area: p!(W_AREA),
             reach: p!(W_REACH),
@@ -2053,10 +2062,16 @@ unsafe fn seg_clear(m: &Mv, wl: *const u8, x0: f64, y0: f64, x1: f64, y1: f64) -
 #[inline(always)]
 unsafe fn fire(m: &Mv, s: usize) {
     let cd = mv_stat(m, s, 4, m.acd);
+    // (At one base tick a step a shot resets the timer to the cooldown and the next waits for a tick on which it is
+    // run out: one shot every ceil(cooldown) base ticks, at most one a tick (research cooldowns below one tick). The
+    // carry's shots the same.)
+    let cd = if m.dk > 1 { ceil(cd).max(1.0) } else { cd };
     let mut at = cd;
     let mut n = 1u8;
     if !m.atl.is_null() {
-        let l = rd(m.atl, s);
+        // (At one base tick a step there is none: a carry from an earlier, longer step is dropped. Its timer out since
+        // before the step, no longer counted down (unit.tmOn 0, k.rs k_status): all of the step.)
+        let l = if m.dk > 1 { if rd(m.tmon, s) == 0 { (m.dk - 1) as u8 } else { rd(m.atl, s).min((m.dk - 1) as u8) } } else { wr(m.atl, s, 0); 0 };
         if l != 0 {
             let lf = l as f64;
             if cd > 0.0 {
@@ -2074,7 +2089,17 @@ unsafe fn fire(m: &Mv, s: usize) {
     wr(m.tmon, s, 1);
 }
 
-
+/// An attack of slot s on unit q, listed for unitHitsResolve (fire's shots, unit.atkN: its step's, all at its target;
+/// one base tick a step whose target fell waits for the brain's next word as long as a step of 4 base ticks does).
+#[inline(always)]
+unsafe fn attack_unit(m: &Mv, p: &MoveP, s: usize, q: usize) {
+    fire(m, s);
+    hit_sty_count(m, p, s);
+    let c = rd(m.hitc, p.chunk);
+    wr(m.hita, p.s0 + c as usize, s as i32);
+    wr(m.hitt, p.s0 + c as usize, q as i32);
+    wr(m.hitc, p.chunk, c + 1);
+}
 #[inline(always)]
 unsafe fn checked_position(m:&Mv,s:usize,x:f64,y:f64)->(f64,f64) {
     if m.occ.is_null(){return (x,y);}
@@ -2150,10 +2175,6 @@ unsafe fn shoulders(m:&Mv,s:usize,ox:i32,oy:i32,dx:f64,dy:f64,want:f64,ax:f64,ay
 unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:bool,fw:i32)->(f64,f64) {
     let (mut nx,mut ny)=(nx,ny);
     if nx==ox&&ny==oy{return (ox as f64*0.125,oy as f64*0.125);}
-    // (A step of several base ticks in a crowd: its wanted step lengthened by the step-size knob times the local
-    // density (traffic.rs move_comp): what a long step loses to the first taken point along it, on average.)
-    if intent&&m.dk>1{let k=super::traffic::move_comp(m.traffic,ox,oy,(*m.occ).layer_mass(s).0);
-        if k>0.0{let f=1.0+k;nx=ox+floor((nx-ox) as f64*f+0.5) as i32;ny=oy+floor((ny-oy) as f64*f+0.5) as i32;}}
     let original_nx=nx;let original_ny=ny;
     let np=((fw>>FW_NP)&15) as usize;
     let wl=if np<NAV_PROFILES&&!m.nav.get_unchecked(np).walls.is_null(){m.nav.get_unchecked(np).walls}else if fw_fl(fw)&32!=0{m.airw}else{m.wall};
@@ -2184,9 +2205,26 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
         let il=1.0/original_len;
         let mut progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)*il;
         dbgc!(m,64);
-        if progress<original_len*0.25&&traffic_deferred(m){dbgc!(m,65);
+        if progress<original_len*(if m.dk>1{RETRY_SHORT}else{0.25})&&traffic_deferred(m){dbgc!(m,65);
             if let Some((sx,sy))=traffic_swap(m,s,tx,ty,original_dx*il,original_dy*il,wl,false){
                 tx=sx;ty=sy;progress=original_len;
+                // (Several base ticks a step: the step goes on from the partner's place along its heading, as the next
+                // base ticks would; an idle friend in the way again is swapped with again (within the step's reach
+                // from where it stood, traffic_swap). Never past the step's length from there.)
+                let mut k=0;
+                while m.dk>1&&k<4{
+                    let (gx,gy)=((tx-ox) as f64,(ty-oy) as f64);let rem=original_len-sqrt(gx*gx+gy*gy);
+                    if !(rem>=8.0){break;}
+                    let (ex,ey)=(tx+js_round(original_dx*il*rem) as i32,ty+js_round(original_dy*il*rem) as i32);
+                    if !seg_clear(m,wl,tx as f64*0.125,ty as f64*0.125,ex as f64*0.125,ey as f64*0.125){break;}
+                    let (px,py)=(*m.occ).preview(s,ex,ey);
+                    let (px,py)=(*m.occ).commit_preview(s,px,py,ex,ey);
+                    let got=((px-tx) as f64*original_dx+(py-ty) as f64*original_dy)*il;
+                    tx=px;ty=py;
+                    if got>=rem*0.25{break;}
+                    match traffic_swap(m,s,tx,ty,original_dx*il,original_dy*il,wl,false){Some((a,b))=>{tx=a;ty=b;}None=>break}
+                    k+=1;
+                }
             }
         }
         // (The tick-start position: the footprint's before this step, ox / oy, as unit.x0 / y0.)
@@ -3782,8 +3820,12 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             }
         }
     }
+    // (The partner's walls by its layer: a flyer's the air's; a ground unit's its profile's (builders walk over
+    // structures) when that is a ground one. A parked unit's profile column is its last walk's, or none (0): parked
+    // collectors (flyers) read as ground units and were never swapped with across a structure.)
     let walls=|b:usize|{let p=rd(m.npr,b) as usize;
-        if p<NAV_PROFILES&&!m.nav.get_unchecked(p).walls.is_null(){m.nav.get_unchecked(p).walls}else if rd(m.fl,b)&32!=0{m.airw}else{m.wall}};
+        if rd(m.slayer,b)==1||rd(m.fl,b)&32!=0{let a=m.nav.get_unchecked(1).walls;if a.is_null(){m.airw}else{a}}
+        else if p!=1&&p<NAV_PROFILES&&!m.nav.get_unchecked(p).walls.is_null(){m.nav.get_unchecked(p).walls}else{m.wall}};
     for k in 0..3{
         let (score,b)=*cand.as_ptr().add(k);
         if score==f64::MAX{break;}
@@ -3867,7 +3909,11 @@ unsafe fn traffic_yield(m:&Mv,s:usize){
     let x0=rd(m.x0,s);let y0=rd(m.y0,s);let x=xq as f64*0.125;let y=yq as f64*0.125;
     let dx=x-x0;let dy=y-y0;let spent=sqrt(dx*dx+dy*dy);
     let mut spd=mv_stat(m,s,0,m.spd);if st_frz(m, s)>0{spd*=0.5;}if st_snd(m, s)>0{spd*=0.5;}
-    let remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
+    let mut remaining=(spd*m.dkf-spent).max(0.0);if remaining<0.25{return;}
+    // (A flow walker: never past its steer's target point. A step of several base ticks ends there on purpose (the
+    // look's end, its destination tile); topped up to its full length it jumped over the destination tile and back
+    // every step (a lone walker at dk 16).)
+    if walker{let tg=rd(m.cn,(s)*SR);if tg!=TGT_NONE{let (qx,qy)=tgt_xy(m,tg);let (ex,ey)=(qx-x,qy-y);remaining=remaining.min(sqrt(ex*ex+ey*ey));if remaining<0.25{return;}}}
     dbgc!(m,77);
     let own=rd(m.own,s);
     let (fx,fy,hop,step);
@@ -4031,9 +4077,9 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
             let firing=v128_and(lane,v128_and(i32x4_ne(v128_and(cm,i32x4_splat(4)),zero),v128_not(f32x4_gt(v128_load(m.at.add(s) as *const v128),fz))));
             let fire_bits=i32x4_bitmask(firing);
             for l in 0..m.span_n {if fire_bits&(1<<l)!=0 {
-                let u=s+l;fire(m,u);hit_sty_count(m,p,u);let c=rd(m.hitc,p.chunk);
-                let ct=rd(m.cmt,u);
-                wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,if rd(m.cmode,u)&16!=0 {-(ct+2)}else{ct});wr(m.hitc,p.chunk,c+1);
+                let u=s+l;let ct=rd(m.cmt,u);
+                if rd(m.cmode,u)&16==0 {attack_unit(m,p,u,ct as usize);}else{fire(m,u);hit_sty_count(m,p,u);let c=rd(m.hitc,p.chunk);
+                wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,-(ct+2));wr(m.hitc,p.chunk,c+1);}
                 dbgc!(m,34);
             }}
         }
@@ -4149,8 +4195,7 @@ unsafe fn combat_hold2(m:&Mv,p:&MoveP,s:usize,cm:u16)->bool {
     if !valid {return false;}
     if cm&0x0404!=0 && !m.hita.is_null() {
         for l in 0..2 {let u=s+l;if cm&(4<<(l*8))!=0 && !(rd(m.at,u)>0.0) {
-            fire(m,u);hit_sty_count(m,p,u);let c=rd(m.hitc,p.chunk);
-            wr(m.hita,p.s0+c as usize,u as i32);wr(m.hitt,p.s0+c as usize,*m.cmt.add(u));wr(m.hitc,p.chunk,c+1);
+            attack_unit(m,p,u,*m.cmt.add(u) as usize);
             dbgc!(m,34);
         }}
     }
@@ -4709,6 +4754,10 @@ unsafe fn list_hit(m: &Mv, p: &MoveP, s: usize, target: i32) {
     if m.hita.is_null() {
         return;
     }
+    if target >= 0 {
+        attack_unit(m, p, s, target as usize);
+        return;
+    }
     fire(m, s);
     hit_sty_count(m, p, s);
     let c = rd(m.hitc, p.chunk);
@@ -5170,12 +5219,7 @@ unsafe fn move_combat(m: &Mv, p: &MoveP, s: usize) -> bool {
         return false;
     }
     if (cm & 4) != 0 && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
-        fire(m, s);
-        hit_sty_count(m, p, s);
-        let c = rd(m.hitc, p.chunk);
-        wr(m.hita, p.s0 + c as usize, s as i32);
-        wr(m.hitt, p.s0 + c as usize, q);
-        wr(m.hitc, p.chunk, c + 1);
+        attack_unit(m, p, s, q as usize);
     }
     let mv = cm & 3;
     if mv == 0 {
@@ -5939,6 +5983,13 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     }
     // (Its steer holds: on toward its target point, held_step.)
     if tl == dk {
+        // (Several base ticks a step: a worker came into its destination's tile in the last step and stands only now,
+        // its AI a step after one base tick a step would have run it (the tick after it came in): that step goes to its
+        // transfer cooldown's carry (unit.wtcL: off its next cooldown, k.rs k_status, or walked), as its arriving
+        // step's rest did. 21% of a walking healer's steps at 16 were that wait.)
+        if m.dk > 1 && !m.wtl.is_null() && !m.iswk.is_null() && rd(m.iswk, s) != 0 {
+            wr(m.wtl, s, (rd(m.wtl, s) as i32 + m.dk).min(2 * m.dk - 1).min(255) as u8);
+        }
         back!();
     }
     if held_step(m, s, x, y, gx, gy, tl, dk, f, wl, p.q, p.iq) {
@@ -6156,11 +6207,41 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     // the way.)
     let (mut cvx, mut cvy) = (vx, vy);
     if m.dk > 1 {
-        let st = js_min(spd * m.dkf, js_max(dist, spd));
+        // (Its step plus what its last step left at a look's end (unit.mvCar): at one base tick a step the next tick
+        // goes on from there; at several, the rest of the step was lost at every corner. What this step leaves at
+        // this look's end is carried in turn (not at its destination: an arrival; at most a step).)
+        // (A worker: the base ticks its transfer cooldown left of the last step (unit.wtcL) walked too; at one base
+        // tick a step it walks on the tick after. Arriving, what its step left comes off its next cooldown instead:
+        // a trip's arrivals and cooldowns each lost the rest of a step, the economy ~0.5x at 16.)
+        let worker = !m.wtl.is_null() && rd(m.iswk, s) != 0;
+        let wt = if worker { rd(m.wtl, s) as f64 } else { 0.0 };
+        let full = spd * m.dkf;
+        let want = full + rd(m.car, s) as f64 * (1.0 / 255.0) * full + wt * spd;
+        let st = js_min(want, js_max(dist, spd));
         let (ax, ay) = ((dx / dist) * st, (dy / dist) * st);
+        let mut car = 0u8;
+        let mut wtl = 0u8;
         if (f & 32) != 0 || seg_open(wl, w, h, x, y, x + ax, y + ay, itile, tile) {
             vx = ax;
             vy = ay;
+            let rem = want - st;
+            let far_now = far;
+            if rem > 0.5 && full > 0.0 {
+                if far_now != dk {
+                    car = floor((rem / full).min(1.0) * 255.0) as u8;
+                } else if worker && spd > 0.0 {
+                    // (The base ticks of the step left when it arrived: its step's own and its cooldown's carry less the way
+                    // walked; not the distance carried from earlier steps (unit.mvCar: way, not time).)
+                    let ticks = m.dkf + wt - (want - rem) / spd;
+                    wtl = floor(ticks).min((m.dk - 1) as f64).max(0.0) as u8;
+                }
+            }
+        }
+        if rd(m.car, s) != car {
+            wr(m.car, s, car);
+        }
+        if worker && rd(m.wtl, s) != wtl {
+            wr(m.wtl, s, wtl);
         }
     }
     let mut slid = false;
@@ -7094,6 +7175,16 @@ unsafe fn epi_slot(m: &Mv, f: *const f64, e: &mut Epi, s: usize, need: bool) {
         let gx = if !(gxf >= 0.0) { 0 } else if gxf >= w as f64 { w - 1 } else { gxf as i32 };
         let gy = if !(gyf >= 0.0) { 0 } else if gyf >= h as f64 { h - 1 } else { gyf as i32 };
         let tt = gy * w + gx;
+        // (Several base ticks a step: a walking worker (a flow walker) whose step reached its destination's point with
+        // base ticks to spare (move_flow: their count in unit.wtcL) stands now and its AI runs after this step (an event),
+        // as one base tick a step stops it the tick after it got there. Else it stood a step more till its next turn saw
+        // it there: each arrival of a trip cost a step, a healer's trip at 16 four steps against ~35 base ticks at 1,
+        // births 0.5x. (On coming into the tile only: dk 1 walks on to the point first, collectors 1.25x at dk 4.))
+        if m.dk > 1 && tt == rd(m.dest, s) && rd(m.on, s) == 1 && (rd(m.fl, s) & 64) != 0 && !m.iswk.is_null() && rd(m.iswk, s) != 0
+            && !m.wtl.is_null() && rd(m.wtl, s) > 0 && !m.ev.is_null() && rd(m.ev, s) == 0 {
+            wr(m.on, s, 0);
+            set_ev(m, s, EV_CHECK);
+        }
         let sep = rd(m.sep, s);
         if rd(m.spe, s) == e.epoch && rd(m.spo, s) == rd(m.own, s) && sep as f64 != e.absent {
             if tt != rd(m.spt, s) {

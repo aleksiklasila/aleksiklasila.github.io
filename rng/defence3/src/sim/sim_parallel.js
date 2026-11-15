@@ -1088,7 +1088,7 @@ function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R =
 const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvPath', 'unit.energy', 'unit.sepKey', 'unit.dead',
     'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvSteer', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
     'unit.mvDest', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
-    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.wkS', '?-', '?-', 'unit.mvWk',
+    'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.wkS', 'unit.mvCar', '?unit.wtcL', 'unit.mvWk',
     'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.stFr', 'unit.stSa',
     '?-', '?-', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
@@ -1767,12 +1767,12 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // [5]/[6] grid, [7] players, [8] areas, [9] CMD_ATTACKING.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown']);
+    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown', 'acq.bf']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.
 // P: [0] slots, [1] per job.
-const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId']);
+const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'acq.out', 'acq.tid', 'acq.bf']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCombatCommitW, P, chunk, 'k_combat_commit', 'COMBAT_COMMIT'); };
 // Towers in the acquisition tier (tower.rs k_tower_acq_snap: the rows at
 // the post, a job over the rows; k_tower_acq: a stage of the tier's chain
@@ -2004,7 +2004,7 @@ const _simMetaUnitsW = _simWK(['pm.id', 'pm.flags', 'pm.orderTick', 'pm.maxEnerg
     '?pm.wtid', 'pm.tab', 'pm.list', 'pm.cnt', '?unit.pvAt']);
 SIM_KERNELS[SIM_KERNEL_META_UNITS] = function (R, P, chunk) { _simRust(_simMetaUnitsW, P, chunk, 'k_meta_units', 'META_UNITS'); };
 const SIM_KERNEL_ACQ_REPLAY = 145;
-const _simAcqReplayW = _simWK(['acq.mlog', 'acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid', 'rl.fwd', 'rl.fst']);
+const _simAcqReplayW = _simWK(['acq.mlog', 'acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'acq.sout', 'acq.bm', 'acq.bt', 'acq.btid', 'rl.fwd', 'rl.fst', 'acq.bf']);
 SIM_KERNELS[SIM_KERNEL_ACQ_REPLAY] = function (R, P, chunk) { _simRust(_simAcqReplayW, P, chunk, 'k_acq_replay', 'ACQ_REPLAY'); };
 // The worker AI's parallel pass (worker.js waiRun; wasm/src/wai.rs k_wai_decide):
 // a chunk of the events decided against the pass's start, its effects into
@@ -2232,7 +2232,7 @@ const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'u
     // (The towers' look at a unit, 35-47: k.rs k_acq_snap's copies.)
     '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt', '?sl.sfree',
     // (The last run's commit in the same pass, 49-54: k.rs acq_commit_range.)
-    'unit.cbS', 'unit.cbTick', 'unit.cbRangeS', 'acq.bm', 'acq.bt', 'acq.btid']);
+    'unit.cbS', 'unit.cbTick', 'unit.cbRangeS', 'acq.bm', 'acq.bt', 'acq.btid', 'acq.bf']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of
@@ -2267,7 +2267,9 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
     // (The build's per-entry key; its stages' histograms by entry range;
     // the answers packed, 32 bytes a team and area: acq_sample.rs RW.)
-    '?acq.saKey','?acq.saHist','?acq.saRec']);
+    '?acq.saKey','?acq.saHist','?acq.saRec',
+    // (The unit's combat target as snapshot (instruction, its id): left out of its answer, 48-49.)
+    '?acq.cm','?acq.ctid']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
 // The same build for the area answers in three stages, chunks of entries
 // (acq_sample.rs k_acq_area_count / _prefix / _scatter: the same table),

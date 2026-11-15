@@ -366,13 +366,20 @@ unsafe fn area_batch(k:&K,bs:&[usize;AB],nb:usize){
     // (non-negative distances order as their bits; lane by lane as the
     // four-wide sum was, the same rounding). Distance ranks a fixed batch
     // only: it cannot reject an area-valid unit.
+    // (The unit's current target left out: its answer is another, the brain's
+    // fallback when the target falls (k.rs brain_pick); a unit that keeps its
+    // target needs no answer of it.)
+    let (cms,ctid)=(k.p::<u8>(48),k.p::<i32>(49));
     for i in 0..nb.min(AB) {let (e,end)=(e0[i],e1[i]);if end==0 {continue;}
         let s=bs[i];let x=*xs.add(s);let y=*ys.add(s);
+        let cm=if cms.is_null() {0}else{*cms.add(s)};
+        let skip=if cm!=0&&cm&16==0&&!ctid.is_null() {*ctid.add(s)}else{i32::MIN};
         let mut best=u64::MAX;let mut win=e;
         for j in 0..4 {let q=e+j;let q=if q<end {q}else{e};
-            let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;
-            let kq=(d.to_bits() as u64)<<32|e_id(E,q) as u32 as u64;
+            let dx=e_x(E,q)-x;let dy=e_y(E,q)-y;let d=dx*dx+dy*dy;let id=e_id(E,q);
+            let kq=if id==skip {u64::MAX}else{(d.to_bits() as u64)<<32|id as u32 as u64};
             let b=kq<best;best=if b {kq}else{best};win=if b {q}else{win};}
+        if best==u64::MAX {continue;}
         *out.add(s)=e_slot(E,win);*tid.add(s)=best as u32 as i32;
     }
 }

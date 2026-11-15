@@ -98,6 +98,8 @@ pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
     let mode = k.i(12);
     let rtype = k.i(13);
     let phase = k.i(14);
+    // (The step's base ticks: the healer queue flag, wai.rs queue_due.)
+    let dk = k.i(16).max(1);
     let (tf, to, ta, tr) = (k.p::<u8>(22), k.p::<i8>(23), k.p::<u8>(24), k.p::<u8>(25));
     let (i0, i1) = if phase == 1 { super::k::job_range(_chunk, k.i(15).max(1), n as i32) } else { (0, n) };
     for i in i0..i1 {
@@ -143,7 +145,7 @@ pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
                 if ow != -128 {
                     have = true;
                     o = ow;
-                    f = flags_of(tab, wtab, c, r, tu, stuc, brain, tykey, rml, smxe, rlv, maxl, ntypes, nkeys, np, l1, r1, rtype, o);
+                    f = flags_of(tab, wtab, c, r, tu, stuc, brain, tykey, rml, smxe, rlv, maxl, ntypes, nkeys, np, l1, r1, rtype, o, dk);
                 }
             }
         }
@@ -184,7 +186,7 @@ pub unsafe extern "C" fn k_wsw_set(a: u32, _chunk: i32) {
 /// _wswFlagsOf for the structure in row r of class c at tile t, owner o.
 #[inline(never)]
 unsafe fn flags_of(tab: *const i32, wtab: *const i32, c: usize, r: usize, tu: usize, stuc: *const u8, brain: *const i32, tykey: *const i32, rml: *const i32,
-    smxe: *const f64, rlv: *const i32, maxl: i32, ntypes: i32, nkeys: i32, np: i32, l1: usize, r1: usize, rtype: i32, o: i32) -> u8 {
+    smxe: *const f64, rlv: *const i32, maxl: i32, ntypes: i32, nkeys: i32, np: i32, l1: usize, r1: usize, rtype: i32, o: i32, dk: i32) -> u8 {
     let flag = |p: *mut u8| -> u8 { if p.is_null() { 0 } else { g(p, r) } };
     let marked = flag(wcol::<u8>(wtab, c, 0)) == 2;
     let uc = g(stuc, tu) != 0;
@@ -237,7 +239,7 @@ unsafe fn flags_of(tab: *const i32, wtab: *const i32, c: usize, r: usize, tu: us
     let qn = { let p = wcol::<i8>(wtab, c, 3); if p.is_null() { 0 } else { g(p, r) as i32 } };
     if qn > 0 && energy > 0.0 && !uc && flag(wcol::<u8>(wtab, c, 2)) != 1 {
         let (req, paid) = (g(wcol::<f64>(wtab, c, 4), r), g(wcol::<f64>(wtab, c, 5), r));
-        if paid < req { f |= WSW_QUEUE; }
+        if paid < super::wai::queue_due(qn, req, dk) { f |= WSW_QUEUE; }
     }
     if rtype > 0 && ty + 1 == rtype && !marked && energy > 0.0 && !uc {
         f |= WSW_RESEARCH;

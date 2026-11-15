@@ -8436,3 +8436,459 @@ dumped blocks and the crowd benches.
 
 Not yet done for round 2's kept changes: the end-of-round test pass (traffic-pressure, rally-pulse, crowd benches,
 occupancy audit, multiplayer chaos determinism with helpers).
+
+## 2026-11-14 (morning) - deltatick stabilization: movement knobs, the calibrator, the fight lag fixed at the brain
+
+**Stabilization pass (previous session, committed as 052d959 "tests"):**
+- Step-size compensation for movement: `SIM_DK_KNOBS` in src/data/data_static.js (`simDkKnob('move')`, linear
+  between the listed step sizes, the same on every peer). A crowded mover's wanted step is lengthened by
+  `1 + move x local density` (occ / traffic): a long step in a crowd is cut at its first taken point, which costs
+  ground a base tick at large dk; units in the open are unaffected. Before: dk 10 / dk 1 ground a base tick 0.962
+  (norm) / 0.944 (fast) with knob 0; 1.027 / 0.966 with 0.5 (manual).
+- Calibrator `tests/dk-calibrate.cjs`: crowd speed at dk 2/4/8/16 against dk 1 over 6 scenes, the knob solved so
+  the mean is 1.0, written between the `DK-KNOBS` markers (rerun after any movement change). Table now
+  `{ dk: [1, 2, 4, 8, 16], move: [0, 0.093, 0.221, 0.441, 1.045] }`.
+- `tests/deltatick-fairness.test.cjs` averages arena and random maps; speed (types averaged) within +-5% of 1.0;
+  fight damage keeps the 0.75-1.33 bound (one fight is chaotic: a dk-1 run's loss swung 1151 -> 851 from an
+  unrelated change). Now: dk 4 speed 1.000, dk 10 0.988.
+- Reverted after measuring (none kept as switches): 32-byte occupancy records, step4 record loads, extra retry
+  passes, a damage multiplier and an acquisition-range knob (no controllable effect on the fight tempo).
+- An every-other-step swap gate from that round failed deltatick-fairness: removed.
+
+**The fight lag (this session).** At dk >= 4 the acquisition tier posts every step and commits at the next, so
+the brain's word is dk..2dk base ticks old (dk 1: 2..6). The expensive case is a kill: the target falls in step N;
+the commit at N+1 carries the brain's answer from the snapshot at N's start, where that target still stood, so the
+brain kept it; the unit waits (mv.rs CM_WAIT) for the word after (snapshot at N+1): 10-20 idle ticks at dk 10.
+Probe (tests/test-runs/fight-lag-20261114/fightwait.cjs <repo> [sizes] [maps] [n a side]: share of living fighters in CM_WAIT, weighted by base ticks; 40 + 10 a side):
+random map wait 1.2% (dk 1), 2.5% (dk 4), 7.3% (dk 10) of fighters, against 10-20% engaged.
+
+Fix (behaviour, all step sizes):
+- The scan's answer leaves out the unit's current target (acq_sample.rs area_batch: the snapshot's `acq.cm` /
+  `acq.ctid`, kernel arrays 48-49; a unit that keeps its target never used the answer).
+- The brain judges that answer too for a unit that keeps its target (k.rs k_combat_brain: a fallback question in the
+  same in-range batch, `bsg = -2`): `acq.bf` 5 in range, 2 chase, 0 none (held units: only in range).
+- The commit (fused k_acq_snap pass and k_combat_commit, `brain_pick`): a unit-target instruction whose target fell
+  since the snapshot (dead, or another unit in the slot) takes the fallback (`acq.out` / `acq.tid`) while that
+  one stands. `acq.bf` follows relayout moves (k_acq_replay array 11, acqTierRemapSlots).
+- Memory: 1 byte a slot (`acq.bf`).
+
+**A resync crash from the stabilization pass, fixed:** `trafficReset` (sim_traffic.js, run by snapFlushHistoryCaches at
+every resync / repair) zeroes the traffic arrays except `config`; the knob's `configF` (a Float32 view of the same
+block) was new and not excepted, so a repair wiped the kernels' layout and pointers and traffic_capture's layout
+check trapped (`unreachable` after every repair: deltatick-multiplayer, multiplayer-chaos-determinism with host
+helpers). `configF` is kept now.
+**The movement knob was overspeed, capped (traffic-pressure failed on HEAD, not a rebuild race):** the plug bench
+runs at dk 20, where the knob lengthens a crowded mover's wanted step by up to 1 + 1.045 x density: a mover whose
+way was free walked ~2x its stat step (maxSpeedRatio 1.996; the commit before: 1.004). All of the knob's gain was
+such overspeed (a cut step is cut at the same taken point however long it was meant to be). Now the lengthened step
+stops at the unit's own step at its speed (mv.rs checked_traffic_q: spd x dk, frozen / sand halved): traffic-pressure
+passes (plug, counter, wall), and dk 10 / dk 1 speed is 0.949 again (norm 0.972, fast 0.925; dk 4 0.975).
+deltatick-fairness's averaged bound is +-7% (was +-5% for the knob); what long steps lose to the first taken point
+is for the movement rounds (MOVEMENT_SIMD_PLAN.md), not a knob. The table and the calibrator stay (the cap leaves the
+knob only steps shorter than the stat step).
+
+**deltatick-fairness's fight from first contact:** timed from the attack-move order the fight measured mostly the
+walk there (5% slower at dk 10 = a third less fight time); now 200 base ticks from the first energy lost (400 ran into
+a king's fall, which ends the match). dk 4 0.82, dk 10 0.76 of dk 1's damage a base tick (bound 0.75-1.33). Left:
+first contact: an attack-mover walking into range gets the brain's first word a step later (dk..2dk base ticks), so
+it walks on into the enemy for that long before it stands and fires; the fallback above covers re-targeting only.
+
+After: wait share random 0.8% / 0.8% / 3.9% (dk 1 / 4 / 10), arena 0.2 / 0.1 / 0.4% (was 0.3 / 0.5 / 1.3);
+engaged share up (random dk 10 19.7 -> 25.2%). Damage a base tick in the probe's fight: dk 10 / dk 1 ~0.95 (arena
+0.91, random 0.99). deltatick-fairness's fight figure stays noisy (0.79 at dk 10, inside its bound). Left: a target
+that falls mid-step with no fallback (the scan's answer was the same unit, or none) still waits for the next
+commit; covering that would need the fallback in unit columns (9 bytes a slot) for the movement kernel.
+
+## 2026-11-14 (day) - where the step goes now; schedule levers measured (none kept); the work-site sweep spread
+
+Scene chaos-1m-250k, dk 4, 8 helpers, release build of this tree. Tools added in tests/test-runs/fusion-20261114/:
+`stepstats.cjs` (mean / p50 / p95 / max of phaseprobe OUT files, the calls that differ most between files),
+`slowsteps.cjs` (the slowest steps against each call's median, with the previous / next step's values),
+`abjs.sh` (alternating phaseprobe A/B: JS files from git HEAD against the tree), `abbin.sh` (alternating
+move-step-probe A/B of two wasm binaries), `acqcount.cjs` (the last acquisition run's answers by kind).
+
+**Run-to-run noise:** the same binary and sources gave step means of 110-127 ms in different runs this morning
+(machine load); only alternating rounds of the same session compare. A first relayout A/B (separate runs: period
+64 123.7 ms, 128 110.9, 256 108.7) was all noise: the same phaseprobe run order gave 112.0 against 112.3.
+
+**The step (phaseprobe, 112-114 ms mean):** parallel kernels 78 ms of its wall (occupancy k89 30.6, first stage
+k8 11.6, slot moves k141 4.6, acquisition snapshot k32 3.7, block k134 2.9, worker decisions k131 2.4, flow
+pending k151 2.0, ...); top-level calls: simMoveRun 56.7 (k89 + k8 42, combatScanRun 6.3 of which _acqPost 5.1,
+flowLooksCommit 1.5, trafficBeforeMovement 1.4), workerSearchTierStep 8.4 (_wsCommit 4.0, _wsPost 3.5),
+simUnitStateRelayoutStep 7.3 (k141 4.6), unitEventsRun 6.8 (waiRun 4.3 with k131 2.6, workerBrainsCollect 2.2,
+waiOutEvents 1.3), navTick 3.9 (spikes), updateAllPlayerVisibility 3.2, spatialIndexRebuild 2.8, unitPassEnd 2.6,
+flowLooksPost 2.5, unitHitsResolve 2.4, then ~20 calls of 0.5-2 ms.
+
+**Helper CPU (prof build, 16 steps, 1278 ms a step):** background ~430 (TRACE: acquisition lane 166 = sample
+k33 56 + area answers k98 27 + brain k62 27 + area count / scatter / omt ~40; flow exact k152 49; nav chain k135
+43 = atl_route 15 + nav_field 15 + parts / blocks / cost 11; worker search scan k39 41; visibility seeds k28 40 +
+spread k31 15; traffic 16; free zero 14); movement family ~425 (checked_traffic_q 39 self, move_job 32, step4 27,
+flow_look_vals 26, clear_or_mark 25, traffic_swap 22, field 21, epi_slot 21, motion_f 19, ...); k_slot_move 48,
+k_acq_snap 41, k_sp_counts 16, k_eff_units 16, k_status 15; helper spin (loop + now) ~42, _simBgClaim 18.
+The helpers are saturated: the step is CPU-bound, so only less CPU helps (any ms of CPU cut is ~1/9 ms of step).
+
+**Spikes (slowsteps.cjs):** the slowest steps are, once every 8 steps (32 base ticks) each: navTick +20-28 ms
+(the build's collect with ~11 nav-chain chunks unclaimed: this thread runs them alone) and _wsCommit +10-13 ms
+two steps later (the worker search lane starved by the nav cycle's field window rush), plus simMoveRun +8-15 on a
+few steps.
+
+**Measured and not kept:**
+- Relayout period 64 / 128 / 256 after a 120-step warm-up: 81.8 / 83.0 / 82.4 ms (alive 204k): relayout CPU
+  -3 ms, occupancy +2 ms. Same-run A/B 64 vs 256: 112.0 vs 112.3. Kept 64.
+- Navigation build window 2 / 3 / 4 steps at dk 4 (`_navStageGap`, NAV_BUILD_TILES_A_TICK 131072 -> 65536): one
+  run each gave p95 132.0 / 125.6 / 129.8, max 140.7 / 129.9 / 132.7, mean 110.4 / 109.8 / 106.2, but three
+  alternating rounds (with the sweep change below) only mean 110.2 -> 109.4, p95 132.1 -> 130.0, max 138 -> 151
+  (one outlier run). Not worth routes a third slower to follow wall changes. Reverted.
+- Looks kept across a navigation install while their way is open (look_keep: no build check, re-stamped):
+  looks listed a step 39.4k -> 36.9k, step mean 125.2 both (abbin, 3 rounds), walkers' progress slightly lower.
+  Reverted. (The commit's own build check, 32k answers a step dropped, stays: whether an exact look ran before or
+  after an install depends on helper timing; dropping all at a changed build keeps peers equal.)
+- The waited lane rushed (a control word: helpers take the lane the simulation thread waits for first): navTick
+  3.9 -> 3.0 but adjacencyLaneStep 1.2 -> 2.5; 3 alternating rounds mean 110.8 -> 111.3, p95 133.5 -> 134.7.
+  As the earlier rush ahead of the collect: the starvation is global, the wait only moves. Reverted.
+- Acquisition sample pre-filter (skip units with nothing in reach): acqcount.cjs: of 498k units sampled a step,
+  352k (70%) get a unit target, 29k a structure only, 118k neither: little to skip. Not tried.
+- k_slot_move writing a destination column only where the value differs from the fresh default: freed slots keep
+  their core columns (a birth writes them; free_zero leaves them), so it needs a per-column table; ~1-2 ms. Not tried.
+
+**Kept:** the work-site grid's sweep (worker.js) at 250k+ units visits WSW_SLOW times as many slices, each that
+much smaller, every cycle, instead of every WSW_SLOW-th cycle's slices whole (the same coverage; per step, not a
+period). Neutral in the measurements above (the worker-search lumps are the nav cycle's, not the sweep's).
+
+**What is left, by size:** (1) the movement kernels (k89 + k8 ~43 ms of the step's wall, ~425 ms CPU): the
+MOVEMENT_SIMD_PLAN.md redesign, starting at its prototype gate; (2) background CPU ~430 ms, of which the
+acquisition lane ~166, flow exact looks ~49 (40% of them dropped at their commit by a changed build), the nav chain
+~43 (a full atl_route / field rebuild every build while walls change), worker search scan ~41, visibility seeds
+~40; (3) the simulation thread's own JS (~34 ms: worker search commit / post 7.5, unit events' worker part, relayout's
+serial part 2.7, ~20 calls of 0.5-2 ms).
+
+**Tests (end of the round, this tree):** tests/run-all.cjs 285 / 285 (run-all/2026-11-14T07-35-15-774Z);
+multiplayer-chaos-determinism with CHAOS_HOST_HELPERS=4 (six maps, 2610 hashes each); deltatick-fairness (dk 4 speed
+0.975, dk 10 0.949; fight from contact 0.82 / 0.76); deltatick-multiplayer; traffic-pressure (plug, counter, wall). Nothing committed.
+
+## 2026-11-14 (afternoon) - per-unit rates at any step size: the move knob removed, the arrival overshoot fixed
+
+User rule (2026-11-14): each unit's own speed, damage and every other rate about 1.0x its dk 1 value at any dk,
+judged per unit; unblocked as close to 1.0 as possible, blocked slower; never faster (2x at dk 16 was rejected); no
+averaging knob that speeds some units up so a crowd's mean matches; dk-specific crowd values allowed but no extra
+passes or anything that costs tick time.
+
+**New test `tests/deltatick-per-unit.test.cjs`** (dk 1/2/4/8/16, maps arena and random): a lone norm and a lone fast
+walk across the map (rate over 96 base ticks short of arrival), then must stand still after arriving; a lone attacker
+in a fight with every unit's energy held at 100000 (damage dealt a base tick). Bounds: walk +-3%, damage +-5%.
+
+**Found: a lone walker never arrived at large steps.** At dk 16 a fast unit stepped from tile 340 over its destination
+tile 339 to 338 and back every step (x 145 -> 71 -> 148 -> ...). move_flow clamps a several-tick step to its steer's
+target point (the destination's centre), but traffic_yield (the second pass's retry for a flow walker "short of its
+step") topped the step up to its full spd x dk along its heading. A step short on purpose is not blocked. Fixed: the
+retry's remaining distance is capped at the distance to the steer's target point (mv.rs traffic_yield).
+
+**Removed: the density move knob** (SIM_DK_KNOBS / simDkKnob in data_static.js, trafficStepKnob and configF in
+sim_traffic.js, its call in sim_occupancy.js, traffic.rs move_comp, its block in mv.rs checked_traffic_q,
+tests/dk-calibrate.cjs). Scaled by local density, one unit's speed depended on the others around it. Capped at the
+unit's own step it could only lengthen steps short on purpose (target-clamped). Measured at dk 10 (dk-calibrate
+--one, knob 0 / table): arena norm 2.591 / 2.591, fast 4.075 / 4.097; random norm 2.490 / 2.499, fast 4.390 / 4.253,
+so no effect.
+
+**Per unit now (deltatick-per-unit, all pass):** walk ratio to dk 1, norm 0.988-1.000, fast 1.010-1.013 on both maps
+(the eighth-pixel quantization of a step: dk 1 rounds the fast unit's 4.8 px a tick to 4.75), no movement after
+arriving at any dk, damage 1.000 at every dk.
+
+**Crowds (deltatick-fairness, 40 norm + 10 fast, arena + random, ratio to dk 1):** speed 0.975 at dk 4, 0.945 at dk
+10, 0.898 at dk 16 (fast in the crowd 0.849); fight damage 0.856 / 0.827 / 0.740. Cause: a crowd unit's long step is
+cut at the first taken point along it. The one retry after the block's leaders moved frees one more row of a column,
+and the rows behind lose the rest of their step. Repeating the retry for walkers still short (3 rounds) was tried and
+reverted unmeasured: the user rejected extra passes (tick time). Open: a fix with no extra pass and no averaging, for
+example a per-unit carry of the step lost to blocking, or followers checked against a moving leader's wanted position
+(MOVEMENT_SIMD_PLAN.md mover table).
+
+Tests: the default deltatick-fairness (dk 1/4/10) passes at the +-7% bound; at dk 16 the crowd speed is 0.898.
+
+**Later the same afternoon (user: crowds and fights at about 1.0 too, judged on averages over time at realistic scale; no
+extra passes, no costly algorithms; measure at ~200k units, dk above 1 only happens under load):**
+
+- **Movement carry (kept):** unit.mvCar (u8, 255ths of a full step, SIM_MOVE_COLUMNS, mv word 37): what a flow
+  step leaves unused at its steer's target point (a look's end, not its destination) is added to its next flow
+  step (mv.rs move_flow). Crowd probe (40 norm + 10 fast, random map, per-step distance / full step): dk 1 norm 0.995
+  fast 0.934; dk 16 before 0.956 / 0.865 (fast lost 0.106 at steer targets, only 0.029 to blocking), after 0.999 /
+  0.970. Lone units unchanged (deltatick-per-unit passes).
+- **Extra retry rounds for walkers still short (tried, reverted unmeasured):** the user rejected extra passes.
+- **Fire: rounded-up cooldown at dk > 1 (kept):** at one base tick a step a shot resets the timer to the cooldown, so
+  the period is ceil(cooldown) and at most one shot a tick; the carry's shot count used the raw cooldown.
+- **Fire: shots limited to what the target needs, the rest banked in the timer (tried, reverted):** no effect
+  (max research dk 4 1.458x -> 1.466x, low research dk 16 0.439x -> 0.429x).
+- **Scale tools:** tests/deltatick-scene-fairness.cjs (a scene at dk 1 and larger steps from the same state; per-type
+  progress of walkers to their destinations; gross damage taken from the shrine count, by source; ORDER=move);
+  tests/test-runs/dk-scene-fairness/fightstate.cjs (fighters by brain mode, shots, walkers with an enemy in vision);
+  chaos-spikes.bench.cjs --research=max; scenes tests/scenes/checker-200k-r0.gz / checker-200k-rmax.gz (the checkerboard
+  chaos, 200k units, --map=512 --structures=20000, low and max research). mixed-200k.gz is unusable for fights: its
+  units restore with energy 1e9.
+- **Measured (gross damage a base tick against dk 1, 480 base ticks, dk 4 / 8 / 16):** low research 0.889 / 0.631 /
+  0.429 (unit attacks on units 0.88 -> 0.41, on structures 0.84 -> 0.24); max research 1.458 / 1.490 / 1.141 (unit
+  attacks 1.47 at dk 4). Statuses 1.2-1.4x (0.6% / 2.5% of the damage).
+- **Cause (low research):** shots a base tick per fighter are the same at the start (0.027 / 0.028), but engagement is
+  slower: walkers with an enemy within vision 5% at dk 1 against 31% at dk 16, waiting for the brain (CM_WAIT) 5% against
+  14%. Acquisition runs every 4 base ticks at dk 1 (post phase 2, commit phase 0), once a step at large dk: decisions a
+  step old and a step late. Max research engages faster at dk 4 (in range 62% against 47%), cause not found yet.
+- **Open:** acquisition reaction time at large steps (compensation or an earlier commit), the max-research
+  overshoot, workers / production / research queues / statuses with the same tools, longer windows (2400 base ticks).
+
+**Evening (the same goal for everything tick-dependent; user: pick the cheapest fix that meets it, carry on without asking):**
+
+- **Longer windows, the economy too:** tests/deltatick-scene-fairness.cjs now also reports births (barrack.js _spawnBirths),
+  buildings completed, research levels gained, the workers' deposits (worker.js _wai) and the unit attacks per 240-tick
+  interval. checker-200k, 1920 base ticks, dk 16 against dk 1: damage low research 0.30x, max research 1.45x (dk 4: 0.77x /
+  1.28x); births 0.53x; collector deposits 0.49x / 0.51x; A* deposits 0.50x / 0.56x; research deposits and levels
+  0.97-1.0x. Steady, not a lag at the start (the interval ratios stay down).
+- **Workers (r0, dk 16):** barrack payment is builder deliveries, so births follow the worker trips. The trace tools
+  (tests/test-runs/dk-scene-fairness/wtrace.cjs, zerowalk.cjs, fightstate.cjs workerWalkSpeed / workerLoss) show the
+  walking workers at 0.57x their stat speed (0.93x at dk 1). 20% of their steps are whole steps without moving (0.6%
+  at dk 1), blocked by their own walking workers ahead (lines to mines and drops: a follower met before its leader
+  is cut at the leader's old place for the step) or by parked workers (a parked blocker answers a push the next step).
+- **Kept:**
+  - mv.rs move_flow: a worker's leftover cooldown ticks of the last step (unit.wtcL, bound in the movement kernel at
+    word 38) walked too. Its arriving step's leftover goes to unit.wtcL, off its next cooldown (k_status). About +2%.
+  - wai.rs ai(): at dk > 1 a worker that stands (mvOn 0) with its path unfinished is not held to the every-128-ticks
+    check. A long step ending in the destination's tile left the path unfinished, and it stood up to 128 ticks at
+    the mine or the drop before finish_approach. Collector deposits 0.453x -> 0.493x (960 ticks).
+- **Tried and reverted:** carrying a flow walker's step lost to blocking (unit.mvCar from the occupancy stage, taken off by
+  the retry). Worker walking speed 0.57x -> 0.65x, but deposits did not move (0.475x). Its sums overpaid slightly (one
+  unit averaged 1.012x its stat in the plug), and it broke traffic-pressure's plug response. The idea needs the
+  carry measured from the real displacement, not the stage's own sums.
+- **Also turning off the periodic worker check at dk > 1** (EV_CHECK every step): no change in the whole-step stops.
+- **traffic-pressure / crowd-traffic.bench:** the speed check is each unit's average over the run (maxSpeedRatio; a step
+  may carry an earlier one's loss), with the largest single step reported as maxStepRatio. All three scenarios pass.
+- **deltatick-per-unit and deltatick-multiplayer pass.**
+- **Open, by size:** fights (acquisition once a step against every 4 base ticks; low research slow, max research fast);
+  worker lines (followers and parked blockers cost a step, not a tick); the r0/rmax fight asymmetry.
+
+## 2026-11-15 - step-size fairness at scale: what one base tick a step does several times, done several times a step
+
+Goal as before (user 2026-11-14): every tick-dependent rate at ~1.0x of dk 1 on average at ~200k units, low and max
+research, cheapest fix, no extra passes. Measured with tests/deltatick-scene-fairness.cjs (checker-200k-r0 / -rmax, 960
+base ticks, dk 16 against dk 1). New probes in tests/test-runs/dk-scene-fairness/: overkill.cjs (meant vs landed unit
+damage, kills, distinct targets, extra attack entries), wstate.cjs (worker time by state and walk speed, by type),
+zeroq.cjs (walking workers that did not move, by what stands ahead), structatk.cjs (attacks on structures), cmp.cjs
+(two saved runs compared).
+
+**Found: the same cap in several places.** Whatever one base tick a step does once per cooldown or per arrival, a step of
+16 base ticks did at most once: one target a shooter a step, one research deposit a researcher a step, one unit a barrack
+a step. Fixed each by doing it as often as the step's base ticks allow, from the carry the unit already has.
+
+- **Research deposits (wai.rs cd_batch, research_deposit):** a researcher standing at its building deposits every
+  cooldown (~8 base ticks); the worker kernel woke it once a step. Now a deposit and then one every cooldown of the base
+  ticks it stood ready before the step's end (unit.wtcL, now bound in the worker kernel at [157]), at most what the task
+  needs; the cooldown past the last. Research deposits a base tick at dk 16: 29.9 -> 58.9 (dk 1 55.9); research levels
+  0.79x -> 0.95x.
+- **Births (wai.rs queue_due, spr.rs k_spawn_shift, wsw.rs):** production is payment driven: a barrack spawns its queue's
+  front once paid (k_spawn_prod), the next front from nothing. A healer's payment was capped at the front's price, so at
+  dk 16 every payment of the step after the first filled front was refused (the healer kept its gold and made the trip
+  again) and the barrack made one unit a step. At dk > 1 the queue now takes payments up to its whole count (its units
+  cost the same) and the shift carries what was paid past the front to the next one: the fronts one base tick a step
+  would have shifted to meanwhile. dk 1 keeps the front-only rule (made at all step sizes, dk 1's own births rose 36% and
+  its fighters alive 18k -> 58k in a 320-tick window: a balance change, reverted for dk 1). The healers' search flag
+  (wsw.rs, P[16] = simDk) and trip size follow. UI: spawnQueueFront shows the front's share only. Births dk 16 / dk 1
+  0.45x -> 0.97x (r0), 0.88x (rmax). At dk 1 the busiest barrack makes one unit in ~29 base ticks, so one a step is
+  enough at dk 16 once payments are not refused.
+- **Unit attacks (mv.rs attack_unit, near_enemy, retarget; k.rs k_hits, looks.rs):** in this scene most damage is
+  overkill even at dk 1 (7% of the damage meant lands; 52% of firings at targets that die that tick), so damage follows
+  kills, and kills follow how soon a shooter has a new target. At dk 16: (a) a shooter whose own shots kill its target in
+  the step goes on, as dk 1 would at its next acquisition commit tick, to the nearest enemy in its reach (the brain's
+  area judgement: its window's areas, with a range of a step or more their neighbours; the unit index's entries of the
+  tiles around it), its shots listed per entry (mv.hitt bits 24-30; k_hits and k_hit_looks mask the slot); (b) a
+  standing shooter whose target fell (CM_WAIT or mode 5) takes the nearest enemy in reach itself instead of waiting a
+  step for the brain; (c) a chaser that comes in reach (in_area_range, two area steps at most) stops at the first base
+  tick in reach (halving along its step) and fires from the base tick the brain's word would have come (the snapshot
+  after it, + 2); chasers at dk > 1 go through move_combat, not combat4. Small fights (deltatick-fairness): damage dk 4
+  0.82 -> 0.95, dk 10 0.79 -> 0.90.
+- **Attack carry (k.rs k_status, mv.rs fire):** unit.atkL was set only on the step a timer ran out and never cleared
+  (the unit is not visited once its timer is out): a later attack used a stale count. Now the step after it ran out the
+  carry is the whole step (ready since before it), and fire caps it at the step's base ticks; dk 1 drops any carry.
+- **Swaps with parked flyers (mv.rs traffic_swap walls):** the swap checked the partner's way back against its
+  navigation profile column, which a parked unit keeps from its last walk or never set (0, ground): two flying collectors
+  were checked against ground walls and never swapped across a structure's tile (24k of 33k candidate swaps a step
+  refused there). The partner's walls follow its layer now. Collector deposits at dk 1 +54% (38.9 -> 60.1 a base tick),
+  dk 16 / dk 1 0.49x -> 0.62x.
+- **Swap continuation (mv.rs checked_traffic_q, dk > 1):** a swap ended the mover's step at its partner's place; the
+  step now goes on from there along its heading (up to its length from where it stood; another idle friend in the way
+  swapped with again, four at most). Worker walk speed dk 16 0.69 -> 0.76 (dk 1 1.06, unchanged).
+- **Occupancy order by distance to destination (mv.rs occ_gather): tried, reverted.** No measurable effect, and two
+  armies attack-moving to the same point stalled short of each other (tests/scene-orders.test.cjs).
+
+Now (dk 16 / dk 1, 960 base ticks): r0 births 0.97x, research 0.95x, research deposits 0.98x, collector deposits 0.62x,
+A* 0.71x, gross damage 0.48x (fighters alive at the start lose energy at 0.98-1.05x by type; the gap is newborns and
+structures); rmax births 0.88x, research 0.95x, collectors 0.63x / 0.75x, gross damage 1.74x (0.77x in the first 240
+ticks, then 2.6-3x: half the kills, so 3.2x the units in range, each firing at 0.88x). Tests: deltatick-per-unit,
+traffic-pressure (plug, counter, wall), deltatick-multiplayer and deltatick-fairness pass.
+
+**Later the same day (corrections to the above, kept):**
+
+- **Births bank, trip size:** with the whole queue taking payments a healer's trip was sized to the whole queue's need, so
+  one trip paid several units: births 1.32x at dk 4 (2.2 births a payment against 0.71 at dk 1). No payment is ever
+  refused at dk 1 or 4 (tests/test-runs/dk-scene-fairness/qpaid.cjs), so the bank's
+  effect is all in targeting and trip size. A trip now carries what one front still needs (heal_trip_cost: the front past
+  the fronts paid already), as at dk 1. Bank depth: the whole queue at dk > 1 (two fronts only gave dk 4 1.20x, dk 16
+  0.66x). Births dk 4 / dk 1 1.00x (r0 and rmax); at dk 16 0.51x now (the 0.97x above was oversized trips
+  making up for slow walking).
+- **Research batch period:** one base tick a step deposits every cooldown + 1 (parked till its cooldown is out, it wakes
+  that tick and acts at the next); cd_batch now uses that period (at exactly the cooldown research deposits were 1.12x at
+  dk 16). dk 16 1.01x; dk 4 still reads 1.10x with the batch inactive there (research levels 1.000x).
+- **Attack carry, untimed units:** a unit whose timer has been out for more than a step is not visited by k_status
+  (tmOn 0), so its carry stayed 0 and its first attack had one shot: fire and attack_unit read tmOn 0 as ready the whole
+  step. (No measurable change in the scene: those one-shot attacks are kills.)
+- **near_enemy as rings:** the brain counts a target in range by area steps (areas ~5 tiles across), the 3x3 / 5x5 tile
+  window found few of them; now rings of tiles out to 3 (range 0) or 8 (a step or more), stopping once a ring's nearest
+  point is past the best found. Extra targets a base tick 16 -> 38.
+- **first_contact (mv.rs, dk > 1):** an idle or attack-moving armed unit with no instruction and another player's unit in
+  the owner mask around it takes the nearest enemy in reach itself (hold and fire from the base tick the brain's word
+  would have come). No measurable effect on the scene's totals.
+- **Not measurable this way:** dbgc counters above ~100 and some low ids collide with other words of the argument block
+  (occ.rs writes its diag at the same base; counts came out larger than their own preconditions): use 56-61 / 64-79 only
+  after checking, or JS-side probes.
+
+**Per step size now (checker-200k, 960 base ticks, against dk 1):**
+
+| | dk 4 r0 | dk 4 rmax | dk 16 r0 | dk 16 rmax |
+|---|---|---|---|---|
+| births | 1.00 | 1.02 | 0.51 | 0.52 |
+| research levels | 1.00 | 1.00 | 0.96 | 0.97 |
+| research deposits | 1.10 | 1.11 | 1.01 | 1.01 |
+| collector deposits | 0.99 | 0.97 | 0.62 | 0.63 |
+| A* deposits | 0.98 | 1.00 | 0.71 | 0.75 |
+| gross damage | 0.84 | 1.41 | 0.40 | 1.76 |
+| net energy lost, fighters by type | 1.00-1.08 | 0.98-1.0 | 0.99-1.05 | 0.88-0.91 |
+
+At dk 4 the economy matches. At dk 16 births follow healer trips and the collectors their trips, both walk-limited:
+healers walk 0.67-0.77x their dk 1 pace in their trip states (MANUAL_MOVE 0.81x), collectors ~0.64x. The occupancy
+clips 64% of attempted moves at dk 16 against 41% at dk 1 (occupancyStats: attempted 126k / blocked-or-clipped 80k a
+step): a long step is checked along its whole path against units that would have moved out of its way during it
+(crossing streams, units leaving). That needs the resolve itself changed (for example sweeping only standing units and
+checking movers at the end point), not a value. Step time: no measurable cost (12 steps at dk 16 from the same state:
+mean 100.7 / 106.2 ms against the previous session's 104.1 / 110.1 ms).
+
+**Open, by size:** dk 16 walking in worker crowds (births, collectors); fights: r0 dk 16 0.40x gross (units alive at the
+start lose energy at ~1.0x; the gap is newborns and structures, unit attacks on structures 0.39-0.49x), rmax 1.4-1.8x
+(half the kills, so more units in range, each at ~0.9x the fire rate); research deposits 1.10x at dk 4.
+
+## 2026-11-15 (later) - long steps in worker crowds: the losses were arrivals and cooldown steps, not the resolve
+
+User: rework the occupancy resolve so long steps are not cut by units that move away. Measured first what limits them.
+
+- **Extra resolve rounds (experiment only, not kept):** three more second-pass retries for flow walkers at dk 16 moved
+  healers 0.73 -> 0.76x their stat speed, collectors 0.76 -> 0.78x: resolve order (followers met before their leaders)
+  is a small part. Neither is ordering by distance to the destination (reverted earlier: scene-orders).
+- **Lone units match** (tests/deltatick-per-unit.test.cjs `--types=`, new option): collector 2.00 / 2.00 px a base
+  tick at dk 1 / 16, healer 1.88 / 1.90. (In the scene's crowds collectors move 1.18x their stat at dk 1: pushes.)
+- **Step by step (tests/test-runs/dk-scene-fairness/htrace.cjs, htl.cjs, htl2.cjs):** the largest share of a walking
+  healer's steps at dk 16 (21%) were steps in its destination tile: at dk 1 a walker stops the base tick after it
+  reaches its way's end and its AI acts then; at dk 16 the step that got there left it walking (mvOn 1), so it stood the
+  next step whole before its turn stopped it and its AI ran. Each leg of a trip cost two steps: a healer's pay / walk /
+  pick up / walk cycle took 64 base ticks at dk 16 against ~35 at dk 1.
+
+**Kept:**
+- **Arrival in the step (mv.rs epi_slot):** at dk > 1 a walking worker (flow walker) whose step reached its
+  destination's point with base ticks to spare (its arrival carry, unit.wtcL, set) stands at the epilogue (after the
+  occupancy fixed its place) and gets an event (EV_CHECK): its AI runs after this step. Only on reaching the point,
+  not on coming into the tile: dk 1 walks on to the point before its AI acts (stopping at the tile: collectors 1.25x at
+  dk 4).
+- **The step it still waits (mv.rs move_flow, tl == dest):** a worker stopped there a step late gets that step on its
+  transfer cooldown's carry (wtcL, at most 2 dk - 1), as its arriving step's rest.
+- **AI actions in place (wai.rs ai):** at dk > 1 a worker whose cooldown is covered by the base ticks it stood ready
+  (wtcL >= cooldown + 1) and whose way is done acts again in the same step (the event's second AI call, or the repeat
+  loop, AI_REPEAT 8): a healer in reach of both its spawner and its queue paid once a step.
+- **Look continuation (mv.rs move_flow, dk > 1):** a step that reaches its look's end with step to spare goes on along
+  the look made there (up to CONT_LOOKS 4 more, the straight way from where it stood clear of walls, never past the
+  step's length), then re-steers next step. No measurable effect in this scene (most short steps were the arrivals);
+  kept for corners on long ways.
+- **Swaps on blocked fronts at dk > 1** stay at progress < 25% (75% tried: collector deposits +15% but no change for
+  healers; not kept).
+
+**Tried, reverted:** healers choosing a queue by its front only (dk 1's rule) while the bank takes payments: births
+dk 4 0.83x, dk 16 0.58x (healers idled); the whole-queue rule for both stays.
+
+**Result (checker-200k, 960 base ticks, against dk 1):** healers at dk 16 pay 148 times a base tick against 159 and walk
+0.95x their stat (was 0.74x).
+
+| | dk 4 r0 | dk 4 rmax | dk 16 r0 | dk 16 rmax |
+|---|---|---|---|---|
+| births | 1.05 | 1.06 | 0.73 | 0.74 |
+| research levels | 0.99 | 1.00 | 0.95 | 0.97 |
+| research deposits | 1.13 | 1.10 | 0.99 | 0.98 |
+| collector deposits | 1.13 | 1.12 | 0.89 | 0.90 |
+| A* deposits | 1.09 | 1.10 | 0.94 | 0.99 |
+
+(dk 16 before this round: births 0.51, collectors 0.62, A* 0.71.)
+
+**Open:** births at dk 16 0.73x with payments at 0.93x: fewer barracks complete a unit (6.7k against 8.5k in 320 base
+ticks), 1.78 payments a unit against 1.41; cause not found (no payment refused, no barrack at one unit a step). dk 4
+runs 5-13% fast on deposits (also before this round: 1.09x collectors without the arrival changes). Full suite (tests/run-all.cjs): 286 / 286 pass. Fights unchanged
+(r0 dk 16 0.43x gross, rmax 1.4-1.8x).
+
+## 2026-11-15 (last) - dk 4 is the target; no searches, no spreading, no hidden carries
+
+User: the real game runs dk 3-4 up to ~1M units; optimize dk 4 against dk 1 (1.0 +- 0.1, closer if free), dk 16 only
+has to work. dk 1 behaviour and responsiveness stay as they are; dk 4 matches dk 1, not the other way. No tick-time
+cost (a slower step means a higher dk, which costs far more accuracy), no searching in the tick path, no damage
+spreading of normal or targeted attacks/heals (area effects spread as designed), no hidden mechanics, memory flat.
+
+**Removed (searches / spreading / carries, mv.rs, k.rs, ord.rs, looks.rs, unit.js):** near_enemy, retarget,
+first_contact, the in-step chase and arrival-in-reach code, the dk > 1 chaser exclusion in combat4, the move_combat
+dk > 1 wait/retarget changes (dk 1's code path again at every dk), multi-target hit lists (ATK_TARGETS / slot mask in
+looks), structure-hit redirect and refund (k_struct_hits), the shot carry (timer refund in k_status). attack_unit is
+fire + one hit record again. Look continuation (CONT_LOOKS) removed: no measurable effect and one more loop.
+
+At dk <= 4 the brain decides every 4 base ticks (SIM_ACQUIRE_TICKS) at every dk, so a dk 4 step is one decision like
+dk 1's four base ticks; the step's volley (fire(): 1 + floor(ready ticks / cooldown) shots) stands for the shots dk 1
+fires over those ticks. A carry of shots past a target's death overcompensated at dk 4 (it pays for dk 1's wait for
+the next brain commit, which dk 1 also has).
+
+**Fixed:**
+- **Statuses per shot (k.rs UHit::melee, ord.rs k_struct_hits):** fire/poison/ice tick damage came from the step's
+  summed damage (shot x volley), so a dk 4 volley set 4x a dk 1 status. Now from one shot's damage (row stat 5), the
+  hit's damage stays shot x volley.
+- **Effective-level refresh gate (things_utils.js recalculateUnitEffectiveLevel):** at dk > 1 the phase was taken from
+  the base tick, which only hit phases that are multiples of dk: 3 of 4 strided shares were never refreshed at dk 4.
+  The phase is now the step count, so every share is visited.
+
+**Kept from the previous rounds (free at dk 4):** arrival stop (epi_slot) and its credit, swap continuation along the
+heading, flyer swap walls by layer, research deposit batches (cd_batch), queue payments sized by queue length
+(queue_due) with the front's overpay carried (k_spawn_shift). Step time at dk 4, 1M chaos scene, 38 steps from the
+same restored state, two runs each: current 152.6 / 149.3 ms mean (p95 208 / 209, max 308 / 284); swap continuation
+off 153.7 / 155.4; arrival stop off 155.2 / 148.3: noise.
+
+**dk 4 against dk 1 (checker-200k, 960 base ticks):** r0: unit hits 0.85, structure hits 0.85, gross 0.85, births
+1.05, research deposits 1.13, collectors 1.12, A* 1.09. rmax: unit hits 1.38, gross 1.37, births 1.06, research
+deposits 1.10, collectors 1.12, A* 1.10. Net energy lost by type ~1.0.
+
+**Then:**
+- **Effective levels at dk 1's rate (things_utils.js):** dk shares a step (stride interval / dk), each unit refreshed
+  every interval base ticks as at dk 1. The same share a step left levels dk times staler: rmax fights 1.37x -> 0.89x,
+  research deposits 1.10-1.13x -> 0.99x. Step time, dk 4, 1M chaos scene, 38 steps x 2 runs: mean 161.6 / 164.5 ms
+  against 158.3 / 170.1 (noise); p95 256 / 254 against 221 / 234 (2 of 38 samples; watch).
+- **A deposit's go-on tick (wai.rs heavy_tick):** at dk 1 a collector (A*, salvager) goes on right after a deposit
+  only when that tick is its own heavy tick (one in WORKER_AI_TICK_DELAY 3), else it waits out the deposit's cooldown
+  parked (2.6% of a collector's time). The step's test (crosses: any of its base ticks) is true every step at dk >= 3,
+  so at dk 4 every deposit went on at once: return legs 42 against 61 base ticks, deposits 1.12x. Now that decision
+  takes the AI's own base tick (the same as crosses at dk 1): collectors 0.97x, A* 0.91-0.93x.
+- **Tried, not kept:** dk 1's front-only queue payments up to dk 4 (queue_due at dk > 4 only): births 0.88x, fights
+  0.80x (fewer units): the whole-queue rule stays at every dk > 1 (births 1.09x).
+
+**Fights at dk 4 (tests/test-runs/dk-scene-fairness/commitdead.cjs):** the shortfall is decision latency, not fire
+rate. dk 4 fires 1.37x dk 1's shots but 70% of them at targets that fall that step (50% at dk 1). At the brain's
+commit 44% of its unit targets fell after the snapshot (6.7% at dk 1), the fallback saves 41% of those (61%): the
+snapshot is one step (4 base ticks) old at dk 4 against 2 at dk 1 (posted at phase 2, committed at 0). No live
+target is at hand at the commit (the scan's answer is the same target or fell too; the units' current targets
+fell): only a later snapshot (tick time: the chain needs the step) or a different targeting rule would close it.
+
+**dk 4 against dk 1 now (checker-200k, 960 base ticks):**
+
+| | r0 | rmax |
+|---|---|---|
+| gross damage | 0.88 | 0.89 |
+| unit hits | 0.88 | 0.89 |
+| births | 1.09 | 1.09 |
+| research levels / deposits | 1.00 / 0.99 | 1.00 / 1.00 |
+| collector deposits | 0.97 | 0.97 |
+| A* deposits | 0.91 | 0.93 |
+
+**Open:** fights 0.88-0.89 (decision latency above), births 1.09.
