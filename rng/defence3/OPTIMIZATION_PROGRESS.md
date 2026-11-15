@@ -8891,4 +8891,25 @@ fell): only a later snapshot (tick time: the chain needs the step) or a differen
 | collector deposits | 0.97 | 0.97 |
 | A* deposits | 0.91 | 0.93 |
 
-**Open:** fights 0.88-0.89 (decision latency above), births 1.09.
+**Open:** fights 0.88-0.89, births 1.09.
+
+**Then: dk 4 fight targeting tried, none kept (2026-11-15, evening).** Per-change dk 4 / dk 1 on checker-200k (960 base
+ticks), gross damage r0 / rmax (was 0.88 / 0.89; one run each, a changed battle moves these by about +-1.5%):
+- **Doomed marks** (k_acq_snap summed each attacker's committed step fire into unit.hAcc, a k_acq_doom pass marked
+  targets it fells, the scan ranked them last): 0.893 / 0.885. ~170-330 marks a step; they covered 67% of the targets
+  that fell, but the scan's 4-sample rarely held a doomed unit anyway. A foreground dispatch and atomics for nothing.
+- **Plus the areas beside the target area** as the scan's fallback when that area held only the current target
+  (P[40], dk > 1): fallback saved 43% -> 57% of fallen targets, lost instructions -35% (12.2k -> 7.9k over 64 base
+  ticks), damage 0.894 / 0.904.
+- **Brain judging a chaser's range at its predicted commit position** (needed live statRow, not deterministic; test
+  only): 0.895 / 0.920.
+- **Chase sub-steps** (dk 1's per-tick step with wall slides, dk times, instead of one base tick's step when the
+  dk-step segment hits a wall): 0.881 / 0.900.
+
+What the probes say (tests/test-runs/dk-scene-fairness/commitdead3.cjs, fightstates.cjs): 87% of fallen brain targets
+are kept targets (the unit's own, killed in the snapshot's step); 63% of the lost ones had no scan answer at all (the
+nearest enemy area held only that target). Overkill is the same at both step sizes (applied / dealt 1.61 dk 1, 1.58
+dk 4): dk 4 fires less, not wastes more. Only ~10-14% of fighters are engaged at any time; at the end dk 4 has 2-19%
+more fighters of every combat type (fewer died). Cutting lost instructions by a third moved damage ~1%: targeting
+latency is not what bounds the fights. Not found yet: what does (contact / approach rate in crowds is the next guess).
+
