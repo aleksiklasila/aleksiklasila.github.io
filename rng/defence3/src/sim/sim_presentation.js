@@ -16,9 +16,40 @@ let _simPresentationGeneration = 0;
 const SIM_PRESENT_SNAPS = 3;
 let _simPresentSnaps = null;
 function simPresentTickBegin() { }
+// The tick's marks and its snapshot's copy run on the helpers as one background chain (lane SIM_LANE_GROW, ranked
+// right after the next tick's index (sim_parallel.js SIM_PAR_BG_ORDER): on SIM_LANE_TICK, ahead of it, the next tick
+// waited for its index 0.6 ms more; SIM_LANE_TICK only while a heap growth still runs there) while this thread hashes the state and makes the result; taken
+// once done, between the ticks (simPresentTickSoon), and at the latest at the next tick's start or the worker's next
+// message (simPresentTickCollect, sim_worker.js), where the snapshot is published and the reader gets the tick's
+// message (simPresentationPublish holds it until then). They read state nothing changes before then (the hash and the
+// result only read; the metadata pump waits for them) and write the presentation's own columns (pvAt, pvS, pvOD: no
+// hash or kernel of the simulation reads them) and the snapshot. (Two foreground jobs, ~1.5 ms of a rendered
+// checker-200k step, 2026-11-16.)
+const _simPresentJob = { posted: false, lane: 0, q: null, Q: null, i: 0, n: 0, tick: 0, msg: null, timer: 0 };
+// (After the step: published as soon as the helpers are done, between the ticks; this thread waits for nothing.)
+function simPresentTickSoon() { const J = _simPresentJob; if (J.posted && !J.timer) J.timer = setTimeout(_simPresentTickTry, 0); }
+function _simPresentTickTry() {
+    const J = _simPresentJob;
+    J.timer = 0;
+    if (!J.posted) return;
+    if (!simParallelBackgroundDone(J.lane)) { J.timer = setTimeout(_simPresentTickTry, 0); return; }
+    simPresentTickCollect();
+}
+function simPresentTickCollect() {
+    const J = _simPresentJob;
+    if (!J.posted) return;
+    J.posted = false;
+    simParallelBackgroundWait(J.lane);
+    const q = J.q, m = J.msg;
+    J.q = null; J.msg = null;
+    if (q) { q.head[1] = J.n; Atomics.store(q.head, 0, J.tick); Atomics.store(J.Q.ctl, 0, J.i); J.Q.publishedTick = J.tick; }
+    const p = _simPresentation;
+    if (m && p) p.worker.postMessage(m);
+}
 function simPresentTickEnd() {
     const p = _simPresentation, S = _simUnitState;
     if (!p || !S || typeof SharedArrayBuffer !== 'function') return;
+    simPresentTickCollect();
     const n = S.owners.length, cap = S.columns.x.length;
     let Q = _simPresentSnaps;
     if (!Q || Q.cap < cap || Q.worker !== p.worker) {
@@ -40,23 +71,31 @@ function simPresentTickEnd() {
         ctl[0] = -1; ctl[1] = 1;
         p.worker.postMessage({ type: 'snaps', ctl, cap, snaps: Q.snaps.map(q => ({ head: q.head, x: q.x, y: q.y, px: q.px, py: q.py })) });
     }
+    const L = simParallelBackgroundPending(SIM_LANE_GROW) && !simParallelBackgroundDone(SIM_LANE_GROW) ? SIM_LANE_TICK : SIM_LANE_GROW;
+    const tick = typeof currentTick === 'number' ? currentTick : 0, stages = [[0, 0], [0, 0]], J = _simPresentJob;
+    J.lane = L;
     // (Each slot's last visual change, for the reader's frames by changes:
     // every tick, before the reader may take this tick's snapshot.)
     if (typeof SIM_KERNEL_PV_MARKS === 'number' && S.columns.pvAt) {
         // (Small jobs: 65536 slots a job were four, and the helpers' share of them small: this thread did most of the ~2.7 ms.)
-        const P = _simParams, per = 8192;
-        P[0] = n; P[1] = per; P[2] = typeof currentTick === 'number' ? currentTick : 0; P[3] = GRID_W; P[4] = TILE;
-        simParallelRun(SIM_KERNEL_PV_MARKS, Math.ceil(Math.max(1, n) / per));
+        const P = simParallelStageParams(L, 0), per = 8192;
+        P.fill(0); P[0] = n; P[1] = per; P[2] = tick; P[3] = GRID_W; P[4] = TILE;
+        stages[0] = [SIM_KERNEL_PV_MARKS, Math.ceil(Math.max(1, n) / per)];
     }
-    if (Atomics.exchange(Q.ctl, 1, 0) !== 1) return;
-    const i = Q.next, q = Q.snaps[i], C = S.columns;
-    Q.next = (i + 1) % SIM_PRESENT_SNAPS;
-    Atomics.store(q.head, 0, -1);
-    if (typeof simParallelCopyHeap === 'function') simParallelCopyHeap([q.x.subarray(0, n), C.x.subarray(0, n), q.y.subarray(0, n), C.y.subarray(0, n), q.px.subarray(0, n), C.prevX.subarray(0, n), q.py.subarray(0, n), C.prevY.subarray(0, n)]);
-    else { q.x.set(C.x.subarray(0, n)); q.y.set(C.y.subarray(0, n)); q.px.set(C.prevX.subarray(0, n)); q.py.set(C.prevY.subarray(0, n)); }
-    q.head[1] = n;
-    Atomics.store(q.head, 0, typeof currentTick === 'number' ? currentTick : 0);
-    Atomics.store(Q.ctl, 0, i); Q.publishedTick = typeof currentTick === 'number' ? currentTick : 0;
+    J.q = null;
+    if (Atomics.exchange(Q.ctl, 1, 0) === 1) {
+        const i = Q.next, q = Q.snaps[i], C = S.columns;
+        Q.next = (i + 1) % SIM_PRESENT_SNAPS;
+        Atomics.store(q.head, 0, -1);
+        const pairs = [q.x.subarray(0, n), C.x.subarray(0, n), q.y.subarray(0, n), C.y.subarray(0, n), q.px.subarray(0, n), C.prevX.subarray(0, n), q.py.subarray(0, n), C.prevY.subarray(0, n)];
+        const st = typeof simParallelCopyStage === 'function' ? simParallelCopyStage(pairs, simParallelStageParams(L, 1), 2) : null;
+        if (st) stages[1] = st;
+        else for (let k = 0; k < pairs.length; k += 2) pairs[k].set(pairs[k + 1]);
+        J.q = q; J.Q = Q; J.i = i;
+    }
+    J.n = n; J.tick = tick; J.msg = null; J.posted = true;
+    // (Eager: without helpers made now, from the state as it is now.)
+    simParallelBackgroundChain(L, stages, true);
 }
 const SIM_PRESENT_MAGIC = 0x50524553;
 const SIM_PRESENT_COLUMNS = ['id','owner','x','y','prevX','prevY','vx','vy','energy','r','commandState',
@@ -414,11 +453,14 @@ function simPresentationPublish(tick) {
     const history = fog && typeof teamVisibilityHistory !== 'undefined' && teamVisibilityHistory;
     const rows = fog && typeof visibilityGridRawByPlayerCache !== 'undefined' ? visibilityGridRawByPlayerCache.get(localPlayerId) : null;
     const sight = rows && rows._flat && typeof SharedArrayBuffer === 'function' && rows._flat.buffer instanceof SharedArrayBuffer ? rows._flat : null;
-    p.worker.postMessage({type:'tick', epoch:p.epoch, tick, time:gameTime, rate:TICK_RATE,
+    const msg = {type:'tick', epoch:p.epoch, tick, time:gameTime, rate:TICK_RATE,
         player:localPlayerId, areaUnit:AREA_UNIT_TILE_EQUIVALENT, n:_simUnitState.owners.length,
         history: history && !!sight, fog: fog && !!sight, sight, gw: GRID_W, gh: GRID_H, tile: TILE,
         lightRange: VISIBILITY_LIGHT_NORMALIZATION_RANGE, rise: VISIBILITY_LIGHT_MAX_CHANGE_PER_SECOND, fall: VISIBILITY_FADE_MAX_CHANGE_PER_SECOND,
-        historyFloor: typeof HISTORY_LIGHT_FLOOR === 'number' ? HISTORY_LIGHT_FLOOR : .14});
+        historyFloor: typeof HISTORY_LIGHT_FLOOR === 'number' ? HISTORY_LIGHT_FLOOR : .14};
+    // (The tick's marks and snapshot still on the helpers: sent with them, simPresentTickCollect.)
+    if (_simPresentJob.posted) _simPresentJob.msg = msg;
+    else p.worker.postMessage(msg);
 }
 
 // The metadata table's first fill from the last frame this worker made
@@ -727,6 +769,8 @@ const SIM_PRESENT_PUMP_REST_MS = 250, SIM_PRESENT_PUMP_STARVE_MS = 50;
 function simPresentationPump() {
     const p = _simPresentation;
     if (!p) return;
+    // (The tick's marks still on the helpers: the metadata pass writes and reads them too, after them.)
+    if (_simPresentJob.posted) { simPresentTickSoon(); p.timer = setTimeout(simPresentationPump, 1); return; }
     const next = typeof _simStream !== 'undefined' && _simStream.length ? _simStream[0] : null;
     if (next && next.type === 'tick' && Number.isFinite(next.due)) {
         const wait = next.due - _simNowAbs();

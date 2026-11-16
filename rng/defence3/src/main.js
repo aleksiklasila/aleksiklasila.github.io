@@ -862,6 +862,8 @@ function _gameTickBody() {
     if (gameTime >= 3 && !_actionSanitizeWarm) actionSanitizeWarm();
     // The destination fields asked for so far (the orders'), for this tick.
     navFieldsFlush();
+    // (A build installed this tick: its profile's flow looks listed now, answered through the tick (unit.js flowLooksInstallPost).)
+    if (typeof navInstalledAt === 'number' && navInstalledAt === gameTime && typeof flowLooksInstallPost === 'function') flowLooksInstallPost();
     _resetPathfindPerfTick();
     _resetPathBudgetTrackingPerTick();
     _ensureUpKeepRateCacheSize();

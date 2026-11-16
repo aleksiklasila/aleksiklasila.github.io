@@ -3356,8 +3356,24 @@ function flowLooksPost() {
     const L0 = _flowLooks;
     L0.calls++;
     if (L0.posted) { if (L0.calls - 1 < L0.due) return; flowLooksCommit(); }
+    if (_simMoveRanTick !== gameTime) return;
+    _flowLooksList(0);
+}
+// A navigation build installed this tick (main.js, after the tick's fields): every look record of its profile names
+// the old build, so the next listing is a burst (~20-35k looks at checker-200k every 8 ticks, ~280 else), and listed
+// after the movement its answers had the rest of the tick only: the next movement waited for them (2026-11-16). Listed
+// here, from where the walkers stand as the tick starts, they have the whole tick: committed at the next movement as
+// before (due one movement on), the movement between taking O(1) answers as it did. (The last listing's job committed
+// first, when due by now; one not due yet keeps the lane: nothing here.) The same ticks on every peer.
+function flowLooksInstallPost() {
+    const L0 = _flowLooks;
+    if (L0.posted) { if (L0.calls < L0.due) return; flowLooksCommit(); }
+    if (_simMoveRanTick < 0) return;
+    _flowLooksList(1);
+}
+function _flowLooksList(ahead) {
     const S = _simUnitState;
-    if (!S || _simMoveRanTick !== gameTime || !_simMoveLookC || typeof SIM_KERNEL_FLOW_PENDING !== 'number' || !_simWasmX || typeof _simWasmX.mv_flow_pending !== 'function') return;
+    if (!S || !_simMoveLookC || typeof SIM_KERNEL_FLOW_PENDING !== 'number' || !_simWasmX || typeof _simWasmX.mv_flow_pending !== 'function') return;
     const n = S.owners.length;
     if (!n || !spatialBlockCols) return;
     const jobs = _flowLooksArrays(n), P = _simParams;
@@ -3370,7 +3386,7 @@ function flowLooksPost() {
     if (typeof _simTraceCur !== 'undefined' && _simTraceCur) _simTraceCur.ph.flowPend = (_simTraceCur.ph.flowPend || 0) + _flowLooks.pend;
     const Q = simParallelStageParams(SIM_LANE_FLOW, 0);
     Q.set(P);
-    _flowLooks.posted = true; _flowLooks.jobs = jobs; _flowLooks.due = _flowLooks.calls + Math.floor(_flowLooks.pend / SIM_FLOW_TICK_LOOKS);
+    _flowLooks.posted = true; _flowLooks.jobs = jobs; _flowLooks.due = _flowLooks.calls + ahead + Math.floor(_flowLooks.pend / SIM_FLOW_TICK_LOOKS);
     // (Eager: without helpers made now, not at a later wait, after the state they read changed.)
     // (The walls as at this post, for the looks: the lane is idle here, its last job committed.)
     simParallelBackgroundWait(SIM_LANE_FLOW); _flowWallSnap();

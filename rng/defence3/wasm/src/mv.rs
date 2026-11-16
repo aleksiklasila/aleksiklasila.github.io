@@ -5642,6 +5642,65 @@ unsafe fn flow_nav(m: &Mv, k: &FlowKey) -> (Nav, *const u8) {
         bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
     }, wl)
 }
+/// mv_flow_pending's first test: a walker whose look record is this tile's exact look as its key reads it (flow_key's
+/// tile, destination, kind, build version, block wall version, computed the same way), without the field checks.
+/// True only where the full test leaves it out (or flow_key gives no key).
+#[inline(always)]
+unsafe fn flow_record_holds(m: &Mv, s: usize, wver: i32, wbw: i32) -> bool {
+    if rd(m.on, s) != 1 || rd(m.dead, s) != 0 {
+        return true;
+    }
+    let (w, h) = (m.w, m.h);
+    let gx = floor(rd(m.x, s) * m.itile) as i32;
+    let gy = floor(rd(m.y, s) * m.itile) as i32;
+    if gx < 0 || gy < 0 || gx >= w || gy >= h {
+        return true;
+    }
+    let tl = gy * w + gx;
+    let dk = rd(m.dest, s);
+    if tl == dk || dk < 0 || dk >= w * h {
+        return true;
+    }
+    let r = m.nv.add(s * NV_STRIDE);
+    if *r.add(NV_D) != dk {
+        return false;
+    }
+    let np = rd(m.npr, s) as usize;
+    if np >= NAV_PROFILES {
+        return true;
+    }
+    let nv = m.nav.get_unchecked(np);
+    if nv.meta.is_null() {
+        return true;
+    }
+    let fid = rd(m.flow, s);
+    let kind = if fid == NAV_ATLAS_FID { 3 } else if fid >= 4194304 { 2 } else { 1 };
+    if *r.add(NV_G) != kind || *r.add(NV_V) != rd(nv.meta, 6) {
+        return false;
+    }
+    // (The two tests of mv_flow_pending, on these words: the record this tile's look (its walls the same, or a steer
+    // made on it held here), or a held steer of an open look with its far tile still ahead.)
+    let (cd, cn) = (rd(m.cd, s * SR), rd(m.cn, s * SR));
+    let steer = *r.add(NV_N1) >= 0 && cd == dk && cn != TGT_NONE;
+    if *r == tl {
+        let bi = ((gy >> 3) * wbw + (gx >> 3)) as usize;
+        let wv = if m.wblk9.is_null() { wver } else { rd(m.wblk9, bi) };
+        if *r.add(NV_W) == wv || (steer && rd(m.ctl, s * SR) == tl) {
+            return true;
+        }
+    }
+    if steer && (*r.add(NV_FO) & 1) != 0 {
+        let far = *r.add(NV_FO) >> 1;
+        let fx = irem_f(far, w);
+        let fy = idiv(far - fx, w);
+        let rx = irem_f(*r, w);
+        let made_near = *r >= 0 && (fx - rx).abs().max((fy - idiv(*r - rx, w)).abs()) < LOOK_CARRY_MIN;
+        if far != tl && (far == dk || made_near || (fx - gx).abs().max((fy - gy).abs()) >= LOOK_CARRY_MIN) {
+            return true;
+        }
+    }
+    false
+}
 #[inline(always)]
 unsafe fn flow_arrays(a: *const i32) -> (*mut i32, *mut i32, *mut i32) {
     (word(a, 480) as *mut i32, word(a, 481) as *mut i32, word(a, 482) as *mut i32)
@@ -5666,6 +5725,11 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
             let w = v128_andnot(i8x16_eq(v128_load(m.on.add(s) as *const v128), one), i8x16_ne(v128_load(m.dead.add(s) as *const v128), i8x16_splat(0)));
             if !v128_any_true(w) { s += 16; continue; }
         }
+        // (Its record this tile's exact look, by the key's cheap words alone (tile, destination, kind, build, block
+        // walls): not listed, as below; flow_key's field and wall checks only decide among walkers whose record
+        // misses. Whatever this skips is a walker the full test does not list either: a key flow_key would refuse
+        // is never listed.)
+        if flow_record_holds(&m, s, wver, wbw) { s += 1; continue; }
         let k = match flow_key(&m, s, wver, wbw) { Some(k) => { s += 1; k }, None => { s += 1; continue } };
         let s = s - 1;
         let r = m.nv.add(s * NV_STRIDE);

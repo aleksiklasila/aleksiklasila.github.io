@@ -256,6 +256,8 @@ let _simEpoch = 0;
 self.onmessage = (ev) => {
     let msg = ev.data || {};
     try {
+        // (The last tick's presentation chain, before anything here may change what it reads: sim_presentation.js.)
+        if (typeof simPresentTickCollect === 'function') simPresentTickCollect();
         if (msg.type === 'load') {
             let t0 = performance.now();
             // (The page's shared control block: [epoch, last tick run].)
@@ -503,7 +505,7 @@ function _simNetAdd(peer, dc) {
     const hello = () => { try { dc.send('{"t":"H"}'); } catch { } };
     dc.onopen = hello;
     dc.onclose = () => { if (_simNet.get(peer) === e) _simNet.delete(peer); };
-    dc.onmessage = ev => { try { _simNetMessage(peer, e, ev.data); } catch (err) { _simError('net', err); } };
+    dc.onmessage = ev => { try { if (typeof simPresentTickCollect === 'function') simPresentTickCollect(); _simNetMessage(peer, e, ev.data); } catch (err) { _simError('net', err); } };
     if (dc.readyState === 'open') hello();
 }
 // Every one of these peers has a worker listening on its channel.
@@ -707,7 +709,7 @@ function _simDeltaEmit(d, source) {
 const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
     'updateAllPlayerVisibility', 'towersTick', '_towerAcqKernels', 'projectilesAdvance', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
     'unitEventsRun', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
-    'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'snapRecordTickHash', '_simPostResult',
+    'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'simPresentTickCollect', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
     // (The worker search tier's parts.)
     '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent',
@@ -782,7 +784,8 @@ function _simTick(msg) {
     simDk = Math.max(1, Math.min(SIM_DK_MAX, msg.dk | 0 || 1));
     // A resync tick: every peer starts it without history caches.
     if (msg.flush) snapFlushHistoryCaches();
-    // (The presentation reader keeps off the state while it changes.)
+    // (The presentation reader keeps off the state while it changes; the last tick's presentation chain taken.)
+    if (typeof simPresentTickCollect === 'function') simPresentTickCollect();
     if (typeof simPresentTickBegin === 'function') simPresentTickBegin();
     let teams = msg.teams;
     let firstTeam = currentTick % teams.length;
@@ -803,12 +806,17 @@ function _simTick(msg) {
     _simTickLateMs = lateMs;
     if (_simMode !== 'authority') {
         _simPost({ type: 'ticked', tick, hash: computeLockstepStateHashFast(tick), ms: simMs });
+        if (typeof simPresentTickSoon === 'function') simPresentTickSoon();
         return;
     }
     // The rolling state hash, as every peer records it after a tick.
-    let hash = msg.hash && snapHashDue(tick) ? snapRecordTickHash(tick) : null;
-    let report = typeof simTickReportHook === 'function' ? simTickReportHook(tick) : null;
-    _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
+    // (The presentation's marks and snapshot run on the helpers meanwhile: published once done, between the ticks,
+    // simPresentTickSoon; taken at the next tick's start or message at the latest.)
+    try {
+        let hash = msg.hash && snapHashDue(tick) ? snapRecordTickHash(tick) : null;
+        let report = typeof simTickReportHook === 'function' ? simTickReportHook(tick) : null;
+        _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
+    } finally { if (typeof simPresentTickSoon === 'function') simPresentTickSoon(); }
 }
 
 // (The last tick's lateness against its deadline, reported with it.)

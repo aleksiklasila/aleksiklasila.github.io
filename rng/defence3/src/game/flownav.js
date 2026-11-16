@@ -1593,6 +1593,8 @@ function navPathTo(u, tx, ty) {
 // Stage identifiers retain their old values for saved pre-chain snapshots;
 // scheduling uses _NAV_STAGES and J.gap, not elapsed base ticks.
 const NAV_STEP_STAGE = 8, NAV_STEP_INSTALL = 12;
+// (The tick a build was last installed by the job (gameTime), -1 none.)
+let navInstalledAt = -1;
 const NAV_BUILD_TICKS = 13; // Conservative step limit used by diagnostics.
 let _navJob = null;
 // Per profile: tiles whose walls differ from those of its newest build (the
@@ -1724,6 +1726,8 @@ function _navJobStep(J, step) {
         _navJob = null;
         _navSlots.lastInstall = gameTime;
         _navNextInstall(J.next);
+        // (The flow looks of its profile listed this tick: main.js, unit.js flowLooksInstallPost.)
+        navInstalledAt = gameTime;
     }
 }
 // Snapshots: the walls of every installed build (but the air's: its walls

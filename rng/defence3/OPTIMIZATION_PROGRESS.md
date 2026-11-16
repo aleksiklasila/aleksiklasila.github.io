@@ -9118,3 +9118,79 @@ neighbours of earlier phases and before those of later ones, the same results as
 - Node (move-step-probe, 3 rounds alternating): 25.2 -> 24.8 ms, p95 30.8 -> 29.7 (neutral: no contention there).
 - **Rendered (edgeov deps, 4 rounds):** step mean 41.6 -> 41.0, p50 40.5 -> 39.6, p95 56.2 / 56.3, p99 64.3 / 63.8;
   k89 wall 16.2 -> 15.4 ms in every round (-5%), tail:89 0.16 -> 0.03 ms.
+
+## 2026-11-16 (later) - background-lane waits and the presentation's tick-end jobs (rendered checker-200k)
+
+Target (user): the long tail of 1-3 ms phases and the background-lane waits (p95 ~10 ms). Tools in
+tests/test-runs/lanes-20261116: cmp.cjs (A/B of edgeov outputs: step stats, w:<lane> waits mean/p95/max, phases that
+differ most), serial.cjs (a WPROF profile's simulation-thread time split serial / parallel, by tick phase; sample
+deltas capped at 1 ms: a sample after a blocked wait carries the whole wait), a named build at sim_named_bin.js
+(WASM32_OVERRIDE). Rendered A/B: wholesale-20261115/edgeov.sh, 3 rounds x 60 s, alternating, loadmon beside each (clean:
+Edge 8-13 cores, nothing else over 0.7). **This sitting ran ~10-25% slower than the morning's (base means 43-57 ms
+over the hours, drifting within a set): only within-set comparisons below.**
+
+**Where the waits were (deps-new runs, 4 x 60 s):** w:<lane> by lane, mean ms a step: index (6) 0.5-0.7, tick lane (0)
+0.55 every step, flow looks (13) 0.2-0.35, navigation build (1) 0.16-0.68. Of the steps with > 5 ms of waits: flow,
+index, navigation. Patterns:
+- **Index (6):** only when the step starts with no gap (bgAge:6 < 4 ms: the last step overran 50 ms); the chain then
+  has 8-10 stages unclaimed. Not its own spike: the knock-on of a slow step.
+- **Navigation build (1):** at tick % 8 = 2 (6), the build's collect two steps after its post found all three stages
+  unclaimed: LONG was last in SIM_PAR_BG_ORDER. Absent in the morning's base runs: the occupancy's fused job leaves no
+  barrier tails where helpers used to drain the low lanes.
+- **Flow looks (13):** at tick % 8 = 0: the ground build's install (every 8 ticks) changes the build version every look
+  record keys on, and ~35,650 looks are listed at once (other ticks ~280); their exact answers are ~200 ms of helper
+  CPU (flow_look_vals, Atl::exit 28%), due at the next movement: the sim thread waits ~2 ms and commits ~1.2 ms more.
+  These steps were ~4 ms longer than the others.
+- **Tick lane (0):** the worker brains' four small stages (workerBrainsCollect ~0.55 ms), all unclaimed at the wait.
+
+**Kept (exact: the state hash equal to HEAD's after 300 + 60 steps, move-step-probe checker-200k, 8 helpers):**
+- **LONG after NAV in SIM_PAR_BG_ORDER** (sim_parallel.js). w:1 0.28 -> 0.02 ms a step, navTick -0.26 (edgeov b1).
+- **mv_flow_pending's record test first (mv.rs flow_record_holds):** both of its skip tests (the record this tile's
+  look; a held steer of an open look) on the key's cheap words (tile, destination, kind, build, block walls) before
+  flow_key's field checks. kp:151 1.79 -> 1.53 ms rendered (Node 1.1 -> 1.0): the scan's cost is its column reads.
+- **The presentation's tick-end jobs off the step (sim_presentation.js simPresentTickEnd / simPresentTickCollect /
+  simPresentTickSoon; sim_worker.js):** the marks (k_pv_marks) and the position snapshot's copy were two foreground jobs
+  at the tick's end (~1.65 ms). Now one background chain (a third copy table, heap.copytab.bg3, kernel 193) posted
+  there, published once done between the ticks (a setTimeout poll), and taken at the latest at the next tick's start or
+  the worker's next message; the reader's tick message waits for it; the metadata pump (which writes pvAt too) waits
+  for it. They read state nothing changes in between and write presentation-only columns.
+  - Collected at the step's end (first version, edgeov b2): simPresentTickEnd -1.67, the collect +0.61, the index's
+    wait +0.37 (lane 0 ranks before IX): about -0.7 ms, inside the run noise (mean 48.2 / 48.7, p99 95.2 -> 90.8).
+  - Published between the ticks (edgeov b3, 3 rounds, better in each): mean 47.8 -> 44.9, p50 46.2 -> 44.5, p95 66.4
+    -> 62.4, p99 85.5 -> 71.8, steps > 60 ms 318 -> 208, fps 110 / 109.
+  - On SIM_LANE_GROW ranked right after the index (lane 0 only while a heap growth still runs; edgeov b4): w:6 1.35 ->
+    0.60, spatialIndexRebuild -0.76, mean 44.8 -> 44.2, p99 73.2 -> 69.4, steps > 60 ms 199 -> 172.
+
+- Tests (the kept set): flow-looks-commit, presentation-worker, presentation-delta, presentation-helpers,
+  shared-spatial-determinism, mover-table, movement-sleep, chaos-scenario-determinism, multiplayer-chaos-determinism
+  pass; browser-mp-gui-fuzz (2 Edge tabs, 304 controls): 0 desyncs of 199 compared, 0 errors, 0 slow.
+
+**Not kept:**
+- **The worker brains' chain as the routes job's local task** (this thread on the brains while the helpers take the
+  routes): w:0 0.72 -> 0.83, the routes job now carrying the wait (edgeov b1). Reverted. The four stages are tiny; the
+  cost is their transitions.
+
+**Flow-look bursts after a build install: listed at the install (kept).** Node (tests/test-runs/lanes-20261116/
+flowprobe.cjs, no helpers, a dbgc build for counters): every 8 ticks ~20k looks listed (~190 else), 18.8k made, 1.1k
+shared-table hits; by reason 13.4k carried open looks (103), 5.9k records of their own tile (102); the exact pass
+~31 ms on one thread (~1.5 us a look). Not levers: bigger exact chunks (FLOW_SPLIT 32 -> 4, warmer exit / step
+caches: 35.98 -> 35.78 ms, nothing); more ticks for a burst (longer O(1) answers: rejected); keeping looks across a
+build (a carry rewrites the record with the new build's version: an old route passing as current; and tried
+2026-11-14 without gain).
+- **Change (unit.js flowLooksInstallPost / _flowLooksList, flownav.js navInstalledAt, main.js after navFieldsFlush):**
+  on a tick that installed a build, the last listing's job is committed (when due) and the looks listed right then,
+  from where walkers stand as the tick starts, due one movement on: the next movement commits them as before (the
+  movement between approximates as it did). The answers have the whole tick instead of what follows the movement.
+  The next tick lists ~500 instead of ~170 (walkers that left a short look's tile).
+- Determinism and behaviour: flow-looks-commit (0 vs 3 helpers), shared-spatial-determinism, chaos-scenario-
+  determinism, multiplayer-chaos-determinism, movement-sleep pass; move-step-probe 8 helpers 80 steps: distance gain
+  -379.8 / -378.3, alive 192017 / 192119, walking 64140 / 63971 (the same), step p95 38.7 -> 36.1.
+- **Rendered (edgeov b5, 3 rounds):** mean 46.3 -> 45.3, p95 64.7 -> 63.7, steps > 60 ms 289 -> 229; w:13 0.32 ->
+  0.06 (max 29.6 -> 8.2), w:1 0.39 -> 0.17 (the burst no longer crowds the next ground build), all waits mean 2.40 ->
+  1.94, p95 10.1 -> 6.4, max 32.9 -> 22.4. By tick % 8: the burst's step 51.4 -> 46.6; the install's step (which now
+  lists) 44.9 -> 47.8.
+
+**Serial simulation-thread time (named rendered profile, prof1):** ~9 ms a step profiled, spread thin: k_uix_remove
+0.40 (unitRows' compaction of the id table, every step with deaths: serial, in place), k_spawn_select 0.23,
+k_spawn_births 0.20, k_wsw_set 0.20, k_struct_status 0.20, k_relayout_plan 0.18, simParallelZeroHeap 0.15, the
+pacing's timers ~0.26, postMessage ~0.4. No single item over 0.4 ms.
