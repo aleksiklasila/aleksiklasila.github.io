@@ -16,7 +16,8 @@ module.exports = function presentPm(ctx) {
     vm.runInContext(fs.readFileSync(path.join(dir, 'presentation_worker.js'), 'utf8'), w);
     vm.runInContext('pmInit(new WebAssembly.Memory({ initial: 1, maximum: 65536, shared: true }))', w);
     ctx.frameIdOrder = (F, count) => w.frameIdOrder(F, count);
-    ctx.buildRenderBuckets = (F, count, columns, rows, tile) => w.buildRenderBuckets(F, count, columns, rows, tile);
+    // (The buckets' records by slot first: a frame's ranges make them in the worker.)
+    ctx.buildRenderBuckets = (F, count, columns, rows, tile) => { w.frameBucketRecords(F, columns, rows, tile); return w.buildRenderBuckets(F, count, columns, rows, tile); };
     const pm = vm.runInContext('pm', w), frameBytes = vm.runInContext('simFrameBytes', w);
     return {
         // F's x, y, px, py, id and order (as they are) into a region of cap

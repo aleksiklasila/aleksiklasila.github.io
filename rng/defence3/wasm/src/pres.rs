@@ -49,44 +49,39 @@ pub unsafe extern "C" fn k_pres_order(a: u32, _: i32) {
 /// entries k0..k1 into this part's lists a cell (k_pres_bucket_merge joins
 /// the parts: the same lists as one pass over all, k descending a cell),
 /// its largest move a cell (tiles), its slots that moved (or changed
-/// position since the last frame built: teleports, stops) at moving[k0..];
-/// then the positions for the next frame.
-/// Arrays: 0 order, 1 x, 2 y, 3 px, 4 py, 5 next (by order entry), 6
-/// moving, 7 prev x, 8 prev y, 9 heads (i32, cells a part), 10 tails (i32),
-/// 11 motion (f32), 12 moved (i32 a part). P: 0 k0, 1 k1, 2 columns, 3
-/// rows, 4 tile, 5 previous ready, 6 part.
+/// position since the last frame built: teleports, stops) at moving[k0..].
+/// Each unit's cell, move and whether it moved from its record (pres_fill.rs
+/// bucket_recs, made by slot with the frame's ranges): one 8-byte read an
+/// entry (the order's slots are random: the columns read here were a miss
+/// each).
+/// Arrays: 0 order, 1 records (u32 pairs by slot), 5 next (by order
+/// entry), 6 moving, 9 heads (i32, cells a part), 10 tails (i32), 11
+/// motion (f32), 12 moved (i32 a part). P: 0 k0, 1 k1, 2 columns, 3 rows,
+/// 6 part.
 #[no_mangle]
 pub unsafe extern "C" fn k_pres_bucket_part(a: u32, _: i32) {
     let k = K::new(waddr(a) as *const i32);
-    let (order, x, y, px, py) = (k.p::<i32>(0), k.p::<f32>(1), k.p::<f32>(2), k.p::<f32>(3), k.p::<f32>(4));
-    let (next, moving, prx, pry) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<f32>(7), k.p::<f32>(8));
+    let (order, rec) = (k.p::<i32>(0), k.p::<u64>(1) as *const u64);
+    let (next, moving) = (k.p::<i32>(5), k.p::<i32>(6));
     let (k0, k1) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize);
     let (cols, rows) = (k.i(2).max(1), k.i(3).max(1));
-    let tile = k.f(4);
-    let ready = k.i(5) != 0;
     let part = k.i(6).max(0) as usize;
     let cells = (cols * rows) as usize;
     let (head, tail, motion, moved) = (k.p::<i32>(9).add(part * cells), k.p::<i32>(10).add(part * cells), k.p::<f32>(11).add(part * cells), k.p::<i32>(12).add(part));
     for c in 0..cells { *head.add(c) = -1; *motion.add(c) = 0.0; }
-    let inv_cell = 1.0 / (tile * 16.0);
-    let inv_tile = 1.0 / tile;
     let mut m = 0usize;
     for i in k0..k1 {
         let s = *order.add(i) as usize;
-        let (xf, yf) = (*x.add(s), *y.add(s));
-        let (xd, yd) = (xf as f64, yf as f64);
-        let bx = (floor(xd * inv_cell) as i32).min(cols - 1).max(0);
-        let by = (floor(yd * inv_cell) as i32).min(rows - 1).max(0);
-        let b = (by * cols + bx) as usize;
+        let w = *rec.add(s);
+        let b = ((w as u32) >> 1) as usize;
         let h = *head.add(b);
         if h < 0 { *tail.add(b) = i as i32; }
         *next.add(i) = h; *head.add(b) = i as i32;
-        // (The largest move: f32 of the largest f64 distance, whatever the
+        // (The largest move: f32 of the largest distance, whatever the
         // order the parts are taken in: rounding is monotonic.)
-        let dist = (*px.add(s) as f64 - xd).abs().max((*py.add(s) as f64 - yd).abs()) * inv_tile;
-        if dist > *motion.add(b) as f64 { *motion.add(b) = dist as f32; }
-        if dist > 0.0 || (ready && (*prx.add(s) != xf || *pry.add(s) != yf)) { *moving.add(k0 + m) = s as i32; m += 1; }
-        *prx.add(s) = xf; *pry.add(s) = yf;
+        let dist = f32::from_bits((w >> 32) as u32);
+        if dist > *motion.add(b) { *motion.add(b) = dist; }
+        *moving.add(k0 + m) = s as i32; m += (w & 1) as usize;
     }
     *moved = m as i32;
 }

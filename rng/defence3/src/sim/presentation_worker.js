@@ -90,9 +90,9 @@ function pmThreadScratch(th,len) {
 // (scratch: the order's, 3 words a slot; lastSlots: the last frame's order, lastN of it.)
 function pmState(cap) {
     if (pm.cap===cap) return;
-    for (const k of ['scratch','prevX','prevY','out','lastSlots']) if (pm[k]) pmFree(pm[k+'R']);
+    for (const k of ['scratch','prevX','prevY','out','lastSlots','brec']) if (pm[k]) pmFree(pm[k+'R']);
     const take=(k,bytes) => {const r=pmAlloc(bytes);pm[k+'R']=r;pm[k]=r.base;};
-    take('scratch',12*cap);take('prevX',4*cap);take('prevY',4*cap);take('out',64);take('lastSlots',4*cap);
+    take('scratch',12*cap);take('prevX',4*cap);take('prevY',4*cap);take('out',64);take('lastSlots',4*cap);take('brec',8*cap);
     pm.cap=cap;pm.prevReady=false;pm.lastN=0;pm.lastView=null;
 }
 // The per-slot state for cap slots (pres_fill.rs T_*): its table, views of
@@ -172,6 +172,20 @@ function acquire(bytes, kind) {
     const buf=new SharedArrayBuffer(bytes+12), id=++sequence;
     const trailer=new DataView(buf,buf.byteLength-12);trailer.setInt32(0,generation,true);trailer.setInt32(4,id,true);trailer.setInt32(8,PRESENT_MAGIC,true);
     buffers.set(id,{buf,busy:true,kind});return buf;
+}
+// A table's rows in use (0..m) copied, column by column at the table's capacity stride (sim_frame_world.js
+// simTableViews: the same layout in both buffers): the page reads no row past its n (a structure table of 315k rows'
+// capacity held 40k structures: its whole copy, 49 MB a step, was ~5 ms of this thread and as much memory traffic).
+function copyTableRows(spec,src,srcOff,dst,cap,m) {
+    m=Math.max(0,Math.min(cap,m));
+    const S=new Uint8Array(src), D=new Uint8Array(dst);
+    let off=0;
+    const seg=k=>{if(m)D.set(S.subarray(srcOff+off,srcOff+off+k*m),off);off+=k*cap;};
+    for (let i=0;i<spec.f32.length;i++) seg(4);
+    for (let i=0;i<spec.i32.length;i++) seg(4);
+    seg(4);
+    for (let i=0;i<spec.i16.length;i++) seg(2);
+    for (let i=0;i<spec.u8.length;i++) seg(1);
 }
 function schedule() {
     if (scheduled || !latest || !source || !ready) return;
@@ -291,9 +305,9 @@ function bucketParts(cells,parts) {
 // A part's arguments (all but which part) into a thread's block.
 function writeBucketJob(I,P) {
     const J=bucketJob, F=J.F, A=bucketParts(J.cells,J.parts);
-    I[512]=F.order.byteOffset;I[513]=F.x.byteOffset;I[514]=F.y.byteOffset;I[515]=F.px.byteOffset;I[516]=F.py.byteOffset;
-    I[517]=J.offset+J.cells*8;I[518]=J.movingOffset;I[519]=pm.prevX;I[520]=pm.prevY;I[521]=A.heads;I[522]=A.tails;I[523]=A.motion;I[524]=A.moved;
-    P[2]=J.columns;P[3]=J.rows;P[4]=J.tile;P[5]=pm.prevReady ? 1 : 0;
+    I[512]=F.order.byteOffset;I[513]=pm.brec;
+    I[517]=J.offset+J.cells*8;I[518]=J.movingOffset;I[521]=A.heads;I[522]=A.tails;I[523]=A.motion;I[524]=A.moved;
+    P[2]=J.columns;P[3]=J.rows;
 }
 // Parts taken until none is left (ctl[4] the next; ctl[5] parts, ctl[6] a
 // part's entries, ctl[7] count).
@@ -307,6 +321,15 @@ function runBucketParts(x,args,P,ctl) {
     }
 }
 const BUCKET_MSG={type:'buckets'};
+// The buckets' records of a frame made outside the ranges (frames made by
+// hand: tests/present-pm.cjs); a frame's ranges make them (k_pres_tail).
+function frameBucketRecords(F, columns, rows, tile) {
+    pmState(F.cap);
+    const I=pm.I, P=pm.P;
+    I[512]=F.id.byteOffset;I[513]=F.x.byteOffset;I[514]=F.y.byteOffset;I[515]=F.px.byteOffset;I[516]=F.py.byteOffset;I[517]=pm.brec;I[518]=pm.prevX;I[519]=pm.prevY;
+    P[0]=0;P[1]=F.cap;P[2]=columns;P[3]=rows;P[4]=tile;P[5]=pm.prevReady ? 1 : 0;
+    pm.x.k_pres_bucket_recs(pm.args,0);
+}
 function buildRenderBuckets(F, count, columns, rows, tile) {
     pmState(F.cap);
     const J=bucketJob, cells=columns*rows, offset=F.base+simFrameBytes(F.cap);
@@ -355,7 +378,7 @@ function dirtyEnd(F,n,offset,seq,tick) {
     return {offset:F.base+offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS};
 }
 // The frame's job (one a frame, its fields rewritten: no objects a frame).
-const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0};
+const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0,bcols:0,brows:0};
 // A range's kernels, in turn (pres_fill.rs: which slots, the filled ones pass
 // by pass, the order, ghosts and marks; each its own function: as one, V8
 // compiled the passes ~10x slower), over a thread's argument block.
@@ -372,6 +395,9 @@ function writeJob(th,F,Pf) {
     P[2]=J.nn;P[3]=J.n;P[4]=J.player;P[5]=J.areaUnit;P[6]=J.metaCopy?1:0;P[7]=J.mode;P[8]=J.seq;P[9]=J.bseq;P[10]=PRESENT_DELTA_ROUNDS;
     P[11]=J.phase;P[12]=J.ta;P[13]=visFollow;P[14]=visTurn;P[15]=faceVel;P[16]=lightFull;P[17]=0;P[18]=pm.hasCm?1:0;P[19]=pm.hasPvOD?1:0;
     P[20]=J.ghosts?1:0;P[21]=J.gw;P[22]=J.gh;P[23]=J.tile;P[24]=J.marks?1:0;P[25]=J.pn;P[26]=J.nb;
+    // (The camera buckets' records by slot (pres_fill.rs bucket_recs), when the frame has buckets.)
+    const bk=J.bcols*J.brows>0;
+    I[522]=bk ? pm.brec : 0;I[523]=pm.prevX;I[524]=pm.prevY;P[28]=J.bcols;P[29]=J.brows;P[30]=J.tile;P[31]=pm.prevReady?1:0;P[32]=bk?1:0;
 }
 // ---- chunks ----
 // A frame's slots in chunks (whole blocks of DIRTY_BLOCK slots), each taken
@@ -425,7 +451,8 @@ function restartHelpers() {if (helpers) {stopHelpers(null);helpersOff=false;}}
 function presentHelpers(nn) {
     if (helpersOff || HELPER || nn<PRESENT_HELPER_MIN || !SHARED || typeof Worker!=='function' || !(self.location && self.location.href)) return null;
     if (!helpers) {
-        const cores=(self.navigator && navigator.hardwareConcurrency) || 4, want=Math.max(0,Math.min(3,(cores>>2)-1));
+        // (&ph=N in this worker's URL (the page's ?presh=N): that many, a measurement.)
+        const cores=(self.navigator && navigator.hardwareConcurrency) || 4, phq=/[?&]ph=(\d+)/.exec(self.location.search||''), want=phq ? Math.min(8,Number(phq[1])) : Math.max(0,Math.min(3,(cores>>2)-1));
         if (!want) {helpersOff=true;return null;}
         helperDone=new Int32Array(new SharedArrayBuffer(4));helperResults=new Int32Array(new SharedArrayBuffer(4*want));
         helpers=[];
@@ -612,6 +639,8 @@ function draw() {
     J.seq=D.seq;J.bseq=bseq;J.phase=D.seq%PRESENT_DELTA_ROUNDS;J.ta=dirty.prevTick;
     J.ghosts=ghosts;J.gw=tick.gw|0;J.gh=tick.gh|0;J.tile=tick.tile||32;J.light=ghosts ? fogState.at[0].base : 0;
     J.marks=!!D.prev;J.pn=D.pn;J.nb=D.nb;
+    // (The camera buckets' records are made with the ranges: their state first.)
+    J.bcols=indexBytes ? columns : 0;J.brows=indexBytes ? rows : 0;pmState(F.cap);
     const count=runRanges(F,D.prev);
     if (count<0) {e.busy=false;dirty.prev=null;e.metaRev=-1;e.seq=0;membershipReset=true;return;}
     e.seq=D.seq;
@@ -640,11 +669,11 @@ function draw() {
         // (Its block only: the table is in the wasm heap's memory.)
         const bytes=structure.bytes||structure.buf.byteLength, off=structure.off||0;
         const b=acquire(bytes,'structures');
-        if(b) {new Uint8Array(b,0,bytes).set(new Uint8Array(structure.buf,off,bytes));world.structures={...structure,buf:b,off:0,bytes};sentStructureRevision=structureRevision;}
+        if(b) {copyTableRows(SIM_STRUCT_SPEC,structure.buf,off,b,structure.cap,Math.max(structure.n|0,structure.count|0));world.structures={...structure,buf:b,off:0,bytes};sentStructureRevision=structureRevision;}
     }
     if(projectiles && projectileRevision!==sentProjectileRevision) {
         const b=acquire(projectiles.buf.byteLength,'projectiles');
-        if(b) {new Uint8Array(b,0,projectiles.buf.byteLength).set(new Uint8Array(projectiles.buf));world.projectiles={...projectiles,buf:b};sentProjectileRevision=projectileRevision;}
+        if(b) {copyTableRows(SIM_PROJ_SPEC,projectiles.buf,0,b,projectiles.cap,Math.max(projectiles.n|0,projectiles.count|0));world.projectiles={...projectiles,buf:b};sentProjectileRevision=projectileRevision;}
     }
     const tt=performance.now();
     if(cells) {const d=cellChanges();if (d) world.state={cells:d};cells=null;}

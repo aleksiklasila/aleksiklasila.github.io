@@ -8,6 +8,64 @@ stay approximately the same (crowd flow, arrival, fights), determinism across pe
 This supersedes the resolve parts of `MOVE_OCCUPANCY_OPTIMIZATION_PLAN.md` (sections 3.2-3.3) and
 `OCCUPACY_OPTIMIZATION.md`; it keeps their mover table (3.1), events (3.3) and determinism rules (3.4).
 
+## 0. Implementation design (2026-11-15): one fused block job, rounds over packets
+
+User direction (2026-11-15): not a local trim of k89; background -> SIMD SoA tables -> foreground parallel
+vectorized loops, few branches, minimal scalar work, over the whole flow (background looks / traffic / pushes ->
+move -> occupancy -> background), and the move and occupancy stages combined so their memory round trips go.
+
+**Where it starts (checker-200k-r0, headed Edge, render + sim, 8 helpers, ~234k units, dk ~1.3):** step mean 50.6 ms,
+p95 64, p99 72; kernels' wall 37 ms of it: occupancy k89 21.2 (178 ms helper CPU a step), first stage k8 4.4; the sim
+thread's own JS ~2 ms. At ~50 ms a step the match falls behind real time and the pace goes to 2 base ticks a step.
+Per step (counters, Node, 190k alive, dk 1): 81k rows gathered, 56k resolved against footprints, 37k pushed,
+18k shoulder searches, 8.4k swap scans, 12k short-walker retries. k89 CPU by function: traffic_swap 25,
+checked_traffic_q 24, occ_gather 16, move_job 16, traffic_yield 16, clear_or_mark 14, epi_slot 13, walker_short_at
+12, motion_f 10, field 9.5, commit_preview 9, preview 8, resolve_slot 7, steer_pressure 6.5, pushes / samples 9.
+
+**Target shape of a block job (one kernel per colour phase, k8 and k89 merged):**
+
+1. *Intent* over the block's rows (slot order inside the block: relayout keeps them in near-contiguous runs, so the
+   4-lane vector paths load runs directly; strays by lane): the first stage's logic, its wanted step written into
+   the job's packet (scratch), not into the x / y columns; heading, steer target, speed, class taken along.
+   Reads only tick-start state of other units (x0 / y0, snapshots): neighbouring blocks of earlier phases have
+   moved already. Outputs once keyed by slot chunk (hit lists, order pickup leftovers, mover-table scan, post
+   lists) are keyed by block job; their JS consumers walk jobs in index order.
+2. *Packet* (SoA, job scratch, priority order = (projection on the block heading, id), radix): slot, ox / oy
+   (footprint), ex / ey (wanted end, pressure-bent), radius / layer / owner / profile, class bits, heading, rte.
+   Standing in-block units follow the movers (indices >= movers: never vacate).
+3. *Owner map* O (u32 a cell) over the movers' box + halo: STATIC (bitmap taken: walls of other blocks' units,
+   anything unknown), EMPTY, or the packet index of the in-block unit covering it. A mover i may enter a cell iff
+   O <= i or EMPTY (its own cells, or a leader's): followers and standing units are never entered.
+4. *Rounds* (sub-steps of at most one cell, as the old discrete sweep's points; rounds = longest mover's sub-steps
+   + catch-up): propose (all candidates of 4 movers a vector: main, slides, +-45 / +-90 shoulders; legality = O row
+   loads + the centre's wall tile; score as the old weights), claim (min of round tag | index over the target's
+   cells), decide (one pass in index order: a winner owns all its target cells and every leader whose cells it
+   enters won: leaders' outcomes never depend on followers, so one pass is exact; no cycles by construction),
+   commit (all winners' old cells cleared, then new cells set: O, the bitmap rows and counts, records, rows).
+5. *After the rounds*: swaps (short movers; partner found by O around the point ahead: standing friendly
+   in-block, the old eligibility rules; walkers passing walkers), deposits and push records, yields (pushed
+   standing units are movers with the push response as their intent), column publication (x, y, vx, vy, out,
+   steady), epilogue (index, areas, charges) for the units with output.
+
+**Result of (A), 2026-11-15 (OPTIMIZATION_PROGRESS.md, same date, night):** built (wasm/src/mv_rounds.rs, ?rounds=1),
+behaviour within ~1% at dk 1 / 4 (better at dk 20), but k89 +15% at dk 1 and +25% at dk 4 against the sequential
+resolver. Parallel claims cost more than they save (the leader-order pass is needed anyway; legality is a few bit
+tests in L1), and sub-steps multiply per-mover passes at long steps. The remaining cost is the scattered per-unit
+column traffic around the resolve, so (B) / (C) (the fused job over block-ordered rows) is the lever, not the
+resolve order. Points 3-4 above are superseded by a leader-order sweep over a local bitmap.
+
+**Result of (B), 2026-11-15:** built and reverted (tests/test-runs/wholesale-20261115/fused-job-not-kept.diff): behaviour
+equal, step +5% at dk 1 and +8% at dk 4: a block's slots are fragmented (mean run 3.5 slots; other blocks' units
+interleave), so the intent's four-lane paths lose their streaming. (C) comes first: the hot state block-contiguous.
+
+**Order of work:** (A) the rounds resolver with the packet as its interface, filled from the first stage's
+outputs; old resolve code (checked_traffic_q, preview / motion_f / field, shoulders, traffic_yield, walker retry,
+second pass) deleted when it lands. (B) intent moved into the block job, writing packets: k8's dispatch, the
+mid-step mover-table sync, the first-stage word and need bits go. (C) rows authoritative for the hot fields, the
+intent's vector paths streaming rows. Gates per stage: crowd-traffic open / counter / plug / wall at dk 1 / 4 / 20
+(baseline in tests/test-runs/wholesale-20261115/crowd-old.txt), traffic-pressure, occupancy audit, scene-orders,
+deltatick tests, multiplayer determinism with helpers; then the Edge run.
+
 ## 1. Where the time is now (chaos-1m-250k, dk 4, 8 helpers; round 2 of the occupancy work)
 
 - Step ~131 ms; movement kernels ~46 ms of its wall: occupancy second stage (k89) ~33 ms (~300 ms helper CPU),

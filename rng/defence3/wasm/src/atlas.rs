@@ -422,87 +422,77 @@ pub unsafe extern "C" fn k_atl_route(a: u32, chunk: i32) {
     let list = dnodes.add(g(dno, d) as usize);
     let out = rc.add(g(rco, d) as usize + t as usize * n);
     let (sc, words) = (waddr(*a.add(1000) as u32) as *mut u32, (*a.add(1001)).max(0) as usize);
-    if 3 * n + 1 > words {
+    // Scratch: dist (n words), then the heap of (dist << 32 | local index) keys (8 bytes each, room for at least 2 n:
+    // a push for every improvement, the stale ones skipped when popped; a full heap is compacted to its live keys,
+    // at most n). One integer compare a step, no position array; the same (dist, index) order, the same distances.
+    let hoff = (n + 1) & !1;
+    if hoff + 4 * n + 2 > words {
         for i in 0..n {
             s(out, i, !0u32);
         }
         return;
     }
-    // Scratch: dist (n), heap of local indices (n), each one's heap place (n).
     let dist = sc;
-    let heap = sc.add(n);
-    let pos = sc.add(2 * n);
+    let heap = sc.add(hoff) as *mut u64;
+    let cap = (words - hoff) / 2;
     for i in 0..n {
         s(dist, i, !0u32);
-        s(pos, i, !0u32);
     }
     let child = |node: i32| -> i32 {
         let p = g(npart, node as usize) as usize;
         if lv == 0 { g(cip, p) as i32 } else { g(cin, g(anc, p * l + lv - 1) as usize) as i32 }
     };
     let mut hn = 0usize;
-    // (Min-heap by (dist, local index): the same order on every peer.)
-    let less = |x: u32, y: u32| -> bool {
-        let (dx, dy) = (*dist.add(x as usize), *dist.add(y as usize));
-        dx < dy || (dx == dy && x < y)
-    };
     macro_rules! up {
         ($i:expr) => {{
             let mut i = $i;
+            let v = *heap.add(i);
             while i > 0 {
-                let p = (i - 1) / 2;
-                let (hi, hp) = (*heap.add(i), *heap.add(p));
-                if !less(hi, hp) {
-                    break;
-                }
+                let p = (i - 1) >> 1;
+                let hp = *heap.add(p);
+                if hp <= v { break; }
                 *heap.add(i) = hp;
-                *heap.add(p) = hi;
-                *pos.add(hp as usize) = i as u32;
-                *pos.add(hi as usize) = p as u32;
                 i = p;
             }
+            *heap.add(i) = v;
+        }};
+    }
+    macro_rules! down {
+        ($i:expr) => {{
+            let mut i = $i;
+            let v = *heap.add(i);
+            loop {
+                let l1 = 2 * i + 1;
+                if l1 >= hn { break; }
+                let r1 = l1 + 1;
+                let mut c = l1;
+                if r1 < hn && *heap.add(r1) < *heap.add(l1) { c = r1; }
+                let hc = *heap.add(c);
+                if hc >= v { break; }
+                *heap.add(i) = hc;
+                i = c;
+            }
+            *heap.add(i) = v;
         }};
     }
     for i in 0..n {
         if child(*list.add(i)) == t {
             *dist.add(i) = 0;
-            *heap.add(hn) = i as u32;
-            *pos.add(i) = hn as u32;
+            *heap.add(hn) = i as u64;
             hn += 1;
             up!(hn - 1);
         }
     }
     while hn > 0 {
-        let u = *heap;
+        let top = *heap;
         hn -= 1;
-        *pos.add(u as usize) = !0u32 - 1;
         if hn > 0 {
-            let last = *heap.add(hn);
-            *heap = last;
-            *pos.add(last as usize) = 0;
-            let mut i = 0usize;
-            loop {
-                let (l1, r1) = (2 * i + 1, 2 * i + 2);
-                let mut m = i;
-                if l1 < hn && less(*heap.add(l1), *heap.add(m)) {
-                    m = l1;
-                }
-                if r1 < hn && less(*heap.add(r1), *heap.add(m)) {
-                    m = r1;
-                }
-                if m == i {
-                    break;
-                }
-                let (hi, hm) = (*heap.add(i), *heap.add(m));
-                *heap.add(i) = hm;
-                *heap.add(m) = hi;
-                *pos.add(hm as usize) = i as u32;
-                *pos.add(hi as usize) = m as u32;
-                i = m;
-            }
+            *heap = *heap.add(hn);
+            down!(0);
         }
-        let du = *dist.add(u as usize);
-        let un = *list.add(u as usize);
+        let (du, u) = ((top >> 32) as u32, (top & 0xFFFF_FFFF) as usize);
+        if du != *dist.add(u) { continue; }
+        let un = *list.add(u);
         for e in g(adjs, un as usize)..g(adjs, un as usize + 1) {
             let vn = g(adja, e as usize);
             let vp = g(npart, vn as usize) as usize;
@@ -514,19 +504,24 @@ pub unsafe extern "C" fn k_atl_route(a: u32, chunk: i32) {
                 continue;
             }
             let nd = du.saturating_add(g(adjc, e as usize).max(0) as u32);
-            let pv = *pos.add(v);
-            if pv == !0u32 - 1 || nd >= *dist.add(v) {
+            if nd >= *dist.add(v) {
                 continue;
             }
             *dist.add(v) = nd;
-            if pv == !0u32 {
-                *heap.add(hn) = v as u32;
-                *pos.add(v) = hn as u32;
-                hn += 1;
-                up!(hn - 1);
-            } else {
-                up!(pv as usize);
+            if hn == cap {
+                // (Full: only the live keys kept (at most n), the heap made again.)
+                let mut k = 0usize;
+                for q in 0..hn {
+                    let h = *heap.add(q);
+                    if (h >> 32) as u32 == *dist.add((h & 0xFFFF_FFFF) as usize) { *heap.add(k) = h; k += 1; }
+                }
+                hn = k;
+                let mut q = hn / 2;
+                while q > 0 { q -= 1; down!(q); }
             }
+            *heap.add(hn) = ((nd as u64) << 32) | v as u64;
+            hn += 1;
+            up!(hn - 1);
         }
     }
     for i in 0..n {

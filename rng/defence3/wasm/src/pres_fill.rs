@@ -261,14 +261,50 @@ pub unsafe extern "C" fn k_pres_tail(a: u32, _: i32) {
         let (b0, b1) = (s0 / BLOCK, (js1 + BLOCK - 1) / BLOCK);
         let (seq, nb, pn) = (k.i(8), k.i(26).max(0) as usize, k.i(25).max(0) as usize);
         let st = t.p::<i32>(T_STAMPS);
-        if *out.add(2) != 0 && s0 < s1 { marks_slots(f, pf, al, *out.add(3) as usize, n, pn, b0, b1, seq, st, nb); }
-        else {
-            let act = if mode != 0 && s0 < s1 { bk } else { core::ptr::null_mut() };
-            marks_range(f, pf, n, pn, b0, b1, seq, st, nb, act, k.i(6) != 0);
-        }
+        // (By the simulation's marks too: the blocks the fill wrote, whole, by
+        // v128 (slots not listed are the last frame's); was slot by slot.)
+        let act = if mode != 0 && s0 < s1 { bk } else { core::ptr::null_mut() };
+        marks_range(f, pf, n, pn, b0, b1, seq, st, nb, act, k.i(6) != 0);
+        let _ = al;
+    }
+    if k.i(32) != 0 && s0 < s1 && k.raw(10) != 0 {
+        bucket_recs(f.p::<i32>(F_ID), f.p::<f32>(F_X), f.p::<f32>(F_Y), f.p::<f32>(F_PX), f.p::<f32>(F_PY), k.p::<u32>(10), k.p::<f32>(11), k.p::<f32>(12), s0, s1, k.i(28).max(1), k.i(29).max(1), k.f(30), k.i(31) != 0);
     }
 }
 
+// The camera buckets' record of each unit of slots s0..s1 (pres.rs
+// k_pres_bucket_part reads it by the id order): its cell << 1 | moved, its
+// largest move (tiles, f32); the positions for the next frame. By slot
+// here, where the columns stream: by the order every column read was a
+// miss (the slots of the id order are random).
+#[inline(never)]
+unsafe fn bucket_recs(fid: *const i32, x: *const f32, y: *const f32, px: *const f32, py: *const f32, rec: *mut u32, prx: *mut f32, pry: *mut f32,
+                      s0: usize, s1: usize, cols: i32, rows: i32, tile: f64, ready: bool) {
+    let inv_cell = 1.0 / (tile * 16.0);
+    let inv_tile = 1.0 / tile;
+    for s in s0..s1 {
+        if *fid.add(s) < 0 { continue; }
+        let (xf, yf) = (*x.add(s), *y.add(s));
+        let (xd, yd) = (xf as f64, yf as f64);
+        let bx = (floor(xd * inv_cell) as i32).min(cols - 1).max(0);
+        let by = (floor(yd * inv_cell) as i32).min(rows - 1).max(0);
+        let dist = (*px.add(s) as f64 - xd).abs().max((*py.add(s) as f64 - yd).abs()) * inv_tile;
+        let moved = dist > 0.0 || (ready && (*prx.add(s) != xf || *pry.add(s) != yf));
+        *rec.add(2 * s) = ((by * cols + bx) as u32) << 1 | moved as u32;
+        *(rec.add(2 * s + 1) as *mut f32) = dist as f32;
+        *prx.add(s) = xf; *pry.add(s) = yf;
+    }
+}
+/// The camera buckets' records of slots s0..s1 (bucket_recs) of a frame
+/// made outside the ranges (frames made by hand: tests/present-pm.cjs).
+/// Arrays: 0 id, 1 x, 2 y, 3 px, 4 py (by slot), 5 records, 6 prev x, 7
+/// prev y. P: 0 s0, 1 s1, 2 columns, 3 rows, 4 tile, 5 previous ready.
+#[no_mangle]
+pub unsafe extern "C" fn k_pres_bucket_recs(a: u32, _: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    bucket_recs(k.p::<i32>(0), k.p::<f32>(1), k.p::<f32>(2), k.p::<f32>(3), k.p::<f32>(4), k.p::<u32>(5), k.p::<f32>(6), k.p::<f32>(7),
+        k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(1), k.i(3).max(1), k.f(4), k.i(5) != 0);
+}
 // Which of slots s0..s1 are filled, the others copied forward: returns
 // (count listed from F.order[s0], changed, filled).
 #[allow(clippy::too_many_arguments)]
@@ -498,38 +534,73 @@ unsafe fn p_facing(k: &K, x: Fl) {
     let Fl { f, c, m, t, al, na, fid, es, mx, my, n, s0, s1, stamped, has_cm } = x;
     let _ = (&f, &c, &m, &t, &al, &na, &fid, &es, &mx, &my, &n, &s0, &s1, &stamped, &has_cm, &k);
         // Facing: toward the fire target, else the smoothed movement, else as it was.
+        // In chunks of FACE_CHUNK list entries: first the targets' offsets
+        // (a tight loop of independent loads: the targets' positions are
+        // scattered, their misses overlap), then the facing, in f32 with
+        // selects (one atan2 a unit). (Was f64 with branches a case: the
+        // presentation's costliest pass, 22% of its CPU in the checker scene.)
         let (d, vx_, vy_) = (f.p::<f32>(F_FACE), f.p::<f32>(F_VX), f.p::<f32>(F_VY));
         let (cm, ct) = (c.s(S_CM), c.s(S_CMT));
         let (fa_, fi, fvx, fvy) = (t.p::<f32>(T_FA), t.p::<i32>(T_FID), t.p::<f32>(T_FVX), t.p::<f32>(T_FVY));
-        let (kv, kt) = (k.f(15), k.f(14)); let min2 = FACE_MIN_SPEED * FACE_MIN_SPEED;
-        for i in 0..na {
-            let s = *al.add(i) as usize; let id = *fid.add(s);
-            if id < 0 { *fi.add(s) = -1; continue; }
-            let fresh = *fi.add(s) != id;
-            let (cvx, cvy) = (*vx_.add(s) as f64, *vy_.add(s) as f64);
-            let mut vx = if fresh { cvx } else { *fvx.add(s) as f64 + (cvx - *fvx.add(s) as f64) * kv };
-            let mut vy = if fresh { cvy } else { *fvy.add(s) as f64 + (cvy - *fvy.add(s) as f64) * kv };
-            let mut settle = false;
-            if !fresh { let ex = cvx - vx; let ey = cvy - vy; if ex * ex + ey * ey < 1e-6 { vx = cvx; vy = cvy; } else { settle = true; } }
-            *fvx.add(s) = vx as f32; *fvy.add(s) = vy as f32;
-            let mut want = f64::NAN;
-            if has_cm && (cm.u8(s) & 20) == 4 {
-                let q = ct.i32(s);
-                if q >= 0 && (q as usize) < n {
-                    let q = q as usize;
-                    let dx = pos(mx, q) as f64 - pos(mx, s) as f64;
-                    let dy = pos(my, q) as f64 - pos(my, s) as f64;
-                    if dx != 0.0 || dy != 0.0 { want = fast_atan2(dx, dy); }
+        let (kv, kt) = (k.f(15) as f32, k.f(14) as f32);
+        let min2 = (FACE_MIN_SPEED * FACE_MIN_SPEED) as f32;
+        let (dead, tau, inv_tau) = (FACE_DEAD as f32, TAU as f32, INV_TAU as f32);
+        let mut tdx = [0f32; FACE_CHUNK]; let mut tdy = [0f32; FACE_CHUNK];
+        let mut i0 = 0usize;
+        while i0 < na {
+            let m = if na - i0 < FACE_CHUNK { na - i0 } else { FACE_CHUNK };
+            for j in 0..m {
+                let s = *al.add(i0 + j) as usize;
+                // (No target: the unit itself, a zero offset.)
+                let mut q = s;
+                if has_cm {
+                    let qq = ct.i32(s);
+                    let ok = ((cm.u8(s) & 20) == 4) & (qq >= 0) & ((qq as u32 as usize) < n);
+                    q = if ok { qq as usize } else { s };
                 }
+                *tdx.get_unchecked_mut(j) = (mx.i32(q) - mx.i32(s)) as f32 * 0.125;
+                *tdy.get_unchecked_mut(j) = (my.i32(q) - my.i32(s)) as f32 * 0.125;
             }
-            if want != want && vx * vx + vy * vy > min2 { want = fast_atan2(vx, vy); }
-            let mut a = if fresh { if want == want { want } else { 0.0 } } else { *fa_.add(s) as f64 };
-            let mut turning = false;
-            if want == want { let mut dd = want - a; dd -= js_round(dd * INV_TAU) * TAU; if dd.abs() > FACE_DEAD { a += dd * kt; turning = true; } }
-            *fa_.add(s) = a as f32; *fi.add(s) = id; *d.add(s) = a as f32;
-            *es.add(s) = if turning || settle { *es.add(s) | 2 } else { *es.add(s) & !2 };
+            for j in 0..m {
+                let s = *al.add(i0 + j) as usize; let id = *fid.add(s);
+                if id < 0 { *fi.add(s) = -1; continue; }
+                let fresh = *fi.add(s) != id;
+                let (cvx, cvy) = (*vx_.add(s), *vy_.add(s));
+                let (ox, oy) = (*fvx.add(s), *fvy.add(s));
+                let (sx, sy) = (ox + (cvx - ox) * kv, oy + (cvy - oy) * kv);
+                let (ex, ey) = (cvx - sx, cvy - sy);
+                let snap = fresh | (ex * ex + ey * ey < 1e-6);
+                let vx = if snap { cvx } else { sx }; let vy = if snap { cvy } else { sy };
+                *fvx.add(s) = vx; *fvy.add(s) = vy;
+                let (dx, dy) = (*tdx.get_unchecked(j), *tdy.get_unchecked(j));
+                let tgt = (dx != 0.0) | (dy != 0.0);
+                let has = tgt | (vx * vx + vy * vy > min2);
+                let want = if tgt { atan2_f32(dx, dy) } else { atan2_f32(vx, vy) };
+                let a0 = if fresh { if has { want } else { 0.0 } } else { *fa_.add(s) };
+                let mut dd = want - a0; dd -= f32_nearest(dd * inv_tau) * tau;
+                let turning = has & (f32::from_bits(dd.to_bits() & 0x7fff_ffff) > dead);
+                let a = if turning { a0 + dd * kt } else { a0 };
+                *fa_.add(s) = a; *fi.add(s) = id; *d.add(s) = a;
+                let e = *es.add(s);
+                *es.add(s) = (e & !2) | (((turning | !snap) as u8) << 1);
+            }
+            i0 += m;
         }
 }
+const FACE_CHUNK: usize = 64;
+// fast_atan2 in f32, by selects (atan2 within ~1e-5 rad; (0, 0): 0).
+#[inline(always)]
+fn atan2_f32(y: f32, x: f32) -> f32 {
+    let ax = f32::from_bits(x.to_bits() & 0x7fff_ffff); let ay = f32::from_bits(y.to_bits() & 0x7fff_ffff);
+    let (mx, mn) = if ax > ay { (ax, ay) } else { (ay, ax) };
+    let a = mn / if mx > 0.0 { mx } else { 1.0 }; let z = a * a;
+    let mut r = (((((-0.0117212f32 * z + 0.05265332) * z - 0.11643287) * z + 0.19354346) * z - 0.33262347) * z + 0.99997726) * a;
+    r = if ay > ax { 1.5707964 - r } else { r };
+    r = if x < 0.0 { 3.1415927 - r } else { r };
+    f32::from_bits(r.to_bits() ^ (y.to_bits() & 0x8000_0000))
+}
+#[inline(always)]
+fn f32_nearest(x: f32) -> f32 { use core::arch::wasm32::*; f32x4_extract_lane::<0>(f32x4_nearest(f32x4_splat(x))) }
 #[inline(never)]
 unsafe fn p_phase(k: &K, x: Fl) {
     let Fl { f, c, m, t, al, na, fid, es, mx, my, n, s0, s1, stamped, has_cm } = x;
@@ -582,7 +653,7 @@ unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, 
         let (mut born, mut idhit) = (false, false);
         if !meta_only {
             born = e > pn; idhit = born;
-            if !born { for s in s0..e { if *i_.add(s) != *j_.add(s) { idhit = true; if *i_.add(s) >= 0 { born = true; break; } } } }
+            if !born && s0 < e { let (h, nb_) = ids_differ(i_, j_, s0, e); idhit = h; born = nb_; }
         }
         let mut done = [0u8; 64];
         for ci in 0..DIRTY_N {
@@ -591,9 +662,9 @@ unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, 
             let hit = if from == F_ID { idhit } else {
                 if done[from] == 0 {
                     let mut h = born;
-                    if !h {
+                    if !h && s0 < e {
                         let (a, q, sz) = (f.p::<u8>(from), pf.p::<u8>(from), fsize(from));
-                        for s in s0..e { if differs(a, q, sz, s) && *i_.add(s) >= 0 { h = true; break; } }
+                        h = live_differs(a, q, sz, i_, s0, e);
                     }
                     done[from] = if h { 2 } else { 1 };
                 }
@@ -603,51 +674,65 @@ unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, 
         }
     }
 }
+// (Slots s0..e: whether an id differs from the last frame's; whether one of
+// those is a unit (id >= 0). By v128, the remainder by slot.)
+#[inline(always)]
+unsafe fn ids_differ(i_: *const i32, j_: *const i32, s0: usize, e: usize) -> (bool, bool) {
+    use core::arch::wasm32::*;
+    let z = i32x4_splat(0);
+    let (mut d, mut u) = (z, z);
+    let mut s = s0;
+    while s + 4 <= e {
+        let x = v128_load(i_.add(s) as *const v128); let ne = i32x4_ne(x, v128_load(j_.add(s) as *const v128));
+        d = v128_or(d, ne); u = v128_or(u, v128_and(ne, i32x4_ge(x, z))); s += 4;
+    }
+    let (mut idhit, mut born) = (v128_any_true(d), v128_any_true(u));
+    while s < e { if *i_.add(s) != *j_.add(s) { idhit = true; if *i_.add(s) >= 0 { born = true; } } s += 1; }
+    (idhit, born)
+}
+// (Whether a unit's slot (id >= 0) of s0..e differs bit for bit between
+// columns a and q of sz bytes an element: branch-free by v128 (the ids'
+// signs narrowed to the element's width), the remainder by slot. Was a
+// loop a slot with a branch an element: the marks were 12% of the
+// presentation's CPU in the checker scene.)
+#[inline(always)]
+unsafe fn live_differs(a: *const u8, q: *const u8, sz: usize, id: *const i32, s0: usize, e: usize) -> bool {
+    use core::arch::wasm32::*;
+    let z = i32x4_splat(0);
+    let live4 = |s: usize| i32x4_ge(v128_load(id.add(s) as *const v128), z);
+    let ld = |p: *const u8, o: usize| v128_load(p.add(o) as *const v128);
+    let mut acc = z; let mut s = s0;
+    if sz == 4 {
+        while s + 4 <= e { acc = v128_or(acc, v128_and(i32x4_ne(ld(a, 4 * s), ld(q, 4 * s)), live4(s))); s += 4; }
+    } else if sz == 2 {
+        while s + 8 <= e {
+            let l = i16x8_narrow_i32x4(live4(s), live4(s + 4));
+            acc = v128_or(acc, v128_and(i16x8_ne(ld(a, 2 * s), ld(q, 2 * s)), l)); s += 8;
+        }
+    } else {
+        while s + 16 <= e {
+            let l = i8x16_narrow_i16x8(i16x8_narrow_i32x4(live4(s), live4(s + 4)), i16x8_narrow_i32x4(live4(s + 8), live4(s + 12)));
+            acc = v128_or(acc, v128_and(i8x16_ne(ld(a, s), ld(q, s)), l)); s += 16;
+        }
+    }
+    if v128_any_true(acc) { return true; }
+    while s < e { if differs(a, q, sz, s) && *id.add(s) >= 0 { return true; } s += 1; }
+    false
+}
 // (act: per block from b0, whether the fill wrote a slot there; the others
 // only the metadata's columns, when it was copied.)
 unsafe fn marks_range(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize, act: *const u8, meta_all: bool) {
     if act.is_null() { marks_run(f, pf, n, pn, b0, b1, seq, st, nb, false); return; }
     let mut b = b0;
+    // (A block past the last frame's count: whole, every column marked.)
+    let on_ = |b: usize| *act.add(b - b0) != 0 || ((b + 1) * BLOCK > pn && b * BLOCK < n);
     while b < b1 {
-        let on = *act.add(b - b0) != 0;
+        let on = on_(b);
         let mut e = b + 1;
-        while e < b1 && (*act.add(e - b0) != 0) == on { e += 1; }
+        while e < b1 && on_(e) == on { e += 1; }
         if on { marks_run(f, pf, n, pn, b, e, seq, st, nb, false); }
         else if meta_all { marks_run(f, pf, n, pn, b, e, seq, st, nb, true); }
         b = e;
-    }
-}
-// A frame by the simulation's marks: its filled slots only. (The columns
-// compared by their marks' index (DIRTY_COLS), resolved once.)
-#[inline(never)]
-unsafe fn marks_slots(f: Tab, pf: Tab, al: *const i32, na: usize, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize) {
-    let (i_, j_) = (f.p::<i32>(F_ID), pf.p::<i32>(F_ID));
-    if n > pn { for b in b0.max(pn / BLOCK)..b1 { if (b + 1) * BLOCK > pn && b * BLOCK < n { mark_all(st, nb, b, seq); } } }
-    let w = |c: usize| (f.p::<u32>(c) as *const u32, pf.p::<u32>(c) as *const u32);
-    let h = |c: usize| (f.p::<u16>(c) as *const u16, pf.p::<u16>(c) as *const u16);
-    let y = |c: usize| (f.p::<u8>(c) as *const u8, pf.p::<u8>(c) as *const u8);
-    let (x, yy, px, py, r, en, fl, fa) = (w(F_X), w(F_Y), w(F_PX), w(F_PY), w(F_R), w(F_EN), w(F_FLAGS), w(F_FACE));
-    let (ow, ty) = (h(F_OWN), h(F_TYPE));
-    let (fs, vi, mo) = (y(F_FLASH), y(F_VIS), y(F_MODE));
-    for i in 0..na {
-        let s = *al.add(i) as usize; let b = s / BLOCK; let id = *i_.add(s);
-        if s >= n { continue; }
-        if id != *j_.add(s) { *st.add(DIRTY_ID * nb + b) = seq; if id >= 0 { mark_all(st, nb, b, seq); continue; } }
-        if id < 0 { continue; }
-        let mut mark = |ci: usize| { *st.add(ci * nb + b) = seq; };
-        if *x.0.add(s) != *x.1.add(s) { mark(0); }
-        if *yy.0.add(s) != *yy.1.add(s) { mark(1); }
-        if *px.0.add(s) != *px.1.add(s) { mark(2); }
-        if *py.0.add(s) != *py.1.add(s) { mark(3); }
-        if *r.0.add(s) != *r.1.add(s) { mark(4); }
-        if *en.0.add(s) != *en.1.add(s) { mark(5); }
-        if *ow.0.add(s) != *ow.1.add(s) { mark(6); }
-        if *fl.0.add(s) != *fl.1.add(s) { mark(7); }
-        if *ty.0.add(s) != *ty.1.add(s) { mark(9); }
-        if *fa.0.add(s) != *fa.1.add(s) { mark(10); }
-        if *fs.0.add(s) != *fs.1.add(s) { mark(11); mark(12); }
-        if *vi.0.add(s) != *vi.1.add(s) { mark(13); }
-        if *mo.0.add(s) != *mo.1.add(s) { mark(14); mark(15); }
     }
 }
 

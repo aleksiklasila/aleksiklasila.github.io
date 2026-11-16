@@ -8913,3 +8913,208 @@ dk 4): dk 4 fires less, not wastes more. Only ~10-14% of fighters are engaged at
 more fighters of every combat type (fewer died). Cutting lost instructions by a third moved damage ~1%: targeting
 latency is not what bounds the fights. Not found yet: what does (contact / approach rate in crowds is the next guess).
 
+
+## 2026-11-15 (night) - rendered checkerboard baseline; the occupancy as rounds over block packets (built, measured, not the default)
+
+User: optimize the whole game with rendering and simulation on (headed Edge), on the checkerboard chaos scene; what
+gives the best uplift, not just the largest kernel; then: not a local trim of the occupancy but background -> SIMD
+SoA tables -> foreground parallel vector loops with few branches, over the whole flow; move and occupancy combined
+so their memory round trips go. Tools in tests/test-runs/wholesale-20261115/: phases.cjs (time phases of a SIMTRACE
+run), profsum.cjs (self / inclusive time of the Edge probe's WPROF profiles by thread kind), msp.cjs (move-step-probe
+copy: DBGC=1 debug counters, OSTATS=1 occupancy stats a step), crowdbase.sh (crowd-traffic open / counter / plug /
+wall at dk 1 / 4 / 20, ROUNDS=), coldiff.cjs (columns and bound arrays after N steps, old against new resolver),
+abr.sh (alternating A/B of the two resolvers, one binary).
+
+**Baseline (checker-200k-r0, headed Edge, 8 helpers, ~234k units, dk ~1.3):** step mean 50.6 ms, p50 50.6, p95 64,
+p99 72, max 90; FPS ~115. Kernels' wall 37 ms of the step: occupancy k89 21.2 (178 ms helper CPU), first stage k8
+4.4, then ~1 ms each; the simulation thread's own JS ~2 ms. The steps run back to back (gap ~1 ms): at ~50 ms the
+match falls behind real time and the pace goes to 2 base ticks a step (100 ms). All threads' CPU a step ~553 ms:
+movement ~250 (k89 215, k8 34), worker search scan 29, flow exact 21, atlas route 20, acquisition sample 12, flow
+pending 11, effective levels 9, visibility seeds 8; presentation worker 32 and page 25 ms CPU a step.
+
+**Counters (Node, 190k alive, dk 1, a step):** 81k rows gathered, 56k resolved against footprints, 37k pushed,
+18k shoulder searches, 8.4k swap scans, 12k short-walker retries; k8 200k lanes, 162k by the vector paths.
+
+**Built: wasm/src/mv_rounds.rs (rounds_job, switch traffic config word 44 = SIM_OCC_ROUNDS, ?rounds=1; default 0).**
+The block job's resolve as rounds of sub-steps of at most one cell over job-local SoA packets (intent movers,
+first-stage-stepless flow walkers, yields), the walls by the centre's tile test, a local copy of the bitmap over the
+movers' region; swaps after the rounds with the partner from the tile index (yields count as standing partners: that
+was 27 -> 584 plug yields in wall dk 4), a swapped mover's continuation and the walkers' retry as further cycles,
+walkers passing walkers; the bitmap, records and rows written once at the end; deposits, pushes, columns and the
+epilogue as the old resolver's. Three designs, in order:
+1. Parallel proposals with claims: owner map O (u16, packet index; a mover may enter cells of a lower index),
+   claims by min index, decide in index order, commit in two passes. First cut: 64% slower k89 (fixed costs: the
+   O map filled from the bitmap and the claims cleared over each job's region, 18M cells a step = ~72 MB written;
+   every standing unit's footprint written into O).
+2. Per-thread generation-tagged O / C maps (no clearing), bitmap-first legality, standing partners from the tile
+   index, a settling pass in index order with an exact fallback for the losers: 133 -> 94 ms helper CPU a step
+   (old resolver 81-84).
+3. The parallel proposal dropped: each round is a sweep in leader order over the local bitmap (a mover's footprint
+   lifted, candidates by 64-bit row tests, put back where it lands): the same outcomes (a follower sees its leaders'
+   new places), no O, no claims. 94 ms CPU; passes fused (box, first list, slot table in the packet loop; swap and
+   retry candidates from a bit set of movers out of the rounds short of their wanted end): 93.6.
+
+**Behaviour (crowd-traffic, progress against the old resolver):** dk 1 open +0.03%, counter +0.6%, plug +0.03%, wall
+-0.2% (after the stepless walkers' retry: their first stage gives most walkers no step in the wall case's second
+step; the old second pass moved them); dk 4 open +5%, counter +0.3% (moving 0.93 against 0.99), plug +5%, wall -0.6%
+(yields 635 / 634); dk 20 open +8%, plug +9% (yields 760 / 749). traffic-pressure (dk 20, 80 ticks): plug passes,
+counter fails "most ordered units move" with the rounds (passes with the old resolver).
+
+**Cost (release, alternating A/B in one sitting, checker-200k-r0, 8 helpers, Node):** dk 1 k89 8.9 -> 10.2 ms
+(+15%); dk 4 14.9 -> 18.7 ms (+25%: a long step is several sub-step sweeps). Not made the default.
+
+**What this says:** the claims machinery costs more than it saves (the leader-order pass is needed anyway, and a
+mover's legality is a few bit tests in L1). The remaining per-mover cost is not the resolve's arithmetic but the
+scattered traffic around it: reading the wanted positions and first-stage words by slot (the gather and packets,
+~17 ms CPU), steer records, stat rows and statuses for the walker checks and retries (~6), the column writes,
+records and rows (~12), the epilogue; and sub-steps multiply the per-mover passes at dk > 1. The lever is the data:
+the hot state in block-ordered rows the fused job streams (intent writing its wanted step into the packet in
+registers / scratch, no x / y round trip), not a different resolve order.
+
+**State:** SIM_OCC_ROUNDS = 0 (the old resolver) by default; the rounds resolver stays in the tree under the switch
+for the next round's work (to be removed with whichever loses). Debug counters in occ.stats words 8-15 (rounds
+path only). Nothing committed.
+
+## 2026-11-15 (night, later) - the first stage fused into the occupancy's block job: built, correct, slower (not kept)
+
+User: the fused move + occupancy job next. Built (patch kept: tests/test-runs/wholesale-20261115/fused-job-not-kept.diff):
+- **mv.rs block_intent:** in each block job (four colour phases), before the resolve: the block's rows' slots (a dead
+  unit's too), radix-sorted, in runs of consecutive slots (parts of at most 512: the step kernel's flags, mv.stept, are
+  bytes of the argument block from word 300 by slot from the part's first; a base of 0 wrote them over the argument
+  words, word 461 = occ.needb among them: "unaligned atomic"); per run ord_pickup (leftovers at the block's row offset),
+  move_span (Mv.fused: stores lane by lane, a run may end inside a group beside another job's slots), mark_need (any
+  range, the need words' bits by atomics). The slot-chunk first-stage dispatch (k8 with P[4] -1), its scan of the mover
+  table and mvtAfterFirstStage gone; mvtBeforeBlockJobs runs the scan kernel and the sync first.
+- **mvt.rs:** a dead unit keeps its row until its slot is let go (releases mark the slot: k_unit_gone, mvtM), so the
+  block job steps it as the first stage did; occ_gather passes over dead rows.
+- **Lists by block job:** hits (k_hits P[7] with occ.offsets, which it already had; k_struct_hits argument 137), the
+  pickup's leftovers (main.js orderPickupFinish by simMovePick.off; ord.lcnt sized for the blocks too).
+- **Swaps:** partners of this block, or standing ones of a block whose phase came before (MoveGrid::earlier_phase; the
+  cross-block swap list): one of a later phase had not had its step yet (a double step). Home-only cost wall dk 4 4%.
+- Audits: no cross-unit reads of current positions in the first stage (targets by x0 / y0).
+
+**Behaviour (crowd-traffic against the two stages):** dk 1 open / counter / plug / wall and dk 4 open / plug, dk 20 open
+bit-identical; counter dk 4 +0.7%, wall dk 4 -0.2% (moving 0.978 / 0.993), plug dk 20 -0.1% (yields 750 / 749).
+
+**Cost (alternating A/B, checker-200k-r0, 8 helpers, Node; HEAD's binary and movement JS as overrides):** dk 1 step
+27.5 -> 28.8 ms, k89 + k8 12.0 -> 13.8; dk 4 53.5 -> 57.8, 19.3 -> 22.2. Helper CPU of the movement ~104 -> 127 ms a
+step: step4 ~2x (20.5 ms), block_intent's own loops 12.9, mark_need 6.9.
+
+**Why:** a block's slots are not contiguous. After 300 steps (checker-200k): 874 blocks, 190k units in 54k runs of
+consecutive slots (mean 3.5; 40.6k runs of one slot; 30% of units in runs of 64 or more); allowing free slots inside a
+run changes nothing (3.6): the runs are broken by other blocks' units. Units cross block edges far faster than the
+relayout (budgeted, every 64 steps) re-homes them, so the first stage's four-lane paths lose their streaming over
+512-slot chunks. **Fusion pays only with block-contiguous hot state:** the movement's hot fields in block-ordered rows
+(moving a row is a few words; moving a slot is every column: k_slot_move ~48 ms helper CPU at 1M), the intent reading
+rows (MOVEMENT_SIMD_PLAN.md section 0 stage C) - or slots kept block-contiguous, which costs the slot moves.
+
+Reverted: the tree is the two-stage movement again (rebuilt). Nothing committed.
+
+## 2026-11-16 - rendered whole-game round: what moves the rendered step
+
+User (2026-11-16): keep optimizing without asking, try strategies, keep what works, note what does not; measure and
+optimize with rendering on, the whole game (the game is played rendered). Tools: tests/test-runs/wholesale-20261115/
+edgeab.sh (headed Edge, checker-200k-r0, alternating configurations by URL query, rounds; step mean / p50 / p95 / p99 /
+fps of the steps after the first 40), abb.sh (Node binary A/B, state hash), abf.sh (fused vs HEAD).
+
+**Rendering's share of the step (edgeab, 2 rounds x 60 s each):** default 48.1 ms mean (p95 63.9, fps 108);
+?present=0 (the presentation worker builds no frames; the page still draws) 42.0 (p95 56.7, fps 116): the frames'
+building costs the simulation ~6 ms a step (13%). The presentation worker builds one frame a simulation step (all
+units read from the simulation heap by three helpers + its thread, ~32 ms CPU a step at 234k units) while the next step
+runs.
+
+**Kept:**
+- **Atlas routes by a lazy heap (atlas.rs k_atl_route):** the Dijkstra's indexed binary heap (decrease-key, position
+  array) replaced by a heap of packed (dist << 32 | local index) keys, stale keys skipped when popped, compacted to the
+  live ones when full (room for 2 n). The same distances (exact: state hash equal after 300 + 40 steps), the same
+  (dist, index) order. Node helper CPU 18.3 -> 12.0 ms a step (-35%).
+- **The occupancy gather reads a footprint row's columns only when it is gathered (mv.rs occ_gather):** ~110k
+  scattered x / y reads a step fewer. Exact; no measurable change in Node (k89 9.70 / 9.73 ms).
+- Knobs for measurement: ?simspin=ms (helper spin, ctl word 190), ?presh=N (presentation helpers).
+
+**Measured, not kept / no effect:**
+- **Helper spin 0.25 / 0.05 / 0 ms (rendered):** step mean 49.0 / 48.2 / 50.0 ms, p95 63.2 / 63.9 / 65.7, fps 110-112:
+  noise. The spin ("loop", ~37 ms helper CPU a step in the profile) costs no step time; 0.25 kept.
+- **Effective levels: a memo of the area-range counts by (area, owner-type lane, range) (k.rs k_eff_units):** 4.4 ->
+  4.6 ms helper CPU (no gain: the range searches are not its cost, or few repeats within a job). Reverted.
+- **Worker search scan:** ~5.4k real requests a step (collectors 1.5k, work grid 2.5k, healers 0.8k scanning 5.3k damaged
+  units in all, research 0.6k), ~3.5 us each: no redundancy found to remove (the healer scan is not the cost).
+
+**The presentation's structure copy (presentation_worker.js copyTableRows), kept:** a frame's structure table was copied
+whole each time it changed: its capacity (315,456 rows) at every column, 48.9 MB a step for 39.6k structures (~5 ms of
+the presentation thread and as much memory traffic). Now only rows 0..max(n, count) of each column, at the capacity
+stride (the same layout: the page reads no row past n); the projectile table the same. Alone (edgeov sc, 3 rounds):
+mean 47.8 -> 49.2, p50 47.5 -> 46.6, p95 62.7 -> 73.1 (tail spikes in one round, the run's variance).
+
+**All the kept changes against HEAD, rendered (edgeov all2, 3 rounds x 60 s, alternating):** base round 1 dropped (69 ms:
+an orphaned grep of mine was loading a core; a load logger to run beside the rounds:
+tests/test-runs/wholesale-20261115/loadmon.ps1 -Out load.log, and sumruns.cjs sums runs by file prefix). Base 48.3 / 48.2, new 47.1 / 46.6 / 46.2; together base mean 48.3, p95 62.2, p99 72.7 ->
+new 46.6, p95 60.2, p99 68.7, fps 111 both: -1.7 ms mean (-3.5%), every round. Kept.
+
+**Thread splits, rendered (edgeab thr, 2 rounds):** default (3 presentation helpers, 8 simulation helpers) 46.4 mean,
+p95 59.5, p99 68.0; presh=1: 48.4 / 65.0 / 85.8; presh=1 + simhelpers=10: 49.6 / 68.2 / 83.4; presh=2 + simhelpers=9:
+47.8 / 64.3 / 78.4. The default is best: fewer presentation threads make its frame later (the page waits), more
+simulation helpers do not add throughput (the machine is full: a thread trace showed ~10.5 busy threads on 8 cores /
+16 logical, Edge ~11.5 cores in the load log).
+
+**Measuring note:** rendered A/B rounds must run with nothing else loading the machine: a single core of other work
+moved a base run from 48 to 57-69 ms. Check the load log before trusting a round.
+
+## 2026-11-16 - the presentation worker's frame passes (rendered checker-200k)
+
+A named rendered profile (build --pres --keep-names --out=..., PRES_OVERRIDE; WPROF; profsum.cjs presentation_worker;
+wasmnames.cjs maps wasm-function[i] of a named build) split the presentation's ~35 ms of CPU a frame (4 threads):
+k_pres_p8 facing 21.6%, k_pres_bucket_part 14.6%, k_pres_tail (change marks) 12.3%, k_pres_order (id radix sort)
+8.9%, k_pres_p2 metadata 6.5%, k_pres_p0 motion 6.3%, select 4.7%, the rest small. The page's main thread: 63% of a
+core, top _simClientUpdateStableSlots 7%.
+
+**Kept (pres_fill.rs, pres.rs, presentation_worker.js; presentation tests, lod-visible-budget, rebase-frame,
+column-dirty-upload pass):**
+- **Facing (p_facing):** in chunks of 64 list entries: the targets' offsets first (a tight loop of independent loads,
+  integer eighths), then the facing in f32 with selects and one atan2 a unit (was f64, branches a case). -12% of the
+  pass only: it is bound by its memory, not its arithmetic.
+- **Change marks by v128 (marks_run: ids_differ, live_differs):** a block's columns compared 4 / 8 / 16 slots at a
+  time against the ids' signs narrowed to the element width, branch-free; by the simulation's marks too (the blocks
+  the fill wrote, whole: marks_slots, a branch a column a slot, removed). Blocks past the last frame's count are always
+  compared whole. Marks -41%.
+- **Camera bucket records by slot (bucket_recs in k_pres_tail; k_pres_bucket_part reads one u64 a unit):** the bucket
+  pass walked the id order, whose slots are random: each of its six column reads and two writes a miss. The ranges'
+  tail now writes each unit's cell << 1 | moved and its largest move (f32) by slot (columns streaming) and the next
+  frame's previous positions; the bucket part reads that record. Part + records -12%. k_pres_bucket_recs (and
+  frameBucketRecords) make the records for frames made by hand (tests/present-pm.cjs).
+- Together, normalized by the id sort: the range passes + buckets -13% of their CPU.
+- **Rendered A/B (edgeov presk, 4 rounds x 60 s; base = the worker and binary before):** base mean 47.3, p95 60.7,
+  p99 69.8 -> new 46.6, p95 61.0, p99 68.2, fps 111 both: neutral to slightly better (the presentation's CPU is ~6 ms
+  of step at most, see present=0).
+
+**Not kept:**
+- **Small range chunks (CHUNK_SLOTS 2048, up to 1024 chunks, so a chunk's ~40 columns stay in L2 across the 13
+  passes):** with the kernels above (edgeov presb, 4 rounds): base 42.5 / p95 56.8 / p99 64.0 / fps 107 -> 44.7 / 58.4
+  / 65.9 / 111, worse in every round; the kernels alone were neutral, so the chunks cost ~2 ms of step (115 chunks a
+  frame: 13 kernel calls each from JS, and the threads' Atomics traffic). Reverted (64 chunks, 4 a thread).
+- Probe dump with the presentation's pacing: tests/perf-fuzz/simtrace-pres-dump.js (PRES line: frames, build ms,
+  pace, threads).
+
+## 2026-11-16 - the occupancy's four phases as one job, a block waiting on its neighbours only (kept)
+
+A named rendered profile of the simulation's threads (build --keep-names --out=..., WASM32_OVERRIDE, WPROF; profsum
+helpers+sim; callers.cjs for a function's callers): move_job 15.5%, the occupancy / traffic family ~25%
+(checked_traffic_q 6.1, traffic_swap 5.1, MoveGrid preview 4.6 / commit_preview 3.8, traffic_yield 3.0, ...), the
+helpers' spin (loop + its performance.now) 8% (idle). The step (phases.cjs): simMoveRun 27.8 of 48.6 ms, k89 19.9 ms
+wall (about twice its Node time: rendering's contention). The slowest steps (spikes.cjs) were k89 at 30-50 ms with a
+large tail:89, a helper the system took away inside a phase holding every thread at that phase's barrier. (The
+400-500 ms steps of the profiled runs are the profiler's start, at WPROF_DELAY: not in unprofiled runs.)
+
+**Change (unit.js simMoveRun, sim_parallel.js kernel 89, sim_occupancy.js occupancyJobs):** the four colour phases
+were four parallel jobs, a barrier each. Now one job over the phases' blocks in the same order (phase after phase,
+heaviest first); a block's chunk first waits (Atomics.wait on occ.deps) for those of its eight neighbours that belong
+to an earlier phase and have units this run, runs, then publishes its finish (also when it throws). A block touches
+its cells and its halo only, so blocks that are not neighbours never meet: every block still runs after its
+neighbours of earlier phases and before those of later ones, the same results as the four jobs in turn.
+
+- Exact: state hash equal to the phases one job each after 100 + 40 steps (checker-200k, 8 helpers), equal at 2
+  helpers; multiplayer-chaos-determinism, chaos-scenario-determinism, shared-spatial-determinism, occupancy-grid,
+  occupancy-shapes, mover-table(-order), traffic-pressure, movement-sleep, worker-approach-occupancy pass.
+- Node (move-step-probe, 3 rounds alternating): 25.2 -> 24.8 ms, p95 30.8 -> 29.7 (neutral: no contention there).
+- **Rendered (edgeov deps, 4 rounds):** step mean 41.6 -> 41.0, p50 40.5 -> 39.6, p95 56.2 / 56.3, p99 64.3 / 63.8;
+  k89 wall 16.2 -> 15.4 ms in every round (-5%), tail:89 0.16 -> 0.03 ms.

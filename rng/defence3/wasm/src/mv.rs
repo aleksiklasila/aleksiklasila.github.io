@@ -3075,11 +3075,14 @@ unsafe fn occ_gather(m:&Mv,rows:&super::mvt::Rows,job:usize,need:*const u32,td:b
             let (rx,ry)=(*base.add(R_X*SLAB+r),*base.add(R_Y*SLAB+r));
             let (cx,cy)=(rx.max(0)>>csh,ry.max(0)>>csh);
             let pushed=td&&super::traffic::push_at(m.traffic,cx,cy);
+            let needed=need.is_null()||pushed||(*need.add(slot>>5)>>(slot&31))&1!=0;
             // (A unit without a footprint (no room where it was made): nothing writes a record for it; its row's
-            // position is its step's, here.)
+            // position is its step's, here. A footprint's row is exact: its columns read only when it is gathered.)
+            let inactive=*base.add(R_STAT*SLAB+r)>=0;
+            if !needed&&!inactive{continue;}
             let (sx,sy)=(*(m.x.add(slot) as *const i32),*(m.y.add(slot) as *const i32));
-            if *base.add(R_STAT*SLAB+r)>=0&&(sx!=rx||sy!=ry){rows.moved(slot,(sl as usize*SLAB+r) as i32,sx,sy);}
-            if !(need.is_null()||pushed||(*need.add(slot>>5)>>(slot&31))&1!=0){continue;}
+            if inactive&&(sx!=rx||sy!=ry){rows.moved(slot,(sl as usize*SLAB+r) as i32,sx,sy);}
+            if !needed{continue;}
             // (The scratch holds 131k rows a block; a block is 16 x 16 tiles of 64 cells.)
             if ne>=cap_e{unreachable();}
             hx+=(sx-rx) as i64;hy+=(sy-ry) as i64;

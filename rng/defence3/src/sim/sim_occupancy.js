@@ -120,16 +120,30 @@ function occupancyPrepareMovement() {
 // (chFix, W a chunk), its cross-block swaps and stats, and the traffic
 // inputs all at once (each job cleared its own block's). The order within a
 // phase decides nothing: its blocks touch disjoint cells.
+// The four phases run as one parallel job (unit.js simMoveRun): a block
+// waits for its neighbours of the phases before its own that have units
+// (occ.deps: [0, jobs) a block's last finished run, [jobs, 2 jobs) the run
+// it has units in, 2 jobs this run's number), not for every block of those
+// phases. A block touches its own cells and its neighbours' (its halo): two
+// blocks that are not neighbours never meet, so the order of their jobs
+// decides nothing either, and every block still runs after its neighbours of
+// earlier phases and before those of later ones: the same results as four
+// jobs one after another. (Four jobs with a barrier each: a helper the system
+// took away for a few ms in a phase held every thread at its end; a step's
+// slowest steps were that, kp:89 30-50 ms with its tail.)
 const _occJobsP=new Float64Array(4);
 function occupancyJobs(postc,sexc,chFix,W){
     const O=_occ,C=O.config,bw=C[5],bh=C[6],jobs=bw*bh,F=O.offsets,k=SIM_OCCUPANCY_XSWAP_STRIDE;
     if(!O.jobs||O.jobs.length<jobs+8){if(O.jobs)simHeapFree(O.jobs);O.jobs=simHeapArray(Int32Array,jobs+8);}
     simParallelBind('occ.jobs',O.jobs);
+    if(!O.deps||O.deps.length<2*jobs+1){if(O.deps)simHeapFree(O.deps);O.deps=simHeapArray(Int32Array,2*jobs+1);O.depRun=0;}
+    simParallelBind('occ.deps',O.deps);
     const J=O.jobs;
     O.stats.fill(0,0,jobs*16);
     // (Each phase's blocks with units, heaviest first; the empty ones' outputs cleared: jobs.rs.)
     const P=_occJobsP;P[0]=bw;P[1]=bh;P[2]=W;P[3]=k;
     simRustDirect('k_occ_jobs',[F,J,postc,sexc,chFix,O.xswap],P);
+    {const D=O.deps,e=O.depRun=O.depRun%0x3fffffff+1,n=J[4]+J[5]+J[6]+J[7];for(let i=0;i<n;i++)D[jobs+J[8+i]]=e;D[2*jobs]=e;}
     if(_traffic)for(const key of ['workX','workY','workLoss'])_traffic[key].fill(0);
     return J;
 }

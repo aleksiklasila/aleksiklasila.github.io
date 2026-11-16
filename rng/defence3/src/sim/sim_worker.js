@@ -271,6 +271,9 @@ self.onmessage = (ev) => {
             self.SIM_NO_PRESENT = !!msg.noPresent;
             // Helpers for the parallel jobs (with shared memory; sim_parallel.js).
             let helpers = 0;
+            if (msg.spinUs >= 0) _simParSpinUs = msg.spinUs;
+            // (?presh=N: the presentation worker's helpers, a measurement; -1 its own choice.)
+            self.SIM_PRES_HELPERS = msg.presHelpers >= 0 ? msg.presHelpers : -1;
             try { helpers = simParallelInit(_simHelperUrl(), msg.maxHelpers, msg.bgOnly | 0); } catch (err) { _simError('helpers', err); }
             _simPost({ type: 'loaded', ms: performance.now() - t0, helpers, shared: SIM_PAR_SHARED });
         } else if (msg.type === 'start') {

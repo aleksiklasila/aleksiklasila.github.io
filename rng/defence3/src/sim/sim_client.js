@@ -131,7 +131,7 @@ function _simClientSpawn(c, viaBlob, maxHelpers) {
         let text = (ev.message || 'worker error, no message (script failed to load?)') + where;
         c.errors.push(text); if (!c.loaded) { c.failed = text; _simClientLoadSettled(c); } console.error('[sim worker]', text, ev);
     };
-    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, bgOnly: c.bgOnly | 0, noPresent: /[?&]present=0(?:&|$)/.test(location.search), ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search),
+    worker.postMessage({ type: 'load', scripts: _simClientScriptUrls(), maxHelpers, presHelpers: (() => { try { const q = new URLSearchParams(location.search).get('presh'); return q !== null && q !== '' ? Math.max(0, Math.floor(Number(q)) || 0) : -1; } catch { return -1; } })(), spinUs: (() => { try { const q = new URLSearchParams(location.search).get('simspin'); return q !== null && q !== '' ? Math.round(Number(q) * 1000) : -1; } catch { return -1; } })(), bgOnly: c.bgOnly | 0, noPresent: /[?&]present=0(?:&|$)/.test(location.search), ctl: c.ctl, ctlBase: c.ctlBase, trace: /[?&]simtrace=1(?:&|$)/.test(location.search),
         // (The kernel build, as the page picks it: sim_wasm.js SIM_WASM64_ENABLED.)
         wasm64: typeof SIM_WASM64_ENABLED !== 'undefined' ? !!SIM_WASM64_ENABLED : false });
 }

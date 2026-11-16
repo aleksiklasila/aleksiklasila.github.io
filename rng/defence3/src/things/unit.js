@@ -3522,7 +3522,13 @@ function simMoveRun() {
         mvtAfterFirstStage(n);
         // (Each phase's blocks with units, heaviest first: occupancyJobs.)
         const J=occupancyJobs(_simMovePostC,P[54]===1&&_sep?_sep.exc:null,_simMoveChFix,NPa+1);
-        for(let phase=0;phase<4;phase++){if(J[4+phase]>0){P[4]=phase;simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,J[4+phase],_simMoveCompanionTask(1+phase));}}
+        // (The four phases as one job: a block waits for its neighbours of earlier phases only, sim_occupancy.js.)
+        const nj=J[4]+J[5]+J[6]+J[7];
+        if(nj>0){
+            const L=[1,2,3,4].map(_simMoveCompanionTask).filter(Boolean);
+            for(let phase=0;phase<4;phase++)if(J[4+phase]>0)P[4]=phase;
+            simParallelRun(SIM_KERNEL_MOVE_OCCUPANCY,nj,L.length?()=>{for(const t of L)t();}:null);
+        }
     }else simParallelRun(SIM_KERNEL_MOVE, chunks, _simMoveCompanionTask(0));
     simMoveCompanionsFlush();
     if (typeof simUnitStSettle === 'function') simUnitStSettle();

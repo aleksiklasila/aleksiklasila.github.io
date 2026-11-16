@@ -235,6 +235,11 @@ const _simOccW = _simWK(['occ.bits','occ.mask','occ.rec','?-','?-','?-','?-',
     // (38..44: the mover table, mvt.rs Rows: the jobs walk their block's rows and keep the rows' positions.
     // 45: the first stage's marks, a bit a slot, mv.rs mark_need.)
     'mvt.cfg', 'mvt.hrow', 'mvt.dirty', 'mvt.bhead', 'mvt.snext', 'mvt.bcount', 'mvt.rows', '?occ.needb']);
+// Chunk c of the four phases' blocks (occ.jobs, phase after phase): its
+// phase and its place in it; first it waits for its neighbours of earlier
+// phases that have units this run (occ.deps, sim_occupancy.js
+// occupancyJobs), then its finish is published for the blocks waiting on it
+// (also when it throws: they would wait forever).
 SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
     if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
     const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
@@ -242,7 +247,21 @@ SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
     // (The thread's scratch: the job's rows gathered and ordered there, mv.rs move_job. Set here: a helper whose
     // first kernel is this one has no other call's words.)
     _simWasmArgI[1000]=_simWEnc(_simWasmScratch);_simWasmArgI[1001]=_simWasmScratchWords;_simWasmArgI[1002]=_simThreadSlot;
-    _simWasmX.mv_move_occupancy(_simWasmArgsW,c);
+    const J=R['occ.jobs'],D=R['occ.deps'],cfg=R['occ.config'],bw=cfg[5],bh=cfg[6],jobs=bw*bh;
+    let ph=0;while(ph<3&&c>=J[ph+1])ph++;
+    const j=J[8+c],e=Atomics.load(D,2*jobs),bx=j%bw,by=(j-bx)/bw;
+    for(let ny=by-1;ny<=by+1;ny++){
+        if(ny<0||ny>=bh)continue;
+        for(let nx=bx-1;nx<=bx+1;nx++){
+            if(nx<0||nx>=bw||((nx&1)|((ny&1)<<1))>=ph)continue;
+            const nj=ny*bw+nx;
+            if(D[jobs+nj]!==e)continue;
+            for(let v;(v=Atomics.load(D,nj))!==e;)Atomics.wait(D,nj,v,2);
+        }
+    }
+    _simWasmArgF[4]=ph;
+    try{_simWasmX.mv_move_occupancy(_simWasmArgsW,c-J[ph]);}
+    finally{Atomics.store(D,j,e);Atomics.notify(D,j);}
 };
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
@@ -954,6 +973,7 @@ function simParallelInit(helperUrl, maxHelpers = null, bgOnly = 0) {
     for (let lane = 0; lane < SIM_PAR_BG_LANES; lane++) ctl[SIM_PAR_BG_BASE + lane * 8 + SIM_PAR_BG_ID] = -1;
     // (At least one helper for the tick's jobs.)
     ctl[SIM_PAR_BG_ONLY] = Math.max(0, Math.min(n - 1, bgOnly | 0));
+    ctl[SIM_PAR_SPIN_US] = _simParSpinUs >= 0 ? _simParSpinUs : Math.round(SIM_PAR_SPIN_MS * 1000);
     // (The wasm heap first: the helpers instantiate the kernels over it.)
     if (typeof simWasmInit === 'function') simWasmInit();
     let helpers = [];
@@ -1601,8 +1621,9 @@ function simParallelHelperMain() {
             // (A short spin first: the simulation thread posts a tick's jobs
             // one after another, and a wake through waitAsync is a task of
             // this worker's event loop, late for a short job.)
-            if (SIM_PAR_SPIN_MS > 0 && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
-                const until = performance.now() + SIM_PAR_SPIN_MS;
+            const spinMs = ctl[SIM_PAR_SPIN_US] / 1000;
+            if (spinMs > 0 && Atomics.load(ctl, SIM_PAR_GEN) === seen) {
+                const until = performance.now() + spinMs;
                 while (Atomics.load(ctl, SIM_PAR_GEN) === seen && performance.now() < until) { }
             }
             // A job can arrive before its binding messages. Receiving the
@@ -1670,6 +1691,10 @@ function simParallelHelperMain() {
 let _simParHelperParams = null;
 // How long an idle helper looks for the next job before it waits (ms).
 const SIM_PAR_SPIN_MS = 0.25;
+// (The spin in microseconds for the helpers, ctl word SIM_PAR_SPIN_US: SIM_PAR_SPIN_MS, or the page's ?simspin=ms
+// (sim_client.js, the worker's load message: _simParSpinUs).)
+const SIM_PAR_SPIN_US = 190;
+let _simParSpinUs = -1;
 
 
 // Same-owner same-type units around each due unit (things_utils.js

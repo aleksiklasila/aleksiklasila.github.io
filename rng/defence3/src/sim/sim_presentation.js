@@ -99,7 +99,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261111-pm' + (self.SIM_NO_PRESENT ? '&present=0' : ''), base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261111-pm' + (self.SIM_NO_PRESENT ? '&present=0' : '') + (self.SIM_PRES_HELPERS >= 0 ? '&ph=' + self.SIM_PRES_HELPERS : ''), base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
