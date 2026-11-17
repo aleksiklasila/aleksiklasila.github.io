@@ -281,26 +281,24 @@ function _spClsBuild() {
     // (Every class's columns in the heap, the rally ones too (the births read them): moved there when one is not. A class
     // left out would neither produce nor rally on this peer alone.)
     const need = [..._SP_COLS, ..._SPAWN_RALLY_COLS];
-    if (CL.some(C => { const T = _sTables.get(C); return T && T.n > 0 && need.some(nm => !T[nm] || !simHeapHas(T[nm])); })) structTablesRehome();
+    // (Checked when a class's kept column table no longer holds: data_state.js _sColPtrs.)
+    if (CL.some(C => { const T = _sTables.get(C); return T && T.n > 0 && !(_sColPtrsKept(T, _SP_COLS) && _sColPtrsKept(T, _SPAWN_RALLY_COLS)) && need.some(nm => !T[nm] || !simHeapHas(T[nm])); })) structTablesRehome();
     let J = 0;
     for (let k = 0; k < CL.length; k++) {
         const C = CL[k];
         const T = _sTables.get(C), b = k * 16;
         cls.fill(0, b, b + 16);
         if (!T || !(T.n > 0)) continue;
-        let j = 0;
-        for (; j < _SP_COLS.length; j++) {
-            const a = T[_SP_COLS[j]];
-            if (!a || !simHeapHas(a)) break;
-            cls[b + 2 + j] = _simWEnc(_simHeapPtrOf(a));
-        }
-        if (j !== _SP_COLS.length) throw new Error('spawner production: a column of ' + C.name + ' not in the heap: ' + _SP_COLS[j]);
+        const E = _sColPtrs(T, _SP_COLS);
+        for (let j = 0; j < _SP_COLS.length; j++) if (!E[j]) throw new Error('spawner production: a column of ' + C.name + ' not in the heap: ' + _SP_COLS[j]);
+        cls.set(E, b + 2);
         cls[b] = T.n;
         cls[b + 1] = _stAllIx.get(C) || 0;
         J += Math.ceil(T.n / SPAWN_PROD_ROWS);
     }
     return { cls, J };
 }
+const _spSqueezeIds = () => { unitRows(); };
 function spawnerProductionPass() {
     const S = _spp, CL = _spClasses();
     if (globalSpawnerReadyOrderCounter > 1073741824) _spRebase(CL);
@@ -324,7 +322,10 @@ function spawnerProductionPass() {
     const ver = _precomputedStatsVersion, P = _simParams;
     // The table's missing or stale keys, then every row.
     P[0] = J; P[1] = 0; P[2] = ver; P[3] = SPAWN_PROD_TYPES; P[4] = SPAWN_PROD_ROWS;
-    simParallelRun(SIM_KERNEL_SPAWN_PROD, J);
+    // (Beside it, on this thread: the units-by-id table's holes of this step's deaths squeezed out (main.js unitRows,
+    // ~0.2 ms a step at 190k units, bandwidth: every row past the first hole moves). Its next reader would do it
+    // anyway: the births just after (they append rows to it); these jobs read none of it.)
+    simParallelRun(SIM_KERNEL_SPAWN_PROD, J, _uix.holes > 0 ? _spSqueezeIds : null);
     for (let j = 0; j < J; j++) { const b = j * SPAWN_PROD_ROWS * 5 + SPAWN_PROD_ROWS * 4; for (let i = 0, m = cnt[j * 16 + 2]; i < m; i++) { const key = out[b + i]; if (tab[key * 3 + 2] !== ver) _spTabFill(tab, key, ver); } }
     P[0] = J; P[1] = 1; P[2] = ver; P[3] = SPAWN_PROD_TYPES; P[4] = SPAWN_PROD_ROWS;
     simParallelRun(SIM_KERNEL_SPAWN_PROD, J);
@@ -472,7 +473,8 @@ function _spawnBirthTables(S, n) {
     _spClasses().forEach((K, k) => {
         const T = _sTables.get(K);
         if (!T || !(T.n > 0)) return;
-        _SPAWN_RALLY_COLS.forEach((nm, j) => { if (!T[nm] || !simHeapHas(T[nm])) throw new Error('spawn births: rally column ' + nm + ' of ' + K.name + ' not in the heap'); B.rally[k * 8 + j] = _simWEnc(_simHeapPtrOf(T[nm])); });
+        const E = _sColPtrs(T, _SPAWN_RALLY_COLS);
+        _SPAWN_RALLY_COLS.forEach((nm, j) => { if (!E[j]) throw new Error('spawn births: rally column ' + nm + ' of ' + K.name + ' not in the heap'); B.rally[k * 8 + j] = E[j]; });
     });
     if (!B.cover || !simHeapHas(B.cover)) B.cover = simHeapArray(Int32Array, 64);
     B.cover.fill(0); B.ncov = 0;

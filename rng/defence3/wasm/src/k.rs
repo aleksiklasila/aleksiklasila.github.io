@@ -1283,6 +1283,13 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
         7 => super::nfs::k_nav_sweep_mark(b, chunk),
         // (A relayout's index entries renamed, shares: tch.rs.)
         8 => super::tch::k_ixd_relayout(b, chunk),
+        // (A move order's workers, a chunk of the list a job: ord.rs k_order_workers, P[25] > 0.)
+        9 => super::ord::k_order_workers(b, chunk),
+        // (A unit command's per-unit writes, a chunk of its ids a job: uix.rs k_unit_cmd_par.)
+        10 => super::uix::k_unit_cmd_par(b, chunk),
+        // (The retire pass's slot release, the presentation's structure rows: nfs.rs.)
+        11 => super::nfs::k_retire_release_par(b, chunk),
+        12 => super::nfs::k_meta_structs_par(b, chunk),
         _ => {}
     }
 }

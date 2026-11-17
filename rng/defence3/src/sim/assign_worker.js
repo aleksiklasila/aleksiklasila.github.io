@@ -9,7 +9,7 @@
 // per building), xs, ys, has, points }; out { seq, keys: [Int32Array of each
 // point's tile keys, ascending], tkz: [their wire form] } (rallyAssignTiles).
 // A pure function of its input: the orders it leads to are sent as any others.
-importScripts('../utils/assign_nearest.js?v=20261029-tkz', '../utils/id_codec.js?v=20261029-tkz');
+importScripts('../utils/assign_nearest.js?v=20261029-tkz', '../utils/id_codec.js?v=20261116-enc');
 const assign = assignNearestXY;
 self.onmessage = event => {
     const m = event.data;

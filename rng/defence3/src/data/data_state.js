@@ -1015,6 +1015,32 @@ function _sColsInHeap(T) {
     for (const f of T.fields) if (!f.shared && f.kind !== 'r') return _simHeapPtrOf(T[f.col]) >= 0;
     return true;
 }
+// The encoded heap addresses of a table's columns (cols: a constant list of names) for the kernels' class tables, kept
+// per table and list while every column is still the array it was (the heap's address map is a WeakMap: a lookup a
+// column, ~250 a table list, several lists a step, ~0.3 ms a step of the simulation thread's serial time). null: not
+// kept (a column replaced, or one outside the heap when made): _sColPtrs makes it.
+function _sColPtrsKept(T, cols) {
+    const e = T._cp ? T._cp.get(cols) : undefined;
+    if (!e || !e.ok) return null;
+    const A = e.arr;
+    for (let j = 0; j < cols.length; j++) if (T[cols[j]] !== A[j]) return null;
+    return e.enc;
+}
+function _sColPtrs(T, cols) {
+    const kept = _sColPtrsKept(T, cols);
+    if (kept) return kept;
+    const m = T._cp || (T._cp = new Map());
+    let e = m.get(cols);
+    if (!e) m.set(cols, e = { arr: new Array(cols.length).fill(null), enc: new Int32Array(cols.length), ok: false });
+    let ok = _simHeapPtrOf !== null;
+    for (let j = 0; j < cols.length; j++) {
+        const a = T[cols[j]], p = a && _simHeapPtrOf !== null ? _simHeapPtrOf(a) : -1;
+        e.arr[j] = a; e.enc[j] = p >= 0 ? _simWEnc(p) : 0;
+        if (a && !(p >= 0)) ok = false;
+    }
+    e.ok = ok;
+    return e.enc;
+}
 function _sTableGrow(T, cap) {
     for (const f of T.fields) {
         const was = T[f.col];

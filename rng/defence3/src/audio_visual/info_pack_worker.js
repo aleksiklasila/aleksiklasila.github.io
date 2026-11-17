@@ -11,7 +11,7 @@
 //   page -> init {pack, cat}; strings {list}; stats {dir}; sel {seq, sSlots,
 //   sSers, uSlots} (transferred); frame {cols}; local {player}
 //   page <- out {seq, rows (Float64Array, IPF_N a group), ms}
-importScripts('./info_pack_fields.js?v=20261101-b', '../utils/id_codec.js?v=20261101-b');
+importScripts('./info_pack_fields.js?v=20261101-b', '../utils/id_codec.js?v=20261116-enc');
 let X = null, P = null, mem = null, cat = null, strings = [''], sel = null, frame = null, localPlayer = 0, timer = 0, busy = false;
 const INFO_PACK_EVERY_MS = 100;
 // Group lookups by string code (made again when the strings grow).

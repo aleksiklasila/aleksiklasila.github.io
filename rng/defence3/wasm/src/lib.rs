@@ -1131,6 +1131,11 @@ pub unsafe fn path_release(pth: *mut i32, q: usize, arena: *mut i32, free: *mut 
     if pth.is_null() { return; }
     let h = *pth.add(q);
     *pth.add(q) = 0;
+    path_drop(h, arena, free);
+}
+/// A path store handle's reference let go (path_release's second half: its block freed with the last).
+#[inline(always)]
+pub unsafe fn path_drop(h: i32, arena: *mut i32, free: *mut i32) {
     if h < 2 || arena.is_null() || free.is_null() { return; }
     let b = (h - 2) as usize;
     let refs = *arena.add(b + 1) - 1;

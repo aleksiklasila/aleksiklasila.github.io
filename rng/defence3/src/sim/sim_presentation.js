@@ -596,6 +596,8 @@ const _simMetaP = new Float64Array(24);
 let SIM_META_PAR_MIN = 8192, SIM_META_PER = 4096;
 let _simMetaB = null;
 // (list, nl: only those slots' rows (the tick's changed tiles), into F and F2 if given.)
+// (The parallel structure rows' parameters: simRustParallel copies them into the block.)
+const _simMetaQ = new Float64Array(24);
 function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
     _simMetaClassOf(null);
     const CL = _simMetaCls, CW = 56, nc = CL.length;
@@ -653,18 +655,18 @@ function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
     for (const k of SIM_STRUCT_SPEC.u8) args.push(F[k]);
     const LM = typeof _laserMap !== 'undefined' && _laserMap.lslot && simHeapHas(_laserMap.lslot) ? _laserMap : null;
     args.push(T, S.pser, B.gone, B.cnt, list, _ST.val, LM && LM.lslot, LM && LM.pn, LM && LM.part, adj.rml);
-    if (!list && nslots >= SIM_META_PAR_MIN && typeof SIM_KERNEL_META_STRUCTS === 'number' && typeof _simPool !== 'undefined' && _simPool) {
+    if (!list && nslots >= SIM_META_PAR_MIN && typeof SIM_BLOCK_META_STRUCTS === 'number' && typeof _simPool !== 'undefined' && _simPool) {
         const per = SIM_META_PER, nch = Math.ceil(nslots / per);
         if (!B.ms || B.ms.length < 4 * nch * per || !simHeapHas(B.ms)) { if (B.ms && simHeapHas(B.ms)) { simHeapFree(B.ms); simHeapFree(B.mc); } B.ms = simHeapArray(Int32Array, 4 * nch * per); B.mc = simHeapArray(Int32Array, 4 * nch + 4); }
         args.push(B.ms, B.mc);
-        for (let i = 0; i < args.length; i++) simParallelBind('mst.' + i, args[i]);
-        const Q = _simParams;
-        Q.fill(0, 0, 24); Q.set(P.subarray(0, 15)); Q[15] = 0; Q[16] = per;
-        simParallelRun(SIM_KERNEL_META_STRUCTS, nch);
+        // (Its arrays and parameters in the block's heap words: no binding a pass (simRustParallel).)
+        const Q = _simMetaQ;
+        Q.fill(0); Q.set(P.subarray(0, 15)); Q[15] = 0; Q[16] = per;
+        simRustParallel(SIM_BLOCK_META_STRUCTS, args, Q, nch);
         P[15] = 1; P[16] = per; P[17] = nch;
         simRustDirect('k_meta_structs_par', args, P);
-        Q.fill(0, 0, 24); Q.set(P.subarray(0, 15)); Q[15] = 2; Q[16] = per;
-        simParallelRun(SIM_KERNEL_META_STRUCTS, nch);
+        Q.fill(0); Q.set(P.subarray(0, 15)); Q[15] = 2; Q[16] = per;
+        simRustParallel(SIM_BLOCK_META_STRUCTS, args, Q, nch);
         P[15] = 0; P[16] = 0; P[17] = 0;
     } else simRustDirect('k_meta_structs', args, P);
     // (Spawn cooldowns of keys not in the table for these stats: filled, written.)

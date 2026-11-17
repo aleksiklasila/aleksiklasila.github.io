@@ -33,6 +33,46 @@ pub unsafe extern "C" fn k_slots_by_id(a: u32, _chunk: i32) {
     }
 }
 
+/// k_ws_fail_bump: the search tier's requests that found nothing (ws.res's first word -1), at its commit
+/// (worker.js _wsCommit, after the take): their worker's failed searches one more (unit.wsFail, k_ws_select doubles the
+/// retry period by it, up to its cap), as wai.rs take_one does for a take that found nothing it could take. A request
+/// still current only: its slot's unit alive with its id, still searching that kind since the same registration.
+/// (These never reached the take: idle workers with no site in reach searched at every retry, ~2.8k scans a step of
+/// ~17k a post at checker-200k, 2026-11-16.) Arrays: [0] ws.res, [1] ws.rslot, [2] ws.rid, [3] ws.rkind, [4] ws.rwt,
+/// [5] unit.id, [6] unit.dead, [7] unit.wsKind, [8] unit.wkIx, [9] unit.wsT (by record), [10] unit.wsFail.
+/// P: [0] requests, [1] K (results a request), [2] slots.
+#[no_mangle]
+pub unsafe extern "C" fn k_ws_fail_bump(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (res, rs, rid, rk, rwt) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
+    let (id, dead, wsk, wix, wst, fail) = (k.p::<i32>(5), k.p::<u8>(6), k.p::<u8>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u8>(10));
+    let (n, kk, ns) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2).max(0));
+    for i in 0..n {
+        if g(res, i * kk) >= 0 { continue; }
+        let q = g(rs, i);
+        if q < 0 || q >= ns { continue; }
+        let q = q as usize;
+        if g(dead, q) != 0 || g(id, q) != g(rid, i) || g(wsk, q) as i32 != g(rk, i) { continue; }
+        let w = g(wix, q);
+        if w <= 0 || g(wst, w as usize) != g(rwt, i) { continue; }
+        let f = g(fail, q);
+        if f < 255 { s(fail, q, f + 1); }
+    }
+}
+
+/// The first row at or after i whose slot is -2 (a hole), n none.
+#[inline(always)]
+unsafe fn next_hole(sl: *const i32, mut i: usize, n: usize) -> usize {
+    let m2 = i32x4_splat(-2);
+    while i + 4 <= n {
+        let m = i32x4_bitmask(i32x4_eq(v128_load(sl.add(i) as *const v128), m2));
+        if m != 0 { return i + m.trailing_zeros() as usize; }
+        i += 4;
+    }
+    while i < n && g(sl, i) != -2 { i += 1; }
+    i
+}
+
 /// k_uix_remove. Arrays: [0] ids, [1] slots, [2] the removed ids (P[0] of
 /// them), [3] header in/out ([0] entries, [1] holes). P[1] 1: every hole
 /// squeezed out now (main.js unitRows: the rows the passes read).
@@ -56,15 +96,21 @@ pub unsafe extern "C" fn k_uix_remove(a: u32, _chunk: i32) {
         }
     }
     if holes as usize * 4 > n || (k.i(1) != 0 && holes > 0) {
-        // (From the first hole; branchless: every row written, kept ones
-        // advance. Holes fall anywhere: a branch per row mispredicted.)
-        let mut w = 0usize;
-        while w < n && g(slots, w) != -2 { w += 1; }
-        for r in w..n {
-            let sl = g(slots, r);
-            s(ids, w, g(ids, r));
-            s(slots, w, sl);
-            w += (sl != -2) as usize;
+        // (From the first hole, run by run: the kept rows between two holes
+        // moved with one memory.copy a column, the holes found 4 rows at a
+        // time. A step's few hundred deaths in ~200k rows had every row past
+        // the first hole read and written one by one, ~0.3 ms a step.)
+        let mut r = next_hole(slots, 0, n);
+        let mut w = r;
+        while r < n {
+            let mut a = r + 1;
+            while a < n && g(slots, a) == -2 { a += 1; }
+            if a >= n { break; }
+            let b = next_hole(slots, a, n);
+            core::ptr::copy(ids.add(a), ids.add(w), b - a);
+            core::ptr::copy(slots.add(a), slots.add(w), b - a);
+            w += b - a;
+            r = b;
         }
         n = w;
         holes = 0;

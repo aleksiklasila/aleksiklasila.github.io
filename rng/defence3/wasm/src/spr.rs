@@ -101,6 +101,25 @@ pub unsafe extern "C" fn k_spawn_prod(a: u32, chunk: i32) {
     s(cnt, j * 16, nr as i32); s(cnt, j * 16 + 1, nn as i32); s(cnt, j * 16 + 2, ns as i32);
 }
 
+/// A stable LSD radix sort of n entries (src: their indices; dst: scratch as long) by key(entry), 8 bits a pass (256
+/// counters in hist; the step's few hundred spawns: 16-bit passes cleared and summed 65536 counters twice a pass, ~0.2 ms
+/// a step), a pass skipped when every key has the same byte there (the orders' high bytes). Returns the buffer holding
+/// the sorted indices (src or dst).
+unsafe fn radix_u32(n: usize, mut src: *mut u32, mut dst: *mut u32, hist: *mut u32, key: impl Fn(u32) -> u32) -> *mut u32 {
+    if n < 2 { return src; }
+    for pass in 0..4 {
+        let sh = pass * 8;
+        for b in 0..256usize { s(hist, b, 0); }
+        for i in 0..n { let b = ((key(g(src, i)) >> sh) & 255) as usize; s(hist, b, g(hist, b) + 1); }
+        if g(hist, ((key(g(src, 0)) >> sh) & 255) as usize) as usize == n { continue; }
+        let mut sum = 0u32;
+        for b in 0..256usize { let v = g(hist, b); s(hist, b, sum); sum += v; }
+        for i in 0..n { let e = g(src, i); let b = ((key(e) >> sh) & 255) as usize; let p = g(hist, b); s(dst, p as usize, e); s(hist, b, p + 1); }
+        let t = src; src = dst; dst = t;
+    }
+    src
+}
+
 /// The step's spawns (processGlobalSpawnerQueue's order): the newly ready
 /// rows get orders from the counter (in the jobs' order), then the ready
 /// ones by order (a radix sort), each taken while its owner has room (P[3 +
@@ -146,21 +165,10 @@ pub unsafe extern "C" fn k_spawn_select(a: u32, _chunk: i32) {
             s(nwv, q, w as u32); s(nkv, q, g(col::<i32>(cls, c, SC_ST), r) as u32); q += 1;
         }
     }
-    if q > 1 {
-        for i in 0..q { s(ix, i, i as u32); }
-        let (mut src, mut dst) = (ix, niv);
-        for pass in 0..2 {
-            let sh = pass * 16;
-            for b in 0..65536usize { s(hist, b, 0); }
-            for i in 0..q { let b = ((g(nkv, g(src, i) as usize) >> sh) & 65535) as usize; s(hist, b, g(hist, b) + 1); }
-            let mut sum = 0u32;
-            for b in 0..65536usize { let v = g(hist, b); s(hist, b, sum); sum += v; }
-            for i in 0..q { let e = g(src, i); let b = ((g(nkv, e as usize) >> sh) & 65535) as usize; let p = g(hist, b); s(dst, p as usize, e); s(hist, b, p + 1); }
-            let t = src; src = dst; dst = t;
-        }
-    } else if q == 1 { s(ix, 0, 0); }
+    for i in 0..q { s(ix, i, i as u32); }
+    let nsorted = radix_u32(q, ix, niv, hist, |e| g(nkv, e as usize));
     for k2 in 0..q {
-        let e = g(ix, k2) as usize;
+        let e = g(nsorted, k2) as usize;
         let w = g(nwv, e) as i32;
         let (c, r) = ((w >> 24) as usize, (w & 0xFFFFFF) as usize);
         let o = counter; counter += 1;
@@ -170,16 +178,7 @@ pub unsafe extern "C" fn k_spawn_select(a: u32, _chunk: i32) {
     }
     // By order: an LSD radix sort, 16 bits a pass, of entry indices.
     for i in 0..m { s(ix, i, i as u32); }
-    let (mut src, mut dst) = (ix, ix2);
-    for pass in 0..2 {
-        let sh = pass * 16;
-        for b in 0..65536usize { s(hist, b, 0); }
-        for i in 0..m { let b = ((g(ord, g(src, i) as usize) >> sh) & 65535) as usize; s(hist, b, g(hist, b) + 1); }
-        let mut sum = 0u32;
-        for b in 0..65536usize { let v = g(hist, b); s(hist, b, sum); sum += v; }
-        for i in 0..m { let e = g(src, i); let b = ((g(ord, e as usize) >> sh) & 65535) as usize; let p = g(hist, b); s(dst, p as usize, e); s(hist, b, p + 1); }
-        let t = src; src = dst; dst = t;
-    }
+    let src = radix_u32(m, ix, ix2, hist, |e| g(ord, e as usize));
     let mut n = 0usize;
     for i in 0..m {
         let e = g(src, i) as usize;

@@ -130,7 +130,7 @@ const _simHeap = {
     hw: 0, fresh: 0,
     // Free blocks [ptr, size, ...] by address; freed arrays waiting
     // { arr, p, s, t, waits: [lane, chains posted then, ...] }.
-    free: [], pending: [], clock: 0,
+    free: [], pending: [], clock: 0, frees: 0,
     ptr: new WeakMap(), size: new WeakMap(), live: 0, peak: 0, arrays: 0, error: null
 };
 
@@ -353,6 +353,8 @@ function _simHeapReleaseAutoImpl(arr) {
 // alive, for the binding check; null when the collector took it).
 function _simHeapQueue(arr, p, s) {
     const H = _simHeap;
+    // (Counted: an address kept for an array holds while nothing was freed, worker.js _waiParallel.)
+    H.frees++;
     // (The chains in flight now: each lane's posted count.)
     const waits = [];
     // (Not the growth lane: its kernel reads no array.)

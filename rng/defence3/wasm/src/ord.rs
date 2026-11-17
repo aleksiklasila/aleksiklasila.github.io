@@ -356,7 +356,7 @@ pub unsafe fn wm_clear(k: &K, at: usize, wr: usize, wb: i32, man: f64) {
     s(n(17), wr, man as f32);
 }
 #[no_mangle]
-pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
+pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
     let (list, out, cnt, pd) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(3), k.p::<i32>(4));
     let (own, dead, iswk, holdf, ep, xs, ys, layer, sepk, uid) = (k.p::<i8>(5), k.p::<u8>(6), k.p::<u8>(7), k.p::<u8>(8), k.p::<i32>(9),
@@ -380,20 +380,84 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
     let itile = 1.0 / (tile * 8.0);
     let tile_of = |q: usize| floor(g(ys, q) as f64 * itile) as i32 * gw + floor(g(xs, q) as f64 * itile) as i32;
     let eligible = |q: usize| g(own, q) as i32 == player && g(dead, q) == 0 && g(iswk, q) != 0 && g(holdf, q) == 0 && g(ep, q) == epoch && g(mshoot, q) == 0;
+    // Chunked (P[25] workers a job, > 0: SIM_BLOCK_ORDER_WORKERS over the helpers): modes 0 and 1 over the list's chunk
+    // `chunk`, their counts and lists into the chunk's own places: cc[32 chunk ..] (the cnt layout: [0] left, [1]
+    // freed path handles, [2] the work site grid's list entries, [3] the work versions' sum, [8 + p] / [20 + p] each
+    // profile's count and first), the left at out[i0 ..], the freed handles at ft[i0 ..], the grid's entries at
+    // wt[i0 ..] (arrays 96, 97, 98). Modes 4 (after 0) and 5 (after 1) merge them in chunk order (P[26] chunks): the
+    // same lists, counts and sums as one pass. The shared counters (work versions, the reservations' region counts
+    // and sums) are atomic adds: the same totals in any order. (An order of 80k workers was ~10 ms of one thread.)
+    let per = k.i(25).max(0) as usize;
+    let (cc, ft, wt) = (k.p::<i32>(96), k.p::<i32>(97), k.p::<i32>(98));
+    // (Stopped workers' wake column, mode 2 with P[27] 1.)
+    let mwake = k.p::<i32>(100);
+    if mode == 4 || mode == 5 || mode == 6 {
+        let jobs = k.i(26).max(0) as usize;
+        // (After mode 2: each chunk's freed path handles, its path store releases (pt[i0 ..], cc[4] of them: what
+        // path_release did, in order), its grid entries, its sum.)
+        if mode == 6 {
+            let (pth, parena, pfree, pt) = (k.p::<i32>(93), k.p::<i32>(94), k.p::<i32>(95), k.p::<i32>(99));
+            let (mut vsum, mut full) = (0i32, 0i32);
+            let cap = k.i(22);
+            for j in 0..jobs {
+                let i0 = j * per;
+                let (cf, cw, cp) = (g(cc, j * 32 + 1) as usize, g(cc, j * 32 + 2) as usize, g(cc, j * 32 + 4) as usize);
+                for x in 0..cf { let m = g(mfree, 0); s(mfree, (m + 1) as usize, g(ft, i0 + x)); s(mfree, 0, m + 1); }
+                for x in 0..cp { crate::path_drop(g(pt, i0 + x), parena, pfree); }
+                if !wswl.is_null() {
+                    for x in 0..cw { let m = g(wswl, 0); if m + 1 < cap { s(wswl, (m + 1) as usize, g(wt, i0 + x)); s(wswl, 0, m + 1); } else { full = 1; } }
+                }
+                vsum = vsum.wrapping_add(g(cc, j * 32 + 3));
+            }
+            let _ = pth;
+            s(cnt, 0, 0); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
+            return;
+        }
+        if mode == 4 {
+            for p in 0..NAV_PROFILES {
+                let (mut c, mut f) = (0i32, -1i32);
+                for j in 0..jobs { c += g(cc, j * 32 + 8 + p); if f < 0 { f = g(cc, j * 32 + 20 + p); } }
+                s(cnt, 8 + p, c); s(cnt, 20 + p, f);
+            }
+            return;
+        }
+        let (mut no, mut vsum, mut full) = (0usize, 0i32, 0i32);
+        let cap = k.i(22);
+        for j in 0..jobs {
+            let i0 = j * per;
+            let (cn, cf, cw) = (g(cc, j * 32) as usize, g(cc, j * 32 + 1) as usize, g(cc, j * 32 + 2) as usize);
+            // (Left: moved down to the end of the earlier chunks' (never past its own place: in order, no overlap read late).)
+            if no != i0 { for x in 0..cn { s(out, no + x, g(out, i0 + x)); } }
+            no += cn;
+            for x in 0..cf { let m = g(mfree, 0); s(mfree, (m + 1) as usize, g(ft, i0 + x)); s(mfree, 0, m + 1); }
+            if !wswl.is_null() {
+                for x in 0..cw { let m = g(wswl, 0); if m + 1 < cap { s(wswl, (m + 1) as usize, g(wt, i0 + x)); s(wswl, 0, m + 1); } else { full = 1; } }
+            }
+            vsum = vsum.wrapping_add(g(cc, j * 32 + 3));
+        }
+        s(cnt, 0, no as i32); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
+        return;
+    }
+    let (i0, i1) = if per > 0 { let a = (chunk.max(0) as usize) * per; (a.min(n), (a + per).min(n)) } else { (0, n) };
+    let ob = if per > 0 { i0 } else { 0 };
     if mode == 0 {
-        for p in 0..NAV_PROFILES { s(cnt, 8 + p, 0); s(cnt, 20 + p, -1); }
-        for i in 0..n {
+        let c = if per > 0 { cc.add((chunk.max(0) as usize) * 32) } else { cnt };
+        for p in 0..NAV_PROFILES { s(c, 8 + p, 0); s(c, 20 + p, -1); }
+        for i in i0..i1 {
             let q = g(list, i);
             if q < 0 { continue; }
             let q = q as usize;
             if !eligible(q) { continue; }
             let p = worker_profile(g(layer, q), g(wbtype, g(wkix, q).max(0) as usize), g(own, q) as i32);
-            s(cnt, 8 + p, g(cnt, 8 + p) + 1);
-            if g(cnt, 20 + p) < 0 { s(cnt, 20 + p, q as i32); }
+            s(c, 8 + p, g(c, 8 + p) + 1);
+            if g(c, 20 + p) < 0 { s(c, 20 + p, q as i32); }
         }
         return;
     }
     let (mut no, mut vsum, mut full) = (0usize, 0i32, 0i32);
+    let (mut nf, mut nw) = (0usize, 0usize);
+    let aadd = |p: *mut i32, i: usize, v: i32| { (*(p.add(i) as *const core::sync::atomic::AtomicI32)).fetch_add(v, core::sync::atomic::Ordering::Relaxed); };
+    let _ = &mut no;
     if mode == 2 {
         // Stopped workers (main.js stop, k_unit_cmd's list): its order's
         // fields cleared (commandState P[18], no way, no targets, the
@@ -402,8 +466,9 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         // returning keeps it), its task memory cleared, state IDLE.
         let (pst, pgx, pgy, hobj, kp) = (k.p::<u8>(89), k.p::<i16>(90), k.p::<i16>(91), k.p::<i32>(92), k.i(23));
         // (The path store: [93] unit.pthH, [94] its arena, [95] its free lists.)
-        let (pth, parena, pfree) = (k.p::<i32>(93), k.p::<i32>(94), k.p::<i32>(95));
-        for i in 0..n {
+        let (pth, parena, pfree, pt) = (k.p::<i32>(93), k.p::<i32>(94), k.p::<i32>(95), k.p::<i32>(99));
+        let mut np = 0usize;
+        for i in i0..i1 {
             let qv = g(list, i);
             if qv < 0 { continue; }
             let q = qv as usize;
@@ -413,8 +478,9 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             if g(cmdc, q) != cmd_move { s(on, q, 0); s(cmdc, q, cmd_move); }
             s(nvpk, q, -1);
             let h = g(mpath, q);
-            if h >= 0 { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
-            crate::path_release(pth, q, parena, pfree);
+            if h >= 0 { if per > 0 { s(ft, i0 + nf, h); nf += 1; } else { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); } s(mpath, q, -1); }
+            if per > 0 { if !pth.is_null() { let ph = g(pth, q); s(pth, q, 0); if ph >= 2 { s(pt, i0 + np, ph); np += 1; } } }
+            else { crate::path_release(pth, q, parena, pfree); }
             s(on, q, 0); s(mcd, q * 8, -1);
             s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0);
             let t = g(pst, q) as i32;
@@ -447,7 +513,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
                     if tl >= 0 && owner >= 0 && owner < vnp && wi < vtypes {
                         let (gx, gy) = (irem(tl, gw), idiv(tl, gw));
                         let vi = (owner * vtypes + wi) * (1 + vrw * vrh) + 1 + (gy / wrt).min(vrh - 1) * vrw + (gx / wrt).min(vrw - 1);
-                        if vi >= 0 && vi < nver { s(wver, vi as usize, g(wver, vi as usize).wrapping_add(1)); vsum = vsum.wrapping_add(work_mix(vi)); }
+                        if vi >= 0 && vi < nver { aadd(wver, vi as usize, 1); vsum = vsum.wrapping_add(work_mix(vi)); }
                     }
                 }
                 let r = g(wkr, q);
@@ -456,12 +522,12 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
                     if !rcount.is_null() {
                         let t = r / nt;
                         let rg = (idiv(t, gw) / srt) * rcols + irem(t, gw) / srt;
-                        s(rcount, rg as usize, g(rcount, rg as usize) - 1);
-                        s(rsum, rg as usize, g(rsum, rg as usize).wrapping_sub(res_term(r, id)));
+                        aadd(rcount, rg as usize, -1);
+                        aadd(rsum, rg as usize, res_term(r, id).wrapping_neg());
                     }
                     if !wswl.is_null() {
                         let m = g(wswl, 0);
-                        if m + 1 < k.i(22) { s(wswl, (m + 1) as usize, r); s(wswl, 0, m + 1); } else { full = 1; }
+                        if per > 0 { s(wt, i0 + nw, r); nw += 1; } else if m + 1 < k.i(22) { s(wswl, (m + 1) as usize, r); s(wswl, 0, m + 1); } else { full = 1; }
                     }
                 }
                 w = (w & !((31 << 5) | (7 << 10)) as u32) | (1 << 5) | (1 << 10);
@@ -477,20 +543,28 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             // State IDLE (1): a change unparks it.
             if st != 1 { s(on, q, 0); s(wkidle, q, 1); w = (w & !31u32) | 1; }
             s(wks, q, w);
+            // Its first look as an idle worker spread over this tick and the next two by its id (P[27] 1; [100]
+            // (the action runs before its tick's movement, at now + 1: wakes now + 1 .. now + 3),
+            // unit.mvWake): parked (on 2, no flags) till then, the movement kernel hands it to its AI at its wake
+            // (mv.rs: parked && t >= wake). A stop of 88k workers listed them all at once: ~17 ms of AI on one tick.
+            if k.i(27) == 1 && !mwake.is_null() && g(dead, q) == 0 {
+                s(on, q, 2); s(mflags, q, 0); s(mwake, q, now + 1 + id.rem_euclid(3));
+            }
         }
+        if per > 0 { let c = cc.add((chunk.max(0) as usize) * 32); s(c, 0, 0); s(c, 1, nf as i32); s(c, 2, nw as i32); s(c, 3, vsum); s(c, 4, np as i32); return; }
         s(cnt, 0, 0); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
         return;
     }
-    for i in 0..n {
+    for i in i0..i1 {
         let qv = g(list, i);
         if qv < 0 { continue; }
         let q = qv as usize;
-        if !eligible(q) { s(out, no, qv); no += 1; continue; }
+        if !eligible(q) { s(out, ob + no, qv); no += 1; continue; }
         let owner = g(own, q) as i32;
         let wb = g(wbtype, g(wkix, q).max(0) as usize);
         let p = worker_profile(g(layer, q), wb, owner);
         let pb = 6 * p;
-        if g(pd, pb + 5) == 0 { s(out, no, qv); no += 1; continue; }
+        if g(pd, pb + 5) == 0 { s(out, ob + no, qv); no += 1; continue; }
         let (dest, wide, fid, gen, ready) = (g(pd, pb), g(pd, pb + 1) != 0, g(pd, pb + 2), g(pd, pb + 3), g(pd, pb + 4));
         let id = g(uid, q);
         // The order's fields (_ordClearFast).
@@ -537,7 +611,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
                 let (gx, gy) = (irem(tl, gw), idiv(tl, gw));
                 let vi = (owner * vtypes + wi) * (1 + vrw * vrh) + 1 + (gy / wrt).min(vrh - 1) * vrw + (gx / wrt).min(vrw - 1);
                 if vi >= 0 && vi < nver {
-                    s(wver, vi as usize, g(wver, vi as usize).wrapping_add(1));
+                    aadd(wver, vi as usize, 1);
                     vsum = vsum.wrapping_add(work_mix(vi));
                 }
             }
@@ -548,12 +622,12 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             if !rcount.is_null() {
                 let t = r / nt;
                 let rg = (idiv(t, gw) / srt) * rcols + irem(t, gw) / srt;
-                s(rcount, rg as usize, g(rcount, rg as usize) - 1);
-                s(rsum, rg as usize, g(rsum, rg as usize).wrapping_sub(res_term(r, id)));
+                aadd(rcount, rg as usize, -1);
+                aadd(rsum, rg as usize, res_term(r, id).wrapping_neg());
             }
             if !wswl.is_null() {
                 let m = g(wswl, 0);
-                if m + 1 < k.i(22) { s(wswl, (m + 1) as usize, r); s(wswl, 0, m + 1); } else { full = 1; }
+                if per > 0 { s(wt, i0 + nw, r); nw += 1; } else if m + 1 < k.i(22) { s(wswl, (m + 1) as usize, r); s(wswl, 0, m + 1); } else { full = 1; }
             }
         }
         let _ = li;
@@ -578,7 +652,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
         if g(pidx, q) != 0 { s(on, q, 0); s(pidx, q, 0); }
         s(nvpk, q, if at { -1 } else { ((p as i32) * 16777216 + dest) * 2 + wide as i32 });
         let h = g(mpath, q);
-        if h >= 0 { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); s(mpath, q, -1); }
+        if h >= 0 { if per > 0 { s(ft, i0 + nf, h); nf += 1; } else { let m = g(mfree, 0); s(mfree, (m + 1) as usize, h); s(mfree, 0, m + 1); } s(mpath, q, -1); }
         s(on, q, 0); s(mcd, q * 8, -1);
         s(rsend, q, if at { -1 } else { dest });
         s(nld, q, -1.0);
@@ -588,6 +662,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, _chunk: i32) {
             s(msteady.add(6), q * 8, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);
         }
     }
+    if per > 0 { let c = cc.add((chunk.max(0) as usize) * 32); s(c, 0, no as i32); s(c, 1, nf as i32); s(c, 2, nw as i32); s(c, 3, vsum); return; }
     s(cnt, 0, no as i32); s(cnt, 1, 0); s(cnt, 2, vsum); s(cnt, 3, full);
 }
 
@@ -697,6 +772,39 @@ pub unsafe extern "C" fn k_struct_status(a: u32, _chunk: i32) {
     let (wteam, en, ow, cnt, died, wend, shrine) = (k.p::<i8>(10), k.p::<f64>(11), k.p::<i8>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<f64>(16));
     let stval = k.p::<f64>(17);
     let (n, dk, scale, nown) = (k.i(0).max(0) as usize, k.i(1).max(1), k.f(2), k.i(3).max(0));
+    let (nd, nw) = struct_status_rows(n, dk, scale, nown, stt, burn, btd, pois, ptd, froz, itd, wet, sandy, wat, wteam, en, ow, died, wend, shrine, stval, 0);
+    s(cnt, 0, nd as i32); s(cnt, 1, nw as i32);
+}
+
+/// k_struct_status over every status class in one call (renderer.js structStatusTick; was a call a class, nine a
+/// step, each its 18 arguments looked up in the heap's address map). Arrays: [0] the classes' table (16 words a class:
+/// [0] rows, then the 13 columns' encoded addresses in k_struct_status's order, _stT .. _ow), [1] cnt (2 a class: died,
+/// watch ended), [2] died, [3] wend (each class << 24 | row, class after class, rows in order), [4] shrine, [5] st.val.
+/// P: [0] classes, [1] base ticks, [2] fixed-point scale, [3] owners.
+#[no_mangle]
+pub unsafe extern "C" fn k_struct_status_all(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ct, cnt, died, wend, shrine, stval) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<f64>(4), k.p::<f64>(5));
+    let (nc, dk, scale, nown) = (k.i(0).max(0) as usize, k.i(1).max(1), k.f(2), k.i(3).max(0));
+    let (mut od, mut ow_) = (0usize, 0usize);
+    for c in 0..nc {
+        let b = ct.add(c * 16);
+        let n = g(b, 0).max(0) as usize;
+        let col = |j: usize| -> *mut u8 { let w = g(b, 1 + j); if w == 0 { core::ptr::null_mut() } else { waddr(w as u32) as *mut u8 } };
+        if n == 0 || col(0).is_null() { s(cnt, 2 * c, 0); s(cnt, 2 * c + 1, 0); continue; }
+        let (nd, nw) = struct_status_rows(n, dk, scale, nown, col(0) as *mut i32, col(1) as *mut i32, col(2) as *mut f32, col(3) as *mut i32, col(4) as *mut f32,
+            col(5) as *mut i32, col(6) as *mut f32, col(7) as *mut i32, col(8) as *mut i32, col(9) as *mut i32, col(10) as *mut i8, col(11) as *mut f64, col(12) as *mut i8,
+            died.add(od), wend.add(ow_), shrine, stval, (c as i32) << 24);
+        s(cnt, 2 * c, nd as i32); s(cnt, 2 * c + 1, nw as i32);
+        od += nd; ow_ += nw;
+    }
+}
+
+/// k_struct_status's rows (tag: or-ed into each listed row).
+#[inline(always)]
+unsafe fn struct_status_rows(n: usize, dk: i32, scale: f64, nown: i32, stt: *mut i32, burn: *mut i32, btd: *mut f32, pois: *mut i32, ptd: *mut f32,
+    froz: *mut i32, itd: *mut f32, wet: *mut i32, sandy: *mut i32, wat: *mut i32, wteam: *mut i8, en: *mut f64, ow: *mut i8,
+    died: *mut i32, wend: *mut i32, shrine: *mut f64, stval: *mut f64, tag: i32) -> (usize, usize) {
     let (mut nd, mut nw) = (0usize, 0usize);
     const UNSET: i32 = i32::MIN;
     let iz = |v: i32| if v == UNSET { 0 } else { v };
@@ -741,9 +849,9 @@ pub unsafe extern "C" fn k_struct_status(a: u32, _chunk: i32) {
         if sd > 0 { sd -= dk.min(sd); }
         if t > 0 {
             t -= dk.min(t);
-            if t <= 0 { team = -1; s(wend, nw, r as i32); nw += 1; }
+            if t <= 0 { team = -1; s(wend, nw, tag | r as i32); nw += 1; }
         }
-        if e <= 0.0 { e = 0.0; s(died, nd, r as i32); nd += 1; }
+        if e <= 0.0 { e = 0.0; s(died, nd, tag | r as i32); nd += 1; }
         s(burn, r, b); s(pois, r, p); s(froz, r, f); s(wet, r, w); s(sandy, r, sd); s(wat, r, t);
         s(btd, r, bd); s(ptd, r, pdm); s(itd, r, id); s(wteam, r, team as i8);
         if e0 == e0 {
@@ -751,7 +859,7 @@ pub unsafe extern "C" fn k_struct_status(a: u32, _chunk: i32) {
             if !stval.is_null() { s(stval, g(stt, r) as usize, e); }
         }
     }
-    s(cnt, 0, nd as i32); s(cnt, 1, nw as i32);
+    (nd, nw)
 }
 
 /// data_static.js secondsToTicks.

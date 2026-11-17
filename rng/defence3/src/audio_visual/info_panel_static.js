@@ -607,18 +607,25 @@ function _infoPackBoxDone(m) {
 // (hud.js _slotUnitIds takes them for the selection they were made for;
 // worker.js _queueLocalAction takes their wire strings: no encoding of
 // 200k ids on the click.)
-const _ipkIds = { sel: null, len: -1, all: null, combat: null, workers: null };
+// (The packer's typed lists kept as they came; a list made of one only when an order asks for it: three lists of a
+// big selection's ids made at every selection change (a big one is compacted twice a second in a fight) were ~14 ms
+// of the page's thread a second.)
+const _ipkIds = { sel: null, len: -1, raw: [null, null, null], z: [null, null, null], made: [null, null, null] };
 const _ipkIdsZ = new WeakMap();
 function _infoPackIds(m) {
-    const S = _ipk.sent;
-    _ipkIds.sel = S.units; _ipkIds.len = S.unitsLen;
-    const keep = (ids, z) => { const a = Array.from(ids); if (z) _ipkIdsZ.set(a, z); return a; };
-    _ipkIds.all = keep(m.all, m.allZ); _ipkIds.combat = keep(m.combat, m.combatZ); _ipkIds.workers = keep(m.workers, m.workersZ);
+    const S = _ipk.sent, I = _ipkIds;
+    I.sel = S.units; I.len = S.unitsLen;
+    I.raw[0] = m.all; I.raw[1] = m.combat; I.raw[2] = m.workers;
+    I.z[0] = m.allZ; I.z[1] = m.combatZ; I.z[2] = m.workersZ;
+    I.made[0] = I.made[1] = I.made[2] = null;
 }
 // The packer's ids for kind (0 all, 1 combat, 2 workers) of the selection now, or null.
 function infoPackSelectionIds(kind) {
-    if (_ipkIds.sel !== selectedUnits || _ipkIds.len !== selectedUnits.length) return null;
-    return kind === 0 ? _ipkIds.all : kind === 1 ? _ipkIds.combat : _ipkIds.workers;
+    const I = _ipkIds;
+    if (I.sel !== selectedUnits || I.len !== selectedUnits.length) return null;
+    const k = kind === 0 ? 0 : kind === 1 ? 1 : 2;
+    if (I.made[k] === null && I.raw[k]) { const a = Array.from(I.raw[k]); if (I.z[k]) _ipkIdsZ.set(a, I.z[k]); I.made[k] = a; }
+    return I.made[k];
 }
 // The wire string of piece k (ACTION_MAX_UNIT_IDS ids each) of ids, or null.
 function infoPackIdsWire(ids, k = 0) { const z = _ipkIdsZ.get(ids); return z ? z[k] || null : null; }

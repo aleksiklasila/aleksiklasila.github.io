@@ -1908,6 +1908,7 @@ function initInput() {
         } catch (err) { _assignWorkerFailed = true; _assignWorker = null; }
         return _assignWorker;
     }
+    const _assignSlotCache = { ids: null, slots: new Int32Array(0) };
     function applyUnitCommandTargets(unitIds, targetX, targetY, appendToMultiPoints, actionName = 'move', unitObjs = null) {
         if (!unitIds || unitIds.length === 0) return;
         if (appendToMultiPoints && multiUnitCommandPoints.length > 0) {
@@ -1932,10 +1933,19 @@ function initInput() {
         const n = unitIds.length, xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
         if (F && typeof _pageUnitsById !== 'undefined') {
             const PU = _pageUnitsById, FID = F.id, FX = F.x, FY = F.y;
+            // (Each id's frame slot kept for this id list (the selection's, the same array click after click of a
+            // chain): the frame's id column confirms it, a Map look-up only for a unit whose slot changed. Was a
+            // look-up a unit a click: ~15 ms of this thread a shift-click with 170k selected, perf fuzz 2026-11-16.)
+            let SL = _assignSlotCache.ids === unitIds && _assignSlotCache.slots.length === n ? _assignSlotCache.slots : null;
+            if (!SL) { SL = new Int32Array(n).fill(-1); _assignSlotCache.ids = unitIds; _assignSlotCache.slots = SL; }
             for (let i = 0; i < n; i++) {
-                const id = unitIds[i], u = PU.get(id), s = u ? u._s : -1;
-                if (s >= 0 && FID[s] === id) { xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; }
-                else if (u) { const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
+                const id = unitIds[i];
+                let s = SL[i];
+                if (s >= 0 && s < FID.length && FID[s] === id) { xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; continue; }
+                const u = PU.get(id);
+                s = u ? u._s : -1;
+                if (s >= 0 && FID[s] === id) { SL[i] = s; xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; }
+                else if (u) { SL[i] = -1; const a = _entityWorldXY(u); if (a) { xs[i] = a.x; ys[i] = a.y; has[i] = 1; } }
             }
         } else {
             // (The kept id map: no map of every unit per click.)
@@ -4659,7 +4669,7 @@ function _orderWorkerArgs(list, S, W, V, U, resKept, wsl) {
 function _ordWReady(m) {
     if (!_ordW || _ordW.out.length !== m || !simHeapHas(_ordW.out)) {
         const I = k => simSharedArray(Int32Array, k);
-        _ordW = { out: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(25) };
+        _ordW = { out: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(28), ft: I(m), wt: I(m), pt: I(m), cc: I(32 * Math.max(1, Math.ceil(m / ORDER_WORKERS_PER))) };
         // (Worker record types, unit.wbType 1..6: their reservation load and work type indices.)
         ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { _ordW.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
     }
@@ -4677,10 +4687,19 @@ function _stopWorkersKernel(list, n, playerId) {
     P[7] = GRID_W; P[8] = TILE; P[9] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[10] = SNAP_REGION_TILES; P[11] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[12] = _WORKER_WORK_TYPES.length; P[13] = V.rw; P[14] = V.rh; P[15] = V.np; P[16] = WORKER_WORK_REGION_TILES; P[17] = U.n;
     P[18] = CMD_IDLE; P[19] = SIM_SEP_ABSENT; P[20] = workerReservedTiles.length; P[21] = V.length; P[22] = wsl ? wsl.length : 0; P[23] = _simPptK;
-    simRustDirect('k_order_workers', _orderWorkerArgs(list, S, W, V, U, resKept, wsl), P);
+    // (Many: in chunks as a move order's (_orderWorkers), merged in order by mode 6: the path store's releases too.)
+    const arrays = _orderWorkerArgs(list, S, W, V, U, resKept, wsl), jobs = Math.ceil(n / ORDER_WORKERS_PER);
+    const par = jobs > 1 && n <= W.ft.length && typeof simRustParallel === 'function';
+    // (P[27] 1: their first look as idle workers spread over three ticks by id, parked till then: ord.rs mode 2.)
+    arrays.push(W.cc, W.ft, W.wt, W.pt, S.columns.mvWake);
+    P[25] = par ? ORDER_WORKERS_PER : 0; P[26] = jobs; P[27] = 1;
+    if (par) { simRustParallel(SIM_BLOCK_ORDER_WORKERS, arrays, P, jobs); P[0] = 6; }
+    simRustDirect('k_order_workers', arrays, P);
     V.sum = (V.sum + W.cnt[2]) | 0;
     if (W.cnt[3]) _wsw = null;
 }
+// (A move order's workers a job of the workers' kernel (k_order_workers), from twice as many over the helpers.)
+let ORDER_WORKERS_PER = 1024;
 function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     const Q = _oq, c = S.columns, m = Q.out2.length;
     _ordWReady(m);
@@ -4696,8 +4715,13 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     P[12] = _WORKER_WORK_TYPES.length; P[13] = V.rw; P[14] = V.rh; P[15] = V.np; P[16] = WORKER_WORK_REGION_TILES; P[17] = U.n;
     P[18] = CMD_MOVING; P[19] = SIM_SEP_ABSENT; P[20] = workerReservedTiles.length; P[21] = V.length; P[22] = wsl ? wsl.length : 0;
     P[23] = _simPptK; P[24] = _simPfaK;
+    // (Many workers: chunks of ORDER_WORKERS_PER over the helpers (without them on this thread: the same), merged in order: ord.rs modes 4 and 5.)
+    const jobs = Math.ceil(n / ORDER_WORKERS_PER), par = jobs > 1 && n <= W.ft.length && typeof simRustParallel === 'function';
+    arrays.push(W.cc, W.ft, W.wt, W.pt, null);
+    P[25] = par ? ORDER_WORKERS_PER : 0; P[26] = jobs;
     P[0] = 0;
-    simRustDirect('k_order_workers', arrays, P);
+    if (par) { simRustParallel(SIM_BLOCK_ORDER_WORKERS, arrays, P, jobs); P[0] = 4; simRustDirect('k_order_workers', arrays, P); }
+    else simRustDirect('k_order_workers', arrays, P);
     // Each profile's destination, flow and its readiness (its first worker's).
     const C = W.cnt, pd = W.pd;
     pd.fill(0);
@@ -4713,7 +4737,8 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
         pd[6 * p] = to; pd[6 * p + 1] = group ? 1 : 0; pd[6 * p + 2] = did; pd[6 * p + 3] = did >= 0 ? navFieldGen(did) : 0; pd[6 * p + 4] = navFieldReadyFor(did); pd[6 * p + 5] = 1;
     }
     P[0] = 1;
-    simRustDirect('k_order_workers', arrays, P);
+    if (par) { simRustParallel(SIM_BLOCK_ORDER_WORKERS, arrays, P, jobs); P[0] = 5; simRustDirect('k_order_workers', arrays, P); }
+    else simRustDirect('k_order_workers', arrays, P);
     V.sum = (V.sum + C[2]) | 0;
     if (C[3]) _wsw = null;
     const left = [];
@@ -5020,7 +5045,9 @@ function _toggleOut(n) {
 const _UNIT_CMD_OPS = { hold: 1, stop: 2, attack: 3, attackBuilding: 4, killUnit: 5 };
 const _unitCmdP = new Float64Array(24);
 let _unitCmdIds = null, _unitCmdOut = null, _unitCmdPaths = null, _unitCmdCnt = null, _unitCmdKeys = null, _unitCmdScr = null, _unitCmdScrN = null;
-const _unitCmdA = [], UNIT_CMD_PAR_MIN = 8192, UNIT_CMD_PER = 4096;
+const _unitCmdA = [], UNIT_CMD_PER = 4096;
+// (let: tests/unit-cmd-kernel.test.cjs runs the parallel path at any size.)
+let UNIT_CMD_PAR_MIN = 8192;
 // (An order's buffers for a selection of every slot: made at the match's start, simMatchReserve.)
 function unitCmdReserve(B) {
     const m = Math.max(65536, B.slots || 0);
@@ -5065,10 +5092,12 @@ function _unitCmdKernel(a, playerId, op, target) {
     if (n < UNIT_CMD_PAR_MIN) simRustDirect('k_unit_cmd', A, P);
     else {
         // (In parallel: the per-unit writes in chunks, then the shared stacks (paths, workers) in id order: the serial kernel's.)
-        for (let i = 0; i < A.length; i++) simParallelBind('uc.' + i, A[i]);
+        // (Its arrays and parameters in the block's heap words (simRustParallel): no binding a command (47 names bound each
+        // time were ~2.6 ms of this thread at 88k units). Through _simParams before (it once ran on the last job's words:
+        // a command on 8192+ units did nothing or probed the id table forever: perf fuzz 2026-11-16).)
         const nch = Math.ceil(n / UNIT_CMD_PER);
         P[21] = 0; P[22] = UNIT_CMD_PER;
-        simParallelRun(SIM_KERNEL_UNIT_CMD, nch);
+        simRustParallel(SIM_BLOCK_UNIT_CMD, A, P, nch);
         P[21] = 1; P[23] = nch;
         simRustDirect('k_unit_cmd_par', A, P);
     }

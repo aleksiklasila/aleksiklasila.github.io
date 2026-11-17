@@ -5,8 +5,10 @@
 // MANUAL_MOVE, moving to the order's tile); a small order (ORDER_NOW units or
 // fewer) at once.
 const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
+const go=per=>{
 const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'64','cfg-map-type':'arena','cfg-max-pop':'20000'}});
 const i=world.spawn('worker-order-budget',{simWorker:false});
+if(per)i.eval('ORDER_WORKERS_PER='+per);
 const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  startSoloGame();
  const ids=[];
@@ -34,11 +36,15 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  simPendingClear=clear;
  return {ids,got,small,now:ORDER_NOW,steps:ORDER_DRAIN_STEPS,
    digest:ids.every(id=>{const u=getUnitById(id);return simUnitHashDigest(u)===u._us.hObj[u._si];}),
-   pending:ids.every(id=>{const u=getUnitById(id);return !u._pendingPathTarget&&!u.pathIsFallbackAstar;})};
+   pending:ids.every(id=>{const u=getUnitById(id);return !u._pendingPathTarget&&!u.pathIsFallbackAstar;}),hash:__exactStateHash()};
 })())`));
 assert.deepEqual(result.got,result.ids,'every selected worker takes the order: MANUAL_MOVE, moving, its task let go');
 assert.deepEqual(result.small,[240],'a small order applies at once');
 assert.equal(result.digest,true,'native pending repair preserves the unit digest');
 assert.equal(result.pending,true,'pending paths and fallback flags cleared');
 assert.deepEqual(i.errors.map(String),[]);
+return result;};
+// (And the kernel in chunks of 16 (ORDER_WORKERS_PER; merged in order, ord.rs modes 4 and 5): the same state.)
+const r1=go(0),r2=go(16);
+assert.equal(r2.hash,r1.hash,'the chunked workers order kernel leaves the state as the single pass');
 console.log('PASS: worker orders through the queue kernels: every worker once, a small one at once');

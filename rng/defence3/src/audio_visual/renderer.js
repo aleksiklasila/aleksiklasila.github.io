@@ -2663,7 +2663,7 @@ function noteOrderMarker(a, tick = currentTick) {
 function _selectedOwnUnitCount() {
     if (selectedUnits.length > 4096 && typeof selectionIndex === 'function') {
         const X = selectionIndex();
-        if (X.framed) return Math.max(0, X.n - X.dead);
+        if (X.framed) return X.n;
     }
     let n = 0;
     for (const u of selectedUnits) if (u && !u.dead && u.owner === localPlayerId) n++;
@@ -7469,6 +7469,8 @@ function STRUCT_STATUS_CLASSES() {
     return _stStatusCls;
 }
 const _stsP = new Float64Array(4);
+// (k_struct_status_all's columns, in its order.)
+const _STS_COLS = ['_stT', 'burning', 'burnTickDamage', 'poisoned', 'poisonTickDamage', 'frozen', 'iceTickDamage', 'wet', 'sandy', 'watched', 'watchedByTeam', '_en', '_ow'].map(k => 'c_' + k);
 let _stsOut = null;
 function structStatusTick() {
     const out = { floor: null, dead: null };
@@ -7476,20 +7478,36 @@ function structStatusTick() {
     if (!_stsOut || !simHeapHas(_stsOut.cnt) || _stsOut.shrine.length < owners) _stsOut = { cnt: simSharedArray(Int32Array, 4), shrine: simSharedArray(Float64Array, Math.max(16, owners)), died: null, wend: null };
     const O = _stsOut, P = _stsP;
     O.shrine.fill(0);
-    for (const C of STRUCT_STATUS_CLASSES()) {
-        const T = C ? _sTables.get(C) : null;
+    // Every class in one kernel call (ord.rs k_struct_status_all: was a call a class, each its arguments looked up in
+    // the heap's address map): the classes' rows and column addresses (kept while the columns are the same arrays,
+    // data_state.js _sColPtrs), the died and watch-ended rows as class << 24 | row, class after class.
+    const CL = STRUCT_STATUS_CLASSES(), nc = Math.min(9, CL.length);
+    if (!O.ct || !simHeapHas(O.ct)) { O.ct = simSharedArray(Int32Array, 9 * 16); O.cc = simSharedArray(Int32Array, 18); }
+    const CT = O.ct;
+    CT.fill(0);
+    let rows = 0;
+    for (let c = 0; c < nc; c++) {
+        const T = CL[c] ? _sTables.get(CL[c]) : null;
         if (!T || !T.n) continue;
-        if (!_sColsInHeap(T)) _sTableGrow(T, T.cap);
-        if (!O.died || O.died.length < T.cap) { O.died = simSharedArray(Int32Array, T.cap); O.wend = simSharedArray(Int32Array, T.cap); }
-        P[0] = T.n; P[1] = simDk; P[2] = RESOURCE_FIXED_POINT_SCALE; P[3] = owners;
-        simRustDirect('k_struct_status', [T.c__stT, T.c_burning, T.c_burnTickDamage, T.c_poisoned, T.c_poisonTickDamage, T.c_frozen, T.c_iceTickDamage,
-            T.c_wet, T.c_sandy, T.c_watched, T.c_watchedByTeam, T.c__en, T.c__ow, O.cnt, O.died, O.wend, O.shrine,
-            _ST.val && simHeapHas(_ST.val) ? _ST.val : null], P);
-        for (let i = 0, n = O.cnt[1]; i < n; i++) { const e = T.rowObj[O.wend[i]]; if (e && typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(e); }
-        const nd = O.cnt[0];
+        let E = _sColPtrsKept(T, _STS_COLS);
+        if (!E) { if (!_sColsInHeap(T)) _sTableGrow(T, T.cap); E = _sColPtrs(T, _STS_COLS); }
+        CT[c * 16] = T.n; CT.set(E, c * 16 + 1);
+        rows += T.n;
+    }
+    if (!rows) return out;
+    if (!O.died || O.died.length < rows) { O.died = simSharedArray(Int32Array, simReserveCap(rows, 4096)); O.wend = simSharedArray(Int32Array, O.died.length); }
+    P[0] = nc; P[1] = simDk; P[2] = RESOURCE_FIXED_POINT_SCALE; P[3] = owners;
+    simRustDirect('k_struct_status_all', [CT, O.cc, O.died, O.wend, O.shrine, _ST.val && simHeapHas(_ST.val) ? _ST.val : null], P);
+    for (let c = 0, od = 0, ow = 0; c < nc; c++) {
+        const nd = O.cc[2 * c], nw = O.cc[2 * c + 1];
+        if (!nd && !nw) continue;
+        const C = CL[c], T = _sTables.get(C);
+        for (let i = 0; i < nw; i++) { const e = T.rowObj[O.wend[ow + i] & 0xffffff]; if (e && typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(e); }
+        ow += nw;
         if (!nd) continue;
-        if (C === FloorItem) { const L = out.floor || (out.floor = []); for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[i]]; if (e) L.push(e); } }
-        else { const L = out.dead || (out.dead = []); for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[i]]; if (e) L.push(e); } }
+        const L = C === FloorItem ? (out.floor || (out.floor = [])) : (out.dead || (out.dead = []));
+        for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[od + i] & 0xffffff]; if (e) L.push(e); }
+        od += nd;
     }
     for (let o = 0; o < owners; o++) if (O.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += O.shrine[o]; }
     if (out.floor) out.floor.sort((a, b) => (a.gy * GRID_W + a.gx) - (b.gy * GRID_W + b.gx));

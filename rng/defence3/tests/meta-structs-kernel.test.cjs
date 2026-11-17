@@ -63,3 +63,5 @@ assert.ok(changed > 0, 'changed tiles written ' + changed);
 assert.ok(links > 0, 'laser links written ' + links);
 assert.deepEqual(i.errors.map(String), []);
 console.log('PASS: k_meta_structs rows equal _simWriteStructure rows (' + checked + ' structures, ' + changed + ' changed rows, ' + links + ' laser links)');
+// (With PAR=1 the real helper threads keep the process alive: it never exited after passing.)
+process.exit(0);

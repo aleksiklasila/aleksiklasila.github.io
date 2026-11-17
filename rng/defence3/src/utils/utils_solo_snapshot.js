@@ -454,6 +454,29 @@ async function restoreSoloGameSnapshot(scene) {
     if (gameStarted || isMultiplayer || _soloStartPreparation) throw new Error('Return to the main menu before importing a snapshot.');
     const h = scene.header;
     applyMainMenuSettingsSnapshot(h.settings);
+    // (The population at least the power of two that holds the scene's largest team: an old export's saved value
+    // (its advanced config's 200000, floored to 131072) refused its own 248k-unit team.)
+    // The saved population is kept when it holds both the largest team's units and buildings; otherwise the
+    // smallest that holds the units (a larger one leaves fewer building rows: attack-200k-8teams' 9104 buildings
+    // a team were refused at its saved 32768 per team, limit 8192). A saved building cap below the need is lifted.
+    {
+        const most = (A, w) => {
+            if (!A || !A.length) return 0;
+            const per = new Map(); let m = 0;
+            for (let i = 1; i < A.length; i += w) { const v = (per.get(A[i]) || 0) + 1; per.set(A[i], v); if (v > m) m = v; }
+            return m;
+        };
+        const mostU = most(scene.cols && scene.cols.units, SCENE_UNIT_W), mostB = most(scene.cols && scene.cols.buildings, SCENE_BUILDING_W);
+        const teams = Math.max(1, h.teams.length), tiles = h.width * h.height;
+        let need = 8; while (need < mostU) need *= 2;
+        const fits = p => p >= need && memoryBudgetBuildings(p, teams, tiles) >= mostB;
+        if (!fits(CONFIG_MAX_POP)) {
+            CONFIG_MAX_POP = need;
+            const el = document.getElementById('cfg-max-pop');
+            if (el && [...el.options].some(o => o.value === String(need))) el.value = String(need);
+        }
+        if (CONFIG_MAX_BUILDINGS > 0 && CONFIG_MAX_BUILDINGS < mostB) CONFIG_MAX_BUILDINGS = 0;
+    }
     await prepareRendererLodAssets(true);
     try {
         isHost = false; isMultiplayer = false; gameSeed = h.seed; localPlayerId = h.player;

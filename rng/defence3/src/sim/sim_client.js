@@ -1067,20 +1067,21 @@ function _simClientUpdateStableSlots(F, old) {
         if (v && !v.dead && v._s === s && v._mv !== mark) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
         _pageSlotViews[s] = undefined;
     }
-    let moved = false;
+    let nm = 0;
+    if (_simMovedFrom.length < nc) { _simMovedFrom = new Int32Array(Math.ceil(nc * 1.25)); _simMovedTo = new Int32Array(_simMovedFrom.length); }
     for (let i = 0; i < nc; i++) {
         const s = changed[i], id = s < F.n ? F.id[s] : -1;
         if (id < 0) continue;
         let v = _pageUnitsById.get(id);
-        if (v && !v.dead && v._mv === mark) { if (v._s !== s) moved = true; v._s = s; }
+        if (v && !v.dead && v._mv === mark) { if (v._s !== s) { _simMovedFrom[nm] = v._s; _simMovedTo[nm++] = s; } v._s = s; }
         else { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
         _pageSlotViews[s] = v;
     }
-    // (Slots of the selected units found again.)
-    if (moved && typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
+    // (The selected units among the moved: their slots in the selection's index, hud.js.)
+    if (nm) { if (typeof selectionSlotsMoved === 'function') selectionSlotsMoved(_simMovedFrom, _simMovedTo, nm); else if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped(); }
     return true;
 }
-let _simStableMark = 0;
+let _simStableMark = 0, _simMovedFrom = new Int32Array(0), _simMovedTo = new Int32Array(0);
 let _simStableChanged = new Int32Array(0);
 // The page's units list: one array, filled from the current frame when
 // read (data_state.js units; a list of every unit at each membership change

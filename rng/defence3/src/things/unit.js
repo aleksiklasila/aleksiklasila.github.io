@@ -3881,8 +3881,9 @@ function acqTierReset() {
 }
 function _acqArray(name, Type, n) {
     let a = _simParReg[name];
-    // (In the wasm heap: the scan's Rust twin reads them in place.)
-    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, Math.max(1024, n)); simParallelBind(name, a); simHeapFree(old); }
+    // (In the wasm heap: the scan's Rust twin reads them in place. With room to grow (simReserveCap): sized exactly,
+    // a count that rose a little at a post (the enemies, the towers' rows) made and zeroed them again, ~0.1 ms a step.)
+    if (!a || a.constructor !== Type || a.length < n) { const old = a; a = simHeapArray(Type, simReserveCap(n, 1024)); simParallelBind(name, a); simHeapFree(old); }
     return a;
 }
 // The job's own arrays (never another's: these names were bound to live

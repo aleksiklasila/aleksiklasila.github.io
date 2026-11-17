@@ -413,9 +413,10 @@ function workerSearchTierStep() {
     // ticks are the bundle's). The grid's sweep slices of the base ticks it
     // is in flight over are held and run right after its commit.
     if (_wsPosted && _wsPosted.step !== gameTime && _wsPosted.due <= gameTime - simDk) { _wsOrder(); _wsCommit(); _wswHeldRun(); }
+    _wswLaterN = 0;
     for (let b = gameTime - simDk + 1; b <= gameTime; b++) {
         const ph = ((b % WS_TICKS) + WS_TICKS) % WS_TICKS, cycle = gameTime - b < WS_TICKS;
-        if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS && _wsPosted && _wsPosted.step !== gameTime) { _wsOrder(); _wsCommit(); _wswHeldRun(); }
+        if (cycle && ph === (WS_POST_PHASE + 2) % WS_TICKS && _wsPosted && _wsPosted.step !== gameTime) { _wswLaterRun(); _wsOrder(); _wsCommit(); _wswHeldRun(); }
         // (Past WSW_SLOW_UNITS units the sweep visits WSW_SLOW times as many slices, each that much smaller: the
         // same coverage WSW_SLOW times slower, a share every cycle (it was every WSW_SLOW-th cycle's slices whole:
         // a lump every fourth step at dk 4). Stateless: by the tick.)
@@ -423,10 +424,27 @@ function workerSearchTierStep() {
         if (ph !== (WS_POST_PHASE + 1) % WS_TICKS) {
             const slice = (wswCycle * 3 + (ph + WS_TICKS - (WS_POST_PHASE + 2) % WS_TICKS) % WS_TICKS) % stride;
             // (This step's own search reads the grid from its post on.)
-            if (_wsPosted && _wsPosted.step === gameTime) _wswHold(slice, stride); else _wswStep(slice, true, stride);
+            if (_wsPosted && _wsPosted.step === gameTime) _wswHold(slice, stride); else _wswLater(slice, stride);
         }
-        if (cycle && ph === WS_POST_PHASE) { _wsPost(); if (_wsPosted) { _wsPosted.step = gameTime; _wsPosted.due = b + 2; } }
+        if (cycle && ph === WS_POST_PHASE) { _wswLaterRun(); _wsPost(); if (_wsPosted) { _wsPosted.step = gameTime; _wsPosted.due = b + 2; } }
     }
+    // The sweep's slices no search of this step reads: beside the movement's first stage (unit.js simMoveCompanion; the
+    // grid, its counts and the reservations' list are read only by the search's scan (none in flight: a sweep never runs
+    // then) and the worker pass after the movement; the movement kernels touch none of it, nor what the sweep reads:
+    // structure rows, the tile journal, reservations, unit ids). ~0.4 ms a step of this thread's serial time.
+    if (_wswLaterN > 0) { if (typeof simMoveCompanion === 'function') simMoveCompanion(0, _wswLaterRun); else _wswLaterRun(); }
+}
+// (The sweep's slices due this step, run in order: before a commit or a post of this step, else beside the movement.)
+const _wswLaterA = new Int32Array(512);
+let _wswLaterN = 0;
+function _wswLater(slice, stride) {
+    if (_wswLaterN * 2 >= _wswLaterA.length) _wswLaterRun();
+    _wswLaterA[2 * _wswLaterN] = slice; _wswLaterA[2 * _wswLaterN + 1] = stride; _wswLaterN++;
+}
+function _wswLaterRun() {
+    const n = _wswLaterN;
+    _wswLaterN = 0;
+    for (let i = 0; i < n; i++) _wswStep(_wswLaterA[2 * i], true, _wswLaterA[2 * i + 1]);
 }
 
 // ---- The work site grid ----
@@ -513,10 +531,8 @@ function _wswClassColumns() {
     const out = _adjArr('wsw.ctab', Int32Array, 9 * width);
     for (let c = 0; c < 9; c++) {
         const T = classes[c] ? _sTables.get(classes[c]) : null;
-        for (let j = 0; j < width; j++) {
-            const a = T && T.n ? T[_WSW_CTAB_COLS[j]] : null;
-            out[c * width + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0;
-        }
+        // (Kept while the columns are the same arrays: data_state.js _sColPtrs.)
+        if (T && T.n) out.set(_sColPtrs(T, _WSW_CTAB_COLS), c * width); else out.fill(0, c * width, c * width + width);
     }
     return out;
 }
@@ -959,7 +975,16 @@ function _wsCommit() {
     }
     const n = _simParReg['ws.orderCount'][0];
     if (n > 0) waiTake(J, _simParReg['ws.order'], n);
+    // The requests that found nothing: their workers' searches further apart (unit.wsFail, k_ws_select's doubling), as a
+    // take that found nothing does (wai.rs take_one). They never reached the take: workers with no site in reach searched
+    // at every retry (~2.8k futile scans a step at checker-200k). (uix.rs k_ws_fail_bump.)
+    {
+        const R = _simParReg, S = _simUnitState, c = S.columns, P = _wsFailP;
+        P[0] = Math.min(J.CH | 0, R['ws.rslot'].length); P[1] = WS_K; P[2] = S.owners.length;
+        simRustDirect('k_ws_fail_bump', [R['ws.res'], R['ws.rslot'], R['ws.rid'], R['ws.rkind'], R['ws.rwt'], c.id, c.dead, c.wsKind, c.wkIx, c.wsT, c.wsFail], P);
+    }
 }
+const _wsFailP = new Float64Array(4);
 
 function _resourceCollectorFindTarget(u, myGx, myGy, resourceCfg) {
     let pinned = _getResourceCollectorPinnedTarget(u, resourceCfg);
@@ -3666,7 +3691,7 @@ const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
 const WAI_CTAB_COLS = ['c_markedForSalvage', 'c_stacks', 'c_level', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c__uc'];
 const _wai = { tver: -1, tablePlayers: 0, tableLevels: 0, P: new Float64Array(80), declined: 0 };
-const _waiNativeArgs = new Array(158).fill(null);
+const _waiNativeArgs = new Array(160).fill(null);
 function _waiArr(name, Type, n) {
     let a = _wai[name];
     if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
@@ -3785,10 +3810,8 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
         const C = _stAllCls[i];
         const T = C ? _sTables.get(C) : null;
         if (!T || !T.n) continue;
-        for (let j = 0; j < CW; j++) {
-            const a = T[WAI_CTAB_COLS[j]];
-            ctab[(i + 1) * CW + j] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0;
-        }
+        // (Kept while the columns are the same arrays: data_state.js _sColPtrs.)
+        ctab.set(_sColPtrs(T, WAI_CTAB_COLS), (i + 1) * CW);
     }
     // (Prices by stationary type: a salvage's refund.)
     const nty = _stationaryTypes.length, price = _waiArr('price', Float64Array, nty + 1);
@@ -3827,6 +3850,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const WCT = _wswClassColumns();
     P[62] = STY; P[63] = SS.nk; P[64] = SX.np; P[65] = SS.L1; P[66] = SS.R1; P[67] = sty('builder_spawner'); P[68] = Number(bld.builderDps) || 1;
     const R2 = _simParReg;
+    _simPptKeys(); P[77] = _simPptK; P[78] = _simPfaK;
     P[72] = mode; P[76] = _workerTypeToLoadIndex('builder'); P[73] = WS_K; P[74] = HEALER_DAMAGED_CANDIDATE_LIMIT; P[75] = WS_TICKS;
     P[69] = secondsToTicks(Math.max(0.01, Number(bld.transferCooldown) || 0.01)); P[70] = Math.max(120, Math.floor(TICK_RATE * 8)); P[71] = Math.max(60, Math.floor(TICK_RATE * 3));
     // Arguments in wai.rs order. Reuse the list for both dispatch paths.
@@ -3880,6 +3904,8 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     WA[arg++] = c.wmMan;
     // (The transfer cooldown's carry: several deposits a step, wai.rs cd_batch.)
     WA[arg++] = c.wtcL || null;
+    // (A manual move's end in the pass, wai.rs finish_manual: the pending way's bits and the digest, its keys P[77] / P[78].)
+    WA[arg++] = c.ptSt || null; WA[arg++] = c.hObj || null;
     try {
         // (The tier's takes too (mode 1): decided on the helpers, settled by the apply's rounds; serial they were ~3 ms a step on this thread at 1M units.)
         if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);
@@ -3902,6 +3928,19 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     return cnt[0];
 }
 // Its out events, in their order (unit.js unitEventsRun, after the pass).
+// Ambient work sounds (presentation only): at most one a structure's tile and kind in cd ticks, by a fixed table of
+// (tile, kind) -> the tick it may sound again; a key that meets another's slot sounds anyway. (Was each structure's
+// object made and given a field, ~150 events a step at checker-200k.) At the tile's centre, as a structure's x / y.
+const _waiAmbK = new Int32Array(8192), _waiAmbT = new Int32Array(8192);
+function _waiAmbient(t, kind, name, cd) {
+    if (!(t >= 0) || t >= GRID_W * GRID_H) return;
+    const gx = t % GRID_W, gy = (t - gx) / GRID_W;
+    if (_ST.ctab && _ST.n === GRID_W * GRID_H ? _ST.ctab[t] === 0 : !getTileEntityRef(gx, gy)) return;
+    const key = t * 4 + kind + 1, h = Math.imul(key, 0x9e3779b1) >>> 19;
+    if (_waiAmbK[h] === key && gameTime < _waiAmbT[h] && _waiAmbT[h] - gameTime <= cd) return;
+    _waiAmbK[h] = key; _waiAmbT[h] = gameTime + cd;
+    playSound(name, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5);
+}
 function waiOutEvents(m) {
     const S = _simUnitState, c = S.columns, owners = S.owners, out = _wai.out;
     _wai.declined = 0;
@@ -3915,13 +3954,11 @@ function waiOutEvents(m) {
             _wai.declined++;
             // (Its floor was looked at before the pass.)
             _unitWorkerEvent(u, c, a, b);
-        } else if (code === WAI_OUT_SOUND_RESEARCH) {
-            const t = getTileEntityRef(b % GRID_W, Math.floor(b / GRID_W));
-            if (t && _noteAmbientSoundTick(t, 'research_tick', 12)) playSound('research_tick', t.x, t.y);
-        } else if (code === WAI_OUT_RESEARCH_ADVANCE) tryAdvancePlayerResearchTask(a);
+        } else if (code === WAI_OUT_SOUND_RESEARCH) _waiAmbient(b, 0, 'research_tick', 12);
+        else if (code === WAI_OUT_RESEARCH_ADVANCE) tryAdvancePlayerResearchTask(a);
         else if (code === WAI_OUT_ARM) { const u = owners.at(a); if (u && !u.dead) simMoveTryArm(u); }
         else if (code === WAI_OUT_SALVAGE) { const e = simWtDecode(b, a); if (e && e._stT >= 0) { if (!salv) salv = structDestroyList(m); salv[ns++] = e._stT; } }
-        else if (code === WAI_OUT_SOUND_UNIT) { const u = owners.at(a); if (u) playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], u.x, u.y); }
+        else if (code === WAI_OUT_SOUND_UNIT) { if (c.live[a]) { const k = c.x instanceof Int32Array ? 0.125 : 1; playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], c.x[a] * k, c.y[a] * k); } }
         else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
         else if (code === WAI_OUT_MINE_GONE) _waiMineGone(a, RESOURCE_TYPE_LIST[b]);
         else if (code === WAI_OUT_ASTAR_LOG) { const u = owners.at(a); if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
@@ -3938,11 +3975,11 @@ function waiOutEvents(m) {
                 if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
             }
         } else if (code === WAI_OUT_SOUND_HEAL) {
-            const t = a >= 0 ? getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)) : owners.at(b);
-            if (t && _noteAmbientSoundTick(t, 'heal_tick', 12)) playSound('heal_tick', t.x, t.y);
+            if (a >= 0) _waiAmbient(a, 1, 'heal_tick', 12);
+            else { const t = owners.at(b); if (t && _noteAmbientSoundTick(t, 'heal_tick', 12)) playSound('heal_tick', t.x, t.y); }
         }
         else if (code === WAI_OUT_BUILT) _waiBuilt(a, b, out[i * 4 + 3]);
-        else if (code === WAI_OUT_SOUND_BUILD) { const t = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W)); if (t && _noteAmbientSoundTick(t, 'builder_work', 10)) playSound('builder_work', t.x, t.y); }
+        else if (code === WAI_OUT_SOUND_BUILD) _waiAmbient(a, 2, 'builder_work', 10);
         else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners.at(a); if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
     }
     if (ns > 0) structDestroyTiles(salv, ns);
@@ -3958,11 +3995,18 @@ function _waiParallel(WA, P, n, mode, list) {
     const B = _waiArr('args', Int32Array, 2048);
     if (_wai.argsFor !== B) { _wai.argsF = new Float64Array(B.buffer, B.byteOffset + 4096, 512); _wai.argsFor = B; }
     const F = _wai.argsF;
-    B.fill(0, 512, 1024);
+    // (The arguments' addresses (160, a heap map lookup each, three passes a step): kept in B while an argument is the
+    // array it was and the heap freed nothing since (a freed array's address may be another's now).)
+    const K = _wai.encA || (_wai.encA = new Array(WA.length).fill(undefined)), fr = _simHeap.frees;
+    const all = _wai.encB !== B || _wai.encFrees !== fr || K.length !== WA.length;
+    if (all) { B.fill(0, 512, 1024); K.length = WA.length; K.fill(undefined); _wai.encB = B; _wai.encFrees = fr; }
     for (let i = 0; i < WA.length; i++) {
-        const a = WA[i], p = a ? _simHeapPtrOf(a) : 0;
+        const a = WA[i];
+        if (!all && i > 0 && a === K[i]) continue;
+        const p = a ? _simHeapPtrOf(a) : 0;
         if (a && !(p >= 0)) throw new Error('waiRun: argument ' + i + ' (' + a.byteLength + ' bytes) not in the wasm heap: ' + JSON.stringify(simHeapStats()));
         B[512 + i] = a ? _simWEnc(p) : 0;
+        K[i] = a || null;
     }
     F.fill(0); F.set(P.length > 512 ? P.subarray(0, 512) : P);
     const per = WAI_DECIDE_PER, redo = mode === 1 ? _waiArr('redo', Int32Array, n + 2) : null, AP = _wai.AP || (_wai.AP = new Float64Array(4));

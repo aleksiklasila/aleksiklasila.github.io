@@ -10,14 +10,14 @@ const vm = require('node:vm');
 const main = fs.readFileSync('src/main.js', 'utf8');
 const libs = ['src/utils/assign_nearest.js', 'src/utils/id_codec.js'].map(f => fs.readFileSync(f, 'utf8')).join('\n');
 const pending = [], sent = [], errors = [];
-const ctx = vm.createContext({ Float32Array, Int32Array, Uint8Array, Number, Array, Math, Map, Object, String, ArrayBuffer,
+const ctx = vm.createContext({ Float32Array, Int32Array, Uint8Array, Number, Array, Math, Map, Object, String, ArrayBuffer, TextDecoder,
     TILE: 32, GRID_W: 100, GRID_H: 100, _matchLoadGen: 1, gameOver: false, multiRallyPoints: [], _rallyCoverOpen: null,
     queueAction: a => sent.push({ ...a, keys: a._keys }),
     reportRuntimeError: (name, err) => errors.push(String(err)),
     Worker: class {
         constructor() {
             const self = { postMessage: m => pending.push(() => this.onmessage({ data: m })) };
-            this.ctx = vm.createContext({ self, Float32Array, Int32Array, Uint8Array, Number, Math, String, ArrayBuffer, console,
+            this.ctx = vm.createContext({ self, Float32Array, Int32Array, Uint8Array, Number, Math, String, ArrayBuffer, TextDecoder, console,
                 importScripts: () => vm.runInContext(libs, this.ctx) });
             vm.runInContext(fs.readFileSync('src/sim/assign_worker.js', 'utf8'), this.ctx);
         }

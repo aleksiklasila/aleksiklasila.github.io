@@ -2,17 +2,21 @@
 // hold / stop / attack / attackBuilding / killUnit by k_unit_cmd (main.js
 // _unitCmdKernel, wasm/src/uix.rs) leave the state as the per-unit setters do:
 // a chaos replay's command bursts with the kernel and without it (hidden),
-// their exact state hashes step by step.
+// their exact state hashes step by step; and the kernel's parallel path (from UNIT_CMD_PAR_MIN units: forced at
+// any size here) the same (it once ran on the last job's parameters: a big command did nothing, or hung).
 // Usage: node tests/unit-cmd-kernel.test.cjs
 const assert = require('node:assert/strict'), H = require('./net-harness.cjs'), chaos = require('./chaos-spikes-scenario.cjs');
 globalThis.self = { crossOriginIsolated: true };
 const controls = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '192', 'cfg-map-type': 'arena', 'cfg-gold-count': '200', 'cfg-astar-mine-count': '200', 'cfg-max-pop': '20000', 'cfg-starting-energy': '1000000000000', 'cfg-starting-astar': '1000000000000' };
-const run = kernel => {
+const run = (kernel, par = false) => {
     const world = new H.World({ controls }), i = world.spawn('cmd' + kernel, { controls, simWorker: false });
     i.eval(`MAX_THING_LEVEL=20;MAX_RESEARCH_LEVEL=10;startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{'unit:king':{1:1},'unit:norm':{12:1000},'unit:builder_unit':{10:60}},researchLevels:{}});applyMainMenuControlsToRuntimeState();startSoloGame();simDk=20;netStepTicks=()=>20;`);
     const setup = JSON.parse(i.eval('JSON.stringify(' + chaos.setup({ mode: 'mega', layout: 'mixed', buildings: 50, level: 6, towerSites: 30, collectorBuildings: 20, structures: 4000 }) + ')'));
     assert.deepEqual(setup.errors, []);
     if (!kernel) i.eval('_unitCmdKernel = () => false; _orderDropKernel = () => false;');
+    // (Without helpers its chunks run on this thread, through the same shared parameters as with them.)
+    // (And the stopped workers' kernel in chunks of 16, merged in order: ord.rs k_order_workers modes 2 / 6.)
+    if (par) i.eval('UNIT_CMD_PAR_MIN = 0; ORDER_WORKERS_PER = 16;');
     i.eval('__scratch.actions=[];queueAction=a=>__scratch.actions.push(a);');
     const hashes = [];
     for (let step = 0; step < 40; step++) {
@@ -25,7 +29,9 @@ const run = kernel => {
     assert.deepEqual(i.errors.map(String), []);
     return hashes;
 };
-const a = run(true), b = run(false);
+const a = run(true), b = run(false), c = run(true, true);
 const first = a.findIndex((h, k) => h !== b[k]);
 assert.equal(first, -1, 'kernel and setters differ from step ' + first);
-console.log('PASS: unit commands by k_unit_cmd equal the setters over', a.length, 'steps');
+const firstPar = c.findIndex((h, k) => h !== b[k]);
+assert.equal(firstPar, -1, 'the parallel kernel and setters differ from step ' + firstPar);
+console.log('PASS: unit commands by k_unit_cmd (serial and parallel) equal the setters over', a.length, 'steps');

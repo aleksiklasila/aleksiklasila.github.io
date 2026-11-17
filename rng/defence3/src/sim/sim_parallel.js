@@ -2051,7 +2051,7 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_NAV_SWEEP = 7, SIM_BLOCK_IXD_RELAYOUT = 8;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_NAV_SWEEP = 7, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
@@ -2116,18 +2116,8 @@ SIM_KERNELS[SIM_KERNEL_UNIT_GONE] = function (R, P, chunk) { _simRust(_simUnitGo
 // Released slots made fresh on SIM_LANE_FREE (sim_unit_state.js _simFreePost; nfs.rs k_slot_zero over the free table).
 // (Stage 1 (one job): the slots as bits and their 4096-slot blocks listed; stage 2: a job a block, runs filled per column: nfs.rs k_free_mark / k_free_zero.)
 const SIM_KERNEL_FREE_MARK = 186, SIM_KERNEL_FREE_ZERO = 185;
-// The retire pass's slot release in parallel (sim_unit_state.js simUnitStateDetachGoneMany; nfs.rs k_retire_release_par: chunks, then the ordered merge).
-const SIM_KERNEL_RETIRE_REL = 187;
-// An order on many units (main.js _unitCmdKernel; uix.rs k_unit_cmd_par: chunks, then the ordered merge of the shared stacks).
-const SIM_KERNEL_UNIT_CMD = 188;
-// The presentation's structure rows in parallel (sim_presentation.js _simMetaStructsRun; nfs.rs k_meta_structs_par).
-const SIM_KERNEL_META_STRUCTS = 189;
-const _simMetaStructsW = _simWK(Array.from({ length: 77 }, (_, i) => '?mst.' + i));
-SIM_KERNELS[SIM_KERNEL_META_STRUCTS] = function (R, P, chunk) { _simRust(_simMetaStructsW, P, chunk, 'k_meta_structs_par', 'META_STRUCTS'); };
-const _simUnitCmdW = _simWK(Array.from({ length: 47 }, (_, i) => '?uc.' + i));
-SIM_KERNELS[SIM_KERNEL_UNIT_CMD] = function (R, P, chunk) { _simRust(_simUnitCmdW, P, chunk, 'k_unit_cmd_par', 'UNIT_CMD'); };
-const _simRetireRelW = _simWK(Array.from({ length: 29 }, (_, i) => '?rr.' + i));
-SIM_KERNELS[SIM_KERNEL_RETIRE_REL] = function (R, P, chunk) { _simRust(_simRetireRelW, P, chunk, 'k_retire_release_par', 'RETIRE_REL'); };
+// (187: the retire pass's slot release in parallel, 189: the presentation's structure rows: block kernels now, SIM_BLOCK_RETIRE_REL / _META_STRUCTS.)
+// (188: an order on many units, now a block kernel: SIM_BLOCK_UNIT_CMD, main.js _unitCmdKernel.)
 const _simFreeZeroW = _simWK(['fz.list', 'fz.ztab', 'unit.sepKey', 'unit.sepLayer', 'fz.zdefs', 'fz.bits', 'fz.bfl', 'fz.blist', 'fz.bcnt']);
 SIM_KERNELS[SIM_KERNEL_FREE_MARK] = function (R, P, chunk) { _simRust(_simFreeZeroW, P, chunk, 'k_free_mark', 'FREE_MARK'); };
 SIM_KERNELS[SIM_KERNEL_FREE_ZERO] = function (R, P, chunk) { _simRust(_simFreeZeroW, P, chunk, 'k_free_zero', 'FREE_ZERO'); };

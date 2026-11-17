@@ -187,12 +187,14 @@ function _adjApplyClasses(CT) {
     for (let c = 0; c < 9; c++) {
         const C = classes[c], T = C ? _sTables.get(C) : null;
         if (!T || !T.n) { CT.fill(0, c * W, c * W + W); continue; }
-        if (!_sColsInHeap(T) || !simHeapHas(T.mTok)) _sTableGrow(T, T.cap);
-        if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; }
-        for (let j = 0; j < W; j++) {
-            const a = T[_ADJ_CTAB_COLS[j]];
-            CT[c * W + j] = _simWEnc(_simHeapPtrOf(a));
+        // (Kept while its columns are the arrays they were, data_state.js _sColPtrs: the heap checks on a change only.)
+        let E = _sColPtrsKept(T, _ADJ_CTAB_COLS);
+        if (!E) {
+            if (!_sColsInHeap(T) || !simHeapHas(T.mTok)) _sTableGrow(T, T.cap);
+            if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; }
+            E = _sColPtrs(T, _ADJ_CTAB_COLS);
         }
+        CT.set(E, c * W);
     }
 }
 // The flood's no members applied (k_adj_apply on the helpers), then its events

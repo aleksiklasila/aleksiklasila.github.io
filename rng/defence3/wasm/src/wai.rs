@@ -178,6 +178,9 @@ struct W {
     wmman: *mut f32,
     /// (unit.wtcL, [157]: the base ticks of the step its transfer cooldown left (k.rs k_status), cd_batch.)
     wtl: *mut u8,
+    /// (unit.ptSt, [158], and unit.hObj, [159]: the pending way's state bits and the object fields' digest, with the
+    /// digest keys of _pendingPathTarget and pathIsFallbackAstar, P[77] / P[78]: a manual move's end, finish_manual.)
+    pst: *mut u8, hobj: *mut i32, kppt: i32, kpfa: i32,
 }
 
 impl W {
@@ -220,6 +223,7 @@ impl W {
             mode: k.i(72), tk: k.i(73).max(1) as usize, hm: k.i(74), ws_ticks: k.i(75), bld_li: k.i(76),
             psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
             take_spawners: k.p(155), wmman: k.p(156), wtl: k.p(157),
+            pst: k.p(158), hobj: k.p(159), kppt: k.i(77), kpfa: k.i(78),
         }
     }
 }
@@ -1122,8 +1126,26 @@ impl<'a> Ctx<'a> {
         if code == EV_RALLY { self.rally(q); self.sync_cmd(q); if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); } return; }
         // (What the pass does not take yet: back to the JavaScript.)
         let wb = self.wb(q);
-        if wb == 0 || self.st(q) == WS_MANUAL || g(w.mvpp, q) != 0 || g(w.mshoot, q) != 0 {
+        if wb == 0 || g(w.mvpp, q) != 0 || g(w.mshoot, q) != 0 {
             self.emit(OUT_DECLINED, q as i32, code, 0);
+            return;
+        }
+        if self.st(q) == WS_MANUAL {
+            // A player's move (or a rally with no work at its point) at its event: updateWorkerAI's MANUAL_MOVE branch,
+            // _workerSyncCommand, _unitWorkerWayEnd and, its way done there, updateWorkerAI again: the move's end
+            // (_workerFinishManualMoveToIdle). Was all the JavaScript's: ~240 arrivals a step at checker-200k (healers
+            // at their rally points), two updateWorkerAI calls each. Still the JavaScript's: a held one, a no-way
+            // (_unitNoWay), a way done before its event (a way made again: findNearestWalkable, _requestWorkerPath; a
+            // pending target), a researcher (its trip memory is not among these columns), no digest columns.
+            if g(w.holdf, q) != 0 || code == EV_NOWAY || self.path_done(q) || wb == WB_RESEARCHER || w.pst.is_null() || w.hobj.is_null() {
+                self.emit(OUT_DECLINED, q as i32, code, 0);
+                return;
+            }
+            let moved = g(w.mout, q) != 0;
+            self.set_cmd(q, CMD_MOVING);
+            if !moved { self.way_end(q, code); }
+            if self.path_done(q) { self.finish_manual(q); }
+            if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); }
             return;
         }
         let moved = g(w.mout, q) != 0;
@@ -1195,6 +1217,59 @@ impl<'a> Ctx<'a> {
             s(w.wtl, q, (l - cd - 1) as u8);
             s(w.cool, q, 0);
         }
+    }
+    /// _workerFinishManualMoveToIdle (no pending way: mvPP 0, see event): its target let go, its type's memory
+    /// cleared, no way, no pending target (null) nor fallback (false) with their digest terms, no targetPos, idle.
+    unsafe fn finish_manual(&mut self, q: usize) {
+        let w = self.w;
+        self.clear_target(q, false);
+        self.free_memory(q);
+        self.set_path(q, -1);
+        self.set_pidx(q, 0);
+        // (_pendingPathTarget = null, pathIsFallbackAstar = false: sim_unit_state.js simPendingTargetSet / simPendingFlagSet.)
+        let t = g(w.pst, q) as i32;
+        let want = (t & !15) | 5;
+        if t != want {
+            use crate::nfs::{hterm, H_NULL, H_UNDEF};
+            let mut h = g(w.hobj, q);
+            if t & 3 != 1 { h = h.wrapping_add(hterm(w.kppt, H_NULL)).wrapping_sub(hterm(w.kppt, H_UNDEF)); }
+            if (t >> 2) & 3 != 1 { let e = if (t >> 2) & 3 == 2 { 0x3bd } else { H_UNDEF }; h = h.wrapping_add(hterm(w.kpfa, 0x2bd)).wrapping_sub(hterm(w.kpfa, e)); }
+            s(w.hobj, q, h);
+            s(w.pst, q, want as u8);
+        }
+        s(w.tgx, q, f32::NAN); s(w.tgy, q, f32::NAN);
+        s(w.wmman, self.rec(q), 0.0);
+        self.set_next(q, w.now); s(w.idlefv, q, -1);
+        self.set_state(q, WS_IDLE);
+        self.set_cmd(q, CMD_IDLE);
+    }
+    /// clearWorkerTaskMemoryForFreeRetarget (not a researcher's: see event): its type's memory as the accessors write
+    /// null (a target 0, a target type 1, a number NaN) and 0, its material false; its next idle look now.
+    unsafe fn free_memory(&self, q: usize) {
+        let w = self.w;
+        let r = self.rec(q);
+        let nan = f32::NAN;
+        match self.wb(q) {
+            WB_COLLECTOR | WB_ASTAR => {
+                s(w.wmpin, r, 0); s(w.wmpinty, r, 1);
+                s(w.wmwx, r, nan); s(w.wmwy, r, nan); s(w.wmwgx, r, nan); s(w.wmwgy, r, nan); s(w.wmwty, r, 1);
+                s(w.wmsp, r, 0); s(w.wmdrop, r, 0); s(w.wmmine, r, 0); s(w.wmminety, r, 1);
+            }
+            WB_BUILDER => {
+                s(w.wmwx, r, nan); s(w.wmwy, r, nan); s(w.wmwgx, r, nan); s(w.wmwgy, r, nan);
+                s(w.wmsp, r, 0);
+                self.b_material_set(q, false);
+            }
+            WB_HEALER => {
+                s(w.wmpin, r, 0);
+                self.heal_commit_clear(q);
+                s(w.wmwx, r, nan); s(w.wmwy, r, nan); s(w.wmwgx, r, nan); s(w.wmwgy, r, nan);
+                s(w.wmsp, r, 0); s(w.wmtrip, r, 0.0);
+                self.heal_material_set(q, false);
+            }
+            _ => {}
+        }
+        self.set_next(q, w.now); s(w.idlefv, q, -1);
     }
     /// _workerFinishApproachInRange.
     #[cfg_attr(feature = "prof", inline(never))]

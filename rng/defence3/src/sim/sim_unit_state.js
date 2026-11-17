@@ -1881,10 +1881,10 @@ function simUnitStateDetachGoneMany(S, L, n) {
         simRustDirect('k_retire_release', A, _simRetP);
     } else {
         // (In parallel: chunks of SIM_RETIRE_PER, then their lists merged in chunk order (the serial kernel's order).)
-        for (let i = 0; i < A.length; i++) simParallelBind('rr.' + i, A[i]);
-        const nch = Math.ceil(n / SIM_RETIRE_PER), P = _simParams;
+        // (Its arrays and parameters in the block's heap words: no binding a pass (simRustParallel).)
+        const nch = Math.ceil(n / SIM_RETIRE_PER), P = _simRetP;
         P.fill(0, 0, 8); P[0] = n; P[1] = tab.nst; P[3] = 0; P[4] = SIM_RETIRE_PER;
-        simParallelRun(SIM_KERNEL_RETIRE_REL, nch);
+        simRustParallel(SIM_BLOCK_RETIRE_REL, A, P, nch);
         _simRetP[0] = n; _simRetP[1] = tab.nst; _simRetP[2] = 0; _simRetP[3] = 1; _simRetP[4] = SIM_RETIRE_PER; _simRetP[5] = nch;
         simRustDirect('k_retire_release_par', A, _simRetP);
         _simRetP[3] = 0;

@@ -9190,7 +9190,348 @@ build (a carry rewrites the record with the new build's version: an old route pa
   1.94, p95 10.1 -> 6.4, max 32.9 -> 22.4. By tick % 8: the burst's step 51.4 -> 46.6; the install's step (which now
   lists) 44.9 -> 47.8.
 
+**Measured after the commit (45f14648), not kept:**
+- **The worker brains' site stages ahead (k_worker_sites 0-2 posted after projectilesAdvance on SIM_LANE_GROW, the
+  spawners' stage alone at the events):** exact (state hash equal to HEAD; the five structure tables checksummed equal
+  at the post and at the events on 120 checker-200k and 218 mixed-200k steps). Rendered, two sets of 3 rounds: w:0
+  0.70 -> 0.13-0.18 and unitEventsRun -0.4, but simMoveRun +2.3 / +0.6 ms (helpers in site chunks when the movement's
+  jobs start): mean 45.2 -> 48.1, then 44.8 -> 45.1. Reverted.
+- **Flow listing jobs of 4096 slots (FLOW_PER 8192 -> 4096, FLOW_SPLIT 32 -> 16: the exact chunks as before):** exact
+  (hash equal); Node kp:151 1.05 -> 0.85; rendered kp:151 1.48 -> 1.36, tail:151 0.36 -> 0.16, step mean 46.5 / 46.9
+  (noise). Below the keep bar (~1 ms): reverted.
+- Looked at, nothing taken: _simPostResult's untraced ~0.7 ms is the tick message's postMessage and the minimap (every
+  5 ticks), which the page and peers need at once; _spawnBirths 0.89 is k_spawn_births (births claim footprints in
+  order: serial by design) and new workers' setup; job tails sum ~2.2 ms a step (flow listing 0.35, the movement's
+  first stage 0.21, effective levels 0.19, worker decisions 0.16), each small.
+
+**The TPS dips (user, 2026-11-16: "tps drops quite low every now and then, before getting back up"):** in the rendered
+checker-200k runs the page's ticksPerSec / the HUD's TPS (main.js _tpsDisplay: steps a second, not base ticks) fall to
+10-13 for a 2 s sample about every 12 s. The simulation's own timeline (trace gap + step) shows ~40 base ticks every
+2 s throughout, no gap over 120 ms: the dips are **2-base-tick steps** (dk 2, a step every 100 ms) for 12-20 steps.
+Each starts after a stretch of steps at 52-60 ms (over the 50 ms budget: the battle's load, k89 20-30 ms and a mix of
+3-10 ms phases, no single spike); lateness climbs 100 -> 150 ms; netHostUpdateSimulationPace (busy: late > 25 ms or
+utilization > 0.8) sets the pace from the measured rate (~17-18 TPS: ~55-58 ms), and simStepTicksForMs rounds any pace
+over 55 ms up to whole base ticks: dk 2, 100 ms. Back to dk 1 once utilization < 0.55 (~1.5-2 s). Slow steps > 65 ms
+average dk 1.53 (vs 1.02 under 50 ms): many "slow steps" are dk 2 steps doing two ticks' work. A pacing decision (step
+rate vs game speed), not a tick spike: put to the user before changing.
+
 **Serial simulation-thread time (named rendered profile, prof1):** ~9 ms a step profiled, spread thin: k_uix_remove
 0.40 (unitRows' compaction of the id table, every step with deaths: serial, in place), k_spawn_select 0.23,
 k_spawn_births 0.20, k_wsw_set 0.20, k_struct_status 0.20, k_relayout_plan 0.18, simParallelZeroHeap 0.15, the
 pacing's timers ~0.26, postMessage ~0.4. No single item over 0.4 ms.
+
+## 2026-11-16 (evening) - the simulation thread's serial work, round 1 (rendered checker-200k)
+
+Target (user): the ~10 ms a step of serial work on the simulation thread. The named rendered profile (prof1) put ~7 ms
+of it in serial samples, ~5 ms inside the tick body, spread over ~40 owners of 0.05-0.3 ms each. Counted in Node
+(tests/test-runs/serial-20261116/evcount.cjs: worker events by code, calls of serial functions; STACKS=1 by caller),
+then fixed where the count showed waste. Tools: tests/test-runs/lanes-20261116/sertree.cjs (a phase's serial samples
+as a tree; takes a Node .cpuprofile too), serial-20261116/hashck.cjs (computeLockstepStateHash every 20 steps).
+
+**Kept (state hash equal to HEAD's at steps 20 / 40 / 60, checker-200k, 8 helpers; 18 tests below pass):**
+- **Manual moves' ends in the worker kernel (wai.rs event / finish_manual / free_memory):** ~240 workers a step (healers
+  at their rally points) arrived at their manual move's tile and were all declined to the JavaScript (updateWorkerAI
+  twice, _workerFinishManualMoveToIdle, _unitArmAgain). The kernel now does updateWorkerAI's MANUAL_MOVE branch,
+  _unitWorkerWayEnd and the move's end: target let go, the type's memory columns as the accessors write null, no way,
+  pending target null / fallback false with their digest terms (ptSt, hObj, keys P[77] / P[78]: worker.js waiRun args
+  158 / 159), idle. Still declined: held, no-way, a way done before its event, a pending target, researchers (their trip
+  memory is not among the pass's columns). Declined events 240 -> 0 a step.
+- **k_spawn_select's radix sorts (spr.rs radix_u32):** 16-bit passes cleared and summed 65536 counters twice a pass for a
+  few hundred spawns; now 8-bit passes, a pass skipped when every key has the same byte. Serial 0.18 -> ~0.01 ms.
+- **k_uix_remove (uix.rs):** the id table's holes squeezed out run by run (memory.copy between holes, holes found 4 rows
+  at a time with i32x4) instead of every row past the first hole one by one.
+- **Column address tables kept (data_state.js _sColPtrs / _sColPtrsKept):** the kernels' class tables (adjacency,
+  the worker pass's ctab, the work-site grid's, the spawners' production and rally columns, the statuses') were a heap
+  address-map (WeakMap) lookup a column at every call; kept per table and column list while every column is the array
+  it was.
+- **_acqArray with room (unit.js):** sized exactly, a count that rose a little at a post made and zeroed the arrays
+  again (simParallelZeroHeap ~0.1 ms a step); now simReserveCap.
+- **Structure statuses in one call (ord.rs k_struct_status_all, renderer.js structStatusTick):** nine calls a step (one a
+  class) -> one, died / watch-ended rows as class << 24 | row.
+- **The worker pass's 160 argument addresses kept (worker.js _waiParallel):** recomputed only for arguments that changed,
+  and all of them after any heap free (sim_wasm.js _simHeap.frees, counted in _simHeapQueue).
+- **Ambient work sounds without structure objects (worker.js _waiAmbient):** research / heal / build ticks throttled by a
+  fixed 8192-entry (tile, kind) -> tick table (presentation only; a collision sounds anyway) at the tile's centre; unit
+  sounds from the position columns. Was each event a structure object made, a field on it, x / y getters.
+
+**Not kept:** the work-site sweep's parallel threshold 512 / 256 -> 128 / 64 tiles: kernel 134 (block jobs) +0.24 ms
+against ~0.2 ms of serial saved. Reverted.
+
+**Rendered A/B, and a run-order bias in edgeov.sh:** two sets of 3 rounds x 60 s, HEAD's files as base (load logs clean):
+- s1 (batch 1, base run first in every round): base 39.5 / p95 55.8, new 41.0 / 57.5.
+- s2 (batch 1 + 2, new run first in every round): base 40.9 / p95 56.5, new 39.0 / 53.8, >60 ms steps 95 -> 63.
+- Whichever side ran first in a round was 1.5-1.9 ms a step faster, every parallel kernel at once (cpu:89 +-4 ms) with
+  the state bit-identical: an order effect, not the code. Net over both orders ~-0.2 ms mean (noise). The serial phases
+  dropped in both orders: waiOutEvents 0.79 -> 0.19 ms, unitEventsRun -0.57, processGlobalSpawnerQueue -0.28,
+  spawnerProductionPass -0.29 (s2). **edgeov.sh now alternates the order by round** (ORDER= fixes it); earlier fixed-order
+  A/Bs of ~1-2 ms carry this bias.
+- Tests: unit-id-index, spawn-rally, mixed-rally-move, spawner-production-pass, spawn-births-columns, spawn-counts,
+  status-expiry-records, worker-walk, worker-take-rounds, worker-fallback-upgrade, worker-created-start,
+  worker-completion-publication, worker-brain-spawners, builder-research-resume, structure-row-expiry-snapshot,
+  multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4, 2610 tick hashes), chaos-scenario-determinism,
+  shared-spatial-determinism pass.
+
+**Serial owners left (Node profile after the round, ms a step):** k_spawn_births 0.29 (births claim footprints in order),
+waiRun's per-call set-up ~0.25 over its three calls (_waiTables rebuilt at every stats version: research completions;
+research arrays per owner; P), _waiMineGone / clearTileEntity 0.17 (a structure's removal in JavaScript), structure
+destroys 0.15, k_ws_buckets 0.135 (the collectors' groups, made again at every structure change), k_relayout_plan 0.14,
+_spTabFill's stat lookups 0.09 (also per stats version), mvt_sync_plan 0.075, k_unit_event_sort 0.075, occupancyJobs
+0.07, occupancyAfterMovement 0.06.
+
+## 2026-11-16 (night) - serial work, round 2: serial pieces as local tasks of parallel jobs (rendered checker-200k)
+
+A fresh named rendered profile (serial-20261116/prof2: build --keep-names to sim_named_bin.js, WASM32_OVERRIDE, WPROF)
+after round 1: top serial owners in the tick were the worker search tier 0.92 ms (the work-site sweep 0.40), births
+0.69, unit events 0.68, the movement's own JavaScript 0.57. The Node harness overstates research churn (stats rebuilds
+that are rare rendered): rank by rendered profiles.
+
+**Kept (state hash equal to HEAD's at steps 20 / 40 / 60 at dk 1, and at 20 / 30 at dk 4):**
+- **The work-site sweep beside the movement's first stage (worker.js _wswLater / _wswLaterRun, simMoveCompanion 0):** the
+  grid, its counts and the reservations' list are read only by the search's scan (never in flight while a sweep runs)
+  and the worker pass after the movement; the movement kernels touch none of it nor what the sweep reads. Slices due
+  before a commit or a post of the same step still run in place. A/B s3 (sweep in place vs beside, 4 rounds, order
+  alternating): workerSearchTierStep 2.32 -> 1.80 ms, step mean 44.3 -> 43.8.
+- **The id table's squeeze as the spawner production job's local task (barrack.js _spSqueezeIds):** this step's deaths'
+  holes (~265 in 190k rows, ~0.2 ms: bandwidth, every row past the first hole moves; memory.copy did not make it
+  cheaper) squeezed out on this thread while the helpers run k_spawn_prod, which reads none of it; the births right
+  after are its next reader. kp:133 +0.16 ms (the job waits for its local task), the squeeze's 0.2 ms gone from the end.
+
+**Rounds 1 + 2 against HEAD (A/B s4, 4 rounds x 60 s, order alternating, load clean but for another Claude session's
+~0.3 core):** step mean 45.3 -> 43.4 ms (-4%), p50 44.4 -> 42.2, p95 61.6 -> 61.1, steps > 50 ms 1067 -> 909, new faster in
+every round. By phase: waiOutEvents 0.93 -> 0.24, unitEventsRun -0.59, workerSearchTierStep -0.45, processGlobalSpawnerQueue
+-0.16, combatScanRun -0.13, updateAllPlayerVisibility -0.11.
+
+Tests (after round 2): unit-id-index, spawn-rally, spawner-production-pass, spawn-births-columns, spawn-counts,
+worker-walk, worker-take-rounds, worker-search-deltatick, area-worker-search, worker-created-start,
+worker-completion-publication, builder-research-resume, multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4),
+chaos-scenario-determinism, shared-spatial-determinism pass.
+
+**Looked at, not done:**
+- Holes left in the id table (squeezed only when a quarter): its ~20 readers index rows up to the hole-free count
+  (units.length); each would need the raw row count. Not worth it for 0.2 ms now that the squeeze is hidden.
+- The traffic grid's work arrays cleared in occupancyJobs (~0.07 ms): its consumer (the capture kernel) runs every
+  other step, so clearing there would only halve it.
+- The unit events' sort (k_unit_event_sort, 0.08 ms) as the flow listing job's local task: needs the events' listing
+  job moved ahead of flowLooksPost; small.
+- Column address checks (_sColPtrsKept, ~0.07 ms over a step): megamorphic property loads; an epoch would need every
+  column replacement site counted.
+
+**Serial owners left (prof2, ms a step):** k_spawn_births 0.33 (births write ~100 columns each through a generic column
+table: a serial phase (exit, footprint, slot, id) + a parallel phase by birth (stats, movement, worker set-up) is the
+lever), waiRun's set-up ~0.14 over three calls, _wsGroupBuild 0.17 (k_ws_buckets, every structure change), relayout plan
+0.14, _waiMineGone 0.13 (goldMines indexOf / splice: a JS array of mines), mvt_sync_plan 0.07, occupancyJobs 0.07,
+occupancyAfterMovement 0.055, k_slots_by_id 0.06, _acqPost 0.12.
+
+## 2026-11-16 (late night) - round 3: p95, interaction fuzzing, a match-stopping hang, the search tier's backoff
+
+**Where p95 comes from (rendered checker-200k, s4 new runs; serial-20261116/slowsteps.cjs: phase means of the steps
+>= p95 against the p40-p60 band, by tick % 8):** not isolated hitches. A run's 1 s means climb from ~30 ms to 50-65 ms as
+the battle develops, so p95 is mostly the late, heavy phase; in slow steps every parallel kernel is slower at once
+(occupancy helper CPU +40%, the largest chunk 2.5-3x: chunkMax:89 5.9 vs 2.3 ms) with the same job counts: contention.
+On top, periodic lumps: the search tier's commit (+1.6-2.2 ms on tick % 4 = 0) and post (+2.1, tick % 4 = 2), the
+relayout every 2nd tick (+0.9), the flow-look burst commit every 8th (+1.5); tick % 8 = 0 has 52 of 192 slow steps.
+3D vs 2D (scene_tps_probe VIEW=2d|3d, new): step 41.3-41.9 vs 42.1-42.8 ms, FPS 102-104 vs 109: no 3D penalty.
+
+**Perf fuzz on checker-200k (tests/perf-fuzz.cjs, 15 min, headed Edge; serial-20261116/fuzz1, fuzz2):**
+- **fuzz1: the match stopped for good** (tick frozen at 7644 from 8m27s, TPS 0 for the rest, "<15 TPS 47%"): every
+  simulation thread inside k_unit_cmd_par from a unit command (processAction -> _unitCmdKernel). **Cause (old bug):**
+  from UNIT_CMD_PAR_MIN (8192) units _unitCmdKernel filled its own parameter array (_unitCmdP) and ran the parallel
+  job, which reads the shared _simParams: the job ran on the last job's words. In Node that made big stop / hold /
+  attack / kill commands do nothing (a 57k-unit hold took 0.5 ms and held none); in the browser a stale mask made the
+  id table's probe loop forever. **Fixed** (main.js: _simParams.set(P) before the job); a 20k-unit hold now holds all.
+  unit-cmd-kernel.test.cjs runs the parallel path too (UNIT_CMD_PAR_MIN = 0, now a let): without the fix it hangs.
+  The other private-parameter jobs (unit gone, meta structs, projectiles, ws groups) copy into _simParams already.
+- fuzz2 (with the fix): no stall, nothing persistent, 6 mild flags (select thrash FPS -27%, one combo -35%); TPS < 15
+  in 6% of samples (the dk-2 pacing dips noted before: a pacing policy, left as is).
+- Page costs of big multi-point orders seen in fuzz1 (not fixed): applyUnitCommandTargets ~15 ms a shift-click with
+  170k selected (a Map look-up a unit for its position), actionIdsEncode ~10 ms an action.
+
+**The search tier's backoff for searches that found nothing (uix.rs k_ws_fail_bump, worker.js _wsCommit):** ~85% of
+requests found nothing (~17k a post, ~2.6k found; ~140k idle workers). k_ws_select doubles a worker's retry period by
+its failed searches (up to 8x), but only the take counted them (a candidate found but not valid): a search that found
+nothing never reached the take, so those workers searched at every retry (20 ticks; measured gap 25 ticks, ~2.8k
+futile scans a step). The commit now counts them too (same validity checks as the take). Node 80 steps: requests a
+step 5030 -> 2873, futile repeats 2812 -> 688 (falling further as the backoff grows), found a step 765 -> 638 (workers
+with no site in reach notice new work later, by up to 8 retries). Rendered A/B s5 (4 rounds, alternating): step mean
+43.9 / 44.0, workerSearchTierStep -0.26, lane waits -0.18 (max 26 -> 17.5), occupancy helper CPU +3.7 (different
+positions: the behaviour changed). Kept: the intended backoff, ~40% less background scan load.
+- Tests: worker-search-deltatick, area-worker-search, worker-take-rounds, worker-walk, worker-created-start,
+  spawn-rally, unit-cmd-kernel, multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4), chaos-scenario-determinism,
+  shared-spatial-determinism pass.
+- **Shift-click order chains on the page (main.js applyUnitCommandTargets, _assignSlotCache):** each id's frame slot kept
+  for the id list (the selection's cached array, the same click after click), confirmed by the frame's id column; a Map
+  look-up only for a unit whose slot changed. Was a look-up a unit a click (~15 ms a shift-click at 170k selected).
+  fuzz3 (5 min, selection + orders): no page errors, order.chain's input handler 6 ms.
+
+**Next (by the data above):** births as a serial claim (exit, footprint, slot, id, id table) plus a parallel column pass
+(~0.3 ms serial now); the search tier per step instead of a post / commit lump every 4 ticks (+2 ms on half the
+steps); the occupancy family (~40% of helper CPU) under heavy battle, where p95 lives.
+
+## 2026-11-16 (night) - round 4: what the step is made of now, the order-id encoder
+
+**Step by search-tier phase (rendered checker-200k, s5 new + spin1 a runs; serial-20261116/ph tools):** post steps
+43.7 ms, commit steps 43.7, the other two 42.3: the post (_wsPost ~2.9 ms: two k_ws_select runs, ~0.7 serial of which
+_wsGroupBuild 0.44) and commit (waiTake ~2.2) sit on ticks where the combat scan and acquisition (~3.5 ms) do not.
+Spreading the tier per step would gain little; not done. tick % 8 = 0 is +3.5 ms (45.9 vs 42.3): the flow-look burst
+after each navigation install (flowLooksCommit +2.5, w:13 1.1, the sim thread running exact looks 1.0, kp:153 +1.4).
+
+**Kernel 89 (occupancy, ~40% of helper CPU, 17 ms wall):** blocks are scheduled at the work floor (occ-sched-probe:
+barrier = ready = sum / threads), so its wall only falls with less work. Counters (dbgc, checker-200k after 400 / 900
+ticks): ~65k / 100k resolves a tick, half blocked; the swap search scans ~2.6-4.9k times (~55k index entries, ~12k chunk
+summaries of ~38k entries): small. Prof build (k89-20261116/pp.*): no hot spot: checked_traffic_q 9.6% self,
+traffic_yield 8.2, occ_gather 7.8, move_job 7.5, clear_or_mark 7.3, traffic_swap 7.1, walker_short_at 6.0 (one steer
+record line a walker), epi_slot 4.9, preview 4.3, field 4.1, commit_preview 4.0, resolve_slot 3.9, motion_f 3.7: the
+per-unit column lines again. A swap chunk prefilter (by distance) would skip ~4% of chunks: not done. No change.
+
+**Helper spin (?simspin):** 190 us (default) vs 50 us, rendered A/B edgeq-spin1 (3 rounds, alternating): 40.5 vs 42.8
+ms mean, p95 54.7 vs 58.8. Kept 190. (New tool: wholesale-20261115/edgeq.sh, the same tree with two page queries.)
+
+**The order-id wire encoder (utils/id_codec.js actionIdsEncode, on the page for every order):** a byte buffer and one
+TextDecoder('latin1') decode instead of String.fromCharCode in 4k pieces, the alphabet as a byte table, shifts below
+2^31. Same strings (old vs new over 16 cases incl. 400k ids, shuffled, typed arrays, invalid input); 170k ids 5.6 ->
+3.0 ms sorted, 13.7 -> 6.2 shuffled (Node). Tests: action-ids-codec, rally-helper-budget (its contexts given
+TextDecoder), action-budget, spawn-counts(-kernel), toggle-many pass.
+
+**Big orders (perf fuzz fuzz4, rally / order actions only, checker-200k, 8 min):** a rally or move click with 18k-80k units
+selected took the sim step from ~45 to 55-82 ms mean (max 124-154) for seconds, TPS ~10 (28% of samples < 15). Node
+probe (serial-20261116/orderprobe.cjs: per-step wall of each _gameTickBody call around one move order of every unit of
+player 0, ~88.7k incl. workers, wire-form ids): the order's step 50 ms vs 26 (list ids) / 37 vs 25 (wire ids), the
+steps after +3-6 ms (k89 / k8: 88k more movers, inherent). On the order's step: _orderWorkers 10.9 ms on the sim
+thread: k_order_workers (ord.rs) twice over the workers (mode 0 counts each profile's, mode 1 applies), serial.
+- **k_order_workers in chunks over the helpers (SIM_BLOCK_ORDER_WORKERS 9, P[25] per job = ORDER_WORKERS_PER 1024):**
+  modes 0 / 1 over a chunk of the list, its counts, left units, freed path handles and work-site-grid entries in the
+  chunk's own places; modes 4 / 5 merge them in chunk order (one serial pass over those few); the shared counters (work
+  versions, reservation region counts and sums) atomic adds. runQueuedOrders on the order's step 10.9 -> 4.7 ms
+  (4096 a job: 5.9). State hashes equal: serial / 4096 / 1000 a job, 174k workers ordered, 6 steps after
+  (ordhash.cjs, 8 helpers); order-worker-budget.test.cjs now also runs 16 a job (no helpers: chunks on the sim
+  thread) against the single pass. Left: the two passes are ~300 ns a worker of scattered column lines (2.85 ms wall);
+  mode 0 could ride the take kernel; the stop path (mode 2) is still one pass (path_release's free lists).
+- **Stop orders (orderprobe ORDER=stop, 88.7k units incl. workers; actionsPrepare as the worker does before the tick):**
+  the stop's step 52 ms vs 28. k_order_workers mode 2 (stopped workers) chunked the same way (path store releases and
+  freed handles listed per chunk, replayed in order by mode 6; path_release split into path_release / path_drop): step
+  69.5 -> 63 before the prepare fix in the probe. State hashes equal serial / 1024 a job (186k units stopped, 6 steps);
+  unit-cmd-kernel.test.cjs's parallel run uses 16 a job. Left: +16.8 ms of worker AI on the stop's step (every
+  stopped worker is listed once: out 0, then registers its search and parks) - a stagger of their first check by id
+  over a few ticks would spread it (not done: parking / wake semantics).
+- **Block kernels instead of per-call name bindings:** k_unit_cmd_par (47 arrays bound as uc.N for every big command,
+  ~2.6 ms of the sim thread for the first one, and helpers sit out a job until their binding messages arrive),
+  k_retire_release_par (rr.N, 29) and k_meta_structs_par (mst.N, 77) now run through simRustParallel (k.rs k_block
+  10 / 11 / 12: arrays and parameters in the block's heap words). SIM_KERNEL_UNIT_CMD / _RETIRE_REL / _META_STRUCTS
+  removed. Hashes equal (move and stop on checker-200k with 8 helpers); meta-structs-kernel PAR=1, unit-cmd-kernel,
+  structure-row-expiry-snapshot, unit-id-index, shared-spatial-determinism pass.
+- **Found and fixed:** meta-structs-kernel.test.cjs with PAR=1 never exited after passing (its real helper threads
+  kept Node alive; looked like a hang): it exits now.
+- **Rendered (scene_tps_probe PAGEACT=@serial-20261116/bigorder.js every 10 s: a move order of every own unit, 60-91k,
+  through queueAction; ordersteps.cjs):** the order's step +4 to +13 ms over the 10 before (42.9 / 30.3, 35.3 / 31.6,
+  44.1 / 36.6, 38.7 / 33.2, 47.7 / 34.5), no errors; kp:134 (the workers' chunks) +2.5-4.6, kp:8 +1.5-3.8,
+  processActions +1.3-2.3. (fuzz4 before the change: 55-82 ms mean, max 124-154, for seconds after such clicks.)
+  Next: mode 0's counts inside the take kernel (one pass over the workers less).
+- **Chunk sizes (not kept):** flow pending 8192 -> 4096 slots, acquisition snapshot 8192 -> 4096, slot remap 16384 ->
+  8192, slab score 256 -> 128, worker decide 128 -> 64 events: rendered A/B c1 (4 rounds, alternating) 43.3 -> 43.9 ms
+  mean (noise), the kernels -0.06 to -0.10 ms each. Reverted.
+- **Stopped workers' first look spread over three ticks (ord.rs k_order_workers mode 2, P[27] 1, [100] unit.mvWake):**
+  each stopped worker is parked (on 2, no flags) with its wake at now + 1 + id % 3 (the action runs before its tick's
+  movement), so the movement kernel hands it to its AI on the stop's tick or one of the next two (mv.rs: parked && t
+  >= wake) instead of all ~80k on the stop's tick. A worker decides at most 2 ticks later than before. Stop of 88.7k
+  units (orderprobe): the stop's step 52 -> 37.6 ms (base 25.7), worker AI +6.3 / +6.8 / +3.9 over the three ticks
+  (was +16.8 on one). Tests: unit-cmd-kernel, worker-walk, worker-created-start, worker-take-rounds,
+  worker-search-deltatick, area-worker-search, order-worker-budget, action-budget, builder-research-resume,
+  multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4), chaos-scenario-determinism pass.
+
+## 2026-11-17 - round 5
+
+**p95 now (rendered c1 runs, slowsteps.cjs):** tick % 8 = 0 holds 187 of the 433 steps >= p95 (mean 47.5 vs ~43): the
+flow-look burst after a ground navigation install (flowLooksCommit +3.7: w:13 2.5 + the sim thread's own exact looks
+2.3, kp:153 +1.3), with the movement +12 ms on those steps (k89 +5.2, kp:8 +2.2: helpers shared with the lane).
+- **SIM_FLOW_TICK_LOOKS 131072 -> 16384 (a 35k burst gets 3 ticks; not kept):** A/B f1 (4 rounds, alternating): tick %
+  8 = 0 45.9 -> 43.2 ms, w:13 0.23 -> 0, but mean 43.8 / 43.8, p95 59.3 / 59.5: the work only moved to the other ticks,
+  and walkers' exact looks come 2 ticks later. Reverted.
+
+**Big selections on the page (scene_tps_probe PAGEACT: every own unit selected as a box selection's apply, ~90k;
+page CPU profiles with / without, selprof/):** FPS ~110 -> 75-90 with the selection. Page JS +55 ms/s: the selection's
+index made anew ~10 times a second (selectionIndex 13 ms/s: the simulation's slot relayout moves some units every other
+tick, and any moved unit marked the whole index stale: a pass over 90k unit views each time), the packer's three id
+lists made into JS arrays at every selection change (keep, 14 ms/s), the per-view compaction twice a second
+(selectionCompactDead 5 ms/s).
+- **The index follows moves and deaths (hud.js selectionSlotsMoved / selectionNoteDead; sim_client.js passes the
+  moved units' old and new slots):** a reverse index (pos) of the live selected slots; a death takes its entry out (the
+  last one into its place, so a unit moved into a dead one's slot is never listed twice); a move rewrites the mover's
+  bit and entry (chains read first). Rebuilds 189 -> 0 in 22 s. _selectedOwnUnitCount is the list's length (it was n -
+  dead, low after a rebuild). New tests/selection-index-moves.test.cjs: 400 frames of random deaths, moves (chains,
+  into freed slots) and births against a rebuild, and compactions (each live unit once).
+- **The packer's id lists as they came** (info_panel_static.js): a JS array made only when an order asks
+  (infoPackSelectionIds).
+- **SELECTION_COMPACT_BIG 100000 -> 16384:** armies from 16k units compact from the index every 2 s (when 1/64 died)
+  instead of a pass over their views every 0.5 s.
+- Result: FPS with 90k selected 85-112 (was 75-90; none selected ~104-117); the page profile with the selection has no
+  index, keep or per-view compaction time left (worker.onmessage +8 ms/s: deaths noted per frame). Tests:
+  selection-index-moves, render-scale, static-panel-edge (9/9) pass.
+- **Helper idle spin as a blocking Atomics.wait of the same length (not kept):** the spin is 7.8% of helper CPU
+  (rendered profile prof5); A/B w1 (4 rounds): 43.3 -> 44.7 ms mean, p95 58.9 -> 63.0: the wake from a futex is later
+  than a spinning helper's pickup. Reverted. (Also measured: page right-click order with 90k selected: handler
+  0.4-2.3 ms, no long task: serial-20261116/rclick.js. The delta spatial index exists, off since 2026-10-29.)
+- **Helper CPU now (prof5, rendered checker-200k, named build):** k89 39.8%, k8 ~8.6%, flow looks ~11.5% (exact 5.3,
+  atl_route 3.5, pending 2.1), spin 7.8%, spatial index ~4.8%, acquisition ~4%, ws scan 2.3%, eff units 1.6%,
+  vis seed 1.5%; tracing (now, _simParTraceChunk) 3.4% in simtrace runs only. Sim thread serial 7.2 of 48.5 ms.
+- **Slot locality (serial-20261116/locality.cjs: live units in a slab homed to the 16x16 block they stand in, runs of
+  consecutive same-block slots):** at checker-200k the home share falls 0.89 -> 0.64 and the mean run 249 -> 2.8 in 400
+  ticks; the relayout runs every 2nd tick but moves only ~60-250 units a step (budget ~5.9k): it can only move a unit
+  into a hole of its block's slabs or an empty slab, and at ~93% density there are few. The drift threshold (half of a
+  slab's units out of its block) is not the limit: 32 / 48 / 56 64ths gave the same moves and locality. A restore (by
+  block, home 0.885, runs 213) decays to 0.73 / 3.7 within 100 ticks, and the restored run's ticks were no faster after
+  its warm-up. Not a lever in this battle; the parameter was reverted.
+
+
+## 2026-11-17 (later) - round 6: scene imports, the slot layout's decay measured, dead ends
+
+**Scene imports (utils_solo_snapshot.js restoreSoloGameSnapshot):** the population picked at an import now also leaves room
+for the largest team's buildings: the saved one is kept when it holds both the largest team's units and its buildings
+(memoryBudgetBuildings), else the smallest power of two that holds the units; a saved building cap below the need is
+lifted (0: the budget's). attack-200k-8teams (9,104 buildings a team, refused at 8,192) and mixed-1m-4teams both import
+in headed Edge now (scene_tps_probe; the fixture argument is relative to tests/: scenes/x.gz), no page errors. Tests:
+solo-snapshot, scene-orders, work-snapshot pass.
+
+**Rendered baseline (checker-200k-r0, headed Edge, simtrace, 60 s; teams8-20261117/chk-base-1.txt):** mean 42.1 ms, p95
+56.0, p99 61.3, max 84.6; kp:89 16.9, kp:8 4.2. The 8-team scene (base-1.txt): steady ~45 ms at 183k units (per unit
+like checker-200k); its first steps after the import are one-time bursts (452 / 146 / 212 ms: every unit's first
+acquisition, every worker's first search, the first movement's looks), an import artefact, not play.
+- **bgLeft:N is a stage count, not ms** (phases.cjs lists it): bgLeft:0 ~3.9 = the worker brains' four-stage chain on
+  lane 0 is never started before workerBrainsCollect (posted ~6 ms earlier, helpers in the movement): ~0.7 ms on the
+  sim thread a step. Not changed.
+- **Single-chunk stalls (8-49 ms, ~3 a minute, Edge only):** the max step (tick 257: kp:36 48.9 ms, one chunk of the
+  unit events kernel, normally 0.5) and the other outliers fall on random kernels about in proportion to their time
+  (mostly k89); Node runs (KTIMETICK, 4 x 400 ticks) show none in k36. OS preemption on the oversubscribed machine (9
+  sim threads, 4 presentation, page, GPU on 16 logical), not first-touch work. No lever inside the game.
+
+**Slot layout, measured (Node, tickbench SCENE=checker-200k-r0 SOLO=1 HELPERS=8 KTIMETICK=1, 20 s; layout-*.json,
+rl-*.json):** k89 wall by window of ticks:
+| run | 10-60 | 60-120 | 120-200 | 200-300 | 300-420 | step mean |
+|---|---|---|---|---|---|---|
+| restored by block (today) | 6.08 | 5.80 | 6.93 | 7.96 | 8.96 | 26.6 |
+| restored shuffled (slot plan permuted) | 9.76 | 8.51 | 9.82 | 10.81 | 11.98 | 30.5 |
+| drift threshold 56/64 home (was 32) | 6.16 | 6.15 | 6.94 | 8.00 | 9.38 | 27.2 |
+| slack shift 2 (was 4) | 6.16 | 6.19 | 7.24 | 8.61 | 9.50 | 28.6 |
+| both | 6.15 | 6.00 | 6.80 | 7.83 | 9.41 | 27.6 |
+Layout matters (shuffled +3 to +3.7 ms k89, +0.6 k8, step +15%) and the gap holds at tick 400, so the online relayout
+keeps most of the block order; the rise over the run (+3 ms in both) is the battle's load, not decay. A stricter drift
+threshold moved hardly more (25.6k vs 24.5k units in 214 steps), more slack 58k, neither changed k89. Run-to-run noise
+is large (a repeat of the default gave 8.78 at 60-120). Reverted (the parameters too).
+
+**Not levers (measured, no change made):**
+- *Atlas route tables reused for unchanged domains* (k_atl_route ~3.6% of helper CPU): per build (Node, 48 builds) 41
+  of 1024 clusters change, 18 of 64 level-0 domains and 3.9 of 4 level-1 domains; cost by level (node-count proxy)
+  L0 33%, L1 52%, top 15%: reuse would save ~0.75% of helper CPU.
+- *Skipping fully blocked movers' resolves:* only ~6% of resolves end with no progress (counter 97: 6.4k of 100k; 16%
+  below a quarter of the step), so it cannot pay.
+- *A memo of atlas steps inside flow looks:* a look's run carries its first exit choice (the hint) along its tiles,
+  so a step is not a function of (tile, destination) alone; a shared memo would make looks order-dependent.
+- *traffic_yield's early outs reordered:* nearly every call reaches the resolve (counters 77 / 79 / 80: 36k / 20k /
+  32k of 48k), nothing to skip.
+
+**Stop path with real helpers (ordhash.cjs ACT=stop, 8 helpers, 91.7k + 94.7k units stopped):** the workers' order
+kernel serial vs 1024 a job: state hashes equal on all 6 ticks after (947ce2fb ... 873af74e); the chunked block (9)
+ran twice. (ordhash.cjs: its block counter now starts before the order, so the order's own blocks are counted.)
+
+**Where it stands:** the step is throughput-bound (sim threads ~85% busy incl. 7.8% spin, page ~67%, presentation ~66% of
+a core); helper CPU k89 ~40%, flow looks ~11.5%, k8 ~8.6%, spatial index ~5.6%. What is left are cuts of 1-3% each, or the
+movement's data redesign (MOVEMENT_SIMD_PLAN.md (C): hot fields in block-ordered rows).

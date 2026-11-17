@@ -3353,7 +3353,9 @@ function getUnitGroupKey(u) {
 // array itself is compacted later, selectionCompactDead). framed: the units
 // are the frame's views (the page beside a simulation worker); otherwise the
 // callers walk the units as before.
-const _selIndex = { sel: null, len: -1, cap: -1, remap: -1, framed: false, slots: new Int32Array(0), n: 0, mask: new Uint8Array(0), dead: 0, version: 0, compactAt: 0 };
+// (slots[0 .. n): the live selected units' slots, in no particular order; pos[s]: s's place there (a selected slot's);
+// dead: the selection array's units that died since it was made (compactions take them out of it).)
+const _selIndex = { sel: null, len: -1, cap: -1, remap: -1, framed: false, slots: new Int32Array(0), pos: new Int32Array(0), n: 0, mask: new Uint8Array(0), dead: 0, version: 0, compactAt: 0 };
 // (Bumped when the frame's slots were dealt again: a restore.)
 let _selIndexRemap = 0;
 function selectionIndexRemapped() { _selIndexRemap++; }
@@ -3362,13 +3364,13 @@ function selectionIndex() {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     const cap = F ? F.cap : 0;
     if (X.sel === sel && X.len === sel.length && X.cap === cap && X.remap === _selIndexRemap) return X;
-    if (X.mask.length < cap) X.mask = new Uint8Array(cap); else X.mask.fill(0);
+    if (X.mask.length < cap) { X.mask = new Uint8Array(cap); X.pos = new Int32Array(cap); } else X.mask.fill(0);
     if (X.slots.length < sel.length) X.slots = new Int32Array(Math.max(1024, Math.ceil(sel.length * 1.25)));
-    const slots = X.slots, mask = X.mask;
+    const slots = X.slots, mask = X.mask, pos = X.pos;
     let n = 0, dead = 0;
     if (F) for (let i = 0; i < sel.length; i++) {
         const u = sel[i], s = u && !u.dead && u._frameView ? u._s : -1;
-        if (s >= 0 && s < cap) { slots[n++] = s; mask[s] = 1; } else dead++;
+        if (s >= 0 && s < cap && !mask[s]) { pos[s] = n; slots[n++] = s; mask[s] = 1; } else dead++;
     }
     X.sel = sel; X.len = sel.length; X.cap = cap; X.remap = _selIndexRemap; X.framed = !!F; X.n = n; X.dead = dead; X.version++;
     return X;
@@ -3379,17 +3381,51 @@ function selectionIndexAdopt(sel, slots, n) {
     const X = _selIndex, F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
     if (!F || sel !== selectedUnits || sel.length !== n) return;
     const cap = F.cap;
-    if (X.mask.length < cap) X.mask = new Uint8Array(cap); else X.mask.fill(0);
+    if (X.mask.length < cap) { X.mask = new Uint8Array(cap); X.pos = new Int32Array(cap); } else X.mask.fill(0);
     if (X.slots.length < n) X.slots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
-    const mask = X.mask;
+    const mask = X.mask, pos = X.pos;
     X.slots.set(slots.subarray(0, n));
-    for (let i = 0; i < n; i++) mask[slots[i]] = 1;
+    for (let i = 0; i < n; i++) { mask[slots[i]] = 1; pos[slots[i]] = i; }
     X.sel = sel; X.len = sel.length; X.cap = cap; X.remap = _selIndexRemap; X.framed = true; X.n = n; X.dead = 0; X.version++;
 }
 // A frame's unit died (its slot may be another unit's from the next frame on).
+// (Its place in the slot list taken by the list's last: the list holds live units only, so a unit moved into this
+// slot later (selectionSlotsMoved) is never listed twice.)
 function selectionNoteDead(slot) {
     const X = _selIndex;
-    if (slot >= 0 && slot < X.mask.length && X.mask[slot]) { X.mask[slot] = 0; X.dead++; X.version++; }
+    if (slot >= 0 && slot < X.mask.length && X.mask[slot]) {
+        X.mask[slot] = 0; X.dead++; X.version++;
+        const j = X.pos[slot];
+        if (j >= 0 && j < X.n && X.slots[j] === slot) { const last = X.slots[--X.n]; X.slots[j] = last; X.pos[last] = j; }
+    }
+}
+// Units the simulation moved to other slots (its relayout moves some every other tick; from[i] -> to[i], k of them):
+// the selected ones' mask bits and list entries follow them. A full rebuild of the index (selectionIndexRemapped) walked
+// every selected unit's view: ~6 ms at 90k selected, ~10 times a second (perf fuzz 2026-11-17, select all on checker-200k).
+let _selMoveJ = new Int32Array(0);
+function selectionSlotsMoved(from, to, k) {
+    const X = _selIndex;
+    if (!(k > 0)) return;
+    // (An index not current anyway, or a slot past it: made again when next asked.)
+    if (!X.framed || X.sel !== selectedUnits || X.len !== selectedUnits.length || X.remap !== _selIndexRemap) { _selIndexRemap++; return; }
+    const mask = X.mask, pos = X.pos, slots = X.slots, cap = mask.length;
+    if (_selMoveJ.length < k) _selMoveJ = new Int32Array(Math.ceil(k * 1.25));
+    const J = _selMoveJ;
+    let m = 0;
+    // (Each selected mover's place, read before any is written: a chain of moves (a to b, b to c) reads b's own.)
+    for (let i = 0; i < k; i++) {
+        const a = from[i], b = to[i];
+        if (a >= 0 && a < cap && mask[a]) {
+            if (!(b >= 0 && b < cap)) { _selIndexRemap++; return; }
+            const j = pos[a];
+            if (!(j >= 0 && j < X.n && slots[j] === a)) { _selIndexRemap++; return; }
+            J[i] = j; m++;
+        } else J[i] = -1;
+    }
+    if (!m) return;
+    for (let i = 0; i < k; i++) if (J[i] >= 0) mask[from[i]] = 0;
+    for (let i = 0; i < k; i++) { const j = J[i]; if (j >= 0) { const b = to[i]; mask[b] = 1; slots[j] = b; pos[b] = j; } }
+    X.version++;
 }
 // The dead leave the selection's array: at once for a small one, a few times
 // a second for a big one (a pass over it, and every cache keyed by the array
@@ -3398,7 +3434,7 @@ function selectionNoteDead(slot) {
 // its index made from the same pass: in a fight a million selected units
 // compacted twice a second, then indexed again, were ~150 ms of long frames
 // a second.)
-const SELECTION_COMPACT_SMALL = 4096, SELECTION_COMPACT_MS = 500, SELECTION_COMPACT_BIG = 100000, SELECTION_COMPACT_BIG_MS = 2000;
+const SELECTION_COMPACT_SMALL = 4096, SELECTION_COMPACT_MS = 500, SELECTION_COMPACT_BIG = 16384, SELECTION_COMPACT_BIG_MS = 2000;
 let _selCompactSlots = new Int32Array(0);
 function selectionCompactDead(force = false) {
     if (selectedUnits.length === 0) return false;
