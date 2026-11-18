@@ -368,9 +368,11 @@ function _ipstAstarRates(owner, plan) {
     _pruneTickLogBucket(bucket, gameTime - Math.max(Math.floor(TICK_RATE * longest) * 2, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
     for (const [sec, rows] of wins) {
         const cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
-        for (let k = 0; k < bucket.length; k++) {
+        // (Newest back to the window's start: the log is in tick order.)
+        for (let k = bucket.length - 1; k >= 0; k--) {
             const ev = bucket[k];
-            if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoff) continue;
+            if (!ev || !Number.isFinite(ev.tick)) continue;
+            if (ev.tick < cutoff) break;
             const d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
             for (const i of rows) if (i === plan.length || plan[i].match(ev)) out[i] += d;
         }

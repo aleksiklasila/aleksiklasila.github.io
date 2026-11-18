@@ -1048,7 +1048,21 @@ function _simClientUpdateStableSlots(F, old) {
     if (_simStableChanged.length < n) _simStableChanged = new Int32Array(Math.ceil(n * 1.25));
     const changed = _simStableChanged;
     let nc = 0;
-    for (let s = 0; s < n; s++) {
+    // (Only the blocks whose ids changed since the old frame, when the presentation's marks say (the same stream and
+    // capacity, the old frame's seq earlier): a battle's frames all change membership, and a pass over every slot was
+    // ~20 ms a second of the page at 200k units, perf fuzz 2026-11-18. Blocks past either frame's count are read whole.)
+    const M = F.idMarks, OM = old.idMarks;
+    if (M && OM && M.stream === OM.stream && M.cap === OM.cap && OM.seq < M.seq) {
+        const B = M.block, st = M.stamps, base = M.base, since = OM.seq, lo = Math.min(F.n, old.n);
+        for (let b = 0, s0 = 0; s0 < n; b++, s0 += B) {
+            const s1 = Math.min(n, s0 + B);
+            if (s1 <= lo && st[base + b] <= since) continue;
+            for (let s = s0; s < s1; s++) {
+                const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
+                if (id !== before) changed[nc++] = s;
+            }
+        }
+    } else for (let s = 0; s < n; s++) {
         const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
         if (id !== before) changed[nc++] = s;
     }
@@ -1169,9 +1183,14 @@ function _simClientApplyFrame(frame, shown) {
         }
     }
     // (Which blocks of the renderer's columns changed: presentation_worker.js markDirty.)
+    F.idMarks = null;
     if (frame.dirty) {
         const D = frame.dirty;
         F.dirty = { seq: D.seq, stream: D.stream, block: D.block, nb: D.nb, cols: D.cols, stamps: new Int32Array(F.buf, D.offset, D.cols.length * D.nb) };
+        // (The id column's marks alone, kept when a rebase drops F.dirty (its px / py rewritten, not its ids): the
+        // membership pass compares only the blocks whose ids changed, _simClientUpdateStableSlots.)
+        const ci = D.cols.indexOf('id');
+        if (ci >= 0) F.idMarks = { stamps: F.dirty.stamps, base: ci * D.nb, nb: D.nb, block: D.block, seq: D.seq, stream: D.stream, cap: frame.cap };
     }
     F.renderMotionPad = 0;
     let old = _pageFrame;

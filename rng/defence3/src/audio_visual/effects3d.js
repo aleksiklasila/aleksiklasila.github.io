@@ -356,11 +356,30 @@ function _fxTypeOfStyle(style) {
     return t;
 }
 
+// (The ring's records that may still be live: from _fxTail (the oldest not yet known dead) to the head, in the order
+// written; the tail moves past dead and expired ones. A pass over every slot of the ring each frame was most of this
+// function's time (~20 ms/s of the page in a battle, perf fuzz 2026-11-18). When more were written since the last
+// frame than the ring holds, the whole ring.)
+let _fxTail = 0, _fxTailSerial = 0, _fxBand = 1 << 30;
 function _pushCombatRecordFx() {
     if (typeof combatFxData === 'undefined') return;
     const data = combatFxData, stride = COMBAT_FX_STRIDE, now = _fx.now, tickScale = _fx.tickScale;
     const ids = typeof combatFxIds !== 'undefined' ? combatFxIds : null, P = _fxAt, volleys = _fx.volleys;
-    for (let o = 0, r = 0, end = COMBAT_FX_CAPACITY * stride; o < end; o += stride, r += 2) {
+    const CAP = COMBAT_FX_CAPACITY, head = combatFxHead, serial = combatFxSerial | 0, written = (serial - _fxTailSerial) | 0;
+    _fxTailSerial = serial;
+    // (_fxBand: records from the tail to the head at the last frame's end; with those written since, the ring's size
+    // or more: the head may have passed the tail, the whole ring.)
+    // (The band read in the slots' order, as the whole ring was (the batch's order, and which records a full batch
+    // leaves out): [start, head) or, wrapped, [0, head) then [start, CAP). The next tail: the kept record nearest the
+    // start in the order written, minPos.)
+    const start = (written < 0 || _fxBand + written >= CAP) ? head : _fxTail;
+    const full = start === head && (written < 0 || _fxBand + written >= CAP);
+    const wrapped = full || start > head;
+    let minPos = CAP;
+    for (let seg = 0; seg < (wrapped ? 2 : 1); seg++) {
+    const qa = wrapped ? (seg === 0 ? 0 : start) : start, qb = wrapped ? (seg === 0 ? head : CAP) : head;
+    for (let q = qa; q < qb; q++) {
+        const o = q * stride, r = q * 2;
         let kind = data[o];
         if (!kind) continue;
         let age = now - data[o + 5];
@@ -370,6 +389,7 @@ function _pushCombatRecordFx() {
         if (kind === 11 && volleys) { data[o] = 0; continue; }
         let duration = volley ? _fxVolleyTicks(volley, _fxLen(data[o + 3] - data[o + 1], data[o + 4] - data[o + 2])) * tickScale : (_FX_DURATION[kind] || 8) * tickScale;
         if (age >= duration) { data[o] = 0; continue; }
+        { const pos = q >= start ? q - start : q + CAP - start; if (pos < minPos) minPos = pos; }
         if (age < 0) continue;
         let x1 = data[o + 3] / TILE, z1 = data[o + 4] / TILE;
         let x0 = data[o + 1] / TILE, z0 = data[o + 2] / TILE;
@@ -394,6 +414,10 @@ function _pushCombatRecordFx() {
         else _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
         _fx.farPpt = 0;
     }
+    }
+    // (None kept: none left before the head.)
+    _fxTail = minPos < CAP ? (start + minPos) % CAP : head;
+    _fxBand = (head - _fxTail + CAP) % CAP;
 }
 
 // ---- Far away: every effect as a dot or a line ---------------------------

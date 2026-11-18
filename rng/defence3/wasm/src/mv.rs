@@ -2042,7 +2042,8 @@ unsafe fn seg_open(wl: *const u8, w: i32, h: i32, x0: f64, y0: f64, x1: f64, y1:
 
 /// seg_open inside an occupancy job: true at once when both ends lie in the job's block and ring and that region has
 /// no wall tile in wl (occ.rs open_ring: the segment cannot leave it, a rectangle); else the tile walk.
-#[inline(always)]
+#[cfg_attr(not(feature="prof"),inline(always))]
+#[cfg_attr(feature="prof",inline(never))]
 unsafe fn seg_clear(m: &Mv, wl: *const u8, x0: f64, y0: f64, x1: f64, y1: f64) -> bool {
     if !m.occ.is_null() {
         if let Some((a, b, c, d)) = (*m.occ).open_ring(wl, m.w, m.h) {

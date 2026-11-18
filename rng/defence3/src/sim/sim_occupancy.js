@@ -35,7 +35,10 @@ function occupancyEnsure() {
         if(_occ.cell<1 || (_occ.cell&(_occ.cell-1)))throw Error('Occupancy cell size must be a power of two');
         if(_simWasmX.occ_layout()!==SIM_OCCUPANCY_LAYOUT)throw Error('Occupancy bitmap layout differs from the wasm module (stale binary)');
         // (A coarse traffic cell is one bitmap word wide: 4 tiles of SUBCELLS cells.)
-        if(SIM_OCCUPANCY_SUBCELLS*4!==32)throw Error('Occupancy counts need 8 cells a tile');
+        if(SIM_OCCUPANCY_SUBCELLS<2||32%SIM_OCCUPANCY_SUBCELLS)throw Error('Occupancy cells a tile must divide 32 (a count cell: one bitmap word square)');
+        // (A block at least two bitmap words wide: footprint writes are 64-bit read-modify-writes past a block's edge, and the
+        // blocks on either side of one block run in the same phase: with a one-word block both write its word at once.)
+        if(SIM_OCCUPANCY_BLOCK_TILES*SIM_OCCUPANCY_SUBCELLS<64)throw Error('Occupancy blocks must be at least 64 cells wide');
         _occ.bits=simHeapArray(Uint32Array,stride*(h+2*SIM_OCCUPANCY_MARGIN_ROWS)*planes+Math.ceil(w/32)*Math.ceil(h/32)*planes);_occ.bits.fill(0);
         _occupancyMargins(_occ);
         const block=Math.max(16,SIM_OCCUPANCY_BLOCK_TILES),bw=Math.ceil(CHUNKS_W/block),bh=Math.ceil(CHUNKS_H/block);

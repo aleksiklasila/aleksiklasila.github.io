@@ -19,7 +19,8 @@ function trafficReset(){
     for(const [k,a]of Object.entries(T))if(k!=='config'&&k!=='pushA'&&k!=='pushB'&&ArrayBuffer.isView(a))a.fill(0);
 }
 function trafficEnsure(O){
-    const w=Math.ceil(GRID_W/4),h=Math.ceil(GRID_H/4),n=w*h*O.planes;
+    // (A traffic cell is one count cell of the occupancy: 32 x 32 of its cells, 32 / SIM_OCCUPANCY_SUBCELLS tiles a side.)
+    const tpc=32/SIM_OCCUPANCY_SUBCELLS,w=Math.ceil(GRID_W/tpc),h=Math.ceil(GRID_H/tpc),n=w*h*O.planes;
     if(!_traffic||_traffic.epoch!==spatialEpoch||_traffic.n!==n){
         if(_traffic){if(_traffic.pending)simParallelBackgroundWait(SIM_LANE_TRAFFIC);for(const a of Object.values(_traffic))if(ArrayBuffer.isView(a))simHeapFree(a);}
         const T=_traffic={epoch:spatialEpoch,n,w,h,pending:0,config:simHeapArray(Int32Array,48)};
@@ -31,11 +32,11 @@ function trafficEnsure(O){
         for(const key of ['pushBitsA','pushBitsB'])T[key]=simHeapArray(Uint32Array,(GRID_W*GRID_H+31)>>5);
         const C=T.config,ptr=a=>_simWEnc(_simHeapPtrOf(a));
         C.fill(0);
-        C.set([SIM_TRAFFIC_MODE,w,h,10,O.planes,0,O.stride,O.h,GRID_W,GRID_H,32,0,0,0,0,0]);
+        C.set([SIM_TRAFFIC_MODE,w,h,Math.round(Math.log2(TILE*8*tpc)),O.planes,0,O.stride,O.h,GRID_W,GRID_H,32,0,0,0,0,0]);
         for(const [i,key]of [[16,'x'],[17,'y'],[18,'workX'],[19,'workY'],[20,'snapX'],[21,'snapY'],[22,'density'],[23,'p0'],[24,'p1'],[25,'capacity'],[26,'source'],[27,'nextX'],[28,'nextY'],[29,'workLoss'],[30,'snapLoss']])C[i]=ptr(T[key]);
         C[32]=ptr(T.mask);C[33]=ptr(T.nextMask);
         C[34]=ptr(T.pushA);C[35]=ptr(T.pushB);C[36]=2;C[37]=GRID_W;C[38]=GRID_H;C[39]=Math.round(Math.log2(TILE*8));
-        C[40]=ptr(T.pushBitsA);C[41]=ptr(T.pushBitsB);C[42]=O.w;C[43]=SIM_OCCUPANCY_MARGIN_ROWS;
+        C[40]=ptr(T.pushBitsA);C[41]=ptr(T.pushBitsB);C[42]=O.w;C[43]=SIM_OCCUPANCY_MARGIN_ROWS;C[44]=tpc;
         simParallelBind('traffic.config',C);
     }
     _traffic.config[0]=SIM_TRAFFIC_MODE;

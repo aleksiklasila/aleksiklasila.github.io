@@ -616,6 +616,7 @@ impl MoveGrid {
     /// neighbouring block's: its job runs in another phase).
     pub(super) unsafe fn chunk_entries_near(&self,x:i32,y:i32)->(i32,i32){let (a,e,_)=self.chunk_near_ix(x,y);(a,e)}
     /// The same and the chunk's place in the job's cache (its summary's index; -1: not cached).
+    #[cfg_attr(feature="prof",inline(never))]
     pub(super) unsafe fn chunk_near_ix(&self,x:i32,y:i32)->(i32,i32,i32){
         let e=self.chq;
         if self.ix_slot.is_null()||x<0||y<0||x<self.bx*self.blockq-e||x>=(self.bx+1)*self.blockq+e||y<self.by*self.blockq-e||y>=(self.by+1)*self.blockq+e{return (0,0,-1);}
@@ -645,7 +646,8 @@ impl MoveGrid {
     /// and reject distant swap candidates together. A one-Q8-unit margin
     /// keeps this f32 broad phase conservative; exact f64 tests follow.
     /// Also their first-stage words (record word 3, mv.rs FW_*: class, brain mode, flags), for the caller's filter.
-    #[inline(always)]
+    #[cfg_attr(not(feature="prof"),inline(always))]
+    #[cfg_attr(feature="prof",inline(never))]
     pub(super) unsafe fn swap_candidates4(&self,slots:&[i32;4],ox:i32,oy:i32,rq:i32)->(u32,v128) {
         let load=|s:i32|if s<0{i32x4_splat(0)}else{v128_load(self.rec.add(s as usize*4) as *const v128)};
         let (a,b,c,d)=(load(slots[0]),load(slots[1]),load(slots[2]),load(slots[3]));
@@ -668,6 +670,7 @@ impl MoveGrid {
     /// else the grid is left as it was. A larger b may settle a cell or two
     /// further along (dx, dy) (b's way, unit length), or beside that.
     /// Returns b's new position.
+    #[cfg_attr(feature="prof",inline(never))]
     pub(super) unsafe fn swap(&self,a:usize,b:usize,dx:f64,dy:f64)->Option<(i32,i32)>{
         let (pa,pb)=(self.rec.add(a*4),self.rec.add(b*4));let (ma,mb)=(*pa.add(2),*pb.add(2));
         if (ma>>16)&255==0||(mb>>16)&255==0||(ma>>8)&255!=(mb>>8)&255{return None;}
@@ -704,7 +707,9 @@ impl MoveGrid {
         let ox=*p;let oy=*p.add(1);
         if nx==ox && ny==oy {return (nx,ny);}
         let r=meta&255;let layer=(meta>>8)&255;
-        let limit=(self.blockq/2-(r+32)*self.g.cell).max(0);
+        // (Past its block by at most half a block, less its footprint and 1024 eighths (4 tiles: what the colour phases keep
+        // apart); written for 32-eighth cells as (r + 32) cells, which left larger cells no room past the edge.)
+        let limit=(self.blockq/2-r*self.g.cell-1024).max(0);
         let mut tx=ox;let mut ty=oy;
         if nx>=self.bx*self.blockq-limit && nx<(self.bx+1)*self.blockq+limit
             && ny>=self.by*self.blockq-limit && ny<(self.by+1)*self.blockq+limit {
@@ -768,7 +773,7 @@ impl MoveGrid {
         if nx==ox && ny==oy{return (tx,ty);}
         *self.stats.add(1)+=1;
         let r=meta&255;let layer=(meta>>8)&255;
-        let limit=(self.blockq/2-(r+32)*self.g.cell).max(0);
+        let limit=(self.blockq/2-r*self.g.cell-1024).max(0);
         if nx<self.bx*self.blockq-limit || nx>=(self.bx+1)*self.blockq+limit
             || ny<self.by*self.blockq-limit || ny>=(self.by+1)*self.blockq+limit {*self.stats.add(5)+=1;}
         if tx!=ox || ty!=oy {

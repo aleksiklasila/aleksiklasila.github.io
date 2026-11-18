@@ -151,8 +151,10 @@ pub unsafe extern "C" fn traffic_capture(a:u32,chunk:i32){
         let x=irem(k as i32,w);let y=irem(idiv(k as i32,w),h);let l=idiv(k as i32,w*h);
         let occupied=*counts.add(k);
         let mut floor=0;
-        for ty in y*4..((y+1)*4).min(gh){for tx in x*4..((x+1)*4).min(gw){if wall.is_null()||*wall.add((ty*gw+tx) as usize)==0{floor+=1;}}}
-        let rho=occupied as f32/1024.0;let cap=floor as f32/16.0;
+        // (Tiles a traffic cell a side: config 44, 32 / the occupancy's cells a tile; 0 from an older caller: 4.)
+        let tpc=if *c.add(44)>0{*c.add(44)}else{4};
+        for ty in y*tpc..((y+1)*tpc).min(gh){for tx in x*tpc..((x+1)*tpc).min(gw){if wall.is_null()||*wall.add((ty*gw+tx) as usize)==0{floor+=1;}}}
+        let rho=occupied as f32/1024.0;let cap=floor as f32/(tpc*tpc) as f32;
         *ptr::<f32>(c,22).add(k)=rho;*ptr::<f32>(c,25).add(k)=cap;
         let ix=*ptr::<i32>(c,18).add(k);let iy=*ptr::<i32>(c,19).add(k);let loss=*ptr::<i32>(c,29).add(k);
         *ptr::<i32>(c,20).add(k)=ix;*ptr::<i32>(c,21).add(k)=iy;*ptr::<i32>(c,30).add(k)=loss;

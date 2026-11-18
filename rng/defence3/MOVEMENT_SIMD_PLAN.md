@@ -8,6 +8,196 @@ stay approximately the same (crowd flow, arrival, fights), determinism across pe
 This supersedes the resolve parts of `MOVE_OCCUPANCY_OPTIMIZATION_PLAN.md` (sections 3.2-3.3) and
 `OCCUPACY_OPTIMIZATION.md`; it keeps their mover table (3.1), events (3.3) and determinism rules (3.4).
 
+## 00. Open: coarser occupancy cells (4 a tile, 8 px), with footprints matched to sprites
+
+The one measured k89 win of this round (k89 -16/-18%, step ~-5/-7%; OPTIMIZATION_PROGRESS.md 2026-11-17 night last+3
+and 2026-11-18). Default kept at 8 for now. Do it together with footprints that match the drawn size (~8 / 16 / 24 px for
+small / middle / large units): 16 px needs even-width footprints in the kernels (details in the progress log).
+
+## 0e. Inflated count maps instead of footprint tests (gate, 2026-11-18): not passed
+
+A byte a cell per mover size class (the bitmap's set bits in the class's footprint square there; C-space inflation as
+in robotics costmaps) turns a footprint test into one byte read and a commit into u8x16 row adds. Exact on the real
+state (identical moves), but 0.53x: 187-191 ns a mover vs 101 for the bitmap. The maps are 24x the bitmap's bytes and a
+commit writes ~20-50 separate cache lines; the bitmap's compactness (a block's rows in L1) is worth more than fewer
+instructions. Details: OPTIMIZATION_PROGRESS.md 2026-11-18.
+
+## 0a. (C) measured before building (2026-11-17): no headroom left in the layout
+
+(C) assumed k89 is bound by scattered slot-column reads that block-ordered rows would remove. Measured on checker-200k-r0
+(Node, 8 helpers, tests/test-runs/simd-c-20261117/ and teams8-20261117/):
+- *Layout does matter in principle:* slots restored in block order vs randomly permuted: k89 work floor 7.3 vs 12.5 ms
+  a tick (occ-sched-probe, prof build). The growth is all in the per-unit column readers: traffic_yield +187%,
+  move_job +267%, occ_gather +185%, traffic_swap +114%, checked_traffic_q +61%, epi_slot, resolve_slot,
+  walker_short_at; the bitmap work (clear_or_mark, field) +13-15%.
+- *But today's layout is already at the block-order ceiling:* the online relayout in stress mode with a 32x budget
+  (884k units moved in 214 steps vs 24k: every slab re-sorted continuously) gives k89 9.86 ms at ticks 300-420 vs
+  9.65 / 9.46 by default (two runs). A stricter drift threshold or more slab slack: no change either. Block slabs of
+  64 already put ~16 same-block units on each column line, about what contiguous rows would.
+- The rise of k89 over a run (6.3 -> 9.6 ms in 400 ticks, in the shuffled run too) is the battle's load, not decay.
+
+So rows authoritative for the hot fields would remove little: what is left in k89 is per-unit compute (block layout,
+share of k89: footprint tests and bitmap 26%, gather / order / job loop 16%, resolve 13%, yields 12%, swaps 9%,
+epilogue and traffic samples ~10%). (C) is not started; (A) and (B) stay as measured (slower). A SIMD rework has to
+cut that compute (fewer or cheaper per-unit decisions), not memory traffic.
+
+## 0b. Per-unit compute in k89: where it goes, how to cut it (2026-11-17)
+
+Data: checker-200k-r0, Node, prof build with 8 helpers (occ-sched-probe PROF, dk 1 30 ticks / dk 4 20 steps) and
+dbgc counters without helpers (counters.cjs, 20 ticks after 60): tests/test-runs/simd-c-20261117/ (under-block.txt,
+under-dk4.txt, counters-dk1.json / -dk4.json, dbgcmap.cjs maps counter ids to code; ids 40-63 are occ.rs diag words).
+185k units with footprints: 142k parked, 42k flow walkers.
+
+| per tick (dk 1) / per step (dk 4) | dk 1 | dk 4 |
+|---|---|---|
+| rows scanned by the gather | 185k | 197k |
+| entries gathered and ordered (90) | 62k | 80k |
+| ... of them only for a push at their tile (84) | 31k | 37k |
+| resolves with a wanted move (93) | 39k | 54k |
+| shoulder tries (94 / 95) | 12k / 25k | 21k / 45k |
+| swap searches entered (66) / chunk scans (67 hop ok) / done (72) | 10k / 1.8k / 1.0k | 16k / 12k / 5.4k |
+| yield calls (73) / second resolves (80) / moved (81) | 30k / 17k / 14k | 39k / 25k / 21k |
+| field builds (53) | 34k | 74k |
+| k89 helper CPU (prof build) | 64 ms | 82 ms |
+
+k89 inclusive shares (dk 1 / dk 4): main resolves (resolve_slot) 56 / 61%, of which footprint tests (preview, field,
+motion_f, commit_preview, clear_or_mark) ~27 / 32%, swaps 11 / 22%, shoulders 7 / 6%, steer_pressure 5 / 4%; yields
+21 / 16%; gather + order + job loop 16 / 10%; epilogue 3 / 7%. A resolve costs ~0.9 us inclusive, a yield call ~0.46 us,
+a swap search ~1.4 us (dk 4), a footprint test ~140 ns. The footprint tests are SIMD already (a dilated 16 x 16 field
+per mover position, 4-lane sweep lookups): their cost is how often they run (~2 per mover) and the per-mover field.
+
+Options, largest first (estimates of k89 CPU; each to be measured, kept or reverted):
+1. **Swap partner from a per-job owner map** (cell -> slot over the block + halo, written by footprint commits)
+   instead of scanning the 3 x 3 chunks' index entries with the class filter: the partner is the unit covering the
+   cells ahead. Swaps are 22% at dk 4 (12k scans a step, 5.4k swaps); est. -12..-15% at dk 4, -6% at dk 1. Behaviour:
+   the nearest blocker ahead instead of the best of three by score: crowd benches (counter, plug), traffic-pressure.
+2. **Block-level dilated legality maps** (D1 / D3 / D5 per radius class, the plan's P2) updated at commits, instead
+   of a 16 x 16 field built per mover position (34k / 74k builds): field + fill_row + part of preview, est. -4..-6%.
+   Exact if the maps equal the per-mover fields (the same bits).
+3. **Yield cadence at dk 1:** a pushed standing unit yields on alternate base ticks (by id) with twice the push step
+   (capped as now): half the yield calls, the same displacement a second. est. -8..-10% at dk 1, nothing at dk 4
+   (one yield a step already). Behaviour: rally-pulse, crowd-traffic at dk 1.
+4. **The gather's push test by a job-local chunk bitmask** (one bit per chunk of the block + halo, made once per job
+   from the push records) instead of push_at for each of the 185k rows: exact, est. -3..-4%.
+5. **Pushed-only standing units out of the leader order:** half the gathered entries are there only to reach the
+   yield pass; ordering them by id alone (fewer radix passes) and keeping them out of the main loop: exact if the
+   yield order stays (key, id); est. -2..-3%.
+6. Smaller: epilogue only for units that crossed a tile (dk 4: 7%); steer_pressure moved into the first stage's
+   vector lanes (5%, moves cost rather than removing it).
+
+Together ~-20..-25% of k89 at dk 4 (1 + 2 + 4 + 5) and ~-20% at dk 1 (1 + 3 + 4 + 5); k89 is ~40% of helper CPU, so
+~8-10% of the step. Not covered here: the first stage (k8, 8.6% of helper CPU) and flow looks (11.5%).
+
+## 0c. Toward k89 near 100% 4-wide (investigation, 2026-11-17)
+
+Three things keep k89 scalar: (1) order: each commit is seen by the next mover (Gauss-Seidel); (2) divergence: free /
+clipped / shoulder / swap / yield are different code; (3) gathers: other units' state by slot. Techniques from other fields:
+
+- **Conflict-free lanes instead of claims (multi-colour Gauss-Seidel, as in Vivace / parallel PBD; Noita's
+  checkerboard chunks at lane scale):** split a block into 4 (or 8) sub-regions with guard bands of the interaction
+  reach (step + footprint + shoulder, <= ~8 cells at dk <= 4). Lane k walks sub-region k's movers in leader order; the
+  4 lanes run in lock-step (SPMD), so each lane is still Gauss-Seidel and lanes never touch the same cells: no claims,
+  no validation, no vacating rounds (what made design (A) cost +15-25%). Movers inside guard bands go in a second,
+  colour-shifted pass. Behaviour: the leader order holds inside a sub-region, not across sub-regions.
+- **SPMD on SIMD (ispc model):** the resolve written lane-per-mover with masks; a branch is skipped when no lane takes
+  it. Divergence costs both sides, so:
+- **Wavefront queues (Laine, Karras, Aila 2013, "Megakernels considered harmful"):** the resolve as stages over
+  compacted queues, each one coherent path: intent + steer (all) -> primary footprint test + commit (all) -> shoulders
+  (clipped only) -> swaps (< 25% progress) -> yields (pushed standing). Left-packing by a 16-entry shuffle table (4 lanes,
+  made at match start). Changes the order between stages (a clipped mover's shoulders after the followers' primary
+  commits): measured with the crowd benches.
+- **Narrow, block-relative numbers:** positions as i16 relative to the block (128 cells x 32 Q8 + halo fits) = 8 lanes;
+  steering in f32x4 (deterministic: no FMA, no relaxed SIMD). Today's scalar steering and scoring are f64.
+- **Tables made at match start:** compaction shuffles; per (step octant, length in cells <= 3) the swept cell offsets
+  and the shoulder rotations of quantized steps (no divisions, no f64 rotation per candidate); footprint row masks per
+  radius (exist).
+- **Gathers once per job:** one packet (SoA, job scratch, ~50 KB for 800 movers: L1 / L2) filled by the gather; every
+  stage streams it; slot columns written back once (publish). Bitmap rows per lane: scalar u64 loads inserted into
+  vectors (wasm has no gather), then shift / mask / test in lanes. ClearPath (Guy et al. 2009) packs neighbours the same
+  way for 4-wide SSE velocity obstacles.
+- **Not adopted:** PBD crowds (Weiss et al. 2017: Jacobi contact constraints, fully parallel) would replace exclusive
+  footprints with soft contacts: a different model. Floor-field CA parallel update with friction (Kirchner, Nishinari,
+  Schadschneider 2003) is the claims model (A) already measured. Noita (falling sand, 64 x 64 chunks, dirty rects,
+  checkerboard threads) is scalar per pixel: its useful parts are the checkerboard (= the lanes above) and dirty
+  rects (skip sleeping regions; k89 already gathers only marked rows).
+
+**Prototype gate before integrating:** a test-only kernel over dumped block inputs (tickbench KDUMP) running the lane
+scheme for intent + primary test + commit, against today's resolve on the same blocks: cost a mover and the moved /
+clipped counts. Keep going only at >= 2x on that path. Then the queues (shoulders, swaps, yields), then integration behind
+a flag with crowd-traffic (open / counter / plug / wall at dk 1 / 4 / 20), traffic-pressure, rally-pulse, determinism
+with helpers, rendered Edge. Estimate if it holds: ~70-85% of k89 instructions in lanes, k89 -40..-50%, step -15..-20%.
+
+**Gate result (2026-11-17): not passed.** Quadrant lanes are exact (lane-order scalar and four-lane runs end identical) but
+run at 113 ns a mover vs 102 scalar (46.9k real movers): the path is small L1 loads one lane at a time (no wasm gather),
+not arithmetic. See OPTIMIZATION_PROGRESS.md 2026-11-17 (night, last).
+
+## 0d. Re-architecture: cell transitions as bit-planes (investigation, 2026-11-17)
+
+**What costs now (measured):** per mover ~100 ns on the primary path alone and ~0.9 us with shoulders, swaps and
+yields; the time is many small block-local loads and branches per mover (field corners, wall tiles, 3-5 bitmap rows a
+new cell, partners' columns), made one mover at a time because each commit is read by the next. Lanes over movers do
+not help (prototype: 1.0x): wasm has no gather. What loads as vectors is the bitmap itself: a block is 128 cells wide,
+one v128 a row.
+
+**Idea (lattice-gas automata, multispin coding: one bit a site, collisions as word-wide Boolean logic):** decide the
+cell transitions of all movers of a block with whole-row bit operations, not mover by mover. Sub-cell motion stays as
+today (a step inside its cell needs no test); only the crossing into a neighbouring cell is resolved (dk 1: ~33k a
+tick of ~47k movers; dk 4: ~75k a step, up to 3 cells a mover: rounds of one cell).
+
+Data per block and layer (job scratch, 128 x 128 cells + halo, rows of 2 x v128):
+- O: occupancy (the bitmap, as today).
+- C[s][d]: intent planes: bit at a mover's centre cell when it wants to cross into neighbour d (8 directions) this
+  round, per footprint class s (1x1, 3x3, 5x5): 24 planes, sparse (row masks of non-empty rows).
+- Y[s][d]: yield planes (standing units with a push, direction from the push record), lower priority.
+
+One round (k = 0..K-1, K = cells a step at most):
+1. Scatter: each mover sets one bit in C[s][d] (d = the neighbour its continuous step crosses into first).
+2. Leading edge: for class s (half width h) and direction d, the cells newly entered are a column / row / L of
+   2h + 1 (4h + 1 diagonal) cells; free_d = AND over those offsets of NOT shift(O); winners W = C[s][d] AND free_d.
+   A v128 row shift by one bit is a few ops (i64x2 shifts + a byte shuffle for the carry).
+3. Trains (followers into cells leaders leave this round): a mover whose leading edge is covered only by footprints of
+   same-direction winners also wins: fixed iterations (3) of W |= C AND shift(W, footprint pitch) masked by the
+   blockers; a column advances together, as the Gauss-Seidel order gives today.
+4. Conflicts between directions: phases in a fixed order rotated by tick (no bias), O updated between phases (clear
+   trailing edges, set leading edges of W: row ORs / ANDNs); two winners of one phase claiming the same cells are
+   separated by a parity rule (a second plane pass).
+5. Losers fall back like shoulders: a loser's bit moves to its next candidate direction (+-45, then +-90, hand side
+   first) for the next phase: whole planes shifted between direction sets, no per-mover code.
+6. Swaps of equal footprints are a relabel only (O does not change): detect a winner-to-be blocked by an idle
+   friendly unit as C_d AND shift(I, d) (I: idle-friendly plane); exchange the two units' positions (scalar, pairs).
+7. Yields: Y planes resolved after the movers' phases, same operations.
+8. Readout: each mover reads its outcome bit (moved / direction) at its centre: one bit gather; sub-cell position
+   clamped inside its cell when denied (today's close-up behaviour).
+9. Traffic deposits and push records from the planes: per tile popcounts of intent-minus-winner bits (blocked
+   movers) by direction, word-wide; no per-mover scattered adds.
+
+**Cost estimate:** per block, per phase, per non-empty plane row ~30-60 vector ops (shifted ANDs of 2h + 1 rows,
+train iterations, O update). ~47k movers over ~800 blocks -> ~20k non-empty (plane, row) pairs a round -> ~1-2 M ops
+a tick, ~1-2 ms on one thread vs ~64 ms helper CPU for k89 today (Node, dk 1); per-mover work left: one bit set, one
+bit read, the sub-cell clamp, swaps' relabels, the epilogue for tile crossings (3-7% of k89 today). Steering by
+pressure moves into the first stage (f32x4 over slot runs).
+
+**Behaviour mapping:** Gauss-Seidel leader order -> trains + direction phases (the pedestrian-CA parallel update with
+conflicts, which the crowd literature treats as realistic); swept multi-cell paths -> rounds of one cell; shoulders ->
+fallback planes; swaps -> relabel of equal footprints (unequal sizes: none, or a separate small scalar list);
+pushes / yields -> yield planes; walls -> wall tiles folded into O (8 x 8 cells a wall tile). Deterministic: Boolean
+logic, fixed phase order by tick, no dependence on rows' or slots' order.
+
+**Risks:** unequal footprints in one train; diagonal corner cutting; direction quantization when a step crosses two
+cells in one tick (rounds handle it); block halos (rows of 2 x v128, phases as today); behaviour in counter-flow and
+plugs (the crowd benches decide).
+
+**Considered, not chosen:** continuum crowds (Treuille et al. 2006: density / velocity fields, no exclusive
+footprints, by its authors not suited to packed crowds); a Jacobi double buffer with sort-based claims (design (A),
+measured +15-25%); soft contacts (PBD crowds: a different model).
+
+**Gate:** a bit-plane resolve of one round on the state proto-eval.js dumps (46.9k movers): time a mover against the
+102 ns scalar primary path, and moved / clipped counts against it (behaviour proxy). Continue at >= 5x.
+
+**Gate result (2026-11-17): not passed, 0.31x** (326 ns a mover vs 102). Intent planes are sparse (~1-2 movers an active
+plane row over 24 planes), so row operations do per-mover work three times over (follower iterations) plus row loads.
+Bit-parallel lattices need dense uniform sites. See OPTIMIZATION_PROGRESS.md 2026-11-17 (night, last+1).
+
 ## 0. Implementation design (2026-11-15): one fused block job, rounds over packets
 
 User direction (2026-11-15): not a local trim of k89; background -> SIMD SoA tables -> foreground parallel

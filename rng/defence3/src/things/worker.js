@@ -3513,7 +3513,8 @@ let localUnitOrderHook = null;
 function _queueLocalAction(action) {
     if (gameOver) return;
     if (localUnitOrderHook && action && Array.isArray(action.unitIds)) localUnitOrderHook(action);
-    if (localUnitOrderHook && action && action.action === 'orderMany' && Array.isArray(action.groups)) for (const g of action.groups) if (g && Array.isArray(g.unitIds)) localUnitOrderHook({ ...g, action: action.mode });
+    // (The hook tested before each call: one may replace it while the groups are told.)
+    if (localUnitOrderHook && action && action.action === 'orderMany' && Array.isArray(action.groups)) for (const g of action.groups) if (g && Array.isArray(g.unitIds) && typeof localUnitOrderHook === 'function') localUnitOrderHook({ ...g, action: action.mode });
     // (A research order: shown at once, see hud.js noteResearchOrder.)
     if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
         noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));

@@ -83,15 +83,24 @@ function getPlayerDeltaFlowScale(owner, resourceKey) {
     let sec = ENERGY_DELTA_DEFAULT_WINDOW_SECONDS;
     let cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
     let gain = 0, loss = 0;
+    // (The logs are in tick order: read from the newest back to the window's start, not the whole log (up to
+    // ENERGY_DELTA_LOG_MAX_SECONDS): ~8 ms a second of the page, perf fuzz 2026-11-18.)
     if (resourceKey === 'astar') {
-        for (let ev of (_ensureAstarLogPlayer(pid) || [])) {
-            if (!ev || !(ev.tick >= cutoff)) continue;
+        const L = _ensureAstarLogPlayer(pid) || [];
+        for (let i = L.length - 1; i >= 0; i--) {
+            const ev = L[i];
+            if (!ev) continue;
+            if (!(ev.tick >= cutoff)) break;
             let d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
             if (d > 0) gain += d; else loss -= d;
         }
     } else {
-        for (let ev of (ensureEnergyDeltaLogPlayer(pid) || [])) {
-            if (!ev || !(ev.tick >= cutoff) || ev.source === 'upKeep') continue;
+        const L = ensureEnergyDeltaLogPlayer(pid) || [];
+        for (let i = L.length - 1; i >= 0; i--) {
+            const ev = L[i];
+            if (!ev) continue;
+            if (!(ev.tick >= cutoff)) break;
+            if (ev.source === 'upKeep') continue;
             let d = Number(ev.delta) || 0;
             if (d > 0) gain += d; else loss -= d;
         }
@@ -310,10 +319,12 @@ function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
     let pruneBefore = gameTime - Math.max(windowTicks * 2, Math.floor(TICK_RATE * ENERGY_DELTA_LOG_MAX_SECONDS));
     _pruneTickLogBucket(bucket, pruneBefore);
 
+    // (Newest back to the window's start: the log is in tick order.)
     let sum = 0;
-    for (let i = 0; i < bucket.length; i++) {
+    for (let i = bucket.length - 1; i >= 0; i--) {
         let ev = bucket[i];
-        if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoffTick) continue;
+        if (!ev || !Number.isFinite(ev.tick)) continue;
+        if (ev.tick < cutoffTick) break;
         if (ev.source === 'upKeep') continue;
         if (sourceKey && ev.source !== sourceKey) continue;
         let d = Number(ev.delta) || 0;

@@ -279,9 +279,11 @@ function _bbComputeRates(owner) {
     // refresh in a battle: ~250 KB of garbage a second.)
     const A = _bbAstarSums, log = _ensureAstarLogPlayer(owner) || [];
     A.sums.fill(0, 0, A.names.length); A.seen.fill(0, 0, A.names.length);
-    for (let i = 0; i < log.length; i++) {
+    // (Newest back to the window's start: the log is in tick order.)
+    for (let i = log.length - 1; i >= 0; i--) {
         const ev = log[i];
-        if (!ev || !(ev.tick >= cutoff)) continue;
+        if (!ev) continue;
+        if (!(ev.tick >= cutoff)) break;
         let d = Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
         let k = A.index.get(ev.unitType);
         if (k === undefined) {
@@ -299,8 +301,11 @@ function _bbComputeRates(owner) {
     if (astarSec !== sec) {
         astarTotal = 0;
         let from = gameTime - Math.max(1, Math.floor(TICK_RATE * astarSec));
-        for (let ev of (_ensureAstarLogPlayer(owner) || [])) {
-            if (!ev || !(ev.tick >= from)) continue;
+        const L = _ensureAstarLogPlayer(owner) || [];
+        for (let i = L.length - 1; i >= 0; i--) {
+            const ev = L[i];
+            if (!ev) continue;
+            if (!(ev.tick >= from)) break;
             astarTotal += Number.isFinite(Number(ev.delta)) ? Number(ev.delta) : -(Math.max(0, Number(ev.used) || 0));
         }
     }

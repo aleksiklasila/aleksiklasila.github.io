@@ -1042,8 +1042,13 @@ function build3DOverlayData(bounds, alpha) {
     overlays.selectionSeeThrough = selectionOutlineSeeThrough;
     overlays.worldTileSize = TILE;
     let pushLine = (x1, y1, x2, y2, color, dashed = false) => overlays.lines.push({ x1: x1 / TILE, z1: y1 / TILE, x2: x2 / TILE, z2: y2 / TILE, color, dashed });
-    let markerKeys = new Set();
+    // (The order markers as getOrderMarkers keeps them (pooled, one a point and kind already: the other overlay paths
+    // use them as they are); a string key and an object each a frame were ~145 ms in a big select + rally trial, perf
+    // fuzz 2026-11-18. The few others (a small selection's towers) are checked against them by key, the keys made
+    // only then.)
+    let markerKeys = null;
     let pushMarker = (x, y, kind, color, n = 1, minor = false) => {
+        if (!markerKeys) { markerKeys = new Set(); for (const m of overlays.markers) markerKeys.add(`${m.x * TILE}|${m.z * TILE}|${m.kind}|${m.color}`); }
         let key = `${x}|${y}|${kind}|${color}`;
         if (markerKeys.has(key)) return;
         markerKeys.add(key);
@@ -1054,7 +1059,7 @@ function build3DOverlayData(bounds, alpha) {
     let pushSiteMark = (gx, gy, kind) => overlays.siteMarks.push({ x: gx + 0.5, z: gy + 0.5, kind });
     // (Big selections: their rally points as markers only, getOrderMarkers.)
     const fewEntities = activeSelectedEntities.length <= SELECTED_UNIT_LINES_MAX;
-    for (let m of getOrderMarkers()) pushMarker(m.x * TILE, m.z * TILE, m.kind, m.color, m.n, m.minor);
+    { const om = getOrderMarkers(); for (let i = 0; i < om.length; i++) overlays.markers.push(om[i]); }
     for (let ent of fewEntities ? activeSelectedEntities : []) {
         if (!ent || (ent.energy !== undefined && ent.energy <= 0)) continue;
         let ex = ent.x || (ent.gx * TILE + TILE * 0.5);
@@ -2885,7 +2890,12 @@ function getOrderMarkers() {
             let u = _pageUnitsById.get(id);
             if (!u && n <= 4096) { const FID = F.id; for (let i = 0; i < n; i++) if (FID[slots[i]] === id) { u = _pageSlotViews[slots[i]]; break; } }
             const s = u && !u.dead ? u._s : -1;
-            if (!(s >= 0) || mask[s] === 0) continue;
+            // (A unit gone: its pending marker with it. Kept, every frame looked for it again over the selection's slots
+            // (a selection of at most 4096): a battle's dead of small orders (a multi-point chain's groups of at most
+            // ORDER_PENDING_PER_UNIT_MAX) took ~27% of the page, 2026-11-18.)
+            if (!(s >= 0)) { if (!u || u.dead) _pendingUnitOrderMarkers.delete(id); continue; }
+            // (Not selected now: let go once the frames show its order, as a selected one's.)
+            if (mask[s] === 0) { _pendingOrderTarget(_pendingUnitOrderMarkers, id, u); continue; }
             const before = _pendingUnitOrderMarkers.size, m = _pendingOrderTarget(_pendingUnitOrderMarkers, id, u);
             if (m) pendingMarks.push(m); else if (_pendingUnitOrderMarkers.size < before) again = true;
         }
@@ -4510,7 +4520,10 @@ function _structureDetailCandidates(F, flat2d) {
     const columns = Math.ceil(GRID_W / 16), rows = Math.ceil(GRID_H / 16);
     let C = _structSpatialCache;
     if (!C || C.client !== client || C.revision !== revision || C.n !== F.n || C.cap !== F.cap || C.columns !== columns || C.rows !== rows) {
-        const head = new Int32Array(columns * rows).fill(-1), next = new Int32Array(F.cap);
+        // (The last index's arrays again when their sizes hold: made anew at every membership change (each tick of a
+        // battle), the table's size each time.)
+        const same = C && C.cap === F.cap && C.head.length === columns * rows;
+        const head = same ? C.head.fill(-1) : new Int32Array(columns * rows).fill(-1), next = same ? C.next : new Int32Array(F.cap);
         for (let s = 0; s < F.n; s++) {
             if (F.kind[s] === 6) continue; // Dropped items can move; never model-detail candidates.
             const bx = Math.max(0,Math.min(columns-1,F.gx[s]>>4)), by = Math.max(0,Math.min(rows-1,F.gy[s]>>4));
@@ -5041,6 +5054,24 @@ function _minimapRgb(color) {
     _minimapOwnerRgb.set(color, v);
     return v;
 }
+// (Each tile column's and row's pixel bounds on the minimap, as _minimapStaticFromTable rounds a tile's rect: kept
+// while the scale, minimum width, minimap size and map size stay.)
+let _minimapRB = null;
+function _minimapRectBounds(scale, minW, S) {
+    const B = _minimapRB;
+    if (B && B.scale === scale && B.minW === minW && B.S === S && B.W === GRID_W && B.H === GRID_H) return B;
+    const axis = n => {
+        const lo = new Int32Array(n), hi = new Int32Array(n);
+        for (let g = 0; g < n; g++) {
+            const l = Math.round(g * scale); let r = Math.round((g + 1) * scale);
+            if (r <= l) r = l + minW;
+            lo[g] = Math.max(0, l); hi[g] = Math.min(S, r);
+        }
+        return [lo, hi];
+    };
+    const [x0, x1] = axis(GRID_W), [y0, y1] = axis(GRID_H);
+    return _minimapRB = { scale, minW, S, W: GRID_W, H: GRID_H, x0, x1, y0, y1 };
+}
 function _minimapStaticFromTable(scale, tilePx) {
     const F = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
     if (!F || !F.kind || !F.gx || !_minimapStaticCtx) return false;
@@ -5052,15 +5083,16 @@ function _minimapStaticFromTable(scale, tilePx) {
     px.fill(abgr(0x111111));
     const N = Math.min(F.n, F.cap), alive = F.alive, kind = F.kind, owner = F.owner, GX = F.gx, GY = F.gy, amount = F.amount;
     const minW = Math.max(1, Math.round(tilePx));
-    // (A tile's pixel rect as the canvas path rounds it, into R.)
+    // (A tile's pixel rect as the canvas path rounds it, into R: from columns' and rows' bounds made once a scale (the
+    // rounding per tile was most of this pass: ~12 ms/s of the page in a battle, rebuilt at every structure change,
+    // perf fuzz 2026-11-18).)
+    const RB = _minimapRectBounds(scale, minW, S), X0 = RB.x0, X1 = RB.x1, Y0 = RB.y0, Y1 = RB.y1;
     const R = new Int32Array(4);
-    const rect = (gx, gy) => {
-        let l = Math.round(gx * scale), r = Math.round((gx + 1) * scale), t = Math.round(gy * scale), b = Math.round((gy + 1) * scale);
-        if (r <= l) r = l + minW;
-        if (b <= t) b = t + minW;
-        R[0] = Math.max(0, l); R[1] = Math.max(0, t); R[2] = Math.min(S, r); R[3] = Math.min(S, b);
+    const rect = (gx, gy) => { R[0] = X0[gx]; R[1] = Y0[gy]; R[2] = X1[gx]; R[3] = Y1[gy]; };
+    const fill = (gx, gy, v) => {
+        const l = X0[gx], r = X1[gx], b = Y1[gy];
+        for (let y = Y0[gy]; y < b; y++) for (let o = y * S + l, e = y * S + r; o < e; o++) px[o] = v;
     };
-    const fill = (gx, gy, v) => { rect(gx, gy); for (let y = R[1]; y < R[3]; y++) px.fill(v, y * S + R[0], y * S + R[2]); };
     const ownerCol = [];
     const colOf = o => { let v = ownerCol[o + 1]; if (v === undefined) v = ownerCol[o + 1] = _minimapRgb(get3DRenderOwnerColor(o >= 0 ? o : -1)); return v; };
     for (let s = 0; s < N; s++) if (alive[s] === 1 && kind[s] <= 2) fill(GX[s], GY[s], abgr(colOf(owner[s])));

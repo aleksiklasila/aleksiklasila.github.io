@@ -402,10 +402,15 @@ function pageGonePut(G, T, keys, s, view) {
     if (!G.cols) {
         G.cols = {}; G.keys = keys; G.owner = new Array(PAGE_GONE_RING).fill(null);
         for (let i = 0; i < keys.length; i++) G.cols[keys[i]] = new T[keys[i]].constructor(PAGE_GONE_RING);
+        G.dst = keys.map(k => G.cols[k]); G.src = new Array(keys.length).fill(null); G.srcT = null;
     }
-    const r = G.at, K = G.keys, C = G.cols;
+    const r = G.at, K = G.keys, D = G.dst, S = G.src, n = K.length;
+    // (The source table's columns as arrays, looked up by name once a table: a name look-up two a column a unit was
+    // ~29 ms a second of the page in a battle (perf fuzz 2026-11-18). A table whose arrays were replaced (a pooled
+    // frame given new buffers, a grown table) is looked up again: its first and last column checked.)
+    if (G.srcT !== T || S[0] !== T[K[0]] || S[n - 1] !== T[K[n - 1]]) { G.srcT = T; for (let i = 0; i < n; i++) S[i] = T[K[i]]; }
     G.at = (r + 1) & G.mask;
-    for (let i = 0; i < K.length; i++) { const k = K[i]; C[k][r] = T[k][s]; }
+    for (let i = 0; i < n; i++) D[i][r] = S[i][s];
     G.owner[r] = view;
     return r;
 }

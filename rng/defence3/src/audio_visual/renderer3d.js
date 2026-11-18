@@ -4011,7 +4011,10 @@
                 this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR_MIPMAP_LINEAR);
                 if (this.textureAnisotropy) {
                     let ext = this.textureAnisotropy;
-                    this.gl.texParameterf(this.gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, this.gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+                    // (The context's maximum read once: getParameter waits for the GPU process, and a zoom that makes
+                    // many top textures at once made it a 126 ms stall in a perf fuzz trial, 2026-11-18.)
+                    if (this.maxAnisotropy === undefined) this.maxAnisotropy = Number(this.gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)) || 1;
+                    this.gl.texParameterf(this.gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, this.maxAnisotropy));
                 }
             }
             this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -8278,7 +8281,9 @@
 
         ensureShadowMap(size) {
             let gl = this.gl;
-            size = Math.min(size, gl.getParameter(gl.MAX_TEXTURE_SIZE) || 2048);
+            // (The maximum read once: a frame's getParameter waits for the GPU process.)
+            if (this.maxTextureSize === undefined) this.maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 2048;
+            size = Math.min(size, this.maxTextureSize);
             if (this.shadowMap && this.shadowMap.size === size) return this.shadowMap;
             if (this.shadowMap) {
                 gl.deleteTexture(this.shadowMap.tex);

@@ -1882,10 +1882,19 @@ function initInput() {
     // The multi-point split's worker (lazily; null without workers).
     const ASSIGN_ASYNC_MIN = 2000;
     let _assignWorker = null, _assignSeq = 0, _assignPending = null, _assignWorkerFailed = false;
+    // (A chain's last split sent: its id list (the selection's array), a point per unit, the points then. A chain of
+    // Control / Shift clicks re-splits every selected unit at each click (12 clicks of 88k units: 12 whole re-orders
+    // in ~1.5 s, steps +10-20 ms each, perf fuzz order.chain 2026-11-18); a click sends only the units whose point
+    // changed.)
+    let _assignChain = null;
+    // (It stays installed: worker.js _queueLocalAction tests the hook once and calls it for each group of an
+    // orderMany, so a hook that took itself away made the next group's call throw (perf fuzz 2026-11-18, seed 4242).
+    // A later split replaces it.)
+    function _assignChainDrop() { _assignChain = null; }
     function _assignWorkerGet() {
         if (_assignWorker || _assignWorkerFailed) return _assignWorker;
         try {
-            _assignWorker = new Worker('./src/sim/assign_worker.js?v=20261024-cells');
+            _assignWorker = new Worker('./src/sim/assign_worker.js?v=20261118-chain');
             _assignWorker.onmessage = ev => {
                 const m = ev.data || {}, P = _assignPending;
                 if (!P || m.seq !== P.seq) return;
@@ -1894,7 +1903,9 @@ function initInput() {
                 if (!m.buckets) { console.error('[assign worker]', m.error); return; }
                 // (Units ordered since the click: theirs is the later order.)
                 const later = P.later.length ? new Set(P.later.flat()) : null;
-                // (Each point's ids, split there: an array each for the actions.)
+                // (Each point's ids, split there: an array each for the actions. In a chain only the units whose
+                // point changed since the last split sent (the worker's diff against P.prev): the rest keep that
+                // order, to the same point.)
                 const groups = [];
                 for (let i = 0; i < m.buckets.length; i++) {
                     let ids = Array.from(m.buckets[i]);
@@ -1902,7 +1913,14 @@ function initInput() {
                     if (ids.length === 0) continue;
                     groups.push({ unitIds: ids, targetX: P.points[i].x, targetY: P.points[i].y });
                 }
+                // (The chain's split as sent: the next click's diff. Units ordered otherwise meanwhile: unknown, sent again.)
+                if (m.pick) {
+                    if (later) { const ids = P.ids; for (let i = 0; i < ids.length; i++) if (later.has(ids[i])) m.pick[i] = -1; }
+                    _assignChain = { ids: P.ids, pick: m.pick, n: P.n, points: P.points.length };
+                }
                 if (groups.length) queueAction({ action: 'orderMany', mode: P.actionName, groups });
+                // (Any other unit order before the chain's next click: the chain's split is not what was sent last.)
+                if (_assignChain) localUnitOrderHook = _assignChainDrop;
             };
             _assignWorker.onerror = () => { _assignWorkerFailed = true; _assignWorker = null; };
         } catch (err) { _assignWorkerFailed = true; _assignWorker = null; }
@@ -1922,6 +1940,9 @@ function initInput() {
         // long list is only encoded for the wire, never changed).
         if (multiUnitCommandPoints.length === 1) {
             queueAction({ action: actionName, unitIds: unitIds.length >= 64 ? unitIds : unitIds.slice(), targetX: multiUnitCommandPoints[0].x, targetY: multiUnitCommandPoints[0].y });
+            // (A chain's first click: every unit at point 0, the next click's diff.)
+            _assignChain = unitIds.length >= ASSIGN_ASYNC_MIN ? { ids: Int32Array.from(unitIds), pick: new Int32Array(unitIds.length), n: unitIds.length, points: 1 } : null;
+            if (_assignChain) localUnitOrderHook = _assignChainDrop;
             return;
         }
         // The units' positions by their ids: beside the worker from the frame's
@@ -1958,11 +1979,21 @@ function initInput() {
         // click's answer replaces an earlier one's).
         if (n >= ASSIGN_ASYNC_MIN && _assignWorkerGet()) {
             const seq = ++_assignSeq, ids = Int32Array.from(unitIds);
-            const pending = _assignPending = { seq, points, actionName, later: [] };
+            // (The same chain: the same selection array and count, points appended to the last split's.)
+            // (The last split's ids and points go with it, copied: the worker matches them to these ids by id (the
+            // selection's id array is made anew at every selection change, a death in a battle, in slot order). On
+            // this thread the match was ~22 ms a click with 209k selected, perf fuzz 2026-11-18.)
+            const C = _assignChain, same = appendToMultiPoints && C && C.points < points.length && C.points >= 1;
+            const prevIds = same ? C.ids.slice() : null, prevPick = same ? C.pick.slice() : null;
+            if (!same) _assignChain = null;
+            const pending = _assignPending = { seq, points, actionName, later: [], ids: ids.slice(), unitIds, n };
             localUnitOrderHook = a => { if (_assignPending === pending) pending.later.push(a.unitIds); };
-            _assignWorker.postMessage({ seq, xs, ys, has, points, ids }, [xs.buffer, ys.buffer, has.buffer, ids.buffer]);
+            const tr = [xs.buffer, ys.buffer, has.buffer, ids.buffer];
+            if (same) tr.push(prevIds.buffer, prevPick.buffer);
+            _assignWorker.postMessage({ seq, xs, ys, has, points, ids, prevIds, prevPick }, tr);
             return;
         }
+        _assignChain = null;
         const pick = assignNearestXY(xs, ys, has, points);
         const buckets = Array.from({ length: points.length }, () => []);
         for (let i = 0; i < n; i++) buckets[pick[i]].push(unitIds[i]);

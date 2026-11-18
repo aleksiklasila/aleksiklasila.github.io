@@ -9535,3 +9535,385 @@ ran twice. (ordhash.cjs: its block counter now starts before the order, so the o
 **Where it stands:** the step is throughput-bound (sim threads ~85% busy incl. 7.8% spin, page ~67%, presentation ~66% of
 a core); helper CPU k89 ~40%, flow looks ~11.5%, k8 ~8.6%, spatial index ~5.6%. What is left are cuts of 1-3% each, or the
 movement's data redesign (MOVEMENT_SIMD_PLAN.md (C): hot fields in block-ordered rows).
+
+
+## 2026-11-17 (night) - MOVEMENT_SIMD_PLAN.md (C) measured before building: the layout is at its ceiling
+
+User: continue with the larger SIMD redesigns. (C) (hot movement fields in block-ordered rows) rests on k89 being bound by
+scattered slot-column reads, so that was measured first (tests/test-runs/simd-c-20261117/):
+- **Prof build, occ-sched-probe, 30 ticks, 8 helpers:** block-ordered slots 7.3 ms k89 work a tick, permuted slots
+  12.5. The extra is in the column readers (traffic_yield +187%, move_job +267%, occ_gather +185%, traffic_swap +114%,
+  checked_traffic_q +61%, epi_slot / resolve_slot / walker_short_at ~+100%); bitmap work +13-15%. colreads.cjs lists
+  the ~30 Mv fields those functions read.
+- **Oracle (tickbench KTIMETICK, 20 s):** relayout in stress mode with SIM_RELAYOUT_PERIOD 2 (884k units moved vs 24k):
+  k89 at ticks 300-420 9.86 ms vs 9.65 / 9.46 default; step mean 32.7 vs 27.8 / 28.1 (the moves cost). Continuous
+  re-sorting gains nothing: the default layout is already as block-ordered as slots get, and block slabs already put
+  ~16 same-block units on a column line. The 6.3 -> 9.6 ms rise over 400 ticks is load (the permuted run rises too).
+- **Conclusion:** rows would remove little memory traffic; k89 is per-unit compute now. (C) not built; noted in
+  MOVEMENT_SIMD_PLAN.md section 0a. (A) rounds and (B) fused intent were already measured slower. A SIMD rework must
+  cut per-unit decisions (footprint tests and bitmap 26% of k89, gather / order / job loop 16%, resolve 13%, yields
+  12%, swaps 9%).
+
+
+## 2026-11-17 (night, later) - per-unit compute in k89: options tried (MOVEMENT_SIMD_PLAN.md 0b)
+
+Loop: implement, smoke-test, measure (occ-sched-probe work floor; prof-build helper profiles), keep or revert.
+Data in tests/test-runs/simd-c-20261117/. Work floor noise ~+-0.4 ms (dk 4 base 8.1, repeats 8.6 / 7.9).
+- **Option 4, the gather's push test (not built):** push_at is already a bit a tile (traffic word 41, in cache); the
+  gather's cost is the first slot-column read of x / y for the 62k gathered rows, which the resolve would pay anyway.
+- **Option 1 bound:** swaps off entirely (bin-noswap.js): k89 work floor 8.1 -> 8.7 ms (dk 4), 6.5 -> 6.9 (dk 1):
+  swaps clear jams that cost more in retries; only a cheaper search can gain.
+- **Swap search prefilter (built, reverted):** chunks wholly behind the mover or past the farthest reach (with a margin
+  of the mover's step + 2 cells: the index lists tick-start tiles) skipped. traffic_swap inclusive 350 -> 338 ms (20
+  steps, dk 4), k89 1630 -> 1703: no gain. Pitfall: an integer division (px / cq) brought in a panic-location string
+  = a data segment, which build.cjs refuses: use shifts (cq is a power of two).
+- **Where the swap search goes (prof build with swap_candidates4, chunk_near_ix, MoveGrid::swap, seg_clear as
+  functions; kept, prof-only attributes):** traffic_swap 338 ms inclusive: its own code 218 (64%: the per-candidate
+  checks, ~50k candidates a step reading the partners' on / dead / own / wk / cmode / rte, divisions for the route
+  rule), chunk_near_ix 48 (incl. fill_row / fill_chunks 30), MoveGrid::swap 38, swap_candidates4 25, seg_clear 7.
+  An owner map would still make those per-candidate checks: option 1 dropped.
+- **Option 5, push-only standing units out of the leader order (not built):** in the main loop they cost little
+  (their x / y already read by the gather, walker_short_at leaves on the class word); only the radix order (occ_order
+  2.9% at dk 1) would halve: ~1.5%, below noise.
+- **Option 2, shared dilated legality maps (not built):** movers change cell at nearly every test, so a shared map
+  would be rewritten at every commit (~74k a step at dk 4, three radius classes, ~9 rows each: ~0.1 us a commit),
+  more than the 74k per-mover field builds it replaces (field self ~62 ns a build).
+- **Option 3, yield cadence (not built):** an averaging knob (every other tick, twice the step): against the
+  per-unit fairness rule.
+- **So none of section 0b's options pays.** k89's paths are each near their floor in this design: the remaining cost is
+  per-candidate and per-mover checks on other units' state, made once each.
+- **Whole helper CPU at dk 4 (prof build, Node, 20 steps after the restore; ps-dk4.*):** worker search scans ~12%
+  (k_ws_scans closure 6.2, k_ws_scan 4.1, closure 1.6: the restore's first-search burst, Edge steady state is ~2.3%),
+  k89 ~19%, first stage (mv_move) 603 ms ~7% (step4 25% of it, step_slot 14, move_flow 12, park4 / combat4 7 each),
+  acquisition area batch 4.6%, k_eff_units 2.8, k_vis_seed 2.8, k_atl_route 2.7.
+- **Swap search split (prof build, inline(never) on its helpers):** its own code is 64% (the per-candidate checks of the
+  partners' state); an owner map would keep those checks. Option 1 dropped.
+- **Relayout off (Node, checker-200k, 20 s, alternating):** step mean 27.2 / 27.6 vs 27.8 / 28.4 on, k89 equal over 400
+  ticks: within noise, and the 1M A/B of 2026-11-07 showed it pays in long games. Kept on.
+- **Compile settings:** already +simd128, +bulk-memory, +nontrapping-fptoint, +sign-ext, LTO fat, one codegen unit,
+  panic abort, opt-level 3 (wasm/.cargo/config.toml): float -> int casts are single instructions. Nothing to gain.
+- **clear_or_mark:** already one 64-bit row read-modify-write a footprint row with tallies.
+- **unitEventsRun (2.66 ms a step rendered):** worker AI decide 0.87 (kernel 131, helpers), its apply / setup ~0.7,
+  the brain chain's wait 0.69 (four tiny stages, tried last round), kp:36 0.08: no serial JS to move.
+- **Sized, not built:**
+  - *Exit costs read from a transposed field table made at the navigation build* (per cluster [tile][node], so
+    Atl::exit's best() reads its candidates' values from one or two lines instead of one 2 KB-strided line each):
+    Atl::exit is 1.9% of helper CPU rendered; at most ~1.3%, below what a rendered run can show (+-1 ms), and the
+    fields' memory twice.
+  - *Prewarming the import's first-step bursts* (452 / 146 / 212 ms: every unit's first acquisition, every worker's
+    first search): a solo scene-import artefact; matches start small and multiplayer has no import.
+- **tickbench:** PHASES=1 with KTIMETICK made the final JSON line unreadable here (no output); run them apart.
+
+## 2026-11-17 (night, last) - the four-lane prototype gate (MOVEMENT_SIMD_PLAN.md 0c): not passed
+
+Prototype (tests/test-runs/simd-c-20261117/proto.rs.not-kept, harness proto-eval.js as tickbench EVAL, test binary
+bin-proto.js): the occupancy's primary path (pressure steer from a bilinear tile field, wall tiles along the sweep,
+footprint test per new cell with the own footprint masked, commit) over the real state after the first stage at tick 200
+of checker-200k (46,888 movers with a wanted move, 804 blocks, no helpers, best of 7):
+| mode | ns a mover | moved / clipped |
+|---|---|---|
+| 0 scalar, block order | 102 | 29,672 / 18,027 |
+| 1 scalar, lane order | 114 | 29,674 / 18,026 |
+| 2 four lanes (quadrants, lock-step) | 113 | 29,674 / 18,026 |
+Modes 1 and 2 end in identical positions and bitmaps (hashes equal): the quadrant-lane scheme is exact; 79.5% of
+movers are interior to a quadrant, 20.5% go to the border pass. **Gain 1.0x (gate: 2x).** Per mover the path is
+~10-20 small L1 loads (four field corners x2, a wall tile a swept cell, 3-5 bitmap rows a new cell) plus two sqrt and
+two divisions; the lanes still load one lane at a time (wasm SIMD has no gather), the arithmetic that goes four wide
+is a small part, and packing lanes costs about what it saves. Not integrated; the module was removed from the build.
+What would change this: data the lanes can load as vectors (block-relative SoA rows, a footprint test that is whole
+bitmap rows for many movers at once, i.e. bitboard move generation), which needs rounds (the measured design (A)).
+
+## 2026-11-17 (night, last+1) - the bit-plane gate (MOVEMENT_SIMD_PLAN.md 0d): not passed
+
+Prototype tests/test-runs/simd-c-20261117/planes.rs.not-kept (harness proto-eval.js, binary bin-planes.js): per block,
+occupancy rows of 192 bits (block + 32 a side) with wall tiles folded in, intent planes (3 footprint classes x 8
+directions) with one bit a crossing mover, each direction phase decided by shifted-row ORs of the newly entered cells,
+three iterations for followers entering cells their leaders vacate, occupancy updated between phases, readout, rows
+written back. Same real state (46,888 movers, 804 blocks, tick 200, no helpers, best of 7):
+| path | ns a mover |
+|---|---|
+| scalar primary path (proto mode 0) | 102 |
+| bit-planes, steered | 326 |
+| bit-planes, wanted steps as they are | 289 |
+**0.31x (gate: 5x).** The planes are sparse: 42.8k crossings over 24 planes x 128 rows x 804 blocks, ~1-2 movers an
+active plane row, so a row operation decides one or two movers and costs what the scalar test costs, three times for
+the follower iterations, plus row loads and wall folding. Bit-parallel lattices pay for dense, uniform sites (lattice
+gas), not sparse agents in 24 intent classes. (The prototype also had a consistency defect: 404 footprint cells
+missing, 1 shared; not fixed.) Removed from the build.
+
+## 2026-11-17 (night, last+2) - more architectures sized on the same real state (none built)
+
+- **Traffic tables resolved once a job (instead of ptr(c, i) at each use):** the re-reads are L1 hits, ~8 extra loads a
+  sample call: < 1% of k89. Not built.
+- **Direct footprint tests instead of per-mover fields:** counters at dk 1: 34k field builds (~62 ns) serve ~93k tests
+  (66.6k one-cell bits, 17k sweeps, 9.8k row scans); direct row tests (~20 ns each, the prototype's) would save ~1 ms a
+  tick of ~64 (~1.5%). Not built.
+- **Convoys (a follower behind a same-direction leader takes its decision):** of 46,888 movers at tick 200, 7,076 have a
+  mover one footprint ahead along their step and 2,797 (6%) of those step within ~20 degrees of it: at most 6% of
+  resolves. Not built.
+- The real kernel's primary path costs ~680 ns a resolve (checked_traffic_q, steer, preview, field, commit) against the
+  prototype's 102 ns for steer + walls + sweep + commit: the difference is the real path's extra decisions (steady
+  windows, deposits, push records, slides, shoulders, swaps' preconditions) and its slot-column reads, each sized above.
+- **Left:** changes of the model, not the implementation: coarser occupancy cells (fewer crossings, larger footprint
+  steps; SIM_OCCUPANCY_SUBCELLS = 8 is assumed in the traffic grid), or another collision model (soft contacts /
+  density). Both change gameplay.
+
+## 2026-11-17 (night, last+3) - coarser occupancy cells (4 a tile, 8 px) tested: faster; a gameplay choice, default kept 8
+
+**Made a setting (default unchanged, state hash a53eec94/1067af6f as before):** SIM_OCCUPANCY_SUBCELLS may be 4 or 8 (the
+guard now: 32 divisible by it). The traffic grid follows the occupancy's count cells (32 x 32 cells: 32 / cells-a-tile
+tiles a side; sim_traffic.js tpc, config word 44; traffic.rs traffic_capture's floor loop and capacity by it). Fixed:
+the block halo limit in occ.rs preview / commit_preview was (r + 32) * cell, which assumed 32-eighth cells and left 64-
+eighth cells no room past a block's edge (every unit stopped at block edges: over-halo 34.6k a tick); now
+r * cell + 1024 (the same at 8). tickbench PREEVAL=<code> runs before the scene's restore (match-start settings).
+**Node (checker-200k, 8 helpers, 20 s; sub-s*.json):** step mean 28.9 (27.8-29.8 earlier) -> 26.3 / 27.0 ms; k89 at
+ticks 300-420 9.7 -> 7.7 / 8.1 (-18%); footprint moves 62.5k -> 40.4k a tick; blocked or clipped 32.8k -> 18.8k;
+registered units equal (194k / 193.5k); spawn relocations 10.3k -> 35.5k; occupancy audit clean.
+**Rendered (headed Edge, edge-sub.sh, 2 rounds alternating, sim_occupancy_sub4.js served):** step mean 42.2 / 43.2 ->
+41.4 / 38.6 ms (~-6%), p95 55.5 / 57.8 -> 57.1 / 52.8; kp:89 17.2-17.6 -> 14.1-15.0 ms, its helper CPU 150 -> 126 ms
+(-16%); FPS 104-117 both.
+**Gameplay effect:** footprints snap to 8 px steps: collision radius <= 8 px -> one 8 px cell (the common 12 px 3x3
+footprint becomes 8 px: crowds ~2.25x denser), 9-16 px -> 24 px. traffic-pressure passes (plug 99.9%, counter 100%,
+wall 19.9% moving vs 7.3% at 8); occupancy-grid passes. Default stays 8 until chosen; to use 4 it must be the same on
+every peer (a match setting or the constant).
+Tests at the default: mover-table(-order), occupancy-grid, occupancy-shapes, traffic-pressure, worker-approach-occupancy pass.
+
+- **2 cells a tile (16 px):** with 16-tile blocks (one bitmap word wide) two identical runs ended in different hashes and
+  the audit failed: the blocks on either side of a block (same phase) both read-modify-write its single word with their
+  64-bit footprint writes. Guard added (blocks >= 64 cells wide: sim_occupancy.js). With 32-tile blocks: deterministic
+  (241a4833/2be0035c twice), audit clean; step mean 26.4 / 25.2 ms, k89 at ticks 300-420 7.5 / 7.0 (8 a tile: 9.7, 4:
+  7.7 / 8.1); blocked or clipped 38.7k (4 a tile: 18.8k), spawn relocations 110.8k (35.5k): every unit up to 16 px is a
+  16 px cell. No better than 4 a tile.
+- **3 a tile:** not expressible now: a cell is a power-of-two number of eighths (256 / 3 is not an integer; cell
+  coordinates are shifts), and count cells need 32 / cells-a-tile tiles.
+
+- **Unit size vs cell size (4 a tile with footprints mixed to about today's occupied area):** checker-200k has 116k units
+  of collision radius 6 (today 3x3 of 4 px = 144 px2; at 8 px cells 64 px2) and 59k of radius 3. With 10% of units (by
+  id) one size up at 8 px cells (24 px), the occupied area after the restore is 20.85 Mpx2 vs 20.63 at 8 a tile (plain 4 a
+  tile: 14.75). One sitting, 20 s, 8 helpers (area-*.json):
+  | run | step mean | p95 | k89 ticks 300-420 | blocked or clipped | footprint moves |
+  |---|---|---|---|---|---|
+  | 8 a tile | 27.8 | 33.8 | 9.85 | 32.8k | 62.5k |
+  | 4 a tile, area matched (x2) | 26.45 / 26.1 | 31.2 / 30.5 | 8.13 / 8.21 | 24.2k | 38.8k |
+  | 4 a tile, units as they map | 25.8 | 30.8 | 7.49 | 18.8k | 40.4k |
+  About two thirds of the k89 gain is the grid (fewer crossings at the same area), a third the smaller units (less
+  blocking). The test knobs (radius scale, id mix) were removed again. One AFTER audit read false with a state hash
+  identical to a passing run; a rerun audited clean (end-of-run timing of the audit, not the state).
+
+**Open, potential optimization: 4 cells a tile (2026-11-18).** Tried as the default for manual testing, then set back to
+8 (user: a separate change, later). Measured win above: k89 -16/-18%, step ~-5/-7%. It should come together with
+footprints that match what is drawn: today a footprint is an odd square, (2k-1) cells with k = ceil(collisionR / cell),
+so at 8 px cells it is 8 or 24 px while sprites are ~2.2 x r wide (renderer3d.js size = clamp(r * 2.2 / tile, .28, .9)):
+units of r 5.5-8 get an 8 px footprint under a 12-18 px sprite. Wanted (user): three sizes, ~8 px (small units, workers),
+~16 px (middle), ~24 px (large: King, Boss, ...), the same for radius, footprint, sprite and model, since the footprint
+decides collisions. 16 px is two 8 px cells, so it needs even-width footprints in the kernels (today a centre cell and
+half-width r-1: occ.rs clear_or_mark / free / half mask / horizontal_motion, mv.rs, mvt.rs, nfs.rs, ord.rs, spr.rs,
+birth.rs, traffic.rs). A footprint of w cells would start at cell (x + (1-w) * cell/2) >> shift (the same as today for
+odd w). Then radii 4 / 8 / 12 and the sprite size 2r.
+
+**Collision radius = radius for every unit (2026-11-18).** The three overrides in data_static.js were removed (Snake 9 ->
+7, Healer and Researcher 3 -> 6; collisionR falls back to r). movement-sleep, separation-jitter and unit-resize-kernel
+tests pass.
+
+## 2026-11-18 - inflated count maps (gate, not passed); bitmap cache footprint; 32-tile blocks
+
+**Count-map gate (MOVEMENT_SIMD_PLAN.md 0e; tests/test-runs/simd-c-20261117/proto_cmap.rs.not-kept, harness
+cmap-eval.js, binary bin-cmap.js):** the four-lane gate's primary path (steer, wall tiles, footprint test per new cell,
+commit) over the real state after the first stage at tick 200 of checker-200k (46,888 movers, 804 blocks, no helpers,
+best of 7, two rounds), with the footprint test / commit by (0) the bitmap and (1) count maps: per mover size class k a
+byte a cell = the bitmap's set bits in the (2k + 1) square there (3 classes, 48.8 MB with padding; built from the bitmap
+in 1.27 s). A test is one byte minus the own footprint's overlap; a commit subtracts / adds the footprint's overlap
+pattern, a u8x16 row a map row, in every class map (pattern table made at the build). Exact: positions identical
+(29,672 moved / 18,027 clipped / 26,564 commits both), mode 1's final maps equal maps built from mode 0's final
+bitmap (0 cells differ). **Cost: bitmap 101.4 / 101.7 ns a mover, count maps 191.3 / 186.6 (0.53x).** The maps are 24x
+the bitmap's bytes (3 bytes vs 1 bit a cell): a commit writes ~2 x 3 x (2e + 1) map rows, each its own cache line in a
+16 MB map, and the tests read the same large maps; the bitmap's rows are 2 MB and a block's part fits L1. Not
+integrated. (Also: count maps would allow any footprint width; today's odd widths at 4 px cells already give 4 / 12 / 20
+/ 28 px footprints exactly, radii 2 / 6 / 10 / 14; 8 / 16 / 24 need even widths.)
+
+**Bitmap cache footprint (user question: separate smaller bitmaps?):** checker-200k is 512 x 512 tiles = 4096 x 4096
+cells: the bitmap is 2.1 MB with margins, but no kernel streams it whole except the build and the audit. A k89 block
+job (16 x 16 tiles = 128 x 128 cells + halo) touches ~200 rows of one 64-byte line each (~13 KB: L1). Measured before
+(0a): shuffled slots made the per-unit column readers +100-267% and the bitmap work only +13-15%: the bitmap work is not
+memory bound, so separate per-region bitmaps would load the same lines. The one cost of one array: a 64-byte line is
+512 cells = four 16-tile blocks across, so same-phase blocks two apart write the same lines from different helpers
+(false sharing). **32-tile blocks (no line shared between same-phase blocks), A/B alternating, checker-200k, 8 helpers,
+20 s (blk-*.json, blk.sh):** step mean 30.7 / 31.5 (16) vs 28.8 / 29.0 (32), p95 36.1 / 42.5 vs 34.6 / 35.1; but the
+kernels' sum a tick is the same (20.30 vs 20.21 ms at ticks 300-420): k89 9.83 -> 9.29 (-0.54), k8 +0.11, others +0.03-0.07.
+Both deterministic (32: 432536f4/183aebfc twice), audits clean. The k89 change is within noise (rule: +-1 ms); the
+step-mean gap is not in the kernels (this sitting ran ~2 ms slower than earlier ones at 16). Default kept at 16; worth
+a repeat in the rendered A/B if k89 is revisited.
+
+## 2026-11-18 - rendered gameplay spikes: big orders, the index lane (tests/test-runs/spikes-20261118/)
+
+User (2026-11-18): leave 4 cells a tile for later; find ways around the serial parts; optimise real gameplay with
+rendering on, issuing orders etc.; above all reduce spikes (multiplayer).
+
+**k89 serial order is not its wall-time limit:** ~800 blocks with movers over 8-9 threads; rendered kp:89 ~17 ms =
+its ~150 ms helper CPU / 9 (perfect throughput). Removing the in-block order only pays if it removes work, and the
+lane / claim / bit-plane / count-map forms measured did not (MOVEMENT_SIMD_PLAN.md 0c-0e).
+
+**Rendered baseline (headed Edge, checker-200k, 90 s, simtrace, PAGEACT=bigorder.js: every own unit, ~90k incl.
+workers, a move every 10 s; base-1.txt):** mean 39.7, p95 48.8, p99 53.1, max 68.5; 5 steps over 1.35x their window
+median; 9 single-chunk stalls over 10 ms (OS preemption, as before); FPS ~102. Order steps 7-12 ms over their
+neighbours: kp:134 (k_order_workers) +3-4, simMoveRun +4, processActions +2, kp:8 +2, kp:89 +2 (ordersteps.cjs).
+Node (orderprobe.cjs WORKERS=1, 88.6k units): order step +4.3 (runQueuedOrders 4.2: k134 2.9, k116 / k115 0.8-0.9;
+processActions 1.7: k_ids_decode ~0.5, the admission kernel 0.9), the next movement +5 (new destinations).
+- **Big orders spread over ORDER_DRAIN_STEPS (built, reverted):** the workers (the take ring) were taken whole at
+  their step (the deadline e.due was set and hashed but unused). Built: a big order (> ORDER_NOW queued) keeps due =
+  step + 3 (a small one its own step); k_order_take takes the queued units whose id hash and steps-left fall in the
+  first of (steps left) buckets (restore-safe: a function of the units still queued and the deadline, both snapshotted);
+  the movement pickup leaves workers / held units of a still-spreading order to the take (row word 11), and
+  orderPickupFinish keeps it queued. Drained 68k -> 41k -> 21k -> 0 over 4 steps, but per step k134 stayed +2.9 /
+  2.9 / 1.6 / 2.6 ms (22k workers cost the simulation thread 2.1 ms of k_order_workers vs 2.5 for 82k: helpers are
+  in background chunks when the job posts, so a small job runs mostly on this thread) and each step re-started
+  movement work: steps +5 / +8 / +1.6 / +9 vs +4.3 / +5 whole. Reverted (sources from the index, wasm byte-equal).
+  Pitfall found: the pickup takes every unit stamped with a published order's seq, workers included (they go to the
+  JavaScript order: 66k workers = 281 ms in orderPickupFinish).
+- k_order_workers is ~0.25 us a worker (~40 scattered column writes + wm_clear): ~20 ms CPU for 82k, ~2.2 ms wall
+  over 9 threads: throughput, not a wait. processActions' decode is ~0.5 ms (actions are prepared at arrival).
+- **Index lane waits (spatialIndexRebuild 0.06 -> 1.7 ms on p95 steps, w:6):** clustered in the ~100 ticks after
+  each big order; bgAge:6 ~3.5 ms on those steps vs ~96 ms on calm ones: the simulation is behind and runs steps
+  back to back, so the index posted at a step's end has no idle time before the next step takes it. A throughput
+  effect, not slow index work.
+- **p95 steps (slowsteps.cjs):** no tick % 8 pattern left; +25 ms k89 CPU (+3.5 wall), +1.7 index wait, +1
+  recalculateUnitEffectiveLevel: battle load and the catch-up above.
+- orderprobe.cjs now advances currentTick each step (as the worker does) and prints QLOG (__scratch.qlog) if set.
+
+**Perf fuzz, rendered checker-200k, 18 min (tests/test-runs/perf-fuzz-2026-11-17T23-43-49, fuzz1.log):** order.chain
+(Control + right clicks, 119k selected) TPS 20 -> 10 during and after, reproduced (score 3.35); scn.economyStorm (build
+lines, placements, queue clicks) TPS 19.8 -> 14.4 in its tail; a combo with a 1,037 ms page frame (not reproduced).
+Production wasm has no names: mapped with a --keep-names build (wasmnames.cjs) the order.chain helpers add
+occ::free_special / free_r10 (more movers), k::nf_apply, wai b_find; the indices are not certain to match the
+production build (near_issued, a few operations, at +250 ms), so profiles for wasm need the named build served.
+- **Multi-point chains, measured with real input (chainclicks.cjs, a new PAGENODE option of scene_tps_probe.cjs:
+  a Node module given the playwright page; box over the field, 12 Control + right clicks 100 ms apart, ~70k units):**
+  13-17 order steps a chain, 150-980 ms extra step time a chain, steps up to 107 ms (base). Each click re-splits the
+  whole selection (orderMany of every unit); a re-order of already-ordered workers costs ~60% of the first order
+  (orderprobe, second order 3 steps on: runQueuedOrders 3.4 vs 5.6 ms, k134 2.6 vs 3.8).
+- **A send gap of 150 ms between a chain's re-splits (built, reverted):** orders a chain 15.3 / 13.3 vs 15.3 / 13.7,
+  mean 46.6 / 47.9 vs 44.6 / 45.5 (ab-chain.sh): the assign worker's answers already come ~150 ms apart; a gap that
+  would merge more (~300 ms) delays the last split a player sees act. Reverted.
+- **Kept: gone views' last values (sim_frame.js pageGonePut):** the source table's columns looked up by name once a
+  table (checked by the table and its first / last column), not two name look-ups a column a dying unit. Page CPU
+  in it 2.21 -> 0.88 ms/s (WPROF page profiles, 60 s, early battle; the fuzz battle had 29 ms/s).
+- **Kept: the HUD's rate logs read newest back to the window's start** (hud.js getPlayerDeltaFlowScale,
+  getPlayerEnergyDeltaRate; bottom_bar.js the A* sums): the logs are in tick order and hold up to 70 s, the default
+  window is 10 s. getPlayerDeltaFlowScale 8.4-9.5 -> 3.6 ms/s, getPlayerEnergyDeltaRate 1.4-1.7 -> 0.3 ms/s of the page.
+  Tests frame-membership-delta, order-markers, research-menu, sim-event-pack pass.
+- Profiled runs (WPROF) have one ~430-480 ms step with every helper's chunk ~360 ms at once: the profiler, not the game
+  (unprofiled runs max ~68 ms).
+- **Kept: a multi-point chain sends only the units whose point changed (main.js applyUnitCommandTargets /
+  _assignChain, assign_worker.js prev diff).** The page keeps the chain's last split sent (ids and a point each; the
+  first click of a chain: every unit at point 0); the next click's request carries it matched to the new id list by
+  id (an open-addressing typed table: the selection's id array is made anew at every selection change, a death in a
+  battle, and is in slot order, so identity or a sorted merge failed: 0 saved at first); the worker returns only the
+  changed units and the whole split. Any other unit order in between drops the chain (localUnitOrderHook): the next
+  click sends all. Units sent a click (real input, ~71k selected): 71k, 53k, then 15-23k instead of ~70k each (274k vs
+  ~700k a 12-click chain). Rendered A/B (ab-chain.sh diff2, 2 rounds alternating, 3 chains a run): extra step time a
+  chain 493 / 595 -> 338 / 308 ms, the chain's worst step 79 / 87 -> 77 / 71, p99 72 / 81 -> 65 / 65; means 41.1 / 45.2
+  vs 44.1 / 44.8 (noise). Tests assign-nearest, order-many, collector-farms pass.
+- **Economy storm, sized (orderprobe EVAL: 30 house placements in a line by player 0's first barrack + 30 queueUnit
+  clicks in one step, checker-200k, Node):** step 34.7 vs 25.7 ms (processActions +5.8: placeBuilding ~0.1 ms a
+  tile, 3.1 for 30; queueUnit through spawnCountsKernel ~55 us a click, _spClsBuild part of it); the steps after
+  within noise. A dragged line is one step's ~3 ms; queue clicks come 1-3 a tick: not a spike source in itself. The
+  fuzz trial's tail (TPS 19.8 -> 14.4 for seconds) is what follows (builders, spawns, navigation): to look at
+  with the second fuzz run.
+
+**Second perf fuzz (perf-fuzz-2026-11-18T00-56-00, fuzz2.log), with the kept changes:** order.chain no longer flagged
+on its own; scn.bigSelectRally (select everything, 8 Control + right clicks, 9 rally clicks) TPS 20 -> 10 on its repeat,
+reproduced; ui.bottomBar one 447 ms frame (not reproduced). In bigSelectRally the simulation threads were not busier
+than the idle control (helpers 65 s vs 82 s): the page was (busy 9.3 of 11.5 s vs 5.9 idle), so the page's tick
+messages came late. Page beyond the control: _assignChainPrev +180 ms (the chain diff's id match on the page: ~22 ms
+a click with 209k selected), pushMarker +145, _simClientApplyWorld +111, applyUnitCommandTargets +73; most page self
+time in the battle: combat effects (_pushCombatRecordFx 348, _fxEventFar 310, _fxOrb 262 ms) and
+_simClientUpdateStableSlots 230.
+- **Kept: the chain's id match on the assign worker** (assign_worker.js prevByIds: an open-addressing table of the
+  last split's ids; the page sends copies of its ids and points, a typed copy of the first click's ids seeds the
+  chain; worker URL version 20261118-chain so a cached old worker is not used). Units sent a click as before (after
+  the first: 10-25k instead of ~70k); the page's part is the existing position gather in applyUnitCommandTargets
+  (~5 ms a click).
+- **Kept: build3DOverlayData takes getOrderMarkers' pooled markers as they are** (renderer.js; one a point and kind
+  already, as the other overlay paths take them), no string key and object a marker a frame; the few tower markers of
+  a small selection are checked against them by key (keys made only then). pushMarker 0.36 -> 0, build3DOverlayData
+  3.5 -> 2.6 ms/s in a chain + rally run (the fuzz trial's +145 ms had more markers). order-markers passes.
+- Open (larger): the combat effects are walked in JavaScript record by record every frame (~80-100 ms/s of the page
+  in a battle): a GPU path (records uploaded once, the shader animating by age) would make it O(1) on the CPU.
+- **Fuzz replay of the second run's trials (fuzz3.log, perf-fuzz-2026-11-18T01-24-02) with every change kept:**
+  scn.bigSelectRally TPS 20 -> 19.6, score 1.28 (was 2.07, its repeat 20 -> 10); select.thrash now the top flag (TPS
+  20 -> 14.3, repeat 20 -> 10): the simulation's ms a step 30 -> 49 in its window (the armies meeting ~2 min in), its
+  threads barely busier than the idle control (sim worker +5%, helpers +2%): battle load at the 50 ms budget, not the
+  selections; the page busy 77% (idle 48%), its largest self time the combat effects (~86 ms/s).
+- **Combat effects on the GPU, sized (not started):** _pushCombatRecordFx walks all 16,384 records (8 floats) every
+  frame and makes each far one a dot / line through _fxEventFar / _fxFarDot / _fxOrb / _fxPush (a volley up to
+  _FX_VOLLEY_MAX shots); the JS is already tight (cached colours, typed batch). A GPU path: the records as a data
+  texture updated where written, one instanced quad per (record, shape) whose vertex shader does _fxEventFar's
+  timing / colour / fog test, the JS loop skipped when the whole view is far (2D zoomed out; 3D when the nearest
+  visible ground is under _FX_FAR_PPT). Needs Edge visual checks.
+- **Untouched match, 10 min rendered (long-1.txt, the trace's last 6,000 steps):** 25-30 ms a step as the units fall
+  220k -> 157k (the samples: ~48 ms in the first minutes, TPS 20 throughout). One window (ticks 8100-8220) at 41-43
+  ms: every parallel kernel slower at once (k89 +6 ms with the same jobs, its CPU 126 -> 171 ms; k8, k27, every tail
+  up), nothing the game did: contention from outside it. The 68 ms of the first fuzz run came from orders that set
+  armies moving.
+- **Kept: the page's membership pass reads only the blocks whose ids changed (sim_client.js).** The presentation's
+  per-block column marks (presentation_worker.js dirtyBegin / dirtyEnd: per column and 256-slot block, the last frame
+  seq it changed in) are kept for the id column as F.idMarks (also when a rebase drops F.dirty: that rewrites px / py,
+  not ids); _simClientUpdateStableSlots compares only blocks marked after the old frame's seq (same stream and
+  capacity), and every block past either frame's count; else the whole pass as before. _simClientUpdateStableSlots
+  19.0 -> 4.1 ms/s of the page (WPROF, 80 s battle). Checked in the page (msverify.js: a wrapper reading the skipped
+  blocks): 793 membership changes, all by marks, ~93% of blocks skipped, 0 id differences in a skipped block.
+  frame-membership-delta passes.
+- **Page self time in a battle after these (WPROF, 80 s, ms a second):** _pushCombatRecordFx 20.0, bufferSubData
+  16.9 (column uploads), getChunkRenderView 12.6 (already bucket-culled), the minimap's static layer 12.6
+  (_minimapStaticFromTable 4.0 + its fill 8.6), canvas stroke / arc 8.5 / 6.4 (minimap alerts: at most 40 x 2 arcs a
+  frame; fewer would mean drawing the minimap less often: not done, UI is never throttled), _structureDetailCandidates
+  7.5, _simPageUnitListFill 6.0, pageApplyState 5.9, _ipstAstarRates 4.9.
+- **Kept: the minimap's static layer from the structure table (renderer.js _minimapStaticFromTable)** rebuilt (at
+  every structure change, beside the worker) with each tile column's / row's pixel bounds made once a scale
+  (_minimapRectBounds: the same rounding and clamping) and its pixels written directly, not four Math.round and a
+  closure a structure. Pixel-identical to the old function on the live page (mmverify.js: 0 of 25,600 pixels differ,
+  39,604 structures); 12.6 -> 5.4 ms/s, page busy 274 -> 249 ms/s.
+- **Kept: the research panel's star rates (info_research_static.js _ipstAstarRates) read newest back to each
+  window's start**, as the HUD's (the log is in tick order). research-menu passes.
+
+- **Kept: _structureDetailCandidates reuses its index arrays** (renderer.js: head / next made anew at every structure
+  membership change, each tick of a battle, the table's size each time: now reused while the sizes hold; garbage only).
+
+- **Helper spin with Atomics.pause (built, reverted; sim_parallel.js):** a pause hint a turn and the clock read every
+  16th instead of a bare loop on performance.now(). Rendered A/B (edgeov pause, 3 rounds alternating, a big order every
+  10 s): mean 35.4 -> 37.6, p95 47.2 -> 48.7, worse in every round: the pickup of a new job is later. The spin is 6.2% of
+  helper CPU in a battle with orders (named profile, bat-*.cpuprofile: k89 ~45%), as the blocking wait before (2026-11-17).
+
+- **Kept: the combat effects walk only the ring's live band (effects3d.js _pushCombatRecordFx).** Records are written in
+  order at combatFxHead and expire by age: a tail (_fxTail) moves past dead / expired ones; each frame reads
+  [tail, head) in the slots' order (two segments when it wraps: the batch's order and the limit's cut as before), the
+  whole ring when the band and the records written since reach its size (the head may have passed the tail). Checked
+  on the live page against the old full pass (fxverify.js: both run each frame on the same state, batches and
+  records compared): 0 of 5,408 frames differ (a first version that read the band oldest-first differed in 42: the
+  batch order). _pushCombatRecordFx 21.8 -> 13.7 ms/s of the page (the second run drew 116 FPS vs 104). Tests
+  combat-effects, sim-event-pack pass.
+
+- **Fixed: my chain hook nulled itself mid-orderMany** (main.js _assignChainDrop set localUnitOrderHook = null; worker.js
+  _queueLocalAction tests the hook once and calls it for each group, so the next group's call threw "localUnitOrderHook
+  is not a function" and the order went wrong: 3 page errors in fuzz seed 4242). The drop hook now only clears the chain
+  and stays installed; _queueLocalAction tests the hook before each call. A rendered chain + big plain orders run: no
+  page errors; order-many, assign-nearest, collector-farms pass.
+- **Fresh fuzz (seed 4242, perf-fuzz-2026-11-18T07-52-32):** TPS held 20 throughout (lowest 19); the flags left are FPS
+  drops with big selections (select.boxArmy 3D 120 -> 71, scn.bigSelectRally 120 -> 56).
+
+- **Fixed: pending unit order markers of dead units were never let go (renderer.js getOrderMarkers).** With a selection
+  of at most 4096 a gone unit's entry was looked for again over the selection's slots every frame; a multi-point chain's
+  small groups (<= ORDER_PENDING_PER_UNIT_MAX: per-unit entries, more of them with the chain diff) and a battle's deaths
+  made that (dead entries) x (selection) a frame: the fuzz (seed 4242) bigSelectRally / select.boxArmy FPS 120 -> 56-71,
+  getOrderMarkers 3.9 s of a trial. Reproduced live (gomtime.js: a wrapper timing it; chains of 3 clicks every 16 s): as
+  the selection fell under 4096, 40 -> 488 -> 1,093 ms per 4 s (27% of the page). Now an entry whose unit is gone is
+  deleted, one of an unselected unit let go once its order shows (as a selected one's): 80-105 ms per 4 s down to 640
+  selected. order-markers passes. (A replay of the fuzz run with the staged files to tell whether it was there before
+  diverged from the run: replays of a long session do not reach the same states.)
+
+- **Fuzz seed 777 (perf-fuzz-2026-11-18T08-50-41):** 4 flagged trials of 54 (8%), no page errors, none persistent. The
+  worst (rally.base + minimap orders + zoom in, 3D) had TPS 10 from the battle's peak before it (214-225k units, the
+  simulation ~47 ms a step) and a 186 ms page task while zooming in close: gl.getParameter +126 ms from getTopTexture.
+- **Kept: GPU constants read once (renderer3d.js):** getTopTexture queried MAX_TEXTURE_MAX_ANISOTROPY_EXT for every new
+  top texture (a zoom makes many: each a wait for the GPU process); ensureShadowMap queried MAX_TEXTURE_SIZE every frame
+  with shadows on. Both now read once per renderer. A rendered zoom in / out run: no page errors.

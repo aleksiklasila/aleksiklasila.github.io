@@ -596,7 +596,6 @@ const THING_STATS = {
             upKeep: {base: 2.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 8000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             r: {base: 7, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            collisionR: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             snakeMaxHistory: {base: 20, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 800, level: {factor: 0.95, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
@@ -724,7 +723,6 @@ const THING_STATS = {
             upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            collisionR: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -746,7 +744,6 @@ const THING_STATS = {
             upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            collisionR: {base: 3, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
