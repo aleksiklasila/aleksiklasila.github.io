@@ -9917,3 +9917,251 @@ _simClientUpdateStableSlots 230.
 - **Kept: GPU constants read once (renderer3d.js):** getTopTexture queried MAX_TEXTURE_MAX_ANISOTROPY_EXT for every new
   top texture (a zoom makes many: each a wait for the GPU process); ensureShadowMap queried MAX_TEXTURE_SIZE every frame
   with shadows on. Both now read once per renderer. A rendered zoom in / out run: no page errors.
+
+## 2026-11-18 (later) - the every-8th-tick spike: flow looks of an older build kept at the walkers' turns
+
+User (2026-11-18): occupancy is another session's; fix the every-8th-tick spikes first; the foreground must have no
+large spikes whatever happens in the game or what players do (even when routes do change), O(1) in the foreground;
+short loops (1-2 min runs, profile, fix, again), not 40-minute runs.
+
+**Checked first:** the close-in 3D zoom (zoom3d.cjs, PAGENODE: 3D, 16 wheel steps in and out at points over the
+field, rAF gaps and LoAF; 80 s rendered checker-200k): worst frames 50 / 58 / 33 ms, no LoAF over 69 ms (was 186 ms
+before the GPU-constant fix): fixed.
+
+**The spike (rendered checker-200k, zoom3d-1.txt, bymod.cjs: phase means by tick % 8):** 66 of the 90 steps over p95
+fall on tick % 8 = 0 (mean 50.2 vs 42.5-46.8). A ground navigation build is installed at tick % 8 = 7 and lists
+~45k flow looks (330 on other ticks: flowPend); the next movement waits for them (flowLooksCommit 6.2 ms: w:13 4.2,
+bgc:13:152 3.9 of exact looks on this thread) with every kernel slower beside the burst; tick % 8 = 1 then waits on
+lane 12 (3.1). Node (lanes-20261116/flowprobe.cjs, no helpers, checker-200k after 600 ticks): the install post
+62-71 ms on one thread (other ticks 5-7: the listing scan), the commit after 5.8-6.2 ms; a dbgc build: 12k records
+of the walker's own tile (102) and 22.6k carried open looks (103), listed only because the build version changed;
+33.8k made, 1k shared-table hits.
+
+**Change (wasm/src/mv.rs):**
+- look_keep: a record of another build (its tile in the map, destination and kind as now) is checked at the walker's
+  own turn against the new build by look_build_agrees: the build's first step from here (nav_step) open and, for
+  the look's own tile, its next tile; for a look carried on from another tile, a step nearer its far tile (Manhattan).
+  Agreeing, it is stamped with the new build and look_keep's tests run as before (its way open on today's walls,
+  the carry rules); else a new look as before (approximated, listed, made, committed).
+- mv_flow_pending: a record that misses only by its build (the own-tile / carried tests with the version left out)
+  is not listed: its walker's next turn checks it. However many routes a build changes, the work comes at the
+  walkers' turns (~500-600 a tick here), not all at once.
+- Counters (dbgc): 117 not listed (version only), 126 kept at a turn, 127 not.
+
+**Node (flowprobe, dbgc):** install ticks list 287-302 looks (was 34.9-36.0k), the install post 5.6-7.4 ms (was
+57-71), the commit after it 0.6-0.8 ms (was 5.8-6.2); a tick: ~40-46k records waiting for their turn, 450-590
+kept at turns, 17-87 not. A first version checked them in mv_flow_pending at the install (no per-turn check): 2.6k
+listed, but ~15 ms of first steps in that one tick's listing (a smaller burst): replaced by the per-turn check.
+**Behaviour (move-step-probe 8 helpers, 120 steps):** mean distance gain -832.6 / -814.2 (warm 200), -632.9 / -628.5
+(warm 260), alive 190537 / 190552: within noise.
+**Tests:** flow-looks-commit (0 vs 3 helpers), movement-sleep, shared-spatial-determinism, chaos-scenario-determinism
+(0 / 3 helpers), multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4) pass.
+**Rendered A/B (edgeov.sh flow 2 x 90 s, flowb 2 x 60 s, base = HEAD's wasm; dk1sum.cjs, dk-1 steps):**
+| run | dk>1 | mean | p95 | p99 | w:13 | flowLooksCommit | mean by tick % 8 |
+|---|---|---|---|---|---|---|---|
+| base flow-1 | 2% | 44.7 | 59.2 | 65.9 | 0.52 | 1.33 | 52.3 42.8 45.3 43.3 44.7 42.2 42.6 44.6 |
+| new flow-1 | 26% | 44.8 | 59.9 | 69.4 | 0 | 0.63 | 46.1 43.0 44.8 44.2 46.8 44.5 45.0 43.9 |
+| base flowb-1 | 0% | 42.5 | 56.4 | 60.8 | 0.14 | 0.94 | 48.4 40.4 43.4 41.9 43.4 39.3 40.7 42.7 |
+| base flowb-2 | 10% | 44.0 | 59.0 | 76.2 | 0.14 | 0.99 | 42.6 42.4 44.7 48.5 43.2 42.4 43.5 44.2 |
+| new flowb-1 | 9% | 43.5 | 57.9 | 71.1 | 0 | 0.61 | 42.8 43.2 44.1 43.0 42.3 44.5 44.2 44.3 |
+| new flowb-2 | 3% | 43.0 | 55.9 | 63.3 | 0 | 0.60 | 43.5 42.7 42.8 43.2 43.5 42.7 43.0 42.9 |
+The base keeps one residue 5-6 ms over the rest (0, or 3 when dk-2 steps shift the phase); the new build is flat by
+tick % 8. Means equal (the share of dk > 1 steps varies run to run on both sides).
+**Big orders on the new build (order-new.txt, bigorder.js every 10 s, 58-89k units):** an order lists 4-9k looks,
+w:13 0 throughout; dk-1 mean 39.2, p95 48.4, p99 55.0, max 62.6. Open: a schedule by size (a burst's commit due
+when the background can have made it) for a burst no turn spreads; none seen in these runs.
+**Left by tick % 8 there (bymod):** residues 0 / 4 +4.5 ms (workerSearchTierStep 3.8: _wsPost 3.1 with
+_wsCollectorGroup 1.9; simUnitStateRelayoutStep 2.5), 3 / 7 +2.5 (_acqPost 2.4, combatScanRun 2.7), 2 / 6
+(_wsCommit 1.8, waiTake 1.5): serial lane posts and commits on this thread.
+
+**Rendered checks after it (short runs):**
+- **Helpers 8 vs 7 (abq.sh h7, 2 x 60 s, ?simhelpers=7):** dk-1 mean 44.5 / 43.3 vs 45.5 / 45.1, p95 59.9 / 56.8 vs 58.6
+  / 57.2: no gain, 8 kept.
+- **p95 steps with the flow change (slowsteps.cjs over the new runs):** spread over every tick % 8 (8-27 a residue),
+  every kernel slower at once (cpu:89 +37%, kp:8 +2, the index +1.8), late 75 vs 24 ms (catch-up after a slow
+  step): contention and battle load, not a periodic phase. The worst single steps: the first ticks after the load
+  (dk 3) and one occupancy block (808) whose chunks take 2-6 ms each.
+- Left by tick % 4 (order-new.txt): residues 0 / 4 +4.5 ms: _wsPost 3.1 a post (_wsCollectorGroup 1.9: both
+  collector groups rebuilt at every post in a battle, as any structure change moves the tile table's version; per
+  group two parallel dispatches plus serial k_ws_buckets; the dispatches' waits are the largest part on this
+  thread), simUnitStateRelayoutStep 2.5 (parallel kernels and their waits); 3 / 7: _acqPost 2.4, combatScanRun 2.7.
+  Not changed yet.
+
+**Short fuzz loops (3 min each, checker-200k, --frame-ms=100 --long-ms=80 --handler-ms=50):**
+- camera / view / ui (seed 101, perf-fuzz-2026-11-18T10-26-28): zoom limits + view switch + resize flagged with TPS
+  10 and presentation gaps up to 438 ms, but the presentation workers were 89% idle (TPS-first pacing waits for the
+  simulation) and the match itself ran at ~47 ms a step then (its reference, 32.9, was a minute old): the battle
+  peak. TPS < 15 in 16% of the run's samples, all between minutes 2 and 4.
+- selection / orders (seed 202, perf-fuzz-2026-11-18T10-31-50): **select.clickUnit compiled a shader in its frame**
+  (getProgramParameter +33.8 ms, createProgram from drawGroundOverlays: the ground lines' program, made at its first
+  draw, not in prewarmPrograms). **Fixed (renderer3d.js):** ensureGroundLineResources() (the same program, VAO and
+  buffer, the VAO unbound after) called by drawGroundOverlays and by prewarmPrograms while the match loads. Replay of
+  the run (perf-fuzz-2026-11-18T10-37-02): clickUnit worst frame 33 ms, no long task; no createProgram time in any
+  page profile; no page errors.
+- Left from these: rally.all with ~123k selected: the info-panel packer 1.46 s busy (control 0.23: units +533 ms,
+  selectionIds +353); the page beyond the control _simClientApplyWorld +50, getSelectionMaskOverlay +37,
+  declutterOrderMarkers +36 ms. Page self time in every battle profile: _pushCombatRecordFx + _fxEventFar + _fxOrb
+  (~330-370 ms a profile), bufferSubData from _columnStoreUploadChanged (125-140 ms). audio.js _audioMayHear calls
+  performance.now (+15 ms in one profile).
+
+## 2026-11-18 (evening) - hectic chaos scene with player bursts: worker GC, collector groups, where the step goes (tests/test-runs/hectic-20261118/)
+
+User (2026-11-18): keep looping on TPS in more and more hectic chaos scenes with player interactions; above all spikes.
+
+**New scene and driver.** `tests/scenes/chaos-300k-32k.gz` (`node --max-old-space-size=8000 tests/chaos-spikes.bench.cjs
+--units=300000 --structures=32768 --helpers=0 --map=512 --export-ticks=0 --export-scene=...`: 300k units, 32,768
+structures, 10k mines a kind, 1.3k farms, 30k healers, queues, research, tower sites). `hectic.js` (PAGEACT, every 4 s):
+queues topped up on 400 buildings, 30 rally points moved (every 2nd), 40 research items, ~40 tower placements and a
+20-house line, the whole army ordered (move / attack-move; every 3rd burst a 6-point split), tower targets for up to
+2,000 towers, a boost, hold / stop / attack / attack-building / kill groups, 60 building switches, research reordered:
+~800 actions a burst. (The page has no findNearestWalkable / grid[y][x].type: rally points are taken from units.)
+Run: `HEADED=1 PAGEACT=@tests/test-runs/hectic-20261118/hectic.js PAGEACT_EVERY=2 QUERY=simtrace=1
+DUMP=tests/perf-fuzz/simtrace-dump.js NODE_PATH=... node .claude/scene_tps_probe.cjs scenes/chaos-300k-32k.gz 60`.
+Tools there: `phmean.cjs` (phase means over a step range), `bursts.cjs` (the steps after each burst vs the 40 before,
+phases that grew), `actsplit.js` (WEVAL_START: per action kind in the worker), `wsgprobe.js` / `wsgparts.js`
+(collector group rebuilds, causes, parts), `takeprobe.js` (the take's rounds), `growprobe.js`, `uniqprobe.js`,
+`elprobe.js`, `boostprobe.js`.
+
+**What the scene does (rendered, headed Edge, 8 helpers):** the armies meet at once: the first ~10 s at 4-9 TPS
+(steps 60-180 ms, dk 1.7; 300k -> 165k units), then 20 TPS at 22-35 ms. Opening step (150 steps): simMoveRun 24.5
+(kp:89 13.2, kp:8 5.5; occupancy is another session's), the worker systems ~13-15 (workerSearchTierStep 5.3, waiRun
+3.8, _wsCommit 2.4, waiTake 2.2, _wsPost 2.2), unitEventsRun 5.1, projectilesAdvance 3.0, _simPostResult 2.9,
+combatScanRun 2.9, relayout 2.6; parallel tails (this thread waiting for helpers' last chunks) 5.9 ms a step.
+
+**Bursts:** the step a burst lands is +6-14 ms (processActions); the next few within noise. Per action kind in the
+worker (actsplit, 12 bursts): setBoost up to 7.4 ms for one click (1-3.5 ms idle: setPlayerThingBoost rebuilds every
+stat of the thing at 21 levels in JavaScript and runs the change hooks per stat), queueWorker 5.4 ms a burst (~15 us a
+click: spawnCountsKernel of one tile, _spClsBuild's class table and column-pointer checks each call), place ~60 us a
+placement, move 3.1, queueUnit 2.5, setRallyMany 2.2, queueResearch 1.8. Spread over generic dispatch (sanitizeAction,
+_actionStr, _dispatchRawAction); no player sends 800 actions a tick: left.
+
+**Fixed: structure row expiry made V8 copy whole backing stores (data_state.js _sRowsFree / _sRowFree).** The worker's
+allocation sampling (HEAPSAMP, 40 s): 36 MB of 121 MB in _sRowsFree, as 1.2 MB and 3.5 MB samples. Split into named
+pieces (served with SERVE_OVERRIDES): the reference columns' clear (one `a[r] = undefined` loop over every table's
+arrays, polymorphic) 10 MB, mEnt's clear 24 MB; plain monomorphic loops did not allocate for the columns; mEnt still
+did. Now each run is cleared with Array.prototype.fill(value, start, end) (reference columns, mEnt, rowObj; the
+single-row path the same): 0 bytes there, the worker's garbage 121 -> 89 MB in 40 s. GC trace (trace-gc-steps.cjs,
+50 s): major GCs 5 -> 3, the in-play ones (25.7, 36.8, 10.0 ms at steps 153, 339, 354) gone; left: two in the first
+~6 s after the load (38.7, 57.1 ms) and one of 7.7 ms. Tests structure-rows-fill, structure-row-reuse,
+structure-row-expiry-snapshot, structure-table, collector-farms, chaos-scenario-determinism pass.
+(The mechanism was not pinned down: Node 24 does not copy on the same stores; dictionary mode ruled out by reads.)
+
+**Changed: the collectors' search groups made again only when their own structures change (worker.js
+_wsCollectorGroup, data_state.js _wsTypeVer).** Both groups (gold, astar) were made again at every search post when any
+structure was placed or lost (_tileEntityVersion): 1.6-3.5 ms of the post step (~0.86 ms a group: the parallel
+k_ws_group count + write 0.47, serial k_ws_buckets 0.21, candidates 0.1). Now per stationary type (the descriptor's
+type + 1) and mine kind a counter, bumped in structTableSet for the tile's old and new occupant, in the destroy batch
+(by the row's object), and on a restore's cell owners; a group's signature is the sum of its farm type's, spawner
+type's and mine kind's counters (+ slot 0, unknown). In this scene it does not help: farms, collector spawners and mines
+of both kinds change between nearly every post (384 of 408 calls still build: farm 889, astar_farm 483, spawners ~535,
+mines ~540 changes in 40 s); in calmer scenes towers / barracks no longer trigger it. A serial single-pass k_ws_group
+(outputs sized by the candidates, no count pass) was tried: 0.64 ms a group vs 0.47 parallel (scattered table reads
+per candidate): reverted to the parallel build. Next for it: patch the groups from the tile journal (_teLog) instead.
+Tests collector-farms, area-worker-search, ws-nearfield-split, worker-search-deltatick, structure-rows-fill,
+chaos-scenario-determinism, multiplayer-chaos-determinism (CHAOS_HOST_HELPERS=4) pass.
+
+**Found: multiplayer-chaos-determinism diverges in the working tree (guest3, tick 305: u31 x/energy, spawner _tgk),
+from the uncommitted networking edits** (utils_networking / host_migration / resync / net_quality: the unvalidated
+rows 55-77 of MULTIPLAYER_AUDIT_2026-10-15.md). Bisected in a scratch copy of HEAD's src + tests: HEAD passes, HEAD +
+the staged wasm + main.js / sim_* edits passes, + those four utils files fails; this round's files on HEAD pass.
+
+**Measured, not changed yet:**
+- The take (waiTake, the search's results committed) is rounds of a parallel decide + a serial apply; requests that lose
+  a slot try again next round. In the opening ~80% lose round 1 (5,974 requests: 47 / 40 / 22 / 10 / 5 / 2 / 1 x6
+  chunks, 12 rounds, 11.3 ms); later 3-5 rounds, ~1-2 ms. Every request of a round sees the same state, so all pick the
+  same best site. Option: resolve conflicts in the background order stage (k_ws_order, one job off this thread) by a
+  greedy claim in id order, losers' claimed candidates moved back.
+- Parallel job start waits (aw:<kernel>, a new trace key in simParallelRun) are ~0; tails are 5.9 ms a step in the
+  opening, 1.8 later.
+- One 105 ms step (tick 286 of one run): kp:133 41.7 ms with chunkMax 0.48 and no tail: JavaScript inside that call,
+  most likely a GC (one of the in-play major GCs the fill change removed).
+- The worker's next garbage: _rqQueue (the research queue made again as objects at each queue version for the
+  per-tick player encode: ~9.5 MB / 40 s with its Map sets), _simMetaStructsRun 4, _tileOrderedReplaceMany 3.8,
+  getPlayerResearchLevel 3.6, towersTick 2.3, _recordAstarUsage 2.1 MB.
+**Kept: the workers' spawner fields made again only where their sites changed (wasm/src/worker_brain.rs k_worker_sites,
+worker.js workerBrainsPrepare).** Every tick with worker events the chain re-made each owner's per-block site bits and,
+per owner and spawner kind, a chamfer distance field over all blocks: k_worker_sites ~940 ms of CPU in 33 s (named
+profile, mostly helpers). Stage 0 now ors, per owner, the kinds whose block bits changed since the last build into
+wb.any[own * 16 + 1] (an atomic or; the JavaScript clears the words before the post, all ones when the field array or
+map is new); stage 2 makes a field again only for a changed (owner, kind): a field is a function of those bits alone.
+Stage 0 jobs 32 -> 256 blocks (WB_SITE_BLOCKS: 128 background chunks a tick before). k_worker_sites CPU 942 -> 381 ms
+in the same 30 s run. Live check at the end of a hectic run (wbverify.js: a normal build's fields vs a forced full one,
+3 times): 12 fields, 0 differing cells. The collect's wait (lane scheduling) did not move. worker-brain-spawners,
+collector-farms, worker-search-deltatick, chaos-scenario-determinism pass.
+
+**Kept: the take's sites claimed in the order stage (wasm/src/k.rs ws_preclaim in k_ws_order; worker.js _wsPost,
+WS_PRECLAIM).** After the id sort (the background chain's one ORDER job), each request in id order claims its first
+candidate no earlier request claimed, by its reservation slot as the apply settles them (a site: the worker type's
+reservation bit and the site, whatever the owner, mines being shared; a collector's candidate its group row; a healer's
+damaged unit: the unit's tile at the post, wsh.x / wsh.y); a hash table ws.claim (power of two, >= 2x the requests).
+Grid / heal candidates claimed by earlier requests move behind the free ones; a collector's every candidate but its
+claim is scored 1e7 more (collectors take the least score plus a jitter by id at the take, so they took later
+requests' claims); a request whose every candidate an earlier one claimed leaves the take as a search that found
+nothing (results -1: k_ws_fail_bump spaces its searches, as the rounds' final loss did). First versions: keys with the
+owner and the unit index, collectors only penalised for earlier claims: rounds 7.7 -> 3.5 but round 2 still ~69% of
+round 1 (redoprobe.js: first-round losers healers 66%, collectors ~76%, builders 36%). Final (takeprobe, 30 s):
+| | rounds (opening) | take ms (opening) | max ms | requests | rounds (later) | ms (later) |
+|---|---|---|---|---|---|---|
+| before | 7.7 | 3.49 | 11.3 | 2,118 | 4.1 | 1.70 |
+| pre-claim | 2.0 | 1.32 | 2.55 | 719 | 2.1 | 1.04 |
+A/B in one build (pc-on / pc-off, WEVAL_START WS_PRECLAIM=false, 50 s): opening waiTake 1.44 -> 0.54,
+workerSearchTierStep 4.79 -> 2.92 ms a step; later waiTake 0.34 -> 0.24. Workers busy at the end (workstate.js):
+healers 1,754 / 1,688, collectors 1,606 / 1,679, astar collectors 1,230 / 1,264, builders 1,203 / 1,185, researchers
+104 / 136, salvagers 378 / 328 (on / off; the armies differ run to run). worker-take-rounds updated: the contended
+takes settle in one round with it, through the rounds without it, the same first take and the end within one (10
+builders on one spot, 10 sites, 6 candidates each: 7 vs 8 held, a lost decide's side effects giving one a site a take
+later). collector-farms, area-worker-search, worker-search-deltatick, worker-brain-spawners, chaos-scenario-determinism,
+multiplayer-chaos-determinism (HEAD's networking files) pass. (Rust: a non-zero array literal or a checked index of a
+local array is a data segment / panic location, which the build refuses: zero-init + stores, get_unchecked.)
+**Kept: the structure tables' JavaScript arrays sized by the rows in use (data_state.js _sJsRoom, _sTableGrow,
+_sRowTake).** A heap snapshot of the worker 8 s into the hectic run (HEAPSNAP + heapcensus --parse): ~160 MB of live
+JavaScript heap, 103.5 MB of it object elements: every structure class's rowObj, mEnt (3 a row) and reference columns
+at the class's capacity (294,912 rows for each of 9 classes), holding 1-11k rows. A major GC marks every slot: the
+post-load GCs' finalize pauses were 39-57 ms. Now they start at 1,024 rows and double by push (packed) when a new row
+passes their length; the typed heap columns stay allocated whole at the match's start. GC trace (50 s): the heap after a
+major GC 160 -> ~62 MB; in-play major GCs 5-6 ms (were 7.7-37). Left: two one-time post-load GCs: 39 ms ("external
+finalize": ArrayBuffer pressure, 148 -> 62 MB, the load's garbage) and 66 ms ("via stack guard": evacuation copy 38 ms,
+compacting the old space the load fragmented); a dedicated worker cannot ask for a GC before the match starts.
+Also seen: 31,704 area objects with cells / neighborAreaIds Int32Arrays (static map data, ~64k typed array objects).
+Tests structure-table, structure-rows-fill, structure-row-reuse, structure-row-expiry-snapshot, collector-farms,
+chaos-scenario-determinism, multiplayer-chaos-determinism (HEAD's networking files) pass. Tools: snapret.cjs (retainers
+of a snapshot's objects by name), snapweak.cjs (WeakMap tables and holders).
+**A more hectic scene: chaos-front-400k (`tests/chaos-spikes.bench.cjs --units=400000 --structures=32768 --helpers=0
+--map=512 --layout=front --export-ticks=0 --export-scene=tests/scenes/chaos-front-400k.gz`).** The armies hold a front
+instead of meeting at once: with hectic.js 370k units stay alive for the whole minute at ~5 TPS (155 ms steps at
+dk 4, FPS 80-100). kp:89 (occupancy, another session's) is 88 of the 155 ms; then combatScanRun 7.0, workerSearchTier
+5.4, unitEventsRun 5.1, recalculateUnitEffectiveLevel 4.8 (kp:27, already parallel), _acqPost 4.4, adjacency 3.2,
+relayout 3.2, visibility 2.8. The simulation thread's serial time (named profile, profile-main-serial.cjs): ~18 ms of a
+~190 ms step: processGlobalSpawnerQueue 3.7 (k_spawn_births 3.2: 87% occ::occ_find, a spawner whose exit is jammed
+searching all 32 rings, ~4,200 footprint tests, and failing, every tick; the search is the occupancy's), unitEventsRun
+3.3, workerSearchTierStep 2.5, pendingPathsTick 2.1 (per-unit JavaScript: _tryUpgradeAstarFallbackPath with
+findNearestWalkable, navPathReach, JS path arrays: next to convert to wasm), simMoveRun 1.6.
+- chaos-300k's first steps after the load (541, 134, 202, 191, 197 ms): the scene's starting state all at once (every
+  worker deciding, first acquisition, a 16k-request search post): load / setup, left.
+- Perf fuzz, chaos-300k, 3 min (perf-fuzz-2026-11-18T18-09-47, seed 303): TPS 19.7-20.2 throughout; two first-use page
+  frames flagged (ui.hover + order.rapid 183 ms, a 72 ms task), not repeated in the run.
+**Kept: a boost click fills the unit's shared stat rows once (data_dynamic.js rebuildPlayerThingBoost).** It rebuilt
+each of the thing's 15 stats with effSharedTablesChanged -> unitStatFill after each; now inside effFillBatchBegin / End
+(the research drain's batch: each (owner, type) filled once at the end; inside an open batch that batch's end does it).
+Idle at the end of a chaos-300k run (boostprobe.js): norm +3 3.49 -> 1.55 ms, fast 1.08 -> 0.97, mole 1.06 -> 0.61,
+collector 1.23 -> 0.54. Left: _applyUnitPlayerPrecomputedStat (273 calls, JavaScript stat entries: the stat tables are
+still JavaScript objects). Tests boost, research-menu, chaos-scenario-determinism, multiplayer-chaos-determinism pass.
+
+**Checked, nothing to fix:** chaos-front-400k has no spikes to speak of (p99 220 vs median 156 ms, 4 steps over 1.3x
+their window: steady occupancy load). A 6-minute perf fuzz on chaos-300k (perf-fuzz-2026-11-18T18-23-12, seed 404):
+TPS p5 19.8 (one 2 s sample at 13), FPS p5 81; the one flagged trial (ui.settings, a 167 ms frame) is the fuzzer's own
+querySelectorAll (session.cjs controls()). The burst step's processActions (+6-14 ms for ~800 actions) is per-action
+JavaScript spread thin: placeBuilding ~85 us a placement (the Tower constructor ~38: the structure object model),
+orders ~2 ms a burst, sanitize / dispatch ~2 us an action. The remaining large conversions: structures' object model,
+processAction, pending paths (67 uses in 7 files, JS Map caches and path-node objects in flownav.js).
+**Where the front scene's CPU goes (named profiles of every simulation thread, 40 s, chaos-front-400k + hectic.js):**
+277 s of busy CPU; the movement / occupancy functions ~60% (traffic_swap 16.5%, MoveGrid::preview 8.7, move_job 8.6,
+checked_traffic_q 6.8, traffic_yield 3.6, commit_preview 3.5, epi_slot 2.3, seg_open 2.3, push_deposit 1.4,
+move_flow 1.2); then k_eff_units 2.5% (effective levels: already area-based; ~74k units refreshed a step at dk 4, ~0.6 us
+each: hysteresis and row lookup per unit), acq_sample area_batch 2.3, k_vis_seed 1.4, k_meta_units 1.3, k_sp_counts 1.2,
+k_acq_snap 1.2, k_atl_route 1.1, k_acq_area_count 1.0; every other function under 1%.
+**Pending paths sized (ppprobe.js, 30 s):** ~140 units a step (21.6k in 155 steps), 89% find their way at their due
+tick (the rest: 1.2k toward a substitute, 0.7k waiting for one, 0.4k parked), ~10 us each in JavaScript: ~2.2 ms a step,
+~1% of the front scene's step. Its wasm conversion (pending target columns, the approach / substitute caches out of JS
+Maps, path nodes) is left for when the larger costs are gone.
+Outside the occupancy, what remains in these scenes is a few percent per item; the step time is the occupancy's.

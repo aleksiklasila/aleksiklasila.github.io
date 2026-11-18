@@ -193,6 +193,21 @@ function simClientWillTakeMatch() {
 function simClientStripUnits(state) {
     if (state && state.lists) { state.lists.u = []; state.res = []; }
 }
+// A join into a running match (live or paused): the host's snapshot text, for the worker that starts at the
+// first tick. (The page's restore leaves out what only the worker keeps (a staged q / e, the navigation's state:
+// utils_snapshot.js pageOnly); a worker started from a snapshot of the page lost them, and the host finished a
+// q / e this peer never had.) Used only while no tick ran and no state was decoded since.
+let _simClientJoinText = null;
+function simClientNoteJoinText(text) {
+    _simClientJoinText = simClientEnabled && typeof text === 'string'
+        ? { text, tick: currentTick, seq: typeof snapDecodeSeq !== 'undefined' ? snapDecodeSeq : -1, session: String(matchStartSessionId || '') } : null;
+}
+function simClientTakeJoinText() {
+    const j = _simClientJoinText;
+    _simClientJoinText = null;
+    if (!j || j.tick !== currentTick || j.session !== String(matchStartSessionId || '') || j.seq !== (typeof snapDecodeSeq !== 'undefined' ? snapDecodeSeq : -1)) return null;
+    return j.text;
+}
 // At a match's load, on every peer (the host once its start snapshot is
 // made, a guest once it restored the host's, solo after startGame), so the
 // start waits for the worker to have the world (simClientWorldReady); the
@@ -590,6 +605,14 @@ function simClientNoteAutoTick(tick, dueAbs) {
     c.dispatchAt.set(tick, at);
     _simAutoFlushDeferred(c);
 }
+// After the page adopted a tick of the worker's (main.js lockstepAdoptAutoTick, once its tick count moved on):
+// the flush in simClientNoteAutoTick ran before that, the tick still the worker's; on the last one adopted nothing
+// sent the waiting requests, and a deferred request stopped the worker's own ticks for good (a host's snapshot for
+// a recovery never made).
+function simClientFlushDeferred() {
+    const c = _simClient;
+    if (c && c.active) _simAutoFlushDeferred(c);
+}
 // Requests that waited for the page to hear of the worker's own ticks (the
 // state a request reads or writes is the page's tick's).
 function _simAutoFlushDeferred(c) {
@@ -756,6 +779,9 @@ function _simClientOnMessage(msg) {
             if (msg.where === 'load') { c.failed = msg.message || 'load error'; _simClientLoadSettled(c); }
             // (It could not start this match: the page runs it.)
             if (msg.where === 'start' && c.active && c.startedEpoch !== c.epoch) { _simClientStartFailed(String(msg.message || 'start error')); break; }
+            // (A tick it can never run, its count behind the page's: every later tick would be refused too,
+            // the match stopped with the page alive. Its state is gone as for a worker lost.)
+            if (msg.where === 'tick' && msg.ahead && msg.epoch === c.epoch && c.active) { _simClientWorkerLost(String(msg.message || 'tick order')); break; }
             // A tick that threw in the worker counts (and logs) as it would
             // on the page.
             let err = new Error(msg.message);

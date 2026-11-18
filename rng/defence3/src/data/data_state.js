@@ -90,6 +90,18 @@ class _TileEntityIter {
 const _NO_TILE_ENTITIES = Object.freeze([]), _teP = new Float64Array(2);
 let _activeTileEntities = new TileEntitySet();
 let _tileEntityVersion = 0; // bumped whenever the tile entity index changes
+// Per stationary type (the per-tile descriptor's low bits, type + 1: slots 1 .. 1021) and mine kind (1022 gold, 1023
+// astar), bumped when a structure of it joins, leaves or is re-set on its tile; slot 0 for a change of unknown type.
+// The collectors' search groups (worker.js _wsCollectorGroup: one farm type, one spawner type, one mine kind) are made
+// again only when one of theirs moved: not at every structure placed or lost in a battle (both groups made again at
+// every search post, ~1.6-3.5 ms of the simulation thread each, in the chaos scene).
+const _wsTypeVer = new Uint32Array(1024);
+function _wsTypeBumpTile(t) {
+    const T = _ST, c = T.code[t];
+    if (!c) return;
+    const ty = T.brain[t] & 0xffff;
+    _wsTypeVer[c === 0x66 ? 1022 : c === 0x77 ? 1023 : ty < 1022 ? ty : 0]++;
+}
 // Tiles whose adjacency is to be worked out again (the adjacency post kernel
 // takes them all at a batch, ord.rs k_adj_post): a flag per tile, their count, the lowest flagged tile (nothing below it is flagged)
 // and the order-free sum the state hash takes (sum of (k + 1) * 2654435761),
@@ -703,6 +715,7 @@ function structTableSet(gx, gy, prev, ref) {
         if (!joins) return;
         structTableEnsure();
     }
+    _wsTypeBumpTile(t);
     _stClear(t);
     if (ref && ref._sr >= 0) {
         structRallyClasses(); T.rrow[t] = ref._sr;
@@ -712,11 +725,12 @@ function structTableSet(gx, gy, prev, ref) {
     }
     if (!joins) return;
     // (An entity moved to another tile leaves its old one.)
-    if (ref._stT >= 0 && ref._stT !== t) _stClear(ref._stT);
+    if (ref._stT >= 0 && ref._stT !== t) { _wsTypeBumpTile(ref._stT); _stClear(ref._stT); }
     ref._stT = t;
     T.code[t] = ref._stCode; T.rcnt[_stRegion(t)]++;
     if (ref._stMine) _stMineAdd(t);
     _stWrite(ref, t);
+    _wsTypeBumpTile(t);
 }
 function _stCellOwner(t) { const gx = t % GRID_W, row = typeof grid !== 'undefined' && grid ? grid[(t - gx) / GRID_W] : null; return row && row[gx] ? cellOwner[(row[gx]) - 1] : undefined; }
 function _stWrite(ref, t) {
@@ -1046,14 +1060,14 @@ function _sTableGrow(T, cap) {
         const was = T[f.col];
         let a;
         if (f.shared) { a=_simRefGrow(was,cap,undefined,true); }
-        else if (f.kind === 'r') { a = new Array(cap).fill(undefined); if (was) for (let i = 0; i < T.n; i++) a[i] = was[i]; }
+        else if (f.kind === 'r') { a = []; if (was) for (let i = 0; i < T.n; i++) a.push(was[i]); }
         else { const nk = _S_NUM_KINDS[f.kind]; a = _sColAlloc(nk ? nk[0] : Uint8Array, cap); if (nk) a.fill(nk[1]); if (was) { a.set(was.subarray(0, T.n)); _sColFree(was); } }
         T[f.col] = a;
     }
     {
         // (The tokens in the heap: the adjacency kernel clears a row's.)
-        const was = T.mTok, tok = _sColAlloc(Int32Array, cap * 3), ent = new Array(cap * 3).fill(undefined);
-        if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent[i] = T.mEnt[i]; _sColFree(was); }
+        const was = T.mTok, tok = _sColAlloc(Int32Array, cap * 3), ent = [];
+        if (was) { tok.set(was.subarray(0, T.n * 3)); for (let i = 0; i < T.n * 3; i++) ent.push(T.mEnt[i]); _sColFree(was); }
         T.mTok = tok; T.mEnt = ent;
     }
     // (The row pool: rowObj the structure holding a row, ret 1 while it is
@@ -1061,12 +1075,26 @@ function _sTableGrow(T, cap) {
     // retired, rp/rn the retire queue (oldest first), free the expired rows.)
     {
         // (ret / rt / rp / rn in the heap: the destroy kernel retires rows.)
-        const n = T.n, obj = new Array(cap).fill(null), ret = _sColAlloc(Uint8Array, cap), rt = _sColAlloc(Int32Array, cap), rp = _sColAlloc(Int32Array, cap), rn = _sColAlloc(Int32Array, cap), free = new Int32Array(cap);
-        if (T.rowObj) { for (let i = 0; i < n; i++) obj[i] = T.rowObj[i]; ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); _sColFree(T.ret); _sColFree(T.rt); _sColFree(T.rp); _sColFree(T.rn); }
+        const n = T.n, obj = [], ret = _sColAlloc(Uint8Array, cap), rt = _sColAlloc(Int32Array, cap), rp = _sColAlloc(Int32Array, cap), rn = _sColAlloc(Int32Array, cap), free = new Int32Array(cap);
+        if (T.rowObj) { for (let i = 0; i < n; i++) obj.push(T.rowObj[i]); ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); _sColFree(T.ret); _sColFree(T.rt); _sColFree(T.rp); _sColFree(T.rn); }
         T.rowObj = obj; T.ret = ret; T.rt = rt; T.rp = rp; T.rn = rn; T.freeRows = free;
         { const q = _sColAlloc(Int32Array, 4); q.set(T.qhdr); _sColFree(T.qhdr); T.qhdr = q; }
     }
     T.cap = cap;
+    T.jsN = 0; _sJsRoom(T, Math.min(cap, Math.max(T.n, 1024)));
+}
+// The JavaScript arrays of a table (the reference columns, rowObj, mEnt: 3 a row) are as long as its rows in use
+// (doubling, by push: packed), not its capacity: at the capacity (294,912 rows a class at chaos-300k, mEnt 3x) they were
+// 103 MB of the worker's ~160 MB live JavaScript heap, slots every major GC marks (39-57 ms pauses after the load).
+// The typed columns stay allocated whole in the heap at the match's start.
+function _sJsRoom(T, need) {
+    if (need <= T.jsN) return;
+    const m = Math.min(Math.max(T.cap, need), Math.max(need, T.jsN * 2, 1024));
+    for (const f of T.fields) if (f.kind === 'r' && !f.shared) { const a = T[f.col]; while (a.length < m) a.push(undefined); }
+    const obj = T.rowObj, ent = T.mEnt;
+    while (obj.length < m) obj.push(null);
+    while (ent.length < m * 3) ent.push(undefined);
+    T.jsN = m;
 }
 // Structure rows are a pool sized at the match's start (structTablesReserve)
 // and reused, never copied: a structure taken out of the world keeps its row
@@ -1147,12 +1175,12 @@ function _sRowFree(T, r) {
     for (const f of T.fields) {
         const a = T[f.col];
         if (f.shared) a.set(r, undefined);
-        else if (f.kind === 'r') a[r] = undefined;
+        else if (f.kind === 'r') a.fill(undefined, r, r + 1);
         else { const nk = _S_NUM_KINDS[f.kind]; a[r] = nk ? nk[1] : 0; }
     }
     T.mTok[r * 3] = 0; T.mTok[r * 3 + 1] = 0; T.mTok[r * 3 + 2] = 0;
-    T.mEnt[r * 3] = undefined; T.mEnt[r * 3 + 1] = undefined; T.mEnt[r * 3 + 2] = undefined;
-    T.rowObj[r] = null;
+    T.mEnt.fill(undefined, r * 3, r * 3 + 3);
+    T.rowObj.fill(null, r, r + 1);
     T.freeRows[T.nfree++] = r;
 }
 // Once a tick: rows retired STRUCT_ROW_KEEP_TICKS ago expire. A destroy wave
@@ -1251,7 +1279,10 @@ function _sRowsFree(T, R, n) {
     for (const f of T.fields) {
         const a = T[f.col];
         if (f.shared) { _sFillDesc(D, k++, a.data, 1, 0); continue; }
-        if (f.kind === 'r') { for (let j = 0; j < runs; j++) for (let r = RS[j], e = RE[j]; r < e; r++) a[r] = undefined; continue; }
+        // (The reference columns, mEnt and rowObj cleared by Array.prototype.fill a run: one store loop over
+        // every table's arrays (polymorphic) made V8 copy whole backing stores, 1.2-3.5 MB each, ~34 MB of the
+        // simulation worker's 120 MB of garbage in 40 s of the chaos-300k battle: its major GCs, 25-37 ms steps.)
+        if (f.kind === 'r') { for (let j = 0; j < runs; j++) a.fill(undefined, RS[j], RE[j]); continue; }
         const nk = _S_NUM_KINDS[f.kind];
         _sFillDesc(D, k++, a, 1, nk ? nk[1] : 0);
     }
@@ -1263,7 +1294,7 @@ function _sRowsFree(T, R, n) {
     if (par) simRustParallel(SIM_BLOCK_ROWS_FILL, [D, _sFillRS, _sFillRE], P, k); else simRustDirect('k_rows_fill', [D, _sFillRS, _sFillRE], P);
     // (A shared column cleared: its rows pool index 0, its default (undefined), as set(r, undefined) leaves it.)
     const ent = T.mEnt, obj = T.rowObj;
-    for (let j = 0; j < runs; j++) { const s0 = RS[j], e = RE[j]; for (let r = s0 * 3, re = e * 3; r < re; r++) ent[r] = undefined; for (let r = s0; r < e; r++) obj[r] = null; }
+    for (let j = 0; j < runs; j++) { const s0 = RS[j], e = RE[j]; ent.fill(undefined, s0 * 3, e * 3); obj.fill(null, s0, e); }
     const free = T.freeRows;
     for (let i = 0; i < n; i++) free[T.nfree++] = R[i];
 }
@@ -1278,6 +1309,7 @@ function _sRowTake(o) {
     let r;
     if (T.nfree === 0 && T.n >= T.cap) { _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); structRowStats.grown++; }
     r = T.nfree > 0 ? T.freeRows[--T.nfree] : T.n++;
+    if (r >= T.jsN) _sJsRoom(T, r + 1);
     if (_sHas.call(o, '_sr')) o._sr = r; else Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
     T.rowObj[r] = o;
     return true;

@@ -5,19 +5,22 @@
 // (WAI_PARALLEL, the default) the takes are decided on the helpers and the
 // apply's rounds settle the contended sites (wai.rs k_wai_apply: the lowest
 // id keeps a site, the others try again); with it off, one serial pass in
-// the search's order (k_worker_ai). The rounds match at least as many.
+// the search's order (k_worker_ai). The rounds match at least as many. With the
+// order stage's pre-claim (WS_PRECLAIM, k.rs ws_preclaim: each request in id
+// order claims a site no earlier one did) the contended takes settle in the
+// first round; off, the rounds settle them.
 //   node tests/worker-take-rounds.test.cjs
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
 // (A 64-tile map: room for a row of 22 open tiles.)
 const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
-async function run(parallel) {
+async function run(parallel, preclaim = true) {
     const world = new H.World({ controls: CONTROLS });
     const host = world.spawn('host', { controls: CONTROLS, simWorker: false });
     host.eval('startSoloGame();');
     await world.run(1500);
     const setup = JSON.parse(host.eval(`(() => {
-        WAI_PARALLEL = ${parallel};
+        WAI_PARALLEL = ${parallel}; WS_PRECLAIM = ${preclaim};
         const key = Object.keys(BASE_CARD_TYPES).find(k => k === 'tower') || Object.keys(BASE_CARD_TYPES).find(k => !BASE_CARD_TYPES[k].notBuildable && /tower/.test(k));
         // A row of open floor: sites on every other tile, builders on the row below.
         const open = (gx, gy) => { const c = grid[gy] && grid[gy][gx]; return c && cellType[(c) - 1] === 0 && !cellItemGet(c) && !getTileEntityRef(gx, gy); };
@@ -59,13 +62,18 @@ async function run(parallel) {
     return { setup, first, end, rounds, log: log.slice(0, 8) };
 }
 (async () => {
-    const par = await run(true), ser = await run(false);
+    const par = await run(true), ser = await run(false), raw = await run(true, false);
     console.log('parallel', JSON.stringify(par));
     console.log('serial  ', JSON.stringify(ser));
+    console.log('rounds  ', JSON.stringify(raw));
     assert.ok(par.setup.sites === 10 && par.setup.builders === 10, 'ten sites and builders');
     assert.ok(par.first, 'a take gave sites');
     assert.ok(par.first[1] >= 5, 'the first take gives builders distinct sites at once: ' + par.first[1]);
-    assert.ok(par.rounds > 1, 'the contended takes went through the rounds: ' + par.rounds);
+    assert.ok(par.rounds === 1, 'the pre-claim settles the contended takes in one round: ' + par.rounds);
+    assert.ok(raw.rounds > 1 && raw.first && raw.first[1] >= 5, 'without it the rounds settle them: ' + JSON.stringify(raw.first) + ' rounds ' + raw.rounds);
+    // (A request whose every candidate an earlier one claimed leaves the take as a failed search; through the rounds it
+    // lost them all too, but its decides' side effects (search memory) can give it a site a take later: within one.)
+    assert.ok(par.first[1] >= raw.first[1] && par.end >= raw.end - 1, 'as many sites at the first take, within one at the end: ' + JSON.stringify([par.first, par.end, raw.first, raw.end]));
     assert.ok(ser.first && par.first[1] >= ser.first[1] && par.end >= ser.end, 'the rounds match at least as many as the serial pass: ' + JSON.stringify([par.first, par.end, ser.first, ser.end]));
     console.log('ok: contended takes give distinct sites in one pass');
     process.exit(0);

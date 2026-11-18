@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Clip analysis</title>
+<style>body { font: 12px ui-monospace, monospace; white-space: pre; }</style>
+<pre id="out">running…</pre>
+<script src="../common.js"></script>
+<script src="../dsp.js"></script>
+<script>
+'use strict';
+// Runs recorded clips through the real chain and prints what streamer focus does.
+// ?base=<url of a folder with the clips>&clips=name1,name2,...  (names without .wav)
+// Clips are played back to back in the given order, like one continuous stream.
+const Y = globalThis.YTEQ;
+const q = new URLSearchParams(location.search);
+const base = q.get('base') || 'http://127.0.0.1:8767/';
+const names = (q.get('clips') || '').split(',').filter(Boolean);
+const out = document.getElementById('out');
+const lines = [];
+const log = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(p * (s.length - 1))]; };
+
+(async () => {
+  const ac = new AudioContext({ sampleRate: 48000 }); // decode + resample to the add-on rate
+  const bufs = [];
+  for (const n of names) bufs.push(await ac.decodeAudioData(await (await fetch(base + n + '.wav')).arrayBuffer()));
+  const sr = bufs[0].sampleRate;
+  const total = bufs.reduce((a, b) => a + b.length, 0);
+  const oc = new OfflineAudioContext(2, total, sr);
+  const chain = Y.createChain(oc);
+  const extra = JSON.parse(q.get('settings') || '{}');
+  await chain.apply(Y.normalize({ ...Y.presetSettings('quieter'), ...extra }));
+  const node = await Y.loadFocus(oc, chain, { worklet: '../separator-worklet.js', wasm: '../dfn/svl_dfn.wasm', model: '../dfn/DeepFilterNet3_onnx.tar.gz' });
+  for (let i = 0; i < 400 && !chain.focusStatus().ready && !chain.focusStatus().error; i++) await new Promise((r) => setTimeout(r, 50));
+  log('separator: ' + JSON.stringify(chain.focusStatus()));
+  const reps = [];
+  const orig = node.port.onmessage;
+  node.port.onmessage = (e) => { orig(e); if (e.data.type === 'report') reps.push(e.data); };
+  const cat = oc.createBuffer(2, total, sr);
+  const starts = [];
+  let off = 0;
+  for (const b of bufs) { starts.push(off); for (let c = 0; c < 2; c++) cat.getChannelData(c).set(b.getChannelData(c), off); off += b.length; }
+  const src = oc.createBufferSource(); src.buffer = cat; src.connect(chain.input); chain.output.connect(oc.destination); src.start();
+  const rendered = await oc.startRendering();
+  await new Promise((r) => setTimeout(r, 1000));
+  const per = reps.length / bufs.length;
+  log(`settings: ${JSON.stringify(extra)}  (detector line ${Y.normalize({ ...Y.presetSettings('quieter'), ...extra }).focusTrigger - 24} dB vs streamer)`);
+  // Output vs input loudness per 50 ms block (output aligned by the stage delay).
+  const inL = cat.getChannelData(0), outL = rendered.getChannelData(0);
+  // Total chain delay, found by cross-correlation (stage + compressor look-ahead).
+  let lat = 0, best = -Infinity;
+  const c0 = Math.min(total - 4000, Math.round(total * 0.5)), cn = Math.min(sr, total - c0 - 4000);
+  for (let d = 0; d < 3000; d++) {
+    let s = 0;
+    for (let k = c0; k < c0 + cn; k += 2) s += inL[k] * outL[k + d];
+    if (s > best) { best = s; lat = d; }
+  }
+  log(`chain delay ${lat} samples (${(lat / sr * 1000).toFixed(1)} ms)`);
+  const blk = Math.round(sr * 0.05);
+  const change = (a, b) => {
+    const rows = [];
+    for (let j = a; j + blk <= b && j + blk + lat < total; j += blk) {
+      let ei = 0, eo = 0;
+      for (let k = j; k < j + blk; k++) { ei += inL[k] * inL[k]; eo += outL[k + lat] * outL[k + lat]; }
+      rows.push([10 * Math.log10(ei / blk + 1e-12), 10 * Math.log10(eo / blk + 1e-12)]);
+    }
+    rows.sort((x, y) => y[0] - x[0]);
+    const top = rows.slice(0, Math.max(1, Math.round(rows.length * 0.15)));
+    const mid = rows.slice(Math.round(rows.length * 0.4), Math.round(rows.length * 0.6));
+    const avg = (r) => r.reduce((s, x) => s + (x[1] - x[0]), 0) / r.length;
+    return 'loudest 15% ' + (avg(top) >= 0 ? '+' : '') + avg(top).toFixed(1) + ' dB, typical ' + (avg(mid) >= 0 ? '+' : '') + avg(mid).toFixed(1) + ' dB';
+  };
+  names.forEach((n, i) => {
+    const r = reps.slice(Math.round(i * per + (i === 0 ? per * 0.25 : 0)), Math.round((i + 1) * per));
+    log(n.padEnd(36) + ' out vs in: ' + change(starts[i] + (i === 0 ? Math.round(bufs[0].length * 0.25) : 0), starts[i] + bufs[i].length));
+    const d = r.map((x) => x.detLevel - 24);
+    log(`${n.padEnd(22)} vs streamer p50 ${pct(d, 0.5).toFixed(1).padStart(6)} p90 ${pct(d, 0.9).toFixed(1).padStart(6)} max ${pct(d, 1).toFixed(1).padStart(6)} | flagged ${(100 * r.filter((x) => x.det >= 0.5).length / r.length).toFixed(0).padStart(3)}% | game boost avg ${(r.reduce((a, x) => a + x.avg, 0) / r.length).toFixed(1)} dB`);
+  });
+  for (const t of (q.get('timeline') || '').split(',').filter(Boolean)) {
+    const i = names.indexOf(t);
+    if (i < 0) continue;
+    const r = reps.slice(Math.round(i * per), Math.round((i + 1) * per));
+    log(`\nTIMELINE ${t}`);
+    for (let j = 0; j < r.length; j += 4) {
+      const x = r[j];
+      log(`${((j * 10) / r.length).toFixed(1).padStart(4)}s ${x.det >= 0.5 ? 'STREAMER' : 'game    '} ${(x.detLevel - 24).toFixed(0).padStart(4)} dB vs streamer   game boost +${x.avg.toFixed(0)} dB`);
+    }
+  }
+  document.title = 'DONE';
+})().catch((e) => { log('ERROR ' + (e.stack || e.message || e)); document.title = 'ERROR'; });
+</script>

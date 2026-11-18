@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Stream Voice Leveler</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="title">
+      <span id="statusDot" class="dot"></span>
+      <div>
+        <h1>Stream Voice Leveler</h1>
+        <div id="statusText" class="status">Looking for the YouTube tab…</div>
+      </div>
+    </div>
+    <label class="switch" title="Turn processing on or off">
+      <input type="checkbox" id="enabled">
+      <span></span>
+    </label>
+  </header>
+
+  <section class="graph-wrap">
+    <canvas id="curve"></canvas>
+    <div id="hoverInfo" class="hover-info">Hover the graph to see what each range sounds like</div>
+    <div class="band-edit">
+      <span id="bandName" class="band-name">No point selected</span>
+      <select id="bandType" disabled>
+        <option value="lowshelf">Low shelf</option>
+        <option value="peaking">Peak</option>
+        <option value="highshelf">High shelf</option>
+      </select>
+      <label class="q">Width
+        <input type="range" id="bandQ" min="0" max="1" step="0.001" disabled>
+      </label>
+    </div>
+    <p class="hint">
+      Drag points to shape the sound. Scroll on a point to make it wider or narrower,
+      double-click to reset it. Drag the <b class="voice-c">voice band</b> edges to set
+      which part the voice controls act on. <b class="cut-c">Green</b> shows how much the game
+      is raised right now in each range. <b>Hold the right mouse button</b> on the graph
+      to hear only that frequency.
+    </p>
+  </section>
+
+  <section class="row presets">
+    <select id="preset"></select>
+    <button id="reset" title="Reset everything to the selected preset">Apply preset</button>
+  </section>
+
+  <section>
+    <h2>Streamer focus</h2>
+    <div class="detector">
+      <div class="det-head">
+        <span>Streamer detector</span>
+        <b id="detState">–</b>
+      </div>
+      <div id="detBar" class="det-bar" title="Click or drag to set where the streamer starts">
+        <i id="detFill"></i>
+        <span id="detMark" class="det-mark"></span>
+      </div>
+      <small>Loudness of the voice range compared with the streamer's usual loudness (right end).
+        Drag the line between where game speech peaks and where the streamer talks.</small>
+    </div>
+    <div class="listen">
+      <span>Listen to</span>
+      <select id="solo">
+        <option value="0">Mix (normal)</option>
+        <option value="1">Voices only (separated)</option>
+        <option value="2">Game sounds only (separated)</option>
+      </select>
+    </div>
+    <div id="focusSliders"></div>
+    <div class="record">
+      <span>Record 10 s of the original audio:</span>
+      <div class="rec-buttons">
+        <button data-label="streamer">Streamer talking</button>
+        <button data-label="game-speech">Game talking</button>
+        <button data-label="game-background">Game background</button>
+      </div>
+      <small id="recStatus">Clips go to Downloads/stream-voice-leveler/</small>
+    </div>
+  </section>
+
+  <section>
+    <h2>Voice vs. background</h2>
+    <div id="voiceSliders"></div>
+  </section>
+
+  <section>
+    <h2>Whole mix</h2>
+    <div id="mixSliders"></div>
+  </section>
+
+  <section class="meters">
+    <h2>Gain reduction</h2>
+    <div class="meter"><span>Game +</span><div class="bar"><i id="mFocus"></i></div><b id="tFocus">0.0 dB</b></div>
+    <div class="meter"><span>Voice</span><div class="bar"><i id="mVoice"></i></div><b id="tVoice">0.0 dB</b></div>
+    <div class="meter"><span>Leveler</span><div class="bar"><i id="mLev"></i></div><b id="tLev">0.0 dB</b></div>
+    <div class="meter"><span>Limiter</span><div class="bar"><i id="mLim"></i></div><b id="tLim">0.0 dB</b></div>
+  </section>
+
+  <script src="common.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

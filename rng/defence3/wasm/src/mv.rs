@@ -1683,7 +1683,7 @@ unsafe fn flow_look(m: &Mv, v: &Nav, s: usize, refresh: bool, tl: i32, gx: i32, 
         return 1;
     }
     // (Its last exact look still holds on today's walls, or it walks on toward that look's far tile: kept, no new one.)
-    if look_keep(m, s, tl, gx, gy, dk, wl, v.w, v.h, nav_ver, wv, fgen) != 0 {
+    if look_keep(m, v, s, tl, gx, gy, dk, wl, v.w, v.h, nav_ver, wv, fgen) != 0 {
         return 1;
     }
     // Else O(1), never the look itself: along its last answer, or a step
@@ -1802,9 +1802,18 @@ let _ = m;
     rd(wl, n1 as usize) == 0 && (n2 < 0 || (n2 < w * h && rd(wl, n2 as usize) == 0))
 }
 #[inline(never)]
-unsafe fn look_keep(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, w: i32, h: i32, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
+unsafe fn look_keep(m: &Mv, v: &Nav, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8, w: i32, h: i32, nav_ver: i32, wv: i32, fgen: i32) -> i32 {
     let r = m.nv.add(s * NV_STRIDE);
     let t0 = *r;
+    // (A look of an older build (a new one of its profile installed since): kept when the new build's first step from
+    // here agrees with it (look_build_agrees), stamped with the new build; else a new look. Checked here, at the
+    // walker's own turn, not for every walker when a build is installed: a ground build every 8 ticks in a battle
+    // listed ~35k looks at once (checker-200k, ~60 ms of exact looks, the next movement waiting), most on routes it
+    // did not change; and however many routes a build changes, the work comes at the walkers' turns, spread as
+    // they are.)
+    if t0 >= 0 && t0 < w * h && *r.add(NV_D) == dk && *r.add(NV_G) == fgen && *r.add(NV_V) != nav_ver {
+        if look_build_agrees(m, v, r, tl, gx, gy, dk, wl) { *r.add(NV_V) = nav_ver; dbgc!(m, 126); } else { dbgc!(m, 127); }
+    }
     if t0 < 0 || t0 >= w * h || *r.add(NV_D) != dk || *r.add(NV_G) != fgen || *r.add(NV_V) != nav_ver {
         #[cfg(feature="dbgc")]{ if *r.add(NV_G) & LOOK_APPROX != 0 { dbgc!(m, 122); } else if *r.add(NV_D) != dk { dbgc!(m, 123); } else if *r.add(NV_G) != fgen { dbgc!(m, 124); } else if *r.add(NV_V) != nav_ver { dbgc!(m, 125); } }
         dbgc!(m, 113); return 0;
@@ -1840,6 +1849,33 @@ unsafe fn look_keep(m: &Mv, s: usize, tl: i32, gx: i32, gy: i32, dk: i32, wl: *c
     nv_put(m, s, tl, dk, nav_ver, wv, fgen, n, -1, far, true);
     dbgc!(m, 121);
     2
+}
+/// Whether an exact look's record r (another build's, its destination and kind as now) agrees with the build of v
+/// from tile tl at (gx, gy): the build's first step from here (nav_step) open and, for the look's own tile, its
+/// next tile; for a look carried on from another tile, a step nearer its far tile (Manhattan). The way beyond is
+/// tested as for any kept look (look_keep: open on today's walls), and a new look comes at the far tile.
+#[inline(never)]
+unsafe fn look_build_agrees(m: &Mv, v: &Nav, r: *const i32, tl: i32, gx: i32, gy: i32, dk: i32, wl: *const u8) -> bool {
+    let (w, h) = (v.w, v.h);
+    let n1 = *r.add(NV_N1);
+    if n1 < 0 || n1 >= w * h {
+        return false;
+    }
+    let step = nav_step(v, tl, gx, gy, dk, m.nav_exit_cache);
+    if step < 0 || step >= w * h || rd(wl, step as usize) != 0 {
+        return false;
+    }
+    if *r == tl {
+        return step == n1;
+    }
+    let fo = *r.add(NV_FO);
+    let far = fo >> 1;
+    if fo & 1 == 0 || far < 0 || far >= w * h {
+        return false;
+    }
+    let (fx, sx) = (irem_f(far, w), irem_f(step, w));
+    let (fy, sy) = (idiv(far - fx, w), idiv(step - sx, w));
+    (fx - sx).abs() + (fy - sy).abs() < (fx - gx).abs() + (fy - gy).abs()
 }
 /// look_direct's test alone (no record written): the prewarm's.
 #[inline(always)]
@@ -5759,6 +5795,25 @@ pub unsafe extern "C" fn mv_flow_pending(a: u32, s0: i32, end: i32, chunk: i32) 
             let rx = irem_f(*r, m.w);
             let made_near = *r >= 0 && (fx - rx).abs().max((fy - idiv(*r - rx, m.w)).abs()) < LOOK_CARRY_MIN;
             if far != k.tl && (far == k.dk || made_near || (fx - k.gx).abs().max((fy - k.gy).abs()) >= LOOK_CARRY_MIN) {
+                continue;
+            }
+        }
+        // (A record that misses only by its build (a new build of its profile installed: its tile, destination and
+        // kind the key's, its walls or steer as the two tests above take them): not listed; its walker's next turn
+        // checks it against the new build (look_keep, look_build_agrees) and keeps it or approximates, and is listed
+        // then. Listing them here made every build a burst: ~35k looks at checker-200k every 8 ticks of a battle.)
+        if *r.add(NV_D) == k.dk && *r.add(NV_G) == k.kind && *r.add(NV_V) != k.ver && *r.add(NV_N1) >= 0 {
+            let steer = rd(m.cd, s * SR) == k.dk && rd(m.cn, s * SR) != TGT_NONE;
+            let own = *r == k.tl && (*r.add(NV_W) == k.wv || (steer && rd(m.ctl, s * SR) == k.tl));
+            let far = *r.add(NV_FO) >> 1;
+            let carried = !own && steer && (*r.add(NV_FO) & 1) != 0 && far != k.tl && far >= 0 && far < m.w * m.h && {
+                let (fx, rx) = (irem_f(far, m.w), irem_f(*r, m.w));
+                let fy = idiv(far - fx, m.w);
+                let made_near = *r >= 0 && (fx - rx).abs().max((fy - idiv(*r - rx, m.w)).abs()) < LOOK_CARRY_MIN;
+                far == k.dk || made_near || (fx - k.gx).abs().max((fy - k.gy).abs()) >= LOOK_CARRY_MIN
+            };
+            if own || carried {
+                dbgc!(m, 117);
                 continue;
             }
         }

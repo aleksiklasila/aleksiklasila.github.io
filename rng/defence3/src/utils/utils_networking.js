@@ -248,11 +248,14 @@ function _updateMatchLoadOverlayPlayers() {
 // Run real initialization ticks, one at a time across all peers. Readiness
 // compares work with work, never with network waits or a target TPS.
 const MATCH_INIT_WORK_SAMPLES = 8;
+// (At most this many initialization ticks: a world whose tick cost repeats a spike (a lane committing every 8th
+// tick) never met the settled test, and every peer stayed on "Initializing simulation" with its ticks running.)
+const MATCH_INIT_MAX_TICKS = 64;
 let _matchLoadInputBlocked = false;
 let _matchInit = null;
 function matchInitializationReset() {
     _matchInit = { released: false, started: false, tick: -1, allowed: 0,
-        samples: [], ready: false, peers: {}, sentAt: -Infinity, releaseTick: -1 };
+        samples: [], ready: false, count: 0, peers: {}, exempt: {}, sentAt: -Infinity, releaseTick: -1 };
 }
 matchInitializationReset();
 // (Active only once a new match's start began it: a path that never runs the
@@ -283,7 +286,8 @@ function matchInitializationNoteTick(now, workMs) {
     s.tick = tick;
     s.samples.push(Math.max(0, Number(workMs) || 0));
     if (s.samples.length > MATCH_INIT_WORK_SAMPLES) s.samples.shift();
-    s.ready = matchInitializationWorkSettled(s.samples);
+    s.count++;
+    s.ready = s.count >= MATCH_INIT_MAX_TICKS || matchInitializationWorkSettled(s.samples);
     s.sentAt = -Infinity;
 }
 function matchInitializationCanRunTick(tick) {
@@ -315,7 +319,9 @@ function _matchInitializationPoll(now) {
     if (s.tick < s.allowed) return;
     let ready = s.ready;
     for (const pid of isMultiplayer ? getActiveMatchPeerIds() : []) {
-        if (pid === myPeerId) continue;
+        // (A player who joined the running match meanwhile (a reload, a full sync) reports nothing: its join
+        // marked its barrier done. Waited for, it froze every peer's start: resyncHostScheduleJoin.)
+        if (pid === myPeerId || s.exempt[pid]) continue;
         const r = s.peers[pid];
         if (!r || r.tick !== s.tick) return;
         ready = ready && r.ready;
@@ -504,6 +510,18 @@ function migratePeerIdByUid(uid, newPeerId) {
         }
         delete matchRoleByPeerId[oldPeerId];
         delete peerUidByPeerId[oldPeerId];
+        // (Its commands the host took late and carries into its next packets: they go with it. Left under the old
+        // id, which sends no packets any more, they never ran: main.js _hostWithCarriedCommands.)
+        if (typeof lockstepHostCarryByPeer !== 'undefined' && lockstepHostCarryByPeer && Array.isArray(lockstepHostCarryByPeer[oldPeerId])) {
+            let from = lockstepHostCarryByPeer[oldPeerId], to = lockstepHostCarryByPeer[targetPeerId] || (lockstepHostCarryByPeer[targetPeerId] = []);
+            let seen = to._ids || (to._ids = new Set());
+            if (from._ids) for (let id of from._ids) seen.add(id);
+            // (The old id's first: they were taken earlier.)
+            let mine = to.splice(0);
+            for (let a of from) to.push(a);
+            for (let a of mine) to.push(a);
+            delete lockstepHostCarryByPeer[oldPeerId];
+        }
 
         for (let lp of (lobbyPlayers || [])) {
             if (lp && lp.peerId === oldPeerId) {
@@ -809,6 +827,9 @@ function guestReviewMatchResult(now) {
     }
     if (H) {
         if (gameTime >= H.t - 2 && now - H.at > 1500) _guestRepairResult(now, 'the match ended on the host');
+        // (Short of the host's end with no bundle to run next: the finished host seals none and answers no request
+        // for one past its last tick; the guest asked for its next bundle for good. The final state instead.)
+        else if (now - H.at > 5000 && !lockstepBundleByTick[currentTick] && !lockstepPendingBundleByTick[currentTick]) _guestRepairResult(now, 'the match ended on the host; no more ticks');
         return;
     }
     if (L) {
@@ -887,6 +908,9 @@ function netRecoverLostSimulation(reason) {
 // the full match through a resync.
 function hostSendFullMatchSync(conn, role) {
     if (!isHost || !conn || !conn.peer) return;
+    // (After the end no tick runs: a join scheduled for a later tick was never sent (a player reloading after the
+    // last tick waited for good). The final state now, and the result after it: resyncHostSendFinalState.)
+    if (gameOver) { resyncHostSendFinalState(conn); return; }
     // The others play on while this peer loads the match and catches up.
     resyncHostScheduleJoin(conn, role);
 }
@@ -1290,6 +1314,34 @@ function _restoreSnapshotApplyUiState(state, context) {
     }
 }
 
+// The simulation's rule switches each page reads from its URL (?occupancy=0, ?traffic=N, ?acq=exact...): the
+// host's are the match's (matchStartConfig.simRules), adopted by every guest before its world is made, and part
+// of the config hash. (Each page sent its own to its worker, restores included: peers with different ones
+// accepted the same snapshot and diverged again in every crowd.)
+function netSimRulesOfPage() {
+    return {
+        occ: typeof SIM_OCCUPANCY_ENABLED !== 'undefined' ? !!SIM_OCCUPANCY_ENABLED : true,
+        occPlanes: typeof SIM_OCCUPANCY_PLANES !== 'undefined' ? SIM_OCCUPANCY_PLANES | 0 : 1,
+        trMode: typeof SIM_TRAFFIC_MODE !== 'undefined' ? SIM_TRAFFIC_MODE | 0 : 3,
+        trResponse: typeof SIM_TRAFFIC_RESPONSE !== 'undefined' ? SIM_TRAFFIC_RESPONSE | 0 : 1,
+        trPasses: typeof SIM_TRAFFIC_PASSES !== 'undefined' ? SIM_TRAFFIC_PASSES | 0 : 2,
+        trLocal: typeof SIM_TRAFFIC_LOCAL !== 'undefined' ? SIM_TRAFFIC_LOCAL | 0 : 1,
+        acqArea: typeof SIM_ACQ_AREA_TARGETS !== 'undefined' ? !!SIM_ACQ_AREA_TARGETS : true,
+        acqBudget: typeof SIM_ACQ_SAMPLE_BUDGET !== 'undefined' ? Number(SIM_ACQ_SAMPLE_BUDGET) || 0 : 0
+    };
+}
+function netSimRulesApply(r) {
+    if (!r || typeof r !== 'object') return;
+    if (typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && r.occ !== undefined) SIM_OCCUPANCY_ENABLED = !!r.occ;
+    if (typeof SIM_OCCUPANCY_PLANES !== 'undefined' && r.occPlanes !== undefined) SIM_OCCUPANCY_PLANES = Math.max(1, Math.min(8, r.occPlanes | 0));
+    if (typeof SIM_TRAFFIC_MODE !== 'undefined' && r.trMode !== undefined) SIM_TRAFFIC_MODE = Math.max(0, Math.min(3, r.trMode | 0));
+    if (typeof SIM_TRAFFIC_RESPONSE !== 'undefined' && r.trResponse !== undefined) SIM_TRAFFIC_RESPONSE = r.trResponse ? 1 : 0;
+    if (typeof SIM_TRAFFIC_PASSES !== 'undefined' && r.trPasses !== undefined) SIM_TRAFFIC_PASSES = r.trPasses === 1 ? 1 : 2;
+    if (typeof SIM_TRAFFIC_LOCAL !== 'undefined' && r.trLocal !== undefined) SIM_TRAFFIC_LOCAL = r.trLocal ? 1 : 0;
+    if (typeof SIM_ACQ_AREA_TARGETS !== 'undefined' && r.acqArea !== undefined) SIM_ACQ_AREA_TARGETS = !!r.acqArea;
+    if (typeof SIM_ACQ_SAMPLE_BUDGET !== 'undefined' && r.acqBudget !== undefined) SIM_ACQ_SAMPLE_BUDGET = Math.max(0, Number(r.acqBudget) || 0);
+}
+
 function buildRuntimeConfigHashForSnapshot() {
     let cfg = {
         gridW: GRID_W,
@@ -1307,7 +1359,8 @@ function buildRuntimeConfigHashForSnapshot() {
         startingMoney: STARTING_MONEY,
         startingAstar: STARTING_ASTAR,
         startingResources: cloneSnapshotValue(startingResourcesConfig || {}),
-        editableConfig: serializeEditableRuntimeConfigForTransport()
+        editableConfig: serializeEditableRuntimeConfigForTransport(),
+        simRules: netSimRulesOfPage()
     };
     return hashStringLockstep(stableSerializeForLockstep(cfg));
 }
@@ -1774,6 +1827,8 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         // while these are what the host actually runs with.
         applyTimingConfig(parseInt(data.cfg.tickRate), parseInt(data.cfg.pipelineDelay));
         lockstepStrictDebugMode = !!data.cfg.exactLockstep;
+        // (The host's simulation rule switches: netSimRulesOfPage.)
+        netSimRulesApply(data.cfg.simRules);
     }
     let snapshotText = null;
     try {
@@ -1799,6 +1854,10 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
     try { startGame(); } finally { startGameSkipStarters = false; }
     matchStartSessionId = _savedSessionId;
     if (midMatchJoin) matchStartWaitingForReady = false;
+    // (A match start: waiting for the host's ALL_READY again, as set above: startGame() (resetWorldState) cleared it,
+    // and the start's loading beat stopped while the worker still loaded: the host dropped a loading player after
+    // MATCH_START_SILENT_MS. The host sets its own after startGame the same way.)
+    else if (!liveJoin && !isHost) matchStartWaitingForReady = true;
 
     let applyStart = performance.now();
     // A match start (not a join into a running one) with the simulation
@@ -1813,6 +1872,8 @@ async function applyIncomingMatchSyncPayload(data, role = 'playing', taken = nul
         };
         // (A snapshot the decoder refuses is none: asked for again below.)
         if (!(guestWorker && simClientStartMatch(snapshotText, guestDecode))) { guestWorker = false; if (!guestDecode()) snapshotText = null; }
+        // (A join into a running match: its worker starts from the host's text, not the page's: simClientNoteJoinText.)
+        if ((liveJoin || midMatchJoin) && typeof simClientNoteJoinText === 'function') simClientNoteJoinText(snapshotText);
         netCounters.snapshotApplyMs = performance.now() - applyStart;
         netCounters.snapshotBytes = netSnapshotPayloadBytes(data.snapshotPayload);
         netCounters.lastSnapshotAt = performance.now();
@@ -2675,12 +2736,33 @@ function _handleConnectionClosed(conn) {
 // resigned the whole team, teammates still playing: audit 2026-10-16, 36).
 // Once a team (the forced resignation queued once).
 let _hostTeamsForcedOut = new Set();
+// Host: whether a player other than `exceptPid` still plays team `teamId`. (Not the peers whose input the ticks
+// wait for (getActiveMatchPeerIds): that list leaves out a teammate loading its join (its team was resigned while
+// it reconnected) and always has the host (a resigned host spectating kept its team in the match).)
+function hostTeamStillPlayed(teamId, exceptPid) {
+    let tid = Math.floor(Number(teamId));
+    if (!Number.isFinite(tid) || tid < 0) return false;
+    let except = String(exceptPid || '');
+    let ids = new Set();
+    for (let list of [matchStartLobbyPlayers, lobbyPlayers]) for (let p of (Array.isArray(list) ? list : [])) if (p && p.peerId) ids.add(String(p.peerId));
+    if (myPeerId) ids.add(String(myPeerId));
+    for (let pid of ids) {
+        if (pid === except || isPeerExplicitlyRemoved(pid) || getTeamIdForPeer(pid) !== tid) continue;
+        if (pid === String(myPeerId || '')) {
+            if (localDefeated || spectateMode !== 'none') continue;
+            if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') !== 'playing') continue;
+            return true;
+        }
+        if (normalizeMatchRole(matchRoleByPeerId[pid], 'playing') === 'playing') return true;
+    }
+    return false;
+}
 function _hostPeerStopsPlaying(pid) {
     matchRoleByPeerId[pid] = 'spectating';
     let uid = getPeerProfileUid(pid);
     if (uid) matchRoleByUid[uid] = 'spectating';
     let teamId = getTeamIdForPeer(pid);
-    let teammatesLeft = getActiveMatchPeerIds().some(other => other !== pid && getTeamIdForPeer(other) === teamId);
+    let teammatesLeft = hostTeamStillPlayed(teamId, pid);
     if (Number.isFinite(teamId) && teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft && !_hostTeamsForcedOut.has(teamId) && typeof queueHostAdminAction === 'function') {
         _hostTeamsForcedOut.add(teamId);
         queueHostAdminAction({ action: 'forceResignTeam', targetTeam: teamId });
@@ -2692,11 +2774,14 @@ function hostPeerStopsPlaying(pid) { if (isHost && gameStarted && !gameOver) _ho
 // host never (a guest's RETURN_TO_LOBBY sent the host back to the lobby; a
 // guest's PLAYER_REMOVED_FROM_MATCH removed a player on the host).
 const NET_HOST_ONLY_MESSAGES = new Set(['TICK_BUNDLE', 'TICK_HASHES', 'TICK_COMMIT', 'TICK_UNAVAILABLE', 'RESYNC_AT', 'RESYNC_PATCH', 'JOIN_LIVE_ACK',
-    'NET_STATS', 'START_GAME_PREPARE', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'HOST_HANDOVER', 'MATCH_RESULT', 'LOBBY_STATE',
+    'NET_STATS', 'START_GAME_PREPARE', 'START_GAME_CANCEL', 'START_GAME', 'START_SPECTATE', 'REJOIN_RESUME', 'HOST_CLOSED_LOBBY', 'HOST_MOVED', 'HOST_HANDOVER', 'MATCH_RESULT', 'LOBBY_STATE',
     'START_SIM_RELEASE', 'START_GAME_COUNTDOWN', 'START_GAME_ALL_READY', 'SPECTATE_UNAVAILABLE', 'MATCH_STATE_SNAPSHOT', 'LOCKSTEP_RESYNC_PAUSE',
     'DUPLICATE_UID_ACTIVE', 'RETURN_TO_LOBBY', 'REMATCH_STATE', 'PLAYER_REMOVED_FROM_MATCH']);
 function _netFromHostOk(conn, type) {
     if (!NET_HOST_ONLY_MESSAGES.has(type)) return true;
+    // (A host by a handover still hears the old host's retry and its word on where the match went:
+    // utils_host_migration.js _handedOverFrom.)
+    if (isHost && (type === 'HOST_HANDOVER' || type === 'HOST_MOVED')) return !!conn && typeof _handedOverFrom !== 'undefined' && _handedOverFrom.peer === String(conn.peer || '');
     return !isHost && !!conn && String(conn.peer || '') === String(wsHostId || '');
 }
 
@@ -2799,6 +2884,14 @@ function _handleConnectionMessage(conn, data) {
             if (p && p.peerId) _matchStartPlayerStatuses[p.peerId] = p.peerId === myPeerId ? 'loading' : 'preparing';
         }
         setMatchLoadOverlay(true, 'Match Starting', 'Waiting for host to generate world…');
+    } else if (type === 'START_GAME_CANCEL' && !isHost) {
+        // (The host's start failed before its world came: this prepare is over.)
+        let sid = String((data && data.startSessionId) || '');
+        if (gameStarted || !sid || sid !== String(matchStartSessionId || '') || sid === _guestStartTakenSessionId) return;
+        _guestStartLoadingBeat(null, false);
+        _matchStartPlayerStatuses = null;
+        setMatchLoadOverlay(false);
+        _setLobbyStatus('The host could not start the match.', '#fa4');
     } else if (type === 'START_GAME' && !isHost) {
         if (data.rules !== undefined && data.rules !== SIM_RULES_REVISION) { _returnToMainMenuWithStatus('Version mismatch: the host runs simulation rules ' + data.rules + ', this page ' + SIM_RULES_REVISION + '. Reload the page.', '#fa4'); return; }
         // (Of a match the host moved past, or a join already taken: late.)
@@ -2877,6 +2970,9 @@ function _handleConnectionMessage(conn, data) {
         _returnToMainMenuWithStatus(String(data.reason || 'The host closed the lobby.'), '#fa4');
     } else if (type === 'HOST_SEEK_REPLY' && !isHost) {
         hostMigrationHandleReply(conn, data);
+    } else if (type === 'HOST_MOVED' && isHost) {
+        // (A successor of a handover that another player's answer won: utils_host_migration.js.)
+        if (typeof hostHandoverMovedElsewhere === 'function') hostHandoverMovedElsewhere(conn, data);
     } else if (type === 'HOST_MOVED' && !isHost) {
         if (conn.peer === wsHostId && String(data.sessionId || '') === String(matchStartSessionId || '')) guestFollowHostMove(data.hostId);
     } else if (type === 'LOBBY_UPDATE_SELF' && isHost) {
@@ -2934,6 +3030,11 @@ function _handleConnectionMessage(conn, data) {
                 fromPeer: String((conn && conn.peer) || ''),
                 reason: String((data && data.reason) || '')
             });
+            return;
+        }
+        // (The match already on its way to it: a repeat while it waits, not a new join; resyncHostJoinInFlight.)
+        if (conn && conn.peer && typeof resyncHostJoinInFlight === 'function' && resyncHostJoinInFlight(String(conn.peer))) {
+            netCounters.repeatMatchSyncIgnored = (netCounters.repeatMatchSyncIgnored | 0) + 1;
             return;
         }
         // Only that peer reloads the match (and catches up); the others play on.
@@ -3005,7 +3106,7 @@ function _handleConnectionMessage(conn, data) {
         _guestReceiveSnapshot(conn, data);
     } else if (type === 'MATCH_RESULT' && !isHost) {
         _guestTakeMatchResult(data);
-    } else if (type === 'HOST_HANDOVER' && !isHost) {
+    } else if (type === 'HOST_HANDOVER') {
         guestTakeHandedOverMatch(conn, data);
     } else if (type === 'HOST_HANDOVER_DONE' && isHost) {
         hostHandoverDone(conn, data);
@@ -3757,9 +3858,14 @@ function startHostedGame(opts = null) {
         return;
     }
     let startBtn = document.getElementById('btn-start-online');
+    let prepareSent = '';
     const startFailed = err => {
         _hostMatchStarting = false;
         console.error('[STARTUP] Failed to start hosted game', err);
+        // (Guests told to prepare wait for this start: told it is off. Before: they stayed on "Waiting for host to
+        // generate world" until another start or the session's end.)
+        if (prepareSent && !gameStarted) connections.forEach(c => { if (c && c.peer) try { c.send({ type: 'START_GAME_CANCEL', startSessionId: prepareSent }); } catch { } });
+        prepareSent = '';
         _matchStartPlayerStatuses = null;
         setMatchLoadOverlay(false);
         startBtn.disabled = false;
@@ -3817,6 +3923,7 @@ function startHostedGame(opts = null) {
         connections.forEach(c => { if (c && c.peer) try { c.send(preparePayload); } catch { } });
     };
     sendPreparePayload();
+    prepareSent = String(matchStartSessionId || '');
 
     // Yield once so the loading overlay can paint before heavy world generation begins.
     setTimeout(async () => {
@@ -3874,6 +3981,7 @@ function startHostedGame(opts = null) {
                 maxResearchLevel: MAX_RESEARCH_LEVEL,
                 startingResources: cloneStartingResourcesConfig(),
                 editableConfig: serializeEditableRuntimeConfigForTransport(),
+                simRules: netSimRulesOfPage(),
             };
             let setup = preSetup;
             activeTeamIds = setup.activeTeamIds;
@@ -4440,10 +4548,13 @@ function _matchLoadOverlayUntilRunning() {
         _matchInit.allowed = c ? c.startTick : currentTick;
         _matchInit.tick = _matchInit.allowed - 1;
     }
-    const epoch = c && c.epoch, gen = ++_matchFirstTickWait, loadGen = _matchLoadGen;
+    const gen = ++_matchFirstTickWait, loadGen = _matchLoadGen;
     let stage = null;
     const wait = () => {
-        if (gen !== _matchFirstTickWait || loadGen !== _matchLoadGen || (c && c.epoch !== epoch) || !gameStarted) return;
+        // (A restore during the initialization (a host migration's resync) moves the worker's epoch: this loop, the
+        // one that grants the initialization ticks, went on; ended there, every peer stopped at that tick. It ends
+        // with the match, or the worker gone.)
+        if (gen !== _matchFirstTickWait || loadGen !== _matchLoadGen || (c && (!c.active || _simClient !== c)) || !gameStarted) return;
         if (!gameOver) _matchInitializationPoll(performance.now());
         const { ready, pending } = _matchInitializationProgress();
         if (!gameOver && pending) {

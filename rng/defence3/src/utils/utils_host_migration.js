@@ -39,6 +39,12 @@ let _hostSeekActive = false;
 let _hostLastSeekAt = 0;
 let _matchRecordSavedAt = 0;
 let _recordRecoveryTries = 0;
+// (A reloaded page looks for where its match went this long from its first look: past the time a lone remaining
+// player waits before it takes the match over (HOST_MIGRATION_ALONE_AFTER_SILENT_MS) and its attempt. Six looks,
+// ~35 s, gave up first: the match went on without the old host, which was told it could not be found.)
+const MATCH_RECORD_SEEK_MS = HOST_MIGRATION_ALONE_AFTER_SILENT_MS + HOST_MIGRATION_ATTEMPT_MS + 10000;
+let _recordRecoveryStartedAt = 0;
+function _recordRecoveryMore(now = performance.now()) { return _recordRecoveryTries === 0 || now - _recordRecoveryStartedAt < MATCH_RECORD_SEEK_MS; }
 
 function resetHostMigrationState() {
     hostMigration = null;
@@ -322,6 +328,8 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     lockstepResyncDeadlineAt = 0;
     lockstepPendingResumeSessionId = '';
     waitingForRemoteSince = 0;
+    // (Commands held while it was joining: its own now, utils_resync.js resyncGuestReleaseOnPromotion.)
+    if (typeof resyncGuestReleaseOnPromotion === 'function') resyncGuestReleaseOnPromotion();
     netDisconnectedSinceByPeer = {};
     for (let pid of getActiveMatchPeerIds()) {
         if (pid !== myPeerId && !connections.some(c => c && c.peer === pid)) netDisconnectedSinceByPeer[pid] = now;
@@ -355,12 +363,22 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
 // its host: netRecoverLostSimulation.)
 const HOST_HANDOVER_MS = 4000;
 let _hostHandover = null;
+// (Every player this host handed the match to, this match: a late answer from one of them still counts, after the
+// next one was asked or the handover gave up. Before: an answer later than HOST_HANDOVER_MS was dropped, the
+// player had already taken over, and the match had two hosts; a retry it ignored, being host.)
+let _hostHandoverSent = { sessionId: '', peers: new Set() };
+// (Successor: the old host that handed this page the match: its retry is answered again, and its word on where
+// the match went (HOST_MOVED, when it took another player's answer first) is followed.)
+let _handedOverFrom = { sessionId: '', peer: '' };
 function hostHandoverActive() { return !!_hostHandover; }
 function hostHandOverMatch(reason) {
     if (!isHost || !gameStarted || gameOver) return false;
     let linked = pid => connections.some(c => c && c.peer === pid && c.open !== false);
-    let cands = computeHostMigrationCandidates(myPeerId).filter(pid => pid !== myPeerId && linked(pid) && _migrationRoleOf(pid) === 'playing'
+    // (Players first, then spectators: they have the same state, and ordinary migration lets them take over. Players
+    // alone: with the other player gone and a spectator linked, the host held its ticks and asked nobody for good.)
+    let ok = computeHostMigrationCandidates(myPeerId).filter(pid => pid !== myPeerId && linked(pid)
         && !(typeof resyncHostIsJoining === 'function' && resyncHostIsJoining(pid)));
+    let cands = ok.filter(pid => _migrationRoleOf(pid) === 'playing').concat(ok.filter(pid => _migrationRoleOf(pid) !== 'playing'));
     if (!cands.length) return false;
     _hostHandover = { cands, i: 0, reason: String(reason || ''), to: '' };
     _hostHandoverNext();
@@ -374,6 +392,8 @@ function _hostHandoverNext() {
         if (!conn) continue;
         h.i++;
         h.to = pid;
+        if (_hostHandoverSent.sessionId !== String(matchStartSessionId || '')) _hostHandoverSent = { sessionId: String(matchStartSessionId || ''), peers: new Set() };
+        _hostHandoverSent.peers.add(pid);
         logLockstepWarning('Simulation lost: handing the match to a player', { to: pid, reason: h.reason });
         try { conn.send({ type: 'HOST_HANDOVER', sessionId: matchStartSessionId, reason: h.reason }); } catch { }
         let epoch = networkSessionEpoch;
@@ -386,19 +406,45 @@ function _hostHandoverNext() {
 }
 // Guest: our host hands us the match (its simulation lost).
 function guestTakeHandedOverMatch(conn, data) {
-    if (isHost || !gameStarted || gameOver || !conn || conn.peer !== wsHostId) return;
+    if (!gameStarted || gameOver || !conn) return;
     if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return;
+    // (Already took it from this host: its retry (our answer late or lost) is answered again.)
+    if (isHost) {
+        if (_handedOverFrom.peer === conn.peer && _handedOverFrom.sessionId === String(matchStartSessionId || '')) {
+            try { conn.send({ type: 'HOST_HANDOVER_DONE', sessionId: matchStartSessionId }); } catch { }
+        }
+        return;
+    }
+    if (conn.peer !== wsHostId) return;
     if (typeof simClientLostPending === 'function' && simClientLostPending()) return;
     promoteSelfToHost(conn.peer, false, { keepOldLink: true });
+    _handedOverFrom = { sessionId: String(matchStartSessionId || ''), peer: String(conn.peer) };
     try { conn.send({ type: 'HOST_HANDOVER_DONE', sessionId: matchStartSessionId }); } catch { }
 }
-// Host: the player took the match: move there, for the whole match.
+// Host: the player took the match: move there, for the whole match. (Any player it was handed to, the first
+// answer: also one after the wait for it ran out; _hostHandoverSent.)
 function hostHandoverDone(conn, data) {
-    let h = _hostHandover;
-    if (!h || !isHost || !conn || conn.peer !== h.to) return;
+    if (!isHost || !conn) return;
     if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return;
+    let pid = String(conn.peer || '');
+    let h = _hostHandover;
+    let ours = (h && pid === h.to) || (_hostHandoverSent.sessionId === String(matchStartSessionId || '') && _hostHandoverSent.peers.has(pid));
+    if (!ours) return;
     _hostHandover = null;
-    demoteSelfToGuest(h.to, { fullSync: true });
+    _hostHandoverSent = { sessionId: '', peers: new Set() };
+    demoteSelfToGuest(pid, { fullSync: true });
+}
+// Successor (host by a handover): the old host says the match went to another player it asked (that one's answer
+// came first): two hosts otherwise; this page joins that one.
+function hostHandoverMovedElsewhere(conn, data) {
+    if (!isHost || !gameStarted || !conn) return false;
+    if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return false;
+    if (_handedOverFrom.peer !== conn.peer || _handedOverFrom.sessionId !== String(matchStartSessionId || '')) return false;
+    let hid = String((data && data.hostId) || '');
+    if (!hid || hid === myPeerId) return false;
+    _handedOverFrom = { sessionId: '', peer: '' };
+    demoteSelfToGuest(hid);
+    return true;
 }
 
 // Host: another host runs this match (we were cut off and the others moved
@@ -446,7 +492,9 @@ function answerHostSeek(conn, successor = '') {
             conn.send({
                 type: 'HOST_SEEK_REPLY', sessionId: matchStartSessionId,
                 isHost: !!(isHost && gameStarted), hostId: isHost ? myPeerId : String((hostMigration && hostMigration.oldHostId) || wsHostId || ''),
-                hostLost: !isHost && guestConsidersHostLost(), successor
+                hostLost: !isHost && guestConsidersHostLost(), successor,
+                // (A host: its players still linked; two hosts each alone break the tie by id: hostMaybeSeekOtherHost.)
+                players: isHost && gameStarted ? getActiveMatchPeerIds().filter(p => p !== myPeerId && connections.some(x => x && x.peer === p && x.open !== false)).length : undefined
             });
         } catch { }
         setTimeout(() => { try { conn.close(); } catch { } }, 1000);
@@ -488,11 +536,11 @@ function seekMatchHost(peerIds, sessionId, done) {
     let conns = [];
     let probed = new Set();
     let pending = 0;
-    let finish = hostId => {
+    let finish = (hostId, reply = null) => {
         if (finished) return;
         finished = true;
         for (let c of conns) { try { c.close(); } catch { } }
-        done(hostId || '');
+        done(hostId || '', reply);
     };
     if (!peer || peer.destroyed) { finish(''); return; }
     let probe = pid => {
@@ -510,7 +558,7 @@ function seekMatchHost(peerIds, sessionId, done) {
             answered = true;
             let hid = String(d.hostId || '');
             if (String(d.sessionId || '') === String(sessionId || '')) {
-                if (d.isHost && hid && hid !== myPeerId) { finish(hid); return; }
+                if (d.isHost && hid && hid !== myPeerId) { finish(hid, d); return; }
                 if (hid && !d.hostLost) probe(hid);
             }
             // Everyone answered and nobody hosts (yet): no need to wait.
@@ -576,11 +624,14 @@ function hostMaybeSeekOtherHost(now = performance.now()) {
     let sessionId = matchStartSessionId;
     let epoch = networkSessionEpoch;
     let spectators = (lobbyPlayers || []).map(p => String((p && p.peerId) || '')).filter(pid => pid && pid !== myPeerId && !participants.includes(pid));
-    seekMatchHost(missing.concat(alone ? spectators : []), sessionId, hostId => {
+    seekMatchHost(missing.concat(alone ? spectators : []), sessionId, (hostId, reply) => {
         _hostSeekActive = false;
         if (!hostId || epoch !== networkSessionEpoch || !isHost || !gameStarted || gameOver || matchStartSessionId !== sessionId) return;
         let stillAlone = !participants.some(pid => connections.some(c => c && c.peer === pid));
-        if (stillAlone || hostId < myPeerId) demoteSelfToGuest(hostId);
+        // (Alone, it joins a host that has players; of two hosts both alone (their probes crossed as a split healed)
+        // only the larger id moves: each gave up hosting for the other's match, and nobody hosted.)
+        let otherAlone = !!reply && reply.players === 0;
+        if ((stillAlone && !otherAlone) || hostId < myPeerId) demoteSelfToGuest(hostId);
     });
 }
 
@@ -676,8 +727,8 @@ function joinWithMatchRecord(hostId) {
 function tryRecoverMatchFromRecord(missingHostId) {
     let missing = String(missingHostId || '');
     let rec = matchRecordFor(missing);
-    if (!rec || gameStarted || isHost || _recordRecoveryTries >= 6) return false;
-    _recordRecoveryTries++;
+    if (!rec || gameStarted || isHost || !_recordRecoveryMore()) return false;
+    if (_recordRecoveryTries++ === 0) _recordRecoveryStartedAt = performance.now();
     _clearGuestJoinTimeout();
     _setLobbyStatus('The host moved. Looking for the match...', '#4af');
     let peers = Array.from(new Set(rec.peers.concat(rec.hostId || [], rec.knownIds || []))).filter(pid => pid && pid !== missing && !_recordWasSelf(rec, pid));
@@ -690,13 +741,14 @@ function tryRecoverMatchFromRecord(missingHostId) {
             return;
         }
         // Others may still be picking the new host: look again shortly.
-        if (_recordRecoveryTries < 6) {
+        if (_recordRecoveryMore()) {
             setTimeout(() => {
                 if (epoch !== networkSessionEpoch || gameStarted) return;
-                if (!tryRecoverMatchFromRecord(missing)) _returnToMainMenuWithStatus('Could not find that game. It may have ended, or the link is wrong.', '#f66');
-            }, 1000);
+                if (!tryRecoverMatchFromRecord(missing)) { _recordRecoveryTries = 0; _returnToMainMenuWithStatus('Could not find that game. It may have ended, or the link is wrong.', '#f66'); }
+            }, 2000);
             return;
         }
+        _recordRecoveryTries = 0;
         _returnToMainMenuWithStatus('Could not find that game. It may have ended, or the link is wrong.', '#f66');
     });
     return true;

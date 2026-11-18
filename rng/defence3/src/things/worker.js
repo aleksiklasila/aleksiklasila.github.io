@@ -324,6 +324,8 @@ function _getMineIndicesNear(mineArray, wx, wy, radiusPx) {
 // tick nothing. Every peer posts and
 // commits at the same ticks; a resync drops it all (and the registry) on
 // every peer.
+// (false: no pre-claim of the take's sites in the order stage (k.rs ws_preclaim): an A/B switch.)
+let WS_PRECLAIM = true;
 const WS_TICKS = 4, WS_POST_PHASE = 3, WS_K = 6, WS_RETRY = 20, WS_SEL_CHUNK = 4096;
 // (A near field's column jobs: this many columns each.)
 const WS_NF_COLS = 64;
@@ -706,7 +708,8 @@ function _wsGroupBuild(G, cfg) {
     // as one pass over them; a serial pass over ~115k structures was ~11 ms,
     // made again at every post in a battle). The outputs are sized by the
     // candidates and bound before the jobs (a binding just before a job
-    // leaves the helpers out of it).
+    // leaves the helpers out of it). (One serial wasm pass writing as it goes
+    // was 0.64 ms a group vs 0.47 in the chaos-300k battle: reads scattered.)
     let cap, np, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR;
     const outs = room => {
         SX = arr('sx', Float32Array, room); SY = arr('sy', Float32Array, room); ST = arr('st', Int32Array, room); SO = arr('so', Int32Array, room);
@@ -797,9 +800,12 @@ function _wsCollectorGroup(cfg) {
     const key = 'c:' + cfg.collectorUnitKey;
     let G = _wsGroups.get(key);
     if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, n: 0 }; _wsGroups.set(key, G); _wsGroupById[G.id] = G; }
-    // (Made again when any structure was placed or removed, or a spawner
-    // came or went: the tile table's version.)
-    const sig = _tileEntityVersion * 4096 + (typeof collectorSpawnersVersion === 'number' ? collectorSpawnersVersion % 4096 : 0);
+    // (Made again when a structure of its farm type, its spawner type or its
+    // mine kind was placed, removed or re-set on its tile (data_state.js
+    // _wsTypeVer, monotonic counters: their sum moves with any of them); not
+    // at every structure placed or lost.)
+    const V = _wsTypeVer, f = _stationaryTypeIds.get(cfg.farmKey), sp = _stationaryTypeIds.get(cfg.collectorBuildingKey);
+    const sig = (V[0] + (f !== undefined && f + 1 < 1022 ? V[f + 1] : 0) + (sp !== undefined && sp + 1 < 1022 ? V[sp + 1] : 0) + V[cfg.mineArrayKey === 'astarMines' ? 1023 : 1022]) >>> 0;
     if (G.sig === sig && G.gridW === GRID_W) {
         if (G.nfEligibilityDirty) { G.nfBuild = true; G.nfEligibilityDirty = false; }
         return G;
@@ -920,7 +926,10 @@ function _wsPost() {
     for (let g = 0; g < eligibleGroups.length; g++) Ep[4 + g] = eligibleGroups[g];
     // (Then the requests that found something listed, k.rs k_ws_order: one job in the same chain.)
     _wsArr('ws.order', Int32Array, total); _wsArr('ws.otmp', Int32Array, total); _wsArr('ws.orderCount', Int32Array, 1);
-    const Op = _simBgStageParams[WS_LANE][5]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL;
+    // (The pre-claim's table (k.rs ws_preclaim): a power of two at least twice the requests.)
+    const claimCap = 1 << Math.max(10, Math.ceil(Math.log2(2 * total)));
+    _wsArr('ws.claim', Int32Array, claimCap);
+    const Op = _simBgStageParams[WS_LANE][5]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL; Op[4] = WS_PRECLAIM ? claimCap : 0; Op[5] = WSR_COLLECT; Op[6] = HM; Op[7] = TILE; Op[8] = GRID_W;
     const spawners = _wsSnapshotReturnSpawners(total, np);
     const Sp = _simBgStageParams[WS_LANE][6];
     Sp[0] = 128; Sp[1] = np; Sp[2] = GRID_W; Sp[3] = GRID_H; Sp[4] = TILE;
@@ -3391,6 +3400,7 @@ function workerBrainReserve(B){
     // (Per owner and spawner kind, each block's distance in blocks to the nearest such site: worker_brain.rs.)
     _workerBrainArray('dist',Uint8Array,np*6*nb);
 }
+const WB_SITE_BLOCKS=256;
 function workerBrainsPrepare(n,defer=false,list=null){
     if(_workerBrain.pending)workerBrainsCollect();
     // (The slots copied into one list bound once (wb.list), not the caller's
@@ -3401,16 +3411,22 @@ function workerBrainsPrepare(n,defer=false,list=null){
     // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
     if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.freeCount<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
     const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
-    _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);_workerBrainArray('any',Int32Array,np*16);_workerBrainArray('dist',Uint8Array,np*6*nb);
+    _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);
+    const any=_workerBrainArray('any',Int32Array,np*16),dist=_workerBrainArray('dist',Uint8Array,np*6*nb);
+    // (Each owner's kinds whose block bits changed since the last build, or-ed in by stage 0; the distance fields
+    // (stage 2) made again for those only: worker_brain.rs. All of them for a new field array or map.)
+    const fresh=B.distArr!==dist||B.distNb!==nb;B.distArr=dist;B.distNb=nb;
+    for(let o=0;o<np;o++)any[o*16+1]=fresh?-1:0;
     for(const key of ['code','own','uc','val','brain'])simParallelBind('st.'+key,_ST[key]);
     const lane=SIM_LANE_TICK;
     for(let stage=0;stage<4;stage++){
-        const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=nb;P[1]=32;P[2]=stage;P[3]=w;P[4]=h;P[5]=cols;P[6]=np;P[7]=stride;
+        // (Stage 0: 256 blocks a job (it was 32: 128 background chunks a tick of ~a few microseconds each).)
+        const P=simParallelStageParams(lane,stage);P.fill(0);P[0]=nb;P[1]=WB_SITE_BLOCKS;P[2]=stage;P[3]=w;P[4]=h;P[5]=cols;P[6]=np;P[7]=stride;
         for(let k=0;k<6;k++)P[16+k]=(_stationaryTypeIds.get(_workerBrainSpawnerTypes[k])??-1)+1;
         if(stage===3){P[0]=n;P[1]=256;P[2]=gameTime;P[8]=TILE*8;}
     }
     B.pending={tick:gameTime,n};
-    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/32)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SITES,np*6],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
+    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/WB_SITE_BLOCKS)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SITES,np*6],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
     if(!defer)workerBrainsCollect();
 }
 function workerBrainsCollect(){

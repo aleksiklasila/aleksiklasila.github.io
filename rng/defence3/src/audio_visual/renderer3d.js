@@ -4197,7 +4197,7 @@
             for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
         }
         prewarmPrograms() {
-            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources(), () => this.ensureSiteMarkResources()]) {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources(), () => this.ensureSiteMarkResources(), () => this.ensureGroundLineResources()]) {
                 try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
             }
         }
@@ -4394,15 +4394,11 @@
             gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
             gl.drawBuffers(this.sceneDrawBuffers);
         }
-        drawGroundOverlays(overlays) {
-            if (!overlays) return;
-            let groups = overlays.selectionContours || [], lines = overlays.lines || [];
-            let ranges = overlays.rangeLines || [];
-            let count = lines.length + ranges.length;
-            for (let group of groups) for (let path of group.paths) count += path.length;
-            if (!count) return;
-            let gl = this.gl;
-            if (!this.groundLineProgram) {
+        // The ground lines' program and buffers (selection outlines, rally and range lines): made while the match
+        // loads (prewarmPrograms); at the first unit click they were a ~37 ms shader compile in its frame.
+        ensureGroundLineResources() {
+            if (this.groundLineProgram) return;
+            const gl = this.gl;
                 // Screen-width quads rather than driver-dependent GL line widths.
                 // Depth testing against the scene hides ground outlines behind models.
                 this.groundLineProgram = createProgram(gl, `#version 300 es
@@ -4478,7 +4474,17 @@
                     gl.vertexAttribPointer(location, size, gl.FLOAT, false, 40, offset);
                     gl.vertexAttribDivisor(location, 1);
                 }
-            }
+                gl.bindVertexArray(null);
+        }
+        drawGroundOverlays(overlays) {
+            if (!overlays) return;
+            let groups = overlays.selectionContours || [], lines = overlays.lines || [];
+            let ranges = overlays.rangeLines || [];
+            let count = lines.length + ranges.length;
+            for (let group of groups) for (let path of group.paths) count += path.length;
+            if (!count) return;
+            let gl = this.gl;
+            this.ensureGroundLineResources();
             if (!this.groundLineData || this.groundLineData.length < count * 10) {
                 this.groundLineData = new Float32Array(Math.max(1024, count * 20));
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.groundLineBuffer);

@@ -2136,7 +2136,11 @@ function _snapResetWorkerCaches() {
 // Restore an encoded state: whole, or (partial) the regions it carries,
 // patching this peer's own objects so references from untouched entities
 // stay valid. Returns { unitsById, missingRefs, statMapsRebuilt, changed }.
+// (Every decode, whole or patch: a text kept for the simulation worker is of the state as it was only while this
+// has not moved: sim_client.js simClientTakeJoinText.)
+let snapDecodeSeq = 0;
 function snapDecodeState(S, options = null) {
+    snapDecodeSeq++;
     // (A decoded state writes the units' columns as it finds them: the mover table made whole at the next movement.)
     if (typeof mvtInvalidate === 'function') mvtInvalidate();
     // (A prebuilt unit index reads what this rewrites: waited for, dropped.)
@@ -2435,6 +2439,7 @@ function snapDecodeState(S, options = null) {
             }
             // Indexes built from cell owners (hostile structures) rebuild.
             _tileEntityVersion++;
+            if (typeof _wsTypeVer !== 'undefined') _wsTypeVer[0]++;
             if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();
             if (typeof simMoveStructsReset === 'function') simMoveStructsReset();
         }

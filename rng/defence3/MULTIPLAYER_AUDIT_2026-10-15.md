@@ -74,6 +74,29 @@ old code, and fixed.
 | 52 | P2 | A tick that threw part way counted as healthy (page and worker): only a hash mismatch, if the half-run tick showed in one, led to a repair, and then a partial patch. | `sim_worker.js` `_simTick`, `main.js` runOneTick, `utils_resync.js` | fixed (guest); host: logged only |
 | 53 | P2 | Upkeep was deducted once a step: below 20 TPS a step of SIM_DK_MAX (20) base ticks spans several seconds (100 charged instead of 330 over 33 s at 5 TPS). Not a desync. Research drain and boost checks read accumulated state and lose nothing. | `main.js` gameTick upkeep | fixed |
 | 54 | P3 | Old host messages overwrote the guest's input delay and pace: `d` and `pace` were applied from every bundle as it came, before any freshness check; the channel is unordered, and resends, copies and the host worker's own seals (values as armed) come late. Lag or controller oscillation, no state divergence. | `main.js` `handleIncomingTickBundle`, `sim_worker.js` auto seals | fixed |
+| 55 | P1 | A worker tick whose command preparation threw (or a pre-step before `currentTick++`) was lost: the worker refused every later tick, the page and network stayed alive (host looked connected, never advanced). | `sim_worker.js` onmessage tick, `_simTick`; `sim_client.js` error | fixed 2026-11-18, unvalidated |
+| 56 | P1 | After a failed chunk or local task the dispatching thread skipped its remaining chunks; a skipped occupancy block never published its marker: helper and simulation thread deadlocked. | `sim_parallel.js` `simParallelRun`, MOVE_OCCUPANCY kernel | fixed 2026-11-18, unvalidated |
+| 57 | P1 | A guest's 8 s full-sync retry superseded the host's in-progress snapshot each time: a snapshot slower than 8 s was never sent, guest paused forever. | `utils_resync.js` `resyncHostJoinInFlight`; REQUEST_MATCH_SYNC | fixed 2026-11-18, unvalidated |
+| 58 | P1 | Movement rule switches (?occupancy, ?traffic*, ?acq) were per page, not in the match config or hash: peers diverged again after every repair. | `utils_networking.js` `netSimRulesOfPage/Apply`, config hash | fixed 2026-11-18, unvalidated |
+| 59 | P2 | A late handover acknowledgement (> HOST_HANDOVER_MS) was dropped and the retry ignored: two hosts. | `utils_host_migration.js` handover | fixed 2026-11-18, unvalidated |
+| 60 | P1 | A guest joining during the start's initialization stopped reporting; the host's barrier waited for it: startup froze for all. | `_matchInitializationPoll`, `resyncHostScheduleJoin` (exempt) | fixed 2026-11-18, unvalidated |
+| 61 | P1 | A guest's own unconfirmed end disabled its silent-host reconnect and migration: frozen at a false victory. | `utils_net_quality.js` `netMaintain` | fixed 2026-11-18, unvalidated |
+| 62 | P1 | A full join asked after the host's end was scheduled for a tick that never runs: reloader waited forever. | `hostSendFullMatchSync`, `resyncHostSendFinalState` | fixed 2026-11-18, unvalidated |
+| 63 | P1 | A live join with the worker lost a staged Q/E (and nav state): the worker started from a page snapshot without them. | `simClientNoteJoinText/TakeJoinText`, `snapDecodeSeq` | fixed 2026-11-18, unvalidated |
+| 64 | P1 | Team force-resign used the tick-input peer list: a teammate loading a join was missed (team resigned), a resigned host counted (team kept). | `hostTeamStillPlayed` | fixed 2026-11-18, unvalidated |
+| 65 | P1 | A guest's normal start left `matchStartWaitingForReady` cleared by `startGame()`: loading heartbeat stopped, host dropped a loading player after 45 s. | `applyIncomingMatchSyncPayload` | fixed 2026-11-18, unvalidated |
+| 66 | P2 | Late commands carried under a player's old peer id were lost on a reconnect under a new id. | `migratePeerIdByUid` | fixed 2026-11-18, unvalidated |
+| 67 | P1 | TICK_RESEND_REQUEST had no match tag (rematch: far-future packets, orders queued behind them); a stale request for a tick already run forced a full sync. | `main.js` `handleIncomingTickResendRequest` | fixed 2026-11-18, unvalidated |
+| 68 | P1 | Requests deferred while the worker ran ticks itself were never drained after the last adoption; autonomous ticks stayed disabled. | `simClientFlushDeferred`, `lockstepAdoptAutoTick` | fixed 2026-11-18, unvalidated |
+| 69 | P1 | Initialization release never happened with a periodic tick-cost spike (settled test). | `MATCH_INIT_MAX_TICKS` | fixed 2026-11-18, unvalidated |
+| 70 | P1 | A guest with the host's result but more than 2 base ticks short and no next bundle waited forever. | `guestReviewMatchResult` | fixed defensively 2026-11-18, unvalidated |
+| 71 | P2 | Two lone hosts after a healed split both demoted: no host. | `hostMaybeSeekOtherHost`, HOST_SEEK_REPLY `players` | fixed 2026-11-18, unvalidated |
+| 72 | P1 | A restore during warmup (migration resync) ended the warmup poll loop: every peer stopped at that tick. | `_matchLoadOverlayUntilRunning` | fixed 2026-11-18, unvalidated |
+| 73 | P1 | Worker-loss handover excluded spectators: with no player linked the match froze. | `hostHandOverMatch` | fixed 2026-11-18, unvalidated |
+| 74 | P2 | A second guest-only tick failure inside the 60 s repair interval was dropped. | `_resyncGuestSettleFails` (`failOwed`) | fixed 2026-11-18, unvalidated |
+| 75 | P2 | A host start that failed after START_GAME_PREPARE left guests on "Waiting for host to generate world". | START_GAME_CANCEL | fixed 2026-11-18, unvalidated |
+| 76 | P2 | A reloaded former host gave up (~35 s) before a lone opponent took over (60 s). | `MATCH_RECORD_SEEK_MS` | fixed 2026-11-18, unvalidated |
+| 77 | P2 | A joining guest promoted to host kept its held orders forever. | `resyncGuestReleaseOnPromotion` | fixed 2026-11-18, unvalidated |
 
 ## Fixes
 

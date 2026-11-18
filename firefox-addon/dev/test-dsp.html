@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DSP chain test</title>
+<pre id="out">running…</pre>
+<script src="../common.js"></script>
+<script src="../dsp.js"></script>
+<script>
+'use strict';
+const Y = globalThis.YTEQ;
+const out = document.getElementById('out');
+const lines = [];
+const log = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+
+// Gain (dB) of the chain for a stereo sine at freq/levelDb, measured over the last 0.5 s.
+async function chainGain(settings, freq, levelDb, opts = {}) {
+  const sr = 48000, len = sr * 2;
+  const oc = new OfflineAudioContext(2, len, sr);
+  const chain = Y.createChain(oc);
+  await chain.apply(settings);
+  const osc = oc.createOscillator();
+  osc.frequency.value = freq;
+  const g = oc.createGain();
+  g.gain.value = Math.pow(10, levelDb / 20);
+  let srcOut = g;
+  if (opts.sideOnly) {
+    // L = +x, R = -x (no centre content)
+    const sp = oc.createChannelMerger(2), inv = oc.createGain();
+    inv.gain.value = -1;
+    g.connect(sp, 0, 0); g.connect(inv).connect(sp, 0, 1);
+    srcOut = sp;
+  }
+  osc.connect(g);
+  srcOut.connect(chain.input);
+  chain.output.connect(oc.destination);
+  osc.start();
+  const buf = await oc.startRendering();
+  const d = buf.getChannelData(0);
+  let s = 0;
+  const from = len - sr / 2;
+  for (let i = from; i < len; i++) s += d[i] * d[i];
+  const rms = Math.sqrt(s / (len - from));
+  return 20 * Math.log10(rms / (Math.pow(10, levelDb / 20) * Math.SQRT1_2));
+}
+
+(async () => {
+  let fails = 0;
+  const check = (name, v, lo, hi) => {
+    const ok = v >= lo && v <= hi;
+    if (!ok) fails++;
+    log(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${v.toFixed(2)} dB  (want ${lo}..${hi})`);
+  };
+  const flat = Y.presetSettings('flat');
+  log('makeup measured: voice(0.55) ' + (await Y.measureCompGain(Y.voiceComp(0.55), -90)).toFixed(3) +
+      ', leveler(0.45)@-14 ' + (await Y.measureCompGain(Y.levelerComp(0.45), -14)).toFixed(3) +
+      ', limiter ' + (await Y.measureCompGain(Y.LIMITER, -90)).toFixed(3));
+
+  log('\n-- Flat preset must pass everything unchanged (crossovers sum flat) --');
+  for (const f of [40, 120, 200, 400, 1000, 3000, 5000, 8000, 15000]) {
+    check(`flat ${f} Hz @ -20 dBFS`, await chainGain(flat, f, -20), -0.3, 0.3);
+  }
+
+  log('\n-- Default preset --');
+  const def = Y.normalize(null);
+  const loud = await chainGain(def, 1000, -12);
+  const quiet = await chainGain(def, 1000, -45);
+  log(`voice band 1 kHz: loud(-12) ${loud.toFixed(1)} dB, quiet(-45) ${quiet.toFixed(1)} dB`);
+  check('quiet voice-band sounds raised more than loud ones (dB)', quiet - loud, 8, 40);
+  const bgLow = await chainGain(def, 80, -30);
+  check('quiet background bass raised', bgLow, 3, 30);
+  const loudTotal = await chainGain(def, 1000, -6);
+  check('loud speech level reduced', loudTotal, -20, -2);
+  check('nothing above 0 dBFS from -1 dBFS input (limiter)', (await chainGain(Y.normalize({ ...def, output: 12 }), 1000, -1)) - 1, -40, 0.5);
+
+  log('\n-- Centre cut leaves side (stereo-only) content alone --');
+  const cc = Y.normalize({ ...flat, centerGain: -12 });
+  check('centre content at 1 kHz', await chainGain(cc, 1000, -20), -12.3, -11.7);
+  check('side content at 1 kHz', await chainGain(cc, 1000, -20, { sideOnly: true }), -0.3, 0.3);
+
+  log('\n-- EQ point --');
+  const eqs = Y.normalize({ ...flat, eq: flat.eq.map((b, i) => (i === 3 ? { ...b, gain: 6 } : b)) });
+  check('+6 dB peak at 1 kHz', await chainGain(eqs, 1000, -20), 5.7, 6.3);
+
+  log(`\nDONE ${fails ? fails + ' FAILED' : 'all passed'}`);
+  document.title = fails ? 'FAIL' : 'PASS';
+})().catch((e) => { log('ERROR ' + e.stack); document.title = 'ERROR'; });
+</script>

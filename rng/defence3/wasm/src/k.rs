@@ -4280,7 +4280,101 @@ pub unsafe extern "C" fn k_ws_order(a: u32, _chunk: i32) {
             }
         }
     }
+    let n = ws_preclaim(&k, out, n, kind, res, ures, kk, heal);
     s(oc, 0, n as i32);
+}
+
+#[inline(always)]
+fn ws_claim_key(a: i32, b: i32, c: i32) -> u32 {
+    let mut h = (a as u32).wrapping_mul(0x9e37_79b1) ^ (b as u32).wrapping_mul(0x85eb_ca77) ^ (c as u32).wrapping_mul(0xc2b2_ae3d);
+    h ^= h >> 15; h = h.wrapping_mul(0x2c1b_3c6d); h ^= h >> 12;
+    if h == 0 { 1 } else { h }
+}
+
+/// The take's sites spread before it (k_ws_order, the background chain, one job): every request of a take saw the
+/// same state, so most picked the same best site and lost it but one, round after round (worker.js waiTake: 5,974
+/// requests in 12 rounds of a parallel decide and a serial apply, 11 ms, in the chaos-300k battle). Here each request,
+/// in the take's order (ids), claims the first of its candidates no earlier one claimed (a site by the worker's
+/// reservation bit and collector group, as the reservation slots go; a damaged unit by its tile); candidates claimed
+/// by earlier requests go behind the free ones (sites; units), or, for collectors (picked by least score), are scored
+/// CLAIMED_PENALTY more. The take still tests and settles everything as before (the rounds take what this missed).
+/// Extra arrays: [8] ws.rowner, [9] ws.rneed, [10] ws.rgrp, [11] ws.score, [12] ws.claim (a power-of-two hash table
+/// of claimed keys, 0 empty), [13] / [14] wsh.x / wsh.y (the damaged units at the post); P[4] the table's size, P[5]
+/// the collectors' request kind, P[6] damaged units an owner, P[7] the tile's pixels, P[8] the map's width.
+unsafe fn ws_preclaim(k: &K, out: *mut i32, n: usize, kind: *const i32, res: *mut i32, ures: *mut i32, kk: usize, heal: i32) -> usize {
+    const CLAIMED_PENALTY: f32 = 1.0e7;
+    let (own, need, grp, score, claim) = (k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<f32>(11), k.p::<u32>(12));
+    let cap = k.i(4).max(0) as usize;
+    if claim.is_null() || own.is_null() || need.is_null() || score.is_null() || cap < 2 || cap & (cap - 1) != 0 || n < 2 || kk > 16 { return n; }
+    let collect = k.i(5);
+    let (hx, hy, hm, tpx, gw) = (k.p::<f32>(13), k.p::<f32>(14), k.i(6), k.f(7).max(1.0), k.i(8).max(1));
+    core::ptr::write_bytes(claim, 0, cap);
+    let m = cap - 1;
+    let find = |key: u32| -> bool { let mut h = key as usize & m; loop { let v = *claim.add(h); if v == 0 { return false; } if v == key { return true; } h = (h + 1) & m; } };
+    let insert = |key: u32| { let mut h = key as usize & m; loop { let v = *claim.add(h); if v == 0 { *claim.add(h) = key; return; } if v == key { return; } h = (h + 1) & m; } };
+    let mut taken = [false; 16];
+    let mut wo = 0usize;
+    for j in 0..n {
+        let i = g(out, j) as usize;
+        let kd = g(kind, i);
+        let (ow, rb) = (g(own, i), (g(need, i) >> 16) & 0xff);
+        let gr = if kd == collect && !grp.is_null() { g(grp, i) } else { -1 };
+        // (A reservation slot is a tile and the worker type's load index, whatever the owner (mines are shared); a
+        // collector's candidates are its group's rows, a tile each.)
+        let site_base = rb | ((gr & 0xff) << 16) | if kd == collect { 1 << 24 } else { 0 };
+        // Sites.
+        let mut nres = 0usize;
+        while nres < kk && g(res, i * kk + nres) >= 0 { nres += 1; }
+        let mut free: isize = -1;
+        for c in 0..nres {
+            let key = ws_claim_key(site_base, 0, g(res, i * kk + c));
+            *taken.get_unchecked_mut(c) = find(key);
+            if !*taken.get_unchecked(c) && free < 0 { free = c as isize; }
+        }
+        let mut claimed = false;
+        // (Kept in the take unless every candidate went to earlier requests: see the end.)
+        let mut keep_unchecked = false;
+        if free >= 0 { insert(ws_claim_key(site_base, 0, g(res, i * kk + free as usize))); claimed = true; }
+        // (A collector takes its least score among them, a jitter by id and tile added at the take: every candidate but
+        // its claim scored more, or it took a later request's claim from it.)
+        if kd == collect && free >= 0 && nres > 1 {
+            for c in 0..nres { if c as isize != free { let p = score.add(i * kk + c); *p += CLAIMED_PENALTY; } }
+        } else if nres > 1 && (0..nres).any(|c| *taken.get_unchecked(c)) {
+            if kd == collect {
+                for c in 0..nres { if *taken.get_unchecked(c) { let p = score.add(i * kk + c); *p += CLAIMED_PENALTY; } }
+            } else {
+                // (Stable: the free ones in their order, then the claimed ones in theirs.)
+                let (mut rv, mut sv) = ([0i32; 16], [0f32; 16]);
+                let mut w = 0usize;
+                for pass in 0..2 { for c in 0..nres { if *taken.get_unchecked(c) == (pass == 1) { *rv.get_unchecked_mut(w) = g(res, i * kk + c); *sv.get_unchecked_mut(w) = g(score, i * kk + c); w += 1; } } }
+                for c in 0..nres { s(res, i * kk + c, *rv.get_unchecked(c)); s(score, i * kk + c, *sv.get_unchecked(c)); }
+            }
+        }
+        // A healer's damaged units (3), when no site was free for it.
+        // (Their slot is the unit's tile (wai.rs can_assign_unit): as at the post, wsh.x / wsh.y.)
+        if kd == heal && !ures.is_null() && !claimed && !hx.is_null() && !hy.is_null() && ow >= 0 {
+            let utile = |x: i32| -> i32 { let h = (ow * hm + x) as usize; (floor(g(hy, h) as f64 / tpx) as i32) * gw + floor(g(hx, h) as f64 / tpx) as i32 };
+            let mut t3 = [false; 3];
+            let mut first: isize = -1;
+            for c in 0..3 { let x = g(ures, i * 3 + c); if x < 0 || x >= hm { continue; } *t3.get_unchecked_mut(c) = find(ws_claim_key(0x7f00_0000 | rb, 1, utile(x))); if !*t3.get_unchecked(c) && first < 0 { first = c as isize; } }
+            if first >= 0 { insert(ws_claim_key(0x7f00_0000 | rb, 1, utile(g(ures, i * 3 + first as usize)))); claimed = true; }
+            if t3.iter().any(|&b| b) {
+                // (Zeroed then -1 by stores: a non-zero array literal is a data segment, which the build refuses.)
+                let mut v = [0i32; 3]; v[0] = -1; v[1] = -1; v[2] = -1; let mut w = 0usize;
+                for pass in 0..2 { for c in 0..3 { let x = g(ures, i * 3 + c); if x >= 0 && *t3.get_unchecked(c) == (pass == 1) { *v.get_unchecked_mut(w) = x; w += 1; } } }
+                for c in 0..3 { s(ures, i * 3 + c, *v.get_unchecked(c)); }
+            }
+        } else if kd == heal && !claimed { keep_unchecked = true; }
+        // Every candidate claimed by an earlier request: out of the take, as a search that found nothing (its results
+        // -1: k_ws_fail_bump spaces its next searches, as a take that found nothing does). It lost every one of them in
+        // the take's rounds before (the lowest id wins a slot), ending the same way, a round and a decide each later.
+        if claimed || keep_unchecked { s(out, wo, i as i32); wo += 1; }
+        else {
+            for c in 0..kk { s(res, i * kk + c, -1); }
+            if !ures.is_null() { for c in 0..3 { s(ures, i * 3 + c, -1); } }
+        }
+    }
+    wo
 }
 
 // =====================================================================

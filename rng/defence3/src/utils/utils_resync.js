@@ -89,7 +89,9 @@ function resyncResetState() {
         tickFailures: 0, failRepairAt: -Infinity,
         // (Its failed ticks waiting for the host's word on them; the host's
         // failed ticks heard of; the newest host hash's tick.)
-        pendingFails: [], hostFails: [], hostHashTick: -1
+        pendingFails: [], hostFails: [], hostHashTick: -1,
+        // (A failed tick of its own whose repair the request interval held back: asked for once it allows.)
+        failOwed: -1
     };
     snapResetHashHistory();
 }
@@ -107,6 +109,7 @@ function resyncNoteRestored(tick) {
     resyncGuest.waitSince = 0;
     resyncGuest.divergedAt = -1;
     resyncGuest.pendingFails.length = 0;
+    resyncGuest.failOwed = -1;
     resyncGuest.hostFails.length = 0;
     resyncGuest.hostHashTick = -1;
     lockstepExpectedStateHashByTick = {};
@@ -181,7 +184,7 @@ function resyncGuestReceiveHashes(h) {
         if (t > g.hostHashTick) g.hostHashTick = t;
         resyncGuestCompare(t);
     }
-    if (g.pendingFails.length) _resyncGuestSettleFails();
+    if (g.pendingFails.length || g.failOwed >= 0) _resyncGuestSettleFails();
 }
 
 function resyncGuestCompare(t) {
@@ -285,9 +288,14 @@ function _resyncGuestSettleFails(where = '') {
         P.splice(i, 1);
         if (!g.hostFails.includes(t) && (own < 0 || t < own)) own = t;
     }
+    // (One held back before: still owed, unless a restore since replaced the state it failed in. Before: taken off
+    // the list and dropped while the interval ran, a second failure within it was never repaired.)
+    if (g.failOwed >= 0 && g.failOwed >= g.graceTick && (own < 0 || g.failOwed < own)) own = g.failOwed;
+    g.failOwed = -1;
     if (own < 0) return;
     const now = performance.now();
-    if (lockstepStrictDebugMode || g.joining || now - g.failRepairAt < RESYNC_GLOBAL_MIN_INTERVAL_MS) return;
+    if (lockstepStrictDebugMode) return;
+    if (g.joining || now - g.failRepairAt < RESYNC_GLOBAL_MIN_INTERVAL_MS) { g.failOwed = own; return; }
     g.failRepairAt = now;
     logLockstepWarning('A tick failed here only; asking for a full repair', { tick: own, where, failures: g.tickFailures });
     g.forceFull = true;
@@ -726,6 +734,9 @@ function resyncHostScheduleJoin(conn, role, opts = null) {
     if (normalizedRole === 'playing') resyncHostJoining.set(pid, { since: performance.now(), g: gen, heard: 0, applied: 0, resent: (opts && opts.resent) || 0 });
     else resyncHostJoining.delete(pid);
     let T = _resyncHostFirstOpenTick() + 1;
+    // (A join during the start's initialization ticks: the joiner's barrier is done once it has the match
+    // (applyIncomingMatchSyncPayload); the host's barrier waits for it no more: utils_networking.js _matchInitializationPoll.)
+    if (typeof _matchInit !== 'undefined' && _matchInit && _matchInit.exempt && !_matchInit.released) _matchInit.exempt[pid] = true;
     resyncHostPending.set(pid, { T, codes: new Set(), full: true, id: ++_resyncPatchSeq, requestedAt: performance.now(), join: normalizedRole, g: gen });
     resyncHostFlushTicks.add(T);
 }
@@ -753,6 +764,8 @@ function _resyncHostSendJoin(conn, pending) {
             netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
             if (conn.open === false || superseded()) return;
             try { conn.send({ ...message, snapshotPayload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
+            // (The final state: the result after it, for a page that had no match when the result came first.)
+            if (pending.final) { try { conn.send({ type: 'MATCH_RESULT', t: gameTime, winner, m: matchStartSessionId || undefined }); } catch { } }
         });
     };
     if (inWorker) simClientSnapshotText(snapshot).then(send, () => { });
@@ -765,7 +778,7 @@ function resyncHostSendFinalState(conn) {
     let pid = String(conn.peer);
     resyncHostJoining.delete(pid);
     let gen = typeof _hostNextResyncGen === 'function' ? _hostNextResyncGen() : 0;
-    _resyncHostSendJoin(conn, { T: currentTick, join: normalizeMatchRole(matchRoleByPeerId[pid], 'playing'), g: gen });
+    _resyncHostSendJoin(conn, { T: currentTick, join: normalizeMatchRole(matchRoleByPeerId[pid], 'playing'), g: gen, final: true });
 }
 
 // Host: a joiner's message is of the join it waits on (its number), or of none
@@ -827,6 +840,17 @@ function resyncHostHandleJoinLive(conn, data) {
     let first = currentTick;
     while (lockstepBundleByTick[first] || lockstepCommittedByTick[first]) first++;
     try { conn.send({ type: 'JOIN_LIVE_ACK', tick: first }); } catch { }
+}
+
+// Host: whether this peer's join is on its way (scheduled, being encoded or sent, or loading, heard within
+// RESYNC_JOIN_LOAD_SILENT_MS): a repeated request for the match is not a new join. (The guest asks again every
+// 8 s while it waits; each request made a new join, which dropped the one being built: a snapshot slower than
+// that was never sent, the guest paused for good.) A join that went silent: resyncHostCheckJoins.
+function resyncHostJoinInFlight(pid, now = performance.now()) {
+    let j = resyncHostJoining.get(pid);
+    if (j && !j.applied && now - Math.max(j.since, j.heard) <= RESYNC_JOIN_LOAD_SILENT_MS) return true;
+    let p = resyncHostPending.get(pid);
+    return !!(p && p.join);
 }
 
 // Host: whether to wait for this peer's input yet. Not while it loads its
@@ -891,6 +915,19 @@ function resyncGuestHandleJoinLiveAck(data) {
     for (let a of final) requeueLocalAction(a);
     for (let a of held) queueAction(a);
     if (gameStarted) sendLocalTickPacketWindow(currentTick, true);
+}
+
+// A joining guest that became the host (a migration before its JOIN_LIVE_ACK): no host is left to answer it; the
+// commands it held go out as the host's own now. (Before: held for good; the acknowledgement that releases them
+// is refused once this peer hosts.)
+function resyncGuestReleaseOnPromotion() {
+    let g = resyncGuest;
+    if (!g) return;
+    let held = g.heldActions || [], final = g.heldFinal || [];
+    g.joining = false; g.awaitingLive = false;
+    g.heldActions = []; g.heldFinal = [];
+    for (let a of final) requeueLocalAction(a);
+    for (let a of held) queueAction(a);
 }
 
 // Guest: while joining, commands wait (the host would not wait for them).

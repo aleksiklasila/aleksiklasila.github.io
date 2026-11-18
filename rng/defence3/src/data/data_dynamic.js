@@ -143,10 +143,16 @@ function rebuildPlayerThingBoost(playerId, branch, key) {
     if (!ensurePrecomputedStatsMap()) return;
     if (!(PRECOMPUTED_STATS_MAP[branch] || {})[key]) return;
     if (branch === 'building' && typeof simTrapResearchDone === 'function') simTrapResearchDone(playerId);
-    for (let statKey of (branch === 'unit' ? PRECOMPUTED_UNIT_STAT_KEYS : PRECOMPUTED_BUILDING_STAT_KEYS)) {
-        if (branch === 'building' && !_buildingStatHasValues(key, statKey)) continue;
-        _rebuildPlayerThingStatLevels(playerId, branch, key, statKey);
-    }
+    // (The unit's shared stat rows filled once at the end, not once a stat (15 a boost click: ~1 ms of its ~3.5):
+    // things_utils.js effFillBatchBegin / End; inside an open batch (the research drain's) that batch's end does it.)
+    const batch = branch === 'unit' && typeof effFillBatchBegin === 'function' && !_effFillOpen;
+    if (batch) effFillBatchBegin();
+    try {
+        for (let statKey of (branch === 'unit' ? PRECOMPUTED_UNIT_STAT_KEYS : PRECOMPUTED_BUILDING_STAT_KEYS)) {
+            if (branch === 'building' && !_buildingStatHasValues(key, statKey)) continue;
+            _rebuildPlayerThingStatLevels(playerId, branch, key, statKey);
+        }
+    } finally { if (batch) effFillBatchEnd(); }
     if (branch === 'building' && key === 'house' && typeof recomputePlayerPopCaps === 'function') recomputePlayerPopCaps();
 }
 // The setBoost action: steps of energy or ★ boost for one thing.

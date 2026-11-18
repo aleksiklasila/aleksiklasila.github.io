@@ -1150,6 +1150,9 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     for (let i = 0; i < m; i++) {
         const ct = D.rows[2 * i], k = _STL_KIND[ct], t = D.tiles[i], gx = t % GRID_W;
         if (k >= 0) { kinds |= 1 << k; adj = adj || k <= 1; }
+        // (The table rows are cleared already: the type by the object, for the collectors' groups (_wsTypeVer).)
+        if (ct === 10 || ct === 11) _wsTypeVer[ct === 10 ? 1022 : 1023]++;
+        else if (ct === 2 || ct === 4 || ct === 5 || !ct) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null, id = e ? _stationaryTypeIds.get(e.type) : undefined; _wsTypeVer[id !== undefined && id + 1 < 1022 ? id + 1 : 0]++; }
         if (k === 0) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
     }
     for (let k = 0; k < 3; k++) if (kinds & (1 << k)) _stlBump(k);

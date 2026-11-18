@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Popup preview</title>
+<link rel="stylesheet" href="../popup.css">
+<body>
+<script>
+'use strict';
+// Stand-in for the extension APIs so the popup can be looked at in a normal page.
+(function () {
+  let store = {};
+  const fakeSpectrum = (tilt) => {
+    const n = 160, out = [];
+    const t = performance.now() / 1000;
+    for (let i = 0; i < n; i++) {
+      const f = 20 * Math.pow(1000, i / n);
+      const voice = Math.exp(-Math.pow(Math.log(f / 900), 2) / 0.9) * 40;
+      out.push(Math.round(-95 + voice + 25 * Math.exp(-Math.pow(Math.log(f / 70), 2)) - tilt * Math.log(f / 20) + 3 * Math.sin(t * 3 + i * 0.4)));
+    }
+    return out;
+  };
+  window.browser = {
+    storage: { local: {
+      get: async () => ({ ...store }),
+      set: async (o) => { Object.assign(store, JSON.parse(JSON.stringify(o))); },
+    } },
+    tabs: {
+      query: async () => [{ id: 1 }],
+      sendMessage: async (id, msg) => msg.type === 'status'
+        ? { present: true, state: 'running', hooked: 1, reductions: { voice: -7.5, leveler: -3.2, limiter: 0 }, specIn: fakeSpectrum(2), specOut: fakeSpectrum(4).map((v, i) => v + (i > 60 && i < 110 ? -6 : 3)),
+            focusCut: Array.from({ length: 160 }, (_, i) => (i > 62 && i < 118 ? Math.max(0, 14 * Math.sin(i * 0.9) ** 2 - 2) : 0)) }
+        : true,
+    },
+  };
+})();
+fetch('../popup.html').then((r) => r.text()).then((html) => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script').forEach((s) => s.remove());
+  document.body.insertAdjacentHTML('beforeend', doc.body.innerHTML);
+  const load = (src) => new Promise((res) => { const s = document.createElement('script'); s.src = src; s.onload = res; document.body.appendChild(s); });
+  load('../common.js').then(() => load('../popup.js'));
+});
+</script>
+</body>

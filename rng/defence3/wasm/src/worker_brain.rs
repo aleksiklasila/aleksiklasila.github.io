@@ -69,9 +69,14 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
     // Stage 2: job (owner * 6 + kind): the blocks' chessboard distance (in blocks, 255 at most: [8] wb.dist) to the
     // nearest block holding a site of that owner and kind (two chamfer passes: exact for unit steps in 8
     // directions). k_worker_spawners starts its rings there: the rings before hold none of them.
+    // (Made again only where stage 0 saw that owner's blocks of that kind change since the last build ([own * 16 + 1]:
+    // the kinds whose block bits changed; all of them when the field array is new: worker.js workerBrainsPrepare): the
+    // field is a function of those bits alone, so a kept one is what this would make. ~2 ms of CPU a tick, every tick
+    // with worker events, in the chaos-300k battle, for spawners that change a few times a second.)
     if k.i(2)==2 {
         let job=chunk.max(0) as usize;let (own,kind)=(job/6,job%6);if own>=np{return;}
         if *any.add(own*16)&(1<<kind)==0 {return;}
+        if own<64&&*any.add(own*16+1)&(1<<kind)==0 {return;}
         let cols=k.i(5).max(1) as usize;let rows=((k.i(4)+7)/8).max(0) as usize;let nb=cols*rows;
         let d=k.p::<u8>(8).add(job*nb);
         for b in 0..nb {*d.add(b)=if *cnt.add(b*stride+1+own)&(1<<kind)!=0 {0}else{255};}
@@ -95,6 +100,9 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
     for b in chunk*k.i(1)..((chunk+1)*k.i(1)).min(k.i(0)) {
         // (The block's record zeroed only where it holds anything: a line's write a block a tick, most blocks have no site.)
         let b=b as usize;let c=cnt.add(b*stride);
+        // (The owners' kind bits as they were: compared after, the changed kinds or-ed into [own * 16 + 1].)
+        let mut was=[0i32;64];let no=np.min(stride-1).min(64);
+        for o in 0..no {was[o]=*c.add(1+o);}
         if (0..=np.min(stride-1)).any(|i| *c.add(i)!=0) {core::ptr::write_bytes(c,0,stride);}
         let x0=(b as i32%cols)*8;let y0=(b as i32/cols)*8;let mut n=0;
         for y in y0..(y0+8).min(h){
@@ -125,6 +133,7 @@ pub unsafe extern "C" fn k_worker_sites(a:u32,chunk:i32){
             }
         }
         if n!=0 {*c=n as i32;}
+        for o in 0..no {let d=was[o]^*c.add(1+o);if d!=0 {(*(any.add(o*16+1) as *const core::sync::atomic::AtomicI32)).fetch_or(d,core::sync::atomic::Ordering::Relaxed);}}
     }
 }
 

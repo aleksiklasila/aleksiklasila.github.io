@@ -289,7 +289,9 @@ self.onmessage = (ev) => {
             simPresentationStop();
         } else if (msg.type === 'tick') {
             // (Its commands prepared now, before it runs: main.js actionPrepare.)
-            if (typeof actionsPrepare === 'function') actionsPrepare(msg.actions);
+            // (A preparation that throws still runs the tick: a tick dropped here left the worker a tick
+            // behind the page for good, every later tick refused (_simTick). Reported as the tick's failure.)
+            try { if (typeof actionsPrepare === 'function') actionsPrepare(msg.actions); } catch (err) { _simError('actions', err, msg.tick | 0); }
             _simStreamPush(msg);
         } else if (msg.type === 'sealed') {
             _simAutoSealed(msg);
@@ -419,7 +421,7 @@ function _simAutoSealed(m) {
         flush = !!b.flush;
         dk = b.dk | 0 || 1;
     }
-    if (typeof actionsPrepare === 'function') actionsPrepare(actions);
+    try { if (typeof actionsPrepare === 'function') actionsPrepare(actions); } catch (err) { _simError('actions', err, t); }
     _simSealed.set(t, { actions: actions || [], flush, dk });
 }
 // Claims the next tick of a word (SEALED, CLAIM) unless the page did, or
@@ -771,7 +773,9 @@ function _simTraceInstall() {
 function _simTick(msg) {
     let t0 = performance.now();
     if (msg.tick !== currentTick) {
-        _simPost({ type: 'error', where: 'tick', message: `tick ${msg.tick} arrived at ${currentTick}` });
+        // (One ahead of the worker can never run: the page counts the worker lost and gets the match again.
+        // One behind is a repeat, dropped.)
+        _simPost({ type: 'error', where: 'tick', message: `tick ${msg.tick} arrived at ${currentTick}`, ahead: msg.tick > currentTick, epoch: _simEpoch });
         return;
     }
     // (How late it starts against its deadline.)
@@ -782,23 +786,28 @@ function _simTick(msg) {
     pathfindBudget = 0;
     // (The step's base ticks, as sealed.)
     simDk = Math.max(1, Math.min(SIM_DK_MAX, msg.dk | 0 || 1));
+    // (Every step up to the tick count's advance reports its failure as the tick's and goes on: a throw
+    // before currentTick++ left the worker a tick behind the page, every later tick refused, the match
+    // stopped with the page and its network alive. The failure's repair: resyncNoteTickFailed.)
     // A resync tick: every peer starts it without history caches.
-    if (msg.flush) snapFlushHistoryCaches();
+    try { if (msg.flush) snapFlushHistoryCaches(); } catch (err) { _simError('gameTick', err, msg.tick); }
     // (The presentation reader keeps off the state while it changes; the last tick's presentation chain taken.)
-    if (typeof simPresentTickCollect === 'function') simPresentTickCollect();
-    if (typeof simPresentTickBegin === 'function') simPresentTickBegin();
-    let teams = msg.teams;
+    try {
+        if (typeof simPresentTickCollect === 'function') simPresentTickCollect();
+        if (typeof simPresentTickBegin === 'function') simPresentTickBegin();
+    } catch (err) { _simError('presentation', err); }
+    let teams = Array.isArray(msg.teams) && msg.teams.length ? msg.teams : [0];
     let firstTeam = currentTick % teams.length;
-    let actions = msg.actions || [];
+    let actions = Array.isArray(msg.actions) ? msg.actions : [];
     for (let k = 0; k < teams.length && actions.length > 0; k++) {
         let teamId = teams[(firstTeam + k) % teams.length];
-        let acts = actions.filter(a => (a.teamId ?? 0) === teamId);
+        let acts = actions.filter(a => (a?.teamId ?? 0) === teamId);
         if (acts.length > 0) {
             try { processActions(acts, teamId); } catch (err) { _simError('actions', err, msg.tick); }
         }
     }
     try { gameTick(); } catch (err) { _simError('gameTick', err, msg.tick); }
-    if (typeof simPresentTickEnd === 'function') simPresentTickEnd();
+    try { if (typeof simPresentTickEnd === 'function') simPresentTickEnd(); } catch (err) { _simError('presentation', err); }
     let tick = currentTick;
     currentTick++;
     let simMs = performance.now() - t0;

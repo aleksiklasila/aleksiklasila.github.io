@@ -746,7 +746,10 @@ function netMaintain(now = performance.now()) {
     netNotePumpFrame(now);
     netUpdateAutoController(now);
     netMaybeBroadcastStats(now);
-    if (gameStarted && !gameOver) {
+    // (A guest whose own simulation ended the match, the host's result not heard: still in the match for its link
+    // to the host. A host that went silent then left it waiting for good: no reconnect, no migration.)
+    let guestEndOpen = !isHost && gameOver && typeof _migrationOwnEndUnconfirmed === 'function' && _migrationOwnEndUnconfirmed();
+    if (gameStarted && (!gameOver || guestEndOpen)) {
         if (isHost) {
             let participants = getActiveMatchPeerIds();
             for (let pid of participants) {
@@ -776,7 +779,7 @@ function netMaintain(now = performance.now()) {
             }
         }
     }
-    if (gameStarted && !gameOver) {
+    if (gameStarted && (!gameOver || guestEndOpen)) {
         if (isHost) hostMaybeSeekOtherHost(now);
         else guestMaintainHostMigration(now);
         saveMatchRecord();

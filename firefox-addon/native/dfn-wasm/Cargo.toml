@@ -1,0 +1,23 @@
+[package]
+name = "svl-dfn"
+version = "0.1.0"
+edition = "2021"
+description = "Plain-export WebAssembly wrapper around DeepFilterNet3 (libDF + tract) for the Stream Voice Leveler add-on"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "7b14b89", default-features = false, features = ["tract"] }
+ndarray = "0.15"
+# Pulled in by tract's dependencies; plain wasm32 needs a custom source (see lib.rs).
+getrandom = { version = "0.2", features = ["custom"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

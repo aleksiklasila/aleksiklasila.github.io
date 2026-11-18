@@ -6960,7 +6960,8 @@ function hostRemovePlayerFromMatch(peerId) {
         if (_isHostResyncPauseComplete()) _finishHostResyncPause('removed peer');
     }
     // A team with other players still in the match keeps playing.
-    let teammatesLeft = getActiveMatchPeerIds().some(other => other !== pid && getTeamIdForPeer(other) === teamId);
+    // (Teammates loading a join count; a resigned host does not: utils_networking.js hostTeamStillPlayed.)
+    let teammatesLeft = hostTeamStillPlayed(teamId, pid);
     if (teamId >= 0 && !resignedTeams.has(teamId) && !teammatesLeft) {
         queueHostAdminAction({ action: 'forceResignTeam', targetTeam: teamId });
     }
@@ -7282,7 +7283,7 @@ function _hostAcceptTickPacket(conn, rawPacket) {
         _lockstepWarnRateLimited('bad-packet:' + connPeerId, 'Rejected tick packet; requesting resend', {
             tick: packet.tick, packetPeerId: String(packet.peerId || ''), fromPeer: connPeerId
         });
-        try { conn.send({ type: 'TICK_RESEND_REQUEST', tick: packet.tick, count: 1, packetPeerId: connPeerId, rebuild: true }); } catch { }
+        try { conn.send({ type: 'TICK_RESEND_REQUEST', tick: packet.tick, count: 1, packetPeerId: connPeerId, rebuild: true, m: matchStartSessionId || undefined }); } catch { }
         return;
     }
 
@@ -7703,6 +7704,8 @@ function lockstepAdoptAutoTick(tick, dueAbs) {
     netCounters.autoTicks = (netCounters.autoTicks || 0) + 1;
     _lockstepAdoptingTick = { due: dueAbs };
     try { runOneTick(); } finally { _lockstepAdoptingTick = null; }
+    // (Requests that waited for the page to hear of the worker's ticks: sim_client.js simClientFlushDeferred.)
+    if (typeof simClientFlushDeferred === 'function') simClientFlushDeferred();
     // (Its slot of the tick clock is taken; the page may dispatch ahead
     // again at once.)
     let tickMs = netSimulationTickMs();
@@ -7833,7 +7836,7 @@ function _hostRequestMissingPackets(t, now) {
         req.at = now;
         req.n++;
         netCounters.resendRequestsSent++;
-        try { conn.send({ type: 'TICK_RESEND_REQUEST', tick: t, count: 1 + Math.max(0, Math.floor(Number(LOCKSTEP_HOST_PREBUILD_TICKS) || 0)), packetPeerId: pid }); } catch { }
+        try { conn.send({ type: 'TICK_RESEND_REQUEST', tick: t, count: 1 + Math.max(0, Math.floor(Number(LOCKSTEP_HOST_PREBUILD_TICKS) || 0)), packetPeerId: pid, m: matchStartSessionId || undefined }); } catch { }
     }
 }
 
@@ -8361,10 +8364,17 @@ function handleIncomingTickResendRequest(conn, data) {
 
     let packetPeerId = data && data.packetPeerId ? String(data.packetPeerId) : '';
     if (packetPeerId && packetPeerId !== myPeerId) return;
-    if (t < currentTick && !lockstepCommittedByTick[t]) {
-        // The host is missing input for a tick we already ran: our states
-        // cannot match. Only a snapshot resolves it.
-        requestHardLockstepResync(currentTick, 'host asked for an executed tick');
+    // (Another match's (a rematch reuses the link and starts at tick 0): its old tick numbers made packets far
+    // ahead, every later command queued behind them.)
+    if (!netMatchTagOk(data && data.m)) { netCounters.otherMatchDropped = (netCounters.otherMatchDropped | 0) + 1; return; }
+    // (A tick this peer already ran: it ran the host's sealed bundle of it, so the host had our packet when it
+    // sealed; the request crossed that bundle on the way. Before: a full match reload for nothing (running the
+    // tick drops its commit mark). The ticks after it are still answered.)
+    if (t < currentTick) {
+        netCounters.staleResendRequests = (netCounters.staleResendRequests | 0) + 1;
+        count -= currentTick - t;
+        if (count <= 0) return;
+        t = currentTick;
     }
     if (data && data.rebuild) {
         for (let tt = t; tt < t + count; tt++) {
@@ -8478,7 +8488,8 @@ function runOneTick() {
     // the match's first tick.
     if (typeof simClientEnabled !== 'undefined' && simClientEnabled && !simClientActive() && !_simClientStartedThisMatch) {
         _simClientStartedThisMatch = true;
-        simClientStartMatch();
+        // (A join's: the host's own text, sim_client.js simClientNoteJoinText.)
+        simClientStartMatch(typeof simClientTakeJoinText === 'function' ? simClientTakeJoinText() : null);
     }
     let inWorker = typeof simClientActive === 'function' && simClientActive();
     // Reset pathfinding budget before processing actions

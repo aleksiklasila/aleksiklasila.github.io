@@ -271,3 +271,72 @@ chaos-spikes-scenario (mixed/front structural and work-site checks) and
 chaos-scenario-determinism (65 exact state hashes matching across two scalar
 replays and one three-helper replay). Changed JavaScript syntax checks pass.
 All validation after the user's target clarification used WASM32 only.
+
+## 2026-11-18: static audit of hangs and unrecoverable desyncs, fixes
+
+A source-only audit (four rounds, 23 findings) was checked against the code; all 23 hold and are fixed below
+(one, a guest with the host's result still waiting for a tick, has no clear trigger: fixed defensively). Left as
+is: the audit's note that automatic removal after a disconnect is ~11.6 days (`NET_HOST_AUTO_DROP_MS`), which is
+intentional (the host's manual Drop button is the recovery). **None of this has been run yet**: only `node
+--check` of the changed files. Validation (targeted reproductions + the MP regression suites) is the next step.
+
+Simulation-thread hangs:
+- sim_worker.js: a tick whose command preparation (`actionsPrepare`) threw was never queued, and a throw in a
+  tick's pre-steps (history flush, presentation begin) skipped `currentTick++`: the worker refused every later
+  tick, the page kept its link alive (a host looked connected and never advanced). Every step before the advance
+  now reports its failure as the tick's (repair via `resyncNoteTickFailed`) and the tick still advances. A tick
+  that arrives *ahead* of the worker (`ahead` flag) now counts as a worker lost (sim_client.js), which re-gets the
+  match instead of stalling.
+- sim_parallel.js: after a failed chunk or local task, the dispatching thread skipped the rest of its chunks
+  (counted as done). A skipped occupancy block never published its marker, so a helper waiting on it, and the
+  simulation thread waiting for the helper, hung. All chunks now run (as on helpers; first error rethrown), and
+  the occupancy kernel publishes its marker however it ends (also on a missing kernel).
+- sim_client.js / main.js: requests deferred while the worker ran ticks on its own were drained only before the
+  page's `currentTick++`, so the last adoption never drained them, and the pending request blocked further
+  autonomous ticks. `simClientFlushDeferred` now runs after each adopted tick.
+
+Recovery, joins and the start:
+- A guest's 8 s full-sync retry made a new join generation each time; the host discarded each finished snapshot
+  as superseded. Repeats are ignored while that peer's join is in flight (`resyncHostJoinInFlight`; silence is
+  still handled by `resyncHostCheckJoins`).
+- Sim rule switches read from each page's URL (?occupancy, ?traffic*, ?acq) are now the host's: carried in
+  `matchStartConfig.simRules`, adopted by guests (`netSimRulesApply`) and part of the config hash.
+- A guest joining during the start's initialization marked its barrier done; the host still waited for its
+  status. The host now exempts joiners (`_matchInit.exempt`). Initialization also ends after
+  `MATCH_INIT_MAX_TICKS` (64): a periodic cost spike (an every-8th-tick lane commit) never passed the settled test.
+- The warmup poll ended on any worker epoch change (a restore during warmup, e.g. a migration resync) and nothing
+  restarted it: it now ends only with the match or the worker gone.
+- A guest's normal start left `matchStartWaitingForReady` cleared by `startGame()`, stopping its loading
+  heartbeat while its worker loaded (the host dropped it after 45 s). Set again after `startGame()`.
+- A failed host start after START_GAME_PREPARE now sends START_GAME_CANCEL; guests leave the loading overlay.
+- Live/paused joins with the worker: the page skips restoring a staged Q/E and the navigation state, and the
+  worker started at the first tick from a snapshot of the page, without them. The worker now starts from the
+  host's own join text (`simClientNoteJoinText`/`simClientTakeJoinText`, valid while no tick ran and no state was
+  decoded since: `snapDecodeSeq`).
+- Late-command carry (`lockstepHostCarryByPeer`) moves with a player's roster entry on a peer-id migration.
+- `forceResignTeam` decisions use `hostTeamStillPlayed`: a teammate loading a join counts, a resigned host not.
+- A held-order queue of a joining guest promoted to host is released (`resyncGuestReleaseOnPromotion`).
+- A second guest-only tick failure within the 60 s repair interval is owed (`failOwed`) and requested later,
+  unless a restore since replaced the state.
+- TICK_RESEND_REQUEST carries the match tag (a previous match's request made far-future packets in a rematch); a
+  request for a tick already run is stale (it crossed the sealed bundle) and no longer forces a full sync.
+
+End of match:
+- A guest whose own end the host has not confirmed now keeps its silent-host reconnect and migration checks.
+- A full sync asked after the host's end (a reload after the final tick) is the final state now, with the result
+  after it, not a join scheduled for a tick that never runs. A guest that has the host's result but no bundle to
+  run next asks for the final state after 5 s.
+
+Host migration:
+- A handover acknowledgement after HOST_HANDOVER_MS is still accepted (from any peer handed to); a successor
+  answers a retry of the same handover; a successor whose acknowledgement lost to another is told by HOST_MOVED
+  and joins the winner (no two hosts).
+- Two hosts that are each alone when a split heals: only the larger id demotes (`players` in HOST_SEEK_REPLY).
+- Worker-loss handover falls back to linked spectators after the players.
+- A reloaded former host searches for the match for `MATCH_RECORD_SEEK_MS` (~85 s), longer than a lone
+  opponent's election wait (60 s + attempt), instead of six tries (~35 s).
+
+Validation to do (suggested order): a host-worker tick that throws in preparation; a forced chunk failure in the
+occupancy kernel with helpers; a full sync whose snapshot takes > 8 s; a guest reload during warmup; a live join
+with a Q/E staged; a rematch with a delayed resend request; handover with the acknowledgement delayed > 4 s; then
+the MP regression suites (worker and page modes).

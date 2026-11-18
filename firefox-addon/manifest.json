@@ -1,0 +1,38 @@
+{
+  "manifest_version": 2,
+  "name": "Stream Voice Leveler",
+  "version": "0.1.0",
+  "description": "Equalizer and voice leveler for YouTube: turn a loud streamer down relative to the game or music behind them.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "stream-voice-leveler@aleksiklasila",
+      "strict_min_version": "115.0"
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "permissions": ["storage", "activeTab", "downloads"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "browser_action": {
+    "default_title": "Stream Voice Leveler",
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "web_accessible_resources": ["separator-worklet.js", "dfn/svl_dfn.wasm", "dfn/DeepFilterNet3_onnx.tar.gz"],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.youtube-nocookie.com/*"
+      ],
+      "js": ["common.js", "dsp.js", "content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}

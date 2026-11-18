@@ -246,27 +246,30 @@ const _simOccW = _simWK(['occ.bits','occ.mask','occ.rec','?-','?-','?-','?-',
 // occupancyJobs), then its finish is published for the blocks waiting on it
 // (also when it throws: they would wait forever).
 SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
-    if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
-    const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
-    for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
-    // (The thread's scratch: the job's rows gathered and ordered there, mv.rs move_job. Set here: a helper whose
-    // first kernel is this one has no other call's words.)
-    _simWasmArgI[1000]=_simWEnc(_simWasmScratch);_simWasmArgI[1001]=_simWasmScratchWords;_simWasmArgI[1002]=_simThreadSlot;
     const J=R['occ.jobs'],D=R['occ.deps'],cfg=R['occ.config'],bw=cfg[5],bh=cfg[6],jobs=bw*bh;
     let ph=0;while(ph<3&&c>=J[ph+1])ph++;
     const j=J[8+c],e=Atomics.load(D,2*jobs),bx=j%bw,by=(j-bx)/bw;
-    for(let ny=by-1;ny<=by+1;ny++){
-        if(ny<0||ny>=bh)continue;
-        for(let nx=bx-1;nx<=bx+1;nx++){
-            if(nx<0||nx>=bw||((nx&1)|((ny&1)<<1))>=ph)continue;
-            const nj=ny*bw+nx;
-            if(D[jobs+nj]!==e)continue;
-            for(let v;(v=Atomics.load(D,nj))!==e;)Atomics.wait(D,nj,v,2);
+    // (The block's finish is published however the chunk ends, a missing kernel included: a block waiting on it
+    // waited forever otherwise.)
+    try{
+        if(!_simMoveWasm(R,P))_simNoWasm('MOVE_OCCUPANCY');
+        const A=_simWPtrs(_simOccW);if(!A)_simNoWasm('MOVE_OCCUPANCY');
+        for(let i=0;i<A.length;i++)_simWasmArgI[512+i]=_simWEnc(A[i]);
+        // (The thread's scratch: the job's rows gathered and ordered there, mv.rs move_job. Set here: a helper whose
+        // first kernel is this one has no other call's words.)
+        _simWasmArgI[1000]=_simWEnc(_simWasmScratch);_simWasmArgI[1001]=_simWasmScratchWords;_simWasmArgI[1002]=_simThreadSlot;
+        for(let ny=by-1;ny<=by+1;ny++){
+            if(ny<0||ny>=bh)continue;
+            for(let nx=bx-1;nx<=bx+1;nx++){
+                if(nx<0||nx>=bw||((nx&1)|((ny&1)<<1))>=ph)continue;
+                const nj=ny*bw+nx;
+                if(D[jobs+nj]!==e)continue;
+                for(let v;(v=Atomics.load(D,nj))!==e;)Atomics.wait(D,nj,v,2);
+            }
         }
-    }
-    _simWasmArgF[4]=ph;
-    try{_simWasmX.mv_move_occupancy(_simWasmArgsW,c-J[ph]);}
-    finally{Atomics.store(D,j,e);Atomics.notify(D,j);}
+        _simWasmArgF[4]=ph;
+        _simWasmX.mv_move_occupancy(_simWasmArgsW,c-J[ph]);
+    }finally{Atomics.store(D,j,e);Atomics.notify(D,j);}
 };
 
 // One tick of an armed mover (see simMoveTryArm in unit.js): Unit.update
@@ -1227,7 +1230,12 @@ function simParallelRun(kernel, total, local = null) {
     let ctl = pool.ctl;
     // Closed (odd) while this job is written; the last one's helpers leave.
     Atomics.add(ctl, SIM_PAR_GEN, 1);
-    for (let a; (a = Atomics.load(ctl, SIM_PAR_ACTIVE)) !== 0;) Atomics.wait(ctl, SIM_PAR_ACTIVE, a, 5);
+    // (Tracing: this wait for the last job's helpers to leave it, aw:<kernel>.)
+    if (Atomics.load(ctl, SIM_PAR_ACTIVE) !== 0) {
+        const tw0 = _simParTrace ? performance.now() : 0;
+        for (let a; (a = Atomics.load(ctl, SIM_PAR_ACTIVE)) !== 0;) Atomics.wait(ctl, SIM_PAR_ACTIVE, a, 5);
+        if (tw0) { const tr = _simParTrace, k = 'aw:' + kernel; tr[k] = (tr[k] || 0) + performance.now() - tw0; }
+    }
     ctl[SIM_PAR_KERNEL] = kernel; ctl[SIM_PAR_TOTAL] = total; ctl[SIM_PAR_DONE] = 0; ctl[SIM_PAR_REGVER] = _simParRegVer;
     // (Tracing: every thread's longest chunk of this job, in microseconds, at SIM_PAR_TRACE_MAX.)
     ctl[SIM_PAR_TRACE_ON] = _simParTrace ? 1 : 0; ctl[SIM_PAR_TRACE_MAX] = 0;
@@ -1245,7 +1253,9 @@ function simParallelRun(kernel, total, local = null) {
             let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
             if (c >= total) break;
             const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
-            if (!failed) { try { fn(_simParReg, _simParams, c); } catch (err) { failed = err; } }
+            // (Every chunk runs after a failure too, as on the helpers: a chunk skipped here never published what
+            // other chunks wait for (the occupancy's block marks), and its waiting helper and this thread hung.)
+            try { fn(_simParReg, _simParams, c); } catch (err) { if (!failed) failed = err; }
             if (t0) _simParTraceChunk(ctl, t0, c);
             Atomics.add(ctl, SIM_PAR_DONE, 1);
         }
@@ -1998,7 +2008,8 @@ SIM_KERNELS[SIM_KERNEL_HEAL_REDUCE] = function (R, P, owner) { _simRust(_simHeal
 // request/results. No live columns: withdrawals/deaths are checked by the
 // tick as it consumes its bounded share. P: chunks, chunk size, K, healer kind.
 // (?ws.otmp: the id sort's other buffer, as long as ws.order.)
-const _simWsOrderW = _simWK(['ws.rcnt', 'ws.rkind', 'ws.rid', 'ws.res', '?ws.ures', 'ws.order', 'ws.orderCount', '?ws.otmp']);
+// (8-14: the pre-claim's (k.rs ws_preclaim): owners, needs, collector groups, scores, the claim table, the healers' damaged units' x / y.)
+const _simWsOrderW = _simWK(['ws.rcnt', 'ws.rkind', 'ws.rid', 'ws.res', '?ws.ures', 'ws.order', 'ws.orderCount', '?ws.otmp', '?ws.rowner', '?ws.rneed', '?ws.rgrp', '?ws.score', '?ws.claim', '?wsh.x', '?wsh.y']);
 SIM_KERNELS[SIM_KERNEL_WS_ORDER] = function (R, P, chunk) { _simRust(_simWsOrderW, P, chunk, 'k_ws_order', 'WS_ORDER'); };
 
 const SIM_KERNEL_WS_RETURN_SPAWNERS = 136;
