@@ -901,6 +901,14 @@ class Unit {
     }
     // Its flow route's end (column rtEnd; with its profile, nvProf: the
     // field sweep's).
+    // Until when its budget glyph shows (pathfinding.js): a column (abBlk, NaN none).
+    get _astarBudgetBlockedUntil() { const c = this._us; if (c) { const v = c.abBlk[this._si]; return v === v ? v : undefined; } return this._det ? this._det._astarBudgetBlockedUntil : this._abb; }
+    set _astarBudgetBlockedUntil(v) {
+        const c = this._us;
+        if (c) c.abBlk[this._si] = typeof v === 'number' ? v : NaN;
+        else if (this._det) this._det._astarBudgetBlockedUntil = v;
+        else Object.defineProperty(this, '_abb', { value: v, writable: true, configurable: true });
+    }
     get _routeEnd() { const c = this._us; return c ? c.rtEnd[this._si] : (this._det ? this._det._routeEnd : this._ree); }
     set _routeEnd(v) {
         const c = this._us;
@@ -1169,8 +1177,8 @@ class Unit {
 // them all (one shape), made at the first value set; undefined until then,
 // as before. In the snapshot by name (simUnitStateKeys).
 // (A worker's memory is its worker record's columns: SIM_WK_MEM, below.)
-const UNIT_ROLE_FIELDS = ['_astarLastChargedTick', '_astarLastChargedFromKey', '_astarLastChargedToKey', '_astarBudgetBlockedUntil',
-    '_nextScoutRetargetTick', '_levelTextLabel', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
+// (Presentation only: none of them is state. The blocked glyph's tick is a column, abBlk.)
+const UNIT_ROLE_FIELDS = ['_levelTextLabel', '_ambientSoundTicks', '_r3d', '_r3dSig', '_r3dTex', '_visStill'];
 // (Every field takes any kind of value from the start: see _makeUnitFieldsMutable.)
 const _UnitRoleMem = new Function(UNIT_ROLE_FIELDS.map(k => 'this.' + k + ' = 1; this.' + k + ' = _UNIT_FIELD_WIDEN; this.' + k + ' = 0.5; this.' + k + ' = undefined;').join(' '));
 for (const k of UNIT_ROLE_FIELDS) {
@@ -2161,8 +2169,8 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
 // none flying), active mines for collectors, its owner's cloud towers.
 const _nwP = new Float64Array(16);
 let _nwOut = null, _nwCloud = null, _nwCloudN = -1;
-function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null, out = { x: 0, y: 0 }) {
-    if (!_nwOut || !simHeapHas(_nwOut)) _nwOut = simHeapArray(Int32Array, 2);
+// (Which stationary types are clouds, by type index: for the kernel; also pp.rs's.)
+function findNearestWalkableClouds() {
     _stationaryTypesSeed();
     const nty = _stationaryTypes.length;
     if (_nwCloudN !== nty || !_nwCloud || !simHeapHas(_nwCloud)) {
@@ -2170,6 +2178,12 @@ function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null, out = { x: 0, 
         for (let i = 0; i < nty; i++) { const b = BASE_CARD_TYPES[_stationaryTypes[i]]; _nwCloud[i] = b && b.isCloud ? 1 : 0; }
         _nwCloudN = nty;
     }
+    return _nwCloud;
+}
+function findNearestWalkable(gx, gy, fromGx, fromGy, unit = null, out = { x: 0, y: 0 }) {
+    if (!_nwOut || !simHeapHas(_nwOut)) _nwOut = simHeapArray(Int32Array, 2);
+    findNearestWalkableClouds();
+    const nty = _stationaryTypes.length;
     const wt = unit ? unit.workerType : null, build = wt === 'builder' || wt === 'salvager', P = _nwP;
     const T = _ST.code && _ST.n === GRID_W * GRID_H ? _ST : null;
     if (T && !simHeapHas(T.code)) structTablesRehome();
@@ -2273,9 +2287,13 @@ function simMoveDisarm(u) {
 // units get their stats as plain fields, and when the stat tables change in
 // place: _precomputedStatsVersion).
 let _simMoveStatsVersion = -1;
+// (Every unit by the id table's slots, k.rs k_unit_stats_apply (utils_snapblock.js snapUnitsDerive): no unit object.
+// Called after simMoveDisarmAll: no unit is armed.)
 function simMoveRefreshAllStats() {
     _simMoveStatsVersion = typeof _precomputedStatsVersion !== 'undefined' ? _precomputedStatsVersion : 0;
-    for (const u of units) if (u && u._us) simMoveStatsChanged(u);
+    if (typeof _simUnitState === 'undefined' || !_simUnitState) return;
+    const R = unitRows();
+    snapUnitsDerive(R.slots, R.n);
 }
 
 // (At a resync, on every peer, and in a restore: every unit disarmed, and
@@ -2370,9 +2388,8 @@ function simMoveStatsChanged(u, previousRow) {
 }
 
 
-// Flow mode: a unit following the flow navigation (destination field slot
-// `fid`, its generation `gen`; the air navigation for a flying unit) to tile
-// `dest` under command `cmd`, armed
+// Flow mode: a unit following the flow navigation (its profile's atlas; the
+// air navigation for a flying unit) to tile `dest` under command `cmd`, armed
 // from its columns alone (stats: simMoveStatsChanged). False when those do
 // not allow it (Unit.update keeps the unit).
 const SIM_FLOW_ARRIVE = 2;
@@ -2390,7 +2407,8 @@ function _simWorkerKind(u) {
     return ws === 'RETURNING_FOR_GOLD' || (ws === 'RETURNING' && u.workerType === 'salvager') ? 3 : 1;
 }
 // (profile: its navigation's, flownav.js navProfileOf: its walls and fields.)
-function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false, isWorker = false, profile = flying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND) {
+// (Its route on its profile's atlas, ready at once: flow NAV_ATLAS_FID, flownav.js navRouteFid.)
+function simFlowArm(c, s, dest, cmd, flying, worker = false, isWorker = false, profile = flying ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND) {
     if (!(simUnitStatValue(c,s,0) >= 0) || c.sepKey[s] === SIM_SEP_ABSENT) return false;
     // (Bit 128: no arriving in a crowd short of the tile: a worker's task
     // is at its tile, a lone unit's order too.)
@@ -2406,7 +2424,7 @@ function simFlowArm(c, s, fid, gen, dest, cmd, flying, ready = 0, worker = false
         _simMoveEnsureAreaBox(area, reach);
         flags |= 1;
     }
-    c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach; c.mvFlow[s] = fid; c.mvFGen[s] = gen; c.mvDest[mvtM(s)] = dest; c.mvReady[s] = ready; c.mvNP[mvtM(s)] = profile; c.mvSteer[mvtS(s * SIM_STEER_W + SIM_ST_STEADY)] = 0;
+    c.mvFlags[mvtM(s)] = flags; c.mvReach[s] = reach; c.mvFlow[s] = NAV_ATLAS_FID; c.mvFGen[s] = 0; c.mvDest[mvtM(s)] = dest; c.mvReady[s] = 0; c.mvNP[mvtM(s)] = profile; c.mvSteer[mvtS(s * SIM_STEER_W + SIM_ST_STEADY)] = 0;
     // (1: a worker at its task, which stands where the way ends; 2: one the
     // player sent, handed back there.)
     c.mvWk[s] = isWorker === 2 || isWorker === 3 ? isWorker : (isWorker ? 1 : 0);
@@ -2445,9 +2463,8 @@ function simMoveTryArm(u) {
     if (!(nd && nd.nav) || u._spatialEpoch !== spatialEpoch) return;
     const s = u._si, profile = nd.nav - 1, dest = nd.y * GRID_W + nd.x;
     if (Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === dest) return;
-    const did = navFieldRequest(profile, dest, !!nd.w);
     // (Arriving in a crowd short of the tile: groups only.)
-    if (did >= 0) simFlowArm(c, s, did, navFieldGen(did), dest, cmd, profile === NAV_PROFILE_AIR, nd.ready | 0, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
+    if (navRouteFid(profile, dest) >= 0) simFlowArm(c, s, dest, cmd, profile === NAV_PROFILE_AIR, !!u.workerState || !nd.w, _simWorkerKind(u), profile);
 }
 
 // The units standing on tile (gx, gy) when it became a wall (a tower's
@@ -3620,7 +3637,7 @@ function _simMoveSepListed(chunks, per) {
     }
     if (retries) {
         retries.sort((a, b) => a.id - b.id);
-        for (let u of retries) _tryUpgradeAstarFallbackPath(u);
+        pendingPathUpgradeUnits(retries);
     }
 }
 
@@ -3820,7 +3837,13 @@ function acqTierRemapSlots(map, runs, n0, ns) {
     }
     // (bt: a unit's slot, or a structure's tile under mode 16.)
     const bt = _simParReg['acq.bt'], bm = _simParReg['acq.bm'];
-    if (bt && bm) for (let s = 0; s < ns; s++) { const t = bt[s], m = bm[s]; if (t >= 0 && m !== 255 && (m & 16) === 0) bt[s] = t < n0 ? map[t] : -1; }
+    // (The scan's unit targets (acq.out) too: the brain's fallback (k.rs brain_pick) reads them by slot at the
+    // commit; left at the old slots, a compaction on one peer only refused fallbacks the other took. -1 one gone.)
+    const out = _simParReg['acq.out'];
+    for (let s = 0; s < ns; s++) {
+        if (bt && bm) { const t = bt[s], m = bm[s]; if (t >= 0 && m !== 255 && (m & 16) === 0) bt[s] = t < n0 ? map[t] : -1; }
+        if (out) { const t = out[s]; if (t >= 0) out[s] = t < n0 ? map[t] : -1; }
+    }
     _acqN = ns;
 }
 // Units moved while a run is in flight (sim_unit_state.js
@@ -3977,7 +4000,7 @@ function _acqPost() {
     // (Sampled with answers: the build's count, offsets and scatter, the
     // structure seeds, the answers and their pack, six stages; sampled
     // only: the build.)
-    const scanSlot = 1 + (sampled ? (answers ? 6 : 1) : 0);
+    const scanSlot = 1 + (sampled ? (answers ? 7 : 1) : 0);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
@@ -4016,6 +4039,8 @@ function _acqPost() {
         // (Each entry one record, x, y, slot, id: no owner, the bucket is the
         // owner's; acq_sample.rs e_put.)
         _acqArray('acq.saE',Int32Array,4*ecap);
+        // (The buckets' sort buffer, as long: answers only, k_acq_area_sort.)
+        if(areaTargets)_acqArray('acq.saE2',Int32Array,4*ecap);
         _acqArray('acq.saKey',Int32Array,ecap);
         const near=_acqArray('acq.saNear',Int32Array,areaTargets?1:A*64);
         const I=simParallelStageParams(ACQ_LANE,1);I.fill(0);I[0]=ne;I[20]=A;I[7]=B[7];
@@ -4047,8 +4072,10 @@ function _acqPost() {
             _acqArray('acq.saHist',Int32Array,ranges*A*I[7]);
             // (The pack's records a job: I[37].)
             const packPer=8192;I[37]=packPer;
-            for(let slot=2;slot<=6;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
-            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],
+            // (The buckets' sort after the scatter: P[38] keys a job, ~64 jobs.)
+            const sortKeys=A*I[7];I[38]=Math.max(1,Math.ceil(sortKeys/64));
+            for(let slot=2;slot<=7;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
+            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],[SIM_KERNEL_ACQ_AREA_SORT,Math.max(1,Math.ceil(sortKeys/I[38]))],
                 [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5],[SIM_KERNEL_ACQ_AREA_PACK,Math.ceil(A*I[7]/packPer)]);
         }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }

@@ -274,6 +274,56 @@ pub unsafe extern "C" fn k_acq_area_scatter(a:u32,chunk:i32){
     }
 }
 
+/// Each area bucket's entries in id order (keys [chunk * P[38], ..)): the scatter leaves them in the unit
+/// index's order, by slot within a cell, and a unit's answer is a batch of four at a seeded place in its target's
+/// bucket (area_batch): with another slot layout (a restore lays the slots out anew) the same unit met other
+/// candidates and took another target, so the restored peer diverged. An LSD radix sort (8-bit passes, the bytes
+/// all ids share skipped) through acq.saE2 ([29], as long as acq.saE): a bucket's range there is its own, so the
+/// jobs never meet. (Two to sixteen entries: an insertion sort, the radix pass's 256 counters for nothing.)
+#[no_mangle]
+pub unsafe extern "C" fn k_acq_area_sort(a:u32,chunk:i32){
+    let k=K::new(waddr(a) as *const i32);
+    let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;let keys=na*players;
+    let per=k.i(38).max(1) as usize;let k0=(chunk.max(0) as usize*per).min(keys);let k1=(k0+per).min(keys);
+    let (off,E,T)=(k.p::<i32>(27),k.p::<i32>(28),k.p::<i32>(29));
+    for key in k0..k1 {
+        let lo=*off.add(key) as usize;let n=*off.add(key+1) as usize-lo;
+        if n>=2 {sort_bucket(E.add(lo*EW),T.add(lo*EW),n);}
+    }
+}
+#[inline(always)]
+unsafe fn sort_bucket(e:*mut i32,t:*mut i32,n:usize){
+    let id=|p:*const i32,j:usize|->u32{*p.add(j*EW+3) as u32};
+    if n<=16 {
+        for i in 1..n {
+            let r=[*e.add(i*EW),*e.add(i*EW+1),*e.add(i*EW+2),*e.add(i*EW+3)];let v=r[3] as u32;
+            let mut j=i;
+            while j>0&&id(e,j-1)>v {for w in 0..EW {*e.add(j*EW+w)=*e.add((j-1)*EW+w);}j-=1;}
+            for w in 0..EW {*e.add(j*EW+w)=*r.get_unchecked(w);}
+        }
+        return;
+    }
+    let (mut or,mut and)=(0u32,u32::MAX);
+    for j in 0..n {let v=id(e,j);or|=v;and&=v;}
+    let diff=or^and;
+    let (mut src,mut dst)=(e,t);
+    let mut cnt=[0u32;256];
+    for b in 0..4u32 {
+        let sh=8*b;
+        if (diff>>sh)&0xFF==0 {continue;}
+        for c in cnt.iter_mut() {*c=0;}
+        for j in 0..n {*cnt.get_unchecked_mut(((id(src,j)>>sh)&0xFF) as usize)+=1;}
+        let mut sum=0u32;
+        for c in cnt.iter_mut() {let v=*c;*c=sum;sum+=v;}
+        for j in 0..n {
+            let d=cnt.get_unchecked_mut(((id(src,j)>>sh)&0xFF) as usize);let at=*d as usize;*d+=1;
+            for w in 0..EW {*dst.add(at*EW+w)=*src.add(j*EW+w);}
+        }
+        core::mem::swap(&mut src,&mut dst);
+    }
+    if src!=e {core::ptr::copy_nonoverlapping(src,e,n*EW);}
+}
+
 /// The answers packed into acq.saRec (see RW), records [chunk * P[37], ..)
 /// of the players * areas, after k_acq_area_answers wrote its ten arrays
 /// (which the spreads keep as their own: dist is their visited mark).

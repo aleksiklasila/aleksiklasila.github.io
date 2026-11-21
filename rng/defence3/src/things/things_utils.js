@@ -214,7 +214,12 @@ function _adjApplyRun(no, passive) {
     for (let j = 0; j < jobs; j++) for (let q = 0, n = evn[j * 16], b = j * ADJ_APPLY_PER_JOB; q < n; q++) {
         const e = 4 * (b + q), T = _sTables.get(classes[ev[e]]), obj = T ? T.rowObj[ev[e + 1]] : null, flags = ev[e + 2], i = ev[e + 3];
         if (!obj) continue;
-        if (flags & 2) { const t = OT[i], gx = t % GRID_W, gy = (t - gx) / GRID_W; workSiteDirty(gx, gy); simTrapDirty(gx, gy); }
+        if (flags & (2 | 64)) {
+            const t = OT[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
+            if (flags & 2) { workSiteDirty(gx, gy); simTrapDirty(gx, gy); }
+            // (Its label and levels to the page at the next tick.)
+            if ((flags & 64) && typeof simPresentTileDirty === 'function') simPresentTileDirty(gx, gy);
+        }
         if (flags & 16) visCoverOnBuildingChanged(obj);
         if ((flags & 32) && obj.laserCheck) obj.laserCheck();
     }
@@ -723,11 +728,13 @@ function _effStatsApply(L, n) {
 }
 // The units of some owners (a restore's stale tables), but those skipped
 // (carried), by the kernel at once: the others marked taken first.
-function effStatsAllUnits(owners, skip) {
+// (owners: the players; skip: the slots of the patch's units, n of them. The marks by a kernel, utils_snapblock.js
+// snapUnitsEffTaken: no unit object.)
+function effStatsAllUnits(owners, skip, nskip) {
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null, n = units.length;
     if (!S || !n) return;
-    const stamp = ++_effectiveStatsStamp, c = S.columns;
-    for (const u of units) if (u && u._us === c && (!owners.has(u.owner) || skip.has(u))) c.esTaken[u._si] = stamp;
+    const stamp = ++_effectiveStatsStamp;
+    snapUnitsEffTaken(owners, skip, nskip, stamp);
     _effUnitsRun(Math.max(0, Math.floor(Number(gameTime) || 0)), 1, 0, n, stamp);
 }
 const _effPSave = new Float64Array(32);
@@ -839,6 +846,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     if (!cardDef) return false;
     let placedNewStructure = false;
     let placedNewWallStructure = false;
+    let placed = null;
 
     // Simulation code must not read this client's UI toggles (they differ
     // between players); the placing player's choice travels in the action.
@@ -846,7 +854,12 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     let useDefaultBuild = true;
     let silentPlace = false;
     let ignorePlacementRules = false;
+    // The selected build level's stacks (2^(level - 1)): a new structure is
+    // ordered with them, one standing here gets its stacks up to them (never
+    // fewer than it has).
+    let stackTarget = 1;
     if (defaults && typeof defaults === 'object') {
+        if (defaults.stacks !== undefined) stackTarget = Math.max(1, Math.floor(Number(defaults.stacks) || 1));
         if (defaults.autoUpgradeEnabled !== undefined) useDefaultAutoUpgrade = !!defaults.autoUpgradeEnabled;
         if (defaults.buildEnabled !== undefined) useDefaultBuild = !!defaults.buildEnabled;
         if (defaults.silent !== undefined) silentPlace = !!defaults.silent;
@@ -917,7 +930,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         // Tower - check if same type exists for stacking
         let existing = getTowerAtTile(gx, gy);
         if (!(existing && existing.type === itemKey && existing.owner === playerId)) existing = null;
-        if (existing) { existing.upgrade(); }
+        if (existing) { stackThingUpTo(existing, stackTarget); }
         else {
             // (Its tile turns into a wall when it is built: structureWallSync.
             // Under construction every unit walks over it.)
@@ -928,7 +941,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             t.buildEnabled = useDefaultBuild;
             t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
             t.updateTextCache();
-            setTileEntity(gx, gy, itemKey, t); towerJoinedOrLeft(t);
+            setTileEntity(gx, gy, itemKey, t); towerJoinedOrLeft(t); placed = t;
             placedNewStructure = true;
             placedNewWallStructure = true;
         }
@@ -938,7 +951,7 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         let existing = getBarrackAtTile(gx, gy);
         if (!(existing && existing.unitType === unitType && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let b = new Barrack(gx, gy, playerId, unitType);
@@ -949,14 +962,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(b);
             barracksChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, b);
+            setTileEntity(gx, gy, itemKey, b); placed = b;
             placedNewStructure = true;
         }
     } else if (itemKey === 'spawner') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'spawner' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new CollectorSpawner(gx, gy, playerId);
@@ -967,14 +980,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else if (itemKey === 'astar_spawner') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'astar_spawner' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new AstarSpawner(gx, gy, playerId);
@@ -985,14 +998,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else if (itemKey === 'salvager') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'salvager' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new SalvagerSpawner(gx, gy, playerId);
@@ -1003,14 +1016,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else if (itemKey === 'builder_spawner') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'builder_spawner' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new BuilderSpawner(gx, gy, playerId);
@@ -1022,14 +1035,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else if (itemKey === 'healer_spawner') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'healer_spawner' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new HealerSpawner(gx, gy, playerId);
@@ -1040,14 +1053,14 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else if (itemKey === 'research') {
         let existing = getSpawnerAtTile(gx, gy);
         if (!(existing && existing.type === 'research' && existing.owner === playerId)) existing = null;
         if (existing) {
-            addManualStackToThing(existing, 1);
+            stackThingUpTo(existing, stackTarget);
         }
         else {
             let s = new ResearchSpawner(gx, gy, playerId);
@@ -1058,22 +1071,29 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
             updateItemTextCache(s);
             collectorSpawnersChanged();
             cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s);
+            setTileEntity(gx, gy, itemKey, s); placed = s;
             placedNewStructure = true;
         }
     } else {
         // Floor item
         let cell = grid[gy][gx];
         if (cellItemGet(cell) && cellItemGet(cell).type === itemKey && cellOwner[(cell) - 1] === playerId) {
-            addManualStackToThing(cellItemGet(cell), 1);
+            stackThingUpTo(cellItemGet(cell), stackTarget);
         } else {
             let stats = calculateItemStats(itemKey, 1, playerId);
             let item = Object.assign(new FloorItem(), { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild });
             cellOwner[(cell) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, item);
+            setTileEntity(gx, gy, itemKey, item); placed = item;
             updateItemTextCache(item);
             placedNewStructure = true;
         }
+    }
+    // (A new structure's stacks ordered at once: built, then stacked by its
+    // builders up to them. Its levels stay 0 while under construction.)
+    if (placed && stackTarget > 1) {
+        placed.manualStacks = stackTarget;
+        upkeepThingDirty(placed);
+        if (placed.updateTextCache) placed.updateTextCache(); else updateItemTextCache(placed);
     }
     // Newly placed structures start under construction, so they don't affect adjacency yet.
     // Avoid expensive full-map adjacency recalculation on every placement.
@@ -1389,8 +1409,18 @@ function addManualStackToThing(item, amount = 1) {
     refreshThingProgressState(item);
     if (item.updateTextCache) item.updateTextCache();
     else updateItemTextCache(item);
+    // (Its new potential level on the page at the next tick.)
+    if (typeof simPresentTileDirty === 'function' && Number.isFinite(item.gx) && Number.isFinite(item.gy)) simPresentTileDirty(item.gx, item.gy);
     bumpTileOccupancyVersion();
     visCoverOnBuildingChanged(item);
+}
+
+// A build order on a structure standing there: its stacks up to `stacks`
+// (the selected build level's), none taken away, nothing when it has them.
+function stackThingUpTo(item, stacks) {
+    if (!item) return;
+    const want = Math.max(1, Math.floor(Number(stacks) || 1)), have = getThingManualStacks(item);
+    if (want > have) addManualStackToThing(item, want - have);
 }
 
 function getThingBaseLevel(item, fallback = 1) {
@@ -1646,11 +1676,17 @@ function markConstructionComplete(item) {
     if (!item) return;
     structProgressOps(item, 0, 0);
     structCompleteHooks(item);
+    recalculateAdjacency();
 }
 // What a completion tells the systems that are not tables yet (the worker
 // kernel's completions run these after its pass, worker.js _waiBuilt).
 function structCompleteHooks(item) {
     structureWallSync(item);
+    // Built: it joins its group (under construction it had no adjacency
+    // signature), so its tile and neighbours seed the next flood: the whole
+    // group's size and effective levels counted again. (The caller runs
+    // recalculateAdjacency once.)
+    _requestAdjacencyRecalcForThing(item, 1);
     // (Its hammer off at the next tick: presentation only.)
     if (typeof simPresentTileDirty === 'function') simPresentTileDirty(item.gx, item.gy);
     if (item.updateTextCache) item.updateTextCache();
@@ -1704,7 +1740,9 @@ function getLevelLabelText(item) {
     let potentialLevel = item.underConstruction
         ? Math.max(0, Math.floor(getThingPotentialLevel(item, Math.max(0, effectiveLevel)) || effectiveLevel))
         : Math.max(effectiveLevel, Math.floor(getThingPotentialLevel(item, effectiveLevel) || effectiveLevel));
-    let researchedMax = (typeof getThingResearchedMaxLevel === 'function') ? getThingResearchedMaxLevel(item) : MAX_THING_LEVEL;
+    // (A level above the researched maximum, a starting structure's: the cap
+    // holds it there, it does not lower it.)
+    let researchedMax = Math.max(currentLevel, (typeof getThingResearchedMaxLevel === 'function') ? getThingResearchedMaxLevel(item) : MAX_THING_LEVEL);
     let shownLevel = Math.max(effectiveLevel, potentialLevel);
     
     if (shownLevel > currentLevel) {

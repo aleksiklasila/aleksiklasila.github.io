@@ -2,7 +2,8 @@ const assert = require('node:assert/strict');
 // (The population is a power of two: the menu's values.)
 const H = require('./net-harness.cjs');
 
-const world = new H.World();
+// (Pinned to the page: it starts and inspects the simulation on the page itself.)
+const world = new H.World({ simWorker: false });
 const game = world.spawn('starting-spawn-limits', { controls: {
     ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '160', 'cfg-map-type': 'arena',
     'cfg-max-pop': '16384', 'cfg-gold-count': '0', 'cfg-astar-mine-count': '0'

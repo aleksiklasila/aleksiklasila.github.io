@@ -17,10 +17,13 @@ async function latencyCase(network, label, perLink = null) {
     const delays = new Map(all.map(i => [i.name, []]));
     const start = world.now;
     let s = 5;
+    // (The lead each command was issued under: the match delay adapts while this runs (worker mode moved it 4 <-> 5).)
+    const leadAt = new Map();
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     for (let k = 0; k < 40; k++) {
         // Everyone issues a harmless command at the same moment.
         for (const i of all) i.eval(`(() => { const u = units.find(u => u.owner === localPlayerId && !u.dead); queueAction({ action: 'hold', unitIds: u ? [u.id] : [] }); })()`);
+        for (const [netId, info] of world.issued) if (!leadAt.has(netId)) leadAt.set(netId, all.find(i => i.name === info.by).eval('netCommandLeadTicks()'));
         await world.run(100 + Math.floor(rand() * 400));
     }
     await world.run(3000);
@@ -29,7 +32,7 @@ async function latencyCase(network, label, perLink = null) {
         const inst = all.find(i => i.name === info.by);
         const ran = inst.executedActions.get(netId);
         assert.ok(ran, `${label}: ${netId} ran`);
-        delays.get(info.by).push({ ticks: ran.tick - info.tick, ms: ran.at - info.at });
+        delays.get(info.by).push({ ticks: ran.tick - info.tick, ms: ran.at - info.at, lead: leadAt.get(netId) });
     }
     const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
     const out = all.map(i => ({ name: i.name, ticks: avg(delays.get(i.name).map(d => d.ticks)), ms: avg(delays.get(i.name).map(d => d.ms)), n: delays.get(i.name).length }));
@@ -38,10 +41,10 @@ async function latencyCase(network, label, perLink = null) {
     for (const o of out.slice(1)) {
         assert.ok(Math.abs(o.ticks - hostTicks) <= 1.01, `${label}: ${o.name} waits ${o.ticks.toFixed(2)} ticks, host ${hostTicks.toFixed(2)}`);
     }
-    const lead = host.eval('netCommandLeadTicks()');
-    assert.ok(hostTicks >= lead - 0.5, `${label}: host commands wait the match delay (${hostTicks.toFixed(2)} of ${lead})`);
+    const lead = avg(delays.get(host.name).map(d => d.lead));
+    assert.ok(hostTicks >= lead - 0.5, `${label}: host commands wait the match delay (${hostTicks.toFixed(2)} of ${lead.toFixed(2)})`);
     H.checkHealthy(world, all, { minCompared: 20, fromTick: 0, label });
-    return `${label}: command delay host ${out.map(o => o.ticks.toFixed(1) + ' ticks/' + Math.round(o.ms) + 'ms').join(', guests ')} (match delay ${lead} ticks)`;
+    return `${label}: command delay host ${out.map(o => o.ticks.toFixed(1) + ' ticks/' + Math.round(o.ms) + 'ms').join(', guests ')} (match delay ${lead.toFixed(1)} ticks)`;
 }
 
 (async () => {

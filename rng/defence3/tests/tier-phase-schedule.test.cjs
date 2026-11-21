@@ -31,7 +31,9 @@ const byTick = new Map();
 for (const [k, ticks] of Object.entries(r.seen)) {
     // (wsPost / wsCommit only with the search tier's kernels.)
     if (k.startsWith('ws') && !r.wsAvail) continue;
-    assert.ok(ticks.length >= 5, k + ' ran: ' + ticks.length);
+    // (A search is committed only when its post found due workers (worker.js _wsPost: no requests, no post to
+    // take): in this small match 3 of 12 cycles. Enough to see it on a tick of its own.)
+    assert.ok(ticks.length >= (k === 'wsCommit' ? 2 : 5), k + ' ran: ' + ticks.length);
     for (const t of ticks) { if (!byTick.has(t)) byTick.set(t, []); byTick.get(t).push(k); }
 }
 const shared = [...byTick].filter(([, ks]) => new Set(ks).size > 1);

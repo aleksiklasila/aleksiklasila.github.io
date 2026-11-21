@@ -57,8 +57,10 @@ const rows=[],bursts=[];let recovery=null,cleanComparisons=0,initialSnapshots=[]
 let world,all,start;
 fs.mkdirSync(path.dirname(out),{recursive:true});
 fs.writeFileSync(out+'.jsonl','');
-const state=i=>i.eval(`(()=>{const roles={};for(const u of units)if(u.workerType){const r=roles[u.workerType]||(roles[u.workerType]={count:0,assigned:0,carrying:0});r.count++;if(u.workerTarget)r.assigned++;if(u.carryingValue||u.builderHasMaterial||u.healerHasMaterial)r.carrying++;}
- return {name:${JSON.stringify(i.name)},tick:currentTick,units:units.length,work:{...__scratch.stressWork},actionKinds:{...__scratch.actionKinds},roles,depletedMines:__scratch.stressMines?.filter(([m,key])=>m[key]<=0).length,desyncs:netCounters.desyncsDetected,patches:${i.patchesApplied},snapshots:${i.snapshotsApplied},heap:simHeapStats(),occupancy:occupancyAudit(),gameOver};})()`);
+// (The occupancy is the simulation's: with a simulation worker, the worker's (evalSim).)
+const state=i=>({...stateOnPage(i),occupancy:i.evalSim('occupancyAudit()')});
+const stateOnPage=i=>i.eval(`(()=>{const roles={};for(const u of units)if(u.workerType){const r=roles[u.workerType]||(roles[u.workerType]={count:0,assigned:0,carrying:0});r.count++;if(u.workerTarget)r.assigned++;if(u.carryingValue||u.builderHasMaterial||u.healerHasMaterial)r.carrying++;}
+ return {name:${JSON.stringify(i.name)},tick:currentTick,units:units.length,work:{...__scratch.stressWork},actionKinds:{...__scratch.actionKinds},roles,depletedMines:__scratch.stressMines?.filter(([m,key])=>m[key]<=0).length,desyncs:netCounters.desyncsDetected,patches:${i.patchesApplied},snapshots:${i.snapshotsApplied},heap:simHeapStats(),gameOver};})()`);
 function persist(status,error){fs.writeFileSync(out,JSON.stringify({status,error:String(error?.stack||error||''),count,map,mapType,networkName,structures,ticks,dk,helperCounts,teams,legacyCollisions,options,cleanComparisons,recovery,bursts,rows,states:all?.map(state),hashes:all?.map(i=>({name:i.name,fast:[...i.tickHashes],exact:[...i.tickExact],parts:[...i.tickParts]}))},null,2));
  if(error&&process.env.DIVTRACE)fs.writeFileSync(out+'.trace.json.gz',require('node:zlib').gzipSync(JSON.stringify(all.map(i=>({name:i.name,trace:[...(i.scratch.div||[])],near:i.scratch.near}))),{level:1}));}
 function check(){
@@ -83,7 +85,8 @@ function check(){
   for(let j=0;j<goldMines.length;j+=3)goldMines[j].gold=Math.min(goldMines[j].gold,20+(j%7)*10);
   for(let j=0;j<astarMines.length;j+=3)astarMines[j].astar=Math.min(astarMines[j].astar,20+(j%7)*10);`,4);
  assert.ok(await world.runUntil(()=>all.every(i=>i.eval('currentTick')>at+2),90000,20),'bulk scene setup completed');
- for(const i of all){assert.deepEqual(i.scratch.stressSetup.errors,[]);for(const role of ['collector','astar_collector','builder','salvager','healer','researcher']){
+ // (Copied into this realm: in worker mode the setup's arrays are the simulation worker's, another realm's Array.)
+ for(const i of all){assert.deepEqual([...i.scratch.stressSetup.errors],[]);for(const role of ['collector','astar_collector','builder','salvager','healer','researcher']){
   assert.ok(i.scratch.stressSetup.jobs[role]>0,role+' jobs');
   for(let p=0;p<teamCount;p++)assert.ok(i.scratch.stressSetup.jobsByTeam[p][role]>0,'team '+p+' '+role+' jobs');
  }}
@@ -127,12 +130,15 @@ function check(){
  cleanComparisons=world.compareHashes(all,start,'tickExact').compared;
  if(process.argv.includes('--recover')){
   const guest=all[1],before=all.map(i=>({patches:i.patchesApplied,snapshots:i.snapshotsApplied})),began=world.now;
-  const id=guest.eval(`(()=>{const u=units.find(u=>!u.dead&&!u.isKing&&u.energy>300);u.energy-=123;return u.id;})()`);
+  // (What the host finds differing in each repair request, for a failure's message.)
+  const host0=all[0];host0.scratch.requests=[];host0.eval(`(()=>{const orig=resyncHostHandleRequest;resyncHostHandleRequest=function(conn,data){const codes=new Set();for(const r of (data&&data.rotation)||[]){const mine=snapGetTickHash(r.tick);if(mine)for(const c of snapDiffTickHash(mine,r))codes.add(c);}__scratch.requests.push({peer:String(conn.peer).slice(0,8),tick:data&&data.tick,at:data&&data.at,full:!!(data&&data.full),hostTick:currentTick,ticks:((data&&data.rotation)||[]).map(r=>r.tick).join(','),differs:snapDescribeCodes(codes,12)});return orig.apply(this,arguments);};})()`);
+  // (The simulation's unit: with a simulation worker the page only holds frame copies.)
+  const id=guest.evalSim(`(()=>{const u=units.find(u=>!u.dead&&!u.isKing&&u.energy>300);u.energy-=123;return u.id;})()`);
   assert.ok(await world.runUntil(()=>guest.patchesApplied>before[1].patches&&all.every(i=>i.eval('isHost ? resyncHostPending.size===0 : resyncGuest.T<0&&!resyncGuest.outstanding')),120000,20),'large-scene guest repair completed');
   const from=Math.max(...all.map(i=>i.eval('currentTick')))+4;
   const repairs=all.map(i=>i.patchesApplied);
   assert.ok(await world.runUntil(()=>all.every(i=>i.eval('currentTick')>from+64),120000,20),'continued after repair');
-  for(const field of ['tickHashes','tickExact'])assert.equal(world.compareHashes(all,from,field).mismatches.length,0,'repaired checkerboard stays in sync: '+field);
+  for(const field of ['tickHashes','tickExact']){const cmp=world.compareHashes(all,from,field);assert.equal(cmp.mismatches.length,0,'repaired checkerboard stays in sync: '+field+' '+JSON.stringify({first:cmp.mismatches.slice(0,4),repairs:all.map((i,j)=>[i.name,i.patchesApplied-before[j].patches,i.snapshotsApplied-before[j].snapshots,i.patchTicks?i.patchTicks.slice(-3):null]),corrupted:id,unit:guest.evalSim(`(()=>{const u=units.find(u=>u.id===${id});return u?[u.x,u.y,u.energy]:null;})()`),host:host0.evalSim(`(()=>{const u=units.find(u=>u.id===${id});return u?[u.x,u.y,u.energy]:null;})()`),requests:host0.scratch.requests,from}));}
   for(let j=0;j<all.length;j++){
    assert.equal(all[j].patchesApplied,repairs[j],'repair did not repeat');
    assert.equal(all[j].snapshotsApplied,before[j].snapshots,'no match-wide snapshot');

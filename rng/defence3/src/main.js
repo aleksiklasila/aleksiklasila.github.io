@@ -810,31 +810,9 @@ function _unitRetirePass(retireBlocks) {
     return kingDied;
 }
 // Units waiting for their way: those due this tick (see _gameTickBody).
+// (One kernel pass: pathfinding.js pendingPathsDue, wasm/src/pp.rs k_pp_due.)
 function pendingPathsTick() {
-    if (pendingPathWaiting() > 0) {
-        let waiting = takeDuePendingPathUnits(gameTime);
-        const pendingBuckets = _pendingPathBuckets;
-        for (let i = 0; i < waiting.length; i++) {
-            const u = waiting[i];
-            let src = u._pendingPathTarget && u._pendingPathTarget.src;
-            let srcTier = Math.max(0, Math.min(4, _pendingPathPriority(src)));
-            pendingBuckets[srcTier].push(u);
-        }
-
-        for (let srcTier = 0; srcTier <= 4; srcTier++) {
-            const bucket = pendingBuckets[srcTier];
-            for (let i = 0; i < bucket.length; i++) {
-                const u = bucket[i];
-                if (u && !u.dead && u._pendingPathTarget) _tryUpgradeAstarFallbackPath(u);
-            }
-            pendingBuckets[srcTier].length = 0;
-        }
-        for (let i = 0; i < waiting.length; i++) {
-            const u = waiting[i];
-            if (!u.dead && u._pendingPathTarget) schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
-        }
-        waiting.length = 0;
-    }
+    if (pendingPathWaiting() > 0) pendingPathsDue();
 }
 function _gameTickBody() {
     // (Actions left from earlier ticks, on a tick that brought none; then the
@@ -860,7 +838,7 @@ function _gameTickBody() {
     runQueuedOrders();
     navTick();
     if (gameTime >= 3 && !_actionSanitizeWarm) actionSanitizeWarm();
-    // The destination fields asked for so far (the orders'), for this tick.
+    // The substitutes asked for so far (the orders'), for this tick.
     navFieldsFlush();
     // (A build installed this tick: its profile's flow looks listed now, answered through the tick (unit.js flowLooksInstallPost).)
     if (typeof navInstalledAt === 'number' && navInstalledAt === gameTime && typeof flowLooksInstallPost === 'function') flowLooksInstallPost();
@@ -2115,7 +2093,7 @@ function initInput() {
             if (playCantPlaceSound) playSound('cant_place');
             return false;
         }
-        let purchaseCount = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+        let purchaseCount = buildStackCount();
         let canPlace = canPlaceSelectedBuildItemAt(gx, gy, purchaseCount);
         if (!canPlace) {
             if (playCantPlaceSound) playSound('cant_place');
@@ -3758,14 +3736,14 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
     for (let u of members) (to >= 0 && navReachable(profile, Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE), to) ? reachable : (outliers ||= [])).push(u);
     if (reachable.length) {
         dest = { x: to % GRID_W, y: (to - to % GRID_W) / GRID_W };
-        // A group (NAV_GROUP_MIN units or more): the wide field, and its units
-        // may arrive short of the tile in their own crowd; a few go all the
-        // way (no crowd settling beside idle units of their own).
+        // A group (NAV_GROUP_MIN units or more): its units may arrive short of
+        // the tile in their own crowd; a few go all the way (no crowd settling
+        // beside idle units of their own). (On the atlas: ready at once.)
         const group = reachable.length >= NAV_GROUP_MIN;
-        const destKey = to, did = navFieldRequest(profile, destKey, group), ready = navFieldReadyFor(did);
+        const destKey = to;
         // (One path for the order's units: paths are replaced, never changed
         // in place.)
-        const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready } : { x: dest.x, y: dest.y, nav: profile + 1, ready }];
+        const navPath = [group ? { x: dest.x, y: dest.y, nav: profile + 1, w: 1, ready: 0 } : { x: dest.x, y: dest.y, nav: profile + 1, ready: 0 }];
         const K = _ordFastOn ? _ordKeys() : null, pk = ((profile * 16777216 + destKey) * 2) + (group ? 1 : 0);
         const flying = profile === NAV_PROFILE_AIR;
         for (let u of reachable) {
@@ -3777,7 +3755,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             if (K && c && (!ws || ws === SIM_WS_MANUAL)) {
                 const wk = !!ws;
                 c.rkF[s] = 1;
-                c.rtEnd[mvtM(s)] = destKey; c.nvProf[s] = profile; c.navRdy[s] = ready;
+                c.rtEnd[mvtM(s)] = destKey; c.nvProf[s] = profile; c.navRdy[s] = 0;
                 if (c.pathIndex[s] !== 0) { c.mvOn[mvtM(s)] = 0; c.pathIndex[s] = 0; }
                 const at = Math.floor(c.y[s] * 0.125 / TILE) * GRID_W + Math.floor(c.x[s] * 0.125 / TILE) === destKey;
                 c.nvPK[s] = at ? -1 : pk;
@@ -3787,13 +3765,13 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
                 c.mvOn[mvtM(s)] = 0; c.mvSteer[mvtS(s * SIM_STEER_W)] = -1;
                 c.rsEnd[s] = at ? -1 : destKey;
                 c.mvNavLD[s] = group && !at && !wk ? _ordNavLD(c, s, destKey) : -1;
-                if (!at && did >= 0) simFlowArm(c, s, did, navFieldGen(did), destKey, wk ? CMD_MOVING : cmd, flying, ready, wk || !group, wk ? 2 : 0, profile);
+                if (!at) simFlowArm(c, s, destKey, wk ? CMD_MOVING : cmd, flying, wk || !group, wk ? 2 : 0, profile);
                 // (A group's unit on the destination tile has arrived: only lone
                 // units and workers go to its middle.)
                 if (at && group && !wk) simFlowArrive(u);
                 continue;
             }
-            u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = ready; u.pathIndex = 0;
+            u._routeKey = NAV_ROUTE_KEY; u._routeEnd = destKey; u._navReady = 0; u.pathIndex = 0;
             if (Math.floor(u.y / TILE) * GRID_W + Math.floor(u.x / TILE) === destKey) { u.path = null; u._routeSegEnd = -1; if (u._us) u._us.mvNavLD[u._si] = -1; if (group && !u.workerState) simFlowArrive(u); continue; }
             // Its way: one nav node to the end (as continueUnitRoute gives),
             // walked by the kernel from its columns.
@@ -3801,7 +3779,7 @@ function _issueFlowOrder(playerId, cmd, dest, members, applyPath, profile) {
             if (u._us) u._us.mvNavLD[u._si] = group && !u.workerState ? _ordNavLD(u._us, u._si, destKey) : -1;
             // (A worker goes all the way and is looked at on its check ticks,
             // as simMoveTryArm arms it.)
-            if (did >= 0) simFlowArm(u._us, u._si, did, navFieldGen(did), destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, ready, !!u.workerState || !group, _simWorkerKind(u), profile);
+            simFlowArm(u._us, u._si, destKey, u.workerState ? CMD_MOVING : cmd, profile === NAV_PROFILE_AIR, !!u.workerState || !group, _simWorkerKind(u), profile);
         }
     }
     if (outliers) for (let u of outliers) {
@@ -3950,7 +3928,6 @@ function _ordPickPublish(e, row) {
         if (to < 0) continue;
         const wide = e.kc[p] >= NAV_GROUP_MIN;
         R[b + 7 + p] = to; R[b + 9 + p] = wide ? 1 : 0;
-        navFieldRequest(profile, to, wide);
     }
     T.tcnt.fill(0, row * 4, row * 4 + 4);
 }
@@ -3981,6 +3958,9 @@ function orderPickupFinish() {
 // clamped the same way on every peer, so a bad action can neither throw
 // halfway, loop for long, nor act for another team.
 const ACTION_MAX_COUNT = 100;
+// A build order's count is the stacks it orders up to (no loop per stack):
+// the build level slider's L17 is 65536; at most an Int32 stacks column's.
+const ACTION_MAX_PLACE_COUNT = 1 << 30;
 const LOCKSTEP_MAX_ACTIONS_PER_PACKET = 256;
 // The match's commands only the host gives (worker.js queueHostAdminAction):
 // a guest's are dropped (_hostSanitizeTickPacket); the host's go in its
@@ -4211,7 +4191,7 @@ function sanitizeAction(raw, immediate = false, moveIds = null) {
     for (let i = 0; i < _actionIntFields.length; i++) { const k = _actionIntFields[i]; if (k in a) a[k] = _actionInt(a[k]); }
     for (let i = 0; i < _actionStringFields.length; i++) { const k = _actionStringFields[i]; if (k in a) a[k] = _actionStr(a[k]); }
     if ('itemType' in a && !(a.itemType && Object.prototype.hasOwnProperty.call(BASE_CARD_TYPES, a.itemType))) a.itemType = null;
-    if ('count' in a) a.count = Math.max(1, Math.min(ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
+    if ('count' in a) a.count = Math.max(1, Math.min(a.action === 'place' ? ACTION_MAX_PLACE_COUNT : ACTION_MAX_COUNT, _actionInt(a.count) ?? 1));
     // (Each id once, in the order given.)
     const rawIds = Array.isArray(a.unitIds) ? a.unitIds : null;
     const clean = moveIds || (rawIds && (!immediate || rawIds.length)
@@ -4700,7 +4680,7 @@ function _orderWorkerArgs(list, S, W, V, U, resKept, wsl) {
 function _ordWReady(m) {
     if (!_ordW || _ordW.out.length !== m || !simHeapHas(_ordW.out)) {
         const I = k => simSharedArray(Int32Array, k);
-        _ordW = { out: I(m), cnt: I(32), pd: I(6 * 11), tt: I(8), P: new Float64Array(28), ft: I(m), wt: I(m), pt: I(m), cc: I(32 * Math.max(1, Math.ceil(m / ORDER_WORKERS_PER))) };
+        _ordW = { out: I(m), cnt: I(32), pd: I(3 * 11), tt: I(8), P: new Float64Array(28), ft: I(m), wt: I(m), pt: I(m), cc: I(32 * Math.max(1, Math.ceil(m / ORDER_WORKERS_PER))) };
         // (Worker record types, unit.wbType 1..6: their reservation load and work type indices.)
         ['', 'collector', 'astar_collector', 'salvager', 'builder', 'healer', 'researcher'].forEach((t, i) => { _ordW.tt[i] = t ? (Math.max(0, _workerTypeToLoadIndex(t)) | (_workerWorkType(t) << 8)) : 0; });
     }
@@ -4753,7 +4733,7 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
     P[0] = 0;
     if (par) { simRustParallel(SIM_BLOCK_ORDER_WORKERS, arrays, P, jobs); P[0] = 4; simRustDirect('k_order_workers', arrays, P); }
     else simRustDirect('k_order_workers', arrays, P);
-    // Each profile's destination, flow and its readiness (its first worker's).
+    // Each profile's destination and whether wide (its first worker's; the route on its atlas).
     const C = W.cnt, pd = W.pd;
     pd.fill(0);
     for (let p = 0; p < 11; p++) {
@@ -4764,8 +4744,7 @@ function _orderWorkers(n, playerId, targetGx, targetGy, S) {
         const fd = findNearestWalkable(targetGx, targetGy, ugx, ugy, u);
         const to = navApproachTile(p, fd.y * GRID_W + fd.x);
         if (to < 0) continue;
-        const group = count >= NAV_GROUP_MIN, did = navFieldRequest(p, to, group);
-        pd[6 * p] = to; pd[6 * p + 1] = group ? 1 : 0; pd[6 * p + 2] = did; pd[6 * p + 3] = did >= 0 ? navFieldGen(did) : 0; pd[6 * p + 4] = navFieldReadyFor(did); pd[6 * p + 5] = 1;
+        pd[3 * p] = to; pd[3 * p + 1] = count >= NAV_GROUP_MIN ? 1 : 0; pd[3 * p + 2] = 1;
     }
     P[0] = 1;
     if (par) { simRustParallel(SIM_BLOCK_ORDER_WORKERS, arrays, P, jobs); P[0] = 5; simRustDirect('k_order_workers', arrays, P); }
@@ -5578,10 +5557,14 @@ function processAction(a, playerId) {
             if (!_orderDropKernel(a, playerId)) _dropQueuedOrderUnits(immediate ? a.unitIds : a.unitIdSet, playerId);
         }
         if (a.action === 'place') {
-            let count = Math.max(1, Math.floor(a.count || 1));
-            for (let i = 0; i < count; i++) {
-                placeBuilding(a.gx, a.gy, a.itemType, playerId, { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled });
-            }
+            // count: the selected build level's stacks; a structure gets its
+            // stacks up to them (placeBuilding), not that many more.
+            // (Manual stacking off: L1 whatever an order says, the same on every peer.)
+            let count = MANUAL_STACKING_ENABLED ? Math.max(1, Math.floor(a.count || 1)) : 1;
+            const opts = { autoUpgradeEnabled: a.autoUpgradeEnabled, buildEnabled: a.buildEnabled, stacks: count };
+            // (An area's multiplier goes to 5 at most: one try a level.)
+            if (a.itemType === 'area_upgrader') for (let i = 0; i < Math.min(count, 5); i++) placeBuilding(a.gx, a.gy, a.itemType, playerId, opts);
+            else placeBuilding(a.gx, a.gy, a.itemType, playerId, opts);
         } else if (a.action === 'move' || a.action === 'attackMove') {
             if (!Number.isFinite(a.targetX) || !Number.isFinite(a.targetY)) return;
             _queueGroupMoveOrder(a, playerId, a.action === 'move' ? CMD_MOVING : CMD_ATTACK_MOVING);
@@ -6397,6 +6380,7 @@ function startGame() {
         let lvl = Math.max(1, clampThingLevel(level || 1));
         let stacks = getRequiredStacksForLevel(lvl);
         item.stacks = stacks;
+        item.manualStacks = stacks;
         item.effectiveStacks = stacks;
         item.level = lvl;
         item.effectiveLevel = lvl;
@@ -6702,6 +6686,8 @@ function startGame() {
     if (!startGameSkipStarters) simMatchPrepare();
     if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
     gameStarted = true;
+    // (The match's manual stacking setting: the build level slider shown or not.)
+    updatePurchaseMultiplierBars();
     const snapshotButton = document.getElementById('btn-export-snapshot');
     if (snapshotButton) snapshotButton.style.display = isMultiplayer ? 'none' : '';
     requestBuildMenuRefresh();
@@ -6948,7 +6934,7 @@ function hostRemovePlayerFromMatch(peerId) {
     lobbyPlayers = lobbyPlayers.filter(p => p && p.peerId !== pid);
     matchStartLobbyPlayers = matchStartLobbyPlayers.filter(p => p && p.peerId !== pid);
     peerPresenceById[pid] = false;
-    let removedMsg = { type: 'PLAYER_REMOVED_FROM_MATCH', peerId: pid, teamId };
+    let removedMsg = { type: 'PLAYER_REMOVED_FROM_MATCH', peerId: pid, teamId, m: matchStartSessionId || undefined };
     connections.forEach(c => {
         if (!c) return;
         try { c.send(removedMsg); } catch { }
@@ -7854,7 +7840,8 @@ function handleIncomingTickBundle(conn, data) {
     if (!bundle || typeof bundle !== 'object') return;
     // Guests normally wait for START_GAME_ALL_READY; ticks from the host mean
     // the match is running, so never stay blocked if that message was lost.
-    if (matchStartWaitingForReady) matchStartWaitingForReady = false;
+    // (The start's overlay and countdown with it: one come late covered the running match: audit row 102.)
+    if (matchStartWaitingForReady || _matchStartCountdownHandle) guestReleaseMatchStart();
     // Copies of the previous bundles ride along, so a message that is lost
     // (and retransmitted much later) does not hold this peer up.
     if (Array.isArray(data.prev)) {
@@ -8215,7 +8202,9 @@ function requestHardLockstepResync(tick, reason = 'tick timeout', now = performa
         tick: t,
         reason: String(reason || 'tick timeout')
     });
-    try { conn.send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: String(reason || 'tick timeout') }); } catch { }
+    // (failedJoin: a join it got and could not use; the host does not take this for a repeat of it.)
+    let failedJoin = typeof netGuestFailedJoin === 'number' && netGuestFailedJoin >= 0 ? netGuestFailedJoin : undefined;
+    try { conn.send({ type: 'REQUEST_MATCH_SYNC', tick: t, reason: String(reason || 'tick timeout'), failedJoin, m: matchStartSessionId || undefined }); } catch { }
     return true;
 }
 
@@ -8339,6 +8328,8 @@ function getHostOldestHistoryTick() {
     return Number.isFinite(oldest) ? oldest : currentTick;
 }
 
+// (Host, after the end: when it last told each peer its result again, for a request past its last tick.)
+let _hostEndResentAt = {};
 function handleIncomingTickResendRequest(conn, data) {
     let t = Math.floor(Number(data && data.tick));
     if (!Number.isFinite(t) || t < 0) return;
@@ -8348,6 +8339,17 @@ function handleIncomingTickResendRequest(conn, data) {
         // Legacy form: a guest asking the host to relay another peer's packet.
         if (data && data.packetPeerId && String(data.packetPeerId) !== String(conn && conn.peer)) return;
         netCounters.resendRequestsServed++;
+        // (A finished host seals nothing past its last tick: a guest asking for one missed the end (its MATCH_RESULT
+        // lost) and asked for good. The result again (once a second per peer), which brings its final state:
+        // utils_networking.js guestReviewMatchResult. Audit row 96.)
+        if (gameOver && t >= currentTick) {
+            const pid = String(conn && conn.peer || ''), now = performance.now();
+            if (!_hostEndResentAt[pid] || now - _hostEndResentAt[pid] >= 1000) {
+                _hostEndResentAt[pid] = now;
+                try { conn.send(hostMatchResultMessage()); } catch { }
+            }
+            return;
+        }
         for (let tt = t; tt < t + count; tt++) {
             let resend = getHostResendBundleForTick(tt);
             if (!resend) {
@@ -8537,6 +8539,8 @@ function runOneTick() {
     }
 
     if (isMultiplayer && !isHost) lockstepNoteUnconfirmed(localInputBuffer[currentTick], currentTick);
+    // (The match's ticks since its last whole state, kept outside the simulation: utils_checkpoint.js.)
+    if (isMultiplayer && typeof netCheckpointNoteTick === 'function') netCheckpointNoteTick(currentTick, lockstepBundleByTick[currentTick]);
     delete localInputBuffer[currentTick];
     delete lockstepLocalPacketByTick[currentTick];
     delete lockstepHostPacketsByTick[currentTick];
@@ -8563,16 +8567,21 @@ function runOneTick() {
     } else {
         simDk = stepDk;
         try { gameTick(); } catch (err) { reportRuntimeError('tick', err); resyncNoteTickFailed(processedTick, 'gameTick'); }
-        netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
-        if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick, stepDk);
-
-        gameStatsStep(currentTick);
-        if (currentTick % TICK_RATE === 0) sampleGameStats();
-        requestResearchPopupRefresh();
+        // (The step ran: whatever follows it fails alone. A throw here left currentTick where it was and the step
+        // ran again on the next call, a host's game time two steps on (audit row 85).)
+        try {
+            netNoteSimulationTick(performance.now(), performance.now() - tickWorkStart);
+            if (typeof simShadowEnabled !== 'undefined' && simShadowEnabled) simShadowAfterTick(processedTick, allActs, teams, flushTick, stepDk);
+        } catch (err) { reportRuntimeError('tick', err); }
+        try {
+            gameStatsStep(currentTick);
+            if (currentTick % TICK_RATE === 0) sampleGameStats();
+            requestResearchPopupRefresh();
+        } catch (err) { reportRuntimeError('stats', err); }
 
         // Every peer hashes a slice of the state each tick; guests compare
         // with the host's (see utils_resync.js).
-        if (isMultiplayer) resyncAfterTick(processedTick);
+        if (isMultiplayer) { try { resyncAfterTick(processedTick); } catch (err) { reportRuntimeError('tick', err); } }
     }
 
     _tpsTickCount++;

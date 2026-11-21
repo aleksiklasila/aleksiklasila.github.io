@@ -51,8 +51,10 @@ mod spr;
 mod arq;
 mod navg;
 mod birth;
+mod snap_units;
 mod world_map;
 mod looks;
+mod pp;
 // The presentation worker's module only (wasm/build.cjs --pres: two memories).
 #[cfg(feature = "pres")]
 mod pres;
@@ -814,7 +816,8 @@ unsafe fn pair_scatter4(o: &PairOut, mut bits: u32, qx: v128, qy: v128, overlap:
     let ovs: [f32; 4] = core::mem::transmute(overlap);
     let slots: [i32; 4] = core::mem::transmute(ord);
     while bits != 0 {
-        let l = bits.trailing_zeros() as usize; bits &= bits - 1;
+        // (A lane of four: masked, so no bounds check (its panic location was a data segment, wasm/build.cjs).)
+        let l = (bits.trailing_zeros() & 3) as usize; bits &= bits - 1;
         let b = slots[l] as usize;
         wr(o.px_out, b, rd(o.px_out, b).wrapping_add(xs[l]));
         wr(o.py_out, b, rd(o.py_out, b).wrapping_add(ys[l]));
@@ -1172,12 +1175,12 @@ pub unsafe extern "C" fn nav_cluster_same(nw: u32, ow: u32, nc: u32, oc: u32, nn
     1
 }
 
-/// One destination field: the costs to reach `dest` from every tile of the
-/// box (bx, by, bw x bh) into pool[off..off + bw * bh] (stepping onto a tile
-/// costs its step cost, 1 without costs; walls never entered: a Dial queue
-/// of four buckets), then (make_row) its row over the exit graph: 255 no
-/// way, 254 the field covers the part, else the part's node to leave by.
-/// `work`: this thread's scratch (words). Returns 0 when it does not fit.
+/// One field toward tile `dest` (a build's exit node's local field: flownav.js
+/// SIM_KERNEL_NAV_CHAIN stage 4): the costs to reach `dest` from every tile
+/// of the box (bx, by, bw x bh) into pool[off..off + bw * bh] (stepping onto
+/// a tile costs its step cost, 1 without costs; walls never entered: a Dial
+/// queue of four buckets). `work`: this thread's scratch (words). Returns 0
+/// when it does not fit.
 #[no_mangle]
 pub unsafe extern "C" fn nav_field(
     pool: u32,
@@ -1192,41 +1195,12 @@ pub unsafe extern "C" fn nav_field(
     dest: i32,
     wall: u32,
     cost: u32,
-    make_row: i32,
-    nb: u32,
-    nt: u32,
-    npair: u32,
-    npart: u32,
-    adj_s: u32,
-    adj_a: u32,
-    adj_c: u32,
-    part_l: u32,
-    part_b: u32,
-    csz: i32,
-    cw: i32,
-    nc: i32,
-    np: i32,
-    bcount: i32,
-    k: i32,
-    edges: i32,
-    rows: u32,
-    ro: i32,
     work: u32,
     work_words: i32,
 ) -> i32 {
     let pool = waddr(pool) as *mut u16;
     let wall = waddr(wall) as *const u8;
     let cost = waddr(cost) as *const u8;
-    let nb = waddr(nb) as *const i32;
-    let nt = waddr(nt) as *const i32;
-    let npair = waddr(npair) as *const i32;
-    let npart = waddr(npart) as *const i32;
-    let adj_s = waddr(adj_s) as *const i32;
-    let adj_a = waddr(adj_a) as *const i32;
-    let adj_c = waddr(adj_c) as *const i32;
-    let part_l = waddr(part_l) as *const u16;
-    let part_b = waddr(part_b) as *const i32;
-    let rows = waddr(rows) as *mut u8;
     let work = waddr(work) as *mut i32;
     // (The scratch's first four words: a kernel's tag and state, see k.rs
     // scratch(): cleared, as this overwrites what follows.)
@@ -1302,210 +1276,6 @@ pub unsafe extern "C" fn nav_field(
             }
             *qn.add(b) = 0;
             d += 1;
-        }
-    }
-    if make_row == 0 || rows.is_null() || np <= 0 {
-        return 1;
-    }
-    // ---- the row: seeds (exits inside the field reaching the destination,
-    // by distance then node), then the search over the exit graph ----
-    let npu = np as usize;
-    let row = rows.add(ro.max(0) as usize);
-    for i in 0..npu {
-        *row.add(i) = 255;
-    }
-    if nb.is_null() || npart.is_null() || adj_s.is_null() || part_l.is_null() {
-        return 1;
-    }
-    let pl = *part_l.add(dest as usize);
-    if pl != 0xFFFF {
-        let dc = idiv(ty, csz) * cw + idiv(tx, csz);
-        *row.add((*part_b.add(dc as usize) + pl as i32) as usize) = 254;
-    }
-    let ku = k.max(0) as usize;
-    if 2 * ku > ww {
-        return 0;
-    }
-    let seed_n = work;
-    let seed_d = work.add(ku);
-    let mut ns = 0usize;
-    let (cx0, cy0, cx1, cy1) = (idiv(bx, csz), idiv(by, csz), idiv(bx + bw - 1, csz), idiv(by + bh - 1, csz));
-    for cy in cy0..=cy1 {
-        for cx in cx0..=cx1 {
-            let c = (cy * cw + cx) as usize;
-            for i in *nb.add(c)..*nb.add(c + 1) {
-                let t = *nt.add(i as usize);
-                let nty = idiv(t, w);
-                let ntx = t - nty * w;
-                let v = *out.add(((nty - by) * bw + (ntx - bx)) as usize);
-                if v == NAV_UNREACHED {
-                    continue;
-                }
-                *row.add(*npart.add(i as usize) as usize) = 254;
-                let v = v as i32;
-                // (Sorted by distance, then node: an insertion.)
-                let mut j = ns;
-                ns += 1;
-                while j > 0 && (*seed_d.add(j - 1) > v || (*seed_d.add(j - 1) == v && *seed_n.add(j - 1) > i)) {
-                    *seed_d.add(j) = *seed_d.add(j - 1);
-                    *seed_n.add(j) = *seed_n.add(j - 1);
-                    j -= 1;
-                }
-                *seed_d.add(j) = v;
-                *seed_n.add(j) = i;
-            }
-        }
-    }
-    nav_row(nb, npair, npart, adj_s, adj_a, adj_c, nc, k, np, bcount, edges, seed_n, seed_d, ns as i32, row,
-        work.add(2 * ku), (ww - 2 * ku) as i32)
-}
-
-/// Rows copied from their key's slot (the batch's other slots of a key):
-/// list[i]'s row from src[i]'s, for i in i0..i1 with src[i] >= 0.
-#[no_mangle]
-pub unsafe extern "C" fn nav_rows_copy(rows: u32, list: u32, src: u32, row_w: i32, i0: i32, i1: i32) {
-    let rows = waddr(rows) as *mut u8;
-    let list = waddr(list) as *const i32;
-    let src = waddr(src) as *const i32;
-    let rw = row_w.max(0) as usize;
-    for i in i0.max(0) as usize..i1.max(0) as usize {
-        let from = *src.add(i);
-        if from >= 0 {
-            core::ptr::copy(rows.add(from as usize * rw), rows.add(*list.add(i) as usize * rw), rw);
-        }
-    }
-}
-
-// =====================================================================
-// FLOW NAVIGATION: A DESTINATION'S ROW
-// =====================================================================
-
-/// A destination field's row (flownav.js _navFieldRow, after its seeds):
-/// one Dijkstra with a bucket queue (Dial: small integer costs) over the
-/// exit graph from the seeds (nodes inside the field that reach the
-/// destination, at their distances there, sorted by distance then node,
-/// let in as the search's distance gets there), then each part's cheapest
-/// node to leave by (crossing to its pair; the first such node on a tie).
-/// `row` (np bytes) comes with 255 (no way) and 254 (the field covers the
-/// part) set; the rest is written here. Work arrays in `work` (this
-/// thread's scratch): returns 0 when they do not fit (the JS search then).
-unsafe fn nav_row(
-    nb: *const i32,
-    npair: *const i32,
-    npart: *const i32,
-    adj_s: *const i32,
-    adj_a: *const i32,
-    adj_c: *const i32,
-    nc: i32,
-    k: i32,
-    np: i32,
-    bcount: i32,
-    edges: i32,
-    seed_n: *const i32,
-    seed_d: *const i32,
-    ns: i32,
-    row: *mut u8,
-    work: *mut i32,
-    work_words: i32,
-) -> i32 {
-    let k = if k > 0 { k as usize } else { 0 };
-    let np = if np > 0 { np as usize } else { 0 };
-    let b = if bcount > 0 { bcount as usize } else { 1 };
-    let ns = if ns > 0 { ns as usize } else { 0 };
-    let cap = (if edges > 0 { edges as usize } else { 0 }) + k + 16;
-    if k + b + 2 * cap + np > (if work_words > 0 { work_words as usize } else { 0 }) {
-        return 0;
-    }
-    const INF: i32 = 0x3fffffff;
-    let dist = work;
-    let head = dist.add(k);
-    let val = head.add(b);
-    let nxt = val.add(cap);
-    let best = nxt.add(cap);
-    for i in 0..k {
-        wr(dist, i, INF);
-    }
-    for i in 0..b {
-        wr(head, i, -1);
-    }
-    for s in 0..ns {
-        wr(dist, rd(seed_n, s) as usize, rd(seed_d, s));
-    }
-    let bi = b as i32;
-    let mut pool0 = 0usize;
-    let mut count = 0i64;
-    let mut si = 0usize;
-    let mut cur = 0i32;
-    while count > 0 || si < ns {
-        // (Nothing queued: on to the next seed's distance.)
-        if count == 0 && rd(seed_d, si) > cur {
-            cur = rd(seed_d, si);
-        }
-        while si < ns && rd(seed_d, si) == cur {
-            let i = rd(seed_n, si);
-            si += 1;
-            // (Reached cheaper through another seed: queued already.)
-            if rd(dist, i as usize) == cur {
-                let bk0 = irem(cur, bi) as usize;
-                wr(val, pool0, i);
-                wr(nxt, pool0, rd(head, bk0));
-                wr(head, bk0, pool0 as i32);
-                pool0 += 1;
-                count += 1;
-            }
-        }
-        let bk = irem(cur, bi) as usize;
-        // (Zero-cost edges add to the bucket being emptied: again.)
-        while rd(head, bk) != -1 {
-            let mut e = rd(head, bk);
-            wr(head, bk, -1);
-            while e != -1 {
-                let eu = e as usize;
-                let u = rd(val, eu);
-                let en = rd(nxt, eu);
-                count -= 1;
-                if rd(dist, u as usize) == cur {
-                    let x1 = rd(adj_s, u as usize + 1) as usize;
-                    let mut x = rd(adj_s, u as usize) as usize;
-                    while x < x1 {
-                        let v = rd(adj_a, x) as usize;
-                        let nd = cur + rd(adj_c, x);
-                        if nd < rd(dist, v) {
-                            wr(dist, v, nd);
-                            let nbk = irem(nd, bi) as usize;
-                            wr(val, pool0, v as i32);
-                            wr(nxt, pool0, rd(head, nbk));
-                            wr(head, nbk, pool0 as i32);
-                            pool0 += 1;
-                            count += 1;
-                        }
-                        x += 1;
-                    }
-                }
-                e = en;
-            }
-        }
-        cur += 1;
-    }
-    for q in 0..np {
-        wr(best, q, INF);
-    }
-    for c in 0..(if nc > 0 { nc as usize } else { 0 }) {
-        let i0 = rd(nb, c);
-        let i1 = rd(nb, c + 1);
-        let mut i = i0;
-        while i < i1 {
-            let q = rd(npart, i as usize) as usize;
-            if rd(row, q) != 254 {
-                // Leaving through node i: cross to its pair (the pair's distance).
-                let j = rd(npair, i as usize);
-                let di = if j >= 0 { rd(dist, j as usize) } else { INF };
-                if di < rd(best, q) {
-                    wr(best, q, di);
-                    wr(row, q, (i - i0) as u8);
-                }
-            }
-            i += 1;
         }
     }
     1

@@ -124,9 +124,14 @@ async function mapCase(mapType, seed) {
         const g = guests[0];
         const before = g.fullPatchesApplied;
         g.eval('resyncGuest.forceFull = true');
-        g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 5; })()`);
+        // (A change that lasts: a standing unit moved by hand is put back on its footprint (the occupancy) before the
+        // next hashed tick, so the guest had nothing to repair (worker mode, islands seed 5181: unit 1).)
+        const movedId = g.evalSim(`(() => { const u = units.find(u => !u.dead); u.x += 5; addPlayerResource(1, 'energy', 17); return u.id; })()`);
         const ok = await world.runUntil(() => g.fullPatchesApplied > before && g.eval('resyncGuest.T < 0'), 20000, 20);
-        assert.ok(ok, `${mapType}: full patch applied`);
+        const posOf = i => i.evalSim(`(() => { const u = units.find(u => u.id === ${movedId}); return u ? [u.x, u.y, !!u.dead, u.unitType] : null; })()`);
+        assert.ok(ok, `${mapType}: full patch applied: ` + JSON.stringify({ moved: movedId, hostPos: posOf(host), guestPos: posOf(g), fulls: [before, g.fullPatchesApplied], patches: g.patchesApplied, snaps: g.snapshotsApplied,
+            guest: g.eval('JSON.stringify({ T: resyncGuest.T, out: resyncGuest.outstanding, forceFull: resyncGuest.forceFull, div: resyncGuest.divergedAt, grace: resyncGuest.graceTick, hostHash: resyncGuest.hostHashTick, joining: resyncGuest.joining, tick: currentTick, pause: lockstepResyncPauseActive })'),
+            host: host.scratch.requests ? host.scratch.requests.slice(-3) : null, warn: g.warnings.slice(-5).map(w => JSON.stringify(w.a).slice(0, 300)), errors: g.errors.slice(-3).map(e => String(e && e.message || e).slice(0, 300)) }));
         const from = g.lastSnapshotTick;
         await play(15);
         await world.run(1000);

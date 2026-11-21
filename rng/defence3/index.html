@@ -263,6 +263,10 @@
                         <input id="cfg-shrines" type="checkbox" checked title="&#128128; is damage taken: the energy your units and buildings lose to damage goes to your shrine and drains passively into &#9889; and &#9733; (multiplier and drain rate are researched). Off: the shrine still counts damage taken, but nothing drains from it.">
                     </div>
                     <div class="lobby-setting-row compact">
+                        <label for="cfg-manual-stacking" title="On: the build level slider above the shop orders a structure with that level's stacks (building on one stacks it up to them). Off: every build is L1 and structures grow only by their groups (adjacency, areas) and upgrades.">Manual stacking</label>
+                        <input id="cfg-manual-stacking" type="checkbox" title="On: the build level slider above the shop orders a structure with that level's stacks (building on one stacks it up to them). Off: every build is L1 and structures grow only by their groups (adjacency, areas) and upgrades.">
+                    </div>
+                    <div class="lobby-setting-row compact">
                         <label>Max Research Level</label>
                         <input id="cfg-max-research-level" type="number" min="1" max="100" step="1" value="10" style="width:72px">
                     </div>
@@ -700,7 +704,8 @@
                 <div class="help-subtitle">Leveling & stacks</div>
                 <ul class="help-list">
                     <li>Most buildings/items scale with <strong>stacks</strong>. Displayed level is based on stacks (roughly $L=\lfloor\log_2(\text{stacks})\rfloor+1$).</li>
-                    <li>New manual stack adds are now <strong>queued</strong>: menu/info stack text is shown as <strong>stacked/manual</strong> (for example <code>8/12</code>).</li>
+                    <li><strong>Manual stacking</strong> (menu, Resources &amp; Research; off by default; <span id="help-manual-stacking-state">this game: off</span>): on, the build level slider above the shop picks a level; a new structure is ordered with that level's stacks ($2^{L-1}$), and building on one of yours stacks it <strong>up to</strong> them (never down: L10 on an L12 stays L12). Off: the slider is hidden and every build is L1; structures grow by their groups (adjacency, areas) and upgrades.</li>
+                    <li>Ordered stacks are <strong>queued</strong>: menu/info stack text is shown as <strong>stacked/manual</strong> (for example <code>8/12</code>).</li>
                     <li>Queued stacks use the <strong>Stacking</strong> state and are built by builders; each completed stack costs base energy (level-1 energy) of that thing.</li>
                     <li>A secondary stacking progress bar is shown directly above the energy bar while queued stacks remain.</li>
                     <li>When both are possible, buildings prioritize <strong>level-up/upgrading before stacking</strong>.</li>
@@ -890,8 +895,10 @@
     <script src="./src/audio_visual/menu_actions.js?v=20261025-st1"></script>
     <script src="./src/utils/utils_net_quality.js?v=20261025-st1"></script>
     <script src="./src/utils/utils_networking.js?v=20261102-e"></script>
-    <script src="./src/utils/utils_snapshot.js?v=20261108-st6"></script>
-    <script src="./src/utils/utils_resync.js?v=20261025-st1"></script>
+    <script src="./src/utils/utils_snapshot.js?v=20261119-ub1"></script>
+    <script src="./src/utils/utils_snapblock.js?v=20261119-ub1"></script>
+    <script src="./src/utils/utils_resync.js?v=20261120-ck1"></script>
+    <script src="./src/utils/utils_checkpoint.js?v=20261120-ck1"></script>
     <script src="./src/utils/utils_host_migration.js?v=20261025-st1"></script>
     <script src="./src/utils/utils_storage.js?v=20261025-st1"></script>
 

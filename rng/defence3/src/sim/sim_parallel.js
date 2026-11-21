@@ -33,25 +33,14 @@ const SIM_PAR_GEN = 0, SIM_PAR_KERNEL = 1, SIM_PAR_NEXT = 2, SIM_PAR_TOTAL = 3, 
 // claim can never run a chunk of the next job.
 const SIM_PAR_BG_BASE = 8, SIM_PAR_BG_KERNEL = 0, SIM_PAR_BG_TOTAL = 1, SIM_PAR_BG_DONE = 2, SIM_PAR_BG_REGVER = 3, SIM_PAR_BG_NEXT = 4, SIM_PAR_BG_LANES = 16;
 const SIM_PAR_BG_ID = 5, SIM_PAR_BG_READERS = 6, SIM_PAR_BG_STAGE = 7, SIM_PAR_BG_STAGES = 24;
-// (Control words: SIM_PAR_BG_BASE + lanes * 8 (8..135), then ERR 136, CAP 137, RUN 138..153, FIRST 154, BG_ERR 155..170: rounded up.)
+// (Control words: SIM_PAR_BG_BASE + lanes * 8 (8..135), then ERR 136, CAP 137, RUN 138..153, 154 unused, BG_ERR 155..170: rounded up.)
 const SIM_PAR_CTL_WORDS = 192;
-// Bulk lanes (every live field remade over a new navigation build,
-// SIM_LANE_NAVX): at most SIM_PAR_BG_CAP helpers inside their chunks at once
+// Bulk lanes (SIM_LANE_TRAFFIC, SIM_LANE_RZ, SIM_LANE_FREE): at most SIM_PAR_BG_CAP helpers inside their chunks at once
 // (helpers - 3, at least 1; per lane at SIM_PAR_BG_RUN + lane), so the
 // tick's foreground kernels always find helpers (all of them deep in a
 // remake left the movement kernel to this thread alone: 114 ms ticks at
 // 400k a team). Where chunks run never changes what they make.
 const SIM_PAR_BG_CAP = 137, SIM_PAR_BG_RUN = 138;
-// A bulk lane behind its deadline (a navigation rebuild's window ending with
-// its fields not made: flownav.js navTick): its chunks taken right after the
-// tick's own lanes (the first SIM_PAR_BG_RUSH_AT of SIM_PAR_BG_ORDER: tick,
-// hash, index, heap growth, the tick's fields; ahead of the fields' lane it
-// starved it, and a flush waited for it instead), by up to helpers - 1 at
-// once (simParallelBulkRush); -1 none. (The install made what was left on
-// the simulation thread: 60-130 ms ticks in the chaos scenario's bursts,
-// the helpers busy with the tiers before it.)
-// (7: SIM_PAR_BG_ORDER's first seven, the search tier's lane among them.)
-const SIM_PAR_BG_FIRST = 154, SIM_PAR_BG_RUSH_AT = 7;
 // A helper's kernel threw (the chunk still counts as done, so nobody waits
 // forever): the simulation thread throws at its next wait. (Foreground jobs
 // only: background lanes have their own flags, SIM_PAR_BG_ERR.)
@@ -84,13 +73,11 @@ function _simParCheckErr(ctl) {
 // the state hash and the time between ticks run; chunk.js
 // spatialIndexPrebuild). SIM_LANE_BUILD: tables made once in a while and
 // taken when done (the area range boxes of a new layout, path regions),
-// never waited for by the tick's own work. SIM_LANE_NAV: the navigation's
-// destination fields asked for in a tick, made by the next tick's flush
-// (flownav.js navFieldsFlush). SIM_LANE_NAVX: every live field over a new
-// navigation build, before it is installed (flownav.js _navNextStage).
-// SIM_LANE_GROW: the wasm memory grown ahead of need (sim_wasm.js
+// never waited for by the tick's own work. (8 and 9: unused, the
+// navigation's destination fields' lanes before every route was on the
+// routing atlas.) SIM_LANE_GROW: the wasm memory grown ahead of need (sim_wasm.js
 // _simHeapGrowAhead), never waited for.
-const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_NAV = 8, SIM_LANE_NAVX = 9, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
+const SIM_LANE_TICK = 0, SIM_LANE_LONG = 1, SIM_LANE_T10 = 2, SIM_LANE_T5 = 3, SIM_LANE_T1 = 4, SIM_LANE_T05 = 5, SIM_LANE_IX = 6, SIM_LANE_BUILD = 7, SIM_LANE_HASH = 10, SIM_LANE_GROW = 11;
 const SIM_LANE_TRAFFIC = 12;
 // SIM_LANE_FLOW: the flow looks the movement left approximate, made exact
 // between the movement and the tick's end (unit.js flowLooksPost / Commit).
@@ -111,12 +98,12 @@ const SIM_LANE_FREE = 15;
 // (T10 (the acquisition scan, committed two ticks after its post) next: behind T1 / GROW / NAV the
 // commit waited up to 7 ms on some ticks at 1M chaos (wait:2); ahead of them no lane waits more.)
 // (FREE and RZ after the lanes their next tick needs (TRAFFIC): theirs commit two or more ticks on; ahead of TRAFFIC an x2's placement left the traffic's wait 12 ms.)
-// (LONG, the navigation build's chain (flownav.js navBuildChain, collected two steps after its post), right after NAV:
+// (LONG, the navigation build's chain (flownav.js navBuildChain, collected two steps after its post), right after T1:
 // last, it found every stage unclaimed at its collect in rendered checker-200k (2026-11-16, w:1 up to 18 ms on the
 // collect steps), while T5 / T05 / BUILD behind it never waited.)
 // (GROW right after the index: it carries the presentation's marks and snapshot between ticks too (sim_presentation.js
 // simPresentTickEnd), wanted by the next tick's start like the index, behind it.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_NAV, SIM_LANE_LONG, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_NAVX, SIM_LANE_BUILD];
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_LONG, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_BUILD];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -284,15 +271,12 @@ SIM_KERNELS[SIM_KERNEL_MOVE_OCCUPANCY] = function(R,P,c){
 // position, speed, path index, node steps taken (mvSpent, charged by the
 // main thread) and mvOut: 1 moved, 3 moved into another tile, 4 into a
 // wall tile (x, y not yet quantized; the main thread pushes it out).
-// Flow navigation (see flownav.js): the next tile from t toward dest, -1
-// none. dfield: the destination field (costs over the box bx, by, bw x bh),
-// used inside its box; elsewhere the cluster hop and the exit's local field.
+// Flow navigation (see flownav.js): the next tile from t toward dest on its
+// profile's routing atlas, -1 none.
 // The flow look-ahead of a unit (unit state columns LC, its record
 // LC.mvNav[s * SIM_NAV_STRIDE ..]: the cache key T tile, D destination, V
 // navigation build, W nearby walls, G
-// destination field kind: 1 narrow, 2 wide (its slot and slot generation
-// are this peer's own history, not a key: a field's content is a function
-// of its destination, kind and build), then N1, N2, Far << 1 | Open; slot s) at tile tl
+// the route's kind (3: on the atlas, the only one), then N1, N2, Far << 1 | Open; slot s) at tile tl
 // = (gx, gy) toward dk, for the movement kernel and Unit._followNavNode
 // alike: the next tile n1 (a wall the navigation predates in the way: the
 // open side neighbour toward where the flow leads past it), the one after
@@ -346,47 +330,10 @@ function simWallKey(WBLK, WBW, WBH, gx, gy, wver) {
     return wv;
 }
 
-// The next tile from t toward dest: the destination field where it reaches
-// the destination, else the exit of t's part in the destination's row
-// (rows at ro; part = partBase[cluster] + partL[t]) and that exit's local
-// field. -1: no way (or at dest).
-function simNavStep(W, C, cw, partL, partBase, rows, ro, fields, nodeBase, nodeTile, nodePair, dfield, doff, bx, by, bw, bh, t, dest) {
-    if (t === dest) return -1;
-    const tx = t % W, ty = (t - tx) / W;
-    if (dfield) {
-        const lx = tx - bx, ly = ty - by;
-        if (lx >= 0 && ly >= 0 && lx < bw && ly < bh) {
-            const o = doff + ly * bw + lx, here = dfield[o];
-            if (here !== 0xFFFF) {
-                let best = -1, bv = here;
-                if (lx + 1 < bw && dfield[o + 1] < bv) { bv = dfield[o + 1]; best = t + 1; }
-                if (lx > 0 && dfield[o - 1] < bv) { bv = dfield[o - 1]; best = t - 1; }
-                if (ly + 1 < bh && dfield[o + bw] < bv) { bv = dfield[o + bw]; best = t + W; }
-                if (ly > 0 && dfield[o - bw] < bv) { bv = dfield[o - bw]; best = t - W; }
-                return best;
-            }
-        }
-    }
-    const cxi = (tx / C) | 0, cyi = (ty / C) | 0, cf = cyi * cw + cxi, pl = partL[t];
-    if (pl === 0xFFFF) return _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty);
-    const e = rows[ro + partBase[cf] + pl];
-    if (e >= 254) return -1;
-    const node = nodeBase[cf] + e;
-    if (nodeTile[node] === t) { const p = nodePair[node]; return p >= 0 ? nodeTile[p] : -1; }
-    const off = node * C * C, lx = tx - cxi * C, ly = ty - cyi * C;
-    let best = -1, bv = fields[off + ly * C + lx];
-    if (lx + 1 < C && fields[off + ly * C + lx + 1] < bv) { bv = fields[off + ly * C + lx + 1]; best = t + 1; }
-    if (lx > 0 && fields[off + ly * C + lx - 1] < bv) { bv = fields[off + ly * C + lx - 1]; best = t - 1; }
-    if (ly + 1 < C && fields[off + (ly + 1) * C + lx] < bv) { bv = fields[off + (ly + 1) * C + lx]; best = t + W; }
-    if (ly > 0 && fields[off + (ly - 1) * C + lx] < bv) { bv = fields[off + (ly - 1) * C + lx]; best = t - W; }
-    return best;
-}
-
-// Standing on a wall tile (a building put down under it): out to an open
-// side neighbour, N, S, W, E: the first whose part has a way in the
-// destination's row (rows null: the first open), else the first open; -1
-// none. (H: from the parts' length.)
-function _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty) {
+// Standing on a wall tile (a building put down under it): out to the first
+// open side neighbour, N, S, W, E; -1 none (mv.rs wall_step_out). (H: from
+// the parts' length.)
+function _simWallStepOut(partL, W, t, tx, ty) {
     const H = (partL.length / W) | 0;
     let first = -1;
     for (let k = 0; k < 4; k++) {
@@ -394,16 +341,10 @@ function _simWallStepOut(partL, partBase, rows, ro, W, C, cw, t, tx, ty) {
         if (x < 0 || y < 0 || x >= W || y >= H) continue;
         const n = y * W + x, l = partL[n];
         if (l === 0xFFFF) continue;
-        if (first < 0) first = n;
-        if (!rows) return n;
-        if (rows[ro + partBase[((y / C) | 0) * cw + ((x / C) | 0)] + l] !== 255) return n;
+        return n;
     }
-    return first;
+    return -1;
 }
-// simNavStep from tile t at column tx, row ty, 2^cs-tile clusters
-// (simFlowLook's steps).
-// (rows null: the route is on the atlas, _simFlowAtlas's build.)
-let _simFlowAtlas = null;
 // _simOpenBlock at column x, row y.
 function _simOpenBlockXY(WALL, x, y, W, H) {
     if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) return false;
@@ -658,11 +599,10 @@ SIM_KERNELS[SIM_KERNEL_COPY] = function (R, P, chunk) { _simRust(_simCopyW, P, c
 // The same over a table of its own (heap.copytab.bg), for a background
 // stage (simParallelCopyStage): a foreground copy meanwhile has the other.
 // A second (heap.copytab.bg2, SIM_KERNEL_COPY_BG2) for a second background
-// copy that may run at once (the next navigation build's pools, on
-// SIM_LANE_NAVX, beside the fields' pools' growth on SIM_LANE_NAV).
+// copy that may run at once.
 const SIM_KERNEL_COPY_BG = 74, SIM_KERNEL_COPY_BG2 = 76;
 // (A third, heap.copytab.bg3: the presentation's position snapshot at a tick's end (sim_presentation.js
-// simPresentTickEnd), while either navigation copy may be in flight.)
+// simPresentTickEnd), while another copy may be in flight.)
 const SIM_KERNEL_COPY_BG3 = 193;
 // How many bytes of two heap arrays differ (the helpers and this thread; a
 // pass over 1M bytes in the page's code was ~2.6 ms, cold): null when
@@ -1009,7 +949,6 @@ function simParallelInit(helperUrl, maxHelpers = null, bgOnly = 0) {
     }
     if (!helpers.length) return 0;
     ctl[SIM_PAR_BG_CAP] = Math.max(1, helpers.length - 3);
-    ctl[SIM_PAR_BG_FIRST] = -1;
     _simPool = { ctl, helpers };
     return helpers.length;
 }
@@ -1116,20 +1055,20 @@ function _simWasmOk(R) { return _simWasmX !== null && _simWasmOn[0] === 1 && R =
 // argument block: word i the address of _SIM_MOVE_WNAMES[i] (mv.rs W_*, the
 // same order; '?' optional, 0 unbound), from word 160 eight per navigation
 // profile (its build's fields, partL, partB, nb, nt, np, meta, its walls),
-// then lengths (partL per profile at 250, area.off, wk.ver, nav.fmeta.0/1,
-// the cover's players and stride at 262..267); the params P as doubles.
+// then lengths (partL per profile at 250, area.off, wk.ver (264 and 265
+// unused), the cover's players and stride at 262..267); the params P as doubles.
 const _SIM_MOVE_WNAMES = ['unit.mvOn', 'unit.mvOut', 'unit.mvFlags', 'unit.id', 'unit.mvPath', 'unit.energy', 'unit.sepKey', 'unit.dead',
     'unit.owner', 'unit.x', 'unit.y', 'unit.prevX', 'unit.prevY', 'unit.mvSteer', 'mv.struct', 'unit.dead0', 'unit.mvWake', 'unit.wkWx', 'unit.wkWy',
     'unit.mvDest', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.mvSteer', 'unit.vx', 'unit.vy', 'unit.mvSpent', 'mv.wall',
     'unit.spArea', 'unit.mvReach', 'mv.areaBox', 'mv.areaBoxOk', '?mv.hostile', 'unit.attackTimer', 'unit.wkS', 'unit.mvCar', '?unit.wtcL', 'unit.mvWk',
-    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?nav.fmeta.0', '?nav.fmeta.1', 'unit.mvNP', '?-' , 'unit.mvHT',
+    'unit.workerTransferCooldown', 'unit.mvFlow', 'unit.mvFGen', 'unit.mvReady', '?-', '?-', 'unit.mvNP', '?-' , 'unit.mvHT',
     'unit.mvHTId', 'unit.x0', 'unit.y0', 'unit.collisionR', 'unit.r', '?area.off', '?area.nb', '?vis.coverf', '?ix.agrid', 'unit.stFr', 'unit.stSa',
     '?-', '?-', '?-' , '?-' , '?wk.ver', 'unit.wkType', 'unit.wkD', 'unit.wkOx', 'unit.wkOy', 'unit.wkTwice',
     'unit.wkFail', 'unit.wkUntil', 'unit.wkSched', '?-', '?-', '?-', '?-', '?-', '?-',
-    'unit.fLsX', 'unit.fLsY', '?-', '?-', '?-', 'unit.mvLane', '?mv.airwall', '?nav.frows.0', '?nav.frows.1', '?nav.fhdr',
+    'unit.fLsX', 'unit.fLsY', '?-', '?-', '?-', 'unit.mvLane', '?mv.airwall', '?-', '?-', '?-',
     // (94, 95: the status records' pool words and free stack, mv.rs floor_hit.)
     // (96, 97: the attackers' styles and each chunk's count of attacks with a status style, mv.rs hit_sty_count.)
-    '?nav.fpool.0', '?nav.fpool.1', 'unit.mvNav', '?unit.statRow', '?eff.hot', 'st.hdr', 'st.free', '?unit.atkSty', '?mv.hitsc',
+    '?-', '?-', 'unit.mvNav', '?unit.statRow', '?eff.hot', 'st.hdr', 'st.free', '?unit.atkSty', '?mv.hitsc',
     // (98: the 11x11 blocks' wall change sums, the shared looks' key: mv.rs W_WBLK81.)
     '?mv.wallBlk81', '?-', 'unit.mvNavLD', 'unit.cwNear', 'unit.cwTick', 'unit.cwDense', '?mv.wallBlk9', 'unit.mvBase', 'unit.mvWlen',
     'unit.mvPlen', 'unit.mvScan', 'unit.mvNodes', 'unit.pathIndex', '?mv.post', '?mv.postc', 'unit.spEpoch', 'unit.spOwner', 'unit.spTile',
@@ -1188,7 +1127,6 @@ function _simMoveWasm(R, P) {
         for (let p = 0; p < _SIM_MOVE_NAV; p++) I[250 + p] = R[_SIM_MOVE_NAV_PART_LENGTH[p]]?.length || 0;
         const COV = R['vis.cover'];
         I[262] = R['area.off']?.length || 0; I[263] = R['wk.ver']?.length || 0;
-        I[264] = R['nav.fmeta.0']?.length || 0; I[265] = R['nav.fmeta.1']?.length || 0;
         I[266] = COV ? COV.length : 0; I[267] = COV && COV[0] ? COV[0].length : 0;
         _simMoveWFill = _simMoveW.binds; _simMoveWArgs = _simWasmArgs;
     }
@@ -1546,15 +1484,6 @@ function simParallelBackgroundWaitAll() {
     if (first) throw first;
 }
 function simParallelBackgroundPending(lane = 1) { return !!_simBg[lane]; }
-// Rushes a bulk lane (lane), or none (-1): see SIM_PAR_BG_FIRST. Where chunks
-// run never changes what they make.
-function simParallelBulkRush(lane) {
-    const P = _simPool;
-    if (!P) return;
-    const on = lane >= 0;
-    Atomics.store(P.ctl, SIM_PAR_BG_CAP, Math.max(1, P.helpers.length - (on ? 1 : 3)));
-    Atomics.store(P.ctl, SIM_PAR_BG_FIRST, on ? lane : -1);
-}
 // Waits until the lane's chain has finished its stages up to `stage` (by
 // their place in the posted list, stages of no chunks counted as done),
 // taking chunks of those meanwhile; the job stays posted (the rest runs on).
@@ -1687,17 +1616,13 @@ function simParallelHelperMain() {
             // (A background-only helper does not stop for a new tick job: it is not one of its takers.)
             while (bgParams && (!fg || Atomics.load(ctl, SIM_PAR_GEN) === seen)) {
                 let ran = false;
-                // (A rushed lane right after the tick's own ones.)
-                const first = Atomics.load(ctl, SIM_PAR_BG_FIRST), R = SIM_PAR_BG_RUSH_AT;
-                for (let li = 0; li <= SIM_PAR_BG_ORDER.length && !ran; li++) {
-                    const lane = first < 0 ? (li < SIM_PAR_BG_ORDER.length ? SIM_PAR_BG_ORDER[li] : -1)
-                        : li < R ? SIM_PAR_BG_ORDER[li] : li === R ? first : SIM_PAR_BG_ORDER[li - 1];
-                    if (lane < 0 || (li > R && lane === first)) continue;
+                for (let li = 0; li < SIM_PAR_BG_ORDER.length && !ran; li++) {
+                    const lane = SIM_PAR_BG_ORDER[li];
                     const b = SIM_PAR_BG_BASE + lane * 8;
                     if (Atomics.load(ctl, b + SIM_PAR_BG_ID) < 0) continue;
                     if (regVer < ctl[b + SIM_PAR_BG_REGVER]) { if (lane === 4 && ctl[SIM_PAR_TRACE_ON]) Atomics.add(ctl, SIM_PAR_TRACE_HSKIP4, 1); continue; }
                     // (A bulk lane: only while under its cap of helpers.)
-                    const capped = lane === SIM_LANE_NAVX || lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
+                    const capped = lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
                     const tq = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0, tk = tq ? Atomics.load(ctl, b + SIM_PAR_BG_KERNEL) & 0xFFFF : 0;
                     try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && tq) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); const BU = _simParReg['par.bgus']; if (BU !== undefined) { const us = Math.round((performance.now() - tq) * 1000); Atomics.add(BU, lane, us); if (16 + tk < BU.length) Atomics.add(BU, 16 + tk, us); } } }
@@ -2041,7 +1966,8 @@ SIM_KERNELS[SIM_KERNEL_SLOT_REMAP] = function (R, P, chunk) { _simRust(_simSlotR
 const _simSlabScoreW = _simWK(['unit.live', 'unit.dead', 'unit.x', 'unit.y', 'rl.home', 'rl.score', '?sl.sfree']);
 SIM_KERNELS[SIM_KERNEL_SLAB_SCORE] = function (R, P, chunk) { _simRust(_simSlabScoreW, P, chunk, 'k_slab_score', 'SLAB_SCORE'); };
 const SIM_KERNEL_ACQ_REMAP = 144;
-const _simAcqRemapW = _simWK(['rl.fwd', 'acq.bt', 'acq.bm', 'rl.fst']);
+// (acq.out: the scan's unit target, the brain's fallback (k.rs brain_pick), a slot to follow its unit too.)
+const _simAcqRemapW = _simWK(['rl.fwd', 'acq.bt', 'acq.bm', 'rl.fst', '?acq.out']);
 SIM_KERNELS[SIM_KERNEL_ACQ_REMAP] = function (R, P, chunk) { _simRust(_simAcqRemapW, P, chunk, 'k_acq_remap', 'ACQ_REMAP'); };
 // (The order pre-pass: in k_order_move now, k.rs.)
 const SIM_KERNEL_META_UNITS = 146;
@@ -2062,7 +1988,7 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_NAV_SWEEP = 7, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
@@ -2298,7 +2224,8 @@ const SIM_KERNEL_ACQ_AREA_BUILD=90;
 const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x','acq.y','acq.own','acq.flags','acq.cmd','acq.rng','acq.id',
     'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
     // (acq.saE: the area buckets' entries, a 16-byte record each: x, y, slot, id.)
-    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?-','?-','?-','?-',
+    // (acq.saE2: as long, the buckets' sort through it, k_acq_area_sort.)
+    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?acq.saE2','?-','?-','?-',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
     // (The build's per-entry key; its stages' histograms by entry range;
@@ -2315,6 +2242,10 @@ SIM_KERNELS[SIM_KERNEL_ACQ_AREA_COUNT]=function(R,P,chunk){_simRust(_simAcqSampl
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_PREFIX]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_prefix','ACQ_AREA_PREFIX');};
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SCATTER]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_scatter','ACQ_AREA_SCATTER');};
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SEED]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_seed','ACQ_AREA_SEED');};
+// (Each bucket's entries in id order after the scatter, P[38] keys a job: a unit's batch of candidates the same
+// whatever the slot layout; acq_sample.rs k_acq_area_sort.)
+const SIM_KERNEL_ACQ_AREA_SORT=147;
+SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SORT]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_sort','ACQ_AREA_SORT');};
 // The area answers after the build: a job per team and part (the nearest area
 // with a visible enemy unit; one for each of the 4 enemy structure classes),
 // chunk = team * 5 + part: independent of one another, so they spread over

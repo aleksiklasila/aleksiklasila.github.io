@@ -668,6 +668,7 @@ function createEditableRuntimeConfigSnapshot() {
             STARTING_MONEY,
             STARTING_ASTAR,
             SHRINES_ENABLED: !!SHRINES_ENABLED,
+            MANUAL_STACKING_ENABLED: !!MANUAL_STACKING_ENABLED,
             MAP_TYPE,
             GAME_MODE: gameMode,
             // During a match the setting, not a spectator's local full view.
@@ -764,6 +765,8 @@ function syncMainMenuFromRuntimeConfig() {
     setValue('cfg-max-research-level', MAX_RESEARCH_LEVEL);
     let shrinesEl = document.getElementById('cfg-shrines');
     if (shrinesEl) shrinesEl.checked = !!SHRINES_ENABLED;
+    let stackingEl = document.getElementById('cfg-manual-stacking');
+    if (stackingEl) stackingEl.checked = !!MANUAL_STACKING_ENABLED;
 }
 
 function applyEditableRuntimeConfigObject(rawConfig, options = null) {
@@ -803,6 +806,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
     if (Number.isFinite(Number(cfg.STARTING_MONEY))) STARTING_MONEY = Math.max(0, Math.floor(Number(cfg.STARTING_MONEY)));
     if (Number.isFinite(Number(cfg.STARTING_ASTAR))) STARTING_ASTAR = Math.max(0, Number(cfg.STARTING_ASTAR));
     if (cfg.SHRINES_ENABLED !== undefined) SHRINES_ENABLED = !!cfg.SHRINES_ENABLED;
+    if (cfg.MANUAL_STACKING_ENABLED !== undefined) { MANUAL_STACKING_ENABLED = !!cfg.MANUAL_STACKING_ENABLED; if (typeof updatePurchaseMultiplierBars === 'function' && typeof document !== 'undefined') try { updatePurchaseMultiplierBars(); } catch { } }
     if (typeof cfg.MAP_TYPE === 'string' && cfg.MAP_TYPE.trim()) MAP_TYPE = cfg.MAP_TYPE.trim();
     if (['destroy', 'killking'].includes(cfg.GAME_MODE)) gameMode = cfg.GAME_MODE;
     if (['full', 'team', 'history'].includes(cfg.MAP_VISIBILITY)) {
@@ -1069,6 +1073,7 @@ function createEditableRuntimeConfigSnapshotFromMainMenu() {
     cfg.STARTING_MONEY = Math.max(0, Math.floor(getNumber('cfg-starting-energy', cfg.STARTING_MONEY)));
     cfg.STARTING_ASTAR = Math.max(0, getNumber('cfg-starting-astar', cfg.STARTING_ASTAR));
     { let el = document.getElementById('cfg-shrines'); if (el) cfg.SHRINES_ENABLED = !!el.checked; }
+    { let el = document.getElementById('cfg-manual-stacking'); if (el) cfg.MANUAL_STACKING_ENABLED = !!el.checked; }
     cfg.MAP_TYPE = getString('cfg-map-type', cfg.MAP_TYPE);
     cfg.GAME_MODE = getString('cfg-gamemode', cfg.GAME_MODE);
     cfg.MAP_VISIBILITY = getString('cfg-full-vis', cfg.MAP_VISIBILITY);
@@ -1109,6 +1114,7 @@ function applyMainMenuControlsToRuntimeState() {
     STARTING_MONEY = cfg.STARTING_MONEY;
     STARTING_ASTAR = cfg.STARTING_ASTAR;
     SHRINES_ENABLED = cfg.SHRINES_ENABLED !== undefined ? !!cfg.SHRINES_ENABLED : SHRINES_ENABLED;
+    MANUAL_STACKING_ENABLED = cfg.MANUAL_STACKING_ENABLED !== undefined ? !!cfg.MANUAL_STACKING_ENABLED : MANUAL_STACKING_ENABLED;
     MAP_TYPE = cfg.MAP_TYPE;
     CONFIG_MAX_POP = cfg.CONFIG_MAX_POP;
     if (cfg.CONFIG_MAX_BUILDINGS) CONFIG_MAX_BUILDINGS = cfg.CONFIG_MAX_BUILDINGS;
@@ -3076,7 +3082,13 @@ function _researchStats() {
 }
 function researchStatIndex(kind, key, statKey) { _researchStats(); const i = _researchStatIx.get(makeResearchLevelId(kind, key, statKey)); return i === undefined ? -1 : i; }
 // (Where the queue is the numbers: not the page of a simulation worker.)
-function _researchSimSide() { return !(typeof simClientActive === 'function' && simClientActive()); }
+// (Nor a page without the wasm kernels (one whose matches its simulation worker runs): between its matches
+// simClientActive() is false, and a rematch's reset there made heap queues and replayed the last match's
+// research task through k_rq_op ("no wasm kernels on this thread"): the host's rematch never started.)
+function _researchSimSide() {
+    if (typeof simClientActive === 'function' && simClientActive()) return false;
+    return typeof _simWasmX !== 'undefined' && !!_simWasmX;
+}
 // The queue's numbers in the wasm heap: ids, depth, prog, hdr ([0] length,
 // [1] version, [2] the last removal's stat); its changes by the kernel
 // (wasm/src/ord.rs k_rq_op). Made from a restored plain copy (its arrays
@@ -3236,7 +3248,12 @@ function ensurePlayerResearchQueueState(playerId) {
 // A player's queue emptied, its progress too (a new match).
 function researchQueueReset(p, playerId) {
     if (p && p._rq && _researchSimSide()) { const old = p._rq; p._rq = _rqNew(playerId); if (old instanceof SimResearchQueue) for (const k of ['ids', 'depth', 'prog', 'hdr']) simHeapFree(old[k]); _rqAttach(p, playerId); return; }
-    if (p) { p.researchQueue = []; p.researchTask = null; }
+    if (p) {
+        // (Plain values: a heap queue's accessors from an earlier simulating time go, they would call the kernel.)
+        const d = Object.getOwnPropertyDescriptor(p, 'researchQueue');
+        if (d && d.get) { delete p.researchQueue; delete p.researchTask; }
+        p.researchQueue = []; p.researchTask = null;
+    }
 }
 // Count tasks of a stat added (at insertAt and on, -1 the end): as many as
 // the labs' capacity and the stat's levels leave room for. The tasks added.

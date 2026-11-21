@@ -50,6 +50,8 @@ require('./menu-limits.cjs').settings(data,{population:num('population',Math.cei
 const controls={...H.SMALL_MATCH_CONTROLS};
 for(const group of ['numbers','selects','checkboxes'])for(const [k,v] of Object.entries(data.lobby[group]||{}))controls[k]=typeof v==='boolean'?v:String(v);
 const world=new H.World({controls}),inst=world.spawn('chaos-spikes',{controls,simWorker:false});
+// (A real clock for code evaluated in the game (RESTORE_JS, --step-eval): its performance.now() is the harness's virtual one.)
+inst.scratch.realNow=()=>performance.now();
 inst.scratch.now=()=>performance.now();
 inst.eval(`MAX_THING_LEVEL=20; MAX_RESEARCH_LEVEL=10;
  startingResourcesConfig=normalizeStartingResourcesConfig(${JSON.stringify(data.startingResources)});
@@ -353,8 +355,7 @@ for(let i=0;i<ticks;i++){
  if(process.env.ROWX)row.x=inst.eval(process.env.ROWX);
  if(process.argv.includes('--occ-jobs'))row.occ=inst.eval('(()=>{const r=__scratch.occ;__scratch.occ=[];return r;})()');
  if(process.argv.includes('--memory-stats'))row.memory=inst.eval(`({ ...simMemoryStats(),
-  navProfiles:_nav.map(n=>n?{atlas:!!n.atlas?.header,nodes:n.nodeTile.length}:null),
-  navFieldBytes:_navFields.pools.reduce((n,f)=>n+(f.pool?.byteLength||0)+(f.rows?.byteLength||0),0) })`);
+  navProfiles:_nav.map(n=>n?{atlas:!!n.atlas?.header,nodes:n.nodeTile.length}:null) })`);
  row.births=row.work.spawns-previousSpawns;row.deaths=previousUnits+row.births-row.units;previousUnits=row.units;previousSpawns=row.work.spawns;
  row.towerBatch=inst.eval(`typeof _towerAcq==='undefined'?null:({queries:_towerAcq.lastN,active:_towerAcq.lastActive,used:_towerAcq.lastUsed,native:!!_towerAcq.native,prepared:_towerAcq.lastPrepared||0})`);
  row.workerBrain=inst.eval(`typeof _workerBrain==='undefined'?null:({prepared:_workerBrain.prepared,used:_workerBrain.used,misses:_workerBrain.misses,bytes:Object.values(_workerBrain.arrays).reduce((n,a)=>n+a.byteLength,0),recordBytes:_simUnitState?.wk?9*_simUnitState.wk.cap:0})`);

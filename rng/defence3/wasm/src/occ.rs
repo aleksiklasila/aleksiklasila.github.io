@@ -218,16 +218,178 @@ unsafe fn free(g:&Grid,x:i32,y:i32,r:i32,layer:i32,ox:i32,oy:i32,orr:i32,ol:i32)
 /// search rings out; None when there is none. (spr.rs k_spawn_births: the place found before the slot is taken.)
 pub(crate) unsafe fn occ_find(bits:*mut u32,mask:*const i8,w:i32,h:i32,stride:i32,cell:i32,planes:i32,x:i32,y:i32,r:i32,layer:i32,search:i32)->Option<(i32,i32)> {
     let g=mkgrid(bits,mask,w,h,stride,cell,planes,core::ptr::null_mut(),true);
+    // (The first rings place by place: most spawns find a place there. Past them, the window at once.)
+    if search>OCC_NEAR && search<=OCC_WIN_S && x>=0 && y>=0 {
+        if let Some(p)=find_rings(&g,x,y,r,layer,OCC_NEAR) { return Some(p); }
+        let (r,layer)=(r.max(1).min(32),layer.max(0).min(planes-1));
+        return if r<=17 { find_win64(&g,x,y,r,layer,search) } else { find_win(&g,x,y,r,layer,search) };
+    }
+    find_rings(&g,x,y,r,layer,search)
+}
+/// occ_find as a test of each place in turn (the reference: occ_find_cmp).
+unsafe fn find_rings(g:&Grid,x:i32,y:i32,r:i32,layer:i32,search:i32)->Option<(i32,i32)> {
+    let g=&*g;let planes=g.planes;let cell=g.cell;
     let layer=layer.max(0).min(planes-1);let r=r.max(1).min(32);
-    if free(&g,x,y,r,layer,0,0,0,-1) {return Some((x,y));}
+    if free(g,x,y,r,layer,0,0,0,-1) {return Some((x,y));}
     for d in 1..=search {
         for dy in -d..=d {for dx in -d..=d {
             if dx.abs()!=d && dy.abs()!=d {continue;}
             let (tx,ty)=(x+dx*cell,y+dy*cell);
-            if free(&g,tx,ty,r,layer,0,0,0,-1){return Some((tx,ty));}
+            if free(g,tx,ty,r,layer,0,0,0,-1){return Some((tx,ty));}
         }}
     }
     None
+}
+const OCC_WIN_S:i32=32;
+const OCC_NEAR:i32=2;
+/// Columns [c, c+128) of map row yy (layer) as bits, cells off the map taken.
+#[inline(always)]
+unsafe fn row128(g:&Grid,layer:i32,yy:i32,c:i32)->u128 {
+    if yy<0 || yy>=g.h { return u128::MAX; }
+    let row=g.bits.add((layer*g.plane+yy*g.stride) as usize);
+    let mut v=0u128;
+    // (Five words cover any 128 columns from c; words outside the map's columns: taken.)
+    let w0=c>>5; let sh=(c-(w0<<5)) as u32;
+    let mut acc=0u128;let mut hi=0u32;
+    for k in 0..4i32 {
+        let wd=w0+k;
+        let word=if wd<0 || (wd<<5)>=g.w {u32::MAX} else {*row.add(wd as usize)};
+        acc|=(word as u128)<<(32*k as u32);
+    }
+    { let wd=w0+4; hi=if wd<0 || (wd<<5)>=g.w {u32::MAX} else {*row.add(wd as usize)}; }
+    v|=acc>>sh;
+    if sh>0 { v|=(hi as u128)<<(128-sh); }
+    // Cells left of the map, or right of it in its last word, taken.
+    if c<0 { let n=(-c).min(128) as u32; v|=if n>=128 {u128::MAX} else {(1u128<<n)-1}; }
+    let past=g.w-c;
+    if past<128 { v|=if past<=0 {u128::MAX} else {u128::MAX<<(past as u32)}; }
+    v
+}
+/// Each bit j: any of bits j..j+n of v (n < 128).
+#[inline(always)]
+fn spread(v:u128,n:i32)->u128 {
+    let (mut acc,mut have)=(v,1i32);
+    while have*2<=n+1 { acc|=acc>>(have as u32); have*=2; }
+    if have<n+1 { acc|=acc>>((n+1-have) as u32); }
+    acc
+}
+/// Columns [c, c+64) of map row yy (layer) as bits, cells off the map taken.
+#[inline(always)]
+unsafe fn row64(g:&Grid,layer:i32,yy:i32,c:i32)->u64 {
+    if yy<0 || yy>=g.h { return u64::MAX; }
+    let row=g.bits.add((layer*g.plane+yy*g.stride) as usize);
+    let w0=c>>5; let sh=(c-(w0<<5)) as u32;
+    let wd=|k:i32|->u64 { let x=w0+k; (if x<0 || (x<<5)>=g.w {u32::MAX} else {*row.add(x as usize)}) as u64 };
+    let lo=wd(0)|(wd(1)<<32);
+    let mut v=if sh==0 {lo} else {(lo>>sh)|(wd(2)<<(64-sh))};
+    if c<0 { let n=(-c).min(64) as u32; v|=if n>=64 {u64::MAX} else {(1u64<<n)-1}; }
+    let past=g.w-c;
+    if past<64 { v|=if past<=0 {u64::MAX} else {u64::MAX<<(past as u32)}; }
+    v
+}
+#[inline(always)]
+fn spread64(v:u64,n:i32)->u64 {
+    let (mut acc,mut have)=(v,1i32);
+    while have*2<=n+1 { acc|=acc>>(have as u32); have*=2; }
+    if have<n+1 { acc|=acc>>((n+1-have) as u32); }
+    acc
+}
+const WIN_ROWS:usize=2*OCC_WIN_S as usize+1+2*17;
+/// find_win for footprints up to radius 17 in 64-bit words: centres 32 a chunk (32 + 2 * 16 columns a read); each
+/// map row spread once a half width, the centre rows the ORs of their footprint rows' spreads.
+unsafe fn find_win64(g:&Grid,x:i32,y:i32,r:i32,layer:i32,search:i32)->Option<(i32,i32)> {
+    let (cx0,cy0)=(cell_coord(g,x),cell_coord(g,y));
+    let n=2*search+1;let nch=(n+31)>>5;let rows=n+2*r;
+    let mut blk=[0u32;3*(2*OCC_WIN_S as usize+1)];
+    let mut sp=[0u32;3*WIN_ROWS];
+    let mut done=0u64;
+    for dy0 in -r..=r {
+        let k=half(g,r,dy0); if k<0 || (done>>k)&1!=0 {continue;}
+        done|=1u64<<k;
+        // Every map row of the window spread by k (its centres' columns +- k).
+        for t in 0..rows { let yy=cy0-search-r+t; for ch in 0..nch {
+            let c0=cx0-search+32*ch;
+            *sp.get_unchecked_mut((t*3+ch) as usize)=spread64(row64(g,layer,yy,c0-k),2*k) as u32;
+        }}
+        // Into each centre row from its footprint rows of that half width.
+        for dy in -r..=r { if half(g,r,dy)!=k {continue;}
+            for j in 0..n { let t=j+dy+r; for ch in 0..nch {
+                *blk.get_unchecked_mut((j*3+ch) as usize)|=*sp.get_unchecked((t*3+ch) as usize);
+            }}
+        }
+    }
+    ring_scan(&blk,search,x,y,g.cell)
+}
+/// The first free centre in occ_find's order (rings out; in a ring by row, then column) of the blocked bits (rows of
+/// three words, centre (search, search)): a ring's first and last rows as words, its sides as two bits a row.
+unsafe fn ring_scan(blk:&[u32],search:i32,x:i32,y:i32,cell:i32)->Option<(i32,i32)> {
+    let bit=|i:i32,j:i32|->bool { (*blk.get_unchecked((j*3+(i>>5)) as usize)>>(i&31))&1!=0 };
+    // The lowest free column of row j in [a, b].
+    let first=|j:i32,a:i32,b:i32|->i32 {
+        let mut i=a;
+        while i<=b {
+            let w=*blk.get_unchecked((j*3+(i>>5)) as usize)>>(i&31);
+            let f=(!w).trailing_zeros() as i32;
+            if f<32-(i&31) { let c=i+f; return if c<=b {c} else {-1}; }
+            i=(i|31)+1;
+        }
+        -1
+    };
+    let s=search;
+    if !bit(s,s) { return Some((x,y)); }
+    for d in 1..=s {
+        let c=first(s-d,s-d,s+d);
+        if c>=0 { return Some((x+(c-s)*cell,y-d*cell)); }
+        for dy in 1-d..d {
+            let j=s+dy;
+            if !bit(s-d,j) { return Some((x-d*cell,y+dy*cell)); }
+            if !bit(s+d,j) { return Some((x+d*cell,y+dy*cell)); }
+        }
+        let c=first(s+d,s-d,s+d);
+        if c>=0 { return Some((x+(c-s)*cell,y+d*cell)); }
+    }
+    None
+}
+/// occ_find over the whole window at once: for every centre (search rings around (x, y)) whether its footprint is
+/// taken (its rows of the bitmap spread by the shape's half widths, ORed), then the rings in occ_find's order.
+unsafe fn find_win(g:&Grid,x:i32,y:i32,r:i32,layer:i32,search:i32)->Option<(i32,i32)> {
+    let (cx0,cy0)=(cell_coord(g,x),cell_coord(g,y));
+    let n=2*search+1;
+    // blocked[row][chunk]: centres cx0-search+64*chunk.. (64 a chunk, two chunks for 65).
+    let mut blk=[0u64;2*(2*OCC_WIN_S as usize+1)];
+    for j in 0..n {
+        let cy=cy0-search+j;
+        for ch in 0..2i32 {
+            let c0=cx0-search+64*ch;
+            if 64*ch>=n { break; }
+            let mut b=0u128;
+            for dy in -r..=r {
+                let hw=half(g,r,dy); if hw<0 {continue;}
+                let v=row128(g,layer,cy+dy,c0-hw);
+                b|=spread(v,2*hw);
+                if b as u64==u64::MAX { break; }
+            }
+            *blk.get_unchecked_mut((j*2+ch) as usize)=b as u64;
+        }
+    }
+    // (As three 32-bit words a row, for the scan.)
+    let mut b3=[0u32;3*(2*OCC_WIN_S as usize+1)];
+    for j in 0..n as usize {
+        let (a,b)=(*blk.get_unchecked(j*2),*blk.get_unchecked(j*2+1));
+        *b3.get_unchecked_mut(j*3)=a as u32; *b3.get_unchecked_mut(j*3+1)=(a>>32) as u32; *b3.get_unchecked_mut(j*3+2)=b as u32;
+    }
+    ring_scan(&b3,search,x,y,g.cell)
+}
+/// occ_find's window search against the place-by-place one (tests/occ-find-window.test.cjs): the two packed results
+/// (x * 65536 + y, -1 none) in out[0], out[1].
+#[no_mangle]
+pub unsafe extern "C" fn occ_find_cmp(bits:u32,mask:u32,w:i32,h:i32,stride:i32,cell:i32,planes:i32,x:i32,y:i32,r:i32,layer:i32,search:i32,out:u32) {
+    let (b,m)=(waddr(bits) as *mut u32,waddr(mask) as *const i8);
+    let o=waddr(out) as *mut i32;
+    let pk=|p:Option<(i32,i32)>|p.map_or(-1,|(a,c)|a*65536+c);
+    *o=pk(occ_find(b,m,w,h,stride,cell,planes,x,y,r,layer,search));
+    let g=mkgrid(b,m,w,h,stride,cell,planes,core::ptr::null_mut(),true);
+    *o.add(1)=pk(find_rings(&g,x,y,r,layer,search));
 }
 /// The footprint marked at (x, y) and slot s's record written (occ_spawn's end).
 pub(crate) unsafe fn occ_mark(bits:*mut u32,mask:*const i8,rec:*mut i32,w:i32,h:i32,stride:i32,cell:i32,planes:i32,s:usize,x:i32,y:i32,r:i32,layer:i32) {

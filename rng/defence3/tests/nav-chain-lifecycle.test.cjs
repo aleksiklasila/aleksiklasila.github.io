@@ -1,6 +1,10 @@
 'use strict';
 // Fixed-arena overflow, reuse, empty geometry and restores at both chain
 // boundaries. Completion timing/helper count must not choose an install step.
+// Every route is on the routing atlas (flownav.js navRouteFid); a build with
+// no open tile has no atlas and no way. (Before 2026-11-20 this test also
+// switched the atlas off, NAV_ATLAS = false, to check the destination fields'
+// window: the fields and that switch are gone.)
 globalThis.self = {crossOriginIsolated:true};
 const assert = require('node:assert/strict'), H = require('./net-harness.cjs');
 for (const helpers of [0, 3]) {
@@ -62,17 +66,21 @@ for (const helpers of [0, 3]) {
             check(JSON.stringify([copy(actual.nodeTile),copy(actual.partComp),copy(actual.atlas.rc)])===geometry,'restore changed geometry');
             out.push({dk,boundary,steps});
         }
-        // An atlas-only window avoids field staging, but the first fallback
-        // request in that window must still be made over the new geometry.
-        const next=navBuild(0,_nav[0].wall,true,W,H);
-        _navNextStage(next);check(_navNext.empty,'unused field window did work');
-        NAV_ATLAS=false;
-        const dest=_nav[0].wall.findIndex(v=>v===0),fid=navFieldRequest(0,dest);
-        check(fid>=0&&!_navNext.empty,'first fallback did not expand window');
-        _navFieldsStart();_navFieldsCommit();
-        _navNextInstall(next);
-        check(_navFields.pools[0].meta[fid*NAV_FIELD_META+7]===1,'fallback field not ready at install');
-        NAV_ATLAS=true;
+        // Every destination's route is the atlas' id; off the map, none.
+        const open=_nav[0].wall.findIndex(v=>v===0);
+        check(navRouteFid(0,open)===NAV_ATLAS_FID,'route not on the atlas');
+        check(navRouteFid(0,-1)===-1&&navRouteFid(0,W*H)===-1,'a route off the map');
+        // No open tile (no parts): no atlas, the same route id, and no step.
+        {
+            const walled=navBuild(0,new Uint8Array(W*H).fill(1),true,W,H),keep=_nav[0];
+            check(walled.np===0&&walled.atlas===null,'a walled build has an atlas');
+            _nav[0]=walled;
+            try {
+                const to=3*W+7;
+                check(navRouteFid(0,to)===NAV_ATLAS_FID,'walled map: no route id');
+                check(navStep(0,5,to)===-1&&navPath(0,5,0,to,8)===null,'walled map: a step');
+            } finally {_nav[0]=keep;}
+        }
         return out;
     })())`));
     assert.deepEqual(inst.errors.map(String),[]);

@@ -288,6 +288,8 @@ pub unsafe extern "C" fn k_rally_tiles(a: u32, _chunk: i32) {
 /// Navigation profiles (flownav.js NAV_PROFILES: ground, air, builders and
 /// salvagers; collectors fly): room for more.
 const NAV_PROFILES: usize = 11;
+/// The route id of every route (flownav.js NAV_ATLAS_FID): on its profile's atlas.
+const ATLAS_FID: i32 = 1 << 30;
 /// A worker's navigation profile (flownav.js navProfileOf): its layer (air),
 /// its worker record's type (unit.wbType: 1 collector, 2 astar collector, 3
 /// salvager, 4 builder), its owner.
@@ -323,8 +325,8 @@ fn work_mix(i: i32) -> i32 {
 /// target/flag hash keys; array word 2 reserved). The work versions'
 /// checksum change at cnt[2]; cnt[3] 1
 /// when the work site grid's dirty list was full.
-/// Per profile p, ow.pd[6p..]: destination tile, wide, flow, its
-/// generation, ready, valid. Releases: the work version of the target's
+/// Per profile p, ow.pd[3p..]: destination tile, wide, valid (its route on
+/// the profile's atlas: flownav.js navRouteFid, ready at once). Releases: the work version of the target's
 /// region (a unit target's from its slot, um.ids / um.slots), the
 /// reservation it holds (wk.resv; its region's count and sum when kept,
 /// the work site grid's list); its state MANUAL_MOVE (13), target and type
@@ -563,9 +565,9 @@ pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
         let owner = g(own, q) as i32;
         let wb = g(wbtype, g(wkix, q).max(0) as usize);
         let p = worker_profile(g(layer, q), wb, owner);
-        let pb = 6 * p;
-        if g(pd, pb + 5) == 0 { s(out, ob + no, qv); no += 1; continue; }
-        let (dest, wide, fid, gen, ready) = (g(pd, pb), g(pd, pb + 1) != 0, g(pd, pb + 2), g(pd, pb + 3), g(pd, pb + 4));
+        let pb = 3 * p;
+        if g(pd, pb + 2) == 0 { s(out, ob + no, qv); no += 1; continue; }
+        let (dest, wide) = (g(pd, pb), g(pd, pb + 1) != 0);
         let id = g(uid, q);
         // The order's fields (_ordClearFast).
         s(tus, q, -1); s(tuid, q, 0); s(tbt, q, -1); s(acqb, q, 0); s(fatf, q, 0);
@@ -648,7 +650,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
         // Its route (_issueFlowOrder): the destination's flow.
         let tl = tile_of(q);
         let at = tl == dest;
-        s(rkf, q, 1); s(rte, q, dest); s(nvp, q, p as i8); s(navrdy, q, ready);
+        s(rkf, q, 1); s(rte, q, dest); s(nvp, q, p as i8); s(navrdy, q, 0);
         if g(pidx, q) != 0 { s(on, q, 0); s(pidx, q, 0); }
         s(nvpk, q, if at { -1 } else { ((p as i32) * 16777216 + dest) * 2 + wide as i32 });
         let h = g(mpath, q);
@@ -656,9 +658,9 @@ pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
         s(on, q, 0); s(mcd, q * 8, -1);
         s(rsend, q, if at { -1 } else { dest });
         s(nld, q, -1.0);
-        if !at && fid >= 0 && g(sepk, q) != absent {
+        if !at && g(sepk, q) != absent {
             s(mflags, q, 64 | if p == 1 { 32 } else { 0 } | 128);
-            s(mreach, q, 0); s(mflow, q, fid); s(mfgen, q, gen); s(mdest, q, dest); s(mready, q, ready); s(mnp, q, p as u8);
+            s(mreach, q, 0); s(mflow, q, ATLAS_FID); s(mfgen, q, 0); s(mdest, q, dest); s(mready, q, 0); s(mnp, q, p as u8);
             s(msteady.add(6), q * 8, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);
         }
     }
@@ -1424,7 +1426,8 @@ pub(crate) unsafe fn col<T>(tab: *const i32, c: usize, j: usize) -> *mut T {
 /// Events for the JavaScript (adj.ev: class, row, flags, member; per job from
 /// job * P[1], adj.evn[job * 16] of them): 2 its effective level changed
 /// (work sites, traps), 16 its vision registration to make again, 32 a laser
-/// whose stats changed.
+/// whose stats changed, 64 its shown levels, stacks or group changed (the
+/// page's row, simPresentTileDirty).
 /// P: [0] members, [1] per job, [2] passive, [3] GRID_W, [4] MAX_THING_LEVEL,
 /// [5] types, [6] owner rows (players + 1; row 0: no owner), [7] unused, [8]
 /// vision coverage current, [9] its generation, [10] the laser's type (-1),
@@ -1499,6 +1502,9 @@ pub unsafe extern "C" fn k_adj_apply(a: u32, chunk: i32) {
         let mut flags = 0i32;
         let eff_changed = prior_lev as i32 != eff_l;
         if eff_changed { flags |= 2; }
+        // (What its label and info show changed: its row to the page at the
+        // next tick, not at the presentation's next full cycle.)
+        if eff_changed || prior_pot as i32 != pot_l || eff0 != effs32 || prior_gs != gs || !(prior_gm == gm) || (!passive && (st0 != stacked || man0 != mans)) { flags |= 64; }
         if (!passive && (st0 != stacked || man0 != mans)) || eff0 != effs32 || prior_pot as i32 != pot_l || eff_changed {
             // (_sDerivedReconcile: the entries made again at their next read;
             // stationaryBrainChanged: the descriptor's effective level.)
@@ -1587,7 +1593,7 @@ pub unsafe extern "C" fn k_adj_apply(a: u32, chunk: i32) {
             if ty == laser { flags |= 32; }
         }
         if en_set && !(energy == g(cen, r)) { s(cen, r, energy); s(stval, tu, energy); }
-        if flags & (2 | 16 | 32) != 0 {
+        if flags & (2 | 16 | 32 | 64) != 0 {
             let e = 4 * (evb + ne);
             s(ev, e, c as i32); s(ev, e + 1, row); s(ev, e + 2, flags); s(ev, e + 3, i as i32); ne += 1;
         }

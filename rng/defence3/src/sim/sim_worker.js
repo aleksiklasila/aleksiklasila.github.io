@@ -261,7 +261,9 @@ self.onmessage = (ev) => {
         if (msg.type === 'load') {
             let t0 = performance.now();
             // (The page's shared control block: [epoch, last tick run].)
-            _simCtl = msg.ctl instanceof Int32Array ? msg.ctl : null;
+            // (Checked by its tag, not instanceof: the same in another realm (the Node harness's contexts), where
+            // instanceof failed and the worker never published its progress there.)
+            _simCtl = Object.prototype.toString.call(msg.ctl) === '[object Int32Array]' ? msg.ctl : null;
             _simAuto.base = Number(msg.ctlBase) || 0;
             // (The page's kernel build, before sim_wasm.js reads it.)
             if (msg.wasm64 !== undefined) self.SIM_WASM64_OPT = !!msg.wasm64;
@@ -821,11 +823,30 @@ function _simTick(msg) {
     // The rolling state hash, as every peer records it after a tick.
     // (The presentation's marks and snapshot run on the helpers meanwhile: published once done, between the ticks,
     // simPresentTickSoon; taken at the next tick's start or message at the latest.)
+    // Every tick that ran ends in exactly one result (audit row 81, 2026-11-20): a throw while publishing it (the
+    // world's encode, the events, the sight grid, the clone) left the page counting the tick in flight for good,
+    // and a guest's patch, gated on no ticks in flight, never applied. The failure goes out as the tick's, with a
+    // bare result (its hash when made); the next frame is whole (the page's copy missed this tick's changes).
+    let hash = null, posted = false;
     try {
-        let hash = msg.hash && snapHashDue(tick) ? snapRecordTickHash(tick) : null;
+        // (The match's last tick is hashed too: its end's state is compared, utils_networking.js guestReviewMatchResult.)
+        hash = msg.hash && (snapHashDue(tick) || gameOver) ? snapRecordTickHash(tick) : null;
         let report = typeof simTickReportHook === 'function' ? simTickReportHook(tick) : null;
         _simPostResult(tick, hash, simReportLockstepHashes ? [computeLockstepStateHashFast(tick)] : null, simMs, report);
-    } finally { if (typeof simPresentTickSoon === 'function') simPresentTickSoon(); }
+        posted = true;
+    } catch (err) {
+        _simError('publish', err, tick);
+    } finally {
+        if (!posted) _simPostBareResult(tick, hash, simMs);
+        if (typeof simPresentTickSoon === 'function') simPresentTickSoon();
+    }
+}
+// (A tick's result whose publication failed: no world, no events; the frames start over.)
+function _simPostBareResult(tick, hash, simMs) {
+    try { _simEvPosted(); } catch { }
+    try { simFrameResetAll(); } catch { }
+    _simPost({ type: 'ticked', epoch: _simEpoch, tick, world: null, presentation: !!_simPresentation, hash, lockHashes: null, events: null,
+        sight: null, simMs, encodeMs: 0, report: null, minimap: null, lateMs: _simTickLateMs, doneAt: _simNowAbs(), bare: true });
 }
 
 // (The last tick's lateness against its deadline, reported with it.)

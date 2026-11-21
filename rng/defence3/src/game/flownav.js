@@ -11,13 +11,13 @@
 //  - parts: a cluster's walkable tiles connected inside it (an exit serves
 //    the part it is in; walls may split a cluster, a maze many times), and
 //    components: the parts connected through exits (who can reach whom);
-//  - per destination (made on first use and cached, navFieldRequest): a
-//    field toward the exact tile over the clusters around it, and a row of
-//    every part's exit toward it (one search over the exit graph, by the
-//    helpers).
-// A step: at most a destination field read, or a row read and a local field
-// read (navStep, and the same in SIM_KERNEL_MOVE). Steps cost more next to
-// walls (stepCostTable), so units keep to the middle of corridors.
+//  - the routing atlas (wasm/src/atlas.rs): any destination by lookups over
+//    a hierarchy of the parts, no search and no per-destination data. Every
+//    route is on it (navRouteFid); a map with no open tile has no atlas and
+//    no route (no way, as for an unreachable destination).
+// A step: atlas lookups and a local field read (navStep, and the same in
+// SIM_KERNEL_MOVE). Steps cost more next to walls (stepCostTable), so units
+// keep to the middle of corridors.
 // A destination a unit cannot reach (another component, or walls all around
 // it): it goes to the closest tile it can reach, worked out by the helpers
 // (navPathSubstitute). Nothing on the simulation thread searches: a unit's
@@ -132,8 +132,6 @@ function _navGroundBytes(W, H) { const C = Math.max(W, H) > 512 ? 32 : 16, nc = 
 // parts).
 function navReserve() {
     if (typeof simHeapHas !== 'function' || typeof GRID_W !== 'number' || !(GRID_W > 0)) return;
-    if (!_navDropList || !simHeapHas(_navDropList)) _navDropList = simSharedArray(Int32Array, Math.max(NAV_FIELDS_NARROW, NAV_FIELDS_WIDE));
-    if (!_navDropHdr || !simHeapHas(_navDropHdr)) _navDropHdr = simSharedArray(Int32Array, 2);
     const S = _navSlots, W = GRID_W, H = GRID_H;
     if (S.slots && S.W === W && S.H === H && S.slots.every(L => L.every(e => simHeapHas(e.a)))) return;
     const prev = _navSlots.cur; S.cur = null;
@@ -169,7 +167,6 @@ function _navSlotTake(profile) {
     if (!S.slots || S.W !== GRID_W || S.H !== GRID_H || !S.slots[profile]) return null;
     const held = new Set();
     for (const b of _nav) if (b && b.slot) held.add(b.slot);
-    if (_navNext.nav && _navNext.nav.slot) held.add(_navNext.nav.slot);
     if (_navJob) { if (_navJob.b && _navJob.b.slot) held.add(_navJob.b.slot); if (_navJob.next && _navJob.next.slot) held.add(_navJob.next.slot); }
     for (const e of S.slots[profile]) if (!held.has(e) && simHeapHas(e.a)) { e.off = 0; return e; }
     return null;
@@ -188,7 +185,6 @@ function _navSweep() {
     if (!_navOwned.size) return;
     const live = new Set(), seen = new Set();
     for (const b of _nav) _navReach(b, seen, live, 0);
-    _navReach(_navNext.nav, seen, live, 0);
     const J = _navJob;
     if (J) { _navReach(J.b, seen, live, 0); _navReach(J.next, seen, live, 0); _navReach(J.atl, seen, live, 0); _navReach(J.shared, seen, live, 0); }
     for (const a of _navOwned) if (!live.has(a)) { _navOwned.delete(a); _navFreeQ.push(_navFreeClock, a); }
@@ -212,7 +208,7 @@ const NAVH = { K:0, NP:1, E:2, TOTAL:3, L:4, POOL:5, NJ:6, NCOMP:7, TOP:8, CAP:9
 // the arena, eliminating the last small allocation at every bind/install.
 const NAV_BUILD_HEADER_BYTES = 256 + NAV_PROFILES * 128;
 const SIM_KERNEL_NAV_CHAIN = 135, NAV_PARTS_PER_JOB = 16, NAV_ATLAS_CLUSTERS_PER_JOB = 8;
-let NAV_ATLAS = true;
+// (The route id of every route: on its profile's atlas, navRouteFid. wasm/src/mv.rs NAV_ATLAS_FID.)
 const NAV_ATLAS_FID = 1 << 30;
 function _navBuildLane() { return typeof SIM_LANE_LONG === 'number' ? SIM_LANE_LONG : 1; }
 function navBuildCollect() { simParallelBackgroundWait(_navBuildLane()); }
@@ -242,7 +238,7 @@ function navBuildStart(profile, wallLive, withCosts, W, H, useSlot = true, capac
     if (withCosts) { put(NAVH.COST, Uint8Array, W * H); put(NAVH.H, Uint8Array, W * H); }
     put(NAVH.PARTL, Uint16Array, W * H); put(NAVH.PARTN, Int32Array, nc);
     put(NAVH.NS, Int32Array, nc * NM); put(NAVH.NSC, Int32Array, nc * 4);
-    return { profile, C, cw, ch, nc, W, H, NM, arena, hdr, slot, wall, withCosts, withAtlas: NAV_ATLAS };
+    return { profile, C, cw, ch, nc, W, H, NM, arena, hdr, slot, wall, withCosts };
 }
 
 // All stages use the arena address carried in their immutable parameters,
@@ -305,7 +301,7 @@ SIM_KERNELS[SIM_KERNEL_NAV_CHAIN] = function (R, P, chunk) {
             }
             X.nav_field(_simWEnc(base + h[NAVH.FIELDS]), i * CC, CC, cx * C, cy * C, C, C, W, H, t,
                 _simWEnc(base + h[NAVH.WALL]), h[NAVH.COST] ? _simWEnc(base + h[NAVH.COST]) : 0,
-                0,0,0,0,0,0,0,0,0,0, 0,0,0,0, 1,0,0, 0,0, _simWEnc(_simWasmScratch), _simWasmScratchWords);
+                _simWEnc(_simWasmScratch), _simWasmScratchWords);
         }
         return;
     }
@@ -342,14 +338,14 @@ function navBuildChain(b, background = true) {
     // stays installed until this build is.)
     const q = _nav[b.profile], prev = NAV_FIELD_REUSE && background && q && q !== b && q.W === b.W && q.H === b.H && q.C === b.C && q.nc === b.nc && !!q.cost === !!b.withCosts
         && _navOnHeap(q.wall) && _navOnHeap(q.nodeBase) && _navOnHeap(q.nodeTile) && _navOnHeap(q.fields) ? q : null;
-    const rows = b.withCosts ? Math.ceil(b.H / NAV_COST_ROWS) : 0, blocks = b.withAtlas ? Math.ceil(b.nc / NAV_ATLAS_CLUSTERS_PER_JOB) : 0;
+    const rows = b.withCosts ? Math.ceil(b.H / NAV_COST_ROWS) : 0, blocks = Math.ceil(b.nc / NAV_ATLAS_CLUSTERS_PER_JOB);
     const counts = [rows, rows, Math.ceil(b.nc / NAV_NODES_PER_JOB), 1, groups, groups, 1, groups,
-        Math.ceil(b.nc / NAV_PARTS_PER_JOB), 1, blocks, 1, b.withAtlas ? groups : 0, 1, blocks, 1];
+        Math.ceil(b.nc / NAV_PARTS_PER_JOB), 1, blocks, 1, groups, 1, blocks, 1];
     const stages = [];
     for (let stage = 0; stage < counts.length; stage++) {
         const P = background ? simParallelStageParams(lane, stage) : _simParams;
         P.fill(0); P[3] = b.W; P[4] = b.H; P[5] = b.C; P[6] = b.cw; P[7] = b.nc; P[11] = b.NM;
-        P[20] = stage; P[21] = _simHeapPtrOf(b.arena); P[22] = groups; P[23] = b.withAtlas ? 1 : 0; P[24] = b.ch;
+        P[20] = stage; P[21] = _simHeapPtrOf(b.arena); P[22] = groups; P[23] = 1; P[24] = b.ch;
         if (stage === 4 && prev) { P[25] = 1; P[26] = prev.wall.byteOffset; P[27] = prev.cost ? prev.cost.byteOffset : 0; P[28] = prev.nodeBase.byteOffset; P[29] = prev.nodeTile.byteOffset; P[30] = prev.fields.byteOffset; }
         if (background) stages.push([SIM_KERNEL_NAV_CHAIN, counts[stage]]);
         else if (counts[stage]) simParallelRun(SIM_KERNEL_NAV_CHAIN, counts[stage]);
@@ -367,7 +363,8 @@ function navBuildFinish(b) {
         fields:view(NAVH.FIELDS,Uint16Array,k*C*C),adjStart:view(NAVH.ADJS,Int32Array,k+1),adjA:view(NAVH.ADJA,Int32Array,h[NAVH.E]),adjC:view(NAVH.ADJC,Int32Array,h[NAVH.E]),B:h[NAVH.B],
         partL:view(NAVH.PARTL,Uint16Array,W*H),partBase:view(NAVH.PARTB,Int32Array,nc+1),np,nodePart:view(NAVH.NPART,Int32Array,k),
         partComp:view(NAVH.PCOMP,Int32Array,np),partCluster:view(NAVH.PCLU,Int32Array,np),ncomp,compStart:view(NAVH.CSTART,Int32Array,ncomp+1),compParts:view(NAVH.CPARTS,Int32Array,np),atlas:null};
-    if (b.withAtlas && np > 0) {
+    // (No parts (every tile a wall): no atlas, no route.)
+    if (np > 0) {
         const L=h[NAVH.L],total=h[NAVH.TOTAL],bw=Math.ceil(W/8),bh=Math.ceil(H/8),nb=bw*bh;
         const co=view(NAVH.CO,Int32Array,nc+1);
         nav.atlas={slot,L,C,cw,bw,np,W,H,nc,bm:view(NAVH.BM,Uint32Array,nb*2),bc:view(NAVH.BC,Uint8Array,W*H),cb:view(NAVH.CB,Uint16Array,nb),
@@ -429,521 +426,25 @@ class _NavHeap {
 }
 const _NavQueue = _NavHeap;
 
-// ---- The installed builds (per profile) and destination fields ----
+// ---- The installed builds (per profile) ----
 let _nav = new Array(NAV_PROFILES).fill(null);
-// Destination fields: costs to reach tile `dest` from every tile of a box
-// around it, one field a slot of a shared pool with its meta [profile,
-// dest, bx, by, bw, bh, gen, made]. Two sizes: narrow (dest's cluster; a
-// worker's task, a lone unit's way) and wide (the 3x3 clusters around it:
-// a group's destination, so a crowd comes in along the whole front, not
-// through the cluster's exits). Slot ids: narrow ones as they are, wide
-// ones NAV_WIDE_BASE + slot.
-// Requests (navFieldRequest) are made by the kernels at the flush point
-// (navFieldsFlush: every tick after the orders, before anything moves). A
-// route asked for before the flush uses its field this tick, asked after
-// it from the next: the tick is kept with the route (a node's `ready`, the
-// unit's mvReady column), so whether this peer happened to have the field
-// already never changes what units do. Fields no route refers to are
-// dropped by a staggered sweep (memory only); every field is made again
-// when a new build is installed; a restore makes those of every route
-// (navFieldsRestore).
-// (The sweep over 128 ticks: at 64 its share of the units' objects cost ~1.3
-// ms a tick at 200k.)
-// Each slot also holds its destination's row (rows, rowW bytes a slot: every
-// part's exit toward it, see _navFieldRow); rowW follows the builds' part
-// counts (nav.fhdr[w]).
-const NAV_FIELD_META = 8, NAV_FIELD_SWEEP_TICKS = 128, NAV_WIDE_BASE = 1 << 22;
-// (rowSrc: a slot holding each row made under the installed builds, by row
-// key: the destination's part (rows depend on that alone, see _navFieldRow);
-// rowKeyOf: each slot's.)
-function _navNewPool(wide) { return { wide, span: 0, C: 0, cap: 0, pool: null, meta: null, rows: null, rowW: 0, ht: null, free: [], pending: [], seen: null, rowSrc: new Map(), rowKeyOf: null }; }
-// A pool's fields by key (profile * 2^24 + dest): an open-addressing table in
-// the heap (F.ht: key, slot + 1 pairs, 0 empty; linear probing; a power of
-// two of pairs, at least twice the slots), the sweep's kernel's too
-// (wasm/src/nfs.rs, the same hash). Live fields: meta[s * NAV_FIELD_META] >= 0.
-function _navHtHash(key, mask) { return (Math.imul(key, 0x9E3779B1) >>> 0) & mask; }
-function _navHtFit(F) {
-    let n = 64;
-    while (n < F.cap * 2) n *= 2;
-    if (F.ht && F.ht.length === n * 2 && simHeapHas(F.ht)) return;
-    const old = F.ht;
-    F.ht = simSharedArray(Int32Array, n * 2); F.ht.fill(0);
-    if (old) { for (let i = 0; i < old.length; i += 2) if (old[i + 1]) _navHtPut(F, old[i], old[i + 1] - 1); simHeapFree(old); }
-}
-// (A pool's live fields.)
-function navFieldsLive(F) { let n = 0; if (F.meta) for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) n++; return n; }
-function _navHtSlot(F, key) {
-    const T = F.ht;
-    if (!T) return -1;
-    const mask = (T.length >> 1) - 1;
-    for (let h = _navHtHash(key, mask); ; h = (h + 1) & mask) { const v = T[2 * h + 1]; if (v === 0) return -1; if (T[2 * h] === key) return v - 1; }
-}
-function _navHtPut(F, key, s) {
-    const T = F.ht, mask = (T.length >> 1) - 1;
-    let h = _navHtHash(key, mask);
-    while (T[2 * h + 1] !== 0) h = (h + 1) & mask;
-    T[2 * h] = key; T[2 * h + 1] = s + 1;
-}
-const _navFields = { pools: [_navNewPool(false), _navNewPool(true)], seenCycle: 0, flushedTick: -1, hdr: null };
-// A rebuild's window (one simulation step, _navJobStep): the next build
-// made but not installed; every live field made over it in the background
-// (SIM_LANE_NAVX) into second arrays (per pool: pool, rows, row keys and
-// sources, the same slots), the fields asked for meanwhile over both builds
-// (their jobs' second batches); at the window's end both installed at once
-// (_navNextInstall), the same tick on every peer: no tick makes them all.
-// The atlas is already complete when the window opens. Routes use it
-// directly; the remaining destination fields are prepared on SIM_LANE_NAVX.
-const _navNext = { nav: null, empty: false, rowW: 0, pools: [null, null], stages: null, spare: [null, null] };
-function _navFieldKey(profile, dest) { return profile * 16777216 + dest; }
-function _navPoolEnsure(F, C) {
-    if (F.C === C && F.pool) return F;
-    // (The fields' job finished; its slots of this pool dropped: new ones.)
-    _navFieldsLaneWait();
-    const J = _navFieldsJob.slots;
-    if (J) { const keep = []; for (let i = 0; i < J.length; i += 3) if (J[i] !== F) keep.push(J[i], J[i + 1], J[i + 2]); _navFieldsJob.slots = keep.length ? keep : null; }
-    F.C = C; F.span = F.wide ? 3 * C : C; F.cap = 0; F.pool = null; F.meta = null; F.rows = null; if (F.ht) simHeapFree(F.ht); F.ht = null; F.free = []; F.pending = []; F.seen = null; F.remake = null;
-    F.rowSrc = new Map(); F.rowKeyOf = null;
-    _navFieldsGrow(F, F.wide ? NAV_FIELDS_WIDE : NAV_FIELDS_NARROW);
-    return F;
-}
-// The pools' slots, fixed (made once, never grown: the wasm32 heap's 4 GiB
-// is shared out at the match's start). Routes use the atlas (every
-// destination by lookups, no field): fields are its fallback; a request
-// with every slot in use gets none (-1: no way this tick, asked again).
-const NAV_FIELDS_NARROW = 4096, NAV_FIELDS_WIDE = 256, NAV_FIELDS_FIXED = true;
-function _navFieldsGrow(F, cap) {
-    // (A growth on its way (_navGrowPlan): finished first, then grown no more
-    // if that gave room.)
-    if (_navGrow[F.wide ? 1 : 0]) { _navGrowSwap(); if (F.cap >= cap || F.free.length) return; }
-    // (The fields' job finished first: its slots copied whole; taken at the
-    // next flush as always.)
-    _navFieldsLaneWait();
-    const size = F.span * F.span, pool = simHeapArrayAuto(Uint16Array, cap * size), meta = simSharedArray(Int32Array, cap * NAV_FIELD_META), seen = simSharedArray(Int32Array, cap);
-    const rows = simHeapArrayAuto(Uint8Array, Math.max(1, cap * F.rowW));
-    const rowKeyOf = new Float64Array(cap).fill(-1);
-    // (The heap arrays in one parallel copy: ~100 MB of rows at 32k slots.)
-    const copies = [];
-    if (F.pool) { copies.push(pool, F.pool, meta, F.meta); seen.set(F.seen); rowKeyOf.set(F.rowKeyOf); }
-    if (F.rows && F.rows.length <= rows.length) copies.push(rows, F.rows);
-    if (typeof simParallelCopyHeap === 'function') simParallelCopyHeap(copies); else for (let i = 0; i < copies.length; i += 2) copies[i].set(copies[i + 1]);
-    F.rowKeyOf = rowKeyOf;
-    for (let s = cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
-    F.pool = pool; F.meta = meta; F.seen = seen; F.cap = cap; F.rows = rows;
-    _navHtFit(F);
-    const w = F.wide ? 1 : 0;
-    simParallelBind('nav.fpool.' + w, pool); simParallelBind('nav.fmeta.' + w, meta); simParallelBind('nav.frows.' + w, rows);
-    _navFieldsHeader();
-    if (_navNext.nav) { _navNextPoolEnsure(F); _navNextCopyFlush(); }
-    _navNextExpect();
-}
-// Rows wide enough for the installed builds' parts (a build installed: every
-// field is made again anyway, see navPublish).
-// A row width for builds of up to `parts` parts: the pools' own while it
-// fits (every pool has the same), else a quarter more, in 64-byte steps.
-// (A build with a few more parts than the last changed the width, and the
-// install then copied every field of every profile, one by one, into wider
-// rows: ~60 ms for 20k fields.)
-function _navRowWidthFor(parts) {
-    let cur = 0;
-    for (const F of _navFields.pools) if (F.pool && F.rowW > cur) cur = F.rowW;
-    if (cur >= parts) return cur;
-    return Math.ceil(Math.max(1, parts) * 1.25 / 64) * 64;
-}
-function _navRowsEnsure() {
-    let w = 1;
-    for (const nav of _nav) if (nav && nav.np > w) w = nav.np;
-    for (const F of _navFields.pools) {
-        if (!F.pool || F.rowW >= w) continue;
-        F.rowW = _navRowWidthFor(w);
-        F.rows = simHeapArrayAuto(Uint8Array, Math.max(1, F.cap * F.rowW));
-        F.rowSrc = new Map();
-        simParallelBind('nav.frows.' + (F.wide ? 1 : 0), F.rows);
-    }
-    _navFieldsHeader();
-}
-// (nav.fhdr: the pools' row widths, then the next build's: _navNext.)
-function _navFieldsHeader() {
-    if (!_navFields.hdr) { _navFields.hdr = simHeapArrayAuto(Int32Array, 4); simParallelBind('nav.fhdr', _navFields.hdr); }
-    for (const F of _navFields.pools) _navFields.hdr[F.wide ? 1 : 0] = F.rowW;
-    for (let w = 0; w < 2; w++) _navFields.hdr[2 + w] = _navNext.pools[w] ? _navNext.pools[w].rowW : 0;
-}
-// The pool and index of a slot id.
-function _navFieldPool(id) { return id >= NAV_WIDE_BASE ? _navFields.pools[1] : _navFields.pools[0]; }
-function _navFieldIndex(id) { return id >= NAV_WIDE_BASE ? id - NAV_WIDE_BASE : id; }
-// The tick a route asked for now may use its field: the fields asked for
-// before a tick's flush are made by the helpers meanwhile and taken at the
-// next tick's flush (navFieldsFlush), before anything moves; asked after it,
-// a tick later.
-function navFieldReadyTick() { return _navFields.flushedTick === gameTime ? gameTime + 2 : gameTime + 1; }
-// The slot id of the field toward `dest` (profile; wide or narrow), asked
-// for if new; -1 without a build.
-function navFieldRequest(profile, dest, wide = false) {
+// The route id of a way toward tile `dest` (profile): NAV_ATLAS_FID, every
+// route is on its profile's atlas (lookups, no destination field: ready at
+// once); -1 without a build or off the map. (A build with no atlas, a map
+// with no open tile: the same id, no step (navStep, the movement kernel's
+// flow_key): no way.)
+function navRouteFid(profile, dest) {
     const nav = _nav[profile];
-    if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return -1;
-    // (On the atlas: no field, the same id for every destination.)
-    if (NAV_ATLAS && nav.atlas && nav.atlas.header) return NAV_ATLAS_FID;
-    const F = _navPoolEnsure(_navFields.pools[wide ? 1 : 0], nav.C), key = _navFieldKey(profile, dest);
-    F.used = true;
-    // The first fallback request can arrive after an atlas-only window
-    // opened. Materialize its field staging before accepting that request.
-    if (_navNext.empty) { const next = _navNext.nav; _navNext.empty = false; _navNextStage(next); }
-    let s = _navHtSlot(F, key);
-    if (s < 0) {
-        if (!F.free.length) return -1;
-        s = F.free.pop();
-        const { C, cw, W, H } = nav, c = _navClusterOf(dest, W, C, cw), cx = c % cw, cy = (c - cx) / cw, m = s * NAV_FIELD_META;
-        const bx = wide ? Math.max(0, (cx - 1) * C) : cx * C, by = wide ? Math.max(0, (cy - 1) * C) : cy * C;
-        const ex = Math.min(W, (cx + (wide ? 2 : 1)) * C), ey = Math.min(H, (cy + (wide ? 2 : 1)) * C);
-        F.meta[m] = profile; F.meta[m + 1] = dest; F.meta[m + 2] = bx; F.meta[m + 3] = by; F.meta[m + 4] = ex - bx; F.meta[m + 5] = ey - by;
-        F.meta[m + 6]++; F.meta[m + 7] = 0;
-        _navHtPut(F, key, s);
-        F.pending.push(s);
-        // (Kept this sweep cycle; after it, while a unit's route or path
-        // leads to it: navFieldsSweepStep. Asking again marks nothing, or
-        // eviction would depend on which units ran Unit.update.)
-        F.seen[s] = _navFields.seenCycle + 1;
-    }
-    return wide ? NAV_WIDE_BASE + s : s;
+    return nav && dest >= 0 && dest < nav.W * nav.H ? NAV_ATLAS_FID : -1;
 }
-function navFieldGen(id) { return id === NAV_ATLAS_FID ? 0 : id >= 0 ? _navFieldPool(id).meta[_navFieldIndex(id) * NAV_FIELD_META + 6] : 0; }
-// The tick a route on field id may start: on the atlas at once.
-function navFieldReadyFor(id) { return id === NAV_ATLAS_FID ? 0 : navFieldReadyTick(); }
-// Every tick, after the orders: the fields started at the last flush taken
-// (made: marked so, the same tick on every peer, whenever the helpers
-// finished), and those asked for since started in the background
-// (SIM_LANE_NAV). Nothing waits for them on this thread but the taking,
-// normally finished long before.
-// (A build's remake, at once: before this tick's job; the slots it made
-// leave the job. In a rebuild's window the job makes its fields over the
-// next build too: _navNextStage.)
+// Every tick, after the orders, before anything moves: the substitutes
+// asked for since the last flush (_navSubstitutesMake).
 function navFieldsFlush() {
     if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
-    _navFieldsCommit();
-    // (A pool grown in the background: its arrays swapped now, the job and
-    // its copy done. See _navGrowPlan.)
-    _navGrowSwap();
-    _navFields.flushedTick = gameTime;
-    if (_navFieldsRemakeStep()) for (const F of _navFields.pools) if (F.pending.length) F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META + 7] !== 1);
-    _navFieldsStart();
-    navFieldsSweepStep();
     _navSubstitutesMake();
 }
-// Batches of fields: list ids (the kernel's lists, nav.flist.<w>.<id>):
-// 0 the installed build's, 1 the next build's (this tick's job, or made
-// now), 2 the next build's every live field (SIM_LANE_NAVX).
-// The fields' job: [pool, slot, gen] of each slot it makes.
-const _navFieldsJob = { slots: null };
-function _navFieldsLaneWait() {
-    if (typeof simParallelBackgroundWait === 'function' && typeof SIM_LANE_NAV === 'number') simParallelBackgroundWait(SIM_LANE_NAV);
-}
-function _navFieldsStart() {
-    const lane = typeof SIM_LANE_NAV === 'number' ? SIM_LANE_NAV : -1;
-    if (lane < 0) { for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; } return; }
-    // (Stages: the fields and rows of both pools, then the copies; then the
-    // same over the next build; last, a pool's growth copy: _navGrowPlan.)
-    const stages = [];
-    for (let i = 0; i < 8; i++) stages.push([SIM_KERNEL_NAV_FIELDS, 0]);
-    const taken = [];
-    let any = false;
-    for (const F of _navFields.pools) {
-        if (!F.pending.length) continue;
-        if (!any) { _navFieldsBindWalls(); any = true; }
-        const w = F.wide ? 1 : 0;
-        F.pending.sort((a, b) => a - b);
-        _navFieldsStage(lane, stages, w, _navFieldsBatch(F, F.pending, false, 0, true));
-        if (_navNext.nav) _navFieldsStage(lane, stages, 4 + w, _navFieldsBatch(F, F.pending, true, 1, true));
-        for (const s of F.pending) taken.push(F, s, F.meta[s * NAV_FIELD_META + 6]);
-        F.pending = [];
-    }
-    const grow = _navGrowPlan(lane);
-    if (grow) stages.push(grow);
-    if (!taken.length && !grow) return;
-    if (taken.length) _navFieldsJob.slots = taken;
-    simParallelBackgroundChain(lane, stages);
-}
-// A pool's growth off the simulation thread: at the job's post, when under
-// a quarter of its slots are free, the pool and rows of twice the slots
-// are allocated and the old ones copied into them by the job's last stage
-// (after its fields: those are in the copy); the next flush, the job taken,
-// swaps them in with the meta (small, copied then: requests and the sweep
-// write it meanwhile). Grown at a request, mid-tick, the copy (~50-100 MB:
-// a field's row has a byte per part) was 12-40 ms, and the job in flight
-// was waited for first. Not while a rebuild window is open or opens before
-// the swap (its install writes the pools). Slots are this peer's
-// bookkeeping, as the sweep's: when this happens changes nothing else.
-const _navGrow = [null, null];
-function _navGrowAllowed() {
-    if (_navNext.nav) return false;
-    const J = _navJob;
-    return !J;
-}
-function _navGrowPlan(lane) {
-    // (The pools are fixed: NAV_FIELDS_NARROW / NAV_FIELDS_WIDE.)
-    if (NAV_FIELDS_FIXED || typeof simParallelCopyStage !== 'function' || !_navGrowAllowed()) return null;
-    const pairs = [];
-    for (let w = 0; w < 2; w++) {
-        const F = _navFields.pools[w];
-        if (!F.pool || _navGrow[w] || F.free.length >= Math.max(F.cap >> 2, F.wide ? 16 : 256)) continue;
-        const cap = F.cap * 2, size = F.span * F.span;
-        const G = { cap, C: F.C, rowW: F.rowW, pool: simHeapArrayAuto(Uint16Array, cap * size, false), rows: simHeapArrayAuto(Uint8Array, Math.max(1, cap * F.rowW), false) };
-        _navGrow[w] = G;
-        pairs.push(G.pool, F.pool, G.rows, F.rows);
-    }
-    if (!pairs.length) return null;
-    const stage = simParallelCopyStage(pairs, simParallelStageParams(lane, 8));
-    if (stage) return stage;
-    // (Not in the heap: copied at the swap, after the job: its fields are
-    // written into the old arrays.)
-    for (let w = 0; w < 2; w++) if (_navGrow[w]) _navGrow[w].copyAtSwap = true;
-    return null;
-}
-function _navGrowSwap() {
-    if (!_navGrow[0] && !_navGrow[1]) return;
-    // (The job with the copy: done. A job of no fields is not waited for by
-    // the commit.)
-    _navFieldsLaneWait();
-    let any = false;
-    for (let w = 0; w < 2; w++) {
-        const G = _navGrow[w], F = _navFields.pools[w];
-        if (!G) continue;
-        _navGrow[w] = null;
-        // (Rows made wider or a new cluster size meanwhile: dropped.)
-        if (!F.pool || F.C !== G.C || F.rowW !== G.rowW || G.cap <= F.cap) continue;
-        if (G.copyAtSwap) { G.pool.set(F.pool); G.rows.set(F.rows); }
-        if (!any) { simParallelBindBatch(); any = true; }
-        const meta = simSharedArray(Int32Array, G.cap * NAV_FIELD_META), seen = simSharedArray(Int32Array, G.cap), rowKeyOf = new Float64Array(G.cap).fill(-1);
-        meta.set(F.meta); seen.set(F.seen); rowKeyOf.set(F.rowKeyOf);
-        for (let s = G.cap - 1; s >= F.cap; s--) { F.free.push(s); meta[s * NAV_FIELD_META] = -1; }
-        F.pool = G.pool; F.rows = G.rows; F.meta = meta; F.seen = seen; F.rowKeyOf = rowKeyOf; F.cap = G.cap;
-        _navHtFit(F);
-        simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.fmeta.' + w, F.meta); simParallelBind('nav.frows.' + w, F.rows);
-    }
-    if (!any) return;
-    simParallelBindFlush();
-    _navFieldsHeader();
-    for (const F of _navFields.pools) if (_navNext.nav && F.pool) _navNextPoolEnsure(F);
-    _navNextCopyFlush();
-    _navNextExpect();
-}
-// A batch's two stages in a chain: its fields at stage st, its copies at
-// st + 2.
-function _navFieldsStage(lane, stages, st, b) {
-    for (let ph = 0; ph < 2; ph++) {
-        const P = simParallelStageParams(lane, st + 2 * ph);
-        P.set(b.P);
-        if (ph) { P[6] = 1; P[1] = 64; }
-        stages[st + 2 * ph][1] = ph ? b.copy : b.make;
-    }
-}
-function _navFieldsCommit() {
-    const T = _navFieldsJob.slots;
-    if (!T) return;
-    _navFieldsJob.slots = null;
-    simParallelBackgroundWait(SIM_LANE_NAV);
-    // (A slot let go meanwhile, and maybe asked for again: not this one's.)
-    for (let i = 0; i < T.length; i += 3) { const F = T[i], m = T[i + 1] * NAV_FIELD_META; if (F.meta && F.meta[m + 6] === T[i + 2] && F.meta[m] >= 0) F.meta[m + 7] = 1; }
-}
-// A slot's row key: its destination tile (+ profile), or (a wall
-// destination) its own (-2 - slot: not shared). (next: the next build.)
-function _navRowKey(F, s, next = null) {
-    const m = s * NAV_FIELD_META, p = F.meta[m], dest = F.meta[m + 1], nav = next && next.profile === p ? next : _nav[p];
-    if (!nav || !nav.partL || !(dest >= 0 && dest < nav.W * nav.H) || nav.partL[dest] === 0xFFFF) return -2 - s;
-    // (Per destination tile: a row's searches start from the field's exits
-    // at their distances to the destination, see _navFieldRow; the same
-    // destination's fields share it.)
-    return p * 16777216 + dest;
-}
-// Makes fields now (and over the next build in a rebuild's window).
-function _navFieldsMake(F, slots) {
-    if (!slots.length) return;
-    // (The job's lists rebound below: it is finished first.)
-    _navFieldsLaneWait();
-    slots.sort((a, b) => a - b);
-    _navFieldsBindWalls();
-    _navFieldsRunNow(_navFieldsBatch(F, slots, false, 0, false));
-    if (_navNext.nav) _navFieldsRunNow(_navFieldsBatch(F, slots, true, 1, false));
-}
-function _navFieldsBindWalls() {
-    for (let p = 0; p < NAV_PROFILES; p++) {
-        const nav = _nav[p];
-        if (!nav) continue;
-        simParallelBind('nav.fwall.' + p, nav.wall); simParallelBind('nav.fcost.' + p, nav.cost || _navNoCost);
-    }
-}
-function _navFieldsRunNow(b) {
-    const P = _simParams;
-    P.set(b.P);
-    simParallelRun(SIM_KERNEL_NAV_FIELDS, b.make);
-    // (Then the copies: their sources are made.)
-    if (b.copy) { P[1] = 64; P[6] = 1; simParallelRun(SIM_KERNEL_NAV_FIELDS, b.copy); }
-}
-// A batch of slots (sorted) to make into the installed arrays (next false)
-// or the next build's (next: _navNext; never marks made: its install does).
-// bg: made in the background (made marked at the job's taking,
-// _navFieldsCommit), else by the kernel. Binds its lists (list id), returns
-// its parameters (P: [count, per chunk, span, W, H, wide, phase, no made
-// mark, next, list id]) and chunk counts (make, copy).
-// Rows: one search per row key; the other slots of the key copy it (a slot
-// made before under these builds, or the batch's first; for the next build
-// the batch's only: its other batches may be running still).
-function _navFieldsBatch(F, slots, next, id, bg) {
-    // (A slot's row is its destination's: one slot a destination in a pool,
-    // so every slot makes its own; nav.fsrc all -1, no copies.)
-    const w = F.wide ? 1 : 0, n = slots.length, N = next ? _navNextPoolEnsure(F) : null;
-    // (The next build's pools still being copied into: done before a batch
-    // over them goes out on another lane.)
-    if (N) _navNextCopyFlush();
-    if (N && _navNext.copying) { simParallelBackgroundWait(SIM_LANE_NAVX); _navNext.copying = false; }
-    if (N) for (let i = 0; i < n; i++) N.made[slots[i]] = 1;
-    const list = simHeapArrayAuto(Int32Array, n), src = simHeapArrayAuto(Int32Array, n, false);
-    list.set(slots);
-    src.fill(-1);
-    const copies = 0;
-    simParallelBind('nav.flist.' + w + '.' + id, list); simParallelBind('nav.fsrc.' + w + '.' + id, src);
-    const per = F.wide ? 1 : 2, P = new Float64Array(10);
-    P[0] = n; P[1] = per; P[2] = F.span; P[3] = _nav[0] ? _nav[0].W : GRID_W; P[4] = _nav[0] ? _nav[0].H : GRID_H; P[5] = w; P[6] = 0; P[7] = bg || N ? 1 : 0; P[8] = N ? 1 : 0; P[9] = id;
-    return { P, make: Math.ceil(n / per), copy: copies ? Math.ceil(n / 64) : 0 };
-}
-const SIM_KERNEL_NAV_FIELDS = 21;
-// One destination field (slot at pool address poolP, element off, size
-// elements) of profile p under the build named pre ('nav.' / 'navn.'), and its
-// row at rowsP + ro (rowsP 0: none): Rust, wasm/src/lib.rs nav_field.
-function _navFieldRust(R, pre, p, poolP, off, size, meta, m, rowsP, ro, W, H) {
-    const WP = _simParWPtr, wallP = WP[pre + 'fwall.' + p], costR = R[pre + 'fcost.' + p], costP = costR && costR.length ? WP[pre + 'fcost.' + p] : 0;
-    const row = rowsP > 0, g = pre + p + '.', NM = R[g + 'meta'];
-    if (_simWasmX === null || !(poolP >= 0) || !(wallP >= 0) || !(costP >= 0) || (row && !NM)) _simNoWasm('NAV_FIELDS');
-    // (Pointers as the kernels' 32-bit words: _simWEnc.)
-    const E = _simWEnc;
-    if (!_simWasmX.nav_field(E(poolP), off, size, meta[m + 2], meta[m + 3], meta[m + 4], meta[m + 5], W, H, meta[m + 1], E(wallP), E(costP),
-        row ? 1 : 0, row ? E(WP[g + 'nb']) : 0, row ? E(WP[g + 'nt']) : 0, row ? E(WP[g + 'np']) : 0, row ? E(WP[g + 'npart']) : 0,
-        row ? E(WP[g + 'adjS']) : 0, row ? E(WP[g + 'adjA']) : 0, row ? E(WP[g + 'adjC']) : 0, row ? E(WP[g + 'partL']) : 0, row ? E(WP[g + 'partB']) : 0,
-        row ? NM[0] | 0 : 0, row ? NM[1] | 0 : 0, row ? NM[3] | 0 : 0, row ? NM[7] | 0 : 0, row ? Math.max(1, NM[8] | 0) : 1, row ? NM[9] | 0 : 0, row ? NM[10] | 0 : 0,
-        E(rowsP), ro, E(_simWasmScratch), _simWasmScratchWords)) _simNoWasm('NAV_FIELDS');
-}
-SIM_KERNELS[SIM_KERNEL_NAV_FIELDS] = function (R, P, chunk) {
-    // (Rust: wasm/src/lib.rs nav_field / nav_rows_copy, on the arrays' heap
-    // addresses.)
-    const w = P[5] | 0, next = P[8] === 1, id = P[9] | 0, WP = _simParWPtr;
-    const fl = 'nav.flist.' + w + '.' + id, fs = 'nav.fsrc.' + w + '.' + id, list = R[fl], src = R[fs], meta = R['nav.fmeta.' + w];
-    const poolName = (next ? 'nav.npool.' : 'nav.fpool.') + w, rowsName = (next ? 'nav.nrows.' : 'nav.frows.') + w;
-    const hdr = R['nav.fhdr'], rowW = hdr ? hdr[(next ? 2 : 0) + w] | 0 : 0, rowsP = R[rowsName] && rowW > 0 ? WP[rowsName] : 0;
-    const pre = next ? 'navn.' : 'nav.';
-    const span = P[2] | 0, size = span * span, W = P[3] | 0, H = P[4] | 0, i0 = chunk * P[1], i1 = Math.min(P[0], i0 + P[1]);
-    if (_simWasmX === null || !(WP[poolName] >= 0) || !(WP[fl] >= 0) || !(WP[fs] >= 0) || (R[rowsName] && rowW > 0 && !(rowsP >= 0))) _simNoWasm('NAV_FIELDS');
-    // (Phase 1: the rows copied from their key's slot, P[6].)
-    if (P[6] === 1) { if (rowsP > 0) _simWasmX.nav_rows_copy(_simWEnc(rowsP), _simWEnc(WP[fl]), _simWEnc(WP[fs]), rowW, i0, i1); return; }
-    for (let i = i0; i < i1; i++) {
-        const s = list[i], m = s * NAV_FIELD_META, p = meta[m];
-        if (!R[pre + 'fwall.' + p]) continue;
-        _navFieldRust(R, pre, p, WP[poolName], s * size, size, meta, m, rowsP > 0 && !(src && src[i] >= 0) ? rowsP : 0, s * rowW, W, H);
-        // (In the background, marked made at the job's taking; the next
-        // build's, at its install.)
-        if (P[7] !== 1) meta[m + 7] = 1;
-    }
-};;
-// Staggered sweep: over NAV_FIELD_SWEEP_TICKS ticks every unit marks the
-// fields its route refers to (requests mark theirs); then the fields not
-// marked in the cycle are dropped. (Memory only: a route's field is never
-// dropped while it is followed.)
-function _navFieldMark(profile, dest, wide, mark) {
-    const F = _navFields.pools[wide ? 1 : 0], s = _navHtSlot(F, _navFieldKey(profile, dest));
-    if (s >= 0) F.seen[s] = mark;
-}
-function navFieldsSweepStep() {
-    const step = NAV_FIELD_SWEEP_TICKS;
-    // (The slices of the step's base ticks in turn; a cycle ends with its
-    // last, the next one's marks after it.)
-    const phases = simStepPhases(step);
-    for (let i = 0; i < phases.length;) {
-        const k = phases[i];
-        let end = i + 1;
-        while (end < phases.length && phases[end] === phases[end - 1] + 1) end++;
-        const mark = _navFields.seenCycle + 1;
-        _navFieldsSweepSlice(k, step, mark, end - i);
-        if (phases[end - 1] === step - 1) _navFieldsSweepEnd(step - 1, step, mark);
-        i = end;
-    }
-}
-function _navFieldsSweepSlice(k, step, mark, count = 1) {
-    // (From the slots' columns, by the units list's order through the slot
-    // map (by slot, which fields a cycle drops would depend on each peer's
-    // slot layout): wasm/src/nfs.rs k_nav_sweep_mark.)
-    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
-    const slots = S && typeof _unitSlotMapEnsure === 'function' ? _unitSlotMapEnsure() : null;
-    const Fn = _navFields.pools[0], Fw = _navFields.pools[1];
-    if (!S || !slots || !Fn.ht || !Fw.ht) return;
-    const C = S.columns, P = _navSweepP;
-    P[0] = k; P[1] = step; P[2] = count; P[3] = units.length; P[4] = mark; P[5] = Fn.ht.length >> 1; P[6] = Fw.ht.length >> 1;
-    // (Its runs split over the helpers from 64k units: the marks are one value whichever thread writes them.)
-    const A = [slots, C.live, C.dead, C.rtEnd, C.rkF, C.nvProf, C.nvPK, Fn.ht, Fn.seen, Fw.ht, Fw.seen];
-    const jobs = units.length >= 65536 && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && _simPool ? 16 : 1;
-    P[7] = jobs;
-    if (jobs > 1) simRustParallel(SIM_BLOCK_NAV_SWEEP, A, P, jobs); else simRustDirect('k_nav_sweep_mark', A, P);
-}
-const _navSweepP = new Float64Array(8);
-let _navDropList = null, _navDropHdr = null;
-function _navFieldsSweepEnd(k, step, mark) {
-    // (In a rebuild's window no slot is let go (the next build's batches
-    // keep theirs): the drop waits a cycle, the marks of both kept.)
-    if (_navNext.nav) return;
-    for (const F of _navFields.pools) {
-        if (!F.pool || !F.ht) continue;
-        if (!_navDropList || _navDropList.length < F.cap || !simHeapHas(_navDropList)) _navDropList = simSharedArray(Int32Array, Math.max(1024, F.cap));
-        if (!_navDropHdr || !simHeapHas(_navDropHdr)) _navDropHdr = simSharedArray(Int32Array, 2);
-        const P = _navSweepP;
-        P[0] = F.cap; P[1] = F.ht.length >> 1; P[2] = mark; P[3] = NAV_FIELD_META;
-        simRustDirect('k_nav_sweep_drop', [F.ht, F.meta, F.seen, _navDropList, _navDropHdr], P);
-        for (let i = 0, nd = _navDropHdr[0]; i < nd; i++) {
-            const s = _navDropList[i];
-            F.free.push(s);
-            if (F.rowKeyOf && F.rowSrc.get(F.rowKeyOf[s]) === s) F.rowSrc.delete(F.rowKeyOf[s]);
-        }
-        if (_navDropHdr[0] > 0) F.pending = F.pending.filter(s => F.meta[s * NAV_FIELD_META] >= 0);
-    }
-    _navFields.seenCycle++;
-}
-// Every field again (a build installed without a window: the map's first,
-// a restore), all at the next flush (one parallel job). Not a share a tick:
-// which fields a peer keeps differs (the sweep, a restore), and a field must
-// hold the same build on every peer at every tick (its content a function of
-// its destination and the build), whichever peer had it already. (A
-// rebuild's: made in its window, see _navNext.)
-const NAV_FIELD_REMAKE_PER_TICK = [Infinity, Infinity];
-function _navFieldsRemakeAll() {
-    for (const F of _navFields.pools) {
-        if (!F.pool) continue;
-        F.rowSrc = new Map();
-        const all = [];
-        for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) all.push(s);
-        F.remake = all; F.remakePos = 0;
-    }
-}
-function _navFieldsRemakeStep() {
-    let any = false;
-    for (let w = 0; w < _navFields.pools.length; w++) {
-        const F = _navFields.pools[w];
-        if (!F.pool || !F.remake || F.remakePos >= F.remake.length) continue;
-        const batch = [];
-        while (F.remakePos < F.remake.length && batch.length < NAV_FIELD_REMAKE_PER_TICK[w]) {
-            const s = F.remake[F.remakePos++];
-            if (F.meta[s * NAV_FIELD_META] >= 0) batch.push(s);
-        }
-        if (batch.length) { _navFieldsMake(F, batch); any = true; }
-    }
-    return any;
-}
-// After a restore: the fields of every route, made now.
-function navFieldsRestore() {
-    for (const u of units) {
-        if (!u || u.dead) continue;
-        const p = navProfileOf(u);
-        if (u._routeKey === NAV_ROUTE_KEY && u._routeEnd >= 0) navFieldRequest(p, u._routeEnd, true);
-        const path = u.path;
-        if (path) for (const nd of path) if (nd && nd.nav) navFieldRequest(nd.nav - 1, nd.y * GRID_W + nd.x, !!nd.w);
-    }
-    for (const F of _navFields.pools) if (F.pending.length) { _navFieldsMake(F, F.pending); F.pending = []; }
-    navSubstitutesRestore();
-}
+// After a restore: the substitutes the waiting units asked for, again.
+function navFieldsRestore() { navSubstitutesRestore(); }
 let _navQ = null;
 
 function navWallTable(profile) {
@@ -998,24 +499,20 @@ const _NAV_PROFILES_ALL = [0, 1, 2];
 function _navProfilesInUse() { return _NAV_PROFILES_ALL; }
 
 // Installs a build as the current one for its profile (every peer at the
-// same tick). Destination fields of the old build are dropped.
+// same tick).
 // (_navVersion: this peer's count of installs, for caches; nav.seq: the
 // profile's build number, the same on every peer: snapshotted, so waiting
 // units can tell a new build, see _tryUpgradeAstarFallbackPath.)
 let _navVersion = 0, _navSeq = new Array(NAV_PROFILES).fill(0);
-// made: its fields made over it already (a rebuild's window, its arrays
-// installed: _navNextInstall).
-function navPublish(nav, made = false) {
+// fromJob: the rebuild job's build (_navJobStep), whose walls have been the
+// diff counter's reference since it was posted.
+function navPublish(nav, fromJob = false) {
     simParallelBindBatch();
-    try { _navPublishBody(nav, made); } finally { simParallelBindFlush(); }
+    try { _navPublishBody(nav, fromJob); } finally { simParallelBindFlush(); }
 }
-function _navPublishBody(nav, made) {
+function _navPublishBody(nav, fromJob) {
     // (The flow looks' prewarm reads the builds: done first, tower.js tickStartChainSettle.)
     if (typeof tickStartChainSettle === 'function') tickStartChainSettle();
-    // (The fields' jobs finished: the arrays they write may be replaced. A
-    // window still open is closed: its build installed as any, at its end.)
-    _navFieldsLaneWait();
-    if (!made && _navNext.nav) _navNextDrop();
     _nav[nav.profile] = nav;
     _navVersion++;
     nav.seq = ++_navSeq[nav.profile];
@@ -1023,29 +520,22 @@ function _navPublishBody(nav, made) {
     nav.version = _navVersion;
     const p = nav.profile;
     _navBindBuild('nav.', nav);
-    for (const F of _navFields.pools) _navPoolEnsure(F, nav.C);
-    _navRowsEnsure();
     // (The build it replaced, and its job's own arrays: given back later.)
     _navSweep();
-    // Every destination field again over the new build (same slots: the
-    // routes keep following them), at the next flush (navFieldsFlush):
-    // until then the old build's. (Rows: the new build's parts.)
-    if (!made) _navFieldsRemakeAll();
-    else _navFieldsHeader();
     // (Components changed: substitutes asked for again.)
     _navSubReset();
     // A completed rebuild has been the diff counter's reference since
     // it was posted; installing those same walls preserves the count.
-    if (!made && p !== NAV_PROFILE_AIR) _navWallDiffReset(p);
+    if (!fromJob && p !== NAV_PROFILE_AIR) _navWallDiffReset(p);
 }
 // A build's arrays for the kernels under names pre + profile + '.' + name
-// ('nav.': the installed one, 'navn.': the next, _navNextStage).
+// ('nav.': the installed one).
 function _navBindBuild(pre, nav) {
     const p = nav.profile;
     simParallelBind(pre + p + '.fields', nav.fields);
     // meta: [C, cw, ch, nc, W, H, version, parts, the graph's bucket count
     // (largest edge + 1), nodes, edges, components]
-    const meta = simHeapView(nav.arena, Int32Array, 256 + p * 128 + (pre === 'navn.' ? 64 : 0), 12);
+    const meta = simHeapView(nav.arena, Int32Array, 256 + p * 128, 12);
     meta[0] = nav.C; meta[1] = nav.cw; meta[2] = nav.ch; meta[3] = nav.nc; meta[4] = nav.W; meta[5] = nav.H; meta[6] = nav.version | 0;
     meta[7] = nav.np | 0; meta[8] = nav.B | 0; meta[9] = nav.k | 0; meta[10] = nav.adjA ? nav.adjA.length : 0; meta[11] = nav.ncomp | 0;
     simParallelBind(pre + p + '.meta', meta);
@@ -1057,226 +547,6 @@ function _navBindBuild(pre, nav) {
     simParallelBind(pre + p + '.atl', nav.atlas && nav.atlas.header ? nav.atlas.header : null);
 }
 
-// ---- A rebuild's window (see _navNext) ----
-// Opens it: the next build's arrays bound (the other profile's: the
-// installed one), every live field made over it in the background. (Those
-// asked for since the last flush: in this tick's job, both builds.)
-function _navNextStage(nav) {
-    if (_navNext.nav) _navNextDrop();
-    _navNext.nav = nav;
-    // Atlas routes never requested destination fields: there is nothing
-    // to scan, copy, bind or remake. Keep the same deterministic window,
-    // and expand it lazily if the first fallback field is requested.
-    _navNext.empty = !!(NAV_ATLAS && nav.atlas && _navFields.pools.every(F => !F.used));
-    if (_navNext.empty) return;
-    // (Its bindings, ~100, to the helpers in one message each, before the
-    // job is posted: simParallelBindBatch.)
-    simParallelBindBatch();
-    try { _navNextStageBody(nav); } finally { simParallelBindFlush(); }
-    simParallelBackgroundChain(SIM_LANE_NAVX, _navNext.stages);
-    _navNext.stages = null;
-}
-function _navNextStageBody(nav) {
-    // (The other profiles' installed builds under the next's names too: the
-    // fields asked for in the window are made over the next builds of every
-    // profile, theirs the same ones.)
-    let rowW = Math.max(1, nav.np | 0);
-    for (const b of [nav, ..._nav.filter(x => x && x.profile !== nav.profile)]) {
-        _navBindBuild('navn.', b);
-        simParallelBind('navn.fwall.' + b.profile, b.wall); simParallelBind('navn.fcost.' + b.profile, b.cost || _navNoCost);
-        rowW = Math.max(rowW, b.np | 0);
-    }
-    // (The pools' row width when the builds fit it: the install then copies
-    // the rebuilt profile's fields in place. Wider: with headroom.)
-    _navNext.rowW = _navRowWidthFor(rowW);
-    const lane = SIM_LANE_NAVX, stages = [], prof = nav.profile;
-    for (let i = 0; i < 4; i++) stages.push([SIM_KERNEL_NAV_FIELDS, 0]);
-    for (const F of _navFields.pools) {
-        if (!F.pool) continue;
-        _navNextPoolEnsure(F);
-        // (Its live slots of the rebuilt profile not pending, in order: from
-        // the meta, not the map. The other profiles' fields are over the same
-        // builds after the install: theirs are kept, see _navNextInstall. All
-        // of them, ~16k at 80k units in a chaos scenario, did not fit the
-        // window: the install waited 50-350 ms for the rest.)
-        const pend = F.pending.length ? new Set(F.pending) : null, meta = F.meta;
-        let slots = new Int32Array(F.cap), n = 0;
-        for (let s = 0; s < F.cap; s++) if (meta[s * NAV_FIELD_META] === prof && !(pend && pend.has(s))) slots[n++] = s;
-        if (!n) continue;
-        _navFieldsStage(lane, stages, F.wide ? 1 : 0, _navFieldsBatch(F, slots.subarray(0, n), true, 2, true));
-    }
-    _navFieldsHeader();
-    // (Both pools made: no headroom kept for them any more.)
-    if (typeof simHeapExpectDone === 'function') simHeapExpectDone('navNext');
-    // (Posted by _navNextStage once the bindings are sent.)
-    _navNext.stages = stages;
-}
-// A pool's arrays over the next build (as many slots as the pool; grown
-// with it, after the background batches that write them).
-function _navNextPoolEnsure(F) {
-    const w = F.wide ? 1 : 0;
-    let N = _navNext.pools[w];
-    if (N && N.cap === F.cap) return N;
-    if (N) { _navFieldsLaneWait(); simParallelBackgroundWait(SIM_LANE_NAVX); }
-    // (Not cleared: a slot's field and row are written whole before it is
-    // marked made, and nothing reads a slot not made; clearing ~300 MB at
-    // 400k a team took 60-150 ms of the rebuild's first tick. Grown: the
-    // made slots' fields copied on the helpers, both pools' in one stage on
-    // SIM_LANE_NAVX (_navNextCopyFlush: whatever reads or writes the pools
-    // waits for that lane first; a batch over this build on the fields'
-    // lane too, see _navFieldsBatch): ~100 MB copied here were 15-25 ms ticks.)
-    // (A window's opening: the last window's arrays when they fit (kept by
-    // _navNextRelease), not ~230 MB allocated anew: 10-13 ms an array.)
-    const rowW = _navNext.rowW, sp = N ? null : _navNext.spare[w];
-    _navNext.spare[w] = null;
-    const reuse = !!sp && sp.cap === F.cap && sp.rowW === rowW && sp.span === F.span;
-    const pool = reuse ? sp.pool : simHeapArrayAuto(Uint16Array, F.cap * F.span * F.span, false), rows = reuse ? sp.rows : simHeapArrayAuto(Uint8Array, Math.max(1, F.cap * rowW), false), rowKeyOf = new Float64Array(F.cap).fill(-1);
-    // (made: the slots a batch over this build was given, written before the
-    // install waits for them; see _navNextInstall.)
-    const made = new Uint8Array(F.cap);
-    if (N) {
-        rowKeyOf.set(N.rowKeyOf); made.set(N.made);
-        const pairs = _navNext.copyPairs || (_navNext.copyPairs = []);
-        pairs.push(pool, N.pool);
-        if (N.rows.length <= rows.length) pairs.push(rows, N.rows);
-    }
-    N = _navNext.pools[w] = { cap: F.cap, span: F.span, pool, rows, rowW, rowKeyOf, made, rowSrc: N ? N.rowSrc : new Map() };
-    simParallelBind('nav.npool.' + w, pool); simParallelBind('nav.nrows.' + w, rows);
-    _navFieldsHeader();
-    return N;
-}
-// (Tests: the install's side forced, 1 the next arrays installed, -1 the
-// rebuilt profile's fields copied; 0 the smaller copy.)
-let NAV_INSTALL_SIDE = 0;
-// (Slots made only at an install, for want of a batch: diagnostics.)
-let _navNextMissed = 0, _navNextKept = 0;
-// Closes it: the next build and its fields installed together.
-function _navNextInstall(nav) {
-    if (_navNext.nav === nav && _navNext.empty) {
-        _navNext.nav = null; _navNext.empty = false;
-        navPublish(nav, true); return;
-    }
-    _navFieldsLaneWait();
-    simParallelBackgroundWait(SIM_LANE_NAVX);
-    // (Closed meanwhile: installed as any build.)
-    if (_navNext.nav !== nav) { navPublish(nav); return; }
-    const prof = nav.profile;
-    for (let w = 0; w < 2; w++) {
-        const F = _navFields.pools[w], N = _navNext.pools[w];
-        if (!F.pool || !N || N.cap !== F.cap) continue;
-        // Every live slot of the rebuilt profile written over this build
-        // first: the pool is not cleared, and a slot no batch was given read
-        // what the memory held before (on each peer what its collector had
-        // freed there: desyncs). The other profiles' slots hold fields over
-        // the builds they keep: as they are. A slot let go but still made (the
-        // movement kernel takes a new generation of a made slot with its
-        // destination as the field made again, and goes on reading it) keeps
-        // what it held.
-        // (One pass: the rebuilt profile's live slots (all made over the next
-        // build once the missed ones are), the missed ones, and how many
-        // other slots hold a field (live, or let go but made). Three passes
-        // over 65k slots were ~7 ms of an install.)
-        const size = F.span * F.span, meta = F.meta, made = N.made, M = NAV_FIELD_META;
-        const mineList = new Int32Array(F.cap), missed = [];
-        let mine = 0, others = 0;
-        for (let s = 0, m = 0; s < F.cap; s++, m += M) {
-            const v = meta[m];
-            if (v === prof) { mineList[mine++] = s; if (!made[s]) missed.push(s); }
-            else if (v >= 0 || meta[m + 7] === 1) others++;
-        }
-        if (missed.length) { _navNextMissed += missed.length; _navFieldsRunNow(_navFieldsBatch(F, Int32Array.from(missed), true, 1, false)); }
-        // (Rows as wide: the smaller side copied, a field's ~8-32 KB each:
-        // the rebuilt profile's ~10k fields into the installed arrays were
-        // 10-19 ms. Fewer of the other profiles' fields: those go into the
-        // next arrays, as for wider rows below, and the installed arrays
-        // are kept for the next window.)
-        if (N.rowW === F.rowW && (NAV_INSTALL_SIDE < 0 || (NAV_INSTALL_SIDE === 0 && mine <= others))) {
-            // (Rows as wide: the rebuilt profile's fields copied into the
-            // installed arrays, in runs of slots. N.made holds every slot
-            // written over the next build: the window's, the missed ones,
-            // and fields asked for meanwhile, the other profiles' among them,
-            // the same over the same builds.)
-            const rw = F.rowW;
-            for (let i = 0; i < mine;) {
-                const s = mineList[i];
-                let j = i + 1;
-                while (j < mine && mineList[j] === s + (j - i)) j++;
-                const e = s + (j - i);
-                F.pool.set(N.pool.subarray(s * size, e * size), s * size);
-                F.rows.set(N.rows.subarray(s * rw, e * rw), s * rw);
-                i = j;
-            }
-            continue;
-        }
-        // (Rows wider, or fewer other fields: the next arrays installed,
-        // every other slot that holds a field (live, or let go but made)
-        // copied over, its row widened when wider.)
-        const old = N.rowW === F.rowW ? { cap: F.cap, span: F.span, rowW: F.rowW, pool: F.pool, rows: F.rows } : null;
-        for (let s = 0; s < F.cap; s++) {
-            const m = s * NAV_FIELD_META;
-            if (N.made[s] && F.meta[m] === prof) continue;
-            if (!(F.meta[m] >= 0 || F.meta[m + 7] === 1)) continue;
-            N.pool.set(F.pool.subarray(s * size, (s + 1) * size), s * size);
-            const rw = Math.min(F.rowW, N.rowW);
-            N.rows.set(F.rows.subarray(s * F.rowW, s * F.rowW + rw), s * N.rowW);
-            if (rw < N.rowW) N.rows.fill(0, s * N.rowW + rw, (s + 1) * N.rowW);
-            _navNextKept++;
-        }
-        F.pool = N.pool; F.rows = N.rows; F.rowW = N.rowW; F.rowSrc = N.rowSrc; F.rowKeyOf = N.rowKeyOf;
-        simParallelBind('nav.fpool.' + w, F.pool); simParallelBind('nav.frows.' + w, F.rows);
-        // (Its arrays are the installed ones now; the old ones, as wide,
-        // kept for the next window instead.)
-        _navNext.pools[w] = null;
-        if (old) _navNext.spare[w] = old;
-    }
-    _navNextRelease();
-    _navNext.nav = null;
-    navPublish(nav, true);
-}
-// The next window's pools, when no spares fit the fields' pools as they
-// are now: the heap told to grow ahead for them (sim_wasm.js
-// simHeapExpect), so the first window's opening does not grow the memory
-// on this thread (~230 MB: two 10-13 ms allocations).
-function _navNextExpect() {
-    if (typeof simHeapExpect !== 'function') return;
-    let bytes = 0;
-    for (const F of _navFields.pools) {
-        if (!F.pool) continue;
-        const sp = _navNext.spare[F.wide ? 1 : 0];
-        if (sp && sp.cap === F.cap && sp.span === F.span) continue;
-        bytes += F.cap * F.span * F.span * 2 + F.cap * Math.max(1, F.rowW);
-    }
-    if (bytes) simHeapExpect('navNext', bytes); else simHeapExpectDone('navNext');
-}
-// The window over: its pools' arrays kept for the next window (the lanes
-// that wrote them waited for), the slots' contents left as they are (a
-// slot is read only once made over the build it belongs to).
-function _navNextRelease() {
-    for (let w = 0; w < 2; w++) {
-        const N = _navNext.pools[w];
-        if (N && N.pool) _navNext.spare[w] = { cap: N.cap, span: N.span, rowW: N.rowW, pool: N.pool, rows: N.rows };
-    }
-    _navNext.pools = [null, null];
-}
-// (Dropped: its batches finished, its arrays let go.)
-// The grown next pools' copies (_navNextPoolEnsure) as one stage on
-// SIM_LANE_NAVX.
-function _navNextCopyFlush() {
-    const pairs = _navNext.copyPairs;
-    if (!pairs || !pairs.length) return;
-    _navNext.copyPairs = null;
-    const stage = typeof simParallelCopyStage === 'function' ? simParallelCopyStage(pairs, simParallelStageParams(SIM_LANE_NAVX, 0), 1) : null;
-    if (stage) { simParallelBackgroundChain(SIM_LANE_NAVX, [stage]); _navNext.copying = true; }
-    else for (let i = 0; i < pairs.length; i += 2) pairs[i].set(pairs[i + 1]);
-}
-function _navNextDrop() {
-    _navFieldsLaneWait();
-    if (typeof SIM_LANE_NAVX === 'number') simParallelBackgroundWait(SIM_LANE_NAVX);
-    _navNextRelease();
-    _navNext.nav = null; _navNext.empty = false; _navNext.copyPairs = null; _navNext.copying = false;
-    _navFieldsHeader();
-    _navSweep();
-}
 
 // The current build of a profile, made now when there is none (the map's
 // first) or the map size changed.
@@ -1312,18 +582,9 @@ function _navShareBuild(profile, wall) {
     return null;
 }
 function navReset() {
-    // (A build's background stage, the fields' jobs: finished, dropped.)
+    // (A build's background stage: finished, dropped.)
     navBuildCollect();
-    if (typeof simParallelBackgroundWait === 'function') { simParallelBackgroundWait(); if (typeof SIM_LANE_NAV === 'number') simParallelBackgroundWait(SIM_LANE_NAV); }
-    _navFieldsJob.slots = null;
-    _navGrow[0] = _navGrow[1] = null;
-    if (_navNext.nav) _navNextDrop();
-    for (const F of _navFields.pools) {
-        if (F.meta) for (let s = 0; s < F.cap; s++) if (F.meta[s * NAV_FIELD_META] >= 0) { F.meta[s * NAV_FIELD_META] = -1; F.meta[s * NAV_FIELD_META + 6]++; F.free.push(s); }
-        F.rowSrc = new Map();
-        if (F.ht) F.ht.fill(0); F.pending = []; F.remake = null;
-    }
-    _navFields.flushedTick = -1;
+    if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait();
     _nav = new Array(NAV_PROFILES).fill(null);
     _navSeq = new Array(NAV_PROFILES).fill(0);
     _navJob = null; _navDiff.fill(0); _navLastJobProfile = -1;
@@ -1336,20 +597,14 @@ function navReset() {
     if (typeof simMoveLookCacheClear === 'function') simMoveLookCacheClear();
 }
 
-// The next tile from `t` toward `dest` (profile), -1 when there is no way
-// (or `t` is `dest`, or its field is not made: the rows are the field's).
-// `destId`: its destination field (navFieldRequest).
-function navStep(profile, t, dest, destId) {
+// The next tile from `t` toward `dest` (profile) on its atlas, -1 when
+// there is no way (or `t` is `dest`, or no build). Standing on a wall: its
+// first open side (_simWallStepOut).
+function navStep(profile, t, dest) {
     const nav = _nav[profile];
-    if (!nav || t === dest || !(destId >= 0)) return -1;
-    if (destId === NAV_ATLAS_FID) {
-        if (nav.partL[t] === 0xFFFF) return _simWallStepOut(nav.partL, nav.partBase, null, 0, nav.W, nav.C, nav.cw, t, t % nav.W, (t - t % nav.W) / nav.W);
-        return navAtlasStep(nav, t, dest);
-    }
-    const F = _navFieldPool(destId), i = _navFieldIndex(destId), m = i * NAV_FIELD_META;
-    if (!(F && F.meta && F.rows && F.meta[m] === profile && F.meta[m + 1] === dest && F.meta[m + 7] === 1)) return -1;
-    return simNavStep(nav.W, nav.C, nav.cw, nav.partL, nav.partBase, F.rows, i * F.rowW, nav.fields, nav.nodeBase, nav.nodeTile, nav.nodePair,
-        F.pool, i * F.span * F.span, F.meta[m + 2], F.meta[m + 3], F.meta[m + 4], F.meta[m + 5], t, dest);
+    if (!nav || t === dest) return -1;
+    if (nav.partL[t] === 0xFFFF) return _simWallStepOut(nav.partL, nav.W, t, t % nav.W, (t - t % nav.W) / nav.W);
+    return navAtlasStep(nav, t, dest);
 }
 
 // ---- Reachability and the closest reachable tile ----
@@ -1369,7 +624,7 @@ function navCompOf(profile, t) {
 function _navUnitComp(profile, t) {
     const c = navCompOf(profile, t), nav = _nav[profile];
     if (c >= 0 || !nav || !(t >= 0 && t < nav.W * nav.H)) return c;
-    const n = _simWallStepOut(nav.partL, nav.partBase, null, 0, nav.W, nav.C, nav.cw, t, t % nav.W, (t - t % nav.W) / nav.W);
+    const n = _simWallStepOut(nav.partL, nav.W, t, t % nav.W, (t - t % nav.W) / nav.W);
     if (n >= 0) return navCompOf(profile, n);
     const a = navApproachTile(profile, t);
     return a >= 0 ? navCompOf(profile, a) : -1;
@@ -1411,26 +666,61 @@ function navPathReach(u, sx, sy, tx, ty, previous = null) {
 // peer, and a restore asks again for the waiting units). Cached per
 // (profile, destination, component) until the next build.
 const NAV_SUB_TICKS = 2;
-const _navSub = { map: new Map(), req: [] };
-// The substitutes' request and result arrays for the match (main.js
-// startGame): room for one request a unit (units: the population the budget
-// holds), so none is made during play.
+// The answers: a table in the heap (tab; shared with pp.rs, which asks and
+// reads them for the waiting units), entries of three words: (profile *
+// 4194304 + component) + 1 (0 empty), destination tile, answer (-2 asked,
+// -1 none, else the tile); open addressing, a power of two of them, at
+// least two a unit. The requests since the last flush: list (n triples).
+// used: entries taken since the table was last cleared; past a quarter of
+// them the flush clears it and asks again for every waiting unit's (pp.rs
+// mode 2), so what a unit finds there never depends on the table's history
+// (a restored peer's has only those).
+// asks: this tick's asks, found or not (counted alike on every peer: the room is theirs, not the table's; pp.rs
+// sub_ask).
+const _navSub = { tab: null, mask: 0, used: 0, n: 0, asks: 0, list: null, out: null, units: 0 };
+// The substitutes' arrays for the match (main.js startGame): room for one
+// request a unit (units: the population the budget holds), so none is made
+// during play.
 function navSubReserve(units) {
     // (The simulation's only: the page runs startGame too, without a heap.)
     if (typeof simHeapHas !== 'function' || typeof simParallelBind !== 'function') return;
     units = Math.max(1024, units | 0);
-    if (_navSub.list && _navSub.units === units && simHeapHas(_navSub.list)) return;
+    if (_navSub.list && _navSub.units === units && simHeapHas(_navSub.list) && simHeapHas(_navSub.tab)) return;
     _navSub.units = units;
     _navSub.list = simHeapArrayAuto(Int32Array, units * 3); simParallelBind('nav.sreq', _navSub.list);
     _navSub.out = simHeapArrayAuto(Int32Array, units); simParallelBind('nav.sout', _navSub.out);
+    const entries = 1 << Math.ceil(Math.log2(units * 2));
+    _navSub.tab = simHeapArrayAuto(Int32Array, entries * 3); _navSub.mask = entries - 1;
+    _navSubReset();
 }
-function _navSubReset() { _navSub.map = new Map(); _navSub.req = []; }
-function _navSubKey(profile, to, comp) { return (profile * 4194304 + comp) * 16777216 + to; }
+function _navSubReady() { if (!_navSub.tab || !simHeapHas(_navSub.tab) || !simHeapHas(_navSub.list)) navSubReserve(_navSub.units); return _navSub; }
+function _navSubReset() { if (_navSub.tab) _navSub.tab.fill(0); _navSub.used = 0; _navSub.n = 0; _navSub.asks = 0; }
+// (A tick's asks: the list's room, one a unit of the budget's population. Refused past it alike on every peer:
+// the room once also counted the table's entries, which differ between peers (a restored one's holds only the
+// waiting units'), and peers refused different asks. The table never fills: at most a quarter full at a tick's
+// start (the flush clears it past that), the room's new entries a half more: it has two entries a unit.)
+function navSubRoom() { return _navSub.list.length / 3; }
+// The entry of a key (pp.rs sub_find): its word index, or -1 - the empty one's.
+function _navSubFind(k1, to) {
+    const T = _navSub.tab, mask = _navSub.mask;
+    let h = ((Math.imul(k1, 0x9E3779B1) ^ Math.imul(to, 0x85EBCA77)) + (to >>> 7)) & mask;
+    for (;;) {
+        const e = h * 3, kw = T[e];
+        if (kw === 0) return -1 - e;
+        if (kw === k1 + 1 && T[e + 1] === to) return e;
+        h = (h + 1) & mask;
+    }
+}
 function navSubstituteRequest(profile, to, comp) {
-    const key = _navSubKey(profile, to, comp);
-    if (_navSub.map.has(key)) return;
-    _navSub.map.set(key, -2);
-    _navSub.req.push(profile, to, comp);
+    const N = _navSubReady();
+    if (++N.asks > navSubRoom()) return false;
+    const k1 = profile * 4194304 + comp, e = _navSubFind(k1, to);
+    if (e >= 0) return true;
+    const T = N.tab, f = -1 - e;
+    T[f] = k1 + 1; T[f + 1] = to; T[f + 2] = -2; N.used++;
+    const L = N.list, r = N.n * 3;
+    L[r] = profile; L[r + 1] = to; L[r + 2] = comp; N.n++;
+    return true;
 }
 // The path of a unit at (sx, sy) toward its pending target pt ({ gx, gy,
 // ... }) that it cannot reach: toward the closest tile it can, once known
@@ -1449,33 +739,38 @@ function navPathSubstitute(u, sx, sy, pt) {
 function navPathSubstitutePrepared(u, profile, to, comp, pt) {
     if (comp < 0) return [];
     if (!(pt.sub > 0) || gameTime < pt.sub) return pt.sub > 0 ? null : _navSubAsk(u, profile, to, comp, pt);
-    const r = _navSub.map.get(_navSubKey(profile, to, comp));
-    if (r === undefined || r === -2) return _navSubAsk(u, profile, to, comp, pt);
+    const e = _navSubReady() && _navSubFind(profile * 4194304 + comp, to), r = e >= 0 ? _navSub.tab[e + 2] : -2;
+    if (r === -2) return _navSubAsk(u, profile, to, comp, pt);
     if (r < 0) return [];
     return [navNode(profile, r % GRID_W, (r - r % GRID_W) / GRID_W)];
 }
 function _navSubAsk(u, profile, to, comp, pt) {
-    navSubstituteRequest(profile, to, comp);
+    // (Refused (the tick's room): asked again next tick, nothing read meanwhile, as pp.rs sub_asked.)
+    if (!navSubstituteRequest(profile, to, comp)) { pt.sub = 0; u._astarBudgetRetryTick = gameTime + 1; return null; }
     pt.sub = gameTime + NAV_SUB_TICKS; u._astarBudgetRetryTick = pt.sub;
     return null;
 }
 // The substitutes asked for (at the flush; one job each).
+// (The arrays navSubReserve made at the match's start, bound once; one
+// request a unit at most. New ones bound each flush made the helpers sit out
+// this job and the next ones.)
 function _navSubstitutesMake() {
-    const req = _navSub.req;
-    if (!req.length) return;
-    _navSub.req = [];
-    // (The arrays navSubReserve made at the match's start, bound once; one
-    // request a unit at most. New ones bound each flush made the helpers sit
-    // out this job and the next ones.)
-    const n = req.length / 3;
-    if (!_navSub.list || _navSub.list.length < req.length || !simHeapHas(_navSub.list)) navSubReserve(Math.max(n, _navSub.units || 0));
-    const list = _navSub.list, out = _navSub.out;
-    list.set(req);
+    const N = _navSub;
+    if (!N.tab) return;
+    // (A quarter full: cleared, and every waiting unit's asked again, at once.)
+    if (N.used > (N.mask + 1) >> 2) { _navSubReset(); pendingPathSubAskAll(); }
+    const n = N.n;
+    N.asks = 0;
+    if (!n) return;
+    N.n = 0;
     const P = _simParams;
     P[0] = n; P[1] = 1;
     simParallelRun(SIM_KERNEL_NAV_SUBST, n);
-    for (let i = 0; i < n; i++) _navSub.map.set(_navSubKey(list[i * 3], list[i * 3 + 1], list[i * 3 + 2]), out[i]);
+    // (The answers into the table: pp.rs k_nav_sub_store.)
+    _navSubStoreP[0] = n; _navSubStoreP[1] = N.mask + 1;
+    simRustDirect('k_nav_sub_store', [N.list, N.out, N.tab], _navSubStoreP);
 }
+const _navSubStoreP = new Float64Array(2);
 const SIM_KERNEL_NAV_SUBST = 17;
 const _navSubstW = [];
 SIM_KERNELS[SIM_KERNEL_NAV_SUBST] = function (R, P, chunk) {
@@ -1489,15 +784,12 @@ SIM_KERNELS[SIM_KERNEL_NAV_SUBST] = function (R, P, chunk) {
 // (k.rs k_nav_subst: component K's tile nearest tile `to` of profile p's
 // build, the lowest tile of those as near; -1 none.)
 // After a restore: the substitutes the waiting units asked for, again (now).
+// (The waiting units' requests by pp.rs k_pp_due mode 2.)
 function navSubstitutesRestore() {
+    if (typeof simHeapHas !== 'function' || typeof _simWasmX === 'undefined' || _simWasmX === null) return;
+    _navSubReady();
     _navSubReset();
-    for (const u of units) {
-        const pt = u && !u.dead ? u._pendingPathTarget : null;
-        if (!pt || !(pt.sub > 0)) continue;
-        const profile = navProfileOf(u), gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-        const comp = _navUnitComp(profile, gy * GRID_W + gx);
-        if (comp >= 0) navSubstituteRequest(profile, Math.max(0, Math.min(GRID_H - 1, pt.gy | 0)) * GRID_W + Math.max(0, Math.min(GRID_W - 1, pt.gx | 0)), comp);
-    }
+    pendingPathSubAskAll();
     _navSubstitutesMake();
 }
 
@@ -1517,18 +809,15 @@ function navProfileOf(u) {
 }
 // Up to maxLen tiles from (gx, gy) toward dest (the start first), as path
 // nodes; null when the navigation has no way from there. For the interface:
-// it changes nothing (a destination field it would ask for, or a build,
-// would exist on the peer that shows the unit only): an existing field of
-// the destination when there is one, else the coarse steps.
+// it changes nothing (the atlas' steps).
 function navPath(profile, gx, gy, dest, maxLen) {
     const nav = _nav[profile];
     if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return null;
-    const W = GRID_W, F = _navFields.pools[1], s = F && F.ht ? _navHtSlot(F, _navFieldKey(profile, dest)) : -1;
-    const did = NAV_ATLAS && nav.atlas && nav.atlas.header ? NAV_ATLAS_FID : s < 0 ? -1 : NAV_WIDE_BASE + s;
+    const W = GRID_W;
     let t = gy * W + gx;
     const path = [{ x: gx, y: gy }];
     while (t !== dest && path.length < maxLen) {
-        const n = navStep(profile, t, dest, did);
+        const n = navStep(profile, t, dest);
         if (n < 0) return path.length > 1 ? path : null;
         path.push({ x: n % W, y: (n - n % W) / W });
         t = n;
@@ -1539,14 +828,12 @@ function navPath(profile, gx, gy, dest, maxLen) {
 // A path node that means "on to tile (x, y) by the navigation": a unit
 // steps toward it one tile at a time (Unit.followPath, or the movement
 // kernel in flow mode), O(1) a tick. `ready`: the tick the route may start
-// (its destination field is made by then; see navFieldReadyTick).
+// (on the atlas at once: 0; a path block's word, sim_unit_state.js simPathStore).
 function navNode(profile, tx, ty, previous = null) {
     navEnsure(profile);
-    const id = navFieldRequest(profile, ty * GRID_W + tx);
-    const ready = navFieldReadyFor(id);
-    // Reuse an unchanged, narrow route without skipping the field request.
-    if (previous && previous.x === tx && previous.y === ty && previous.nav === profile + 1 && previous.ready === ready && !previous.w) return previous;
-    return { x: tx, y: ty, nav: profile + 1, ready };
+    // (An unchanged, narrow route: the same node.)
+    if (previous && previous.x === tx && previous.y === ty && previous.nav === profile + 1 && !previous.ready && !previous.w) return previous;
+    return { x: tx, y: ty, nav: profile + 1, ready: 0 };
 }
 // Where a unit goes to reach tile t (profile): t itself when open, else the
 // nearest open tile around it (rings outward, up to NAV_APPROACH_MAX tiles;
@@ -1589,7 +876,7 @@ function navPathTo(u, tx, ty) {
 }
 
 // Walls changed: post an immutable snapshot, collect the complete helper
-// chain at a fixed simulation step, then install its destination fields.
+// chain at a fixed simulation step, then install it.
 // Stage identifiers retain their old values for saved pre-chain snapshots;
 // scheduling uses _NAV_STAGES and J.gap, not elapsed base ticks.
 const NAV_STEP_STAGE = 8, NAV_STEP_INSTALL = 12;
@@ -1668,30 +955,17 @@ function navTick() {
         // (Too big for its slot: dropped, the installed build kept.)
         _navSlotFullNote(J.profile);
         if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
-        if (_navNext.nav) _navNextDrop();
         _navSlots.capped[J.profile] = _navDiff[J.profile];
         _navSlots.lastInstall = gameTime;
         _navJob = null;
     }
     finally { _navSlots.cur = null; }
-    _navRushCheck();
 }
-// The window's second half with its fields not made: the helpers take them
-// first, more of them at once (simParallelBulkRush), so the install does not
-// make the rest on this thread. Scheduling only: the same fields.
-let _navRush = false;
-function _navRushCheck() {
-    const J = _navJob;
-    const rush = !!J && !!J.next && typeof simParallelBackgroundPending === 'function' && simParallelBackgroundPending(SIM_LANE_NAVX);
-    if (rush === _navRush) return;
-    _navRush = rush;
-    if (typeof simParallelBulkRush === 'function') simParallelBulkRush(rush ? SIM_LANE_NAVX : -1);
-}
-// Post the whole chain, collect and stage destination fields, then install.
-// Completion time never chooses the step: a slow peer waits for the same
-// data at the same scheduled step. At coarse steps this is two steps from
-// post to install; at dk < 3 it is three. The complete build gets two short
-// steps, followed by one step for the destination-field window.
+// Post the whole chain, collect it, then install. Completion time never
+// chooses the step: a slow peer waits for the same data at the same
+// scheduled step. At coarse steps this is two steps from post to install; at
+// dk < 3 it is three. The complete build gets two short steps, then one
+// step before its install (the schedule a snapshot's job carries).
 const _NAV_STAGES = [0, NAV_STEP_STAGE, NAV_STEP_INSTALL];
 // (The build's background work by the map's size, in ticks: NAV_BUILD_TILES_A_TICK
 // tiles a tick (a 1024x1024 map: 8 ticks); as steps, at least 1 step apart at
@@ -1721,11 +995,10 @@ function _navJobStep(J, step) {
     } else if (step === NAV_STEP_STAGE) {
         if (!J.shared) navBuildCollect();
         J.next = J.shared || navBuildFinish(J.b);
-        _navNextStage(J.next);
     } else if (step === NAV_STEP_INSTALL) {
         _navJob = null;
         _navSlots.lastInstall = gameTime;
-        _navNextInstall(J.next);
+        navPublish(J.next, true);
         // (The flow looks of its profile listed this tick: main.js, unit.js flowLooksInstallPost.)
         navInstalledAt = gameTime;
     }
@@ -1763,7 +1036,7 @@ function navRestoreState(st) {
         navPublish(_navShareBuild(p, wall) || navBuild(p, wall, true, GRID_W, GRID_H));
         if (e.seq > 0) _nav[p].seq = _navSeq[p] = e.seq | 0;
     }
-    // (The air one too, as the match's first tick made it: flyers' fields
+    // (The air one too, as the match's first tick made it: flyers' routes
     // need it now.)
     navEnsure(NAV_PROFILE_AIR);
     _navLastJobProfile = Number.isFinite(st.last) ? st.last | 0 : -1;
@@ -1799,7 +1072,6 @@ function navRestoreState(st) {
                 if (e !== _NAV_SLOT_FULL) throw e;
                 _navSlotFullNote(p);
                 if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(_navBuildLane());
-                if (_navNext.nav) _navNextDrop();
                 _navSlots.capped[p] = -2;
                 _navJob = null;
             } finally { _navSlots.cur = null; }

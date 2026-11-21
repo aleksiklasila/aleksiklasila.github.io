@@ -132,52 +132,85 @@ function _navGoalRecheckTick(u) {
 // its way when it can get there now (its order then goes on as given);
 // else toward the closest tile it can reach (pt kept: not arrived); there,
 // or walled in, it waits until a new navigation build. Looks before its
-// retry tick (u._astarBudgetRetryTick) do nothing.
-const _pendingPathDest = { x: 0, y: 0 };
+// retry tick (u._astarBudgetRetryTick) do nothing. By the kernel (wasm/src/pp.rs
+// k_pp_due): one unit here (mode 1); the tick's due units in one pass
+// (pendingPathsDue, mode 0); every waiting unit's substitute asked again
+// (pendingPathSubAskAll, mode 2).
 function _tryUpgradeAstarFallbackPath(u) {
-    const pt = u && u._pendingPathTarget;
-    if (!pt || u.dead) return;
-    if (Number.isFinite(u._astarBudgetRetryTick) && gameTime < u._astarBudgetRetryTick) return;
-    // (On its way to the closest tile: looks again when there, or at its look.)
-    const currentPath = u.path;
-    if (currentPath && u.pathIndex < currentPath.length) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
-    const profile = navProfileOf(u), nav = _nav[profile];
-    // Waiting where it got to: only a new build changes the answer.
-    if (pt.ver > 0 && nav && pt.ver === nav.seq) { u._astarBudgetRetryTick = _navGoalRecheckTick(u); return; }
-    pt.ver = 0;
-    const c = u._us, s = u._si;
-    const ugx = Math.floor((c ? c.x[s] * 0.125 : u.x) / TILE);
-    const ugy = Math.floor((c ? c.y[s] * 0.125 : u.y) / TILE), here = ugy * GRID_W + ugx;
-    const dest = findNearestWalkable(pt.gx, pt.gy, ugx, ugy, u, _pendingPathDest);
-    const way = navPathReach(u, ugx, ugy, dest.x, dest.y, currentPath);
-    if (way && way.length > 0) {
-        u.path = way;
-        u.pathIndex = 0;
-        u.pathIsFallbackAstar = false;
-        u.commandState = pt.cmd;
-        u._pendingPathTarget = null;
-        return;
+    if (!u || u.dead || !u._us) return;
+    _ppList(1)[0] = u._si;
+    _ppRun(1, 1, _ppL);
+}
+// (Units in the given order, one pass.)
+function pendingPathUpgradeUnits(us) {
+    const L = _ppList(us.length);
+    let n = 0;
+    for (const u of us) if (u && !u.dead && u._us) L[n++] = u._si;
+    if (n) _ppRun(1, n, L);
+}
+// k_pp_due's arguments (see its comment): the arrays, the parameters, the
+// per-profile navigation table (encoded addresses), the scratch (heap; sized
+// by the units waiting, a power of two).
+const _ppA = new Array(53).fill(null), _ppP = new Float64Array(25);
+let _ppHdr = null, _ppTab = null, _ppL = null, _ppKa = null, _ppKb = null, _ppVa = null, _ppVb = null, _ppKeys = null;
+function _ppGrow(a, T, n) {
+    if (a && a.length >= n && simHeapHas(a)) return a;
+    if (a && simHeapHas(a)) simHeapFree(a);
+    return simHeapArray(T, Math.max(1024, 1 << Math.ceil(Math.log2(Math.max(1, n)))));
+}
+function _ppList(n) { return (_ppL = _ppGrow(_ppL, Int32Array, n)); }
+function _ppRun(mode, n, list) {
+    const S = _simUnitState, C = S && S.columns;
+    if (!C) return;
+    const N = _navSubReady(), A = _ppA, P = _ppP;
+    if (!_ppHdr || !simHeapHas(_ppHdr)) { _ppHdr = simHeapArray(Int32Array, 8); _ppTab = simHeapArray(Int32Array, 12); }
+    if (!_ppKeys) { _ppKeys = [_simHKey('_pendingPathTarget'), _simHKey('pathIsFallbackAstar'), _simHKey('_astarBudgetRetryTick')]; }
+    // The navigation of every profile (a unit's is its own: flying, building, else the ground's).
+    for (let p = 0; p < NAV_PROFILES; p++) {
+        const nav = navEnsure(p), w = navWallTable(p), o = p * 4;
+        _ppTab[o] = _simWEnc(_simHeapPtrOf(w)); _ppTab[o + 1] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partL)) : 0;
+        _ppTab[o + 2] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partBase)) : 0; _ppTab[o + 3] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partComp)) : 0;
+        for (let j = 0; j < 4; j++) if (!(_ppTab[o + j] >= 0)) throw new Error('k_pp_due: profile ' + p + ' navigation array ' + j + ' not in the wasm heap');
+        P[16 + p] = nav ? nav.seq | 0 : 0; P[19 + p] = nav ? nav.cs : 0; P[22 + p] = nav ? nav.cw : 0;
     }
-    const path = navPathSubstitute(u, ugx, ugy, pt);
-    if (path === null) return;
-    const at = path.length ? path[0].y * GRID_W + path[0].x : -1;
-    // Walled in, or as near as it gets (on that tile, or a step from it in
-    // a crowd): it waits (its order stays).
-    if (at < 0 || at === here || (Math.abs(path[0].x - ugx) <= 1 && Math.abs(path[0].y - ugy) <= 1 && pt.at === at)) {
-        pt.ver = nav ? nav.seq : 1;
-        pt.at = at;
-        u.path = null;
-        u.pathIndex = 0;
-        u.pathIsFallbackAstar = true;
-        u._astarBudgetRetryTick = _navGoalRecheckTick(u);
-        return;
-    }
-    pt.at = at;
-    u.path = path;
-    u.pathIndex = 0;
-    u.pathIsFallbackAstar = true;
-    u.commandState = pt.cmd;
-    u._astarBudgetRetryTick = _navGoalRecheckTick(u);
+    const room = Math.max(1, mode === 0 ? _ppCount : n);
+    _ppKa = _ppGrow(_ppKa, BigUint64Array, room); _ppKb = _ppGrow(_ppKb, BigUint64Array, room);
+    _ppVa = _ppGrow(_ppVa, Int32Array, room); _ppVb = _ppGrow(_ppVb, Int32Array, room);
+    const PA = simPathArena(8 * room), T = _ST.code && _ST.n === GRID_W * GRID_H ? _ST : null;
+    if (T && !simHeapHas(T.code)) structTablesRehome();
+    const rt = C.oc__astarBudgetRetryTick;
+    if (!simHeapHas(rt.data)) rt._rehome();
+    A[0] = list; A[1] = _ppHeads(); A[2] = C.ppDue; A[3] = C.ppNext; A[4] = C.ppPrev;
+    A[5] = C.ptSt; A[6] = C.ptGx; A[7] = C.ptGy; A[8] = C.ptCmd; A[9] = C.ptSrc; A[10] = C.ptVer; A[11] = C.ptAt; A[12] = C.ptSub;
+    A[13] = C.dead; A[14] = C.live; A[15] = C.id; A[16] = C.x; A[17] = C.y; A[18] = rt.data; A[19] = C.hObj;
+    A[20] = C.nvPK; A[21] = C.pthH; A[22] = C.pathIndex; A[23] = C.commandState; A[24] = C.mvOn; A[25] = C.mvSteer; A[26] = C.mvPath;
+    A[27] = S.pathPool ? S.pathPool.fs : null; A[28] = C.mvPF; A[29] = C.mvPP; A[30] = PA.a; A[31] = PA.free;
+    A[32] = C.jFly; A[33] = C.wkIx; A[34] = C.wbType; A[35] = C.owner; A[36] = _mvtDirty; A[37] = _ppTab;
+    A[38] = simMoveWallGrid(); A[39] = _navClassWalls(NAV_PROFILE_BUILD);
+    A[40] = T && T.code; A[41] = T && T.val; A[42] = T && T.uc; A[43] = T && T.own; A[44] = T && T.brain; A[45] = findNearestWalkableClouds();
+    A[46] = N.tab; A[47] = N.list; A[48] = _ppHdr; A[49] = _ppKa; A[50] = _ppKb; A[51] = _ppVa; A[52] = _ppVb;
+    P[0] = mode; P[1] = mode === 0 ? room : n; P[2] = gameTime; P[3] = GRID_W; P[4] = GRID_H; P[5] = TILE; P[6] = PENDING_WHEEL; P[7] = _ppTaken;
+    P[8] = PA.a.length; P[9] = N.mask + 1; P[10] = navSubRoom(); P[11] = NAV_SUB_TICKS;
+    P[12] = _ppKeys[0]; P[13] = _ppKeys[1]; P[14] = _ppKeys[2]; P[15] = _stationaryTypes.length;
+    const H = _ppHdr;
+    H[0] = 0; H[1] = PA.top; H[2] = N.n; H[3] = 0; H[5] = N.asks;
+    simRustDirect('k_pp_due', A, P);
+    PA.top = H[1];
+    N.used += H[2] - N.n; N.n = H[2]; N.asks = H[5];
+    if (mode === 0) { _ppCount += H[0]; _ppTaken = gameTime; }
+    // (Bit 2: the substitutes' room, a limit; the others cannot happen with the room given.)
+    if (H[3] & ~2) throw new Error('k_pp_due: errors ' + H[3]);
+}
+// The units due this tick (main.js pendingPathsTick): each, by its source's
+// priority, then its id, looked at once; those still waiting scheduled again.
+function pendingPathsDue() {
+    if (_ppCount > 0) _ppRun(0, 0, null);
+}
+// Every waiting unit's substitute asked again (flownav.js navSubstitutesRestore, and the table cleared).
+function pendingPathSubAskAll() {
+    if (typeof _simUnitState === 'undefined' || !_simUnitState || typeof _simWasmX === 'undefined' || _simWasmX === null) return;
+    const R = unitRows();
+    if (R.n > 0) _ppRun(2, R.n, R.slots);
 }
 
 function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null, unitTypeHint = null) {
@@ -281,8 +314,6 @@ function _finalizePathfindPerfTick(backlogCount) {
 // grows and nothing is made in play.
 const PENDING_WHEEL = 1024;
 let _ppHead = null, _ppCount = 0, _ppTaken = -1;
-const _pendingPathDueScratch = [];
-const _pendingPathBuckets = [[], [], [], [], []];
 function _ppHeads() {
     if (!_ppHead || (typeof simHeapHas === 'function' && !simHeapHas(_ppHead))) { _ppHead = typeof simSharedArray === 'function' ? simSharedArray(Int32Array, PENDING_WHEEL) : new Int32Array(PENDING_WHEEL); _ppHead.fill(-1); }
     return _ppHead;
@@ -324,50 +355,26 @@ function notePendingPathUnit(u) {
     schedulePendingPathUnit(u, _pendingPathDueTick(u, gameTime));
 }
 function resetPendingPathUnits() {
-    _pendingPathDueScratch.length = 0;
-    for (const bucket of _pendingPathBuckets) bucket.length = 0;
     const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     if (S) S.columns.ppDue.fill(-1);
     _ppHeads().fill(-1); _ppCount = 0; _ppTaken = gameTime;
-    for (let u of units) if (u && !u.dead && u._pendingPathTarget) notePendingPathUnit(u);
+    // (A page beside a simulation worker simulates nothing: no wheel.)
+    if (!S || typeof _simWasmX === 'undefined' || _simWasmX === null) return;
+    // (The units with a pending target, in id order, by a kernel over the id table and columns: snap_units.rs
+    // k_pp_reset. A pass over the units list made every unit's object.)
+    const R = unitRows(), C = S.columns, rt = C.oc__astarBudgetRetryTick, P = _ppResetP;
+    P[0] = R.n; P[1] = gameTime; P[2] = PENDING_WHEEL;
+    simRustDirect('k_pp_reset', [R.slots, C.dead, C.ptSt, rt && rt.data && simHeapHas(rt.data) ? rt.data : null, _ppHeads(), C.ppNext, C.ppPrev, C.ppDue, _ppResetOut()], P);
+    _ppCount = _ppResetOut()[0];
 }
+// (A whole release: the wheel empty.)
+function pendingPathClear() { _ppHeads().fill(-1); _ppCount = 0; }
+const _ppResetP = new Float64Array(4);
+let _ppResetO = null;
+function _ppResetOut() { if (!_ppResetO || !simHeapHas(_ppResetO)) _ppResetO = simHeapArray(Int32Array, 4); return _ppResetO; }
 function pendingPathWaiting() { return _ppCount; }
-// The pending units due at `tick` (each once, in id order); those no longer
-// waiting are dropped.
-function takeDuePendingPathUnits(tick) {
-    const due = _pendingPathDueScratch, S = _simUnitState;
-    due.length = 0;
-    if (!S) return due;
-    const c = S.columns, owners = S.owners, H = _ppHeads();
-    // (The buckets of the ticks since the last take, each once.)
-    const from = _ppTaken < 0 || tick - _ppTaken >= PENDING_WHEEL ? tick - PENDING_WHEEL + 1 : _ppTaken + 1;
-    for (let t = from; t <= tick; t++) {
-        let s = H[t & (PENDING_WHEEL - 1)];
-        while (s >= 0) {
-            const next = c.ppNext[s];
-            if (c.ppDue[s] <= tick) {
-                pendingPathUnlink(c, s);
-                const u = owners.at(s);
-                if (u && !u.dead && u._pendingPathTarget) due.push(u);
-            }
-            s = next;
-        }
-    }
-    _ppTaken = tick;
-    due.sort(_pendingPathIdOrder);
-    return due;
-}
-function _pendingPathIdOrder(a, b) { return a.id - b.id; }
 function _countPendingPathBacklog() {
     return _ppCount;
-}
-
-function _pendingPathPriority(src) {
-    if (src === 'player_commands') return 0;
-    if (src === 'ai_combat') return 1;
-    if (src === 'worker_ai') return 2;
-    if (src === 'scout_ai') return 3;
-    return 4;
 }
 
 function _updateAdaptivePathBudget() {
@@ -495,6 +502,23 @@ function cloudTowerToggle(t) {
     // (A member while it holds its tile: the list is the table's view.)
     if (t._stT >= 0 && !t.dead) _cloudSet.add(t); else _cloudSet.delete(t);
     _cloudTablesMake();
+}
+// A cloud portal joined or left (built, destroyed): the groups at every
+// portal of its pair seed the next adjacency flood, not only those at its
+// own tile (a pair's groups are one group through the portals; destroyed, the
+// far end's group stayed joined until a change near it). Any owner: a
+// destroyed tower's row, its owner, is cleared already; a pair has a few
+// portals at most. (Flags: the marking order does not matter.)
+function cloudPairAdjacencyDirty(t) {
+    const def = t && BASE_CARD_TYPES[t.type];
+    if (!def || def.pairId === undefined || def.pairId === null) return;
+    if (!_cloudTablesCurrent()) _rebuildCloudTileCache();
+    for (const c of _cloudSet) {
+        const d = BASE_CARD_TYPES[c.type];
+        // (Only one standing at its tile: a member left over on one peer
+        // would mark tiles the others do not; the dirty set is hashed.)
+        if (d && d.pairId === def.pairId && Number.isFinite(c.gx) && Number.isFinite(c.gy) && getTileEntityRef(c.gx, c.gy) === c) requestAdjacencyRecalc(c.gx, c.gy, 1);
+    }
 }
 // Whether owner has a live cloud tower of this type (the cloud set, not a
 // walk of every tower).

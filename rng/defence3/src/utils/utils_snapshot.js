@@ -44,7 +44,7 @@
 // entities no longer in their list.
 // ============================================================
 
-const SNAP_FORMAT = 7;
+const SNAP_FORMAT = 8;
 // The simulation's numeric rules (storage precision, rounding points): peers
 // of different revisions cannot stay in lockstep, so joins, match starts and
 // snapshots carry it and a mismatch is refused before any simulation. A
@@ -195,7 +195,9 @@ const SNAP_FORMAT = 7;
 // flush no longer send every unit through the full path; the worker
 // search commits its requests in id order (k_ws_order), not slot order.
 // 57: lockstep initialization completion barrier.
-const SIM_RULES_REVISION = 57;
+// 58: a scalar move's tile-step charge by its stored (quantized, checked) position, as the vector lanes' (mv.rs
+// commit_step): the charge no longer depends on the unit's slot (a restore's layout charged otherwise).
+const SIM_RULES_REVISION = 58;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
@@ -811,14 +813,14 @@ function _snapReservationHash(slot, u) {
 }
 
 // fn(slot, unit) for the entries whose target tile is in region r.
-function _snapForRegionReservations(r, fn) {
+function _snapForRegionReservations(r, fn, withUnit = true) {
     let table = workerReservedTiles, n = _WORKER_TARGET_LOAD_TYPE_COUNT, rt = SNAP_REGION_TILES;
     let ry = Math.floor(r / 1024), rx = r - ry * 1024;
     let gx0 = rx * rt, gx1 = Math.min(GRID_W, gx0 + rt);
     if (!table || gx0 >= gx1) return;
     for (let gy = ry * rt, gy1 = Math.min(GRID_H, gy + rt); gy < gy1; gy++) {
         for (let slot = (gy * GRID_W + gx0) * n, end = (gy * GRID_W + gx1) * n; slot < end; slot++) {
-            if (table[slot]) fn(slot, workerReservedAt(slot));
+            if (table[slot]) fn(slot, withUnit ? workerReservedAt(slot) : null);
         }
     }
 }
@@ -872,7 +874,7 @@ function _snapDecodeReservations(enc, partial = null) {
     if (partial) {
         // The carried regions' entries, and the entry each carried or
         // removed unit held elsewhere (by its slot from before the restore).
-        for (let r of partial.regions) _snapForRegionReservations(r, slot => { table[slot] = 0; });
+        for (let r of partial.regions) _snapForRegionReservations(r, slot => { table[slot] = 0; }, false);
         let ids = new Set();
         for (let u of partial.carried) ids.add(u.id);
         for (let [u, slot] of partial.slots) {
@@ -1071,7 +1073,7 @@ function snapTickHash(tick, allSlices = false) {
             for (let k = 0, c = CC[j * 4 + 2]; k < c; k++) { const si = NL[b + k]; _snapRegionAdd(regions, Math.floor(CY[si] * 0.125 / ts) * 1024 + Math.floor(CX[si] * 0.125 / ts), NLH[b + k] >>> 0); }
         }
         unitOrder = h >>> 0;
-    } else unitOrder = _snapHashOrder('u', allSlices ? -1 : slice);
+    } else { unitOrder = _snapHashOrder('u', allSlices ? -1 : slice); _snapUnitLists(0, 1); }
     push(SNAP_PART_ORDER * SNAP_CODE_SHIFT + SNAP_LIST_CODE.u, unitOrder);
     // The units' region sums added to the others', and every region as a
     // pair (SIM_KERNEL_SNAP_MERGE, here: one job).
@@ -1095,8 +1097,10 @@ let _snapHashHistory = new Map();
 
 function snapRecordTickHash(tick) {
     // Exact-lockstep debug mode hashes everything every tick: it stops at the
-    // first tick anything differs and names all of it.
-    return snapStoreTickHash(snapTickHash(tick, !!lockstepStrictDebugMode));
+    // first tick anything differs and names all of it. The match's last tick too: its hash is what the host's
+    // result confirms (utils_networking.js _guestFinalStateAgrees), and a slice alone missed a difference in the
+    // others (audit row 104).
+    return snapStoreTickHash(snapTickHash(tick, !!lockstepStrictDebugMode || !!gameOver));
 }
 
 // Records a tick hash computed elsewhere (the simulation worker's).
@@ -1115,6 +1119,12 @@ function snapStoreTickHash(r) {
     return r;
 }
 
+// The newest tick hash recorded (null: none).
+function snapNewestTickHash() {
+    let best = null;
+    for (const r of _snapHashHistory.values()) if (!best || r.tick > best.tick) best = r;
+    return best;
+}
 function snapGetTickHash(tick) {
     return _snapHashHistory.get(Math.floor(tick)) || null;
 }
@@ -1310,22 +1320,9 @@ function _snapStatRefString(obj, index) {
 function _snapRootRef(v) {
     let ctx = _snapEnc;
     if (v instanceof Unit) {
-        // The unit list is in id order (ids only grow; removal splices).
-        if (ctx.unitsSorted === null) {
-            ctx.unitsSorted = true;
-            for (let i = 1; i < units.length; i++) if (!(units[i - 1].id < units[i].id)) { ctx.unitsSorted = false; break; }
-        }
-        if (ctx.unitsSorted) {
-            let lo = 0, hi = units.length - 1, id = v.id;
-            while (lo <= hi) {
-                let mid = (lo + hi) >> 1, mv = units[mid].id;
-                if (mv === id) return units[mid] === v ? '~u' + id : null;
-                if (mv < id) lo = mid + 1; else hi = mid - 1;
-            }
-            return null;
-        }
-        if (!ctx.unitSet) ctx.unitSet = new Set(units);
-        return ctx.unitSet.has(v) ? '~u' + v.id : null;
+        // (A unit of the id table by its id; one that left it (dead), none: sent by value.)
+        const id = v.id;
+        return v._us && getUnitById(id) === v ? '~u' + id : null;
     }
     let gx = v.gx, gy = v.gy;
     if (typeof gx === 'number' && typeof gy === 'number' && gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H) {
@@ -1685,9 +1682,36 @@ function _snapDecodeOrder(list, enc) {
 // reservations, as the page restores a start (its units come from frames;
 // references to units stay references by id): the simulation worker's start
 // state for its page, without encoding millions of rows to drop them.
+// A patch's regions widened by how far a unit can have gone since its differing hash's tick (buckets.ageTicks):
+// the regions are those where the difference was seen, and a unit that differed there may have moved on by the
+// patch's tick. Before: one ring around them (snapBucketsFromCodes), and a unit three regions on by then kept its
+// difference: the repair asked again (multiplayer-checkerboard-chaos --recover: a tank 30 ticks past its region).
+// The reach: the fastest stat row's speed a base tick (effective stats, _effRowCols.rSpd), twice for the pushes.
+function _snapWidenForAge(only) {
+    const age = Math.max(0, Math.floor(Number(only.ageTicks) || 0));
+    if (!(age > 0) || !only.regions || only.regions.size === 0) return only;
+    let v = 0;
+    const R = typeof _effRowCols !== 'undefined' && _effRowCols ? _effRowCols.rSpd : null;
+    if (R) for (let i = 0; i < R.length; i++) { const x = R[i]; if (x > v) v = x; }
+    const regionPx = TILE * SNAP_REGION_TILES, extra = Math.ceil(2 * v * age / regionPx);
+    if (!(extra > 0)) return only;
+    const rw = Math.ceil(GRID_W / SNAP_REGION_TILES), rh = Math.ceil(GRID_H / SNAP_REGION_TILES);
+    const regions = new Set();
+    for (const r of only.regions) {
+        const ry = Math.floor(r / 1024), rx = r - ry * 1024;
+        for (let y = Math.max(0, ry - extra), y1 = Math.min(rh - 1, ry + extra); y <= y1; y++)
+            for (let x = Math.max(0, rx - extra), x1 = Math.min(rw - 1, rx + extra); x <= x1; x++) regions.add(y * 1024 + x);
+    }
+    return { ...only, regions };
+}
 function snapEncodeState(options = null) {
     let only = options && options.buckets ? options.buckets : null;
-    const noUnits = !only && !!(options && options.noUnits);
+    if (only) only = _snapWidenForAge(only);
+    // (A page beside a simulation worker holds no simulation units (no unit state, no kernels): its snapshot has
+    // none, as the worker's page text; the worker's own text carries them.)
+    const simless = typeof _simWasmX === 'undefined' || _simWasmX === null || typeof _simUnitState === 'undefined' || !_simUnitState;
+    if (only && simless && !only.noUnits) only = { ...only, noUnits: true };
+    const noUnits = (!only && !!(options && options.noUnits)) || (!only && simless);
     _snapEnc = {
         gen: ++_snapEncGen, refs: new Map(), statIndex: _snapStatIndex(), pool: [], poolIds: new Map(), poolRefs: [],
         shapes: [], tpls: [], scratch: [], track: only ? new Set() : null, unitSet: null, unitsSorted: null, projIndex: null, defs: null
@@ -1700,12 +1724,17 @@ function snapEncodeState(options = null) {
         let listOf = list => list === 'f' ? (floor || (floor = _snapFloorItems())) : _snapListEntities(list);
         if (!only) {
             for (let list of SNAP_LISTS) {
-                if (noUnits && list === 'u') continue;
+                // (The units: a block of their columns, utils_snapblock.js.)
+                if (list === 'u') continue;
                 let arr = listOf(list);
                 for (let i = 0; i < arr.length; i++) if (arr[i]) _snapEncodeRow(list, arr[i], i, rows[list], mru[list]);
             }
             let res = [];
-            if (!noUnits) _snapForReservations(-1, (slot, u) => _snapEncodeReservation(res, slot, u));
+            if (!noUnits) {
+                const sel = snapUnitsSelect(null, null);
+                out.ub = snapUnitsEncode(sel.list, sel.n);
+                res = snapUnitsReservations(null, 0);
+            }
             out.res = res;
         } else {
             let done = new Set();
@@ -1714,7 +1743,9 @@ function snapEncodeState(options = null) {
             // noUnits: records for the page, which has units from frames
             // (references to units stay references, resolved by id there).
             let noUnits = !!only.noUnits;
-            let add = (list, e, i) => { if (done.has(e) || (noUnits && list === 'u')) return; done.add(e); _snapEncodeRow(list, e, i, rows[list], mru[list]); at[list].push(i); };
+            // (Units: collected for the block (utils_snapblock.js), the regions' units with them below.)
+            let unitAlso = [];
+            let add = (list, e, i) => { if (done.has(e) || (noUnits && list === 'u')) return; done.add(e); if (list === 'u') { unitAlso.push(e); return; } _snapEncodeRow(list, e, i, rows[list], mru[list]); at[list].push(i); };
             let regions = only.regions;
             let withPlayers = !!only.players;
             let labs = [];
@@ -1729,11 +1760,7 @@ function snapEncodeState(options = null) {
             // Map list -> [[entity, index], ...].
             if (only.entities) for (let [list, items] of only.entities) for (let [e, i] of items) add(list, e, i);
             if (regions.size > 0) {
-                let rt = SNAP_REGION_TILES, ts = TILE * SNAP_REGION_TILES;
-                for (let i = 0; i < units.length; i++) {
-                    let u = units[i];
-                    if (regions.has(Math.floor(u.y / ts) * 1024 + Math.floor(u.x / ts))) add('u', u, i);
-                }
+                let rt = SNAP_REGION_TILES;
                 for (let list of SNAP_REGION_LISTS) {
                     if (list === 'u') continue;
                     let arr = listOf(list);
@@ -1745,7 +1772,7 @@ function snapEncodeState(options = null) {
             }
             // Reservations on the carried tiles (their units come along).
             let res = [];
-            if (!noUnits) for (let r of regions) _snapForRegionReservations(r, (slot, u) => _snapEncodeReservation(res, slot, u));
+            if (!noUnits) { const T = workerReservedTiles; for (let r of regions) _snapForRegionReservations(r, slot => res.push(slot, T[slot]), false); }
             // Entities pointed at by what is sent come along, so every
             // reference resolves even where the receiver lacks them.
             let where = null;
@@ -1756,9 +1783,10 @@ function snapEncodeState(options = null) {
                 if (pending.length === 0) break;
                 if (!where) {
                     where = new Map();
-                    for (let list of SNAP_REGION_LISTS) { let arr = listOf(list); for (let i = 0; i < arr.length; i++) where.set(arr[i], i); }
+                    for (let list of SNAP_REGION_LISTS) { if (list === 'u') continue; let arr = listOf(list); for (let i = 0; i < arr.length; i++) where.set(arr[i], i); }
                 }
                 for (let e of pending) {
+                    if (e instanceof Unit) { add('u', e, 0); continue; }
                     let i = where.get(e);
                     if (i === undefined) continue;
                     let r = _snapEnc.refs.get(e);
@@ -1769,12 +1797,10 @@ function snapEncodeState(options = null) {
             // And the reservation each unit sent holds elsewhere. (An entry
             // its unit no longer points at, outside the carried regions,
             // shows in that region's hash if it differs.)
-            if (rows.u.length > 0) {
-                for (let e of done) {
-                    if (!(e instanceof Unit)) continue;
-                    let slot = e._workerReservedTileIndex;
-                    if (Number.isInteger(slot) && slot >= 0 && workerReservedTiles[slot] === e.id && !regions.has(_snapReservationRegion(slot))) _snapEncodeReservation(res, slot, e);
-                }
+            if (!noUnits) {
+                const sel = snapUnitsSelect(regions, unitAlso);
+                out.ub = snapUnitsEncode(sel.list, sel.n);
+                for (const x of snapUnitsReservations(sel.list, sel.n)) res.push(x);
             }
             out.res = res;
             out.partial = 1;
@@ -1783,7 +1809,7 @@ function snapEncodeState(options = null) {
             if (only.projectiles) out.projectiles = 1;
             out.order = {};
             for (let list of SNAP_ORDER_LISTS) {
-                if (only.orders.has(list)) out.order[list] = _snapEncodeOrder(list, listOf(list));
+                if (only.orders.has(list)) out.order[list] = list === 'u' ? (noUnits ? undefined : snapUnitsOrder()) : _snapEncodeOrder(list, listOf(list));
             }
             // Without the order, where each sent building sits in its list: one
             // the receiver lacks goes where the host has it, not at the end.
@@ -1916,6 +1942,8 @@ function _snapDLookup(x) {
     let ctx = _snapDec;
     let list = x[1];
     let key = x.slice(2);
+    // (Units by the id index: the block's, made before any row is filled, and a patch's kept ones.)
+    if (list === 'u') return getUnitById(+key) || null;
     if (ctx.partial) {
         // Referenced but not carried: an entity this peer keeps as it is.
         if (list === 'u') return (ctx.finals && _snapFindUnit(ctx.finals.u, +key)) || null;
@@ -2149,6 +2177,11 @@ function snapDecodeState(S, options = null) {
     // (This peer's pending q / e let go first: the snapshot's own comes with it, main.js rzCancel / rzRestore.)
     if (typeof rzCancel === 'function') rzCancel();
     if (S.rules !== undefined && S.rules !== SIM_RULES_REVISION) { console.error('snapshot of simulation rules ' + S.rules + ', this peer runs ' + SIM_RULES_REVISION); return null; }
+    // (A page beside a simulation worker has no kernels and simulates nothing: its units are the worker's frames.
+    // The unit block and its reservations left out, as simClientStripUnits does at a start.)
+    // (Read, not removed: the same object goes to the worker, simClientAfterSnapshotApplied.)
+    const ubOff = S.ub !== undefined && (typeof _simWasmX === 'undefined' || _simWasmX === null);
+    const resList = ubOff ? [] : S.res;
     let collect = !!(options && options.collectChanges);
     let partial = !!S.partial;
     let pool = S.pool || [];
@@ -2185,6 +2218,8 @@ function snapDecodeState(S, options = null) {
         // and layout match; everything else is created.
         let regions = partial ? new Set(S.regions || []) : null;
         let prev = {}, shells = {}, finals = {}, removed = {};
+        // (The units as a block of columns: utils_snapblock.js; ub its slots.)
+        let ub = null;
         // Units' reservation slots before the restore (carried and removed).
         let resSlots = new Map();
         // Units kept (patched in place): where the page last drew them, so a
@@ -2194,9 +2229,23 @@ function snapDecodeState(S, options = null) {
         let floorList = null;
         let listOf = list => list === 'f' ? (floorList || (floorList = _snapFloorItems())) : _snapListEntities(list);
         for (let list of SNAP_LISTS) {
+            if (list === 'u' && S.ub !== undefined && !ubOff) {
+                // A whole restore: every unit let go, room for the block's (the population's slots, as at the match's start).
+                if (!partial) {
+                    simUnitStateReleaseAll();
+                    const pop = simUnitPopulationSlots();
+                    simUnitStateReserve(S.ub.n, pop > 0 ? pop : Math.ceil(S.ub.n * 1.125));
+                    simMatchReserve();
+                } else if (S.order && Array.isArray(S.order.u)) snapUnitsDropByOrder(S.order.u);
+                ub = snapUnitsDecode(S.ub, partial);
+                // (A patch: slots whose unit left the list without its slot let go, as the units list's collection did.)
+                if (partial) snapUnitsCollectGhosts();
+                prev.u = null; shells.u = []; finals.u = null; removed.u = [];
+                continue;
+            }
             let rows = S.lists[list] || [];
             let whole = !partial || (list === 'P' && S.players) || (list === 'p' && S.projectiles);
-            let orderEnc = partial && S.order ? S.order[list] : null;
+            let orderEnc = partial && S.order && !(ubOff && list === 'u') ? S.order[list] : null;
             let atEnc = partial && S.at && Array.isArray(S.at[list]) && S.at[list].length === rows.length ? S.at[list] : null;
             let arr = (list === 'f' && partial && rows.length === 0 && !orderEnc && regions.size === 0) ? null : listOf(list);
             prev[list] = arr;
@@ -2210,7 +2259,10 @@ function snapDecodeState(S, options = null) {
             // columns instead of making a second set, 1.3 GB at 2M units.)
             // (The units it replaces let go first: the restored ones take their slots, from 0. sim_unit_state.js simUnitStateReleaseAll.)
             if (list === 'u' && !partial && typeof simUnitStateReleaseAll === 'function') simUnitStateReleaseAll();
-            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') simUnitStateReserve(rows.length, Math.max(typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0, Math.ceil(rows.length * 1.125)));
+            // (The match's own reservation, the population's slots, as at its start: the 1/8 more past it grew every
+            // column at a restore near a full population (147456 -> 151552 slots at 124k units), past the match-start
+            // budget. Without a population (tests), 1/8 more than the rows.)
+            if (list === 'u' && !partial && typeof simUnitStateReserve === 'function') { const pop = typeof simUnitPopulationSlots === 'function' ? simUnitPopulationSlots() : 0; simUnitStateReserve(rows.length, pop > 0 ? pop : Math.ceil(rows.length * 1.125)); }
             // (And the ticks' work arrays for the match: main.js simMatchReserve.)
             if (list === 'u' && !partial && typeof simMatchReserve === 'function') simMatchReserve();
             // (Their slots planned by block from the rows' positions, units of a block in neighbouring slots: sim_unit_state.js.)
@@ -2376,7 +2428,7 @@ function snapDecodeState(S, options = null) {
         for (let list of SNAP_LISTS) if (list !== 'P') fill(list);
 
         // 3. Lists and globals.
-        unitsReplaced(finals.u);
+        if (!ub) unitsReplaced(finals.u);
         // (The structure lists are the table's views: the restored ones tabled.)
         structListsReplaced();
         if (finals.g !== goldMines) { let a = finals.g.slice(); goldMines.length = 0; for (let m of a) goldMines.push(m); }
@@ -2475,11 +2527,11 @@ function snapDecodeState(S, options = null) {
         // Worker reservations.
         if (!partial) {
             resetSimulationTickCaches();
-            _snapDecodeReservations(S.res);
+            _snapDecodeReservations(resList);
         } else {
             _snapResetWorkerCaches();
             for (let u of removed.u) if (!resSlots.has(u)) resSlots.set(u, u._workerReservedTileIndex);
-            _snapDecodeReservations(S.res, { regions, carried: shells.u, slots: resSlots });
+            _snapDecodeReservations(resList, { regions, carried: shells.u, slots: resSlots });
         }
         if (Array.isArray(g.adjacency)) {
             _adjacencyNeedsRecalc = !!g.adjacency[0];
@@ -2502,7 +2554,7 @@ function snapDecodeState(S, options = null) {
         if (partial) for (let u of removed.u) removeUnitSpatial(u);
         if (typeof simUnitStateCollect === 'function') simUnitStateCollect();
         // (A whole world: its units in slots from 0, see simUnitStateCompact.)
-        if (!partial && typeof simUnitStateCompact === 'function') simUnitStateCompact(true);
+        if (!partial && !ub && typeof simUnitStateCompact === 'function') simUnitStateCompact(true);
         // (Every unit with a status holds a status record: its accessors took one.)
         // (A unit's effective tables are derived, not sent (preComputed /
         // preComputedEffective: non-enumerable, or its stat row): made again
@@ -2510,16 +2562,22 @@ function snapDecodeState(S, options = null) {
         // tables, with nothing else touched. A unit not initialized yet gets
         // them at its first stats pass, as on the peer it came from.)
         if (typeof structTableRefresh === 'function') for (const list of ['t', 'b', 's', 'f', 'g', 'a']) for (const e of (shells[list] || [])) structTableRefresh(e);
-        if (typeof unitDerivedStatsRestore === 'function') for (let u of (partial ? shells.u : units)) if (u && !u.dead) unitDerivedStatsRestore(u);
+        if (ub) snapUnitsDerive(ub.list, ub.n);
+        else if (typeof unitDerivedStatsRestore === 'function') for (let u of (partial ? shells.u : units)) if (u && !u.dead) unitDerivedStatsRestore(u);
         // (The object fields' digest, as their values give it: restored
         // fields reach it through setters whose order and starting values
         // the restore does not control (a shell's constructor, a slot's
         // last unit); the hash reads the digest, so it is made again here.)
-        if (typeof simUnitHashDigest === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) u._us.hObj[u._si] = simUnitHashDigest(u);
+        // (A block carries the digest as it was.)
+        if (!ub && typeof simUnitHashDigest === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) u._us.hObj[u._si] = simUnitHashDigest(u);
         // (Max energy and the movement stats into the columns, as the
         // others' flush did: this peer's flush ran before its units came.)
-        if (typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }
-        if (partial) {
+        if (!ub && typeof simUnitMaxE === 'function') for (let u of (partial ? shells.u : units)) if (u && u._us) { simUnitMaxE(u); if (typeof simMoveStatsChanged === 'function') simMoveStatsChanged(u); }
+        if (ub) {
+            // (A patch's kept units leave the index first; a whole restore's index is new.)
+            if (partial) snapUnitsSpatialOut(ub.list, ub.n); else initSpatialHash();
+            snapUnitsSpatialIn(ub.list, ub.n);
+        } else if (partial) {
             for (let u of shells.u) { let p = keptPrev.get(u); if (p) { u.prevX = p[0]; u.prevY = p[1]; } else { u.prevX = u.x; u.prevY = u.y; } updateUnitSpatial(u); }
         } else {
             initSpatialHash();
@@ -2531,7 +2589,7 @@ function snapDecodeState(S, options = null) {
         // refresh after a research), each share changed how its energy rounds
         // on this peer alone when its turn came: a new difference a rotation,
         // a patch each, six for one research counted wrongly.)
-        if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof effStatsAllUnits === 'function') effStatsAllUnits(new Set(ctx.statMapsStale), new Set(shells.u));
+        if (partial && ctx.statMapsStale && ctx.statMapsStale.length && typeof effStatsAllUnits === 'function') effStatsAllUnits(ctx.statMapsStale, ub ? ub.list : null, ub ? ub.n : 0);
         for (let p of shells.p) { p.prevX = p.x; p.prevY = p.y; }
         resetPendingPathUnits();
         resetNewUnitsForStats();
@@ -2570,12 +2628,13 @@ function snapDecodeState(S, options = null) {
                 return b;
             }) : null;
         }
-        if (typeof healerCandidatesRestore === 'function') { const byId = new Map(); for (const u of units) byId.set(u.id, u); healerCandidatesRestore(S.g ? S.g.healers : null, byId); }
+        // (Units by the id index: no map of every unit.)
+        const byId = { get: id => getUnitById(id) || undefined };
+        if (typeof healerCandidatesRestore === 'function') healerCandidatesRestore(S.g ? S.g.healers : null, byId);
         if (!pageOnly && !partial && typeof simMatchPrepare === 'function') simMatchPrepare();
 
-        let unitsById = null;
         return {
-            get unitsById() { if (!unitsById) { unitsById = new Map(); for (let u of units) unitsById.set(u.id, u); } return unitsById; },
+            unitsById: byId,
             missingRefs: ctx.missingRefs, statMapsRebuilt: ctx.statMapsRebuilt, changed, restored: shells, removed
         };
     } finally {

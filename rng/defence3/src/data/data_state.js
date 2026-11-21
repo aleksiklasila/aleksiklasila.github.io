@@ -1932,7 +1932,7 @@ function towersChanged() { towersVersion++; }
 // Bumped when a cloud tower joins or leaves towers (pathfinding.js keeps
 // its cloud tables by it: other towers falling in a battle leave them).
 let cloudTowersVersion = 0;
-function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) { cloudTowersVersion++; if (typeof cloudTowerToggle === 'function') cloudTowerToggle(t); } if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
+function towerJoinedOrLeft(t) { towersVersion++; if (t && t.baseStats && t.baseStats.isCloud) { cloudTowersVersion++; if (typeof cloudTowerToggle === 'function') cloudTowerToggle(t); if (typeof cloudPairAdjacencyDirty === 'function') cloudPairAdjacencyDirty(t); } if (t && t.type === 'laser') { laserTowersVersion++; if (typeof laserListToggle === 'function') laserListToggle(t); } }
 // Bumped when a laser tower joins or leaves towers (the laser links' list).
 let laserTowersVersion = 0;
 // The units: the id table's view (main.js _uix, unitsView), one object for

@@ -266,31 +266,36 @@ pub unsafe extern "C" fn k_tile_occupied(a: u32, _chunk: i32) {
 /// (st.brain [6] low word - 1) a cloud in [7]) of its owner (st.own [5]; P[7]
 /// < 0 any owner); flying (P[6] 2) anywhere; no unit (P[6] 0) the map's
 /// walls only. P: [4] W, [5] H.
-#[no_mangle]
-pub unsafe extern "C" fn k_nearest_walk(a: u32, _chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (ground, cwall, code, val, uc, own, brain, cloud, out) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<f64>(3), k.p::<u8>(4), k.p::<i32>(5), k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8));
-    if out.is_null() { return; }
-    let (gx, gy, fx, fy) = (k.i(0), k.i(1), k.f(2), k.f(3));
-    let (w, h, mode, owner, coll) = (k.i(4).max(1), k.i(5).max(1), k.i(6), k.i(7), k.i(8) != 0);
-    let walls = if cwall.is_null() { ground } else { cwall };
-    let nty = k.i(9).max(0);
-    let ok = |x: i32, y: i32| -> bool {
-        if x < 0 || y < 0 || x >= w || y >= h { return false; }
-        if mode == 2 { return true; }
-        let t = (y * w + x) as usize;
-        if walls.is_null() || g(walls, t) == 0 { return true; }
+/// Where a unit may stand for nearest_walk: the walls it walks by, the
+/// structure table it may pass on (mines for a collector, its own cloud
+/// towers), the unit's kind (mode 0 no unit, 1 walking, 2 flying), owner
+/// (< 0 any) and whether it collects.
+pub(crate) struct WalkWhere {
+    pub walls: *const u8, pub code: *const u8, pub val: *const f64, pub uc: *const u8, pub own: *const i32, pub brain: *const i32,
+    pub cloud: *const u8, pub nty: i32, pub w: i32, pub h: i32, pub mode: i32, pub owner: i32, pub coll: bool,
+}
+impl WalkWhere {
+    #[inline(always)]
+    unsafe fn ok(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= self.w || y >= self.h { return false; }
+        if self.mode == 2 { return true; }
+        let t = (y * self.w + x) as usize;
+        if self.walls.is_null() || g(self.walls, t) == 0 { return true; }
         // (No unit: the map's walls only.)
-        if mode == 0 || code.is_null() { return false; }
-        let c = g(code, t);
-        if coll && (c == 0x66 || c == 0x77) && !val.is_null() && g(val, t) > 0.0 { return true; }
-        if c == 0x22 && !cloud.is_null() && !brain.is_null() && (uc.is_null() || g(uc, t) == 0) {
-            let ty = (g(brain, t) & 65535) - 1;
-            if ty >= 0 && ty < nty && g(cloud, ty as usize) != 0 && (owner < 0 || own.is_null() || g(own, t) == owner) { return true; }
+        if self.mode == 0 || self.code.is_null() { return false; }
+        let c = g(self.code, t);
+        if self.coll && (c == 0x66 || c == 0x77) && !self.val.is_null() && g(self.val, t) > 0.0 { return true; }
+        if c == 0x22 && !self.cloud.is_null() && !self.brain.is_null() && (self.uc.is_null() || g(self.uc, t) == 0) {
+            let ty = (g(self.brain, t) & 65535) - 1;
+            if ty >= 0 && ty < self.nty && g(self.cloud, ty as usize) != 0 && (self.owner < 0 || self.own.is_null() || g(self.own, t) == self.owner) { return true; }
         }
         false
-    };
-    if ok(gx, gy) { s(out, 0, gx); s(out, 1, gy); return; }
+    }
+}
+/// findNearestWalkable (see k_nearest_walk): (x, y).
+pub(crate) unsafe fn nearest_walk(ww: &WalkWhere, gx: i32, gy: i32, fx: f64, fy: f64) -> (i32, i32) {
+    let (w, h) = (ww.w, ww.h);
+    if ww.ok(gx, gy) { return (gx, gy); }
     let has_from = fx == fx && fy == fy;
     let (fxi, fyi) = (if has_from { fx as i64 } else { 0 }, if has_from { fy as i64 } else { 0 });
     let maxr = w.max(h);
@@ -298,7 +303,7 @@ pub unsafe extern "C" fn k_nearest_walk(a: u32, _chunk: i32) {
     while r <= maxr {
         let (mut bx, mut by, mut bd, mut found) = (0i32, 0i32, 0i64, false);
         let mut take = |x: i32, y: i32| {
-            if !ok(x, y) { return; }
+            if !ww.ok(x, y) { return; }
             if !has_from { if !found { bx = x; by = y; found = true; } return; }
             let (dx, dy) = (x as i64 - fxi, y as i64 - fyi);
             let d = dx * dx + dy * dy;
@@ -308,10 +313,20 @@ pub unsafe extern "C" fn k_nearest_walk(a: u32, _chunk: i32) {
         while x <= gx + r { take(x, gy - r); take(x, gy + r); x += 1; }
         let mut y = gy - r + 1;
         while y <= gy + r - 1 { take(gx - r, y); take(gx + r, y); y += 1; }
-        if found { s(out, 0, bx); s(out, 1, by); return; }
+        if found { return (bx, by); }
         r += 1;
     }
-    s(out, 0, gx.max(0).min(w - 1)); s(out, 1, gy.max(0).min(h - 1));
+    (gx.max(0).min(w - 1), gy.max(0).min(h - 1))
+}
+#[no_mangle]
+pub unsafe extern "C" fn k_nearest_walk(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (ground, cwall, out) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i32>(8));
+    if out.is_null() { return; }
+    let ww = WalkWhere { walls: if cwall.is_null() { ground } else { cwall }, code: k.p::<u8>(2), val: k.p::<f64>(3), uc: k.p::<u8>(4), own: k.p::<i32>(5),
+        brain: k.p::<i32>(6), cloud: k.p::<u8>(7), nty: k.i(9).max(0), w: k.i(4).max(1), h: k.i(5).max(1), mode: k.i(6), owner: k.i(7), coll: k.i(8) != 0 };
+    let (x, y) = nearest_walk(&ww, k.i(0), k.i(1), k.f(2), k.f(3));
+    s(out, 0, x); s(out, 1, y);
 }
 
 /// unit.js _simMoveWalls: the ground walls (mv.wall [1]) from the cell types

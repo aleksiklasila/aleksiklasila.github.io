@@ -26,6 +26,16 @@ let STARTING_ASTAR = 9000;
 // and ★ (see shrineTick). Off: it still counts damage taken, but cannot be
 // drained (no drain buttons, no shrine research).
 let SHRINES_ENABLED = true;
+// Manual stacking (menu, Resources & Research): off, a build order is always
+// at L1 (one stack; on a structure standing there, nothing more), the build
+// level slider hidden; structures grow by their groups (effective levels,
+// upgrades) only. The simulation holds every peer's orders to it
+// (main.js processAction), not only the menu's slider.
+let MANUAL_STACKING_ENABLED = false;
+// The selected build level's stacks (2^(level - 1)), 1 with manual stacking off.
+function buildStackCount() {
+    return MANUAL_STACKING_ENABLED ? Math.max(1, Math.floor(buildPurchaseMultiplier || 1)) : 1;
+}
 let MAP_TYPE = 'islands';
 let TYPE_FLOOR = 0, TYPE_WALL = 1;
 let CONFIG_MAX_POP = 131072;

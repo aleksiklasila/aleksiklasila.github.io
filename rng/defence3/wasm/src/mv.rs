@@ -117,8 +117,6 @@ const W_WTC: usize = 40;
 const W_FLOW: usize = 41;
 const W_FGEN: usize = 42;
 const W_RDY: usize = 43;
-const W_FMN: usize = 44;
-const W_FMW: usize = 45;
 const W_NPR: usize = 46;
 const W_SPD: usize = 47;
 const W_HT: usize = 48;
@@ -159,11 +157,6 @@ const W_LSPY: usize = 82;
 const W_LST: usize = 83;
 const W_LANE: usize = 84;
 const W_AIRW: usize = 85;
-const W_FRN: usize = 86;
-const W_FRW: usize = 87;
-const W_FHD: usize = 88;
-const W_FPN: usize = 89;
-const W_FPW: usize = 90;
 // (The flow look-ahead record, unit.mvNav: NV_STRIDE words a slot, see nv.)
 const W_NV: usize = 91;
 const W_STATROW: usize = 92;
@@ -291,8 +284,8 @@ const W_SCCX: usize = 450;
 const W_SCCY: usize = 451;
 const W_SFX: usize = 452;
 const W_SFY: usize = 453;
-/// The field id of a route on the atlas (flownav.js NAV_ATLAS_FID): no
-/// destination field, every destination by lookups (atlas.rs).
+/// The route id of every route (flownav.js NAV_ATLAS_FID, navRouteFid): on its
+/// profile's atlas, every destination by lookups (atlas.rs); any other id: no route.
 pub const NAV_ATLAS_FID: i32 = 1 << 30;
 const W_TRES: usize = 290;
 /// Per navigation profile p: 8 words from W_NAV + 8p (fields, partL, partB,
@@ -301,12 +294,10 @@ const W_NAV: usize = 160;
 pub const NAV_PROFILES: usize = 11;
 /// partL's length per profile (11 words).
 const W_PARTLN: usize = 250;
-/// Lengths and counts: area.off's, wk.ver's, nav.fmeta.0's, nav.fmeta.1's,
-/// the cover's players and areas per player (its stride).
+/// Lengths and counts: area.off's, wk.ver's, (264, 265 unused), the cover's
+/// players and areas per player (its stride).
 const W_OFFN: usize = 262;
 const W_WKVN: usize = 263;
-const W_FMNN: usize = 264;
-const W_FMWN: usize = 265;
 const W_COVP: usize = 266;
 const W_COVS: usize = 267;
 
@@ -468,8 +459,6 @@ struct Mv {
     flow: *const i32,
     fgen: *mut i32,
     rdy: *const i32,
-    fmn: *const i32,
-    fmw: *const i32,
     npr: *const u8,
     spd: *const F32,
     ht: *const i32,
@@ -511,11 +500,6 @@ struct Mv {
     lst: *mut i32,
     lane: *const F32,
     airw: *const u8,
-    frn: *const u8,
-    frw: *const u8,
-    fhd: *const i32,
-    fpn: *const u16,
-    fpw: *const u16,
     nv: *mut i32,
     statrow: *const i16,
     hot: *const f32,
@@ -620,8 +604,6 @@ struct Mv {
     nav: [NavP; NAV_PROFILES],
     offn: usize,
     wkvn: usize,
-    fmnn: usize,
-    fmwn: usize,
     covp: i32,
     covs: i32,
     // (Params.)
@@ -807,8 +789,6 @@ impl Mv {
             flow: p!(W_FLOW),
             fgen: p!(W_FGEN),
             rdy: p!(W_RDY),
-            fmn: p!(W_FMN),
-            fmw: p!(W_FMW),
             npr: p!(W_NPR),
             spd: p!(W_SPD),
             ht: p!(W_HT),
@@ -850,11 +830,6 @@ impl Mv {
             lst: p!(W_LST),
             lane: p!(W_LANE),
             airw: p!(W_AIRW),
-            frn: p!(W_FRN),
-            frw: p!(W_FRW),
-            fhd: p!(W_FHD),
-            fpn: p!(W_FPN),
-            fpw: p!(W_FPW),
             nv: p!(W_NV),
             statrow: p!(W_STATROW),
             hot: p!(W_HOT),
@@ -958,8 +933,6 @@ impl Mv {
             nav,
             offn: word(a, W_OFFN),
             wkvn: word(a, W_WKVN),
-            fmnn: word(a, W_FMNN),
-            fmwn: word(a, W_FMWN),
             covp: rd(a, W_COVP),
             covs: rd(a, W_COVS),
             t: to_i32(rd(f, 2)),
@@ -1401,34 +1374,20 @@ struct AtlasStepEntry {
 }
 /// The navigation context of one look (simFlowLook's arguments).
 struct Nav {
-    /// The profile's atlas header when the route is on the atlas (no rows,
-    /// no destination field): null otherwise.
+    /// The profile's atlas header (every route is on it).
     atl: *const i32,
     step_cache: *mut AtlasStepEntry,
     w: i32,
     h: i32,
-    cs: i32,
-    c: i32,
-    cw: i32,
     pl: *const u16,
     plh: i32,
     pb: *const i32,
-    rows: *const u8,
-    ro: i32,
     fields: *const u16,
-    nb: *const i32,
     nt: *const i32,
     np: *const i32,
-    df: *const u16,
-    doff: i32,
-    bx: i32,
-    by: i32,
-    bw: i32,
-    bh: i32,
 }
-/// _simWallStepOut (rows always given here).
+/// _simWallStepOut: the first open side, N, S, W, E; -1 none.
 unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
-    let mut first = -1;
     for k in 0..4 {
         let x = tx + if k == 2 { -1 } else if k == 3 { 1 } else { 0 };
         let y = ty + if k == 0 { -1 } else if k == 1 { 1 } else { 0 };
@@ -1440,136 +1399,35 @@ unsafe fn wall_step_out(v: &Nav, tx: i32, ty: i32) -> i32 {
         if l == 0xFFFF {
             continue;
         }
-        if first < 0 {
-            first = n;
-        }
-        // (On the atlas: no rows, the first open side.)
-        if v.rows.is_null() {
-            return n;
-        }
-        let cf = idiv(y, v.c) * v.cw + idiv(x, v.c);
-        if rd(v.rows, (v.ro + rd(v.pb, cf as usize) + l as i32) as usize) != 255 {
-            return n;
-        }
+        return n;
     }
-    first
+    -1
 }
-/// A look-ahead's step (flow_look_calc): on the atlas with the run's exit
-/// hint (crate::atlas::atlas_step_h), not through the job's step cache (its
-/// entries are full choices; a look must not depend on which units its job
-/// ran first, looks are shared across threads); else nav_step.
-unsafe fn nav_step_run(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mut crate::atlas::ExitCache, hint: *mut [i32; 3]) -> i32 {
-    if t == dest {
-        return -1;
-    }
-    if !v.atl.is_null() {
-        if rd(v.pl, t as usize) == 0xFFFF {
-            return wall_step_out(v, tx, ty);
-        }
-        return match crate::atlas::Atl::from(v.atl) {
-            Some(mut a) => {
-                a.exit_cache = exit_cache;
-                crate::atlas::atlas_step_h(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest, hint)
-            },
-            None => -1,
-        };
-    }
-    nav_step(v, t, tx, ty, dest, exit_cache)
-}
-/// simNavStepXY.
+/// The next tile from t toward dest on the atlas (flownav.js navStep), through the job's step cache; -1: none (or at
+/// dest, or no atlas). Standing on a wall: its first open side.
 unsafe fn nav_step(v: &Nav, t: i32, tx: i32, ty: i32, dest: i32, exit_cache: *mut crate::atlas::ExitCache) -> i32 {
-    if t == dest {
+    if t == dest || v.atl.is_null() {
         return -1;
     }
-    if !v.atl.is_null() {
-        if rd(v.pl, t as usize) == 0xFFFF {
-            return wall_step_out(v, tx, ty);
-        }
-        let cache = if v.step_cache.is_null() { core::ptr::null_mut() } else {
-            let h = (t as u32).wrapping_mul(0x9e3779b1) ^ (dest as u32).wrapping_mul(0x85ebca77);
-            v.step_cache.add(((h ^ (h >> 16)) as usize) & (ATLAS_STEP_CACHE_ENTRIES - 1))
-        };
-        if !cache.is_null() && (*cache).atlas == v.atl && (*cache).tile == t && (*cache).dest == dest {
-            return (*cache).next;
-        }
-        let next = match crate::atlas::Atl::from(v.atl) {
-            Some(mut a) => {
-                a.exit_cache = exit_cache;
-                crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest)
-            },
-            None => -1,
-        };
-        if !cache.is_null() { core::ptr::write(cache, AtlasStepEntry { atlas: v.atl, tile: t, dest, next }); }
-        return next;
-    }
-    if !v.df.is_null() {
-        let lx = tx - v.bx;
-        let ly = ty - v.by;
-        if lx >= 0 && ly >= 0 && lx < v.bw && ly < v.bh {
-            let o = (v.doff + ly * v.bw + lx) as usize;
-            let here = rd(v.df, o);
-            if here != 0xFFFF {
-                let bwu = v.bw as usize;
-                let mut best = -1;
-                let mut bv = here;
-                if lx + 1 < v.bw && rd(v.df, o + 1) < bv {
-                    bv = rd(v.df, o + 1);
-                    best = t + 1;
-                }
-                if lx > 0 && rd(v.df, o - 1) < bv {
-                    bv = rd(v.df, o - 1);
-                    best = t - 1;
-                }
-                if ly + 1 < v.bh && rd(v.df, o + bwu) < bv {
-                    bv = rd(v.df, o + bwu);
-                    best = t + v.w;
-                }
-                if ly > 0 && rd(v.df, o - bwu) < bv {
-                    best = t - v.w;
-                }
-                return best;
-            }
-        }
-    }
-    let cxi = tx >> v.cs;
-    let cyi = ty >> v.cs;
-    let cf = (cyi * v.cw + cxi) as usize;
-    let pl = rd(v.pl, t as usize);
-    if pl == 0xFFFF {
+    if rd(v.pl, t as usize) == 0xFFFF {
         return wall_step_out(v, tx, ty);
     }
-    let e = rd(v.rows, (v.ro + rd(v.pb, cf) + pl as i32) as usize);
-    if e >= 254 {
-        return -1;
+    let cache = if v.step_cache.is_null() { core::ptr::null_mut() } else {
+        let h = (t as u32).wrapping_mul(0x9e3779b1) ^ (dest as u32).wrapping_mul(0x85ebca77);
+        v.step_cache.add(((h ^ (h >> 16)) as usize) & (ATLAS_STEP_CACHE_ENTRIES - 1))
+    };
+    if !cache.is_null() && (*cache).atlas == v.atl && (*cache).tile == t && (*cache).dest == dest {
+        return (*cache).next;
     }
-    let node = (rd(v.nb, cf) + e as i32) as usize;
-    if rd(v.nt, node) == t {
-        let p = rd(v.np, node);
-        return if p >= 0 { rd(v.nt, p as usize) } else { -1 };
-    }
-    let c = v.c as usize;
-    let lx = tx - (cxi << v.cs);
-    let ly = ty - (cyi << v.cs);
-    let o = node * c * c + ly as usize * c + lx as usize;
-    let f = v.fields;
-    let mut best = -1;
-    let mut bv = rd(f, o);
-    if lx + 1 < v.c && rd(f, o + 1) < bv {
-        bv = rd(f, o + 1);
-        best = t + 1;
-    }
-    if lx > 0 && rd(f, o - 1) < bv {
-        bv = rd(f, o - 1);
-        best = t - 1;
-    }
-    if ly + 1 < v.c && rd(f, o + c) < bv {
-        bv = rd(f, o + c);
-        best = t + v.w;
-    }
-    if ly > 0 && rd(f, o - c) < bv {
-        best = t - v.w;
-    }
-    best
+    let next = match crate::atlas::Atl::from(v.atl) {
+        Some(mut a) => {
+            a.exit_cache = exit_cache;
+            crate::atlas::atlas_step(&a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, t, dest)
+        },
+        None => -1,
+    };
+    if !cache.is_null() { core::ptr::write(cache, AtlasStepEntry { atlas: v.atl, tile: t, dest, next }); }
+    next
 }
 /// The flow looks shared by every thread (mv.lookc, LOOKC_ENTRIES entries
 /// of 16 words): a look's result is a pure function of its tile, its
@@ -1942,8 +1800,7 @@ unsafe fn flow_look_vals(m: &Mv, v: &Nav, tl: i32, gx: i32, gy: i32, dk: i32, wl
         let dkx = irem_f(dk, w);
         let dky = idiv(dk - dkx, w);
         while k < lim {
-            let nx = if v.atl.is_null() { nav_step_run(v, cur, cx, cy, dk, exit_cache, &mut hint) }
-                else if cur == dk { -1 }
+            let nx = if cur == dk { -1 }
                 else if rd(v.pl, cur as usize) == 0xFFFF { wall_step_out(v, cx, cy) }
                 else { match &atl { Some(a) => crate::atlas::atlas_step_xy(a, v.pl, v.pb, v.nt, v.np, v.fields, v.w, cur, cx, cy, dk, dkx, dky, &mut hint), None => -1 } };
             if nx < 0 || rd(wl, nx as usize) != 0 {
@@ -2319,14 +2176,18 @@ unsafe fn commit_step(m: &Mv, s: usize, x: f64, y: f64, vx: f64, vy: f64, gx: i3
     wr(m.py, s, y);
     wr(m.vx, s, vx);
     wr(m.vy, s, vy);
-    wr(m.spent, s, if floor(nx * itile) != gx as f64 || floor(ny * itile) != gy as f64 { 1 } else { 0 });
     wr(m.floor, (s) * SR, tl);
     let qx = quant_mul(nx, q, iq);
     let qy = quant_mul(ny, q, iq);
     let (qx,qy)=checked_position(m,s,qx,qy);
     wr(m.x,s,qx);
     wr(m.y,s,qy);
-    wr(m.out, s, if floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64 { 3 } else { 1 });
+    // (Its tile step (the charge) by the position stored, quantized and checked, as step4's lanes: from the raw
+    // x + vx, a step ending at a tile's edge or held back by the check was charged here and not there, and which
+    // of the two moved a unit depends on its slot's group: a restore's new slot layout charged otherwise.)
+    let left = floor(qx * itile) != gx as f64 || floor(qy * itile) != gy as f64;
+    wr(m.spent, s, if left { 1 } else { 0 });
+    wr(m.out, s, if left { 3 } else { 1 });
 }
 
 /// The params of the step kernel (from F).
@@ -2571,16 +2432,8 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
     let fg4 = v128_load(m.fgen.add(s) as *const v128);
     let dk4 = v128_load(m.dest.add(s) as *const v128);
     let same = |v: v128| i32x4_all_true(i32x4_eq(v, i32x4_shuffle::<0, 0, 0, 0>(v, v)));
-    let field_ok = |fid: i32, fgen: i32, dk: i32| -> bool {
-        if fid == NAV_ATLAS_FID {
-            return true;
-        }
-        let wide = fid >= 4194304;
-        let did = if wide { fid - 4194304 } else { fid };
-        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
-        let dm = (did.max(0)) as usize * 8;
-        fid >= 0 && !fmeta.is_null() && dm + 7 < fmn && rd(fmeta, dm + 6) == fgen && rd(fmeta, dm + 1) == dk && rd(fmeta, dm + 7) == 1
-    };
+    // (A route: on the atlas, the only kind.)
+    let field_ok = |fid: i32, _fgen: i32, _dk: i32| -> bool { fid == NAV_ATLAS_FID };
     if same(fl4) && same(fg4) && same(dk4) {
         if !field_ok(i32x4_extract_lane::<0>(fl4), i32x4_extract_lane::<0>(fg4), i32x4_extract_lane::<0>(dk4)) {
             dbgc!(m, 24, cand4.count_ones());
@@ -2909,18 +2762,8 @@ unsafe fn step_flow(
     if rd(m.wk, s) == 1 && irem_f(tw, wcheck) < m.dk && !(rd(m.wtc, s) > 0) {
         return;
     }
-    let fid = rd(m.flow, s);
-    if fid != NAV_ATLAS_FID {
-        let wide = fid >= 4194304;
-        let did = if wide { fid - 4194304 } else { fid };
-        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
-        if !(fid >= 0) || fmeta.is_null() {
-            return;
-        }
-        let dm = did as usize * 8;
-        if dm + 7 >= fmn || rd(fmeta, dm + 6) != rd(m.fgen, s) || rd(fmeta, dm + 1) != dk || rd(fmeta, dm + 7) != 1 {
-            return;
-        }
+    if rd(m.flow, s) != NAV_ATLAS_FID {
+        return;
     }
     if t < rd(m.rdy, s) {
         return;
@@ -5556,24 +5399,13 @@ pub const FLOW_PER: usize = 8192;
 /// The helpers' claims a job (mv_flow_exact): 256 keys at most each.
 pub const FLOW_SPLIT: usize = 32;
 const FLOW_W: usize = 8;
-/// An answer made while its field or build changed: not committed.
+/// An answer made while its build changed: not committed.
 const FLOW_STALE: i32 = 99;
-/// The key's field (not on the atlas) still the listed one, and the
-/// profile's build the listed build.
+/// The profile's build still the listed build (the key on its atlas).
 #[inline(always)]
 unsafe fn flow_inputs_same(m: &Mv, k: &FlowKey) -> bool {
     let nv = m.nav.get_unchecked(k.np);
-    if nv.meta.is_null() || rd(nv.meta, 6) != k.ver {
-        return false;
-    }
-    if k.fid == NAV_ATLAS_FID {
-        return true;
-    }
-    let wide = k.fid >= 4194304;
-    let did = if wide { k.fid - 4194304 } else { k.fid };
-    let dm = (did as i64 * 8) as usize;
-    let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
-    k.fid >= 0 && !fmeta.is_null() && dm + 7 < fmn && rd(fmeta, dm + 1) == k.dk && rd(fmeta, dm + 6) == k.fgen && rd(fmeta, dm + 7) == 1
+    !nv.meta.is_null() && rd(nv.meta, 6) == k.ver && k.fid == NAV_ATLAS_FID
 }
 /// A unit's slot by its id (main.js unitIdIndex: ids ascending, their
 /// slots; -2 a hole), -1 none.
@@ -5612,28 +5444,13 @@ unsafe fn flow_key(m: &Mv, s: usize, wver: i32, wbw: i32) -> Option<FlowKey> {
         return None;
     }
     let wl = if !nv.walls.is_null() { nv.walls } else if (rd(m.fl, s) & 32) != 0 { m.airw } else { m.wall };
+    // (On its profile's atlas, the only route; no atlas (no open tile): no way.)
     let fid = rd(m.flow, s);
-    let on_atl = fid == NAV_ATLAS_FID;
-    if on_atl && (*m.atlh.get_unchecked(np)).is_null() {
+    if fid != NAV_ATLAS_FID || (*m.atlh.get_unchecked(np)).is_null() {
         return None;
     }
-    let wide = !on_atl && fid >= 4194304;
-    let mut fgen = 0;
-    if !on_atl {
-        let did = if wide { fid - 4194304 } else { fid };
-        let dm = (did as i64 * 8) as usize;
-        let (fmeta, fmn) = if wide { (m.fmw, m.fmwn) } else { (m.fmn, m.fmnn) };
-        if !(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk || rd(fmeta, dm + 7) != 1 {
-            return None;
-        }
-        let rows = if wide { m.frw } else { m.frn };
-        let rw = if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
-        if rows.is_null() || !(rw > 0) {
-            return None;
-        }
-        fgen = rd(fmeta, dm + 6);
-    }
-    let kind = if on_atl { 3 } else if wide { 2 } else { 1 };
+    let fgen = 0;
+    let kind = 3;
     let kp = kind | ((np as i32) << 8) | (if wl == m.airw { 1 << 20 } else { 0 });
     let bi = ((gy >> 3) * wbw + (gx >> 3)) as usize;
     let wv = if m.wblk9.is_null() { wver } else { rd(m.wblk9, bi) };
@@ -5643,40 +5460,19 @@ unsafe fn flow_key(m: &Mv, s: usize, wver: i32, wbw: i32) -> Option<FlowKey> {
 /// The key's navigation view and walls (move_flow's Nav).
 unsafe fn flow_nav(m: &Mv, k: &FlowKey) -> (Nav, *const u8) {
     let nv = m.nav.get_unchecked(k.np);
-    let on_atl = k.fid == NAV_ATLAS_FID;
-    let wide = !on_atl && k.fid >= 4194304;
-    let did = if on_atl { 0 } else if wide { k.fid - 4194304 } else { k.fid };
-    let dm = (did as i64 * 8) as usize;
-    let (fmeta, fpool) = if wide { (m.fmw, m.fpw) } else { (m.fmn, m.fpn) };
-    let rows = if on_atl { 0 as *const u8 } else if wide { m.frw } else { m.frn };
-    let rw = if on_atl { 1 } else if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
-    let n_c = rd(nv.meta, 0);
-    let span = if wide { 3 * n_c } else { n_c };
     let wl = if !nv.walls.is_null() { nv.walls } else if (k.kp & (1 << 20)) != 0 { m.airw } else { m.wall };
     let w = m.w;
     (Nav {
-        atl: if on_atl { *m.atlh.get_unchecked(k.np) } else { 0 as *const i32 },
+        atl: *m.atlh.get_unchecked(k.np),
         step_cache: m.nav_step_cache,
         w,
         h: m.h,
-        cs: 31 - (n_c as u32).leading_zeros() as i32,
-        c: n_c,
-        cw: rd(nv.meta, 1),
         pl: nv.partl,
         plh: if w > 0 { (nv.partln as i64).wrapping_div(w as i64) as i32 } else { 0 },
         pb: nv.partb,
-        rows,
-        ro: did * rw,
         fields: nv.fields,
-        nb: nv.nb,
         nt: nv.nt,
         np: nv.np,
-        df: if on_atl { 0 as *const u16 } else { fpool },
-        doff: did * span * span,
-        bx: if on_atl { 0 } else { rd(fmeta, dm + 2) },
-        by: if on_atl { 0 } else { rd(fmeta, dm + 3) },
-        bw: if on_atl { 0 } else { rd(fmeta, dm + 4) },
-        bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
     }, wl)
 }
 /// mv_flow_pending's first test: a walker whose look record is this tile's exact look as its key reads it (flow_key's
@@ -5710,8 +5506,11 @@ unsafe fn flow_record_holds(m: &Mv, s: usize, wver: i32, wbw: i32) -> bool {
     if nv.meta.is_null() {
         return true;
     }
-    let fid = rd(m.flow, s);
-    let kind = if fid == NAV_ATLAS_FID { 3 } else if fid >= 4194304 { 2 } else { 1 };
+    // (Not on the atlas: flow_key gives no key.)
+    if rd(m.flow, s) != NAV_ATLAS_FID {
+        return true;
+    }
+    let kind = 3;
     if *r.add(NV_G) != kind || *r.add(NV_V) != rd(nv.meta, 6) {
         return false;
     }
@@ -6073,36 +5872,14 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
             if fly { m.airw } else { m.wall }
         }
     };
-    let fid = rd(m.flow, s);
-    // (On the atlas: no destination field to check, ready at once.)
-    let on_atl = fid == NAV_ATLAS_FID;
-    let atlh = if on_atl && np < NAV_PROFILES { *m.atlh.get_unchecked(np) } else { 0 as *const i32 };
-    if on_atl && atlh.is_null() {
+    // (Its route on its profile's atlas (no destination field to check, ready at once); no atlas (no open tile): no
+    // way.)
+    let atlh = if rd(m.flow, s) == NAV_ATLAS_FID && np < NAV_PROFILES { *m.atlh.get_unchecked(np) } else { 0 as *const i32 };
+    if atlh.is_null() {
         back!();
-    }
-    let wide = !on_atl && fid >= 4194304;
-    let did = if on_atl { 0 } else if wide { fid - 4194304 } else { fid };
-    let dm = (did as i64 * 8) as usize;
-    let (fmeta, fmn, fpool) = if wide { (m.fmw, m.fmwn, m.fpw) } else { (m.fmn, m.fmnn, m.fpn) };
-    if !on_atl && (!(fid >= 0) || fmeta.is_null() || dm + 7 >= fmn || rd(fmeta, dm + 1) != dk) {
-        back!();
-    }
-    if !on_atl && rd(fmeta, dm + 6) != rd(m.fgen, s) {
-        // (Its destination's field made again (a navigation build installed):
-        // the same slot and destination, its new generation taken here, as
-        // _simMoveTryFlowArm would; its committed step dropped.)
-        if rd(fmeta, dm + 7) != 1 {
-            back!();
-        }
-        wr(m.fgen, s, rd(fmeta, dm + 6));
-        wr(m.cd, (s) * SR, -1);
-        if !m.steady.is_null() { wr(m.steady, (s) * SR, 0); }
     }
     if t < rd(m.rdy, s) {
         stand!();
-    }
-    if !on_atl && rd(fmeta, dm + 7) != 1 {
-        back!();
     }
     // (Its steer holds: on toward its target point, held_step.)
     if tl == dk {
@@ -6140,14 +5917,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         Some(n) => n,
         None => back!(),
     };
-    let rows = if on_atl { 0 as *const u8 } else if wide { m.frw } else { m.frn };
-    let rw = if on_atl { 1 } else if m.fhd.is_null() { 0 } else { rd(m.fhd, if wide { 1 } else { 0 }) };
-    if nv.fields.is_null() || nv.meta.is_null() || nv.partl.is_null() || nv.partb.is_null() || (!on_atl && rows.is_null()) || !(rw > 0) {
+    if nv.fields.is_null() || nv.meta.is_null() || nv.partl.is_null() || nv.partb.is_null() {
         back!();
     }
-    let n_c = rd(nv.meta, 0);
-    let ncw = rd(nv.meta, 1);
-    let span = if wide { 3 * n_c } else { n_c };
     let nld = rd(m.nld, s);
     if nld == (-2 - dk) as f64 {
         let look = (tw & 15) < m.dk;
@@ -6194,31 +5966,18 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         }
         nav_ld = if timed { last } else { now };
     }
-    // The look-ahead (simFlowLook): clusters of 2^cs tiles.
-    let cs = 31 - (n_c as u32).leading_zeros() as i32;
+    // The look-ahead (simFlowLook).
     let v = Nav {
         atl: atlh,
         step_cache: m.nav_step_cache,
         w,
         h,
-        cs,
-        c: n_c,
-        cw: ncw,
         pl: nv.partl,
         plh: if w > 0 { (nv.partln as i64).wrapping_div(w as i64) as i32 } else { 0 },
         pb: nv.partb,
-        rows,
-        ro: did * rw,
         fields: nv.fields,
-        nb: nv.nb,
         nt: nv.nt,
         np: nv.np,
-        df: if on_atl { 0 as *const u16 } else { fpool },
-        doff: did * span * span,
-        bx: if on_atl { 0 } else { rd(fmeta, dm + 2) },
-        by: if on_atl { 0 } else { rd(fmeta, dm + 3) },
-        bw: if on_atl { 0 } else { rd(fmeta, dm + 4) },
-        bh: if on_atl { 0 } else { rd(fmeta, dm + 5) },
     };
     let wv = if m.wblk9.is_null() { p.wver } else { rd(m.wblk9, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
     // (A steer is a look's end now, not a tick's: its record always checked against today's build and walls.)
@@ -6226,7 +5985,7 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     // (The shared looks' wall key: the walls within their reach (32 steps and one tile: +-5 blocks), not every wall of the map:
     // in a battle some wall changes every step, and every look was made again each step.)
     let lwv = if m.wblk81.is_null() { p.wver } else { rd(m.wblk81, ((gy >> 3) * p.wbw + (gx >> 3)) as usize) };
-    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, lwv, if on_atl { 3 } else if wide { 2 } else { 1 });
+    let lk = flow_look(m, &v, s, refresh, tl, gx, gy, dk, wl, rd(nv.meta, 6), wv, lwv, 3);
     if lk == 0 {
         // (No way: an event on its own tick of SIM_REROUTE_TICKS (the main
         // thread's pending target, a worker at its task done there), standing

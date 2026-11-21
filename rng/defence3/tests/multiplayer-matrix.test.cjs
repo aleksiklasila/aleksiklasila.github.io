@@ -57,7 +57,8 @@ async function runCase(c, seed) {
     // And the next match.
     host.eval('hostRematch()');
     const again = await world.runUntil(() => all.every(i => i.eval('gameStarted && !gameOver && !matchStartWaitingForReady')) && host.eval('currentTick') > 10, 30000, 20);
-    assert.ok(again, c.name + ': rematch started');
+    assert.ok(again, c.name + ': rematch started: ' + JSON.stringify(all.map(i => [i.name, i.eval('gameStarted'), i.eval('gameOver'), i.eval('matchStartWaitingForReady'), i.eval('currentTick'),
+        i.eval('typeof simClientActive === "function" && simClientActive()'), i.eval('JSON.stringify(_matchInit && { r: _matchInit.released, t: _matchInit.tick, a: _matchInit.allowed })'), i.errors.slice(-2).map(e => String(e && e.stack || e).slice(0, 1500))])));
     const from = host.eval('currentTick');
     await world.run(3000);
     const cmp2 = world.compareHashes(all, from, 'tickExact');

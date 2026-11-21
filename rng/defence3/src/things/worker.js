@@ -3508,7 +3508,7 @@ function requeueLocalAction(finalAction) {
 // (Returns the tick it goes in: undefined when it went nowhere.)
 function queueAction(action) {
     // Player input starts after loading ticks; admin commands have their own route.
-    if (typeof matchInitializationBlocksInput === 'function' && matchInitializationBlocksInput()) return;
+    if (typeof matchInitializationBlocksInput === 'function' && matchInitializationBlocksInput()) { if (typeof matchInitializationHoldAction === 'function') matchInitializationHoldAction(action); return; }
     if (localDefeated && action && action.action !== 'resign') return;
     return _queueLocalAction(action);
 }
@@ -3682,7 +3682,7 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
 // serial pass in their order over the columns, the structure tables, the
 // reservations and work versions, payments into the resource batch's rows;
 // then its out events here in their order: sounds, the research queue's
-// advance, arming off the atlas, and the events of the worker types it does
+// advance, arming a worker with its own stats, and the events of the worker types it does
 // not take yet (their JavaScript, as before). MAIN_THREAD_SERIAL_PLAN.md
 // "Stage D". Off: every worker event goes the JavaScript way.
 let WORKER_AI_WASM = true;
@@ -3816,8 +3816,6 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     const wsl = _wsw ? _wswResvRoom() : null;
     structRallyClasses();
     const RT = typeof ResearchSpawner !== 'undefined' ? _sTables.get(ResearchSpawner) : null;
-    let atlas = 0;
-    for (let p = 0; p < NAV_PROFILES; p++) { const nav = _nav[p]; if (NAV_ATLAS && nav && nav.atlas && nav.atlas.header) atlas |= 1 << p; }
     // (Every profile's walls, as navApproachTile reads them.)
     const cwall = _waiArr('cwall', Int32Array, NAV_PROFILES);
     for (let p = 0; p < NAV_PROFILES; p++) { const a = navWallTable(p); cwall[p] = a && simHeapHas(a) ? _simWEnc(_simHeapPtrOf(a)) : 0; }
@@ -3843,7 +3841,7 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     P[7] = getWorkerIdleRetargetTicks(); P[8] = getWorkerIdleSearchTicks(); P[9] = WORKER_IDLE_BACKOFF_SECONDS * TICK_RATE;
     P[10] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[11] = SNAP_REGION_TILES; P[12] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[13] = _WORKER_WORK_TYPES.length; P[14] = V.rw; P[15] = V.rh; P[16] = V.np; P[17] = WORKER_WORK_REGION_TILES;
-    P[18] = spatialEpoch; P[19] = SIM_SEP_ABSENT; P[20] = atlas; P[21] = localPlayerId; P[22] = _stAllIx.get(ResearchSpawner) || 0;
+    P[18] = spatialEpoch; P[19] = SIM_SEP_ABSENT; P[20] = 0; P[21] = localPlayerId; P[22] = _stAllIx.get(ResearchSpawner) || 0;
     P[23] = MAX_THING_LEVEL + 1; P[24] = MAX_THING_LEVEL; P[25] = outCap; P[26] = workerReservedTiles.length; P[27] = V.length;
     P[28] = wsl ? wsl.length : 0; P[29] = np; P[30] = RESOURCE_FIXED_POINT_SCALE; P[31] = simWttCode('research');
     P[32] = Math.max(1, Math.round(Number(base.researcherDps) || 1)); P[33] = secondsToTicks(Math.max(0.01, Number(base.transferCooldown) || 0.01));
@@ -4095,7 +4093,10 @@ function _waiBuilt(at, kind, v) {
     const t = getTileEntityRef(at % GRID_W, Math.floor(at / GRID_W));
     if (!t) return;
     if (kind === 0) {
+        // (Its tile marked for the adjacency flood there: a structure built
+        // joins its group; recalculated once after the pass's events.)
         structCompleteHooks(t);
+        _wai.adjDue = true;
         if (t.owner === localPlayerId) playSound('build_complete', t.x, t.y);
         return;
     }
@@ -4105,6 +4106,8 @@ function _waiBuilt(at, kind, v) {
     }
     if (kind === 2 && !v) return;
     if (t.updateTextCache) t.updateTextCache(); else updateItemTextCache(t);
+    // (Its new level / stacks on the page at the next tick.)
+    if (typeof simPresentTileDirty === 'function') simPresentTileDirty(t.gx, t.gy);
     _requestAdjacencyRecalcForThing(t, 1);
     // (Recalculated once after the pass's events: waiOutEvents.)
     _wai.adjDue = true;

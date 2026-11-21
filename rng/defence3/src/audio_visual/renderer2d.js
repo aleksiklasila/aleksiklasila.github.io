@@ -694,7 +694,7 @@ function getItemThumbnailImage(key, size) {
 }
 
 function getBuildPreviewLevelFromMultiplier() {
-    let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+    let stacks = buildStackCount();
     return stackCountToLevel(stacks);
 }
 

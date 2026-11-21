@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const helpers=Number(process.argv.find(a=>a.startsWith('--helpers='))?.slice(10)||0);
 if(helpers)globalThis.self={crossOriginIsolated:true};
 const controls={...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'128','cfg-map-type':'crossroads','cfg-max-pop':'20000'};
-const world=new H.World({controls}),i=world.spawn('event-routes',{controls,simWorker:process.env.SIM_WORKER==='1'});
+const world=new H.World({controls}),i=world.spawn('event-routes',{controls,simWorker:false});
 if(helpers){i.scratch.Worker=require('./real-sim-helper.cjs');i.eval(`Worker=__scratch.Worker;navigator.hardwareConcurrency=16;simParallelInit('',${helpers});`);}
 const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  startSoloGame();navEnsure(NAV_PROFILE_GROUND);navEnsure(NAV_PROFILE_AIR);
@@ -21,7 +21,7 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  const capture=u=>({pending:u._pendingPathTarget&&{...u._pendingPathTarget},path:u.path,index:u.pathIndex,
   fallback:u.pathIsFallbackAstar,key:u._routeKey,retry:u._astarBudgetRetryTick,h:u._us.hObj[u._si],
   cols:['nvPK','mvOn','mvSteer','mvPF','rkF'].map(k=>u._us[k][k==='mvSteer'?u._si*8:u._si]),
-  requests:_navSub.req.slice(),entries:[..._navSub.map],due:u._us.ppDue[u._si],pending:pendingPathWaiting()});
+  requests:Array.from(_navSub.list.subarray(0,_navSub.n*3)),entries:_navSub.used,due:u._us.ppDue[u._si],pending:pendingPathWaiting()});
  for(let round=0;round<4;round++){
   gameTime=100+round*20;
   for(let j=0;j<n;j++){

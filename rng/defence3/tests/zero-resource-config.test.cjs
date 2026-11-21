@@ -1,5 +1,6 @@
 const assert=require('node:assert/strict');const H=require('./net-harness.cjs');
-const world=new H.World(),game=world.spawn('config');
+// (Pinned to the page: it reads the page's own simulation config after its start.)
+const world=new H.World({simWorker:false}),game=world.spawn('config');
 const fields=['cfg-gold-count','cfg-gold-min','cfg-gold-max','cfg-astar-mine-count','cfg-astar-mine-min','cfg-astar-mine-max','cfg-starting-energy','cfg-starting-astar'];
 const values='[GOLD_MINE_COUNT,GOLD_MINE_MIN,GOLD_MINE_MAX,ASTAR_MINE_COUNT,ASTAR_MINE_MIN,ASTAR_MINE_MAX,STARTING_MONEY,STARTING_ASTAR]';
 const read=()=>JSON.parse(game.eval('JSON.stringify('+values+')'));

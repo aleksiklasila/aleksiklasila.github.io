@@ -70,8 +70,9 @@ const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a'];
 const SIM_STRUCT_SPEC = simTableSpec({
     f32: ['x', 'y', 'energy', 'maxEnergy', 'spawnTimer', 'spawnCooldown', 'stackWork', 'stackReq', 'angle', 'amount', 'amountMax', 'cd',
         'tx', 'ty', 'resDone', 'resReq', 'rallyX', 'rallyY', 'timer', 'damage'],
-    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId', 'label'],
-    i16: ['kind', 'gx', 'gy', 'owner', 'type', 'utype', 'level', 'elevel', 'stacks', 'mstacks', 'estacks', 'qlen', 'qtype', 'laser',
+    // (Stacks 32-bit: the build level slider orders up to 2^16, past an i16.)
+    i32: ['serial', 'flags', 'l0', 'l1', 'l2', 'l3', 'orderTick', 'rallyTargetId', 'label', 'stacks', 'mstacks', 'estacks'],
+    i16: ['kind', 'gx', 'gy', 'owner', 'type', 'utype', 'level', 'elevel', 'qlen', 'qtype', 'laser',
         'watchedBy', 'stackCount'],
     // (vision: whole area steps.)
     u8: ['alive', 'flash', 'vision']
@@ -127,7 +128,9 @@ function _simStructLists() {
 // maximum, as things_utils.js getLevelLabelText makes it.
 function simLabelText(v) {
     if (!(v & (1 << 28))) return 'L1';
-    const cl = v & 127, el = (v >> 7) & 127, pl = (v >> 14) & 127, rm = (v >> 21) & 127;
+    // (A level above the researched maximum, a starting structure's: the cap
+    // holds it there, it does not lower it.)
+    const cl = v & 127, el = (v >> 7) & 127, pl = (v >> 14) & 127, rm = Math.max(cl, (v >> 21) & 127);
     let shown = Math.max(el, pl);
     if (shown > cl) {
         if (pl > rm) return cl === rm ? 'L' + cl + '->L' + pl + '|BLOCKED' : 'L' + cl + '->L' + rm + '->L' + pl + '|BLOCKED';

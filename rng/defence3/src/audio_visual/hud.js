@@ -1724,7 +1724,7 @@ function renderBuildItemDetailedStats(key) {
     shopStatMatrixDescriptorById = {};
     nextShopStatMatrixDescriptorId = 1;
 
-    let stacks = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+    let stacks = buildStackCount();
     let level = stackCountToLevel(stacks);
     let html = '<div class="build-stats-panel">';
     let thingName = def.name || key;
@@ -2038,7 +2038,7 @@ function updateBuildMenu() {
     if (!container) return;
     let items = BUILD_CATEGORIES[activeBuildTab] || [];
     let cloudUnavailable = _computeCloudUnavailableSet(localPlayerId);
-    let purchaseMultiplier = Math.max(1, Math.floor(buildPurchaseMultiplier || 1));
+    let purchaseMultiplier = buildStackCount();
 
     _buildMenuNeedsRefresh = false;
 
@@ -2091,7 +2091,7 @@ function updateBuildMenu() {
 function _patchBuildMenuClasses(items, cloudUnavailable, purchaseMultiplier) {
     let list = items || BUILD_CATEGORIES[activeBuildTab] || [];
     let unavailableSet = cloudUnavailable || _computeCloudUnavailableSet(localPlayerId);
-    let count = Math.max(1, Math.floor(purchaseMultiplier || buildPurchaseMultiplier || 1));
+    let count = Math.max(1, Math.floor(purchaseMultiplier || buildStackCount()));
     for (let key of list) {
         let def = BASE_CARD_TYPES[key]; if (!def) continue;
         let div = _buildMenuItems[key]; if (!div) continue;

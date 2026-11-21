@@ -103,6 +103,23 @@ function _successorFromMyView(failedByOthers, passSelf = false) {
 function _migrationOwnEndUnconfirmed() {
     return gameOver && typeof netMatchEndFinal === 'function' && !netMatchEndFinal();
 }
+// (Its own state in doubt: an end the host never confirmed, or a known divergence not repaired yet (audit row 87).
+// Such a guest takes over only when nobody else can.)
+// (Its own simulation lost too (waiting for the match again): it has no world to run or send. The preferred
+// successor took over with its empty world and the healthy guest restored it: audit row 113.)
+// (Waiting for the whole match: its own request for it, a join or a full patch on the way. Its world stands at the
+// tick it stopped; the others ran on. The preferred successor paused at tick 8 took over and the healthy guest,
+// at 228, restored its tick: an order both had run was lost. Audit row 121. Everyone paused alike (a match-wide
+// recovery): each defers, the first asker still takes it.)
+function _migrationAwaitingWholeMatch() {
+    if (isHost || !gameStarted) return false;
+    const g = typeof resyncGuest !== 'undefined' ? resyncGuest : null;
+    return (lockstepResyncPauseActive && lockstepResyncRequestedAt > 0) || !!(g && (g.joining || (g.T >= 0 && g.full)));
+}
+function _migrationSelfDefers() {
+    return _migrationOwnEndUnconfirmed() || (typeof resyncGuestStateSuspect === 'function' && resyncGuestStateSuspect())
+        || (typeof simClientLostPending === 'function' && simClientLostPending()) || _migrationAwaitingWholeMatch();
+}
 function _migrationMatchOver() {
     return gameOver && !_migrationOwnEndUnconfirmed();
 }
@@ -143,7 +160,7 @@ function guestStartHostMigration(reason, opts = {}) {
     let candidates = computeHostMigrationCandidates(oldHostId);
     if (candidates.length === 0) return false;
     // (Its own end unconfirmed: itself last.)
-    if (_migrationOwnEndUnconfirmed() && candidates.length > 1 && candidates.includes(myPeerId)) candidates = [...candidates.filter(pid => pid !== myPeerId), myPeerId];
+    if (_migrationSelfDefers() && candidates.length > 1 && candidates.includes(myPeerId)) candidates = [...candidates.filter(pid => pid !== myPeerId), myPeerId];
     hostMigration = { oldHostId, candidates, index: 0, hostLeft: !!opts.hostLeft, attemptAt: 0, redirects: 0, target: '' };
     netCounters.hostMigrations++;
     logLockstepWarning('Host lost; moving the match', { oldHostId, candidates, reason: String(reason || '') });
@@ -293,8 +310,10 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     // Guests keep the start roster as it was; the host's broadcasts carry
     // current peer ids (players who reconnected under a new one).
     matchStartLobbyPlayers = (lobbyPlayers || []).filter(lp => lp && lp.peerId && !isPeerExplicitlyRemoved(lp.peerId)).map(lp => ({ ...lp }));
-    // (A rematch's players, as far as the roster tells: those still playing.)
-    _matchStartPlayerIds = new Set(Object.keys(matchRoleByPeerId).filter(pid => matchRoleByPeerId[pid] === 'playing'));
+    // (A rematch's players: the match's start players as the old host sent them (one who resigned and spectates on
+    // too: audit row 105); from an old host that sent none, those still playing.)
+    _matchStartPlayerIds = (typeof guestMatchStartPlayerIds === 'function' && guestMatchStartPlayerIds())
+        || new Set(Object.keys(matchRoleByPeerId).filter(pid => matchRoleByPeerId[pid] === 'playing'));
     if (!(opts && opts.keepOldLink)) {
         let stale = connections.filter(c => c && c.peer === oldHostId);
         connections = connections.filter(c => !stale.includes(c));
@@ -330,12 +349,16 @@ function promoteSelfToHost(oldHostId, hostLeft, opts = null) {
     waitingForRemoteSince = 0;
     // (Commands held while it was joining: its own now, utils_resync.js resyncGuestReleaseOnPromotion.)
     if (typeof resyncGuestReleaseOnPromotion === 'function') resyncGuestReleaseOnPromotion();
+    // (The start's initialization barrier, if it still runs: the host's now.)
+    if (typeof matchInitializationOnPromotion === 'function') matchInitializationOnPromotion();
     netDisconnectedSinceByPeer = {};
     for (let pid of getActiveMatchPeerIds()) {
         if (pid !== myPeerId && !connections.some(c => c && c.peer === pid)) netDisconnectedSinceByPeer[pid] = now;
     }
     LOCKSTEP_PIPELINE_TICKS = Math.max(0, Math.floor(Number(INPUT_DELAY) || 0));
     if (hostLeft && oldHostId) hostRemovePlayerFromMatch(oldHostId);
+    // (The start's wait for players to load, if it still runs: this host's now, utils_networking.js.)
+    if (typeof hostTakeOverStartWait === 'function') hostTakeOverStartWait();
     try {
         let url = new URL(window.location.href);
         url.searchParams.set('game', myPeerId);
@@ -380,7 +403,7 @@ function hostHandOverMatch(reason) {
         && !(typeof resyncHostIsJoining === 'function' && resyncHostIsJoining(pid)));
     let cands = ok.filter(pid => _migrationRoleOf(pid) === 'playing').concat(ok.filter(pid => _migrationRoleOf(pid) !== 'playing'));
     if (!cands.length) return false;
-    _hostHandover = { cands, i: 0, reason: String(reason || ''), to: '' };
+    _hostHandover = { cands, i: 0, reason: String(reason || ''), to: '', suspect: [], force: false };
     _hostHandoverNext();
     return true;
 }
@@ -395,14 +418,34 @@ function _hostHandoverNext() {
         if (_hostHandoverSent.sessionId !== String(matchStartSessionId || '')) _hostHandoverSent = { sessionId: String(matchStartSessionId || ''), peers: new Set() };
         _hostHandoverSent.peers.add(pid);
         logLockstepWarning('Simulation lost: handing the match to a player', { to: pid, reason: h.reason });
-        try { conn.send({ type: 'HOST_HANDOVER', sessionId: matchStartSessionId, reason: h.reason }); } catch { }
+        try { conn.send({ type: 'HOST_HANDOVER', sessionId: matchStartSessionId, reason: h.reason, force: h.force ? 1 : undefined }); } catch { }
         let epoch = networkSessionEpoch;
         setTimeout(() => { if (_hostHandover === h && h.to === pid && epoch === networkSessionEpoch && isHost) _hostHandoverNext(); }, HOST_HANDOVER_MS);
+        return;
+    }
+    // (Every live simulation gone, or every one left known diverged: the match again from this page's checkpoint,
+    // utils_checkpoint.js. Only without one does a diverged player take it, its state as it is (audit row 101).)
+    if (!h.force && typeof netCheckpointRestoreSelf === 'function' && netCheckpointRestoreSelf(h.reason)) { _hostHandover = null; return; }
+    if (!h.force && h.suspect.length) {
+        logLockstepWarning('Simulation lost: no checkpoint; handing the match to a diverged player', { reason: h.reason });
+        h.cands = h.suspect; h.suspect = []; h.i = 0; h.force = true;
+        _hostHandoverNext();
         return;
     }
     _hostHandover = null;
     logLockstepWarning('Simulation lost: no player took the match over', { reason: h.reason });
     if (typeof setMatchLoadOverlay === 'function') setMatchLoadOverlay(true, 'Simulation stopped', 'No other player could take the match over.');
+}
+// Host: the player it handed the match to cannot take it (its own simulation lost): the next one at once.
+function hostHandoverRefused(conn, data) {
+    let h = _hostHandover;
+    if (!isHost || !h || !conn || String(conn.peer || '') !== h.to) return;
+    if (String((data && data.sessionId) || '') !== String(matchStartSessionId || '')) return;
+    if (_hostHandoverSent.peers) _hostHandoverSent.peers.delete(h.to);
+    // (Its state known diverged: asked again only when nothing else can take the match.)
+    if (data && data.suspect && !h.force) h.suspect.push(h.to);
+    h.to = '';
+    _hostHandoverNext();
 }
 // Guest: our host hands us the match (its simulation lost).
 function guestTakeHandedOverMatch(conn, data) {
@@ -416,7 +459,13 @@ function guestTakeHandedOverMatch(conn, data) {
         return;
     }
     if (conn.peer !== wsHostId) return;
-    if (typeof simClientLostPending === 'function' && simClientLostPending()) return;
+    // (Its own simulation lost too: it says so, the host asks the next one, or runs the match again from its
+    // checkpoint when nobody can: audit row 83.)
+    if (typeof simClientLostPending === 'function' && simClientLostPending()) { try { conn.send({ type: 'HOST_HANDOVER_REFUSED', sessionId: matchStartSessionId }); } catch { } return; }
+    // (Its own state known diverged (or its end unconfirmed): a healthy player, or the host's checkpoint, first. The
+    // handover skipped the check an ordinary migration makes, and the diverged state became the match's: audit row
+    // 101. Forced: nothing else can.)
+    if (!(data && data.force) && typeof _migrationSelfDefers === 'function' && _migrationSelfDefers()) { try { conn.send({ type: 'HOST_HANDOVER_REFUSED', sessionId: matchStartSessionId, suspect: 1 }); } catch { } return; }
     promoteSelfToHost(conn.peer, false, { keepOldLink: true });
     _handedOverFrom = { sessionId: String(matchStartSessionId || ''), peer: String(conn.peer) };
     try { conn.send({ type: 'HOST_HANDOVER_DONE', sessionId: matchStartSessionId }); } catch { }
@@ -455,6 +504,10 @@ function demoteSelfToGuest(newHostId, opts = null) {
     let hid = String(newHostId || '');
     logLockstepWarning('Another host runs this match; joining it', { newHostId: hid });
     netCounters.hostMigrations++;
+    // (Its state gone (a handover: fullSync): its own commands in bundles it sealed but never ran go along with its
+    // join, with their ids (the new host leaves out any it ran). Its ledger counts a command as run once sealed, so
+    // the rejoin left them out, and if the bundle never reached the successor nobody ran them: audit row 117.)
+    if (opts && opts.fullSync && typeof netNoteSealedUnrunOwnCommands === 'function') netNoteSealedUnrunOwnCommands();
     for (let c of connections) {
         try { c.send({ type: 'HOST_MOVED', hostId: hid, sessionId: matchStartSessionId }); } catch { }
     }
@@ -513,7 +566,7 @@ function guestHandleMigrationConnection(conn) {
     if (sameMatch && !_migrationMatchOver() && !isPeerExplicitlyRemoved(myPeerId) && guestConsidersHostLost()) {
         // (Our own end unconfirmed: the next one in our view takes over, the
         // asker itself if it is that one; we do only when nobody else can.)
-        let deferring = _migrationOwnEndUnconfirmed();
+        let deferring = _migrationSelfDefers();
         let successor = _successorFromMyView(meta.failed, deferring);
         if (deferring && successor) { answerHostSeek(conn, successor); return; }
         if (!successor || successor === conn.peer) {
@@ -630,9 +683,36 @@ function hostMaybeSeekOtherHost(now = performance.now()) {
         let stillAlone = !participants.some(pid => connections.some(c => c && c.peer === pid));
         // (Alone, it joins a host that has players; of two hosts both alone (their probes crossed as a split healed)
         // only the larger id moves: each gave up hosting for the other's match, and nobody hosted.)
+        // One order both hosts read alike: more linked players stays, a tie goes to the smaller id. (The lone host
+        // yielded to the one with players while that one yielded to the smaller id: both demoted, audit row 119.)
         let otherAlone = !!reply && reply.players === 0;
+        if (reply && Number.isFinite(reply.players)) {
+            const mine = participants.filter(pid => connections.some(c => c && c.peer === pid && c.open !== false)).length;
+            if (reply.players > mine || (reply.players === mine && hostId < myPeerId)) demoteSelfToGuest(hostId);
+            return;
+        }
         if ((stillAlone && !otherAlone) || hostId < myPeerId) demoteSelfToGuest(hostId);
     });
+}
+
+// Host: its peer closed for good (not a signaling hiccup: a closed peer cannot reconnect). Every link went with it;
+// its players move the match to the first successor in the order they share. This page kept the host role with no
+// peer: it could neither seek that host (hostMaybeSeekOtherHost needs a peer) nor be found, two hosts for good
+// (audit row 90). It joins the successor as a migrating player (a new peer; the successor takes over at once,
+// having lost this host too), whose snapshot replaces the ticks run here alone.
+const HOST_PEER_CLOSED_JOIN_MS = HOST_MIGRATION_CANDIDATE_SILENT_MS + 1000;
+function hostAfterPeerClosed() {
+    if (!isHost || !gameStarted || gameOver) return;
+    const session = String(matchStartSessionId || ''), epoch = networkSessionEpoch;
+    logLockstepWarning('This host lost its peer; joining the match where its players move it', {});
+    setTimeout(() => {
+        if (!isHost || !gameStarted || gameOver || String(matchStartSessionId || '') !== session) return;
+        // (A new peer came meanwhile (initPeer): its links are this host's again.)
+        if (peer && epoch !== networkSessionEpoch) return;
+        const cands = computeHostMigrationCandidates(myPeerId).filter(pid => pid !== myPeerId);
+        if (!cands.length) return;
+        demoteSelfToGuest(cands[0]);
+    }, HOST_PEER_CLOSED_JOIN_MS);
 }
 
 // Guest (every frame): a successor that accepted the link but never took

@@ -113,7 +113,6 @@ const SECONDS = Number(process.argv[2]) || 110;
     // (DIVTRACE=1 with DIVTRACE_TICKS covering the match: where a peer that
     // needed a patch first differed from the host.)
     if (process.env.DIVTRACE) for (const i of live) if (i !== g3 && i !== host && i.patchesApplied) console.error('DIVTRACE', i.name, JSON.stringify(require('./net-harness.cjs').divergenceReport(host, i, 0), null, 1));
-    if (process.env.SOAK_NAVMISS) for (const i of live) console.error('NAVMISS', i.name, i.evalSim('typeof _navNextMissed === "number" ? _navNextMissed : -1'));
     if (process.env.SOAK_CAPTURE) for (const i of live) if (i !== host && i.scratch.cap && host.scratch.cap) {
         const ticks = Object.keys(host.scratch.cap).map(Number).filter(t => i.scratch.cap[t] !== undefined).sort((x, y) => x - y);
         const t = ticks.find(t => i.scratch.cap[t] !== host.scratch.cap[t]);

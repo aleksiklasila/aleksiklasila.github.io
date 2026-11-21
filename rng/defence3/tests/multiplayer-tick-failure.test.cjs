@@ -6,6 +6,7 @@
 // 2. Every peer's ticks throw alike for a while (a fault the host's state
 //    carries): the guest asks for a full repair at most once a minute (no
 //    snapshot loop), the match keeps going, and agrees once the fault ends.
+// 3. A second guest-only failure inside that minute is repaired once it ends (audit row 74, 2026-11-18).
 // Page and worker simulation (SIM_WORKER=1).
 'use strict';
 const assert = require('node:assert/strict');
@@ -51,6 +52,34 @@ const dropInjected = all => { for (const i of all) i.errors = i.errors.filter(e 
         await world.run(1500);
         dropInjected(all);
         H.checkHealthy(world, all, { minCompared: 10, fromTick: from, label: 'after a shared fault' });
+    }
+    {
+        // 3. Two guest-only failures, the second ~20 s after the first's repair, within RESYNC_GLOBAL_MIN_INTERVAL_MS
+        //    (60 s): the second is owed and repaired once the interval ends (audit row 74, utils_resync.js
+        //    failOwed). Old code: taken off the list while the interval ran and dropped: never repaired. (A tick that
+        //    throws after it ran: the state agrees, so only the failure report can bring the repair.)
+        const after = (inst, n) => inst.evalSim(`(() => { const f = gameTick; let n = ${n}; gameTick = function () { const r = f.apply(this, arguments); if (n-- > 0) throw new Error('injected tick failure'); return r; }; return 0; })()`);
+        const world = new H.World({ network: { latencyMs: 40, jitterMs: 5 }, controls: H.SMALL_MATCH_CONTROLS });
+        const { host, guests } = await H.startHostedMatch(world, { guests: 1 });
+        const all = [host, ...guests], g = guests[0];
+        await H.playFor(world, all, 2000, { seed: 31 });
+        const rep = () => g.patchesApplied + g.snapshotsApplied, settled = () => !g.eval('resyncGuest.outstanding') && g.eval('resyncGuest.T') < 0;
+        const rep0 = rep();
+        after(g, 1);
+        assert.ok(await world.runUntil(() => rep() > rep0 && settled(), 10000), 'the first failure was repaired');
+        const t1 = world.now;
+        await H.playFor(world, all, 20000, { seed: 32 });
+        const rep1 = rep(), fails1 = g.eval('netCounters.tickFailures | 0');
+        after(g, 1);
+        assert.ok(await world.runUntil(() => g.eval('netCounters.tickFailures | 0') > fails1, 5000), 'the second failure was noted');
+        assert.ok(await world.runUntil(() => rep() > rep1 && settled(), 60000), 'the second failure, inside the interval, was repaired after it: ' + JSON.stringify([rep1, rep(), g.eval('resyncGuest.failOwed')]));
+        const waited = world.now - t1;
+        assert.ok(waited >= 55000, 'not before the interval (' + Math.round(waited) + ' ms after the first)');
+        const from = Math.max(...all.map(i => i.eval('currentTick'))) + 5;
+        await H.playFor(world, all, 3000, { seed: 33 });
+        await world.run(1500);
+        dropInjected(all);
+        H.checkHealthy(world, all, { minCompared: 10, fromTick: from, label: 'after an owed repair' });
     }
     console.log('PASS multiplayer-tick-failure');
     process.exit(0);

@@ -68,7 +68,8 @@ const START = {
         const view = i => i.eval(`JSON.stringify(${JSON.stringify(tiles.slice(0, 3))}.map(t => (e => e && [e.type, e.owner, e.manualStacks, e.autoUpgradeEnabled])(getTileEntityRef(t.gx, t.gy))))`);
         const v0 = view(host);
         assert.ok(all.every(i => view(i) === v0), 'same buildings everywhere: ' + v0);
-        assert.equal(JSON.parse(v0)[0][2], 3, 'same-type placements stacked');
+        // (Orders stack up to their count, not by it: 1 then 2 is 2.)
+        assert.equal(JSON.parse(v0)[0][2], 2, 'same-type placements stacked up to the larger order');
         rows.push('teammates and an opponent building on the same tiles on one tick');
     }
 

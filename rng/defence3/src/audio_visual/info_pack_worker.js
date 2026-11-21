@@ -202,7 +202,7 @@ function structures(rows) {
     if (!(base > 0 && cap > 0)) return;
     const c = tableCols(base, cap);
     const kind = new Int16Array(buf, c.kind, cap), type = new Int16Array(buf, c.type, cap), utype = new Int16Array(buf, c.utype, cap);
-    const stacksC = new Int16Array(buf, c.stacks, cap), mstacksC = new Int16Array(buf, c.mstacks, cap), estacksC = new Int16Array(buf, c.estacks, cap);
+    const stacksC = new Int32Array(buf, c.stacks, cap), mstacksC = new Int32Array(buf, c.mstacks, cap), estacksC = new Int32Array(buf, c.estacks, cap);
     const flagsC = new Int32Array(buf, c.flags, cap), rallyXC = new Float32Array(buf, c.rallyX, cap), rallyYC = new Float32Array(buf, c.rallyY, cap);
     // (A selection past the members' room: an even sample of it, the counts scaled.)
     const total = sel.sSlots.length, n = Math.min(total, P.members), step = total / n, scale = total / n;

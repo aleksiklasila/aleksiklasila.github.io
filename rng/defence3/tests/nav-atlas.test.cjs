@@ -1,9 +1,9 @@
 // The routing atlas (NAVIGATION_OPTIMIZATION.md, flownav.js navAtlasBuild,
 // wasm/src/atlas.rs): any destination by lookups. From random open tiles to
 // random reachable ones on several map types (walls, islands, rooms),
-// stepping navStep on the atlas id: every walk arrives (no loop, no dead end),
-// within a bounded detour of the shortest way (breadth first), and no field
-// or row is made for any destination.
+// stepping navStep on the atlas: every walk arrives (no loop, no dead end),
+// within a bounded detour of the shortest way (breadth first). (Every route is
+// on the atlas: there are no destination fields.)
 // node tests/nav-atlas.test.cjs [--pairs=400]
 const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
@@ -51,7 +51,6 @@ function carve(type) {
         const r = JSON.parse(inst.eval(`JSON.stringify((() => {
             const nav = navEnsure(NAV_PROFILE_GROUND), W = GRID_W, H = GRID_H, wall = nav.wall, A = nav.atlas;
             if (!A) return { err: 'no atlas' };
-            const fields0 = _navFields.pools.map(F => navFieldsLive(F));
             let seed = 99;
             const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
             const open = [];
@@ -77,7 +76,7 @@ function carve(type) {
                 const seen = new Set([s]);
                 let t = s, n = 0;
                 for (; t !== d && n < 8 * (best + 50); n++) {
-                    const nx = navStep(NAV_PROFILE_GROUND, t, d, NAV_ATLAS_FID);
+                    const nx = navStep(NAV_PROFILE_GROUND, t, d);
                     if (nx < 0 || wall[nx]) { stuck++; if (bad.length < 3) bad.push({ s, d, t, nx, why: 'stuck' }); break; }
                     const dx = Math.abs(nx % W - t % W), dy = Math.abs(Math.floor(nx / W) - Math.floor(t / W));
                     if (dx + dy !== 1) { stuck++; if (bad.length < 3) bad.push({ s, d, t, nx, why: 'jump' }); break; }
@@ -87,8 +86,7 @@ function carve(type) {
                 if (t === d) { arrived++; const q = n / Math.max(1, best); sum += q; if (q > worst) worst = q; }
             }
             return { W, open: open.length, parts: nav.np, levels: A.L, nodes: A.nodes, poolEntries: A.poolEntries, walks, arrived, loops, stuck, unreachable,
-                meanDetour: +(sum / Math.max(1, arrived)).toFixed(3), worstDetour: +worst.toFixed(3), bad,
-                fieldsMade: _navFields.pools.map((F, i) => navFieldsLive(F) - fields0[i]) };
+                meanDetour: +(sum / Math.max(1, arrived)).toFixed(3), worstDetour: +worst.toFixed(3), bad };
         })())`));
         console.log(`${type} ${size} (${built} walls, atlas+build ${buildMs} ms): ` + JSON.stringify(r));
         assert.ok(!r.err, r.err);
@@ -97,10 +95,9 @@ function carve(type) {
         assert.equal(r.arrived, r.walks, type + ': every walk arrives');
         assert.ok(r.meanDetour < 1.35, type + ': mean detour ' + r.meanDetour);
         assert.ok(r.worstDetour < 3, type + ': worst detour ' + r.worstDetour);
-        assert.deepEqual(r.fieldsMade, [0, 0], type + ': no destination fields');
         assert.deepEqual(inst.errors.map(e => String(e.stack || e).slice(0, 300)), [], type + ': no errors');
         world.instances.forEach(i => { try { i.kill({ silent: true }); } catch { } });
     }
-    console.log('PASS: the atlas reaches every reachable destination without fields, loops or dead ends.');
+    console.log('PASS: the atlas reaches every reachable destination without loops or dead ends.');
     process.exit(0);
 })().catch(err => { console.error(err); process.exit(1); });

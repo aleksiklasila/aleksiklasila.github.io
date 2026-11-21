@@ -6347,6 +6347,8 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         driveStrictLockstep(now, currentTick);
         resyncHostFlushHashes(now);
         if (!isHost) guestReviewMatchResult(now);
+        // (A worker stalled where its peers went on: lost, sim_client.js simClientStallCheck.)
+        if (typeof simClientStallCheck === 'function') simClientStallCheck(now);
     }
     // (The simulation worker was lost: no tick until the match is back, see
     // sim_client.js simClientLostHold.)
@@ -6361,6 +6363,8 @@ function pumpSimulationTicks(now, accumulator, maxTicks) {
         let normal = 2;
         if (buffered > normal) catchUp = Math.min(buffered - normal, buffered > normal * 4 ? 12 : 3);
     }
+    // (A host running the match again from its checkpoint: those ticks as fast as they go, utils_checkpoint.js.)
+    else if (isMultiplayer && isHost && typeof netCheckpointReplayCatchUp === 'function') catchUp = netCheckpointReplayCatchUp();
     let processed = 0;
     let limit = maxTicks + catchUp;
     let tickMs = netSimulationTickMs();
@@ -7187,9 +7191,15 @@ function startMainThreadLoops() {
 }
 
 function runHiddenTickPump() {
-    if (!gameStarted || gameOver || !document.hidden) return;
+    if (!gameStarted || !document.hidden) return;
 
     let now = performance.now();
+    // (A guest's end waits for the host's word, as the visible frame's does (processVisibleSimulationFrame): a
+    // hidden guest with a false victory stopped here and never asked for the match: audit row 97.)
+    if (gameOver) {
+        if (isMultiplayer && !isHost) { sendNetworkPings(now); netMaintain(now); guestReviewMatchResult(now); }
+        return;
+    }
     sendNetworkPings(now);
     if (!_hiddenLastTickTime) _hiddenLastTickTime = now;
     let dt = now - _hiddenLastTickTime;
@@ -7338,6 +7348,11 @@ function formatPurchaseMultiplier(value) {
 function updatePurchaseMultiplierBars() {
     const bar = document.getElementById('build-multiplier-bar');
     if (!bar || countBarBusy(bar)) return;
+    // Manual stacking off (the match setting): no slider, every build at L1.
+    const st = document.getElementById('help-manual-stacking-state');
+    if (st) st.textContent = 'this game: ' + (MANUAL_STACKING_ENABLED ? 'on' : 'off');
+    bar.hidden = !MANUAL_STACKING_ENABLED;
+    if (!MANUAL_STACKING_ENABLED) { buildPurchaseMultiplier = 1; if (bar.innerHTML) bar.innerHTML = ''; return; }
     // Keep the former 1..65536 stack range, with every intervening level.
     const maxLevel = Math.min(MAX_THING_LEVEL, 17);
     const level = Math.max(1, Math.min(maxLevel, Math.floor(Math.log2(buildPurchaseMultiplier)) + 1));

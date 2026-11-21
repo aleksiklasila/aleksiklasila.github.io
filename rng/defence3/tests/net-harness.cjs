@@ -61,6 +61,12 @@ const CONTROL_DEFAULTS = new Map();
             options
         });
     }
+    // (Manual stacking: off in the menu by default; the tests and workloads
+    // were written ordering stacks (place count > 1), so on here unless a
+    // test sets the control: tests/manual-stacking-setting.test.cjs checks
+    // the off default.)
+    const ms = CONTROL_DEFAULTS.get('cfg-manual-stacking');
+    if (ms) ms.checked = true;
 }
 
 // ------------------------------------------------------------------
@@ -765,7 +771,10 @@ function createInstance(world, name, options = {}) {
         queueAction = function (action) {
             const before = nextLocalActionSeq;
             const r = __origQueue.apply(this, arguments);
-            if (nextLocalActionSeq !== before) __harnessHooks.issued((myPeerId || ('p' + localPlayerId)) + ':' + _localActionEpoch + ':' + before, currentTick);
+            // (The tick the command lead counts from: the completed tick the player sees, as the game's
+            // _localActionTick (worker.js); with the simulation worker the page's currentTick runs ahead of it.)
+            if (nextLocalActionSeq !== before) __harnessHooks.issued((myPeerId || ('p' + localPlayerId)) + ':' + _localActionEpoch + ':' + before,
+                isMultiplayer && gameStarted && typeof netCompletedSimulationTick === 'function' ? netCompletedSimulationTick() : currentTick);
             return r;
         };
     })()`.replace(/__harnessHooks/g, '__hooks'));
@@ -853,7 +862,10 @@ function attachHooks(world, inst) {
 class World {
     constructor(options = {}) {
         this.sched = new Scheduler();
-        this.simWorker = !!options.simWorker;
+        // (Unset unless the test names a mode: SIM_WORKER=1 then picks the worker. A false here
+        // (`!!options.simWorker`, 2026-10-25..11-19) pinned every such test to the page, so SIM_WORKER=1 runs
+        // tested the page mode twice.)
+        this.simWorker = options.simWorker === undefined ? undefined : !!options.simWorker;
         this.net = new Network(this);
         this.instances = [];
         this.signalingMs = options.signalingMs ?? 80;
@@ -1132,7 +1144,7 @@ function assertAllCommandsExecuted(world, inst, label = '', issuedBefore = Infin
     const missing = [];
     for (const [netId, info] of world.issued) {
         if (info.by !== inst.name || info.at > issuedBefore) continue;
-        if (!inst.executedActions.has(netId)) missing.push(netId);
+        if (!inst.executedActions.has(netId)) missing.push(netId + ' (issued at ' + Math.round(info.at) + ' ms, tick ' + info.tick + ')');
     }
     assert.deepEqual(missing, [], label + ' ' + inst.name + ' lost commands');
 }

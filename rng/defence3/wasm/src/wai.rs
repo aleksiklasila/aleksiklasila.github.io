@@ -160,7 +160,7 @@ struct W {
     // Params.
     n: usize, now: i32, dk: i32, gw: i32, gh: i32, tile: f64, delay: i32, retarget: i32, search_ticks: i32, backoff: i32,
     nt: i32, srt: i32, rcols: i32, vtypes: i32, vrw: i32, vrh: i32, vnp: i32, wrt: i32, epoch: i32, absent: u32,
-    atlas: i32, local: i32, rcls: u8, l1: i32, maxl: i32, outcap: usize, nres: i32, nver: i32, nwsw: i32, np: i32,
+    local: i32, rcls: u8, l1: i32, maxl: i32, outcap: usize, nres: i32, nver: i32, nwsw: i32, np: i32,
     scale: f64, research_tt: u32, fallback_rdps: f64, base_cd: i32, umask: u32, salv_type: i32, salv_cd: i32, nprice: i32,
     // Per resource (0 energy, 1 A*): the target type codes of its mines and farms, its farms' and dropoff
     // buildings' stationary types, its mines' structure code, its collectors' base cooldown, its config index.
@@ -210,7 +210,7 @@ impl W {
             n: k.i(0).max(0) as usize, now: k.i(1), dk: k.i(2).max(1), gw: k.i(3).max(1), gh: k.i(4).max(1), tile: k.f(5),
             delay: k.i(6).max(1), retarget: k.i(7), search_ticks: k.i(8), backoff: k.i(9), nt: k.i(10).max(1), srt: k.i(11).max(1),
             rcols: k.i(12), vtypes: k.i(13), vrw: k.i(14), vrh: k.i(15), vnp: k.i(16), wrt: k.i(17).max(1), epoch: k.i(18),
-            absent: k.f(19) as u32, atlas: k.i(20), local: k.i(21), rcls: k.i(22) as u8, l1: k.i(23).max(2), maxl: k.i(24).max(1),
+            absent: k.f(19) as u32, local: k.i(21), rcls: k.i(22) as u8, l1: k.i(23).max(2), maxl: k.i(24).max(1),
             outcap: k.i(25).max(0) as usize, nres: k.i(26), nver: k.i(27), nwsw: k.i(28), np: k.i(29), scale: k.f(30),
             research_tt: k.i(31) as u32, fallback_rdps: k.f(32), base_cd: k.i(33),
             umask: (k.i(34).max(1) as u32) - 1, salv_type: k.i(35), salv_cd: k.i(36), nprice: k.i(37),
@@ -1055,9 +1055,8 @@ impl<'a> Ctx<'a> {
         let dest = irem(key >> 1, 16777216);
         let (ux, uy) = self.utile(q);
         if uy * w.gw + ux == dest { return; }
-        // (Off the atlas the destination's field is JavaScript's: simMoveTryArm.)
-        // (Its own stats, not a row: its speed is the JavaScript's.)
-        if (w.atlas >> prof) & 1 == 0 || g(w.srow, q) < 0 { self.emit(OUT_ARM, q as i32, 0, 0); return; }
+        // (Its own stats, not a row: its speed is the JavaScript's. Every route is on its profile's atlas.)
+        if g(w.srow, q) < 0 { self.emit(OUT_ARM, q as i32, 0, 0); return; }
         if !(self.hot(q, 0) >= 0.0) || g(w.sepk, q) == w.absent { return; }
         let st = self.st(q);
         let kind = if st == WS_MANUAL { 2 } else if st == WS_RETURNING_FOR_GOLD || (st == WS_RETURNING && self.wb(q) == WB_SALVAGER) { 3 } else { 1 };

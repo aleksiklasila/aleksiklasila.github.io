@@ -361,7 +361,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // drive-by look.
     ['mvRangeK', Uint8Array, 1],
     // Flow mode's look-ahead (mvNav) from tile T (-1 none), made with the
-    // navigation build V, wall version W and destination field kind G: the
+    // navigation build V, wall version W and route kind G (3, the atlas): the
     // next tile, the one after, the farthest one it heads straight for, and
     // whether that is over open ground.
     // (One record a slot, SIM_NAV_STRIDE words: T, D, V, W, G, N1, N2,
@@ -379,7 +379,7 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (And the units listed in its 3x3 tiles, capped: a waiting unit goes
     // on once that thins out.)
     ['cwDense', Uint16Array, 1],
-    // Flow mode: the tick its route may start (see navFieldReadyTick).
+    // Flow mode: the tick its route may start (on the atlas at once: 0, flownav.js navRouteFid).
     ['mvReady', Int32Array, 1],
     // Attack hold (mvOn 3; see simMoveTryHold): the target's slot and id,
     // the target's tile, and the unit's own tile and window zone, as when
@@ -539,9 +539,8 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // setters keep it), hashed with its columns (SIM_KERNEL_SNAP_REGION).
     ['hObj', Int32Array, 1],
     // Its flow route's end tile (Unit._routeEnd; -1 none) and its navigation
-    // profile as of then; its path's last flow node's field (key * 2 + wide,
-    // -1 none; the path setter's): what the field sweep keeps
-    // (flownav.js navFieldsSweepStep), from columns.
+    // profile as of then; its path's last flow node's key (profile * 2^24 +
+    // tile, * 2 + wide, -1 none; the path setter's), from columns.
     ['rtEnd', Int32Array, 1], ['nvProf', Int8Array, 1], ['nvPK', Int32Array, 1],
     // 1 while its worker state is IDLE (the workerState setter's: the game
     // stats count idle workers from columns).
@@ -571,7 +570,9 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // The numeric fields JavaScript alone reads (SIM_UNIT_JS_FIELDS, through
     // SIM_UNIT_JS_COL_ALIAS): heap columns as the rest, so a slot's whole
     // numeric state moves, zeroes and grows with the kernels' columns.
-    ['j__rslot', Int32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1]];
+    ['j__rslot', Int32Array, 1], ['j__okTile', Int32Array, 1], ['j__okVer', Int32Array, 1], ['j__okNodeTile', Int32Array, 1], ['j__okNodeVer', Int32Array, 1], ['j__effectiveStatsStamp', Int32Array, 1],
+    // Unit._astarBudgetBlockedUntil (NaN none): the tick its path budget glyph shows until (pathfinding.js).
+    ['abBlk', Float32Array, 1]];
 // Accessor defaults (the "not indexed / not registered" values).
 const SIM_SPATIAL_DEFAULTS = { spTile: -1, spArea: -2, spOwner: -1, spEpoch: 0, spType: -1, vsGen: 0, vsR: -1, vsA: -1, vsP1: -1, vsP2: -1 };
 // Worker records: the worker columns are a pool with a record a worker (a
@@ -993,7 +994,7 @@ function simSlotDefaults() {
     if (_simSlotDefs) return _simSlotDefs;
     const d = { mvNav: -1, mvNavLD: -1, mvSteer: -1, esVer: -1, statRow: -1, bsRow: -1, fLsX: NaN, fLsY: NaN, mvPath: -1,
         wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
-        cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1 };
+        cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1, abBlk: NaN };
     for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
     d.j__rslot = -1; d.j__okTile = -1; d.j__okNodeTile = -1;
     for (const k in SIM_SPATIAL_DEFAULTS) d[k] = SIM_SPATIAL_DEFAULTS[k];
@@ -1960,8 +1961,25 @@ function simUnitStateReleaseAll() {
     const S = _simUnitState;
     if (!S || !S.cap) return;
     if (typeof simParallelBackgroundWaitAll === 'function') simParallelBackgroundWaitAll();
-    const n0 = S.owners.length;
-    for (let s = 0; s < n0; s++) if (S.owners.at(s)) simUnitStateDetach(S, s);
+    const n0 = S.owners.length, C0 = S.columns;
+    // Every unit let go at once, nothing per unit here: the handles back by a kernel (snap_units.rs k_ub_release_all:
+    // an object held elsewhere reads its gone record), the objects, the by-handle references, the worker and status
+    // records, the path windows and the paths, the pending ways all dropped whole. (simUnitStateDetach a slot at a
+    // time made every slot's object first: ~360 ms at 105k units.)
+    if (n0 > 0) {
+        const out = _simRelOut || (_simRelOut = simHeapArray(Int32Array, 4)), P = _simRelP;
+        P[0] = Math.min(n0, S.cap); P[1] = S.hfreeN;
+        if (!simHeapHas(S.hfree)) { const h = simHeapArray(Int32Array, Math.max(1024, S.hfree.length)); h.set(S.hfree); S.hfree = h; }
+        simRustDirect('k_ub_release_all', [C0.hnd, C0.hslot, C0.hgen, C0.hg, C0.id, C0.owner, C0.x, C0.y, S.hfree, out], P);
+        S.hfreeN = out[0];
+    }
+    S.objs.fill(null);
+    for (const nm of _simHandleRefNames()) { const col = C0[nm]; if (col && col.v) col.v.fill(undefined); }
+    if (S.wk) { S.wk.used = 1; S.wk.freeCount = 0; }
+    if (S.st && S.st.hdr) { const T = S.st, used = Math.min(T.hdr[1], T.cap); for (const [k] of SIM_UNIT_ST_SIDE) if (C0[k]) C0[k].fill(0, 0, used); T.hdr[0] = 0; T.hdr[1] = 1; }
+    if (S.pathPool) { S.pathPool.next = 0; S.pathPool.fs[0] = 0; }
+    simPathReset();
+    if (typeof pendingPathClear === 'function') pendingPathClear();
     _simUnitPrepFree(S);
     _simUnitFreeQueueRelease(S);
     S.owners.length = 0;
@@ -1969,7 +1987,7 @@ function simUnitStateReleaseAll() {
     // (The released slots as used before: a unit that takes one has its
     // JavaScript fields made anew (_simUnitSlotStart). Marked never used, a
     // unit spawned there kept the last one's targetPos.)
-    { const sl = S.sl; for (let s = 0; s < n0; s++) sl.ever[s >> 5] |= 1 << (s & 31); }
+    { const sl = S.sl, w = n0 >> 5; sl.ever.fill(0xFFFFFFFF, 0, w); if (n0 & 31) sl.ever[w] |= (1 << (n0 & 31)) - 1; }
     simUnitFreeQueueReserve(S);
     // (Every column zeroed over the slots used, then the defaults that are not
     // zero: _simSlotFreshRange writes only those, as a new array is zero.)
@@ -1977,9 +1995,47 @@ function simUnitStateReleaseAll() {
     for (const k of SIM_UNIT_COLUMNS) C[k].fill(0, 0, used);
     for (const [k, , per] of SIM_MOVE_COLUMNS) C[k].fill(0, 0, used * per);
     _simSlotFreshRange(S, 0, used);
+    // (Their object and JavaScript fields at the defaults too: the batch births (spr.rs k_spawn_write) take slots
+    // without the `ever` mark's reset (_simUnitSlotStart's), and write a worker's workerType only: a soldier born in
+    // a slot a researcher held before the restore was a "researcher" (hashed), on the restored peer alone.)
+    _simUnitFieldsClearRange(S, 0, used);
     if (S.sepKey) S.sepKey.fill(SIM_SEP_ABSENT, 0, Math.min(S.sepKey.length, n0));
     if (S.sepLayer) S.sepLayer.fill(0, 0, Math.min(S.sepLayer.length, n0));
-    if (typeof unitSlotMapInvalidate === 'function') unitSlotMapInvalidate();
+    // (The id table emptied: every unit left (a restore makes it again). Rebuilt from the old view, every unit's
+    // object was read.)
+    if (typeof _uix !== 'undefined') { _uix.n = 0; _uix.holes = 0; _uix.loose.clear(); _uix.ver++; _uix.epoch++; }
+}
+let _simRelOut = null;
+const _simRelP = new Float64Array(4);
+// Slots [from, to)'s object fields (SIM_UNIT_OBJ_FIELDS) and JavaScript fields (SIM_UNIT_JS_FIELDS) at their
+// defaults, a column at a time.
+function _simColClearRange(col, from, to) {
+    if (!col || !(to > from)) return;
+    if (col instanceof SimSharedColumn) { col.data.fill(0, from, Math.min(to, col.data.length)); return; }
+    if (col instanceof SimNumColumn) { col.data.fill(NaN, from, Math.min(to, col.data.length)); return; }
+    if (col instanceof SimRefColumn) {
+        for (let s = from; s < to;) {
+            const k = s >>> 10, a = k << 10, e = a + 1024;
+            if (s === a && e <= to) { col.pages[k] = undefined; s = e; continue; }
+            const end = Math.min(e, to);
+            if (col.pages[k]) for (; s < end; s++) col.clear(s); else s = end;
+        }
+        return;
+    }
+    for (let s = from; s < to; s++) col.clear(s);
+}
+function _simUnitFieldsClearRange(S, from, to) {
+    const C = S.columns;
+    to = Math.min(to, S.cap);
+    if (!(to > from)) return;
+    for (const k of SIM_UNIT_OBJ_FIELDS) _simColClearRange(C['oc_' + k], from, to);
+    for (const [k, kind, def] of SIM_UNIT_JS_FIELDS) {
+        const col = C[_simJsName(k, kind)];
+        if (!col) continue;
+        if (kind === 'r' || SIM_UNIT_SPARSE_JS_FIELDS.has(k) || !ArrayBuffer.isView(col)) { _simColClearRange(col, from, to); continue; }
+        const v = _simJsDefault(kind, def), per = Math.max(1, Math.round(col.length / Math.max(1, S.cap)));
+        if (per === 1) col.fill(v, from, to); else for (let s = from; s < to; s++) col[s * per] = v;
+    }
 }
 // After a whole-world restore (snapDecodeState): the restored units took
 // new slots above the old ones, which the collection frees: every per-slot
@@ -1999,7 +2055,10 @@ function simUnitStateCompact(force = false) {
     for (let i = 0; i < units.length; i++) { const u = units[i]; if (u && u._us === S.columns && S.owners.at(u._si) === u) live++; }
     if (!force && S.owners.length - live < Math.max(4096, S.owners.length / 3)) return false;
     // (No smaller than the population's reservation: see simUnitPopulationSlots.)
-    const want = Math.max(1024, Math.ceil(Math.max(live * 1.125, simUnitPopulationSlots()) / 4096) * 4096);
+    // (The population's reservation when the match has one (no more: the match-start budget); without, 1/8 more
+    // than the units.)
+    const popSlots = simUnitPopulationSlots();
+    const want = Math.max(1024, Math.ceil(Math.max(popSlots > 0 ? live : live * 1.125, popSlots) / 4096) * 4096);
     // Already the layout this makes (a match's start into a fresh state: the
     // units in slots 0.. in list order, no gaps) and about its size: kept.
     // (A copy of every column, 1.3 GB at 2M units, beside the reservation's

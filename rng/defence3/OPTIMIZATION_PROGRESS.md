@@ -10165,3 +10165,71 @@ tick (the rest: 1.2k toward a substitute, 0.7k waiting for one, 0.4k parked), ~1
 ~1% of the front scene's step. Its wasm conversion (pending target columns, the approach / substitute caches out of JS
 Maps, path nodes) is left for when the larger costs are gone.
 Outside the occupancy, what remains in these scenes is a few percent per item; the step time is the occupancy's.
+
+## 2026-11-20 - pending paths in wasm (wasm/src/pp.rs k_pp_due)
+**Converted: the units waiting for their way.** pathfinding.js _tryUpgradeAstarFallbackPath, takeDuePendingPathUnits
+and main.js's tier buckets are one Rust kernel over the columns (pp.rs): mode 0 takes the wheel's due buckets, radix-
+sorts them by (source priority, id), looks at each (findNearestWalkable via tch.rs nearest_walk, navApproachTile,
+navReachable, the substitute), writes Unit.path / pathIndex / commandState / the pending target / the retry tick as
+their setters do (path store blocks, movement window back, mvOn / mvSteer / ?mvt marks, hObj digest terms) and
+relinks those still waiting; mode 1 is the event callers (one unit, or unit.js's separation retries as one list);
+mode 2 asks again for every waiting unit's substitute (navSubstitutesRestore). The substitutes' JS Map is a heap
+table shared with the kernel (3 words an entry, open addressing, 2 entries a unit of the population; cleared at a
+build; past a quarter full the flush clears it and asks again for every waiting unit's, so what a unit finds there
+does not depend on the table's history, as a restored peer's has only those). The JS that remains is O(things
+changed): navFieldRequest for the nodes made on a build without the routing atlas (tests only), and the callers.
+Pitfalls found: the Unit.path getter (a stored path whose last node is not nvPK's is null, or nvPK's one node stored
+in its place: a unit at its substitute tile reads null, else it never looks again; nav-reach B); an if-chain over
+source codes became a switch table (a data segment, refused by build.cjs: an immediate's nibbles now).
+**Measured:** chaos-front-400k, Node, 8 helpers, dk 4, 40 steps (MAINPROF + a callee sum): pendingPathsTick 0.19 ms
+a step (the substitutes' flush 0.08 of it). The 11-18 Edge run with hectic.js had 2.1 ms in per-unit JS (~140 units a
+step); not the same load, so this is an order of magnitude, not an A/B. Tests: nav-reach, event-route-batch /
+-determinism, order-*, worker-*, nav-* (atlas, rows, chain lifecycle, background, field sweep, flow width, shared
+build), deltatick-*, chaos-scenario-determinism, multiplayer-chaos-determinism, multiplayer-snapshot, late-carry
+restore, shared-spatial-determinism, solo-snapshot, work-snapshot pass. worker-fallback-upgrade now stubs the
+upgrade's two outcomes (it sliced the deleted JS).
+**Next on the same profile:** processGlobalSpawnerQueue > _processSpawnsByTables 12 ms of the step's 27 ms serial
+(k_spawn_births: jammed exits searching every ring each tick).
+
+## 2026-11-20 - a spawn's footprint search as a window (occ.rs occ_find)
+A spawner whose exit is jammed searched 32 rings of places, each tested on its own (free: the footprint's rows of
+the bitmap), and failed, every tick; the ring loop itself walked each ring's whole square (~45k iterations for 32
+rings, 4,225 places). Now: the first two rings place by place (most spawns end there), then the whole window at
+once: every map row of the window spread by each of the shape's half widths once (32 centres a 64-bit read), the
+centre rows ORed from their footprint rows, and the rings scanned in occ_find's order on those bits (a ring's top
+and bottom rows as words, its sides two bits a row). Footprints over radius 17 use 128-bit reads (same scan).
+tests/occ-find-window.test.cjs: equal to the place-by-place search (kept as occ_find_cmp's reference) on 7,200
+random cases (densities 0-97%, radii 1-32, edges, off-cell positions, both planes, search 1-32).
+**Measured** (chaos-front-400k, Node, 8 helpers, dk 4, 40 steps, MAINPROF; profile-main-serial): processGlobalSpawnerQueue
+12.0 -> 6.2 (window, u128) -> 5.2 (u64, spreads shared) -> 2.5 ms a step (ring scan by words); the serial wasm a step
+15.4 -> 5.8 ms. Positions' hash after the run unchanged (816010184 -> 942201655, as before). (Named profile between:
+occ_find 4.58 ms of _processSpawnsByTables' 6 with the square ring loop and u128 shifts as library calls.)
+
+## 2026-11-20 - navigation: the atlas always, the destination-field pools gone
+**Removed: the non-atlas field-pool mode** (the last JavaScript fallback of the navigation, AGENTS.md hard rule). Every
+route is on its profile's routing atlas: flownav.js navRouteFid gives NAV_ATLAS_FID for any tile on the map (-1 off
+it or without a build), ready at once (ready / generation words 0). The NAV_ATLAS switch, the field pools
+(_navFields: narrow/wide pools, meta, rows, hash tables, requests, the flush's background job, growth, the staggered
+sweep and its nfs.rs kernels, remakes at installs) and the rebuild window's second pools (_navNext, SIM_LANE_NAVX
+and its bulk rush) are deleted: a rebuild's job collects its chain and installs it at the same fixed steps as before
+(NAV_STEP_STAGE, NAV_STEP_INSTALL; snapshots' job state unchanged). navFieldsFlush / navFieldsRestore keep their
+names (trace lists) and only flush / re-ask the substitutes. flownav.js 1809 -> 1081 lines.
+Kernels: pp.rs loses its node log (nlog / nn, hdr[4], P[25..28], A[53]) and pathfinding.js the JS loop after
+k_pp_due that asked fields for nodes on builds without an atlas; ord.rs's per-profile words are (dest, wide, valid)
+and it arms ATLAS_FID itself; wai.rs arms every worker on the atlas (OUT_ARM only for a worker with its own stats);
+mv.rs drops the pool bindings (W 44, 45, 86-90, 264, 265 now unused: sim_parallel.js '?-'), the field-id decode in
+the steady window, step_flow, flow_key / flow_nav / flow_inputs_same / flow_record_holds, the Nav struct's rows and
+destination-field members and nav_step's non-atlas branch (nav_step_run gone); lib.rs nav_field keeps only the local
+field (the build's stage 4), nav_rows_copy / nav_row gone; sim_parallel.js simNavStep gone, _simWallStepOut without
+rows. unit.js simFlowArm(c, s, dest, cmd, flying, worker, isWorker, profile) writes the atlas id itself.
+**Empty map** (no open tile: the build has no parts, so no atlas): the route id is still NAV_ATLAS_FID, navStep /
+navPath give no step, the movement kernel's flow_key / step_flow find no atlas and the unit has no way (the same as
+an unreachable destination); nav-chain-lifecycle checks it.
+**Memory:** the pools were made at every match start even when no route used them: 18.9 MB on a 1024 map (narrow
+4096 x 32^2 u16 8.4 MB, its rows 5.2 MB, wide 256 x 96^2 u16 4.7 MB, rows/meta/tables), 4.9 MB on a 256 map, more
+with more parts (a row is ~1.25 bytes a part a slot). Solo 1024 at tick 59 (Node): wasm heap 2033 -> 1969 MB.
+**Tests:** nav-rows and nav-field-sweep deleted (they tested the pools only); nav-chain-lifecycle's atlas-off tail
+replaced by route-id and walled-map checks; nav-atlas no longer counts fields. Passed: the 9 nav-* tests; the 55 multiplayer-* files in both modes (tests/run-regressions.cjs 3
+--filter=^multiplayer-, SIM_WORKER 0 and 1: 110/110).
+Not done here: the unit columns that only carried field data are now constant (mvFGen 0, mvReady 0, navRdy 0, the
+look record's G word 3): a column-diet follow-up; sim_wasm64_bin.js (legacy) not rebuilt.

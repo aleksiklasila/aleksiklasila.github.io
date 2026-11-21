@@ -391,6 +391,18 @@ function chaosBurst(o, k) {
     let seed = 4242 + ((o.seed || 777) - 777) + k * 7919 + localPlayerId * 104729;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const me = localPlayerId, W = GRID_W, H = GRID_H, out = { queue: 0, rally: 0, research: 0, place: 0, orders: 0 };
+    // (A player's page picks its points: with a simulation worker it has no wasm kernels, so no findNearestWalkable
+    // (simMoveWallGrid); there the nearest floor tile by rings, from the map the page has.)
+    const kernels = typeof _simWasmX !== 'undefined' && _simWasmX !== null;
+    const nearWalk = (gx, gy) => {
+        if (kernels) return findNearestWalkable(gx, gy);
+        for (let r = 0; r < Math.max(W, H); r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            const x = gx + dx, y = gy + dy;
+            if (x >= 0 && y >= 0 && x < W && y < H && grid[y][x].type === TYPE_FLOOR) return { x, y };
+        }
+        return { x: gx, y: gy };
+    };
     const mineB = [...barracks, ...collectorSpawners].filter(b => b.owner === me && b.energy > 0 && !b.underConstruction);
     // Queues topped up: 150 buildings a burst, by turns over all of them.
     for (let i = 0; i < 150 && mineB.length; i++) {
@@ -401,15 +413,17 @@ function chaosBurst(o, k) {
     // Every 3rd burst: the rally points moved (30 points, all buildings).
     if (k % 3 === 0 && o.layout!=='front') {
         const pts = [];
-        for (let r = 0; r < 30; r++) { const t = findNearestWalkable(Math.floor(W * (0.05 + 0.9 * rnd())), Math.floor(H * (0.05 + 0.9 * rnd()))); pts.push([t.x * TILE + 16, t.y * TILE + 16]); }
+        for (let r = 0; r < 30; r++) { const t = nearWalk(Math.floor(W * (0.05 + 0.9 * rnd())), Math.floor(H * (0.05 + 0.9 * rnd()))); pts.push([t.x * TILE + 16, t.y * TILE + 16]); }
         const byPt = pts.map(() => []);
         mineB.forEach((b, i) => byPt[(i + k) % pts.length].push(b.gx, b.gy));
         byPt.forEach((c, j) => { for (let q = 0; q < c.length; q += 2 * ACTION_MAX_RALLY_COORDS) { queueAction({ action: 'setRallyMany', coords: c.slice(q, q + 2 * ACTION_MAX_RALLY_COORDS), targetX: pts[j][0], targetY: pts[j][1], targetUnitId: null }); out.rally++; } });
     }
     if(o.layout==='front'){
-        const line=(__scratch.chaosFrontBuildings||[]).filter(f=>f.b.owner===me&&f.b.energy>0);
+        // (Each building found again by its tile: a restore (--restore-at) makes new objects; the old ones read stale queues.)
+        const now=f=>getBarrackAtTile(f.b.gx,f.b.gy);
+        const line=(__scratch.chaosFrontBuildings||[]).filter(f=>{const b=now(f);return !!b&&b.owner===me&&b.energy>0;});
         for(let i=0;i<150&&i<line.length;i++){
-            const f=line[(k*150+i)%line.length],b=f.b;
+            const f=line[(k*150+i)%line.length],b=now(f);
             queueAction({action:'setRally',gx:b.gx,gy:b.gy,targetX:b.x+((k&1)?8:-8)*TILE,targetY:f.targetY*TILE+16,targetUnitId:null});out.rally++;
             if(b.spawnQueue.length<20){queueAction({action:'queueUnit',gx:b.gx,gy:b.gy,count:20-b.spawnQueue.length});out.queue++;}
         }

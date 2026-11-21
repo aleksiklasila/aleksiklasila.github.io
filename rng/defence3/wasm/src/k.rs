@@ -1279,8 +1279,6 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
         5 => super::mvt::mvt_sync_apply(b, chunk),
         // (Structure rows cleared, a job a column: uix.rs.)
         6 => super::uix::k_rows_fill(b, chunk),
-        // (The navigation fields' sweep marks: nfs.rs.)
-        7 => super::nfs::k_nav_sweep_mark(b, chunk),
         // (A relayout's index entries renamed, shares: tch.rs.)
         8 => super::tch::k_ixd_relayout(b, chunk),
         // (A move order's workers, a chunk of the list a job: ord.rs k_order_workers, P[25] > 0.)

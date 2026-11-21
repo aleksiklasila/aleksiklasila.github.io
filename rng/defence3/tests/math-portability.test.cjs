@@ -75,7 +75,7 @@ const rows = [];
 // Maps from the seed under another engine's Math.
 (async () => {
     for (const [type, size] of [['island', 60], ['island', 61], ['islands', 60], ['solar_system', 80], ['crossroads', 60], ['arena', 40]]) {
-        const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-map-type': type, 'cfg-mapsize': String(size) } });
+        const world = new H.World({ simWorker: false, controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-map-type': type, 'cfg-mapsize': String(size) } });
         const make = (name, foreignMath) => {
             const inst = world.spawn(name, { foreignMath });
             inst.eval('readConfigFromMenu(); isMultiplayer = false; gameSeed = 424242; localPlayerId = 0; startGame();');
@@ -92,7 +92,7 @@ const rows = [];
     // The tests' exact fingerprint (net-harness.cjs __exactStateHash) sees a
     // path's waypoints, not only its length.
     {
-        const world = new H.World({ controls: H.SMALL_MATCH_CONTROLS });
+        const world = new H.World({ simWorker: false, controls: H.SMALL_MATCH_CONTROLS });
         const inst = world.spawn('fp');
         inst.eval('readConfigFromMenu(); isMultiplayer = false; gameSeed = 5; localPlayerId = 0; startGame();');
         const r = JSON.parse(inst.eval(`JSON.stringify((() => { const u = units.find(u => !u.dead); u.path = [{ x: 3, y: 4 }, { x: 5, y: 6 }]; u.pathIndex = 0;

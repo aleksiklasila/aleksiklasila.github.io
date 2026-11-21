@@ -191,7 +191,9 @@ function simClientWillTakeMatch() {
 // worker's frames (made and dropped at once, 200k of them were seconds);
 // references to them are the worker's business.
 function simClientStripUnits(state) {
+    // (The units: their rows, and the column block of a format 8 snapshot (utils_snapblock.js).)
     if (state && state.lists) { state.lists.u = []; state.res = []; }
+    if (state) { delete state.ub; if (state.order) delete state.order.u; }
 }
 // A join into a running match (live or paused): the host's snapshot text, for the worker that starts at the
 // first tick. (The page's restore leaves out what only the worker keeps (a staged q / e, the navigation's state:
@@ -329,20 +331,23 @@ function simClientCreateMatch(opts = {}) {
 function _simClientCreated(c, msg) {
     const job = c.creating;
     c.creating = null;
-    const pageTick = currentTick;
-    let parsed = JSON.parse(msg.pageText);
-    msg.pageText = null;
-    c.decodingStart = true;
+    // (A throw here left the start waiting for good: the page makes the match then, as for a worker that could not.)
     try {
-        if (isMultiplayer || job.scene) applyAuthoritativeStateSnapshot(parsed);
-        else { snapFlushHistoryCaches(); snapDecodeState(parsed.state); currentTick = pageTick; }
-    } finally { c.decodingStart = false; }
-    parsed = null;
-    _simClientResetUnits();
-    recomputePlayerPopCaps();
-    clearGameplayVisibilityCache();
-    updateVisibility(localPlayerId);
-    job.resolve(msg.startText || null);
+        const pageTick = currentTick;
+        let parsed = JSON.parse(msg.pageText);
+        msg.pageText = null;
+        c.decodingStart = true;
+        try {
+            if (isMultiplayer || job.scene) applyAuthoritativeStateSnapshot(parsed);
+            else { snapFlushHistoryCaches(); snapDecodeState(parsed.state); currentTick = pageTick; }
+        } finally { c.decodingStart = false; }
+        parsed = null;
+        _simClientResetUnits();
+        recomputePlayerPopCaps();
+        clearGameplayVisibilityCache();
+        updateVisibility(localPlayerId);
+        job.resolve(msg.startText || null);
+    } catch (err) { c.creating = job; _simClientStartFailed('page restore: ' + (err && err.message || err)); }
 }
 
 // The worker could not start the match (an error loading its state): the
@@ -412,10 +417,47 @@ function _simClientWorkerLost(reason) {
     for (const d of c.autoDeferred) { try { d.reject(lost); } catch { } }
     c.autoDeferred = [];
     c.inFlight = 0;
-    _simClientLost = { reason, at: performance.now() };
+    // (appliedTick: the last tick it completed, for what this page sealed after it: netNoteSealedUnrunOwnCommands.)
+    _simClientLost = { reason, at: performance.now(), appliedTick: c.appliedTick };
     _simClientRestoreSettle(c, false);
     _simClientRespawn(c);
     if (typeof netRecoverLostSimulation === 'function') netRecoverLostSimulation(reason);
+}
+// ---- a worker stalled behind its peers ----
+// A worker that stops without a word (a helper gone from a parallel job's
+// barrier, a loop that never ends) held the match for good: the page waits
+// for a slow worker however long it takes, and in a match every peer waited
+// with it while its page still answered the network (audit row 82). Silence
+// alone is no evidence (a 2M-unit world's first ticks take long, see above),
+// but the other peers run the same steps on the same world: once a peer
+// reports it completed the oldest tick this worker has had in flight, and
+// this worker still has not, SIM_CLIENT_PEER_STALL_MS later it is lost (a
+// host then hands the match on, a guest gets it again from its host).
+const SIM_CLIENT_PEER_STALL_MS = 20000;
+function simClientStallCheck(now) {
+    const c = _simClient;
+    if (!c || !c.active || _simClientLost || !isMultiplayer || !gameStarted || gameOver) { if (c) c.stall = null; return false; }
+    if (c.inFlight <= 0 || c.startedEpoch !== c.epoch) { c.stall = null; return false; }
+    const oldest = c.appliedTick + 1;
+    let S = c.stall;
+    if (!S || S.tick !== oldest || S.epoch !== c.epoch) S = c.stall = { tick: oldest, epoch: c.epoch, since: now, peerAt: 0 };
+    // (A peer's report heard since this tick has been waited on, completing it: netCompletedSimulationTick is the
+    // tick after the last one completed.)
+    if (!S.peerAt && typeof netRemoteReportByPeer === 'object' && netRemoteReportByPeer) {
+        for (const pid of Object.keys(netRemoteReportByPeer)) {
+            const r = netRemoteReportByPeer[pid];
+            if (!r || !(r.at > S.since) || pid === myPeerId) continue;
+            if (r.simTick > oldest && r.simTick <= currentTick + 400) { S.peerAt = r.at; S.peer = pid; S.peerTick = r.simTick; break; }
+        }
+    }
+    // (Or its own word: the shared progress says the worker ran that tick, and its result never came. Not silence (a
+    // tick still running says nothing here): the tick is done, its result lost. Every peer's worker stopping at
+    // once left no peer to complete the tick, and the match stood for good: audit row 114.)
+    if (!S.peerAt && c.ctl && Atomics.load(c.ctl, 0) === c.epoch && Atomics.load(c.ctl, 1) >= oldest) { S.peerAt = now; S.peer = 'its own shared progress'; S.peerTick = Atomics.load(c.ctl, 1); }
+    if (!S.peerAt || now - S.peerAt < SIM_CLIENT_PEER_STALL_MS) return false;
+    c.stall = null;
+    _simClientWorkerLost('no result for tick ' + oldest + ' in ' + Math.round((now - S.since) / 1000) + ' s; ' + S.peer + ' completed it');
+    return true;
 }
 // A new worker for later matches (a few at most: one that keeps failing
 // leaves matches to the page).
@@ -918,6 +960,9 @@ function _simClientApplyTick(msg) {
         return;
     }
     c.inFlight = Math.max(0, c.inFlight - 1);
+    // (Results come in tick order: a tick before this one still counted in flight never sends one. Counted for
+    // good, it held a guest's patch gate (simClientQuiescent) forever: audit row 81.)
+    for (const k of c.dispatchAt.keys()) if (k < msg.tick) { c.dispatchAt.delete(k); c.inFlight = Math.max(0, c.inFlight - 1); c.stats.lostResults = (c.stats.lostResults | 0) + 1; }
     let t0 = performance.now();
     let dispatchedAt = c.dispatchAt.get(msg.tick);
     c.dispatchAt.delete(msg.tick);

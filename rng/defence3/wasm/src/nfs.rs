@@ -1,9 +1,5 @@
-//! The destination fields' sweep (flownav.js navFieldsSweepStep): a share of
-//! the units (by the units list's order, through the slot map) marks the
-//! fields their route and path refer to; at a cycle's end the fields not
-//! marked are dropped. A pool's fields by key are an open-addressing table
-//! (flownav.js _navHt*: key, slot + 1 pairs, 0 empty; linear probing; a
-//! power of two of pairs), the same hash as the JavaScript's.
+//! Simulation-thread and helper kernels over the units' slots and tables: the visibility
+//! cover's commit, slot zeroing / moving / remapping, relayout plans, the slab allocator, retires.
 use super::*;
 use super::k::K;
 
@@ -14,135 +10,6 @@ unsafe fn g<T: Copy>(p: *const T, i: usize) -> T {
 #[inline(always)]
 unsafe fn s<T>(p: *mut T, i: usize, v: T) {
     *p.add(i) = v;
-}
-#[inline(always)]
-fn hash(key: i32, mask: u32) -> u32 {
-    (key as u32).wrapping_mul(0x9E37_79B1) & mask
-}
-/// The slot of the field with key, -1 none. (n: the table's pairs.)
-#[inline(always)]
-unsafe fn slot_of(ht: *const i32, n: u32, key: i32) -> i32 {
-    if ht.is_null() || n == 0 {
-        return -1;
-    }
-    let mask = n - 1;
-    let mut h = hash(key, mask);
-    loop {
-        let v = g(ht, (2 * h + 1) as usize);
-        if v == 0 {
-            return -1;
-        }
-        if g(ht, (2 * h) as usize) == key {
-            return v - 1;
-        }
-        h = (h + 1) & mask;
-    }
-}
-/// Key out of the table (backward shift, so lookups never stop early).
-unsafe fn del(ht: *mut i32, n: u32, key: i32) {
-    let mask = n - 1;
-    let mut h = hash(key, mask);
-    loop {
-        if g(ht, (2 * h + 1) as usize) == 0 {
-            return;
-        }
-        if g(ht, (2 * h) as usize) == key {
-            break;
-        }
-        h = (h + 1) & mask;
-    }
-    s(ht, (2 * h + 1) as usize, 0);
-    let mut j = h;
-    loop {
-        j = (j + 1) & mask;
-        let v = g(ht, (2 * j + 1) as usize);
-        if v == 0 {
-            return;
-        }
-        let k = hash(g(ht, (2 * j) as usize), mask);
-        // (Its home k cyclically outside (h, j]: it moves into the hole.)
-        let keep = if j > h { k > h && k <= j } else { k > h || k <= j };
-        if !keep {
-            s(ht, (2 * h) as usize, g(ht, (2 * j) as usize));
-            s(ht, (2 * h + 1) as usize, v);
-            s(ht, (2 * j + 1) as usize, 0);
-            h = j;
-        }
-    }
-}
-
-/// Marks. Arrays: [0] ix.slots, [1] unit.live, [2] unit.dead, [3]
-/// unit.rtEnd, [4] unit.rkF, [5] unit.nvProf, [6] unit.nvPK, [7] the narrow
-/// pool's table, [8] its marks, [9] the wide pool's table, [10] its marks.
-/// P: [0] k, [1] step, [2] count, [3] units, [4] mark, [5] / [6] the tables'
-/// pairs (narrow, wide), [7] jobs (0 or 1: one call; else this chunk's share of the
-/// runs, contiguous: the marks are the same value from any thread).
-#[no_mangle]
-pub unsafe extern "C" fn k_nav_sweep_mark(a: u32, chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (sl, live, dead, re, rk, pr, pk) = (k.p::<i32>(0), k.p::<u8>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<i8>(5), k.p::<i32>(6));
-    let (htn, seenn, htw, seenw) = (k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
-    let (k0, step, count, n, mark) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2).max(1) as usize, k.i(3).max(0) as usize, k.i(4));
-    let (nn, nw) = (k.i(5).max(0) as u32, k.i(6).max(0) as u32);
-    let jobs = k.i(7).max(1) as usize;
-    let runs = if n > k0 { (n - k0 + step - 1) / step } else { 0 };
-    let (r0, r1) = if jobs > 1 { (runs * chunk.max(0) as usize / jobs, runs * (chunk.max(0) as usize + 1) / jobs) } else { (0, runs) };
-    let mut base = k0 + r0 * step;
-    let stop = k0 + r1 * step;
-    while base < n && base < stop {
-        let end = (base + count).min(n);
-        for i in base..end {
-            let q = g(sl, i);
-            if q < 0 {
-                continue;
-            }
-            let q = q as usize;
-            if g(live, q) == 0 || g(dead, q) != 0 {
-                continue;
-            }
-            let e = g(re, q);
-            if e >= 0 && g(rk, q) == 1 {
-                let f = slot_of(htw, nw, (g(pr, q) as i32).wrapping_mul(16_777_216).wrapping_add(e));
-                if f >= 0 {
-                    s(seenw, f as usize, mark);
-                }
-            }
-            let p = g(pk, q);
-            if p >= 0 {
-                let (ht, nh, seen) = if p & 1 != 0 { (htw, nw, seenw) } else { (htn, nn, seenn) };
-                let f = slot_of(ht, nh, p >> 1);
-                if f >= 0 {
-                    s(seen, f as usize, mark);
-                }
-            }
-        }
-        base += step;
-    }
-}
-
-/// A cycle's end, one pool: every field (slot order) not marked since mark
-/// out of the table, its meta freed (meta[0] -1, its generation meta[6] on),
-/// listed in drop. Arrays: [0] table, [1] meta, [2] marks, [3] drop out,
-/// [4] hdr out ([0] dropped). P: [0] slots, [1] pairs, [2] mark, [3] meta
-/// words a slot.
-#[no_mangle]
-pub unsafe extern "C" fn k_nav_sweep_drop(a: u32, _chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (ht, meta, seen, drop, hdr) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
-    let (cap, n, mark, mw) = (k.i(0).max(0) as usize, k.i(1).max(0) as u32, k.i(2), k.i(3).max(1) as usize);
-    let mut nd = 0usize;
-    for f in 0..cap {
-        let m = f * mw;
-        if g(meta, m) < 0 || g(seen, f) >= mark {
-            continue;
-        }
-        del(ht, n, g(meta, m).wrapping_mul(16_777_216).wrapping_add(g(meta, m + 1)));
-        s(meta, m, -1);
-        s(meta, m + 6, g(meta, m + 6).wrapping_add(1));
-        s(drop, nd, f as i32);
-        nd += 1;
-    }
-    s(hdr, 0, nd as i32);
 }
 
 /// The visibility cover's commit (renderer.js _visCoverUnitsCommit): per
@@ -981,7 +848,16 @@ pub unsafe extern "C" fn k_acq_remap(a: u32, chunk: i32) {
     let (s0, s1) = super::k::job_range(chunk, k.i(1), k.i(0));
     let fl = k.i(2).max(0);
     let stamp = k.i(3);
+    // (The scan's unit target (acq.out, -1 none, -2 not scanned): the brain's fallback when its kept target falls
+    // (k.rs brain_pick), read by slot at the commit. Left at the moved unit's old slot, the fallback was refused
+    // (another unit, or none, there) where a layout without the move took it: a relayout on one peer only (a
+    // restore's dense layout needs none) changed a unit's target.)
+    let out = k.p::<i32>(4);
     for q in s0..s1 {
+        if !out.is_null() {
+            let o = g(out, q);
+            if o >= 0 && o < fl && g(fst, o as usize) == stamp { s(out as *mut i32, q, g(fwd, o as usize)); }
+        }
         let m = g(bm, q);
         if m == 255 || m == 0 || (m & 16) != 0 { continue; }
         let v = g(bt, q);
@@ -1023,7 +899,7 @@ pub unsafe extern "C" fn k_slab_score(a: u32, chunk: i32) {
 /// whose row is no longer in the world (its tile [2] ctab, [3] rrow): alive
 /// 0, listed ([67], count [68][0]); the slots written in order into the
 /// order column, count [68][1]. The presentation table's columns: [16..36)
-/// f32, [36..45) i32, [45] order, [46..62) i16, [62..65) u8 (sim_frame_world.js
+/// f32, [36..48) i32, [48] order, [49..62) i16, [62..65) u8 (sim_frame_world.js
 /// SIM_STRUCT_SPEC's order); [65] the tile -> slot map, [66] the slots'
 /// serials. P: [0] slots, [1] classes, [2] game time, [3] order tick, [4]
 /// tile, [5] L1, [6] R1, [7] keys, [8] spr types, [9] area steps max, [10]
@@ -1056,9 +932,9 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
     let mut nm = 0usize;
     let f = |i: usize| k.p::<f32>(16 + i);
     let i4 = |i: usize| k.p::<i32>(36 + i);
-    let i2 = |i: usize| k.p::<i16>(46 + i);
+    let i2 = |i: usize| k.p::<i16>(49 + i);
     let u1 = |i: usize| k.p::<u8>(62 + i);
-    let (mut order, tslot, serials, mut gone, _cnt) = (k.p::<i32>(45), k.p::<i32>(65), k.p::<i32>(66), k.p::<i32>(67), k.p::<i32>(68));
+    let (mut order, tslot, serials, mut gone, _cnt) = (k.p::<i32>(48), k.p::<i32>(65), k.p::<i32>(66), k.p::<i32>(67), k.p::<i32>(68));
     let order_ok = !order.is_null();
     if let Some((og, oo, ok_, os)) = outs { gone = og; order = oo; miss_k = ok_; miss_s = os; }
     // (The owners' researched maximum level per building key: adj.rml [74], (owner + 1) * keys + key.)
@@ -1154,7 +1030,7 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         let (rx, ry) = (rdf(MC_RX), rdf(MC_RY));
         s(f(16), sl, if rx == rx { rx as f32 } else { 0.0 }); s(f(17), sl, if ry == ry { ry as f32 } else { 0.0 });
         s(f(18), sl, 0.0); s(f(19), sl, damage as f32);
-        // i32: serial flags l0 l1 l2 l3 orderTick rallyTargetId label (the links: the second pass)
+        // i32: serial flags l0 l1 l2 l3 orderTick rallyTargetId label stacks mstacks estacks (the links: the second pass)
         if !serials.is_null() { s(i4(0), sl, g(serials, sl)); }
         let researching = rhas && !rdb(MC_UPG) && rdb(MC_ARS) && rok;
         let flags = (if rdb(MC_UC) { 1 } else { 0 }) | (if rdb(MC_UPG) { 2 } else { 0 }) | (if rdb(MC_SALV) { 4 } else { 0 }) | (if rdb(MC_ISSTK) { 8 } else { 0 })
@@ -1166,22 +1042,22 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         s(i4(6), sl, otick);
         let rt = rdf(MC_RT);
         s(i4(7), sl, if rt == rt { rt as i32 } else { -1 });
-        // i16: kind gx gy owner type utype level elevel stacks mstacks estacks qlen qtype laser watchedBy stackCount
+        // i16: kind gx gy owner type utype level elevel qlen qtype laser watchedBy stackCount
         s(i2(0), sl, kind as i16); s(i2(1), sl, gx as i16); s(i2(2), sl, gy as i16); s(i2(3), sl, owner as i16);
         s(i2(4), sl, tcode as i16); s(i2(5), sl, ucode as i16);
         s(i2(6), sl, if lv0 != -128 { lv0 as i16 } else { -1 }); s(i2(7), sl, if el0 != -128 { el0 as i16 } else { -1 });
-        let opt = |x: i32| -> i16 { if x == i32::MIN { -1 } else { x as i16 } };
-        s(i2(8), sl, opt(stk)); s(i2(9), sl, opt(rdi(MC_MSTK))); s(i2(10), sl, opt(rdi(MC_ESTK)));
+        let opt = |x: i32| -> i32 { if x == i32::MIN { -1 } else { x } };
+        s(i4(9), sl, opt(stk)); s(i4(10), sl, opt(rdi(MC_MSTK))); s(i4(11), sl, opt(rdi(MC_ESTK)));
         let qn = rd8(MC_QN);
         let ql = if qn == -128 { 0 } else { qn.max(0) };
-        s(i2(11), sl, ql as i16);
+        s(i2(8), sl, ql as i16);
         let qt = if ql > 0 { let p = mcol::<i32>(cls, c, MC_QT); if p.is_null() { 0 } else { g(p, if kind == 1 { uid } else { tid }) } } else { 0 };
-        s(i2(12), sl, qt as i16);
+        s(i2(9), sl, qt as i16);
         let lz = rd8(MC_LZ);
-        s(i2(13), sl, if lz == -128 { 0 } else { lz as i16 });
+        s(i2(10), sl, if lz == -128 { 0 } else { lz as i16 });
         let wb = rd8(MC_WBT);
-        s(i2(14), sl, if wb == -128 { -1 } else { wb as i16 });
-        s(i2(15), sl, -1);
+        s(i2(11), sl, if wb == -128 { -1 } else { wb as i16 });
+        s(i2(12), sl, -1);
         // The level label's numbers (things_utils.js getLevelLabelText): its
         // level (0 under construction), effective and potential levels, the
         // owner's researched maximum, each 7 bits, bit 28 set; the page makes
@@ -1271,7 +1147,7 @@ pub unsafe extern "C" fn k_meta_structs_par(a: u32, chunk: i32) {
         }
         1 => {
             let nch = k.i(17).max(0) as usize;
-            let (gone, order, mk, msl) = (k.p::<i32>(67), k.p::<i32>(45), k.p::<i32>(14), k.p::<i32>(15));
+            let (gone, order, mk, msl) = (k.p::<i32>(67), k.p::<i32>(48), k.p::<i32>(14), k.p::<i32>(15));
             let list_mode = !k.p::<i32>(69).is_null();
             let (mut ag, mut ao, mut am) = (0usize, 0usize, 0usize);
             for c in 0..nch {
@@ -1372,9 +1248,25 @@ pub(super) unsafe fn slab_alloc(b: &Books, key: i32, slack_min: i32, slack_shift
         if *b.sfree.add(slab as usize) as i32 == SLAB && *b.home.add(slab as usize) != super::birth::RZ_RESERVED { *b.home.add(slab as usize) = key; *b.cur.add(k) = slab; return slab_take(b, slab); }
     }
     slab = slab_fresh(b);
-    if slab < 0 { return -1; }
+    if slab < 0 {
+        // (The columns' slots all opened (the match's reservation): any free slot, wherever. Below the slack's
+        // threshold the holes were not looked at, and a birth was refused with free slots left: a fragmented layout
+        // refused what a compact one (a restored peer's) placed, the barracks' queues apart on the two peers.)
+        let s = slab_near_hole(b, key);
+        return if s >= 0 { s } else { slab_any(b) };
+    }
     *b.home.add(slab as usize) = key; *b.cur.add(k) = slab;
     slab_take(b, slab)
+}
+/// Any slab with a free slot (not the relayout's), the opened ones in order; -1 none. (Only when every slot is opened:
+/// a scan of the slabs' counts, a few thousand bytes.)
+unsafe fn slab_any(b: &Books) -> i32 {
+    let opened = *b.hdr.add(1);
+    if *b.hdr <= 0 { return -1; }
+    for slab in 0..opened {
+        if *b.sfree.add(slab as usize) > 0 && *b.home.add(slab as usize) != super::birth::RZ_RESERVED { return slab_take(b, slab); }
+    }
+    -1
 }
 /// A batch birth's slot (birth.rs k_birth_take): its block's current slab
 /// while it has room, else a whole empty slab, else a new one, so a batch
