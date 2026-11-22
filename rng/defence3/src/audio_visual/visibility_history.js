@@ -133,6 +133,12 @@ function freezeHistoryRecord(record) {
     const source = record.source;
     // (A unit view reads the frame: its ghost is a plain unit.)
     const copy = Object.create(source._frameView ? Object.getPrototypeOf(Object.getPrototypeOf(source)) : Object.getPrototypeOf(source));
+    // (A structure's ghost is detached (_sr -1): its values in its own _sdet record, never in the struct tables. With
+    // no row its writes went to the tables at row undefined: a maxEnergy override set and cleared there moved the
+    // table's override count (SOverrideColumn) on this peer only, the owner's reconcile of a placed site then skipped
+    // the table and kept the site's placement override, and a builder finished the site at that energy: a desync,
+    // multiplayer-extremes 2026-11-22.)
+    if (typeof source._sr === 'number') Object.defineProperty(copy, '_sr', { value: -1, writable: true, configurable: true, enumerable: false });
     for (const key of HISTORY_RENDER_FIELDS) copy[key] = source[key];
     // Only small rendering data is copied, once on disappearance. No paths,
     // targets, spatial buckets, canvases or recursively reachable world state.

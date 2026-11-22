@@ -98,7 +98,9 @@ function pmState(cap) {
 // The per-slot state for cap slots (pres_fill.rs T_*): its table, views of
 // each column and of the stamps (the change marks). True when made anew.
 const PM_STATE=[['last',Int32Array,-1],['vx',Float32Array,0],['vy',Float32Array,0],['vid',Int32Array,-1],['fa',Float32Array,0],['fid',Int32Array,-1],
-    ['fvx',Float32Array,0],['fvy',Float32Array,0],['full',Int32Array,0],['ease',Uint8Array,0],['gx',Float32Array,0],['gy',Float32Array,0],['gid',Int32Array,-1]];
+    ['fvx',Float32Array,0],['fvy',Float32Array,0],['full',Int32Array,0],['ease',Uint8Array,0],['gx',Float32Array,0],['gy',Float32Array,0],['gid',Int32Array,-1],
+    // (Table word 13 is the stamps': these two at 14 and 15, the facing's held turn.)
+    ['fpw',Float32Array,0],['fpn',Uint8Array,0]];
 function pmStateFor(cap) {
     const old=pm.st;
     if (old && old.cap===cap) return false;
@@ -106,7 +108,7 @@ function pmStateFor(cap) {
     const tab=pmAlloc(64);st.regions.push(tab);st.T=tab.base;
     const T=new Int32Array(pm.mem.buffer,tab.base,16);
     PM_STATE.forEach(([k,A,fill],i) => {
-        const r=pmAlloc(cap*A.BYTES_PER_ELEMENT);st.regions.push(r);T[i]=r.base;
+        const r=pmAlloc(cap*A.BYTES_PER_ELEMENT);st.regions.push(r);T[i<13?i:i+1]=r.base;
         const v=st.views[k]=new A(pm.mem.buffer,r.base,cap);
         // (The drawn places and facings carried over from a smaller state.)
         const keep=old ? Math.min(cap,old.cap) : 0;

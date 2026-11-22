@@ -843,8 +843,12 @@ impl MoveGrid {
         if free(&self.g,bx,by,ra,l,0,0,0,-1){
             clear_or_mark(&self.g,bx,by,ra,l,true);
             let c=self.g.cell as f64;let (px,py)=(-dy,dx);
-            let tries:[(f64,f64);6]=[(0.0,0.0),(1.0,0.0),(1.0,1.0),(1.0,-1.0),(2.0,0.0),(0.0,1.0)];
-            for k in 0..(if rb>ra{6}else{1}){
+            // (A larger partner: places near where the mover stood, back along the mover's way and to its sides, up to 4
+            // cells back and 2 aside. With 10 (up to 3 back, 1 aside) a builder in a parked group of bigger fighters
+            // failed 56% of its swaps, all of them for the partner's place.)
+            let tries:[(f64,f64);23]=[(0.0,0.0),(1.0,0.0),(1.0,1.0),(1.0,-1.0),(2.0,0.0),(0.0,1.0),(0.0,-1.0),(2.0,1.0),(2.0,-1.0),(3.0,0.0),
+                (0.0,2.0),(0.0,-2.0),(1.0,2.0),(1.0,-2.0),(2.0,2.0),(2.0,-2.0),(3.0,1.0),(3.0,-1.0),(3.0,2.0),(3.0,-2.0),(4.0,0.0),(4.0,1.0),(4.0,-1.0)];
+            for k in 0..(if rb>ra{23}else{1}){
                 let (f,g)=*tries.as_ptr().add(k);
                 let tx=ax+js_round((dx*f+px*g)*c) as i32;let ty=ay+js_round((dy*f+py*g)*c) as i32;
                 if free(&self.g,tx,ty,rb,l,0,0,0,-1){

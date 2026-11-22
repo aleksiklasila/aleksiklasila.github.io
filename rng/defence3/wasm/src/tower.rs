@@ -315,6 +315,8 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
     // (Outcomes, a diagnostic: cnt[4] committed unit shot, [5] structure, [6] none (idle), [7] gone since (retry), [8] preferred.)
     let mut oc=[0i32;5];
     let mut nlive=*hdr as usize;let mut nfree=*hdr.add(1) as usize;let live0=nlive as i32;
+    // (hdr[10]: the slots' high-water mark, projectile.js projHighWater: the frames send the slots below it.)
+    let mut hw=(*hdr.add(10)).max(0) as usize;
     let tick=(now as i64 & 1023) as i32;
     // (Its row's next tick to act in tw.due [74], as k_tower_due writes it.)
     let due=k.p::<i32>(74);
@@ -399,7 +401,7 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
         *ftile.add(nf)=t;*fang.add(nf)=a;nf+=1;
         if nk<nlook{*looks.add(nk)=q as i32;*ltgt.add(2*nk)=pick.0;*ltgt.add(2*nk+1)=pick.1;nk+=1;}
         if nfree==0{drop+=1;continue;}
-        nfree-=1;let s=*free.add(nfree) as usize;*live.add(nlive)=s as i32;nlive+=1;
+        nfree-=1;let s=*free.add(nfree) as usize;*live.add(nlive)=s as i32;nlive+=1;if s>=hw{hw=s+1;}
         let len=sqrt(dx*dx+dy*dy);
         *px.add(s)=x;*py.add(s)=y;*psx.add(s)=x;*psy.add(s)=y;*ppx.add(s)=x as f32;*ppy.add(s)=y as f32;*paim.add(s)=len as f32;
         if len>0.0{*pvx.add(s)=dx/len*8.0;*pvy.add(s)=dy/len*8.0;}else{*pvx.add(s)=8.0;*pvy.add(s)=0.0;}
@@ -416,7 +418,7 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
         *pid.add(s)=(tick<<22)|t;*pev.add(s)=0;*parg.add(s)=-1;
     }
     *hdr.add(2)=(*hdr.add(2)).wrapping_add(nlive as i32-live0);
-    *hdr=nlive as i32;*hdr.add(1)=nfree as i32;*hdr.add(3)+=drop;
+    *hdr=nlive as i32;*hdr.add(1)=nfree as i32;*hdr.add(3)+=drop;*hdr.add(10)=hw as i32;
     *cnt=0;*cnt.add(1)=nf as i32;*cnt.add(2)=nk as i32;*cnt.add(3)=drop;
     for i in 0..5{*cnt.add(4+i)=oc[i];}
 }

@@ -48,6 +48,8 @@ const CMD_MOVING: u8 = 1;
 const EV_NOWAY: i32 = 2;
 /// A new worker of a spawner with a rally point (spr.rs k_spawn_births; unit.js UNIT_EV_RALLY).
 const EV_RALLY: i32 = 6;
+/// A worker stalled beside its way's end (mv.rs move_flow wnear): there, as at EV_NOWAY a tile from it.
+const EV_NEAR: i32 = 7;
 // Out events.
 const OUT_SOUND_RESEARCH: i32 = 1;
 const OUT_RESEARCH_ADVANCE: i32 = 2;
@@ -1142,7 +1144,8 @@ impl<'a> Ctx<'a> {
             }
             let moved = g(w.mout, q) != 0;
             self.set_cmd(q, CMD_MOVING);
-            if !moved { self.way_end(q, code); }
+            // (Beside its way's end (EV_NEAR) it has arrived though a push moved it this step.)
+            if !moved || code == EV_NEAR { self.way_end(q, code); }
             if self.path_done(q) { self.finish_manual(q); }
             if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); }
             return;
@@ -1151,7 +1154,7 @@ impl<'a> Ctx<'a> {
         self.ai(q);
         self.sync_cmd(q);
         let left = if g(w.nvpk, q) >= 0 { 1 - g(w.pidx, q) } else { 0 };
-        if !moved && g(w.cmd, q) == CMD_MOVING { self.way_end(q, code); }
+        if (!moved || code == EV_NEAR) && g(w.cmd, q) == CMD_MOVING { self.way_end(q, code); }
         if left > 0 && g(w.dead, q) == 0 && self.path_done(q) { self.ai(q); self.sync_cmd(q); }
         if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); }
     }
@@ -1165,9 +1168,10 @@ impl<'a> Ctx<'a> {
             let (ux, uy) = self.utile(q);
             let (dx, dy) = (irem(dest, w.gw), idiv(dest, w.gw));
             if ux == dx && uy == dy { self.set_pidx(q, g(w.pidx, q) + 1); s(w.navld, q, -1.0); }
-            else if code == EV_NOWAY {
+            else if code == EV_NOWAY || code == EV_NEAR {
                 if (dx - ux).abs() > 1 || (dy - uy).abs() > 1 { return; }
                 self.set_pidx(q, 1);
+                if code == EV_NEAR { s(w.navld, q, -1.0); }
             } else { return; }
             if !self.path_done(q) { return; }
         }

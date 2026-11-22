@@ -499,7 +499,7 @@ function simPresentationReturn(buf) {
 }
 
 function* simPresentationProjectiles() {
-    const p=_simPresentation, n=_pj.hw;
+    const p=_simPresentation, n=projHighWater();
     let F=p.projectiles;
     if(!F || F.cap<n) {
         const cap=Math.max(64,Math.ceil(n*1.25/64)*64);

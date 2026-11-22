@@ -86,8 +86,10 @@ for (const worker of [false,true]) {
     c.localDefeated=false;
     let calls=0; c._queueLocalAction=()=>++calls;
     vm.runInContext(worker.slice(worker.indexOf('function queueAction(action)'),worker.indexOf("// The host's administrative commands")),c);
-    c.queueAction({action:'move'}); assert.equal(calls,0);
+    c.queueAction({action:'move'}); assert.equal(calls,0,'input blocked while loading');
     for(let i=0;i<8;i++)step(10);
-    c.queueAction({action:'move'}); assert.equal(calls,1);
+    // (A command given under the loading overlay is held and queued at the release, not dropped: audit row 120.)
+    assert.equal(calls,1,'held command queued once at the release');
+    c.queueAction({action:'move'}); assert.equal(calls,2);
 }
 console.log('PASS loading work convergence, worker/page completion, per-tick barrier, stale session, release retry, input gate and never-started matches');

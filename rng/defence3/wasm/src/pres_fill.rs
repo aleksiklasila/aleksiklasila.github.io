@@ -92,6 +92,8 @@ const S_MX: usize = 25; const S_MY: usize = 26; const S_MPX: usize = 27; const S
 const T_LAST: usize = 0; const T_VX: usize = 1; const T_VY: usize = 2; const T_VID: usize = 3; const T_FA: usize = 4;
 const T_FID: usize = 5; const T_FVX: usize = 6; const T_FVY: usize = 7; const T_FULL: usize = 8; const T_EASE: usize = 9;
 const T_GX: usize = 10; const T_GY: usize = 11; const T_GID: usize = 12; const T_STAMPS: usize = 13;
+// The facing's held turn (p_facing): the wanted direction a big turn waits on, and for how many builds.
+const T_FPW: usize = 14; const T_FPN: usize = 15;
 
 // Flags (sim_frame.js SIM_UF_*).
 const UF_BURNING: i32 = 16; const UF_POISONED: i32 = 32; const UF_FROZEN: i32 = 64; const UF_WET: i32 = 128;
@@ -101,6 +103,13 @@ const FILL_STATUS: i32 = UF_BURNING | UF_POISONED | UF_FROZEN | UF_WET | UF_SAND
 // presentation_worker.js constants.
 const VIS_REST: f64 = 0.02; const VIS_LAG: f64 = 64.0;
 const FACE_MIN_SPEED: f64 = 0.2; const FACE_DEAD: f64 = 0.04;
+// A turn of more than FACE_HOLD_ANGLE (46 degrees) waits until the same direction (within FACE_SAME) has been wanted
+// FACE_HOLD builds in a row. A unit pressed in a crowd steps back and forth, or around a short cycle, a few pixels a
+// step: its smoothed movement swung the model through half a turn and back every tick (the "spinning" of stuck
+// units). Measured on the 2026-11-21 scene (tests/worker-crowd-probe.cjs, turns of 0.3 rad and more reversed the next
+// build, a thousand unit-builds): one base tick a step 1.5 -> 0, four 11.5 -> 2.4; steady movers' mean lag behind
+// their heading 0.19 -> 0.22 rad, 0.029 -> 0.041.
+const FACE_HOLD_ANGLE: f32 = 0.8; const FACE_SAME: f32 = 0.6; const FACE_HOLD: u8 = 2;
 const PI: f64 = 3.141592653589793; const TAU: f64 = PI * 2.0; const INV_TAU: f64 = 1.0 / TAU;
 const BLOCK: usize = 256;
 // DIRTY_COLS (16), and the column each is marked by (DIRTY_FROM).
@@ -542,6 +551,7 @@ unsafe fn p_facing(k: &K, x: Fl) {
         let (d, vx_, vy_) = (f.p::<f32>(F_FACE), f.p::<f32>(F_VX), f.p::<f32>(F_VY));
         let (cm, ct) = (c.s(S_CM), c.s(S_CMT));
         let (fa_, fi, fvx, fvy) = (t.p::<f32>(T_FA), t.p::<i32>(T_FID), t.p::<f32>(T_FVX), t.p::<f32>(T_FVY));
+        let (fpw, fpn) = (t.p::<f32>(T_FPW), t.p::<u8>(T_FPN));
         let (kv, kt) = (k.f(15) as f32, k.f(14) as f32);
         let min2 = (FACE_MIN_SPEED * FACE_MIN_SPEED) as f32;
         let (dead, tau, inv_tau) = (FACE_DEAD as f32, TAU as f32, INV_TAU as f32);
@@ -578,7 +588,16 @@ unsafe fn p_facing(k: &K, x: Fl) {
                 let want = if tgt { atan2_f32(dx, dy) } else { atan2_f32(vx, vy) };
                 let a0 = if fresh { if has { want } else { 0.0 } } else { *fa_.add(s) };
                 let mut dd = want - a0; dd -= f32_nearest(dd * inv_tau) * tau;
-                let turning = has & (f32::from_bits(dd.to_bits() & 0x7fff_ffff) > dead);
+                let add = f32::from_bits(dd.to_bits() & 0x7fff_ffff);
+                // (A big turn held until its direction has been wanted FACE_HOLD builds in a row: FACE_HOLD_ANGLE.)
+                let big = has & !fresh & (add > FACE_HOLD_ANGLE);
+                let (pw, pn) = (*fpw.add(s), *fpn.add(s));
+                let mut e = want - pw; e -= f32_nearest(e * inv_tau) * tau;
+                let same = (pn > 0) & (f32::from_bits(e.to_bits() & 0x7fff_ffff) < FACE_SAME);
+                let n2 = if !big { 0 } else if same { pn.saturating_add(1) } else { 1 };
+                *fpn.add(s) = n2;
+                if big & !same { *fpw.add(s) = want; }
+                let turning = has & !(big & (n2 < FACE_HOLD)) & (add > dead);
                 let a = if turning { a0 + dd * kt } else { a0 };
                 *fa_.add(s) = a; *fi.add(s) = id; *d.add(s) = a;
                 let e = *es.add(s);
@@ -779,6 +798,7 @@ pub unsafe extern "C" fn k_pres_moves(a: u32, _: i32) {
     let (np, cap, gh) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2) != 0);
     let (vx, vy, vi) = (t.p::<f32>(T_VX), t.p::<f32>(T_VY), t.p::<i32>(T_VID));
     let (fa, fi, fvx, fvy) = (t.p::<f32>(T_FA), t.p::<i32>(T_FID), t.p::<f32>(T_FVX), t.p::<f32>(T_FVY));
+    let (fpw, fpn) = (t.p::<f32>(T_FPW), t.p::<u8>(T_FPN));
     let (gx, gy, gi, es) = (t.p::<f32>(T_GX), t.p::<f32>(T_GY), t.p::<i32>(T_GID), t.p::<u8>(T_EASE));
     for j in 0..np {
         let (f_, t_) = (*pr.add(2 * j), *pr.add(2 * j + 1));
@@ -787,7 +807,10 @@ pub unsafe extern "C" fn k_pres_moves(a: u32, _: i32) {
         let id = ids.i32(t_);
         if id <= 0 { continue; }
         if *vi.add(f_) == id { *vx.add(t_) = *vx.add(f_); *vy.add(t_) = *vy.add(f_); *vi.add(t_) = id; *vi.add(f_) = -1; }
-        if *fi.add(f_) == id { *fa.add(t_) = *fa.add(f_); *fvx.add(t_) = *fvx.add(f_); *fvy.add(t_) = *fvy.add(f_); *fi.add(t_) = id; *fi.add(f_) = -1; }
+        if *fi.add(f_) == id {
+            *fa.add(t_) = *fa.add(f_); *fvx.add(t_) = *fvx.add(f_); *fvy.add(t_) = *fvy.add(f_); *fi.add(t_) = id; *fi.add(f_) = -1;
+            *fpw.add(t_) = *fpw.add(f_); *fpn.add(t_) = *fpn.add(f_); *fpn.add(f_) = 0;
+        }
         if gh && *gi.add(f_) == id { *gx.add(t_) = *gx.add(f_); *gy.add(t_) = *gy.add(f_); *gi.add(t_) = id; *gi.add(f_) = -1; }
         *es.add(t_) = *es.add(f_); *es.add(f_) = 0;
     }

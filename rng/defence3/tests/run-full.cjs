@@ -15,8 +15,8 @@
 // --resume=<dir>: reuse that run dir and skip the jobs that PASSed there
 // (--rerun=regex: those jobs run again even so).
 // --functional: only the jobs that can fail on a bug (tests in both modes,
-// soaks/extremes, fuzzers, behaviour-checking browser tests); no benchmarks,
-// profiles, tickbench, balance or timing/latency/FPS probes.
+// soaks/extremes, UI/GUI fuzzers, behaviour-checking browser tests); no benchmarks,
+// profiles, tickbench, balance, perf fuzz or timing/latency/FPS probes.
 // --only/--skip match job names (see --list). Failures never stop the run.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), os = require('node:os');
 const { spawn, spawnSync } = require('node:child_process');
@@ -98,8 +98,9 @@ add('balance-all-scenarios', 'tests/balance/run-fights.cjs', ['--seconds', '60',
 
 let selected = jobs.map((j, i) => ({ ...j, index: i }));
 // --functional: what can fail on a bug only; no measurements (benchmarks,
-// profiles, tickbench, balance, the timing/latency/FPS probes).
-const MEASURE = /^(benchmark-|balance-|tickbench-|chaos-(million|profile|neighbor|allocation)|edge-chaos-scene$|browser-(render-scale-profile|page-stall-tps-probe|motion-jitter-probe|view-switch-spike|select-all-spike-probe|camera-steady-trace|fx-ab-probe|click_latency_probe|latency_probe|order_marker_probe|panel_scroll_probe|place_tps_probe)$)/;
+// profiles, tickbench, balance, the perf fuzzers, the measurement tools without asserts (crowd-scenarios,
+// entity-storage-census) and the timing/latency/FPS/stall probes).
+const MEASURE = /^(benchmark-|balance-|tickbench-|perf-fuzz-|crowd-scenarios$|entity-storage-census$|browser-ui-longtask-survey$|chaos-(million|profile|neighbor|allocation)|edge-chaos-scene$|browser-(render-scale-profile|page-stall-tps-probe|motion-jitter-probe|view-switch-spike|select-all-spike-probe|camera-steady-trace|fx-ab-probe|click_latency_probe|latency_probe|order_marker_probe|panel_scroll_probe|place_tps_probe)$)/;
 if (flag('functional')) selected = selected.filter(j => !MEASURE.test(j.name));
 const only = arg('only', ''), skip = arg('skip', '');
 if (only) selected = selected.filter(j => new RegExp(only).test(j.name));
@@ -135,10 +136,12 @@ const state = { pid: process.pid, started: new Date().toISOString(), status: 'ru
 function save() {
     state.updated = new Date().toISOString();
     fs.writeFileSync(artifact('status.json'), JSON.stringify(state, null, 2));
-    const bad = rows.filter(r => r.result !== 'PASS');
+    // (A resumed run's rerun job: its latest row only.)
+    const latest = [...new Map(rows.map(r => [r.name, r])).values()];
+    const bad = latest.filter(r => r.result !== 'PASS');
     fs.writeFileSync(artifact('summary.md'), '# Full validation\n\n' + state.status + ' — ' + state.completed + '/' + state.total + ' completed; ' + state.passed + ' passed, ' + state.failed + ' failed, ' + state.timedOut + ' timed out.\n\nCurrent: ' + (state.current ? state.current.name : 'none') +
         '\n\n## Not passed\n\n' + (bad.length ? bad.map(r => '- ' + r.name + ' — ' + r.result + ' ([log](logs/' + r.log + '))').join('\n') : 'none') +
-        '\n\n## All\n\n| Job | Result | Seconds | Log |\n|---|---|---:|---|\n' + rows.map(r => '| ' + r.name + ' | ' + r.result + ' | ' + (r.elapsedMs / 1000).toFixed(1) + ' | [log](logs/' + r.log + ') |').join('\n') + '\n');
+        '\n\n## All\n\n| Job | Result | Seconds | Log |\n|---|---|---:|---|\n' + latest.map(r => '| ' + r.name + ' | ' + r.result + ' | ' + (r.elapsedMs / 1000).toFixed(1) + ' | [log](logs/' + r.log + ') |').join('\n') + '\n');
 }
 function log(s) { const line = new Date().toISOString() + ' ' + s; fs.appendFileSync(artifact('run.log'), line + '\n'); console.log(line); }
 function killTree(pid) { if (!pid) return; if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); else try { process.kill(-pid, 'SIGKILL'); } catch { } }

@@ -10233,3 +10233,154 @@ replaced by route-id and walled-map checks; nav-atlas no longer counts fields. P
 --filter=^multiplayer-, SIM_WORKER 0 and 1: 110/110).
 Not done here: the unit columns that only carried field data are now constant (mvFGen 0, mvReady 0, navRdy 0, the
 look record's G word 3): a column-diet follow-up; sim_wasm64_bin.js (legacy) not rebuilt.
+
+## 2026-11-21 - workers through crowds: arrival beside a packed destination, swaps past parked groups, no sidestep cycles, a steadier 3D facing
+
+User: units (workers especially: builders to their builder spawner for materials, healers to theirs) got stuck in
+crowds and jittered in place; in the 3D renderer the jitter showed as the model spinning back and forth. Scene:
+`tests/defence3-scene-2026-11-21T13-39-07-046Z.gz` (a base where every structure is walkable: 230 builders, 37
+healers, a parked group of laser_resistant on the lava sites). Probe: `tests/worker-crowd-probe.cjs <scene> <dk>
+<ticks>` (per worker type: legs a unit per 1000 base ticks, share of walking time stuck (< 24 px in 60 ticks),
+direction reversals per 1000 walking steps; LIST / TRACE / NEAR / MAP / FLIPS / ASSIGN / EVAL to look at one unit, a
+neighbourhood, the map or a player's build assignment; and a model of the 3D facing (pres_fill.rs p_facing) run on the
+simulation's velocities of every unit).
+
+**What held them (traced unit by unit):**
+- Workers path to the spawner's own tile (structures are walkable) and arrive only in that tile. Three to five walkers
+  aimed at the same tile's point were all "walkers" heading the same way: no swap between them, no yield, and workers
+  skip the fighters' crowd arrival (mvFlags 128). A worker one tile from its spawner (within its interaction range,
+  wai.rs within) pressed on for good. Trip legs (RETURNING_FOR_GOLD, mvWk 3) never get EV_CHECK events either.
+  The user's case reproduced: five builders beside the builder spawner assigned to lava sites (ASSIGN) switched to
+  RETURNING_FOR_GOLD and never changed state in 1200 ticks.
+- A worker sent to a site beside a parked friendly group never swapped through it: traffic_swap skipped partners whose
+  route ends within 3 tiles of the mover's (the "own destination crowd" rule, meant for arrivals).
+- The x-blocked mover stepped a quarter turn one way, then from there the other way back: a pixel-perfect two-tick
+  cycle at full speed (vy +-1.75), 800+ reversals in 1200 ticks for one builder. Its velocity, smoothed for the facing,
+  stayed above FACE_MIN_SPEED: the model turned half-way round and back every tick.
+
+**Kept (wasm/src/mv.rs, wai.rs, occ.rs, pres_fill.rs, presentation_worker.js):**
+- **Arrival beside a packed destination (mv.rs move_flow wnear, EV_NEAR 7; wai.rs way_end):** a worker walker in a
+  tile next to its destination's samples its distance to the tile's middle every STEER_NEAR_TICKS on its own phase
+  (unit.navLD); stalled over a window (less than 0.3 of its speed's way) it stands with EV_NEAR, and the worker kernel
+  ends the leg as at EV_NOWAY a tile from it (also when a push moved it that step: mvOut is then set). Its target a
+  tile away, it acts there (within); else it walks on and is looked at again a window later. step_flow leaves it to
+  move_flow on its phase tick, step4 drops a lane entering a tile within 2 of its destination, and steady_until ends
+  such a worker's steady window at its next phase tick (held steers never reached move_flow before).
+- **Workers swap past standing non-workers (traffic_swap):** the own-crowd rule no longer applies to a worker mover
+  (a worker at its work still keeps its spot).
+- **A larger partner's place in a swap (occ.rs MoveGrid::swap):** 10 tries instead of 6 (beside where the mover stood,
+  two cells along with a side cell, three along).
+- **Shoulders (mv.rs shoulders):** the quarter turn only to the right-hand side (keep_right's n); no quarter turn to
+  the left. (No quarter turns at all: traffic-pressure counter 92% moving < 95%, and worker-walk's researcher died in
+  the lava; right-hand only: counter 98.9%, base 98.7%.)
+- **3D facing hold (pres_fill.rs p_facing, presentation state words 14 / 15):** a turn of more than 46 degrees waits
+  until the same direction (within 0.6 rad) has been wanted two builds in a row; smaller turns as before. Moved with
+  the slot (k_pres_moves).
+
+**Measured (scene, 1200 base ticks; base = HEAD's binary):**
+
+| | base dk 1 | now dk 1 | base dk 4 | now dk 4 |
+|---|---|---|---|---|
+| healer legs / unit / 1000 ticks | 13.7 | 25.1 | 18.0 | 22.1 |
+| healer walking time stuck | 26.6% | 0.2% | 4.9% | 0.3% |
+| healer direction reversals / 1000 walking steps | 309 | 32 | 122 | 32 |
+| builder legs / unit / 1000 ticks | 4.12 | 5.04 | 4.70 | 4.98 |
+| builder walking time stuck | 29.6% | 2.8% | 1.6% | 1.2% |
+| builder direction reversals / 1000 walking steps | 366 | 84 | 91 | 53 |
+
+3D facing turns of 0.3 rad or more reversed the next build, per 1000 unit-builds (all units): base simulation with
+the old facing 28.2 (dk 1) / 19.6 (dk 4); now 0.00 / 2.7. Steady movers' mean lag behind their heading 0.19 -> 0.23
+rad (dk 1), 0.028 -> 0.039 (dk 4). (Candidates measured on the same velocities: gating turns on the smoothed velocity
+being half the current one gave 0 at dk 1 but nothing at dk 4, where the per-build smoothing follows a 4-tick
+cycle; the hold at 100 degrees left 6.2 at dk 4; at 46 degrees 2.4.)
+
+The user's case on the new binary: the same five builders all fetched materials and finished their sites within 213
+ticks.
+
+**In Edge (tests/facing-jitter-edge-probe.cjs: the scene through the game's Load button, 3D, 20 s, every unit's
+drawn facing per presentation frame; a wiggle is a turn over 0.3 rad reversed the next frame):** HEAD 6,501 wiggles
+in 265k unit-frames (24.5 per 1000; the worst units 290-335 in 380 frames: spinning every frame); now 1 in 278k
+(0.00). A lone builder walking across the 1500 fixture (motion-jitter-probe, 3D): facing flips 0.129/s against HEAD's
+0.127/s (the hold costs nothing on a normal walk). No page errors.
+
+**Cost (move-step-probe, 8 helpers, dk 4, 40 steps, alternating builds, serial):** checker-200k-r0 step mean
+50.9 / 49.1 ms now against 52.2 / 49.5 base, p95 57.1 / 54.8 against 60.4 / 56.9, k89 10.0 / 9.6 against 10.7 / 10.2,
+k8 4.0 / 4.0 against 4.3 / 3.8. chaos-300k-32k: k89 15.0 / 15.2 / 14.4 against 15.1 / 14.6 / 14.6, k8 5.2 / 5.4 / 4.9
+against 5.0 / 4.8 / 4.9; the step mean 68.9 / 70.1 / 65.1 against 65.6 / 63.2 / 63.0, but every kernel moved alike
+(combat ones too) and the battle differs (163,942 alive after 40 steps against 167,784: units no longer held reach
+the fight): not the movement's cost.
+
+**Tests passed:** traffic-pressure (plug 99.6%, counter 98.9%, wall), worker-approach-occupancy, worker-walk,
+worker-take-rounds, worker-search-deltatick, worker-brain-spawners, worker-completion-publication,
+worker-created-start, worker-fallback-upgrade, scene-orders, movement-sleep, separation-jitter / -integration /
+-entry / -presentation, unit-collision-smoothness (reversal rate 0.109, base 0.127), deltatick-per-unit,
+deltatick-multiplayer, mover-table, mover-table-order, occupancy-grid, occupancy-shapes, shared-spatial-determinism,
+multiplayer-chaos-determinism, presentation-worker / -delta / -helpers.
+
+**Researchers in the scene (checked, not a fault):** 5 of 15 work at their labs and research advances (deposits on
+their cooldown); the other 10 stand with a pending lab search because no free lab is within their work range (2 area
+steps) of where they stand. (Energy plays no part in research: it only affects boosts. The earlier note here that
+they stood "with nothing payable, energy negative" was wrong.)
+
+### Follow-up (same day): no backward shoulders, wider swap places for a bigger partner
+
+The probe now counts a worker as walking only while it moves (mvOn 1): parked researchers had counted as stuck
+walkers. Numbers below are on that probe.
+
+- **Shoulders never go back along the step (mv.rs shoulders):** a quarter turn whose slide along the blocker went
+  backwards (its way ahead blocked) scored above standing with the right-hand bonus, and the next tick stepped
+  forward again: a two-tick cycle in parked crowds. Such a move is now skipped.
+- **A bigger partner's place in a swap (occ.rs MoveGrid::swap):** 23 places (up to 4 cells back along the mover's
+  way, 2 aside) instead of 10. Per-unit debug counters (a dbgc build) over 1200 ticks of the scene's walking workers:
+  of 25k blocked-tick swap looks, 90% are off the unit's hop tick (a swap is a whole contact spacing, so it comes once
+  every k ticks to keep its speed); of the 1.7k swaps tried, 949 failed, all of them for a larger partner's place.
+  With 23 places: 599 failed, 768 done (748 before).
+
+| scene, 1200 base ticks | before (r1) dk 1 | backward-shoulder fix dk 1 | + swap places dk 1 | r1 dk 4 | now dk 4 |
+|---|---|---|---|---|---|
+| builder walking time stuck | 3.6% | 4.7% | 3.4% | 1.5% | 3.4% |
+| builder reversals / 1000 walking steps | 102 | 54 | 43 | 51 | 32 |
+| healer walking time stuck | 0.4% | 0.0% | 0.0% | 0.2% | 0.1% |
+| healer reversals / 1000 walking steps | 47 | 44 | 33 | 19 | 13 |
+| builder legs / unit / 1000 ticks | 5.04 | 5.11 | 5.09 | 4.98 | 5.10 |
+
+(The stuck share went up with the shoulder fix because units that cycled in place at full speed counted as moving;
+they now stand and wait for a swap.)
+
+**Cost (move-step-probe, 8 helpers, dk 4, 40 steps, alternating base / new):** checker-200k-r0 step mean 44.7 / 47.0
+base against 45.9 / 46.7, k89 9.0 / 9.6 against 9.2 / 9.3; chaos-300k-32k 56.4 / 57.2 against 59.8 / 58.2, k89 12.7 /
+13.0 against 13.6 / 13.1: within run noise.
+
+**Tests passed:** the same 27 movement, worker, crowd, presentation and multiplayer-determinism tests as above.
+
+**Left:** the remaining stuck builders in the scene have their sites under a barracks' rally point: new
+laser_resistant keep walking into the parked group that covers the sites (the builder's blocker is often one of
+them, still walking to the group). In a fully packed group of bigger units the parked ones try to step aside
+(traffic_yield) but are boxed in too, and the swap finds no place. Levers not taken: a swap retry off the hop tick
+(would let a unit go faster than its speed), swaps with same-way walkers, builders giving up a site after a long
+stall. Only the wasm32 build is maintained (wasm64 is opt-in legacy, not rebuilt).
+
+### 2026-11-22: full functional run, failures fixed
+
+`node tests/run-full.cjs --functional` (tests/test-runs/full/2026-11-21T15-50-29-300Z): 629 of 635 jobs ran, 8 failed (4
+tests, some in both modes); the perf fuzzers were stopped. `--functional` now also leaves out the perf fuzzers
+(perf-fuzz-large, perf-fuzz-multiplayer), the measurement tools without asserts (crowd-scenarios,
+entity-storage-census) and the page-stall timing survey (browser-ui-longtask-survey). The other three Edge jobs
+(lod-startup, lod-strip, pop-limit-menu) passed.
+
+- **first-tick-loading (test stale):** a command given under the loading overlay is now held and queued at the
+  release (audit row 120), so the test counts it: one at the release, then the next.
+- **shared-stat-rows (test stale):** effStatsAllUnits takes a heap slot list and a count, not a Set.
+- **sim-frame-replica (bug):** the projectile pool's high-water mark was a JS field (_pj.hw) that only
+  projectileFire raised; tower shots from tower.rs k_tower_fire left it at 0, and the frame (n = hw slots) sent the
+  page no shots while the first shots of a match were towers'. It is pj.hdr[10] now, kept by both writers
+  (projHighWater()). The test read the page's own (allocated, empty) pool instead of the frame's views; it reads
+  the views on the page now.
+- **multiplayer-extremes (desync, mode 0 and EXT_GC):** guest4 diverged at tick 439: a builder finished its own
+  team's A* farm at 1562 energy on guest4, 7450 elsewhere. The site kept its placement maxEnergy override (_mxOv
+  1562) on guest4 only. The visibility history's ghosts (freezeHistoryRecord) are Object.create copies of a
+  structure with no row: their writes went through the struct accessors at row undefined, and a maxEnergy override
+  set and cleared there lowered the table's override count (SOverrideColumn, mxOvN) on that peer. At 0 the owner
+  reconcile at placement skipped the table and the override stayed; the builder kernel (wai.rs b_maxe) reads it
+  first. Ghosts are detached now (_sr -1: their values in _sdet), so the tables never see them. The movement
+  changes of 2026-11-21 only moved the timing that exposed it (the committed build passed by chance).

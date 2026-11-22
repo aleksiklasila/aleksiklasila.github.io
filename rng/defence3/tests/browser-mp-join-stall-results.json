@@ -14,8 +14,8 @@
     "guest1": {
      "maxLong": 0,
      "longSum": 0,
-     "tickGap": 71,
-     "ticks": 85
+     "tickGap": 59,
+     "ticks": 84
     }
    }
   },
@@ -23,16 +23,16 @@
    "label": "spectator joins",
    "per": {
     "host": {
-     "maxLong": 374,
-     "longSum": 507,
-     "tickGap": 2085,
-     "ticks": 908
+     "maxLong": 394,
+     "longSum": 780,
+     "tickGap": 655,
+     "ticks": 982
     },
     "guest1": {
-     "maxLong": 0,
-     "longSum": 0,
-     "tickGap": 1850,
-     "ticks": 914
+     "maxLong": 73,
+     "longSum": 73,
+     "tickGap": 794,
+     "ticks": 988
     }
    }
   },
@@ -40,17 +40,17 @@
    "label": "guest reloads",
    "per": {
     "host": {
-     "maxLong": 475,
-     "longSum": 652,
-     "tickGap": 3286,
-     "ticks": 1085
+     "maxLong": 465,
+     "longSum": 905,
+     "tickGap": 4376,
+     "ticks": 988
     }
    }
   }
  ],
  "health": [
   {
-   "tick": 2166,
+   "tick": 2146,
    "started": true,
    "desyncs": 0,
    "hard": 0,
@@ -59,7 +59,7 @@
    "mp": true
   },
   {
-   "tick": 1105,
+   "tick": 1180,
    "started": true,
    "desyncs": 0,
    "hard": 0,
@@ -68,7 +68,7 @@
    "mp": true
   },
   {
-   "tick": 2167,
+   "tick": 2146,
    "started": true,
    "desyncs": 0,
    "hard": 0,

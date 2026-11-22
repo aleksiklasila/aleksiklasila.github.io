@@ -198,7 +198,7 @@ function simProjFill(F, n) {
     return j;
 }
 function simFrameEncodeProjectiles() {
-    const n = _pj.hw, cap = Math.max(64, n);
+    const n = projHighWater(), cap = Math.max(64, n);
     const buf = _simFrameAcquire(cap * SIM_PROJ_SPEC.slotBytes), F = simTableViews(SIM_PROJ_SPEC, buf, cap);
     const j = simProjFill(F, n);
     return { buf, cap, n, count: j, mver: _simProjPres.version };

@@ -28,9 +28,11 @@ const _PROJ_COLS = {
 };
 const _PROJ_TYPED = { f64: Float64Array, f32: Float32Array, i32: Int32Array, i16: Int16Array, i8: Int8Array, u8: Uint8Array };
 // hdr: [0] in flight, [1] free, [2] next id, [3] not made (full), [4] unit
-// hits, [5] structure hits, [6] looks, [7] unit hits with a status, [9] hash.
+// hits, [5] structure hits, [6] looks, [7] unit hits with a status, [9] hash, [10] the
+// slots' high-water mark (one past the highest slot taken since the clear: the
+// frames' extent; kept by every writer, here and tower.rs k_tower_fire).
 const _pj = { cap: 0, a: null, hdr: null, live: null, free: null, uev: null, sev: null, look: null, bsum: null, tfl: null, tflN: -1,
-    hw: 0, unitHits: 0, P: new Float64Array(12), stats: { steps: 0, shots: 0 } };
+    unitHits: 0, P: new Float64Array(12), stats: { steps: 0, shots: 0 } };
 // Type names by a static index (pj.tt: the same on every peer).
 let _projTypeNames = null, _projTypeIds = null;
 function _projTypeId(name) {
@@ -64,9 +66,10 @@ function projPoolClear() {
     if (!P.cap) return;
     const F = P.free, H = P.hdr, n = P.cap;
     for (let i = 0; i < n; i++) F[i] = n - 1 - i;
-    H.fill(0); H[1] = n; P.hw = 0; P.unitHits = 0;
+    H.fill(0); H[1] = n; P.unitHits = 0;
 }
 function projCount() { return _pj.cap ? _pj.hdr[0] : 0; }
+function projHighWater() { return _pj.cap ? _pj.hdr[10] : 0; }
 
 // A shot from (x, y) at t (a unit, a structure, a point): as the old
 // Projectile's constructor. Its status's duration and tick damage as its
@@ -76,7 +79,7 @@ function projectileFire(x, y, t, type, dmg, level, source, maxRange, blastDamage
     if (H[1] <= 0) { H[3]++; return -1; }
     const s = P.free[--H[1]];
     P.live[H[0]++] = s;
-    if (s >= P.hw) P.hw = s + 1;
+    if (s >= H[10]) H[10] = s + 1;
     const A = P.a;
     // cos/sin(atan2) as an exact normalization: trig results may differ
     // between browsers, and lockstep peers must agree on every shot.
@@ -201,7 +204,7 @@ function projSnapshotLoad(list) {
         if (r.none || H[1] <= 0) continue;
         const s = P.free[--H[1]];
         P.live[H[0]++] = s;
-        if (s >= P.hw) P.hw = s + 1;
+        if (s >= H[10]) H[10] = s + 1;
         for (const k of _PROJ_SNAP_FIELDS) A[k][s] = Number(r[k]) || 0;
         A.tt[s] = _projTypeId(r.type || ''); A.px[s] = A.x[s]; A.py[s] = A.y[s]; A.ev[s] = 0; A.arg[s] = -1;
         if (!Number.isFinite(r.ft)) A.ft[s] = -1;

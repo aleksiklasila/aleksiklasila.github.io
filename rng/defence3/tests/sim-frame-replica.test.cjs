@@ -25,9 +25,11 @@ const OTHERS = `(() => { const out = {};
     out.f = JSON.stringify(getCellItemsRowMajor().filter(e => !(e instanceof Tower) && !(e instanceof Barrack) && !isSpawnerEntity(e)).map(S));
     out.P = JSON.stringify(players.map(p => [p.energy, p.astar, p.popCount, JSON.stringify(p.researchLevels), (p.researchQueue || []).length]));
     // (The worker's shots are its pool, the page's views of its table: compared as sets.)
-    out.p = JSON.stringify((_pj.cap ? projSnapshotRecords().map(r => [Math.fround(r.x), Math.fround(r.y), r.type]) : projectiles.map(p => [Math.fround(p.x), Math.fround(p.y), p.type]))
+    // (The page: the views of the frame's table (its own pool, allocated, stays empty); the worker: its pool.)
+    const viewsP = typeof _pageTables !== 'undefined' && !!_pageTables.p;
+    out.p = JSON.stringify((!viewsP && _pj.cap ? projSnapshotRecords().map(r => [Math.fround(r.x), Math.fround(r.y), r.type]) : projectiles.map(p => [Math.fround(p.x), Math.fround(p.y), p.type]))
         .sort((a, b) => a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)));
-    out.pn = _pj.cap ? projCount() : projectiles.length;
+    out.pn = !viewsP && _pj.cap ? projCount() : projectiles.length;
     let g = 0; for (const row of grid) for (const c of row) g = Math.imul(g ^ (String(cellType[(c) - 1]).length * 131 + (typeof cellType[(c) - 1] === 'number' ? cellType[(c) - 1] : 0) * 31 + cellOwner[(c) - 1] + 7), 16777619);
     out.grid = g >>> 0;
     out.globals = JSON.stringify([gameTime, !!gameOver, winner, [...resignedTeams]]);

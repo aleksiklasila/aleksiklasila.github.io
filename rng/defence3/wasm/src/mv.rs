@@ -2028,8 +2028,8 @@ unsafe fn steer_pressure(m:&Mv,ox:i32,oy:i32,layer:i32,odx:f64,ody:f64,len:f64)-
     let r=len/sqrt(len*len+s*s);
     Some((ox+floor((odx-s*uy)*r+0.5) as i32,oy+floor((ody+s*ux)*r+0.5) as i32))
 }
-/// A blocked flow may use the free shoulder: the step (dx, dy) (want: its length squared) turned an eighth and a
-/// quarter to either side (the hand side first when traffic[13]), each through the walls (wl) and the footprints
+/// A blocked flow may use the free shoulder: the step (dx, dy) (want: its length squared) turned an eighth to
+/// either side or a quarter to its right-hand side (the hand side first when traffic[13]), each through the walls (wl) and the footprints
 /// (its field) from (ox, oy); the best by progress along the step and distance, if better than where the step got
 /// (ax, ay off (ox, oy), reaching (tx, ty)). At most one accepted move, at the requested speed.
 #[cfg_attr(not(feature="prof"),inline(always))]
@@ -2040,22 +2040,28 @@ unsafe fn shoulders(m:&Mv,s:usize,ox:i32,oy:i32,dx:f64,dy:f64,want:f64,ax:f64,ay
     let il=1.0/len;
     let handed=!m.traffic.is_null()&&*m.traffic.add(13)!=0;
     let mut best=(ax*dx+ay*dy)*il*0.7+sqrt(ax*ax+ay*ay)*0.3;
-    // (The four turned steps at once: an eighth either way (rotations by +-45 degrees), a quarter either way.)
+    // (The three turned steps: an eighth either way (rotations by +-45 degrees), a quarter to the right-hand side
+    // (keep_right's, n = (-uy, ux)), the hand side's first. Not a quarter to the left too (2026-11-21): blocked ahead,
+    // a unit stepped a quarter one way, then from there the other way back, every tick for good (a pixel-perfect
+    // two-tick cycle: the 3D model spun on its axis). Head-on walkers still pass each other by the right.)
     const H:f64=0.7071067811865476;
     let v=f64x2(dx,dy);let w=f64x2(-dy,dx);
     let e0=f64x2_mul(f64x2_add(v,w),f64x2_splat(H));let e1=f64x2_mul(f64x2_sub(v,w),f64x2_splat(H));
     let o=f64x2(ox as f64,oy as f64);let half=f64x2_splat(0.5);
     let tgt=|e:v128|{let p=f64x2_floor(f64x2_add(f64x2_add(o,e),half));(f64x2_extract_lane::<0>(p) as i32,f64x2_extract_lane::<1>(p) as i32)};
-    let cands=[tgt(e0),tgt(e1),tgt(w),tgt(f64x2_neg(w))];
+    let cands=[tgt(e0),tgt(w),tgt(e1)];
     let tsh=m.tsh;
-    for k in 0..4 {
-        let direction=if handed{((k&1)<<1)|((k>>1)&1)}else{k};
-        let (ax,ay)=*cands.get_unchecked(direction);
+    for k in 0..3 {
+        let (ax,ay)=*cands.get_unchecked(k);
         if (tsh>=0&&(ax>>tsh)==(ox>>tsh)&&(ay>>tsh)==(oy>>tsh))
             ||seg_clear(m,wl,ox as f64*0.125,oy as f64*0.125,ax as f64*0.125,ay as f64*0.125) {
             let (px,py)=(*m.occ).preview(s,ax,ay);dbgc!(m,95);
             let vx=(px-ox) as f64;let vy=(py-oy) as f64;
             let distance=sqrt(vx*vx+vy*vy);
+            // (Never back along its step: a turned step the footprints slid backward (a quarter to the right, its
+            // way ahead blocked, sliding along the blocker away from the target) scored above standing with the hand
+            // side's bonus, and the next tick's step went forward again: a two-tick cycle in a parked crowd.)
+            if vx*dx+vy*dy<0.0{continue;}
             let score=(vx*dx+vy*dy)*il*0.7+distance*0.3+if handed&&k<2{distance*0.4}else{0.0};
             if score>best+0.0625 {best=score;tx=px;ty=py;dbgc!(m,96);}
             if handed&&k<2&&distance>=len*0.65{break;}
@@ -2330,7 +2336,7 @@ unsafe fn step4(m: &Mv, p: &StepP, s: usize, mvd: &mut i32, valid: i32) -> i32 {
                 }
                 let q = s + l;
                 let dk = rd(m.dest, q);
-                if tla[l] == dk || !steer_hold(m, q, tla[l], gxa[l], gya[l], dk) {
+                if tla[l] == dk || wk_near(m, q, gxa[l], gya[l], rd(m.fl, q), 2) || !steer_hold(m, q, tla[l], gxa[l], gya[l], dk) {
                     drop |= 1 << l;
                     continue;
                 }
@@ -2751,6 +2757,10 @@ unsafe fn step_flow(
         return;
     }
     let tw = t.wrapping_add(id);
+    // (A worker beside its destination on its phase tick: move_flow's stall check, wnear.)
+    if irem_f(tw, STEER_NEAR_TICKS) < m.dk && wk_near(m, s, gx, gy, f, 1) {
+        return;
+    }
     if rd(m.floor, (s) * SR) != tl || irem_f(tw, tr) < m.dk {
         let code = rd(m.sc, tl as usize) as i32;
         if code != -1 && code != owner && floor_hit(m, s, tl) {
@@ -3694,8 +3704,10 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
                 if !(ob==1&&rd(m.fl,b)&64!=0&&{let (hx,hy)=(rd(m.cvx, (b) * SR),rd(m.cvy, (b) * SR));hx*ux+hy*uy< -0.3*sqrt(hx*hx+hy*hy)}){continue;}
             }else if ob!=0&&ob!=2{continue;}
             let re=rd(m.rte,b);
-            // (A worker on its way passes idle workers of its crowd: its task is at its tile.)
-            if mine>=0&&re>=0&&!(rd(m.wk,s)!=0&&rd(m.wk,b)!=0&&(*m.wks.add(b)&31)==1)&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
+            // (A worker on its way passes any standing unit not at its work: its task is at its tile, it is no
+            // crowd's member arriving at its edge. Builders sent to a site beside a parked group stood at the
+            // group's edge for good.)
+            if mine>=0&&re>=0&&!(rd(m.wk,s)!=0&&!m.iswk.is_null()&&rd(m.iswk,s)!=0)&&(irem(mine,m.w)-irem(re,m.w)).abs()<=3&&(idiv(mine,m.w)-idiv(re,m.w)).abs()<=3{continue;}
             let score=along+lat*0.6+if rb!=rq{4096.0}else{0.0};
             dbgc!(m,70);
             let mut j=3;while j>0&&cand[j-1].0>score{j-=1;}
@@ -4399,6 +4411,8 @@ const EV_NOWAY: u8 = 2;
 const EV_WAITED: u8 = 3;
 const EV_SPATIAL: u8 = 4;
 const EV_CHECK: u8 = 5;
+/// A worker stalled beside its destination's tile (move_flow wnear; wai.rs way_end). (6 is the spawner's rally.)
+const EV_NEAR: u8 = 7;
 #[inline(always)]
 unsafe fn set_ev(m: &Mv, s: usize, e: u8) {
     if !m.ev.is_null() {
@@ -5892,6 +5906,31 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
         }
         back!();
     }
+    // (A worker beside its destination's tile: it works from there (wai.rs within: a tile away). Pressing into a
+    // tile others stand in (a spawner's, its rally point) it was held there for good, a walker aimed at the same
+    // point as the others (no swap, no yield between them), on a held steer, shaking a pixel or two each tick. Its
+    // distance to the tile's middle is sampled every STEER_NEAR_TICKS (its own phase, unit.navLD); stalled over
+    // one it has arrived (EV_NEAR: the worker kernel ends the leg; its target not a tile away, it walks on and is
+    // looked at again a window later).)
+    let wnear = wk_near(m, s, gx, gy, f, 1);
+    if wnear && irem_f(tw, STEER_NEAR_TICKS) < m.dk {
+        let ex = dx0 as f64 * tile + 16.0 - x;
+        let ey = dy0 as f64 * tile + 16.0 - y;
+        let now = sqrt(ex * ex + ey * ey);
+        let last = rd(m.nld, s);
+        wr(m.nld, s, now);
+        let mut es = mv_stat(m, s, 0, m.spd);
+        if st_frz(m, s) > 0 {
+            es *= 0.5;
+        }
+        if st_snd(m, s) > 0 {
+            es *= 0.5;
+        }
+        if last >= 0.0 && last - now < es * 0.3 * STEER_NEAR_TICKS.max(m.dk) as f64 {
+            set_ev(m, s, EV_NEAR);
+            back!();
+        }
+    }
     if held_step(m, s, x, y, gx, gy, tl, dk, f, wl, p.q, p.iq) {
         return;
     }
@@ -6007,7 +6046,9 @@ unsafe fn move_flow(m: &Mv, p: &MoveP, s: usize) {
     let n2 = *nr.add(NV_N2);
     let far = *nr.add(NV_FO) >> 1;
     let open = (*nr.add(NV_FO) & 1) != 0;
-    wr(m.nld, s, nav_ld);
+    if !wnear {
+        wr(m.nld, s, nav_ld);
+    }
     let kx = irem_f(far, w);
     let ky = idiv(far - kx, w);
     let base_tx = kx as f64 * tile + 16.0;
@@ -6180,7 +6221,26 @@ unsafe fn steady_until(m: &Mv, s: usize, t: i32, end: i32, f: u8, tr: i32, acq_t
     if rd(m.wk, s) == 3 && { let w = wki(m, s); rd(m.wkwx, w) == rd(m.wkwx, w) } {
         u = u.min(next(BUILDER_WATCH_TICKS));
     }
+    // (A worker near its destination: move_flow's stall check on its phase ticks.)
+    if wk_near(m, s, floor(rd(m.x, s) * m.itile) as i32, floor(rd(m.y, s) * m.itile) as i32, f, 2) {
+        u = u.min(next(STEER_NEAR_TICKS));
+    }
     u
+}
+/// A worker on its way (a flow walker with no crowd: flags 128) in a tile within r tiles of its destination's
+/// (move_flow's stall check beside it, wnear; the steady windows and held steps leave it there on its phase ticks).
+#[inline(always)]
+unsafe fn wk_near(m: &Mv, s: usize, gx: i32, gy: i32, f: u8, r: i32) -> bool {
+    if (f & 128) == 0 || m.iswk.is_null() || rd(m.iswk, s) == 0 {
+        return false;
+    }
+    let d = rd(m.dest, s);
+    if d < 0 {
+        return false;
+    }
+    let dx = irem_f(d, m.w);
+    let dy = idiv(d - dx, m.w);
+    (dx - gx).abs() <= r && (dy - gy).abs() <= r
 }
 /// worker.js BUILDER_WATCH_TICKS (P[29] of the movement kernel).
 const BUILDER_WATCH_TICKS: i32 = 64;
