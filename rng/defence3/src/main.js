@@ -5656,8 +5656,8 @@ function processAction(a, playerId) {
             let r = getSpawnerAtTile(a.gx, a.gy);
             if (!(r && r.owner === playerId && r.type === 'research')) r = null;
             if (r && r.energy > 0 && !r.underConstruction && getResearchStatEntry(a.kind, a.key, a.statKey)) {
-                // Optional position in the ordered queue (0 = the active task).
-                const insertAt = Number.isFinite(Number(a.insertAt)) ? Math.max(0, Math.floor(Number(a.insertAt))) : -1;
+                // Optionally in front of a task (before: its name, [kind, key, statKey, toLevel]: researchPlaceBefore).
+                const insertAt = a.before != null ? researchPlaceBefore(playerId, a.before) : -1;
                 researchQueueAdd(playerId, a.kind, a.key, a.statKey, Math.max(1, Math.floor(a.count || 1)), insertAt);
             }
         } else if (a.action === 'workerAssign') {
@@ -5812,47 +5812,11 @@ function processAction(a, playerId) {
                 const any = !(a.kind && a.key && a.statKey), s = any ? -1 : researchStatIndex(a.kind, a.key, a.statKey);
                 if (any || s >= 0) researchQueueRemove(playerId, s, Math.max(1, Math.floor(a.count || 1)), any);
             }
-        } else if (a.action === 'reorderResearch') {
-            let r = getSpawnerAtTile(a.gx, a.gy);
-            if (!(r && r.owner === playerId && r.type === 'research')) r = null;
-            if (r || hasOwnedActiveResearchLab(playerId)) {
-                let fromIsActive = !!a.fromActive;
-                let toIsActive = !!a.toActive;
-                const count = getPlayerResearchQueueTotalLength(playerId);
-                if (count <= 1) return;
-
-                let from = fromIsActive ? 0 : (Math.floor(Number(a.fromIndex)) + 1);
-                if (!Number.isFinite(from) || from < 0 || from >= count) return;
-
-                let rawTo = Math.floor(Number(a.toIndex));
-                let to = 0;
-                if (toIsActive) {
-                    to = 0;
-                } else {
-                    if (!Number.isFinite(rawTo)) return;
-                    if (fromIsActive) {
-                        to = Math.max(0, Math.min(count - 1, rawTo + 1));
-                    } else {
-                        to = rawTo <= 0
-                            ? 0
-                            : Math.max(0, Math.min(count - 1, rawTo + 1));
-                    }
-                }
-                if (from === to) return;
-
-                researchQueueMove(playerId, from, to);
-            }
         } else if (a.action === 'moveResearch') {
-            // Move one task within the ordered queue (index 0 = the active task).
-            if (hasOwnedActiveResearchLab(playerId)) {
-                const count = getPlayerResearchQueueTotalLength(playerId);
-                let from = Math.floor(Number(a.from));
-                let to = Math.floor(Number(a.to));
-                if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from >= count) return;
-                to = Math.max(0, Math.min(count - 1, to));
-                if (from === to) return;
-                researchQueueMove(playerId, from, to);
-            }
+            // One task (task: [kind, key, statKey, toLevel]) moved in front of
+            // another (before; null: to the end), both named by what they
+            // research, not by place (data_dynamic.js researchTaskPlace).
+            if (hasOwnedActiveResearchLab(playerId)) researchQueueMoveTask(playerId, a.task, a.before === undefined ? null : a.before);
         } else if (a.action === 'setToggleMany') {
             // A flag of a selection's buildings (their tile keys, tkz): the
             // kernel writes it by tile (wasm/src/ord.rs k_struct_flags); what
@@ -5987,6 +5951,8 @@ function processAction(a, playerId) {
             const P = _towerTargetP;
             P[0] = Math.min(n, tiles.length); P[1] = tct; P[2] = _stOwnerWord(playerId); P[3] = kind; P[4] = value;
             simRustDirect('k_tower_target', [tiles, ST.ctab, ST.rrow, ST.own, ST.brain, TT.c__ptK, TT.c__ptV], P);
+            // (Shown at the next tick, not at the metadata cycle's end: their rows again.)
+            if (typeof simPresentTileDirty === 'function') for (let i = 0; i < P[0]; i++) { const t = tiles[i], gx = t % GRID_W; simPresentTileDirty(gx, (t - gx) / GRID_W); }
         }
     }
 }

@@ -500,7 +500,9 @@ function chaosBurst(o, k) {
         // The research queue reordered and shortened.
         const lab = collectorSpawners.find(s => s.owner === me && s.type === 'research' && s.energy > 0);
         if (lab) {
-            queueAction({ action: 'moveResearch', gx: lab.gx, gy: lab.gy, from: 1 + (k % 50), to: 1 });
+            // (A task moved up, by name as the panels give it: researchMoveAction.)
+            const mv = researchMoveAction(me, 1 + (k % 50), 1);
+            if (mv) queueAction(mv);
             queueAction({ action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, count: 3 });
             out.research += 2;
         }
@@ -576,7 +578,8 @@ function chaosConflicts(o, k, shared) {
     const lab = production.find(b => b.type === 'research');
     if (lab) {
         add({ action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'building', key: 'pistol', statKey: 'maxLevel', count: 2 });
-        add({ action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 1, toIndex: 0, fromActive: false, toActive: !!(k&1) });
+        // (A queued task to the front, by name; none queued yet: one named that is not there, a no-op every peer agrees on.)
+        add(researchMoveAction(me, 2, 0) || { action: 'moveResearch', task: ['building', 'pistol', 'maxLevel', 99], before: null });
         add({ action: 'setAutoResearch', gx: lab.gx, gy: lab.gy, enabled: true });
     }
     return out;

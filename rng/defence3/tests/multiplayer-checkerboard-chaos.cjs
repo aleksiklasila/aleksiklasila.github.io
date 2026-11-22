@@ -124,7 +124,7 @@ function check(){
  for(const [netId]of world.issued)for(const i of all)assert.ok(i.executedActions.has(netId),i.name+' missed '+netId);
  // Resignation and host administration end play; their dedicated transport
  // suites exercise those lifecycle actions separately from this live battle.
- const gameplay=['place','move','attackMove','attack','attackBuilding','stop','hold','queueUnit','queueWorker','queueResearch','workerAssign','setRally','setRallyMany','dequeueUnit','dequeueWorker','dequeueResearch','reorderResearch','moveResearch','markSalvage','setSalvage','setAutoUpgrade','setAutoStack','setBuildEnabled','setQueueEnabled','setAutoResearch','setBoost','shrineDrain','killUnit','resizeUnitGroup','towerTarget'];
+ const gameplay=['place','move','attackMove','attack','attackBuilding','stop','hold','queueUnit','queueWorker','queueResearch','workerAssign','setRally','setRallyMany','dequeueUnit','dequeueWorker','dequeueResearch','moveResearch','markSalvage','setSalvage','setAutoUpgrade','setAutoStack','setBuildEnabled','setQueueEnabled','setAutoResearch','setBoost','shrineDrain','killUnit','resizeUnitGroup','towerTarget'];
  for(const i of all){const kinds=i.eval('__scratch.actionKinds');for(const kind of gameplay)assert.ok(kinds[kind]>0,i.name+' applied gameplay action '+kind);}
  for(const i of all){const s=state(i);assert.ok(s.occupancy.ok,i.name+' collision occupancy');assert.equal(s.gameOver,false);for(const k of ['spawns','collectorDeposits','astarDeposits','researchDeposits','constructionCompleted','destroyedStructures','placed','healerDeliveries','salvagerReturns','contestedPlacements'])assert.ok(s.work[k]>0,i.name+' exercised '+k);}
  cleanComparisons=world.compareHashes(all,start,'tickExact').compared;

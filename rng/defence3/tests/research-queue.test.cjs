@@ -31,6 +31,9 @@ function assertInSync(world, all, label, minCompared = 50) {
 
 const q = (inst, a) => inst.eval(`queueAction(${JSON.stringify(a)})`);
 const own = (inst, expr) => JSON.parse(inst.eval(`JSON.stringify(${expr})`));
+// A move as the panels give it: the task the player sees at place from (0: the active one) to place to, by name (data_dynamic.js researchMoveAction); null when nothing would move.
+const mvq = (inst, pid, from, to) => own(inst, `researchMoveAction(${pid}, ${from}, ${to})`);
+const qMove = (inst, pid, from, to) => { const a = mvq(inst, pid, from, to); if (a) q(inst, a); return a; };
 const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawners.find(s => s.owner === localPlayerId && s.type === 'research'))`);
 const sid = s => s.kind + ':' + s.key + ':' + s.statKey;
 
@@ -125,8 +128,9 @@ function rng(seed) {
         const lab = labOf(host);
         assert.equal(levelOf(host, pid, S), 2, 'starting research level applied');
         const add = (s, count = 1) => q(host, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count });
-        const moveTop = i => q(host, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: i, toIndex: 0, fromActive: false, toActive: false });
-        const moveBottom = (i, active = false) => q(host, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: i, toIndex: pendingLen(host, pid) - 1, fromActive: active, toActive: false });
+        // (i: a pending place; the active task is place 0 of the order.)
+        const moveTop = i => qMove(host, pid, i + 1, 0);
+        const moveBottom = (i, active = false) => qMove(host, pid, active ? 0 : i + 1, pendingLen(host, pid));
 
         // Expected rows: [stat, fromLevel, progress], where progress is a minimum for the level
         // researchers may still be feeding (they keep delivering in-flight material), exact otherwise.
@@ -220,7 +224,7 @@ function rng(seed) {
             for (const k of ['fromLevel', 'toLevel', 'cost', 'workRequired']) { const v = a[k]; a[k] = b[k]; b[k] = v; } })()`);
         await world.run(3000);
         assert.ok(invariantViolations(host, pid).length > 0, 'corruption applied');
-        q(host, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 1, toIndex: 0, fromActive: false, toActive: false });
+        assert.ok(qMove(host, pid, 2, 0), 'a reorder to give');
         await world.run(1500);
         assertValid(all, [pid], 'healed by reorder');
         world.atNextSafeTick(`(() => { const p = ensurePlayerResearchQueueState(${pid}); p.researchQueue[0].fromLevel = 7; p.researchQueue[0].workRequired = 99999; })()`);
@@ -230,6 +234,29 @@ function rng(seed) {
         assertValid(all, [pid], 'healed by dequeue');
         assertInSync(world, all, 'healing');
         rows.push('stale queue state heals on the next reorder or dequeue, identically on every peer');
+    }
+
+    // 2b. A slider's order on its way (multiplayer: input delay and the link) while a
+    //     level of its stat finishes: the shown target holds (the ahead count followed
+    //     the queue's depth, read the finished level as the queue going back, and the
+    //     slider jumped back until the order landed).
+    {
+        const { world, host, all } = await match();
+        const pid = host.eval('localPlayerId');
+        const lab = labOf(host);
+        const S = own(host, `(() => { const all = RESEARCH_THINGS.flatMap(t => (t.stats || []).map(s => ({ kind: t.kind, key: t.key, statKey: s.statKey, w: getResearchWork(t.kind, t.key, s.statKey, 0) }))); return all.sort((a, b) => a.w - b.w)[0]; })()`);
+        q(host, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: S.kind, key: S.key, statKey: S.statKey, count: 1 });
+        assert.ok(await world.runUntil(() => (tasksOf(host, pid)[0] || {}).workDone > 0, 20000, 50), 'research started');
+        const L0 = levelOf(host, pid, S);
+        const target = () => Number(host.eval(`researchBarLevel(${pid}, ${JSON.stringify(S)}).target`));
+        // (An order of 2 more for a tick far off: not arrived whatever the time.)
+        host.eval(`noteResearchOrder(${JSON.stringify(S.kind)}, ${JSON.stringify(S.key)}, ${JSON.stringify(S.statKey)}, 2, currentTick + 100000)`);
+        const t0 = target();
+        assert.equal(t0, L0 + 1 + 2, 'ordered target shown');
+        assert.ok(await world.runUntil(() => levelOf(host, pid, S) > L0, 60000, 50), 'a level finished');
+        assert.equal(target(), t0, 'target held through the finished level');
+        assertInSync(world, all, 'ahead through a finished level');
+        rows.push(`a slider's order on its way holds its target through a finished level (R${t0})`);
     }
 
     // 3. Fuzz: three players edit their own queues at once with every action and
@@ -259,30 +286,37 @@ function rng(seed) {
                 if (r < 0.3) {
                     const s = pick(pool);
                     a = { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count: 1 + Math.floor(rand() * 3) };
-                    // Bottom bar drop: insert at a position, including the active slot and past the end.
-                    if (rand() < 0.4) a.insertAt = Math.floor(rand() * (len + 3));
+                    // Bottom bar drop: in front of a task by name (the active one, past the end: none), or a stale / forged name.
+                    if (rand() < 0.4) a.before = rand() < 0.85 ? own(inst, `researchTaskRefAt(${pid}, ${Math.floor(rand() * (len + 3))})`) : [s.kind, s.key, s.statKey, Math.floor(rand() * 14) - 2];
+                    if (a.before === null) delete a.before;
                 } else if (r < 0.45) {
                     const s = pick(pool);
                     a = rand() < 0.8
                         ? { action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count: 1 + Math.floor(rand() * 2) }
                         : { action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, count: 1 };
                 } else if (r < 0.7) {
-                    a = { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: Math.floor(rand() * Math.max(1, len)), toIndex: 0, fromActive: false, toActive: false };
+                    // ↑: a task to the front.
+                    a = mvq(inst, pid, Math.floor(rand() * (len + 1)), 0) || { action: 'moveResearch', task: null, before: null, _kind: 'none' };
+                    a._kind = a._kind || 'top';
                 } else if (r < 0.85) {
-                    const fromActive = rand() < 0.3;
-                    a = { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: fromActive ? -1 : Math.floor(rand() * Math.max(1, len)), toIndex: Math.max(0, len - 1), fromActive, toActive: false };
+                    // ↓ and the active task down.
+                    a = mvq(inst, pid, rand() < 0.3 ? 0 : Math.floor(rand() * (len + 1)), len) || { action: 'moveResearch', task: null, before: null, _kind: 'none' };
+                    a._kind = a._kind || 'down';
                 } else if (r < 0.89) {
-                    // Bottom bar drag: plain ordered indices, including out-of-range ones.
-                    a = { action: 'moveResearch', from: Math.floor(rand() * (len + 3)) - 1, to: Math.floor(rand() * (len + 3)) - 1 };
+                    // A drag: any place to any place.
+                    a = mvq(inst, pid, Math.floor(rand() * (len + 1)), Math.floor(rand() * (len + 1))) || { action: 'moveResearch', task: null, before: null, _kind: 'none' };
+                    a._kind = a._kind || 'drag';
                 } else if (r < 0.93) {
-                    // Arbitrary moves, including out-of-range and to the active slot.
-                    a = { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: Math.floor(rand() * (len + 3)) - 1, toIndex: Math.floor(rand() * (len + 3)) - 1, fromActive: rand() < 0.2, toActive: rand() < 0.2 };
+                    // Stale or forged names: done levels, levels not queued, things that do not exist.
+                    const s = pick(pool), t = pick(pool);
+                    a = { action: 'moveResearch', task: rand() < 0.2 ? ['unit', 'nothing', 'x', 1] : [s.kind, s.key, s.statKey, Math.floor(rand() * 14) - 2], before: rand() < 0.3 ? null : [t.kind, t.key, t.statKey, Math.floor(rand() * 14) - 2], _kind: 'forged' };
                 } else {
                     const l = own(inst, `collectorSpawners.filter(s => s.owner === localPlayerId && s.type === 'research').map(s => ({ gx: s.gx, gy: s.gy }))`);
                     const target = pick(l);
                     a = { action: 'setAutoResearch', gx: target.gx, gy: target.gy, enabled: rand() < 0.75 };
                 }
-                const kind = a.action + (a.action === 'reorderResearch' ? (a.fromActive ? ':active' : a.toIndex === 0 ? ':top' : ':down') : '') + (a.insertAt !== undefined ? ':insertAt' : '');
+                const kind = a.action + (a._kind ? ':' + a._kind : '') + (a.before !== undefined && a.action === 'queueResearch' ? ':before' : '');
+                delete a._kind;
                 counts[kind] = (counts[kind] || 0) + 1;
                 q(inst, a);
             }

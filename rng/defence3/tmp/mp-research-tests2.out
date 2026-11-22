@@ -1,0 +1,14 @@
+meta exit=0 5s PASS: k_meta_structs rows equal _simWriteStructure rows (4012 structures, 19290 changed rows, 76 laser links, 2 preferred targets)
+rq-page exit=0 56s PASS: research queue
+rq-worker exit=0 226s PASS: research queue
+features-page exit=0 39s PASS: multiplayer features
+features-worker exit=0 154s PASS: multiplayer features
+concurrency-page exit=0 19s PASS: concurrency (2954 bit-exact tick comparisons)
+concurrency-worker exit=0 73s PASS: concurrency (2942 bit-exact tick comparisons)
+actionfuzz-page exit=0 77s PASS: action fuzz
+actionfuzz-worker exit=0 121s PASS: action fuzz
+scenarios-page exit=0 39s PASS: multiplayer scenarios
+scenarios-worker exit=0 167s PASS: multiplayer scenarios
+chaosdet-page exit=0 131s PASS: chaos determinism
+chaosdet-worker exit=0 770s PASS: chaos determinism
+ALLDONE

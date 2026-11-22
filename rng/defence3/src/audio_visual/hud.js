@@ -1523,23 +1523,26 @@ function optimisticQueueBump(fracEl, delta) {
 // A research queue change comes back from the simulation a
 // few ticks later: until then the stat's row and the research row of the
 // bottom bar showed the old queue. What was ordered and has not arrived is
-// kept here, per stat, as a change of its queue depth from the depth the
-// simulation had at the order; the panels add it to what they show. It goes
-// as the simulation's depth follows (in part, for orders in a row), or after
-// RESEARCH_AHEAD_MS (an order that came to nothing). Shown only.
+// kept here, per stat, as a change of its target (level + queue depth) from
+// the target the simulation had at the order; the panels add it to what they
+// show. It goes as the simulation's target follows (in part, for orders in a
+// row), or after RESEARCH_AHEAD_MS and the order's tick (an order that came to
+// nothing). Shown only. (By the depth alone, a level finished while an order
+// was on its way read as the queue going the other way: the order was let go
+// and the slider jumped back until it landed.)
 const RESEARCH_AHEAD_MS = 1500;
 const _researchAhead = new Map();
 function researchOrdersAhead(kind, key, statKey, depth) {
     if (_researchAhead.size === 0) return 0;
     const k = kind + '|' + key + '|' + statKey, o = _researchAhead.get(k);
     if (!o) return 0;
-    const got = depth - o.base;
+    const total = getPlayerResearchLevel(localPlayerId, kind, key, statKey) + depth, got = total - o.base;
     if (got !== 0) {
         // (The simulation moved: that much of it has arrived.)
         if ((got > 0) !== (o.delta > 0) || Math.abs(got) >= Math.abs(o.delta)) { _researchAhead.delete(k); return 0; }
-        o.base = depth; o.delta -= got;
+        o.base = total; o.delta -= got;
     }
-    if (performance.now() - o.at > RESEARCH_AHEAD_MS) { _researchAhead.delete(k); return 0; }
+    if (!localOrderShownAhead(o.at, o.tick, RESEARCH_AHEAD_MS)) { _researchAhead.delete(k); return 0; }
     return o.delta;
 }
 // The local player's orders not there yet, as [{ kind, key, statKey, delta }].
@@ -1552,8 +1555,8 @@ function researchOrdersAheadList() {
     }
     return out;
 }
-// An order was given (queueAction): count levels more (or, negative, fewer).
-function noteResearchOrder(kind, key, statKey, count) {
+// An order was given (queueAction, for tick): count levels more (or, negative, fewer).
+function noteResearchOrder(kind, key, statKey, count, tick = -1) {
     if (typeof document === 'undefined' || typeof performance === 'undefined' || !gameStarted || !players[localPlayerId] || !count) return;
     const owner = localPlayerId, depth = getResearchQueuedDepthForPlayer(owner, kind, key, statKey);
     let ahead = researchOrdersAhead(kind, key, statKey, depth), delta;
@@ -1563,8 +1566,8 @@ function noteResearchOrder(kind, key, statKey, count) {
         delta = Math.max(0, Math.min(count, room, MAX_RESEARCH_LEVEL - getPlayerResearchLevel(owner, kind, key, statKey) - depth - ahead));
     } else delta = -Math.min(-count, depth + ahead);
     if (!delta) return;
-    const k = kind + '|' + key + '|' + statKey, o = _researchAhead.get(k) || { kind, key, statKey, base: depth, delta: 0, at: 0 };
-    o.delta += delta; o.at = performance.now();
+    const k = kind + '|' + key + '|' + statKey, o = _researchAhead.get(k) || { kind, key, statKey, base: getPlayerResearchLevel(owner, kind, key, statKey) + depth, delta: 0, at: 0, tick: -1 };
+    o.delta += delta; o.at = performance.now(); o.tick = Math.max(o.tick, tick);
     if (o.delta) _researchAhead.set(k, o); else _researchAhead.delete(k);
     // (Shown with the next frame.)
     if (typeof requestInfoPanelRefresh === 'function') requestInfoPanelRefresh(0);
@@ -2132,7 +2135,7 @@ function _infoToggleState(cls, id, on) {
     if (_infoToggleShown.size === 0) return on;
     const k = cls + '|' + id, o = _infoToggleShown.get(k);
     if (!o) return on;
-    if (o.on === !!on || performance.now() - o.at > INFO_TOGGLE_SHOWN_MS) { _infoToggleShown.delete(k); return on; }
+    if (o.on === !!on || !localOrderShownAhead(o.at, o.tick, INFO_TOGGLE_SHOWN_MS)) { _infoToggleShown.delete(k); return on; }
     return o.on;
 }
 // (A group's: all of them, and any of them.)
@@ -2140,7 +2143,7 @@ function _infoToggleGroupState(cls, id, all, any) {
     if (_infoToggleShown.size === 0) return [all, any];
     const k = cls + '|' + id, o = _infoToggleShown.get(k);
     if (!o) return [all, any];
-    if ((o.on ? !!all : !any) || performance.now() - o.at > INFO_TOGGLE_SHOWN_MS) { _infoToggleShown.delete(k); return [all, any]; }
+    if ((o.on ? !!all : !any) || !localOrderShownAhead(o.at, o.tick, INFO_TOGGLE_SHOWN_MS)) { _infoToggleShown.delete(k); return [all, any]; }
     return [o.on, o.on];
 }
 // Per toggle class, from the pressed element's data: what it is for, the
@@ -2169,9 +2172,13 @@ function infoTogglePressed(el) {
         if (!el.classList.contains(cls)) continue;
         const p = INFO_TOGGLE_PRESS[cls](el.dataset);
         if (!p || p[0] === undefined || p[0] === 'undefined,undefined') return;
-        _infoToggleShown.set(cls + '|' + p[0], { on: p[1], at: performance.now() });
+        // (The markup first: its maker reads the shown state, and a press it
+        // found already there (the asked state is what it was given) was let
+        // go at once: the old state came back at the next refresh until the
+        // order arrived, a flicker in multiplayer.)
         const t = document.createElement('template');
         t.innerHTML = p[2](p[1]);
+        _infoToggleShown.set(cls + '|' + p[0], { on: p[1], at: performance.now(), tick: lastLocalOrderTick });
         const src = t.content.firstElementChild;
         if (!src) return;
         for (const a of src.attributes) if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
@@ -6467,43 +6474,21 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
         });
     });
 
-    panel.querySelectorAll('.info-research-move-top-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = Number.parseInt(btn.dataset.gx, 10);
-            let gy = Number.parseInt(btn.dataset.gy, 10);
-            let owner = Number.parseInt(btn.dataset.owner, 10);
-            let fromIndex = Math.floor(Number(btn.dataset.pendingIndex));
-            let fromActive = btn.dataset.active === '1';
-            if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(owner)) return;
-            if (!Number.isFinite(fromIndex)) return;
-            if (fromActive) return;
-            let queueLen = getPlayerResearchQueue(owner).length;
-            if (fromIndex < 0 || fromIndex >= queueLen) return;
-            lockInfoPanelScroll(btn);
-            queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex: 0, fromActive: false, toActive: false });
-            refreshThisPanel();
-        });
+    // (↑ to the front, ↓ to the end: the task by name, data_dynamic.js researchMoveAction;
+    // its place as shown: the active one 0, a pending one after it.)
+    const researchMoveBtn = (btn, top) => bindInstantPress(btn, () => {
+        const owner = Number.parseInt(btn.dataset.owner, 10), pending = Math.floor(Number(btn.dataset.pendingIndex));
+        if (owner !== localPlayerId) return;
+        const from = btn.dataset.active === '1' ? 0 : pending + (getPlayerResearchTask(owner) ? 1 : 0);
+        if (!Number.isFinite(from)) return;
+        const a = researchMoveAction(owner, from, top ? 0 : getPlayerResearchQueueTotalLength(owner) - 1);
+        if (!a) return;
+        lockInfoPanelScroll(btn);
+        queueAction(a);
+        refreshThisPanel();
     });
-
-    panel.querySelectorAll('.info-research-move-bottom-btn').forEach(btn => {
-        bindInstantPress(btn, () => {
-            let gx = Number.parseInt(btn.dataset.gx, 10);
-            let gy = Number.parseInt(btn.dataset.gy, 10);
-            let owner = Number.parseInt(btn.dataset.owner, 10);
-            let fromIndex = Math.floor(Number(btn.dataset.pendingIndex));
-            let fromActive = btn.dataset.active === '1';
-            if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(owner)) return;
-            if (!Number.isFinite(fromIndex)) return;
-            let queueLen = getPlayerResearchQueue(owner).length;
-            if (queueLen <= 0) return;
-            let toIndex = queueLen - 1;
-            if (!fromActive && (fromIndex < 0 || fromIndex >= queueLen)) return;
-            if (!fromActive && fromIndex === toIndex) return;
-            lockInfoPanelScroll(btn);
-            queueAction({ action: 'reorderResearch', gx, gy, fromIndex, toIndex, fromActive, toActive: false });
-            refreshThisPanel();
-        });
-    });
+    panel.querySelectorAll('.info-research-move-top-btn').forEach(btn => researchMoveBtn(btn, true));
+    panel.querySelectorAll('.info-research-move-bottom-btn').forEach(btn => researchMoveBtn(btn, false));
 
     panel.querySelectorAll('.info-research-thing-btn').forEach(btn => {
         bindInstantPress(btn, (ev) => {

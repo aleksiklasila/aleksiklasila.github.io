@@ -1752,7 +1752,8 @@ pub unsafe extern "C" fn k_order_drop(a: u32, _chunk: i32) {
 /// ([0] length, [1] version, [2] the stat of the last removal, -1 none).
 /// P: [0] op: 0 stat P[2] in at place P[1]; 1 place P[1] out; 2 the task at
 /// place P[1] moved to P[2]; 3 the last P[3] tasks of stat P[2] out (P[2] < 0:
-/// the last of any). Room for an insert: the caller's.
+/// the last of any); 4 (a find, nothing changed): [2] the place of the
+/// P[2]-th task of stat P[1] (0: its first), -1 none. Room for an insert: the caller's.
 #[no_mangle]
 pub unsafe extern "C" fn k_rq_op(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -1782,6 +1783,11 @@ pub unsafe extern "C" fn k_rq_op(a: u32, _chunk: i32) {
             let st = g(ids, f);
             if f < t { for j in f..t { s(ids, j, g(ids, j + 1)); } } else { let mut j = f; while j > t { s(ids, j, g(ids, j - 1)); j -= 1; } }
             s(ids, t, st);
+        }
+        4 => {
+            let mut left = p2;
+            for i in 0..n { if g(ids, i) == p1 { if left == 0 { s(hdr, 2, i as i32); return; } left -= 1; } }
+            return;
         }
         3 => {
             for _ in 0..p3.max(0) {

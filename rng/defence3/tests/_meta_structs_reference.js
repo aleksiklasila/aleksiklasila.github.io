@@ -25,10 +25,12 @@ function _simWriteStructure(F, s, e, kind, tick) {
     F.amountMax[s] = kind === 4 ? Number(e.maxGold) || 0 : kind === 5 ? Number(e.maxAstar) || 0 : 0;
     F.timer[s] = Number(e.timer) || 0;
     let at = e.attackTarget, task = e.researchTask;
-    F.tx[s] = at ? Number(at.x) || 0 : 0; F.ty[s] = at ? Number(at.y) || 0 : 0;
+    // (tx, ty: a tower's preferred target, its kind and a structure's tile; a unit's id in rallyTargetId.)
+    const ptk = e._ptK > 0 && Number.isFinite(e._ptV) ? e._ptK : 0;
+    F.tx[s] = ptk; F.ty[s] = ptk > 1 ? e._ptV : 0;
     F.resDone[s] = task ? Number(task.workDone) || 0 : 0; F.resReq[s] = task ? Number(task.workRequired) || 0 : 0;
     F.rallyX[s] = Number(e.rallyX) || 0; F.rallyY[s] = Number(e.rallyY) || 0;
-    F.rallyTargetId[s] = e.rallyTargetUnitId == null ? -1 : e.rallyTargetUnitId;
+    F.rallyTargetId[s] = ptk === 1 ? e._ptV : e.rallyTargetUnitId == null ? -1 : e.rallyTargetUnitId;
     F.vision[s] = kind <= 3 ? areaSteps(getEntityEffectiveVisibilityRangeArea(e)) : 0;
     F.level[s] = Number.isFinite(e.level) ? e.level : -1;
     F.elevel[s] = Number.isFinite(e.effectiveLevel) ? e.effectiveLevel : -1;

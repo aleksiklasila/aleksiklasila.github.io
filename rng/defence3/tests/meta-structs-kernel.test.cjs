@@ -41,6 +41,12 @@ __scratch.diff = (a, b, only) => { const bad = [], want = only ? new Set(only) :
     for (let j = 0; j < b.slots.length; j++) { if (want && !want.has(b.slots[j])) continue; const s = b.slots[j], e = _simStructSlots.owner[s];
         if (!e || b.kind[j] > 3) continue; const x = getLevelLabelText(e), y = simLabelText(b.label[j]); if (x !== y) { bad.push(['label', s, x, y, e.constructor.name, e.type]); break; } }
     return bad; };`);
+// (Preferred targets on some towers, a unit's and a structure's: shown as tx, ty and rallyTargetId.)
+const pref = Number(i.eval(`(() => { const ts = towers.filter(t => t && !t.dead), u = units.find(u => u && !u.dead); let n = 0;
+    for (let k = 0; k < ts.length && k < 40; k++) { const t = ts[k], o = ts[(k + 7) % ts.length];
+        if (k % 2 && u) towerSetPreferredTargetCode(t, 1, u.id); else towerSetPreferredTargetCode(t, 2, o.gy * GRID_W + o.gx); n++; }
+    return n; })()`));
+assert.ok(pref > 10, 'preferred targets set ' + pref);
 let checked = 0, changed = 0, links = 0;
 for (let step = 0; step < 30; step++) {
     if (step % 10 === 0) for (let owner = 0; owner < 2; owner++) i.eval(`localPlayerId=${owner};${chaos.burst({ mode: 'mega' }, step / 10)};processActions(__scratch.actions.splice(0),${owner});`);
@@ -58,10 +64,24 @@ for (let step = 0; step < 30; step++) {
     assert.deepEqual(r.bad, [], 'step ' + step + ': kernel rows differ from _simWriteStructure ' + JSON.stringify(r));
     checked = Math.max(checked, r.n); links = Math.max(links, r.links);
 }
+// Every structure's tile marked changed twice in one step (a mass toggle):
+// each one row, none dropped (the list was capped at 65536 a step), none twice.
+{
+    const r = JSON.parse(i.eval(`(() => { const lists = _simStructLists(), tiles = new Set();
+        for (const l of lists.slice(0, 4)) for (const e of l) if (e && e._sslot !== undefined && getTileEntityRef(e.gx, e.gy) === e) tiles.add(e.gy * GRID_W + e.gx);
+        for (let k = 0; k < 2; k++) for (const t of tiles) simPresentTileDirty(t % GRID_W, Math.floor(t / GRID_W));
+        __scratch.chg = null; _simPresentStructureChanges(_simPresentation); const ch = __scratch.chg || [];
+        return JSON.stringify({ tiles: tiles.size, rows: ch.length, distinct: new Set(ch).size }); })()`));
+    assert.equal(r.rows, r.distinct, 'each changed slot once ' + JSON.stringify(r));
+    assert.ok(r.rows >= r.tiles && r.tiles > 1000, 'every marked structure rewritten ' + JSON.stringify(r));
+}
 assert.ok(checked > 1000, 'structures checked ' + checked);
+// (Some rows carried a preferred target: the columns were compared, not only zeros.)
+const shownPref = Number(i.eval(`(() => { __scratch.cycle(); const F = _simPresentation.structures; let n = 0; for (let s = 0; s < F.cap; s++) if (F.alive[s] && F.kind[s] === 0 && F.tx[s] > 0) n++; return n; })()`));
+assert.ok(shownPref > 0, 'preferred targets shown ' + shownPref);
 assert.ok(changed > 0, 'changed tiles written ' + changed);
 assert.ok(links > 0, 'laser links written ' + links);
 assert.deepEqual(i.errors.map(String), []);
-console.log('PASS: k_meta_structs rows equal _simWriteStructure rows (' + checked + ' structures, ' + changed + ' changed rows, ' + links + ' laser links)');
+console.log('PASS: k_meta_structs rows equal _simWriteStructure rows (' + checked + ' structures, ' + changed + ' changed rows, ' + links + ' laser links, ' + shownPref + ' preferred targets)');
 // (With PAR=1 the real helper threads keep the process alive: it never exited after passing.)
 process.exit(0);

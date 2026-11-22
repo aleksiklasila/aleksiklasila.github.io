@@ -53,11 +53,11 @@ const labOf = inst => own(inst, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawne
         const removed = queueOf(host);
         assert.ok(!removed.includes('tank.speed'), 'removed: ' + removed);
         // Move the last queued item to the active slot, then one down.
-        q(host, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: removed.length - 2, toIndex: 0, fromActive: false, toActive: true });
+        q(host, own(host, `researchMoveAction(localPlayerId, ${removed.length - 1}, 0)`));
         await world.run(1000);
         const reordered = queueOf(host);
         assert.equal(reordered[0], removed[removed.length - 1], 'moved to the front: ' + reordered);
-        q(host, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 0, toIndex: 1, fromActive: false, toActive: false });
+        q(host, own(host, `researchMoveAction(localPlayerId, 1, 2)`));
         await world.run(1000);
         assert.deepEqual(queueOf(guests[0].eval('localPlayerId') === host.eval('localPlayerId') ? guests[0] : host), queueOf(host));
         const hostTeam = host.eval('localPlayerId');

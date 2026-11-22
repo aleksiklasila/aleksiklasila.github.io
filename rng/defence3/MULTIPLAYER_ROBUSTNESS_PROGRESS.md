@@ -785,3 +785,89 @@ row 124's Hold issued at 20 ran at 247 without the fix), then passing in both mo
 - **126** unsent scheduled join counted as on its way: dropped when its link is gone at its tick.
 - **127** lost START_GAME: the beat says whether the start came; the host sends it again.
 - **128** duplicate START_GAME: a start already taken is dropped.
+
+### 2026-11-22: player controls in real multiplayer (research sliders, queue, pills, drag and drop)
+
+Reported: in multiplayer a research slider click or a drag-and-drop added to the queue but the slider did not move,
+"a bit unstable"; every player action must work in multiplayer (solo is for testing). New tool:
+`tests/browser-mp-actions.cjs` (Edge, host + guest tabs over `browser-fake-peer.js`, 40 ms one way, simulation
+workers, the real GUI, real mouse/keys). Stages (`--only=research|sweep|map|bb`): the research stat slider; every
+info panel control (sliders, toggle pills, queue rows) of one structure of every own type and one group of every own
+unit type, checking the control keeps what was set and both pages show the same structure/player state at one tick;
+rally (right click), move (right click), hold/stop keys, placement from the shop; the bottom bar's drop onto the
+research row (+2 in its menu), a task dragged to the front, a boost slot. Needs playwright:
+`NODE_PATH=Z:/data/Antigravity/resources/app/node_modules`.
+
+Found and fixed:
+1. **The host page read a stale research queue for every player.** The host page made the world (wasm heap queue
+   `p._rq` on its players) before the worker took over; the frames then updated the plain `researchQueue` /
+   `researchTask`, but `getResearchQueuedDepthForPlayer` and `getPlayerResearchQueueTotalLength` preferred `p._rq`.
+   So on the host every research slider snapped back to the level at the match's start, queue counts and the
+   bottom bar's capacity were frozen, for the host's own and the guests' queues (guest pages were right).
+   `ensurePlayerResearchQueueState` on a page that does not simulate now lets go of a heap queue (`_rqDetach`).
+2. **Toggle pills flickered back.** `infoTogglePressed` recorded the pressed state and then built the pressed
+   markup, whose maker (`autoStackGroupBtn`, `unitHoldBtn`, ...) reads the shown state, found the press "arrived"
+   and deleted it: the refresh 50 ms later showed the old state until the order came back (solo: a tick, unseen;
+   multiplayer: input delay + link, ~0.3-0.5 s). Trace: hold OFF (press) -> ON (+60 ms) -> OFF (+700 ms). Markup first,
+   then the record.
+3. **Shown-ahead holds expired by wall time only** (1.5 s research/spawn sliders and pills, 3 s boosts): at a low
+   tick rate with input delay an order can take longer. `localOrderShownAhead(at, tick, ms)` (worker.js; the order's
+   tick from `queueAction`, `lastLocalOrderTick`): held for at least ms and until `netCompletedSimulationTick()` has
+   passed the order's tick.
+4. **Research moves and drops by place raced the queue.** `moveResearch {from, to}`, `reorderResearch {fromIndex,
+   ...}` and `queueResearch {insertAt}` named places; an order lands ticks after the click, and the active task
+   finishing meanwhile shifted every place (the wrong task moved, a drop inserted one late, or nothing: the bottom
+   bar's drag also dropped the move when the head finished during the drag). Now tasks are named by what they do,
+   `[kind, key, statKey, toLevel]`: `moveResearch {task, before}` (before null: the end) and `queueResearch {before}`;
+   the place is found when the order runs (`researchTaskPlace`: the stat's k-th task, k = toLevel - level - 1, by the
+   kernel's new find op, `k_rq_op` op 4); a task already done is not moved, an insert before a done task goes to the
+   front. `reorderResearch` and the place forms are gone; `researchMoveAction(owner, from, to)` makes the order from
+   the places the player sees (bottom bar drag / ↑↓ menu, info panel ↑↓, the research popup). The bottom bar keeps the
+   tasks' names from the press (the row is not redrawn under a press) and the drop menu its insert point.
+   SIM_RULES_REVISION 59.
+
+5. **Cloud portals' info panel section acted on nothing** (solo too). The static panel's catalogue and its packer
+   put a type in the tower groups only if it is in the shop's Towers tab; cloud portals (Special tab, `Tower`
+   objects) became `floor_cloud_*` groups, which the packer counted but the page's members (`getEntityGroupKey`:
+   `tower_cloud_*`) never matched: salvage, auto-stack and auto-upgrade sent empty commands, the pill fell back.
+   Towers are now the 'wall' cards (exactly what `placeBuilding` makes a `Tower`).
+6. **Changed structures past 65536 a step were not shown** (`simPresentTileDirty` capped its list, deduped by a new
+   Set each step): a toggle or salvage of a bigger selection left the rest showing the old state until the
+   metadata cycle. Now a mark per tile and a list sized to the map; `meta-structs-kernel.test.cjs` marks every
+   structure twice in a step and checks each is rewritten once.
+
+7. **A tower's preferred target never reached the page** (worker mode, so always in multiplayer): page structure
+   views had no `preferredTargetSpec`, the panel's Target row always said None. The metadata kernel now shows the
+   tower row's `_ptK` / `_ptV` (column map slots 52/53) in the structure-only `tx` (kind) / `ty` (a structure's
+   tile) and `rallyTargetId` (a unit's id; towers have no rally): those columns were written 0 by the kernel and
+   the attack-target flag never set. `towerTarget` marks its towers' tiles changed (shown at the next tick, not at
+   the metadata cycle). The JS reference and `meta-structs-kernel.test.cjs` (with preferred targets set) follow.
+
+8. **A research slider jumped back when a level finished while its order was on its way.** The shown-ahead count
+   followed the stat's queue depth; a finished level lowers the depth, read as the queue going the other way: the
+   order was let go and the target fell back (R3 -> R1) until the order landed. It follows the target (level +
+   depth) now. `research-queue.test.cjs` 2b: an order for a far tick, a level finishes, the target holds (fails on
+   the depth version: 3 -> 1).
+9. **A rally on a building the presentation table had no slot for yet** (placed this tick, or slots handed out
+   again by a metadata cycle) was skipped and showed only at the next cycle; that tile now gets its row again at
+   the next tick (a candidate for the host page once missing a rally; not reproduced since).
+
+By design (checked, not changed): a site takes one builder (workers' targets are exclusive, rules 53): six sent,
+five stay idle; a tower drops a preferred target it cannot see (`k_tower_fire`). a move ordered while units hold waits; releasing (X / the pill) runs it
+(main.js 'hold': "new orders queue up while held"); the probe checks exactly that on both peers.
+
+Open: once, ~20 min into a long probe run, the host page did not show a barracks' new rally (the guest page did);
+not reproduced in short runs (rally twice per player after a queue change). The rally reaches the page only by
+`simPresentRallyTiles` writing the presentation frames through `tileSlot`, skipped silently when the slot no longer
+holds the tile; next suspect.
+
+Checked fine (no change needed): spawn/worker queue count sliders (spawnCounts), rally, move, hold/stop keys, shop
+placement, hold/stack/queue/build/auto pills (after 2), both pages agree on every control's effect at the same tick.
+
+Validation: Edge probe, full run on the final code (2 peers, ~42 game minutes, 0 desyncs, 0 page errors): every
+stage passes (research slider, every panel control of every own structure type and unit group, map actions, bottom
+bar drop / reorder / boost, tower target / workers / salvage / research popup, HUD getters equal on both pages at one
+tick) except the guest's move checks, whose first 8 units were slow or crowded late in the match (both pages
+agreed: not a desync); the probe now picks idle norm/fast units and the map stage passes. In Node, both modes: research-queue (fuzz now also sends
+stale/forged names), multiplayer-features, -concurrency (bit-exact), -action-fuzz, -scenarios, -chaos-determinism:
+all PASS.

@@ -197,7 +197,10 @@ const SNAP_FORMAT = 8;
 // 57: lockstep initialization completion barrier.
 // 58: a scalar move's tile-step charge by its stored (quantized, checked) position, as the vector lanes' (mv.rs
 // commit_step): the charge no longer depends on the unit's slot (a restore's layout charged otherwise).
-const SIM_RULES_REVISION = 58;
+// 59: research queue moves and inserts name their tasks ([kind, key, statKey, toLevel]: moveResearch task /
+// before, queueResearch before), not places (a task finished before the order landed shifted every place);
+// reorderResearch and the place forms gone.
+const SIM_RULES_REVISION = 59;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

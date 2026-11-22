@@ -555,7 +555,16 @@ const _PAGE_STRUCT_ACCESSORS = {
     sandy: { get() { let d = _pageStructDetail(this, 'sandy'); return d !== undefined ? d : _pageStructFlag(this, SIM_SF_SANDY) ? 1 : 0; } },
     rallyX: { get() { return _pageStructFlag(this, SIM_SF_RALLY) ? _pageStructCol(this, 'rallyX') : undefined; } },
     rallyY: { get() { return _pageStructFlag(this, SIM_SF_RALLY) ? _pageStructCol(this, 'rallyY') : undefined; } },
-    rallyTargetUnitId: { get() { const id = _pageStructCol(this, 'rallyTargetId'); return id >= 0 ? id : null; } },
+    rallyTargetUnitId: { get() { if (this._kind === 0) return null; const id = _pageStructCol(this, 'rallyTargetId'); return id >= 0 ? id : null; } },
+    // (A tower's preferred target (tower.js preferredTargetSpec): tx its kind, ty a structure's tile, rallyTargetId a unit's id.)
+    preferredTargetSpec: { get() {
+        if (this._kind !== 0) return null;
+        const k = Math.round(_pageStructCol(this, 'tx'));
+        if (!(k > 0) || typeof TOWER_TARGET_KINDS === 'undefined' || !TOWER_TARGET_KINDS[k]) return null;
+        if (k === 1) { const id = _pageStructCol(this, 'rallyTargetId'); return id >= 0 ? { type: 'unit', id } : null; }
+        const v = Math.round(_pageStructCol(this, 'ty'));
+        return { type: TOWER_TARGET_KINDS[k], gx: v % GRID_W, gy: Math.floor(v / GRID_W) };
+    } },
     attackTarget: { get() {
         if (!_pageStructFlag(this, SIM_SF_ATTACK_TARGET)) return null;
         let t = this._at || (this._at = { x: 0, y: 0 }); t.x = _pageStructCol(this, 'tx'); t.y = _pageStructCol(this, 'ty'); return t;

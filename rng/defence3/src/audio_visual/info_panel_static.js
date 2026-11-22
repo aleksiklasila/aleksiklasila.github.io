@@ -122,7 +122,11 @@ const IPS_FX = { fire: ['burnDps', 'burnDuration'], poison: ['poisonDps', 'poiso
 const IPS_FX_LABEL = { burnDps: 'Burn DPS', burnDuration: 'Burn Duration', poisonDps: 'Poison DPS', poisonDuration: 'Poison Duration', freezeDps: 'Freeze DPS', freezeDuration: 'Freeze Duration',
     wetDuration: 'Wet Duration', sandDuration: 'Slow Duration', watchDuration: 'Watch Duration' };
 function _ipsCatalogue() {
-    const groups = [], towers = (typeof BUILD_CATEGORIES !== 'undefined' && BUILD_CATEGORIES.towers) || [];
+    // (Towers: what is made a Tower (things_utils.js placeBuilding: a 'wall' card), as the
+    // page groups a selection (hud.js getEntityGroupKey). The shop's towers tab left the
+    // cloud portals out: they were a floor group the packer counted and the page never
+    // matched, a section whose buttons and slider acted on none of them.)
+    const groups = [], towers = Object.keys(BASE_CARD_TYPES).filter(t => !t.startsWith('barrack_') && BASE_CARD_TYPES[t] && BASE_CARD_TYPES[t].target === 'wall');
     const bkey = t => _normalizePlayerPrecomputedBuildingKey(t), ukey = t => _normalizePlayerPrecomputedUnitKey(t);
     const price = t => (BASE_CARD_TYPES[t] || {}).price;
     for (const t of Object.keys(BASE_CARD_TYPES)) {
@@ -515,7 +519,7 @@ function _ipsGroup(S, g, R, o, n, X) {
             // command lands a tick or more later): no snap back to the old count.
             const ahead = S.qIn._ahead;
             if (ahead) {
-                if (value === ahead.target || performance.now() - ahead.at > RESEARCH_AHEAD_MS) S.qIn._ahead = null;
+                if (value === ahead.target || !localOrderShownAhead(ahead.at, ahead.tick, RESEARCH_AHEAD_MS)) S.qIn._ahead = null;
                 else value = Math.max(0, Math.min(max, ahead.target));
             }
             // (Mid-gesture the page never rewrites the thumb under the pointer.)

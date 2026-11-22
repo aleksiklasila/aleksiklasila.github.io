@@ -916,6 +916,9 @@ const MC_POIS: usize = 29; const MC_FROZ: usize = 30; const MC_WET: usize = 31; 
 const MC_AST: usize = 35; const MC_UPMX: usize = 36; const MC_MXOV: usize = 37; const MC_SPT: usize = 38; const MC_QON: usize = 39; const MC_QN: usize = 40;
 const MC_RX: usize = 41; const MC_RY: usize = 42; const MC_RT: usize = 43; const MC_ARS: usize = 44; const MC_CDU: usize = 45; const MC_ANG: usize = 46;
 const MC_LZ: usize = 47; const MC_MV: usize = 48; const MC_MXA: usize = 49; const MC_DMG: usize = 50; const MC_PEL: usize = 51;
+// (A tower's preferred target, its row's _ptK (i8) and _ptV (i32): shown as tx (the kind), ty (a structure's tile)
+// and rallyTargetId (a unit's id), columns a structure has no other use for.)
+const MC_PTK: usize = 52; const MC_PTV: usize = 53;
 #[inline(always)]
 unsafe fn mcol<T>(cls: *const i32, c: usize, j: usize) -> *mut T { let v = g(cls, c * META_CW + j); if v == 0 { core::ptr::null_mut() } else { waddr(v as u32) as *mut T } }
 #[inline(always)]
@@ -1023,7 +1026,9 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         s(f(10), sl, if (kind == 4 || kind == 5) && mxa == mxa { mxa as f32 } else { 0.0 });
         let cdu = rdf(MC_CDU);
         s(f(11), sl, if cdu == cdu { (cdu - now).max(0.0) as f32 } else { 0.0 });
-        s(f(12), sl, 0.0); s(f(13), sl, 0.0);
+        let (ptk, ptv) = (rd8(MC_PTK), rdi(MC_PTV));
+        let pt = ptk > 0 && ptv != i32::MIN;
+        s(f(12), sl, if pt { ptk as f32 } else { 0.0 }); s(f(13), sl, if pt && ptk != 1 { ptv as f32 } else { 0.0 });
         let lab = kind == 2 && !mcol::<u8>(cls, c, MC_ARS).is_null();
         let (rdone, rreq, rhas, rok) = if lab && !res.is_null() && owner >= 0 && (owner as usize) < np as usize { let b = owner as usize * 4; (g(res, b), g(res, b + 1), g(res, b + 2) != 0.0, g(res, b + 3) != 0.0) } else { (0.0, 0.0, false, false) };
         s(f(14), sl, rdone as f32); s(f(15), sl, rreq as f32);
@@ -1041,7 +1046,7 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         s(i4(1), sl, flags);
         s(i4(6), sl, otick);
         let rt = rdf(MC_RT);
-        s(i4(7), sl, if rt == rt { rt as i32 } else { -1 });
+        s(i4(7), sl, if pt && ptk == 1 { ptv } else if rt == rt { rt as i32 } else { -1 });
         // i16: kind gx gy owner type utype level elevel qlen qtype laser watchedBy stackCount
         s(i2(0), sl, kind as i16); s(i2(1), sl, gx as i16); s(i2(2), sl, gy as i16); s(i2(3), sl, owner as i16);
         s(i2(4), sl, tcode as i16); s(i2(5), sl, ucode as i16);

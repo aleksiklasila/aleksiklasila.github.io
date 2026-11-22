@@ -3237,10 +3237,28 @@ function _rqAttach(p, o) {
     if (Array.isArray(plainQ) && plainQ.length) p.researchQueue = plainQ;
     return p;
 }
+// The heap queue let go of on a page that does not simulate: its tasks kept
+// as the plain values the frames update (they send deltas against them).
+function _rqDetach(p) {
+    const d = Object.getOwnPropertyDescriptor(p, 'researchQueue');
+    let q = [], t = null;
+    if (d && d.get) {
+        try { q = p.researchQueue.slice(); t = p.researchTask; } catch (_) { q = []; t = null; }
+        delete p.researchQueue; delete p.researchTask;
+        p.researchQueue = q; p.researchTask = t;
+    }
+    delete p._rq;
+}
 function ensurePlayerResearchQueueState(playerId) {
     const p = players[playerId];
     if (!p) return { researchQueue: [], researchTask: null };
     if (_researchSimSide()) return _rqAttach(p, playerId);
+    // (A page whose simulation is in its worker: the frames' plain queue is
+    // the truth. A heap queue left from before the worker took over (the
+    // host page that made the world) was read by the depth and length below
+    // and never changed again: the host's research sliders and queue counts
+    // stayed where the match started, for every player.)
+    if (p._rq !== undefined) _rqDetach(p);
     if (!Array.isArray(p.researchQueue)) p.researchQueue = [];
     if (!Object.prototype.hasOwnProperty.call(p, 'researchTask')) p.researchTask = null;
     return p;
@@ -3284,6 +3302,60 @@ function researchQueueMove(playerId, from, to) {
     if (!R || !(from >= 0 && from < R.n && to >= 0 && to < R.n) || from === to) return;
     _rqOp(R, 2, from, to);
     tryAdvancePlayerResearchTask(playerId);
+}
+
+// A task named by what it does (its stat and the level it researches to),
+// not by its place: an order lands ticks after the player saw the queue (in
+// multiplayer the input delay and the link), and a task finished meanwhile
+// moved every place by one: a move by places moved the wrong task, a drop
+// inserted one place late. Its place now (the kernel's find, op 4): the
+// stat's k-th task, k from the level it researches to; -1 done already, -2
+// not queued.
+function researchTaskPlace(playerId, kind, key, statKey, toLevel) {
+    const R = ensurePlayerResearchQueueState(playerId)._rq, s = researchStatIndex(kind, key, statKey), lv = Math.floor(Number(toLevel));
+    if (!R || s < 0 || !Number.isFinite(lv)) return -2;
+    const k = lv - getPlayerResearchLevel(playerId, kind, key, statKey) - 1;
+    if (k < 0) return -1;
+    if (!(s < R.depth.length) || k >= R.depth[s]) return -2;
+    return _rqOp(R, 4, s, k);
+}
+// (A task's name on the wire: [kind, key, statKey, toLevel]; null when malformed.)
+function _researchTaskRef(r) {
+    return Array.isArray(r) && r.length === 4 && typeof r[0] === 'string' && typeof r[1] === 'string' && typeof r[2] === 'string' && Number.isFinite(Number(r[3])) ? r : null;
+}
+// Where a task named so is now (place), for an insert before it: done
+// already (it was the active one) the front, not queued the end (-1).
+function researchPlaceBefore(playerId, ref) {
+    const b = _researchTaskRef(ref);
+    if (!b) return -1;
+    const i = researchTaskPlace(playerId, b[0], b[1], b[2], b[3]);
+    return i === -1 ? 0 : i < 0 ? -1 : i;
+}
+// moveResearch: the task named moved in front of the one named before (null: to the end).
+function researchQueueMoveTask(playerId, task, before) {
+    const R = ensurePlayerResearchQueueState(playerId)._rq, t = _researchTaskRef(task);
+    if (!R || !t) return;
+    const from = researchTaskPlace(playerId, t[0], t[1], t[2], t[3]);
+    if (from < 0) return;
+    const n = R.n, at = before == null ? -1 : researchPlaceBefore(playerId, before);
+    const end = at < 0 ? n : at, to = Math.min(n - 1, end > from ? end - 1 : end);
+    researchQueueMove(playerId, from, to);
+}
+// (The page's: a task's name as the player sees it, and the order that moves
+// the task at place from (0: the active one) to place to.)
+function researchTaskRefOf(t) { return t ? [t.kind, t.key, t.statKey, Number(t.toLevel)] : null; }
+function researchMoveAction(owner, from, to) {
+    const task = getPlayerResearchTask(owner), queue = getPlayerResearchQueue(owner), n = (task ? 1 : 0) + queue.length;
+    const at = i => task ? (i === 0 ? task : queue[i - 1]) : queue[i];
+    from = Math.floor(from); to = Math.max(0, Math.min(n - 1, Math.floor(to)));
+    if (!(from >= 0 && from < n) || from === to) return null;
+    const before = to < from ? at(to) : to + 1 < n ? at(to + 1) : null;
+    return { action: 'moveResearch', task: researchTaskRefOf(at(from)), before: researchTaskRefOf(before) };
+}
+// (The name of the task the player sees at place i, for an insert before it; null past the end.)
+function researchTaskRefAt(owner, i) {
+    const task = getPlayerResearchTask(owner), queue = getPlayerResearchQueue(owner);
+    return researchTaskRefOf(task ? (i === 0 ? task : queue[i - 1]) : queue[i]);
 }
 
 function getPlayerResearchQueue(playerId) {

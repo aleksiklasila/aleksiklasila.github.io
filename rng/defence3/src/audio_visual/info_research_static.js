@@ -161,21 +161,14 @@ function _iprBind(el) {
         if (!b.dataset.kind) return;
         openResearchStatMatrixPopup(b.dataset.kind, b.dataset.key, b.dataset.statKey, int(b.dataset.fromLevel), int(b.dataset.toLevel));
     });
+    // (↑ to the front, ↓ to the end: the task by name, researchMoveAction.)
     const move = (b, top) => bindInstantPress(b, () => {
-        const gx = int(b.dataset.gx), gy = int(b.dataset.gy), owner = int(b.dataset.owner), from = Math.floor(Number(b.dataset.pendingIndex)), active = b.dataset.active === '1';
-        if (!Number.isFinite(gx) || !Number.isFinite(gy) || !Number.isFinite(owner) || !Number.isFinite(from)) return;
-        const len = getPlayerResearchQueue(owner).length;
-        if (top) {
-            if (active || from < 0 || from >= len) return;
-            lockInfoPanelScroll(b);
-            queueAction({ action: 'reorderResearch', gx, gy, fromIndex: from, toIndex: 0, fromActive: false, toActive: false });
-        } else {
-            if (len <= 0) return;
-            const to = len - 1;
-            if (!active && (from < 0 || from >= len || from === to)) return;
-            lockInfoPanelScroll(b);
-            queueAction({ action: 'reorderResearch', gx, gy, fromIndex: from, toIndex: to, fromActive: active, toActive: false });
-        }
+        const owner = int(b.dataset.owner), from = int(b.dataset.index);
+        if (owner !== localPlayerId || !Number.isFinite(from)) return;
+        const a = researchMoveAction(owner, from, top ? 0 : getPlayerResearchQueueTotalLength(owner) - 1);
+        if (!a) return;
+        lockInfoPanelScroll(b);
+        queueAction(a);
         updateInfoPanel();
     });
     for (const R of _ipr.rows) { move(R.up, true); move(R.down, false); }
@@ -252,7 +245,7 @@ function _iprQueueRows(lab) {
         if (R.slot !== i) { R.row.style.top = i * IPR_ROW_H + 'px'; R.slot = i; }
         const active = task && i === 0, pending = active ? -1 : i - (task ? 1 : 0);
         _ipsAttr(R.row, 'data-research-id', `${id}:${fromLevel}`);
-        for (const b of [R.item, R.up, R.down]) { _ipsAttr(b, 'data-owner', owner); _ipsAttr(b, 'data-gx', lab.gx); _ipsAttr(b, 'data-gy', lab.gy); _ipsAttr(b, 'data-active', active ? '1' : '0'); _ipsAttr(b, 'data-pending-index', pending); }
+        for (const b of [R.item, R.up, R.down]) { _ipsAttr(b, 'data-owner', owner); _ipsAttr(b, 'data-gx', lab.gx); _ipsAttr(b, 'data-gy', lab.gy); _ipsAttr(b, 'data-active', active ? '1' : '0'); _ipsAttr(b, 'data-pending-index', pending); _ipsAttr(b, 'data-index', i); }
         _ipsAttr(R.m, 'data-kind', t.kind); _ipsAttr(R.m, 'data-key', t.key); _ipsAttr(R.m, 'data-stat-key', t.statKey); _ipsAttr(R.m, 'data-from-level', fromLevel); _ipsAttr(R.m, 'data-to-level', toLevel);
         const thing = getResearchThing(t.kind, t.key), stat = getResearchStatEntry(t.kind, t.key, t.statKey);
         _ipsShow(R.ib, !!thing);

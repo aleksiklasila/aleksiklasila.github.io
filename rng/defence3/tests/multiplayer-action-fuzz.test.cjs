@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const H = require('./net-harness.cjs');
 
 const ACTIONS = ['place', 'move', 'attackMove', 'attack', 'attackBuilding', 'stop', 'hold', 'queueUnit', 'queueWorker', 'queueResearch',
-    'workerAssign', 'setRally', 'resign', 'forceResignTeam', 'dequeueUnit', 'dequeueWorker', 'dequeueResearch', 'reorderResearch',
+    'workerAssign', 'setRally', 'resign', 'forceResignTeam', 'dequeueUnit', 'dequeueWorker', 'dequeueResearch', 'moveResearch',
     'markSalvage', 'setSalvage', 'setAutoUpgrade', 'setAutoStack', 'setBuildEnabled', 'setQueueEnabled', 'setAutoResearch',
     'killUnit', 'resizeUnitGroup', 'towerTarget', 'explode', '', '__proto__', 'constructor', 'toString'];
 
@@ -93,7 +93,7 @@ function armHostile(guest, fn) {
             { action: 'setRally', gx: b.gx, gy: b.gy, targetX: 5, targetY: 5 }, { action: 'dequeueUnit', gx: b.gx, gy: b.gy, count: 99 },
             { action: 'dequeueWorker', gx: b.gx, gy: b.gy, count: 99 }, { action: 'dequeueResearch', gx: b.gx, gy: b.gy, count: 99 },
             { action: 'setAutoResearch', gx: b.gx, gy: b.gy, enabled: false }, { action: 'queueUnit', gx: b.gx, gy: b.gy, count: 5 },
-            { action: 'reorderResearch', gx: b.gx, gy: b.gy, fromIndex: 0, toIndex: 1 }
+            { action: 'moveResearch', task: ['unit', 'norm', 'atk', 1], before: ['unit', 'fast', 'speed', 1] }
         ]),
         { action: 'towerTarget', towerCoords: b0, target: { type: 'unit', id: victim.units[0] } },
         { action: 'forceResignTeam', targetTeam: 0 }, { action: 'forceResignTeam', targetTeam: 1 }

@@ -326,10 +326,16 @@ function _simStructTableMsg(F, extra) { return { buf: F.buf, off: F.off, bytes: 
 // Tiles whose structure changed in a way the tile journal does not see (a
 // salvage mark, a toggle, construction finished): shown at the next tick
 // too. Presentation only: nothing of the simulation reads it.
-let _simPresentDirtyTiles = [];
+// (Each tile once a step: a mark per tile and the list, sized to the map when
+// it is made. Capped at 65536 a step before, a toggle or salvage of a bigger
+// selection left the rest showing the old state until the metadata cycle.)
+let _simDirtyMark = null, _simDirtyList = null, _simDirtyN = 0;
 function simPresentTileDirty(gx, gy) {
     if (!_simPresentation || !(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return;
-    if (_simPresentDirtyTiles.length < 65536) _simPresentDirtyTiles.push((gy | 0) * GRID_W + (gx | 0));
+    const n = GRID_W * GRID_H, t = (gy | 0) * GRID_W + (gx | 0);
+    if (!_simDirtyMark || _simDirtyMark.length !== n) { _simDirtyMark = new Uint8Array(n); _simDirtyList = new Int32Array(n); _simDirtyN = 0; }
+    if (_simDirtyMark[t]) return;
+    _simDirtyMark[t] = 1; _simDirtyList[_simDirtyN++] = t;
 }
 // A rally order's building (main.js _rallySetTiles): its rally cells of the
 // shown table (and the one being filled) written at once, its row not rewritten
@@ -351,10 +357,12 @@ function simPresentRallyTiles(keys, m, x, y, id) {
     for (const F of [p.structures, p.structuresNext]) {
         if (!F) continue;
         for (let i = 0; i < m; i++) {
-            const t = keys[i], s = T[t];
-            if (s < 0 || s >= F.cap) continue;
-            const gx = t % W;
-            if (F.gx[s] !== gx || F.gy[s] !== (t - gx) / W) continue;
+            const t = keys[i], s = T[t], gx = t % W, gy = (t - gx) / W;
+            // (A building the shown table has no row for yet, or not at this slot
+            // (placed this tick, slots handed out again by a cycle): its row again at
+            // the next tick, from its table's rally columns. Skipped, its rally showed
+            // only at the next metadata cycle, seconds later at scale.)
+            if (s < 0 || s >= F.cap || F.gx[s] !== gx || F.gy[s] !== gy) { if (F === p.structures) simPresentTileDirty(gx, gy); continue; }
             _simPresentRallyCells(F, s, on, x, y, id);
         }
     }
@@ -372,9 +380,14 @@ function _simPresentStructureChanges(p) {
     let F = p.structures;
     if (!F || typeof tileEntityChangesSince !== 'function') return;
     let tiles = tileEntityChangesSince(p.teCursor || (p.teCursor = { epoch: -1, pos: 0 }));
-    if (_simPresentDirtyTiles.length) {
-        const d = _simPresentDirtyTiles; _simPresentDirtyTiles = [];
-        tiles = tiles && tiles.length ? [...new Set([...tiles, ...d])] : [...new Set(d)];
+    if (_simDirtyN) {
+        // (The journal's tiles and the marked ones, each once: the marks say which are in.)
+        const M = _simDirtyMark, D = _simDirtyList, nd = _simDirtyN, out = [];
+        _simDirtyN = 0;
+        if (tiles) for (const t of tiles) if (M[t] !== 2) { M[t] = 2; out.push(t); }
+        for (let i = 0; i < nd; i++) { const t = D[i]; if (M[t] !== 2) { M[t] = 2; out.push(t); } }
+        for (const t of out) M[t] = 0;
+        tiles = out;
     }
     const rally = p.rallyDirty === true;
     p.rallyDirty = false;
@@ -610,7 +623,7 @@ function _simMetaStructsRun(p, F, S, T, list = null, nl = 0, F2 = null) {
     const COLS = { 11: '_stT', 12: '_ow', 13: '_uc', 14: '_en', 15: 'gx', 16: 'gy', 17: 'stacks', 18: 'manualStacks', 19: 'effectiveStacks', 20: 'level', 21: 'effectiveLevel', 22: 'isStacking',
         23: 'stackingWorkDone', 24: 'markedForSalvage', 25: 'autoUpgradeEnabled', 26: 'buildEnabled', 27: 'isUpgrading', 28: 'burning', 29: 'poisoned', 30: 'frozen', 31: 'wet', 32: 'sandy', 33: 'watched',
         34: 'watchedByTeam', 35: 'autoStackEnabled', 36: 'upgrademaxEnergy', 37: '_mxOv', 38: '_spt', 39: 'queueEnabled', 40: '_qN', 41: 'rallyX', 42: 'rallyY', 43: 'rallyTargetUnitId',
-        44: 'autoResearchEnabled', 45: '_cdUntil', 46: 'angle', 47: 'laserState', 48: '_mv', 50: 'damage', 51: 'potentialEffectiveLevel' };
+        44: 'autoResearchEnabled', 45: '_cdUntil', 46: 'angle', 47: 'laserState', 48: '_mv', 50: 'damage', 51: 'potentialEffectiveLevel', 52: '_ptK', 53: '_ptV' };
     for (let k = 0; k < nc; k++) {
         const C = CL[k], Tb = C ? _sTables.get(C) : null, b = k * CW;
         if (!Tb || !(Tb.n > 0)) continue;

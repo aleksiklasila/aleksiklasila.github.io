@@ -190,7 +190,8 @@ const ECONOMY = {
             const lab = JSON.parse(inst.eval(`JSON.stringify((s => ({ gx: s.gx, gy: s.gy }))(collectorSpawners.find(s => s.owner === localPlayerId && s.type === 'research')))`));
             q(inst, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'unit', key: 'norm', statKey: 'atk', count: 2 });
             q(inst, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'unit', key: 'collector', statKey: 'gatherPerTrip', count: 1 });
-            q(inst, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 0, toIndex: 0, fromActive: false, toActive: true });
+            // (The collector level in front of the attack ones, by name: queued this tick, not on the page yet.)
+            q(inst, { action: 'moveResearch', task: ['unit', 'collector', 'gatherPerTrip', 1], before: ['unit', 'norm', 'atk', 1] });
         }
         await seenStates(40000);
         assert.ok(host.eval('goldMines.reduce((s, m) => s + m.gold, 0)') < goldBefore, 'collectors mined gold');

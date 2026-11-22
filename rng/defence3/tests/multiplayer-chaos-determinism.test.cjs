@@ -48,7 +48,7 @@ const CHAOS_COMMAND = `(r => {
     const near = (x, y, d) => ({ gx: Math.max(0, Math.min(GRID_W - 1, Math.floor(x / TILE) + Math.floor(R() * (2 * d + 1)) - d)), gy: Math.max(0, Math.min(GRID_H - 1, Math.floor(y / TILE) + Math.floor(R() * (2 * d + 1)) - d)) });
     const kinds = ['place', 'place', 'move', 'attackMove', 'attack', 'attackBuilding', 'stop', 'hold', 'queueUnit', 'queueWorker',
         'queueResearch', 'workerAssign', 'setRally', 'setRallyUnit', 'markSalvage', 'setSalvage', 'setAutoUpgrade', 'setAutoStack',
-        'setBuildEnabled', 'setQueueEnabled', 'setAutoResearch', 'dequeueUnit', 'dequeueWorker', 'dequeueResearch', 'reorderResearch',
+        'setBuildEnabled', 'setQueueEnabled', 'setAutoResearch', 'dequeueUnit', 'dequeueWorker', 'dequeueResearch', 'moveResearch',
         'killUnit', 'resizeUnitGroup', 'towerTarget'];
     const kind = pick(kinds);
     const b = pick(myB);
@@ -77,7 +77,7 @@ const CHAOS_COMMAND = `(r => {
             if (lab && stat) queueAction({ action: kind, gx: lab.gx, gy: lab.gy, kind: thing.kind, key: thing.key, statKey: stat.statKey, count: 1 + Math.floor(R() * 2) });
             break;
         }
-        case 'reorderResearch': { const lab = pick(collectorSpawners.filter(x => x.owner === me && x.type === 'research')); if (lab) queueAction({ action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: Math.floor(R() * 3), toIndex: Math.floor(R() * 3), fromActive: R() < 0.2, toActive: R() < 0.2 }); break; }
+        case 'moveResearch': { const a = researchMoveAction(me, Math.floor(R() * 4), Math.floor(R() * 4)); if (a) queueAction(a); break; }
         case 'workerAssign': {
             const workers = mine.filter(u => u.workerState);
             if (!workers.length) break;

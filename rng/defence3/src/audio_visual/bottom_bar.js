@@ -435,8 +435,8 @@ function _bbBoostState(info, res) {
     let key = typeof _boostThingKey === 'function' ? _boostThingKey(branch, info.key) : info.key;
     let steps = typeof getPlayerThingBoost === 'function' ? getPlayerThingBoost(localPlayerId, branch, key, res) : 0;
     let id = info.id + '/' + res, pending = bb.boostPending && bb.boostPending[id], now = performance.now();
-    // (An order sent: shown until the simulation has it, or a few seconds.)
-    if (pending && (pending.steps === steps || now - pending.at > 3000)) { delete bb.boostPending[id]; pending = null; }
+    // (An order sent: shown until the simulation has it, or its tick has run and a few seconds passed.)
+    if (pending && (pending.steps === steps || !localOrderShownAhead(pending.at, pending.tick, 3000))) { delete bb.boostPending[id]; pending = null; }
     let shown = pending ? pending.steps : steps;
     let seen = bb.boostSeen || (bb.boostSeen = {});
     if (!seen[id] || seen[id].steps !== shown) seen[id] = { steps: shown, at: seen[id] ? now : -Infinity };
@@ -503,8 +503,9 @@ function _bbOnBoostClick(slot) {
     let info = _bbThingInfo(tile.dataset.id), res = slot.dataset.bbBoost === 'astar' ? 'astar' : 'energy';
     let steps = Math.max(0, Math.floor(Number(slot.dataset.step) || 0));
     if (steps === _bbBoostState(info, res).steps) return;
-    (bb.boostPending || (bb.boostPending = {}))[info.id + '/' + res] = { steps, at: performance.now() };
-    queueAction({ action: 'setBoost', kind: info.kind === 'building' ? 'building' : 'unit', key: info.key, res, steps });
+    const pending = (bb.boostPending || (bb.boostPending = {}))[info.id + '/' + res] = { steps, at: performance.now(), tick: -1 };
+    const tick = queueAction({ action: 'setBoost', kind: info.kind === 'building' ? 'building' : 'unit', key: info.key, res, steps });
+    if (Number.isFinite(tick)) pending.tick = tick;
     bb.thingsSig = '';
     if (!bb.press) _bbRenderThings();
     if (bb.menu) _bbRenderMenu(true);
@@ -768,6 +769,9 @@ function _bbOnPointerDown(ev) {
         placeholder: null,
         zone: null,
         pointerId: ev.pointerId,
+        // (The tasks' names as the row shows them now: it is not redrawn
+        // under a press, so a drop's place is a place in this list.)
+        refs: _bbOrderedTasks(localPlayerId).map(researchTaskRefOf),
     };
     document.addEventListener('pointermove', _bbOnPointerMove, true);
     document.addEventListener('pointerup', _bbOnPointerUp, true);
@@ -976,8 +980,12 @@ function _bbOnPointerUp(ev) {
 
     if (press.type === 'task') {
         let tasks = _bbOrderedTasks(localPlayerId);
-        if (zone === 'research' && Number.isFinite(idx) && idx >= 0 && idx !== press.index && press.index < tasks.length) {
-            queueAction({ action: 'moveResearch', from: press.index, to: idx });
+        if (zone === 'research' && Number.isFinite(idx) && idx >= 0 && idx !== press.index && press.index < press.refs.length) {
+            // (By name: the task pressed, in front of the one now at the drop
+            // place among the others; past the last, the end. A task finished
+            // during the drag or before the order lands moves nothing else.)
+            const others = press.refs.filter((_, i) => i !== press.index);
+            queueAction({ action: 'moveResearch', task: press.refs[press.index], before: idx < others.length ? others[idx] : null });
             // Show the dropped order until the move lands.
             if (placeholder && placeholder.parentNode) {
                 placeholder.parentNode.insertBefore(press.src, placeholder);
@@ -1020,7 +1028,7 @@ function _bbOnPointerUp(ev) {
         let anchor = placeholder && placeholder.isConnected ? placeholder.getBoundingClientRect() : null;
         if (placeholder) placeholder.remove();
         _bbOpenMenu({
-            type: 'drop', id: press.id, insertAt: idx,
+            type: 'drop', id: press.id, insertAt: idx, before: idx < press.refs.length ? press.refs[idx] : null,
             anchor: { x: anchor ? anchor.left + anchor.width / 2 : press.x, top: bb.els.research.getBoundingClientRect().top },
         });
         return;
@@ -1094,6 +1102,10 @@ function _bbOpenMenu(spec) {
     bb.menu = {
         type: spec.type, id: spec.id || null, task: spec.task || null, taskKey: spec.task ? _bbTaskKey(spec.task) : '', el,
         anchor: spec.anchor || null, insertAt: spec.insertAt || 0, added: 0, html: '', pressed: false,
+        // (A drop: the task it was dropped in front of, by name (null: the
+        // end); every level the menu adds goes there, wherever the queue has
+        // moved by the time it lands: data_dynamic.js researchPlaceBefore.)
+        before: spec.type === 'drop' ? (spec.before !== undefined ? spec.before : researchTaskRefAt(localPlayerId, spec.insertAt || 0)) : null,
     };
     el.addEventListener('pointerdown', () => { if (bb.menu) bb.menu.pressed = true; });
     el.addEventListener('pointerup', () => { setTimeout(() => { if (bb.menu) bb.menu.pressed = false; }, 0); });
@@ -1329,12 +1341,9 @@ function _bbTaskAction(act) {
     let last = tasks.length - 1;
     let lab = _bbResearchLab(owner);
     if (!lab) return;
-    if (act === 'task-first') {
-        queueAction({ action: 'moveResearch', from: i, to: 0 });
-    } else if (act === 'task-last') {
-        queueAction({ action: 'moveResearch', from: i, to: last });
-
-    }
+    // (By name: researchMoveAction.)
+    const a = act === 'task-first' ? researchMoveAction(owner, i, 0) : act === 'task-last' ? researchMoveAction(owner, i, last) : null;
+    if (a) queueAction(a);
 }
 
 Object.assign(globalThis, { updateBottomBar, closeBottomBarMenus, bottomBarRefreshNow });

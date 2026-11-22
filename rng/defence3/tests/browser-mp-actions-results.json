@@ -1,0 +1,153 @@
+{
+ "fixture": "10000-160.json",
+ "delay": 40,
+ "health": [
+  {
+   "tick": 739,
+   "desyncs": 0,
+   "stop": false,
+   "started": true
+  },
+  {
+   "tick": 739,
+   "desyncs": 0,
+   "stop": false,
+   "started": true
+  }
+ ],
+ "errors": [],
+ "results": [
+  {
+   "name": "rally",
+   "page": "host",
+   "ok": true,
+   "rally": [
+    3056,
+    2383.5
+   ]
+  },
+  {
+   "name": "move",
+   "page": "host",
+   "ok": true,
+   "d0": [
+    332.29760004049734,
+    332.29760004049734
+   ],
+   "d1": [
+    183.8246811871892,
+    181.67092783395202
+   ]
+  },
+  {
+   "name": "move while held",
+   "page": "host",
+   "ok": true,
+   "e0": [
+    107.28719250149432,
+    107.28719250149432
+   ],
+   "e1": [
+    107.28719250149432,
+    107.28719250149432
+   ],
+   "e2": [
+    32.21401396396233,
+    31.19291943985886
+   ]
+  },
+  {
+   "name": "hold key",
+   "page": "host",
+   "ok": true,
+   "h1": [
+    8,
+    8
+   ]
+  },
+  {
+   "name": "stop key",
+   "page": "host",
+   "ok": true,
+   "h2": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "place",
+   "page": "host",
+   "ok": true,
+   "r": [
+    "pistol(uc)",
+    "pistol(uc)"
+   ]
+  },
+  {
+   "name": "rally",
+   "page": "guest",
+   "ok": true,
+   "rally": [
+    2096,
+    47.5
+   ]
+  },
+  {
+   "name": "move",
+   "page": "guest",
+   "ok": true,
+   "d0": [
+    656.0719005435637,
+    656.0719005435637
+   ],
+   "d1": [
+    538.5489528296587,
+    536.8060320161433
+   ]
+  },
+  {
+   "name": "move while held",
+   "page": "guest",
+   "ok": true,
+   "e0": [
+    565.3323707811461,
+    565.3323707811461
+   ],
+   "e1": [
+    565.3323707811461,
+    565.3323707811461
+   ],
+   "e2": [
+    491.7027827419567,
+    489.77777845199375
+   ]
+  },
+  {
+   "name": "hold key",
+   "page": "guest",
+   "ok": true,
+   "h1": [
+    8,
+    8
+   ]
+  },
+  {
+   "name": "stop key",
+   "page": "guest",
+   "ok": true,
+   "h2": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "place",
+   "page": "guest",
+   "ok": true,
+   "r": [
+    "pistol(uc)",
+    "pistol(uc)"
+   ]
+  }
+ ]
+}

@@ -82,7 +82,8 @@ const START = {
         gA2.queueAt(T, { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: 'building', key: 'pistol', statKey: 'damage', count: 1 });
         await runPast(T);
         T = future();
-        host.queueAt(T, { action: 'reorderResearch', gx: lab.gx, gy: lab.gy, fromIndex: 3, toIndex: 0, fromActive: false, toActive: true });
+        // (The fourth pending task to the front, by name as the panels give it.)
+        host.queueAt(T, own(host, `researchMoveAction(localPlayerId, 4, 0)`));
         gA2.queueAt(T, { action: 'dequeueResearch', gx: lab.gx, gy: lab.gy, kind: 'unit', key: 'norm', statKey: 'atk', count: 1 });
         gA2.queueAt(T, { action: 'setAutoResearch', gx: lab.gx, gy: lab.gy, enabled: false });
         host.queueAt(T, { action: 'setAutoResearch', gx: lab.gx, gy: lab.gy, enabled: true });

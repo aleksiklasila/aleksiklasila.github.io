@@ -3505,6 +3505,22 @@ function requeueLocalAction(finalAction) {
     delete lockstepLocalPacketByTick[tick];
     if (isHost && lockstepHostPacketsByTick[tick] && myPeerId) delete lockstepHostPacketsByTick[tick][myPeerId];
 }
+// The tick this player's last order went in, and whether the frames this
+// page shows include a tick yet: the controls that show an order at once
+// (a pressed toggle, a slider's new target) keep showing it until then, not
+// a fixed time: in multiplayer an order lands after the input delay and the
+// link, and at a low tick rate that was longer than the time and the old
+// state came back for a while.
+let lastLocalOrderTick = -1;
+function localOrderArrived(tick) {
+    if (!Number.isFinite(tick) || tick < 0) return true;
+    const done = typeof netCompletedSimulationTick === 'function' ? netCompletedSimulationTick() : currentTick;
+    return done > tick;
+}
+// (Shown ahead still: for at least ms, and until its tick has been run.)
+function localOrderShownAhead(at, tick, ms) {
+    return performance.now() - at <= ms || !localOrderArrived(tick);
+}
 // (Returns the tick it goes in: undefined when it went nowhere.)
 function queueAction(action) {
     // Player input starts after loading ticks; admin commands have their own route.
@@ -3531,10 +3547,6 @@ function _queueLocalAction(action) {
     if (localUnitOrderHook && action && Array.isArray(action.unitIds)) localUnitOrderHook(action);
     // (The hook tested before each call: one may replace it while the groups are told.)
     if (localUnitOrderHook && action && action.action === 'orderMany' && Array.isArray(action.groups)) for (const g of action.groups) if (g && Array.isArray(g.unitIds) && typeof localUnitOrderHook === 'function') localUnitOrderHook({ ...g, action: action.mode });
-    // (A research order: shown at once, see hud.js noteResearchOrder.)
-    if (action && (action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
-        noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)));
-    }
     if (action && Array.isArray(action.unitIds) && typeof ACTION_MAX_UNIT_IDS === 'number' && action.unitIds.length > ACTION_MAX_UNIT_IDS && ACTION_SPLIT_BY_UNITS.has(action.action)) {
         // (Each piece's wire string made already, when the selection's ids came from the packer thread.)
         for (let i = 0, k = 0; i < action.unitIds.length; i += ACTION_MAX_UNIT_IDS, k++) {
@@ -3576,6 +3588,11 @@ function _queueLocalAction(action) {
     }
     delete finalAction._uidzMade;
     localInputBuffer[tick].push(finalAction);
+    lastLocalOrderTick = tick;
+    // (A research order: shown at once until its tick has run, see hud.js noteResearchOrder.)
+    if ((action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
+        noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)), tick);
+    }
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.
     delete lockstepLocalPacketByTick[tick];

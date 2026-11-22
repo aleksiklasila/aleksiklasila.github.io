@@ -121,7 +121,7 @@ function spawnBarOptions(coords, worker) {
         const pending = spawnBarAhead.get(key);
         if (pending) {
             const got = o.len - pending.base;
-            if (performance.now() - pending.at > RESEARCH_AHEAD_MS ||
+            if (!localOrderShownAhead(pending.at, pending.tick, RESEARCH_AHEAD_MS) ||
                 (got && ((got > 0) !== (pending.delta > 0) || Math.abs(got) >= Math.abs(pending.delta)))) {
                 spawnBarAhead.delete(key);
             } else {
@@ -201,16 +201,21 @@ function setSpawnBarCount(spec, target) {
         }
     }
     // (One command for the bar's change: main.js spawnCounts.)
-    const ch = [];
+    const ch = [], noted = [];
     for (const o of options) {
         const change = o.len - o.initial;
         if (!change) continue;
         const old = spawnBarAhead.get(o.key);
-        spawnBarAhead.set(o.key, { base: old ? old.base : o.initial,
-            delta: (old ? old.delta : 0) + change, at: performance.now() });
+        const e = { base: old ? old.base : o.initial, delta: (old ? old.delta : 0) + change, at: performance.now(), tick: old ? old.tick : -1 };
+        spawnBarAhead.set(o.key, e); noted.push(e);
         ch.push([o.gy * GRID_W + o.gx, change]);
     }
-    if (ch.length) { ch.sort((x, y) => x[0] - y[0]); queueAction({ action: 'spawnCounts', worker: !!spec.worker, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[1]) }); }
+    if (ch.length) {
+        ch.sort((x, y) => x[0] - y[0]);
+        const tick = queueAction({ action: 'spawnCounts', worker: !!spec.worker, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[1]) });
+        // (Shown until the order's tick has run: localOrderShownAhead.)
+        if (Number.isFinite(tick)) for (const e of noted) e.tick = Math.max(e.tick, tick);
+    }
 }
 
 function researchBarLevel(owner, stat) {
@@ -242,8 +247,10 @@ function commitCountBar(input) {
         updateBuildMenu();
     } else if (spec.type === 'spawn') {
         // The thumb stays at the release until the queue itself reaches it.
-        input._ahead = { target: value, at: performance.now() };
+        input._ahead = { target: value, at: performance.now(), tick: -1 };
+        const before = lastLocalOrderTick;
         setSpawnBarCount(spec, value);
+        if (lastLocalOrderTick !== before) input._ahead.tick = lastLocalOrderTick;
     } else if (spec.type === 'research') {
         if (spec.owner !== localPlayerId) return;
         const anchor = spec.coords.find(c => {
@@ -260,11 +267,14 @@ function commitCountBar(input) {
             // that position. The same bar elsewhere appends as before.
             if (typeof bb !== 'undefined' && bb.menu && bb.menu.el.contains(input)) {
                 if (bb.menu.type === 'drop') {
-                    if (delta > 0) action.insertAt = bb.menu.insertAt + bb.menu.added;
+                    // (In front of the task it was dropped before, by name: lands right however the queue moved.)
+                    if (delta > 0 && bb.menu.before) action.before = bb.menu.before;
                     const room = getResearchQueueCapacityForPlayer(localPlayerId) - getPlayerResearchQueueTotalLength(localPlayerId);
                     bb.menu.added = Math.max(0, bb.menu.added + (delta > 0 ? Math.min(delta, room) : delta));
                 } else if (bb.menu.type === 'task' && delta > 0) {
-                    action.insertAt = _bbMenuTaskIndex(_bbOrderedTasks(localPlayerId)) + 1;
+                    // (Right after the open task: in front of the one after it, by name; none: the end.)
+                    const after = researchTaskRefAt(localPlayerId, _bbMenuTaskIndex(_bbOrderedTasks(localPlayerId)) + 1);
+                    if (after) action.before = after;
                 }
             }
             queueAction(action);
@@ -373,7 +383,7 @@ function syncCountSliderValues(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('.count-slider[data-count-spec]').forEach(input => {
         if (input !== activeCountBar) {
-            const ahead = input._ahead && performance.now() - input._ahead.at <= RESEARCH_AHEAD_MS ? input._ahead.target : null;
+            const ahead = input._ahead && localOrderShownAhead(input._ahead.at, input._ahead.tick, RESEARCH_AHEAD_MS) ? input._ahead.target : null;
             input.value = ahead === null ? input.getAttribute('value') : String(ahead);
             positionCountSliderLabel(input);
         }
