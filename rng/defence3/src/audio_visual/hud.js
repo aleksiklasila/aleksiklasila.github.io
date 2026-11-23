@@ -1373,7 +1373,8 @@ function _bindHudShrineDrain(el) {
         let cur = _hudShrineDrainShown && _hudShrineDrainShown.owner === localPlayerId && gameTime < _hudShrineDrainShown.until ? _hudShrineDrainShown.mode : getPlayerShrineDrainMode(localPlayerId);
         let next = cur ^ (Number(b.getAttribute('data-shrine-drain')) & 3);
         _hudShrineDrainShown = { owner: localPlayerId, mode: next, until: gameTime + Math.max(10, TICK_RATE * 3) };
-        queueAction({ action: 'shrineDrain', drain: next });
+        const bit = Number(b.getAttribute('data-shrine-drain')) & 3;
+        queueAction({ action: 'shrineDrain', bit, on: !!(next & bit) });
         ev.stopPropagation();
     });
 }

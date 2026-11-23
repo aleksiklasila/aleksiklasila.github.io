@@ -1547,6 +1547,13 @@ function simClientSnapshotText(snapshot) {
     });
 }
 
+// Host: a join's snapshot as the payload to send ({ z } gzipped, or { json }), the page's part (built
+// withoutState) and the worker's state put together and gzipped in the worker (sim_worker.js
+// _simJoinPayload): no text of the whole match on the page.
+function simClientJoinPayload(snapshot) {
+    return simClientRequest('encodeJoinPayload', { head: snapshot }).then(r => ({ payload: r.z ? { z: r.z } : { json: r.json }, bytes: r.bytes, gameTime: r.gameTime }));
+}
+
 // Guest: a resync patch, for the worker to apply before the next tick.
 // (Posted at once, in order with the ticks: the worker applies it before the
 // next one. The promise: whether its decoder took it.)

@@ -200,7 +200,10 @@ const SNAP_FORMAT = 8;
 // 59: research queue moves and inserts name their tasks ([kind, key, statKey, toLevel]: moveResearch task /
 // before, queueResearch before), not places (a task finished before the order landed shifted every place);
 // reorderResearch and the place forms gone.
-const SIM_RULES_REVISION = 59;
+// 60: setResearchTarget (a research slider's command): the stat's target set, its difference taken when it runs.
+// 61: spawnCounts set: a slider's counts are queue lengths to have, the difference taken when it runs.
+// 62: shrineDrain bit / on: a drain button's one target on or off.
+const SIM_RULES_REVISION = 62;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;

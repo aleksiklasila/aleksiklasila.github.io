@@ -248,12 +248,12 @@ function _spClasses() {
 // A group's spawn queue changes (main.js spawnCounts): tiles and counts, by
 // the kernel (wasm/src/spr.rs k_spawn_counts); the changed tiles' list and
 // count back (_spp.out, n). Fronts' costs: spr.tab, missing keys filled first.
-function spawnCountsKernel(tiles, counts, n, playerId, worker) {
+function spawnCountsKernel(tiles, counts, n, playerId, worker, set = false) {
     const S = _spp, CL = _spClasses(), { cls } = _spClsBuild();
     const np1 = players.length + 1, tab = _spArr('tab', Float64Array, np1 * SPAWN_PROD_TYPES * 64 * 3);
     if (S.np !== np1) { tab.fill(NaN); S.np = np1; }
     const out = _spArr('cout', Int32Array, n + 4), cnt = _spArr('ccnt', Int32Array, 4), ver = _precomputedStatsVersion, P = S.CP || (S.CP = new Float64Array(16));
-    P.fill(0); P[0] = n; P[1] = SPAWN_PROD_TYPES; P[2] = playerId; P[3] = worker ? 1 : 0; P[4] = CL.length; P[5] = GRID_W * GRID_H; P[7] = ver; P[8] = worker ? 10 : 20;
+    P.fill(0); P[0] = n; P[1] = SPAWN_PROD_TYPES; P[2] = playerId; P[3] = worker ? 1 : 0; P[4] = CL.length; P[5] = GRID_W * GRID_H; P[7] = ver; P[8] = worker ? 10 : 20; P[9] = set ? 1 : 0;
     const args = [cls, tiles, counts, _ST.ctab, _ST.rrow, _ST.brain, tab, out, cnt, _ST.tim];
     P[6] = 0; simRustDirect('k_spawn_counts', args, P);
     for (let i = 0, m = cnt[1]; i < m; i++) { const key = out[i]; if (tab[key * 3 + 2] !== ver) _spTabFill(tab, key, ver); }

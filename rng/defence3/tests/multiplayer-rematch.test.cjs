@@ -25,6 +25,9 @@ function startState(i) {
     await H.playFor(world, all, 3000, { seed: 1 });
     await endMatch(world, host, all);
 
+    // (Controls showing an order ahead of the simulation, left from this match:
+    // its ticks; a rematch's start again, so they must go with the world.)
+    for (const i of all) i.eval(`_infoToggleShown.set('info-queue-toggle-group-btn|x', { on: true, at: performance.now(), tick: currentTick + 100000 }); _researchAhead.set('unit|norm|atk', { kind: 'unit', key: 'norm', statKey: 'atk', base: 0, delta: 2, at: performance.now(), tick: currentTick + 100000 }); spawnBarAhead.set('0:1,1', { base: 0, delta: 1, at: performance.now(), tick: currentTick + 100000 });`);
     // A guest asks; everyone sees it.
     guests[0].eval('guestToggleRematchVote()');  // the button's handler (UI wiring is not loaded here)
     assert.ok(await world.runUntil(() => host.eval('rematchVotePeerIds.size') === 1 && guests[1].eval('rematchVotePeerIds.size') === 1, 3000), 'vote reached everyone');
@@ -47,6 +50,7 @@ function startState(i) {
         assert.equal(b.patches + b.resyncs, 0, all[k].name + ' counters reset');
     }
     assert.equal(host.eval('rematchVotePeerIds.size'), 0, 'votes cleared');
+    for (const i of all) assert.equal(i.eval('_infoToggleShown.size + _researchAhead.size + spawnBarAhead.size'), 0, i.name + ' orders shown ahead cleared with the world');
     // (Every player plays it: the worker's defeated teams of the last match
     // made the host take its guests for spectators, their commands left out.)
     await world.run(1500);

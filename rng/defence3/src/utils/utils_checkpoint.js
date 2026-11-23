@@ -20,10 +20,12 @@ function _netCkptNew(session, tick, text) {
     return { session, tick, text, ticks: new Map(), dkRuns: [[tick, 1]], last: tick - 1 };
 }
 // A whole state of the match at `tick` (before that tick runs), as text.
+// (text: the text, or a snapshot payload ({ z } gzipped, { json }): decoded only when the checkpoint is used.)
 function netCheckpointNote(session, tick, text) {
     session = String(session || '');
     const t = Math.floor(Number(tick));
-    if (!session || typeof text !== 'string' || !text || !Number.isFinite(t) || t < 0) return;
+    const ok = typeof text === 'string' ? !!text : !!(text && typeof text === 'object' && (text.z || typeof text.json === 'string'));
+    if (!session || !ok || !Number.isFinite(t) || t < 0) return;
     const old = _netCkpt && _netCkpt.session === session ? _netCkpt : null;
     // (An older state than the one kept: kept as it is. The same tick again: the newer text.)
     if (old && t < old.tick) return;
@@ -95,8 +97,11 @@ function netCheckpointRestoreSelf(reason) {
     const session = String(matchStartSessionId || '');
     const job = _netCkptRestoring = { session };
     const done = () => { if (_netCkptRestoring === job) _netCkptRestoring = null; };
-    (typeof simClientWhenLoaded === 'function' ? simClientWhenLoaded(10000) : Promise.resolve(true)).then(ok => {
+    // (A payload kept gzipped: its text first.)
+    const textOf = typeof k.text === 'string' ? Promise.resolve(k.text) : netDecodeSnapshotPayload(k.text).catch(() => null);
+    Promise.all([typeof simClientWhenLoaded === 'function' ? simClientWhenLoaded(10000) : Promise.resolve(true), textOf]).then(([ok, text]) => {
         done();
+        if (typeof text !== 'string' || !text) { logLockstepWarning('The checkpoint could not be read', {}); return; }
         if (!ok || !isHost || !gameStarted || gameOver || String(matchStartSessionId || '') !== session || _netCkpt !== k) return;
         if (!simClientLostPending()) return;
         simClientLostClear();
@@ -111,7 +116,7 @@ function netCheckpointRestoreSelf(reason) {
         if (typeof resyncNoteRestored === 'function') resyncNoteRestored(k.tick);
         // (The page decodes the text without units; the worker loads all of it: sim_client.js simClientStartMatch.)
         if (typeof _simClientStartedThisMatch !== 'undefined') _simClientStartedThisMatch = false;
-        if (!(typeof simClientStartMatch === 'function' && simClientStartMatch(k.text))) {
+        if (!(typeof simClientStartMatch === 'function' && simClientStartMatch(text))) {
             logLockstepWarning('The checkpoint could not be loaded into a worker', {});
             return;
         }

@@ -12,6 +12,11 @@ run actionfuzz-page node tests/multiplayer-action-fuzz.test.cjs
 run actionfuzz-worker env SIM_WORKER=1 node tests/multiplayer-action-fuzz.test.cjs
 run scenarios-page node tests/multiplayer-scenarios.test.cjs
 run scenarios-worker env SIM_WORKER=1 node tests/multiplayer-scenarios.test.cjs
+run shrine-page node tests/shrine.test.cjs
+run shrine-worker env SIM_WORKER=1 node tests/shrine.test.cjs
+run rematch-page node tests/multiplayer-rematch.test.cjs
+run rematch-worker env SIM_WORKER=1 node tests/multiplayer-rematch.test.cjs
+run livejoin node tests/multiplayer-live-join-worker.test.cjs
 run chaosdet-page node tests/multiplayer-chaos-determinism.test.cjs
 run chaosdet-worker env SIM_WORKER=1 node tests/multiplayer-chaos-determinism.test.cjs
 echo ALLDONE

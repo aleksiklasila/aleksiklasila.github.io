@@ -3859,6 +3859,7 @@ function resetWorldState() {
     lockstepHostHardResyncRequestedByTick = {};
     nextLocalActionSeq = 1;
     _localActionEpoch = _newLocalActionEpoch();
+    if (typeof localOrdersReset === 'function') localOrdersReset();
     _hostPeersWithoutMatch.clear();
     _hostPeerGotMatchGen.clear();
     _hostTeamsOut = new Set();

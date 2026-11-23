@@ -233,6 +233,8 @@ pub unsafe extern "C" fn k_spawn_shift(a: u32, _chunk: i32) {
 /// P[6] 0: only the keys of fronts to make whose cost is not in the table
 /// listed ([7], count [8][1]); 1: done, the changed tiles listed ([7],
 /// [8][0]), a queue emptied with its timer 0 and no ready order.
+/// P[9] 1: a count is the queue's length to have (a slider's setting, the
+/// difference from its length now: two settings in one tick leave the later).
 /// Arrays: [0] spr.cls, [9] st.tim. P: [0] count, [1] types, [4] classes, [5] tiles.
 #[no_mangle]
 pub unsafe extern "C" fn k_spawn_counts(a: u32, _chunk: i32) {
@@ -241,11 +243,12 @@ pub unsafe extern "C" fn k_spawn_counts(a: u32, _chunk: i32) {
     let tim = k.p::<f64>(9);
     let (n, types, player, worker, ncls, ntiles, phase, cap) = (k.i(0).max(0) as usize, k.i(1).max(1), k.i(2), k.i(3) != 0, k.i(4).max(0) as usize, k.i(5).max(0), k.i(6), k.i(8).max(0));
     let ver = k.f(7);
+    let set = k.i(9) != 0;
     let (mut m, mut miss) = (0usize, 0usize);
     for i in 0..n {
         let t = g(tiles, i);
-        let d = g(counts, i);
-        if t < 0 || t >= ntiles || d == 0 { continue; }
+        let raw = g(counts, i);
+        if t < 0 || t >= ntiles || (!set && raw == 0) { continue; }
         let tu = t as usize;
         let tag = g(ctab, tu) as i32;
         let mut c = usize::MAX;
@@ -261,6 +264,8 @@ pub unsafe extern "C" fn k_spawn_counts(a: u32, _chunk: i32) {
             col::<f64>(cls, c, SC_QREQ), col::<f64>(cls, c, SC_QPAID), col::<f64>(cls, c, SC_SPT), col::<i32>(cls, c, SC_RDY));
         let q0 = g(qn, r);
         let mut q = if q0 == -128 { 0 } else { q0 as i32 };
+        let d = if set { raw.max(0).min(cap) - q } else { raw };
+        if d == 0 { continue; }
         let b = g(brain, tu);
         let key = key_of(b, o, types);
         if d > 0 {

@@ -5762,22 +5762,30 @@ function processAction(a, playerId) {
             }
         } else if (a.action === 'spawnCounts') {
             // A group's queue changes, one command: per building (its tile
-            // key, tkz) its count, + queued, - taken off (worker: spawners).
+            // key, tkz) its count, + queued, - taken off (worker: spawners);
+            // set: the count is the length to have (a slider's setting: the
+            // difference taken when it runs; as changes, two teammates' 3 and
+            // 7 at once made 10).
             const pre = a[_actionPrepared], keys = pre && pre.keys ? pre.keys : typeof a.tkz === 'string' ? _actionIdsDecodeW(a.tkz) : [];
             const counts = Array.isArray(a.counts) ? a.counts : [], N = GRID_W * GRID_H, cap = a.worker ? 10 : 20;
             if (SPAWN_COUNTS_KERNEL && _spProdOn() && _simWasmX.k_spawn_counts) {
                 // (The kernel: wasm/src/spr.rs k_spawn_counts; changed tiles back.)
                 const n = Math.min(keys.length, counts.length), T = _towerTargetTiles(n), C = _spawnCountsBuf(n);
                 T.set(ArrayBuffer.isView(keys) ? keys.subarray(0, n) : keys.slice(0, n));
-                for (let i = 0; i < n; i++) { const d = _actionInt(counts[i]); C[i] = d === null ? 0 : Math.max(-100, Math.min(100, d)); }
-                const m = spawnCountsKernel(T, C, n, playerId, !!a.worker), out = _spp.cout;
+                for (let i = 0; i < n; i++) { const d = _actionInt(counts[i]); C[i] = a.set ? (d === null ? -1 : Math.max(0, Math.min(cap, d))) : d === null ? 0 : Math.max(-100, Math.min(100, d)); }
+                // (A set's unreadable count: its building skipped.)
+                if (a.set) for (let i = 0; i < n; i++) if (C[i] < 0) T[i] = -1;
+                const m = spawnCountsKernel(T, C, n, playerId, !!a.worker, !!a.set), out = _spp.cout;
                 const site = typeof workSiteDirty === 'function', dirty = typeof simPresentTileDirty === 'function';
                 for (let i = 0; i < m; i++) { const t = out[i], gx = t % GRID_W, gy = (t - gx) / GRID_W; if (site) workSiteDirty(gx, gy); if (dirty) simPresentTileDirty(gx, gy); }
                 return;
             }
             for (let i = 0; i < keys.length && i < counts.length; i++) {
-                const t = keys[i], d = _actionInt(counts[i]);
-                if (!(t >= 0 && t < N) || !d) continue;
+                const t = keys[i], v = _actionInt(counts[i]);
+                if (!(t >= 0 && t < N) || v === null) continue;
+                const b0 = a.set ? (a.worker ? getSpawnerAtTile(t % GRID_W, (t - t % GRID_W) / GRID_W) : getBarrackAtTile(t % GRID_W, (t - t % GRID_W) / GRID_W)) : null;
+                const d = a.set ? (b0 ? Math.max(0, Math.min(cap, v)) - spawnQueueCount(b0) : 0) : v;
+                if (!d) continue;
                 const gx = t % GRID_W, gy = (t - gx) / GRID_W, b = a.worker ? getSpawnerAtTile(gx, gy) : getBarrackAtTile(gx, gy);
                 if (!(b && b.owner === playerId)) continue;
                 if (d > 0) {
@@ -5803,6 +5811,21 @@ function processAction(a, playerId) {
                 let count = Math.max(1, Math.floor(a.count || 1));
                 for (let i = 0; i < count && spawnQueueCount(s) > 0; i++) spawnQueueShift(s);
                 spawnerProductionChanged(s);
+            }
+        } else if (a.action === 'setResearchTarget') {
+            // A research slider's setting: the stat's target (its level and
+            // its queued levels) set to `to`, the difference taken here, when
+            // it runs. (As counts, two settings on their way at once (two
+            // teammates, R3 and R5 from R2) added up to R6; now the later one
+            // stands.) Levels added in front of a task (before), none taken
+            // below the level researched.
+            let r = getSpawnerAtTile(a.gx, a.gy);
+            if (!(r && r.owner === playerId && r.type === 'research')) r = null;
+            const s = r && getResearchStatEntry(a.kind, a.key, a.statKey) ? researchStatIndex(a.kind, a.key, a.statKey) : -1, to = Math.floor(Number(a.to));
+            if (s >= 0 && Number.isFinite(to)) {
+                const cur = getPlayerResearchLevel(playerId, a.kind, a.key, a.statKey) + getResearchQueuedDepthForPlayer(playerId, a.kind, a.key, a.statKey);
+                if (to > cur && r.energy > 0 && !r.underConstruction) researchQueueAdd(playerId, a.kind, a.key, a.statKey, Math.min(MAX_RESEARCH_LEVEL, to) - cur, a.before != null ? researchPlaceBefore(playerId, a.before) : -1);
+                else if (to < cur) researchQueueRemove(playerId, s, cur - Math.max(0, to), false);
             }
         } else if (a.action === 'dequeueResearch') {
             let r = getSpawnerAtTile(a.gx, a.gy);
@@ -5898,7 +5921,13 @@ function processAction(a, playerId) {
         } else if (a.action === 'shrineDrain') {
             // Where the player's shrine drains to: 1 energy, 2 \u2605, 3 both, 0 neither
             // (shrines off: no draining, the order is ignored).
-            if (SHRINES_ENABLED && players[playerId]) players[playerId].shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
+            // A button's order is one target on or off (bit, on): two teammates turning
+            // off one each at once keep both (as the whole mode, the later undid the other).
+            if (SHRINES_ENABLED && players[playerId]) {
+                const p = players[playerId];
+                if (a.bit !== undefined) { const bit = (Math.floor(Number(a.bit)) || 0) & 3, cur = getPlayerShrineDrainMode(playerId); p.shrineDrain = a.on ? cur | bit : cur & ~bit; }
+                else p.shrineDrain = (Math.floor(Number(a.drain)) || 0) & 3;
+            }
         } else if (a.action === 'killUnit') {
             // One unit (unitId) or a group's (unitIds: one order, not one per
             // unit, each found by a scan of every unit: a 50k group's kill

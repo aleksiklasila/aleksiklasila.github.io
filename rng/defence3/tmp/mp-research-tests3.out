@@ -1,0 +1,16 @@
+meta exit=0 6s PASS: k_meta_structs rows equal _simWriteStructure rows (4012 structures, 19290 changed rows, 76 laser links, 2 preferred targets)
+rq-page exit=0 82s PASS: research queue
+rq-worker exit=0 317s PASS: research queue
+features-page exit=0 47s PASS: multiplayer features
+features-worker exit=0 164s PASS: multiplayer features
+concurrency-page exit=0 20s PASS: concurrency (3338 bit-exact tick comparisons)
+concurrency-worker exit=0 79s PASS: concurrency (3320 bit-exact tick comparisons)
+actionfuzz-page exit=0 78s PASS: action fuzz
+actionfuzz-worker exit=0 124s PASS: action fuzz
+scenarios-page exit=0 38s PASS: multiplayer scenarios
+scenarios-worker exit=0 166s PASS: multiplayer scenarios
+chaosdet-page exit=0 134s PASS: chaos determinism
+PASS: shrines {"host":[{"shrine":209.04296875,"drain":2,"fixed":214060},{"shrine":307.24609375,"drain":2,"fixed":314620}],"lastSample":{"0":174.541015625,"1":293.224609375},"rate":1,"mult":0.009999999776482582}
+chaosdet-page exit=0 131s PASS: chaos determinism
+chaosdet-worker exit=0 774s PASS: chaos determinism
+ALLDONE

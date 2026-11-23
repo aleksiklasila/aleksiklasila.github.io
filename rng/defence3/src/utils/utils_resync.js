@@ -842,14 +842,15 @@ function _resyncHostSendJoin(conn, pending) {
         snapshot = buildHostAuthoritativeStateSnapshot({ includeConfig: true, includeStaticMapState: true, includeGridTypes: true, withoutState: inWorker });
         message = { type: pending.join === 'spectating' ? 'START_SPECTATE' : 'START_GAME', ...buildHostMatchSyncPayload(), joinTick: pending.T, g: pending.g };
     } catch (err) { console.error('[NET] Join snapshot failed', err); fail(err); return; }
-    let send = text => {
+    // (text: the snapshot's text; ready: its payload made already (the worker's, gzipped there), no text on this page.)
+    let send = (text, ready = null) => {
         netCounters.snapshotBuildMs = performance.now() - t0;
         netCounters.lastSnapshotAt = performance.now();
         if (superseded()) return;
-        // (This host's own state at T: its checkpoint, utils_checkpoint.js.)
-        if (!pending.final && typeof netCheckpointNote === 'function') netCheckpointNote(session, pending.T, text);
-        logLockstepWarning('Sending the match to a joining player', { peerId: pid, tick: pending.T, bytes: text.length });
-        netEncodeSnapshotText(text).then(payload => {
+        // (This host's own state at T: its checkpoint, utils_checkpoint.js; the payload as it is, decoded if ever used.)
+        if (!pending.final && typeof netCheckpointNote === 'function') netCheckpointNote(session, pending.T, ready ? ready.payload : text);
+        logLockstepWarning('Sending the match to a joining player', { peerId: pid, tick: pending.T, bytes: ready ? ready.bytes : text.length });
+        (ready ? Promise.resolve(ready.payload) : netEncodeSnapshotText(text)).then(async payload => {
             netCounters.snapshotBytes = netSnapshotPayloadBytes(payload);
             if (superseded()) return;
             if (conn.open === false) { drop(); return; }
@@ -858,12 +859,16 @@ function _resyncHostSendJoin(conn, pending) {
             // (Sent now: its silence counts from here, not from its scheduling: an encode longer than
             // RESYNC_JOIN_LOAD_SILENT_MS made a new join each time, which dropped the finished one: audit row 92.)
             if (j && j.g === pending.g) { j.conn = conn; j.sentAt = performance.now(); }
-            try { conn.send({ ...message, snapshotPayload: netSnapshotPayloadForPeer(pid, payload, text) }); } catch { }
+            // (A peer without gzip: the text, decoded here for it alone.)
+            let out = netSnapshotPayloadForPeer(pid, payload, text);
+            if (out && out.z && ready && !(netPeerCapsByPeer[pid] && netPeerCapsByPeer[pid].gzip)) out = { json: await netDecodeSnapshotPayload(out) };
+            if (superseded()) return;
+            try { conn.send({ ...message, snapshotPayload: out }); } catch { }
             // (The final state: the result after it, for a page that had no match when the result came first.)
             if (result) { try { conn.send(result); } catch { } }
         }).catch(fail);
     };
-    if (inWorker) simClientSnapshotText(snapshot).then(send, fail).catch(fail);
+    if (inWorker) simClientJoinPayload(snapshot).then(r => send(null, r), fail).catch(fail);
     else { try { send(JSON.stringify(snapshot)); } catch (err) { fail(err); throw err; } }
 }
 

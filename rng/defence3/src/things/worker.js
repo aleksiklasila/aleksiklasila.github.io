@@ -3517,6 +3517,16 @@ function localOrderArrived(tick) {
     const done = typeof netCompletedSimulationTick === 'function' ? netCompletedSimulationTick() : currentTick;
     return done > tick;
 }
+// A new world (utils_networking.js resetWorldState): what was shown ahead of
+// the last world's orders goes (its ticks were that world's: a rematch's
+// ticks start again, and a press kept until a tick 50000 never let go).
+function localOrdersReset() {
+    lastLocalOrderTick = -1;
+    if (typeof _researchAhead !== 'undefined') _researchAhead.clear();
+    if (typeof _infoToggleShown !== 'undefined') _infoToggleShown.clear();
+    if (typeof spawnBarAhead !== 'undefined') spawnBarAhead.clear();
+    if (typeof bb !== 'undefined' && bb) bb.boostPending = {};
+}
 // (Shown ahead still: for at least ms, and until its tick has been run.)
 function localOrderShownAhead(at, tick, ms) {
     return performance.now() - at <= ms || !localOrderArrived(tick);
@@ -3590,8 +3600,9 @@ function _queueLocalAction(action) {
     localInputBuffer[tick].push(finalAction);
     lastLocalOrderTick = tick;
     // (A research order: shown at once until its tick has run, see hud.js noteResearchOrder.)
-    if ((action.action === 'queueResearch' || action.action === 'dequeueResearch') && typeof noteResearchOrder === 'function') {
-        noteResearchOrder(action.kind, action.key, action.statKey, (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1)), tick);
+    if ((action.action === 'queueResearch' || action.action === 'dequeueResearch' || action.action === 'setResearchTarget') && typeof noteResearchOrder === 'function') {
+        const d = action.action === 'setResearchTarget' ? Math.floor(Number(action._delta) || 0) : (action.action === 'queueResearch' ? 1 : -1) * Math.max(1, Math.floor(Number(action.count) || 1));
+        if (d) noteResearchOrder(action.kind, action.key, action.statKey, d, tick);
     }
 
     // The tick is unsent (guest) or unsealed (host): rebuild its packet.

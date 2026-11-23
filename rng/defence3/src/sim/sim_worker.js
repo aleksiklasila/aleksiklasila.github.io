@@ -937,7 +937,31 @@ function _simRequest(msg) {
         _simError('request ' + msg.op, err);
         return;
     }
+    // (A request that answers later (a promise): its reply then, its bytes handed over, not copied.)
+    if (result && typeof result.then === 'function') {
+        result.then(r => { if (msg.id) _simPost({ type: 'reply', id: msg.id, result: r }, r && r.z && r.z.buffer ? [r.z.buffer] : []); },
+            err => { if (msg.id) _simPost({ type: 'reply', id: msg.id, error: String(err && err.message || err) }); _simError('request ' + msg.op, err); });
+        return;
+    }
     if (msg.id) _simPost({ type: 'reply', id: msg.id, result });
+}
+// A join's whole snapshot, the page's part (head: built withoutState) and
+// the state, as text, gzipped here: the page gets only its bytes. (The page
+// took the state's text over (a copy of tens of MB), joined it to its part
+// (another) and made its UTF-8 bytes for the gzip on its main thread: ~0.45 s
+// twice at 100k units, every player's frames and ticks held meanwhile.) The
+// state is taken now; the gzip runs on while the ticks go on. Without
+// CompressionStream, the text.
+function _simJoinPayload(head) {
+    const snapshot = head && typeof head === 'object' ? head : {};
+    snapshot.gameTime = gameTime;
+    delete snapshot.state;
+    const state = JSON.stringify(snapEncodeState()), h = JSON.stringify(snapshot);
+    const text = h.slice(0, -1) + (h.length > 2 ? ',' : '') + '"state":' + state + '}';
+    const out = { gameTime, bytes: text.length };
+    if (typeof CompressionStream !== 'function' || typeof Blob !== 'function' || typeof Response !== 'function') return { ...out, json: text };
+    return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()
+        .then(buf => ({ ...out, z: new Uint8Array(buf) }), () => ({ ...out, json: text }));
 }
 function _simRequestRun(msg) {
     let result = null;
@@ -956,6 +980,10 @@ function _simRequestRun(msg) {
         // it on its main thread).
         case 'encodeStateText':
             result = { text: JSON.stringify(snapEncodeState()), gameTime };
+            break;
+        // A join's snapshot, gzipped here (_simJoinPayload).
+        case 'encodeJoinPayload':
+            result = _simJoinPayload(msg.args && msg.args.head);
             break;
         // Guest: a resync patch before the next tick. (The page sees its
         // effects in the next frame and records.)

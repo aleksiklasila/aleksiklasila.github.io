@@ -36,6 +36,15 @@ const WAN = { latencyMs: 40, jitterMs: 5 };
             assert.equal(i.snapshotsApplied, before[k].snapshots + (i === g ? 1 : 0), 'round ' + round + ': ' + i.name + ' reloaded only once');
             assert.equal(i.eval('netCounters.desyncsDetected | 0'), 0, 'round ' + round + ': ' + i.name + ' found no desync');
         }
+        // (The host's checkpoint is the join's snapshot as the worker made it (gzipped there when it can,
+        // sim_worker.js _simJoinPayload): it reads back as a whole snapshot, the state in it.)
+        if (round === 0) {
+            host.eval(`__scratch.ck = null; (typeof _netCkpt.text === 'string' ? Promise.resolve(_netCkpt.text) : netDecodeSnapshotPayload(_netCkpt.text)).then(t => { const s = JSON.parse(t); __scratch.ck = JSON.stringify({ kind: typeof _netCkpt.text === 'string' ? 'text' : (_netCkpt.text.z ? 'gzip' : 'json'), state: !!s.state, units: s.state && (s.state.units || s.state.u) ? 1 : 0, gameTime: Number.isFinite(s.gameTime), tick: _netCkpt.tick }); }, e => { __scratch.ck = 'error ' + e; })`);
+            await world.runUntil(() => host.scratch.ck, 5000, 20);
+            const ck = JSON.parse(host.scratch.ck);
+            assert.ok(ck.state && ck.gameTime, 'the join checkpoint reads back as a whole snapshot: ' + host.scratch.ck);
+            rows.push('the host\'s checkpoint is the join\'s payload (' + ck.kind + '), read back whole');
+        }
         rows.push('round ' + round + ': ' + g.name + ' reloaded at tick ' + from + ', in sync, no repair');
     }
     console.log('PASS multiplayer-live-join-worker\n  ' + rows.join('\n  '));

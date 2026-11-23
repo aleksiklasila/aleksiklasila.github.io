@@ -12,7 +12,7 @@ const root = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
 const fixture = args.find(a => !a.startsWith('--')) || '10000-160.json';
 const opt = k => { const a = args.find(x => x.startsWith('--' + k + '=')); return a ? a.slice(k.length + 3) : null; };
-const DELAY = Number(opt('delay') ?? 40), ONLY = opt('only'), HEADED = args.includes('--headed') || process.env.HEADED === '1';
+const DELAY = Number(opt('delay') ?? 40), ONLY = opt('only'), want = st => !ONLY || ONLY.split(',').includes(st), HEADED = args.includes('--headed') || process.env.HEADED === '1';
 
 const server = http.createServer((req, res) => {
     const file = path.resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname));
@@ -56,7 +56,12 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
     const hostId = await host.evaluate(() => myPeerId);
     const guest = await open('guest', `${base}/index.html?game=${hostId}&room=${hostId}`);
     await guest.evaluate(hostId => { loadOrCreateLocalIdentity(); joinGame(hostId); }, hostId);
-    await host.waitForFunction(() => lobbyPlayers.length >= 2 && connections.length >= 1, {}, { timeout: 30000 });
+    // (--mate: a third tab on the host's team (the same lobby color): teammates share the team's player.)
+    let mate = null;
+    if (args.includes('--mate')) { mate = await open('mate', `${base}/index.html?game=${hostId}&room=${hostId}`); pages.pop(); await mate.evaluate(hostId => { loadOrCreateLocalIdentity(); joinGame(hostId); }, hostId); }
+    const allPages = mate ? [host, guest, mate] : pages;
+    await host.waitForFunction(n => lobbyPlayers.length >= n && connections.length >= n - 1, allPages.length, { timeout: 30000 });
+    if (mate) await mate.evaluate(() => { const me = lobbyPlayers.find(p => p.peerId === myPeerId); if (me) { me.color = TEAM_PRESET_COLORS[0]; connections[0].send({ type: 'LOBBY_UPDATE_SELF', name: me.name, color: me.color }); } });
     for (let i = 0; i < pages.length; i++) {
         await pages[i].evaluate(i => {
             const me = lobbyPlayers.find(p => p.peerId === myPeerId);
@@ -67,11 +72,20 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
     }
     await host.waitForTimeout(1500);
     await host.evaluate(() => startHostedGame());
-    for (const p of pages) await p.waitForFunction(() => gameStarted && !matchStartWaitingForReady && currentTick > 30, {}, { timeout: 180000 });
-    console.log('match running', JSON.stringify(await Promise.all(pages.map(p => p.evaluate(() => ({ me: localPlayerId, tick: currentTick, mp: isMultiplayer, host: isHost, worker: typeof _simClient !== 'undefined' && !!_simClient }))))));
+    // (Input released: the start's initialization done, its overlay gone; a click before lands on the overlay.)
+    for (const p of allPages) await p.waitForFunction(() => gameStarted && !matchStartWaitingForReady && currentTick > 30 && !(typeof matchInitializationBlocksInput === 'function' && matchInitializationBlocksInput()), {}, { timeout: 180000 });
+    console.log('match running', JSON.stringify(await Promise.all(allPages.map(p => p.evaluate(() => ({ me: localPlayerId, tick: currentTick, mp: isMultiplayer, host: isHost, worker: typeof _simClient !== 'undefined' && !!_simClient }))))));
 
     const other = p => pages.find(x => x !== p);
     const both = (fn, arg) => Promise.all(pages.map(p => p.evaluate(fn, arg)));
+    // (fn's value on both pages at one applied tick: each page sampled until a tick both saw.)
+    const pairAt = async (fn, arg) => {
+        const src = fn.toString(), seen = pages.map(() => new Map()); let found = null; const t0 = Date.now();
+        await Promise.all(pages.map(async (p, k) => { while (!found && Date.now() - t0 < 5000) {
+            const d = await p.evaluate(([src, arg]) => ({ tick: typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.appliedTick) ? _simClient.appliedTick : currentTick, v: (0, eval)('(' + src + ')')(arg) }), [src, arg]);
+            seen[k].set(d.tick, d.v); if (seen[1 - k].has(d.tick) && !found) found = k === 0 ? [d.v, seen[1].get(d.tick)] : [seen[0].get(d.tick), d.v]; await p.waitForTimeout(3); } }));
+        return found;
+    };
     // A peer's view of player `owner`'s research depth for a stat.
     const depthOn = (p, owner, s) => p.evaluate(([o, s]) => ({ tick: currentTick, depth: getResearchQueuedDepthForPlayer(o, s.kind, s.key, s.statKey), level: getPlayerResearchLevel(o, s.kind, s.key, s.statKey), total: getPlayerResearchQueueTotalLength(o) }), [owner, s]);
     // (How each page holds the research queues: a heap queue (_rq, accessors) or the frames' plain arrays.)
@@ -134,12 +148,12 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         }), null, 0));
     }
     for (const page of pages) {
-        if (!ONLY || ONLY === 'research') await researchSlider(page);
+        if (want('research')) await researchSlider(page);
     }
 
     // ---- every info panel control of every kind of own structure ----
     // The commands a page gives, recorded (queueAction wrapped).
-    for (const p of pages) await p.evaluate(() => {
+    for (const p of allPages) await p.evaluate(() => {
         if (window.__acts) return;
         window.__acts = [];
         const q = queueAction;
@@ -271,7 +285,7 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
             }
         }
     };
-    if (!ONLY || ONLY === 'sweep') for (const page of pages) await sweep(page);
+    if (want('sweep')) for (const page of pages) await sweep(page);
     if (ONLY === 'rally2') for (const page of pages) {
         const b = await page.evaluate(() => { const b = barracks.find(b => b && b.owner === localPlayerId && !b.underConstruction); return { gx: b.gx, gy: b.gy }; });
         const look = () => both(([gx, gy]) => { const e = getTileEntityRef(gx, gy); return e ? [currentTick, e.rallyX, e.rallyY, e.spawnQueue.length, e.queueEnabled, e._s, e.constructor.name] : null; }, [b.gx, b.gy]);
@@ -308,12 +322,19 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         await Promise.all(pages.map(async (p, k) => { while (!found && Date.now() - t0 < 5000) { const d = await p.evaluate(hudState); seen[k].set(d.tick, d); const o = seen[1 - k].get(d.tick); if (o && !found) found = k === 0 ? [d, o] : [o, d]; await p.waitForTimeout(5); } }));
         if (!found) return fail('hud-state ' + label, 'both', 'no common tick');
         const diff = [];
-        for (let o = 0; o < found[0].p.length; o++) for (const k in found[0].p[o]) if (JSON.stringify(found[0].p[o][k]) !== JSON.stringify(found[1].p[o][k])) diff.push({ o, k, host: String(found[0].p[o][k]).slice(0, 200), guest: String(found[1].p[o][k]).slice(0, 200) });
+        for (let o = 0; o < found[0].p.length; o++) for (const k in found[0].p[o]) if (JSON.stringify(found[0].p[o][k]) !== JSON.stringify(found[1].p[o][k])) { let h = found[0].p[o][k], g = found[1].p[o][k]; try { const H = JSON.parse(h), G = JSON.parse(g); if (H && typeof H === 'object') { const ks = [...new Set([...Object.keys(H), ...Object.keys(G)])].filter(x => H[x] !== G[x]); h = ks.map(x => x + ':' + H[x]).join(' '); g = ks.map(x => x + ':' + G[x]).join(' '); } } catch { } diff.push({ o, k, host: String(h).slice(0, 300), guest: String(g).slice(0, 300) }); }
+        if (diff.some(d => d.k === 'uc')) {
+            // (Which units: ids one page has and the other not, at a later common tick, with their state.)
+            const ids = await pairAt(() => { const out = []; for (const u of units) if (u && !u.dead) out.push(u.id); return out; });
+            if (ids) { const A = new Set(ids[0]), B = new Set(ids[1]); const onlyH = ids[0].filter(x => !B.has(x)).slice(0, 10), onlyG = ids[1].filter(x => !A.has(x)).slice(0, 10);
+                const look = (p, list) => p.evaluate(list => list.map(id => { const u = getUnitById(id); return u ? [id, u.unitType, u.owner, !!u.dead, Math.round(u.energy), u._s] : [id, 'none']; }), list);
+                diff.push({ k: 'unit ids', host: JSON.stringify(await look(host, onlyH)), guest: JSON.stringify(await look(guest, onlyG)) }); }
+        }
         if (diff.length) fail('hud-state ' + label, 'both', 'pages differ at tick ' + found[0].tick, { diff: diff.slice(0, 8) });
         else pass('hud-state ' + label, 'both', { tick: found[0].tick });
     };
-    if (!ONLY || ONLY === 'hud') await hudCompare(ONLY === 'hud' ? 'start' : 'end');
-    if (ONLY === 'hud') { await host.waitForTimeout(20000); await hudCompare('later'); }
+    if (want('hud')) await hudCompare(ONLY && ONLY.split(',').includes('hud') ? 'start' : 'end');
+    
     if (ONLY === 'inv') console.log('inv', JSON.stringify(await host.evaluate(() => {
         const types = {}; for (const u of units) if (u && !u.dead) { const k = u.owner + ':' + u.unitType + ':' + (u.workerType || ''); types[k] = (types[k] || 0) + 1; }
         const vis = goldMines.filter(m => m && isTileActuallyVisibleToPlayer(localPlayerId, m.gx, m.gy)).length;
@@ -482,7 +503,7 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
             }
         }
     };
-    if (!ONLY || ONLY === 'map') for (const page of pages) await mapActions(page);
+    if (want('map')) for (const page of pages) await mapActions(page);
 
     // ---- the bottom bar: a thing dropped on the research row, a task dragged to the front ----
     const queueSig = (p, owner) => p.evaluate(o => ({ tick: typeof _simClient !== 'undefined' && _simClient ? _simClient.appliedTick : currentTick, q: [getPlayerResearchTask(o), ...getPlayerResearchQueue(o)].filter(Boolean).map(t => t.kind + ':' + t.key + ':' + t.statKey) }), owner);
@@ -527,11 +548,13 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         const q1 = await queueBoth(me);
         await page.keyboard.press('Escape');
         const at = q1 && q1[0].q.indexOf(sid);
-        const added = q1 ? q1[0].q.filter(x => x === sid).length - q0[0].q.filter(x => x === sid).length : -1;
+        // (Level + queued: a level inserted at the head may finish before the check.)
+        const lq = await both(([o, k]) => { const [kind, key, statKey] = k.split(':'); return getPlayerResearchLevel(o, kind, key, statKey) + getResearchQueuedDepthForPlayer(o, kind, key, statKey); }, [me, sid]);
+        const added = lq[0] === lq[1] ? lq[0] - v0 : -1;
         const info = { menu, sid, v0, target, shown, q0: q0 && q0[0].q, q1: q1 && q1.map(d => d.q) };
         if (!q1 || JSON.stringify(q1[0].q) !== JSON.stringify(q1[1].q)) fail('bb-drop', page.__name, 'pages show different queues', info);
         else if (added !== target - v0) fail('bb-drop', page.__name, `added ${added}, want ${target - v0}`, info);
-        else if (at !== menu.insertAt) fail('bb-drop', page.__name, `inserted at ${at}, want ${menu.insertAt}`, info);
+        else if (at >= 0 && at > menu.insertAt) fail('bb-drop', page.__name, `inserted at ${at}, want ${menu.insertAt} or before (the head finished)`, info);
         else if (shown.some(v => v !== String(target))) fail('bb-drop', page.__name, 'drop menu slider did not stay', info);
         else pass('bb-drop', page.__name, { sid, at, added });
         // Reorder: the last task dragged onto the first.
@@ -539,7 +562,9 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         const last = await page.evaluate(o => { const q = [getPlayerResearchTask(o), ...getPlayerResearchQueue(o)].filter(Boolean); const t = q[q.length - 1]; return t.kind + ':' + t.key + ':' + t.statKey; }, me);
         const qBefore = (await queueSig(page, me)).q;
         await page.evaluate(() => { window.__acts.length = 0; });
-        await drag(page, await center(tasks.nth(n - 1)), await center(tasks.nth(0)));
+        const from = await center(tasks.nth(n - 1)), to = await center(tasks.nth(0));
+        if (!from || !to) return fail('bb-reorder', page.__name, 'task tiles not shown', { n });
+        await drag(page, from, to);
         const dragActs = await page.evaluate(() => window.__acts.map(a => JSON.stringify(a)));
         const look = [];
         for (let i = 0; i < 6; i++) { await page.waitForTimeout(150); look.push(await page.evaluate(() => [...document.querySelectorAll('#bb-research .bb-task')].map(e => e.dataset.index).slice(0, 3).join(','))); }
@@ -560,7 +585,7 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         else if (filled.some(n => n !== 3)) fail('bb-boost', page.__name, 'slots did not stay filled (x1 + 2 steps)', { id, filled });
         else pass('bb-boost', page.__name, { id, boosts });
     };
-    if (!ONLY || ONLY === 'bb') for (const page of pages) await bottomBar(page);
+    if (want('bb')) for (const page of pages) await bottomBar(page);
 
     // ---- more: tower target, worker assignment, salvage mark and unmark, the research popup's slider ----
     const POPUP_RESEARCH_SLIDER = '#research-popup input.count-slider:not([disabled])[data-count-spec*='+'"\\"type\\":\\"research\\""]';
@@ -591,8 +616,8 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
                 const now = await page.evaluate(id => { const u = getUnitById(id); const r = document.getElementById('game-area').getBoundingClientRect(); return { x: (u.x - camera.x) * camera.zoom + r.left, y: (u.y - camera.y) * camera.zoom + r.top }; }, t.foe);
                 await page.mouse.click(now.x, now.y, { button: 'right' });
                 await page.waitForTimeout(1500);
-                const shown = await both(ts => ts.map(([gx, gy]) => { const e = getTileEntityRef(gx, gy); return e ? getTowerPreferredTargetDisplay(e) : 'gone'; }), t.towers);
-                if (JSON.stringify(shown[0]) !== JSON.stringify(shown[1]) || shown[0].every(x => x === 'None')) fail('tower target', page.__name, 'target not set on both', { t, shown, s });
+                const shown = await pairAt(ts => ts.map(([gx, gy]) => { const e = getTileEntityRef(gx, gy); return e ? JSON.stringify(e.preferredTargetSpec || null) : 'gone'; }), t.towers);
+                if (!shown || JSON.stringify(shown[0]) !== JSON.stringify(shown[1]) || shown[0].every(x => x === 'null')) fail('tower target', page.__name, 'target not set on both', { t, shown, s });
                 else pass('tower target', page.__name, { shown: shown[0] });
             }
         }
@@ -683,8 +708,83 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
             }
         }
     };
-    if (!ONLY || ONLY === 'more') for (const page of pages) await more(page);
+    if (want('more')) for (const page of pages) await more(page);
 
+    // ---- teammates (--mate): the same team's controls from two tabs, at once ----
+    // (fn's value on every tab at one applied tick.)
+    const allAt = async (fn, arg) => {
+        const src = fn.toString(), seen = allPages.map(() => new Map()); let found = null; const t0 = Date.now();
+        await Promise.all(allPages.map(async (p, k) => { while (!found && Date.now() - t0 < 8000) {
+            const d = await p.evaluate(([src, arg]) => ({ tick: typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.appliedTick) ? _simClient.appliedTick : currentTick, v: (0, eval)('(' + src + ')')(arg) }), [src, arg]);
+            seen[k].set(d.tick, d.v); if (!found && seen.every(m => m.has(d.tick))) found = seen.map(m => m.get(d.tick)); await p.waitForTimeout(3); } }));
+        return found;
+    };
+    const team = async () => {
+        if (!mate) return;
+        const me = await mate.evaluate(() => localPlayerId);
+        if (me !== await host.evaluate(() => localPlayerId)) return fail('team', 'mate', 'not on the host team', { me });
+        const sel = p => p.evaluate(() => { const r = collectorSpawners.find(s => s && s.owner === localPlayerId && s.type === 'research' && !s.underConstruction); selectedUnits = []; selectedEntities = [r]; updateInfoPanel(); });
+        const pick = async p => {
+            await sel(p); await p.waitForTimeout(300);
+            const thing = p.locator('.info-research-thing-btn:visible').nth(2);
+            if (!(await thing.evaluate(b => b.classList.contains('info-thing-btn-selected')))) await thing.click();
+            await p.waitForTimeout(300);
+            return p.locator('.ipr-stat:visible input.count-slider').first();
+        };
+        const clickAt = async (p, sl, v) => { const b = await sl.boundingBox(); await p.mouse.click(b.x + 2 + (b.width - 4) * v / 10, b.y + b.height / 2); };
+        // 1. The teammate's research slider: every tab shows its result.
+        const slider = await pick(mate);
+        const st = JSON.parse(await slider.getAttribute('data-count-spec')).stats[0];
+        const lq = () => allAt(([o, s]) => getPlayerResearchLevel(o, s.kind, s.key, s.statKey) + getResearchQueuedDepthForPlayer(o, s.kind, s.key, s.statKey), [me, st]);
+        const v0 = (await lq())[0], target = Math.min(10, v0 + 2);
+        await clickAt(mate, slider, target);
+        await mate.waitForTimeout(2000);
+        const r1 = await lq();
+        if (!r1 || r1.some(v => v !== target)) fail('team research slider', 'mate', 'tabs differ or not the target', { v0, target, r1 }); else pass('team research slider', 'mate', { r1 });
+        // 2. Both teammates set the same stat at once, to different levels: one result on every tab, both sliders show it.
+        const hs = await pick(host);
+        const base0 = (await lq())[0], tH = Math.min(10, base0 + 1), tM = Math.min(10, base0 + 3);
+        await Promise.all([clickAt(host, hs, tH), clickAt(mate, slider, tM)]);
+        await host.waitForTimeout(3000);
+        const r2 = await lq();
+        const shown = await Promise.all([hs.inputValue(), slider.inputValue()]);
+        const info = { base0, tH, tM, r2, shown };
+        if (!r2 || r2.some(v => v !== r2[0])) fail('team research race', 'both', 'tabs differ', info);
+        else if (shown.some(v => Number(v) !== r2[0])) fail('team research race', 'both', 'a slider does not show the result', info);
+        else if (r2[0] !== tH && r2[0] !== tM) fail('team research race', 'both', 'result is neither setting: the two set-to orders added up', info);
+        else pass('team research race', 'both', info);
+        // 3. Both press the same barrack's queue pill at once: one result everywhere, both pills show it.
+        const b = await host.evaluate(() => { const b = barracks.find(b => b && b.owner === localPlayerId && !b.underConstruction); return { gx: b.gx, gy: b.gy }; });
+        for (const p of [host, mate]) await p.evaluate(({ gx, gy }) => { const e = getTileEntityRef(gx, gy); selectedUnits = []; selectedEntities = [e]; updateInfoPanel(); }, b);
+        await host.waitForTimeout(400);
+        const pills = [host, mate].map(p => p.locator('#info-panel [data-b="queue"]').filter({ visible: true }).first());
+        await Promise.all(pills.map(pl => pl.click()));
+        await host.waitForTimeout(2500);
+        const q = await allAt(([gx, gy]) => { const e = getTileEntityRef(gx, gy); return e ? !!e.queueEnabled : null; }, [b.gx, b.gy]);
+        const looks = await Promise.all(pills.map(pl => pl.textContent()));
+        const wantLook = q && q[0] ? 'Q ON' : 'Q OFF';
+        if (!q || q.some(v => v !== q[0])) fail('team pill race', 'both', 'tabs differ', { q, looks });
+        else if (looks.some(t => t.trim() !== wantLook)) fail('team pill race', 'both', 'a pill does not show the result', { q, looks, wantLook });
+        else pass('team pill race', 'both', { q: q[0], looks });
+        // 4. Both set the same barrack's queue count slider at once (host 3, mate 7): one result everywhere, the later setting (not 10).
+        const qs = [host, mate].map(p => p.locator('#info-panel input.count-slider[data-count-spec*="spawn"]').filter({ visible: true }).first());
+        if (await qs[0].count() && await qs[1].count()) {
+            // (Its queue off (3 above) keeps the count still while it is checked.)
+            const qn = () => allAt(([gx, gy]) => { const e = getTileEntityRef(gx, gy); return e && e.spawnQueue ? e.spawnQueue.length : -1; }, [b.gx, b.gy]);
+            const max = Number(await qs[0].getAttribute('max'));
+            const at = async (p, sl, v) => { const bx = await sl.boundingBox(); await p.mouse.click(bx.x + 2 + (bx.width - 4) * v / max, bx.y + bx.height / 2); };
+            await Promise.all([at(host, qs[0], 3), at(mate, qs[1], 7)]);
+            await host.waitForTimeout(2500);
+            const n = await qn(), shown = await Promise.all(qs.map(x => x.inputValue()));
+            const info = { n, shown, max, queueOn: q && q[0] };
+            if (!n || n.some(v => v !== n[0])) fail('team queue race', 'both', 'tabs differ', info);
+            else if (shown.some(v => Number(v) !== n[0])) fail('team queue race', 'both', 'a slider does not show the result', info);
+            else if (n[0] !== 3 && n[0] !== 7) fail('team queue race', 'both', `result ${n[0]}: the two settings added up`, info);
+            else pass('team queue race', 'both', info);
+        } else fail('team queue race', 'both', 'no queue slider');
+    };
+    if (want('team')) await team();
+    if (ONLY && ONLY.split(',').includes('hud')) for (let i = 0; i < 6; i++) { await host.waitForTimeout(5000); await hudCompare('later' + i); }
     console.log('queue forms', JSON.stringify(await Promise.all(pages.map(rqForm))));
     const health = await Promise.all(pages.map(p => p.evaluate(() => ({ tick: currentTick, desyncs: netCounters.desyncsDetected, stop: lockstepFatalStopActive, started: gameStarted }))));
     const out = { fixture, delay: DELAY, health, errors: errors.slice(0, 30), results };

@@ -208,11 +208,12 @@ function setSpawnBarCount(spec, target) {
         const old = spawnBarAhead.get(o.key);
         const e = { base: old ? old.base : o.initial, delta: (old ? old.delta : 0) + change, at: performance.now(), tick: old ? old.tick : -1 };
         spawnBarAhead.set(o.key, e); noted.push(e);
-        ch.push([o.gy * GRID_W + o.gx, change]);
+        ch.push([o.gy * GRID_W + o.gx, change, o.len]);
     }
     if (ch.length) {
         ch.sort((x, y) => x[0] - y[0]);
-        const tick = queueAction({ action: 'spawnCounts', worker: !!spec.worker, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[1]) });
+        // (Each changed building's length to have (set): the difference is taken when it runs.)
+        const tick = queueAction({ action: 'spawnCounts', worker: !!spec.worker, set: true, tkz: actionIdsEncode(ch.map(x => x[0])), counts: ch.map(x => x[2]) });
         // (Shown until the order's tick has run: localOrderShownAhead.)
         if (Number.isFinite(tick)) for (const e of noted) e.tick = Math.max(e.tick, tick);
     }
@@ -260,9 +261,12 @@ function commitCountBar(input) {
         if (!anchor) return;
         for (const stat of spec.stats) {
             const current = researchBarLevel(localPlayerId, stat);
-            const delta = Math.max(current.level, Math.min(MAX_RESEARCH_LEVEL, value)) - current.target;
+            const to = Math.max(current.level, Math.min(MAX_RESEARCH_LEVEL, value)), delta = to - current.target;
             if (!delta) continue;
-            const action = { action: delta > 0 ? 'queueResearch' : 'dequeueResearch', ...anchor, ...stat, count: Math.abs(delta) };
+            // (The target itself: main.js setResearchTarget takes the difference when it runs. The
+            // difference from what this page shows, for its shown-ahead count only, not sent.)
+            const action = { action: 'setResearchTarget', ...anchor, ...stat, to };
+            Object.defineProperty(action, '_delta', { value: delta, enumerable: false });
             // Dragging a thing into the bottom research bar still inserts at
             // that position. The same bar elsewhere appends as before.
             if (typeof bb !== 'undefined' && bb.menu && bb.menu.el.contains(input)) {

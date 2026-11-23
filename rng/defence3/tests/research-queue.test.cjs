@@ -259,6 +259,30 @@ function rng(seed) {
         rows.push(`a slider's order on its way holds its target through a finished level (R${t0})`);
     }
 
+    // 2c. A slider's setting is a target (setResearchTarget): two in one tick (two
+    //     teammates) leave the later one, not their sum; one below the queue takes
+    //     levels off, never below the level researched.
+    {
+        const { world, host, guests, all } = await match();
+        const pid = host.eval('localPlayerId');
+        const lab = labOf(host);
+        const S = own(host, `(t => ({ kind: t.kind, key: t.key, statKey: t.stats[0].statKey }))(RESEARCH_THINGS.find(t => t.kind === 'unit'))`);
+        const set = (to, inst = host) => q(inst, { action: 'setResearchTarget', gx: lab.gx, gy: lab.gy, ...S, to });
+        const target = () => levelOf(host, pid, S) + Number(host.eval(`getResearchQueuedDepthForPlayer(${pid}, ${JSON.stringify(S.kind)}, ${JSON.stringify(S.key)}, ${JSON.stringify(S.statKey)})`));
+        const L0 = levelOf(host, pid, S);
+        set(L0 + 3); set(L0 + 5);
+        await world.run(1500);
+        assert.equal(target(), L0 + 5, 'the later of two settings in one tick');
+        set(L0 + 2);
+        await world.run(1500);
+        assert.equal(target(), L0 + 2, 'a lower setting takes levels off');
+        set(-4);
+        await world.run(1500);
+        assert.equal(target(), levelOf(host, pid, S), 'never below the level researched');
+        assertInSync(world, all, 'research targets');
+        rows.push('research slider settings are targets: two in a tick leave the later, lower ones take levels off down to the level');
+    }
+
     // 3. Fuzz: three players edit their own queues at once with every action and
     //    index combination while researchers keep working.
     for (const seed of [1, 7, 42]) {
@@ -285,7 +309,9 @@ function rng(seed) {
                 let a;
                 if (r < 0.3) {
                     const s = pick(pool);
-                    a = { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count: 1 + Math.floor(rand() * 3) };
+                    // (Half as a slider's setting: a target, past both ends too.)
+                    a = rand() < 0.5 ? { action: 'queueResearch', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, count: 1 + Math.floor(rand() * 3) }
+                        : { action: 'setResearchTarget', gx: lab.gx, gy: lab.gy, kind: s.kind, key: s.key, statKey: s.statKey, to: Math.floor(rand() * 14) - 1 };
                     // Bottom bar drop: in front of a task by name (the active one, past the end: none), or a stale / forged name.
                     if (rand() < 0.4) a.before = rand() < 0.85 ? own(inst, `researchTaskRefAt(${pid}, ${Math.floor(rand() * (len + 3))})`) : [s.kind, s.key, s.statKey, Math.floor(rand() * 14) - 2];
                     if (a.before === null) delete a.before;

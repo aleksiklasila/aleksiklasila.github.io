@@ -94,6 +94,34 @@ const START = {
         rows.push('teammates adding, removing and reordering research on one tick');
     }
 
+    // 3b. Teammates set one barrack's queue count (the slider: spawnCounts set) and one
+    //     research target (setResearchTarget) on the same tick: the later command
+    //     stands, not their sum; the same everywhere.
+    {
+        const b = own(host, `(b => ({ gx: b.gx, gy: b.gy }))(barracks.find(b => b.owner === localPlayerId && !b.underConstruction))`);
+        const lab = own(host, `(s => ({ gx: s.gx, gy: s.gy }))(collectorSpawners.find(s => s.owner === localPlayerId && s.type === 'research'))`);
+        const tk = b.gy * Number(host.eval('GRID_W')) + b.gx, tkz = host.eval(`actionIdsEncode([${tk}])`);
+        const S = { kind: 'unit', key: 'fast', statKey: 'atk' };
+        // (Its queue off: nothing produced between the command and the check.)
+        let T = future();
+        host.queueAt(T, { action: 'setQueueEnabled', gx: b.gx, gy: b.gy, enabled: false });
+        await runPast(T);
+        T = future();
+        host.queueAt(T, { action: 'spawnCounts', worker: false, set: true, tkz, counts: [3] });
+        gA2.queueAt(T, { action: 'spawnCounts', worker: false, set: true, tkz, counts: [7] });
+        const L = Number(host.eval(`getPlayerResearchLevel(localPlayerId, 'unit', 'fast', 'atk') + getResearchQueuedDepthForPlayer(localPlayerId, 'unit', 'fast', 'atk')`));
+        host.queueAt(T, { action: 'setResearchTarget', gx: lab.gx, gy: lab.gy, ...S, to: L + 1 });
+        gA2.queueAt(T, { action: 'setResearchTarget', gx: lab.gx, gy: lab.gy, ...S, to: L + 3 });
+        await runPast(T);
+        const team = host.eval('localPlayerId');
+        const view = i => i.eval(`JSON.stringify([(e => e && e.spawnQueue.length)(getBarrackAtTile(${b.gx}, ${b.gy})), getPlayerResearchLevel(${team}, 'unit', 'fast', 'atk') + getResearchQueuedDepthForPlayer(${team}, 'unit', 'fast', 'atk')])`);
+        const v = JSON.parse(view(host));
+        assert.ok(v[0] === 3 || v[0] === 7, 'queue count is one of the settings, not their sum: ' + v[0]);
+        assert.ok(v[1] === L + 1 || v[1] === L + 3, 'research target is one of the settings, not their sum: ' + v[1] + ' from ' + L);
+        assert.ok(all.every(i => view(i) === view(host)), 'same everywhere');
+        rows.push(`teammates setting one queue count (3, 7 -> ${v[0]}) and one research target (+1, +3 -> +${v[1] - L}) on one tick`);
+    }
+
     // 4. Both teams send collectors to the same mine, and teammates assign
     // the same builders to different targets, on the same tick.
     {

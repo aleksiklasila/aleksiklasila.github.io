@@ -871,3 +871,76 @@ tick) except the guest's move checks, whose first 8 units were slow or crowded l
 agreed: not a desync); the probe now picks idle norm/fast units and the map stage passes. In Node, both modes: research-queue (fuzz now also sends
 stale/forged names), multiplayer-features, -concurrency (bit-exact), -action-fuzz, -scenarios, -chaos-determinism:
 all PASS.
+
+### 2026-11-22, loop 2: higher latency, teammates
+
+`tests/browser-mp-actions.cjs` now takes `--only=a,b,...`, `--delay=ms` (one way) and `--mate` (a third tab on the
+host's team: same lobby color, so the same player), and waits for the start's input release (its loading overlay)
+before clicking.
+
+- **150 ms one way** (stages research, hud, map, bb, more): all pass. Probe fixes only: a click before the
+  initialization barrier released landed on the overlay (a player cannot click there); a drop's levels checked by
+  level + queued (inserted at the head when the active task finished on the way, a cheap level can finish before the
+  check); tower targets compared as specs at one tick (the display depends on each page's live visibility).
+- **Teammates setting the same research slider at once added up** (R2: one set R3, the other R5, result R6): the
+  slider sent counts (queueResearch / dequeueResearch +-n) from what each page showed. Now `setResearchTarget {to}`
+  (main.js): the stat's target (level + queued) set, the difference taken when it runs: the later of two stands
+  (R5), a lower one takes levels off, never below the level researched; levels added go in front of `before` as
+  before. The page's shown-ahead count still uses the difference it saw (`_delta`, not sent). SIM_RULES_REVISION 60.
+  `research-queue.test.cjs` 2c (two in a tick, lower, below the level) and the fuzz (half its adds as targets).
+- Teammates pressing the same queue pill at once: one result on all three tabs, both pills show it (no stale press).
+- **Teammates setting the same queue count slider at once added up too** (3 and 7 made 10): `spawnCounts` sent each
+  building's change. Now the slider sends `set: true` and each building's length to have; `k_spawn_counts` (P[9])
+  takes the difference from its live queue when it runs (also right when a unit was produced while the order was on
+  its way). SIM_RULES_REVISION 61. `multiplayer-concurrency.test.cjs` 3b: teammates set one queue count and one
+  research target on one tick: the later stands, bit-exact everywhere (both modes).
+- **Shrine drain buttons** sent the whole mode from what the page showed: two teammates each turning one target
+  off at once, the later undid the other. The buttons now send `shrineDrain {bit, on}` (one target on or off; the
+  whole-mode form stays for scripts). SIM_RULES_REVISION 62. `shrine.test.cjs`: two bit orders in one tick, both
+  kept (fails on the old code).
+- **Regression from item 3 (loop 1), fixed:** controls held their pressed look until the order's tick ran, but the
+  maps holding them (research ahead, toggle presses, queue-slider ahead, boost presses) outlived the match: after a
+  rematch the ticks start again and a leftover held for the whole new match. `localOrdersReset()` (worker.js) clears
+  them in `resetWorldState`. `multiplayer-rematch.test.cjs` checks they are gone in the rematch (fails without).
+- Open: once (3 tabs, right after the research stage) player 0's unit count by type differed between the host and
+  guest pages at one applied tick (norm); not reproduced in 13 comparisons since (2 and 3 tabs, after bottom bar
+  actions). Suspect: a unit born that tick shown by one page's frame a tick apart (display only; the hashes agree).
+
+Validation (loop 2, final code): Node, both modes: meta-structs-kernel, research-queue, multiplayer-features,
+-concurrency (bit-exact), -action-fuzz, -scenarios, shrine, multiplayer-rematch, -chaos-determinism: all PASS (18 runs).
+`browser-mp-gui-fuzz.cjs`: 305 controls on both players, 0 desyncs, 0 hash mismatches, 0 page errors, 0 slow.
+`browser-mp-actions.cjs --mate` full run (3 tabs, ~46 game minutes): 0 failures, 0 desyncs, 0 page errors (191 command
+checks; tower target skipped, no enemy came into sight). Next: the open unit-count item now records the differing
+unit ids when it recurs; tower target needs a reliable enemy approach in the probe.
+
+### 2026-11-23, loop 3: joins and reloads in the browser
+
+`tests/browser-mp-join-stall.cjs` (50000-200, 100k units, headless Edge): a spectator joins, then the playing guest
+reloads. Tools: `tests/test-runs/mp-controls-20261122/reload-timeline.cjs` (the same, with a 100 ms timeline of the
+host's tick, connections, active peers and wait; every page's desync/patch/resync console lines; net counters; the
+reloaded player followed for 60 s; an optional fixture argument), `join-profile.cjs` (a CPU profile of the host page
+during the join, `JOIN_ONLY=1`) and `slice-profile.cjs` (a profile's longest busy stretch by function).
+
+- **The host page held ~0.45 s, twice, for every join** (all players' frames and ticks with it: guests' tick gaps
+  ~0.7 s). Profile: the stretch is native time ("(program)"): the worker's state text (tens of MB) copied to the page,
+  joined to the page's part (another copy), and its UTF-8 bytes made for the gzip (`new Blob([text])`), on the main
+  thread. Now the worker makes the join's payload whole (`encodeJoinPayload`, sim_worker.js `_simJoinPayload`: the
+  page's part as an object, the state, gzipped there; a request may answer later, its bytes transferred) and the page
+  sends it as it is (`simClientJoinPayload`); a peer without gzip gets it decoded for it alone. The host's checkpoint
+  keeps the payload and decodes it only if it is ever run again (utils_checkpoint.js). Host page's longest task during
+  a join: 455 -> 75 ms. `multiplayer-live-join-worker.test.cjs` checks the join checkpoint reads back whole.
+- **Still open (next): the worker's own encode holds the ticks** (~0.75 s tick gap at 100k units for host and guest):
+  `snapEncodeState` and its stringify run in the tick stream. Needs the state taken at a tick boundary cheaply (heap
+  columns copied) and serialized off the tick path.
+- **A playing guest's reload freezes everyone ~5 s, by design**: the host waits for a silent player (an outage, a
+  reload: "every peer waits for it, as its units cannot be commanded meanwhile", main.js `_hostAdvanceBundles`) until
+  it is taken out of the match (its link closed, ~5 s), then it rejoins live. Left as it is (a game rule); the user
+  may want a shorter wait for a closed link.
+- **A rejoined player needs ~45 s to catch up at 100k units** (loading the page took ~55 s headless; it replays the
+  ~1100 ticks at about twice the speed). Works; slow.
+- **A spectator diverged once** (1 of 6 runs at 100k units: 212 ticks mismatched, repaired by one patch; host 1
+  repair). 0 of 8 at 10k units; multiplayer-patch (spectator joins, a player reloads) passes 6 seeds in worker mode.
+  The timeline tool now logs each page's desync lines (what differs) for the next time.
+
+Validation: multiplayer-live-join-worker, multiplayer-patch (SIM_WORKER=1), multiplayer-disconnect (SIM_WORKER=1),
+multiplayer-stuck-recovery parts 83 and 109 (checkpoint replays): PASS.

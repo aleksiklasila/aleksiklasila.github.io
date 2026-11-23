@@ -45,6 +45,8 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
         queueAction({ action: 'attackMove', unitIds: mine.map(u => u.id), targetX: GRID_W * TILE / 2, targetY: GRID_H * TILE / 2 }); })()`);
     // Player 1 drains into ★ only; player 0 keeps the default (both).
     for (const i of all) i.eval(`if (localPlayerId === 1) queueAction({ action: 'shrineDrain', drain: 2 })`);
+    // Player 0's two drain buttons at once (as two teammates would): each one target (energy off, ★ on), both kept.
+    for (const i of all) i.eval(`if (localPlayerId === 0) { queueAction({ action: 'shrineDrain', bit: 1, on: false }); queueAction({ action: 'shrineDrain', bit: 2, on: true }); }`);
     let s = 7;
     const rand = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
     for (let k = 0; k < 60; k++) { for (const i of all) if (rand() < 0.4) i.eval(C.CHAOS_COMMAND + '(' + rand() + ')'); await world.run(200); }
@@ -56,6 +58,7 @@ const C = require('./multiplayer-chaos-determinism.test.cjs');
     const hs = st(host), gs = st(g);
     assert.deepEqual(gs, hs, 'peers agree on the shrines');
     assert.equal(hs[1].drain, 2, 'drain order applied');
+    assert.equal(hs[0].drain, 2, 'two drain buttons at once: both kept');
     const taken = JSON.parse(host.evalSim(`JSON.stringify((() => { const S = _snapHashGlobals ? 1 : 0; return gameStatsHistory.length ? gameStatsHistory[gameStatsHistory.length - 1].shrine : null; })())`));
     const bad = [];
     for (const [t, h] of host.tickExact || []) { const o = g.tickExact.get(t); if (o !== undefined && o !== h) bad.push(t); }
