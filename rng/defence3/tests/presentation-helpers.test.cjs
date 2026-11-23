@@ -103,6 +103,14 @@ for (let tick = 1; tick <= 60; tick++) {
         const xa = new Uint8Array(ua.buf).slice(ua.base, ua.base + bytes), xb = new Uint8Array(ub.buf).slice(ub.base, ub.base + bytes);
         const order = vm.runInContext('simFrameViews', B.ctx)(new SharedArrayBuffer(vm.runInContext('simFrameBytes', B.ctx)(cap)), cap).order.byteOffset;
         xa.fill(0, order + ua.count * 4, order + cap * 4); xb.fill(0, order + ub.count * 4, order + cap * 4);
+        // (The slots whose id changed, listed by each chunk from its first slot: the same slots whatever the threads,
+        // laid out by the chunks; compared as sets, then left out like the order's tail.)
+        if (ua.changes || ub.changes) {
+            const listed = (u, x) => { const L = new Int32Array(x.buffer, x.byteOffset + u.changes.offset - u.base, cap), out = new Set(); for (let r = 0; r < u.changes.ranges.length; r += 2) for (let j = u.changes.ranges[r]; j < u.changes.ranges[r] + u.changes.ranges[r + 1]; j++) out.add(L[j]); return [...out].sort((p, q) => p - q); };
+            assert.equal(ua.changes.complete, ub.changes.complete, `tick ${tick}: changes complete`);
+            assert.deepEqual(listed(ua, xa), listed(ub, xb), `tick ${tick}: the same changed slots`);
+            xa.fill(0, ua.changes.offset - ua.base, ua.changes.offset - ua.base + cap * 4); xb.fill(0, ub.changes.offset - ub.base, ub.changes.offset - ub.base + cap * 4);
+        }
         if (Buffer.compare(Buffer.from(xa), Buffer.from(xb)) !== 0) {
             let k = 0; while (xa[k] === xb[k]) k++;
             assert.fail(`tick ${tick}: frames differ from byte ${k} (slot field offset ${Math.floor(k / cap)})`);

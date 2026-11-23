@@ -705,6 +705,7 @@ function _pageViewSlot(s, v) {
 // over the table: the views, lists, tile index and drawn tiles of the slots
 // whose structure changed. Everything is made anew only for the first frame,
 // a new grid, or a change of most of the table.
+let _pageGoneSlots = new Int32Array(256);
 function pageApplyStructures(table, c) {
     let F = simTableViews(SIM_STRUCT_SPEC, table.buf, table.cap, table.off || 0);
     F.n = table.n;
@@ -737,8 +738,14 @@ function pageApplyStructures(table, c) {
             pageStructStats.inc++; pageStructStats.changes += nGone + nAdded;
             // (Off their tiles while their last frame is still the table: a
             // reused slot's view reads the new one.)
+            // (The detail split's index of them by the same changes: renderer.js structSpatialPatch.)
+            const goneSlots = _pageGoneSlots.length >= nGone ? _pageGoneSlots : (_pageGoneSlots = new Int32Array(nGone * 2));
+            if (gone) for (let i = 0; i < nGone; i++) goneSlots[i] = gone[i]._s;
+            if (typeof structSpatialPatch === 'function') structSpatialPatch(F, goneSlots, nGone, added, nAdded, c.structMver, table.mver);
             if (gone) for (const v of gone) {
                 const s = v._s;
+                // (A selected one leaves the selection's slot index: hud.js selectionStructGone.)
+                if (typeof selectionStructGone === 'function') selectionStructGone(v, s);
                 _pageFreezeStruct(v);
                 _pageStructUnplace(v);
                 _pageStructListRemove(v);
@@ -756,6 +763,7 @@ function pageApplyStructures(table, c) {
                 _markCombinedBgTileDirty(v.gx, v.gy, 0, false);
                 if (typeof minimapStaticTileChanged === 'function') minimapStaticTileChanged(v.gx, v.gy);
             }
+            if (typeof selectionStructGoneDone === 'function') selectionStructGoneDone();
             c.structMver = table.mver;
             c.structViews = null;
             if (nGone + nAdded) _simClientStructuresChanged();
@@ -877,14 +885,17 @@ function _pageResolveRefs(v) {
     for (let k in v) v[k] = _pageResolveRefs(v[k]);
     return v;
 }
+const _pageLvChanged = [], _PAGE_LV_ALL = new Array(33).fill('');
 function _pageBoostSig(p) { try { return JSON.stringify([p.boosts || null, p.boostOn || null]); } catch { return ''; } }
 function pageApplyState(st) {
     if (!st) return;
     if (typeof st.upkeep === 'string' && typeof _upKeepRateByPlayer !== 'undefined') { try { _upKeepRateByPlayer = JSON.parse(st.upkeep); } catch { } }
     if (st.players) {
-        // (What the stat tables follow: each player's research levels, kept
-        // as they were, and its boosts; compared after the apply.)
-        const before = players.map(p => p && typeof p === 'object' ? { lv: Object.assign({}, p.researchLevels || null), boost: _pageBoostSig(p) } : null);
+        // (What the stat tables follow: each player's boosts, compared after the apply, and the research levels that
+        // changed: the patch's keys (simFrameEncodeState), a whole object compared only when one is sent whole. A copy
+        // of every player's levels and a pass over all of them each tick was ~0.4 ms of a tick in a battle.)
+        const before = players.map(p => p && typeof p === 'object' ? { boost: _pageBoostSig(p) } : null);
+        const lvChanged = _pageLvChanged; lvChanged.length = st.players.length;
         for (let i = 0; i < st.players.length; i++) {
             let raw = st.players[i], same = raw && raw.__same;
             if (same) delete raw.__same;
@@ -917,6 +928,20 @@ function pageApplyState(st) {
                 }
                 p.researchQueue = nq;
             }
+            lvChanged[i] = null;
+            if (p && p.researchLevels && typeof p.researchLevels === 'object') {
+                const lv = p.researchLevels, was = (cur && cur.researchLevels) || {}, ch = [];
+                if (lv.__lvp) {
+                    for (const k in lv.__lvp) if (lv.__lvp[k] !== was[k]) ch.push(k);
+                    for (const k of lv.__lvd) if (k in was) ch.push(k);
+                } else {
+                    for (const k in lv) if (lv[k] !== was[k]) ch.push(k);
+                    for (const k in was) if (!(k in lv)) ch.push(k);
+                }
+                lvChanged[i] = ch;
+            }
+            // (Levels dropped whole (a restore): the whole table again.)
+            else if (p && cur && cur.researchLevels && !('researchLevels' in p) && !(same && same.includes('researchLevels'))) lvChanged[i] = _PAGE_LV_ALL;
             if (p) for (const key of _SIM_FLAT_KEYS) {
                 const lv = p[key];
                 if (!lv || !lv.__lvp) continue;
@@ -940,10 +965,8 @@ function pageApplyState(st) {
             const p = players[pid], b = before[pid];
             if (!p || typeof p !== 'object') continue;
             if (!b || b.boost !== _pageBoostSig(p)) { rebuildPrecomputedStatsMapPlayer(pid); continue; }
-            const lv = p.researchLevels || {}, changed = [];
-            for (const id in lv) if (lv[id] !== b.lv[id]) changed.push(id);
-            for (const id in b.lv) if (!(id in lv)) changed.push(id);
-            if (!changed.length) continue;
+            const changed = lvChanged[pid];
+            if (!changed || !changed.length) continue;
             if (changed.length > 32) { rebuildPrecomputedStatsMapPlayer(pid); continue; }
             for (const id of changed) {
                 const a = id.indexOf(':'), z = id.lastIndexOf(':');

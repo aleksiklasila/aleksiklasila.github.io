@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261025-st1','sim_frame_world.js?v=20261025-st1','pres_wasm_bin.js?v=20261111-pm');
+importScripts('sim_frame.js?v=20261123-i','sim_frame_world.js?v=20261123-f','pres_wasm_bin.js?v=20261123-e');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, cellBaseline=null;
@@ -83,7 +83,7 @@ function pmRegion(name,bytes) {
 function pmThreadScratch(th,len) {
     if (th.len>=len) return;
     for (const k of ['ALR','CLR','BKR']) if (th[k]) pmFree(th[k]);
-    th.ALR=pmAlloc(4*len);th.CLR=pmAlloc(4*len);th.BKR=pmAlloc(Math.ceil(len/DIRTY_BLOCK)+2);
+    th.ALR=pmAlloc(4*len);th.CLR=pmAlloc(4*len);th.BKR=pmAlloc(Math.ceil(len/FILL_BLOCK)+2);
     th.AL=th.ALR.base;th.CL=th.CLR.base;th.BK=th.BKR.base;th.len=len;
 }
 // The order's and buckets' state for frames of cap slots (pres.rs).
@@ -117,6 +117,10 @@ function pmStateFor(cap) {
     });
     const sr=pmAlloc(DIRTY_COLS.length*nb*4);st.regions.push(sr);T[13]=sr.base;
     st.stamps=new Int32Array(pm.mem.buffer,sr.base,DIRTY_COLS.length*nb);
+    // (Each mark block's box of its units' places, pres_fill.rs block_box: none yet.)
+    const br=pmAlloc(nb*16);st.regions.push(br);st.boxesBase=br.base;
+    st.boxes=new Float32Array(pm.mem.buffer,br.base,nb*4);
+    for (let b=0;b<nb;b++) {st.boxes[b*4]=Infinity;st.boxes[b*4+1]=Infinity;st.boxes[b*4+2]=-Infinity;st.boxes[b*4+3]=-Infinity;}
     st.views.last.fill(-1);
     if (old) for (const r of old.regions) pmFree(r);
     pm.st=st;
@@ -360,9 +364,12 @@ function buildRenderBuckets(F, count, columns, rows, tile) {
 // DIRTY_BLOCK slots: the last frame (seq) it changed in (pres_fill.rs
 // marks), kept here and copied into each frame, so a page that skipped
 // frames still knows what changed since the one its GPU holds.
-const DIRTY_COLS=['x','y','px','py','r','energy','owner','flags','id','type','facing','phase','prate','vision','mode','amount'], DIRTY_BLOCK=256;
+// (The marks' blocks (pres_fill.rs MARK): smaller than the ranges' blocks (FILL_BLOCK, BLOCK there), a few
+// changes spread over the slots marked fewer bytes; the ranges stay whole FILL_BLOCKs.)
+const DIRTY_COLS=['x','y','px','py','r','energy','owner','flags','id','type','facing','phase','prate','vision','mode','amount'], DIRTY_BLOCK=64, FILL_BLOCK=256;
 const dirty={stream:(Math.random()*2147483647)|0,seq:0,cap:-1,stamps:null,prev:null,prevN:0,prevTick:-1};
-function dirtyBytes(cap) {return DIRTY_COLS.length*Math.ceil(cap/DIRTY_BLOCK)*4;}
+// (The stamps, then each block's box: 4 floats.)
+function dirtyBytes(cap) {return (DIRTY_COLS.length+4)*Math.ceil(cap/DIRTY_BLOCK)*4;}
 // A frame's marks begin (this frame's seq; the last frame to compare with,
 // or none: every block marked) and end (copied into the frame: its record).
 function dirtyBegin(F,n) {
@@ -377,10 +384,18 @@ function dirtyEnd(F,n,offset,seq,tick) {
     const D=dirty, nb=Math.ceil(F.cap/DIRTY_BLOCK);
     D.prev=F;D.prevN=n;D.prevTick=Number.isFinite(tick) ? tick : -1;
     new Int32Array(F.buf,F.base+offset,D.stamps.length).set(D.stamps);
-    return {offset:F.base+offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS};
+    // (The blocks' boxes after them: renderer3d.js _columnStoreUploadNear.)
+    const bo=F.base+offset+D.stamps.length*4, B=pm.st && pm.st.boxes;
+    if (B && B.length===nb*4) new Float32Array(F.buf,bo,nb*4).set(B);
+    return {offset:F.base+offset,seq,stream:D.stream,block:DIRTY_BLOCK,nb,cols:DIRTY_COLS,boxes:B && B.length===nb*4 ? bo : -1};
 }
 // The frame's job (one a frame, its fields rewritten: no objects a frame).
-const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0,bcols:0,brows:0};
+const job={n:0,nn:0,player:0,areaUnit:0,metaCopy:false,mode:0,seq:0,bseq:0,phase:0,ta:-1,ghosts:false,gw:0,gh:0,tile:32,light:0,marks:false,pn:0,nb:0,bcols:0,brows:0,list:0};
+// (The slots whose id changed since the last frame built, by the ranges (pres_fill.rs select): each chunk's from its
+// first slot in the frame's list region; the page's membership pass reads them instead of comparing every slot's
+// id, sim_client.js _simClientUpdateStableSlots: ~1.7 ms a tick on the page in a 140k battle, 2026-11-23.)
+function changesBytes(cap) {return cap*4;}
+const changeRanges=[];let changesComplete=false;
 // A range's kernels, in turn (pres_fill.rs: which slots, the filled ones pass
 // by pass, the order, ghosts and marks; each its own function: as one, V8
 // compiled the passes ~10x slower), over a thread's argument block.
@@ -400,6 +415,7 @@ function writeJob(th,F,Pf) {
     // (The camera buckets' records by slot (pres_fill.rs bucket_recs), when the frame has buckets.)
     const bk=J.bcols*J.brows>0;
     I[522]=bk ? pm.brec : 0;I[523]=pm.prevX;I[524]=pm.prevY;P[28]=J.bcols;P[29]=J.brows;P[30]=J.tile;P[31]=pm.prevReady?1:0;P[32]=bk?1:0;
+    I[525]=J.list;I[526]=pm.st && pm.st.boxesBase ? pm.st.boxesBase : 0;
 }
 // ---- chunks ----
 // A frame's slots in chunks (whole blocks of DIRTY_BLOCK slots), each taken
@@ -496,7 +512,7 @@ function runRanges(F,Pf) {
     // simulation short of them. Millions of slots: every helper whatever the pace.)
     const J=job, all=presentHelpers(J.nn);
     const nh=!all ? 0 : pacing.pace>1 && J.nn<PRESENT_ALL_HELPERS_MIN ? (pacing.pace===2 ? 1 : 0) : all.length;
-    const B=DIRTY_BLOCK, parts=nh+1, want=nh ? Math.min(CHUNK_MAX,parts*CHUNKS_A_THREAD) : 1;
+    const B=FILL_BLOCK, parts=nh+1, want=nh ? Math.min(CHUNK_MAX,parts*CHUNKS_A_THREAD) : 1;
     const per=Math.max(1,Math.ceil(Math.ceil(J.n/B)/want))*B, nch=Math.ceil(J.n/per);
     stepMs.fill(0);
     if (!nch) {fillChanged=false;return 0;}
@@ -535,6 +551,8 @@ function runRanges(F,Pf) {
         total+=cnt;
     }
     byMarks=ctl[16+2];
+    changeRanges.length=0;changesComplete=true;
+    for (let c=0;c<nch;c++) {const o=16+16*c;changeRanges.push(c*per,ctl[o+4]);if (ctl[o+5]) changesComplete=false;}
     fillChanged=changed;rangeThreads=parts;
     return total;
 }
@@ -608,7 +626,7 @@ function draw() {
     const columns = tick.n >= 5000 && tick.gw > 0 ? Math.ceil(tick.gw / 16) : 0;
     const rows = columns ? Math.ceil(tick.gh / 16) : 0;
     const indexBytes = columns * rows ? columns * rows * 8 + cap * 8 : 0;
-    const frameBytes=simFrameBytes(cap) + indexBytes + dirtyBytes(cap);
+    const changesOffset=simFrameBytes(cap) + indexBytes + dirtyBytes(cap), frameBytes=changesOffset + changesBytes(cap);
     if (pmStateFor(cap)) membershipReset=true;
     const e=acquireUnits(frameBytes,cap);
     if (!e) return;
@@ -643,6 +661,7 @@ function draw() {
     J.marks=!!D.prev;J.pn=D.pn;J.nb=D.nb;
     // (The camera buckets' records are made with the ranges: their state first.)
     J.bcols=indexBytes ? columns : 0;J.brows=indexBytes ? rows : 0;pmState(F.cap);
+    J.list=F.base+changesOffset;
     const count=runRanges(F,D.prev);
     if (count<0) {e.busy=false;dirty.prev=null;e.metaRev=-1;e.seq=0;membershipReset=true;return;}
     e.seq=D.seq;
@@ -666,6 +685,8 @@ function draw() {
     }
     const tb=performance.now();
     world.units.dirty = dirtyEnd(F, tick.n, simFrameBytes(cap) + indexBytes, D.seq, tick.tick);
+    // (Against the frame built last (seq - 1): whole only when it was, no unit recycled during the fill.)
+    world.units.changes={offset:F.base+changesOffset,ranges:changeRanges.slice(),complete:changesComplete && !!D.prev,seq:D.seq,prevSeq:D.prev ? D.seq-1 : -1,stream:dirty.stream};
     const tm=performance.now();
     if(structure && structureRevision!==sentStructureRevision) {
         // (Its block only: the table is in the wasm heap's memory.)

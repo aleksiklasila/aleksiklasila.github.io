@@ -1516,6 +1516,14 @@ function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
             if (IDLE[s]) add(a.idle, pid);
         }
     }
+    // (Beside the simulation worker: the structure table's slots (alive, kinds 1-3: the cell items, not towers), no list of the cell
+    // items made again at every change of them, ~0.3 ms a tick in a battle. The graph samples either way.)
+    const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    if (T && T.alive) {
+        const AL = T.alive, KI = T.kind, OW = T.owner, EN = T.energy;
+        for (let s = k, n = Math.min(T.n, T.cap); s < n; s += step) if (AL[s] === 1 && KI[s] >= 1 && KI[s] <= 3 && EN[s] > 0) add(a.structures, OW[s]);
+        return a;
+    }
     let items = getCellItemsRowMajor();
     for (let i = k, n = items.length; i < n; i += step) {
         let item = items[i], cell = grid[item.gy] && grid[item.gy][item.gx];

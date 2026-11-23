@@ -169,10 +169,14 @@ function _bbSyncOrder(map) {
 
 // The not-owned section, in the player's order: defaults are appended once,
 // and anything owned or pinned leaves it.
+// (Made again only when what is known or the row's own order changed: the defaults' list was sorted anew at every
+// refresh.)
 function _bbRestIds() {
+    if (bb.restAt && bb.restAt.set === bb.known && bb.restAt.known === bb.known.size && bb.restAt.rest === bb.rest && bb.restAt.len === bb.rest.length) return bb.rest;
     let have = new Set(bb.rest);
     for (let id of _bbUnownedIds()) if (!have.has(id)) bb.rest.push(id);
     bb.rest = bb.rest.filter(id => !bb.known.has(id));
+    bb.restAt = { set: bb.known, known: bb.known.size, rest: bb.rest, len: bb.rest.length };
     return bb.rest;
 }
 
@@ -277,8 +281,22 @@ function _bbComputeRates(owner) {
     // (Sums by unit type in a typed array: a double added to an object's
     // property is a new heap number each time, thousands of log rows a
     // refresh in a battle: ~250 KB of garbage a second.)
-    const A = _bbAstarSums, log = _ensureAstarLogPlayer(owner) || [];
+    const A = _bbAstarSums, DL = typeof _deltaList === 'function' && _DELTA_STORE_ON ? _deltaList('a', owner) : null, log = DL ? [] : _ensureAstarLogPlayer(owner) || [];
     A.sums.fill(0, 0, A.names.length); A.seen.fill(0, 0, A.names.length);
+    // (By the running sums: a series per unit type and source, hud.js _deltaStore.)
+    if (DL) {
+        const w = Math.max(1, Math.floor(TICK_RATE * sec));
+        for (let i = 0; i < DL.length; i++) {
+            const s = DL[i], d = _deltaWindow(s, s.c, w);
+            if (d === 0) continue; // (a type with none: read as 0 either way)
+            let k = A.index.get(s.unitType);
+            if (k === undefined) {
+                k = A.names.length; A.index.set(s.unitType, k); A.names.push(s.unitType);
+                if (k >= A.sums.length) { const x = new Float64Array(A.sums.length * 2), f = new Uint8Array(x.length); x.set(A.sums); f.set(A.seen); A.sums = x; A.seen = f; }
+            }
+            A.sums[k] += d; A.seen[k] = 1; astarTotal += d;
+        }
+    }
     // (Newest back to the window's start: the log is in tick order.)
     for (let i = log.length - 1; i >= 0; i--) {
         const ev = log[i];
@@ -298,7 +316,11 @@ function _bbComputeRates(owner) {
     // panel's totals use (its 1s/10s/30s/60s buttons), so both say the same.
     let energySec = typeof getEnergyDeltaWindowSeconds === 'function' ? getEnergyDeltaWindowSeconds('total') : sec;
     let astarSec = typeof getAstarWindowSeconds === 'function' ? getAstarWindowSeconds('total') : sec;
-    if (astarSec !== sec) {
+    if (astarSec !== sec && DL) {
+        astarTotal = 0;
+        const w = Math.max(1, Math.floor(TICK_RATE * astarSec));
+        for (let i = 0; i < DL.length; i++) astarTotal += _deltaWindow(DL[i], DL[i].c, w);
+    } else if (astarSec !== sec) {
         astarTotal = 0;
         let from = gameTime - Math.max(1, Math.floor(TICK_RATE * astarSec));
         const L = _ensureAstarLogPlayer(owner) || [];
@@ -364,6 +386,13 @@ function _bbEnsureDom() {
         }, { passive: false });
         row.addEventListener('scroll', () => { if (bb.menu) _bbPositionMenu(); }, { passive: true });
     }
+    // (The research row's scroll position and width, kept here: its tiles are elements only near what it
+    // shows, _bbRenderResearch. Read in the scroll event and by a ResizeObserver, never in a frame, where a
+    // read would force the frame's layout.)
+    const R = bb.els.research;
+    bb.rsLeft = R.scrollLeft; bb.rsWidth = R.clientWidth;
+    R.addEventListener('scroll', () => { bb.rsLeft = R.scrollLeft; _bbResearchWindowCheck(); }, { passive: true });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => { bb.rsWidth = R.clientWidth; bb.rsLeft = R.scrollLeft; _bbResearchWindowCheck(); }).observe(R);
     document.addEventListener('pointerdown', _bbOnDocumentPointerDown, true);
     window.addEventListener('resize', () => closeBottomBarMenus());
     return bb.els;
@@ -379,7 +408,8 @@ function _bbResetForNewMatch() {
     closeBottomBarMenus();
 }
 
-function updateBottomBar(now) {
+// (busy: another UI write had this frame: the refresh waits for the next one. Returns whether it refreshed.)
+function updateBottomBar(now, busy = false) {
     let els = _bbEnsureDom();
     if (!els) return;
     if (!gameStarted || !players[localPlayerId]) return;
@@ -390,7 +420,7 @@ function updateBottomBar(now) {
     bb.lastGameTime = gameTime;
 
     if (bb.press && bb.press.dragging) _bbAutoScroll();
-    if (now - bb.lastRefresh < BB_REFRESH_MS) return;
+    if (now - bb.lastRefresh < BB_REFRESH_MS || busy) return false;
     bb.lastRefresh = now;
 
     // (The counts walk every unit and building: twice a second at most, and
@@ -410,6 +440,7 @@ function updateBottomBar(now) {
         _bbRenderResearch(now);
     }
     if (bb.menu) _bbRenderMenu();
+    return true;
 }
 
 function _bbRenderTotals() {
@@ -545,16 +576,27 @@ function _bbRenderThings() {
         let rates = _bbThingRates(info);
         return `${id}/${info.count}/${info.idle}/${_bbFmtRateShort(rates.energy)}/${rates.astar === null ? '' : _bbFmtRateShort(rates.astar)}/${_bbBoostSig(info)}`;
     };
-    let sig = bb.order.map(part).join('|') + '#' + rest.map(part).join('|') + '#' + (bb.menu && bb.menu.type === 'thing' ? bb.menu.id : '')
+    // (Per thing its part, the tiles whose part changed patched alone; all of them when what colours or opens them
+    // changed. Every tile's markup was made at every refresh.)
+    const P = bb.thingParts || (bb.thingParts = new Map()), dirty = bb.thingDirty || (bb.thingDirty = new Set());
+    dirty.clear();
+    for (const id of bb.order) { const pp = part(id); if (P.get(id) !== pp) { P.set(id, pp); dirty.add(id); } }
+    for (const id of rest) { const pp = part(id); if (P.get(id) !== pp) { P.set(id, pp); dirty.add(id); } }
+    const head = (bb.menu && bb.menu.type === 'thing' ? bb.menu.id : '')
         + '#' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'energy')) + '/' + formatCompactNumber(getPlayerDeltaFlowScale(localPlayerId, 'astar'));
-    if (sig === bb.thingsSig) return;
+    const sig = bb.order.join('|') + '#' + rest.join('|') + '#' + head;
+    const allParts = sig !== bb.thingsSig;
+    if (!allParts && dirty.size === 0) return;
     bb.thingsSig = sig;
-    // (null: the line between owned and never owned.)
-    let parts = bb.order.map(id => _bbThingHtml(id, true));
-    if (rest.length > 0) { parts.push(null); for (let id of rest) parts.push(_bbThingHtml(id, false)); }
+    // (null: the line between owned and never owned; undefined: a tile unchanged.)
+    const mk = (id, owned) => allParts || dirty.has(id) ? _bbThingHtml(id, owned) : undefined;
+    let parts = bb.order.map(id => mk(id, true));
+    if (rest.length > 0) { parts.push(null); for (let id of rest) parts.push(mk(id, false)); }
     let kids = els.things.children, same = kids.length === parts.length;
-    for (let i = 0; same && i < parts.length; i++) same = parts[i] ? kids[i].dataset.id === parts[i].id : kids[i].classList.contains('bb-sep');
+    const idAt = i => i < bb.order.length ? bb.order[i] : i === bb.order.length ? null : rest[i - bb.order.length - 1];
+    for (let i = 0; same && i < parts.length; i++) { const id = idAt(i); same = id !== null ? kids[i].dataset.id === id : kids[i].classList.contains('bb-sep'); }
     if (!same) {
+        for (let i = 0; i < parts.length; i++) if (parts[i] === undefined) parts[i] = _bbThingHtml(idAt(i), i < bb.order.length);
         let html = '';
         for (let p of parts) html += p ? _bbThingPartsHtml(p) : `<div class="bb-sep" title="Never owned yet (drag things across to pin them left of this line)"></div>`;
         els.things.innerHTML = html;
@@ -566,7 +608,7 @@ function _bbRenderThings() {
         let p = parts[i], el = kids[i];
         if (!p) continue;
         if (el.className !== p.cls) el.className = p.cls;
-        if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title);
+        if (el._bbTitle !== p.title) { if (hoverTextOf(el) !== p.title) el.setAttribute('title', p.title); el._bbTitle = p.title; }
         if (el._bbBoost !== p.boost) { el.firstElementChild.outerHTML = p.boost; el._bbBoost = p.boost; }
         if (el._bbBody !== p.body) { _bbWriteThingBody(el.lastElementChild, p); el._bbBody = p.body; }
     }
@@ -578,8 +620,9 @@ function _bbRenderThings() {
 function _bbWriteThingBody(body, p) {
     const img = body.children[0], e = body.children[1], a = body.children[2];
     if (!img || !e || !a || img.tagName !== 'IMG' || !e.firstChild || e.firstChild.nodeType !== 3 || !a.firstChild || a.firstChild.nodeType !== 3) { _bbPatchThingBody(body, p.body); return; }
+    // (The URL written last, kept: reading the attribute back copied the ~1.6 KB data: URL at every compare.)
     const src = getItemThumbnail(p.key, 20);
-    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    if (img._bbSrc !== src) { if (img.getAttribute('src') !== src) img.setAttribute('src', src); img._bbSrc = src; }
     const r = p.rates, et = _bbFmtRateShort(r.energy), ec = 'bb-rate bb-rate-e ' + _bbRateClass(r.energy), ecol = getDeltaRateColor(r.energy, 'energy');
     if (e.firstChild.nodeValue !== et) e.firstChild.nodeValue = et;
     if (e.className !== ec) e.className = ec;
@@ -610,79 +653,123 @@ function _bbRenderResearch(now) {
     let owner = localPlayerId;
     let tasks = _bbOrderedTasks(owner);
     let cap = getResearchQueueCapacityForPlayer(owner);
-    let orderSig = _bbResearchOrderSig(tasks);
-    if (bb.freezeUntil > now && orderSig === bb.freezeOrderSig) return;
+    // (The order's signature only while a drop holds the row still.)
+    if (bb.freezeUntil > now && _bbResearchOrderSig(tasks) === bb.freezeOrderSig) return;
     bb.freezeUntil = 0;
 
     let caret = (bb.menu && bb.menu.type === 'drop') ? Math.min(tasks.length, bb.menu.insertAt + bb.menu.added) : -1;
     let openIndex = _bbMenuTaskIndex(tasks);
-    let parts = [];
-    for (let t of tasks) {
-        parts.push(`${_bbTaskStatId(t)}/${t.toLevel}/${Math.round(_bbTaskProgress(t) * 200)}/${Math.round(Number(t.cost) || 0)}`);
-    }
     // (Orders given and not there yet: faded tiles after the queue, counted in.)
     let ahead = typeof researchOrdersAheadList === 'function' ? researchOrdersAheadList().filter(a => a.delta > 0) : [];
     let aheadCount = 0;
     for (let a of ahead) aheadCount += a.delta;
     aheadCount = Math.max(0, Math.min(aheadCount, cap - tasks.length));
-    let sig = parts.join('|') + `#${cap}#${caret}#${openIndex}#${ahead.map(a => a.key + '/' + a.statKey + '/' + a.delta).join(',')}`;
     const count = tasks.length + aheadCount;
+    const empty = Math.min(BB_MAX_EMPTY_SLOTS, Math.max(0, cap - tasks.length - aheadCount));
+    const nT = tasks.length, nTC = nT + (caret >= 0 ? 1 : 0), noLab = cap <= 0 && nT <= 0 ? 1 : 0;
+    const total = nTC + aheadCount + empty + noLab;
+    const win = _bbResearchWindow(nTC + aheadCount + empty);
+    bb.rsWin = { left: win.left, right: win.right, width: bb.rsWidth || 0 };
     const percent = cap > 0 ? Math.round(count / cap * 100) : 0;
     let labelHtml = `<span class="bb-lcount">${percent}%</span><span class="bb-lcap" aria-hidden="true" style="color:#aef;font-weight:bold">R</span><span class="lf-tip" role="tooltip">${count} / ${cap}</span>`;
     if (els.researchLabel.innerHTML !== labelHtml) els.researchLabel.innerHTML = labelHtml;
     els.researchLabel.setAttribute('aria-label', `Research ${percent}%`);
+
+    // The row's slots in order: the tasks (the drop caret among them), the orders on their way, empty slots, or the
+    // no-lab note. Only the window's are made (slotAt): a refresh was a string a task for the whole queue, 3-5 ms
+    // four times a second at 1.6k tasks (2026-11-23); what is drawn and the signature are the window's alone (the
+    // others are margins, from the counts).
+    // (Only the slots in the window are elements; margins on its first and last take the others' room, so the
+    // row scrolls as with every tile in it. A queue of 1.6k tasks was ~10k elements: every layout of the page
+    // laid out, hit-tested and pre-painted the whole row, 20-70 ms frames in a battle, 2026-11-23.)
+    const windowed = win.to >= win.from && total > win.to - win.from + 1 && total === win.n;
+    const from = windowed ? win.from : 0, to = windowed ? win.to : total - 1;
+    const slotAt = i => {
+        if (i < nTC) {
+            if (i === caret) return { key: 'caret', html: '<div class="bb-caret"></div>' };
+            const k = caret >= 0 && i > caret ? i - 1 : i, t = tasks[k];
+            return { key: 'task:' + owner + ':' + _bbTaskTileKey(t), task: t, index: k, open: k === openIndex,
+                draw: `${_bbTaskStatId(t)}/${t.toLevel}/${Math.round(_bbTaskProgress(t) * 200)}/${Math.round(Number(t.cost) || 0)}` + (k === 0 ? '/a' : '') + (k === openIndex ? '/o' : '') };
+        }
+        let j = i - nTC;
+        if (j < aheadCount) {
+            for (const a of ahead) {
+                if (j < a.delta) {
+                    const stat = getResearchStatEntry(a.kind, a.key, a.statKey);
+                    return { key: `ahead:${a.kind}:${a.key}:${a.statKey}:${j}`,
+                        html: `<div class="bb-slot bb-ahead${a.kind === 'unit' ? ' bb-unit' : ''}" title="Ordered: on its way"><img src="${getItemThumbnail(a.key, 20)}" width="20" height="20" alt="" draggable="false"><span class="bb-task-stat">${_bbStatAbbrHtml(a.statKey, stat ? stat.label : a.statKey)}</span></div>` };
+                }
+                j -= a.delta;
+            }
+        }
+        j = i - nTC - aheadCount;
+        if (j < empty) return { key: 'empty:' + j, html: '<div class="bb-slot"></div>' };
+        return { key: 'no-lab', html: '<div class="bb-empty-msg">No research lab. Build one to research upgrades.</div>' };
+    };
+    const shown = [];
+    let sig = `${total}#${nT}#${cap}#${caret}#${openIndex}#${ahead.map(a => a.key + '/' + a.statKey + '/' + a.delta).join(',')}#${from}-${to}`;
+    for (let i = from; i <= to; i++) { const slot = slotAt(i); shown.push(slot); sig += '|' + slot.key + (slot.draw ? '/' + slot.draw + '/' + slot.index : ''); }
     if (sig === bb.researchSig) return;
     bb.researchSig = sig;
-
-    // Preserve queue tiles across progress updates and completed tasks. A
-    // full innerHTML replacement of a long queue made the browser relayout
-    // and raster thousands of nodes, interrupting even steady camera pans.
-    const slots = [];
-    for (let i = 0; i < tasks.length; i++) {
-        if (i === caret) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
-        slots.push({ key: 'task:' + owner + ':' + _bbTaskKey(tasks[i]), task: tasks[i], index: i, open: i === openIndex, draw: parts[i] + (i === 0 ? '/a' : '') + (i === openIndex ? '/o' : '') });
+    let marginLeft = 0, marginRight = 0;
+    if (windowed) {
+        const at = k => k * (BB_RS_W + BB_RS_GAP) - (caret >= 0 && caret < k ? BB_RS_W - BB_RS_CARET_W : 0);
+        const end = k => at(k) + (k === caret ? BB_RS_CARET_W : BB_RS_W);
+        marginLeft = at(win.from);
+        marginRight = end(total - 1) - end(win.to);
     }
-    if (caret >= tasks.length) slots.push({ key: 'caret', html: '<div class="bb-caret"></div>' });
-    let aheadLeft = aheadCount;
-    for (let a of ahead) for (let n = 0; n < a.delta && aheadLeft > 0; n++, aheadLeft--) {
-        let stat = getResearchStatEntry(a.kind, a.key, a.statKey);
-        slots.push({ key: `ahead:${a.kind}:${a.key}:${a.statKey}:${n}`,
-            html: `<div class="bb-slot bb-ahead${a.kind === 'unit' ? ' bb-unit' : ''}" title="Ordered: on its way"><img src="${getItemThumbnail(a.key, 20)}" width="20" height="20" alt="" draggable="false"><span class="bb-task-stat">${_bbStatAbbrHtml(a.statKey, stat ? stat.label : a.statKey)}</span></div>` });
-    }
-    let empty = Math.min(BB_MAX_EMPTY_SLOTS, Math.max(0, cap - tasks.length - aheadCount));
-    for (let i = 0; i < empty; i++) slots.push({ key: 'empty:' + i, html: '<div class="bb-slot"></div>' });
-    if (cap <= 0 && tasks.length <= 0) {
-        slots.push({ key: 'no-lab', html: '<div class="bb-empty-msg">No research lab. Build one to research upgrades.</div>' });
-    }
-    const keep = new Set(slots.map(slot => slot.key));
-    const existing = new Map();
-    for (const el of Array.from(els.research.children)) {
-        if (keep.has(el._bbResearchKey)) existing.set(el._bbResearchKey, el);
-        else el.remove();
-    }
-    let cursor = els.research.firstElementChild;
-    for (const slot of slots) {
-        let el = existing.get(slot.key);
-        if (!el) {
+    // Positional: the window's i-th element shows its i-th slot, its content patched (a task tile: its thumbnail's
+    // src, stat, level, progress, cost; the others by their markup). Tiles kept by their task were made anew and
+    // moved whenever the queue's task objects or levels changed: ~8 of 40 a refresh in a battle, 1-5 ms (2026-11-23).
+    const R = els.research;
+    let el = R.firstElementChild;
+    for (let si = 0; si < shown.length; si++) {
+        const slot = shown[si], kind = slot.task ? 'task' : slot.key.slice(0, slot.key.indexOf(':') >= 0 ? slot.key.indexOf(':') : slot.key.length);
+        let cur = el;
+        if (!cur || cur._bbKind !== kind || (!slot.task && cur._bbHtml !== slot.html)) {
             const holder = document.createElement('div');
-            holder.innerHTML = slot.task ? _bbTaskHtml(slot.task, slot.index, slot.open) : slot.html;
-            el = holder.firstElementChild;
-            el._bbResearchKey = slot.key;
-            el._bbDrawn = slot.draw; el._bbIdx = slot.index;
+            holder.innerHTML = slot.task ? _bbTaskHtml(slot.task, slot.index, slot.open, true) : slot.html;
+            const made = holder.firstElementChild;
+            if (slot.task) { made.insertBefore(_bbThumbSpan(slot.task.key), made.querySelector('.bb-task-info')); made._bbThumb = slot.task.key; made._bbStat = _bbTaskStatId(slot.task); }
+            made._bbKind = kind; made._bbHtml = slot.task ? null : slot.html;
+            made._bbDrawn = slot.draw; made._bbIdx = slot.index;
+            if (cur) R.replaceChild(made, cur); else R.appendChild(made);
+            cur = made;
         } else if (slot.task) {
-            // (Only a tile whose stat, level, progress, cost, active or open
-            // state changed is drawn again: the active task's progress
-            // changes every tick, the rest of a long queue does not, and a
-            // finished task only moves the rest one place (their index; the
-            // hover text that names it is written when hovered,
-            // _bbResearchHover). Patching every tile was ~1 s of 26 at a
-            // 1.6k-task queue.)
-            if (el._bbIdx !== slot.index) { el.dataset.index = String(slot.index); el._bbIdx = slot.index; el._bbTitleStale = true; }
-            if (el._bbDrawn !== slot.draw) { _bbPatchResearchTask(el, slot.task, slot.index, slot.open); el._bbDrawn = slot.draw; }
+            // (Only what changed: the active task's progress every tick, the rest when the queue moves. The hover
+            // text that names a tile is written when hovered, _bbResearchHover.)
+            const t = slot.task;
+            if (cur._bbThumb !== t.key) { const ts = cur.querySelector('.bb-ts'); if (ts) ts.style.backgroundPosition = _bbSpritePos(t.key); cur._bbThumb = t.key; }
+            const sid = _bbTaskStatId(t);
+            if (cur._bbStat !== sid) { const st = cur.querySelector('.bb-task-stat'), e = getResearchStatEntry(t.kind, t.key, t.statKey); if (st) st.innerHTML = _bbStatAbbrHtml(t.statKey, e ? e.label : t.statKey); cur._bbStat = sid; }
+            if (cur._bbIdx !== slot.index) { cur.dataset.index = String(slot.index); cur._bbIdx = slot.index; cur._bbTitleStale = true; }
+            if (cur._bbDrawn !== slot.draw) { _bbPatchResearchTask(cur, t, slot.index, slot.open); cur._bbDrawn = slot.draw; }
         }
-        if (el !== cursor) els.research.insertBefore(el, cursor);
-        cursor = el.nextElementSibling;
+        cur._bbResearchKey = slot.key;
+        const ml = si === 0 && marginLeft > 0 ? marginLeft + 'px' : '', mr = si === shown.length - 1 && marginRight > 0 ? marginRight + 'px' : '';
+        if ((cur._bbMl || '') !== ml) { cur.style.marginLeft = ml; cur._bbMl = ml; }
+        if ((cur._bbMr || '') !== mr) { cur.style.marginRight = mr; cur._bbMr = mr; }
+        el = cur.nextElementSibling;
     }
+    while (el) { const next = el.nextElementSibling; el.remove(); el = next; }
+}
+
+// The research row's window: the slots (in the row's order) within two of its widths either side of what it
+// shows (the tiles' sizes: bottom_bar.css .bb-task / .bb-slot 74 px, .bb-caret 3, #bb-research gap 10). Small
+// queues: every slot.
+const BB_RS_W = 74, BB_RS_GAP = 10, BB_RS_CARET_W = 3, BB_RS_ALL = 64;
+function _bbResearchWindow(n) {
+    const step = BB_RS_W + BB_RS_GAP, width = Math.max(step, bb.rsWidth || 0), left = Math.max(0, (bb.rsLeft || 0) - 12);
+    if (n <= BB_RS_ALL) return { n, from: 0, to: n - 1, left: 0, right: Infinity };
+    const from = Math.max(0, Math.floor((left - 2 * width) / step)), to = Math.min(n - 1, Math.ceil((left + 3 * width) / step));
+    // (Drawn again when what the row shows comes within a width of the window's ends.)
+    return { n, from, to, left: from > 0 ? (from * step + width) : -Infinity, right: to < n - 1 ? (to * step - 2 * width) : Infinity };
+}
+function _bbResearchWindowCheck() {
+    const w = bb.rsWin;
+    if (!w || bb.press || !gameStarted || !players[localPlayerId]) return;
+    const left = bb.rsLeft || 0;
+    if (left < w.left || left > w.right || (bb.rsWidth || 0) !== w.width) { bb.researchSig = ''; _bbRenderResearch(performance.now()); }
 }
 
 function _bbTaskPresentation(t, index, open) {
@@ -710,6 +797,16 @@ function _bbResearchHover(ev) {
     el._bbTitleStale = false;
     if (t) el.setAttribute('title', _bbTaskPresentation(t, i, el.classList.contains('bb-open')).title);
 }
+// A task tile's key: the task object's own (the page keeps a queue's objects from tick to tick, sim_frame_world.js
+// pageApplyState), not its stat and level: a finished level moves the levels of the same stat's tasks behind it, and
+// every such tile in the row was made anew (with its thumbnail) at each finished level.
+const _bbTaskTileKeys = new WeakMap();
+let _bbTaskTileN = 0;
+function _bbTaskTileKey(t) {
+    let k = _bbTaskTileKeys.get(t);
+    if (k === undefined) { k = ++_bbTaskTileN; _bbTaskTileKeys.set(t, k); }
+    return k;
+}
 function _bbPatchResearchTask(el, t, index, open) {
     const p = _bbTaskPresentation(t, index, open);
     if (el.className !== p.cls) el.className = p.cls;
@@ -720,6 +817,8 @@ function _bbPatchResearchTask(el, t, index, open) {
     const progress = el._bbProgress || (el._bbProgress = el.querySelector('.bb-task-progress > div'));
     const height = (p.pct * 100).toFixed(1) + '%';
     if (progress.style.height !== height) progress.style.height = height;
+    const lvl = el._bbLvl || (el._bbLvl = el.querySelector('.bb-task-lvl')), lt = 'R' + t.toLevel;
+    if (lvl && lvl.textContent !== lt) lvl.textContent = lt;
     const cost = el._bbCost || (el._bbCost = el.querySelector('.bb-task-cost'));
     const text = '⚡' + _bbFmtInt(Math.ceil(p.left));
     if (cost.textContent !== text) cost.textContent = text;
@@ -731,12 +830,46 @@ function _bbPatchResearchTask(el, t, index, open) {
     } else if (!p.active && arrow) arrow.remove();
 }
 
-function _bbTaskHtml(t, index, open) {
+// The research tiles' thumbnails: one sprite sheet of every thing's 20 px thumbnail (made once, at its first use),
+// a tile's thumbnail its background position. A thumbnail changed is a style write: an <img> given another URL
+// (or parsed from markup with it) was the bulk of a refresh in a battle, ~1-5 ms (2026-11-23).
+const _bbSprite = { css: null, at: new Map(), cell: 20 };
+function _bbSpriteBuild() {
+    const S = _bbSprite;
+    const keys = [...new Set([...Object.keys(BASE_CARD_TYPES || {}), ...Object.keys(BASE_UNIT_STATS || {})])];
+    const dpr = window.devicePixelRatio || 1, px = Math.ceil(20 * dpr), cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)));
+    const rows = Math.max(1, Math.ceil(keys.length / cols));
+    const atlas = document.createElement('canvas'); atlas.width = cols * px; atlas.height = rows * px;
+    const ctx = atlas.getContext('2d'), tmp = document.createElement('canvas');
+    for (let i = 0; i < keys.length; i++) {
+        // (Drawn into tmp: getItemThumbnail draws into a given canvas only when it has no cached URL.)
+        const ck = keys[i] + '_20', had = _thumbCache[ck];
+        delete _thumbCache[ck];
+        try { getItemThumbnail(keys[i], 20, tmp); ctx.drawImage(tmp, (i % cols) * px, Math.floor(i / cols) * px, px, px); } catch (_) { }
+        finally { if (had !== undefined) _thumbCache[ck] = had; }
+        S.at.set(keys[i], [(i % cols) * 20, Math.floor(i / cols) * 20]);
+    }
+    S.css = `background-image:url(${atlas.toDataURL()});background-size:${cols * 20}px ${rows * 20}px;`;
+}
+// The background position of a thing's thumbnail ('' unknown: the sheet's first).
+function _bbSpritePos(key) {
+    if (!_bbSprite.css) _bbSpriteBuild();
+    const p = _bbSprite.at.get(key);
+    return p ? `-${p[0]}px -${p[1]}px` : '0 0';
+}
+function _bbThumbSpan(key) {
+    if (!_bbSprite.css) _bbSpriteBuild();
+    const el = document.createElement('i');
+    el.className = 'bb-ts'; el.style.cssText = _bbSprite.css; el.style.backgroundPosition = _bbSpritePos(key);
+    return el;
+}
+// (noImg: without the thumbnail, the caller puts in _bbThumbImg before .bb-task-info.)
+function _bbTaskHtml(t, index, open, noImg = false) {
     const { cls, title, active, pct, left, statLabel } = _bbTaskPresentation(t, index, open);
     let html = `<div class="${cls}" data-index="${index}" title="${_bbEscape(title)}">`;
     html += `<div class="bb-task-progress"><div style="height:${(pct * 100).toFixed(1)}%"></div></div>`;
     if (active) html += `<span class="bb-task-arrow">◀</span>`;
-    html += `<img src="${getItemThumbnail(t.key, 20)}" width="20" height="20" alt="" draggable="false">`;
+    if (!noImg) html += `<img src="${getItemThumbnail(t.key, 20)}" width="20" height="20" alt="" draggable="false">`;
     html += `<div class="bb-task-info"><div class="bb-task-top"><span class="bb-task-lvl">R${t.toLevel}</span><span class="bb-task-stat">${_bbStatAbbrHtml(t.statKey, statLabel)}</span></div>`;
     html += `<div class="bb-task-cost">⚡${_bbFmtInt(Math.ceil(left))}</div></div>`;
     html += `</div>`;
@@ -804,6 +937,8 @@ function _bbStartDrag() {
     ghost.removeAttribute('title');
     ghost.style.width = rect.width + 'px';
     ghost.style.height = rect.height + 'px';
+    ghost.style.left = '0px'; ghost.style.top = '0px';
+    ghost.style.transform = `translate(${press.startX - press.offX}px, ${press.startY - press.offY}px) scale(1.08)`;
     document.body.appendChild(ghost);
     press.ghost = ghost;
     document.body.classList.add('bb-dragging');
@@ -821,7 +956,7 @@ function _bbStartDrag() {
 function _bbMakePlaceholder(src, kind) {
     let ph = document.createElement('div');
     ph.className = 'bb-placeholder ' + (kind === 'task' ? 'bb-ph-task' : 'bb-ph-thing');
-    let img = src.querySelector('img');
+    let img = src.querySelector('img, .bb-ts');
     if (img) ph.appendChild(img.cloneNode());
     return ph;
 }
@@ -843,31 +978,53 @@ function _bbPointInRect(x, y, r, pad = 0) {
     return x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
 }
 
-// Animates siblings from their old to their new positions after mutate().
+// Animates siblings from their old to their new positions after mutate() (the drag's placeholder put in, moved or
+// taken out). The tiles that moved are those between its old and new places, by its width and the row's gap (its step,
+// read once a drag): no position read a tile before and after (two layouts of the whole page each, and one more a tile
+// to restart its transition: 50-190 ms tasks while dragging in a big match, 2026-11-23); the transitions start on the
+// next frame.
 function _bbFlip(row, mutate) {
-    let items = Array.from(row.children);
-    let before = new Map(items.map(el => [el, el.getBoundingClientRect().left]));
+    const press = bb.press, ph = press && press.placeholder, kids = row.children;
+    const oldIdx = ph && ph.parentNode === row ? Array.prototype.indexOf.call(kids, ph) : -1;
     mutate();
-    for (let el of items) {
-        if (!before.has(el) || !el.isConnected) continue;
-        let dx = before.get(el) - el.getBoundingClientRect().left;
-        if (Math.abs(dx) < 0.5) continue;
-        el.style.transition = 'none';
-        el.style.transform = `translateX(${dx}px)`;
-        void el.offsetWidth;
-        el.style.transition = 'transform 140ms ease-out';
-        el.style.transform = '';
+    if (!ph) return;
+    const newIdx = ph.parentNode === row ? Array.prototype.indexOf.call(kids, ph) : -1;
+    let from, to, dx;
+    const step = _bbPhStep(row, ph);
+    if (!(step > 0)) return;
+    if (oldIdx < 0 && newIdx >= 0) { from = newIdx + 1; to = kids.length; dx = -step; }
+    else if (oldIdx >= 0 && newIdx < 0) { from = oldIdx; to = kids.length; dx = step; }
+    else if (oldIdx >= 0 && newIdx >= 0 && newIdx < oldIdx) { from = newIdx + 1; to = oldIdx + 1; dx = -step; }
+    else if (oldIdx >= 0 && newIdx > oldIdx) { from = oldIdx; to = newIdx; dx = step; }
+    else return;
+    const moved = [];
+    for (let i = from; i < to && i < kids.length; i++) {
+        const el = kids[i]; if (el === ph) continue;
+        el.style.transition = 'none'; el.style.transform = `translateX(${dx}px)`; moved.push(el);
     }
+    requestAnimationFrame(() => { for (const el of moved) { el.style.transition = 'transform 140ms ease-out'; el.style.transform = ''; } });
+}
+// The placeholder's width and the row's gap (read once a drag and row; 0 when it is not in the row).
+function _bbPhStep(row, ph) {
+    const press = bb.press, key = row.id || 'row';
+    const C = press.phStep || (press.phStep = {});
+    if (C[key] !== undefined) return C[key];
+    let w = 0;
+    if (ph.parentNode === row) w = ph.getBoundingClientRect().width;
+    else { row.appendChild(ph); w = ph.getBoundingClientRect().width; ph.remove(); }
+    const g = parseFloat(getComputedStyle(row).columnGap) || 0;
+    return C[key] = w + g;
 }
 
 function _bbUpdateDrag() {
     let press = bb.press;
     let els = bb.els;
-    press.ghost.style.left = (press.x - press.offX) + 'px';
-    press.ghost.style.top = (press.y - press.offY) + 'px';
+    // (Moved by its transform: left / top made the page's layout dirty at every move, and the reads below laid it out.)
+    press.ghost.style.transform = `translate(${press.x - press.offX}px, ${press.y - press.offY}px) scale(1.08)`;
 
     let researchRect = els.research.getBoundingClientRect();
     let thingsRect = els.things.getBoundingClientRect();
+    press.researchRect = researchRect; press.thingsRect = thingsRect;
     let zone = null;
     if (_bbPointInRect(press.x, press.y, researchRect, 14)) zone = 'research';
     else if (press.type === 'thing' && _bbPointInRect(press.x, press.y, thingsRect, 8)) zone = 'things';
@@ -885,7 +1042,11 @@ function _bbUpdateDrag() {
             press.placeholder = _bbMakePlaceholder(press.src, 'task');
         }
         _bbPlaceAt(els.research, press.placeholder, items, idx);
-        press.dropIndex = idx;
+        // (The row's tiles are a window of the queue, _bbRenderResearch: the place counts the tasks before it,
+        // the pressed one left out. None in the window: past the last.)
+        const k = items.length ? Number(items[0].dataset.index) : -1;
+        const before = k < 0 ? press.refs.length - (press.type === 'task' ? 1 : 0) - idx : press.type === 'task' && k > press.index ? k - 1 : k;
+        press.dropIndex = before + idx;
     } else if (zone === 'things') {
         // The divider counts as an item: left of it is the pinned (owned)
         // section, right of it the never-owned one. Owned things stay left.
@@ -908,7 +1069,7 @@ function _bbUpdateDrag() {
     } else if (zone === 'research-out') {
         // A task dragged away keeps its slot and snaps back on release.
         let items = _bbRowItems(els.research, '.bb-task');
-        _bbPlaceAt(els.research, press.placeholder, items, press.index);
+        _bbPlaceAt(els.research, press.placeholder, items, items.filter(el => Number(el.dataset.index) < press.index).length);
         press.dropIndex = press.index;
     } else if (press.placeholder && press.placeholder.parentNode) {
         let row = press.placeholder.parentNode;
@@ -932,7 +1093,9 @@ function _bbAutoScroll() {
     let press = bb.press;
     let row = press.zone === 'things' ? bb.els.things : (press.zone === 'research' || press.zone === 'research-out') ? bb.els.research : null;
     if (!row) return;
-    let r = row.getBoundingClientRect();
+    // (The row's box as the last move read it: a read every frame of a drag laid the page out.)
+    let r = row === bb.els.things ? press.thingsRect : press.researchRect;
+    if (!r) return;
     let edge = 36;
     let before = row.scrollLeft;
     if (press.x < r.left + edge) row.scrollLeft -= Math.ceil((r.left + edge - press.x) / 3);

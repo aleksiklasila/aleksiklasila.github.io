@@ -112,6 +112,10 @@ const FACE_MIN_SPEED: f64 = 0.2; const FACE_DEAD: f64 = 0.04;
 const FACE_HOLD_ANGLE: f32 = 0.8; const FACE_SAME: f32 = 0.6; const FACE_HOLD: u8 = 2;
 const PI: f64 = 3.141592653589793; const TAU: f64 = PI * 2.0; const INV_TAU: f64 = 1.0 / TAU;
 const BLOCK: usize = 256;
+// The change marks' blocks (presentation_worker.js DIRTY_BLOCK): MARK_SUB to a BLOCK. A battle changes a few units' energy,
+// flags, ids, animation in nearly every block of 256 (~5k a tick over ~740 blocks), so each such column was uploaded
+// whole: ~8 MB a tick for ~1.8 MB changed (2026-11-23).
+const MARK: usize = 64; const MARK_SUB: usize = BLOCK / MARK;
 // DIRTY_COLS (16), and the column each is marked by (DIRTY_FROM).
 const DIRTY_N: usize = 16;
 #[inline(always)]
@@ -200,11 +204,12 @@ pub unsafe extern "C" fn k_pres_select(a: u32, _: i32) {
     let (al, cl, bk, out) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<u8>(7), k.p::<i32>(8));
     let (s0, s1, js1, n, mode) = range_of(&k);
     if s0 < s1 {
-        let (count, changed, na) = select(&k, f, pf, c, m, t, al, cl, bk, s0, s1, n, mode);
+        let (count, changed, na, nl) = select(&k, f, pf, c, m, t, al, cl, bk, s0, s1, n, mode);
         *out = count as i32; *out.add(1) = changed as i32; *out.add(2) = (mode == 2) as i32; *out.add(3) = na as i32;
+        *out.add(4) = nl as i32; *out.add(5) = 0;
     } else {
         if mode != 0 { core::ptr::write_bytes(bk, 0, (js1.max(s0) - s0 + BLOCK - 1) / BLOCK + 1); }
-        *out = 0; *out.add(1) = 0; *out.add(2) = (k.i(27) != 0) as i32; *out.add(3) = 0;
+        *out = 0; *out.add(1) = 0; *out.add(2) = (k.i(27) != 0) as i32; *out.add(3) = 0; *out.add(4) = 0; *out.add(5) = 0;
     }
 }
 // The passes' arguments, or none (no slots in the range).
@@ -226,6 +231,13 @@ unsafe fn passes_of(k: &K) -> Option<Fl> {
 #[no_mangle] pub unsafe extern "C" fn k_pres_p7(a: u32, _: i32) { let k = K::new(waddr(a) as *const i32); if let Some(x) = passes_of(&k) { p_mode(&k, x); } }
 #[no_mangle] pub unsafe extern "C" fn k_pres_p8(a: u32, _: i32) { let k = K::new(waddr(a) as *const i32); if let Some(x) = passes_of(&k) { p_facing(&k, x); } }
 #[no_mangle] pub unsafe extern "C" fn k_pres_p9(a: u32, _: i32) { let k = K::new(waddr(a) as *const i32); if let Some(x) = passes_of(&k) { p_phase(&k, x); } }
+// A slot dropped by finish: added to the range's list of changed slots (it may be there already: the page skips a
+// repeat), or the list marked incomplete when the range's room is used up.
+#[inline(always)]
+unsafe fn drop_listed(k: &K, out: *mut i32, s: usize, s0: usize, s1: usize) {
+    let nl = *out.add(4) as usize;
+    if k.raw(13) != 0 && nl < s1 - s0 { *k.p::<i32>(13).add(s0 + nl) = s as i32; *out.add(4) = (nl + 1) as i32; } else { *out.add(5) = 1; }
+}
 /// The range's order: units the simulation recycled during the fill dropped
 /// (not shown with another unit's metadata); by marks, the listed slots.
 #[no_mangle]
@@ -241,13 +253,13 @@ pub unsafe extern "C" fn k_pres_finish(a: u32, _: i32) {
     if mode == 2 {
         for i in 0..na {
             let s = *al.add(i) as usize; let id = *fid.add(s);
-            if id >= 0 && (cid.i32(s) != id || mid.i32(s) != id || cdead.u8(s) != 0) { *fid.add(s) = -1; *l.add(s) = -1; changed = true; }
+            if id >= 0 && (cid.i32(s) != id || mid.i32(s) != id || cdead.u8(s) != 0) { *fid.add(s) = -1; *l.add(s) = -1; changed = true; drop_listed(&k, out, s, s0, s1); }
         }
         for s in s0..s1 { if *fid.add(s) >= 0 { *ford.add(s0 + count) = s as i32; count += 1; } }
     } else {
         for q in s0..s0 + count {
             let s = *ford.add(q) as usize; let id = *fid.add(s);
-            if cid.i32(s) != id || mid.i32(s) != id || cdead.u8(s) != 0 { *fid.add(s) = -1; *l.add(s) = -1; changed = true; }
+            if cid.i32(s) != id || mid.i32(s) != id || cdead.u8(s) != 0 { *fid.add(s) = -1; *l.add(s) = -1; changed = true; drop_listed(&k, out, s, s0, s1); }
         }
         if changed {
             let mut j = s0;
@@ -266,6 +278,9 @@ pub unsafe extern "C" fn k_pres_tail(a: u32, _: i32) {
     if k.i(20) != 0 && s0 < s1 && k.raw(9) != 0 {
         ghosts(f, t, k.p::<f32>(9), s0, s1, k.i(21).max(1) as usize, k.i(22).max(1) as usize, k.f(23), k.i(4));
     }
+    // (Each mark block's box of its live units' places, both tick ends, world pixels: argument 14, when given;
+    // renderer3d.js uploads the changed blocks near the view by them.)
+    let bx = if k.raw(14) != 0 { k.p::<f32>(14) } else { core::ptr::null_mut() };
     if k.i(24) != 0 && !pf.none() {
         let (b0, b1) = (s0 / BLOCK, (js1 + BLOCK - 1) / BLOCK);
         let (seq, nb, pn) = (k.i(8), k.i(26).max(0) as usize, k.i(25).max(0) as usize);
@@ -273,8 +288,12 @@ pub unsafe extern "C" fn k_pres_tail(a: u32, _: i32) {
         // (By the simulation's marks too: the blocks the fill wrote, whole, by
         // v128 (slots not listed are the last frame's); was slot by slot.)
         let act = if mode != 0 && s0 < s1 { bk } else { core::ptr::null_mut() };
-        marks_range(f, pf, n, pn, b0, b1, seq, st, nb, act, k.i(6) != 0);
+        marks_range(f, pf, n, pn, b0, b1, seq, st, nb, act, k.i(6) != 0, bx);
         let _ = al;
+    } else if !bx.is_null() && s0 < js1 {
+        // (No last frame to compare with: every block's box.)
+        let (b0, b1) = (s0 / BLOCK, (js1 + BLOCK - 1) / BLOCK);
+        for b in b0 * MARK_SUB..b1 * MARK_SUB { block_box(f, n, b, bx); }
     }
     if k.i(32) != 0 && s0 < s1 && k.raw(10) != 0 {
         bucket_recs(f.p::<i32>(F_ID), f.p::<f32>(F_X), f.p::<f32>(F_Y), f.p::<f32>(F_PX), f.p::<f32>(F_PY), k.p::<u32>(10), k.p::<f32>(11), k.p::<f32>(12), s0, s1, k.i(28).max(1), k.i(29).max(1), k.f(30), k.i(31) != 0);
@@ -319,7 +338,7 @@ pub unsafe extern "C" fn k_pres_bucket_recs(a: u32, _: i32) {
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, cl: *mut i32, bk: *mut u8,
-               s0: usize, s1: usize, n: usize, mode: i32) -> (usize, bool, usize) {
+               s0: usize, s1: usize, n: usize, mode: i32) -> (usize, bool, usize, usize) {
     let fid = f.p::<i32>(F_ID); let ford = f.p::<i32>(F_ORD);
     let cid = c.s(S_ID); let clive = c.s(S_LIVE); let cdead = c.s(S_DEAD);
     let mid = m.s(M_ID); let l = t.p::<i32>(T_LAST);
@@ -328,6 +347,9 @@ unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, c
     let has_cm = k.i(18) != 0;
     let seq = k.i(8); let bseq = k.i(9); let kk = k.i(10).max(1) as usize; let ph = k.i(11).max(0) as usize;
     let (mut count, mut changed, mut na, mut nc) = (0usize, false, 0usize, 0usize);
+    // (The slots whose id changed, in order, from s0 in the frame's list (P 13; none: 0).)
+    let lst = if k.raw(13) != 0 { k.p::<i32>(13) } else { core::ptr::null_mut() };
+    let mut nl = 0usize;
     let nbk = (s1 - s0 + BLOCK - 1) / BLOCK + 1;
     if mode == 0 {
         for s in s0..s1 {
@@ -335,11 +357,11 @@ unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, c
             *al.add(na) = s as i32; na += 1;
             if clive.u8(s) == 0 || cdead.u8(s) != 0 || mid.i32(s) != id {
                 *fid.add(s) = -1;
-                if *l.add(s) != -1 { changed = true; *l.add(s) = -1; }
+                if *l.add(s) != -1 { changed = true; *l.add(s) = -1; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } }
                 continue;
             }
             *fid.add(s) = id; *ford.add(s0 + count) = s as i32; count += 1;
-            if *l.add(s) != id { changed = true; *l.add(s) = id; }
+            if *l.add(s) != id { changed = true; *l.add(s) = id; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } }
         }
         core::ptr::write_bytes(bk, 1, nbk);
         for s in s0..s1 { *fa.add(s) = seq; }
@@ -351,8 +373,8 @@ unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, c
             if ca.i32(s) > ta || *es.add(s) != 0 || (mm != *l.add(s) && mm == cid.i32(s)) || ((s >> 8) % kk) == ph {
                 *al.add(na) = s as i32; na += 1; *fa.add(s) = seq; *bk.add((s - s0) / BLOCK) = 1;
                 let id = cid.i32(s);
-                if clive.u8(s) == 0 || cdead.u8(s) != 0 || mm != id { *fid.add(s) = -1; if *l.add(s) != -1 { changed = true; *l.add(s) = -1; } }
-                else { *fid.add(s) = id; if *l.add(s) != id { changed = true; *l.add(s) = id; } }
+                if clive.u8(s) == 0 || cdead.u8(s) != 0 || mm != id { *fid.add(s) = -1; if *l.add(s) != -1 { changed = true; *l.add(s) = -1; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } } }
+                else { *fid.add(s) = id; if *l.add(s) != id { changed = true; *l.add(s) = id; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } } }
             } else if *fa.add(s) > bseq { *cl.add(nc) = s as i32; nc += 1; }
         }
         for ci in 0..STAMP_N {
@@ -370,13 +392,13 @@ unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, c
             let id = cid.i32(s);
             if clive.u8(s) == 0 || cdead.u8(s) != 0 || mid.i32(s) != id {
                 *fid.add(s) = -1;
-                if *l.add(s) != -1 { changed = true; *l.add(s) = -1; *al.add(na) = s as i32; na += 1; *bk.add((s - s0) / BLOCK) = 1; *fa.add(s) = seq; }
+                if *l.add(s) != -1 { changed = true; *l.add(s) = -1; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } *al.add(na) = s as i32; na += 1; *bk.add((s - s0) / BLOCK) = 1; *fa.add(s) = seq; }
                 else if *fa.add(s) > bseq { *cl.add(nc) = s as i32; nc += 1; }
                 continue;
             }
             *fid.add(s) = id; *ford.add(s0 + count) = s as i32; count += 1;
             let mut act = *l.add(s) != id;
-            if act { changed = true; *l.add(s) = id; }
+            if act { changed = true; *l.add(s) = id; if !lst.is_null() { *lst.add(s0 + nl) = s as i32; nl += 1; } }
             else {
                 act = *vi.add(s) != id || *vx_.add(s) != pos(mx, s) || *vy_.add(s) != pos(my, s)
                     || cvx.f32(s) != 0.0 || cvy.f32(s) != 0.0 || *pvx.add(s) != 0.0 || *pvy.add(s) != 0.0
@@ -394,7 +416,7 @@ unsafe fn select(k: &K, f: Tab, pf: Tab, c: Tab, m: Tab, t: Tab, al: *mut i32, c
         }
     }
     let _ = (es, mx, my, has_cm, fid);
-    (count, changed, na)
+    (count, changed, na, nl)
 }
 
 // A fill's slots and tables, for its passes.
@@ -659,25 +681,27 @@ unsafe fn ghosts(f: Tab, t: Tab, light: *const f32, s0: usize, s1: usize, gw: us
 
 // Every column of block b marked.
 #[inline(always)]
-unsafe fn mark_all(st: *mut i32, nb: usize, b: usize, seq: i32) { for c in 0..DIRTY_N { *st.add(c * nb + b) = seq; } }
 // Blocks b0..b1 of frame f against the last one: a live slot that differs
 // (bit for bit), a unit new to its slot or a block past the last frame's
 // count (every column); the id column at every difference. meta_only: the
 // metadata's columns only.
 #[inline(never)]
-unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize, meta_only: bool) {
+unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize, meta_only: bool, bx: *mut f32) {
     let (i_, j_) = (f.p::<i32>(F_ID), pf.p::<i32>(F_ID));
-    for b in b0..b1 {
-        let s0 = b * BLOCK; let e = if s0 + BLOCK < n { s0 + BLOCK } else { n };
+    for b in b0 * MARK_SUB..b1 * MARK_SUB {
+        let s0 = b * MARK; let e = if s0 + MARK < n { s0 + MARK } else { n };
         let (mut born, mut idhit) = (false, false);
         if !meta_only {
             born = e > pn; idhit = born;
             if !born && s0 < e { let (h, nb_) = ids_differ(i_, j_, s0, e); idhit = h; born = nb_; }
         }
         let mut done = [0u8; 64];
+        let mut moved = born || idhit;
         for ci in 0..DIRTY_N {
             if meta_only && !dirty_meta(ci) { continue; }
-            let from = dirty_from(ci);
+            // (phase, prate and amount by their own bits: marked by the attack flash and the mode they are made from,
+            // a battle's flashes marked them in nearly every block, ~0.5 MB each a tick for a few KB changed.)
+            let from = match ci { 11 => F_PHASE, 12 => F_PRATE, 15 => F_AMT, _ => dirty_from(ci) };
             let hit = if from == F_ID { idhit } else {
                 if done[from] == 0 {
                     let mut h = born;
@@ -689,9 +713,29 @@ unsafe fn marks_run(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, 
                 }
                 done[from] == 2
             };
-            if hit { *st.add(ci * nb + b) = seq; }
+            if hit { *st.add(ci * nb + b) = seq; if ci < 4 { moved = true; } }
         }
+        // (Its box again when a place or a unit of it changed.)
+        if moved && !meta_only && !bx.is_null() { block_box(f, n, b, bx); }
     }
+}
+// Mark block b's box: min x, min y, max x, max y of its live units (id >= 0) at both tick ends (x, y, px, py), world
+// pixels; none live: min > max.
+#[inline(never)]
+unsafe fn block_box(f: Tab, n: usize, b: usize, bx: *mut f32) {
+    let (id, x, y, px, py) = (f.p::<i32>(F_ID), f.p::<f32>(F_X), f.p::<f32>(F_Y), f.p::<f32>(F_PX), f.p::<f32>(F_PY));
+    let s0 = b * MARK; let e = if s0 + MARK < n { s0 + MARK } else { n };
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    let mut s = s0;
+    while s < e {
+        if *id.add(s) >= 0 {
+            let (a, c, p, q) = (*x.add(s), *y.add(s), *px.add(s), *py.add(s));
+            x0 = x0.min(a).min(p); x1 = x1.max(a).max(p); y0 = y0.min(c).min(q); y1 = y1.max(c).max(q);
+        }
+        s += 1;
+    }
+    let o = bx.add(b * 4);
+    *o = x0; *o.add(1) = y0; *o.add(2) = x1; *o.add(3) = y1;
 }
 // (Slots s0..e: whether an id differs from the last frame's; whether one of
 // those is a unit (id >= 0). By v128, the remainder by slot.)
@@ -740,8 +784,8 @@ unsafe fn live_differs(a: *const u8, q: *const u8, sz: usize, id: *const i32, s0
 }
 // (act: per block from b0, whether the fill wrote a slot there; the others
 // only the metadata's columns, when it was copied.)
-unsafe fn marks_range(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize, act: *const u8, meta_all: bool) {
-    if act.is_null() { marks_run(f, pf, n, pn, b0, b1, seq, st, nb, false); return; }
+unsafe fn marks_range(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize, seq: i32, st: *mut i32, nb: usize, act: *const u8, meta_all: bool, bx: *mut f32) {
+    if act.is_null() { marks_run(f, pf, n, pn, b0, b1, seq, st, nb, false, bx); return; }
     let mut b = b0;
     // (A block past the last frame's count: whole, every column marked.)
     let on_ = |b: usize| *act.add(b - b0) != 0 || ((b + 1) * BLOCK > pn && b * BLOCK < n);
@@ -749,8 +793,8 @@ unsafe fn marks_range(f: Tab, pf: Tab, n: usize, pn: usize, b0: usize, b1: usize
         let on = on_(b);
         let mut e = b + 1;
         while e < b1 && on_(e) == on { e += 1; }
-        if on { marks_run(f, pf, n, pn, b, e, seq, st, nb, false); }
-        else if meta_all { marks_run(f, pf, n, pn, b, e, seq, st, nb, true); }
+        if on { marks_run(f, pf, n, pn, b, e, seq, st, nb, false, bx); }
+        else if meta_all { marks_run(f, pf, n, pn, b, e, seq, st, nb, true, bx); }
         b = e;
     }
 }

@@ -138,6 +138,14 @@ function _simEvVal(E, v) {
     return true;
 }
 // One event: its letter and up to 8 values (refs: a unit or a structure).
+const _simListen = [-Infinity, -Infinity, Infinity, Infinity];
+// (World pixels within the page's view as it sent it, unit.js simLookView in eighths of a pixel; none sent: in.)
+function _simInView(x, y) {
+    const V = simLookView;
+    if (V[0] > V[2] || !(x === x && y === y)) return true;
+    const X = x * 8, Y = y * 8;
+    return X >= V[0] && X <= V[2] && Y >= V[1] && Y <= V[3];
+}
 function _simEv(op, argc, a0, a1, a2, a3, a4, a5, a6, a7) {
     const E = _simEvents, start = E.n;
     if (start + 2 + argc * 2 > E.buf.length) { const nb = new Float64Array(Math.max(E.buf.length * 2, start + 2 + argc * 2)); nb.set(E.buf.subarray(0, start)); E.buf = nb; }
@@ -201,11 +209,13 @@ function _simStubUi() {
     self.hostBroadcastMatchResult = () => { };
     // (The hits' looks go to the page as records with the step's result: unit.js SIM_LOOKS_DEFER.)
     try { self.eval('SIM_LOOKS_DEFER = true'); } catch { }
-    self._simRecordSound = (type, x, y, sub) => { _simEv('s', 4, type, x, y, sub === undefined ? '' : sub); };
+    // (The page drops what it would not play or draw: a sound outside where it hears, an explosion's or a burst's
+    // particles outside its view (both sent with 'view'). Nothing here is the simulation's state.)
+    self._simRecordSound = (type, x, y, sub) => { if (x === x && y === y && !(x >= _simListen[0] && x <= _simListen[2] && y >= _simListen[1] && y <= _simListen[3])) return; _simEv('s', 4, type, x, y, sub === undefined ? '' : sub); };
     self._simRecordDamage = (target, amount, owner) => { if (SIM_DAMAGE_FLASH && _simIsRef(target)) _simEv('d', 3, target, amount, owner === undefined ? null : owner); };
     self._simRecordAlert = (target, dmg, owner) => { if (_simIsRef(target)) _simEv('h', 3, target, dmg, owner); };
-    self._simRecordExplosion = (x, y, c, n) => { _simEv('x', 4, x, y, c, n); };
-    self._simRecordDirected = (fx, fy, tx, ty, c, n) => { _simEv('p', 6, fx, fy, tx, ty, c, n); };
+    self._simRecordExplosion = (x, y, c, n) => { if (!_simInView(x, y)) return; _simEv('x', 4, x, y, c, n); };
+    self._simRecordDirected = (fx, fy, tx, ty, c, n) => { if (!_simInView(fx, fy) && !_simInView(tx, ty)) return; _simEv('p', 6, fx, fy, tx, ty, c, n); };
     self._simRecordFx = (kind, x0, y0, x1, y1, style, src = 0, dst = 0) => { _simEv('f', 8, kind, x0, y0, x1, y1, style === undefined ? null : style, src | 0, dst | 0); };
     for (let [name, rec] of [['playSound', '_simRecordSound'], ['recordDamageVisual', '_simRecordDamage'], ['pushHostileDamageAlert', '_simRecordAlert'],
         ['createExplosion', '_simRecordExplosion'], ['createDirectedParticles', '_simRecordDirected'], ['recordCombatFx', '_simRecordFx']]) {
@@ -237,10 +247,10 @@ function _simImport(url) {
 // sources in one blob too: a relative URL or a text/plain script would fail.
 function _simHelperUrl() {
     let base = self.SIM_WORKER_BASE || location.href;
-    let url = new URL('sim_helper.js?v=20261108-st6', base).href;
+    let url = new URL('sim_helper.js?v=20261123-h', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261108-st6', 'sim_wasm_bin.js?v=20261108-st6', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
+    let parts = ['sim_parallel.js?v=20261108-st6', 'sim_wasm_bin.js?v=20261123-h', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -312,6 +322,8 @@ self.onmessage = (ev) => {
         } else if (msg.type === 'view') {
             // (The page's view: its hits' looks first, unit.js.)
             if (Array.isArray(msg.r) && msg.r.length === 4 && typeof simLookView !== 'undefined') for (let i = 0; i < 4; i++) simLookView[i] = msg.r[i] | 0;
+            // (Where the page hears (world pixels; x0 > x1: nothing positional), null: everything.)
+            if (Array.isArray(msg.a) && msg.a.length === 4) { for (let i = 0; i < 4; i++) _simListen[i] = +msg.a[i]; } else { _simListen[0] = -Infinity; _simListen[1] = -Infinity; _simListen[2] = Infinity; _simListen[3] = Infinity; }
         } else if (msg.type === 'request') {
             // A whole-state restore: the ticks queued before it belong to the
             // old epoch (dropped; requests before it still run, in order).

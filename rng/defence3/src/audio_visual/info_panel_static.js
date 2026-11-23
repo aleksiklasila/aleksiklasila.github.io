@@ -13,7 +13,15 @@
 const INFO_PACK_URL = './src/audio_visual/info_pack_worker.js?v=20261101-f';
 // state: 0 off, 1 asked, 2 ready, -1 none (no simulation worker: the in-page
 // simulation draws the old panel, see infoPanelStaticActive).
-const _ipk = { state: 0, worker: null, seq: 0, rows: null, rowsSeq: -1, ms: 0, sent: null };
+// (selSeq: the seq of the last selection that was another one; a compaction (its gone members out: the same selection)
+// sends a new seq but the rows already shown stay until the packer answers it: hiding every section until then was a
+// style, layout and paint of the whole panel at each compaction, a few times a second in a fight.)
+const _ipk = { state: 0, worker: null, seq: 0, selSeq: 0, cUnits: null, cEnts: null, rows: null, rowsSeq: -1, ms: 0, sent: null };
+function infoPackSelectionCompacted(oldSel, newSel) {
+    const S = _ipk.sent;
+    if (S.units === oldSel) _ipk.cUnits = newSel;
+    if (S.ents === oldSel) _ipk.cEnts = newSel;
+}
 function _ipkSentReset() { _ipk.sent = { ents: null, entsLen: -1, units: null, unitsLen: -1, frame: null, strings: -1, local: null }; }
 _ipkSentReset();
 function infoPackMatchStarted() {
@@ -104,6 +112,8 @@ function _infoPackSync() {
     }
     const ents = selectedEntities, us = selectedUnits;
     if (S.ents === ents && S.entsLen === ents.length && S.units === us && S.unitsLen === us.length) return;
+    const same = ((S.units === us && S.unitsLen === us.length) || us === _ipk.cUnits) && ((S.ents === ents && S.entsLen === ents.length) || ents === _ipk.cEnts);
+    _ipk.cUnits = _ipk.cEnts = null;
     S.ents = ents; S.entsLen = ents.length; S.units = us; S.unitsLen = us.length;
     let n = 0;
     const sl = new Int32Array(ents.length), se = new Int32Array(ents.length);
@@ -111,6 +121,7 @@ function _infoPackSync() {
     const X = typeof selectionIndex === 'function' ? selectionIndex() : null;
     const ul = X && X.framed ? X.slots.slice(0, X.n) : new Int32Array(0);
     _ipk.seq++;
+    if (!same) _ipk.selSeq = _ipk.seq;
     const a = sl.slice(0, n), b = se.slice(0, n);
     w.postMessage({ type: 'sel', seq: _ipk.seq, sSlots: a, sSers: b, uSlots: ul }, [a.buffer, b.buffer, ul.buffer]);
 }
@@ -320,7 +331,10 @@ function infoPanelMatchStart() {
             row._h = true;
             S.rows[row.dataset.r] = { row, cells };
         }
-        S.rowList = g.rows.map(r => S.rows[r.id]);
+        // (Rows the page writes itself (_ipsGroup: the researched maximum, a tower's preferred target) are not the
+        // packer's: hidden by its flags and shown again at every write, each one's style and layout twice a write. Null here,
+        // in the packer's row order.)
+        S.rowList = g.rows.map(r => r.id === 'maxlevel' || (r.id === 'rally' && g.kind === 'tower') ? null : S.rows[r.id]);
         S.specU = JSON.stringify({ type: 'spawn', coordsRef: '@g:' + g.key + ':ready', worker: false }); S.specW = JSON.stringify({ type: 'spawn', coordsRef: '@g:' + g.key + ':ready', worker: true });
         S.q = el.querySelector('.ips-q');
         if (S.q) { S.qCost = S.q.querySelector('.count-cost'); S.qCtl = S.q.querySelector('.count-control'); S.qIn = S.q.querySelector('input'); S.qOut = S.q.querySelector('output'); S.qMax = S.q.querySelector('.count-max'); }
@@ -401,7 +415,15 @@ function _ipsRepView(gi) {
 }
 
 // ---- writes (only what changed) ----
-function _ipsText(el, t) { t = t === undefined || t === null ? '' : String(t); if (el._t !== t) { el.textContent = t; el._t = t; } }
+// (A value's own text node written in place: textContent puts in a new node each time, a style recalc of it and a
+// layout insertion, ~3k a second with a big selection.)
+function _ipsText(el, t) {
+    t = t === undefined || t === null ? '' : String(t);
+    if (el._t === t) return;
+    const c = el.firstChild;
+    if (c !== null && c.nodeType === 3 && c.nextSibling === null && t !== '') c.nodeValue = t; else el.textContent = t;
+    el._t = t;
+}
 function _ipsShow(el, on) { on = !!on; if (el._h !== !on) { el.hidden = !on; el._h = !on; } }
 function _ipsAttr(el, k, v) { v = String(v); const c = el._a || (el._a = {}); if (c[k] !== v) { el.setAttribute(k, v); c[k] = v; } }
 function _ipsCss(el, css) { if (el._css !== css) { el.style.cssText = css; el._css = css; } }
@@ -451,7 +473,7 @@ function _ipsApply(panel) {
     }
     panel.style.display = 'block';
     _ipsShow(_ips.status, false);
-    const fresh = R && _ipk.rowsSeq === _ipk.seq;
+    const fresh = R && _ipk.rowsSeq >= _ipk.selSeq;
     let groups = 0, energy = 0, max = 0;
     for (let i = 0; i < cat.groups.length; i++) {
         const g = cat.groups[i], o = i * IPF_N, n = fresh ? R[o + IPF.n] : 0, T = _ips.toggles[i], S = _ips.secs[i];
@@ -484,7 +506,9 @@ function _ipsGroup(S, g, R, o, n, X) {
     _ipsShow(S.mixed, X.mixed); _ipsText(S.hl, X.hl); _ipsText(S.he, X.he); _ipsText(S.hs, X.hs);
     const v = X.v, list = S.rowList;
     for (let k = 0; k < list.length; k++) {
-        const r = list[k], show = v[k * 3] === 1;
+        const r = list[k];
+        if (!r) continue;
+        const show = v[k * 3] === 1;
         _ipsShow(r.row, show);
         if (!show) continue;
         _ipsText(r.cells[0].v, v[k * 3 + 1]);
@@ -592,10 +616,10 @@ function infoPackBoxSelect(screenRect, shift, worldRect) {
 function _infoPackBoxDone(m) {
     if (m.id !== _ipkBox.id || !_ipkBox.pending) return;
     _ipkBox.pending = false;
-    const views = _pageSlotViews, sv = typeof _pageStructViews !== 'undefined' ? _pageStructViews : [];
+    const sv = typeof _pageStructViews !== 'undefined' ? _pageStructViews : [];
     const units = [], slots = new Int32Array(m.units.length);
     let k = 0;
-    for (let i = 0; i < m.units.length; i++) { const s = m.units[i], u = views[s]; if (u) { units.push(u); slots[k++] = s; } }
+    for (let i = 0; i < m.units.length; i++) { const s = m.units[i], u = pageSlotView(s); if (u) { units.push(u); slots[k++] = s; } }
     const entities = [];
     for (let i = 0; i < m.structs.length; i++) { const v = sv[m.structs[i]]; if (v && !v.dead) entities.push(v); }
     for (let i = 0; i < m.mines.length; i++) {

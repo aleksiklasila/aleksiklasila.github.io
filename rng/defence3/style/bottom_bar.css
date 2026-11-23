@@ -5,9 +5,11 @@ body.app-fullscreen #bottom-bar { display: none; }
 
 #bottom-bar {
     flex-shrink: 0; display: flex; flex-direction: column;
-    background: rgba(0, 0, 0, 0.95); border-top: 2px solid #333;
+    background: #010101; border-top: 2px solid #333;
     border-left: 2px solid #333; border-right: 2px solid #333;
     padding: 0 4px; z-index: 10; font-size: 11px;
+    /* (A compositor layer of its own: see style.css, #left-panel / #right-panel / #hud.) */
+    will-change: transform;
 }
 /* Both rows share one height, plus room for the thin scrollbar. */
 .bb-row {
@@ -117,6 +119,10 @@ body.app-fullscreen #bottom-bar { display: none; }
 .bb-task.bb-unit .bb-task-progress { left: 4px; top: 6px; bottom: 6px; }
 .bb-task.bb-open, .bb-thing.bb-open { outline: 1px solid #fff; outline-offset: 1px; }
 .bb-task.bb-unit img { border-radius: 50%; }
+/* (A research tile's thumbnail from the sprite sheet: bottom_bar.js _bbThumbSpan.) */
+.bb-ts { display: block; width: 20px; height: 20px; flex: 0 0 auto; pointer-events: none; background-repeat: no-repeat; }
+.bb-task.bb-unit .bb-ts { border-radius: 50%; }
+.bb-placeholder .bb-ts { opacity: 0.55; }
 /* Chevrons between tasks: the queue flows to the left. */
 .bb-task + .bb-task::before, .bb-caret + .bb-task::before, .bb-placeholder + .bb-task::before, .bb-task + .bb-placeholder::before {
     content: '‹'; position: absolute; left: -10px; top: 50%; transform: translateY(-55%);

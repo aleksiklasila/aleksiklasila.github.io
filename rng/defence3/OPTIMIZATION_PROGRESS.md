@@ -10384,3 +10384,464 @@ entity-storage-census) and the page-stall timing survey (browser-ui-longtask-sur
   reconcile at placement skipped the table and the override stayed; the builder kernel (wai.rs b_maxe) reads it
   first. Ghosts are detached now (_sr -1: their values in _sdet), so the tables never see them. The movement
   changes of 2026-11-21 only moved the timing that exposed it (the committed build passed by chance).
+
+## 2026-11-23 - rendered FPS at high unit counts: the research row's DOM, far combat effects on the GPU
+
+Continues the FPS / frame-hitch audit (gameplay FPS plan, pasted by the user): what lowers FPS at high unit counts,
+then optimize target by target. Tools in `tests/test-runs/fps-20261123/`: `fpsprobe.cjs <scene> <prefix>` (headed Edge,
+the real page; per camera case 2d/3d close/mid/far/tilt: frame intervals p50/p95/p99/max and counts over 20/33/50 ms,
+the game frame's parts by wrapped globals and renderer3d methods, the renderer's own phases (`__r3dPhases`) per frame,
+GL upload bytes/calls per frame, GPU timer, a post-rAF message's delay = the frame's style/layout/paint time (`life`),
+long animation frames, page message tasks; PROF=1 page CPU profile, TRACE=<case> a Chrome trace, SHOT=1, JS= / END_EVAL=,
+SERVE_OVERRIDES), `ab.sh` (one line per case), `partspk.cjs` (parts of slow frames), `gapup.cjs` (uploads before
+gaps), `tracegap.cjs` / `lifecycle.cjs` / `parents.cjs` (what ran in a trace's gaps; style/layout/prepaint/hit test
+per frame), `loafsum.cjs`, `selftop.cjs`, `bbcheck.cjs` / `bbdrag.cjs` (research row window), `freezeshot.cjs`
+(a scene held at an exact tick), `abfx.cjs` (one frozen frame drawn with HEAD's effects3d.js and this tree's,
+pixel difference).
+
+**Where FPS went (chaos-300k-32k, ~140k units fighting, 120 Hz display):**
+- 1M units idle (mixed-1m-4teams): the page ~21% busy; 3D views GPU-bound (GPU 6-9.5 ms a frame, 3D mid 97 FPS).
+- In the battle the game frame was ~3-5 ms, yet 2D views and 3D far ran 88-105 FPS with 20-80 frames over 20 ms in
+  8 s. A Chrome trace: `BeginMainFrame` 60-73 ms in the gaps, of which the rAF JS was 11-27; the rest Blink's
+  lifecycle: ~26 layouts a second (one a tick) each followed by a hover **HitTest of ~5 ms** (the cursor over the
+  canvas), PrePaint up to 25 ms. The page had 23.6k elements: the bottom bar's research row ~9.8k (one tile a task,
+  1078-1600 tasks), the info panel ~11.8k (hiding it changed nothing). Hiding the research row alone: 3D far 88 -> 111
+  FPS (over 20 ms 42 -> 4).
+- After that: every frame of a far view built the combat effects on the page (~2.2 ms in 3D far: a pass over every
+  live record, ~8k), and each frame that took a new tick added ~8 ms (tick apply ~3.4 of it `_simClientUpdateStableSlots`
+  2.25; column uploads 2.2-2.7 for ~6 MB; structure detail split ~1.2; `getChunkRenderView` 1.2 in 2D): at 120 Hz
+  each such frame misses a vsync, ~20 a second.
+
+**Kept:**
+- **Research row as a window (bottom_bar.js `_bbRenderResearch`, `_bbResearchWindow`):** only the slots within two
+  row widths of what it shows are elements (34-67 instead of 1-2k); margins on the first and last stand for the rest
+  (fixed tile geometry from bottom_bar.css: 74 px tiles, 3 px caret, 10 px gap), so the row scrolls as before. The
+  scroll position / width come from the row's scroll event and a ResizeObserver (no read in a frame); the window is
+  drawn again when what shows comes within a width of its ends (not under a press). Drag indices made global: a drop
+  counts the tasks before the window (`items[0].dataset.index`, the pressed one left out); the snap-back place counts
+  rendered tiles before the pressed one. Checked: tiles under the pointer have the expected index at the start and at
+  75% scroll, the end shows the empty slots, the task menu anchors on its tile; windowed drags (left, right, mid-queue)
+  queue `moveResearch` naming the placeholder's neighbour (sim held still); `browser-mp-actions --only=bb` (drop,
+  reorder, boost, both peers) passes. Trace after: HitTest p50 5.15 -> 0.67 ms, Layout p50 1.84 -> 0.63, PrePaint
+  max 25 -> 3.4; gaps in the 6 s trace 61 -> 21.
+- **Far recorded effects on the GPU (effects3d.js `_pushCombatRecordFx`, `FX_FAR`; renderer3d.js `drawFxFar`,
+  `FX_FAR_VERTEX_GLSL`):** the record ring is copied to an RGBA32F texture as it is written (only the records since the
+  last frame, by serial; whole after `clearCombatFx`, counted by `combatFxClears`); per frame one POINTS draw (8 a
+  record: a tower volley's 4 shots as muzzle flash + flight/hit, else one dot) and one TRIANGLES draw of `_fxBeam`'s
+  box (36 vertices of the effects' cube mesh, same orientation, lighting, additive), each vertex reading its record by
+  `gl_VertexID` and drawing what `_fxEventFar` drew by the record's age: colours, sizes (at least 1.5 CSS px by the
+  record's pixels a tile), fades, visibility (the lit-tile texture: the column glyphs' when it is the same grid), the
+  near/far split at 6 pixels a tile at the target. The page reads only near records, and none when no corner of the
+  view's box is that near (`_fxMaxPixelsPerTile`). The CPU far path for records is gone (`_fxEventFar`,
+  `_fxFarColor`); `_fxFarDot` stays for the in-page simulation's projectiles. Pitfalls hit: instanced attributes with
+  POINTS were blamed first but the 10 ms was a shader link failing every frame (an int uniform's precision differs
+  between stages by default: `highp int uBeam` in both; the render error ended each frame early); the flat view's
+  pixels a world unit come from the view-projection's x column, not P[5] (62 ms of GPU with huge dots).
+  Same frozen frame, HEAD's effects vs these (`abfx.cjs`, static views where two shots of the same build are
+  identical): 708-1976 of 826k pixels differ, isolated dot pixels (point sprite vs orb rasterization, draw order);
+  dots identical, beams in place. `combat-effects.test.cjs` updated (far records: no page instances, the ring handed
+  over), all 26 renderer/effects tests pass.
+
+**Measured (fpsprobe, chaos-300k-32k, 7 s a case, headed Edge 1600x900, HEAD vs both changes, order base new new base):**
+
+| view | HEAD FPS | now FPS | frames > 20 ms HEAD | now | frame CPU mean HEAD | now |
+|---|---|---|---|---|---|---|
+| 2D close (zoom 2) | 88.8 / 98.1 | 107.2 / 99.2 | 37 / 27 | 10 / 16 | 3.94 / 2.86 | 3.58 / 4.37 |
+| 2D far (whole map) | 105.6 / 102.6 | 114.6 / 113.4 | 18 / 21 | 6 / 1 | 4.16 / 4.65 | 2.91 / 3.08 |
+| 3D far (whole map) | 97.0 / 91.9 | 115.5 / 114.4 | 25 / 35 | 4 / 7 | 4.88 / 5.45 | 2.66 / 3.09 |
+| 3D mid | 117.2 / 118.5 | 118.9 / 119.0 | 2 / 0 | 0 / 0 | 3.19 / 3.03 | 3.12 / 3.00 |
+| 3D tilted | 118.3 / 118.2 | 119.3 / 119.3 | 1 / 1 | 0 / 0 | 3.97 / 4.19 | 3.41 / 3.46 |
+
+TPS 20 throughout (one base run 16.3 in 2D close). Raw per-frame data: `ab-r2*-frames.json`.
+
+**Left (the frames that take a tick, ~10-13 ms in 2D close):** `_simClientUpdateStableSlots` (page PageUnit views per
+changed slot, ~2.25 ms a tick in the battle), column uploads (~6 MB a tick, 2.2-2.7 ms), `b.startPre` in 2D
+(`_structureDetailSplit` ~1.2-1.5, `getChunkRenderView` ~1.2, `_simPageUnitListFill` ~0.9), `pageApplyStructures` ~1.
+A 1x1 R32F `texImage2D` every frame in full visibility (drawFrameColumns' fallback branch) and one `getParameter` a
+frame are still there. 1M idle units: the 3D GPU time (6-9.5 ms).
+
+### 2026-11-23 (later): the frames that take a tick
+
+A frame that shows a new presentation frame was ~11-13 ms in 2D close (the others ~3): at 120 Hz each misses a vsync.
+The apply runs in the frame by design (the play clock shows a queued frame when it reaches it), so its pieces were
+cut instead.
+
+- **Visible units' views by slot (renderer.js getChunkRenderView):** `out.push(list[k])` read the lazy page unit
+  list, whose first index each tick filled the whole list (`_simPageUnitListFill`, ~0.9 ms at 140k); now
+  `_pageSlotViews[s]` (the same view: the fill is `_pageSlotViews[order[k]]` of the same `_pageFrame`). Whole-run
+  `_unitsPageFills` in the battle: 0.
+- **The structures' bucket index kept by changes (renderer.js `structSpatialPatch`, called from sim_frame_world.js
+  pageApplyStructures' incremental branch with the gone and taken slots):** each changed slot (and any between the old
+  and new n) is placed again from the table as a rebuild would (dead slots stay, floor items out, a bucket's slots
+  highest first; `at[]` per slot). Checked in the battle against a fresh rebuild every 300 ms: 118 of 118 identical.
+  (A first version dropped dead slots: every check differed.)
+  Slow-frame means, 2D close: `b.startPre` 2.95 -> 0.57 ms, `getChunkRenderView` 1.22 -> 0.11,
+  `_structureDetailCandidates` 1.28 -> 0.03. A/B (HEAD renderer.js + sim_frame_world.js vs these, alternating):
+  2D close 105.3 / 107.6 -> 108.8 / 108.7 FPS, frame CPU p95 14.6 / 13.5 -> 11.8 / 11.7 ms; 3D far p95 8.9 / 9.3 ->
+  7.9 / 8.0.
+- **Dead units' views frozen together (sim_frame.js `pageGonePutMany`, `pageUnitsFreeze`; sim_client.js
+  `_simClientUpdateStableSlots`):** per tick of the battle ~2-3k changed slots, ~300-530 deaths, ~750-1200 relayout
+  moves, ~40 births; the death loop was ~3.3 us a death. A warm `pageGonePut` is 0.5 us: the rest was cache misses (35
+  columns read at a slot far from the last). Now the deaths' slots (ascending) are copied a column at a time, one loop
+  per element type. Every frozen view's 35 values equal the old frame's at its slot (58,010 views checked).
+  `_simClientUpdateStableSlots` on slow frames 3.43 / 3.28 -> 2.74 / 2.94 ms; FPS within noise (2D close ~110).
+- **Tried, not kept:** an off-screen early return in the column glyphs' vertex shader (after the style fetch, a
+  conservative margin): on mixed-1m-4teams the 3D GPU time moved 9.06 -> 8.81 / 8.96 ms in 3D mid, nothing elsewhere
+  (these zooms show most of the map); every view stayed at ~101 FPS.
+
+**Left on a tick frame (2D close, ~11 ms):** the membership scan in `_simClientUpdateStableSlots` (~1.3 ms: every id
+compared, as a battle changes every block; the presentation worker could send the changed slots), the column uploads
+(~7.5 MB a tick: x, y, px, py, facing, amount, phase, prate, energy ~0.7 MB each; 2-2.7 ms), `pageApplyStructures`
+(~1 ms, an O(n) alive/serial pass per membership change), the near effects in tilted views (~1.5 ms a frame, CPU).
+
+- **Near/far test inlined (effects3d.js _pushCombatRecordFx):** a record is near when its target depth along the view is at most
+  lodProjectionScale / 6 (the GPU's rule), one dot product against per-frame constants instead of two calls a record;
+  within noise in the tilted view (effects ~1.1-1.25 ms a frame there, the near records' own detail). combat-effects.test.cjs
+  now uses a real perspective stub (eye, forward, scale). Note: in the last runs the display ran at ~100 Hz (p50 9.9 ms):
+  re-baseline before comparing FPS with the 120 Hz runs above.
+
+### 2026-11-23 (round 3): changed slots from the presentation, exact column marks, control groups
+
+**Probe note:** fpsprobe's GL call wrappers (upload byte counts) cost the page per call and inflated per-call costs
+(e.g. upload "gap" comparisons) and lowered FPS; `NOGL=1` turns them off. Numbers below say which.
+
+- **Changed slots listed by the presentation (pres_fill.rs `select` / `drop_listed`, presentation_worker.js
+  `changeRanges`, sim_client.js `_simClientUpdateStableSlots`):** wherever the fill changes a slot's last sent id
+  (T_LAST) it appends the slot to its chunk's segment of a list in the frame (count in the chunk's out[4]); a unit
+  recycled during the fill is appended by finish (the page skips repeats by a stamp; out[5] marks a chunk whose room ran
+  out). The page uses the list when the frame was built right after the one it shows (stream and seq), else the block
+  scan as before. Checked against a full id scan every tick of the battle: 354 of 354 identical, none falling back
+  (before the finish append 11% fell back). Per tick (early battle: ~4.6k changed slots, ~830 deaths, ~1.9k relayout
+  moves) the scan was ~1.7 ms; `_simClientUpdateStableSlots` per frame 0.33 / 0.31 -> 0.23 / 0.22 ms.
+  presentation-helpers.test.cjs compares the listed slots as sets (the list's layout follows the chunks).
+- **Exact change marks (pres_fill.rs marks_run, MARK 64; presentation_worker.js DIRTY_BLOCK 64, FILL_BLOCK 256;
+  renderer3d.js `columnUploadGapBytes` 2048):** a battle changed a few units' energy, flags, ids, animation in nearly
+  every block of 256 (measured: energy 20 KB changed vs 565 KB uploaded a tick, flags 9 vs 431, id 13 vs 404, prate 4
+  vs 531, amount 32 vs 793), and phase / prate / amount were marked by the attack flash / mode they derive from. Marks
+  now per 64 slots, phase / prate / amount by their own bits (exact: the GPU mirrors the frames). Uploads 8.3 -> 6.5 MB
+  a tick; page time unchanged (it is a copy: `bufferSubData` ~0.75 ms a tick on average, the same at 18 or 540 calls
+  without the probe's wrappers). column-dirty-upload: 63.8% -> 50.9% of whole columns, all 327 drawn frames matched.
+- **Control groups (audio.js `_cgAliveUnits`, `_cgCarry`, `_cgUnitPrint`; sim_client.js `pageUnitDeaths`):** the bar's
+  refresh (4 times a second) made every group's lists anew (`filter`), which also dropped their membership sets, and
+  matched the active group with a set of the whole selection. Now a list is made anew only when a member died (its set
+  carried over without them), and the match compares counts and two order-free sums of id hashes (cached by list and
+  the page's death count beside the worker; entities exactly). A 70k-unit group selected: refresh 20.7 ms (max 30.7)
+  -> 0.07 ms; the next damage mark 9.5 -> 0.02 ms. In the battle with groups of 96k / 48k: the bar per frame 0.43 /
+  0.37 -> 0.30 / 0.22 ms, FPS 88 / 97.5 -> 95.3 / 105.2 (2D close / 3D far). Highlight checks in Edge (half / all /
+  reordered / one different / recall): all right. selection-performance.test.cjs slices the print helper too.
+- **Tried, not kept:** two unit column buffers in turn (a GPU wait suspected in the upload): no change (2.9-3.1 vs
+  2.4-2.9 ms on tick frames); finding births only into free slots (a narrower "born" rule, exact): no change in bytes
+  (births into free slots touch ~156 of 736 blocks; the waste was the spread of sparse changes); deriving the middle
+  models' `amount` from `mode` (redundant for units in the worker's frames, but the in-page encoder makes it
+  continuous).
+
+**Now (NOGL=1, chaos-300k-32k, 8 s a case):** 2D close 113.6 FPS (over 20 ms: 6), 2D far 116.6 (1), 3D far 115.8 (3),
+3D tilted 119.3 (0); frame CPU means 2.4-3.1 ms, TPS 20.
+
+**Left:** with a large selection the page repaints: the document layer every tick (~1.8 ms) and the right panel
+(~2.3 ms), Layerize p95 4.7 ms; post-frame style/layout/paint p95 4 -> 14 ms with ~95k units selected (the info
+panel's selection view); GPU +1.3 ms (outlines). The tick frames' apply (~2-3 ms in battle) and uploads (~0.75 ms).
+
+### 2026-11-23 (round 4): a big selection in a battle
+
+**Probe:** `fpsprobe.cjs` `SEL=1` makes a real box selection first (a mouse drag over the whole game area in the 2D
+whole-map view: ~75k units and ~33k buildings in chaos-300k-32k), `SHOT=full` a whole-page screenshot; `sel.sh <label>
+[cases]` runs it (NOGL=1) one line per case. `invsum.cjs` (a trace with
+`disabled-by-default-devtools.timeline.invalidationTracking`: invalidations by node / reason / JS line, Paint by node),
+`bmf.cjs` (each BeginMainFrame's rAF / style / layout / prepaint / paint / layerize / commit), `slowiv.cjs` (long frame
+intervals and the game frame in each), `forced.js` (JS= probe: layout-reading DOM calls over 0.3 ms with their caller),
+`selcheck.js` (END_EVAL: the outline's building entries and the slot index against the live selection, every frame).
+
+**What a big selection cost:** every death of a selected building made `selectedEntities` anew (sim_client.js
+`_simClientApplyWorld`: a `.some` over the selection each world apply, then a `map` / `filter`), so every cache keyed by
+the array was made again each tick: the outline's building list (33k entries through the views' getters, ~3 ms a
+tick), the packer's selection (a new `sel` message), the panel's groups. Each new packer selection hid every panel
+section until its answer came (`fresh` needed the latest seq) and showed them again: a style / layout / paint of the
+whole panel several times a second. Two page-written rows (Max Level, a tower's Rally) were hidden by the packer's flags
+and shown again at every write. With the selection (2D close at zoom 0.08): `build3DOverlayData` 2.3 ms a frame, 66 FPS.
+
+**Kept:**
+- **The selected buildings by structure slot (hud.js `selectionStructIndex`, `selectionStructGone`,
+  `selectionStructGoneDone`, `selectionStructCompact`; sim_frame_world.js pageApplyStructures' incremental branch):**
+  as the units' index, a mark per structure slot made once per selection; a selected building that goes leaves its mark
+  and is logged (O(gone)); its view stays in the array, dead, until a compaction (at once for a small selection, a big
+  one when a 64th is gone, every 2-10 s, as the units). The array is made anew right away only when a live building
+  stands on a gone one's tile in the same frame (`replaced`: an upgrade's new structure, a restore), as before.
+  Consumers skip dead views (they read no energy); `isRallyCapableEntity` and the tower order's list skip them too.
+  `getActiveEntities` returns the selection's own array (read-only) instead of a copy a frame.
+- **The outline's buildings switched off by slot (renderer.js `getSelectionMaskOverlay`; renderer3d.js
+  `drawSelectionMask`):** the entries are made once per selection from the structure table's columns; the logged slots
+  switch theirs off and the GPU copy patches 4 bytes each (`buildingsOff`). `selcheck.js` in the battle: 121 frames,
+  3 compactions, up to 715 dead in the selection: the entries that are on, the marks and the live buildings equal on
+  every frame. `build3DOverlayData` 2.3 -> 0.2 ms a frame.
+- **The panel through a compaction (info_panel_static.js `infoPackSelectionCompacted`, `_ipk.selSeq`):** a new packer
+  selection that is the same selection compacted keeps the rows shown until the packer answers. The rows the page
+  writes itself are left out of the packer's row loop (`rowList` null there). Values written into their own text node
+  (`_ipsText`: nodeValue, not a new node per write). Trace (4 s, 2D close): section toggles 545 -> 0, info-row
+  show/hide 6.4k -> ~0, text nodes inserted 13k -> 0.
+- **The build menu's refresh (hud.js `updateShopStatsInMinimap`, `updateSelectedBuildDescription`):** it read the
+  minimap button's `innerText` (a forced layout, ~1 ms with the panel changed, ~7 a second) and rewrote the same
+  markup; now `textContent` and writes only on change.
+- **The panels on compositor layers (style.css `#left-panel, #right-panel, #hud`, bottom_bar.css `#bottom-bar`:
+  `will-change: transform`, backgrounds opaque `#010101` = the 0.95 black over the body, for LCD text):** the frames
+  with the UI's refresh (bottom bar and panel, 4 a second) were 15 ms of style / layout / paint / layerize with the
+  selection (11.5 without). A/B with the selection, 2D close (base, contain, layers, base): 98.2 / 98.1 / 107.8 / 96.3
+  FPS, over 20 ms 23 / 34 / 12 / 37, those frames' lifecycle 14.5 / 14.8 / 10.4 / 15.1 ms. `contain: layout paint
+  style` instead: no gain (and it clips). More layers (the info panel, the rows, each section): within noise or worse.
+  Popups with `position: fixed` are all the body's children (checked), so no containing block changes.
+
+**Measured after (NOGL=1, chaos-300k-32k, 8 s a case; selection ~74.5k units + 33.4k buildings):**
+
+| view | FPS selected | over 20 ms | life mean / p95 | FPS nothing selected | over 20 ms | life mean / p95 |
+|---|---|---|---|---|---|---|
+| 2D close | 105.0 | 19 | 3.31 / 8.9 | 113.8 | 6 | 2.15 / 4.1 |
+| 2D far | 111.1 | 7 | 2.93 / 7.9 | 117.7 | 1 | 2.02 / 3.7 |
+| 3D far | 112.0 | 6 | 2.82 / 7.8 | 116.1 | 2 | 2.07 / 4.1 |
+| 3D tilted | 118.0 | 0 | 2.23 / 5.0 | 119.9 | 0 | 1.51 / 3.2 |
+
+Steps with the selection, 2D close / 3D far: after the slot index and outline 88.4 / 100.1 FPS (over 20 ms 59 / 25),
+after the panel fixes 99.7 / 105.6 (25 / 17), with the layers ~108 (12) in the A/B; runs vary by ~5 FPS (two base
+runs 98.2 and 96.3). TPS 20 (one no-selection run 18.1 in 2D close). Raw: `sel-fin1-*`, `ab-nosfin1-*`, `css-*`.
+Tests: selection-performance, order-markers, render-scale, mixed-rally-move, input-stress, static-panel-edge,
+frame-membership-delta, presentation-helpers, combat-effects pass.
+
+**Left:** the UI refresh frame (4 a second, selection or not): the bottom bar's research row builds strings for the
+whole queue each refresh (`_bbRenderResearch` 3-5 ms at ~1.6k tasks, O(queue) not O(window)) and `_bbRenderThings`
+1-3 ms; its lifecycle still ~10 ms with a big selection (Layerize ~4-6 ms, paint). The bottom bar and panel refresh in
+the same frame. The selection outline's GPU pass (+~1 ms GPU in 2D close).
+
+### 2026-11-23 (round 5): uploads near the view, the UI refresh frame, events the page drops
+
+**Probes added** (`tests/test-runs/fps-20261123/`): `nearcheck2.js` (END_EVAL: the camera pans ~6 s; right after every
+5th near upload the units' GPU buffer is read back and every slot on screen by the frame's or the GPU's position (either
+tick end) must hold the frame's x, y, px, py, id exactly), `deltacheck.js` (the rates' running sums against a scan of
+the logs, every player / source / ★ type / window), `callers.cjs` (who calls a function in a .cpuprofile),
+`invsum.cjs`, `bmf.cjs`, `slowiv.cjs` (round 4).
+
+**Kept:**
+- **Unit columns uploaded near the view only (renderer3d.js `_columnStoreUploadNear`):** per column and 64-slot block
+  the frame seq the GPU buffer holds (`S.held`) and per block the box of the positions it holds (`S.hb`). A block is
+  near when a unit of the frame is in one of the frame's 16-tile render buckets near the clip volume (16 tiles and the
+  bucket's motion more, 4 tiles of height) or its held box is; only near blocks' changed columns are uploaded, also on
+  frames without a new tick when the view moved (skipped when neither the frame nor the view-projection changed).
+  When most non-empty buckets are near, every changed block as before (boxes unknown = near). A run of blocks only
+  over near blocks: the first version let a non-near block be swept into the x column's run but not the id column's,
+  and the GPU held a dead unit as live where its box did not look (`nearcheck2`: 214 then 0 mismatches). After:
+  `nearcheck2` while panning, 0 mismatches in 2D close (94 checks), 2D mid, 3D close, 3D tilted (6M on-screen slot
+  checks), 3D far. Bytes a tick: 2D close ~8 MB -> 0.06, 2D mid 0.11, 3D close 0.19, 3D tilted 3.8, whole-map views
+  7.7 (unchanged). column-dirty-upload.test.cjs (no buckets: every changed block) passes.
+- **The periodic UI writes one a frame (renderer.js processRenderFrame, `_refreshInfoPanelPeriodic` returns whether
+  it wrote, bottom_bar.js `updateBottomBar(now, busy)`):** the info panel and the bottom bar ran on clocks of the same
+  250 ms period from the same frame and wrote in the same frame (whose style / layout / paint then held both); one
+  that comes due with another waits a frame; the build menu's 30-frame refresh too.
+- **The research row (bottom_bar.js `_bbRenderResearch`):** built for its window only (`slotAt`; the signature from
+  the window's slots and the counts), not a string per task of the whole queue (1.6k); the elements positional (the
+  i-th shows the i-th slot, content patched), thumbnails from one sprite sheet (`_bbSpriteBuild` at match start,
+  main.js; `.bb-ts` background position): an `<img>` given another URL or parsed from markup with its data: URL was
+  most of the cost (profile line ticks). The things row: a part per thing, only changed tiles' markup made
+  (`bb.thingParts`), the img's src and the title compared with what was written (reading the src attribute back copied
+  the ~1.6 KB data: URL), the never-owned list made again only when what is known changed (`_bbRestIds`). Per refresh,
+  big selection in the battle (31 refreshes): `updateBottomBar` mean 3.53 -> 2.43 ms, p90 6.08 -> 3.36, max 8.50 ->
+  3.61. `browser-mp-actions --only=bb` and research-menu.test.cjs pass.
+- **The rates' running sums (hud.js `_deltaStore`, `_deltaAdd`, `_deltaWindow`; readers getPlayerEnergyDeltaRate,
+  getPlayerDeltaFlowScale, _getPlayerAstarDeltaRate, bottom_bar.js _bbComputeRates, info_research_static.js
+  _ipstAstarRates; pathfinding.js _recordAstarUsage feeds it for the in-page simulation):** per player one series per
+  energy source and per ★ (unit type, source), totals / gains / losses through each tick in 2048-tick rings: a window
+  is two reads, not a walk over the log's objects (thousands a rate, a dozen rates a refresh). Page only (off in the
+  worker). `deltacheck.js` in the battle: 228 comparisons (12 energy, 43 ★ series), all equal.
+- **Events the page would drop are not sent (sim_worker.js `_simRecordSound`, `_simRecordExplosion`,
+  `_simRecordDirected`, `_simInView`; sim_client.js simClientNoteView sends the listening box with the view;
+  audio.js `audioListenBox`):** a sound outside where the page hears (the audio box, 8 tiles more), none positional
+  when nothing is heard (zoomed out, audio off); explosions and particle bursts outside the view. Per tick in the
+  battle: sounds 328 -> 0.4 (of those 73-77% now played, was 0.2%); explosions in close views 126 -> 0 (they also ate
+  the page's 500-particle cap with off-screen ones).
+- **Not reproduced:** one `browser-mp-actions` full run failed "rally host: rally not at the click" (host read no rally,
+  guest at the click; no desyncs) late in a run that overlapped other Edge runs; `--only=map` passes.
+
+**Measured (NOGL=1, chaos-300k-32k, 8 s a case):**
+
+| view | FPS nothing selected (before -> after) | over 20 ms | FPS ~76k units + 33k buildings selected | over 20 ms |
+|---|---|---|---|---|
+| 2D close | 113.8 -> 116.7 / 116.9 | 6 -> 3 / 3 | 105.0 -> 109.0 / 110.2 | 19 -> 8 / 6 |
+| 2D far | 117.7 -> 119.4 / 118.5 | 1 -> 0 / 1 | 111.1 -> 114.5 / 113.1 | 7 -> 1 / 2 |
+| 3D far | 116.1 -> 118.1 / 117.5 | 2 -> 2 / 0 | 112.0 -> 116.0 / 114.9 | 6 -> 3 / 5 |
+| 3D tilted | 119.9 -> 120.1 / 119.4 | 0 | 118.0 -> 118.4 / 118.1 | 0 |
+
+("after" = two runs: `nosfin2` / `nosfin3`, `sel-fin2` / `sel-fin3`.) Tick frames in 2D close with the selection:
+upload 2.49 -> 1.25 ms, frame JS 8.75 -> 7.56 ms.
+
+**(round 5, later) The near test by the presentation's block boxes (pres_fill.rs `block_box`, marks_run / k_pres_tail
+argument 14; presentation_worker.js boxes after the stamps in each frame (`dirtyBytes` 4 floats more a block,
+`dirtyEnd`); sim_client.js `F.dirty.boxes`; renderer3d.js `_columnStoreUploadNear`):** the first near test walked the
+units of the near buckets (~5.8 ms a frame in a tilted view of chaos-1m-250k, ~500k units near), a second computed
+each changed block's box in JS (O(moving units off screen) a tick: ~13 ms there). Now the kernel keeps per 64-slot
+block the box of its live units' places (both tick ends), made again where marks_run finds a place or a unit changed
+(every block when there is no last frame), and the renderer tests only changed blocks: by what the buffer holds
+(held box) or the frame's box; the bucket cells decide only whether most of the map is near (then every changed
+block, as before). Checks: `boxcheck.js` (the kernel's boxes contain each block's exact box: 74,126 block checks, 0
+bad), `nearcheck2` 0 mismatches (2D close, 3D tilted), presentation-helpers / column-dirty-upload /
+frame-membership-delta / lod-visible-budget pass. chaos-1m-250k 3D tilted: frames over 20 ms 19 -> 0 / 5 (two runs),
+frame CPU p95 16.5 -> 9.2 / 11 ms, near test p90 2.3 ms on tick frames; FPS 104-110 (GPU ~7.4 ms). chaos-300k-32k
+unchanged (2D close 115.9, 2D far 119.5, 3D far 117.9, 3D tilted 120.0).
+
+**GPU at 1M idle units (mixed-1m-4teams, 3D mid 85-88 FPS, GPU ~9.6 ms; `gpupass.js` stubs passes, `pointbench.js`
+micro-benchmarks):** glyph shading ~4.1 ms, the glyph draw with every unit culled at its top (plus middle models)
+~2.3, the claim passes ~1.3 (sum pass ~0.8-1), the rest ~2.1. Culled points themselves are cheap (1M points, 16 float
+attributes: 0.76 ms). In the micro-benchmark a 4 KB bufferSubData into a 64 MB buffer made the next draw cost ~10.9 ms
+of GPU (ANGLE copying the buffer); in the game GPU time on upload frames equals the others (timer results lag a
+frame or more). Tried, not kept: testing the claim before the visibility fetch in the glyph shader (most small units
+lose their cell): GPU 9.46-9.62 either way.
+**Left:** a tick frame's apply in 2D close (~7.5 ms): `_simClientApplyWorld` 2.7-3.6 ms (`_simClientApplyFrame` 1.3-2.2
+with the membership pass 1.2-2.0, `pageApplyStructures` 1.2-1.3: an O(slots) pass when membership changes), 3D tilted
+uploads 3.8 MB a tick. The things row's parts for every thing (~1.5 ms a refresh). The minimap's canvas work each frame
+(~0.2 ms: alerts' arcs, camera outline).
+
+### 2026-11-23 (round 6): what a tick costs the page
+
+Tick frames in 2D close (chaos-300k-32k, nothing selected) were ~7.8 ms of JS: `_simClientApplyWorld` ~3.6
+(membership pass ~2.0, structures ~1.3), the column upload ~1.5, `build3DFrameData` ~1.2. Off the frames,
+`pageApplyState` (~0.46 ms a tick self) and the game stats' structure count (`getCellItemsRowMajor`, ~0.3 ms a tick)
+ran in message / tick work.
+
+**Kept:**
+- **Stat tables follow the research levels' patch (sim_frame_world.js pageApplyState, `_pageLvChanged`):** each tick
+  every player's research levels were copied whole (`Object.assign`) before the apply and every key compared after it;
+  the changed levels are now the patch's own keys (`__lvp` values that differ, `__lvd`), a whole object compared only
+  when one is sent whole, levels dropped whole (a restore) the whole table again (`_PAGE_LV_ALL`). Check
+  (`statcheck.js`, after ~12 s of the battle, 103 one-stat rebuilds in an 8 s window): each player's
+  PRECOMPUTED_STATS_MAP_PLAYER equal to a full rebuild (JSON), both players.
+- **The game stats' structures from the structure table (data_dynamic.js `_gameStatsSlice`):** beside the worker the
+  sampled count reads the table's alive / kind (1-3: the cell items; towers are not) / owner / energy columns, not the
+  cell items' list made again at every change of them. A full count both ways in the battle: equal per owner and kind.
+
+**Tried, not kept:**
+- An open-addressed typed hash of the changed slots' old ids for the membership pass (instead of two `Map` reads a moved
+  unit): slower, A/B alternating (`_simClientUpdateStableSlots` on tick frames 1.62 / 1.78 ms with the Map, 1.91 / 2.05
+  with the hash). V8's Map with small-integer keys is the faster one here.
+- Near uploads' runs bridging blocks held up to date (32 KB gaps): the ~150 bufferSubData calls a tick in 2D close stay
+  (near blocks are separated by off-screen blocks with changes), more bytes in tilted views. The calls' overhead
+  (~7 us each) is what the near upload costs in close views now (~1.2 ms a tick for ~40 KB).
+
+**Notes:** `pageApplyStructures` on tick frames ~1.3 ms is per-change work spread thin (wrapped callees: tile
+background dirty 0.22, label text 0.17, unplace 0.17, freeze 0.16, list removal 0.10, minimap tiles 0.10 ms) plus
+~0.3 ms of O(slots) passes (membership, labels). The 4M scene (mixed-4m-4teams.gz) no longer loads: "The maximum
+supported map size is 1024 x 1024". Battle FPS now (NOGL=1, 8 s a case): 2D close 117.0 (over 20 ms: 1), 2D far
+118.7 (0), 3D far 118.3 (1), 3D tilted 119.9 (0).
+
+**Left:** tick frames still ~7.8 ms in 2D close (a vsync missed ~3 times a second): the per-unit page views
+(`_pageSlotViews`, PageUnit objects and the id Map, ~2 ms a busy tick) are the next structural step (views made only
+when read); structure apply per change; upload call overhead.
+
+### 2026-11-23 (round 7): page unit views made when read
+
+Every live unit had a page view (PageUnit) made at its birth and kept slot by slot: the membership pass read the id
+map twice for every changed slot (~2-4k a busy tick), made a view per birth and froze every death's (35 columns).
+
+**Kept (sim_frame.js `_pageIdSlot`, `pageIdSlotEnsure`, PageUnitIdMap `get` / `view`; sim_client.js `pageSlotView`,
+`_pageViewIn`, `_simClientUpdateStableSlots`, the full pass of `_simClientApplyFrame`, `_simPageUnitListFill`; call
+sites in renderer.js, main.js, hud.js, info_panel_static.js):**
+- A unit's view is made when first read: by slot (`pageSlotView(s)`: box selection, the packer's box, the detail
+  split, order markers, the panel's representatives, the units list's fill) or by id (`_pageUnitsById.get`: events'
+  targets, details, selections by id). `view(id)`, `size` and `values()` are the views made so far.
+- Each id's slot in a typed array, kept by the membership pass with writes for the changed slots only (old ids out,
+  new ids in). The pass then looks only at the views at changed slots: moved (its id now at another slot; placed after
+  the pass) or gone (frozen, `selectionNoteDead`). `pageUnitDrawnAt` (effects' beam ends) reads the id's slot: no view.
+- The first frame / a restore: the index made from the frame, the views made so far moved or frozen, the units list
+  lazy (no view a unit).
+- PageUnit's `id` an own class field (was a defineProperty a view).
+
+**Checks:** `memcheck2.js` (80 frames each: every live id's slot right, every view made live at its slot and the map's,
+the map's views at their slots, the selection's views at their slots): 0 bad of ~12M slot checks without a selection
+(3,155 views made of 139,701 units) and with a box selection (~52k views, 55k selected). frame-membership-delta.test.cjs
+updated (loads pageSlotView and the id index) and passes; selection-performance, order-markers, input-stress,
+render-scale, mixed-rally-move, presentation-helpers, combat-effects, static-panel-edge pass; `browser-mp-actions
+--only=map` (12 ok) and `--only=more` (7 ok), no desyncs; a control group of the whole army (82k): bar refresh 0.05 ms.
+
+**Measured (2D close, chaos-300k-32k, NOGL=1, tick frames, vs round 6's two runs):** `_simClientUpdateStableSlots`
+1.99 / 2.18 -> 0.88 / 0.96 ms, `_simClientApplyWorld` 3.61 / 3.78 -> 2.65 / 2.74, the tick frame's JS 7.82 / 7.85 ->
+7.18 / 7.21 ms. FPS 2D close 115.2 / 114.8, 3D far 117.8 / 116.3 (run-to-run spread; the 3D far tick frames of these
+two-case runs came earlier in the battle, ~100k units vs ~76k, with more upload).
+
+**Left on a tick frame in 2D close (~7.2 ms):** column upload call overhead (~1.2-1.5 ms), `pageApplyStructures`
+(~1.3), `build3DFrameData` (~1.2), the render.
+
+### 2026-11-23 (round 8): scenes whose armies last, fuzzing for big drops, held workers
+
+**Scenes (chaos-spikes.bench.cjs --export-scene):** a loaded chaos scene's units started at ~1.6% of their energy
+(median; tanks ~5.5k of ~3M): they are placed full at their base level, and the game's effective levels (by the units
+of the type in their areas; a packed scene's are high) raise the maximum, and damage, within seconds. Buildings were
+at ~33% of their own level's maximum (research seeded after placement), half of them mid-upgrade (auto-upgrade toward
+effective levels). The exporter now (unless `--keep-energy`): computes every unit's effective level (`_effUnitsRun`
+over all units) and fills units to their maximum; runs the adjacency pass once and fills buildings to their own
+level's maximum (preComputedBase; never toward an upgrade's target; sites under construction as placed). Prints the
+ratios. New scenes: `tests/scenes/chaos-500k-l16.gz` (500k units, levels +16), `chaos-front-400k-l16.gz`,
+`checker-300k-l16.gz` (map 512, 20k structures). Lifespan (`lifespan.js`, 90 s): checker 244k -> 206k units at
+~20 TPS; chaos-500k 354k -> ~200k (holds) at 5-10 TPS. Static views on chaos-500k-l16: 113-120 FPS everywhere.
+
+**Fuzz actions added (tests/perf-fuzz/actions.cjs):** `cam.freestyle` (2D or 3D: pans held / tapped / diagonal, zoom
+bursts at random points, pan while zooming, minimap jumps; in 3D rotate, tilt, rotate while panning or zooming),
+`view.lowOrbit` (tilted near the ground, a slow continuous turn), `bar.research` (things dragged onto the research row,
+tasks reordered, task menus). Probes: `spikeph.js` (phases in slow vs normal steps), `phases.js`, `holdwk*.js`,
+`holdrel.js`.
+
+**Held workers (wasm/src/wai.rs `park_held`, `arm_again`, the MANUAL branch of `event`):** the fuzz found a base box
+selection + the `c` key (hold) taking 20 TPS to 5, reproduced. Holding ~84k workers: the worker kernel got ~74k events a
+tick (held idle and mid-task workers never parked: park_idle / park_work refuse held ones, so each stayed off and had
+an event every tick) and ~6k held MANUAL_MOVE workers were declined to the JavaScript every tick (updateWorkerAI each).
+Now held workers are parked in the kernel: at their work with a cooldown until it ends, else as a held unit (a wake
+every SIM_IDLE_PARK_TICKS by id); an order sets movement off and wakes them. After: events with the workers held ~660 a
+tick (as free), steps 48 / 47 -> 45 / 40 ms after holding (was 47 -> 91), TPS 20 -> 20 (was 20 -> 10). Behaviour the
+same as the old kernel (`holdrel.js`, old build served beside: moved while held 4 s 18.5k vs 20.3k of 81k (pushes),
+moving 6 s after a stop 51.7k vs 53.5k of 78k). Tests: multiplayer-scenarios (hold/stop in sync), multiplayer-features,
+multiplayer-action-fuzz, action-budget, worker-brain-spawners, area-worker-search, order-worker-budget,
+worker-approach-occupancy pass; browser-mp-actions --only=map (hold key both peers) / more, no desyncs.
+
+- **Bottom bar drags without forced layouts (bottom_bar.js `_bbFlip`, `_bbPhStep`, `_bbUpdateDrag`, `_bbAutoScroll`,
+  `_bbStartDrag`):** the fuzz's `bar.research` had a 73-192 ms long task on every run (frames to 208 ms; once TPS 20 ->
+  10). Profile: `getBoundingClientRect` from `_bbAutoScroll` (every frame of a drag), `_bbFlip` (every tile's position
+  before and after a placeholder move, and `offsetWidth` a tile to restart its transition), the ghost moved by
+  left/top (layout dirty at every move). Now the ghost moves by its transform, the auto scroll uses the rows' boxes the
+  last move read, the FLIP's offsets are the placeholder's width plus the row's gap (read once a drag) for the tiles
+  between its old and new places, transitions restarted on the next frame. After (28 runs): long tasks 0, frames
+  mostly <= 50 ms. browser-mp-actions --only=bb passes.
+- **The first click no longer makes a view for every unit (main.js `_unitsNearPoint`, hud.js
+  `_findInfoPanelUnitById`, sim_frame.js PageUnit fields):** the first right click on a barrack (queue) was a 137-202 ms
+  handler: the click's enemy candidates read `units[k]`, which filled the page's lazy units list (a view a unit,
+  ~200k), and a view's constructor went through Unit.prototype's `_det` setter (a defineProperty). Now the near units'
+  views by slot (`pageSlotView`), the info panel's unit by id, and PageUnit's fields are class fields (no inherited
+  setter). First right click 202 -> 46 ms (`RCLICK=4` in fpsprobe: timed clicks, the first profiled), later ones 16-20.
+- **A click's own targets from the tiles near it (main.js `findNearestOwnedSelectableClickTarget`):** the fuzz
+  (chaos-500k-l16, `ui.settings+build.place`, 3D) had a 124 ms click handler: every own building of the map became a
+  candidate object, and in 3D every visible tile was scanned for own floor items (`addOwnedFloorItem` +99 ms). Now the
+  own structures and floor items within CLICK_STRUCT_REACH tiles of the click, as the enemy's already were. build.place
+  handlers 124 -> 23-36 ms.
+- **A multi-point order's positions by the id column (main.js `applyUnitCommandTargets`):** with lazy page views a
+  ctrl-click chain with 150k selected made a view for each unit (`_pageUnitsById.get`, +69 ms). The id's slot now comes
+  from `_pageIdSlot` (the view only for a unit not in the frame). MCLICK probe (134k selected): 7-17 ms a click.
+- **The page's view map dense (sim_frame.js `PageUnitIdMap.set`):** the first lazy view at a high id put its array in
+  dictionary mode (V8, a write far past the end): every get and set a hash look-up (`set` +45 ms making a 150k
+  selection's views). The array now grows dense by doubling before such a write.
+- **Every selection's outline on the GPU (renderer.js SELECTION_GPU_MIN 120 -> 1):** a selection under 120 was traced on
+  the CPU (selection_overlay.js) again each frame its units moved: `buildSelectionContours` ~31 ms/s of the page with
+  83 selected zoomed in (scn.groupsAndPan). Now the GPU mask (drawSelectionMask) at any size beside the worker. A/B
+  (checker-300k-l16, 40 selected, close): 2D 90.5/92 -> 97/95.4 FPS, 3D 67.4/68.3 -> 68.4/70.9.
+- **Near combat effects built on the GPU (effects3d.js `_pushCombatRecordFx`, `_fxNearVolley`; renderer3d.js
+  `drawFxNear`, `fxNearVertexGlsl`, `fxNearDrawGlsl`):** found as a sustained drop: a close-up 3D view of the checker
+  scene's battle held ~68-85 FPS (120 elsewhere), the page's frame ~12 ms. Per frame the page made ~1060 effect records'
+  shapes (`_fxEvent`, `_fxBox`, `_fxDecal`, `_fxPush`: ~5400 instances, ~1.5 ms; the batch's limit, 6000, dropped the
+  rest: in 2D ~70% of them). Now the page lists the near records (8 floats each: their ends as drawn, kind, style, seed,
+  phase; a volley's shots as muzzle / flight / hit entries); the GPU builds each one's pieces once (a transform-feedback
+  pass of points, `_fxEvent` and `_pushProjectileFx` in GLSL) into an instance buffer and draws them all in one
+  instanced draw (a slot's vertices its mesh's, by its mesh; a draw a mesh ran every slot through 120 vertices: +1.5 ms
+  GPU in 2D, so one draw of 60). No limit: every near effect drawn. A/B (checker-300k-l16, close, 2 rounds, old
+  effects3d served beside): 3D 73.1/74.1 -> 88.4/82.8 FPS (page CPU 8.1/7.9 -> 5.6/6.1 ms a frame), 2D 82.8/89 ->
+  88.3/94 (CPU 6.2/5.8 -> 4.9/4.0), GPU the same or less. The random parts hash their seeds differently (not the same
+  debris directions). Tests: combat-effects (near list: casts, expiry, culling, 2D, volleys), render-scale,
+  sim-event-pack, lod-visible-budget (harness: pageSlotView) pass.
+- Not spikes: the minimap's static layer from the table (4-5 ms at 85k structures, a rebuild a structure change);
+  `rally.all`'s TPS dips are the whole army moving (occupancy, left alone).
+- **Tried, reverted: a GL state cache on the context (renderer3d.js, uniforms by location, texture units, program,
+  VAO).** A wrapped-prototype probe (glcalls.js) showed ~5100 GL calls and ~4.5 ms in them a frame in the close-up
+  battle (92 textured draws, each setting every uniform and texture again); the cache skipped the repeats, but A/B
+  (2 rounds, checker close/mid) was equal or worse: 3D close 81.9/79.1 vs 84.4/90.2 FPS without it. The probe's own
+  wrappers made the calls look expensive; Chrome's GL calls are cheap here.

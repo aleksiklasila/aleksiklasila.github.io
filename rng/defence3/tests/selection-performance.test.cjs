@@ -58,7 +58,8 @@ assert.deepEqual(transforms.at(-1),Object.values(matrix),'tracked transform rest
 
 const audio = read('src/audio_visual/audio.js');
 const start = audio.indexOf('function doesCurrentSelectionMatchSnapshot(');
-const end = audio.indexOf('\nfunction ',start+1);
+// (Through the units' prints it reads, _cgUnitPrint, up to getUnitWorldPos.)
+const end = audio.indexOf('\nfunction getUnitWorldPos(',start+1);
 const selectedUnits = Array.from({length:1200},(_,id)=>({id}));
 selectedUnits.includes=()=>{throw Error('quadratic includes scan');};
 const ac=vm.createContext({selectedUnits,selectedEntities:[],activeSubGroups:{snake:true}});

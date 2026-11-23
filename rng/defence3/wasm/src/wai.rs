@@ -1038,6 +1038,15 @@ impl<'a> Ctx<'a> {
         if st == 0 { return; }
         let cmd = g(w.cmd, q);
         let cd = g(w.cool, q) as i32;
+        // Held (no movement): at its work with its cooldown running (its way done), parked until the cooldown ends as a
+        // free one is; else parked as a held unit, woken every SIM_IDLE_PARK_TICKS (an order sets on to 0: at once).
+        // Left off, every held worker had an event every tick: ~74k a tick with a base's workers held, the step x2.
+        if g(w.holdf, q) != 0 {
+            if !self.indexed(q) { return; }
+            if st != WS_MANUAL && cd > 0 && self.path_done(q) { s(w.wake, q, w.now + cd); s(w.mflags, q, 0); s(w.on, q, 2); return; }
+            self.park_held(q);
+            return;
+        }
         if st != WS_MANUAL && cd > 0 { self.park_work(q); if g(w.on, q) != 0 { return; } }
         if cmd == CMD_MOVING { if g(w.holdf, q) == 0 { self.try_arm(q); } } else if cmd == CMD_IDLE && cd > 0 { self.park_work(q); } else if cmd == CMD_IDLE && st == WS_IDLE { self.park_idle(q); }
     }
@@ -1066,6 +1075,13 @@ impl<'a> Ctx<'a> {
         s(w.mnp, q, prof as u8); s(w.msteady.add(6), q * 8, 0); s(w.mwk, q, kind); s(w.mspent, q, 0); s(w.on, q, 1);
     }
     /// simMoveTryPark for an idle worker (not a builder or collector).
+    /// simMoveTryParkHeld for a held worker on its way (no shooting: no reach): woken every SIM_IDLE_PARK_TICKS, by id.
+    unsafe fn park_held(&self, q: usize) {
+        let w = self.w;
+        const P: i32 = 1000; // (unit.js SIM_IDLE_PARK_TICKS)
+        let ph = irem(w.now.wrapping_add(g(w.id, q)), P);
+        s(w.wake, q, w.now + P - ph); s(w.mflags, q, 0); s(w.on, q, 2);
+    }
     unsafe fn park_idle(&self, q: usize) {
         let w = self.w;
         if g(w.holdf, q) != 0 || g(w.cool, q) > 0 || !self.indexed(q) { return; }
@@ -1138,6 +1154,10 @@ impl<'a> Ctx<'a> {
             // at their rally points), two updateWorkerAI calls each. Still the JavaScript's: a held one, a no-way
             // (_unitNoWay), a way done before its event (a way made again: findNearestWalkable, _requestWorkerPath; a
             // pending target), a researcher (its trip memory is not among these columns), no digest columns.
+            // Held: it keeps its way and stands, parked as a held unit is (unit.js simMoveTryParkHeld: a wake every
+            // SIM_IDLE_PARK_TICKS by id, nothing else). Handed back every tick, ~6k held workers on a player's move cost
+            // the JavaScript ~80 ms a step (updateWorkerAI each) and halved the tick rate (2026-11-23).
+            if g(w.holdf, q) != 0 && code != EV_NOWAY && !self.path_done(q) && self.indexed(q) { self.park_held(q); return; }
             if g(w.holdf, q) != 0 || code == EV_NOWAY || self.path_done(q) || wb == WB_RESEARCHER || w.pst.is_null() || w.hobj.is_null() {
                 self.emit(OUT_DECLINED, q as i32, code, 0);
                 return;

@@ -403,6 +403,13 @@ function pageGonePut(G, T, keys, s, view) {
         G.cols = {}; G.keys = keys; G.owner = new Array(PAGE_GONE_RING).fill(null);
         for (let i = 0; i < keys.length; i++) G.cols[keys[i]] = new T[keys[i]].constructor(PAGE_GONE_RING);
         G.dst = keys.map(k => G.cols[k]); G.src = new Array(keys.length).fill(null); G.srcT = null;
+        // (The columns by element type, each copied in its own loop: one loop over all of them read and wrote
+        // four kinds of typed array at one place, ~40 ns an element, ~4 us a unit for its 35 columns: ~1.5 ms a tick
+        // of a battle's ~400 deaths, 2026-11-23.)
+        const by = C => keys.map((k, i) => i).filter(i => G.dst[i] instanceof C);
+        G.f32 = by(Float32Array); G.i32 = by(Int32Array); G.i16 = by(Int16Array); G.u8 = by(Uint8Array);
+        const known = new Set([...G.f32, ...G.i32, ...G.i16, ...G.u8]);
+        G.other = keys.map((k, i) => i).filter(i => !known.has(i));
     }
     const r = G.at, K = G.keys, D = G.dst, S = G.src, n = K.length;
     // (The source table's columns as arrays, looked up by name once a table: a name look-up two a column a unit was
@@ -410,9 +417,37 @@ function pageGonePut(G, T, keys, s, view) {
     // frame given new buffers, a grown table) is looked up again: its first and last column checked.)
     if (G.srcT !== T || S[0] !== T[K[0]] || S[n - 1] !== T[K[n - 1]]) { G.srcT = T; for (let i = 0; i < n; i++) S[i] = T[K[i]]; }
     G.at = (r + 1) & G.mask;
-    for (let i = 0; i < n; i++) D[i][r] = S[i][s];
+    let L = G.f32; for (let j = 0; j < L.length; j++) { const i = L[j]; D[i][r] = S[i][s]; }
+    L = G.i32; for (let j = 0; j < L.length; j++) { const i = L[j]; D[i][r] = S[i][s]; }
+    L = G.i16; for (let j = 0; j < L.length; j++) { const i = L[j]; D[i][r] = S[i][s]; }
+    L = G.u8; for (let j = 0; j < L.length; j++) { const i = L[j]; D[i][r] = S[i][s]; }
+    L = G.other; for (let j = 0; j < L.length; j++) { const i = L[j]; D[i][r] = S[i][s]; }
     G.owner[r] = view;
     return r;
+}
+// Many at once (count views, their slots in ascending order): their records from the ring's head, copied a column at
+// a time. (One unit at a time read its 35 columns at a slot far from the last one's: a cache miss each, ~3 us a unit,
+// ~1.8 ms a tick of a battle's ~500 deaths, 2026-11-23.) Returns the first record; view j's is (that + j) & mask.
+function pageGonePutMany(G, T, keys, slots, views, count) {
+    if (!(count > 0)) return G.at;
+    if (!G.cols) pageGonePut(G, T, keys, slots[0], views[0]), G.at = (G.at - 1) & G.mask;
+    const K = G.keys, D = G.dst, S = G.src, n = K.length, mask = G.mask, r0 = G.at;
+    if (G.srcT !== T || S[0] !== T[K[0]] || S[n - 1] !== T[K[n - 1]]) { G.srcT = T; for (let i = 0; i < n; i++) S[i] = T[K[i]]; }
+    let L = G.f32; for (let k = 0; k < L.length; k++) { const d = D[L[k]], c = S[L[k]]; for (let j = 0; j < count; j++) d[(r0 + j) & mask] = c[slots[j]]; }
+    L = G.i32; for (let k = 0; k < L.length; k++) { const d = D[L[k]], c = S[L[k]]; for (let j = 0; j < count; j++) d[(r0 + j) & mask] = c[slots[j]]; }
+    L = G.i16; for (let k = 0; k < L.length; k++) { const d = D[L[k]], c = S[L[k]]; for (let j = 0; j < count; j++) d[(r0 + j) & mask] = c[slots[j]]; }
+    L = G.u8; for (let k = 0; k < L.length; k++) { const d = D[L[k]], c = S[L[k]]; for (let j = 0; j < count; j++) d[(r0 + j) & mask] = c[slots[j]]; }
+    L = G.other; for (let k = 0; k < L.length; k++) { const d = D[L[k]], c = S[L[k]]; for (let j = 0; j < count; j++) d[(r0 + j) & mask] = c[slots[j]]; }
+    for (let j = 0; j < count; j++) G.owner[(r0 + j) & mask] = views[j];
+    G.at = (r0 + count) & mask;
+    return r0;
+}
+// Units' views frozen together (PageUnit _freeze, each bound to its slot in _pageFrame: slots ascending).
+function pageUnitsFreeze(views, slots, count) {
+    const F = _pageFrame;
+    if (!F) { for (let j = 0; j < count; j++) { views[j]._last = -1; views[j]._s = -1; } return; }
+    const r0 = pageGonePutMany(_pageUnitGone, F, _PAGE_UNIT_GONE_KEYS, slots, views, count), mask = _pageUnitGone.mask;
+    for (let j = 0; j < count; j++) { views[j]._last = (r0 + j) & mask; views[j]._s = -1; }
 }
 function pageGoneGet(G, view, r, k) { return r >= 0 && G.owner && G.owner[r] === view ? G.cols[k][r] : 0; }
 const _pageUnitGone = pageGoneRing();
@@ -426,14 +461,18 @@ class PageUnit {
     // would take a set, and a read through it cost ~30 ns a unit: 10 ms for
     // a pass over 300k selected units.)
     dead = false;
+    // (Its id and the rest the same way: own fields, defined (Unit.prototype has accessors of some of these names, _det's
+    // setter a defineProperty: that and the id's defineProperty were most of making a view; views are made when first
+    // read now, a big selection's at once).)
+    id = 0;
+    _s = -1;
+    _last = -1;     // its gone record, once dead (pageGonePut)
+    _det = null;    // detail record (watched units)
+    _at = null;     // attackTarget's point, made at its first read
+    _ox = undefined; _oy = undefined;
     constructor(id, slot) {
-        Object.defineProperty(this, 'id', { value: id, writable: true, enumerable: true });
+        this.id = id;
         this._s = slot;
-        this._last = -1;     // its gone record, once dead (pageGonePut)
-        this._det = null;    // detail record (watched units)
-        this._at = null;     // attackTarget's point, made at its first read
-        this._ox = undefined; this._oy = undefined;
-        this._mv = 0;        // (_simClientUpdateStableSlots: its unit still in the frame)
     }
     _col(k) { let s = this._s; return s >= 0 ? _pageFrame[k][s] : pageGoneGet(_pageUnitGone, this, this._last, k); }
     _flag(bit) { return (this._col('flags') & bit) !== 0; }
@@ -578,17 +617,36 @@ if (typeof Unit === 'function') Object.setPrototypeOf(PageUnit.prototype, Unit.p
 function pageUnitDrawnAt(id, alpha, out) {
     const F = _pageFrame;
     if (!F || !(id > 0)) return false;
-    const v = _pageUnitsById.get(id);
-    if (!v || !(v._s >= 0)) return false;
-    const s = v._s, px = F.px[s], py = F.py[s];
+    // (By the id's slot: no view made for it.)
+    const s = id < _pageIdSlot.length ? _pageIdSlot[id] : -1;
+    if (!(s >= 0 && s < F.n && F.id[s] === id)) return false;
+    const px = F.px[s], py = F.py[s];
     out[0] = px + (F.x[s] - px) * alpha; out[1] = py + (F.y[s] - py) * alpha;
     return true;
 }
+// Views are made when first read (sim_client.js pageSlotView): get(id) makes the view of a unit the current frame has
+// and none was made for yet (by _pageIdSlot); view(id) is only one made already; size, values() and the rest count and
+// walk the made ones.
 class PageUnitIdMap {
     constructor() { this.a = []; this.size = 0; }
-    get(id) { return id >= 0 ? this.a[id] : undefined; }
-    has(id) { return id >= 0 && this.a[id] !== undefined; }
-    set(id, v) { if (!(id >= 0)) return this; if (this.a[id] === undefined) this.size++; this.a[id] = v; return this; }
+    get(id) {
+        const v = id >= 0 ? this.a[id] : undefined;
+        if (v !== undefined || !(id >= 0)) return v;
+        const s = id < _pageIdSlot.length ? _pageIdSlot[id] : -1;
+        return s >= 0 && typeof pageSlotView === 'function' ? pageSlotView(s, id) : undefined;
+    }
+    view(id) { return id >= 0 ? this.a[id] : undefined; }
+    has(id) { return this.get(id) !== undefined; }
+    // (The array grown dense, by doubling, before a write past its end: a first view at a high id (lazy views,
+    // 2026-11-23) left it in dictionary mode, every get and set a hash look-up: `set` +45 ms making a 150k
+    // selection's views.)
+    set(id, v) {
+        if (!(id >= 0)) return this;
+        const a = this.a;
+        if (id >= a.length) { let n = Math.max(1024, a.length * 2); while (n <= id) n *= 2; for (let i = a.length; i < n; i++) a.push(undefined); }
+        if (a[id] === undefined) this.size++;
+        a[id] = v; return this;
+    }
     delete(id) { if (!(id >= 0) || this.a[id] === undefined) return false; this.a[id] = undefined; this.size--; return true; }
     clear() { this.a = []; this.size = 0; }
     *values() { const a = this.a; for (let i = 0; i < a.length; i++) if (a[i] !== undefined) yield a[i]; }
@@ -599,6 +657,17 @@ class PageUnitIdMap {
 }
 // Detail refs resolve to what the page has: a unit view or a structure.
 let _pageUnitsById = new PageUnitIdMap();
+// Each unit id's slot in the current frame (-1: none), kept by the membership pass (sim_client.js
+// _simClientUpdateStableSlots, typed writes for the changed slots only); ids are dense from 1.
+let _pageIdSlot = new Int32Array(0);
+function pageIdSlotEnsure(id) {
+    if (id < _pageIdSlot.length) return _pageIdSlot;
+    let n = Math.max(1024, _pageIdSlot.length);
+    while (n <= id) n *= 2;
+    const a = new Int32Array(n).fill(-1);
+    a.set(_pageIdSlot);
+    return _pageIdSlot = a;
+}
 function _pageResolveDetailRef(u, k) {
     let d = u._det;
     let ref = d ? d[k] : null;

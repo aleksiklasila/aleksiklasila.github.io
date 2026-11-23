@@ -63,6 +63,8 @@ const combatFxData = new Float32Array(COMBAT_FX_CAPACITY * COMBAT_FX_STRIDE);
 const combatFxIds = new Int32Array(COMBAT_FX_CAPACITY * 2);
 let combatFxHead = 0;
 let combatFxSerial = 0;
+// (Counts clears: the GPU's copy of the ring (renderer3d.js drawFxFar) is made whole again after one.)
+let combatFxClears = 0;
 // The game time the records now replayed happened within ([from, to]: the
 // page sets it to the step of the result it replays): each record starts at
 // a point of it of its own, so a step of many ticks (a slow simulation)
@@ -90,6 +92,7 @@ function clearCombatFx() {
     combatFxData.fill(0);
     combatFxIds.fill(0);
     combatFxHead = 0;
+    combatFxClears++;
 }
 
 // A unit's attack as an effect. Melee and caster styles differ by role, so

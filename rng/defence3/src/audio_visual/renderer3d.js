@@ -26,12 +26,14 @@
                     ivec2 claimCell(vec4 clip, ivec2 cells) {
                         return ivec2(floor((clip.xy / clip.w * .5 + .5) * vec2(cells)));
                     }`;
-    function createProgram(gl, vertexSource, fragmentSource) {
+    // (feedback: the vertex outputs a transform feedback writes, interleaved.)
+    function createProgram(gl, vertexSource, fragmentSource, feedback = null) {
         let program = gl.createProgram();
         let vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexSource);
         let fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
         gl.attachShader(program, vertexShader);
         gl.attachShader(program, fragmentShader);
+        if (feedback) gl.transformFeedbackVaryings(program, feedback, gl.INTERLEAVED_ATTRIBS);
         gl.linkProgram(program);
         gl.deleteShader(vertexShader);
         gl.deleteShader(fragmentShader);
@@ -574,6 +576,458 @@
             // Premultiplied: additive shapes add light, others cover.
             outColor = vec4(color * alpha, alpha * (1. - vStyle.z));
         }`;
+
+    // Recorded effects far away (drawFxFar): a record two texels of uRec (aA:
+    // kind, x0, y0, x1; aB: y1, start, style, a volley's shots; pixels and
+    // ticks), read by the vertex's id (no attributes: ANGLE expanded instanced
+    // attributes for points on the CPU, ~10 ms a frame),
+    // what effects3d.js drew for it from afar: dots (POINTS, 8 a record: a
+    // volley's shots by twos, else the first) or a beam's line (uBeam 1:
+    // _fxBeam's box, 36 vertices of the cube mesh, BOX_P / BOX_N, lit and
+    // added as the effects' shader does). A dot is the orb's size (at least
+    // uMinPx CSS pixels by the record's pixels a tile) on the scene target.
+    const FX_FAR_VERTEX_GLSL = `#version 300 es
+        precision highp float;
+        uniform highp sampler2D uRec;
+        uniform mat4 uVP;
+        uniform float uFlat, uNow, uTs, uRest, uPpt, uFull, uVolleys, uTile, uP5, uTargetH, uProjScale, uFarPpt, uMinPx;
+        uniform vec2 uHalf;
+        uniform vec3 uEye, uFwd, uBossDust, uBeamHit;
+        uniform vec4 uBounds, uVolley;
+        uniform highp int uBeam;
+        uniform sampler2D uVis;
+        uniform vec3 uKindColor[13];
+        uniform vec3 uShotColor[16];
+        uniform vec3 uElemMain[5];
+        uniform vec3 uElemGlow[5];
+        uniform float uDur[13];
+        out vec4 vColor;
+        out float vPx;
+        out vec3 vNormal;
+        /*BOX*/
+        bool lit(vec2 t) {
+            if (t.x < uBounds.x || t.x > uBounds.z || t.y < uBounds.y || t.y > uBounds.w) return false;
+            if (uFull > .5) return true;
+            ivec2 c = ivec2(floor(t)), n = textureSize(uVis, 0);
+            if (c.x < 0 || c.y < 0 || c.x >= n.x || c.y >= n.y) return false;
+            return texelFetch(uVis, c, 0).r > 0.;
+        }
+        void hide() { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 1.; vColor = vec4(0.); vPx = 0.; }
+        vec3 place(vec3 w) { if (uFlat > .5) { w.z -= w.y * .6; w.y = .1; } return w; }
+        // (Pixels a world unit across the view: the perspective's scale at that depth; the flat view's x axis.)
+        float pxPerWorld(float w) { return uFlat > .5 ? length(vec2(uVP[0][0], uVP[0][1]) * uHalf) : uTargetH * .5 * uP5 / w; }
+        void farDot(vec2 t, float d, vec3 color, float alpha, float ppt) {
+            if (!(alpha > .02) || !lit(t)) { hide(); return; }
+            float size = max(d, uMinPx / max(.05, ppt));
+            gl_Position = uVP * vec4(place(vec3(t.x, .3 * uRest, t.y)), 1.);
+            if (gl_Position.w <= 0.) { hide(); return; }
+            float px = size * pxPerWorld(gl_Position.w);
+            vPx = px; gl_PointSize = max(px, 1.);
+            vColor = vec4(color, min(1., alpha));
+        }
+        void main() {
+            vNormal = vec3(0., 1., 0.);
+            int pieces = uBeam == 1 ? 36 : 8, rec = gl_VertexID / pieces, piece = gl_VertexID - rec * pieces, tx = rec * 2;
+            vec4 aA = texelFetch(uRec, ivec2(tx & 2047, tx >> 11), 0), aB = texelFetch(uRec, ivec2((tx + 1) & 2047, (tx + 1) >> 11), 0);
+            int k = int(aA.x + .5), style = int(aB.z + .5);
+            if (k <= 0 || k > 12 || (k == 11 && uVolleys > .5)) { hide(); return; }
+            vec2 p0 = aA.yz / uTile, p1 = vec2(aA.w, aB.x) / uTile, dd = p1 - p0;
+            float dl = length(dd), age = uNow - aB.y;
+            float shots = uVolleys > .5 && k == 10 ? aB.w : 0.;
+            float duration = shots > .5 ? ((min(uVolley.y, shots) - 1.) * uVolley.x + length(vec2(aA.w - aA.y, aB.x - aA.z)) / uVolley.z + uVolley.w) * uTs : uDur[k] * uTs;
+            if (age < 0. || age >= duration || (!lit(p1) && !lit(p0))) { hide(); return; }
+            // (At the record's target, as the page tells near from far.)
+            float ppt = uProjScale > 0. ? uProjScale / max(.1, dot(vec3(p1.x, .3, p1.y) - uEye, uFwd)) : uPpt;
+            if (ppt >= uFarPpt) { hide(); return; }
+            float q = age / duration, fade = 1. - q;
+            vec3 shot = uShotColor[clamp(style, 0, 15)];
+            if (uBeam == 1) {
+                if (k != 5 || shots > .5) { hide(); return; }
+                vec3 a = vec3(p0.x, .5 * uRest, p0.y), b = vec3(p1.x, .38 * uRest, p1.y), d = b - a;
+                float flatLen = length(d.xz), len = length(vec2(flatLen, d.y));
+                if (len < .001) { hide(); return; }
+                // (_fxBeam: the box between the ends, width w, yaw atan2(dx, dz), pitch -atan2(dy, flat length):
+                // FX_VERTEX_GLSL's orient without roll.)
+                float w = max(.09, uMinPx / max(.05, ppt)), cp = cos(-atan(d.y, flatLen)), sp = sin(-atan(d.y, flatLen)), yaw = atan(d.x, d.z), cy = cos(yaw), sy = sin(yaw);
+                vec3 sc = vec3(w, w, len), p = BOX_P[piece] * sc, n = BOX_N[piece] / sc;
+                p.yz = vec2(cp * p.y - sp * p.z, sp * p.y + cp * p.z); n.yz = vec2(cp * n.y - sp * n.z, sp * n.y + cp * n.z);
+                p = vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z); n = vec3(cy * n.x + sy * n.z, n.y, -sy * n.x + cy * n.z);
+                vec3 world = (a + b) * .5 + p;
+                if (uFlat > .5) { world.z -= world.y * .6; world.y = .1; }
+                gl_Position = uVP * vec4(world, 1.);
+                gl_PointSize = 1.; vPx = 0.; vNormal = n;
+                vColor = vec4(uKindColor[5], .9 * fade);
+                return;
+            }
+            if (shots > .5) {
+                // A tower's volley: shot i's muzzle flash (piece 2i), then its flight or its hit (2i + 1).
+                int i = piece >> 1;
+                float t = age - float(i) * uVolley.x * uTs;
+                if (float(i) >= min(uVolley.y, shots) || t < 0.) { hide(); return; }
+                float flight = (dl > 0. ? dl : .001) * uTile / uVolley.z;
+                if ((piece & 1) == 0) {
+                    float d10 = uDur[10] * uTs, qq = t / d10;
+                    if (t < d10 && qq < .5) farDot(p0 + dd / (dl > 0. ? dl : 1.) * .42, .3, shot, 1. - qq * 2., ppt); else hide();
+                } else if (t < flight) farDot(p0 + dd * (t / flight), .15, shot, 1., ppt);
+                else if (t < flight + uVolley.w * uTs) farDot(p1, .35, shot, (1. - (t - flight) / (uVolley.w * uTs)) * .95, ppt);
+                else hide();
+                return;
+            }
+            if (piece != 0) { hide(); return; }
+            if (k == 5) { farDot(p1, .25, uBeamHit, fade, ppt); return; }
+            if (k == 7 || k == 8) {
+                float fl = k == 7 ? .45 : .4;
+                if (q < fl) farDot(p0 + dd * (q / fl), .15, uKindColor[k], 1., ppt);
+                else farDot(p1, .35, uKindColor[k], (1. - (q - fl) / (1. - fl)) * .8, ppt);
+                return;
+            }
+            if (k == 4) {
+                int e = style >= 1 && style <= 4 ? style : 1;
+                if (q < .3) farDot(p0 + dd * (q / .3), .1, uElemGlow[e], 1., ppt);
+                else { float a = 1.; if (q > .65) a *= (1. - q) / .35; farDot(p1, .5, uElemMain[e], max(0., a), ppt); }
+                return;
+            }
+            if (k == 10) { if (q < .5) farDot(p0 + dd / (dl > 0. ? dl : 1.) * .42, .3, shot, 1. - q * 2., ppt); else hide(); return; }
+            // A blow or a hit: a flash at the target (melee blows white, smaller and fainter).
+            bool melee = k == 1 || k == 2 || k == 3 || k == 6 || k == 9 || k == 12;
+            vec3 color = k == 11 ? shot : k == 3 && style == 13 ? uBossDust : uKindColor[k];
+            farDot(p1, melee ? (k == 3 || k == 12 ? .4 : .25) : .35, color, fade * (melee ? .55 : .95), ppt);
+        }`;
+    // Lit as the orb's emissive facets (pattern GLOW_SOLID): a sphere's normal
+    // across the dot; a beam by its box's faces.
+    const FX_FAR_FRAGMENT_GLSL = `#version 300 es
+        precision highp float;
+        in vec4 vColor;
+        in float vPx;
+        in vec3 vNormal;
+        uniform highp int uBeam;
+        layout(location=0) out vec4 outColor;
+        void main() {
+            float shade = mix(.82, 1.12, max(dot(normalize(vNormal), normalize(vec3(-.42, .86, .31))), 0.));
+            if (uBeam == 0) {
+                vec2 c = gl_PointCoord * 2. - 1.;
+                float r2 = dot(c, c);
+                if (vPx > 2.5 && r2 > 1.) discard;
+                vec3 n = normalize(vec3(c.x, sqrt(max(0., 1. - r2)), c.y));
+                shade = mix(.82, 1.12, max(dot(n, normalize(vec3(-.42, .86, .31))), 0.));
+            }
+            float alpha = vColor.a;
+            if (alpha <= 0.) discard;
+            // (Premultiplied; a beam adds light, as _fxBeam's box does.)
+            outColor = vec4(vColor.rgb * shade * alpha, uBeam == 1 ? 0. : alpha);
+        }`;
+
+    // Recorded effects up close (drawFxNear): the page's near list (effects3d.js _pushCombatRecordFx: an entry each
+    // (x0, z0, x1, z1 | kind, style, seed, q), its ends as drawn, in tiles; q its phase; a volley's shots as entries
+    // of their muzzle flash (kind 10), flight (13, q the flight's fraction) and hit (11)), two texels of uEnt each.
+    // Vertex i (a point, the rasterizer off, transform feedback) is piece i & 7 of entry i >> 3: what effects3d.js
+    // drew as its (i & 7)th instance, built here once (the same shapes, sizes, colours and timing), written as an
+    // instance of the effects' layout (FX_STRIDE: tA..tD; tD.w its additive flag + 2 x its mesh, -2 none), drawn by
+    // the effects' shader (fxNearDrawGlsl: a draw a mesh, the others' instances dropped). The random parts (_fxHash)
+    // hash the same seed differently. (Was ~1000 entries and ~5400 instances a frame made by the page in a close-up
+    // battle, ~1.5 ms a frame: 2026-11-23. Built per mesh vertex instead of once a piece, the GPU took ~1.5 ms more.)
+    const fxNearVertexGlsl = () => {
+        const c = h => { h = h.replace('#', ''); if (h.length === 3) h = h.replace(/./g, x => x + x); const n = parseInt(h, 16); return `vec3(${((n >> 16 & 255) / 255).toFixed(4)}, ${((n >> 8 & 255) / 255).toFixed(4)}, ${((n & 255) / 255).toFixed(4)})`; };
+        return `#version 300 es
+        precision highp float;
+        uniform highp sampler2D uEnt;
+        uniform float uFlat, uRest, uDetail, uProjScale;
+        uniform int uCycle;
+        uniform vec3 uEye, uFwd;
+        uniform vec3 uShotColor[16];
+        uniform vec3 uElemMain[5];
+        uniform vec3 uElemGlow[5];
+        uniform vec2 uArc[16];
+        out vec4 tA, tB, tC, tD;
+        const float PI = 3.14159265;
+        const vec3 CYCLE[4] = vec3[4](${c('#ff6a1a')}, ${c('#3aa8ff')}, ${c('#5de04a')}, ${c('#b8f4ff')});
+        // The piece wanted (gWant), the pieces made so far (gCur), the one made (r*).
+        int gWant, gCur; bool gHit;
+        int rMesh; vec3 rPos, rScale; float rYaw, rPitch, rPattern, rParam, rRoll, rAdd; vec4 rColor;
+        void emit(int mesh, vec3 p, float yaw, vec3 s, float pitch, vec3 col, float a, float pattern, float param, float roll, float add) {
+            if (gCur == gWant) { gHit = true; rMesh = mesh; rPos = p; rYaw = yaw; rScale = s; rPitch = pitch; rColor = vec4(col, a); rPattern = pattern; rParam = param; rRoll = roll; rAdd = add; }
+            gCur++;
+        }
+        float at2(float y, float x) { return y == 0. && x == 0. ? 0. : atan(y, x); }
+        float hash(float seed, int k) {
+            uint h = uint(int(seed)) * 374761393u + uint(k) * 668265263u;
+            h *= 1274126177u; h ^= h >> 13u; h *= 2246822519u; h ^= h >> 16u;
+            return float(h) / 4294967296.;
+        }
+        float env(float q, float fi, float fo) { float a = q < fi ? q / fi : 1.; if (q > 1. - fo) a *= (1. - q) / fo; return max(0., a); }
+        float arcY(float h0, float h1, float apex, float t) { return h0 + (h1 - h0) * t + 4. * apex * t * (1. - t); }
+        bool detailAt(float x, float z) {
+            if (uFlat > .5 || uProjScale <= 0.) return uDetail > .5;
+            return !(uProjScale / max(.1, dot(vec3(x, .3, z) - uEye, uFwd)) < 14.);
+        }
+        // (effects3d.js's _fxOrb, _fxDecal, _fxBox, _fxBeam, _fxSpike, _fxShadow; meshes BOX 0, ORB 1, SPIKE 2, DECAL 3;
+        // patterns as FX_PATTERN.)
+        void orb(vec3 p, float size, vec3 col, float a, float add) { emit(1, p, 0., vec3(size), 0., col, a, 1., 0., 0., add); }
+        void decal(vec3 p, float yaw, float size, vec3 col, float a, float pat, float param, float add, float roll) { emit(3, p, yaw, vec3(size, 1., size), 0., col, a, pat, param, roll, add); }
+        void box(vec3 p, float yaw, vec3 s, float pitch, vec3 col, float a, float pat, float roll, float add) { emit(0, p, yaw, s, pitch, col, a, pat, 0., roll, add); }
+        void beam(vec3 a0, vec3 b0, float w, vec3 col, float a, float add) {
+            vec3 d = b0 - a0; float fl = length(d.xz), len = length(vec2(fl, d.y));
+            if (len < .001) return;
+            emit(0, (a0 + b0) * .5, at2(d.x, d.z), vec3(w, w, len), -at2(d.y, fl), col, a, 1., 0., 0., add);
+        }
+        void spike(vec3 p, float yaw, float elev, float w, float len, vec3 col, float a, float pat, float add) { emit(2, p, yaw, vec3(w, len, w), PI * .5 - elev, col, a, pat, 0., 0., add); }
+        void shadow(float x, float z, float size, float a) { emit(3, vec3(x, .012, z), 0., vec3(size, 1., size), 0., vec3(0.), a, 8., 0., 0., 0.); }
+        vec3 shotColor(int style) { return uShotColor[clamp(style, 0, 15)]; }
+        // A blow, a cast, a shot's muzzle or hit (effects3d.js's _fxEvent).
+        void event(int kind, float x0, float z0, float x1, float z1, int style, float seed, float q) {
+            float rest = uRest; bool detail = detailAt(x1, z1);
+            float dx = x1 - x0, dz = z1 - z0, dist = length(vec2(dx, dz)); if (dist == 0.) dist = .001;
+            float yaw = at2(dx, dz), nx = dx / dist, nz = dz / dist, fade = 1. - q;
+            if (kind == 1 || kind == 12) {
+                bool king = kind == 12; float size = king ? 1.05 : .78;
+                vec3 col = king ? ${c('#ffd84a')} : ${c('#eef6ff')};
+                float side = hash(seed, 1) < .5 ? -1. : 1.;
+                decal(vec3(x1 - nx * .2 * size, .32 * rest, z1 - nz * .2 * size), yaw, size, col, .95 * env(q, .1, .45), 5., min(1., q * 2.4), 1., side * .55);
+                if (king) decal(vec3(x1, .02, z1), 0., .5 + q * .7, ${c('#ffd84a')}, .7 * fade, 3., .8, 1., 0.);
+                if (detail) for (int k = 0; k < 2; k++) {
+                    float a = yaw + (k == 1 ? 1.9 : -1.9) + hash(seed, k + 2) * .6, r = .08 + q * .32;
+                    orb(vec3(x1 + sin(a) * r, .32 * rest + sin(q * PI) * .18, z1 + cos(a) * r), .05 * fade + .02, ${c('#ffe7a0')}, fade, 1.);
+                }
+            } else if (kind == 2) {
+                decal(vec3(x1, .3 * rest, z1), yaw, .62, ${c('#f4f4ff')}, .95 * env(q, .08, .4), 7., min(1., q * 1.8), 1., 0.);
+            } else if (kind == 3) {
+                bool boss = style == 13; float size = boss ? 1.7 : 1.15;
+                decal(vec3(x1, .015, z1), 0., size * (.35 + q * .75), ${c('#d8c8a8')}, .85 * fade, 3., .82, 0., 0.);
+                if (q < .3) orb(vec3(x1, .12 * rest, z1), .18 + q, ${c('#fff1c8')}, (1. - q / .3) * .8, 1.);
+                if (detail) for (int k = 0; k < (boss ? 6 : 4); k++) {
+                    float a = hash(seed, k) * PI * 2., r = q * (.35 + hash(seed, k + 9) * .3);
+                    float hop = (.22 + hash(seed, k + 20) * .25) * sin(min(1., q * 1.2) * PI);
+                    box(vec3(x1 + sin(a) * r, .03 + hop, z1 + cos(a) * r), a, vec3(.07, .06, .08), q * 6., boss ? ${c('#6d6258')} : ${c('#8a7a66')}, min(1., fade * 2.), 0., q * 9., 0.);
+                }
+            } else if (kind == 4) {
+                int e = style >= 1 && style <= 4 ? style : 1;
+                vec3 mainC = uElemMain[e], glow = uElemGlow[e];
+                decal(vec3(x1, .025, z1), 0., .55 + min(1., q * 4.) * .45, mainC, .9 * env(q, .18, .3), 4., q * 3.2 + seed, 1., 0.);
+                if (q < .3) {
+                    float t = q / .3;
+                    orb(vec3(x0 + dx * t, (.78 * (1. - t) + .45 * t) * rest + sin(t * PI) * .12, z0 + dz * t), .09, glow, 1., 1.);
+                }
+                if (q > .2) {
+                    float e2 = (q - .2) / .8, rise = sin(e2 * PI);
+                    if (style == 1) {
+                        for (int k = 0; k < (detail ? 3 : 1); k++) {
+                            float a = float(k) * 2.1 + seed, r = k > 0 ? .13 : 0.;
+                            spike(vec3(x1 + sin(a) * r, 0., z1 + cos(a) * r), a, PI * .5, .16 - float(k) * .03, (.5 - float(k) * .1) * rise + .02, k > 0 ? ${c('#ffb347')} : ${c('#ff6a1a')}, min(1., rise * 1.6), 1., 1.);
+                        }
+                        decal(vec3(x1, .02, z1), 0., .7, ${c('#ff8a2a')}, .6 * rise, 2., 0., 1., 0.);
+                    } else if (style == 2) {
+                        decal(vec3(x1, .02, z1), 0., .4 + e2 * .6, ${c('#8fd0ff')}, .9 * (1. - e2), 3., .8, 1., 0.);
+                        spike(vec3(x1, 0., z1), 0., PI * .5, .13, .45 * rise, ${c('#3aa8ff')}, .8 * rise, 1., 0.);
+                        if (detail) for (int k = 0; k < 4; k++) {
+                            float a = float(k) * 1.57 + seed, r = .1 + e2 * .25;
+                            orb(vec3(x1 + sin(a) * r, .05 + sin(e2 * PI) * (.28 + float(k) * .03), z1 + cos(a) * r), .06, ${c('#bfe6ff')}, 1. - e2, 0.);
+                        }
+                    } else if (style == 3) {
+                        float grow = min(1., e2 * 4.) * (e2 > .8 ? (1. - e2) / .2 : 1.);
+                        for (int k = 0; k < (detail ? 5 : 2); k++) {
+                            float a = float(k) * 1.2566 + seed;
+                            spike(vec3(x1 + sin(a) * .1, 0., z1 + cos(a) * .1), a, PI * .5 - .5, .09, .36 * grow + .01, ${c('#c8f6ff')}, .95, 1., 0.);
+                        }
+                        spike(vec3(x1, 0., z1), 0., PI * .5, .11, .46 * grow + .01, ${c('#eaffff')}, .95, 1., 0.);
+                    } else {
+                        decal(vec3(x1, .018, z1), seed, .75, ${c('#3fa83a')}, .55 * (1. - e2 * .6), 9., e2, 0., 0.);
+                        for (int k = 0; k < (detail ? 4 : 1); k++) {
+                            float a = float(k) * 1.7 + seed, local = mod(e2 * 1.4 + float(k) * .23, 1.);
+                            orb(vec3(x1 + sin(a) * .16, .05 + local * .45, z1 + cos(a) * .16), .05 + local * .1, (k & 1) == 1 ? ${c('#8cff6a')} : ${c('#5de04a')}, (1. - local) * .85, 0.);
+                        }
+                    }
+                }
+            } else if (kind == 5) {
+                float w = .09 * (1. - q) + .015, ay = .82 * rest, by = .38 * rest;
+                vec3 a0 = vec3(x0 + nx * .12, ay, z0 + nz * .12), b0 = vec3(x1, by, z1);
+                beam(a0, b0, w, ${c('#e040ff')}, .9 * fade, 1.);
+                beam(a0, b0, w * .4, vec3(1.), fade, 1.);
+                orb(b0, .18 + .1 * sin(q * 20.), ${c('#f08cff')}, fade, 1.);
+                decal(vec3(x1, .02, z1), 0., .45 + q * .4, ${c('#e040ff')}, .7 * fade, 3., .75, 1., 0.);
+            } else if (kind == 6) {
+                decal(vec3(x1, .34 * rest, z1), yaw, .66, ${c('#fff2a0')}, .95 * env(q, .05, .45), 6., min(1., q * 2.6), 1., 0.);
+                if (detail) for (int k = 0; k < 3; k++) {
+                    float a = seed + float(k) * 2.2, drift = q * .35;
+                    box(vec3(x1 + sin(a) * drift, (.55 - q * .45) * rest + .04, z1 + cos(a) * drift), a + q * 4., vec3(.1, .012, .05), sin(q * 9. + float(k)) * .6, ${c('#e8d98a')}, fade, 0., q * 3., 0.);
+                }
+            } else if (kind == 7) {
+                if (q < .45) {
+                    float t = q / .45, apex = min(.5, dist * .12);
+                    float y = arcY(.62 * rest, .32 * rest, apex, t), slope = ((.32 - .62) * rest + 4. * apex * (1. - 2. * t)) / dist;
+                    spike(vec3(x0 + dx * t, y, z0 + dz * t), yaw, atan(slope), .035, .42, ${c('#d8b47a')}, 1., 0., 0.);
+                    shadow(x0 + dx * t, z0 + dz * t, .2, .3);
+                } else {
+                    float e2 = (q - .45) / .55;
+                    decal(vec3(x1, .02, z1), 0., .5 + e2 * .5, ${c('#99ccff')}, .9 * (1. - e2), 3., .85, 1., 0.);
+                    orb(vec3(x1, .7 * rest + .1, z1), .08, ${c('#cfe8ff')}, (1. - e2) * (sin(e2 * 18.) > -.4 ? 1. : .3), 1.);
+                }
+            } else if (kind == 8) {
+                if (q < .4) {
+                    float t = q / .4, apex = .28, y = arcY(.45 * rest, .3 * rest, apex, t);
+                    orb(vec3(x0 + dx * t, y, z0 + dz * t), .15, ${c('#7dff3a')}, 1., 0.);
+                    if (detail) orb(vec3(x0 + dx * (t - .12), arcY(.45 * rest, .3 * rest, apex, max(0., t - .12)), z0 + dz * (t - .12)), .08, ${c('#b6ff7a')}, .7, 1.);
+                    shadow(x0 + dx * t, z0 + dz * t, .22, .3);
+                } else {
+                    float e2 = (q - .4) / .6;
+                    decal(vec3(x1, .018, z1), seed, .5 + e2 * .3, ${c('#58d63a')}, .8 * (1. - e2), 9., e2, 0., 0.);
+                }
+                if (detail && uFlat < .5) for (int k = 0; k < 2; k++) {
+                    float local = min(1., q * 1.4 + float(k) * .3);
+                    orb(vec3(x0 - nx * .05, .62 + local * .5, z0 - nz * .05), .07 + local * .12, ${c('#e3e9ee')}, .45 * (1. - local), 0.);
+                }
+            } else if (kind == 9) {
+                decal(vec3(x1, .015, z1), 0., .35 + q * .45, ${c('#8a6a44')}, .7 * fade, 3., .8, 0., 0.);
+                for (int k = 0; k < (detail ? 4 : 2); k++) {
+                    float a = hash(seed, k) * 6.283, r = q * (.2 + hash(seed, k + 5) * .2);
+                    box(vec3(x1 + sin(a) * r, .03 + sin(q * PI) * (.2 + float(k) * .04), z1 + cos(a) * r), a, vec3(.07, .06, .07), q * 5., ${c('#6b4a2a')}, min(1., fade * 2.), 0., q * 7., 0.);
+                }
+            } else if (kind == 10) {
+                vec3 col = shotColor(style), tip = vec3(x0 + nx * .42, .78 * rest, z0 + nz * .42);
+                float big = style == 8 ? 1.6 : style == 1 ? 1.3 : 1.;
+                if (q < .5) orb(tip, (.2 + .1 * big) * (1. - q * 2.) + .04, col, 1., 1.);
+                if (style == 8 && q < .4) beam(tip, vec3(tip.x + nx * .9, tip.y - .05, tip.z + nz * .9), .025, vec3(1.), 1. - q / .4, 1.);
+                if (detail && uFlat < .5) orb(vec3(tip.x, tip.y + q * .45, tip.z), .08 + q * .16, ${c('#b8bec4')}, .4 * (1. - q), 0.);
+            } else if (kind == 11) {
+                float hy = .3 * rest;
+                if (style == 1) {
+                    orb(vec3(x1, hy, z1), .2 + q * .45, q < .5 ? ${c('#ffd27a')} : ${c('#ff6a1a')}, fade * .95, 1.);
+                    decal(vec3(x1, .02, z1), 0., .5 + q * .8, ${c('#ff7a1a')}, .8 * fade, 3., .8, 1., 0.);
+                    decal(vec3(x1, .015, z1), seed, .7, ${c('#2a1a10')}, .45 * fade, 9., 0., 0., 0.);
+                } else if (style == 2) {
+                    decal(vec3(x1, .02, z1), 0., .35 + q * .6, ${c('#8fd0ff')}, .9 * fade, 3., .8, 1., 0.);
+                    if (detail) for (int k = 0; k < 3; k++) {
+                        float a = float(k) * 2.1 + seed;
+                        orb(vec3(x1 + sin(a) * q * .3, hy * .5 + sin(q * PI) * .25, z1 + cos(a) * q * .3), .05, ${c('#bfe6ff')}, fade, 0.);
+                    }
+                } else if (style == 3) {
+                    decal(vec3(x1, .02, z1), 0., .4 + q * .4, vec3(1.), .8 * fade, 3., .8, 1., 0.);
+                    for (int k = 0; k < (detail ? 4 : 2); k++) {
+                        float a = float(k) * 1.57 + seed;
+                        spike(vec3(x1 + sin(a) * q * .25, hy * .6, z1 + cos(a) * q * .25), a, .4, .05, .16, ${c('#c8f6ff')}, fade, 1., 0.);
+                    }
+                } else if (style == 4) {
+                    decal(vec3(x1, .018, z1), seed, .55 + q * .25, ${c('#4cc83c')}, .7 * fade, 9., q, 0., 0.);
+                } else if (style == 9) {
+                    decal(vec3(x1, .015, z1), 0., .4 + q * .7, ${c('#c99a66')}, .75 * fade, 3., .75, 0., 0.);
+                    decal(vec3(x1, .02, z1), 0., .6, ${c('#e0b98a')}, .4 * fade, 2., 0., 0., 0.);
+                } else if (style == 10) {
+                    for (int k = 0; k < 3; k++) {
+                        float local = clamp(q * 1.5 - float(k) * .2, 0., 1.);
+                        if (local > 0. && local < 1.) decal(vec3(x1, .02 + float(k) * .002, z1), 0., .3 + local * .7, CYCLE[(k + int(seed)) & 3], .8 * (1. - local), 3., .82, 1., 0.);
+                    }
+                } else if (style == 11) {
+                    decal(vec3(x1, .02, z1), 0., .4 + q * .5, ${c('#ffe14a')}, .8 * fade, 3., .85, 1., 0.);
+                } else if (style == 8) {
+                    decal(vec3(x1, hy, z1), seed, .5, vec3(1.), fade, 7., 1., 1., 0.);
+                    orb(vec3(x1, hy, z1), .22 * fade + .03, vec3(1.), fade, 1.);
+                } else {
+                    orb(vec3(x1, hy, z1), .12 * fade + .03, shotColor(style), fade, 1.);
+                    decal(vec3(x1, .02, z1), 0., .25 + q * .35, ${c('#fff4c8')}, .6 * fade, 3., .8, 1., 0.);
+                }
+            }
+        }
+        // A volley's shot in flight, q of its way from (x0, z0) to (x1, z1) (effects3d.js's _pushProjectileFx).
+        void shot(float x0, float z0, float x1, float z1, int style, float q) {
+            float rest = uRest, dx = x1 - x0, dz = z1 - z0, dist = length(vec2(dx, dz)); if (dist == 0.) dist = .001;
+            float px = x0 + dx * q, pz = z0 + dz * q, aim = dist, ux = dx / dist, uz = dz / dist;
+            float t = clamp(q * dist / max(.05, aim), 0., 1.);
+            vec2 arc = uArc[clamp(style, 0, 15)];
+            float apex = min(arc.y, arc.x * aim), h0 = .76 * rest, h1 = .3 * rest, y = arcY(h0, h1, apex, t);
+            float elevation = atan(((h1 - h0) + 4. * apex * (1. - 2. * t)) / max(.05, aim)), yaw = at2(ux, uz);
+            vec3 col = shotColor(style), p = vec3(px, y, pz);
+            if (apex > .02 || uFlat < .5) shadow(px, pz, .2, .28);
+            if (style == 1) {
+                orb(p, .2, ${c('#ff7a1a')}, 1., 0.); orb(p, .34, ${c('#ffb347')}, .5, 1.);
+                if (detailAt(px, pz)) for (int k = 1; k <= 2; k++) { float b = float(k) * .16; orb(vec3(px - ux * b, arcY(h0, h1, apex, max(0., t - b / max(.05, aim))), pz - uz * b), .13 - float(k) * .03, ${c('#ffd27a')}, .7 - float(k) * .2, 1.); }
+            } else if (style == 2 || style == 4) {
+                vec3 mainC = style == 2 ? ${c('#3aa8ff')} : ${c('#5de04a')}, light = style == 2 ? ${c('#bfe6ff')} : ${c('#b6ff7a')};
+                orb(p, .18, mainC, 1., 0.);
+                if (detailAt(px, pz)) for (int k = 1; k <= 2; k++) { float b = float(k) * .14; orb(vec3(px - ux * b, arcY(h0, h1, apex, max(0., t - b / max(.05, aim))), pz - uz * b), .08 - float(k) * .015, light, .8 - float(k) * .25, 0.); }
+            } else if (style == 3) {
+                spike(vec3(px - ux * .15, y, pz - uz * .15), yaw, elevation, .11, .34, ${c('#c8f6ff')}, 1., 1., 0.);
+                orb(p, .16, ${c('#eaffff')}, .35, 1.);
+            } else if (style == 7 || style == 8) {
+                float len = style == 8 ? .55 : .26, w = style == 8 ? .035 : .04, tl = style == 8 ? 1.1 : .45;
+                vec3 back = vec3(px - ux * len, y, pz - uz * len);
+                beam(back, p, w, col, 1., 0.);
+                beam(vec3(px - ux * tl, arcY(h0, h1, apex, max(0., t - tl / max(.05, aim))), pz - uz * tl), back, w * .6, col, .45, 1.);
+            } else if (style == 9) {
+                for (int k = -1; k <= 1; k++) {
+                    float side = float(k) * .07, ak = abs(float(k));
+                    box(vec3(px - uz * side - ux * ak * .05, y + ak * .03, pz + ux * side - uz * ak * .05), yaw + float(k), vec3(.06, .05, .06), 0., ${c('#d9a86a')}, 1., 0., 0., 0.);
+                }
+            } else if (style == 10) {
+                orb(p, .17, CYCLE[uCycle & 3], 1., 0.); orb(p, .3, vec3(1.), .3, 1.);
+            } else if (style == 11) {
+                orb(p, .12, ${c('#ffe14a')}, 1., 0.); orb(p, .26, ${c('#ffe14a')}, .4, 1.);
+            } else {
+                box(p, yaw, vec3(.06, .06, .16), -elevation, col, 1., 1., 0., 0.);
+                orb(p, .13, col, .35, 1.);
+            }
+        }
+        void main() {
+            int ent = gl_VertexID >> 3, tx = ent * 2;
+            gWant = gl_VertexID & 7; gCur = 0; gHit = false;
+            gl_Position = vec4(0.); gl_PointSize = 1.;
+            vec4 a = texelFetch(uEnt, ivec2(tx & 2047, tx >> 11), 0), b = texelFetch(uEnt, ivec2((tx + 1) & 2047, (tx + 1) >> 11), 0);
+            int kind = int(b.x + .5), style = int(b.y + .5);
+            if (kind == 13) shot(a.x, a.y, a.z, a.w, style, b.w);
+            else event(kind, a.x, a.y, a.z, a.w, style, b.z, b.w);
+            if (!gHit || !(rColor.a > 0.)) { tA = vec4(0.); tB = vec4(0.); tC = vec4(0.); tD = vec4(0., 0., 0., -2.); return; }
+            tA = vec4(rPos, rYaw); tB = vec4(rScale, rPitch); tC = rColor; tD = vec4(rPattern, rParam, rRoll, rAdd + 2. * float(rMesh));
+        }`;
+    };
+    // (The feedback pass draws nothing.)
+    const FX_NEAR_TF_FRAGMENT_GLSL = `#version 300 es
+        precision highp float;
+        out vec4 o;
+        void main() { o = vec4(0.); }`;
+    // The near pieces drawn (FX_VERTEX_GLSL's shapes and outputs): one draw of every piece's slot (an instance of
+    // the feedback's rows: iA..iD), the most vertices a mesh has (the orb's); a vertex its mesh's corner (P0..P3 /
+    // N0..N3, the meshes' triangles unrolled, by tD.w's mesh) or none past the mesh's count. (A draw a mesh ran
+    // every slot through all four meshes' vertices, 120 a slot.)
+    const fxNearDrawGlsl = (meshes) => {
+        const arr = (name, list) => 'const vec3 ' + name + '[' + list.length + '] = vec3[' + list.length + '](' + list.map(v => 'vec3(' + v.join(', ') + ')').join(', ') + ');';
+        const decl = meshes.map((m, i) => arr('P' + i, m.p) + '\n' + arr('N' + i, m.n)).join('\n');
+        const pick = (what) => meshes.map((m, i) => 'if (mesh == ' + i + ') return ' + what + i + '[min(v, ' + (m.p.length - 1) + ')];').join(' ') + ' return vec3(0.);';
+        const counts = meshes.map(m => m.p.length).join(', ');
+        return `#version 300 es
+        precision highp float;
+        layout(location=3) in vec4 iA;
+        layout(location=4) in vec4 iB;
+        layout(location=5) in vec4 iC;
+        layout(location=6) in vec4 iD;
+        uniform mat4 uViewProjection;
+        uniform float uFlat;
+        out vec3 vNormal;
+        out vec4 vColor;
+        out vec2 vUv;
+        flat out vec3 vStyle;
+        ${decl}
+        const int COUNT[${meshes.length}] = int[${meshes.length}](${counts});
+        vec3 meshP(int mesh, int v) { ${pick('P')} }
+        vec3 meshN(int mesh, int v) { ${pick('N')} }
+        vec3 orient(vec3 p) {
+            float cr = cos(iD.z), sr = sin(iD.z);
+            p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
+            float cp = cos(iB.w), sp = sin(iB.w);
+            p.yz = vec2(cp * p.y - sp * p.z, sp * p.y + cp * p.z);
+            float cy = cos(iA.w), sy = sin(iA.w);
+            return vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+        }
+        void main() {
+            int mesh = int(floor(iD.w * .5)), v = gl_VertexID;
+            if (iD.w < 0. || mesh < 0 || mesh > ${meshes.length - 1} || v >= COUNT[clamp(mesh, 0, ${meshes.length - 1})] || !(iC.w > 0.)) { gl_Position = vec4(2., 2., 2., 1.); vNormal = vec3(0., 1., 0.); vColor = vec4(0.); vUv = vec2(0.); vStyle = vec3(0.); return; }
+            vec3 aPosition = meshP(mesh, v);
+            vec3 world = iA.xyz + orient(aPosition * iB.xyz);
+            vNormal = orient(meshN(mesh, v) / max(iB.xyz, vec3(.0001)));
+            if (uFlat > .5) { world.z -= world.y * .6; world.y = .1; }
+            gl_Position = uViewProjection * vec4(world, 1.);
+            vColor = iC;
+            vUv = aPosition.xz + .5;
+            vStyle = vec3(iD.x, iD.y, mod(iD.w, 2.));
+        }`;
+    };
 
     const SHADOW_LIGHT_DIRECTION = (() => {
         let x = -0.42;
@@ -4107,7 +4561,13 @@
                     gl.bindBuffer(gl.ARRAY_BUFFER, M.bBuf);
                     gl.bufferData(gl.ARRAY_BUFFER, S.buildings, gl.DYNAMIC_DRAW);
                     for (let i = 0; i < 6; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 1, gl.FLOAT, false, 24, i * 4); }
-                    M.bVersion = S.buildingsVersion;
+                    M.bVersion = S.buildingsVersion; M.bOffAt = S.buildingsOffN | 0;
+                } else if ((M.bOffAt | 0) < (S.buildingsOffN | 0)) {
+                    // (Buildings gone since: their entries' on value, 4 bytes each.)
+                    gl.bindBuffer(gl.ARRAY_BUFFER, M.bBuf);
+                    const L = S.buildingsOff, B = S.buildings;
+                    for (let k = M.bOffAt | 0; k < S.buildingsOffN; k++) { const j = L[k]; gl.bufferSubData(gl.ARRAY_BUFFER, j * 24 + 20, B, j * 6 + 5, 1); }
+                    M.bOffAt = S.buildingsOffN;
                 }
                 gl.drawArrays(gl.POINTS, 0, S.buildingCount);
             }
@@ -6055,7 +6515,10 @@
 
         // One upload of every mesh's instances, then one draw per mesh.
         drawFx(batch, flat) {
-            if (!batch || batch.total <= 0) return;
+            if (!batch) return;
+            if (batch.far) this.drawFxFar(batch.far, flat);
+            if (batch.near && batch.near.n > 0) this.drawFxNear(batch.near, flat);
+            if (batch.total <= 0) return;
             this.ensureFxResources();
             let gl = this.gl;
             let bytes = batch.total * FX_STRIDE * 4;
@@ -6096,6 +6559,218 @@
             gl.depthMask(true);
             gl.enable(gl.DEPTH_TEST);
             gl.bindVertexArray(null);
+        }
+
+        // Recorded effects far away (effects3d.js FX_FAR): the record ring copied
+        // to a buffer as it is written (the records since the last frame; the
+        // whole ring after a clear or when more were written than it holds),
+        // each record drawn by its age: up to 8 dots (a volley's 4 shots: muzzle
+        // flash, then the shot's flight or its hit) and a beam's line. Records
+        // at FX_FAR.ppt pixels a tile or more at their target are the page's
+        // (_pushCombatRecordFx), as are the near ends of a tilted view.
+        drawFxFar(F, flat) {
+            const gl = this.gl, T = typeof FX_FAR !== 'undefined' ? FX_FAR : null;
+            if (!T || !F.data || !F.cap) return;
+            let R = this.fxFar;
+            if (!R) {
+                // (The beams' box: the effects' cube mesh, its triangles unrolled.)
+                const cube = createCenteredCubeData(), bp = [], bn = [];
+                for (const i of cube.indices) { bp.push(`vec3(${cube.positions[i * 3]}, ${cube.positions[i * 3 + 1]}, ${cube.positions[i * 3 + 2]})`); bn.push(`vec3(${cube.normals[i * 3]}, ${cube.normals[i * 3 + 1]}, ${cube.normals[i * 3 + 2]})`); }
+                const box = `const vec3 BOX_P[${bp.length}] = vec3[${bp.length}](${bp.join(', ')}); const vec3 BOX_N[${bn.length}] = vec3[${bn.length}](${bn.join(', ')});`;
+                const P = createProgram(gl, FX_FAR_VERTEX_GLSL.replace('/*BOX*/', box), FX_FAR_FRAGMENT_GLSL);
+                R = this.fxFar = { program: P, rec: createTexture(gl), vao: gl.createVertexArray(), cap: 0, serial: 0, clears: -1, stage: null, u: {},
+                    visTex: createTexture(gl), visW: 0, visH: 0, visSource: null, visVersion: -1, visData: null, empty: createTexture(gl) };
+                for (const n of ['VP', 'Flat', 'Now', 'Ts', 'Rest', 'Ppt', 'Full', 'Volleys', 'Tile', 'P5', 'TargetH', 'Half', 'ProjScale', 'Eye', 'Fwd', 'Vis', 'Bounds', 'Beam',
+                    'KindColor', 'ShotColor', 'ElemMain', 'ElemGlow', 'Dur', 'FarPpt', 'MinPx', 'BossDust', 'BeamHit', 'Volley', 'Rec']) R.u[n] = gl.getUniformLocation(P, 'u' + n);
+                gl.bindTexture(gl.TEXTURE_2D, R.empty);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 1, 1, 0, gl.RED, gl.FLOAT, new Float32Array([1]));
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                // (The tables, once: constants.)
+                gl.useProgram(P);
+                const rgb = c => T.rgb(c), flatten = list => { const a = new Float32Array(list.length * 3); list.forEach((c, i) => a.set(rgb(c), i * 3)); return a; };
+                const kc = [], sc = [], em = [], eg = [], du = [];
+                for (let k = 0; k < 13; k++) kc.push(T.kindColor[k] || T.shotDefault);
+                for (let s = 0; s < 16; s++) sc.push(T.shotColor[s] || T.shotDefault);
+                for (let e = 0; e < 5; e++) { const el = T.element[e] || T.element[1]; em.push(el.main); eg.push(el.glow); }
+                for (let k = 0; k < 13; k++) du.push(T.duration[k] || 8);
+                gl.uniform3fv(R.u.KindColor, flatten(kc)); gl.uniform3fv(R.u.ShotColor, flatten(sc)); gl.uniform3fv(R.u.ElemMain, flatten(em)); gl.uniform3fv(R.u.ElemGlow, flatten(eg));
+                gl.uniform1fv(R.u.Dur, new Float32Array(du)); gl.uniform1f(R.u.FarPpt, T.ppt); gl.uniform1f(R.u.MinPx, T.minPx);
+                gl.uniform3fv(R.u.BossDust, rgb(T.bossDust)); gl.uniform3fv(R.u.BeamHit, rgb(T.beamHit));
+                gl.uniform4f(R.u.Volley, T.volleyGap, T.volleyMax, T.projSpeed, T.impactTicks);
+            }
+            // The records written since the last upload (kind, x0, y0, x1, y1, start, style, the volley's shots): texels
+            // 2q and 2q + 1 of rows 2048 texels wide.
+            const cap = F.cap, TW = 2048;
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, R.rec);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            if (R.cap !== cap) {
+                R.cap = cap; R.stage = new Float32Array(cap * 8); R.clears = -1;
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TW, Math.ceil(cap * 2 / TW), 0, gl.RGBA, gl.FLOAT, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            }
+            const written = (F.serial - R.serial) | 0, whole = R.clears !== F.clears || written < 0 || written >= cap;
+            if (whole || written > 0) {
+                const D = F.data, I = F.ids, st = R.stage;
+                const pack = (a, b) => {
+                    for (let q = a; q < b; q++) {
+                        const o = q * 8;
+                        for (let k = 0; k < 7; k++) st[o + k] = D[o + k];
+                        const v = I ? I[q * 2] : 0;
+                        st[o + 7] = v < 0 ? -v : 0;
+                    }
+                    // (Texels [2a, 2b): a partial first row, whole rows, a partial last row.)
+                    const t0 = 2 * a, t1 = 2 * b, r0 = Math.floor(t0 / TW), r1 = Math.floor((t1 - 1) / TW);
+                    const row = (r, x0, x1) => gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, r, x1 - x0, 1, gl.RGBA, gl.FLOAT, st, (r * TW + x0) * 4);
+                    if (r0 === r1) { row(r0, t0 - r0 * TW, t1 - r0 * TW); return; }
+                    row(r0, t0 - r0 * TW, TW);
+                    if (r1 - r0 > 1) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r0 + 1, TW, r1 - r0 - 1, gl.RGBA, gl.FLOAT, st, (r0 + 1) * TW * 4);
+                    row(r1, 0, t1 - r1 * TW);
+                };
+                if (whole) pack(0, cap);
+                else {
+                    const start = ((F.head - written) % cap + cap) % cap;
+                    if (start < F.head) pack(start, F.head);
+                    else { pack(start, cap); if (F.head > 0) pack(0, F.head); }
+                }
+                R.serial = F.serial; R.clears = F.clears;
+            }
+            // Lit tiles: the column glyphs' texture when it holds the same grid, else this one's own.
+            let visTex = R.empty;
+            if (!F.full && F.vis) {
+                if (this.columnVisibilitySource === F.vis && this.columnVisibilityVersion === F.visVersion && this.columnVisibilityWidth) visTex = this.columnVisibilityTexture;
+                else {
+                    const h = F.vis.length, w = h && F.vis[0] ? F.vis[0].length : 0;
+                    if (w && (R.visSource !== F.vis || R.visVersion !== F.visVersion)) {
+                        const flatGrid = F.vis._flat && F.vis._flat.length === w * h ? F.vis._flat : null;
+                        let data = flatGrid;
+                        if (!data) { if (!R.visData || R.visData.length !== w * h) R.visData = new Float32Array(w * h); data = R.visData; for (let y = 0; y < h; y++) data.set(F.vis[y], y * w); }
+                        gl.bindTexture(gl.TEXTURE_2D, R.visTex);
+                        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+                        if (R.visW !== w || R.visH !== h) {
+                            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, data);
+                            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                            R.visW = w; R.visH = h;
+                        } else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.FLOAT, data);
+                        R.visSource = F.vis; R.visVersion = F.visVersion;
+                    }
+                    if (w) visTex = R.visTex;
+                }
+            }
+            const u = R.u, eye = this.lodEye, fwd = this.lodForward, size = this.sceneTargetSize;
+            gl.useProgram(R.program);
+            gl.uniformMatrix4fv(u.VP, false, this.tmpViewProjection);
+            gl.uniform1f(u.Flat, flat ? 1 : 0); gl.uniform1f(u.Now, F.now); gl.uniform1f(u.Ts, F.ts); gl.uniform1f(u.Rest, F.rest);
+            gl.uniform1f(u.Ppt, F.ppt); gl.uniform1f(u.Full, F.full ? 1 : 0); gl.uniform1f(u.Volleys, F.volleys ? 1 : 0); gl.uniform1f(u.Tile, F.tile);
+            gl.uniform1f(u.P5, this.tmpProjection[5]); gl.uniform1f(u.TargetH, size.height || 1); gl.uniform2f(u.Half, (size.width || 1) * .5, (size.height || 1) * .5);
+            gl.uniform1f(u.ProjScale, !flat && eye && this.lodProjectionScale ? this.lodProjectionScale : 0);
+            gl.uniform3f(u.Eye, eye ? eye[0] : 0, eye ? eye[1] : 0, eye ? eye[2] : 0); gl.uniform3f(u.Fwd, fwd ? fwd[0] : 0, fwd ? fwd[1] : 0, fwd ? fwd[2] : 1);
+            gl.uniform4f(u.Bounds, F.minX, F.minZ, F.maxX, F.maxZ);
+            gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, R.rec); gl.uniform1i(u.Rec, 1);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, visTex); gl.uniform1i(u.Vis, 0);
+            if (flat) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.bindVertexArray(R.vao);
+            gl.uniform1i(u.Beam, 0);
+            gl.drawArrays(gl.POINTS, 0, cap * 8);
+            gl.uniform1i(u.Beam, 1);
+            gl.drawArrays(gl.TRIANGLES, 0, cap * 36);
+            gl.bindVertexArray(null);
+            gl.drawBuffers(this.sceneDrawBuffers);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            gl.enable(gl.DEPTH_TEST);
+        }
+
+        // Recorded effects up close (effects3d.js _pushCombatRecordFx's near list, N: data, n entries of 8 floats):
+        // the entries uploaded (two RGBA32F texels each, rows 2048 wide); the pieces built, 8 an entry, a point each
+        // into the instance buffer (transform feedback, the rasterizer off: fxNearVertexGlsl); then one draw of them
+        // all (fxNearDrawGlsl), lit and patterned by the effects' fragment shader.
+        drawFxNear(N, flat) {
+            const gl = this.gl, T = typeof FX_FAR !== 'undefined' ? FX_FAR : null;
+            if (!T) return;
+            let R = this.fxNear;
+            if (!R) {
+                const P = createProgram(gl, fxNearVertexGlsl(), FX_NEAR_TF_FRAGMENT_GLSL, ['tA', 'tB', 'tC', 'tD']);
+                const meshes = [createCenteredCubeData(), createOrbData(), createSpikeData(), createPlaneData()].map(d => {
+                    const p = [], n = [], f = v => Number(v).toFixed(5);
+                    for (const i of d.indices) { p.push([f(d.positions[i * 3]), f(d.positions[i * 3 + 1]), f(d.positions[i * 3 + 2])]); n.push([f(d.normals[i * 3]), f(d.normals[i * 3 + 1]), f(d.normals[i * 3 + 2])]); }
+                    return { p, n };
+                });
+                const D = createProgram(gl, fxNearDrawGlsl(meshes), fxFragmentGlsl());
+                R = this.fxNear = { program: P, draw: D, tex: createTexture(gl), vao: gl.createVertexArray(), drawVao: gl.createVertexArray(), tf: gl.createTransformFeedback(), buf: gl.createBuffer(), bytes: 0, rows: 0, u: {}, du: {}, verts: Math.max(...meshes.map(m => m.p.length)) };
+                for (const n of ['Flat', 'Rest', 'Detail', 'ProjScale', 'Cycle', 'Eye', 'Fwd', 'ShotColor', 'ElemMain', 'ElemGlow', 'Arc', 'Ent']) R.u[n] = gl.getUniformLocation(P, 'u' + n);
+                for (const n of ['ViewProjection', 'Flat']) R.du[n] = gl.getUniformLocation(D, 'u' + n);
+                gl.useProgram(P);
+                const flatten = list => { const a = new Float32Array(list.length * 3); list.forEach((c, i) => a.set(T.rgb(c), i * 3)); return a; };
+                const sc = [], em = [], eg = [], arc = new Float32Array(32);
+                for (let s = 0; s < 16; s++) { sc.push(T.shotColor[s] || T.shotDefault); const a = T.arc[s] || T.arc[0]; arc[s * 2] = a[0]; arc[s * 2 + 1] = a[1]; }
+                for (let e = 0; e < 5; e++) { const el = T.element[e] || T.element[1]; em.push(el.main); eg.push(el.glow); }
+                gl.uniform3fv(R.u.ShotColor, flatten(sc)); gl.uniform3fv(R.u.ElemMain, flatten(em)); gl.uniform3fv(R.u.ElemGlow, flatten(eg)); gl.uniform2fv(R.u.Arc, arc);
+                // (The instance buffer's rows, as drawFx's.)
+                gl.bindVertexArray(R.drawVao);
+                gl.bindBuffer(gl.ARRAY_BUFFER, R.buf);
+                for (let row = 0; row < 4; row++) { gl.enableVertexAttribArray(3 + row); gl.vertexAttribDivisor(3 + row, 1); gl.vertexAttribPointer(3 + row, 4, gl.FLOAT, false, FX_STRIDE * 4, row * 16); }
+                gl.bindVertexArray(null);
+                gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            }
+            const TW = 2048, texels = N.n * 2, rows = Math.ceil(texels / TW), pieces = N.n * 8;
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, R.tex);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            if (R.rows < N.rows) {
+                // (Its size from the list's, the most the ring can give: made once.)
+                R.rows = N.rows;
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TW, R.rows, 0, gl.RGBA, gl.FLOAT, null);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            }
+            if (rows > 1) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TW, rows - 1, gl.RGBA, gl.FLOAT, N.data, 0);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, rows - 1, texels - (rows - 1) * TW, 1, gl.RGBA, gl.FLOAT, N.data, (rows - 1) * TW * 4);
+            // (The instance buffer: grown by doubling to the most pieces seen, never shrunk.)
+            const need = pieces * FX_STRIDE * 4;
+            if (R.bytes < need) {
+                R.bytes = Math.max(64 * 1024, need * 2);
+                gl.bindBuffer(gl.ARRAY_BUFFER, R.buf);
+                gl.bufferData(gl.ARRAY_BUFFER, R.bytes, gl.DYNAMIC_COPY);
+                gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            }
+            // Pass 1: the pieces.
+            const u = R.u, eye = this.lodEye, fwd = this.lodForward;
+            gl.useProgram(R.program);
+            gl.uniform1f(u.Flat, flat ? 1 : 0); gl.uniform1f(u.Rest, N.rest); gl.uniform1f(u.Detail, N.detail ? 1 : 0);
+            gl.uniform1f(u.ProjScale, !flat && N.perspective && eye && this.lodProjectionScale ? this.lodProjectionScale : 0);
+            gl.uniform3f(u.Eye, eye ? eye[0] : 0, eye ? eye[1] : 0, eye ? eye[2] : 0); gl.uniform3f(u.Fwd, fwd ? fwd[0] : 0, fwd ? fwd[1] : 0, fwd ? fwd[2] : 1);
+            gl.uniform1i(u.Cycle, N.cycle & 3); gl.uniform1i(u.Ent, 1);
+            gl.bindVertexArray(R.vao);
+            gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, R.tf);
+            gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, R.buf);
+            gl.enable(gl.RASTERIZER_DISCARD);
+            gl.beginTransformFeedback(gl.POINTS);
+            gl.drawArrays(gl.POINTS, 0, pieces);
+            gl.endTransformFeedback();
+            gl.disable(gl.RASTERIZER_DISCARD);
+            gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+            gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+            gl.activeTexture(gl.TEXTURE0);
+            // Pass 2: the meshes.
+            gl.useProgram(R.draw);
+            gl.uniformMatrix4fv(R.du.ViewProjection, false, this.tmpViewProjection);
+            gl.uniform1f(R.du.Flat, flat ? 1 : 0);
+            if (flat) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+            gl.bindVertexArray(R.drawVao);
+            gl.drawArraysInstanced(gl.TRIANGLES, 0, R.verts, pieces);
+            gl.bindVertexArray(null);
+            gl.drawBuffers(this.sceneDrawBuffers);
+            gl.disable(gl.BLEND);
+            gl.depthMask(true);
+            gl.enable(gl.DEPTH_TEST);
         }
 
         // Scene objects (3D-style) for the flat view: converted into a batch.
@@ -7163,11 +7838,6 @@
                         // (A structure's: STRUCT_GHOST_FLAG; 65536 is its research task.)
                         bool ghost = (flags & (uStructure != 0 ? 4194304 : 65536)) != 0;
                         float light = uFull != 0 || ghost ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
-                        // (The viewing player's own unit lights its area to the full:
-                        // drawn so at once. The fog's light of an area it has just
-                        // walked into rises over most of a second; read from there, a
-                        // unit that lights only its own area dimmed and brightened at
-                        // every border it crossed.)
                         if (uStructure == 0 && uFull == 0 && !ghost && int(aOwner) == uPlayer) light = 1.;
                         if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0. || (uDebug == 2 && uStructure == 0)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         if (ghost) light = .14;
@@ -7648,8 +8318,18 @@
                 // (Units' uploads counted: columnUploadStats.)
                 const stats = !structure ? this.columnUploadStats || (this.columnUploadStats = { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }) : { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }, t0 = performance.now();
                 stats.frames++;
-                if (since >= 0) this._columnStoreUploadChanged(F, D, since, offsets, stats);
+                // (Units: by what is near the view, _columnStoreUploadNear; the blocks held per column and block.)
+                const near = !structure && D && Defence3Renderer3D.nearColumnUploads !== false;
+                if (near && !(S.held && S.held.length === D.cols.length * D.nb)) since = -1;
+                if (since >= 0 && near && S.held && S.held.length === D.cols.length * D.nb) this._columnStoreUploadNear(S, F, D, offsets, stats);
+                else if (since >= 0) this._columnStoreUploadChanged(F, D, since, offsets, stats);
                 else stats.full++;
+                if (near && since < 0) {
+                    // (All of it uploaded below: held as of this frame, anywhere.)
+                    if (!S.held || S.held.length !== D.cols.length * D.nb) { S.held = new Int32Array(D.cols.length * D.nb); S.hb = new Float32Array(D.nb * 4); S.vis = new Int32Array(D.nb); S.visStamp = 0; S.prevVis = new Int32Array(D.nb); S.prevN = 0; S.nearVis = new Int32Array(D.nb); }
+                    S.held.fill(D.seq); S.hb.fill(Infinity); for (let b = 0; b < D.nb; b++) { S.hb[b * 4] = -Infinity; S.hb[b * 4 + 1] = -Infinity; }
+                    S.prevN = 0; S.nearKey = null;
+                } else if (!near) S.held = null;
                 const seen = new Set();
                 for (let i=0;i<fields.length;i++) {
                     const name=fields[i];
@@ -7668,6 +8348,11 @@
                 // the same buffer, drawSelectionMask.)
                 S.offsets=offsets;
                 S.angleRev=F.angleRev?Atomics.load(F.angleRev,0):-1;
+            } else if (!structure && S.held && F.dirty && S.offsets) {
+                // (The same frame, the view moved: blocks come near it that were left behind.)
+                const stats = this.columnUploadStats || (this.columnUploadStats = { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }), t0 = performance.now();
+                this._columnStoreUploadNear(S, F, F.dirty, S.offsets, stats);
+                stats.ms += performance.now() - t0;
             } else if (structure && F.angleRev && S.offsets && S.offsets.has('angle')) {
                 // Turrets turned since (the table's angles are live:
                 // sim_frame_world.js pageApplyStructures): that column alone.
@@ -7678,17 +8363,127 @@
         }
         // The runs of blocks changed after frame `since` (its buffer bound to
         // ARRAY_BUFFER, holding that frame); runs apart by up to
-        // columnUploadGap blocks as one (a call costs more than 2 KB). (px / py
+        // columnUploadGapBytes apart or less as one (a call costs about 2 KB). (px / py
         // copied on the GPU from the last frame's x / y, in the same buffer,
         // took Edge from ~100 to ~37 FPS: ANGLE's copies through its staging
         // buffer wait for the GPU. They are uploaded as any column.)
-        _columnStoreUploadChanged(F, D, since, offsets, stats) {
-            const gl = this.gl, B = D.block, n = F.n, used = Math.min(D.nb, Math.ceil(n / B)), ST = D.stamps, cols = D.cols;
-            const gap = Math.max(0, Defence3Renderer3D.columnUploadGap | 0);
+        // The changed blocks of the units' columns near the view only (S.held: per column and block, the frame seq the
+        // buffer holds it as of; S.hb: per block, the box of the positions it holds, tiles). A block is near when a
+        // unit of the frame is in one of the frame's 16-tile buckets near the view (renderBuckets) or what the buffer
+        // holds of it is (its box): one held behind is never drawn where its units are no longer. When most of the map is near: every changed block, as
+        // before (boxes unknown: near). In a close view of a battle the uploads were ~8 MB a tick, nearly all of it
+        // off screen (2026-11-23).
+        _columnStoreUploadNear(S, F, D, offsets, stats) {
+            const gl = this.gl, B = D.block, nb = D.nb, n = F.n, used = Math.min(nb, Math.ceil(n / B)), ST = D.stamps, H = S.held, cols = D.cols, seq = D.seq;
+            const RB = F.renderBuckets, M = this.tmpViewProjection;
+            // (The same frame from the same view as the last time: nothing new is near.)
+            if (M) {
+                const K = S.nearM || (S.nearM = new Float32Array(16));
+                let same = S.nearF === F && S.nearSeq === seq;
+                for (let i = 0; same && i < 16; i++) same = K[i] === M[i];
+                if (same) return;
+                K.set(M); S.nearF = F; S.nearSeq = seq;
+            }
+            // Which blocks are near (vis[b] === stamp), the bucket test first: a box (tiles, y up to 4) against the clip volume.
+            const stamp = ++S.visStamp, vis = S.vis, hb = S.hb;
+            let all = !RB || !RB.head || !M;
+            const near = (x0, z0, x1, z1) => {
+                const x = (x0 + x1) * .5, z = (z0 + z1) * .5, rx = (x1 - x0) * .5 + 16, rz = (z1 - z0) * .5 + 16, hy = 4;
+                const w = M[3] * x + M[11] * z + M[15], dw = rx * Math.abs(M[3]) + rz * Math.abs(M[11]) + hy * Math.abs(M[7]);
+                if (w + dw <= 0) return false;
+                const cx = M[0] * x + M[8] * z + M[12], dx = rx * Math.abs(M[0]) + rz * Math.abs(M[8]) + hy * Math.abs(M[4]);
+                if (Math.abs(cx) > w + dw + dx) return false;
+                const cy = M[1] * x + M[9] * z + M[13], dy = rx * Math.abs(M[1]) + rz * Math.abs(M[9]) + hy * Math.abs(M[5]);
+                return Math.abs(cy) <= w + dw + dy;
+            };
+            const T = (RB && RB.tile) || (typeof TILE === 'number' ? TILE : 32), X = F.x, Y = F.y, PX = F.px, PY = F.py, id = F.id;
+            if (!all) {
+                // (Most of the map near: every changed block, no boxes. By the buckets' cells alone.)
+                const cols16 = RB.columns, cells = cols16 * RB.rows, head = RB.head, motion = RB.motion, pad = (F.renderMotionPad || 0) / T;
+                let nonEmpty = 0, hit = 0;
+                for (let c = 0; c < cells; c++) {
+                    if (head[c] < 0) continue;
+                    nonEmpty++;
+                    const gx = (c % cols16) * 16, gz = Math.floor(c / cols16) * 16, m = Math.max(motion[c], pad);
+                    if (near(gx - m, gz - m, gx + 16 + m, gz + 16 + m)) hit++;
+                }
+                if (hit * 2 > nonEmpty) all = true;
+            }
+            // The near blocks among the changed ones (only those can need an upload): by what the buffer holds of
+            // them (their held box) or what the frame has (their box now, made once a frame, cached). A walk over the
+            // units of the near buckets was ~5.8 ms a frame in a tilted view of a 1M battle.
+            const cb = S.cb && S.cb.length >= nb * 4 ? S.cb : (S.cb = new Float32Array(nb * 4)), cbGen = S.cbGen && S.cbGen.length >= nb ? S.cbGen : (S.cbGen = new Int32Array(nb));
+            if (S.cbFrame !== F) { S.cbFrame = F; S.cbG = (S.cbG | 0) + 1; }
+            const gen = S.cbG, mpad = 1 + (F.renderMotionPad || 0) / T;
+            const DB = D.boxes && D.boxes.length >= used * 4 ? D.boxes : null;
+            const boxNow = b => {
+                if (cbGen[b] === gen) return;
+                cbGen[b] = gen;
+                let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+                // (The presentation's box of the block (pres_fill.rs block_box): no pass over its slots here.)
+                if (DB) { const o = b * 4; x0 = DB[o]; z0 = DB[o + 1]; x1 = DB[o + 2]; z1 = DB[o + 3]; }
+                else
+                for (let s = b * B, e = Math.min(n, s + B); s < e; s++) {
+                    if (id[s] < 0) continue;
+                    const ax = X[s], az = Y[s], bx = PX[s], bz = PY[s];
+                    if (ax < x0) x0 = ax; if (ax > x1) x1 = ax; if (bx < x0) x0 = bx; if (bx > x1) x1 = bx;
+                    if (az < z0) z0 = az; if (az > z1) z1 = az; if (bz < z0) z0 = bz; if (bz > z1) z1 = bz;
+                }
+                const o = b * 4;
+                if (!(x0 <= x1)) { cb[o] = 1e9; cb[o + 1] = 1e9; cb[o + 2] = 1e9; cb[o + 3] = 1e9; } // (none live: nowhere)
+                else { cb[o] = x0 / T - mpad; cb[o + 1] = z0 / T - mpad; cb[o + 2] = x1 / T + mpad; cb[o + 3] = z1 / T + mpad; }
+            };
+            const stale = S.stale && S.stale.length >= nb ? S.stale : (S.stale = new Int32Array(nb));
+            if (!all) {
+                for (let c = 0; c < cols.length; c++) { const base = c * nb; for (let b = 0; b < used; b++) if (ST[base + b] > H[base + b]) stale[b] = stamp; }
+                for (let b = 0; b < used; b++) {
+                    if (stale[b] !== stamp) continue;
+                    const o = b * 4;
+                    if (hb[o] === -Infinity || near(hb[o], hb[o + 1], hb[o + 2], hb[o + 3])) { vis[b] = stamp; continue; }
+                    boxNow(b);
+                    if (near(cb[o], cb[o + 1], cb[o + 2], cb[o + 3])) vis[b] = stamp;
+                }
+            }
+            // The stale ones among them (all: every block), uploaded in runs per column.
+            const gapBytes = Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0);
+            const upd = this._nearUpd || (this._nearUpd = new Int32Array(nb));
+            if (upd.length < nb) this._nearUpd = new Int32Array(nb);
+            const U = this._nearUpd, ustamp = (this._nearUStamp = (this._nearUStamp | 0) + 1);
             for (let c = 0; c < cols.length; c++) {
                 const off = offsets.get(cols[c]), a = F[cols[c]];
                 if (off === undefined || !a) continue;
-                const base = c * D.nb, bpe = a.BYTES_PER_ELEMENT;
+                const base = c * nb, bpe = a.BYTES_PER_ELEMENT, gap = Math.floor(gapBytes / (B * bpe));
+                for (let b = 0; b < used;) {
+                    if (!(all || vis[b] === stamp) || ST[base + b] <= H[base + b]) { b++; continue; }
+                    let e = b + 1, k = e;
+                    // (A run only over near blocks: a block uploaded is brought up to date in every column at once, so what
+                    // it holds is one frame's and its box is that frame's. One swept into the x run but not the id run held
+                    // a dead unit as live where its box did not look.)
+                    while (k < used && k - e <= gap && (all || vis[k] === stamp)) { if (ST[base + k] > H[base + k]) e = k + 1; k++; }
+                    const s0 = b * B, s1 = Math.min(n, e * B);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, off + s0 * bpe, a, s0, s1 - s0);
+                    stats.bytes += (s1 - s0) * bpe; stats.calls++;
+                    for (let x = b; x < e; x++) { H[base + x] = seq; U[x] = ustamp; }
+                    b = e;
+                }
+            }
+            // The boxes of the blocks uploaded: what they hold now (all: unknown, near).
+            for (let b = 0; b < used; b++) {
+                if (U[b] !== ustamp) continue;
+                const o = b * 4;
+                if (all) { hb[o] = -Infinity; hb[o + 1] = -Infinity; hb[o + 2] = Infinity; hb[o + 3] = Infinity; continue; }
+                boxNow(b);
+                hb[o] = cb[o]; hb[o + 1] = cb[o + 1]; hb[o + 2] = cb[o + 2]; hb[o + 3] = cb[o + 3];
+            }
+            stats.near = (stats.near | 0) + (all ? 0 : 1);
+        }
+        _columnStoreUploadChanged(F, D, since, offsets, stats) {
+            const gl = this.gl, B = D.block, n = F.n, used = Math.min(D.nb, Math.ceil(n / B)), ST = D.stamps, cols = D.cols;
+            const gapBytes = Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0);
+            for (let c = 0; c < cols.length; c++) {
+                const off = offsets.get(cols[c]), a = F[cols[c]];
+                if (off === undefined || !a) continue;
+                const base = c * D.nb, bpe = a.BYTES_PER_ELEMENT, gap = Math.floor(gapBytes / (B * bpe));
                 for (let b = 0; b < used;) {
                     if (ST[base + b] <= since) { b++; continue; }
                     let e = b + 1, k = e;
@@ -8407,7 +9202,8 @@
     // Small far sprites grow by up to this share (buildings; units 60% of it), 0: off.
     Defence3Renderer3D.farGrow = .3;
     // (Unit column uploads: runs of changed blocks this far apart sent as one; _columnStoreUploadChanged.)
-    Defence3Renderer3D.columnUploadGap = 2;
+    // (Runs of changed blocks this many bytes apart or less uploaded as one: a call costs about that.)
+    Defence3Renderer3D.columnUploadGapBytes = 2048;
     Defence3Renderer3D.bakedSampling = 'filtered';
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
     Defence3Renderer3D.PersistentInstances = PersistentInstances;

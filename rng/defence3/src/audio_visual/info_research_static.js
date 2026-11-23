@@ -357,6 +357,15 @@ function _ipstAstarRates(owner, plan) {
     const want = (i, sec) => { let a = wins.get(sec); if (!a) wins.set(sec, a = []); a.push(i); };
     want(plan.length, Math.max(1, Number(getAstarWindowSeconds('total')) || ENERGY_DELTA_DEFAULT_WINDOW_SECONDS));
     for (let i = 0; i < plan.length; i++) if (plan[i].match) want(i, Math.max(1, Number(getAstarWindowSeconds(plan[i].metric)) || ENERGY_DELTA_DEFAULT_WINDOW_SECONDS));
+    // (By the running sums: hud.js _deltaStore.)
+    const DL = typeof _deltaList === 'function' && _DELTA_STORE_ON ? _deltaList('a', owner) : null;
+    if (DL) {
+        for (const [sec, rows] of wins) {
+            const w = Math.max(1, Math.floor(TICK_RATE * sec));
+            for (let k = 0; k < DL.length; k++) { const s = DL[k], d = _deltaWindow(s, s.c, w); if (d !== 0) for (const i of rows) if (i === plan.length || plan[i].match(s)) out[i] += d; } for (const i of rows) out[i] /= sec;
+        }
+        return out;
+    }
     let longest = 1; for (const s of wins.keys()) if (s > longest) longest = s;
     _pruneTickLogBucket(bucket, gameTime - Math.max(Math.floor(TICK_RATE * longest) * 2, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS)));
     for (const [sec, rows] of wins) {

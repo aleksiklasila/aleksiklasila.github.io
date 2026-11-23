@@ -62,9 +62,36 @@ function getControlGroupSnapshot(num) {
 function normalizeControlGroup(num) {
     let grp = getControlGroupSnapshot(num);
     if (!grp) return;
-    grp.units = grp.units.filter(u => u && !u.dead);
-    grp.entities = grp.entities.filter(e => e && !(e.energy !== undefined && e.energy <= 0));
+    grp.units = _cgAliveUnits(grp.units);
+    grp.entities = _cgAliveEntities(grp.entities);
     if (grp.units.length === 0 && grp.entities.length === 0) delete controlGroups[num];
+}
+// A group's list without its dead: the same list when none is (a group of 70k units made anew every refresh, its
+// membership set (_controlGroupHas) with it: ~20 ms of the page 4 times a second in a battle, 2026-11-23); else a
+// new one, the set carried over without them.
+function _cgAliveUnits(list) {
+    const live = typeof pageUnitDeaths === 'number' && typeof simClientActive === 'function' && simClientActive();
+    if (live && _cgAliveChecked.get(list) === pageUnitDeaths + ':' + list.length) return list;
+    let i = 0;
+    while (i < list.length && list[i] && !list[i].dead) i++;
+    if (i === list.length) { if (live) _cgAliveChecked.set(list, pageUnitDeaths + ':' + list.length); return list; }
+    return _cgCarry(list, list.filter(u => u && !u.dead), u => !u || u.dead);
+}
+function _cgAliveEntities(list) {
+    let i = 0;
+    while (i < list.length && list[i] && !(list[i].energy !== undefined && list[i].energy <= 0)) i++;
+    const gone = e => !e || (e.energy !== undefined && e.energy <= 0);
+    return i === list.length ? list : _cgCarry(list, list.filter(e => !gone(e)), gone);
+}
+const _cgAliveChecked = new WeakMap();
+function _cgCarry(old, list, gone) {
+    const m = _controlGroupSets.get(old);
+    if (m && m.len === old.length && list.length >= 64) {
+        for (let i = 0; i < old.length; i++) if (gone(old[i])) m.set.delete(old[i]);
+        m.len = list.length;
+        _controlGroupSets.set(list, m); _controlGroupSets.delete(old);
+    }
+    return list;
 }
 
 function getPopupControlGroupSnapshot(key) {
@@ -79,8 +106,8 @@ function getPopupControlGroupSnapshot(key) {
 function normalizePopupControlGroup(key) {
     let grp = getPopupControlGroupSnapshot(key);
     if (!grp) return;
-    grp.units = grp.units.filter(u => u && !u.dead);
-    grp.entities = grp.entities.filter(e => e && !(e.energy !== undefined && e.energy <= 0));
+    grp.units = _cgAliveUnits(grp.units);
+    grp.entities = _cgAliveEntities(grp.entities);
     if (grp.units.length === 0 && grp.entities.length === 0) {
         delete popupControlGroups[key];
         if (activePopupControlGroupKey === key) activePopupControlGroupKey = '';
@@ -89,13 +116,15 @@ function normalizePopupControlGroup(key) {
 
 function doesCurrentSelectionMatchSnapshot(grp, membership = null) {
     if (!grp) return false;
-    let aliveUnits = (grp.units || []).filter(u => u && !u.dead);
+    // (The units: the group's alive ones and the selection as counts and order-free prints of their ids
+    // (_cgUnitPrint, cached by list): the selection held the group's alive units, no more, when they agree. Sets of
+    // 70k units made here every refresh were most of a ~20 ms frame.)
+    const gu = _cgUnitPrint(grp.units || [], true), su = _cgUnitPrint(selectedUnits, false);
     let aliveEntities = (grp.entities || []).filter(e => e && !(e.energy !== undefined && e.energy <= 0));
-    if (aliveUnits.length === 0 && aliveEntities.length === 0) return false;
-    if (selectedUnits.length !== aliveUnits.length || selectedEntities.length !== aliveEntities.length) return false;
-    let unitSet = membership ? membership.units : new Set(selectedUnits);
+    if (gu.n === 0 && aliveEntities.length === 0) return false;
+    if (selectedUnits.length !== gu.n || selectedEntities.length !== aliveEntities.length) return false;
+    if (su.n !== gu.n || su.a !== gu.a || su.b !== gu.b) return false;
     let entitySet = membership ? membership.entities : new Set(selectedEntities);
-    if (!aliveUnits.every(u => unitSet.has(u))) return false;
     if (!aliveEntities.every(e => entitySet.has(e))) return false;
 
     let saved = grp.activeSubGroups || {};
@@ -103,6 +132,27 @@ function doesCurrentSelectionMatchSnapshot(grp, membership = null) {
         if ((activeSubGroups[k] !== false) !== (saved[k] !== false)) return false;
     }
     return true;
+}
+
+// A unit list's count and two sums of hashes of its ids (alive members only: aliveOnly), cached by the list, its
+// length and pageUnitDeaths (beside the simulation worker; else made each time).
+const _cgPrints = new WeakMap();
+function _cgUnitPrint(list, aliveOnly) {
+    const live = typeof pageUnitDeaths === 'number' && typeof simClientActive === 'function' && simClientActive();
+    const key = live ? pageUnitDeaths * 4 + (aliveOnly ? 1 : 0) : -1;
+    let p = live ? _cgPrints.get(list) : null;
+    if (p && p.len === list.length && p.key === key) return p;
+    let n = 0, a = 0, b = 0;
+    for (let i = 0; i < list.length; i++) {
+        const u = list[i];
+        if (!u || (aliveOnly && u.dead)) continue;
+        let h = Math.imul((u.id | 0) ^ 0x9e3779b9, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+        let g = Math.imul((u.id | 0) + 0x632be5ab, 0x27d4eb2f); g ^= g >>> 15; g = Math.imul(g, 0x165667b1); g ^= g >>> 13;
+        a = (a + h) | 0; b = (b + g) | 0; n++;
+    }
+    p = { len: list.length, key, n, a, b };
+    if (live) _cgPrints.set(list, p);
+    return p;
 }
 
 function getUnitWorldPos(u, out = {}) {
@@ -326,9 +376,9 @@ function updateControlGroupBar() {
         return;
     }
     C.units = selectedUnits; C.unitsLen = selectedUnits.length; C.entities = selectedEntities; C.entitiesLen = selectedEntities.length; C.groupsKey = groupsKey; C.at = now;
-    // (Sets of the selection only when some group is its size.)
+    // (The selection's entities as a set only when some group is its size; its units by prints, _cgUnitPrint.)
     let membership = null;
-    const lazyMembership = () => membership || (membership = { units: new Set(selectedUnits), entities: new Set(selectedEntities) });
+    const lazyMembership = () => membership || (membership = { units: null, entities: new Set(selectedEntities) });
     const matches = grp => !!grp && grp.units.length === selectedUnits.length && grp.entities.length === selectedEntities.length && doesCurrentSelectionMatchSnapshot(grp, lazyMembership());
     for (let n = 1; n <= 9; n++) {
         let key = String(n);
@@ -748,9 +798,9 @@ function _soundRecipeKept(type, subtype) {
 const AUDIO_REACH_MAX = 32, AUDIO_LISTEN_MS = 50;
 let _audioListenAt = -Infinity, _audioSilent = false;
 const _audioListen = [0, 0, 0, 0];
-function _audioMayHear(worldX, worldY) {
-    if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !(camera.zoom > 0)) return true;
-    const now = performance.now();
+// The listening box, made again at most every AUDIO_LISTEN_MS (also each frame for the simulation worker, which
+// sends no sound outside it: audioListenBox).
+function _audioListenRefresh(now) {
     if (now - _audioListenAt >= AUDIO_LISTEN_MS) {
         _audioListenAt = now;
         const width = viewW / camera.zoom, height = viewH / camera.zoom, cx = camera.x + width * .5, cy = camera.y + height * .5;
@@ -762,6 +812,17 @@ function _audioMayHear(worldX, worldY) {
         const r = AUDIO_REACH_MAX * TILE;
         _audioListen[0] = cx - r; _audioListen[1] = cy - r; _audioListen[2] = cx + r; _audioListen[3] = cy + r;
     }
+}
+// [x0, y0, x1, y1] world pixels and whether nothing positional is heard (zoomed out), or null before a match.
+function audioListenBox() {
+    if (!gameStarted || !camera || !(camera.zoom > 0)) return null;
+    _audioListenRefresh(performance.now());
+    return _audioSilent ? null : _audioListen;
+}
+function audioListenSilent() { return _audioSilent; }
+function _audioMayHear(worldX, worldY) {
+    if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !(camera.zoom > 0)) return true;
+    _audioListenRefresh(performance.now());
     if (_audioSilent) return false;
     return worldX >= _audioListen[0] && worldX <= _audioListen[2] && worldY >= _audioListen[1] && worldY <= _audioListen[3];
 }

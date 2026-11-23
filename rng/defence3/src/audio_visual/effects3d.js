@@ -50,7 +50,7 @@ const _FX_ARC = { 0: [.05, .3], 1: [.2, 1.1], 2: [.26, 1.3], 3: [.07, .35], 4: [
 
 const _fx = {
     batch: null, flat: false, detail: true, now: 0, tickScale: 1, rest: 1,
-    limit:10000, cells:new Set(), cellSize:1, ppt: 32, farPpt: 0,
+    limit:10000, cells:new Set(), cellSize:1, ppt: 32,
     minX: 0, minZ: 0, maxX: 0, maxZ: 0, vis: null, full: false, lastNow: -Infinity, volleys: false
 };
 let _FXM = null, _FXP = null;
@@ -108,197 +108,18 @@ function _fxShadow(x, z, size, alpha) {
     _fxPush(_FXM.DECAL, x, .012, z, 0, size, 1, size, 0, _fxRgb('#000'), alpha, _FXP.SHADOW, 0, 0, 0);
 }
 
-function _fxEnvelope(q, fadeIn, fadeOut) {
-    let a = q < fadeIn ? q / fadeIn : 1;
-    if (q > 1 - fadeOut) a *= (1 - q) / fadeOut;
-    return Math.max(0, a);
-}
-
 // ---- Recorded attacks, shots and hits ---------------------------------
 
-function _fxEvent(kind, x0, z0, x1, z1, style, seed, q) {
-    const rest = _fx.rest, detail = _fxDetailAt(x1, z1);
-    let dx = x1 - x0, dz = z1 - z0, dist = _fxLen(dx, dz) || .001;
-    let yaw = Math.atan2(dx, dz), nx = dx / dist, nz = dz / dist;
-    let fade = 1 - q;
-    switch (kind) {
-        case 1: case 12: { // SLASH, CLEAVE (king)
-            let king = kind === 12, size = king ? 1.05 : .78;
-            let color = king ? '#ffd84a' : '#eef6ff';
-            let side = _fxHash(seed, 1) < .5 ? -1 : 1;
-            _fxDecal(x1 - nx * .2 * size, .32 * rest, z1 - nz * .2 * size, yaw, size, color, .95 * _fxEnvelope(q, .1, .45),
-                _FXP.CRESCENT, Math.min(1, q * 2.4), 1, 0, side * .55);
-            if (king) _fxDecal(x1, .02, z1, 0, .5 + q * .7, '#ffd84a', .7 * fade, _FXP.RING, .8, 1);
-            if (detail) for (let k = 0; k < 2; k++) {
-                let a = yaw + (k ? 1.9 : -1.9) + _fxHash(seed, k + 2) * .6;
-                let r = .08 + q * .32;
-                _fxOrb(x1 + Math.sin(a) * r, (.32 * rest) + Math.sin(q * Math.PI) * .18, z1 + Math.cos(a) * r, .05 * fade + .02, '#ffe7a0', fade);
-            }
-            break;
-        }
-        case 2: // DUAL (fast): quick crossed cuts
-            _fxDecal(x1, .3 * rest, z1, yaw, .62, '#f4f4ff', .95 * _fxEnvelope(q, .08, .4), _FXP.CROSS, Math.min(1, q * 1.8), 1);
-            break;
-        case 3: { // SMASH (tank, boss): shockwave and flying rubble
-            let boss = style === 13, size = boss ? 1.7 : 1.15;
-            _fxDecal(x1, .015, z1, 0, size * (.35 + q * .75), '#d8c8a8', .85 * fade, _FXP.RING, .82, 0);
-            if (q < .3) _fxOrb(x1, .12 * rest, z1, .18 + q, '#fff1c8', (1 - q / .3) * .8);
-            if (detail) for (let k = 0; k < (boss ? 6 : 4); k++) {
-                let a = _fxHash(seed, k) * Math.PI * 2, r = q * (.35 + _fxHash(seed, k + 9) * .3);
-                let hop = (.22 + _fxHash(seed, k + 20) * .25) * Math.sin(Math.min(1, q * 1.2) * Math.PI);
-                _fxBox(x1 + Math.sin(a) * r, .03 + hop, z1 + Math.cos(a) * r, a, .07, .06, .08, q * 6, boss ? '#6d6258' : '#8a7a66', Math.min(1, fade * 2), 0, q * 9);
-            }
-            break;
-        }
-        case 4: { // CAST: a rune on the target, then the element erupts there
-            let el = _FX_ELEMENT[style] || _FX_ELEMENT[1];
-            let rune = _fxEnvelope(q, .18, .3);
-            _fxDecal(x1, .025, z1, 0, .55 + Math.min(1, q * 4) * .45, el.main, .9 * rune, _FXP.RUNE, q * 3.2 + seed, 1);
-            if (q < .3) {
-                // A mote from the staff marks who cast it.
-                let t = q / .3;
-                _fxOrb(x0 + dx * t, (.78 * (1 - t) + .45 * t) * rest + Math.sin(t * Math.PI) * .12, z0 + dz * t, .09, el.glow, 1);
-            }
-            if (q > .2) {
-                let e = (q - .2) / .8, rise = Math.sin(e * Math.PI);
-                if (style === 1) { // fire: flame tongues
-                    for (let k = 0; k < (detail ? 3 : 1); k++) {
-                        let a = k * 2.1 + seed, r = k ? .13 : 0;
-                        _fxSpike(x1 + Math.sin(a) * r, 0, z1 + Math.cos(a) * r, a, Math.PI * .5, .16 - k * .03, (.5 - k * .1) * rise + .02, k ? '#ffb347' : '#ff6a1a', Math.min(1, rise * 1.6), 1, 1);
-                    }
-                    _fxDecal(x1, .02, z1, 0, .7, '#ff8a2a', .6 * rise, _FXP.GLOW, 0, 1);
-                } else if (style === 2) { // water: splash and droplets
-                    _fxDecal(x1, .02, z1, 0, .4 + e * .6, '#8fd0ff', .9 * (1 - e), _FXP.RING, .8, 1);
-                    _fxSpike(x1, 0, z1, 0, Math.PI * .5, .13, .45 * rise, '#3aa8ff', .8 * rise, 1, 0);
-                    if (detail) for (let k = 0; k < 4; k++) {
-                        let a = k * 1.57 + seed, r = .1 + e * .25;
-                        _fxOrb(x1 + Math.sin(a) * r, .05 + Math.sin(e * Math.PI) * (.28 + k * .03), z1 + Math.cos(a) * r, .06, '#bfe6ff', 1 - e, 0);
-                    }
-                } else if (style === 3) { // ice: spikes jut from the ground
-                    let grow = Math.min(1, e * 4) * (e > .8 ? (1 - e) / .2 : 1);
-                    for (let k = 0; k < (detail ? 5 : 2); k++) {
-                        let a = k * 1.2566 + seed;
-                        _fxSpike(x1 + Math.sin(a) * .1, 0, z1 + Math.cos(a) * .1, a, Math.PI * .5 - .5, .09, .36 * grow + .01, '#c8f6ff', .95, 1, 0);
-                    }
-                    _fxSpike(x1, 0, z1, 0, Math.PI * .5, .11, .46 * grow + .01, '#eaffff', .95, 1, 0);
-                } else { // poison: bubbling cloud and a splat
-                    _fxDecal(x1, .018, z1, seed, .75, '#3fa83a', .55 * (1 - e * .6), _FXP.SPLAT, e, 0);
-                    for (let k = 0; k < (detail ? 4 : 1); k++) {
-                        let a = k * 1.7 + seed, local = (e * 1.4 + k * .23) % 1;
-                        _fxOrb(x1 + Math.sin(a) * .16, .05 + local * .45, z1 + Math.cos(a) * .16, .05 + local * .1, k & 1 ? '#8cff6a' : '#5de04a', (1 - local) * .85, 0);
-                    }
-                }
-            }
-            break;
-        }
-        case 5: { // BEAM (laser caster): a raised beam from the staff tip
-            let width = .09 * (1 - q) + .015;
-            let ay = .82 * rest, by = .38 * rest;
-            _fxBeam(x0 + nx * .12, ay, z0 + nz * .12, x1, by, z1, width, '#e040ff', .9 * fade);
-            _fxBeam(x0 + nx * .12, ay, z0 + nz * .12, x1, by, z1, width * .4, '#ffffff', fade);
-            _fxOrb(x1, by, z1, .18 + .1 * Math.sin(q * 20), '#f08cff', fade);
-            _fxDecal(x1, .02, z1, 0, .45 + q * .4, '#e040ff', .7 * fade, _FXP.RING, .75, 1);
-            break;
-        }
-        case 6: { // SWOOP (flying): raking talons and loose feathers
-            _fxDecal(x1, .34 * rest, z1, yaw, .66, '#fff2a0', .95 * _fxEnvelope(q, .05, .45), _FXP.CLAWS, Math.min(1, q * 2.6), 1);
-            if (detail) for (let k = 0; k < 3; k++) {
-                let a = seed + k * 2.2, drift = q * .35;
-                _fxBox(x1 + Math.sin(a) * drift, (.55 - q * .45) * rest + .04, z1 + Math.cos(a) * drift, a + q * 4, .1, .012, .05, Math.sin(q * 9 + k) * .6, '#e8d98a', fade, 0, q * 3);
-            }
-            break;
-        }
-        case 7: { // SCOUT: the rider's javelin, then a watching mark
-            if (q < .45) {
-                let t = q / .45, apex = Math.min(.5, dist * .12);
-                let y = _fxArcY(.62 * rest, .32 * rest, apex, t);
-                let slope = ((.32 - .62) * rest + 4 * apex * (1 - 2 * t)) / dist;
-                _fxSpike(x0 + dx * t, y, z0 + dz * t, yaw, Math.atan(slope), .035, .42, '#d8b47a', 1, 0, 0);
-                _fxShadow(x0 + dx * t, z0 + dz * t, .2, .3);
-            } else {
-                let e = (q - .45) / .55;
-                _fxDecal(x1, .02, z1, 0, .5 + e * .5, '#9cf', .9 * (1 - e), _FXP.RING, .85, 1);
-                _fxOrb(x1, .7 * rest + .1, z1, .08, '#cfe8ff', (1 - e) * (Math.sin(e * 18) > -.4 ? 1 : .3));
-            }
-            break;
-        }
-        case 8: { // SPIT (snake engine): venom glob, splat and steam
-            if (q < .4) {
-                let t = q / .4, apex = .28;
-                let y = _fxArcY(.45 * rest, .3 * rest, apex, t);
-                _fxOrb(x0 + dx * t, y, z0 + dz * t, .15, '#7dff3a', 1, 0);
-                if (detail) _fxOrb(x0 + dx * (t - .12), _fxArcY(.45 * rest, .3 * rest, apex, Math.max(0, t - .12)), z0 + dz * (t - .12), .08, '#b6ff7a', .7, 1);
-                _fxShadow(x0 + dx * t, z0 + dz * t, .22, .3);
-            } else {
-                let e = (q - .4) / .6;
-                _fxDecal(x1, .018, z1, seed, .5 + e * .3, '#58d63a', .8 * (1 - e), _FXP.SPLAT, e, 0);
-            }
-            if (detail && !_fx.flat) for (let k = 0; k < 2; k++) {
-                let local = Math.min(1, q * 1.4 + k * .3);
-                _fxOrb(x0 - nx * .05, .62 + local * .5, z0 - nz * .05, .07 + local * .12, '#e3e9ee', .45 * (1 - local), 0);
-            }
-            break;
-        }
-        case 9: { // DIG (mole): dirt thrown up from the target's feet
-            _fxDecal(x1, .015, z1, 0, .35 + q * .45, '#8a6a44', .7 * fade, _FXP.RING, .8, 0);
-            for (let k = 0; k < (detail ? 4 : 2); k++) {
-                let a = _fxHash(seed, k) * 6.283, r = q * (.2 + _fxHash(seed, k + 5) * .2);
-                _fxBox(x1 + Math.sin(a) * r, .03 + Math.sin(q * Math.PI) * (.2 + k * .04), z1 + Math.cos(a) * r, a, .07, .06, .07, q * 5, '#6b4a2a', Math.min(1, fade * 2), 0, q * 7);
-            }
-            break;
-        }
-        case 10: { // MUZZLE (tower): flash at the barrel and a smoke puff
-            let color = _FX_SHOT_COLOR[style] || '#fff4c8';
-            let tipX = x0 + nx * .42, tipZ = z0 + nz * .42, tipY = .78 * rest;
-            let big = style === 8 ? 1.6 : style === 1 ? 1.3 : 1;
-            if (q < .5) _fxOrb(tipX, tipY, tipZ, (.2 + .1 * big) * (1 - q * 2) + .04, color, 1);
-            if (style === 8 && q < .4) _fxBeam(tipX, tipY, tipZ, tipX + nx * .9, tipY - .05, tipZ + nz * .9, .025, '#ffffff', 1 - q / .4);
-            if (detail && !_fx.flat) _fxOrb(tipX, tipY + q * .45, tipZ, .08 + q * .16, '#b8bec4', .4 * (1 - q), 0);
-            break;
-        }
-        case 11: { // IMPACT: the shot's own kind of hit
-            let hy = .3 * rest;
-            if (style === 1) {
-                _fxOrb(x1, hy, z1, .2 + q * .45, q < .5 ? '#ffd27a' : '#ff6a1a', fade * .95);
-                _fxDecal(x1, .02, z1, 0, .5 + q * .8, '#ff7a1a', .8 * fade, _FXP.RING, .8, 1);
-                _fxDecal(x1, .015, z1, seed, .7, '#2a1a10', .45 * fade, _FXP.SPLAT, 0, 0);
-            } else if (style === 2) {
-                _fxDecal(x1, .02, z1, 0, .35 + q * .6, '#8fd0ff', .9 * fade, _FXP.RING, .8, 1);
-                if (detail) for (let k = 0; k < 3; k++) {
-                    let a = k * 2.1 + seed;
-                    _fxOrb(x1 + Math.sin(a) * q * .3, hy * .5 + Math.sin(q * Math.PI) * .25, z1 + Math.cos(a) * q * .3, .05, '#bfe6ff', fade, 0);
-                }
-            } else if (style === 3) {
-                _fxDecal(x1, .02, z1, 0, .4 + q * .4, '#ffffff', .8 * fade, _FXP.RING, .8, 1);
-                for (let k = 0; k < (detail ? 4 : 2); k++) {
-                    let a = k * 1.57 + seed;
-                    _fxSpike(x1 + Math.sin(a) * q * .25, hy * .6, z1 + Math.cos(a) * q * .25, a, .4, .05, .16, '#c8f6ff', fade, 1, 0);
-                }
-            } else if (style === 4) {
-                _fxDecal(x1, .018, z1, seed, .55 + q * .25, '#4cc83c', .7 * fade, _FXP.SPLAT, q, 0);
-            } else if (style === 9) {
-                _fxDecal(x1, .015, z1, 0, .4 + q * .7, '#c99a66', .75 * fade, _FXP.RING, .75, 0);
-                _fxDecal(x1, .02, z1, 0, .6, '#e0b98a', .4 * fade, _FXP.GLOW, 0, 0);
-            } else if (style === 10) {
-                const cycle = ['#ff6a1a', '#3aa8ff', '#5de04a', '#b8f4ff'];
-                for (let k = 0; k < 3; k++) {
-                    let local = Math.max(0, Math.min(1, q * 1.5 - k * .2));
-                    if (local > 0 && local < 1) _fxDecal(x1, .02 + k * .002, z1, 0, .3 + local * .7, cycle[(k + seed) & 3], .8 * (1 - local), _FXP.RING, .82, 1);
-                }
-            } else if (style === 11) {
-                _fxDecal(x1, .02, z1, 0, .4 + q * .5, '#ffe14a', .8 * fade, _FXP.RING, .85, 1);
-            } else if (style === 8) {
-                _fxDecal(x1, hy, z1, seed, .5, '#ffffff', fade, _FXP.CROSS, 1, 1);
-                _fxOrb(x1, hy, z1, .22 * fade + .03, '#ffffff', fade);
-            } else {
-                _fxOrb(x1, hy, z1, .12 * fade + .03, _FX_SHOT_COLOR[style] || '#fff4c8', fade);
-                _fxDecal(x1, .02, z1, 0, .25 + q * .35, '#fff4c8', .6 * fade, _FXP.RING, .8, 1);
-            }
-            break;
-        }
-    }
+// Near records are drawn on the GPU (renderer3d.js drawFxNear, fxNearVertexGlsl: the shapes of a blow, a cast, a
+// shot's muzzle, flight and hit, built there from an entry): the page lists them, an entry each of 8 floats (x0, z0,
+// x1, z1 in tiles, its ends as drawn; kind, style, seed, q its phase); a volley's shots as entries of their own
+// (_fxNearVolley). Sized once for the ring's every record a volley's most (_pushCombatRecordFx).
+const _fxNear = { data: null, rows: 0, n: 0, rest: 1, detail: true, cycle: 0, perspective: false };
+function _fxNearPut(N, kind, x0, z0, x1, z1, style, seed, q) {
+    const D = N.data, o = N.n * 8;
+    D[o] = x0; D[o + 1] = z0; D[o + 2] = x1; D[o + 3] = z1; D[o + 4] = kind; D[o + 5] = style; D[o + 6] = seed; D[o + 7] = q;
+    N.n++;
 }
-
 // A unit's drawn position by id (pixels, into out): the worker's frames, or
 // the unit itself in this thread; false when it is not drawn.
 const _fxAt = [0, 0];
@@ -317,43 +138,21 @@ function _fxDrawnAt(id, out) {
 // (as drawn, by dst id) at a projectile's speed (8 px a tick), then its
 // impact. Drawn from the record alone, on the effects' clock: beside the
 // worker the simulation's projectiles are not drawn (_fx.volleys), its
-// impact records neither.
+// impact records neither. Each shot: its muzzle flash (kind 10), its flight
+// (13, q its fraction; where it is lit) or its hit (11), entries of the near list.
 const _FX_VOLLEY_GAP = 6, _FX_VOLLEY_MAX = 4, _FX_PROJ_SPEED = 8, _FX_IMPACT_TICKS = 9;
-const _fxShot = { type: '', startX: 0, startY: 0, aimDist: 0, vx: 0, vy: 0 };
 function _fxVolleyTicks(n, distPx) { return (Math.min(_FX_VOLLEY_MAX, n) - 1) * _FX_VOLLEY_GAP + distPx / _FX_PROJ_SPEED + _FX_IMPACT_TICKS; }
-function _fxVolley(n, x0, z0, x1, z1, style, seed, age, typeName) {
-    const ts = _fx.tickScale;
+function _fxNearVolley(N, n, x0, z0, x1, z1, style, seed, age) {
+    const ts = _fx.tickScale, muzzle = _FX_DURATION[10] * ts, impact = _FX_IMPACT_TICKS * ts;
     n = Math.min(_FX_VOLLEY_MAX, n);
     const dx = x1 - x0, dz = z1 - z0, dist = _fxLen(dx, dz) || .001, flight = dist * TILE / _FX_PROJ_SPEED;
     for (let i = 0; i < n; i++) {
         const t = age - i * _FX_VOLLEY_GAP * ts;
         if (t < 0) break;
-        const farPpt = _fx.farPpt;
-        if (t < _FX_DURATION[10] * ts) { if (farPpt) _fxEventFar(10, x0, z0, x1, z1, style, t / (_FX_DURATION[10] * ts), farPpt); else _fxEvent(10, x0, z0, x1, z1, style, seed + i, t / (_FX_DURATION[10] * ts)); }
-        if (farPpt) {
-            if (t < flight) { const q = t / flight; _fxFarDot(x0 + dx * q, z0 + dz * q, .15, _FX_SHOT_COLOR[style] || '#fff4c8', 1, farPpt); }
-            else if (t < flight + _FX_IMPACT_TICKS * ts) _fxEventFar(11, x0, z0, x1, z1, style, (t - flight) / (_FX_IMPACT_TICKS * ts), farPpt);
-            continue;
-        }
-        if (t < flight) {
-            const q = t / flight, px = x0 + dx * q, pz = z0 + dz * q;
-            if (!_fxVisible(px, pz)) continue;
-            const S = _fxShot;
-            S.type = typeName; S.startX = x0 * TILE; S.startY = z0 * TILE; S.aimDist = dist * TILE; S.vx = dx / dist * _FX_PROJ_SPEED; S.vy = dz / dist * _FX_PROJ_SPEED;
-            _pushProjectileFx(S, px, pz);
-        } else if (t < flight + _FX_IMPACT_TICKS * ts) _fxEvent(11, x0, z0, x1, z1, style, seed + i, (t - flight) / (_FX_IMPACT_TICKS * ts));
+        if (t < muzzle) _fxNearPut(N, 10, x0, z0, x1, z1, style, seed + i, t / muzzle);
+        if (t < flight) { const q = t / flight; if (_fxVisible(x0 + dx * q, z0 + dz * q)) _fxNearPut(N, 13, x0, z0, x1, z1, style, seed + i, q); }
+        else if (t < flight + impact) _fxNearPut(N, 11, x0, z0, x1, z1, style, seed + i, (t - flight) / impact);
     }
-}
-// (The projectile type of a shot style: its look, _pushProjectileFx.)
-const _fxStyleType = [];
-function _fxTypeOfStyle(style) {
-    let t = _fxStyleType[style];
-    if (t === undefined) {
-        t = '';
-        if (typeof COMBAT_FX_STYLE !== 'undefined') for (const k in COMBAT_FX_STYLE) if (COMBAT_FX_STYLE[k] === style) { t = k; break; }
-        _fxStyleType[style] = t;
-    }
-    return t;
 }
 
 // (The ring's records that may still be live: from _fxTail (the oldest not yet known dead) to the head, in the order
@@ -361,11 +160,43 @@ function _fxTypeOfStyle(style) {
 // function's time (~20 ms/s of the page in a battle, perf fuzz 2026-11-18). When more were written since the last
 // frame than the ring holds, the whole ring.)
 let _fxTail = 0, _fxTailSerial = 0, _fxBand = 1 << 30;
+// (Far away (under _FX_FAR_PPT pixels a tile at its target) a record is drawn on the GPU from the ring itself:
+// renderer3d.js drawFxFar, which gets the records written since its last frame and animates each by its age. The
+// page reads only the near ones, and none when nothing in view is that near: a pass over every live record each
+// frame was ~2.2 ms a frame zoomed out over a 140k battle (2026-11-23).)
+const _fxFarState = { data: null, ids: null, cap: 0, head: 0, serial: 0, clears: 0, now: 0, ts: 1, volleys: false, flat: false, rest: 1,
+    ppt: 32, full: false, vis: null, visVersion: 0, tile: 32, minX: 0, minZ: 0, maxX: 0, maxZ: 0 };
+function _fxMaxPixelsPerTile() {
+    const r = _fx.renderer;
+    if (_fx.flat || !r) return _fx.ppt;
+    // (Depth is linear in position: its least over the view's box is at a corner.)
+    let m = 0;
+    for (const x of [_fx.minX, _fx.maxX]) for (const z of [_fx.minZ, _fx.maxZ]) m = Math.max(m, r.pixelsPerWorldAt(x, .3, z));
+    return m;
+}
 function _pushCombatRecordFx() {
     if (typeof combatFxData === 'undefined') return;
     const data = combatFxData, stride = COMBAT_FX_STRIDE, now = _fx.now, tickScale = _fx.tickScale;
     const ids = typeof combatFxIds !== 'undefined' ? combatFxIds : null, P = _fxAt, volleys = _fx.volleys;
-    const CAP = COMBAT_FX_CAPACITY, head = combatFxHead, serial = combatFxSerial | 0, written = (serial - _fxTailSerial) | 0;
+    const CAP = COMBAT_FX_CAPACITY, head = combatFxHead, serial = combatFxSerial | 0;
+    const S = _fxFarState;
+    S.data = data; S.ids = ids; S.cap = CAP; S.head = head; S.serial = serial; S.clears = typeof combatFxClears === 'number' ? combatFxClears : 0;
+    S.now = now; S.ts = tickScale; S.volleys = volleys; S.flat = _fx.flat; S.rest = _fx.rest; S.ppt = _fx.ppt; S.full = _fx.full;
+    S.vis = _fx.vis; S.visVersion = typeof visibilityVersion === 'number' ? visibilityVersion : 0; S.tile = TILE;
+    S.minX = _fx.minX; S.minZ = _fx.minZ; S.maxX = _fx.maxX; S.maxZ = _fx.maxZ;
+    _fx.batch.far = S;
+    // (The near ones: entries for the GPU, renderer3d.js drawFxNear.)
+    const N = _fxNear;
+    if (!N.data) { N.data = new Float32Array(CAP * _FX_VOLLEY_MAX * 2 * 8); N.rows = Math.ceil(CAP * _FX_VOLLEY_MAX * 2 * 2 / 2048); }
+    N.n = 0; N.rest = _fx.rest; N.detail = _fx.detail; N.cycle = Math.floor(now / (3 * tickScale)) & 3; N.perspective = !!_fx.renderer;
+    _fx.batch.near = N;
+    if (!(_fxMaxPixelsPerTile() >= _FX_FAR_PPT)) return;
+    // (Near at its target, as _fxPixelsPerTileAt and the GPU tell it: its depth along the view at most the
+    // projection's scale over _FX_FAR_PPT; the flat view (one scale) all near here.)
+    const R = _fx.renderer, eye = R && R.lodEye, fw = R && R.lodForward, perspective = !!(eye && fw && R.lodProjectionScale);
+    const ex = perspective ? eye[0] : 0, ey = perspective ? eye[1] - .3 : 0, ez = perspective ? eye[2] : 0, fx = perspective ? fw[0] : 0, fy = perspective ? fw[1] : 0, fz = perspective ? fw[2] : 0;
+    const nearDepth = perspective ? R.lodProjectionScale / _FX_FAR_PPT : Infinity;
+    const written = (serial - _fxTailSerial) | 0;
     _fxTailSerial = serial;
     // (_fxBand: records from the tail to the head at the last frame's end; with those written since, the ring's size
     // or more: the head may have passed the tail, the whole ring.)
@@ -393,26 +224,18 @@ function _pushCombatRecordFx() {
         if (age < 0) continue;
         let x1 = data[o + 3] / TILE, z1 = data[o + 4] / TILE;
         let x0 = data[o + 1] / TILE, z0 = data[o + 2] / TILE;
+        // (Far away: the GPU's, drawFxFar.)
+        if ((x1 - ex) * fx - ey * fy + (z1 - ez) * fz > nearDepth) continue;
         if (!_fxVisible(x1, z1) && !_fxVisible(x0, z0)) continue;
-        if (_fx.batch.total >= _fx.limit) continue;
-        // (Far away: each effect a dot or a line, _fxEventFar; between its
-        // units as drawn as close up.)
-        const ppt = _fxPixelsPerTileAt(x1, z1), farAway = ppt < _FX_FAR_PPT;
         // (A unit's attack between its units as drawn: a beam's ends stay on
-        // the caster and its target as they move; where they stood once gone.
-        // Far away, where the record put them: the difference is under a pixel,
-        // and the lookup per record per frame was the page's largest cost in big
-        // fights zoomed out (pageUnitDrawnAt ~3.5 s of 31 s).)
-        if (ids !== null && !farAway) {
+        // the caster and its target as they move; where they stood once gone.)
+        if (ids !== null) {
             const a = ids[r], b = ids[r + 1];
             if (a > 0 && _fxDrawnAt(a, P)) { x0 = P[0] / TILE; z0 = P[1] / TILE; }
             if (b > 0 && _fxDrawnAt(b, P)) { x1 = P[0] / TILE; z1 = P[1] / TILE; }
         }
-        _fx.farPpt = farAway ? ppt : 0;
-        if (volley) { _fxVolley(volley, x0, z0, x1, z1, data[o + 6], data[o + 7], age, _fxTypeOfStyle(data[o + 6])); _fx.farPpt = 0; continue; }
-        if (farAway) _fxEventFar(kind, x0, z0, x1, z1, data[o + 6], age / duration, ppt);
-        else _fxEvent(kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
-        _fx.farPpt = 0;
+        if (volley) { _fxNearVolley(N, volley, x0, z0, x1, z1, data[o + 6], data[o + 7], age); continue; }
+        _fxNearPut(N, kind, x0, z0, x1, z1, data[o + 6], data[o + 7], age / duration);
     }
     }
     // (None kept: none left before the head.)
@@ -425,7 +248,9 @@ function _pushCombatRecordFx() {
 // each one is drawn instead as what it is from afar, its colour where it is
 // (a shot's dot along its flight, a beam's line, a hit's flash at its
 // target), at least _FX_FAR_MIN_PX on screen: the same timing and colours as
-// close up, without its detail.
+// close up, without its detail. Recorded effects are drawn so on the GPU
+// (renderer3d.js drawFxFar, from FX_FAR below); _fxFarDot is the in-page
+// simulation's projectiles'.
 // (Full effects down to _FX_FAR_PPT pixels a tile; under it dots of at least
 // _FX_FAR_MIN_PX, their own colour, not additive: many overlapping
 // additive dots summed to white blobs over the coloured shots.)
@@ -434,57 +259,17 @@ function _fxPixelsPerTileAt(x, z) {
     const r = _fx.renderer;
     return _fx.flat || !r ? _fx.ppt : r.pixelsPerWorldAt(x, .3, z);
 }
-// The colour an event reads as from afar.
-function _fxFarColor(kind, style) {
-    switch (kind) {
-        case 1: return '#eef6ff';
-        case 12: return '#ffd84a';
-        case 2: return '#f4f4ff';
-        case 3: return style === 13 ? '#d8c8a8' : '#fff1c8';
-        case 4: return (_FX_ELEMENT[style] || _FX_ELEMENT[1]).main;
-        case 5: return '#e040ff';
-        case 6: return '#fff2a0';
-        case 7: return '#9cf';
-        case 8: return '#7dff3a';
-        case 9: return '#c99a66';
-        default: return _FX_SHOT_COLOR[style] || '#fff4c8';
-    }
-}
-// A dot of d tiles (at least _FX_FAR_MIN_PX on screen) at (x, z).
+// What the GPU's far effects read: an event's colour from afar by kind (null: by its style, as a shot's; kind 3
+// with style 13 the boss's dust; kind 4 its element's), the shots' colours by style, the elements' main and glow
+// colours, the base durations, the volleys' timing.
+const FX_FAR = {
+    ppt: _FX_FAR_PPT, minPx: _FX_FAR_MIN_PX, kindColor: [null, '#eef6ff', '#f4f4ff', '#fff1c8', null, '#e040ff', '#fff2a0', '#9cf', '#7dff3a', '#c99a66', null, null, '#ffd84a'],
+    bossDust: '#d8c8a8', beamHit: '#f08cff', shotColor: _FX_SHOT_COLOR, shotDefault: '#fff4c8', element: _FX_ELEMENT, duration: _FX_DURATION,
+    volleyGap: _FX_VOLLEY_GAP, volleyMax: _FX_VOLLEY_MAX, projSpeed: _FX_PROJ_SPEED, impactTicks: _FX_IMPACT_TICKS, rgb: _fxRgb, arc: _FX_ARC,
+};
 function _fxFarDot(x, z, d, color, alpha, ppt) {
     if (!(alpha > .02) || !_fxVisible(x, z)) return;
     _fxOrb(x, .3 * _fx.rest, z, Math.max(d, _FX_FAR_MIN_PX / Math.max(.05, ppt)), color, Math.min(1, alpha), 0);
-}
-function _fxEventFar(kind, x0, z0, x1, z1, style, q, ppt) {
-    const color = _fxFarColor(kind, style), fade = 1 - q;
-    const dx = x1 - x0, dz = z1 - z0;
-    switch (kind) {
-        case 5: { // a beam: its line, at least a pixel and a half wide
-            const w = Math.max(.09, 1.5 / Math.max(.05, ppt));
-            _fxBeam(x0, .5 * _fx.rest, z0, x1, .38 * _fx.rest, z1, w, color, .9 * fade);
-            _fxFarDot(x1, z1, .25, '#f08cff', fade, ppt);
-            return;
-        }
-        case 7: case 8: { // a thrown javelin / spat glob: its flight, then its hit
-            const flight = kind === 7 ? .45 : .4;
-            if (q < flight) { const t = q / flight; _fxFarDot(x0 + dx * t, z0 + dz * t, .15, color, 1, ppt); }
-            else _fxFarDot(x1, z1, .35, color, (1 - (q - flight) / (1 - flight)) * .8, ppt);
-            return;
-        }
-        case 4: { // a cast: the mote to the target, then the element there
-            if (q < .3) { const t = q / .3; _fxFarDot(x0 + dx * t, z0 + dz * t, .1, (_FX_ELEMENT[style] || _FX_ELEMENT[1]).glow, 1, ppt); }
-            else _fxFarDot(x1, z1, .5, color, _fxEnvelope(q, .3, .35), ppt);
-            return;
-        }
-        case 10: // a muzzle flash at the barrel
-            if (q < .5) _fxFarDot(x0 + dx / (_fxLen(dx, dz) || 1) * .42, z0 + dz / (_fxLen(dx, dz) || 1) * .42, .3, color, 1 - q * 2, ppt);
-            return;
-        default: { // a blow or a hit: a flash at the target (melee blows,
-            // white, smaller and fainter: they hid the coloured shots)
-            const melee = kind === 1 || kind === 2 || kind === 3 || kind === 6 || kind === 9 || kind === 12;
-            _fxFarDot(x1, z1, melee ? (kind === 3 || kind === 12 ? .4 : .25) : .35, color, fade * (melee ? .55 : .95), ppt);
-        }
-    }
 }
 
 // ---- Projectiles --------------------------------------------------------
@@ -650,16 +435,17 @@ function beginFrameEffects(batch, flat2d, bounds, visibility, pixelsPerTile, ren
     _FXM = window.Defence3Renderer3D.FX_MESH;
     _FXP = window.Defence3Renderer3D.FX_PATTERN;
     batch.reset();
+    batch.far = null;
     _fx.batch = batch;
     _fx.flat = !!flat2d;
     _fx.rest = flat2d ? .15 : 1;
     // Zoomed far out, secondary pieces (debris, trails, smoke) are subpixel.
     if(!flat2d && renderer && renderer.lodPixelsPerWorld>0) pixelsPerTile=renderer.lodPixelsPerWorld;
     _fx.detail = !(pixelsPerTile < 14);
-    // (Far away an effect is one dot or line, _fxEventFar: more of them fit.)
+    // (Far away an effect is one dot (_fxFarDot): more of them fit.)
     _fx.limit = pixelsPerTile < 14 ? 8192 : pixelsPerTile < 32 ? 4096 : 6000;
     _fx.cellSize=Math.max(1,3/Math.max(.1,pixelsPerTile));_fx.cells.clear();
-    _fx.ppt = pixelsPerTile; _fx.farPpt = 0;
+    _fx.ppt = pixelsPerTile;
     _fx.renderer = !flat2d && renderer && typeof renderer.pixelsPerWorldAt === 'function' ? renderer : null;
     _fx.tickScale = Math.max(.25, (typeof TICK_RATE === 'number' ? TICK_RATE : 20) / 20);
     // (On the drawn units' clock beside the worker: see simClientDrawnGameTime.)

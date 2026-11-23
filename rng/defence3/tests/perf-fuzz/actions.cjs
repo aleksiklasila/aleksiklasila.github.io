@@ -242,6 +242,108 @@ add({ name: 'view.orbit', cat: 'view', weight: 4, tailMs: 4000,
         return { note: `${n} middle drags` };
     } });
 
+// A low camera turning round: the view tilted near the ground (a long middle drag down), then a slow continuous turn
+// (the middle button held for seconds, the mouse moved a little each frame), sometimes zooming in on the way.
+add({ name: 'view.lowOrbit', cat: 'view', weight: 4, tailMs: 4000,
+    prelude: async c => { const s = await c.state(); if (!/^3/.test(s.view)) { const b = (await c.controls({ ids: ['btn-view-3d'] }))[0]; if (b) { await c.click(b.x, b.y); await sleep(2500); } } },
+    run: async c => {
+        const f = field(c), cx = (f.l + f.r) / 2, cy = (f.t + f.b) / 2, p = c.page;
+        // (Tilt: the middle button dragged a long way down, then let go.)
+        await c.drag(cx, cy - 150, cx, Math.min(f.b - 5, cy + c.rng.range(150, 330)), { button: 'middle', steps: 20 });
+        await sleep(150);
+        const ms = c.rng.int(2500, 7000), dir = c.rng.pick([-1, 1]), speed = c.rng.range(0.15, 0.6), zoom = c.rng.chance(0.4);
+        await p.mouse.move(cx, cy); await p.mouse.down({ button: 'middle' }); c.S.heldButtons.add('middle');
+        const t0 = Date.now(); let x = cx;
+        try {
+            while (Date.now() - t0 < ms) {
+                x += dir * speed * 16;
+                if (x < f.l + 20 || x > f.r - 20) { await p.mouse.up({ button: 'middle' }); x = cx; await p.mouse.move(x, cy); await p.mouse.down({ button: 'middle' }); }
+                await p.mouse.move(x, cy + Math.sin((Date.now() - t0) / 700) * 3);
+                if (zoom && Math.random() < 0.05) await p.mouse.wheel(0, -100);
+                await sleep(16);
+            }
+        } finally { await p.mouse.up({ button: 'middle' }); c.S.heldButtons.delete('middle'); }
+        return { note: `low orbit ${ms} ms ${dir < 0 ? 'left' : 'right'} x${speed.toFixed(2)}${zoom ? ' zooming' : ''}` };
+    } });
+// The camera as a player moves it, in 2D or 3D (chosen first): for several seconds a random run of pans (keys held,
+// diagonals, taps), wheel zooms (bursts in and out, fast or slow, at random points), and in 3D rotation and tilt (the
+// middle button held, the mouse moved), often at once (panning while zooming, rotating while panning), and minimap
+// jumps.
+const viewTo = async (c, mode) => {
+    const id = mode === '2d' ? 'btn-view-2d' : 'btn-view-3d';
+    const s = await c.state(); if ((mode === '2d') === /^2d/.test(s.view)) return;
+    const b = (await c.controls({ ids: [id] }))[0]; if (b) { await c.click(b.x, b.y); await sleep(1500); }
+};
+add({ name: 'cam.freestyle', cat: 'camera', weight: 8, tailMs: 3500, run: async c => {
+    const mode = c.rng.pick(['2d', '3d', '3d']); await viewTo(c, mode);
+    const f = field(c), p = c.page, notes = [mode], t0 = Date.now(), total = c.rng.int(4000, 10000);
+    const dirs = [['w'], ['a'], ['s'], ['d'], ['w', 'a'], ['w', 'd'], ['s', 'a'], ['s', 'd'], ['ArrowUp'], ['ArrowDown'], ['ArrowLeft'], ['ArrowRight']];
+    const wheelAt = async (n, dir, gap) => { await c.mouse(c.rng.range(f.l, f.r), c.rng.range(f.t, f.b), 2); for (let i = 0; i < n; i++) { await c.wheel(dir * 100); await sleep(gap); } };
+    const middle = async (ms, fx, fy, keys) => {
+        const cx = (f.l + f.r) / 2, cy = (f.t + f.b) / 2; let x = cx, y = cy;
+        for (const k of keys || []) await c.keyDown(k);
+        await p.mouse.move(x, y); await p.mouse.down({ button: 'middle' }); c.S.heldButtons.add('middle');
+        try {
+            const s = Date.now();
+            while (Date.now() - s < ms) {
+                x = Math.max(f.l + 5, Math.min(f.r - 5, x + fx)); y = Math.max(f.t + 5, Math.min(f.b - 5, y + fy));
+                await p.mouse.move(x, y); await sleep(16);
+                if (x <= f.l + 5 || x >= f.r - 5 || y <= f.t + 5 || y >= f.b - 5) break;
+            }
+        } finally { await p.mouse.up({ button: 'middle' }); c.S.heldButtons.delete('middle'); for (const k of keys || []) await c.keyUp(k); }
+    };
+    while (Date.now() - t0 < total) {
+        const ops = ['pan', 'panTap', 'zoom', 'zoomPan', 'minimap', ...(mode === '3d' ? ['rotate', 'rotate', 'tilt', 'rotatePan', 'rotateZoom'] : ['zoom', 'pan'])];
+        const op = c.rng.pick(ops); notes.push(op);
+        if (op === 'pan') { const k = c.rng.pick(dirs); for (const x of k) await c.keyDown(x); await sleep(c.rng.int(250, 2000)); for (const x of k) await c.keyUp(x); }
+        else if (op === 'panTap') { const k = c.rng.pick(dirs)[0]; for (let i = 0; i < c.rng.int(3, 12); i++) { await c.key(k); await sleep(c.rng.int(30, 160)); } }
+        else if (op === 'zoom') await wheelAt(c.rng.int(2, 25), c.rng.pick([-1, 1]), c.rng.pick([8, 20, 50, 120]));
+        else if (op === 'zoomPan') { const k = c.rng.pick(dirs); for (const x of k) await c.keyDown(x); await wheelAt(c.rng.int(4, 20), c.rng.pick([-1, 1]), c.rng.pick([20, 60])); for (const x of k) await c.keyUp(x); }
+        else if (op === 'minimap') {
+            const m = (await c.controls({ ids: ['minimapCanvas'] }))[0];
+            if (m) { const r = await p.evaluate(() => { const e = document.getElementById('minimapCanvas').getBoundingClientRect(); return [e.left, e.top, e.width, e.height]; });
+                const px = () => r[0] + c.rng.range(0.1, 0.9) * r[2], py = () => r[1] + c.rng.range(0.1, 0.9) * r[3];
+                if (c.rng.chance(0.5)) await c.click(px(), py()); else await c.drag(px(), py(), px(), py(), { steps: c.rng.int(5, 20) }); }
+        }
+        else if (op === 'rotate') await middle(c.rng.int(400, 2500), c.rng.pick([-1, 1]) * c.rng.range(2, 14), c.rng.range(-1, 1));
+        else if (op === 'tilt') await middle(c.rng.int(300, 1200), c.rng.range(-1, 1), c.rng.pick([-1, 1]) * c.rng.range(2, 8));
+        else if (op === 'rotatePan') await middle(c.rng.int(600, 2200), c.rng.pick([-1, 1]) * c.rng.range(2, 10), c.rng.range(-2, 2), c.rng.pick(dirs));
+        else if (op === 'rotateZoom') { const ms = c.rng.int(600, 2000); const z = wheelAt(c.rng.int(4, 16), c.rng.pick([-1, 1]), 60); await Promise.all([middle(ms, c.rng.pick([-1, 1]) * c.rng.range(2, 10), c.rng.range(-3, 3)), z]); }
+        await sleep(c.rng.int(0, 250));
+    }
+    return { note: notes.join(' ') };
+} });
+
+// Research by the bottom bar: things dragged onto the research row (queued), tasks dragged to another place, a task's
+// menu opened and one of its controls clicked.
+const bbTiles = c => c.page.evaluate(() => {
+    const pick = sel => [...document.querySelectorAll(sel)].map(e => { const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, r.width]; })
+        .filter(p => p[2] > 3 && p[0] > 0 && p[0] < innerWidth && p[1] > 0 && p[1] < innerHeight);
+    const row = document.getElementById('bb-research'), rr = row ? row.getBoundingClientRect() : null;
+    return { things: pick('#bb-things .bb-thing'), tasks: pick('#bb-research .bb-task'), row: rr ? [rr.left, rr.top, rr.right, rr.bottom] : null };
+});
+add({ name: 'bar.research', cat: 'economy', weight: 5, tailMs: 4000, run: async c => {
+    const n = c.rng.int(1, 5), notes = [];
+    for (let i = 0; i < n; i++) {
+        const T = await bbTiles(c); if (!T.row) return { skipped: 'no research row' };
+        const kind = c.rng.pick(['queue', 'queue', 'reorder', 'menu']);
+        if (kind === 'queue' && T.things.length) {
+            const a = c.rng.pick(T.things), x = c.rng.range(T.row[0] + 10, T.row[2] - 10), y = (T.row[1] + T.row[3]) / 2;
+            await c.drag(a[0], a[1], x, y, { steps: c.rng.int(8, 20), hold: 120 }); notes.push('queue');
+        } else if (kind === 'reorder' && T.tasks.length > 1) {
+            const a = c.rng.pick(T.tasks), b = c.rng.pick(T.tasks);
+            await c.page.mouse.move(a[0], a[1]); await c.page.mouse.down(); await sleep(450);
+            await c.page.mouse.move(b[0] + 10, b[1], { steps: c.rng.int(8, 20) }); await sleep(120); await c.page.mouse.up(); notes.push('reorder');
+        } else if (T.tasks.length) {
+            const a = c.rng.pick(T.tasks); await c.click(a[0], a[1]); await sleep(300);
+            const inside = await c.controls({ region: '^(bbmenu|bottom-bar)$', max: 20 }); if (inside.length) { const y = c.rng.pick(inside); await c.click(y.x, y.y); }
+            await sleep(200); await c.key('Escape'); notes.push('menu');
+        }
+        await sleep(c.rng.int(120, 600));
+    }
+    return { note: notes.join(' ') };
+} });
+
 // -- UI --
 add({ name: 'ui.settings', cat: 'ui', weight: 6, tailMs: 4000, settleMs: 1200, run: async c => {
     const open = (await c.controls({ ids: ['btn-help'] }))[0]; if (!open) return { skipped: 'no settings button' };

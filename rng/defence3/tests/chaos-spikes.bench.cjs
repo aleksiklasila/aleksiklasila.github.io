@@ -82,6 +82,29 @@ console.log('Setup',JSON.stringify(setupSummary));
 const exportScene=process.argv.find(a=>a.startsWith('--export-scene='))?.slice(15);
 if(exportScene){
  for(let i=0;i<num('export-ticks',10);i++)inst.eval('gameTick()');
+ // Units start full: they are placed with their base energy and the levels, research and boosts seeded after raise
+ // only their maximum (a loaded scene's median unit had ~2% of its energy and the armies melted in seconds).
+ // --keep-energy: as placed. Prints the units' energy / max (median, 5th percentile) before and after.
+ const ratio=()=>inst.eval(`(()=>{const r=[];for(const u of units){if(u.dead)continue;const m=u.maxEnergy;if(m>0)r.push(u.energy/m);}r.sort((a,b)=>a-b);return JSON.stringify({n:r.length,p05:r[Math.floor(r.length*.05)],p50:r[Math.floor(r.length*.5)]});})()`);
+ console.log('energy/max before',ratio());
+ // (Their effective levels first, every unit at once (the game refreshes a share a tick, so at tick 0 none has its
+ // own yet): the maximum they will have, from their areas' counts. Loaded at base energy, their maximum (and damage)
+ // rose to tens or hundreds of times it within seconds.)
+ if(!process.argv.includes('--keep-energy')){
+  inst.eval(`(()=>{const st=++_effectiveStatsStamp;_effUnitsRun(Math.max(0,gameTime|0),1,0,units.length,st,getUnitEffectiveStatsRecalcTicks());})()`);
+  console.log('energy/max with effective levels',ratio());
+  inst.eval(`for(const u of units){if(u.dead)continue;const m=u.maxEnergy;if(m>0&&u.energy<m)u.energy=m;}`);console.log('energy/max after',ratio());
+  // Buildings the same: their effective levels from the adjacency pass (a background lane in play: run once here),
+  // then full.
+  const sratio=()=>inst.eval(`(()=>{const r=[];for(const L of [towers,barracks,collectorSpawners,getCellItemsRowMajor()])for(const e of L){if(!e||e.dead||!(e.energy>0))continue;const m=e.maxEnergy;if(m>0)r.push(e.energy/m);}r.sort((a,b)=>a-b);return JSON.stringify({n:r.length,p05:r[Math.floor(r.length*.05)],p50:r[Math.floor(r.length*.5)]});})()`);
+  inst.eval(`(()=>{const l=ADJACENCY_LANE;ADJACENCY_LANE=false;try{_adjacencyLastRecalcTick=-1;recalculateAdjacency(true);}finally{ADJACENCY_LANE=l;}})()`);
+  console.log('buildings energy/max with adjacency',sratio());
+  console.log('buildings detail',inst.eval(`(()=>{let n=0,up=0,uc=0,lvlFull=0,sumLv=0,sumEff=0;const r=[];for(const L of [towers,barracks,collectorSpawners,getCellItemsRowMajor()])for(const e of L){if(!e||e.dead||!(e.energy>0))continue;n++;if(e.isUpgrading)up++;if(e.underConstruction)uc++;const b=e.preComputedBase&&e.preComputedBase.maxEnergy;if(b>0)r.push(e.energy/b);sumLv+=e.level||0;sumEff+=e.effectiveLevel||0;}r.sort((a,b)=>a-b);return JSON.stringify({n,upgrading:up,underConstruction:uc,vsLevelMax:{p05:r[Math.floor(r.length*.05)],p50:r[Math.floor(r.length*.5)]},meanLevel:sumLv/n,meanEff:sumEff/n});})()`));
+  // (Up to their own level's maximum (preComputedBase): an effective level above it is what a building can upgrade
+  // to, not energy it has; one mid-upgrade keeps the upgrade's own maximum as its cap; a site under construction stays as placed: its energy is its build progress.)
+  inst.eval(`for(const L of [towers,barracks,collectorSpawners,getCellItemsRowMajor()])for(const e of L){if(!e||e.dead||!(e.energy>0)||e.underConstruction)continue;const b=e.preComputedBase&&e.preComputedBase.maxEnergy;const m=Math.min(b>0?b:Infinity,e.maxEnergy>0?e.maxEnergy:Infinity);if(Number.isFinite(m)&&e.energy<m)e.energy=Math.floor(m);}`);
+  console.log('buildings energy/max after (of maxEnergy)',sratio());console.log('buildings detail after',inst.eval(`(()=>{const r=[];for(const L of [towers,barracks,collectorSpawners,getCellItemsRowMajor()])for(const e of L){if(!e||e.dead||!(e.energy>0))continue;const b=e.preComputedBase&&e.preComputedBase.maxEnergy;if(b>0)r.push(e.energy/b);}r.sort((a,b)=>a-b);return JSON.stringify({vsLevelMax:{p05:r[Math.floor(r.length*.05)],p50:r[Math.floor(r.length*.5)],max:r[r.length-1]}});})()`));
+ }
  const parts=inst.eval(`(()=>{const settings=createMainMenuSettingsSnapshot();settings.editableConfig=serializeEditableRuntimeConfigForTransport();
   return soloGameSnapshotJsonParts(buildSoloGameSnapshotParts({createdAt:new Date().toISOString(),settings,player:0,teamColors:{...teamColorById},
    camera:{x:GRID_W/2,y:GRID_H/2,zoom:camera.zoom}}));})()`);

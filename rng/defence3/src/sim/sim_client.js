@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261108-st6';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261123-h';
 
 function _simClientCreate() {
     let c = {
@@ -1023,8 +1023,33 @@ function _simClientApplyTick(msg) {
 
 // ---- units: frames and their views ----
 
-// View per slot (while alive; by id in _pageUnitsById).
+// View per slot (while alive; by id in _pageUnitsById): only the views made so far. A unit's view is made when first
+// read (pageSlotView, or _pageUnitsById.get by id): the selection's, the ones drawn in detail, the targets of events.
+// The membership pass (_simClientUpdateStableSlots) moves and freezes only those; every unit's view made at its birth
+// and kept slot by slot was ~2 ms of a busy tick of a 140k battle (2026-11-23).
 let _pageSlotViews = [];
+// The view of slot s's unit in the current frame (made if none was: undefined for an empty slot; wantId: undefined
+// unless the slot holds that unit).
+// (A view in frame F, before it is the current one: the full pass's.)
+function _pageViewIn(F, s) {
+    let v = _pageSlotViews[s];
+    if (v !== undefined) return v;
+    const id = F.id[s];
+    if (id < 0) return undefined;
+    v = new PageUnit(id, s); _pageSlotViews[s] = v; _pageUnitsById.set(id, v);
+    return v;
+}
+function pageSlotView(s, wantId = -1) {
+    const v = _pageSlotViews[s];
+    if (v !== undefined) return wantId < 0 || v.id === wantId ? v : undefined;
+    const F = _pageFrame;
+    if (!F || !(s >= 0 && s < F.n)) return undefined;
+    const id = F.id[s];
+    if (id < 0 || (wantId >= 0 && id !== wantId)) return undefined;
+    const u = new PageUnit(id, s);
+    _pageSlotViews[s] = u; _pageUnitsById.set(id, u);
+    return u;
+}
 let _pageViewStamp = 0;
 
 // (The presentation reader's buffers: a trailer, its magic last.)
@@ -1061,9 +1086,11 @@ function _simClientResetUnits() {
     let c = _simClient;
     _simClientDropHeld(c);
     for (let u of _pageUnitsById.values()) { u._freeze(); u.dead = true; }
+    pageUnitDeaths++;
     if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
     _pageUnitsById = new PageUnitIdMap();
     _pageSlotViews = [];
+    _pageIdSlot.fill(-1);
     let bufs = pageResetWorldTables(c);
     if (_pageFrame) { bufs.push(_pageFrame); _pageFrame = null; }
     _simClientReturnBufs(bufs);
@@ -1096,8 +1123,11 @@ function _simClientApplyWorld(w, shown) {
     if ('details' in w) _simClientApplyDetails(w.details);
     if ('structureDetails' in w) pageApplyStructureDetails(w.structureDetails, c);
     _simClientWatch();
-    // Selected structures replaced by new objects (a restore): the new ones.
-    if (selectedEntities.length && selectedEntities.some(e => e && e._structView && e.dead)) {
+    // Selected structures replaced by new objects (a restore, a structure made anew on its tile): the new ones.
+    // (Known by the selection's slot index, hud.js selectionStructIndex: a building that died with nothing in its
+    // place stays in the array, dead, until a compaction; a pass here made the array anew at every such death.)
+    const SX = selectedEntities.length && typeof selectionStructIndex === 'function' ? selectionStructIndex() : null;
+    if (SX ? SX.replaced : selectedEntities.length && selectedEntities.some(e => e && e._structView && e.dead)) {
         selectedEntities = selectedEntities.map(e => {
             if (!e || !e._structView || !e.dead) return e;
             let cell = grid[e.gy] && grid[e.gy][e.gx];
@@ -1122,8 +1152,23 @@ function _simClientUpdateStableSlots(F, old) {
     // (Only the blocks whose ids changed since the old frame, when the presentation's marks say (the same stream and
     // capacity, the old frame's seq earlier): a battle's frames all change membership, and a pass over every slot was
     // ~20 ms a second of the page at 200k units, perf fuzz 2026-11-18. Blocks past either frame's count are read whole.)
-    const M = F.idMarks, OM = old.idMarks;
-    if (M && OM && M.stream === OM.stream && M.cap === OM.cap && OM.seq < M.seq) {
+    const M = F.idMarks, OM = old.idMarks, CH = F.changes, OC = old.changes;
+    if (CH && CH.complete && OC && CH.stream === OC.stream && CH.prevSeq === OC.seq) {
+        // (The presentation's list of them, the old frame the one it built before this: slots under both counts
+        // from it, the rest read.)
+        // (A slot listed twice (one the fill dropped): once.)
+        const L = CH.list, R = CH.ranges, lo = Math.min(F.n, old.n);
+        if (_simChSeen.length < n) _simChSeen = new Uint32Array(Math.ceil(n * 1.25));
+        const seen = _simChSeen, st = _simChStamp = (_simChStamp + 1) >>> 0 || (seen.fill(0), 1);
+        for (let r = 0; r < R.length; r += 2) for (let j = R[r], e = R[r] + R[r + 1]; j < e; j++) {
+            const s = L[j];
+            if (s < lo && seen[s] !== st && F.id[s] !== old.id[s]) { seen[s] = st; changed[nc++] = s; }
+        }
+        for (let s = lo; s < n; s++) {
+            const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
+            if (id !== before) changed[nc++] = s;
+        }
+    } else if (M && OM && M.stream === OM.stream && M.cap === OM.cap && OM.seq < M.seq) {
         const B = M.block, st = M.stamps, base = M.base, since = OM.seq, lo = Math.min(F.n, old.n);
         for (let b = 0, s0 = 0; s0 < n; b++, s0 += B) {
             const s1 = Math.min(n, s0 + B);
@@ -1137,37 +1182,47 @@ function _simClientUpdateStableSlots(F, old) {
         const id = s < F.n ? F.id[s] : -1, before = s < old.n ? old.id[s] : -1;
         if (id !== before) changed[nc++] = s;
     }
-    // Units moved to other slots (the simulation's relayout moves some every
-    // step, a restore many) keep their views: marked first (their id is in a
-    // changed slot), so only the views of units gone are frozen. (A moved id
-    // sent every frame to the whole rebuild: a list of every unit and its
-    // pass, most of the page's garbage after the frozen records.)
-    const mark = ++_simStableMark;
-    for (let i = 0; i < nc; i++) {
-        const s = changed[i], id = s < F.n ? F.id[s] : -1;
-        if (id >= 0) { const v = _pageUnitsById.get(id); if (v && !v.dead) v._mv = mark; }
-    }
+    // Each id's slot: the changed slots' old ids out, their new ids in (typed writes, every unit).
+    const oid = old.id, on = old.n, fid = F.id, fn = F.n;
+    let IDS = _pageIdSlot;
+    for (let i = 0; i < nc; i++) { const s = changed[i], o = s < on ? oid[s] : -1; if (o >= 0 && o < IDS.length && IDS[o] === s) IDS[o] = -1; }
+    for (let i = 0; i < nc; i++) { const s = changed[i], id = s < fn ? fid[s] : -1; if (id >= 0) { if (id >= IDS.length) IDS = pageIdSlotEnsure(id); IDS[id] = s; } }
+    // The views made at the changed slots: a unit moved to another slot keeps its view (placed there after the pass,
+    // so no slot is read after it was written); one gone is frozen with its last values. Slots without views: nothing.
+    let nd = 0, nm = 0, nv = 0;
+    if (_simDeadSlots.length < nc) _simDeadSlots = new Int32Array(Math.ceil(nc * 1.25));
+    if (_simMovedFrom.length < nc) { _simMovedFrom = new Int32Array(Math.ceil(nc * 1.25)); _simMovedTo = new Int32Array(_simMovedFrom.length); }
+    const deadViews = _simDeadViews, deadSlots = _simDeadSlots, MV = _simMovedViews;
     for (let i = 0; i < nc; i++) {
         const s = changed[i], v = _pageSlotViews[s];
-        if (v && !v.dead && v._s === s && v._mv !== mark) { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
+        if (v === undefined) continue;
         _pageSlotViews[s] = undefined;
+        if (v.dead || v._s !== s) continue;
+        const id = v.id, ns = id < IDS.length ? IDS[id] : -1;
+        if (ns >= 0) { MV[nv] = v; _simMovedTo[nv++] = ns; }
+        else { if (typeof selectionNoteDead === 'function') selectionNoteDead(s); deadViews[nd] = v; deadSlots[nd++] = s; v.dead = true; _pageUnitsById.delete(id); }
     }
-    let nm = 0;
-    if (_simMovedFrom.length < nc) { _simMovedFrom = new Int32Array(Math.ceil(nc * 1.25)); _simMovedTo = new Int32Array(_simMovedFrom.length); }
-    for (let i = 0; i < nc; i++) {
-        const s = changed[i], id = s < F.n ? F.id[s] : -1;
-        if (id < 0) continue;
-        let v = _pageUnitsById.get(id);
-        if (v && !v.dead && v._mv === mark) { if (v._s !== s) { _simMovedFrom[nm] = v._s; _simMovedTo[nm++] = s; } v._s = s; }
-        else { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
-        _pageSlotViews[s] = v;
+    // (The views of units gone frozen together, their slots in order: pageUnitsFreeze.)
+    pageUnitsFreeze(deadViews, deadSlots, nd);
+    if (nd) pageUnitDeaths++;
+    for (let j = 0; j < nd; j++) deadViews[j] = null;
+    for (let j = 0; j < nv; j++) {
+        const v = MV[j], ns = _simMovedTo[j];
+        MV[j] = null;
+        if (v._s !== ns) { _simMovedFrom[nm] = v._s; _simMovedTo[nm++] = ns; }
+        v._s = ns; _pageSlotViews[ns] = v;
     }
     // (The selected units among the moved: their slots in the selection's index, hud.js.)
     if (nm) { if (typeof selectionSlotsMoved === 'function') selectionSlotsMoved(_simMovedFrom, _simMovedTo, nm); else if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped(); }
     return true;
 }
-let _simStableMark = 0, _simMovedFrom = new Int32Array(0), _simMovedTo = new Int32Array(0);
+let _simMovedFrom = new Int32Array(0), _simMovedTo = new Int32Array(0);
+const _simMovedViews = [];
+// (Moves whenever a page unit view became dead: lists' alive counts cached by it, audio.js _cgUnitPrint.)
+let pageUnitDeaths = 0;
+let _simDeadSlots = new Int32Array(0); const _simDeadViews = [];
 let _simStableChanged = new Int32Array(0);
+let _simChSeen = new Uint32Array(0), _simChStamp = 0;
 // The page's units list: one array, filled from the current frame when
 // read (data_state.js units; a list of every unit at each membership change
 // was ~2-35 ms and its garbage, a few times a second in a fight).
@@ -1177,7 +1232,8 @@ function _simPageUnitListFill() {
     if (!F) { list.length = 0; return; }
     const order = F.order, n = F.count;
     list.length = n;
-    for (let k = 0; k < n; k++) list[k] = _pageSlotViews[order[k]];
+    // (Every unit's view: made here for those none was made for, once.)
+    for (let k = 0; k < n; k++) list[k] = pageSlotView(order[k]);
 }
 // Keep the population loop separate from frame installation so V8 can
 // optimize it without the object/membership slow paths in that function.
@@ -1257,12 +1313,17 @@ function _simClientApplyFrame(frame, shown) {
     F.idMarks = null;
     if (frame.dirty) {
         const D = frame.dirty;
-        F.dirty = { seq: D.seq, stream: D.stream, block: D.block, nb: D.nb, cols: D.cols, stamps: new Int32Array(F.buf, D.offset, D.cols.length * D.nb) };
+        F.dirty = { seq: D.seq, stream: D.stream, block: D.block, nb: D.nb, cols: D.cols, stamps: new Int32Array(F.buf, D.offset, D.cols.length * D.nb),
+            // (Each block's box of its units' places, world pixels: presentation_worker.js dirtyEnd.)
+            boxes: D.boxes >= 0 ? new Float32Array(F.buf, D.boxes, D.nb * 4) : null };
         // (The id column's marks alone, kept when a rebase drops F.dirty (its px / py rewritten, not its ids): the
         // membership pass compares only the blocks whose ids changed, _simClientUpdateStableSlots.)
         const ci = D.cols.indexOf('id');
         if (ci >= 0) F.idMarks = { stamps: F.dirty.stamps, base: ci * D.nb, nb: D.nb, block: D.block, seq: D.seq, stream: D.stream, cap: frame.cap };
     }
+    // (The slots whose id changed since the frame built before it: presentation_worker.js changeRanges.)
+    const CH = frame.changes;
+    F.changes = CH ? { list: new Int32Array(F.buf, CH.offset, F.cap), ranges: CH.ranges, complete: CH.complete, seq: CH.seq, prevSeq: CH.prevSeq, stream: CH.stream } : null;
     F.renderMotionPad = 0;
     let old = _pageFrame;
     if (old && shown < 1) {
@@ -1280,35 +1341,36 @@ function _simClientApplyFrame(frame, shown) {
             c.frameUnits = list;
             c.mver = frame.mver;
         } else {
-            // (What the list held: its fill first, for the gone ones below.)
-            if (typeof _unitsPv === 'function' && _unitsPageView !== null) _unitsPv();
-            let stamp = ++_pageViewStamp, order = F.order, ids = F.id;
-            list = new Array(frame.count);
-            for (let k = 0; k < frame.count; k++) {
-                let s = order[k], id = ids[s], v = _pageSlotViews[s];
-                if (!v || v.id !== id || v.dead) {
-                    v = _pageUnitsById.get(id);
-                    if (!v || v.dead) { v = new PageUnit(id, s); _pageUnitsById.set(id, v); }
-                    _pageSlotViews[s] = v;
-                }
-                v._stamp = stamp;
-                list[k] = v;
+            // Every id's slot from the frame; the views made so far to their units' slots, or frozen (gone: their last
+            // values, from the frame they were last in). No view made here (a match's first frame, a restore).
+            const ids = F.id, n = F.n;
+            _pageIdSlot.fill(-1);
+            for (let s = 0; s < n; s++) { const id = ids[s]; if (id >= 0) pageIdSlotEnsure(id)[id] = s; }
+            const IDS = _pageIdSlot, views = [];
+            for (const v of _pageUnitsById.values()) {
+                if (v.dead) continue;
+                const s = v.id < IDS.length ? IDS[v.id] : -1;
+                if (s >= 0) views.push(v, s);
+                else { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
             }
-            // Gone: their last values, from the frame they were last in.
-            let prev = c.frameUnits || [];
-            for (let v of prev) if (v._stamp !== stamp && !v.dead) { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
-            for (let k = 0; k < list.length; k++) list[k]._s = order[k];
+            _pageSlotViews = [];
+            for (let i = 0; i < views.length; i += 2) { views[i]._s = views[i + 1]; _pageSlotViews[views[i + 1]] = views[i]; }
+            pageUnitDeaths++;
             // (Slots dealt again: the selection's slots are found again.
             // This path only: a restore, a match's first frame.)
             if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped();
-            // A restore brought new objects for units the page had selected.
+            // A restore brought new objects for units the page had selected: their views (made from this frame).
             if (selectedUnits.length && selectedUnits.some(u => !(u instanceof PageUnit))) {
-                selectedUnits = selectedUnits.map(u => u instanceof PageUnit ? u : _pageUnitsById.get(u.id)).filter(u => u && !u.dead);
+                selectedUnits = selectedUnits.map(u => {
+                    if (u instanceof PageUnit) return u;
+                    const s = u && u.id >= 0 && u.id < IDS.length ? IDS[u.id] : -1;
+                    return s >= 0 ? _pageViewIn(F, s) : null;
+                }).filter(u => u && !u.dead);
             }
-            _simPageUnitList.length = list.length;
-            for (let k = 0; k < list.length; k++) _simPageUnitList[k] = list[k];
-            unitsSetView(_simPageUnitList);
-            c.frameUnits = _simPageUnitList;
+            // (The units list filled when read, from the frame current then.)
+            list = _simPageUnitList;
+            unitsSetViewLazy(list, _simPageUnitListFill, frame.count);
+            c.frameUnits = list;
             c.mver = frame.mver;
         }
     }
@@ -1339,15 +1401,23 @@ function simClientInfoPackAsk() {
     c.worker.postMessage({ type: 'infoPack' });
     return true;
 }
+const AUDIO_LISTEN_PAD = 8;
 function simClientNoteView(minGx, minGy, maxGx, maxGy) {
     const c = _simClient;
     if (!c || !c.active || !c.worker) return;
     const v = c.view || (c.view = [1, 0, 0, 0]), pad = 4;
     const r = [Math.floor(minGx) - pad, Math.floor(minGy) - pad, Math.ceil(maxGx) + pad, Math.ceil(maxGy) + pad];
-    if (Math.abs(r[0] - v[0]) < 2 && Math.abs(r[1] - v[1]) < 2 && Math.abs(r[2] - v[2]) < 2 && Math.abs(r[3] - v[3]) < 2) return;
-    c.view = r;
+    // (The listening box too, in whole tiles, AUDIO_LISTEN_PAD more each side (the camera moves meanwhile): the worker
+    // sends no sound outside it, none positional when nothing is heard. In a whole-map battle ~330 sounds a tick were
+    // sent, decoded and dropped here, 0.2% of them heard.)
+    const L = typeof audioListenBox === 'function' ? audioListenBox() : null, silent = (typeof audioListenSilent === 'function' && audioListenSilent()) || (typeof audioEnabled !== 'undefined' && !audioEnabled);
+    const a = silent ? [1, 0, 0, 0] : L ? [Math.floor(L[0] / TILE) - AUDIO_LISTEN_PAD, Math.floor(L[1] / TILE) - AUDIO_LISTEN_PAD, Math.ceil(L[2] / TILE) + AUDIO_LISTEN_PAD, Math.ceil(L[3] / TILE) + AUDIO_LISTEN_PAD] : null;
+    const la = c.listen || null;
+    const listenSame = a === la || (a && la && Math.abs(a[0] - la[0]) < 2 && Math.abs(a[1] - la[1]) < 2 && Math.abs(a[2] - la[2]) < 2 && Math.abs(a[3] - la[3]) < 2);
+    if (listenSame && Math.abs(r[0] - v[0]) < 2 && Math.abs(r[1] - v[1]) < 2 && Math.abs(r[2] - v[2]) < 2 && Math.abs(r[3] - v[3]) < 2) return;
+    c.view = r; c.listen = a;
     const e = TILE * 8;
-    c.worker.postMessage({ type: 'view', r: [r[0] * e, r[1] * e, (r[2] + 1) * e, (r[3] + 1) * e] });
+    c.worker.postMessage({ type: 'view', r: [r[0] * e, r[1] * e, (r[2] + 1) * e, (r[3] + 1) * e], a: a ? (a[0] > a[2] ? [1, 0, 0, 0] : [a[0] * TILE, a[1] * TILE, (a[2] + 1) * TILE, (a[3] + 1) * TILE]) : null });
 }
 // What the page watches: the selected units and structures (up to caps).
 function _simClientWatch() {

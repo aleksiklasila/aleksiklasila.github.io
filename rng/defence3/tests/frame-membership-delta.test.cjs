@@ -6,11 +6,18 @@ class View {
     constructor(id,s){this.id=id;this._s=s;this.dead=false;}
     _freeze(){freezes++;this.lastX=c._pageFrame.x[this._s];this._s=-1;}
 }
-const c=vm.createContext({PageUnit:View,_pageSlotViews:[],_pageUnitsById:new Map()});
+const c=vm.createContext({PageUnit:View,_pageSlotViews:[],_pageUnitsById:new Map(),
+    // (Dead views frozen together, sim_frame.js pageUnitsFreeze: here each its own.)
+    pageUnitsFreeze:(views,slots,n)=>{for(let j=0;j<n;j++)views[j]._freeze();}});
 vm.runInContext(source.slice(source.indexOf('function _simClientUpdateStableSlots('),source.indexOf('function _simClientApplyFrame(')),c);
+// (Views made when first read: sim_client.js pageSlotView; each id's slot: sim_frame.js _pageIdSlot.)
+vm.runInContext(source.slice(source.indexOf('// (A view in frame F'),source.indexOf('let _pageViewStamp')),c);
+const frameSrc=fs.readFileSync(path.join(__dirname,'../src/sim/sim_frame.js'),'utf8');
+vm.runInContext(frameSrc.slice(frameSrc.indexOf('let _pageIdSlot'),frameSrc.indexOf('function _pageResolveDetailRef(')),c);
 const n=100000,old={n,id:Int32Array.from({length:n},(_,i)=>i),x:Float32Array.from({length:n},(_,i)=>i*3)};
 for(let s=0;s<n;s++){const v=new View(s,s);Object.defineProperty(v,'_stamp',{set(){touches++;}});c._pageSlotViews[s]=v;c._pageUnitsById.set(s,v);}
 c._pageFrame=old;
+vm.runInContext('pageIdSlotEnsure('+n+');for(let s=0;s<'+n+';s++)_pageIdSlot[s]=s;',c);
 const retained=c._pageSlotViews[50],retired=c._pageSlotViews[7];
 const next={n,count:n-1,id:old.id.slice(),order:Int32Array.from({length:n-1},(_,i)=>i<7?i:i+1)};next.id[7]=-1;
 assert.equal(c._simClientUpdateStableSlots(next,old),true);

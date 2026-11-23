@@ -83,6 +83,15 @@ function getPlayerDeltaFlowScale(owner, resourceKey) {
     let sec = ENERGY_DELTA_DEFAULT_WINDOW_SECONDS;
     let cutoff = gameTime - Math.max(1, Math.floor(TICK_RATE * sec));
     let gain = 0, loss = 0;
+    const DL = _DELTA_STORE_ON ? _deltaList(resourceKey === 'astar' ? 'a' : 'e', pid) : null;
+    if (DL) {
+        const w = Math.max(1, Math.floor(TICK_RATE * sec));
+        for (let i = 0; i < DL.length; i++) { const s = DL[i]; if (resourceKey !== 'astar' && s.source === 'upKeep') continue; gain += _deltaWindow(s, s.g, w); loss += _deltaWindow(s, s.l, w); }
+        if (resourceKey !== 'astar') { const upkeep = typeof getPlayerUpKeepBreakdown === 'function' ? getPlayerUpKeepBreakdown(pid) : null; loss += Math.max(0, Number(upkeep && upkeep.total) || 0) * sec; }
+        const value = Math.max(DELTA_COLOR_MIN_FLOW, gain / sec, loss / sec);
+        _deltaFlowScaleCache[resourceKey] = { key: cacheKey, value };
+        return value;
+    }
     // (The logs are in tick order: read from the newest back to the window's start, not the whole log (up to
     // ENERGY_DELTA_LOG_MAX_SECONDS): ~8 ms a second of the page, perf fuzz 2026-11-18.)
     if (resourceKey === 'astar') {
@@ -220,6 +229,57 @@ function ensureEnergyDeltaLogPlayer(owner) {
 function resetEnergyDeltaTracking() {
     energyDeltaEventLogByPlayer = Array.from({ length: players.length || 8 }, () => []);
     astarUsageEventLogByPlayer = Array.from({ length: players.length || 8 }, () => []);
+    _deltaStore.e.length = 0; _deltaStore.a.length = 0;
+}
+
+// ---- the rates' running sums (the page) ----
+// Per player, one series per energy source and per ★ (unit type, source): running totals through each tick (all,
+// gains, losses) in rings of DELTA_RING ticks, so a window's sum is two reads. The HUD's, the bottom bar's and the
+// panel's rates read these; the logs' objects were walked from the newest back to the window's start at every rate
+// asked (10 s x every source: thousands of rows, a dozen times a refresh). The logs stay (the worker sends from
+// its own; the in-page simulation's readers of single rows). Off in the worker (no reader there).
+const DELTA_RING = 2048, DELTA_MASK = DELTA_RING - 1;
+const _DELTA_STORE_ON = typeof document !== 'undefined';
+const _deltaStore = { e: [], a: [] }; // [pid] -> { list: [series], byKey: Map }
+function _deltaSeries(kind, pid, key, unitType, source) {
+    const S = _deltaStore[kind];
+    let P = S[pid];
+    if (!P) P = S[pid] = { list: [], byKey: new Map() };
+    let s = P.byKey.get(key);
+    if (!s) {
+        s = { unitType, unitMetric: kind === 'a' ? _astarMetricKeyForUnitType(unitType) : '', source, first: -1, last: -1,
+            c: new Float64Array(DELTA_RING), g: new Float64Array(DELTA_RING), l: new Float64Array(DELTA_RING) };
+        P.byKey.set(key, s); P.list.push(s);
+    }
+    return s;
+}
+function _deltaAdd(s, tick, d) {
+    if (!(tick >= 0)) return;
+    if (s.first < 0 || tick < s.last) { s.first = tick; s.last = tick; const k = tick & DELTA_MASK; s.c[k] = 0; s.g[k] = 0; s.l[k] = 0; }
+    else if (tick > s.last) {
+        // (The ticks between carry the totals on.)
+        const k0 = s.last & DELTA_MASK, c = s.c[k0], g = s.g[k0], l = s.l[k0];
+        for (let t = Math.max(s.last + 1, tick - DELTA_RING + 1); t <= tick; t++) { const k = t & DELTA_MASK; s.c[k] = c; s.g[k] = g; s.l[k] = l; }
+        s.last = tick;
+        if (tick - s.first >= DELTA_RING) s.first = tick - DELTA_RING + 1;
+    }
+    const k = tick & DELTA_MASK;
+    s.c[k] += d; if (d > 0) s.g[k] += d; else s.l[k] -= d;
+}
+// The series' totals through tick t (0 before its first).
+function _deltaAt(s, arr, t) {
+    if (s.first < 0 || t < s.first) return 0;
+    return arr[(t >= s.last ? s.last : t) & DELTA_MASK];
+}
+// What the series added over the window [gameTime - ticks, gameTime] (as the logs' readers counted: the cutoff tick
+// in): all, gains or losses (arr: s.c / s.g / s.l). (Windows up to a minute: well inside the ring.)
+function _deltaWindow(s, arr, ticks) {
+    const now = gameTime;
+    return _deltaAt(s, arr, now) - _deltaAt(s, arr, now - ticks - 1);
+}
+function _deltaList(kind, owner) {
+    const P = _deltaStore[kind][_normalizeOwnerId(owner)];
+    return P ? P.list : null;
 }
 
 function _isInfoSectionCollapsed(sectionKey) {
@@ -303,7 +363,9 @@ function recordEnergyDelta(owner, source, delta) {
     if (!Number.isFinite(d) || Math.abs(d) <= 1e-9) return;
     let bucket = ensureEnergyDeltaLogPlayer(owner);
     if (!bucket) return;
-    bucket.push({ tick: gameTime, source: String(source || ''), delta: d });
+    const src = String(source || '');
+    bucket.push({ tick: gameTime, source: src, delta: d });
+    if (_DELTA_STORE_ON) { const pid = Math.floor(Number(owner)); _deltaAdd(_deltaSeries('e', pid, src, '', src), gameTime, d); }
     let pruneBefore = gameTime - Math.max(1, Math.floor(TICK_RATE * ENERGY_DELTA_LOG_MAX_SECONDS));
     _pruneTickLogBucket(bucket, pruneBefore);
 }
@@ -319,6 +381,13 @@ function getPlayerEnergyDeltaRate(owner, sourceKey, windowSeconds) {
     let pruneBefore = gameTime - Math.max(windowTicks * 2, Math.floor(TICK_RATE * ENERGY_DELTA_LOG_MAX_SECONDS));
     _pruneTickLogBucket(bucket, pruneBefore);
 
+    // (The running sums: two reads a source.)
+    const L = _DELTA_STORE_ON ? _deltaList('e', owner) : null;
+    if (L) {
+        let sum = 0;
+        for (let i = 0; i < L.length; i++) { const s = L[i]; if (s.source === 'upKeep' || (sourceKey && s.source !== sourceKey)) continue; sum += _deltaWindow(s, s.c, windowTicks); }
+        return sum / sec;
+    }
     // (Newest back to the window's start: the log is in tick order.)
     let sum = 0;
     for (let i = bucket.length - 1; i >= 0; i--) {
@@ -348,6 +417,7 @@ function recordAstarDelta(owner, delta, unit = null, sourceTag = null) {
     let unitType = String((unit && unit.unitType) || 'other');
     let unitMetric = _astarMetricKeyForUnitType(unitType);
     let unitId = (unit && Number.isFinite(Number(unit.id))) ? Math.floor(Number(unit.id)) : null;
+    if (_DELTA_STORE_ON) { const src = String(sourceTag || ''); _deltaAdd(_deltaSeries('a', pid, unitType + '|' + src, unitType, src), gameTime, d); }
     bucket.push({
         tick: gameTime,
         owner: pid,
@@ -468,6 +538,11 @@ function _getPlayerAstarDeltaRate(owner, windowSeconds, matcherFn) {
     let pruneBefore = gameTime - Math.max(windowTicks * 2, Math.floor(TICK_RATE * ASTAR_USAGE_LOG_MAX_SECONDS));
     _pruneTickLogBucket(bucket, pruneBefore);
     let sum = 0;
+    const L = _DELTA_STORE_ON ? _deltaList('a', owner) : null;
+    if (L) {
+        for (let i = 0; i < L.length; i++) { const s = L[i]; if (!matcherFn || matcherFn(s)) sum += _deltaWindow(s, s.c, windowTicks); }
+        return sum / sec;
+    }
     for (let i = 0; i < bucket.length; i++) {
         let ev = bucket[i];
         if (!ev || !Number.isFinite(ev.tick) || ev.tick < cutoffTick) continue;
@@ -1157,6 +1232,8 @@ function _buildInfoPanelAssignedLabelButton(mode, dataAttrs = {}) {
 function _findInfoPanelUnitById(unitId) {
     let id = Math.floor(Number(unitId));
     if (!Number.isFinite(id)) return null;
+    // (Beside the worker: by id, no pass over the page's units (which made a view for each).)
+    if (typeof simClientCurrentUnitVis === 'function' && simClientCurrentUnitVis()) { const u = _pageUnitsById.get(id); return u && !u.dead ? u : null; }
     for (let i = 0; i < units.length; i++) {
         let u = units[i];
         if (u && !u.dead && Math.floor(Number(u.id)) === id) return u;
@@ -1673,15 +1750,16 @@ function updateSelectedBuildDescription() {
     if (!descEl) return;
     if (!selectedBuildItem) {
         descEl.classList.add('empty');
-        descEl.innerHTML = 'Select a shop item to see details.';
+        // (Written only when it differs.)
+        if (descEl._html !== '') { descEl.textContent = 'Select a shop item to see details.'; descEl._html = ''; }
         updateShopStatsInMinimap();
         return;
     }
     let def = BASE_CARD_TYPES[selectedBuildItem] || {};
     let desc = DESCRIPTIONS[selectedBuildItem] || (def.name || selectedBuildItem);
     descEl.classList.remove('empty');
-    descEl.innerHTML = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
-    bindShopStatsMatrixButtons(descEl);
+    const html = `<div class="shop-stats-title">${def.name || selectedBuildItem} Stats</div>${renderBuildItemDetailedStats(selectedBuildItem)}<div class="shop-stats-desc">${desc}</div>`;
+    if (descEl._html !== html) { descEl.innerHTML = html; descEl._html = html; bindShopStatsMatrixButtons(descEl); }
     updateShopStatsInMinimap();
 }
 
@@ -1714,11 +1792,14 @@ function updateShopStatsInMinimap() {
     let btnMap = document.getElementById('btn-minimap');
     if (!mapCont || !statsCont || !btnMap) return;
 
-    let isCollapsed = btnMap.innerText === '\u25B2';
-    statsCont.style.display = 'none';
-    statsCont.innerHTML = '';
-    mapCont.style.display = isCollapsed ? 'none' : 'block';
-    if (titleEl) titleEl.textContent = 'Map';
+    // (textContent, not innerText: that one lays the page out first, ~1 ms a call with a big selection's panel
+    // changed; and nothing written that is so already: the build menu's refresh comes here several times a second.)
+    let isCollapsed = btnMap.textContent.trim() === '\u25B2';
+    if (statsCont.style.display !== 'none') statsCont.style.display = 'none';
+    if (statsCont.firstChild) statsCont.textContent = '';
+    const disp = isCollapsed ? 'none' : 'block';
+    if (mapCont.style.display !== disp) mapCont.style.display = disp;
+    if (titleEl && titleEl.textContent !== 'Map') titleEl.textContent = 'Map';
 }
 
 function renderBuildItemDetailedStats(key) {
@@ -2250,7 +2331,7 @@ function _infoPanelGroupsFromBins(B, sums) {
     const order = Array.from(B.used.subarray(0, B.count)).sort((p, q) => B.first[p] - B.first[q]);
     const groups = new Map(), out = {}, ignore = ignoreLevelSubgroups;
     for (const h of order) {
-        const k = B.key[h], t = (k >>> 20) & 1023, bl = (k >>> 13) & 127, view = _pageSlotViews[B.slot[h]];
+        const k = B.key[h], t = (k >>> 20) & 1023, bl = (k >>> 13) & 127, view = pageSlotView(B.slot[h]);
         if (!view) continue;
         const code = ignore ? t : t * 128 + bl;
         let g = groups.get(code);
@@ -2348,6 +2429,15 @@ const _infoUnitSnap = { ref: null, snap: null, at: 0, pos: -1, end: 0, dense: fa
 // Gone buildings leave the selection: a small one at every refresh, a big
 // one once a second.
 function _infoPanelDropGoneEntities() {
+    // (A selection of structure views beside the worker: by the slot index's count of gone ones, no pass over it.)
+    const SX = selectedEntities.length && typeof _pageTables !== 'undefined' && _pageTables && _pageTables.s ? selectionStructIndex() : null;
+    if (SX && SX.framed && SX.other === 0) {
+        const T = _pageTables.s, EN = T.energy;
+        const old = selectedEntities;
+        if (selectionStructCompact(e => e.dead || (e._kind < 4 && EN[e._s] <= 0))
+            && _infoSectionCacheSel && _infoSectionCacheSel.entities === old) _infoSectionCacheSel.entities = selectedEntities;
+        return;
+    }
     if (selectedEntities.length > INFO_ENTITY_SWEEP_BIG) {
         const now = performance.now();
         if (now - _infoEntitySweepAt < INFO_ENTITY_SWEEP_MS) return;
@@ -2423,6 +2513,7 @@ function _infoPanelSectionsToRemake(panel, allGroups, subgroupState) {
 function infoPanelSelectionCompacted(oldSel, newSel) {
     if (_infoUnitSnap.ref === oldSel) _infoUnitSnap.ref = newSel;
     if (_infoSectionCacheSel && _infoSectionCacheSel.units === oldSel) _infoSectionCacheSel.units = newSel;
+    if (typeof infoPackSelectionCompacted === 'function') infoPackSelectionCompacted(oldSel, newSel);
 }
 // The unit groups the panel draws: the latest snapshot for this selection
 // (made at once only for a new selection), null for a small one.
@@ -3481,7 +3572,7 @@ function selectionCompactDead(force = false) {
             for (let i = 0; i < X.n; i++) {
                 const s = slots[i];
                 if (mask[s] === 0) continue;
-                const v = _pageSlotViews[s];
+                const v = pageSlotView(s);
                 if (!v) continue;
                 out.push(v); keep[ns++] = s;
             }
@@ -3507,6 +3598,80 @@ function selectionCompactDead(force = false) {
     if (typeof infoPanelSelectionCompacted === 'function') infoPanelSelectionCompacted(selectedUnits, out);
     selectedUnits = out;
     if (slotted && ns === out.length) { const at = X.compactAt; selectionIndexAdopt(out, slots, ns); X.compactAt = at; }
+    return true;
+}
+
+// ---- the selected structures by the structure table's slots ----
+// As the units' index: a mark per structure slot, made once per selection (its array and length tell) and kept by
+// the structure frames' membership changes (selectionStructGone, from pageApplyStructures: a selected building that
+// went leaves the mark at once and its slot is logged; the array keeps its view, dead, until a compaction). Every
+// death of a selected building used to make the selection's array anew (sim_client.js _simClientApplyWorld) and
+// with it every cache keyed by the array (the outline's buildings, the panel's groups, the packer's selection): with
+// ~33k selected buildings in a battle ~6-10 ms of the page a tick.
+// (log[0 .. logN): the slots of selected buildings gone since the index was made, in order; replaced: one went and a
+// live building stands on its tile in the same frame (an upgrade's new structure, a restore): the selection follows
+// it, sim_client.js.)
+const _selStruct = { sel: null, len: -1, cap: -1, full: -1, framed: false, mark: new Uint8Array(0), n: 0, dead: 0, other: 0, log: new Int32Array(0), logN: 0, replaced: false, version: 0, compactAt: 0 };
+const _selStructGoneViews = [];
+function selectionStructIndex() {
+    const X = _selStruct, sel = selectedEntities;
+    const T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    const cap = T ? T.cap : 0, full = typeof pageStructStats !== 'undefined' ? pageStructStats.full : 0;
+    if (X.sel === sel && X.len === sel.length && X.cap === cap && X.full === full) return X;
+    if (X.mark.length < cap) X.mark = new Uint8Array(cap); else X.mark.fill(0);
+    if (X.log.length < sel.length) X.log = new Int32Array(Math.max(256, Math.ceil(sel.length * 1.25)));
+    const mark = X.mark;
+    let n = 0, dead = 0, other = 0;
+    for (let i = 0; i < sel.length; i++) {
+        const e = sel[i];
+        if (!e) { dead++; continue; }
+        if (!e._structView) { other++; continue; }
+        const s = e._s;
+        if (e.dead || !(s >= 0 && s < cap) || mark[s]) { dead++; continue; }
+        mark[s] = 1; n++;
+    }
+    // (Dead views in a new index: gone before it was made, a replacement not looked for then; the selection's own
+    // pass does, sim_client.js, and its new array has none.)
+    X.sel = sel; X.len = sel.length; X.cap = cap; X.full = full; X.framed = !!T; X.n = n; X.dead = dead; X.other = other;
+    X.logN = 0; X.replaced = dead > 0; X.version++;
+    return X;
+}
+// A structure view leaving slot s (called before it is frozen; its tile is looked at after the frame's new views are
+// placed, selectionStructGoneDone).
+function selectionStructGone(v, s) {
+    const X = _selStruct;
+    if (X.sel !== selectedEntities || X.len !== selectedEntities.length || !(s >= 0 && s < X.mark.length) || !X.mark[s]) return;
+    X.mark[s] = 0; X.n--; X.dead++;
+    if (X.logN < X.log.length) X.log[X.logN++] = s;
+    else X.replaced = true; // (a log full: the selection's pass makes all again)
+    _selStructGoneViews.push(v);
+}
+function selectionStructGoneDone() {
+    const L = _selStructGoneViews;
+    for (let i = 0; i < L.length; i++) {
+        const v = L[i], now = getTileEntityRef(v.gx, v.gy);
+        if (now && now !== v && now._structView && !now.dead) _selStruct.replaced = true;
+    }
+    L.length = 0;
+}
+// The gone buildings leave the selection's array: at once for a small one, for a big one once a sixty-fourth of it
+// is gone (at most every SELECTION_COMPACT_BIG_MS), else every 5 of those (as the units, selectionCompactDead).
+// Drawn, ordered and packed things skip them meanwhile (dead views: no slot, no energy). Returns whether it did.
+function selectionStructCompact(gone) {
+    const X = selectionStructIndex();
+    if (X.dead === 0) return false;
+    const len = selectedEntities.length;
+    if (len > SELECTION_COMPACT_SMALL) {
+        const now = performance.now();
+        if (now - X.compactAt < (len >= SELECTION_COMPACT_BIG ? SELECTION_COMPACT_BIG_MS : SELECTION_COMPACT_MS)) return false;
+        if (len >= SELECTION_COMPACT_BIG && X.dead * 64 < X.n && now - X.compactAt < SELECTION_COMPACT_BIG_MS * 5) return false;
+        X.compactAt = now;
+    }
+    const old = selectedEntities, out = [];
+    for (let i = 0; i < old.length; i++) { const e = old[i]; if (e && !gone(e)) out.push(e); }
+    selectedEntities = out;
+    if (typeof infoPackSelectionCompacted === 'function') infoPackSelectionCompacted(old, out);
+    const at = X.compactAt; selectionStructIndex(); X.compactAt = at;
     return true;
 }
 
@@ -3628,7 +3793,7 @@ function _slotUnitClasses(X, F) {
             if (nWorkers) for (let i = 0; i < n; i++) {
                 const s = slots[i], c = WT[s];
                 if (c === 0) continue;
-                const u = _pageSlotViews[s] || _pageUnitsById.get(ID[s]);
+                const u = pageSlotView(s);
                 if (!u) continue;
                 const wt = _pageFrameStrings[c];
                 let a = byType.get(wt);
@@ -3705,7 +3870,8 @@ function getActiveEntities() {
     // (No subgroup turned off: all of them, no key string per entity.)
     let anyOff = false;
     for (let key in activeSubGroups) if (activeSubGroups[key] === false) { anyOff = true; break; }
-    if (!anyOff) return selectedEntities.slice();
+    // (Read-only: the selection's own array; a copy each frame was 33k entries a frame with a big selection.)
+    if (!anyOff) return selectedEntities;
     return selectedEntities.filter(e => {
         return activeSubGroups[getEntityGroupKey(e)] !== false;
     });

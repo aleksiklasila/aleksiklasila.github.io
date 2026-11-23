@@ -233,6 +233,8 @@ function _recordAstarUsage(owner, usedNodes, unit = null, sourceTag = null, unit
     // A snapshot can rewind the clock while retaining the HUD's log buckets.
     if (gameTime < _astarUsageIndexTick) _astarUsageIndex = new WeakMap();
     _astarUsageIndexTick = gameTime;
+    // (The page's running sums: hud.js _deltaStore.)
+    if (typeof _DELTA_STORE_ON !== 'undefined' && _DELTA_STORE_ON) _deltaAdd(_deltaSeries('a', pid, unitType + '|' + source, unitType, source), gameTime, -used);
     let byOwner = _astarUsageIndex.get(bucket);
     if (!byOwner) _astarUsageIndex.set(bucket, byOwner = new Map());
     let byType = byOwner.get(unitType);

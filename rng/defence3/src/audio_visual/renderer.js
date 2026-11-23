@@ -105,15 +105,16 @@ function _refreshInfoPanelPeriodic(now) {
     }
     // (Sections left by a refresh elsewhere, a click's: made from this frame.)
     if (typeof _infoPanelPendingSections !== 'undefined' && _infoPanelPendingSections > 0) _infoPanelNextRefreshAt = 0;
-    if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return;
+    if (now < _infoPanelNextRefreshAt || researchQueueDragInProgress) return false;
     let started = performance.now();
     updateInfoPanel();
     let cost = performance.now() - started;
     // (Sections still to make: the next frame's refresh makes more.)
-    if (typeof _infoPanelPendingSections !== 'undefined' && _infoPanelPendingSections > 0) { _infoPanelNextRefreshAt = 0; return; }
+    if (typeof _infoPanelPendingSections !== 'undefined' && _infoPanelPendingSections > 0) { _infoPanelNextRefreshAt = 0; return true; }
     // Smoothed, so one slow refresh (a garbage collection) does not stall it.
     _infoPanelRefreshCostMs += (cost - _infoPanelRefreshCostMs) * 0.3;
     _infoPanelNextRefreshAt = now + Math.min(INFO_PANEL_REFRESH_MAX_MS, Math.max(INFO_PANEL_REFRESH_MS, _infoPanelRefreshCostMs * 20));
+    return true;
 }
 let _minimapRefreshCounter = 10;
 let _backgroundCacheRefreshCounter = 20;
@@ -1494,7 +1495,7 @@ function get3DBoxSelection(screenRect) {
     let pointUnits = null;
     if (UF && VP && renderer3dInstance.cssWidth > 0) {
         // (Slot by slot: the columns in memory order; see _ownUnitsInBox.)
-        const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py, views = _pageSlotViews;
+        const n = UF.n, O = UF.owner, ID = UF.id, X = UF.x, Y = UF.y, PX = UF.px, PY = UF.py;
         const me = localPlayerId, full = fullVisibility, it = 1 / TILE, lift = 0.28, exact = UF.count <= BOX_MESH_TEST_MAX;
         const W = renderer3dInstance.cssWidth, H = renderer3dInstance.cssHeight, pad = renderer3dInstance.viewPad || 0;
         const m0 = VP[0], m1 = VP[1], m3 = VP[3], m8 = VP[8], m9 = VP[9], m11 = VP[11];
@@ -1511,7 +1512,7 @@ function get3DBoxSelection(screenRect) {
             for (let i = 0; i < c; i++) {
                 const s = hits[i];
                 if (!full && !isTileVisible(Math.floor((PX[s] + (X[s] - PX[s]) * alpha) * it), Math.floor((PY[s] + (Y[s] - PY[s]) * alpha) * it))) continue;
-                const u = views[s];
+                const u = pageSlotView(s);
                 if (u) { pointUnits.push(u); hits[k++] = s; }
             }
             _box3dSlotCount = k; _box3dSlotsFor = pointUnits;
@@ -1528,7 +1529,7 @@ function get3DBoxSelection(screenRect) {
             if (!exact && !hit) continue;
             // (A slot with an id holds a live unit's view: the view itself
             // is not read, 300k of them are 300k cache misses.)
-            const u = views[s];
+            const u = pageSlotView(s);
             if (!u) continue;
             if (!exact) { pointUnits.push(u); continue; }
             if (!hit) pending.add(u);
@@ -2343,7 +2344,9 @@ function getChunkRenderView(view, bounds, flat2d) {
                     if (Math.abs(cx) > w * sx + margin || Math.abs(cy) > w * sy + margin) continue;
                 }
                 outS[out.length] = s;
-                out.push(list[k]);
+                // (Its view by its slot: list[k] is _pageSlotViews[ord[k]], and the first read of the page's
+                // lazy list filled the whole list (every unit) each tick, sim_client.js _simPageUnitListFill.)
+                out.push(pageSlotView(s));
             }
             U = rendererChunkCache.liveUnits = { key, frame: F, list, query: out, slots: outS.subarray(0, out.length) };
         }
@@ -2888,7 +2891,7 @@ function getOrderMarkers() {
         const pendingMarks = [];
         if (_pendingUnitOrderMarkers.size) for (const id of _pendingUnitOrderMarkers.keys()) {
             let u = _pageUnitsById.get(id);
-            if (!u && n <= 4096) { const FID = F.id; for (let i = 0; i < n; i++) if (FID[slots[i]] === id) { u = _pageSlotViews[slots[i]]; break; } }
+            if (!u && n <= 4096) { const FID = F.id; for (let i = 0; i < n; i++) if (FID[slots[i]] === id) { u = pageSlotView(slots[i]); break; } }
             const s = u && !u.dead ? u._s : -1;
             // (A unit gone: its pending marker with it. Kept, every frame looked for it again over the selection's slots
             // (a selection of at most 4096): a battle's dead of small orders (a multi-point chain's groups of at most
@@ -2910,7 +2913,7 @@ function getOrderMarkers() {
                 if (mask[s] === 0 || O[s] !== me || !(EN[s] > 0)) continue;
                 if (pendingAny && _pendingUnitOrderMarkers.has(ID[s])) continue;
                 if (CM[s] === CMD_ATTACKING && (FL[s] & SIM_UF_ATTACK_TARGET) !== 0) {
-                    if (out.length < ORDER_MARKERS_MAX) { const u = _pageSlotViews[s]; if (u && !u.dead) { const m = getUnitOrderTarget(u); if (m) out.push(m); } }
+                    if (out.length < ORDER_MARKERS_MAX) { const u = pageSlotView(s); if (u && !u.dead) { const m = getUnitOrderTarget(u); if (m) out.push(m); } }
                     continue;
                 }
                 const code = OD[s];
@@ -3140,8 +3143,11 @@ const SELECTED_UNIT_LINES_MAX = 300;
 
 // A selection this big (units and buildings) is outlined on the GPU
 // (renderer3d drawSelectionMask: a mask of its footprints, outlined), not
-// by tracing contours here (100k units: ~0.5 s each time).
-const SELECTION_GPU_MIN = 120;
+// by tracing contours here (100k units: ~0.5 s each time). Any size beside
+// the worker: a small selection's contours were traced again every frame its
+// units moved (~31 ms/s of the page with 83 selected zoomed in, perf fuzz
+// 2026-11-23).
+const SELECTION_GPU_MIN = 1;
 let _selMaskState = { sel: null, len: -1, sub: '', mver: -1, frame: null, mask: null, version: 0, ents: null, elen: -1, buildings: null, count: 0, bversion: 0 };
 function getSelectionMaskOverlay() {
     const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
@@ -3166,19 +3172,53 @@ function getSelectionMaskOverlay() {
         }
     }
     S.sub = sub; S.show = showUnits;
-    if (S.ents !== selectedEntities || S.elen !== selectedEntities.length) {
-        const ents = showSelectionOutlinesForBuildings() ? getActiveEntities() : [];
-        const B = new Float32Array(Math.max(6, ents.length * 6));
+    // The buildings: an entry each ([x, z, x, z, size, on]), made once per selection (or subgroup toggles) from the
+    // structure table's columns; one that goes is switched off by its slot (the selection's slot index logs it:
+    // hud.js selectionStructGone) and listed for the GPU copy to patch (buildingsOff). Made again at every death
+    // (each a new selection array) it was ~3 ms of getters a tick with 33k selected buildings.
+    const SX = typeof selectionStructIndex === 'function' ? selectionStructIndex() : null;
+    const showB = showSelectionOutlinesForBuildings(), T = typeof _pageTables !== 'undefined' && _pageTables ? _pageTables.s : null;
+    if (S.ents !== selectedEntities || S.elen !== selectedEntities.length || S.showB !== showB || S.bsub !== sub || (SX && S.sxver !== SX.version)) {
+        const ents = showB ? getActiveEntities() : [];
+        const cap = T ? T.cap : 0;
+        let B = S.buildings;
+        if (!B || B.length < ents.length * 6 || B.length > Math.max(6, ents.length * 6) * 4) B = new Float32Array(Math.max(6, ents.length * 6));
+        if (!S.bEntry || S.bEntry.length < cap) S.bEntry = new Int32Array(cap); else S.bEntry.fill(0);
+        if (!S.bOff || S.bOff.length < ents.length) S.bOff = new Int32Array(Math.max(64, ents.length));
+        const E = S.bEntry, X = T ? T.x : null, Y = T ? T.y : null, EN = T ? T.energy : null;
         let n = 0;
-        for (const e of ents) {
-            if (!e || (e.energy !== undefined && e.energy <= 0)) continue;
-            const x = Number.isFinite(e.x) ? e.x : e.gx * TILE + TILE / 2, y = Number.isFinite(e.y) ? e.y : e.gy * TILE + TILE / 2, o = n++ * 6;
+        for (let i = 0; i < ents.length; i++) {
+            const e = ents[i];
+            if (!e || e.dead) continue;
+            const s = e._structView ? e._s : -1;
+            let x, y;
+            if (T && s >= 0 && s < cap) {
+                if (e._kind < 4 && !(EN[s] > 0)) continue;
+                x = X[s]; y = Y[s];
+                if (!Number.isFinite(x) || !Number.isFinite(y)) { x = e.gx * TILE + TILE / 2; y = e.gy * TILE + TILE / 2; }
+                E[s] = n + 1;
+            } else {
+                if (e.energy !== undefined && e.energy <= 0) continue;
+                x = Number.isFinite(e.x) ? e.x : e.gx * TILE + TILE / 2; y = Number.isFinite(e.y) ? e.y : e.gy * TILE + TILE / 2;
+            }
+            const o = n++ * 6;
             B[o] = x; B[o + 1] = y; B[o + 2] = x; B[o + 3] = y; B[o + 4] = 17; B[o + 5] = 1;
         }
-        S.ents = selectedEntities; S.elen = selectedEntities.length; S.buildings = B; S.count = n; S.bversion++;
+        S.ents = selectedEntities; S.elen = selectedEntities.length; S.showB = showB; S.bsub = sub; S.sxver = SX ? SX.version : -1;
+        S.logAt = SX ? SX.logN : 0; S.offN = 0;
+        S.buildings = B; S.count = n; S.bversion++;
+    } else if (SX && S.logAt < SX.logN) {
+        const B = S.buildings, E = S.bEntry, L = SX.log;
+        for (let k = S.logAt; k < SX.logN; k++) {
+            const s = L[k], j = s < E.length ? E[s] - 1 : -1;
+            if (j < 0) continue;
+            E[s] = 0; B[j * 6 + 5] = 0;
+            if (S.offN < S.bOff.length) S.bOff[S.offN++] = j; else S.bversion++; // (a full list: the whole copy again)
+        }
+        S.logAt = SX.logN;
     }
     return { units: F, mask: S.mask, maskVersion: S.version, buildings: S.buildings, buildingCount: S.count, buildingsVersion: S.bversion,
-        alpha: tickAlpha, tile: TILE, color: get3DRenderOwnerColor(localPlayerId) };
+        buildingsOff: S.bOff, buildingsOffN: S.offN, alpha: tickAlpha, tile: TILE, color: get3DRenderOwnerColor(localPlayerId) };
 }
 
 // The fog on the GPU (renderer3d: the ground's shader turns the grid's light
@@ -4524,12 +4564,13 @@ function _structureDetailCandidates(F, flat2d) {
         // battle), the table's size each time.)
         const same = C && C.cap === F.cap && C.head.length === columns * rows;
         const head = same ? C.head.fill(-1) : new Int32Array(columns * rows).fill(-1), next = same ? C.next : new Int32Array(F.cap);
+        const at = same ? C.at.fill(-1) : new Int32Array(F.cap).fill(-1);
         for (let s = 0; s < F.n; s++) {
             if (F.kind[s] === 6) continue; // Dropped items can move; never model-detail candidates.
             const bx = Math.max(0,Math.min(columns-1,F.gx[s]>>4)), by = Math.max(0,Math.min(rows-1,F.gy[s]>>4));
-            const b = by * columns + bx; next[s] = head[b]; head[b] = s;
+            const b = by * columns + bx; next[s] = head[b]; head[b] = s; at[s] = b;
         }
-        C = _structSpatialCache = {client,revision,n:F.n,cap:F.cap,columns,rows,head,next,key:null,slots:[]};
+        C = _structSpatialCache = {client,revision,n:F.n,cap:F.cap,columns,rows,head,next,at,key:null,slots:[]};
     }
     const key = _detailViewKey(flat2d);
     if (C.key === key) return C.slots;
@@ -4550,6 +4591,37 @@ function _structureDetailCandidates(F, flat2d) {
     }
     C.key = key;
     return slots;
+}
+// The index above kept by the structures that changed (sim_frame_world.js pageApplyStructures: their slots gone
+// and taken), as a rebuild would have it (a bucket's slots highest first). A battle changes the table's membership
+// every tick, and the rebuild over every slot then was ~1 ms a tick at 32k structures (2026-11-23).
+function structSpatialPatch(F, gone, nGone, added, nAdded, fromRev, toRev) {
+    const C = _structSpatialCache, client = typeof _simClient === 'undefined' ? null : _simClient;
+    if (!C || C.client !== client || C.revision !== fromRev || C.cap !== F.cap || F.history || C.columns !== Math.ceil(GRID_W / 16) || C.rows !== Math.ceil(GRID_H / 16)) return;
+    const columns = C.columns, rows = C.rows, head = C.head, next = C.next, at = C.at;
+    const unlink = s => {
+        const b = at[s];
+        if (b < 0) return;
+        at[s] = -1;
+        if (head[b] === s) { head[b] = next[s]; return; }
+        for (let p = head[b]; p >= 0; p = next[p]) if (next[p] === s) { next[p] = next[s]; return; }
+    };
+    // (Each changed slot placed again by what the table holds there now: a rebuild keeps a dead slot where it
+    // was, every slot under n but floor items.)
+    const relink = s => {
+        unlink(s);
+        if (s >= F.n || F.kind[s] === 6) return;
+        const bx = Math.max(0, Math.min(columns - 1, F.gx[s] >> 4)), by = Math.max(0, Math.min(rows - 1, F.gy[s] >> 4)), b = by * columns + bx;
+        at[s] = b;
+        if (head[b] < s) { next[s] = head[b]; head[b] = s; return; }
+        let p = head[b];
+        while (next[p] > s) p = next[p];
+        next[s] = next[p]; next[p] = s;
+    };
+    for (let i = 0; i < nGone; i++) if (gone[i] >= 0) relink(gone[i]);
+    for (let i = 0; i < nAdded; i++) relink(added[i]);
+    for (let s = C.n; s < F.n; s++) if (at[s] < 0) relink(s);
+    C.revision = toRev; C.n = F.n; C.key = null;
 }
 function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame = null) {
     const R = renderer3dInstance;
@@ -6786,13 +6858,17 @@ function processRenderFrame(timestamp) {
         _fpsDisplay = Math.round(_fpsFrameCount * 1000 / (timestamp - _fpsLastTime));
         _fpsFrameCount = 0; _fpsLastTime = timestamp;
     }
+    // The periodic UI writes (the info panel, the bottom bar, the build menu) one a frame: on clocks of the same
+    // period they fell into the same frame, whose style / layout / paint was all of theirs (~15 ms in a battle
+    // with a big selection, four times a second); one that comes due with another waits a frame.
+    const uiNow = Number.isFinite(timestamp) ? timestamp : performance.now();
+    let uiWrote = _refreshInfoPanelPeriodic(uiNow) === true;
+    if (typeof updateBottomBar === 'function') uiWrote = updateBottomBar(uiNow, uiWrote) === true || uiWrote;
     // Refresh the build menu every ~30 frames (the info panel on its own clock).
-    if (++_buildMenuRefreshCounter >= 30) {
+    if (++_buildMenuRefreshCounter >= 30 && !(uiWrote && _buildMenuNeedsRefresh)) {
         _buildMenuRefreshCounter = 0;
         if (_buildMenuNeedsRefresh) updateBuildMenu();
     }
-    _refreshInfoPanelPeriodic(Number.isFinite(timestamp) ? timestamp : performance.now());
-    if (typeof updateBottomBar === 'function') updateBottomBar(Number.isFinite(timestamp) ? timestamp : performance.now());
     // Refresh minimap static layer every ~30 frames on a different phase.
     if (++_minimapRefreshCounter >= 30) {
         _minimapRefreshCounter = 0;

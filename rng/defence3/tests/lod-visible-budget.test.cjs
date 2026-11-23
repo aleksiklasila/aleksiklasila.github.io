@@ -4,6 +4,8 @@ const read = p => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const c = vm.createContext({window:{}, console, TILE:32, GRID_W:1000,GRID_H:1000,viewW:1280,viewH:800,camera:{zoom:3},tickAlpha:1,
     fullVisibility:true,visibilityGrid:[],visibilityVersion:1,gameTime:1,localPlayerId:0,VISIBILITY_LIGHT_NORMALIZATION_RANGE:6,
     SIM_UF_GHOST:65536,SIM_UF_HIDDEN:1024,get3DRenderOwnerColor:()=> '#fff',_isLiveRenderGrid:()=>true});
+// (The page's views by frame slot: renderer.js getChunkRenderView reads them so; here the units' list, its order the slots'.)
+Object.defineProperty(c, '_pageSlotViews', { get: () => c.units });
 vm.runInContext('var renderCellItem=c=>c&&c.item,renderCellValue=(c,f)=>c&&c[f],cellItemGet=c=>c&&c.item;',c);
 vm.runInContext(read('src/audio_visual/renderer3d.js'), c);
 const R=c.renderer3dInstance=Object.create(c.window.Defence3Renderer3D.prototype);
@@ -107,6 +109,8 @@ project(true,3);
 const sparse=c.units.slice(0,1);
 assert.ok(c._unitDetailSplit(sparse,true,{}).columns.units,'small query preserves the distant GPU army');
 vm.runInContext('let rendererChunkCache=null;'+source.slice(source.indexOf('function getChunkRenderView('),source.indexOf('function useScaleRendering(')),c);
+// (A slot's page view, sim_client.js pageSlotView: the list's view at that slot here.)
+c.pageSlotView=s=>c.units[s];
 const world={grid:[],units:c.units,towers:[],barracks:[],collectorSpawners:[],goldMines:[],astarMines:[],droppedItems:[]};
 for(const flat of [true,false])for(const zoom of [.6,3,15])for(const yaw of [0,Math.PI/2,Math.PI]) {
     project(flat,zoom,.38,yaw);c.gameTime++;

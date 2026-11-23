@@ -24,6 +24,8 @@ const frame = (flat = false, projectiles = [], particles = [], towers = []) => {
 // Script-level consts are not context properties.
 const combatFxData = vm.runInContext('combatFxData', c), STRIDE = vm.runInContext('COMBAT_FX_STRIDE', c);
 const kinds = () => { const out = []; for (let o = 0; o < combatFxData.length; o += STRIDE) if (combatFxData[o]) out.push(combatFxData[o]); return out; };
+// The near list's entries (effects3d.js _fxNear: drawn on the GPU, renderer3d.js drawFxNear), as objects.
+const nearEntries = () => { const N = c.batch.near, out = []; if (!N) return out; for (let i = 0; i < N.n; i++) { const o = i * 8, d = N.data; out.push({ x0: d[o], z0: d[o + 1], x1: d[o + 2], z1: d[o + 3], kind: d[o + 4], style: d[o + 5], q: d[o + 7] }); } return out; };
 // Instances of one mesh, as objects.
 const instances = (mesh) => {
     const out = [], d = c.batch.data[mesh];
@@ -48,21 +50,22 @@ for (const [type, style, kind] of cases) {
     assert.deepEqual(kinds(), [kind], `${type} attacks with its own effect`);
 }
 
-// A cast marks the target with a rune circle on the ground.
+// A cast near the camera: an entry of the near list at its target (its rune and eruption the GPU's).
 c.clearCombatFx();
 c.recordUnitAttackFx(unit('fire_resistant', 'fire'), target);
 frame();
-const rune = instances(M.DECAL).find(i => i.pattern === P.RUNE);
-assert.ok(rune, 'cast draws a rune');
-assert.equal(rune.x, 6);
-assert.equal(rune.z, 5);
-assert.ok(rune.y < .05, 'the rune lies on the ground');
+const cast = nearEntries().find(e => e.kind === FX.CAST);
+assert.ok(cast, 'a cast is listed for the GPU');
+assert.equal(cast.x1, 6);
+assert.equal(cast.z1, 5);
+assert.ok(cast.q >= 0 && cast.q < 1, 'with its phase');
+assert.equal(c.batch.total, 0, 'its shapes are not made on the page');
 
 // Records expire after their duration and are released; a rewind (new
 // game, resync) drops records from the future.
 c.gameTime = 140;
 frame();
-assert.equal(c.batch.total, 0, 'expired effects draw nothing');
+assert.equal(c.batch.total + nearEntries().length, 0, 'expired effects draw nothing');
 assert.deepEqual(kinds(), [], 'expired records are released');
 c.recordUnitAttackFx(unit('norm', 'melee'), target);
 c.gameTime = 10;
@@ -74,7 +77,7 @@ c.gameTime = 100;
 frame();
 c.recordCombatFx(FX.SLASH, 900 * 32, 900 * 32, 901 * 32, 900 * 32, 'default');
 frame();
-assert.equal(c.batch.total, 0, 'off-screen effects are culled');
+assert.equal(c.batch.total + nearEntries().length, 0, 'off-screen effects are culled');
 
 // Lobbed shots arc (highest mid-flight, with a ground shadow); tracers fly flat.
 const shot = (type, traveled) => ({ type, startX: 2 * 32, startY: 10 * 32, x: (2 + traveled) * 32, y: 10 * 32,
@@ -95,8 +98,7 @@ assert.ok(instances(M.DECAL).some(i => i.pattern === P.SHADOW), 'airborne shots 
 c.clearCombatFx();
 c.recordUnitAttackFx(unit('norm', 'melee'), target);
 frame(true);
-const slash = instances(M.DECAL).find(i => i.pattern === P.CRESCENT);
-assert.ok(slash && slash.y < .1, '2D slashes lie flat');
+assert.ok(nearEntries().some(e => e.kind === FX.SLASH), '2D slashes are listed (flattened by the GPU, uFlat)');
 
 // Laser fences between connected turrets, brighter while burning.
 const a = { type: 'laser', gx: 2, gy: 2, x: 2.5 * 32, y: 2.5 * 32, laserState: 1 };
@@ -107,23 +109,41 @@ frame(false, [], [], [a, b]);
 assert.equal(c.batch.count[M.BOX], 2, 'one burning fence: glow and core, drawn once per pair');
 
 // A tilted close camera still sees a distant battle. Use depth at the attack,
-// not the camera centre: far away each attack is one dot (its colour where it
-// is, effects3d.js _fxEventFar), not its parts.
+// not the camera centre: far away each attack is the GPU's (renderer3d.js
+// drawFxFar reads the ring the frame publishes as batch.far), none of its parts
+// on the page; nothing in view near enough: the page reads no record at all.
 c.clearCombatFx();
 for (let i=0;i<100;i++) c.recordCombatFx(FX.CAST,5*32,5*32,6*32,5*32,'fire');
-const tilted={lodPixelsPerWorld:64,pixelsPerWorldAt:()=>3};
-c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
+// (A perspective camera as renderer3d.js has it: pixels a world unit by depth along the view.)
+const cam=(eye,fwd,scale=64)=>{const l=Math.hypot(...fwd),f=fwd.map(v=>v/l);return {lodPixelsPerWorld:scale/50,lodEye:eye,lodForward:f,lodProjectionScale:scale,
+    pixelsPerWorldAt:(x,y,z)=>scale/Math.max(.1,(x-eye[0])*f[0]+(y-eye[1])*f[1]+(z-eye[2])*f[2])};};
+c.beginFrameEffects(c.batch,false,bounds,[],64,cam([5,2,-100],[0,0,1]));
 c.buildFrameEffects([],[],[]);c.endFrameEffects();
-assert.equal(c.batch.total,100,'distant attacks: one dot each, even in a close tilted view');
-const distant=instances(M.ORB);
-c.beginFrameEffects(c.batch,false,{...bounds,minGx:.2,minGy:.2},[],64,tilted);
+assert.equal(c.batch.total+nearEntries().length,0,'distant attacks: none drawn on the page, even in a close tilted view');
+const far=c.batch.far;
+assert.ok(far&&far.data===combatFxData&&far.cap===vm.runInContext('COMBAT_FX_CAPACITY',c)&&far.serial===vm.runInContext('combatFxSerial',c)&&far.head===vm.runInContext('combatFxHead',c),'the ring is handed to the GPU with its head and serial');
+assert.equal(far.now,100,'on the drawn clock');
+// (The ray hits nothing near: no record is read, none released or changed.)
+assert.equal(kinds().length,100,'distant records stay for the GPU');
+c.beginFrameEffects(c.batch,false,bounds,[],64,cam([40,2,40],[-1,0,-1]));
 c.buildFrameEffects([],[],[]);c.endFrameEffects();
-assert.deepEqual(instances(M.ORB),distant,'panning leaves the distant dots where they are');
-tilted.pixelsPerWorldAt=()=>64;
-c.beginFrameEffects(c.batch,false,bounds,[],64,tilted);
+assert.equal(c.batch.total+nearEntries().length,0,'a view with near ground but the attacks far: still on the GPU');
+c.beginFrameEffects(c.batch,false,bounds,[],64,cam([6,2,0],[0,0,1]));
 c.buildFrameEffects([],[],[]);c.endFrameEffects();
-assert.ok(c.batch.total>100,'nearby spell effects retain their individual shapes');
+assert.equal(nearEntries().length,100,'nearby spell effects: each listed for its shapes on the GPU');
+assert.equal(c.batch.total,0,'none made on the page');
 
+// A tower's volley beside the worker: its shots' muzzle flashes, flights and hits as entries.
+c.clearCombatFx();
+c.gameTime = 100;
+vm.runInContext('simClientActive = () => true; pageUnitDrawnAt = () => false;', c);
+c.recordCombatFx(FX.MUZZLE, 5 * 32, 5 * 32, 9 * 32, 5 * 32, 'pistol', -3, 0);
+c.gameTime = 108;
+frame();
+const vk = nearEntries().map(e => e.kind);
+assert.ok(vk.includes(13) && vk.includes(10), 'a volley lists its shots in flight and its muzzle flashes: ' + vk.join(','));
+vm.runInContext('simClientActive = undefined; pageUnitDrawnAt = undefined;', c);
+c.gameTime = 100;
 console.log('PASS: role-specific attack effects, runes, expiry, culling, rewinds, lobbed shots, 2D flattening and laser fences.');
 
 const alerts = vm.createContext({ gameTime: 100, tickAlpha: 0, TICK_RATE: 20, TILE: 32, mapAlerts: [] });

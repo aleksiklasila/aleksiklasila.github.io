@@ -1284,7 +1284,8 @@ function initInput() {
 
     const RALLY_CAPABLE_TYPES = new Set(['barrack', 'spawner', 'astar_spawner', 'salvager', 'builder_spawner', 'healer_spawner', 'research']);
     function isRallyCapableEntity(ent) {
-        if (!ent || ent.owner !== localPlayerId) return false;
+        // (A gone building's view stays in a big selection until it is compacted: hud.js selectionStructCompact.)
+        if (!ent || ent.dead || ent.owner !== localPlayerId) return false;
         if (RALLY_CAPABLE_TYPES.has(ent.type)) return true;
         return Number.isFinite(ent.gx) && Number.isFinite(ent.gy) && ('rallyX' in ent) && ('rallyY' in ent);
     }
@@ -1302,7 +1303,7 @@ function initInput() {
         if (!(S.ents === selectedEntities && S.len === selectedEntities.length && S.off === off)) {
             const active = getActiveEntities();
             S.rally = active.filter(isRallyCapableEntity);
-            S.allTowers = active.filter(e => e instanceof Tower && e.owner === localPlayerId);
+            S.allTowers = active.filter(e => e instanceof Tower && !e.dead && e.owner === localPlayerId);
             S.ents = selectedEntities; S.len = selectedEntities.length; S.off = off;
         }
         S.towers = S.allTowers.filter(t => t.energy > 0);
@@ -1470,13 +1471,16 @@ function initInput() {
     function _unitsNearPoint(x, y, reach, own) {
         const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
         if (!F) return units;
-        const out = [], ord = F.order, X = F.x, Y = F.y, O = F.owner, n = Math.min(F.count, units.length), me = localPlayerId;
+        // (The views of the near ones only, by slot: units[k] filled the page's whole list, a view made for every unit,
+        // ~200 ms at the first click in a 200k battle, 2026-11-23.)
+        const out = [], ord = F.order, X = F.x, Y = F.y, O = F.owner, n = F.count, me = localPlayerId;
         const near = (k) => {
             const s = ord[k];
             if ((O[s] === me) !== own) return;
             const dx = X[s] - x, dy = Y[s] - y;
             if (dx > reach || dx < -reach || dy > reach || dy < -reach) return;
-            out.push(units[k]);
+            const v = pageSlotView(s);
+            if (v !== undefined) out.push(v);
         };
         const cells = _frameListInBox(F, x - reach, y - reach, x + reach, y + reach);
         if (cells) { for (let i = 0; i < cells.length; i++) if (cells[i] < n) near(cells[i]); }
@@ -1502,7 +1506,7 @@ function initInput() {
         // (Slot by slot: the columns read in memory order, ~3x faster than
         // in the list's order; the selection is then in slot order. Their
         // slots are kept for the selection's index: selectionIndexAdopt.)
-        const X = F.x, Y = F.y, O = F.owner, ID = F.id, n = F.n, me = localPlayerId, full = fullVisibility, it = 1 / TILE, views = _pageSlotViews;
+        const X = F.x, Y = F.y, O = F.owner, ID = F.id, n = F.n, me = localPlayerId, full = fullVisibility, it = 1 / TILE;
         let slots = _boxUnitSlots;
         if (slots.length < n) slots = _boxUnitSlots = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
         let c = 0;
@@ -1525,7 +1529,7 @@ function initInput() {
                 const x = X[s], y = Y[s];
                 if (x < sx || x > ex || y < sy || y > ey) continue;
                 if (!full && !isTileVisible(Math.floor(x * it), Math.floor(y * it))) continue;
-                const u = views[s];
+                const u = pageSlotView(s);
                 if (u) { out.push(u); slots[c++] = s; }
             }
         } else for (let s = 0; s < n; s++) {
@@ -1535,7 +1539,7 @@ function initInput() {
             if (!full && !isTileVisible(Math.floor(x * it), Math.floor(y * it))) continue;
             // (A slot with an id holds a live unit's view: the view itself
             // is not read.)
-            const u = views[s];
+            const u = pageSlotView(s);
             if (u) { out.push(u); slots[c++] = s; }
         }
         _boxUnitSlotCount = c; _boxUnitSlotsFor = out;
@@ -1622,20 +1626,19 @@ function initInput() {
                 hitZ: 30,
             });
         }
-        for (let b of barracks) {
-            if (b.owner !== localPlayerId || b.energy <= 0) continue;
-            if (!isTileVisible(b.gx, b.gy)) continue;
-            candidates.push({ kind: 'entity', ref: b, x: b.x, y: b.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
-        }
-        for (let t of towers) {
-            if (t.owner !== localPlayerId || t.energy <= 0) continue;
-            if (!isTileVisible(t.gx, t.gy)) continue;
-            candidates.push({ kind: 'entity', ref: t, x: t.x, y: t.y, hitShape: { kind: 'rect', hw: 15, hh: 15 }, hitRadius: 20, hitZ: 20 });
-        }
-        for (let s of collectorSpawners) {
-            if (s.owner !== localPlayerId || s.energy <= 0) continue;
-            if (!isTileVisible(s.gx, s.gy)) continue;
-            candidates.push({ kind: 'entity', ref: s, x: s.x, y: s.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
+        // Structures by their tiles within a few of the click's ground point,
+        // as for the enemy's (every own building of the map, an object each,
+        // and in 3D every visible tile, were a click's cost: 2026-11-23).
+        const reach = renderDimensionMode === '3d' ? CLICK_STRUCT_REACH_3D : CLICK_STRUCT_REACH_2D;
+        const cgx = Math.floor(worldX / TILE), cgy = Math.floor(worldY / TILE);
+        const gy0 = Math.max(0, cgy - reach), gy1 = Math.min(GRID_H - 1, cgy + reach), gx0 = Math.max(0, cgx - reach), gx1 = Math.min(GRID_W - 1, cgx + reach);
+        for (let ty = gy0; ty <= gy1; ty++) for (let tx = gx0; tx <= gx1; tx++) {
+            const e = getTileEntityRef(tx, ty);
+            if (!e || e.gx !== tx || e.gy !== ty || e.owner !== localPlayerId || !(e.energy > 0)) continue;
+            const kind = _clickStructKind(e);
+            if (!kind || !isTileVisible(tx, ty)) continue;
+            candidates.push(kind === 'tower' ? { kind: 'entity', ref: e, x: e.x, y: e.y, hitShape: { kind: 'rect', hw: 15, hh: 15 }, hitRadius: 20, hitZ: 20 }
+                : { kind: 'entity', ref: e, x: e.x, y: e.y, hitShape: { kind: 'rect', hw: 14, hh: 14 }, hitRadius: 20, hitZ: 20 });
         }
         let addOwnedFloorItem = (cell, gx, gy) => {
             if (cellItemGet(cell) && cellOwner[(cell) - 1] === localPlayerId) {
@@ -1653,9 +1656,8 @@ function initInput() {
         };
         let gx = Math.floor(worldX / TILE), gy = Math.floor(worldY / TILE);
         if (renderDimensionMode === '3d') {
-            let bounds = get3DVisibleWorldBounds();
-            for (let scanGy = bounds.minGy; scanGy <= bounds.maxGy; scanGy++) {
-                for (let scanGx = bounds.minGx; scanGx <= bounds.maxGx; scanGx++) {
+            for (let scanGy = gy0; scanGy <= gy1; scanGy++) {
+                for (let scanGx = gx0; scanGx <= gx1; scanGx++) {
                     if (!isTileVisible(scanGx, scanGy)) continue;
                     let cell = grid[scanGy] && grid[scanGy][scanGx];
                     if (cell) addOwnedFloorItem(cell, scanGx, scanGy);
@@ -1931,7 +1933,7 @@ function initInput() {
         const F = typeof simClientCurrentUnitVis === 'function' ? simClientCurrentUnitVis() : null;
         const n = unitIds.length, xs = new Float32Array(n), ys = new Float32Array(n), has = new Uint8Array(n);
         if (F && typeof _pageUnitsById !== 'undefined') {
-            const PU = _pageUnitsById, FID = F.id, FX = F.x, FY = F.y;
+            const PU = _pageUnitsById, FID = F.id, FX = F.x, FY = F.y, IDS = typeof _pageIdSlot !== 'undefined' ? _pageIdSlot : null;
             // (Each id's frame slot kept for this id list (the selection's, the same array click after click of a
             // chain): the frame's id column confirms it, a Map look-up only for a unit whose slot changed. Was a
             // look-up a unit a click: ~15 ms of this thread a shift-click with 170k selected, perf fuzz 2026-11-16.)
@@ -1941,6 +1943,10 @@ function initInput() {
                 const id = unitIds[i];
                 let s = SL[i];
                 if (s >= 0 && s < FID.length && FID[s] === id) { xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; continue; }
+                // (The id's slot from the id column, no view: PU.get makes a page view for a unit without one, ~69 ms
+                // the first multi-point click with 150k selected, perf fuzz 2026-11-23.)
+                s = IDS && id >= 0 && id < IDS.length ? IDS[id] : -1;
+                if (s >= 0 && s < FID.length && FID[s] === id) { SL[i] = s; xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; continue; }
                 const u = PU.get(id);
                 s = u ? u._s : -1;
                 if (s >= 0 && FID[s] === id) { SL[i] = s; xs[i] = FX[s]; ys[i] = FY[s]; has[i] = 1; }
@@ -6734,6 +6740,8 @@ function startGame() {
     _tpsLastTime = _lastTickTime;
     startMainThreadLoops();
     prewarmItemThumbnails();
+    // (The bottom bar's research thumbnails' sprite sheet: now, not at the first research tile.)
+    if (typeof _bbSpriteBuild === 'function' && typeof _bbSprite !== 'undefined' && !_bbSprite.css) { try { _bbSpriteBuild(); } catch (_) { } }
     // (The info panel's elements: made now, not at the first selection.)
     if (typeof infoPanelMatchStart === 'function') infoPanelMatchStart();
 }
