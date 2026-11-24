@@ -294,7 +294,7 @@ unsafe fn rz_place_job(a: u32, chunk: i32) {
     };
     let mut f = [0u64; 64];
     let mut wl = [0u64; 64];
-    let mut e = [[0u64; 64]; 33];
+    let mut e = [0u64; 64];
     let mut fit = [0u64; 64];
     let mut i = t0;
     while i < t1 {
@@ -302,46 +302,41 @@ unsafe fn rz_place_job(a: u32, chunk: i32) {
         let mut en = i;
         while en < t1 && g(tg, g(tord, en) as usize) == gi { en += 1; }
         let meta = g(rec, g(tord, i) as usize);
-        let r = (meta & 255).max(1).min(32); let layer = ((meta >> 8) & 255).min(planes - 1); let ground = (meta >> 16) & 1 == 0;
+        let fw = (meta & 255).max(1).min(super::occ::OCC_WMAX); let layer = ((meta >> 8) & 255).min(planes - 1); let ground = (meta >> 16) & 1 == 0;
         let need = en - i;
-        // The disk's half widths (shape table: -1 none in that row).
-        let hw = |dy: i32| -> i32 { if dy < -32 || dy > 32 { -1 } else { *mask.add((r * 65 + dy + 32) as usize) as i32 } };
-        // Rows y0..=y1 of f and e made again from the bits.
-        let mut erode = |f: &mut [u64; 64], e: &mut [[u64; 64]; 33], y0: i32, y1: i32| {
+        // (A footprint: fw x fw cells from its anchor (top-left cell); the place of anchor a is its middle,
+        // a * cell + fo.)
+        let fo = super::occ::foot_off(cell, fw) + (cell >> 1);
+        // Rows y0..=y1 of f and e made again from the bits: e bit x = cells x..x+fw of the row free (past the block: not).
+        let erode = |f: &mut [u64; 64], e: &mut [u64; 64], y0: i32, y1: i32| {
             for y in y0.max(0)..=y1.min(63) {
                 let v = row_free(y, layer);
                 *f.get_unchecked_mut(y as usize) = v;
-                let mut c = v;
-                *e.get_unchecked_mut(0).get_unchecked_mut(y as usize) = c;
-                for hh in 1..=r as usize { c &= (c << 1) & (c >> 1); *e.get_unchecked_mut(hh).get_unchecked_mut(y as usize) = c; }
+                // (Doubling: c covers have cells, then the rest by one shift.)
+                let (mut c, mut have) = (v, 1);
+                while have * 2 <= fw { c &= c >> (have as u32); have *= 2; }
+                if have < fw { c &= c >> ((fw - have) as u32); }
+                *e.get_unchecked_mut(y as usize) = c;
             }
         };
-        // Fit rows y0..=y1 from e (the disk inside the block: rows past it none), walls out; returns their bits.
-        let refit = |e: &[[u64; 64]; 33], fit: &mut [u64; 64], wl: &[u64; 64], y0: i32, y1: i32| -> i32 {
+        // Fit rows y0..=y1 from e (the footprint inside the block: rows past it none; ground: its middle's tile not a
+        // wall); returns their bits.
+        let refit = |e: &[u64; 64], fit: &mut [u64; 64], wl: &[u64; 64], y0: i32, y1: i32| -> i32 {
             let mut n = 0;
             for y in y0.max(0)..=y1.min(63) {
-                let mut m = u64::MAX;
-                for dy in -r..=r {
-                    let hh = hw(dy);
-                    if hh < 0 { continue; }
-                    let yy = y + dy;
-                    if yy < 0 || yy > 63 { m = 0; break; }
-                    m &= *e.get_unchecked(hh as usize).get_unchecked(yy as usize);
-                    if m == 0 { break; }
-                }
+                let mut m = if y + fw > 64 { 0 } else { u64::MAX };
+                let mut dy = 0;
+                while m != 0 && dy < fw { m &= *e.get_unchecked((y + dy) as usize); dy += 1; }
                 if ground { m &= !*wl.get_unchecked(y as usize); }
                 *fit.get_unchecked_mut(y as usize) = m;
                 n += m.count_ones() as i32;
             }
             n
         };
-        // (Two footprints overlap exactly when, on a row both cover (rows a
-        // and b of theirs, a - b = D, the centres' vertical offset), the
-        // centres are at most hw(a) + hw(b) apart: per D the widest, -1
-        // none. A placed one's centre clears those spans of the fit map.)
-        let mut ex = [-1i32; 128];
-        for a in 1 - r..r { let ha = hw(a); if ha < 0 { continue; } for b in 1 - r..r { let hb = hw(b); if hb < 0 { continue; } let d = (a - b + 63) as usize; if ha + hb > *ex.get_unchecked(d) { *ex.get_unchecked_mut(d) = ha + hb; } } }
-        for y in 0..64 { wl[y as usize] = if ground { row_wall(y) } else { 0 }; }
+        // (The wall test at an anchor: its middle's cell, (fw - 1) / 2 cells right and below: the rows' wall cells
+        // moved there.)
+        let mid = (fo >> csh) as u32;
+        for y in 0..64i32 { wl[y as usize] = if ground { row_wall(y + mid as i32) >> mid } else { 0 }; }
         erode(&mut f, &mut e, 0, 63);
         let mut cand = refit(&e, &mut fit, &wl, 0, 63);
         if cand == 0 { i = en; continue; }
@@ -356,7 +351,7 @@ unsafe fn rz_place_job(a: u32, chunk: i32) {
         let (mut ylo, mut yhi) = (64i32, -1i32);
         for t in i..en {
             let ti = g(tord, t) as usize;
-            let (x, y) = ((g(ux, ti) >> csh) - bx0, (g(uy, ti) >> csh) - by0);
+            let (x, y) = (((g(ux, ti) - fo + (cell >> 1)) >> csh) - bx0, ((g(uy, ti) - fo + (cell >> 1)) >> csh) - by0);
             if x >= 0 && y >= 0 && x < 64 && y < 64 { *fr.get_unchecked_mut(y as usize) |= 1u64 << x; ylo = ylo.min(y); yhi = yhi.max(y); }
         }
         for y in 0..64 { *vis.get_unchecked_mut(y) = *fr.get_unchecked(y); }
@@ -370,17 +365,16 @@ unsafe fn rz_place_job(a: u32, chunk: i32) {
                 if hit == 0 { y += 1; continue; }
                 let x = hit.trailing_zeros() as i32;
                 let (cx, cy) = (bx0 + x, by0 + y);
-                let px = (cx << csh) + (cell >> 1); let py = (cy << csh) + (cell >> 1);
-                super::occ::disk_mark(&gd, px, py, r, layer);
+                let px = (cx << csh) + fo; let py = (cy << csh) + fo;
+                super::occ::disk_mark(&gd, px, py, fw, layer);
                 let ti = g(tord, i + made) as usize;
                 s(pos, 2 * ti, px); s(pos, 2 * ti + 1, py);
                 made += 1;
-                // (Its exclusion spans out of the fit map; the same row again.)
-                for d in 2 - 2 * r..=2 * r - 2 {
-                    let wd = *ex.get_unchecked((d + 63) as usize);
+                // (Its exclusion out of the fit map: the anchors less than fw cells away on both axes; the same row again.)
+                for d in 1 - fw..fw {
                     let yy = y + d;
-                    if wd < 0 || yy < 0 || yy > 63 { continue; }
-                    let (lo, hi) = ((x - wd).max(0), (x + wd).min(63));
+                    if yy < 0 || yy > 63 { continue; }
+                    let (lo, hi) = ((x - fw + 1).max(0), (x + fw - 1).min(63));
                     let m = if hi - lo >= 63 { u64::MAX } else { ((1u64 << (hi - lo + 1)) - 1) << lo };
                     let row = fit.get_unchecked_mut(yy as usize);
                     cand -= (*row & m).count_ones() as i32;
@@ -754,25 +748,28 @@ pub unsafe extern "C" fn k_rz_cplace(a: u32, chunk: i32) {
     for b in g(cj, 4 * j) as usize..g(cj, 4 * j + 1) as usize {
         let ti = g(bt, b) as usize;
         let (px, py, meta) = (g(pos, 2 * ti), g(pos, 2 * ti + 1), g(tmeta, ti));
-        let (r, layer, ground) = ((meta & 255).max(1).min(32), ((meta >> 8) & 255).min(planes - 1), (meta >> 16) & 1 == 0);
-        let (cx, cy) = (px >> csh, py >> csh);
+        let (fw, layer, ground) = ((meta & 255).max(1).min(super::occ::OCC_WMAX), ((meta >> 8) & 255).min(planes - 1), (meta >> 16) & 1 == 0);
+        // (Anchors: a footprint's top-left cell; the place of anchor a its footprint's middle, a * cell + (cell / 2 + fo).)
+        let fo = super::occ::foot_off(cell, fw) + (cell >> 1);
+        let (cx, cy) = ((px - fo + (cell >> 1)) >> csh, (py - fo + (cell >> 1)) >> csh);
         let fits_at = |x: i32, y: i32| -> bool {
-            if x - r < bx0 || y - r < by0 || x + r >= bx0 + BC || y + r >= by0 + BC || x < 0 || y < 0 || x >= w || y >= h { return false; }
-            if ground && !wall.is_null() && g(wall, ((y >> tsh) * gw + (x >> tsh)) as usize) != 0 { return false; }
-            !super::occ::cell_taken(&gd, x, y, layer) && super::occ::disk_free(&gd, (x << csh) + (cell >> 1), (y << csh) + (cell >> 1), r, layer)
+            if x < bx0 || y < by0 || x + fw > bx0 + BC || y + fw > by0 + BC || x < 0 || y < 0 || x + fw > w || y + fw > h { return false; }
+            let (qx, qy) = ((x << csh) + fo, (y << csh) + fo);
+            if ground && !wall.is_null() && g(wall, (((qy >> csh) >> tsh) * gw + ((qx >> csh) >> tsh)) as usize) != 0 { return false; }
+            super::occ::disk_free(&gd, qx, qy, fw, layer)
         };
-        let mut at = if !super::occ::cell_taken(&gd, cx, cy, layer) && super::occ::disk_free(&gd, px, py, r, layer) { Some((px, py)) } else { None };
+        let mut at = if super::occ::disk_free(&gd, px, py, fw, layer) { Some((px, py)) } else { None };
         // (Taken since the placement: the nearest free one within P[9] cells, ring by ring.)
         let mut d = 1;
         while at.is_none() && d <= retry {
             'ring: for dy in -d..=d { for dx in -d..=d {
                 if dx.abs() != d && dy.abs() != d { continue; }
-                if fits_at(cx + dx, cy + dy) { at = Some((((cx + dx) << csh) + (cell >> 1), ((cy + dy) << csh) + (cell >> 1))); break 'ring; }
+                if fits_at(cx + dx, cy + dy) { at = Some((((cx + dx) << csh) + fo, ((cy + dy) << csh) + fo)); break 'ring; }
             }}
             d += 1;
         }
         match at {
-            Some((x, y)) => { super::occ::disk_mark(&gd, x, y, r, layer); s(pos, 2 * ti, x); s(pos, 2 * ti + 1, y); s(ok, b, 1); }
+            Some((x, y)) => { super::occ::disk_mark(&gd, x, y, fw, layer); s(pos, 2 * ti, x); s(pos, 2 * ti + 1, y); s(ok, b, 1); }
             None => s(ok, b, 0),
         }
     }

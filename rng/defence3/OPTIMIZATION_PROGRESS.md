@@ -11001,3 +11001,181 @@ renderer3d.js against HEAD (static views, 2 rounds alternating, tick frames): up
   structure, not the scan): a Rust change to list its rows would save ~0.7 ms each. Not done.
 - Fuzz chaos-front-400k-l16 (6 min): TPS 4-5 (the simulation); page findings were the near pass above and the
   fuzzer's own probe (querySelectorAll / getBoundingClientRect / elementFromPoint from its controls scan).
+
+## 2026-11-24 - occupancy at 8-px cells (4 a tile), square footprints of 1-4 cells; sizes drawn as occupied (tests/test-runs/occ4-20261124/)
+
+User: convert the occupancy to 4 x 4 cells a tile; workers 8 px, middle units 16 px, large 24 px (the King may be 4
+cells), sprites / models the size of the footprint (a px or so less for variety, never e.g. a 12 px sprite on 8 px of
+occupancy); optimize the kernels for it and measure; the user tests the look / feel by hand.
+
+**Model.** SIM_OCCUPANCY_SUBCELLS 4 (8-px cells). A footprint is a square of w cells (occ.rec meta's low byte is the
+width now, not a radius), w = round(2R / 8 px) (sim_occupancy.js occupancyFootprintCells; barrack.js spawn table and
+main.js starter spacing use it). Its anchor (top-left cell) is cell(p - (w - 1) * cell / 2): centred on the unit for odd
+and even widths (an even one turns over at the cells' middles). Radii (data_static.js): workers, Fast, Scout 4 (8 px);
+Norm, Flying, Mole, Snake, the resistants 8 (16 px); Tank, Boss 12 (24 px); King 16 (32 px). r is also what the
+separation, melee contact and the sprites use, so all of them follow.
+
+**Kernels (occ.rs, birth.rs).** The disk raster is gone (occ_shapes.rs, generate-occ-shapes.cjs, the 33 x 65 half-width
+table; occ.mask stays only as an unused argument). One square model: `fits` (w row reads of 64 bits, the own footprint
+masked by a span), `paint` (rows64, counts kept), `fits_step` (a one-cell step tests only the row and / or column it
+enters: the old r2 step leaves, for every width), the sweeps on shifted positions p - off (`motion_s`,
+`horizontal_motion`, `motion_f`: for odd widths the same steps as before), the legal-anchor fields `field8` /
+`field16` for W = w - 1 in 0..3 (SIMD dilation by W across and W rows down, own footprint cleared in registers), spawn
+search `find_win64` for every width (one spread of the window's rows by w - 1, an anchor row the OR of w rows;
+`find_win` / row128 gone), release / atomic release as squares; radius_q (w + 1) * cell / 2, mass w * w. birth.rs
+placement: a row's fit = free cells eroded by w (doubling shifts), w rows ANDed, the wall test at the footprint's middle
+cell, exclusion |d| < w on both axes; the commit's retry by anchors. occ_layout() = OCC_MY | 3 << 8 (stale binaries
+refused). Tests: occupancy-shapes (2560 cases, widths 1-10, now against squares), occupancy-grid (oracle as squares),
+occ-find-window, mover-table(-order), traffic-pressure, worker-approach-occupancy, occupancy-chunk-failure,
+spawn-births-columns, starting-spawn-limits pass; determinism: multiplayer-chaos-determinism (3 maps), shared-spatial-
+determinism (0 vs 7 helpers), chaos-scenario-determinism, deltatick-multiplayer, multiplayer-cross-engine pass.
+
+**Overlap at 8-px cells: blocked units hold a quarter cell past their cell's middle (occ.rs hold_mid).** A footprint is
+its anchor cell's, the unit's square overhangs it by its offset from the cell's middle, and "blocked units close up
+inside their cell" let a unit creep to its cell's edge toward a taken neighbour: two facing units overlapped by a whole
+cell, a 1-cell worker by its whole size (separation-rally at 20 TPS: deep pairs 7.4 a frame, a pair deep for all 800
+ticks, penetration .203: fail). Now each attempt of preview (the step, its two slides) ends at most a quarter cell past
+its cell's middle on an axis it moved along toward a taken neighbour (one row read or a bit a row, only past that
+point); held with no progress is blocked (the slides, the caller's shoulders). At the middle itself head-on walkers
+lost 12.5% of their progress (crowd-traffic counter, dk 1 and 4: no longer within the swap's reach); at a quarter cell
+progress is as without any hold (counter dk 1 12.31M vs 12.32M, dk 4 12.00M vs 11.88M; plug 12.52M / 12.25M vs 12.56M /
+12.19M) and separation-rally passes (penetration .148 / .096, deep pairs .4 / 0, longest deep streak 4 ticks).
+
+**Scenes carry their THING_STATS.** A scene's (or saved config's) advanced config replaces THING_STATS whole, so the
+saved scenes kept their old radii (the first measurement had workers at 16 px). Exported configs now say `unitSizes: 2`;
+older ones get the built-in radii and lose old collisionR overrides (data_dynamic.js migrateThingStatsSizes,
+data_static.js THING_UNIT_RADII).
+
+**Drawn size.** Quad size in tiles = clamp((2r - 1) * 1.4 / TILE, .2, 1.5) everywhere the renderers had
+clamp(r * 2.2 / TILE, .28, .9) (renderer.js, renderer3d.js incl. the slot / claim shaders): the baked model fills ~70%
+of its quad (the bake fits its bounding box to 89% of the panel), so the body is ~1 px under the square. The per-type
+scales were Fast 1.35, Flying 1.3, Scout 1.2, small flyers 0.8 (Fast drew ~18 px on a 12 px footprint); now variety
+only: Fast .94, Scout .9, small flyers .92, workers .96. Checked in Edge at zoom 6 on the densest crowd (shots/,
+zoom_ladder_probe with JS=focus.js): 2D collector rings are their 8 px, 3D workers about their square.
+
+**Measured, final build (hold included) against base = HEAD binary + JS (tests/test-runs/occ4-20261124: bench.sh,
+edge-ab.sh / edge-ab2.sh).** Node tickbench, checker-200k, 8 helpers, same sitting:
+| run | step mean | p95 | k89 | blocked or clipped | footprint moves | cells taken |
+|---|---|---|---|---|---|---|
+| base 20 s (4 px, disks, old radii) | 26.08 | 30.2 | 8.10 | 29.6k | 60.6k | 1.48M (23.7 Mpx2) |
+| final 20 s (x3) | 23.39 / 23.39 / 24.00 | 27.0 / 27.4 / 29.7 | 6.30 / 6.30 / 6.45 | 22.9k | 39.1k | 294k (18.8 Mpx2) |
+| base 45 s (900 ticks, armies converging) | 29.23 | 36.9 | 11.99 | | | |
+| final 45 s | 26.73 | 32.7 | 10.44 | | | |
+(Without the hold k89 was 6.2 / 9.4: the hold costs ~1 ms of k89 in the converging fight and keeps units off each
+other.) chaos-1m-250k (little movement): 12.7 -> 12.3 ms (3.7k of its 1M units find no footprint at the import: the
+scene was packed for the old sizes). With the old radii on 8-px cells (workers 16 px) k89 was only -7%.
+**Rendered (headed Edge, checker-200k, simtrace, 60 s a run, alternating, FPS ~101 both sides):**
+| | mean | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| base | 41.1 / 38.7 | 40.8 / 37.6 | 53.6 / 54.1 | 57.9 / 72.7 | 77.1 / 128.8 |
+| final | 38.0 / 32.3 | 37.0 / 31.9 | 50.7 / 42.2 | 55.5 / 47.7 | 64.4 / 63.6 |
+The slowest steps of both are k89 bursts in the converging fight (base +108..+235 ms helper CPU, mostly dk 2 steps;
+final +44..+79). Not like for like: base's worst three were dk 2 steps (two ticks of movement), the final's dk 1.
+variance.)
+**Spikes at equal step size (rendered, pace pinned at 50 ms: every step dk 1; 3 rounds x 120 s alternating, ~7.1k
+steps a side; edge-pin-*.txt, spikes.cjs):**
+| pooled | step mean | p95 | p99 | max | steps > 60 / > 80 ms | kp:89 mean / p95 / p99 / max | cpu:89 mean / p95 / p99 / max |
+|---|---|---|---|---|---|---|---|
+| base | 43.4 | 55.1 | 61.4 | 94.3 | 98 / 5 | 21.1 / 29.1 / 32.6 / 42.0 | 186 / 256 / 284 / 358 |
+| final | 39.4 | 52.3 | 58.1 | 130.5 | 46 / 3 | 17.1 / 24.2 / 27.2 / 43.1 | 150 / 212 / 234 / 370 |
+Per run step means 41.8 / 44.0 / 44.3 vs 40.3 / 39.6 / 38.4. k89's bursts shrink by about what its mean does (p95 /
+p99 -17%, mean -19%); its single worst step is the same (42 vs 43 ms wall). Steps over 60 ms halve. The 130 ms step
+(new run 1) is a k89 burst (+204 ms helper CPU) together with a spatial index rebuild (+17) and background waits (+18),
+once in 7.2k steps. k89 is ~45% of the rendered step (17-21 of ~40 ms; ~6 in Node): the rendered helpers share the
+machine with the page and GPU process.
+
+Profile (prof build, checker-200k): the occupancy's own primitives (preview, motion_f, fits, field, paint, commit) are
+~21% of k89 now; the rest is the per-unit traffic logic (checked_traffic_q, traffic_yield, traffic_swap, occ_gather,
+push_deposit, steering) as before.
+
+**Open (later): the 130 ms step of edge-pin-new-1 (#1660, tick ~1700).** Not the occupancy alone: on that step nearly every
+phase grew at once: kp:89 43 ms (cpu:89 370), spatialIndexRebuild 17.4 (median 0), recalculateUnitEffectiveLevel 16.2
+(1.1), statusPrepassRun 11.9 (0.6), kernels 100 (12.8 ms) and 191 (4.3 ms) that ran only on that step, background
+lane 4 aged 165 ms (0), simParallelBackgroundWait 18.8, flowPend 707 (~330). Looks like a machine-wide stall (all
+helpers slow together) on top of one-off work (a full index rebuild, kernel 100's job); to be traced (what triggers
+kernel 100 / the full rebuild there, and spread or prewarm it).
+
+**Tests changed with the sizes:** occupancy-shapes (squares, hold in its reference sweep), occupancy-grid (oracle),
+shared-unit-state (the replacement's spawn may be moved off its point), scene-orders (runs until one army is gone, up
+to 3000 ticks: fewer 16-px norms fight at the front, the same fight takes longer), unit-retirement (norms 16 px apart).
+
+**Tried, not kept:** 32-tile blocks (a 64-byte bitmap line is 8 blocks wide at 8 px): k89 -0.4 ms, step -0.3 ms,
+under the noise bar; 16 kept.
+
+**Left / notes:** the traffic's coarse cells follow the count cells, 8 tiles a side now (4 before); traffic-pressure
+passes. The k89 bursts in converging fights are the tail to attack next.
+
+
+### 2026-11-24 (later) - 4-px vs 8-px cells with the same unit sizes (8 / 16 / 24 / 32 px squares)
+
+The sizes work at either cell size (at 4 px they are 2 / 4 / 6 / 8 cells wide; SIM_OCCUPANCY_SUBCELLS 8 vs 4, same
+build, hold_mid at a quarter cell in both). tests/test-runs/occ4-20261124/compare-cells.cjs (press: separation-rally's
+120 norm / fast / tank crowd ordered to its own centre every 5 ticks; settle: ordered once, the last 400 ticks;
+fight: two armies of 150 attack-moving through each other), cells-matrix.jsonl. Overlap = the area two units' squares
+(side 2r) share over the smaller one's, per sample; back-and-forth = a visible move against the previous one.
+| cell | scenario | dk | overlapping pairs | mean overlap | > 25% | > 50% | max | moving | back-and-forth / unit-tick | its px |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4 px | press | 1 | 72 | .097 | 1.2 | 0 | .38 | .375 | .139 | .204 |
+| 8 px | press | 1 | 90 | .212 | 28.1 | 4.2 | .66 | .427 | .199 | .374 |
+| 4 px | press | 4 | 85 | .084 | 0 | 0 | .25 | .085 | .074 | .426 |
+| 8 px | press | 4 | 77 | .194 | 18.0 | 6.0 | .66 | .008 | .007 | .054 |
+| 4 px | settle | 1 | 63 | .071 | 3 | 0 | .30 | 0 | 0 | 0 |
+| 8 px | settle | 1 | 89 | .162 | 21 | 3 | .77 | 0 | 0 | 0 |
+| 4 px | settle | 4 | 62 | .069 | 0 | 0 | .25 | 0 | 0 | 0 |
+| 8 px | settle | 4 | 75 | .154 | 13 | 5 | .69 | 0 | 0 | 0 |
+| 4 px | fight | 1 | 60 | .063 | 1.7 | 0 | .42 | .367 | .076 | .115 |
+| 8 px | fight | 1 | 85 | .116 | 7.6 | .57 | .94 | .420 | .147 | .234 |
+| 4 px | fight | 4 | 52 | .051 | .4 | 0 | .38 | .368 | .024 | .148 |
+| 8 px | fight | 4 | 63 | .090 | 4.1 | .28 | .72 | .375 | .055 | .268 |
+8-px cells overlap about twice as much (a unit's square may sit up to half a cell off its footprint each way: 4 px
+of an 8-px worker; the hold covers only a blocked mover's facing axis, not side offsets, swaps' places or units at
+rest), and units sit more than half on another one at rest and in fights, which 4-px cells never showed. Back-and-forth
+is about half at 4 px at dk 1 (at dk 4 the pressed 8-px crowd freezes instead).
+**Flow (crowd-traffic, new --cells, per walker; 4 px refuses 372 of the 3200 walkers' dense spawns: its spawn search
+is 32 cells = 128 px, half of 8 px's):** counter 477 vs 481 px (dk 1), 446 vs 469 (dk 4); plug 495 vs 489, 480 vs
+479; open 505 vs 502, 496 vs 495: the same within ~5%.
+**Speed (tickbench checker-200k, 8 helpers, 2 alternating rounds):** 4 px 25.68 / 25.20 ms step, k89 7.87 / 7.61;
+8 px 23.73 / 23.92, k89 6.33 / 6.36: step -6.5%, k89 -18% (4 px slightly handicapped: its 6- and 8-cell Tank / Boss /
+King have no field path).
+**So:** 8-px cells buy ~18% of k89 (~6% of the Node step; k89 is ~45% of the rendered step) for about twice the
+overlap and visible units-on-units, with flow equal. Not decided (user).
+
+
+**Decision (user, 2026-11-24): 8 cells a tile (4-px cells) is the default.** SIM_OCCUPANCY_SUBCELLS = 8 in
+sim_occupancy.js, a plain constant (no URL or config switch: one value for every peer); 4 (8-px cells) still works when
+set there in code for testing (the kernels take the cell size as a value; the sizes, the hold, the tests' references
+follow it). Default against HEAD (both 4-px cells; HEAD with the old radii), checker-200k, 8 helpers, alternating, one
+sitting: step mean 27.38 / 27.55 vs 27.74 / 27.62 ms, k89 8.17 / 8.14 vs 8.30 / 8.33; 900 ticks 29.85 vs 30.00 ms, p95
+35.2 vs 34.9: the same. Tests at the default: occupancy-shapes, occupancy-grid, occ-find-window, traffic-pressure,
+separation-rally, scene-orders, shared-unit-state, unit-retirement, mover-table(-order), worker-approach-occupancy,
+occupancy-chunk-failure, spawn-births-columns, starting-spawn-limits, shared-spatial-determinism,
+chaos-scenario-determinism, multiplayer-chaos-determinism pass. (At 4-px cells the 6- and 8-cell Tank / Boss / King
+take motion_s, not the legal-anchor fields (widths <= 4): left; the default's speed is HEAD's as it is.)
+
+
+### 2026-11-24 (end) - 4-px cells as a kernel constant, SIMD fields for every width, sizes by strength
+
+User: specialize to 4-px cells (a 4x4 return would be its own refactor); SIMD for every unit size (sizes may scale with
+stats later); sizes near the pre-session ones and varied by strength (King largest, Boss, ..., workers smallest),
+8 px the minimum.
+- **occ.rs OCC_CELL = 32 eighths (OCC_SH 5), a constant:** no runtime cell size in Grid; mkgrid traps on another;
+  occ_layout carries it (OCC_MY | 3 << 8 | 32 << 16, sim_occupancy.js the same from SIM_OCCUPANCY_SUBCELLS 8).
+- **field_any:** the legal-anchor field for any width 1..32: the patch's 2K + 2 + W rows as 64-bit lanes (three words a
+  row, own footprint cleared), spread across by W with doubling u64x2 shifts, down by W with doubling ORs in place
+  (u64x2, each row read before it is written). field8 / field16 (16-bit lanes) stay for widths 1-4; preview takes the
+  field path for every width (motion_s only past the field's reach). Checked: occupancy-shapes (widths 1-10, 2560
+  cases) passes with the real build and with field_any forced for every width.
+- **Sizes (data_static.js r; square = round(2r / 4 px) cells, 2 cells (8 px) at least):** King 16 (32 px), Boss 14
+  (28), Snake 12 (24), Tank 10 / Fire Resistant 9.5 / Ice Resistant 9 (20), Poison Resistant 8.5 / Laser and Water
+  Resistant 8 / Norm 8 / Flying 7 (16), Fast 6 / Mole 5.5 / Builder and Salvager 6 / Healer and Researcher 5 (12),
+  Collectors 4 / Scout 4 (8). Radii between the 4-px steps give sprite variety inside one square.
+- Tests: occupancy-grid, occ-find-window, traffic-pressure, separation-rally, scene-orders, shared-unit-state,
+  unit-retirement, mover-table(-order), worker-approach-occupancy, occupancy-chunk-failure, spawn-births-columns,
+  starting-spawn-limits, shared-spatial-determinism, chaos-scenario-determinism, multiplayer-chaos-determinism,
+  multiplayer-cross-engine, deltatick-multiplayer pass.
+- **Smoke timing only (the machine busy with other programs, base itself drifted 26 -> 30 ms between rounds):**
+  checker-200k, 8 helpers, 20 s: HEAD 26.06 / 30.21 ms (k89 7.89 / 9.19), final 27.89 / 30.96 (k89 9.46 / 9.89),
+  field_any for every width 30.78 / 31.15 (k89 10.17 / 10.18); 45 s: HEAD 31.8 (k89 13.1), final 33.0 (k89 14.5).
+  The scene's units are larger now (Snake 12 -> 24 px, Boss 20 -> 28, King 20 -> 32, Norm 12 -> 16): blocked or
+  clipped 41.9k a tick vs HEAD's 29.6k, 465 of its units find no place at the import. To be measured on a quiet
+  machine (and the code alone: new code with HEAD's radii vs HEAD).

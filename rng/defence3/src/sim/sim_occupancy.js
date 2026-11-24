@@ -2,20 +2,27 @@
 // Occupancy contacts are the default; ?occupancy=0 keeps the comparison path.
 // Identity queries keep the existing index; contacts use only this grid.
 let SIM_OCCUPANCY_ENABLED = !(typeof location!=='undefined'&&location&&/[?&]occupancy=0(?:&|$)/.test(String(location.search||'')));
+// Cells a tile: 8 (4-px cells): the kernels take it as a constant (occ.rs OCC_CELL; 8-px cells were measured k89 ~18%
+// faster with about twice the overlap between units: OPTIMIZATION_PROGRESS.md 2026-11-24). A footprint is a square of
+// w cells centred on its unit (occ.rs anchor), w from the collision radius R: round(2R / 4 px) (R 4..16 px:
+// 8..32 px squares, 2..8 cells; data_static.js radii by strength), 2..32; any width moves by the SIMD fields (occ.rs).
 let SIM_OCCUPANCY_PLANES = 1, SIM_OCCUPANCY_SUBCELLS = 8, SIM_OCCUPANCY_BLOCK_TILES = 16;
+// (8 px the smallest: 2 cells.)
+function occupancyFootprintCells(R){return Math.max(2,Math.min(32,Math.round(2*(Number(R)||1)/(TILE/SIM_OCCUPANCY_SUBCELLS))));}
 // The bitmap's margins (occ.rs OCC_MY, occ_margins): per plane this many rows above and below the map, all taken, and
 // each row's last word (past the map's columns) taken: reads near the edge need no tests (the movers' legal-centre
 // fields). The array is [margin][map rows][margin] a plane; the kernels address from the map's origin.
 const SIM_OCCUPANCY_MARGIN_ROWS = 16;
 // After the planes: a count of taken cells a coarse traffic cell (32 x 32 cells: a bitmap word's columns), kept by
 // every bitmap write (occ.rs tally); the traffic's capture reads them. occ.rs occ_layout: margins | counts << 8.
-const SIM_OCCUPANCY_LAYOUT = SIM_OCCUPANCY_MARGIN_ROWS | (1 << 8);
+// (3 << 8: the counts and square footprints anchored at their middle.)
+const SIM_OCCUPANCY_LAYOUT = SIM_OCCUPANCY_MARGIN_ROWS | (3 << 8) | ((256 / SIM_OCCUPANCY_SUBCELLS) << 16);
 // Per movement job: idle units it swapped with across its block's edge
 // (mv.rs traffic_swap; their index entries are moved after the phases).
 const SIM_OCCUPANCY_XSWAP = 32;
 const SIM_OCCUPANCY_XSWAP_STRIDE = 48; // 33 words rounded to cache lines.
 let _occ = null;
-// The footprint of a slot is one 16-byte record in occ.rec (Int32 x4: x, y, meta = radius | layer << 8 | active << 16; the fourth word the movement's first stage's results for its second, mv.rs FW_*):
+// The footprint of a slot is one 16-byte record in occ.rec (Int32 x4: x, y, meta = width (cells) | layer << 8 | active << 16; the fourth word the movement's first stage's results for its second, mv.rs FW_*):
 // the second stage's neighbour scans read one line a unit, not one for each of x, y, radius, layer and active.
 const _occNames = ['occ.bits','occ.mask','occ.rec'];
 function _occupancyMargins(O){_simWasmX.occ_margins(_simWEnc(O.bits.byteOffset),O.w,O.h,O.stride,O.planes);}
@@ -48,13 +55,10 @@ function occupancyEnsure() {
         _occ.offsets=simHeapArray(Int32Array,bw*bh+1);
         _occ.xswap=simHeapArray(Int32Array,bw*bh*SIM_OCCUPANCY_XSWAP_STRIDE);_occ.xswap.fill(0);
         for(const name of ['config','stats','offsets','xswap'])simParallelBind('occ.'+name,_occ[name]);
-        _occ.mask=simHeapArray(Int8Array,33*65);_occ.mask.fill(-1);
-        _occ.sizes=new Array(33).fill(0);
-        for(let r=1;r<=32;r++)for(let dy=-r;dy<=r;dy++){
-            let hw=-1;for(let dx=0;dx<r;dx++)if(dx*dx+dy*dy<r*r)hw=dx;
-            _occ.mask[r*65+dy+32]=hw;
-            if(hw>=0)_occ.sizes[r]+=hw*2+1;
-        }
+        // (occ.mask: the old disk table's place in the kernels' arguments, unused by them.)
+        _occ.mask=simHeapArray(Int8Array,64);_occ.mask.fill(-1);
+        // (Cells a footprint of width w takes.)
+        _occ.sizes=new Array(49).fill(0);for(let w=1;w<=48;w++)_occ.sizes[w]=w*w;
     }
     const O=_occ,n=_simUnitState.cap;
     if(O.cap<n){
@@ -79,7 +83,7 @@ function occupancySpawn(u) {
     if(!SIM_OCCUPANCY_ENABLED||typeof _simWasmX==='undefined'||!_simWasmX)return true;
     const O=occupancyEnsure();if(!O||!u._us)return true;
     const s=u._si;if(_occActive(O,s))return true;
-    const x=u._us.x[s],y=u._us.y[s],r=Math.max(1,Math.min(32,Math.ceil((u.collisionR||u.r||1)/(TILE/SIM_OCCUPANCY_SUBCELLS))));
+    const x=u._us.x[s],y=u._us.y[s],r=occupancyFootprintCells(u.collisionR||u.r||1);
     const layer=O.planes===1?0:Math.min(O.planes-1,u.isFlying?1:u.unitType==='mole'?2:0);
     const A=_occupancyAddresses();
     const ok=_simWasmX.occ_spawn(A[0],A[1],A[2],O.w,O.h,O.stride,O.cell,O.planes,s,x,y,r,layer,32);

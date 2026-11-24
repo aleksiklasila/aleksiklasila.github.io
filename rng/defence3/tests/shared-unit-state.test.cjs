@@ -49,8 +49,10 @@ const result = JSON.parse(inst.eval(`JSON.stringify((() => {
         if(replacement[name]!==def)fail('sparse cache stale write '+name);
         first[name]=def;
     }
+    // (Where the replacement stands (its footprint may have moved it off rx: packed spawns spread).)
+    const rxNow = replacement.x;
     retired.x = -100;
-    if (replacement.x !== rx) fail('stale reference wrote reused slot');
+    if (replacement.x !== rxNow) fail('stale reference wrote reused slot');
     let compared = 0;
     for (let t = 0; t < 20; t++) {
         gameTick();

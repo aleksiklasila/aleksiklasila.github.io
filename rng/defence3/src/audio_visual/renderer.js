@@ -1842,7 +1842,7 @@ function _pushProductionGhost(objects, entity, flat2d) {
     if (!stats) return;
     let cache = renderer3dProductionGhosts.get(entity);
     if (!cache || cache.type !== type || cache.owner !== entity.owner) {
-        let footprint = Math.max(0.28, Math.min(0.9, ((stats.r || 8) * 2.2) / TILE));
+        let footprint = Math.max(.2, Math.min(1.5, (2 * (stats.r || 8) - 1) * 1.4 / TILE));
         let mount = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : 1;
         // A miniature: about a sixth of a tile wide (mounts a little wider).
         let width = mount > 1 ? 0.2 : 0.16;
@@ -2337,7 +2337,7 @@ function getChunkRenderView(view, bounds, flat2d) {
                     const radius = 1 + (Math.abs(x - px) + Math.abs(y - py)) / TILE;
                     const w = M[3] * wx + M[11] * wz + M[15];
                     if (w + radius <= 0) continue;
-                    const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                    const size = Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/TILE));
                     if (size * projectionScale / (flat2d ? 1 : Math.max(.01, w - radius)) < (flat2d ? UNIT_DETAIL_MIN_PX : 8) * .85) continue;
                     const cx = M[0] * wx + M[8] * wz + M[12], cy = M[1] * wx + M[9] * wz + M[13];
                     const margin = radius * (Math.abs(M[0]) + Math.abs(M[8]) + Math.abs(M[1]) + Math.abs(M[9]) + 1);
@@ -2457,7 +2457,7 @@ function buildScaleFrameData(flat2d, view) {
             d[o] = x; d[o + 1] = z;
             d[o + 2] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevX) ? e.prevX / TILE : x;
             d[o + 3] = kind === 0 && !e._historyGhost && Number.isFinite(e.prevY) ? e.prevY / TILE : z;
-            d[o + 4] = kind === 0 ? Math.max(.28, Math.min(.9, (e.r || 8) * 2.2 / TILE)) : .94;
+            d[o + 4] = kind === 0 ? Math.max(.2,Math.min(1.5,(2*((e.r || 8))-1)*1.4/TILE)) : .94;
             d[o + 5] = kind === 0 ? (e.isFlying ? .9 : .5) : kind === 1 ? .85 : .2;
             d[o + 6] = kind === 0 ? Math.atan2(e.vx || 0, e.vy || 1) : 0;
             d[o + 7] = kind;
@@ -2495,7 +2495,7 @@ function buildScaleFrameData(flat2d, view) {
                 if (!fullVisibility && !(light > 0)) continue;
                 const o = moving.count++ * 12, c = colorFor(F.owner[s]);
                 d[o] = x; d[o + 1] = z; d[o + 2] = F.px[s] / TILE; d[o + 3] = F.py[s] / TILE;
-                d[o + 4] = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+                d[o + 4] = Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/TILE));
                 d[o + 5] = F.flags[s] & 1 ? .9 : .5; d[o + 6] = F.facing[s]; d[o + 7] = 0;
                 const brightness = fullVisibility ? 1 : .35 + .65 * Math.min(1, (light || 0) / VISIBILITY_LIGHT_NORMALIZATION_RANGE);
                 d[o + 8] = c.r / 255 * brightness; d[o + 9] = c.g / 255 * brightness; d[o + 10] = c.b / 255 * brightness; d[o + 11] = 1;
@@ -3978,7 +3978,7 @@ function build3DFrameData(flat2d = false) {
                 if (!r3.writeUnitLayerRecord(lodC === 0 ? S.kind[slot] : lodC === 1 ? S.kindLod[slot] : S.kindLod2[slot], snakeC ? 0 : FV.mode[slot], rec, panelC, units[i])) { slowIdx.push(i); continue; }
                 if (flags & U_SLOT_MOTION) {
                     let u = units[i];
-                    let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                    let footprint = Math.max(.2, Math.min(1.5, (2 * (u.r || 8) - 1) * 1.4 / TILE));
                     unitLayer.motion.push({ u, footprint, scaleY: S.dim[slot * 4 + 1] });
                     pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, S.dim[slot * 4 + 1]);
                 }
@@ -4013,7 +4013,7 @@ function build3DFrameData(flat2d = false) {
             if (!r3.writeUnitLayerRecord(lod === 0 ? S.kind[slot] : lod === 1 ? S.kindLod[slot] : S.kindLod2[slot], snake ? 0 : FV.mode[slot], rec, panel, units[i])) { slowIdx.push(i); continue; }
             if (flags & U_SLOT_MOTION) {
                 let u = units[i];
-                let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+                let footprint = Math.max(.2, Math.min(1.5, (2 * (u.r || 8) - 1) * 1.4 / TILE));
                 unitLayer.motion.push({ u, footprint, scaleY: sy });
                 pushUnitMotionFx(u, ux / TILE, uy / TILE, footprint, sy);
             }
@@ -4038,7 +4038,7 @@ function build3DFrameData(flat2d = false) {
         if (layerBuilding) unitLayer.occupied.push(ugy * GRID_W + ugx);
 
         if (flat2d && _pushFlatUnit(flatBatch, u, ux / TILE, uy / TILE, view3DKey)) continue;
-        let footprint = Math.max(0.28, Math.min(0.9, ((u.r || 8) * 2.2) / TILE));
+        let footprint = Math.max(.2, Math.min(1.5, (2 * (u.r || 8) - 1) * 1.4 / TILE));
         if (unitVis) {
             let cached = u._r3d, sl = _uSlotVisIndex;
             let sig = unitVis.sig[sl];
@@ -4142,9 +4142,8 @@ function build3DFrameData(flat2d = false) {
                 if (unitVis) cached.sigW = unitVis.sig[_uSlotVisIndex];
                 continue;
             }
-            // Mounts (pony, winged horses) carry a rider: larger than a lone figure.
-            let modelScale = u.unitType === 'fast' ? 1.35 : u.unitType === 'scout' ? 1.2 : u.unitType === 'flying' ? 1.3
-                : u.isFlying ? 0.8 : 1;
+            // (The drawn size follows the footprint; a little variety by type only (the catalog styles' scale).)
+            let modelScale = u.unitType === 'fast' ? .94 : u.unitType === 'scout' ? .9 : u.isFlying && u.unitType !== 'flying' ? .92 : u.isWorker ? .96 : 1;
             let mounted = MOUNTED_UNIT_TYPES.has(u.unitType);
             // The mounted panel is the unit's canonical 2D rendering at every LOD.
             // The shared status texture remains only a short-lived fallback while a
@@ -4338,7 +4337,9 @@ function _makeColumnLodCatalog() {
     for (const [code, type] of types) {
         const unit = BASE_UNIT_STATS[type], card = BASE_CARD_TYPES[type];
         if (unit) {
-            const scale = type === 'fast' ? 1.35 : type === 'scout' ? 1.2 : type === 'flying' ? 1.3 : unit.isFlying ? .8 : 1;
+            // (The drawn size follows the footprint (its radius: 1 px less than the occupied square); a little variety
+            // by type only, never wider than the square.)
+            const scale = type === 'fast' ? .94 : type === 'scout' ? .9 : unit.isFlying && type !== 'flying' ? .92 : unit.isWorker ? .96 : 1;
             add(7, code, {modelKey:'unit_'+type, type, unit:true, snake:type==='snake', isFlying:!!unit.isFlying, isWorker:!!unit.isWorker, mounted:MOUNTED_UNIT_TYPES.has(type),
                 weaponType:getUnit3DWeaponType({unitType:type,attackStyle:unit.attackStyle}),
                 color:type==='snake'?'#3dff64':UNIT_3D_BODY_COLORS[type] || unit.color, scaleX:scale, scaleY:scale*(type==='snake'?.52:MOUNTED_UNIT_TYPES.has(type)?MOUNT_HEIGHT_RATIO:1.45),
@@ -4762,7 +4763,7 @@ function _unitDetailSplit(viewUnits, flat2d, bounds, vSlots = null) {
         // (Frozen or hidden ones, Team + history: the glyphs' alone.)
         if (F.flags[s] & (SIM_UF_GHOST | SIM_UF_HIDDEN) || F.energy[s] <= 0) { P[i] = 0; continue; }
         const x = (F.px[s] + (F.x[s] - F.px[s]) * a) / TILE, z = (F.py[s] + (F.y[s] - F.py[s]) * a) / TILE;
-        const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / TILE));
+        const size = Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/TILE));
         if (!fullVisibility && !(visibilityGrid[Math.floor(z)]?.[Math.floor(x)] > 0)) { P[i] = 0; continue; }
         P[i] = _detailScore(x, z, size, flat2d, !!(_detailMask && _detailMask[s]));
     }

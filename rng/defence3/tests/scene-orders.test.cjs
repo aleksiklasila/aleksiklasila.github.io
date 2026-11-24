@@ -29,7 +29,9 @@ async function main(){
   await settle(world,target.eval('restoreSoloGameSnapshot(__scratch.scene)'));
   // Keep running through initial approach and combat: merely moving a few
   // pixels before cancelling the order allowed the original stall to pass.
-  for(let i=0;i<1200;i++)target.evalSim('runOneTick()');
+  // (Until one side is gone or 3000 ticks: the footprints decide how many fight at the front, so how long it takes.)
+  const sides=()=>target.evalSim('new Set(units.filter(u=>!u.dead&&u.energy>0).map(u=>u.owner)).size');
+  for(let i=0;i<3000&&(i<1200||kind!=='units'||sides()>1);i++)target.evalSim('runOneTick()');
   const state=target.evalSim('({alive:units.filter(u=>!u.dead&&u.energy>0).length,teams:[...new Set(units.filter(u=>!u.dead&&u.energy>0).map(u=>u.owner))],towers:towers.filter(t=>t.owner===1&&t.type==="pistol"&&t.energy>0).length})');
   if(kind==='units')assert(state.teams.length<=1,'Opposing armies must engage instead of both becoming idle short of their destination');
   else assert(state.alive===0||state.towers===0,'Units must engage the towers without another click');

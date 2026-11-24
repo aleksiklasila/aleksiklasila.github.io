@@ -6493,15 +6493,14 @@ function startGame() {
     const STARTER_UNITS_PER_TILE = 3;
     let starterUnitCountByTeam = {}, starterUnitTilesByTeam = {}, starterRejectedByTeam = {};
     const STARTER_TILE_OFFSETS = [[0, 0], [-9, -9], [9, 9], [9, -9], [-9, 9], [0, -11], [0, 11], [-11, 0], [11, 0]];
-    // A unit's exclusive footprint in tiles: occupancy holds a disk of
-    // ceil(R / cell) cells, neighbours at least two radii apart, dealt on the
-    // tiles' grid (a 24 px disk takes a whole 32 px tile, a 16 px one a
-    // quarter); a tenth more for the relocation's slack (sim_occupancy.js
-    // occupancySpawn).
+    // A unit's exclusive footprint in tiles: occupancy holds a square of
+    // occupancyFootprintCells(R) cells, dealt on the tiles' grid (a 32 px
+    // square takes a whole 32 px tile, a 16 px one a quarter); a tenth more
+    // for the relocation's slack (sim_occupancy.js occupancySpawn).
     let starterUnitFootprintTiles = (unitType) => {
         let st = BASE_UNIT_STATS[unitType] || BASE_UNIT_STATS.norm || {};
-        let cell = TILE / SIM_OCCUPANCY_SUBCELLS, cells = Math.max(1, Math.ceil((Number(st.collisionR) || Number(st.r) || 8) / cell));
-        let d = 2 * cells * cell, side = Math.floor(TILE / d);
+        let cell = TILE / SIM_OCCUPANCY_SUBCELLS, cells = occupancyFootprintCells(Number(st.collisionR) || Number(st.r) || 8);
+        let d = cells * cell, side = Math.floor(TILE / d);
         return 1.1 * (side >= 1 ? 1 / (side * side) : Math.ceil(d / TILE) ** 2);
     };
     let starterOccupancy = () => typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED;

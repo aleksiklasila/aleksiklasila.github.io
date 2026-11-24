@@ -3634,7 +3634,7 @@
                 void fetchSlot() {
                     int s = int(aSlot + .5);
                     float wx = slotF(0, s), wy = slotF(1, s), x = wx / uSlotTile, z = wy / uSlotTile;
-                    float size = clamp(slotF(4, s) * 2.2 / uSlotTile, .28, .9);
+                    float size = clamp((2. * slotF(4, s) - 1.) * 1.4 / uSlotTile, .2, 1.5);
                     float sx = size * uSlotScale.x, sy = size * uSlotScale.y;
                     bool flying = (uSlotStyleFlags & 1) != 0;
                     if ((uSlotStyleFlags & 2) == 0) sy = (uSlotStyleFlags & 4) != 0 ? max(.24, sy) : max(.48 * uSlotScale.x, sy);
@@ -6929,7 +6929,7 @@
                     if (!C.fullVisibility && !(C.visibility[Math.floor(z)] && C.visibility[Math.floor(z)][Math.floor(x)] > 0)) continue;
                     visit(source, moving ? (F.px[s] + (F.x[s] - F.px[s]) * C.alpha) / C.tile : x,
                         moving ? (F.py[s] + (F.y[s] - F.py[s]) * C.alpha) / C.tile : z,
-                        moving ? Math.max(.28, Math.min(.9, F.r[s] * 2.2 / C.tile)) : .94, .02);
+                        moving ? Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/C.tile)) : .94, .02);
                 }
                 return;
             }
@@ -7392,7 +7392,7 @@
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile;
                         // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                         if(!C.fullVisibility && !(F.flags[s]&(kind?65536:STRUCT_GHOST_FLAG)) && !(kind&&F.owner[s]===C.player) && !(C.visibility[Math.floor(z)]?.[Math.floor(x)]>0))continue;
-                        const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
+                        const size=kind?Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/C.tile)):.94;
                         // A tall tower's ground anchor can be off screen while
                         // its roof is close and visible. Keep that roof a mesh.
                         const erow=kind?7:F.kind[s],ecode=kind?F.type[s]:erow===4||erow===5?(F.amount[s]>0?0:1):erow===1?F.utype[s]:F.type[s];
@@ -7423,7 +7423,7 @@
                         if(!style || !A.panels[styleIndex])continue;
                         // (Per style, once: this ran for every instance.)
                         const figure=style._lodFigure!==undefined?style._lodFigure:(style._lodFigure=proceduralKind(style)||null);if(!figure)continue;
-                        const size=kind?Math.max(.28,Math.min(.9,F.r[s]*2.2/C.tile)):.94;
+                        const size=kind?Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/C.tile)):.94;
                         const x=F.x[s]/C.tile,z=F.y[s]/C.tile,sx=size*style.scaleX;
                         let sy=size*style.scaleY;
                         if(kind&&!style.mounted)sy=style.snake?Math.max(.24,sy):Math.max(.48*style.scaleX,sy);
@@ -7530,7 +7530,7 @@
                 const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s],ownerIdx=Math.max(0,Math.min(8,F.owner[s]+1)),own=F.owner[s]===player;
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && !own && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
-                const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
+                const size=Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/tile));
                 const edgeHeight=Math.max(1,2*_cmBaseHeight(A,7,F.type[s]));
                 let seed=id^0x9e3779b9;
                 seed=Math.imul(seed^(seed>>>16),0x7feb352d);
@@ -7693,7 +7693,7 @@
                 const x=F.x[s]/tile,z=F.y[s]/tile,id=F.id[s];
                 // (The viewing player's own units: always drawn, at full light, as the glyphs' shader has them.)
                 if(!full && !(F.flags[s]&65536) && F.owner[s]!==player && !(vis[Math.floor(z)]?.[Math.floor(x)]>0))continue;
-                const size=Math.max(.28,Math.min(.9,F.r[s]*2.2/tile));
+                const size=Math.max(.2,Math.min(1.5,(2*(F.r[s])-1)*1.4/tile));
                 const edgeHeight=Math.max(1,2*_cmBaseHeight(A,7,F.type[s]));
                 let seed=id^0x9e3779b9;
                 seed=Math.imul(seed^(seed>>>16),0x7feb352d);
@@ -7855,7 +7855,7 @@
                         if (!alive || (aEnergy <= 0. && (uStructure == 0 || aKind < 4.)) || light <= 0. || (uDebug == 2 && uStructure == 0)) { gl_Position=vec4(2.,2.,2.,1.); gl_PointSize=1.; vColor=vec4(0.); return; }
                         if (ghost) light = .14;
                         gl_Position = uViewProjection * vec4(vGround,1.);
-                        float size = uStructure != 0 ? .94 : clamp(aRadius * 2.2 / uTile,.28,.9);
+                        float size = uStructure != 0 ? .94 : clamp((2. * aRadius - 1.) * 1.4 / uTile, .2, 1.5);
                         float tilePixels = uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
                         float pixels = size * tilePixels;
                         // (A small unit that does not hold its claim cell: hidden
@@ -8818,7 +8818,7 @@
                         float light = uFull != 0 || ghost ? 1. : texelFetch(uVisibility,ivec2(current),0).r / uLightNorm;
                         if (uFull == 0 && !ghost && int(aOwner) == uPlayer) light = 1.;
                         gl_Position = uViewProjection * vec4(p.x,.02,p.y,1.);
-                        float size = clamp(aRadius * 2.2 / uTile,.28,.9);
+                        float size = clamp((2. * aRadius - 1.) * 1.4 / uTile, .2, 1.5);
                         float pixels = size * uScale / (uFlat > .5 ? 1. : max(.01,gl_Position.w));
                         if (!alive || light <= 0. || pixels >= uClaimMaxPx || !(gl_Position.w > 0.)) { gl_Position = vec4(2.,2.,2.,1.); gl_PointSize = 1.; return; }
                         // (Divided here, w 1: the depth written is the claim's

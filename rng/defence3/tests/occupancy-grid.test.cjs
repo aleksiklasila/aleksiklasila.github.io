@@ -42,10 +42,9 @@ async function run(helpers,planes){
  const oracle=JSON.parse(i.eval(`JSON.stringify((()=>{
   const seen=new Set(),O=_occ;let overlaps=0,active=0;
   for(let s=0;s<O.cap;s++){if(!_occActive(O,s))continue;active++;
-   const x=Math.floor(O.rec[s*4]/O.cell),y=Math.floor(O.rec[s*4+1]/O.cell),r=_occRadius(O,s),l=_occLayer(O,s);
-   for(let dy=-r;dy<=r;dy++){const half=O.mask[r*65+dy+32];if(half<0)continue;
-    for(let dx=-half;dx<=half;dx++){const key=(l*O.h+y+dy)*O.w+x+dx;if(seen.has(key))overlaps++;seen.add(key);}
-   }
+   // (A footprint: w x w cells from its anchor, the cell of the position less (w - 1) / 2 cells: occ.rs anchor.)
+   const w=_occRadius(O,s),off=((w-1)*O.cell)>>1,x=Math.floor((O.rec[s*4]-off)/O.cell),y=Math.floor((O.rec[s*4+1]-off)/O.cell),l=_occLayer(O,s);
+   for(let dy=0;dy<w;dy++)for(let dx=0;dx<w;dx++){const key=(l*O.h+y+dy)*O.w+x+dx;if(seen.has(key))overlaps++;seen.add(key);}
   }return {overlaps,active,bits:seen.size,audit:occupancyAudit(),stats:occupancyStats(),sepCap:_sep.cap};
  })())`));
  assert.equal(oracle.overlaps,0,'exclusive footprints');assert.equal(oracle.bits,oracle.audit.actualBits);

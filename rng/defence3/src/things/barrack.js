@@ -434,7 +434,7 @@ function _spawnBirthTables(S, n) {
             const mat = wt === 'builder' ? 1 << 13 : wt === 'healer' ? 1 << 15 : wt === 'researcher' ? 1 << 17 : 0;
             const ty = spatialUnitTypeToIndex[name];
             B.ut[b] = ty >= 0 ? ty : -1; B.ut[b + 1] = r; B.ut[b + 2] = cr;
-            B.ut[b + 3] = Math.max(1, Math.min(32, Math.ceil((cr || r || 1) / (TILE / SIM_OCCUPANCY_SUBCELLS))));
+            B.ut[b + 3] = occupancyFootprintCells(cr || r || 1);
             B.ut[b + 4] = planes === 1 ? 0 : Math.min(planes - 1, fly ? 1 : name === 'mole' ? 2 : 0);
             B.ut[b + 5] = wb;
             B.ut[b + 6] = wt ? (SIM_WS_IDLE | (simWttCode(null) << 5) | (SIM_WT_NULL << 10) | mat) : 0;

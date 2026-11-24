@@ -694,6 +694,8 @@ function createEditableRuntimeConfigSnapshot() {
             MAX_THING_LEVEL,
             MAX_RESEARCH_LEVEL,
         },
+        // (Unit radii are occupancy footprint sizes since 2026-11-24: migrateThingStatsSizes.)
+        unitSizes: 2,
         tables: {
             THING_STATS: cloneJsValue(THING_STATS),
             BUILD_CATEGORIES: cloneJsValue(BUILD_CATEGORIES),
@@ -853,6 +855,7 @@ function applyEditableRuntimeConfigObject(rawConfig, options = null) {
 
     if (tables.THING_STATS) {
         migrateThingStatsAreas(tables.THING_STATS);
+        if (!(Number(cfgObject.unitSizes) >= 2)) migrateThingStatsSizes(tables.THING_STATS);
         validateThingStats(tables.THING_STATS);
         replaceObjectContents(THING_STATS, tables.THING_STATS);
     }
@@ -879,6 +882,20 @@ function migrateThingStatsAreas(thingStats) {
         if (!stats || !stats.workerSearchDistance) continue;
         if (thing.isWorker) stats.attackRange = stats.workerSearchDistance;
         delete stats.workerSearchDistance;
+    }
+}
+
+// Configs from before the occupancy's footprint sizes (2026-11-24): a unit's
+// radius is its footprint now (8 / 16 / 24 / 32 px squares of 8-px cells,
+// sim_occupancy.js occupancyFootprintCells) and what it draws; an old config's
+// radii (and collision radii apart from them) are the built-in ones.
+function migrateThingStatsSizes(thingStats) {
+    if (!thingStats || typeof thingStats !== 'object') return;
+    for (const [key, thing] of Object.entries(thingStats)) {
+        if (!thing || thing.kind !== 'unit' || !Number.isFinite(THING_UNIT_RADII[key])) continue;
+        if (thing.stats && thing.stats.r) thing.stats.r.base = THING_UNIT_RADII[key];
+        delete thing.collisionR;
+        if (thing.stats) delete thing.stats.collisionR;
     }
 }
 

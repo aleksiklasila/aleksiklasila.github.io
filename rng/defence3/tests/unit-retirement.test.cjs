@@ -6,7 +6,8 @@ const world = new H.World({ controls: { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize'
 const inst = world.spawn('retirement', { simWorker: false });
 inst.eval('startSoloGame();');
 const result = JSON.parse(inst.eval(`JSON.stringify((() => {
-    for (let i = 0; i < 17000; i++) { const u = new Unit('norm', 0, 400 + (i % 130) * 14, 400 + Math.floor(i / 130) * 14); units.push(u); }
+    // (16 px apart: a norm's footprint, occupancyFootprintCells.)
+    for (let i = 0; i < 17000; i++) { const u = new Unit('norm', 0, 400 + (i % 130) * 16, 400 + Math.floor(i / 130) * 16); units.push(u); }
     const original = units.slice(), dead = [3, 4, 8191, 8192, units.length - 1];
     const stale = original[dead[0]];
     const workerRecord = simUnitWk(stale._us, stale._si), workerPool = _simUnitState.wk;

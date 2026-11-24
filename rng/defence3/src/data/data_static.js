@@ -437,7 +437,7 @@ const THING_STATS = {
             astarCost: {base: 23, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 2, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 4000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 12, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 14, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 400, level: {factor: 0.94, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -479,7 +479,7 @@ const THING_STATS = {
             astarCost: {base: 0.05, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.05, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 100, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 7.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 5.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 10, level: {factor: 0.88, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -500,7 +500,7 @@ const THING_STATS = {
             astarCost: {base: 11, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 600, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 8.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 60, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -521,7 +521,7 @@ const THING_STATS = {
             astarCost: {base: 13, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.55, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 700, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 10, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 9.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 70, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -584,7 +584,7 @@ const THING_STATS = {
             astarCost: {base: 11, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.6, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 550, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 9, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 8, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 55, level: {factor: 0.92, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -605,7 +605,7 @@ const THING_STATS = {
             astarCost: {base: 28, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 2.5, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 8000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 7, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 12, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             snakeMaxHistory: {base: 20, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 800, level: {factor: 0.95, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
@@ -627,7 +627,7 @@ const THING_STATS = {
             astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.15, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 140, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 5.5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 4, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 14, level: {factor: 0.89, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -648,7 +648,7 @@ const THING_STATS = {
             astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 1.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 15, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 4, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 15, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -669,7 +669,7 @@ const THING_STATS = {
             astarCost: {base: 3, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 1.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 15, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 4, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 15, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -732,7 +732,7 @@ const THING_STATS = {
             astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -753,7 +753,7 @@ const THING_STATS = {
             astarCost: {base: 10, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.4, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 18, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 6, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 5, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
             trainingTime: {base: 25, level: {factor: 0.9, min: 0.05}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
@@ -774,7 +774,7 @@ const THING_STATS = {
             astarCost: {base: 15, level: {factor: 1.75, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             upKeep: {base: 0.8, level: {factor: 1.45, min: 0.01}, researchable: true, research: {factor: 2, direction: "decrease"}, softCap: null, min: 0.01},
             price: {base: 1000, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
-            r: {base: 12, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
+            r: {base: 16, level: {}, researchable: false, research: {factor: 1, direction: "increase"}, softCap: null},
         }
     },
     pistol: { kind: "building", name: "Pistol", icon: "⚡", color: "#964B00", target: "wall", description: "Basic single-shot tower. Reliable damage, decent range.", strength: "Cheap dependable direct fire", weakness: "Short reach and low health",
@@ -1352,6 +1352,8 @@ const RESOURCE_COLLECTOR_UNIT_KEYS = Object.freeze(RESOURCE_TYPE_LIST.map(cfg =>
 
 
 // Compatibility views are generated from THING_STATS; never edit them for balance.
+// The units' built-in radii: their occupancy footprints (data_dynamic.js migrateThingStatsSizes: older configs carry others).
+const THING_UNIT_RADII = Object.fromEntries(Object.entries(THING_STATS).filter(([, t]) => t.kind === 'unit').map(([k, t]) => [k, Number(t.stats.r.base)]));
 const BASE_UNIT_STATS = {}, BASE_CARD_TYPES = {}, DESCRIPTIONS = {}, UNIT_DISPLAY_NAMES = {}, BARRACK_SPAWN_CONFIG = {};
 function rebuildThingDefinitionViews() {
     for (const view of [BASE_UNIT_STATS, BASE_CARD_TYPES, DESCRIPTIONS, UNIT_DISPLAY_NAMES, BARRACK_SPAWN_CONFIG]) {

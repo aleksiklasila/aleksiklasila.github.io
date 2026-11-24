@@ -6,7 +6,7 @@ const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'200'
  'cfg-max-pop':'20000','cfg-starting-energy':'900000000','cfg-starting-astar':'900000000'}});
 const i=world.spawn('traffic',{simWorker:false,url:'http://localhost/?wasm64=0'});i.scratch.now=()=>performance.now();
 const r=i.eval(`(()=>{
- SIM_TRAFFIC_MODE=${mode};performance.now=__scratch.now;
+ SIM_TRAFFIC_MODE=${mode};performance.now=__scratch.now;${arg('cells','')?'SIM_OCCUPANCY_SUBCELLS='+Number(arg('cells',''))+';':''}
  SIM_TRAFFIC_PASSES=${Number(arg('passes',2))};SIM_TRAFFIC_RESPONSE=${Number(arg('response',1))};SIM_TRAFFIC_LOCAL=${Number(arg('local',1))};
  startingResourcesConfig=normalizeStartingResourcesConfig({spawnCounts:{},researchLevels:{}});
  applyMainMenuControlsToRuntimeState();startSoloGame();
@@ -18,6 +18,8 @@ const r=i.eval(`(()=>{
   const u=new Unit('norm',0,(70+x*.4)*TILE,(82+y*.4)*TILE);units.push(u);plug.push(u);players[0].popCount++;
  }`}
  ${arg('scenario','plug')==='wall'?'for(let y=0;y<GRID_H;y++){cellType[grid[y][90]-1]=TYPE_WALL;simMoveTileTypeChanged(90,y);}':''}
+ // (Units refused a place at their spawn (no room within the search) are dead: left out.)
+ for(const A of [us,plug])for(let k=A.length-1;k>=0;k--)if(A[k].dead||!A[k]._us)A.splice(k,1);
  for(let t=0;t<NAV_BUILD_TICKS+5;t++)gameTick();
  processAction({action:'move',unitIds:us.map(u=>u.id),targetX:190*TILE,targetY:88*TILE},0);simDk=${dk};
  ${arg('scenario','plug')==='counter'?'processAction({action:"move",unitIds:plug.map(u=>u.id),targetX:10*TILE,targetY:88*TILE},0);':''}
@@ -44,7 +46,7 @@ const r=i.eval(`(()=>{
   }
  }
  let worst=-1;for(let i=0;i<us.length;i++){if(pathLen[i]/baseTicks>maxSpeedRatio){maxSpeedRatio=pathLen[i]/baseTicks;worst=i;}}const worstSteps=worst>=0?__scratch.stp[worst]:null;
- return {mode:SIM_TRAFFIC_MODE,msPerTick:ms/${ticks},maxSpeedRatio,maxStepRatio,worstSteps,wallViolations,maxX:Math.max(...us.map(u=>u.x)),samples,audit:occupancyAudit(),traffic:_traffic?{publications:_traffic.config[5],bytes:Object.values(_traffic).filter(ArrayBuffer.isView).reduce((s,a)=>s+a.byteLength,0)}:null};
+ return {mode:SIM_TRAFFIC_MODE,walkers:us.length,plugUnits:plug.length,msPerTick:ms/${ticks},maxSpeedRatio,maxStepRatio,worstSteps,wallViolations,maxX:Math.max(...us.map(u=>u.x)),samples,audit:occupancyAudit(),traffic:_traffic?{publications:_traffic.config[5],bytes:Object.values(_traffic).filter(ArrayBuffer.isView).reduce((s,a)=>s+a.byteLength,0)}:null};
 })()`);
 console.log(JSON.stringify(r,null,2));if(arg('out',null))fs.writeFileSync(arg('out'),JSON.stringify(r,null,2));
 if(!r.audit.ok||i.errors.length)throw Error(JSON.stringify(i.errors));

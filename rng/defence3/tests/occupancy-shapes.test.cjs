@@ -9,8 +9,11 @@ const result=i.eval(`(()=>{
  // Larger jobs here permit long sweeps that test rotation/swizzle wrap.
  // Production keeps its smaller checkerboard jobs and halo limit.
  O.config[7]=64;
- const disk=(x,y,r)=>{const a=[];for(let dy=1-r;dy<r;dy++)for(let dx=1-r;dx<r;dx++)if(dx*dx+dy*dy<r*r)a.push([x+dx,y+dy]);return a;};
- const spawn=(s,x,y,r,px=0,py=0)=>_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,C,O.planes,s,x*C+px,y*C+py,r,0,0);
+ // (A footprint: w x w cells from its anchor, the cell of the position less (w - 1) / 2 cells (occ.rs anchor); off
+ // the position's shift. sq: the cells of a w-wide footprint at position (x, y).)
+ const off=w=>((w-1)*C)>>1,sq=(x,y,w)=>{const ax=Math.floor((x-off(w))/C),ay=Math.floor((y-off(w))/C),a=[];for(let dy=0;dy<w;dy++)for(let dx=0;dx<w;dx++)a.push([ax+dx,ay+dy]);return a;};
+ // (Spawned with its anchor at cell (x, y), px / py into the cell.)
+ const spawn=(s,x,y,w,px=0,py=0)=>_simWasmX.occ_spawn(...A,O.w,O.h,O.stride,C,O.planes,s,x*C+off(w)+px,y*C+off(w)+py,w,0,0);
  // (The bitmap's map rows start after the margin rows; each row's last word is its margin (taken); the coarse
  // cells' kept counts must equal the bitmap's.)
  const M=SIM_OCCUPANCY_MARGIN_ROWS;
@@ -28,24 +31,37 @@ const result=i.eval(`(()=>{
   _simWasmArgI[512+28]=_simWEnc(O.stats.byteOffset);_simWasmArgI[512+33]=_simWEnc(O.config.byteOffset);
   const pos=_simWasmX.occ_move_one(_simWasmArgsW,s,x,y),c=_simUnitState.columns;c.x[s]=Number(BigInt.asIntN(32,pos));c.y[s]=Number(BigInt.asIntN(32,pos>>32n));};
  let cases=0;
- for(let r=1;r<=10;r++)for(const cx of [r-1,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
+ for(let r=1;r<=10;r++)for(const cx of [0,30,31,32,33,63,64,O.w-r])for(const [dx,dy]of [[1,0],[-1,0],[1,1],[-2,3],[8,-5],[80,0],[-80,0],[0,300]])for(const phase of [[0,0,0,0],[C-1,0,-3,0],[C>>1,C-1,7,-2],[C-1,C>>1,-5,3]]){
   O.bits.fill(0);_occupancyMargins(O);O.rec.fill(0);const cy=32;
   if(!spawn(0,cx,cy,r,phase[0],phase[1]))throw Error('legal spawn rejected r='+r);
-  const own=new Set(disk(cx,cy,r).map(([x,y])=>fold(x,y))),obstacle=new Set();
+  const obstacle=new Set();
   const bx=dy>100?cx:cx+(dx>32?64:dx< -32?-64:r+3),by=dy>100?cy+256:cy+1;
-  if(bx>=2 && bx+3<O.w && spawn(1,bx,by,3))for(const [x,y]of disk(bx,by,3))obstacle.add(fold(x,y));
-  const free=(x,y)=>disk(Math.trunc(x/C),Math.trunc(y/C),r).every(([a,b])=>a>=0&&b>=0&&a<O.w&&b<O.h&&(!obstacle.has(fold(a,b)))) && x>=0&&y>=0;
-  const ox=cx*C+phase[0],oy=cy*C+phase[1],nx=ox+dx*C+phase[2],ny=oy+dy*C+phase[3];
+  if(bx>=2 && bx+3<O.w && spawn(1,bx,by,3))for(const [x,y]of sq(bx*C+off(3),by*C+off(3),3))obstacle.add(fold(x,y));
+  const free=(x,y)=>sq(x,y,r).every(([a,b])=>a>=0&&b>=0&&a<O.w&&b<O.h&&(!obstacle.has(fold(a,b)))) && x>=0&&y>=0;
+  const ox=cx*C+off(r)+phase[0],oy=cy*C+off(r)+phase[1],nx=ox+dx*C+phase[2],ny=oy+dy*C+phase[3];
   const sweep=(nx,ny)=>{let x=ox,y=oy;const n=Math.max(1,Math.ceil(Math.max(Math.abs(nx-ox),Math.abs(ny-oy))/C));
    for(let k=1;k<=n;k++){const tx=ox+Math.trunc((nx-ox)*k/n),ty=oy+Math.trunc((ny-oy)*k/n);if(!free(tx,ty))break;x=tx;y=ty;}return [x,y];};
-  let [x,y]=sweep(nx,ny);if(x===ox&&y===oy){[x,y]=sweep(nx,oy);if(x===ox&&y===oy)[x,y]=sweep(ox,ny);}
+  // (occ.rs hold_mid: an attempt's end held a quarter cell past its cell's middle on an axis it moved along toward a
+  // taken neighbour cell, shifted positions; a held attempt that gets nowhere is blocked.)
+  const taken=(a,b)=>a<0||b<0||a>=O.w||b>=O.h||obstacle.has(fold(a,b));
+  const hold=([tx,ty])=>{
+   if(tx===ox&&ty===oy)return [tx,ty];
+   const o=off(r),sx=tx-o,sy=ty-o,sox=ox-o,soy=oy-o,ax=Math.floor(sx/C),ay=Math.floor(sy/C),q=C>>2;
+   if(ax<0||ay<0||ax+r>O.w||ay+r>O.h)return [tx,ty];
+   const mx=ax*C+(C>>1),my=ay*C+(C>>1);let x=sx,y=sy;
+   const col=c=>{for(let k=0;k<r;k++)if(taken(c,ay+k))return true;return false;},row=rr=>{for(let k=0;k<r;k++)if(taken(ax+k,rr))return true;return false;};
+   if(sx>sox&&sx>mx+q){if(col(ax+r))x=Math.max(mx+q,sox);}else if(sx<sox&&sx<mx-q){if(col(ax-1))x=Math.min(mx-q,sox);}
+   if(sy>soy&&sy>my+q){if(row(ay+r))y=Math.max(my+q,soy);}else if(sy<soy&&sy<my-q){if(row(ay-1))y=Math.min(my-q,soy);}
+   return [x+o,y+o];
+  };
+  let [x,y]=hold(sweep(nx,ny));if(x===ox&&y===oy&&nx!==ox&&ny!==oy){[x,y]=hold(sweep(nx,oy));if(x===ox&&y===oy)[x,y]=hold(sweep(ox,ny));}
   moveOne(0,nx,ny);
   if(O.rec[0]!==x||O.rec[1]!==y)throw Error('movement mismatch r='+r+' cx='+cx+' delta='+dx+','+dy+' actual='+O.rec[0]+','+O.rec[1]+' expected='+x+','+y);
-  const expected=new Set(obstacle);for(const [a,b]of disk(Math.trunc(x/C),Math.trunc(y/C),r))expected.add(fold(a,b));
+  const expected=new Set(obstacle);for(const [a,b]of sq(x,y,r))expected.add(fold(a,b));
   verify(expected,'r='+r+' cx='+cx);
   _simWasmX.occ_release(...A,O.w,O.h,O.stride,C,O.planes,0);verify(obstacle,'release');cases++;
  }
  return cases;
 })()`);
 assert.equal(result,2560);assert.deepEqual(i.errors.map(String),[]);
-console.log('PASS: '+result+' specialized-radius, word-seam, map-edge, swept move, own-mask and release cases.');
+console.log('PASS: '+result+' square-width, word-seam, map-edge, swept move, own-mask and release cases.');
