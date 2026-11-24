@@ -706,6 +706,19 @@ function _pageViewSlot(s, v) {
 // whose structure changed. Everything is made anew only for the first frame,
 // a new grid, or a change of most of the table.
 let _pageGoneSlots = new Int32Array(256);
+// A table's list of changed slots, each once, ascending (_pageChgN of them).
+let _pageChgSorted = new Int32Array(256), _pageChgSeen = new Uint32Array(0), _pageChgStamp = 0, _pageChgN = 0;
+function _pageStructChgSlots(L, F) {
+    const cap = Math.max(F.cap, _pageStructViews.length);
+    if (_pageChgSeen.length < cap) _pageChgSeen = new Uint32Array(Math.ceil(cap * 1.25));
+    if (_pageChgSorted.length < L.length) _pageChgSorted = new Int32Array(L.length * 2);
+    const seen = _pageChgSeen, st = _pageChgStamp = (_pageChgStamp + 1) >>> 0 || (seen.fill(0), 1), out = _pageChgSorted;
+    let k = 0;
+    for (let i = 0; i < L.length; i++) { const s = L[i]; if (s >= 0 && s < seen.length && seen[s] !== st) { seen[s] = st; out[k++] = s; } }
+    _pageChgN = k;
+    out.subarray(0, k).sort();
+    return out;
+}
 function pageApplyStructures(table, c) {
     let F = simTableViews(SIM_STRUCT_SPEC, table.buf, table.cap, table.off || 0);
     F.n = table.n;
@@ -715,6 +728,11 @@ function pageApplyStructures(table, c) {
     let old = _pageTables.s;
     let changed = table.mver !== c.structMver || !old;
     let relabel = [];
+    // (The slots this table changed since the one applied last, when the presentation's list chains on to it
+    // (presentation_worker.js structChg*, sim_presentation.js _simPresentStructureChanges): the membership and label
+    // passes look at those only, in slot order. A pass over every slot was ~0.7 ms a table at 40k structures.)
+    const CL = old && table.chg && table.sstream !== undefined && table.sstream === c.structStream && table.sseqFrom === c.structSseq ? _pageStructChgSlots(table.chg, F) : null;
+    c.structStream = table.sstream; c.structSseq = table.sseq;
     if (changed && old && c.structGrid === grid) {
         // Which slots hold which structure now: by each slot's alive byte, not
         // the order list (the metadata cycle rewrites that in place over many
@@ -724,7 +742,9 @@ function pageApplyStructures(table, c) {
         if (_pageViewHas.length < n) _pageViewSlot(n - 1, _pageStructViews[n - 1] || null);
         const H = _pageViewHas, SER = _pageViewSer, alive = F.alive, serial = F.serial;
         let gone = null, added = null;
-        for (let s = 0; s < n; s++) {
+        for (let i = 0, m = CL ? _pageChgN : n; i < m; i++) {
+            const s = CL ? CL[i] : i;
+            if (s >= n) continue;
             const has = H[s] === 1, now = s < live && alive[s] === 1;
             if (!has && !now) continue;
             const same = has && now && SER[s] === serial[s];
@@ -815,7 +835,8 @@ function pageApplyStructures(table, c) {
     // Labels: where the code changed.
     if (old && !changed) {
         let n = Math.min(F.n, old.n), a = F.label, b = old.label;
-        for (let s = 0; s < n; s++) if (a[s] !== b[s] && F.alive[s] && _pageStructViews[s]) relabel.push(_pageStructViews[s]);
+        if (CL) { for (let i = 0; i < _pageChgN; i++) { const s = CL[i]; if (s < n && a[s] !== b[s] && F.alive[s] && _pageStructViews[s]) relabel.push(_pageStructViews[s]); } }
+        else for (let s = 0; s < n; s++) if (a[s] !== b[s] && F.alive[s] && _pageStructViews[s]) relabel.push(_pageStructViews[s]);
     } else if (old) {
         let n = Math.min(F.n, old.n);
         for (let s = 0; s < n; s++) { let v = _pageStructViews[s]; if (v && F.label[s] !== old.label[s] && !relabel.includes(v)) relabel.push(v); }

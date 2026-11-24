@@ -7343,7 +7343,8 @@
                 this.ensureColumnProgram();
                 this._columnStoreUpload(1,C.units);
                 gl.bindVertexArray(null);
-                slotMode=!!this._cmSlotTextures(C.units);
+                // (Ready only: the columns are copied into its textures once models are known, below.)
+                slotMode=!!this._cmSlotTextures(C.units,false);
             }
             if(S.slotMode!==slotMode) {
                 _cmUnitsReset(S);
@@ -7481,7 +7482,12 @@
                 const buffer=G.storage.upload(gl);
                 this.drawTexturedInstanceRange({first:0,count:G.storage.count,sample:G.sample,kind:G.kind,mesh:G.mesh,statusAtlas:atlas,buffer},null,null,atlas);
             }
-            if(S.slotMode)this._cmDrawSlotGroups(S,atlas);
+            if(S.slotMode&&S.sgroups&&S.sgroups.some(G=>G.n>0)) {
+                // (The columns only these models read, uploaded now that some are drawn (_columnStoreUploadDeferred),
+                // then the columns into the slot textures.)
+                this._columnStoreUploadDeferred(C.units);
+                if(this._cmSlotTextures(C.units,true))this._cmDrawSlotGroups(S,atlas);
+            }
             this.layerAlpha=alpha;this.layerFlyTime=fly;
             return S;
         }
@@ -7594,7 +7600,7 @@
         // columns as bands of an R32F texture, id and flags of an R32I one,
         // owner an R16I one. Textures on units 8-11 (the others' units stay as
         // they bound them).
-        _cmSlotTextures(F) {
+        _cmSlotTextures(F, copy = true) {
             const gl = this.gl, CS = this.columnStores && this.columnStores[1];
             if (!CS || !CS.buffer || CS.frame !== F || !CS.offsets) return null;
             let T = this.cmSlotTex;
@@ -7618,7 +7624,14 @@
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 }
             }
-            if (T.frame !== F || T.fver !== F.ver || T.n !== F.n) {
+            if (!copy) {
+                for (const name of ['x', 'y', 'px', 'py', 'r', 'facing', 'prate', 'amount', 'phase', 'id', 'flags', 'owner', 'vision']) if (CS.offsets.get(name) === undefined) return null;
+                return T;
+            }
+            // (Again when the column buffer changed since the copy: blocks come near as the view moves within a frame.)
+            const ug = CS.uploadGen | 0;
+            if (T.frame !== F || T.fver !== F.ver || T.n !== F.n || T.ug !== ug) {
+                T.ug = ug;
                 const rowsN = Math.max(1, Math.ceil(F.n / T.w));
                 gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, CS.buffer);
                 gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -8326,8 +8339,8 @@
                 else stats.full++;
                 if (near && since < 0) {
                     // (All of it uploaded below: held as of this frame, anywhere.)
-                    if (!S.held || S.held.length !== D.cols.length * D.nb) { S.held = new Int32Array(D.cols.length * D.nb); S.hb = new Float32Array(D.nb * 4); S.vis = new Int32Array(D.nb); S.visStamp = 0; S.prevVis = new Int32Array(D.nb); S.prevN = 0; S.nearVis = new Int32Array(D.nb); }
-                    S.held.fill(D.seq); S.hb.fill(Infinity); for (let b = 0; b < D.nb; b++) { S.hb[b * 4] = -Infinity; S.hb[b * 4 + 1] = -Infinity; }
+                    if (!S.held || S.held.length !== D.cols.length * D.nb) { S.held = new Int32Array(D.cols.length * D.nb); S.hb = new Float32Array(D.nb * 4); S.hc = new Int16Array(D.nb * 4); S.vis = new Int32Array(D.nb); S.visStamp = 0; S.prevVis = new Int32Array(D.nb); S.prevN = 0; S.nearVis = new Int32Array(D.nb); }
+                    S.held.fill(D.seq); S.hc.fill(-32768); S.cc = null; S.saF = null; S.hb.fill(Infinity); for (let b = 0; b < D.nb; b++) { S.hb[b * 4] = -Infinity; S.hb[b * 4 + 1] = -Infinity; }
                     S.prevN = 0; S.nearKey = null;
                 } else if (!near) S.held = null;
                 const seen = new Set();
@@ -8397,15 +8410,34 @@
                 return Math.abs(cy) <= w + dw + dy;
             };
             const T = (RB && RB.tile) || (typeof TILE === 'number' ? TILE : 32), X = F.x, Y = F.y, PX = F.px, PY = F.py, id = F.id;
+            // (Which 16-tile cells are near, as prefix sums over the grid: a block's box is near when a near cell
+            // overlaps it, four reads. A cell holding a point of the box that the test accepts is accepted itself, so
+            // no box the frustum test would take is missed; boxes merely touching near cells add bytes, never holes.)
+            let cw = 0, chh = 0, PS = null;
             if (!all) {
                 // (Most of the map near: every changed block, no boxes. By the buckets' cells alone.)
-                const cols16 = RB.columns, cells = cols16 * RB.rows, head = RB.head, motion = RB.motion, pad = (F.renderMotionPad || 0) / T;
+                const cols16 = RB.columns, rows16 = RB.rows, cells = cols16 * rows16, head = RB.head, motion = RB.motion, pad = (F.renderMotionPad || 0) / T;
+                cw = cols16; chh = rows16;
+                PS = S.nearPS && S.nearPS.length === (cols16 + 1) * (rows16 + 1) ? S.nearPS : (S.nearPS = new Int32Array((cols16 + 1) * (rows16 + 1)));
                 let nonEmpty = 0, hit = 0;
-                for (let c = 0; c < cells; c++) {
-                    if (head[c] < 0) continue;
-                    nonEmpty++;
-                    const gx = (c % cols16) * 16, gz = Math.floor(c / cols16) * 16, m = Math.max(motion[c], pad);
-                    if (near(gx - m, gz - m, gx + 16 + m, gz + 16 + m)) hit++;
+                // (A cell's test as near() has it for the box (gx, gz)-(gx + 16, gz + 16): its extents the same for
+                // every cell, its centre's w / cx / cy affine in the cell: added along a row.)
+                const ex = 24, ez = 24, aw = ex * Math.abs(M[3]) + ez * Math.abs(M[11]) + 4 * Math.abs(M[7]);
+                const ax = ex * Math.abs(M[0]) + ez * Math.abs(M[8]) + 4 * Math.abs(M[4]), ay = ex * Math.abs(M[1]) + ez * Math.abs(M[9]) + 4 * Math.abs(M[5]);
+                const sw = 16 * M[3], sx = 16 * M[0], sy = 16 * M[1];
+                for (let r = 0; r < rows16; r++) {
+                    let rowSum = 0;
+                    const o = (r + 1) * (cols16 + 1), op = r * (cols16 + 1), z = r * 16 + 8;
+                    let w = M[3] * 8 + M[11] * z + M[15], cx = M[0] * 8 + M[8] * z + M[12], cy = M[1] * 8 + M[9] * z + M[13];
+                    for (let q = 0; q < cols16; q++, w += sw, cx += sx, cy += sy) {
+                        const c = r * cols16 + q, gx = q * 16, gz = r * 16, lim = w + aw;
+                        if (lim > 0 && Math.abs(cx) <= lim + ax && Math.abs(cy) <= lim + ay) rowSum++;
+                        PS[o + q + 1] = PS[op + q + 1] + rowSum;
+                        if (head[c] < 0) continue;
+                        nonEmpty++;
+                        const m = Math.max(motion[c], pad);
+                        if (near(gx - m, gz - m, gx + 16 + m, gz + 16 + m)) hit++;
+                    }
                 }
                 if (hit * 2 > nonEmpty) all = true;
             }
@@ -8433,49 +8465,183 @@
                 if (!(x0 <= x1)) { cb[o] = 1e9; cb[o + 1] = 1e9; cb[o + 2] = 1e9; cb[o + 3] = 1e9; } // (none live: nowhere)
                 else { cb[o] = x0 / T - mpad; cb[o + 1] = z0 / T - mpad; cb[o + 2] = x1 / T + mpad; cb[o + 3] = z1 / T + mpad; }
             };
-            const stale = S.stale && S.stale.length >= nb ? S.stale : (S.stale = new Int32Array(nb));
+            const NL = S.nearList && S.nearList.length >= nb ? S.nearList : (S.nearList = new Int32Array(nb));
+            let nn = 0;
+            const ncols = cols.length;
             if (!all) {
-                for (let c = 0; c < cols.length; c++) { const base = c * nb; for (let b = 0; b < used; b++) if (ST[base + b] > H[base + b]) stale[b] = stamp; }
+                // (Near first (by the held box, or the box now), then stale in some column: the near ones are few. A
+                // pass over every column's stamps of every block was most of this function's time in a close view.)
+                // (Inline, cells by truncation: below 0 is clamped to 0 as floor would be; a box wholly below the
+                // grid reads cell 0 at worst, near more often, never less.)
+                // (The boxes as 16-tile cell rectangles: the held ones (S.hc) kept as blocks go up, the frame's (S.cc)
+                // made once a frame. A frame of camera motion only read them: the boxes again at every view were ~0.85
+                // ms a frame of an orbit at 446k units, 2026-11-24.)
+                const W = cw + 1, cmax = cw - 1, rmax = chh - 1, HC = S.hc;
+                const CC = this._columnBoxCells(S, F, seq, used, nb, boxNow, cb, DB, T, mpad, cbGen, gen), SA = this._columnStaleBlocks(S, F, D, used, nb);
                 for (let b = 0; b < used; b++) {
-                    if (stale[b] !== stamp) continue;
+                    // (Up to date in every column (2): nothing to upload, near or not. Not yet known (0): found out when near.)
+                    const sa = SA[b];
+                    if (sa === 2) continue;
                     const o = b * 4;
-                    if (hb[o] === -Infinity || near(hb[o], hb[o + 1], hb[o + 2], hb[o + 3])) { vis[b] = stamp; continue; }
-                    boxNow(b);
-                    if (near(cb[o], cb[o + 1], cb[o + 2], cb[o + 3])) vis[b] = stamp;
+                    let ok = HC[o] === -32768;
+                    if (!ok) {
+                        let a = HC[o], bz = HC[o + 1], c = HC[o + 2], d = HC[o + 3];
+                        if (a <= c && bz <= d && c >= 0 && d >= 0 && a <= cmax && bz <= rmax) {
+                            if (a < 0) a = 0; if (bz < 0) bz = 0; if (c > cmax) c = cmax; if (d > rmax) d = rmax;
+                            ok = PS[(d + 1) * W + c + 1] - PS[bz * W + c + 1] - PS[(d + 1) * W + a] + PS[bz * W + a] > 0;
+                        }
+                    }
+                    if (!ok) {
+                        let a = CC[o], bz = CC[o + 1], c = CC[o + 2], d = CC[o + 3];
+                        if (a <= c && bz <= d && c >= 0 && d >= 0 && a <= cmax && bz <= rmax) {
+                            if (a < 0) a = 0; if (bz < 0) bz = 0; if (c > cmax) c = cmax; if (d > rmax) d = rmax;
+                            ok = PS[(d + 1) * W + c + 1] - PS[bz * W + c + 1] - PS[(d + 1) * W + a] + PS[bz * W + a] > 0;
+                        }
+                    }
+                    if (!ok) continue;
+                    if (sa === 0) { this._columnStaleAgain(S, D, b, nb); if (SA[b] === 2) continue; }
+                    vis[b] = stamp; NL[nn++] = b;
                 }
             }
-            // The stale ones among them (all: every block), uploaded in runs per column.
-            const gapBytes = Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0);
-            const upd = this._nearUpd || (this._nearUpd = new Int32Array(nb));
-            if (upd.length < nb) this._nearUpd = new Int32Array(nb);
-            const U = this._nearUpd, ustamp = (this._nearUStamp = (this._nearUStamp | 0) + 1);
-            for (let c = 0; c < cols.length; c++) {
+            // The stale ones among them (all: every block), uploaded in runs per column. (The columns only the middle
+            // models read are left for _columnStoreUploadDeferred, which runs when some are drawn: in 2D and far views
+            // none are, and prate / amount were ~1.7 of ~10.7 MB a tick of a far view.)
+            const gapBytes = Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0), calls0 = stats.calls;
+            const DEF = Defence3Renderer3D.deferModelColumns !== false ? Defence3Renderer3D.MODEL_ONLY_COLUMNS : null;
+            S.nearN = nn; S.nearAll = all;
+            for (let c = 0; c < ncols; c++) {
                 const off = offsets.get(cols[c]), a = F[cols[c]];
-                if (off === undefined || !a) continue;
+                if (off === undefined || !a || (DEF && DEF.includes(cols[c]))) continue;
                 const base = c * nb, bpe = a.BYTES_PER_ELEMENT, gap = Math.floor(gapBytes / (B * bpe));
-                for (let b = 0; b < used;) {
-                    if (!(all || vis[b] === stamp) || ST[base + b] <= H[base + b]) { b++; continue; }
-                    let e = b + 1, k = e;
-                    // (A run only over near blocks: a block uploaded is brought up to date in every column at once, so what
-                    // it holds is one frame's and its box is that frame's. One swept into the x run but not the id run held
-                    // a dead unit as live where its box did not look.)
-                    while (k < used && k - e <= gap && (all || vis[k] === stamp)) { if (ST[base + k] > H[base + k]) e = k + 1; k++; }
+                // (A run only over near blocks: a block uploaded is brought up to date in every column at once, so what
+                // it holds is one frame's and its box is that frame's. One swept into the x run but not the id run held
+                // a dead unit as live where its box did not look.)
+                if (all) {
+                    for (let b = 0; b < used;) {
+                        if (ST[base + b] <= H[base + b]) { b++; continue; }
+                        let e = b + 1, k = e;
+                        while (k < used && k - e <= gap) { if (ST[base + k] > H[base + k]) e = k + 1; k++; }
+                        const s0 = b * B, s1 = Math.min(n, e * B);
+                        gl.bufferSubData(gl.ARRAY_BUFFER, off + s0 * bpe, a, s0, s1 - s0);
+                        stats.bytes += (s1 - s0) * bpe; stats.calls++;
+                        for (let x = b; x < e; x++) { H[base + x] = seq; vis[x] = stamp; }
+                        b = e;
+                    }
+                    continue;
+                }
+                // (Over the near list, in block order: a run continues through listed blocks next to each other.)
+                for (let j = 0; j < nn;) {
+                    const b = NL[j];
+                    if (ST[base + b] <= H[base + b]) { j++; continue; }
+                    let e = b + 1, je = j + 1, k = j + 1;
+                    while (k < nn && NL[k] === NL[k - 1] + 1 && NL[k] - e <= gap) { if (ST[base + NL[k]] > H[base + NL[k]]) { e = NL[k] + 1; je = k + 1; } k++; }
                     const s0 = b * B, s1 = Math.min(n, e * B);
                     gl.bufferSubData(gl.ARRAY_BUFFER, off + s0 * bpe, a, s0, s1 - s0);
                     stats.bytes += (s1 - s0) * bpe; stats.calls++;
-                    for (let x = b; x < e; x++) { H[base + x] = seq; U[x] = ustamp; }
-                    b = e;
+                    for (let x = b; x < e; x++) H[base + x] = seq;
+                    j = je;
                 }
             }
-            // The boxes of the blocks uploaded: what they hold now (all: unknown, near).
-            for (let b = 0; b < used; b++) {
-                if (U[b] !== ustamp) continue;
-                const o = b * 4;
-                if (all) { hb[o] = -Infinity; hb[o + 1] = -Infinity; hb[o + 2] = Infinity; hb[o + 3] = Infinity; continue; }
-                boxNow(b);
-                hb[o] = cb[o]; hb[o + 1] = cb[o + 1]; hb[o + 2] = cb[o + 2]; hb[o + 3] = cb[o + 3];
+            // The boxes of the blocks uploaded: what they hold now (all: unknown, near). (Every near stale block is
+            // uploaded in each column it is stale in, so the near list is the blocks uploaded.)
+            if (all) {
+                for (let b = 0; b < used; b++) { if (vis[b] !== stamp) continue; const o = b * 4; hb[o] = -Infinity; hb[o + 1] = -Infinity; hb[o + 2] = Infinity; hb[o + 3] = Infinity; S.hc[o] = -32768; }
+            } else {
+                const CC = S.cc;
+                for (let j = 0; j < nn; j++) {
+                    const b = NL[j], o = b * 4;
+                    boxNow(b);
+                    hb[o] = cb[o]; hb[o + 1] = cb[o + 1]; hb[o + 2] = cb[o + 2]; hb[o + 3] = cb[o + 3];
+                    S.hc[o] = CC[o]; S.hc[o + 1] = CC[o + 1]; S.hc[o + 2] = CC[o + 2]; S.hc[o + 3] = CC[o + 3];
+                }
             }
             stats.near = (stats.near | 0) + (all ? 0 : 1);
+            if (stats.calls !== calls0) S.uploadGen = (S.uploadGen | 0) + 1;
+            if (S.sa && S.saF === F) {
+                if (all) { for (let b = 0; b < used; b++) if (vis[b] === stamp) this._columnStaleAgain(S, D, b, nb); }
+                else for (let j = 0; j < nn; j++) this._columnStaleAgain(S, D, NL[j], nb);
+            }
+        }
+        // Per block, as of the frame: whether some column holds an older frame's values than the frame's (1), none (2),
+        // or not known yet (0: a new frame), found out for a block the near pass looks at and kept as blocks go up
+        // (_columnStaleAgain). A frame of camera motion skips the blocks at 2 before any test. (All of them at every
+        // frame, a column at a time, was ~0.5 ms a tick frame at 8k blocks.)
+        _columnStaleBlocks(S, F, D, used, nb) {
+            let SA = S.sa;
+            if (SA && SA.length >= nb && S.saF === F && S.saSeq === D.seq && S.saN >= used) return SA;
+            if (!SA || SA.length < nb) SA = S.sa = new Uint8Array(nb);
+            SA.fill(0, 0, used);
+            S.saF = F; S.saSeq = D.seq; S.saN = used;
+            return SA;
+        }
+        _columnStaleAgain(S, D, b, nb) {
+            const ST = D.stamps, H = S.held, nc = D.cols.length;
+            let st = 0;
+            for (let c = 0; c < nc && !st; c++) if (ST[c * nb + b] > H[c * nb + b]) st = 1;
+            S.sa[b] = st ? 1 : 2;
+        }
+        // The frame's block boxes (boxNow: tiles, motion pad) as 16-tile cell rectangles, once a frame (Int16: below the
+        // grid -1, past it or unknown 32767; a lower edge under 0 truncates to 0, as clamping would).
+        _columnBoxCells(S, F, seq, used, nb, boxNow, cb, DB, T, mpad, cbGen, gen) {
+            let CC = S.cc;
+            if (CC && CC.length >= nb * 4 && S.ccF === F && S.ccSeq === seq && S.ccN >= used) return CC;
+            if (!CC || CC.length < nb * 4) CC = S.cc = new Int16Array(nb * 4);
+            if (DB) {
+                // (From the presentation's boxes in one pass: the boxes (cb, boxNow's) and their cells.)
+                const iT = 1 / T;
+                for (let b = 0, o = 0; b < used; b++, o += 4) {
+                    const x0 = DB[o], z0 = DB[o + 1], x1 = DB[o + 2], z1 = DB[o + 3];
+                    cbGen[b] = gen;
+                    if (!(x0 <= x1)) { cb[o] = 1e9; cb[o + 1] = 1e9; cb[o + 2] = 1e9; cb[o + 3] = 1e9; CC[o] = 32767; CC[o + 1] = 32767; CC[o + 2] = 32767; CC[o + 3] = 32767; continue; }
+                    const a = x0 * iT - mpad, bz = z0 * iT - mpad, c = x1 * iT + mpad, d = z1 * iT + mpad;
+                    cb[o] = a; cb[o + 1] = bz; cb[o + 2] = c; cb[o + 3] = d;
+                    // (Float32 as boxNow stores them, then the cells: below the grid -1, past it 32767.)
+                    const fa = cb[o], fb = cb[o + 1], fc = cb[o + 2], fd = cb[o + 3];
+                    CC[o] = fa < 524272 ? (fa > -16 ? (fa / 16) | 0 : -1) : 32767; CC[o + 1] = fb < 524272 ? (fb > -16 ? (fb / 16) | 0 : -1) : 32767;
+                    CC[o + 2] = fc < 524272 ? (fc > -16 ? (fc / 16) | 0 : -1) : 32767; CC[o + 3] = fd < 524272 ? (fd > -16 ? (fd / 16) | 0 : -1) : 32767;
+                }
+            } else {
+                const cl = v => v < 524272 ? (v > -16 ? (v / 16) | 0 : -1) : 32767;
+                for (let b = 0; b < used; b++) {
+                    boxNow(b);
+                    const o = b * 4;
+                    CC[o] = cl(cb[o]); CC[o + 1] = cl(cb[o + 1]); CC[o + 2] = cl(cb[o + 2]); CC[o + 3] = cl(cb[o + 3]);
+                }
+            }
+            S.ccF = F; S.ccSeq = seq; S.ccN = used;
+            return CC;
+        }
+        // The columns only the middle models read (MODEL_ONLY_COLUMNS), brought up to date where the last near upload
+        // looked (its near list, or every block in whole-map mode), when models are drawn. Their stamps count in the near
+        // list, so a block stale only in these is listed; the glyphs never read them, so the held box is unaffected.
+        _columnStoreUploadDeferred(F) {
+            const gl = this.gl, S = this.columnStores && this.columnStores[1], D = F && F.dirty;
+            if (!S || S.frame !== F || !S.held || !D || !S.offsets || !S.buffer || S.held.length !== D.cols.length * D.nb) return;
+            if (Defence3Renderer3D.deferModelColumns === false) return;
+            const stats = this.columnUploadStats || (this.columnUploadStats = { frames: 0, full: 0, bytes: 0, calls: 0, ms: 0 }), t0 = performance.now(), calls0 = stats.calls;
+            const B = D.block, nb = D.nb, n = F.n, used = Math.min(nb, Math.ceil(n / B)), ST = D.stamps, H = S.held, cols = D.cols, seq = D.seq;
+            const NL = S.nearList, nn = S.nearAll ? used : (S.nearN | 0), all = !!S.nearAll || !NL;
+            const gapBytes = Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, S.buffer);
+            for (const name of Defence3Renderer3D.MODEL_ONLY_COLUMNS) {
+                const c = cols.indexOf(name), off = S.offsets.get(name), a = F[name];
+                if (c < 0 || off === undefined || !a) continue;
+                const base = c * nb, bpe = a.BYTES_PER_ELEMENT, gap = Math.floor(gapBytes / (B * bpe));
+                for (let j = 0; j < nn;) {
+                    const b = all ? j : NL[j];
+                    if (ST[base + b] <= H[base + b]) { j++; continue; }
+                    let e = b + 1, je = j + 1, k = j + 1;
+                    while (k < nn && (all ? k : NL[k]) === (all ? k - 1 : NL[k - 1]) + 1 && (all ? k : NL[k]) - e <= gap) { const bk = all ? k : NL[k]; if (ST[base + bk] > H[base + bk]) { e = bk + 1; je = k + 1; } k++; }
+                    const s0 = b * B, s1 = Math.min(n, e * B);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, off + s0 * bpe, a, s0, s1 - s0);
+                    stats.bytes += (s1 - s0) * bpe; stats.calls++;
+                    for (let x = b; x < e; x++) H[base + x] = seq;
+                    j = je;
+                }
+            }
+            if (stats.calls !== calls0) S.uploadGen = (S.uploadGen | 0) + 1;
+            if (S.sa && S.saF === F) for (let j = 0; j < nn; j++) this._columnStaleAgain(S, D, all ? j : NL[j], nb);
+            stats.ms += performance.now() - t0;
         }
         _columnStoreUploadChanged(F, D, since, offsets, stats) {
             const gl = this.gl, B = D.block, n = F.n, used = Math.min(D.nb, Math.ceil(n / B)), ST = D.stamps, cols = D.cols;
@@ -9204,6 +9370,9 @@
     // (Unit column uploads: runs of changed blocks this far apart sent as one; _columnStoreUploadChanged.)
     // (Runs of changed blocks this many bytes apart or less uploaded as one: a call costs about that.)
     Defence3Renderer3D.columnUploadGapBytes = 2048;
+    // (Unit columns the glyphs' shader never reads, only the middle models' slot textures: uploaded when models are
+    // drawn, renderer3d.js _columnStoreUploadDeferred. deferModelColumns = false: with the rest, for comparisons.)
+    Defence3Renderer3D.MODEL_ONLY_COLUMNS = ['prate', 'amount'];
     Defence3Renderer3D.bakedSampling = 'filtered';
     Defence3Renderer3D.FlatSpriteBatch = FlatSpriteBatch;
     Defence3Renderer3D.PersistentInstances = PersistentInstances;

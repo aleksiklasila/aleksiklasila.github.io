@@ -11,7 +11,7 @@ const c=vm.createContext({PageUnit:View,_pageSlotViews:[],_pageUnitsById:new Map
     pageUnitsFreeze:(views,slots,n)=>{for(let j=0;j<n;j++)views[j]._freeze();}});
 vm.runInContext(source.slice(source.indexOf('function _simClientUpdateStableSlots('),source.indexOf('function _simClientApplyFrame(')),c);
 // (Views made when first read: sim_client.js pageSlotView; each id's slot: sim_frame.js _pageIdSlot.)
-vm.runInContext(source.slice(source.indexOf('// (A view in frame F'),source.indexOf('let _pageViewStamp')),c);
+vm.runInContext(source.slice(source.indexOf('// (A view written at slot s'),source.indexOf('let _pageViewStamp')),c);
 const frameSrc=fs.readFileSync(path.join(__dirname,'../src/sim/sim_frame.js'),'utf8');
 vm.runInContext(frameSrc.slice(frameSrc.indexOf('let _pageIdSlot'),frameSrc.indexOf('function _pageResolveDetailRef(')),c);
 const n=100000,old={n,id:Int32Array.from({length:n},(_,i)=>i),x:Float32Array.from({length:n},(_,i)=>i*3)};

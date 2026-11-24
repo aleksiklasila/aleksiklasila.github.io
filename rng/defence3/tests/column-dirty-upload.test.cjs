@@ -85,9 +85,14 @@ function pageFrame(m) {
 }
 const GPU_COLS = ['x', 'y', 'px', 'py', 'r', 'energy', 'owner', 'flags', 'id', 'type', 'facing', 'phase', 'prate', 'vision', 'mode', 'amount'];
 let checked = 0, liveChecked = 0, wholeBytes = 0;
-function check(F) {
+// (deferred: the middle models' columns (renderer3d.js MODEL_ONLY_COLUMNS) were not brought up to date this frame:
+// they may hold an older frame's values until _columnStoreUploadDeferred runs; checked on the frames that run it.)
+let deferredChecked = 0; // (frames whose deferred columns were checked too)
+function check(F, deferred = false) {
     const S = R.columnStores[1], data = S.buffer.data;
+    if (!deferred) deferredChecked++;
     for (const name of GPU_COLS) {
+        if (deferred && r3.window.Defence3Renderer3D.MODEL_ONLY_COLUMNS.includes(name)) continue;
         const a = F[name], off = S.offsets.get(name);
         const g = new a.constructor(data.buffer, data.byteOffset + off, F.n);
         const bits = a.BYTES_PER_ELEMENT === 4 ? [new Int32Array(a.buffer, a.byteOffset, F.n), new Int32Array(data.buffer, data.byteOffset + off, F.n)] : [a, g];
@@ -141,12 +146,12 @@ for (tick = 1; tick <= 500; tick++) {
         if (m.type !== 'presentation') continue;
         lastSeen = m.tick;
         // The page draws some frames; every frame is shown, then given back.
-        if (rnd() < .65) { const F = pageFrame(m); R._columnStoreUpload(1, F); check(F); }
+        if (rnd() < .65) { const F = pageFrame(m); R._columnStoreUpload(1, F); const models = rnd() < .5; if (models) R._columnStoreUploadDeferred(F); check(F, !models); }
         held.push(m.world.units);
         while (held.length > 1 + (rnd() < .3 ? 1 : 0)) { const h = held.shift(); send({ type: 'release', rid: h.rid, gen: h.gen }); }
     }
 }
-assert.ok(lastSeen > 450 && checked > 250, `frames drawn: ${checked}`);
+assert.ok(lastSeen > 450 && checked > 250, `frames drawn: ${checked}`); assert.ok(deferredChecked > 100, `frames with the models' columns checked: ${deferredChecked}`);
 const st = R.columnUploadStats;
 assert.ok(st.full <= 4, `whole uploads only at the start and a new capacity: ${st.full}`);
 assert.ok(st.bytes < wholeBytes * .75, `uploaded ${st.bytes} of ${wholeBytes} bytes`);

@@ -1,8 +1,24 @@
 "use strict";
-importScripts('sim_frame.js?v=20261123-i','sim_frame_world.js?v=20261123-f','pres_wasm_bin.js?v=20261123-e');
+importScripts('sim_frame.js?v=20261123-i','sim_frame_world.js?v=20261124-a','pres_wasm_bin.js?v=20261123-e');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, cellBaseline=null;
+// (The structure log as of the table last sent (sim_presentation.js _simStructLog): its id, slots read, whole-table
+// count, and the sends counted; the page scans the slots listed since only when it applied the send before.)
+let structLogId=-1, structLogEnd=0, structLogAll=-1, structSends=0;
+// The slots changed since the last send, read after the copy (null: every row may have changed).
+function structLogRead(L) {
+    if(!L || !L.ring || !L.cur) {structLogId=-1;return null;}
+    const end=Atomics.load(L.cur,0), all=Atomics.load(L.cur,1), id=L.cur[2];
+    let out=null;
+    if(id===structLogId && all===structLogAll && ((end-structLogEnd)|0)>=0 && ((end-structLogEnd)|0)<=L.ring.length) {
+        const n=(end-structLogEnd)|0, m=L.ring.length-1;
+        out=new Int32Array(n);
+        for(let i=0;i<n;i++) out[i]=L.ring[(structLogEnd+i)&m];
+    }
+    structLogId=id;structLogEnd=end;structLogAll=all;
+    return out;
+}
 let projectiles=null, projectileRevision=-1, sentProjectileRevision=-1;
 let membership=0, sequence=0;
 const buffers=new Map();
@@ -692,7 +708,14 @@ function draw() {
         // (Its block only: the table is in the wasm heap's memory.)
         const bytes=structure.bytes||structure.buf.byteLength, off=structure.off||0;
         const b=acquire(bytes,'structures');
-        if(b) {copyTableRows(SIM_STRUCT_SPEC,structure.buf,off,b,structure.cap,Math.max(structure.n|0,structure.count|0));world.structures={...structure,buf:b,off:0,bytes};sentStructureRevision=structureRevision;}
+        if(b) {
+            copyTableRows(SIM_STRUCT_SPEC,structure.buf,off,b,structure.cap,Math.max(structure.n|0,structure.count|0));
+            // (Read after the copy: every change the copy holds is listed.)
+            const lid=structLogId, chg=structLogRead(structure.slog);
+            const {slog,...rest}=structure;
+            world.structures={...rest,buf:b,off:0,bytes,chg,sstream:structLogId,sseqFrom:chg && lid===structLogId ? structSends : -1,sseq:++structSends};
+            sentStructureRevision=structureRevision;
+        }
     }
     if(projectiles && projectileRevision!==sentProjectileRevision) {
         const b=acquire(projectiles.buf.byteLength,'projectiles');

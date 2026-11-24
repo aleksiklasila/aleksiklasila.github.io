@@ -1028,6 +1028,14 @@ function _simClientApplyTick(msg) {
 // The membership pass (_simClientUpdateStableSlots) moves and freezes only those; every unit's view made at its birth
 // and kept slot by slot was ~2 ms of a busy tick of a 140k battle (2026-11-23).
 let _pageSlotViews = [];
+// (A view written at slot s: the array grown dense, by doubling, before a write past its end. Lazy views are first
+// written at high slots, and such a write left the array in V8's dictionary mode: every read a hash look-up, the
+// membership pass's reads at the changed slots ~0.4 ms of a busy tick (2026-11-24).)
+function _pageSlotViewPut(s, v) {
+    const a = _pageSlotViews;
+    if (s >= a.length) { let n = Math.max(1024, a.length * 2); while (n <= s) n *= 2; for (let i = a.length; i < n; i++) a.push(undefined); }
+    a[s] = v;
+}
 // The view of slot s's unit in the current frame (made if none was: undefined for an empty slot; wantId: undefined
 // unless the slot holds that unit).
 // (A view in frame F, before it is the current one: the full pass's.)
@@ -1036,7 +1044,7 @@ function _pageViewIn(F, s) {
     if (v !== undefined) return v;
     const id = F.id[s];
     if (id < 0) return undefined;
-    v = new PageUnit(id, s); _pageSlotViews[s] = v; _pageUnitsById.set(id, v);
+    v = new PageUnit(id, s); _pageSlotViewPut(s, v); _pageUnitsById.set(id, v);
     return v;
 }
 function pageSlotView(s, wantId = -1) {
@@ -1047,7 +1055,7 @@ function pageSlotView(s, wantId = -1) {
     const id = F.id[s];
     if (id < 0 || (wantId >= 0 && id !== wantId)) return undefined;
     const u = new PageUnit(id, s);
-    _pageSlotViews[s] = u; _pageUnitsById.set(id, u);
+    _pageSlotViewPut(s, u); _pageUnitsById.set(id, u);
     return u;
 }
 let _pageViewStamp = 0;
@@ -1210,7 +1218,7 @@ function _simClientUpdateStableSlots(F, old) {
         const v = MV[j], ns = _simMovedTo[j];
         MV[j] = null;
         if (v._s !== ns) { _simMovedFrom[nm] = v._s; _simMovedTo[nm++] = ns; }
-        v._s = ns; _pageSlotViews[ns] = v;
+        v._s = ns; _pageSlotViewPut(ns, v);
     }
     // (The selected units among the moved: their slots in the selection's index, hud.js.)
     if (nm) { if (typeof selectionSlotsMoved === 'function') selectionSlotsMoved(_simMovedFrom, _simMovedTo, nm); else if (typeof selectionIndexRemapped === 'function') selectionIndexRemapped(); }
@@ -1354,7 +1362,7 @@ function _simClientApplyFrame(frame, shown) {
                 else { v._freeze(); v.dead = true; _pageUnitsById.delete(v.id); }
             }
             _pageSlotViews = [];
-            for (let i = 0; i < views.length; i += 2) { views[i]._s = views[i + 1]; _pageSlotViews[views[i + 1]] = views[i]; }
+            for (let i = 0; i < views.length; i += 2) { views[i]._s = views[i + 1]; _pageSlotViewPut(views[i + 1], views[i]); }
             pageUnitDeaths++;
             // (Slots dealt again: the selection's slots are found again.
             // This path only: a restore, a match's first frame.)

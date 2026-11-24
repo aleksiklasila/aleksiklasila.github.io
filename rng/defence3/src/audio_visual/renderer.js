@@ -3285,13 +3285,26 @@ function getGroundTilesForGpu() {
     const G = _groundTiles, n = GRID_W * GRID_H;
     if (!G.mask || G.w !== GRID_W || G.h !== GRID_H) { G.mask = new Uint8Array(n); G.w = GRID_W; G.h = GRID_H; G.full = true; G.upY0 = G.upY1 = -1; }
     if (!G.floor) { const f = _parseHexColor(C_FLOOR), w = _parseHexColor(C_WALL); G.floor = [f.r / 255, f.g / 255, f.b / 255]; G.wall = [w.r / 255, w.g / 255, w.b / 255]; }
+    const M = G.mask, T = cellType, WALL = TYPE_WALL, A = G.rx0, B = G.rx1;
     let y0 = -1, y1 = -1;
-    if (G.full) { y0 = 0; y1 = GRID_H - 1; G.full = false; }
-    else if (G.dirtyY0 >= 0) { y0 = G.dirtyY0; y1 = G.dirtyY1; }
+    if (G.full) {
+        y0 = 0; y1 = GRID_H - 1; G.full = false;
+        for (let i = 0; i < n; i++) M[i] = T[i] === WALL ? 255 : 0;
+    } else if (G.dirtyY0 >= 0 && A && A.length === GRID_H) {
+        // (The tiles marked (per row, an x range: renderer2d.js _markGroundTileRows); a row goes up only when a
+        // wall there changed.)
+        for (let y = G.dirtyY0; y <= G.dirtyY1; y++) {
+            const x0 = A[y], x1 = B[y];
+            if (x0 > x1) continue;
+            A[y] = GRID_W; B[y] = -1;
+            let ch = false;
+            for (let i = y * GRID_W + x0, e = y * GRID_W + x1; i <= e; i++) { const m = T[i] === WALL ? 255 : 0; if (M[i] !== m) { M[i] = m; ch = true; } }
+            if (ch) { if (y0 < 0) y0 = y; y1 = y; }
+        }
+    }
+    if (A && A.length === GRID_H && G.dirtyY0 >= 0) for (let y = G.dirtyY0; y <= G.dirtyY1; y++) { A[y] = GRID_W; B[y] = -1; }
     G.dirtyY0 = G.dirtyY1 = -1;
     if (y0 >= 0) {
-        const M = G.mask, T = cellType, WALL = TYPE_WALL;
-        for (let i = y0 * GRID_W, e = (y1 + 1) * GRID_W; i < e; i++) M[i] = T[i] === WALL ? 255 : 0;
         // (Rows the renderer has not uploaded yet: theirs and these.)
         G.upY0 = G.upY0 < 0 ? y0 : Math.min(G.upY0, y0); G.upY1 = Math.max(G.upY1, y1);
         G.version++;

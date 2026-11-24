@@ -10845,3 +10845,159 @@ worker-approach-occupancy pass; browser-mp-actions --only=map (hold key both pee
   battle (92 textured draws, each setting every uniform and texture again); the cache skipped the repeats, but A/B
   (2 rounds, checker close/mid) was equal or worse: 3D close 81.9/79.1 vs 84.4/90.2 FPS without it. The probe's own
   wrappers made the calls look expensive; Chrome's GL calls are cheap here.
+
+## 2026-11-24 - tick frames of a close battle view: near uploads, the slot views dense, the ground's wall mask (tests/test-runs/fps-20261124/)
+
+Continuing round 8's "3D close still CPU-bound ~11 ms". Re-measured first (checker-300k-l16, NOGL=1): the page's frame
+is ~3 ms on most frames and ~10-13 ms on tick frames (frames that apply a presentation frame, ~7-8 a second here), so
+each tick frame misses a 120 Hz vsync. The 865 / 274 ms first frames of a PROF=1 case are the profiler starting
+(Profiler.start), not the game: without PROF the worst frame was 49 ms. A trace's long frames (25-50 ms) were the
+frame's JS plus style / layout / paint (layout ~33 a second, each followed by a hover hit-test ~0.9 ms), two 11-14 ms
+major GCs in 10 s and one 6 ms innerHTML parse.
+
+**Tools (fps-20261124):** `tickparts.cjs` (an fpsprobe frames.json: mean parts of tick frames vs other frames),
+`tickprof.cjs` (a PROF profile: self time per function in tick frames vs other frames; frames = runs of samples under
+processRenderFrame, a tick frame one with a sample under _simClientApplyWorld), `ab2.sh` (fpsprobe on the checker
+scene + tickparts per case), END_EVAL probes `nearruns.js` (each near upload's runs per column, what bridging would
+give), `stablelist.js` (the membership pass's list vs the slots whose id changed), `structapply.js` /
+`structparts.js` (pageApplyStructures per call, by callee), `structcheck.js` (gone structures' frozen records and the
+slot mirror). HEAD's files for A/B: `*.base.js`.
+
+**Kept:**
+- **Near column uploads by a list of the near blocks (renderer3d.js `_columnStoreUploadNear`):** per tick frame in 3D
+  close ~1200 bufferSubData calls (~1.5 MB; 2D close ~150): the ~170 near stale blocks lie in ~126 separate runs over
+  all ~4200 blocks (slots of a place are spread over the slot range), so each column needs ~126 calls; bridging gaps of
+  16 blocks would still be ~35 runs at ~4x the bytes. The function's own JS was as much as the calls: every column's
+  stamps of every block scanned for staleness, the frustum test on nearly every block (nearly all are stale), every
+  column's blocks scanned again for runs. Now the 16-tile cells near the view are prefix sums (made with the
+  bucket pass, a frustum test a cell), a block's held box or box now is near when a near cell overlaps it (four reads,
+  inline; conservative: a box the frustum test takes always overlaps a cell it takes), the near blocks stale in any
+  column are listed once, and each column's runs are made over the list. The whole-map mode is as before.
+  GPU readback check (`nearcheck2.js`, panning): 0 bad of 45k (3D close), 11k (2D close), 3.0M (3D tilted) on-screen
+  slot checks. column-dirty-upload passes. Upload on tick frames (A/B vs HEAD, 2 rounds): 2D close 2.15 / 2.36 ->
+  1.55 / 1.57 ms, 3D close 2.53 / 2.73 -> 2.39 / 2.15 (first round), 2.56 / 2.66 -> 2.36 / 2.17 (second), 3D far
+  unchanged (whole-map mode). bufferSubData itself (~1.1 ms a 3D tick frame) is what is left: fewer calls need
+  another layout (slots of a place together, or positions interleaved by the presentation).
+- **The page's slot views dense (sim_client.js `_pageSlotViewPut`):** `_pageSlotViews` began `[]` and lazy views are
+  first written at high slots: V8 dictionary mode, every read a hash look-up (the same as PageUnitIdMap in round 8).
+  It now grows dense by doubling before a write past its end. `_simClientUpdateStableSlots` on 3D close tick frames
+  1.26 / 1.11 -> 0.78 / 0.73 ms (the presentation's change list was already exact: ~2000 slots a busy tick).
+  frame-membership-delta (loads the helper now), order-markers, selection-index-moves, lod-visible-budget pass.
+- **The ground's wall mask by the tiles marked (renderer2d.js `_markGroundTileRows`, renderer.js
+  `getGroundTilesForGpu`):** a building placed or gone marks the terrain dirty (the 2D background), and the large-map
+  ground mask took the dirty rows' span: in a battle most of the map every tick, read again whole (262k tiles) and
+  uploaded again though walls do not change. Now each dirty row keeps the x range marked, only those tiles are read,
+  and a row goes up only when a wall byte there changed. Per call 13.9 / 15.4 -> 5.6 / 5.3 us, the worst 1.0-1.1 ->
+  0.1 ms; uploads 15 in 6 s (was about every tick). Check: the mask equal to a full recompute after 6 s of battle (0 of
+  262k).
+
+**Tried, not kept:**
+- **Structure apply scans as small typed loops + gone structures frozen together (sim_frame_world.js):** per call
+  pageApplyStructures was ~0.5-2 ms (40k slots: membership scan ~0.46, label scan ~0.25, gone ~0.63, label text ~0.2).
+  The scans moved to their own functions with typed outputs ran no faster (~10 ns a slot; Node runs the same loop at
+  ~4 ns: it is V8's speed for it, the machine busy), the gone views frozen a column at a time (pageGonePutMany) saved
+  little. A/B per call (alternating): HEAD 1.25 / 1.37 ms, changed 1.54 / 1.20 (by the structures gone in the window).
+  Correct (`structcheck.js`: 2562 gone, 0 bad), reverted as no gain. The scan needs the table's changes from the worker
+  (O(changes)), not a faster loop.
+- Moving the world apply out of the frame: presentation frames are shown when the play clock reaches them
+  (`_simPlayShow`), inside the frame on purpose; applying on arrival would need the page's state double-buffered.
+
+**Measured (all kept vs HEAD, 2 rounds alternating, NOGL, checker-300k-l16):** FPS 3D close 103.3 / 113.8 (HEAD) vs
+109.2 / 111.1, 2D close 112.9 / 111.1 vs 111.7 / 113.3, 3D far 118.5 / 112.2 vs 113.9 / 116.7: within run spread (TPS
+16-20 between runs changes how much each tick carries). Earlier same-sitting 3D close runs: tick-frame JS 12.1 / 11.0
+-> 9.8 / 10.4 ms, FPS 111.6 / 113.5 -> 113.8 / 115.
+
+**Left on a 3D close tick frame (~10 ms):** bufferSubData calls of the near upload (~1.1 ms native, slot layout),
+`build3DFrameData`'s tick part (+2 ms: getChunkRenderView, the detail splits, unit layer build), pageApplyStructures
+(~1 ms; needs the worker's change list), the membership pass (~0.75), drawColumnModels' groups. Tick frames still miss
+a vsync at 120 Hz.
+
+### 2026-11-24 (round 2): model-only columns deferred, structure changes as a shared log, marked tiles by slot
+
+**Kept:**
+- **The middle models' columns uploaded only when models are drawn (renderer3d.js `MODEL_ONLY_COLUMNS`,
+  `_columnStoreUploadDeferred`, `_cmSlotTextures(F, copy)`):** in a far view every tick uploaded ~10.7 MB of unit
+  columns (`colbytes.js`: x / y / px / py 4.3 MB, facing 1.08, amount 1.07, phase 0.81, flags 0.79, energy 0.77, prate
+  0.65). The glyph shader never reads units' `prate` (its slot is aUnitType, read for structures only) or `amount` (an
+  extra column): only the middle models' slot textures do. Now the near / whole-map upload skips those two (their
+  stamps still count in the near list), and after the models' membership, when some are drawn, they are brought up to
+  date where the near upload looked and the slot textures are copied (no band copy at all without models). The copy
+  also runs again when the column buffer changed within the frame (`uploadGen`: blocks coming near while panning
+  between ticks were missing from the models' textures until the next tick). `deferModelColumns = false`: as before.
+  column-dirty-upload checks both kinds of frames now (deferred columns exempt until the deferred pass; exact on frames
+  that run it). Checks: `modelcols.js` (GPU readback of prate / amount / x / y at every slot drawn as a model, panning):
+  0 bad of 80k (3D close) and 151k (tilted); nearcheck2 0 bad. A/B (switch, alternating; runs with similar frame
+  counts): 2D far upload 4.07 / 3.99 -> 3.47 ms a tick frame, 3D close 2.50 / 2.52 -> 2.44 / 2.40, 2D close equal.
+- **Structure changes as a shared log (sim_presentation.js `_simStructLog*`, presentation_worker.js `structLogRead`,
+  sim_frame_world.js `_pageStructChgSlots`):** the page's structure apply scanned every slot twice (membership,
+  labels), ~0.5-1 ms a table at 40k. The simulation's presentation already knew the slots it changed (the tile
+  journal's and marked tiles' rows, frees). A list in each message was not enough (`structcheck.js`: 1152 mirror
+  mismatches, 15 labels missed): the table is shared memory, copied by the presentation worker when it sends, possibly
+  after the next tick's rows were written. Now a shared ring: a slot goes in before its row is written (frees before
+  their alive byte), a counter moves when every row may change (a metadata cycle's pass, the journal lost, a table
+  swapped), and the presentation worker reads the ring after its copy: every change the copy holds is listed. The page
+  scans the listed slots (each once, ascending) when the list chains on to the table it applied last (stream id +
+  send sequence), else everything as before. Checks (`structcheck.js`, full compare after every apply, labels
+  against a full label compare): 0 bad over 29 / 41 applies. Per call (10 s, checker battle): listed 0.39 ms (81 of
+  106 calls), full 2.18 ms (25: after cycles, ~131 gone each); small changes were ~1.0 ms before.
+- **Marked tiles by their slot (sim_presentation.js `_simDirtyFast`):** `dirtywho.js` (WEVAL in the sim worker): in
+  the checker battle the adjacency lane's commits mark ~1030 structure tiles a step (flag 64: group sizes, effective
+  stacks or levels changed: real changes), each through the full look-up (tile entity, kind by instanceof, cell item,
+  slot) ~0.85 us. A tile only marked, not in the tile journal, holds the structure it held: its slot from the tile
+  slots. The function's JS besides the kernel 0.89 -> 0.53 ms a step (sim thread).
+
+Tests: column-dirty-upload, render-scale, lod-visible-budget, sim-frame-replica, presentation-helpers, structure-row-*,
+structure-rows-fill, structure-adjacency-events, structure-list-reuse, structure-render-hotspots, history-structure-
+columns, snapshot-pooled-structure, frame-membership-delta pass; browser-mp-actions --only=map: no desyncs, one run
+had "move while held@host" fail (released units moved 7 px in 2.5 s, not 20), the rerun passed: a timing flake of the
+test's window, not looked into further. Cache tokens bumped (index.html, presentation_worker import, LOD worker).
+
+**Also measured:** chaos-500k-l16 in Edge: 114-120 FPS in every view, TPS 10 at dk 2 (game time real time): the
+simulation is that scene's limit (step 71 ms: simMoveRun 37.5, k89 23, k8 7.6; named profile: move_job, traffic_swap,
+checked_traffic_q, MoveGrid preview / commit_preview ~30% of all simulation CPU). Helpers spend ~6% of their CPU in the
+spin before waiting (sim_parallel.js loop), left as tuned. A fuzz long task (101 ms, zoom limits + minimap) did not
+reproduce in a direct probe (`zoomout.js`: jumps and gradual zooms, worst frame 23 ms).
+
+**Next:** the metadata cycle's pass to list the rows it changes (k_meta_structs: alive / serial / label against the
+row before), so the cycle's tables are applied by list too (the 25% full applies, ~2.2 ms each).
+
+### 2026-11-24 (round 3): camera motion's near-upload passes; what else was looked at
+
+**Kept: the near pass while the camera moves (renderer3d.js `_columnStoreUploadNear`, `_columnBoxCells`,
+`_columnStaleBlocks`, `_columnStaleAgain`, held cells `S.hc`):** the fuzz on chaos-front-400k-l16 (446k units,
+`view.lowOrbit`) had `_columnStoreUploadNear` +176 ms self in 3 s: with the camera moving every frame looks at every
+block (8.1k) again, not only tick frames. `orbit.js` (yaw orbit, per frame): ~1.0 ms a camera frame in it, ~0.85 of
+that without any upload (stage timers in an instrumented copy: cells 0.28, blocks 0.49). Now:
+- the 16-tile cells' frustum test incremental along a row (its extents the same for every cell, its centre's w / cx /
+  cy affine): three adds and three compares a cell;
+- the blocks' boxes as cell rectangles: the frame's (`S.cc`, from the presentation's boxes in one pass, once a frame)
+  and the held ones (`S.hc`, kept as blocks go up; -32768 unknown), so a test is four Int16 reads and the prefix sums;
+- per block whether it is stale, up to date or not yet known (`S.sa`, reset a frame): found out only for a block that
+  passes the near test (the stamps are column-major: a block's 16 columns are 16 cache misses), kept as blocks go up
+  (near, whole-map and deferred uploads). Blocks up to date are skipped before any test while the camera moves. (A
+  first version made every block's state at each frame a column at a time: 0.48 ms a tick frame, more than before;
+  the lazy one costs what the old per-block test did.)
+Orbit (446k): camera frames 0.99 -> 0.50 / 0.55 ms (0.71 -> 0.37 / 0.43 without uploads); tick frames as before (stage
+split: cells 0.15, box cells 0.19 + reset, blocks 0.36). Checks: nearcheck2 (3D tilted 5.8M, close 9k, 2D close 2.6k
+on-screen slot checks: 0 bad), modelcols (57k model slots, 0 bad), column-dirty-upload passes. All of today's
+renderer3d.js against HEAD (static views, 2 rounds alternating, tick frames): upload 3D close 2.70 / 2.63 -> 1.85 /
+1.90 ms, 2D close 2.28 / 2.05 -> 1.43 / 1.57, 3D far 4.34 / 4.22 -> 3.69 / 3.90; tick-frame JS 3D close 10.57 / 10.05
+-> 9.59 / 9.92, 2D close 7.86 / 6.96 -> 6.24 / 6.60, 3D far 8.20 / 7.89 -> 7.32 / 7.72.
+
+**Looked at, not changed:**
+- The research row's arrow (the page's one running CSS animation, transform + opacity): all animations off looked
+  like -0.2 ms of the frame's lifecycle in one pair of runs; `will-change` on it changed nothing and later runs with
+  it on matched: noise. Layout runs ~30 a second (HUD resource cells by innerHTML as values change, the research row,
+  build menu classes), each ~0.7 ms plus a ~0.9 ms hover hit-test: left (earlier rounds: `contain` did not help).
+- Slot blocks are compact in space (median box side ~17 tiles in both scenes) but hold ~56 live units of 256: a
+  place's slabs (64 slots each, by 16-tile block, in allocation order) lie all over the slot range, so the near
+  blocks of a view are ~126 separate runs: the remaining upload calls (~1 ms native in 3D close). Ordering slabs by
+  place would be the simulation's relayout policy (open layout-dependence for peers): not touched.
+- Simulation (chaos-500k-l16, dk 2, 71 ms steps): the sim thread's JS is ~2% besides waits; helpers' foreground
+  joins (`helpers:K` is a count of helpers active at the post, not ms); background chunks average ~50 us (7.8k a step)
+  so chunk length does not delay the joins. Relayout (k_slot_move ~3 ms + ~22 ms helper CPU a step) is the budgeted
+  design measured as a net win before.
+- The metadata cycle's tables still apply in full on the page (2.5 a second, ~2.2 ms each, most of it per gone
+  structure, not the scan): a Rust change to list its rows would save ~0.7 ms each. Not done.
+- Fuzz chaos-front-400k-l16 (6 min): TPS 4-5 (the simulation); page findings were the near pass above and the
+  fuzzer's own probe (querySelectorAll / getBoundingClientRect / elementFromPoint from its controls scan).

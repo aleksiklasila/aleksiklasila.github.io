@@ -3,13 +3,13 @@
  "delay": 40,
  "health": [
   {
-   "tick": 354,
+   "tick": 728,
    "desyncs": 0,
    "stop": false,
    "started": true
   },
   {
-   "tick": 354,
+   "tick": 728,
    "desyncs": 0,
    "stop": false,
    "started": true
@@ -18,51 +18,135 @@
  "errors": [],
  "results": [
   {
-   "name": "bb-drop",
+   "name": "rally",
    "page": "host",
    "ok": true,
-   "sid": "building:barrack_norm:maxEnergy",
-   "at": 1,
-   "added": 2
-  },
-  {
-   "name": "bb-reorder",
-   "page": "host",
-   "ok": true,
-   "first": "building:pistol:maxEnergy"
-  },
-  {
-   "name": "bb-boost",
-   "page": "host",
-   "ok": true,
-   "id": "building:shrine",
-   "boosts": [
-    2,
-    2
+   "rally": [
+    848,
+    495.5
    ]
   },
   {
-   "name": "bb-drop",
-   "page": "guest",
+   "name": "move",
+   "page": "host",
    "ok": true,
-   "sid": "building:barrack_norm:maxEnergy",
-   "at": 1,
-   "added": 2
+   "d0": [
+    1720.4000938167874,
+    1720.4000938167874
+   ],
+   "d1": [
+    1679.1049176713825,
+    1679.1049176713825
+   ]
   },
   {
-   "name": "bb-reorder",
-   "page": "guest",
+   "name": "move while held",
+   "page": "host",
    "ok": true,
-   "first": "building:pistol:maxEnergy"
+   "e0": [
+    1555.3595229106052,
+    1555.3595229106052
+   ],
+   "e1": [
+    1555.3595229106052,
+    1555.3595229106052
+   ],
+   "e2": [
+    1527.4036911388948,
+    1526.87451964477
+   ]
   },
   {
-   "name": "bb-boost",
+   "name": "hold key",
+   "page": "host",
+   "ok": true,
+   "h1": [
+    8,
+    8
+   ]
+  },
+  {
+   "name": "stop key",
+   "page": "host",
+   "ok": true,
+   "h2": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "place",
+   "page": "host",
+   "ok": true,
+   "r": [
+    "pistol(uc)",
+    "pistol(uc)"
+   ]
+  },
+  {
+   "name": "rally",
    "page": "guest",
    "ok": true,
-   "id": "building:shrine",
-   "boosts": [
-    2,
-    2
+   "rally": [
+    3504,
+    1295.5
+   ]
+  },
+  {
+   "name": "move",
+   "page": "guest",
+   "ok": true,
+   "d0": [
+    211.83988529347187,
+    211.83988529347187
+   ],
+   "d1": [
+    74.80769778758527,
+    73.25355365454807
+   ]
+  },
+  {
+   "name": "move while held",
+   "page": "guest",
+   "ok": true,
+   "e0": [
+    149.20156124788465,
+    149.20156124788465
+   ],
+   "e1": [
+    149.20156124788465,
+    149.20156124788465
+   ],
+   "e2": [
+    70.90838842974023,
+    69.04391449090772
+   ]
+  },
+  {
+   "name": "hold key",
+   "page": "guest",
+   "ok": true,
+   "h1": [
+    8,
+    8
+   ]
+  },
+  {
+   "name": "stop key",
+   "page": "guest",
+   "ok": true,
+   "h2": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "place",
+   "page": "guest",
+   "ok": true,
+   "r": [
+    "pistol(uc)",
+    "pistol(uc)"
    ]
   }
  ]

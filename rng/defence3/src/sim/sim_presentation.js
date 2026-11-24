@@ -138,7 +138,7 @@ function simPresentationStart() {
     simPresentationStop();
     if (!SIM_PAR_SHARED || typeof Worker !== 'function') return false;
     const base = self.SIM_WORKER_BASE || location.href;
-    const worker = new Worker(new URL('presentation_worker.js?v=20261123-i' + (self.SIM_NO_PRESENT ? '&present=0' : '') + (self.SIM_PRES_HELPERS >= 0 ? '&ph=' + self.SIM_PRES_HELPERS : ''), base).href);
+    const worker = new Worker(new URL('presentation_worker.js?v=20261124-a' + (self.SIM_NO_PRESENT ? '&present=0' : '') + (self.SIM_PRES_HELPERS >= 0 ? '&ph=' + self.SIM_PRES_HELPERS : ''), base).href);
     const p = _simPresentation = { worker, epoch:_simEpoch, generation:++_simPresentationGeneration,
         timer:0, job:null, meta:null, projectileJob:null, projectileAt:0,
         structures:null, cells:null, columns:null, sourceBuffer:null, strings:0, revision:0 };
@@ -376,27 +376,63 @@ function _simPresentRallyCells(F, s, on, x, y, id) {
 }
 // (The changed tiles' slots, for the metadata kernel: a heap list.)
 let _simChgL = null;
+// The structure slots whose rows are written or freed in place, a shared ring the presentation worker reads after it
+// copies the table (presentation_worker.js structLogRead): a slot goes in before its row is written, so whatever of a
+// change the copy holds, its slot is listed. cur[0]: slots put; cur[1]: moves when every row may change (a metadata
+// cycle's pass, the tile journal lost, a table swapped): the reader takes all; cur[2]: the log's id.
+const SIM_STRUCT_LOG = 1 << 18;
+let _simStructLogN = 0;
+function _simStructLog(p) {
+    if (!p.slog && typeof SharedArrayBuffer === 'function') { p.slog = { ring: new Int32Array(new SharedArrayBuffer(SIM_STRUCT_LOG * 4)), cur: new Int32Array(new SharedArrayBuffer(16)) }; p.slog.cur[2] = ++_simStructLogN; }
+    return p.slog || null;
+}
+function _simStructLogPut(p, L, n) {
+    const W = _simStructLog(p);
+    if (!W || !(n > 0)) return;
+    const R = W.ring, m = SIM_STRUCT_LOG - 1, i0 = W.cur[0];
+    for (let i = 0; i < n; i++) R[(i0 + i) & m] = L[i];
+    Atomics.store(W.cur, 0, (i0 + n) | 0);
+}
+function _simStructLogAll(p) { const W = _simStructLog(p); if (W) Atomics.add(W.cur, 1, 1); }
+const _simStructLogOne = new Int32Array(1);
+const _simDirtyFast = [];
 function _simPresentStructureChanges(p) {
     let F = p.structures;
     if (!F || typeof tileEntityChangesSince !== 'function') return;
     let tiles = tileEntityChangesSince(p.teCursor || (p.teCursor = { epoch: -1, pos: 0 }));
+    // (The journal started over or fell behind: changes not listed, every row may differ.)
+    if (tiles === null) _simStructLogAll(p);
     if (_simDirtyN) {
         // (The journal's tiles and the marked ones, each once: the marks say which are in.)
-        const M = _simDirtyMark, D = _simDirtyList, nd = _simDirtyN, out = [];
-        _simDirtyN = 0;
+        // (A tile only marked, not in the journal, holds the structure it held: its row again by its slot
+        // (_simDirtyFast); the journal's take the full look-up. A battle's adjacency commits marked ~1000 a step, each
+        // through the look-up below: ~0.85 us a tile, 2026-11-24.)
+        const M = _simDirtyMark, D = _simDirtyList, nd = _simDirtyN, out = [], fast = _simDirtyFast;
+        _simDirtyN = 0; fast.length = 0;
         if (tiles) for (const t of tiles) if (M[t] !== 2) { M[t] = 2; out.push(t); }
-        for (let i = 0; i < nd; i++) { const t = D[i]; if (M[t] !== 2) { M[t] = 2; out.push(t); } }
+        for (let i = 0; i < nd; i++) { const t = D[i]; if (M[t] !== 2 && M[t] !== 3) { M[t] = 3; fast.push(t); } }
         for (const t of out) M[t] = 0;
+        for (const t of fast) M[t] = 0;
         tiles = out;
     }
     const rally = p.rallyDirty === true;
     p.rallyDirty = false;
-    if ((!tiles || !tiles.length) && !rally) return;
+    const fast = _simDirtyFast;
+    if ((!tiles || !tiles.length) && !fast.length && !rally) return;
     if (!tiles) tiles = [];
     const S = _simStructSlots, T = _simPresentTileSlots(p);
     let count = Math.min(F.cap, p.structCount | 0), wrote = rally, nl = 0;
-    if (!_simChgL || _simChgL.length < tiles.length || !simHeapHas(_simChgL)) _simChgL = simHeapArray(Int32Array, Math.max(1024, tiles.length * 2));
+    if (!_simChgL || _simChgL.length < tiles.length + fast.length || !simHeapHas(_simChgL)) _simChgL = simHeapArray(Int32Array, Math.max(1024, (tiles.length + fast.length) * 2));
     const L = _simChgL;
+    // (Marked tiles whose slot still holds their structure: listed as they are; the others the full way.)
+    if (fast.length) {
+        for (const t of fast) {
+            const k = T[t], e = k >= 0 ? S.owner[k] : null, gx = t % GRID_W;
+            if (e && e._sslot === k && e.gx === gx && e.gy === (t - gx) / GRID_W && k < F.cap) { L[nl++] = k; wrote = true; }
+            else tiles.push(t);
+        }
+        fast.length = 0;
+    }
     for (const t of tiles) {
         const gx = t % GRID_W, gy = (t - gx) / GRID_W;
         let e = typeof getTileEntityRef === 'function' ? getTileEntityRef(gx, gy) : null, kind = -1;
@@ -414,6 +450,7 @@ function _simPresentStructureChanges(p) {
             const pe = S.owner[prev];
             if (pe && pe.gx === gx && pe.gy === gy) {
                 pe._sslot = undefined; S.owner[prev] = null; S.free.push(prev); S.version++; S.psrcSet(prev, null);
+                _simStructLogOne[0] = prev; _simStructLogPut(p, _simStructLogOne, 1);
                 if (prev < F.cap) F.alive[prev] = 0;
                 if (p.structuresNext && prev < p.structuresNext.cap) p.structuresNext.alive[prev] = 0;
                 wrote = true;
@@ -437,6 +474,7 @@ function _simPresentStructureChanges(p) {
     // Their rows by the metadata kernel (both tables while a bigger one fills).
     if (nl) {
         const N = p.structuresNext;
+        _simStructLogPut(p, L, nl);
         _simMetaStructsRun(p, F, S, T, L, nl, N);
         for (let i = 0; i < nl; i++) {
             const s = L[i];
@@ -448,7 +486,7 @@ function _simPresentStructureChanges(p) {
     _simPresentAngles(p, F);
     _simInfoPackTable(F);
     simInfoPackStatDirCheck();
-    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count,mver:S.version,angles:p.angles,angleRev:p.angleRev}), revision:++p.revision});
+    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count,mver:S.version,angles:p.angles,angleRev:p.angleRev,slog:_simStructLog(p)}), revision:++p.revision});
 }
 
 function simPresentationPublish(tick) {
@@ -754,18 +792,19 @@ function* simPresentationMetadata() {
     {
         // Every tabled structure's row by the kernel; what it finds gone freed here.
         F = cur();
+        _simStructLogAll(p);
         j = _simMetaStructsRun(p, F, S, T);
         yield;
     }
     F = cur();
     S.orderChanged(F.order,j);
     simPresentationBind();
-    if (fresh) { _simStructTableRetire(p.structures); p.structures = F; p.structuresNext = null; }
+    if (fresh) { _simStructLogAll(p); _simStructTableRetire(p.structures); p.structures = F; p.structuresNext = null; }
     p.structCount = j;
     _simPresentAngles(p, F);
     _simInfoPackTable(F);
     simInfoPackStatDirCheck();
-    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev}), revision:++p.revision});
+    p.worker.postMessage({type:'structures', table:_simStructTableMsg(F,{n:S.owner.length,count:j,mver:S.version,angles:p.angles,angleRev:p.angleRev,slog:_simStructLog(p)}), revision:++p.revision});
     // The cells: the reader reads the simulation's columns (map.js cellType,
     // cellOwner: shared) and computes the display delta; nothing copied here.
     // (When a tile changed, or every few seconds.)

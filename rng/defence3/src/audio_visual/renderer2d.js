@@ -863,14 +863,21 @@ function _clampTileRect(minGx, minGy, maxGx, maxGy, out = {}) {
 // getGroundTilesForGpu, renderer3d.js drawBackground): a byte a tile (255 a
 // wall), its rows to upload since the renderer last took them. Marked with
 // the terrain's own dirty rects.
-const _groundTiles = { mask: null, w: 0, h: 0, version: 0, full: true, dirtyY0: -1, dirtyY1: -1, upY0: -1, upY1: -1, floor: null, wall: null };
+// (Per dirty row its tiles' x range (rx0 / rx1): a battle's buildings gone all over the map made the dirty rows most
+// of it every tick, each read again whole; only the tiles marked are now, and rows go up only where a wall changed.)
+const _groundTiles = { mask: null, w: 0, h: 0, version: 0, full: true, dirtyY0: -1, dirtyY1: -1, upY0: -1, upY1: -1, floor: null, wall: null, rx0: null, rx1: null };
 // Whether the WebGL ground draws the tiles now (the 2D background is then not
 // made: renderer.js's background commit skips it; the 2D view clears this).
 let _groundTilesActive = false;
-function _markGroundTileRows(y0, y1) {
+function _markGroundTileRows(y0, y1, x0 = 0, x1 = GRID_W - 1) {
     const G = _groundTiles;
-    if (G.dirtyY0 < 0 || y0 < G.dirtyY0) G.dirtyY0 = Math.max(0, y0);
-    if (y1 > G.dirtyY1) G.dirtyY1 = Math.min(GRID_H - 1, y1);
+    y0 = Math.max(0, y0); y1 = Math.min(GRID_H - 1, y1); x0 = Math.max(0, x0); x1 = Math.min(GRID_W - 1, x1);
+    if (y0 > y1 || x0 > x1) return;
+    if (!G.rx0 || G.rx0.length !== GRID_H) { G.rx0 = new Int32Array(GRID_H).fill(GRID_W); G.rx1 = new Int32Array(GRID_H).fill(-1); }
+    const A = G.rx0, B = G.rx1;
+    for (let y = y0; y <= y1; y++) { if (x0 < A[y]) A[y] = x0; if (x1 > B[y]) B[y] = x1; }
+    if (G.dirtyY0 < 0 || y0 < G.dirtyY0) G.dirtyY0 = y0;
+    if (y1 > G.dirtyY1) G.dirtyY1 = y1;
 }
 function _markCombinedTerrainFullDirty() {
     _groundTiles.full = true;
@@ -883,7 +890,7 @@ function _markCombinedTerrainRectDirty(minGx, minGy, maxGx, maxGy) {
     // Pad by one tile so neighboring wall borders/outlines stay coherent.
     let rect = _clampTileRect(minGx - 1, minGy - 1, maxGx + 1, maxGy + 1);
     if (!rect) return;
-    _markGroundTileRows(rect.minGy, rect.maxGy);
+    _markGroundTileRows(rect.minGy, rect.maxGy, rect.minGx, rect.maxGx);
     _combinedTerrainDirty = true;
     if (_combinedTerrainDirtyFull) return;
     if (_combinedTerrainDirtyBounds) {
