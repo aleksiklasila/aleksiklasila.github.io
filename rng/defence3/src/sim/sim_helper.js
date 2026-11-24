@@ -2,7 +2,7 @@
 // A helper of the simulation worker: runs its parallel jobs (sim_parallel.js).
 importScripts('sim_parallel.js?v=20261108-st6');
 // The Rust kernels (instantiated over the simulation's memory at init).
-importScripts('sim_wasm_bin.js?v=20261123-h');
+importScripts('sim_wasm_bin.js?v=20261124-occ');
 importScripts('sim_wasm.js?v=20261025-st1');
 importScripts('sim_frame.js?v=20261105-rl2');
 // The navigation build's kernels (flow navigation, see flownav.js).
