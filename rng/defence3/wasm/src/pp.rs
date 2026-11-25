@@ -298,11 +298,16 @@ impl Pp {
     unsafe fn upgrade(&mut self, q: usize) {
         let rt = g(self.retry, q);
         if rt == rt && (self.now as f64) < rt { return; }
-        // (On its way to the closest tile: looks again when there, or at its look.)
-        if g(self.pidx, q) < self.cur_len(q) { let r = self.recheck(q); self.set_retry(q, r); return; }
         let p = self.profile(q);
         let pu = p as usize;
         let seq = (*self.seq.get_unchecked(pu));
+        // (On its way to the closest tile: looks again when there, or at its look under a newer build than the one
+        // its way was chosen under (pt_ver -build): a unit that could never quite get there (a crowd on that tile)
+        // never looked again, and stayed short of a destination a new wall opening made reachable.)
+        if g(self.pidx, q) < self.cur_len(q) {
+            let v = g(self.pt_ver, q);
+            if !(v < 0 && seq > 0 && -v != seq) { let r = self.recheck(q); self.set_retry(q, r); return; }
+        }
         // Waiting where it got to: only a new build changes the answer.
         if g(self.pt_ver, q) > 0 && seq > 0 && g(self.pt_ver, q) == seq { let r = self.recheck(q); self.set_retry(q, r); return; }
         s(self.pt_ver, q, 0);
@@ -367,6 +372,8 @@ impl Pp {
             return;
         }
         s(self.pt_at, q, at);
+        // (On its way under this build: -seq, not a waiting stamp (> 0).)
+        s(self.pt_ver, q, if seq > 0 { -seq } else { 0 });
         self.set_path(q, p, at, false);
         self.set_pidx(q, 0);
         self.flag(q, true);

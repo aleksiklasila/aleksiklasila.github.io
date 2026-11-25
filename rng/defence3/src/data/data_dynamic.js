@@ -3321,7 +3321,9 @@ function researchQueueRemove(playerId, s, count, any) {
     _rqOp(R, 3, 0, any ? -1 : s, count);
     tryAdvancePlayerResearchTask(playerId);
 }
-// The task at place from moved to place to (0: the active one).
+// The task at place from moved to place to (0: the active one), with its
+// stat's tasks between (the levels it needs to the front, those after it to
+// the back: a stat's tasks are its id repeated, levels by order; k_rq_op 2).
 function researchQueueMove(playerId, from, to) {
     const R = ensurePlayerResearchQueueState(playerId)._rq;
     if (!R || !(from >= 0 && from < R.n && to >= 0 && to < R.n) || from === to) return;

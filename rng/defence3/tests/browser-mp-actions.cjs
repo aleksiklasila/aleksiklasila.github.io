@@ -39,7 +39,7 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
     const open = async (name, url) => {
         const page = await context.newPage();
         page.on('pageerror', e => errors.push(name + ': ' + e.message.slice(0, 300)));
-        page.on('console', m => { if (m.type() === 'error' && !/favicon|404/.test(m.text())) errors.push(name + ' console: ' + m.text().slice(0, 300)); });
+        page.on('console', m => { if (m.type() === 'error' && !/favicon|404|Permissions policy violation: compute-pressure/.test(m.text())) errors.push(name + ' console: ' + m.text().slice(0, 300)); });
         page.on('dialog', d => d.dismiss().catch(() => { }));
         await page.goto(url);
         page.__name = name;
@@ -172,7 +172,7 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         const s = e ? ['type', 'level', 'stacks', 'manualStacks', 'markedForSalvage', 'autoUpgradeEnabled', 'autoStackEnabled', 'buildEnabled', 'queueEnabled', 'autoResearchEnabled', 'rallyX', 'rallyY', 'underConstruction']
             .map(k => k + '=' + (typeof e[k] === 'number' ? Math.round(e[k] * 100) / 100 : e[k])).join(',') + ',q=' + (e.spawnQueue ? e.spawnQueue.length : '-') : 'none';
         const p = players[owner];
-        const rq = [getPlayerResearchTask(owner), ...getPlayerResearchQueue(owner)].filter(Boolean).map(t => t.key + '.' + t.statKey).join('|');
+        const rq = [getPlayerResearchTask(owner), ...getPlayerResearchQueue(owner)].filter(Boolean).map(t => t.key + '.' + t.statKey + '.' + t.toLevel).join('|');
         const tick = typeof _simClient !== 'undefined' && _simClient && Number.isFinite(_simClient.appliedTick) ? _simClient.appliedTick : currentTick;
         return { tick, s, rq, rqn: getPlayerResearchQueueTotalLength(owner), lv: JSON.stringify(p && p.researchLevels || {}).length, boosts: JSON.stringify(p && p.boosts || {}), drain: p && p.shrineDrain };
     };
@@ -586,6 +586,112 @@ const pass = (name, page, extra) => { results.push({ name, page, ok: true, ...ex
         else pass('bb-boost', page.__name, { id, boosts });
     };
     if (want('bb')) for (const page of pages) await bottomBar(page);
+
+    // ---- the info panel's research queue: a row's ↓ (to the end) and ↑ (to the front) ----
+    // (Several levels of a stat queued, as the sliders do: a stat's tasks are its id repeated, levels by
+    // order, so a task moves with the levels it needs (↑) or those after it (↓); one id moved alone showed
+    // the stat's last level move and the row pressed stay.)
+    const queueLv = (p, owner) => p.evaluate(o => ({ tick: typeof _simClient !== 'undefined' && _simClient ? _simClient.appliedTick : currentTick, q: [getPlayerResearchTask(o), ...getPlayerResearchQueue(o)].filter(Boolean).map(t => t.kind + ':' + t.key + ':' + t.statKey + ':' + t.toLevel) }), owner);
+    const queueLvBoth = async owner => {
+        const seen = pages.map(() => new Map()); let found = null; const t0 = Date.now();
+        await Promise.all(pages.map(async (p, k) => { while (!found && Date.now() - t0 < 3000) { const d = await queueLv(p, owner); seen[k].set(d.tick, d); const o = seen[1 - k].get(d.tick); if (o && !found) found = k === 0 ? [d, o] : [o, d]; await p.waitForTimeout(3); } }));
+        return found;
+    };
+    const statOf = id => id.split(':').slice(0, 3).join(':');
+    // (The others' order kept, and the pressed task where it should be: only its stat's tasks after it (↓) / before it (↑).)
+    const moveOk = (before, after, task, down) => {
+        if (before.length !== after.length || !after.includes(task)) return 'tasks changed';
+        const others = q => q.filter(x => statOf(x) !== statOf(task)).join('|');
+        if (others(before) !== others(after)) return 'the other tasks\' order changed';
+        const i = after.indexOf(task), rest = down ? after.slice(i + 1) : after.slice(0, i);
+        return rest.every(x => statOf(x) === statOf(task)) ? '' : down ? 'other tasks after it' : 'other tasks before it';
+    };
+    // (The rows shown in order, as tasks: kind:key:stat:fromLevel -> toLevel.)
+    const rowsShown = page => page.evaluate(() => [...document.querySelectorAll('#info-panel .info-research-queue-row')].filter(e => !e.hidden && e.offsetParent)
+        .sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top)).map(e => { const p = e.dataset.researchId.split(':'); return p.slice(0, 3).join(':') + ':' + (Number(p[3]) + 1); }));
+    const queueArrows = async page => {
+        const me = await page.evaluate(() => localPlayerId);
+        await page.keyboard.press('Escape');
+        const setup = await page.evaluate(() => {
+            const r = collectorSpawners.find(s => s && s.owner === localPlayerId && s.type === 'research' && !s.underConstruction);
+            if (!r) return null;
+            const picks = [];
+            for (const t of RESEARCH_THINGS) for (const s of t.stats || []) if (picks.length < 3 && getPlayerResearchLevel(localPlayerId, t.kind, t.key, s.statKey) + getResearchQueuedDepthForPlayer(localPlayerId, t.kind, t.key, s.statKey) < MAX_RESEARCH_LEVEL - 4 && !picks.some(p => p.key === t.key)) picks.push({ kind: t.kind, key: t.key, statKey: s.statKey });
+            picks.forEach((p, i) => queueAction({ action: 'queueResearch', gx: r.gx, gy: r.gy, ...p, count: i < 2 ? 3 : 1 }));
+            selectedUnits = []; selectedEntities = [r]; activeSubGroups = {};
+            updateInfoPanel();
+            return { gx: r.gx, gy: r.gy, picks };
+        });
+        if (!setup) return fail('rq-arrows', page.__name, 'no research lab');
+        await page.waitForTimeout(1200);
+        const toggle = page.locator('#info-panel .info-research-queue-toggle:visible').first();
+        if (!(await toggle.count())) return fail('rq-arrows', page.__name, 'no queue toggle shown');
+        if (!(await page.locator('#info-panel .info-research-move-bottom-btn:visible').count())) { await toggle.click(); await page.waitForTimeout(300); }
+        const downs = page.locator('#info-panel .info-research-move-bottom-btn:visible');
+        const q0 = await queueLvBoth(me), nRows = await downs.count();
+        if (!q0 || q0[0].q.length < 4 || nRows < 4) return fail('rq-arrows', page.__name, 'queue rows not shown', { nRows, q0: q0 && q0[0].q });
+        // ↓ on the second row (a level with more of its stat after it).
+        const shown0 = await rowsShown(page), task = shown0[1];
+        await page.evaluate(() => { window.__acts.length = 0; const r = [...document.querySelectorAll('#info-panel .info-research-queue-row')].filter(e => !e.hidden && e.offsetParent).sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top))[1]; document.querySelectorAll('[data-rqpick]').forEach(e => e.removeAttribute('data-rqpick')); if (r) r.querySelector('.info-research-move-bottom-btn').setAttribute('data-rqpick', '1'); });
+        await page.locator('#info-panel [data-rqpick="1"]').click();
+        const acts1 = await page.evaluate(() => window.__acts.map(a => JSON.stringify(a)));
+        await page.waitForTimeout(800);
+        const q1 = await queueLvBoth(me), shown1 = await rowsShown(page);
+        const info1 = { task, q0: q0[0].q, q1: q1 && q1[0].q, shown1, acts1 };
+        const bad1 = q1 && moveOk(q0[0].q.filter(x => q1[0].q.includes(x)), q1[0].q.filter(x => q0[0].q.includes(x)), task, true);
+        if (!q1 || JSON.stringify(q1[0].q) !== JSON.stringify(q1[1].q)) fail('rq-down', page.__name, 'pages show different queues', info1);
+        else if (bad1) fail('rq-down', page.__name, bad1, info1);
+        else if (JSON.stringify(shown1) !== JSON.stringify(q1[0].q.slice(0, shown1.length))) fail('rq-down', page.__name, 'rows do not show the queue', info1);
+        else pass('rq-down', page.__name, { task, n: q1[0].q.length });
+        // ↑ on the last row (scrolled into view by the wheel, as a player does: a scrollTop written by script is no
+        // manual scroll, the press's scroll lock (hud.js lockInfoPanelScroll, 1.5 s) put it back; the list's rows
+        // are a pool, the last by position).
+        const scrollTo = async top => { const b = await page.locator('#info-panel .ipr-scroll:visible').first().boundingBox(); if (!b) return; await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await page.mouse.wheel(0, top < 0 ? 20000 : -20000); };
+        await page.evaluate(() => { window.__acts.length = 0; });
+        await scrollTo(-1);
+        await page.waitForTimeout(300);
+        const scrollLook = await page.evaluate(() => { const all = [...document.querySelectorAll('.ipr-scroll')], s = typeof _ipr !== 'undefined' ? _ipr.scroll : null; return { n: all.length, vis: all.map(e => !!e.offsetParent), same: all.map(e => e === s), top: s && s.scrollTop, iprTop: _ipr.top, sh: s && s.scrollHeight, ch: s && s.clientHeight, ipn: _ipr.n, lab: _ipr.lab ? [_ipr.lab.owner, _ipr.lab.gx, _ipr.lab.gy, _ipr.lab.type] : null, rows: [...document.querySelectorAll('#info-panel .info-research-queue-row')].filter(e => !e.hidden && e.offsetParent).map(e => parseFloat(e.style.top)).sort((a, b) => a - b).join(',') }; });
+        const shownEnd = await rowsShown(page), upTask = shownEnd[shownEnd.length - 1], qb = (await queueLv(page, me)).q;
+        await page.evaluate(() => { const r = [...document.querySelectorAll('#info-panel .info-research-queue-row')].filter(e => !e.hidden && e.offsetParent).sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top)).pop(); document.querySelectorAll('[data-rqpick]').forEach(e => e.removeAttribute('data-rqpick')); if (r) r.querySelector('.info-research-move-top-btn').setAttribute('data-rqpick', '1'); });
+        await page.locator('#info-panel [data-rqpick="1"]').click();
+        const acts2 = await page.evaluate(() => window.__acts.map(a => JSON.stringify(a)));
+        await page.waitForTimeout(800);
+        const q2 = await queueLvBoth(me);
+        const info2 = { upTask, qb, q2: q2 && q2[0].q, acts2, scrollLook };
+        const bad2 = q2 && moveOk(qb.filter(x => q2[0].q.includes(x)), q2[0].q.filter(x => qb.includes(x)), upTask, false);
+        if (!q2 || JSON.stringify(q2[0].q) !== JSON.stringify(q2[1].q)) fail('rq-up', page.__name, 'pages show different queues', info2);
+        else if (upTask !== qb[qb.length - 1]) fail('rq-up', page.__name, 'the last row is not the last task', info2);
+        else if (bad2) fail('rq-up', page.__name, bad2, info2);
+        else pass('rq-up', page.__name, { upTask });
+        await scrollTo(0);
+        await page.waitForTimeout(300);
+        const shown2 = await rowsShown(page), q2n = (await queueLv(page, me)).q;
+        if (JSON.stringify(shown2) !== JSON.stringify(q2n.slice(0, shown2.length))) fail('rq-rows', page.__name, 'rows do not show the queue', { shown2, q: q2n });
+        // The bottom bar's task menu (a task tile clicked): its ↓ and ↑, the same checks.
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(300);
+        for (const [act, down] of [['task-last', true], ['task-first', false]]) {
+            const name = 'bb-' + act, qa = (await queueLv(page, me)).q;
+            const tiles = page.locator('#bb-research .bb-task'), nt = await tiles.count();
+            if (nt < 3) { fail(name, page.__name, 'task tiles not shown', { nt }); continue; }
+            const idx = down ? 1 : nt - 1;
+            await tiles.nth(idx).click();
+            await page.waitForTimeout(250);
+            const menuTask = await page.evaluate(() => bb.menu && bb.menu.type === 'task' && bb.menu.task ? bb.menu.task.kind + ':' + bb.menu.task.key + ':' + bb.menu.task.statKey + ':' + bb.menu.task.toLevel : null);
+            const btn = page.locator(`.bb-menu [data-bb-act="${act}"]`).first();
+            if (!menuTask || !(await btn.count())) { fail(name, page.__name, 'task menu did not open', { menuTask, idx }); await page.keyboard.press('Escape'); continue; }
+            await btn.click();
+            await page.waitForTimeout(800);
+            const qz = await queueLvBoth(me);
+            await page.keyboard.press('Escape');
+            const info = { menuTask, qa, qz: qz && qz[0].q };
+            const bad = qz && moveOk(qa.filter(x => qz[0].q.includes(x)), qz[0].q.filter(x => qa.includes(x)), menuTask, down);
+            if (!qz || JSON.stringify(qz[0].q) !== JSON.stringify(qz[1].q)) fail(name, page.__name, 'pages show different queues', info);
+            else if (bad) fail(name, page.__name, bad, info);
+            else pass(name, page.__name, { menuTask });
+        }
+    };
+    if (want('rqarrows')) for (const page of pages) await queueArrows(page);
 
     // ---- more: tower target, worker assignment, salvage mark and unmark, the research popup's slider ----
     const POPUP_RESEARCH_SLIDER = '#research-popup input.count-slider:not([disabled])[data-count-spec*='+'"\\"type\\":\\"research\\""]';

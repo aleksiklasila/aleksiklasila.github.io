@@ -84,5 +84,8 @@ for (const dk of [1, 20]) {
     console.log(20 / dk + ' TPS mixed stack:', result);
     assert.deepEqual(inst.errors.map(String), []);
     assert.ok(result.severeFraction < .08, 'small and large bodies escape deep overlaps');
-    assert.ok(result.maxDuration < 120, 'near-coincident pairs do not remain stacked for six seconds');
+    // (This path (occupancy off, the comparison path; the game's occupancy never stacks) relaxes a pile once a
+    // step: at 1 TPS it spreads by steps, not ticks. Since the radii by strength (2026-11-24) one tank pair of
+    // this 96-unit pile takes 7 steps (140 ticks; 5 before); bounded by steps there.)
+    assert.ok(result.maxDuration < Math.max(120, 8 * dk), 'near-coincident pairs do not remain stacked for six seconds (eight steps at long steps)');
 }

@@ -61,7 +61,7 @@ function reference(C, F, mask) {
         if (!(s >= 0) || want[s] || F.id[s] < 0 || F.energy[s] <= 0 || (F.flags[s] & 1024) !== 0) continue; // (remembered ones too: only the hidden are out)
         const x = F.x[s] / C.tile, z = F.y[s] / C.tile;
         if (!C.fullVisibility && !(F.flags[s] & 65536) && F.owner[s] !== C.player && !(C.visibility[Math.floor(z)]?.[Math.floor(x)] > 0)) continue;
-        const size = Math.max(.28, Math.min(.9, F.r[s] * 2.2 / C.tile));
+        const size = Math.max(.2, Math.min(1.5, (2 * F.r[s] - 1) * 1.4 / C.tile));
         let sd = F.id[s] ^ 0x9e3779b9;
         sd = Math.imul(sd ^ (sd >>> 16), 0x7feb352d); sd = Math.imul(sd ^ (sd >>> 15), 0x846ca68b);
         const fraction = ((sd ^ (sd >>> 16)) >>> 0) / 4294967296;

@@ -1,14 +1,14 @@
 'use strict';
 const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 for(const dk of [1,4,20]) {
-// (A map with room: units cannot overlap on the occupancy raster, and one that is refused a place is dead.)
+// (A map with room: units cannot overlap on the occupancy raster, and one that is refused a place is dead: 18 px apart, a norm's footprint is 16 px.)
 const world=new H.World({controls:{...H.SMALL_MATCH_CONTROLS,'cfg-mapsize':'200','cfg-map-type':'arena'}}),inst=world.spawn('collection'+dk,{simWorker:false});
 const result=inst.eval(`(() => {
     startSoloGame();
     const old=[];
     simUnitStateReserve(8192);
     for(let i=0;i<8192;i++) {
-        const u=new Unit('norm',0,400+(i%100)*14,400+Math.floor(i/100)*14);units.push(u);old.push(u);
+        const u=new Unit('norm',0,400+(i%100)*18,400+Math.floor(i/100)*18);units.push(u);old.push(u);
     }
     simUnitStateCollect();
     const dead=old.filter((u,i)=>i%3===0), live=old.filter((u,i)=>i%3!==0);

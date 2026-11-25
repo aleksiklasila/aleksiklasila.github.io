@@ -1751,7 +1751,7 @@ pub unsafe extern "C" fn k_order_drop(a: u32, _chunk: i32) {
 /// (stat ids, [0] the active task), each stat's count [1], its header [2]
 /// ([0] length, [1] version, [2] the stat of the last removal, -1 none).
 /// P: [0] op: 0 stat P[2] in at place P[1]; 1 place P[1] out; 2 the task at
-/// place P[1] moved to P[2]; 3 the last P[3] tasks of stat P[2] out (P[2] < 0:
+/// place P[1] moved to P[2] (with its stat's tasks between); 3 the last P[3] tasks of stat P[2] out (P[2] < 0:
 /// the last of any); 4 (a find, nothing changed): [2] the place of the
 /// P[2]-th task of stat P[1] (0: its first), -1 none. Room for an insert: the caller's.
 #[no_mangle]
@@ -1778,11 +1778,23 @@ pub unsafe extern "C" fn k_rq_op(a: u32, _chunk: i32) {
         }
         1 => { let i = p1.max(0) as usize; if i < n { remove(&mut n, i); } else { return; } }
         2 => {
+            // (A stat's tasks are its id repeated, their levels by order: one
+            // id moved alone showed the stat's last level move, not the task
+            // pressed. So the task goes with its stat's tasks between f and t:
+            // to the front with the ones it needs first, to the back with
+            // the ones that need it; the others keep their order.)
             let (f, t) = (p1.max(0) as usize, p2.max(0) as usize);
             if f >= n || t >= n || f == t { return; }
             let st = g(ids, f);
-            if f < t { for j in f..t { s(ids, j, g(ids, j + 1)); } } else { let mut j = f; while j > t { s(ids, j, g(ids, j - 1)); j -= 1; } }
-            s(ids, t, st);
+            if f > t {
+                let mut j = f;
+                for i in (t..=f).rev() { let v = g(ids, i); if v != st { s(ids, j, v); j -= 1; } }
+                for i in t..=j { s(ids, i, st); }
+            } else {
+                let mut j = f;
+                for i in f..=t { let v = g(ids, i); if v != st { s(ids, j, v); j += 1; } }
+                for i in j..=t { s(ids, i, st); }
+            }
         }
         4 => {
             let mut left = p2;

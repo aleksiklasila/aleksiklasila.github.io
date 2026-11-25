@@ -4322,8 +4322,10 @@ function pushUnitOutOfBlockedTile(unit) {
     let dest = findNearestWalkable(gx, gy, fromGx, fromGy, unit);
     if (!canUnitOccupyTile(unit, dest.x, dest.y)) return;
 
-    unit.x = dest.x * TILE + TILE * 0.5;
-    unit.y = dest.y * TILE + TILE * 0.5;
+    // (A jump to the free tile, placed at the nearest free spot there: x and y
+    // written apart were two swept moves, the second unit of a crowd pushed to
+    // one tile blocked by the first mid-sweep, left on the new wall.)
+    unit.teleportTo(dest.x * TILE + TILE * 0.5, dest.y * TILE + TILE * 0.5);
     unit.path = null;
     unit.pathIndex = 0;
     if (unit._pendingPathTarget) {

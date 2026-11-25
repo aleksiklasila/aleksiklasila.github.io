@@ -44,7 +44,8 @@ assert.equal(S.count,4,'unselected, live units, visible or remembered, enter the
 assert.deepEqual(Array.from(S.masks[1]),[255,255,0,255,0,255,255]);
 const record=draws[0],data=Array.from(S.groups.values())[0].storage.data;
 assert.equal(record.count,4);
-assert.ok(Math.abs(data[5]-.55*1.45*3)<1e-6,'height matches the close model, including its baked sight scale');
+// (The size follows the footprint: (2r - 1) * 1.4 / tile, r = 8.)
+assert.ok(Math.abs(data[5]-(15*1.4/32)*1.45*3)<1e-6,'height matches the close model, including its baked sight scale');
 assert.equal(data[3],-4/32,'GPU retains interpolation offset');
 assert.equal(data[19],1,'middle models are opaque');
 const version=S.version;R.drawColumnModels(C,{worldWidth:1000},A);assert.equal(S.version,version,'camera-only stable frames reuse instance storage');

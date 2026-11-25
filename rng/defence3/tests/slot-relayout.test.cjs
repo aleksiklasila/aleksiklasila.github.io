@@ -10,19 +10,20 @@ const result=inst.eval(`(() => {
     simUnitStateReserve(16384);
     let seed = 777; const rnd = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
     const all = [];
-    // Interleaved creation in six blocks.
+    // Interleaved creation in six blocks (18 px apart: a norm's occupancy footprint is 16 px, one refused a place is dead).
     const centres = [[600, 600], [1700, 600], [2800, 1700], [600, 2800], [3900, 3900], [5000, 1200]];
     for (let i = 0; i < 1500; i++) for (let g = 0; g < centres.length; g++) {
-        const [cx, cy] = centres[g], u = new Unit('norm', g & 1, cx + (i % 25) * 14, cy + Math.floor(i / 25) * 10);
+        const [cx, cy] = centres[g], u = new Unit('norm', g & 1, cx + (i % 25) * 18, cy + Math.floor(i / 25) * 18);
         units.push(u); unitAdded(u); all.push(u);
     }
     const S = _simUnitState, C = () => _simUnitState.columns;
     const slabsInUse = () => { let n = 0; for (let b = 0; b < S.sl.slabs; b++) if (S.sl.sfree[b] < SIM_SLAB) n++; return n; };
-    // Two thirds die; a quarter of the rest walk to another block (drift).
+    // Two thirds die; a quarter of the rest walk to another block (drift). (Into a 600 px square: the density the
+    // old 300 px one had with 8 px footprints; overfull, the occupancy put them farther, over more slab blocks.)
     for (const u of all) if (rnd() < 0.66) u.dead = true;
     for (let t = 1; t <= 64; t++) { gameTime = t; simUnitStateCollect(); }
     const live = all.filter(u => !u.dead);
-    for (const u of live) if (rnd() < 0.25) { const [cx, cy] = centres[Math.floor(rnd() * centres.length)]; u.x = cx + rnd() * 300; u.y = cy + rnd() * 300; u.prevX = u.x; u.prevY = u.y; }
+    for (const u of live) if (rnd() < 0.25) { const [cx, cy] = centres[Math.floor(rnd() * centres.length)]; u.x = cx + rnd() * 600; u.y = cy + rnd() * 600; u.prevX = u.x; u.prevY = u.y; }
     // Every unit's target: another living unit (its slot and id).
     for (let i = 0; i < live.length; i++) { const t = live[(i * 7 + 3) % live.length]; const c = C(), s = live[i]._si; c.tuS[s] = t._si; c.tuId[s] = t.id; }
     simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); simUnitStateReleaseFreed(); /* (the slots made fresh on a lane, back two calls later) */

@@ -6270,6 +6270,9 @@ function updateInfoPanel(panelOverride = null, opts = {}) {
     if (!panelOverride && typeof infoPanelStaticActive === 'function' && infoPanelStaticActive()) {
         _infoPanelDropGoneEntities();
         selectionCompactDead();
+        // (Its wheel marks a manual scroll as the markup panel's does: unbound, a press's scroll lock
+        // (lockInfoPanelScroll, 1.5 s) put the player's scrolling back at every refresh.)
+        bindInfoPanelInteractionTracking(panel);
         infoPanelStaticRender(panel);
         if (isInfoButtonHelpPopupOpen() && infoButtonHelpPanel === panel) renderInfoButtonHelpPopup();
         activeFormatBigNumberSuffixStart = prevFormatBigNumberSuffixStart;

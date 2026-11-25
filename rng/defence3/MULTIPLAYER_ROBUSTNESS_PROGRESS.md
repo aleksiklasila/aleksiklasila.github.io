@@ -944,3 +944,27 @@ during the join, `JOIN_ONLY=1`) and `slice-profile.cjs` (a profile's longest bus
 
 Validation: multiplayer-live-join-worker, multiplayer-patch (SIM_WORKER=1), multiplayer-disconnect (SIM_WORKER=1),
 multiplayer-stuck-recovery parts 83 and 109 (checkpoint replays): PASS.
+
+### 2026-11-24: research queue arrows (rules revision 63)
+
+The research queue's up/down arrows (info panel rows, the bottom bar's task menu) looked dead with several levels of a stat
+queued (what the sliders make). The kernel queue holds a stat's tasks as its id repeated, levels by order, so moving one id
+moved the stat's last level: down on R2 of R1-R3 showed R3 go to the end and the pressed row stay; up on R3 changed nothing.
+ord.rs k_rq_op 2 now moves the task with its stat's tasks between (to the front with the levels it needs, to the back with
+the ones after it); the other tasks keep their order. Drag reorder (same action) follows the same rule.
+
+Tests: browser-mp-actions.cjs stage rqarrows (2-tab Edge: info-panel down/up and bottom-bar task-first/task-last, the
+pressed task checked by stat + level on both pages; failed on the old kernel); research-queue.test.cjs case 1 updated
+(higher level up brings the lower one, lowest down brings the rest). browser-mp-actions is now a run-full --functional job.
+
+The full functional run after it (tests/test-runs/full/2026-11-24T16-40-35-595Z: 623/631, then the 8 and the
+affected jobs again: 16/16) found, all from the 8x8 occupancy commit (2ecab58d) unless said:
+- A worker match's info panel (the static one) never bound its wheel tracking: after a press with a scroll lock
+  (research arrows), the 1.5 s lock put the player's scrolling back at every refresh (hud.js; older than 8x8).
+- Units standing on a tower when it was built: pushed off by x then y, two swept moves; one of a crowd stayed on
+  the wall. Now a jump (teleportTo).
+- pp.rs: a unit on its way to the closest tile it can reach skipped every recheck; a crowd that never quite got
+  there never saw the wall open (nav-reach). Now its way carries its build (ptVer -build) and a newer one rechecks.
+- Tests: spawn spacing below the 16 px footprints (unit-collection-blocks, slot-relayout), the old sprite size
+  (medium-models x2), and separation-integration's occupancy-off pile at 1 TPS bounded by steps (that path relaxes
+  once a step; the game's occupancy never stacks).

@@ -71,6 +71,8 @@ for (const name of ['crowd-scenarios', 'entity-storage-census', 'multiplayer-che
 add('ui-fuzz', 'tests/ui-fuzz.cjs', [], { HEADED: '0', OUT: artifact('ui-fuzz.json') });
 add('browser-mp-gui-fuzz', 'tests/browser-mp-gui-fuzz.cjs');
 add('browser-mp-join-stall', 'tests/browser-mp-join-stall.cjs');
+// (Every control in a 2-tab Edge match, each checked for what it should do: research arrows, sliders, bottom bar...)
+add('browser-mp-actions', 'tests/browser-mp-actions.cjs', [], {}, 3600);
 add('perf-fuzz-large', 'tests/perf-fuzz.cjs', ['scenes/chaos-1m-250k.gz', '--minutes=' + fuzzMinutes, '--headless', '--seed=20261103', '--out=' + artifact('perf-fuzz-large')], {}, fuzzMinutes * 60 + 3600);
 add('perf-fuzz-multiplayer', 'tests/perf-fuzz.cjs', ['50000-200.json', '--mp=2', '--minutes=' + mpFuzzMinutes, '--headless', '--seed=20261104', '--out=' + artifact('perf-fuzz-multiplayer')], {}, mpFuzzMinutes * 60 + 3600);
 for (const file of files.filter(f => /(?:\.bench|-bench)\.cjs$/.test(f)).sort()) {

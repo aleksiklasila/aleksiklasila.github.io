@@ -175,9 +175,21 @@ function rng(seed) {
         progress = t[1].workDone;
         await world.run(2000);
         assert.equal(tasksOf(host, pid)[1].workDone, progress, 'paused stat keeps its progress unchanged');
-        moveTop(1); // the higher S level jumps above T: still the lowest S level runs first
+        // The higher S level to the top: the level it needs comes with it (a stat's tasks are its id
+        // repeated, levels by order: one moved alone showed R(base+1) stay last, the row pressed not moving).
+        moveTop(1);
         await world.run(1000);
-        t = expectRows([[S, base, 'kept'], [T, tBase, 'any'], [S, base + 1, 0]], 'higher S level above T');
+        t = expectRows([[S, base, 'kept'], [S, base + 1, 0], [T, tBase, 'any']], 'higher S level to the top, with the level before it');
+        progress = t[0].workDone;
+        // The lowest S level to the bottom: the level after it goes with it.
+        moveBottom(-1, true);
+        await world.run(1000);
+        t = expectRows([[T, tBase, 'any'], [S, base, 'kept'], [S, base + 1, 0]], 'lowest S level to the bottom, with the level after it');
+        progress = t[1].workDone;
+        // The lower S level above T (nothing of S before it): it alone.
+        moveTop(0);
+        await world.run(1000);
+        t = expectRows([[S, base, 'kept'], [T, tBase, 'any'], [S, base + 1, 0]], 'lower S level above T');
         progress = t[0].workDone;
 
         // Dequeue removes the highest level and leaves the rest priced right.

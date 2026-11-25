@@ -203,7 +203,11 @@ const SNAP_FORMAT = 8;
 // 60: setResearchTarget (a research slider's command): the stat's target set, its difference taken when it runs.
 // 61: spawnCounts set: a slider's counts are queue lengths to have, the difference taken when it runs.
 // 62: shrineDrain bit / on: a drain button's one target on or off.
-const SIM_RULES_REVISION = 62;
+// 63: a research move takes the task's stat's tasks between with it (ord.rs k_rq_op 2): to the front with the
+// levels it needs first, to the back with the ones after it (one stat id moved alone moved its last level);
+// a unit pushed off a new wall jumps (occupancyTeleport), not two swept moves that left one of a crowd on it;
+// a unit on its way to the closest tile it can reach looks again at its recheck under a newer build (pp.rs ptVer -build).
+const SIM_RULES_REVISION = 63;
 // (A unit's role memory fields, unit.js UNIT_ROLE_FIELDS: prototype accessors, unset by undefined.)
 let _SNAP_ROLE_FIELDS = null;
 const SNAP_TILDE = 126;
