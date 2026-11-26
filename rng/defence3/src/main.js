@@ -4488,7 +4488,7 @@ function simMatchReserve() {
         typeof simSpawnBatchReserve === 'function' ? simSpawnBatchReserve : null, typeof simTileChangesReserve === 'function' ? simTileChangesReserve : null,
         typeof spawnerProductionReserve === 'function' ? spawnerProductionReserve : null, typeof workerSitesReserve === 'function' ? workerSitesReserve : null,
         typeof healerCandidatesReserve === 'function' ? healerCandidatesReserve : null, typeof adjacencyReserve === 'function' ? adjacencyReserve : null,
-        typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, upkeepReserve, rzReserve, unitCmdReserve]) if (f) f(B);
+        typeof effRowsReserve === 'function' ? effRowsReserve : null, typeof simPresentStructReserve === 'function' ? simPresentStructReserve : null, typeof structRowsFreeReserve === 'function' ? structRowsFreeReserve : null, typeof pendingPathsReserve === 'function' ? pendingPathsReserve : null, typeof cloudTilesReserve === 'function' ? cloudTilesReserve : null, upkeepReserve, rzReserve, unitCmdReserve]) if (f) f(B);
     // (The navigation's build slots: flownav.js navReserve.)
     if (typeof navReserve === 'function') navReserve();
     // (The area index for range queries, per layout: unit.js areaRangeIndexEnsure.)
@@ -4548,6 +4548,8 @@ function orderQueueReserve() {
     // (The order move kernel's list: an entry's take at most.)
     if (_ordSlots && typeof simHeapHas === 'function' && !simHeapHas(_ordSlots)) _ordSlots = null;
     _ordSlotsRoom(m);
+    // (The worker kernel's order lists too, sized as out2: made at the first order they were 8 MB in play.)
+    _ordWReady(_oq.out2.length);
     return _oq;
 }
 function _ordSlotsRoom(n) {
@@ -6249,6 +6251,7 @@ let _simShadowMatchTick = -1;
 let _simClientStartedThisMatch = false;
 
 function startGame() {
+    if (typeof selectionPrewarmReset === 'function') selectionPrewarmReset();
     GRID_W = Math.min(MAP_SIZE_MAX, GRID_W); GRID_H = Math.min(MAP_SIZE_MAX, GRID_H);
     WORLD_W = GRID_W * TILE; WORLD_H = GRID_H * TILE;
     resetOrderMarkers();

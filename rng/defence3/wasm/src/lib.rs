@@ -39,6 +39,7 @@ mod laser;
 mod vis;
 mod tfx;
 mod dst;
+mod plc;
 mod wsb;
 mod uix;
 mod jobs;

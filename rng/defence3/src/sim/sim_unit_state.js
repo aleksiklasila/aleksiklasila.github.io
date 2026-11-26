@@ -1701,6 +1701,9 @@ function _simUnitStateGrow(S, cap, minCap = cap) {
     if (typeof simParallelBindBatch === 'function') simParallelBindBatch();
     try {
         for (let i = 0; i < fresh.length; i += 2) { S.columns[fresh[i]] = fresh[i + 1]; simParallelBind('unit.' + fresh[i], fresh[i + 1]); }
+        // (Past the slots in use the columns stay as fresh memory has them until a slot there is taken: left out of the
+        // heap's prefault, resident only once used (sim_wasm.js simHeapLazyRange).)
+        if (typeof simHeapLazyRange === 'function') for (let i = 1; i < fresh.length; i += 2) { const a = fresh[i]; simHeapLazyRange(a, Math.min(a.byteLength, Math.ceil(used * a.byteLength / cap))); }
         // (The object fields' arrays: as long as the columns, see _simRefGrow.)
         for (const k of SIM_UNIT_OBJ_FIELDS) S.columns['oc_' + k] = _simRefGrow(S.columns['oc_' + k], cap, SIM_UNIT_OBJ_DEFAULTS[k], SIM_SHARED_REF_FIELDS.has(k), SIM_NUM_OBJ_FIELDS.has(k));
         // (The JavaScript fields: typed columns sized with the others, plain

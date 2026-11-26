@@ -62,7 +62,7 @@ function _drawAreaRangeOverlay2D(ctx, worldX, worldY, rangeArea, color, overlayV
 }
 
 const TOWER_ICON_SPRITE_CACHE = new Map();
-const TOWER_ICON_SPRITE_CACHE_MAX = 1024;
+const TOWER_ICON_SPRITE_CACHE_MAX = 2048;
 const TOWER_ICON_ANGLE_STEPS = 32;
 const TOWER_ICON_ANGLE_TABLE = (() => {
     let table = new Float32Array(TOWER_ICON_ANGLE_STEPS);
@@ -116,6 +116,19 @@ function draw2DDamageFlashOverlay(ctx, target, x, y, radiusOrHalfSize, isRect = 
     ctx.restore();
 }
 
+// Every tower type's icons (its colour, each of the angle steps, active and not), made while the match loads
+// (renderer.js _maybePrewarm3DView): made at first sight in play, a zoom in from far made ~60 at once (a new canvas
+// and GPU image each). The cache holds them all (TOWER_ICON_SPRITE_CACHE_MAX), none trimmed.
+let _towerIconsPrewarmed = false;
+function prewarmTowerIconSprites() {
+    if (_towerIconsPrewarmed || typeof BASE_CARD_TYPES === 'undefined') return;
+    _towerIconsPrewarmed = true;
+    for (const type of Object.keys(BASE_CARD_TYPES)) {
+        const def = BASE_CARD_TYPES[type];
+        if (!def || def.target !== 'wall') continue;
+        for (let q = 0; q < TOWER_ICON_ANGLE_STEPS; q++) for (const active of [false, true]) _getTowerIconSprite(def.color || '#999', TOWER_ICON_ANGLE_TABLE[q], type, active);
+    }
+}
 function _getTowerIconSprite(color, angle, type, active) {
     let qIdx = _quantizeTowerAngleIndex(angle);
     let key = (type || '') + '|' + String(color || '') + '|' + (active ? '1' : '0') + '|' + qIdx;

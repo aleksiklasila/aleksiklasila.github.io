@@ -615,7 +615,9 @@ function _simMetaKernel(p) {
 // The structure metadata by the kernel (wasm/src/nfs.rs k_meta_structs).
 const _simMetaP = new Float64Array(24);
 // (A whole pass from this many slots on the helpers: rows in chunks of SIM_META_PER, their ordered lists merged, then the laser links; nfs.rs k_meta_structs_par.)
-let SIM_META_PAR_MIN = 8192, SIM_META_PER = 4096;
+// (Chunks of about a sixteenth of the rows, 512-4096: a list of a few thousand changed rows (an 8-tick commit's marked
+// tiles, ~2 ms on this thread alone) spread over the helpers too; the merge keeps chunk order, the same output.)
+let SIM_META_PAR_MIN = 2048, SIM_META_PER = 4096, SIM_META_PER_MIN = 512;
 let _simMetaB = null;
 // (list, nl: only those slots' rows (the tick's changed tiles), into F and F2 if given.)
 // (The parallel structure rows' parameters: simRustParallel copies them into the block.)
@@ -698,8 +700,9 @@ function _simMetaStructsRows(p, F, S, T, list, nl, F2, B, cls, nc, stt, adj, L1)
     // destroys), on the helpers: the kernel takes a list's entries by chunks as it takes slots.)
     const rows = list ? nl : nslots;
     if (rows >= SIM_META_PAR_MIN && typeof SIM_BLOCK_META_STRUCTS === 'number' && typeof _simPool !== 'undefined' && _simPool) {
-        const per = SIM_META_PER, nch = Math.ceil(rows / per);
-        if (!B.ms || B.ms.length < 4 * nch * per || !simHeapHas(B.ms)) { if (B.ms && simHeapHas(B.ms)) { simHeapFree(B.ms); simHeapFree(B.mc); } B.ms = simHeapArray(Int32Array, 4 * nch * per); B.mc = simHeapArray(Int32Array, 4 * nch + 4); }
+        const per = Math.max(SIM_META_PER_MIN, Math.min(SIM_META_PER, Math.ceil(rows / 16 / 256) * 256)), nch = Math.ceil(rows / per);
+        // (Sized for the whole pass's chunks at the smallest size: no new array for a list.)
+        if (!B.ms || B.ms.length < 4 * nch * per || !simHeapHas(B.ms)) { if (B.ms && simHeapHas(B.ms)) { simHeapFree(B.ms); simHeapFree(B.mc); } const m = Math.max(rows, nslots) + SIM_META_PER; B.ms = simHeapArray(Int32Array, 4 * m); B.mc = simHeapArray(Int32Array, 4 * Math.ceil(m / SIM_META_PER_MIN) + 4); }
         args.push(B.ms, B.mc);
         // (Its arrays and parameters in the block's heap words: no binding a pass (simRustParallel).)
         const Q = _simMetaQ;

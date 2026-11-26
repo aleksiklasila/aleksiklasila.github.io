@@ -159,6 +159,15 @@ function _ppGrow(a, T, n) {
     return simHeapArray(T, Math.max(1024, 1 << Math.ceil(Math.log2(Math.max(1, n)))));
 }
 function _ppList(n) { return (_ppL = _ppGrow(_ppL, Int32Array, n)); }
+// The wheel's work lists for every unit the match can hold waiting at once (B: main.js startGame's reserves): grown at
+// the first waits in play before (alloc-weval.js).
+function pendingPathsReserve(B) {
+    if (typeof simHeapHas !== 'function') return;
+    const n = Math.max(1024, (B && B.slots) | 0, (B && B.units) | 0);
+    _ppL = _ppGrow(_ppL, Int32Array, n);
+    _ppKa = _ppGrow(_ppKa, BigUint64Array, n); _ppKb = _ppGrow(_ppKb, BigUint64Array, n);
+    _ppVa = _ppGrow(_ppVa, Int32Array, n); _ppVb = _ppGrow(_ppVb, Int32Array, n);
+}
 function _ppRun(mode, n, list) {
     const S = _simUnitState, C = S && S.columns;
     if (!C) return;
@@ -578,6 +587,13 @@ function _cloudTablesMake() {
 // change: a mine depleted or a building placed or lost anywhere walked all
 // the towers, ~20k, at the next lookup, several times a tick in a battle.)
 let _cloudTileCacheList = null, _cloudTileList = null, _cloudTileN = 0;
+// The cloud tiles' list for every structure the match can hold (B.structs), made at the match's start, not at the
+// first cloud built in play.
+function cloudTilesReserve(B) {
+    if (typeof simSharedArray !== 'function') return;
+    const n = Math.max(64, (B && B.structs) | 0);
+    if (!_cloudTileList || _cloudTileList.length < n || (typeof simHeapHas === 'function' && !simHeapHas(_cloudTileList))) _cloudTileList = simSharedArray(Int32Array, n);
+}
 function _cloudTowersVersion() { return typeof cloudTowersVersion === 'number' ? cloudTowersVersion : 0; }
 function _cloudTablesCurrent() { return _cloudTileCacheVer === _cloudTowersVersion() && _cloudTileCacheList === towers; }
 

@@ -3207,7 +3207,7 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
 }
 /// The queued move orders' pickup (main.js _runQueuedOrders publishes,
 /// orderPickupFinish settles): a unit stamped by its order's admission (its
-/// ordSq the order's seq: the player's, alive, not a worker, not held then)
+/// ordSq the order's seq: the player's, alive, not a worker; a held one too: parked)
 /// takes the order here, at its chunk's start in the movement kernel's first
 /// stage, which reads its columns this tick anyway (no pass of its own over
 /// the ordered units' scattered columns). The orders' table (ord.tab, 16
@@ -3216,9 +3216,9 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
 /// navigation (-1 none), wide by profile]. Per unit: its stamp cleared, its
 /// row's taken count and id sum (ord.tcnt, 4 words a row: atomic adds);
 /// not the player's or dead: nothing more. The player's alive non-workers:
-/// the group-path wait cleared, a pending way or fallback path let go (not
-/// held, indexed this epoch: target null, flag false, their digest terms
-/// moved: sim_unit_state.js simPendingClear). Then, not held, not a worker,
+/// the group-path wait cleared, a pending way or fallback path let go
+/// (indexed this epoch: target null, flag false, their digest terms
+/// moved: sim_unit_state.js simPendingClear). Then, not a worker,
 /// indexed this epoch, no pending flag, no path window, a destination, off
 /// its tile: targets cleared, its command, the attack-move tile, the issued
 /// position, its route's end and profile, its path's key (profile,
@@ -3277,11 +3277,13 @@ unsafe fn ord_pickup(a: *const i32, b0: usize, e: usize, chunk: usize) {
                 let row = tab.add(r * 16);
                 if *own.add(q) as i32 != *row.add(1) as i32 || *dead.add(q) != 0 { continue; }
                 let wk = *iswk.add(q) != 0;
-                let held = *holdf.add(q) != 0;
+                // (Held units take the order as the others: its route kept, the controller parks them (ctl_order
+                // park_held) until the hold ends. holdf read no more here.)
+                let _ = holdf;
                 let indexed = *ep.add(q) == epoch;
                 if !wk {
                     // (The pre-pass: a pending way let go, the group-path wait cleared.)
-                    if !held && indexed && *pp.add(q) != 0 {
+                    if indexed && *pp.add(q) != 0 {
                         let t = *pst.add(q) as i32;
                         let mut h = *hob.add(q);
                         if t & 3 != 1 {
@@ -3300,7 +3302,7 @@ unsafe fn ord_pickup(a: *const i32, b0: usize, e: usize, chunk: usize) {
                 let d = *row.add(7 + prof) as i32;
                 let (x, y) = (*xs.add(q) as f64, *ys.add(q) as f64);
                 let tl = if d >= 0 { floor(y * itile) as i32 * gw + floor(x * itile) as i32 } else { -1 };
-                if wk || held || !indexed || *pf.add(q) != 0 || *mpath.add(q) >= 0 || d < 0 || tl == d {
+                if wk || !indexed || *pf.add(q) != 0 || *mpath.add(q) >= 0 || d < 0 || tl == d {
                     *left.add(b0 + nl) = q as i32; *leftr.add(b0 + nl) = r as i32; nl += 1;
                     continue;
                 }

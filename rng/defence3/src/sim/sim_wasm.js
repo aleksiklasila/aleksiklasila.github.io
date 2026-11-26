@@ -32,12 +32,27 @@ const _simHeapPlay = { on: false, sites: null, n: 0, bytes: 0, grown: 0 };
 // Every page of the wasm heap in use written once (its value kept), at the match's start (simMatchReserve): the
 // operating system commits a page at its first write, which in play was a cold first use (a q / e's first
 // commit 1.5-2x the next's). Nothing runs beside it. Returns the pages touched.
+// Ranges written as they come into use (data_state.js: the structure tables' rows past those in use): the prefault
+// leaves their pages alone, so they are resident only once used. By the array's address: [from, end) in bytes.
+const _simHeapLazy = new Map();
+function simHeapLazyRange(a, fromBytes) {
+    if (!_simHeapPtrOf) return;
+    const p = _simHeapPtrOf(a);
+    if (!(p >= 0)) return;
+    _simHeapLazy.set(p, [p + Math.max(0, fromBytes | 0), p + a.byteLength]);
+}
 function simHeapPrefault() {
     const H = _simHeap;
     if (!H || !H.memory) return 0;
     const u = new Uint8Array(H.memory.buffer), end = Math.min(u.length, H.hw || H.top || u.length);
-    let n = 0;
-    for (let p = 0; p < end; p += 4096) { u[p] = u[p]; n++; }
+    // (Whole pages inside a lazy range skipped.)
+    const L = [..._simHeapLazy.values()].filter(([a, b]) => b - a >= 8192).sort((x, y) => x[0] - y[0]);
+    let n = 0, k = 0;
+    for (let p = 0; p < end; p += 4096) {
+        while (k < L.length && L[k][1] <= p) k++;
+        if (k < L.length && L[k][0] <= p && p + 4096 <= L[k][1]) continue;
+        u[p] = u[p]; n++;
+    }
     return n;
 }
 function simHeapPlayMark(sites = false) { const P = _simHeapPlay; P.on = true; P.n = 0; P.bytes = 0; P.grown = 0; P.sites = sites ? new Map() : null; }

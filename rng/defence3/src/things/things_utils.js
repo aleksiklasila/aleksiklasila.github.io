@@ -212,7 +212,7 @@ function _adjApplyRun(no, passive) {
     simParallelRun(SIM_KERNEL_ADJ_APPLY, jobs);
     const OT = R['adj.otile'], classes = STRUCT_STATUS_CLASSES();
     for (let j = 0; j < jobs; j++) for (let q = 0, n = evn[j * 16], b = j * ADJ_APPLY_PER_JOB; q < n; q++) {
-        const e = 4 * (b + q), T = _sTables.get(classes[ev[e]]), obj = T ? T.rowObj[ev[e + 1]] : null, flags = ev[e + 2], i = ev[e + 3];
+        const e = 4 * (b + q), T = _sTables.get(classes[ev[e]]), obj = T ? structRowObj(T, ev[e + 1]) : null, flags = ev[e + 2], i = ev[e + 3];
         if (!obj) continue;
         if (flags & (2 | 64)) {
             const t = OT[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
@@ -843,9 +843,6 @@ function getAreaUpgradeCost(currentLevel) {
 function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
     let cardDef = BASE_CARD_TYPES[itemKey];
     if (!cardDef) return false;
-    let placedNewStructure = false;
-    let placedNewWallStructure = false;
-    let placed = null;
 
     // Simulation code must not read this client's UI toggles (they differ
     // between players); the placing player's choice travels in the action.
@@ -865,18 +862,10 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         if (defaults.ignorePlacementRules !== undefined) ignorePlacementRules = !!defaults.ignorePlacementRules;
     }
 
-    // The building limit (getPlayerStructureLimit): a new structure on an
-    // empty tile only; stacking or upgrading one in place still works.
-    if (!ignorePlacementRules && playerId >= 0 && typeof playerStructureCount === 'function'
-        && !getTileEntityRef(gx, gy) && playerStructureCount(playerId) >= getPlayerStructureLimit()) return false;
-
-    if (itemKey.startsWith('cloud_')) {
-        let hasSameCloud = cloudTowerOwned(playerId, itemKey);
-        if (hasSameCloud) return false;
-    }
-
-    // Area upgrader: special handling
+    // Area upgrader: special handling (an area's multiplier; the structures: the placement kernel, below, which
+    // also checks the building limit and the one cloud of a type)
     if (itemKey === 'area_upgrader') {
+        if (!ignorePlacementRules && playerId >= 0 && !getTileEntityRef(gx, gy) && playerStructureCount(playerId) >= getPlayerStructureLimit()) return false;
         let aId = cellArea[(grid[gy][gx]) - 1];
         if (aId === -1) return false;
         if (_areaHasForeignBuildPresence(aId, playerId)) return false;
@@ -918,187 +907,145 @@ function placeBuilding(gx, gy, itemKey, playerId, defaults = null) {
         return true;
     }
 
-    // Allow startup/bootstrap spawns to bypass visibility/normal placement gates.
-    // This keeps configured starter spawns deterministic even under fog/contested checks.
-    if (!ignorePlacementRules) {
-        // Allow stacking on existing same-type buildings, otherwise check canBuildAt
-        if (!canStackAt(gx, gy, itemKey, playerId) && !canBuildAt(gx, gy, playerId)) return false;
-    }
+    return _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, useDefaultAutoUpgrade, useDefaultBuild, silentPlace, ignorePlacementRules);
+}
 
-    if (cardDef.target === 'wall') {
-        // Tower - check if same type exists for stacking
-        let existing = getTowerAtTile(gx, gy);
-        if (!(existing && existing.type === itemKey && existing.owner === playerId)) existing = null;
-        if (existing) { stackThingUpTo(existing, stackTarget); }
-        else {
-            // (Its tile turns into a wall when it is built: structureWallSync.
-            // Under construction every unit walks over it.)
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            let t = new Tower(gx, gy, itemKey, playerId);
-            t.underConstruction = true; t.energy = 1;
-            t.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            t.buildEnabled = useDefaultBuild;
-            t.level = 0; t.effectiveLevel = 0; t.potentialEffectiveLevel = 0;
-            t.updateTextCache();
-            setTileEntity(gx, gy, itemKey, t); towerJoinedOrLeft(t); placed = t;
-            placedNewStructure = true;
-            placedNewWallStructure = true;
-        }
+// A structure placed by the placement kernel (plc.rs k_struct_place): the checks, its row and tile written there, no
+// object made (data_state.js structRowObj makes one when it is read). Here the class's arguments and, after it, the
+// events of what is not tables yet: list versions, the walk classes, the laser and cloud lists, presentation, sound.
+// (Starter buildings and a snapshot's (rules off) too. Another structure on the tile with the rules off: refused.)
+const PLACE_COLS = ['c__stT', 'c__ow', 'c__uc', 'c__en', 'c_gx', 'c_gy', 'c_stacks', 'c_manualStacks', 'c_effectiveStacks', 'c_level',
+    'c_effectiveLevel', 'c_potentialEffectiveLevel', 'c_isStacking', 'c_stackingWorkDone', 'c_markedForSalvage', 'c_autoUpgradeEnabled',
+    'c_buildEnabled', 'c__cdUntil', 'c_angle', 'c_laserState', 'c_laserTimer', 'c__ptK', 'c__ptV', 'c__lzLv', 'c__lzUc', 'c__spt',
+    'c_queueEnabled', 'c__qN', 'c_autoResearchEnabled'];
+const _plc = { A: [], P: new Float64Array(40), hdr: null, cols: new Map(), areaSrc: null, areaN: -1, ast: null, atl: null, pos: { gx: 0, gy: 0 } };
+const _PLC_SPAWNER_CLASS = { spawner: 'CollectorSpawner', astar_spawner: 'AstarSpawner', salvager: 'SalvagerSpawner', builder_spawner: 'BuilderSpawner',
+    healer_spawner: 'HealerSpawner', research: 'ResearchSpawner' };
+function _plcClassOf(itemKey, cardDef) {
+    if (cardDef.target === 'wall') return Tower;
+    if (itemKey.startsWith('barrack_')) return Barrack;
+    const n = _PLC_SPAWNER_CLASS[itemKey];
+    return n ? _structClasses()[n] : FloorItem;
+}
+// (A shared column's pool id for a value, added when new (sim_unit_state.js SimSharedColumn.set's).)
+function _plcPoolId(C, v) {
+    const P = C.pool, key = Object.is(v, -0) ? P.negativeZero : v;
+    let id = P.ids.get(key);
+    if (id === undefined) { id = P.values.length; P.values.push(v); P.ids.set(key, id); }
+    if (id > (C.data.BYTES_PER_ELEMENT === 1 ? 255 : C.data.BYTES_PER_ELEMENT === 2 ? 65535 : 4294967295)) C._replace(simHeapArray(id > 65535 ? Uint32Array : Uint16Array, C.length).fill(0));
+    return id;
+}
+// (The class's columns' addresses for the kernel, in the heap, made again when a column was replaced.)
+function _plcCols(T) {
+    let e = _plc.cols.get(T);
+    if (e && e.ver === T._colVer && simHeapHas(e.a)) return e.a;
+    const enc = _sColPtrs(T, PLACE_COLS);
+    if (!e) _plc.cols.set(T, e = { ver: -1, a: null });
+    if (!e.a || !simHeapHas(e.a)) e.a = simSharedArray(Int32Array, PLACE_COLS.length);
+    e.a.set(enc); e.ver = T._colVer;
+    return e.a;
+}
+// (Each area's tiles for the contested check (solo): starts and tiles, from the areas' canonical cell lists, as
+// _areaHasForeignBuildPresence reads them; made again when the map's areas are new.)
+function _plcAreas() {
+    const src = Array.isArray(gridCellsByArea) ? gridCellsByArea : null, n = src ? src.length : 0;
+    const P = _plc;
+    if (P.areaSrc === src && P.areaN === n && P.ast && simHeapHas(P.ast) && simHeapHas(P.atl)) return P;
+    let total = 0;
+    const lists = new Array(n);
+    for (let a = 0; a < n; a++) { const c = src[a] && src[a].length ? src[a] : (getAreaById(a) || {}).cells || []; lists[a] = c; total += c.length; }
+    P.ast = simSharedArray(Int32Array, n + 1); P.atl = simSharedArray(Int32Array, Math.max(1, total));
+    let k = 0;
+    for (let a = 0; a < n; a++) { P.ast[a] = k; for (const cp of lists[a]) P.atl[k++] = cp; }
+    P.ast[n] = k; P.areaSrc = src; P.areaN = n;
+    return P;
+}
+function _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, auto, build, silent, ignore) {
+    if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return false;
+    const C = _plcClassOf(itemKey, cardDef), T = _sTableOf(C);
+    if (!T) return false;
+    structTableEnsure();
+    const ST = _ST;
+    if (!simHeapHas(ST.code)) structTablesRehome();
+    if (!_sColsInHeap(T)) _sTableGrow(T, T.cap);
+    // (The next row's room: the pool grown when full (structTablesReserve's budget is there to avoid it), the
+    // defaults of the next block of rows.)
+    if (T.nfree === 0) {
+        if (T.n >= T.cap) { _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); structRowStats.grown++; }
+        if (!(T.n < T._lz)) _sLazyFill(T, T.n);
+    }
+    structRallyClasses();
+    const ct = _stAllIx.get(C) || 0, unitType = C === Barrack ? (cardDef.unitType || 'norm') : null;
+    const raw = C === Barrack ? 'barrack_' + unitType : itemKey;
+    _stationaryTypesSeed();
+    let ty = _stationaryTypeIds.get(raw);
+    if (ty === undefined) { ty = _stationaryTypes.length; _stationaryTypeIds.set(raw, ty); _stationaryTypes.push(raw); }
+    const cloud = itemKey.startsWith('cloud_'), laser = itemKey === 'laser';
+    if (cloud && !_cloudTablesCurrent()) _rebuildCloudTileCache();
+    const vpid = Number.isFinite(Number(playerId)) && Math.floor(Number(playerId)) >= 0 ? Math.floor(Number(playerId)) : localPlayerId;
+    const coverOk = !ignore && _visCoverReady() && vpid >= 0 && vpid < _visCover.players && simHeapHas(_visCover.coverFlat);
+    const contested = !ignore && !(isMultiplayer && gameStarted);
+    const AR = contested ? _plcAreas() : null;
+    const AD = _adjacencyDirtyTiles; AD.room(GRID_W * GRID_H);
+    const V = _workerWorkTable(), L = _teLogRoom(), J = _wsj, jOk = !J.all && J.flag !== null && simHeapHas(J.flag) && simHeapHas(J.list);
+    const due = C === Tower && _towerDue.a && simHeapHas(_towerDue.a) ? _towerDue.a : null;
+    if (!_plc.hdr || !simHeapHas(_plc.hdr)) _plc.hdr = simSharedArray(Int32Array, 16);
+    const A = _plc.A, P = _plc.P, ut = unitType !== null && T.c_unitType ? T.c_unitType : null;
+    const typ = _plcPoolId(T.c_type, C === Barrack ? 'barrack' : itemKey), utyp = ut ? _plcPoolId(ut, unitType) : -1;
+    A[0] = ST.code; A[1] = ST.own; A[2] = ST.uc; A[3] = ST.val; A[4] = ST.tim; A[5] = ST.brain; A[6] = ST.rtab; A[7] = ST.stab;
+    A[8] = ST.rrow; A[9] = ST.ctab; A[10] = ST.rcnt; A[11] = ST.cnt; A[12] = cellType; A[13] = cellOwner; A[14] = cellArea;
+    A[15] = coverOk ? _visCover.cover[vpid] : null; A[16] = AR ? AR.ast : null; A[17] = AR ? AR.atl : null;
+    A[18] = AD.flag; A[19] = AD.blk; A[20] = V; A[21] = L; A[22] = jOk ? J.flag : null; A[23] = jOk ? J.list : null;
+    A[24] = cloud ? _cloudTileList : null; A[25] = due; A[26] = _plc.hdr;
+    A[27] = T.rh; A[28] = T.freeRows; A[29] = _plcCols(T); A[30] = T.mTok; A[31] = T.c_type.data; A[32] = ut ? ut.data : null;
+    P[0] = gx; P[1] = gy; P[2] = GRID_W; P[3] = GRID_H; P[4] = playerId; P[5] = ct; P[6] = _stRallyIx.get(C) || 0; P[7] = _stStatusIx.get(C) || 0;
+    P[8] = C.prototype._stCode; P[9] = ty; P[10] = typ; P[11] = utyp; P[12] = stackTarget;
+    P[13] = (ignore ? 1 : 0) | (auto ? 2 : 0) | (build ? 4 : 0) | (contested ? 8 : 0) | (cloud ? 16 : 0) | (laser ? 32 : 0) | (C === Tower ? 64 : 0)
+        | (C !== Tower && C !== FloorItem ? 128 : 0) | (C === _structClasses().ResearchSpawner ? 256 : 0);
+    P[14] = gameTime; P[15] = getPlayerStructureLimit(); P[16] = playerStructureCount(playerId);
+    P[17] = SNAP_REGION_TILES; P[18] = ST.rw; P[19] = AD.flag.length; P[20] = V.np; P[21] = _WORKER_WORK_TYPES.length; P[22] = V.rw; P[23] = V.rh;
+    P[24] = WORKER_WORK_REGION_TILES; P[25] = _teLogEnd; P[26] = L.length; P[27] = _stLabCt(); P[28] = cloud ? _cloudTileN : 0; P[29] = TYPE_WALL;
+    P[30] = T.c_type.data.BYTES_PER_ELEMENT; P[31] = ut ? ut.data.BYTES_PER_ELEMENT : 1;
+    P[32] = coverOk || ignore ? 1 : isTileActuallyVisibleToPlayer(vpid, gx, gy) ? 1 : 0; P[33] = J.n; P[34] = due ? due.length : 0;
+    simRustDirect('k_struct_place', A, P);
+    const H = _plc.hdr, res = H[0];
+    if (res === 0) return false;
+    if (res === 2) {
+        // The same structure there: its stacks up to the order's (the stacking's, while manual stacking orders more).
+        if (stackTarget > 1) stackThingUpTo(structRowObj(T, H[1]), stackTarget);
+        if (C === Tower) _markCombinedBgTileDirty(gx, gy, 0, true);
+        if (playerId === localPlayerId && !silent) playSound('place', gx * TILE + 16, gy * TILE + 16);
+        return true;
+    }
+    // Placed: the counters of the batch, then the events.
+    const r = H[1];
+    if (r >= T.jsN) _sJsRoom(T, r + 1);
+    if (H[8] >= 0) { structCountByOwner[H[8]]++; if (H[9]) structCellCountByOwner[H[8]]++; if (H[10]) structLabCount[H[8]]++; }
+    _teLogEnd = H[6]; _teLogBase = Math.max(0, _teLogEnd - L.length);
+    J.n = H[7];
+    if (H[2] > 0) { if (AD.n === 0 || H[4] < AD.min) AD.min = H[4]; AD.n += H[2]; AD.sum = (AD.sum + H[3]) | 0; }
+    _adjacencyNeedsRecalc = true;
+    V.sum = (V.sum + H[5]) | 0;
+    _tileEntityVersion++;
+    if (tileEntityRef && tileEntityRef[gy]) { tileEntityType[gy][gx] = TILE_ENTITY_NONE; tileEntityRef[gy][gx] = null; }
+    const kind = _STL_KIND[ct];
+    if (kind >= 0) _stlBump(kind);
+    if (C === Barrack) barracksChanged(); else if (kind === 2) collectorSpawnersChanged();
+    simMoveTileEntityChanged(gx, gy);
+    const pos = _plc.pos; pos.gx = gx; pos.gy = gy;
+    if (C === Tower) {
+        // (Its lists: a laser's and a cloud's by its object; a laser's lines, as its constructor's check marked them.)
+        if (laser || cloud) towerJoinedOrLeft(structRowObj(T, r)); else towersVersion++;
+        if (laser) laserLinesTouch(pos);
         _markCombinedBgTileDirty(gx, gy, 0, true);
-    } else if (itemKey.startsWith('barrack_')) {
-        let unitType = cardDef.unitType || 'norm';
-        let existing = getBarrackAtTile(gx, gy);
-        if (!(existing && existing.unitType === unitType && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let b = new Barrack(gx, gy, playerId, unitType);
-            b.underConstruction = true; b.energy = 1;
-            b.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            b.buildEnabled = useDefaultBuild;
-            b.level = 0; b.effectiveLevel = 0; b.potentialEffectiveLevel = 0;
-            updateItemTextCache(b);
-            barracksChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, b); placed = b;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'spawner') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'spawner' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new CollectorSpawner(gx, gy, playerId);
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'astar_spawner') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'astar_spawner' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new AstarSpawner(gx, gy, playerId);
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'salvager') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'salvager' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new SalvagerSpawner(gx, gy, playerId);
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'builder_spawner') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'builder_spawner' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new BuilderSpawner(gx, gy, playerId);
-            // builder spawner starts under construction too
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'healer_spawner') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'healer_spawner' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new HealerSpawner(gx, gy, playerId);
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else if (itemKey === 'research') {
-        let existing = getSpawnerAtTile(gx, gy);
-        if (!(existing && existing.type === 'research' && existing.owner === playerId)) existing = null;
-        if (existing) {
-            stackThingUpTo(existing, stackTarget);
-        }
-        else {
-            let s = new ResearchSpawner(gx, gy, playerId);
-            s.underConstruction = true; s.energy = 1;
-            s.autoUpgradeEnabled = useDefaultAutoUpgrade;
-            s.buildEnabled = useDefaultBuild;
-            s.level = 0; s.effectiveLevel = 0; s.potentialEffectiveLevel = 0;
-            updateItemTextCache(s);
-            collectorSpawnersChanged();
-            cellOwner[(grid[gy][gx]) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, s); placed = s;
-            placedNewStructure = true;
-        }
-    } else {
-        // Floor item
-        let cell = grid[gy][gx];
-        if (cellItemGet(cell) && cellItemGet(cell).type === itemKey && cellOwner[(cell) - 1] === playerId) {
-            stackThingUpTo(cellItemGet(cell), stackTarget);
-        } else {
-            let stats = calculateItemStats(itemKey, 1, playerId);
-            let item = Object.assign(new FloorItem(), { type: itemKey, stacks: 1, manualStacks: 1, effectiveStacks: 1, level: 0, effectiveLevel: 0, potentialEffectiveLevel: 0, isStacking: false, stackingWorkDone: 0, energy: 1, maxEnergy: stats.maxEnergy, damage: stats.damage || 0, gx, gy, x: gx * TILE + 16, y: gy * TILE + 16, underConstruction: true, owner: playerId, markedForSalvage: false, autoUpgradeEnabled: useDefaultAutoUpgrade, buildEnabled: useDefaultBuild });
-            cellOwner[(cell) - 1] = playerId;
-            setTileEntity(gx, gy, itemKey, item); placed = item;
-            updateItemTextCache(item);
-            placedNewStructure = true;
-        }
+        markLaserConnectionsDirty(gx, gy);
     }
-    // (A new structure's stacks ordered at once: built, then stacked by its
-    // builders up to them. Its levels stay 0 while under construction.)
-    if (placed && stackTarget > 1) {
-        placed.manualStacks = stackTarget;
-        upkeepThingDirty(placed);
-        if (placed.updateTextCache) placed.updateTextCache(); else updateItemTextCache(placed);
-    }
-    // Newly placed structures start under construction, so they don't affect adjacency yet.
-    // Avoid expensive full-map adjacency recalculation on every placement.
-    if (placedNewStructure) _bumpPathTopologyVersion();
-    if (placedNewWallStructure) markLaserConnectionsDirty(gx, gy);
-    if (playerId === localPlayerId && !silentPlace) playSound('place', gx * TILE + 16, gy * TILE + 16);
+    // (Its stacks ordered at once: its upkeep bin looked at again.)
+    if (stackTarget > 1) upkeepThingDirty(pos);
+    // (Its level label: the page's own simulation only; a worker's page draws from its views.)
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') updateItemTextCache(structRowObj(T, r));
+    _bumpPathTopologyVersion();
+    if (playerId === localPlayerId && !silent) playSound('place', gx * TILE + 16, gy * TILE + 16);
     return true;
 }
 
@@ -1171,7 +1118,7 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
         if (k >= 0) { kinds |= 1 << k; adj = adj || k <= 1; }
         // (The table rows are cleared already: the tile journaled for the collectors' groups, data_state.js _wsjMark.)
         _wsjMark(t);
-        if (k === 0) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
+        if (k === 0) { const Tb = D.tabs[ct], e = Tb ? structRowObj(Tb, D.rows[2 * i + 1]) : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
     }
     for (let k = 0; k < 3; k++) if (kinds & (1 << k)) _stlBump(k);
     // The batch's counters.

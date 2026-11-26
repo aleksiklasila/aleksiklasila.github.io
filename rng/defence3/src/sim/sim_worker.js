@@ -741,7 +741,7 @@ function _simDeltaEmit(d, source) {
 // page keeps them in window.__simTrace (sim_client.js). A phase that is long
 // only in the slow ticks is the spike; time in the tick but in none of the
 // phases is the rest (collections, the pump).
-const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
+const SIM_TRACE_FNS = ['processActions', 'runQueuedOrders', 'spatialIndexRebuild', 'navTick', 'navFieldsFlush', 'recalculateUnitEffectiveLevel',
     'updateAllPlayerVisibility', 'towersTick', '_towerAcqKernels', 'projectilesAdvance', 'statusPrepassRun', 'simMoveRun', 'combatScanRun', '_acqCommit', '_acqPost',
     'unitEventsRun', 'unitHitsResolve', 'unitRetirePrepare', 'simUnitStateCollect', 'workerSearchTierStep', 'adjacencyLaneStep', 'gameStatsStep',
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'simPresentTickCollect', 'snapRecordTickHash', '_simPostResult',

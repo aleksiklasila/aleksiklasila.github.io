@@ -4,7 +4,7 @@ const w=new H.World({controls:H.SMALL_MATCH_CONTROLS}),i=w.spawn('range-display'
 const result=i.eval(`(()=>{
  startSoloGame();
  const u=new Unit('norm',0,5*TILE,5*TILE);units.push(u);unitSlotMapPushed(u);
- const b=new Barrack(6,6,'norm',0),t=new Tower(7,7,'pistol',0);
+ const mk=(C,o)=>{const e=Object.assign(_snapStructShell(C),{stacks:1,manualStacks:1,effectiveStacks:1,level:1,effectiveLevel:1,isStacking:false,stackingWorkDone:0,markedForSalvage:false,autoUpgradeEnabled:true,buildEnabled:true},o);if(C===Barrack||C===CollectorSpawner){e._qN=0;e.queueEnabled=true;e.spawnTimer=0;}e.energy=e.maxEnergy;return e;};const b=mk(Barrack,{gx:6,gy:6,type:'barrack',unitType:'norm',owner:0}),t=mk(Tower,{gx:7,gy:7,type:'pistol',owner:0});
  const row=(html,label)=>html.split('<div').find(s=>s.includes('>'+label+'</')||s.includes('>'+label+'<'))||'';
  const unit=row(renderUnitInfo(u),'Range'),group=row(renderUnitGroupInfo([u]),'Range');
  const barrack=row(renderBarrackInfo(b),'Unit Range'),bgroup=row(renderBarrackGroupInfo([b]),'Unit Range');

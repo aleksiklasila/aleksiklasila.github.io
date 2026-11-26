@@ -28,8 +28,8 @@ pub(crate) fn id_h(id: i32) -> i32 {
 /// repeat, next to it: passed over). A unit taken: the player's, alive, not
 /// already this order's; an earlier queued order of it (its ordSq) loses it
 /// (that entry's live count and sum, q.edl / q.eds, by its seq in q.eseq,
-/// ascending: atomic adds, the same whatever the jobs' timing). A worker's or
-/// held unit's slot listed in q.out from the job's first place (job * P[5]),
+/// ascending: atomic adds, the same whatever the jobs' timing). A worker's
+/// slot listed in q.out from the job's first place (job * P[5]),
 /// in id order (the take's, k_order_take); the others only stamped: the
 /// movement kernel takes them (mv.rs ord_pickup), counted by layer (ground,
 /// flying: sepLayer 1) with the first id of each. A unit outside the
@@ -97,8 +97,12 @@ pub unsafe extern "C" fn k_order_admit(a: u32, chunk: i32) {
             }
             s(sq, q, seq);
             sum = sum.wrapping_add(id_h(id));
-            if g(iswk, q) != 0 || g(holdf, q) != 0 {
-                // (Workers and held units: the take's list, in id order.)
+            // (A held unit takes the order as the others do (mv.rs ord_pickup): its route kept, the controller parks it
+            // (park_held) until the hold ends; per unit in the JavaScript with a path search each, ~15 ms a whole-army
+            // order with a few thousand held. holdf: the array stays bound, unused here.)
+            let _ = holdf;
+            if g(iswk, q) != 0 {
+                // (Workers: the take's list, in id order.)
                 s(out, i0 + m, q as i32);
                 m += 1;
             } else if g(lay, q) == 1 { c1 += 1; if f1 < 0 { f1 = id; } } else { c0 += 1; if f0 < 0 { f0 = id; } }
@@ -142,7 +146,7 @@ pub unsafe fn radix_sort_i32(v: *mut i32, t: *mut i32, n: usize) {
     }
 }
 
-/// SIM_KERNEL_ORDER_TAKE: an entry's workers and held units (the admission's
+/// SIM_KERNEL_ORDER_TAKE: an entry's workers (the admission's
 /// list: the rest the movement kernel's, mv.rs ord_pickup), from its slots in
 /// the queue's ring (ord.ring, from P[0], P[1] of them), a job of P[5] each
 /// (helpers): those still its (ordSq its seq), their stamps cleared, to q.out2
@@ -318,7 +322,7 @@ fn work_mix(i: i32) -> i32 {
 /// and follow the order's flow, as _ordClearFast, _ordWorkerManual and
 /// _issueFlowOrder did in JavaScript. P[0] 0: each profile's eligible
 /// workers counted (cnt[8 + p]) and its first (cnt[20 + p]); 1: applied.
-/// Eligible: the player's, alive, a worker, not held, indexed this epoch,
+/// Eligible: the player's, alive, a worker (held too: not armed), indexed this epoch,
 /// not a shooter; the others listed for the JavaScript (out, cnt[0]), as
 /// are those of a profile without a destination (ow.pd valid 0). Units with
 /// a pending way have it cleared in the heap, including its digest (P[23/24]
@@ -381,7 +385,10 @@ pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
         k.i(18) as u8, k.f(19) as u32, k.i(20).max(0), k.i(21).max(0));
     let itile = 1.0 / (tile * 8.0);
     let tile_of = |q: usize| floor(g(ys, q) as f64 * itile) as i32 * gw + floor(g(xs, q) as f64 * itile) as i32;
-    let eligible = |q: usize| g(own, q) as i32 == player && g(dead, q) == 0 && g(iswk, q) != 0 && g(holdf, q) == 0 && g(ep, q) == epoch && g(mshoot, q) == 0;
+    // (Held workers too: the order taken whole, its route kept, only not armed (below); the worker kernel parks them
+    // held (wai.rs park_held) and arms them when the hold ends (try_arm). Handed to the JavaScript they took a path
+    // search each, ~20 ms a whole-army order with a few hundred held.)
+    let eligible = |q: usize| g(own, q) as i32 == player && g(dead, q) == 0 && g(iswk, q) != 0 && g(ep, q) == epoch && g(mshoot, q) == 0;
     // Chunked (P[25] workers a job, > 0: SIM_BLOCK_ORDER_WORKERS over the helpers): modes 0 and 1 over the list's chunk
     // `chunk`, their counts and lists into the chunk's own places: cc[32 chunk ..] (the cnt layout: [0] left, [1]
     // freed path handles, [2] the work site grid's list entries, [3] the work versions' sum, [8 + p] / [20 + p] each
@@ -658,7 +665,7 @@ pub unsafe extern "C" fn k_order_workers(a: u32, chunk: i32) {
         s(on, q, 0); s(mcd, q * 8, -1);
         s(rsend, q, if at { -1 } else { dest });
         s(nld, q, -1.0);
-        if !at && g(sepk, q) != absent {
+        if !at && g(sepk, q) != absent && g(holdf, q) == 0 {
             s(mflags, q, 64 | if p == 1 { 32 } else { 0 } | 128);
             s(mreach, q, 0); s(mflow, q, ATLAS_FID); s(mfgen, q, 0); s(mdest, q, dest); s(mready, q, 0); s(mnp, q, p as u8);
             s(msteady.add(6), q * 8, 0); s(mwk, q, 2); s(mspent, q, 0); s(on, q, 1);

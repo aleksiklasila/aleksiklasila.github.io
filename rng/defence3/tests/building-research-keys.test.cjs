@@ -7,8 +7,8 @@ function run(layout){
  const result=i.eval(`(()=>{
   SIM_THING_STATS_LAYOUT=${JSON.stringify(layout)};startSoloGame();
   const objects=[];
-  const tower=new Tower(8,8,'pistol',0);tower.underConstruction=false;tower.level=tower.effectiveLevel=3;objects.push(tower);
-  const producer=new Barrack(9,8,0,'norm');producer.underConstruction=false;producer.level=producer.effectiveLevel=3;objects.push(producer);
+  const mk=(C,o)=>{const e=Object.assign(_snapStructShell(C),{stacks:1,manualStacks:1,effectiveStacks:1,level:1,effectiveLevel:1,isStacking:false,stackingWorkDone:0,markedForSalvage:false,autoUpgradeEnabled:true,buildEnabled:true},o);if(C===Barrack||C===CollectorSpawner){e._qN=0;e.queueEnabled=true;e.spawnTimer=0;}e.energy=e.maxEnergy;return e;};const tower=mk(Tower,{gx:8,gy:8,type:'pistol',owner:0});tower.underConstruction=false;tower.level=tower.effectiveLevel=3;objects.push(tower);
+  const producer=mk(Barrack,{gx:9,gy:8,type:'barrack',unitType:'norm',owner:0});producer.underConstruction=false;producer.level=producer.effectiveLevel=3;objects.push(producer);
   const floor=Object.assign(new FloorItem(),{gx:10,gy:8,type:'lava',owner:0,level:3,effectiveLevel:3,underConstruction:false});objects.push(floor);
   const read=()=>objects.map(e=>{const st=e.preComputedBase;return [e.maxEnergy,st.damage,st.visionRange,e.spawnCooldown,e.damage,st.burnDps];});
   const before=read(), levels=ensurePlayerResearchLevels(0);

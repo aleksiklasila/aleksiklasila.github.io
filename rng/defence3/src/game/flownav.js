@@ -132,6 +132,8 @@ function _navGroundBytes(W, H) { const C = Math.max(W, H) > 512 ? 32 : 16, nc = 
 // parts).
 function navReserve() {
     if (typeof simHeapHas !== 'function' || typeof GRID_W !== 'number' || !(GRID_W > 0)) return;
+    // (navPath's output: its callers ask for 64 tiles at most (pathfinding.js UNIT_DISPLAY_PATH).)
+    if (!_navPathOut || _navPathOut.length < 256 || !simHeapHas(_navPathOut)) _navPathOut = simHeapArray(Int32Array, 256);
     const S = _navSlots, W = GRID_W, H = GRID_H;
     if (S.slots && S.W === W && S.H === H && S.slots.every(L => L.every(e => simHeapHas(e.a)))) return;
     const prev = _navSlots.cur; S.cur = null;
@@ -157,6 +159,9 @@ function navReserve() {
     sizes[NAV_PROFILE_AIR] = [_navAirBytes(W, H)];
     sizes[NAV_PROFILE_BUILD] = [builder, builder];
     S.slots = sizes.map((L, p) => L.map((bytes, s) => ({ p, s, a: simSharedArray(Uint8Array, bytes), off: 0 })));
+    // (Sized for the worst case, written as far as a build reaches: left out of the heap's prefault (sim_wasm.js), so
+    // only what the builds use is resident (the slots are 325 MB at a 1024 map).)
+    if (typeof simHeapLazyRange === 'function') for (const L of S.slots) for (const e of L) simHeapLazyRange(e.a, 0);
     S.W = W; S.H = H; S.cur = prev;
 }
 // The slots' bytes in all (the memory budget: data_static.js).

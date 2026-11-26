@@ -57,10 +57,11 @@ for (let owner=0; owner<2; owner++) {
   for (let i=0; i<500; i++) {
     const gx = 4 + i%25 + owner*90, gy = 4 + Math.floor(i/25)*(scenario==='lasers'?2:3);
     let b;
-    if (scenario==='lasers' || i%4===0) { b = new Tower(gx,gy,scenario==='lasers'?'laser':['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5],owner); towers.push(b); cellType[(grid[gy][gx]) - 1] = TYPE_WALL; }
-    else if (i%4===1) { b = new Barrack(gx,gy,owner,'norm'); barracks.push(b); }
-    else { const C = [CollectorSpawner, BuilderSpawner, HealerSpawner, ResearchSpawner, AstarSpawner, SalvagerSpawner][Math.floor(i/4)%6]; b = new C(gx,gy,owner); collectorSpawners.push(b); }
-    setTileEntity(gx,gy,b.type,b);
+    // (Placed by the placement kernel, built at level 1 as the old constructors left them.)
+    const key = scenario==='lasers' || i%4===0 ? (scenario==='lasers'?'laser':['pistol','smg','water','poison','sniper'][Math.floor(i/4)%5]) : i%4===1 ? 'barrack_norm' : ['spawner','builder_spawner','healer_spawner','research','astar_spawner','salvager'][Math.floor(i/4)%6];
+    placeBuilding(gx,gy,key,owner,{ignorePlacementRules:true,silent:true}); b = getTileEntityRef(gx,gy);
+    b.level = b.effectiveLevel = 1; b.energy = b.maxEnergy;
+    if (b instanceof Tower) cellType[(grid[gy][gx]) - 1] = TYPE_WALL;
     cellOwner[(grid[gy][gx]) - 1] = owner;
     b.underConstruction=false;
     if (scenario==='working' && i%5===0) { b.underConstruction=true; b.buildProgress=0; b.energy=1; }

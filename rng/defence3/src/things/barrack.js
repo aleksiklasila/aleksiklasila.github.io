@@ -229,7 +229,7 @@ function _spArr(name, Type, n) { let a = _spp[name]; if (!a || a.length < n || !
 // at most the structure rows (B.structs), a batch's spawns at most SPB_CAP.
 function spawnerProductionReserve(B) {
     const rows = Math.max(64, B.structs | 0), classes = 16, jobs = Math.ceil(rows / SPAWN_PROD_ROWS) + classes;
-    _spArr('cls', Int32Array, classes * 16); _spArr('jobs', Int32Array, jobs * 3);
+    _spArr('cls', Int32Array, classes * 16); _spArr('jobs', Int32Array, jobs * 3); _spClsKey.cls = null;
     _spArr('tab', Float64Array, (Math.max(1, B.players) + 1) * SPAWN_PROD_TYPES * 64 * 3); _spp.np = -1;
     _spArr('out', Int32Array, jobs * SPAWN_PROD_ROWS * 5); _spArr('cnt', Int32Array, jobs * 16);
     _spArr('sel', Int32Array, rows + 4); _spArr('tmp', Uint32Array, 8 * rows + 65536); _spArr('shift', Int32Array, SPB_CAP + 1);
@@ -274,13 +274,21 @@ function _spTabFill(tab, key, ver) {
 // The step's production; returns spr.sel ([0] count, then the tiles of the spawners to spawn, in order).
 // The classes' table for the kernels (spr.cls: rows, ctab tag, column
 // pointers by _SP_COLS) and their jobs' count.
+// (Kept while every class's table, its rows and its column version and the heap are what they were: built on every
+// queue action and every production step otherwise.)
+const _spClsKey = { cls: null, mem: null, T: [], ver: new Float64Array(16), n: new Float64Array(16), J: 0, res: { cls: null, J: 0 } };
 function _spClsBuild() {
-    const CL = _spClasses();
+    const CL = _spClasses(), K = _spClsKey;
+    if (K.cls && K.mem === _spHeapMem() && simHeapHas(K.cls)) {
+        let same = true;
+        for (let k = 0; k < CL.length; k++) { const T = _sTables.get(CL[k]) || null; if (T !== K.T[k] || (T && (T._colVer !== K.ver[k] || T.n !== K.n[k]))) { same = false; break; } }
+        if (same) return K.res;
+    }
     if (typeof structRallyClasses === 'function') structRallyClasses();
     const cls = _spArr('cls', Int32Array, CL.length * 16);
     // (Every class's columns in the heap, the rally ones too (the births read them): moved there when one is not. A class
     // left out would neither produce nor rally on this peer alone.)
-    const need = [..._SP_COLS, ..._SPAWN_RALLY_COLS];
+    const need = _SP_NEED || (_SP_NEED = [..._SP_COLS, ..._SPAWN_RALLY_COLS]);
     // (Checked when a class's kept column table no longer holds: data_state.js _sColPtrs.)
     if (CL.some(C => { const T = _sTables.get(C); return T && T.n > 0 && !(_sColPtrsKept(T, _SP_COLS) && _sColPtrsKept(T, _SPAWN_RALLY_COLS)) && need.some(nm => !T[nm] || !simHeapHas(T[nm])); })) structTablesRehome();
     let J = 0;
@@ -296,8 +304,12 @@ function _spClsBuild() {
         cls[b + 1] = _stAllIx.get(C) || 0;
         J += Math.ceil(T.n / SPAWN_PROD_ROWS);
     }
-    return { cls, J };
+    K.cls = cls; K.mem = _spHeapMem(); K.res.cls = cls; K.res.J = J;
+    for (let k = 0; k < CL.length; k++) { const T = _sTables.get(CL[k]) || null; K.T[k] = T; K.ver[k] = T ? T._colVer : -1; K.n[k] = T ? T.n : -1; }
+    return K.res;
 }
+let _SP_NEED = null;
+const _spHeapMem = () => typeof _simHeap !== 'undefined' ? _simHeap.memory : null;
 const _spSqueezeIds = () => { unitRows(); };
 function spawnerProductionPass() {
     const S = _spp, CL = _spClasses();
@@ -560,31 +572,8 @@ function _spawnUpkeep(list, n, C) {
     simRustDirect('k_upk_bins', [list, C.owner, C.upT, C.effectiveLevel, C.unitLevel, C.baseLevel, C.stackCount, C.upB, U.cnt], P);
 }
 class Barrack {
-    constructor(gx, gy, owner, unitType = 'norm', stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'barrack'; this.unitType = unitType;
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        this.spawnTimer = 0;
-
-        this._qN = 0; // queued units (the front: _qLv, _qReq, _qPaid)
-        this.rallyX = null; this.rallyY = null; // rally point in world coords
-        this.rallyTargetUnitId = null;
-        let stats = calculateItemStats('barrack_' + this.unitType, this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
 
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
@@ -663,29 +652,8 @@ function spawnerDue(b) {
 }
 
 class CollectorSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'spawner';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        let stats = calculateItemStats('spawner', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this._qN = 0; this.spawnTimer = 0;
-        this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'collector', lvl, 'energy');
@@ -722,29 +690,8 @@ class CollectorSpawner {
 if (typeof structTableAccessors === 'function') structTableAccessors(CollectorSpawner, 0x44);
 
 class AstarSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'astar_spawner';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        let stats = calculateItemStats('astar_spawner', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this._qN = 0; this.spawnTimer = 0;
-        this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'astar_collector', lvl, 'energy');
@@ -781,29 +728,8 @@ class AstarSpawner {
 if (typeof structTableAccessors === 'function') structTableAccessors(AstarSpawner, 0x44);
 
 class SalvagerSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'salvager';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        let stats = calculateItemStats('salvager', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this._qN = 0; this.spawnTimer = 0;
-        this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'salvager_unit', lvl, 'energy');
@@ -840,30 +766,8 @@ class SalvagerSpawner {
 if (typeof structTableAccessors === 'function') structTableAccessors(SalvagerSpawner, 0x44);
 
 class BuilderSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'builder_spawner';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        let stats = calculateItemStats('builder_spawner', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.underConstruction = true;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this._qN = 0; this.spawnTimer = 0;
-        this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'builder_unit', lvl, 'energy');
@@ -907,30 +811,8 @@ class BuilderSpawner {
 if (typeof structTableAccessors === 'function') structTableAccessors(BuilderSpawner, 0x44);
 
 class HealerSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'healer_spawner';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        let stats = calculateItemStats('healer_spawner', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.underConstruction = true;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this._qN = 0; this.spawnTimer = 0;
-        this.rallyX = null; this.rallyY = null; this.rallyTargetUnitId = null;
-
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
     getUnitCost() {
         let lvl = getThingBaseLevel(this);
         let energyCost = getUnitStatForOwner(this.owner, 'healer_unit', lvl, 'energy');
@@ -973,33 +855,8 @@ class HealerSpawner {
 if (typeof structTableAccessors === 'function') structTableAccessors(HealerSpawner, 0x44);
 
 class ResearchSpawner {
-    constructor(gx, gy, owner, stacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = stacks; this.type = 'research';
-        this.manualStacks = stacks;
-        this.effectiveStacks = stacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-        this.spawnTimer = 0;
-
-        this._qN = 0;
-        this.rallyX = null; this.rallyY = null;
-        this.rallyTargetUnitId = null;
-        let stats = calculateItemStats('research', this.level, this.owner);
-
-        this.energy = stats.maxEnergy;
-        this.underConstruction = true;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.queueEnabled = true;
-        this.autoResearchEnabled = true;
-        updateItemTextCache(this);
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
 
     getUnitCost() {
         let lvl = getThingBaseLevel(this);

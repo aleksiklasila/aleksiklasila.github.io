@@ -72,18 +72,21 @@ calls.length=0;r.textureFrame++;
 r.drawFlatSprites([other,alternate,other,object]);
 assert.equal(count('texImage2D'),0,'textures outside the array are cached too');
 
-// A full array evicts layers unused for a few frames, else grows.
+// The array is made at its size (as many layers as panels can be alive) and never grows in play: a full array evicts
+// layers unused for a few frames, else the sprite is drawn on its own.
 const atlas=r.flatAtlas;
 const before=atlas.capacity;
+assert.ok(before>=1024,'the array is made at its full size');
 for(let frame=0;frame<3;frame++) {
     r.textureFrame++;
     r.drawFlatSprites(Array.from({length:before+10},(_,i)=>({...object,topTextureCanvas:panel(),topTextureKey:'grow'+frame+':'+i})));
 }
-assert.ok(atlas.capacity>before,'visible set larger than the array grows it');
-const grownCapacity=atlas.capacity;
+assert.equal(atlas.capacity,before,'a visible set larger than the array does not grow it');
 r.textureFrame+=5;
+calls.length=0;
 r.drawFlatSprites(Array.from({length:50},(_,i)=>({...object,topTextureCanvas:panel(),topTextureKey:'late'+i})));
-assert.equal(atlas.capacity,grownCapacity,'stale layers are reused before growing again');
+assert.equal(atlas.capacity,before,'stale layers are reused');
+assert.equal(count('texImage2D'),0,'stale layers taken: no sprite drawn on its own');
 
 r.enabled=r.supported=true;r.overlayDepthCache=new Map();
 for(const method of ['resize','drawBackground','drawGroundOverlays','drawSelectionMask','resolveScene','presentSceneToCanvas'])r[method]=()=>calls.push([method]);
@@ -113,7 +116,7 @@ const pipeline=vm.createContext({performance,_overlayDrawStart:0,_overlayDrawMs:
     _fpsFrameCount:0,_fpsLastTime:0,_buildMenuRefreshCounter:0,_minimapRefreshCounter:0,_backgroundCacheRefreshCounter:0,
     updateVisibilityHistory(){},updateCamera(){},graphicsOptions:{},ensure3DRendererInitialized:()=>({setGraphicsOptions(){},render(s){received=s;}}),
     build3DFrameData:flat2d=>({flat2d}),draw(){worldDraws++;},drawMinimap(){},drawInteractionOverlay(){},
-    flushTickUiRequests(){},updateHUD(){},updateControlGroupBar(){},_refreshInfoPanelPeriodic(){},_applyRenderCameraSnap(){},_maybePrewarm3DView(){}});
+    flushTickUiRequests(){},updateHUD(){},updateControlGroupBar(){},_refreshInfoPanelPeriodic(){},_applyRenderCameraSnap(){},_maybePrewarm3DView(){},_maybePrewarmSelection(){}});
 vm.runInContext(source.slice(begin,end),pipeline);
 pipeline.processRenderFrame(0);
 assert.equal(received.flat2d,true);assert.equal(worldDraws,0,'2D bypasses Canvas world drawing');

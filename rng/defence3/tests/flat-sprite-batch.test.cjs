@@ -76,7 +76,8 @@ const frame = list => {
     vm.runInContext('renderer3dExactUnitTextureBuildsRemaining = 1e9; renderer3dExactUnitTextureTimeRemaining = 1e9;', pc);
     return list.map(e => pc.get3DExact2DTexture(e, true));
 };
-const first = Array.from({ length: 1100 }, (_, i) => entity(i));
+const cacheMax = vm.runInContext('RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX', pc);
+const first = Array.from({ length: cacheMax + 76 }, (_, i) => entity(i));
 const firstPanels = frame(first);
 for (let i = 0; i < 3; i++) frame(first.slice(0, 10));
 assert.equal(vm.runInContext('renderer3dPanelPool.length', pc), 76, 'evicted canvases are pooled');
@@ -85,7 +86,7 @@ const recycled = frame([entity('new')])[0];
 assert.equal(created, createdBefore, 'new panel reuses a pooled canvas');
 const previousOwner = first[firstPanels.indexOf(recycled)];
 assert.ok(previousOwner, 'the canvas belonged to an evicted panel');
-assert.ok(recycled._textureVersion > 1100, 'redrawn canvas has a new version');
+assert.ok(recycled._textureVersion > cacheMax + 76, 'redrawn canvas has a new version');
 vm.runInContext('renderer3dExactUnitTextureBuildsRemaining = 0;', pc);
 assert.notEqual(pc.get3DExact2DTexture(Object.assign(previousOwner, { energy: 0.5 }), true), recycled,
     "a recycled canvas is never shown as the previous owner's stand-in");

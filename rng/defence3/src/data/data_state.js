@@ -817,7 +817,7 @@ function _stlFill() {
     for (let i = 0; i < n; i++) {
         const t = Tl[i], c = C[t], k = _STL_KIND[c];
         if (k === undefined || k < 0) continue;
-        const Tb = _stTabByCt[c] || _stTabOfCt(c), o = Tb && R[t] >= 0 ? Tb.rowObj[R[t]] : null;
+        const Tb = _stTabByCt[c] || _stTabOfCt(c), o = Tb && R[t] >= 0 ? structRowObj(Tb, R[t]) : null;
         // Overwrite the existing backing store. Clearing the lengths first
         // made V8 discard it and grow three new stores on every refill.
         if (o && o._stT === t) A[k][counts[k]++] = o;
@@ -877,7 +877,7 @@ const _STF_BUILDING = 'i:_stT c:_ow b:_uc n:_en s:gx s:gy n:x n:y r:type i:stack
 const _STF_SPAWNER = 'n:_spt b:queueEnabled c:_qN n:_qLv n:_qReq n:_qPaid N:rallyX N:rallyY N:rallyTargetUnitId n:spawnCooldown i:_spawnReadyOrder N:_rallyLastSeenX N:_rallyLastSeenY b:_pendingRallyDetach';
 const _STF_MINE = 'i:_stT n:_mv s:gx s:gy n:x n:y';
 const STRUCT_TABLE_FIELDS = {
-    Tower: _STF_BUILDING + ' r:baseStats r:currentStats r:textCtx n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV i:_aqI i:_aqT',
+    Tower: _STF_BUILDING + ' r:baseStats r:currentStats n:_cdUntil f:angle c:laserState n:laserTimer c:_lzLv b:_lzUc c:_ptK i:_ptV i:_aqI i:_aqT',
     Barrack: _STF_BUILDING + ' ' + _STF_SPAWNER + ' r:unitType',
     CollectorSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, AstarSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, SalvagerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
     BuilderSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER, HealerSpawner: _STF_BUILDING + ' ' + _STF_SPAWNER,
@@ -986,11 +986,17 @@ function _sTableOf(C) {
     const allFields = spec.split(' ').map(f => { const [kind, name] = f.split(':'); return { kind, name, shared:kind==='r' && STRUCT_SHARED_REFS.has(name), col: 'c_' + name }; });
     const derived=allFields.filter(f=>STRUCT_DERIVED_STATS.has(f.name)).map(f=>f.name);
     const fields=allFields.filter(f=>!STRUCT_DERIVED_STATS.has(f.name));
-    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), _colVer: 0, cap: 0, n: 0, nfree: 0, qhdr: null, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && !_S_OV_COLS.has(f.name)).map(f => f.name) };
+    T = { C, fields, derived, unique:Object.fromEntries(derived.map(k=>[k,new Map()])), _colVer: 0, cap: 0, rh: null, qhdr: null, rowObj: null, keys: fields.filter(f => f.name !== '_stT' && !_S_OV_COLS.has(f.name)).map(f => f.name) };
     for (const f of fields) T[f.col] = null;
     // (The retire queue's head, tail and length: heap words the destroy kernel
     // writes, dst.rs k_struct_destroy.)
     T.qhdr = _sColAlloc(Int32Array, 4); T.qhdr[0] = -1; T.qhdr[1] = -1;
+    // (The row pool's counts in the heap (the placement kernel takes rows, plc.rs k_struct_place): [0] rows taken
+    // (n), [1] freed rows on the free stack (nfree), [2] rows given their defaults (_lz), [3] capacity.)
+    T.rh = _sColAlloc(Int32Array, 8);
+    Object.defineProperty(T, 'n', { get() { return this.rh[0]; }, set(v) { this.rh[0] = v; } });
+    Object.defineProperty(T, 'nfree', { get() { return this.rh[1]; }, set(v) { this.rh[1] = v; } });
+    Object.defineProperty(T, '_lz', { get() { return this.rh[2]; }, set(v) { this.rh[2] = v; } });
     Object.defineProperty(T, 'qh', { get() { return this.qhdr[0]; }, set(v) { this.qhdr[0] = v; } });
     Object.defineProperty(T, 'qt', { get() { return this.qhdr[1]; }, set(v) { this.qhdr[1] = v; } });
     Object.defineProperty(T, 'qn', { get() { return this.qhdr[2]; }, set(v) { this.qhdr[2] = v; } });
@@ -1028,7 +1034,7 @@ function _sTableOf(C) {
 // structure kernels read them: main.js _rallyKernel), allocated at the
 // match's start (structTablesReserve), never grown in play.
 function _sColAlloc(Type, n) { return typeof simHeapArray === 'function' && typeof _simHeapAlloc !== 'undefined' && _simHeapAlloc !== null ? simHeapArray(Type, n) : new Type(n); }
-function _sColFree(a) { if (typeof simHeapFree === 'function' && typeof _simHeapPtrOf !== 'undefined' && _simHeapPtrOf !== null && _simHeapPtrOf(a) >= 0) simHeapFree(a); }
+function _sColFree(a) { if (typeof simHeapFree === 'function' && typeof _simHeapPtrOf !== 'undefined' && _simHeapPtrOf !== null && _simHeapPtrOf(a) >= 0) { if (typeof _simHeapLazy !== 'undefined') _simHeapLazy.delete(_simHeapPtrOf(a)); simHeapFree(a); } }
 // (Whether its columns are where the kernels read them: false while the heap
 // is up and they are not in it.)
 function _sColsInHeap(T) {
@@ -1068,9 +1074,17 @@ function _sTableGrow(T, cap) {
         let a;
         if (f.shared) { a=_simRefGrow(was,cap,undefined,true); }
         else if (f.kind === 'r') { a = []; if (was) for (let i = 0; i < T.n; i++) a.push(was[i]); }
-        else { const nk = _S_NUM_KINDS[f.kind]; a = _sColAlloc(nk ? nk[0] : Uint8Array, cap); if (nk) a.fill(nk[1]); if (was) { a.set(was.subarray(0, T.n)); _sColFree(was); } }
+        else {
+            // (Rows past T.n take their defaults when they are first taken (_sLazyFill): a column filled whole here wrote
+            // every page of every class's table, each sized for the whole owned-row budget (~500 MB a 200k-unit match
+            // made resident), though all the classes together hold at most that many rows.)
+            const nk = _S_NUM_KINDS[f.kind]; a = _sColAlloc(nk ? nk[0] : Uint8Array, cap);
+            if (was) { a.set(was.subarray(0, T.n)); _sColFree(was); } else if (T.n > 0) a.fill(nk ? nk[1] : 0, 0, T.n);
+            if (typeof simHeapLazyRange === 'function') simHeapLazyRange(a, T.n * a.BYTES_PER_ELEMENT);
+        }
         T[f.col] = a;
     }
+    T._lz = T.n;
     {
         // (The tokens in the heap: the adjacency kernel clears a row's.)
         const was = T.mTok, tok = _sColAlloc(Int32Array, cap * 3), ent = [];
@@ -1082,12 +1096,13 @@ function _sTableGrow(T, cap) {
     // retired, rp/rn the retire queue (oldest first), free the expired rows.)
     {
         // (ret / rt / rp / rn in the heap: the destroy kernel retires rows.)
-        const n = T.n, obj = [], ret = _sColAlloc(Uint8Array, cap), rt = _sColAlloc(Int32Array, cap), rp = _sColAlloc(Int32Array, cap), rn = _sColAlloc(Int32Array, cap), free = new Int32Array(cap);
-        if (T.rowObj) { for (let i = 0; i < n; i++) obj.push(T.rowObj[i]); ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); _sColFree(T.ret); _sColFree(T.rt); _sColFree(T.rp); _sColFree(T.rn); }
+        const n = T.n, obj = [], ret = _sColAlloc(Uint8Array, cap), rt = _sColAlloc(Int32Array, cap), rp = _sColAlloc(Int32Array, cap), rn = _sColAlloc(Int32Array, cap), free = _sColAlloc(Int32Array, cap);
+        if (T.rowObj) { for (let i = 0; i < n; i++) obj.push(T.rowObj[i]); ret.set(T.ret.subarray(0, n)); rt.set(T.rt.subarray(0, n)); rp.set(T.rp.subarray(0, n)); rn.set(T.rn.subarray(0, n)); free.set(T.freeRows.subarray(0, T.nfree)); _sColFree(T.ret); _sColFree(T.rt); _sColFree(T.rp); _sColFree(T.rn); _sColFree(T.freeRows); }
         T.rowObj = obj; T.ret = ret; T.rt = rt; T.rp = rp; T.rn = rn; T.freeRows = free;
         { const q = _sColAlloc(Int32Array, 4); q.set(T.qhdr); _sColFree(T.qhdr); T.qhdr = q; }
+        { const q = _sColAlloc(Int32Array, 8); q.set(T.rh); _sColFree(T.rh); T.rh = q; }
     }
-    T.cap = cap;
+    T.cap = cap; T.rh[3] = cap;
     T._colVer++;
     T.jsN = 0; _sJsRoom(T, Math.min(cap, Math.max(T.n, 1024)));
 }
@@ -1267,6 +1282,16 @@ function _sRowRuns(R, n) {
 // derived maps.
 const _sFillP = new Float64Array(4), _sFillBits = new DataView(new ArrayBuffer(8));
 let _sFillCols = null, _sFillRS = null, _sFillRE = null;
+// The row frees' kernel lists made at the match's start (main.js startGame's reserves), for every row the match's
+// structure tables can hold at once (B.structs + B.mines): made at the first removal they were in-play allocations
+// (alloc-weval.js, chaos-300k battle).
+function structRowsFreeReserve(B) {
+    if (typeof simHeapHas !== 'function') return;
+    let nc = 96; for (const T of _sTables.values()) if (T && T.fields) nc = Math.max(nc, T.fields.length + 1);
+    if (!_sFillCols || _sFillCols.length < 5 * nc || !simHeapHas(_sFillCols)) { if (_sFillCols) simHeapFreeAuto(_sFillCols); _sFillCols = simSharedArray(Int32Array, 5 * nc); }
+    const c = Math.max(1024, ((B && B.structs) | 0) + ((B && B.mines) | 0));
+    if (!_sFillRS || _sFillRS.length < c || !simHeapHas(_sFillRS)) { if (_sFillRS) { simHeapFreeAuto(_sFillRS); simHeapFreeAuto(_sFillRE); } _sFillRS = simSharedArray(Int32Array, c); _sFillRE = simSharedArray(Int32Array, c); }
+}
 function _sFillDesc(D, i, a, per, v) {
     const w = a.BYTES_PER_ELEMENT, B = _sFillBits;
     if (w === 8) B.setFloat64(0, v, true); else if (a instanceof Float32Array) B.setFloat32(0, v, true); else B.setInt32(0, w === 4 ? v : w === 2 ? v & 0xFFFF : v & 0xFF, true);
@@ -1307,6 +1332,17 @@ function _sRowsFree(T, R, n) {
     for (let i = 0; i < n; i++) free[T.nfree++] = R[i];
 }
 // A row for structure o (its class's table; none: its fields stay its own).
+// A fresh row's block of rows (1024, from it) given every numeric and plain column's default, as the columns once
+// were whole when made: the same values, written as the table fills.
+function _sLazyFill(T, r) {
+    const end = Math.min(T.cap, r + 1024);
+    for (const f of T.fields) {
+        if (f.shared || f.kind === 'r') continue;
+        const nk = _S_NUM_KINDS[f.kind], a = T[f.col];
+        if (a) a.fill(nk ? nk[1] : 0, r, end);
+    }
+    T._lz = end;
+}
 function _sRowTake(o) {
     const T = _sTableOf(o.constructor);
     if (!T) return false;
@@ -1317,6 +1353,7 @@ function _sRowTake(o) {
     let r;
     if (T.nfree === 0 && T.n >= T.cap) { _sTableGrow(T, Math.ceil(T.cap * 1.5 / 1024) * 1024); structRowStats.grown++; }
     r = T.nfree > 0 ? T.freeRows[--T.nfree] : T.n++;
+    if (!(r < T._lz)) _sLazyFill(T, r);
     if (r >= T.jsN) _sJsRoom(T, r + 1);
     if (_sHas.call(o, '_sr')) o._sr = r; else Object.defineProperty(o, '_sr', { value: r, writable: true, configurable: true });
     T.rowObj[r] = o;
@@ -1324,6 +1361,21 @@ function _sRowTake(o) {
 }
 // A removed structure's record (its values while it has no row: a restore's
 // shell, or a structure whose row expired: its writes go nowhere).
+// A structure's object: made when it is first read (a row the placement kernel took has none, plc.rs
+// k_struct_place): only for a row in the world (its _stT a tile) or retired (still readable); null for a free or
+// unused row. The object holds only its row (_sr) and the hidden fields; the rest is the row's.
+function structRowObj(T, r) {
+    if (!T || !(r >= 0) || r >= T.n) return null;
+    const o = r < T.rowObj.length ? T.rowObj[r] : null;
+    if (o) return o;
+    if (!(T.c__stT[r] >= 0) && !T.ret[r]) return null;
+    if (r >= T.jsN) _sJsRoom(T, r + 1);
+    const e = Object.create(T.C.prototype);
+    Object.defineProperties(e, _S_HIDDEN);
+    e._sr = r;
+    T.rowObj[r] = e;
+    return e;
+}
 function _sDetOf(o) {
     let d = o._sdet;
     if (d === _S_GONE) return _sGoneSink;
@@ -1413,7 +1465,9 @@ function _sTablesReset() {
         T.n = 0; T.nfree = 0; T.qh = -1; T.qt = -1; T.qn = 0; T.ret.fill(0);
         T.mTok.fill(0); T.mEnt.fill(undefined);
         for(const map of Object.values(T.unique))map.clear();
-        for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined); else if (_S_NUM_KINDS[f.kind]) T[f.col].fill(_S_NUM_KINDS[f.kind][1]); else T[f.col].fill(0);
+        // (The numeric columns' defaults written as rows are taken again: _sLazyFill.)
+        for (const f of T.fields) if (f.shared) T[f.col]=new SimSharedColumn(T.cap); else if (f.kind === 'r') T[f.col].fill(undefined);
+        T._lz = 0;
     }
 }
 // The snapshot's keys of a tabled structure: its fields that hold a value
@@ -1836,7 +1890,7 @@ function getTileEntityRef(gx, gy) {
     const T = _ST, t = gy * GRID_W + gx;
     if (T.n === GRID_W * GRID_H && T.ctab) {
         const c = T.ctab[t];
-        if (c !== 0) { const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null; if (o && o._stT === t) return o; }
+        if (c !== 0) { const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? structRowObj(Tb, r) : null; if (o && o._stT === t) return o; }
     }
     if (!tileEntityRef || !tileEntityRef[gy]) return null;
     return tileEntityRef[gy][gx] || null;
@@ -1850,7 +1904,7 @@ function _stTabOfCt(c) { structRallyClasses(); const Tb = _sTables.get(_stAllCls
 function structAtTile(t) {
     const T = _ST, c = T.ctab ? T.ctab[t] : 0;
     if (c === 0) return null;
-    const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? Tb.rowObj[r] : null;
+    const Tb = _stTabByCt[c] || _stTabOfCt(c), r = T.rrow[t], o = Tb && r >= 0 ? structRowObj(Tb, r) : null;
     return o && o._stT === t ? o : null;
 }
 function _teGrids() {

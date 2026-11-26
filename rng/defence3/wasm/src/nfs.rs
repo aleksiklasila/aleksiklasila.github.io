@@ -907,6 +907,8 @@ pub unsafe extern "C" fn k_slab_score(a: u32, chunk: i32) {
 /// spawn cooldown key of another version listed (key [14], slot [15], count
 /// [68][2]) for the JavaScript to fill; [14] a slot list's length ([69]).
 const META_CW: usize = 56;
+// (At most this many meta classes: sim_presentation.js _simMetaCls has 11.)
+const META_CLS_MAX: usize = 16;
 const MC_N: usize = 0; const MC_TAG: usize = 1; const MC_KIND: usize = 2; const MC_TW: usize = 3; const MC_UW: usize = 4;
 const MC_TID: usize = 5; const MC_UID: usize = 6; const MC_TCODE: usize = 7; const MC_UCODE: usize = 8; const MC_KEY: usize = 9; const MC_QT: usize = 10;
 const MC_ST: usize = 11; const MC_OW: usize = 12; const MC_UC: usize = 13; const MC_EN: usize = 14; const MC_GX: usize = 15; const MC_GY: usize = 16;
@@ -933,10 +935,16 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
     let (mut miss_k, mut miss_s) = (k.p::<i32>(14), k.p::<i32>(15));
     let spver = k.f(13);
     let mut nm = 0usize;
-    let f = |i: usize| k.p::<f32>(16 + i);
-    let i4 = |i: usize| k.p::<i32>(36 + i);
-    let i2 = |i: usize| k.p::<i16>(49 + i);
-    let u1 = |i: usize| k.p::<u8>(62 + i);
+    // (The output columns and every class's column addresses in locals, once a call: read through the argument
+    // block and the class table (heap memory every store may alias) they were reloaded at each use.)
+    let fo: [*mut f32; 20] = core::array::from_fn(|i| k.p::<f32>(16 + i));
+    let io: [*mut i32; 12] = core::array::from_fn(|i| k.p::<i32>(36 + i));
+    let ho: [*mut i16; 13] = core::array::from_fn(|i| k.p::<i16>(49 + i));
+    let bo: [*mut u8; 3] = core::array::from_fn(|i| k.p::<u8>(62 + i));
+    let f = |i: usize| *fo.get_unchecked(i);
+    let i4 = |i: usize| *io.get_unchecked(i);
+    let i2 = |i: usize| *ho.get_unchecked(i);
+    let u1 = |i: usize| *bo.get_unchecked(i);
     let (mut order, tslot, serials, mut gone, _cnt) = (k.p::<i32>(48), k.p::<i32>(65), k.p::<i32>(66), k.p::<i32>(67), k.p::<i32>(68));
     let order_ok = !order.is_null();
     if let Some((og, oo, ok_, os)) = outs { gone = og; order = oo; miss_k = ok_; miss_s = os; }
@@ -945,6 +953,15 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
     let (n, ncls, now, otick, tile, l1, r1, nk, types, smax, gw, ntiles, np) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.f(2), k.i(3), k.f(4), k.i(5).max(2), k.i(6).max(1), k.i(7).max(0),
         k.i(8).max(1), k.i(9), k.i(10).max(1), k.i(11), k.i(12).max(0));
     if cls.is_null() || psrc.is_null() || !order_ok { return (0, 0, 0); }
+    let ncls = ncls.min(META_CLS_MAX);
+    let mut cp = [[core::ptr::null_mut::<u8>(); META_CW]; META_CLS_MAX];
+    let mut cw = [[0i32; 5]; META_CLS_MAX];
+    for c in 0..ncls {
+        for j in 0..META_CW { let v = g(cls, c * META_CW + j); cp[c][j] = if v == 0 { core::ptr::null_mut() } else { waddr(v as u32) as *mut u8 }; }
+        for j in 0..5 { cw[c][j] = g(cls, c * META_CW + j); }
+    }
+    let pc = |c: usize, j: usize| -> *mut u8 { *cp.get_unchecked(c).get_unchecked(j) };
+    let wc = |c: usize, j: usize| -> i32 { *cw.get_unchecked(c).get_unchecked(j) };
     let (mut ng, mut no) = (0usize, 0usize);
     let maxl = l1 - 1;
     // (A list ([69], P[14] its length): only those slots, the order column and gone list untouched.)
@@ -957,29 +974,29 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         let v = g(psrc, sl);
         if v < 0 { continue; }
         let (c, r) = ((v as u32 >> 24) as usize, (v & 0xFFFFFF) as usize);
-        if c >= ncls || r >= g(cls, c * META_CW + MC_N).max(0) as usize { continue; }
-        let t = g(mcol::<i32>(cls, c, MC_ST), r);
-        if t < 0 || t >= ntiles || g(ctab, t as usize) as i32 != g(cls, c * META_CW + MC_TAG) || g(rrow, t as usize) != r as i32 {
+        if c >= ncls || r >= wc(c, MC_N).max(0) as usize { continue; }
+        let t = g((pc(c, MC_ST) as *mut i32), r);
+        if t < 0 || t >= ntiles || g(ctab, t as usize) as i32 != wc(c, MC_TAG) || g(rrow, t as usize) != r as i32 {
             s(u1(0), sl, 0);
             if !gone.is_null() && list.is_null() { s(gone, ng, sl as i32); ng += 1; }
             continue;
         }
         let tu = t as usize;
-        let kind = g(cls, c * META_CW + MC_KIND);
-        let rd8 = |j: usize| -> i32 { let p = mcol::<i8>(cls, c, j); if p.is_null() { -128 } else { g(p, r) as i32 } };
-        let rdb = |j: usize| -> bool { let p = mcol::<u8>(cls, c, j); !p.is_null() && g(p, r) == 2 };
-        let rdi = |j: usize| -> i32 { let p = mcol::<i32>(cls, c, j); if p.is_null() { i32::MIN } else { g(p, r) } };
-        let rdf = |j: usize| -> f64 { let p = mcol::<f64>(cls, c, j); if p.is_null() { f64::NAN } else { g(p, r) } };
+        let kind = wc(c, MC_KIND);
+        let rd8 = |j: usize| -> i32 { let p = (pc(c, j) as *mut i8); if p.is_null() { -128 } else { g(p, r) as i32 } };
+        let rdb = |j: usize| -> bool { let p = (pc(c, j) as *mut u8); !p.is_null() && g(p, r) == 2 };
+        let rdi = |j: usize| -> i32 { let p = (pc(c, j) as *mut i32); if p.is_null() { i32::MIN } else { g(p, r) } };
+        let rdf = |j: usize| -> f64 { let p = (pc(c, j) as *mut f64); if p.is_null() { f64::NAN } else { g(p, r) } };
         let pos = |x: i32| x != i32::MIN && x > 0;
-        let (gx, gy) = (g(mcol::<i16>(cls, c, MC_GX), r) as i32, g(mcol::<i16>(cls, c, MC_GY), r) as i32);
+        let (gx, gy) = (g((pc(c, MC_GX) as *mut i16), r) as i32, g((pc(c, MC_GY) as *mut i16), r) as i32);
         let ow = g(own, tu);
         let owner = if ow == 0x7ff9 { -1 } else { ow };
-        let tid = mid(mcol::<u8>(cls, c, MC_TID) as *const u8, g(cls, c * META_CW + MC_TW), r);
-        let uid = mid(mcol::<u8>(cls, c, MC_UID) as *const u8, g(cls, c * META_CW + MC_UW), r);
-        let tcode = { let p = mcol::<i32>(cls, c, MC_TCODE); if p.is_null() { 0 } else { g(p, tid) } };
-        let ucode = { let p = mcol::<i32>(cls, c, MC_UCODE); if p.is_null() { 0 } else { g(p, uid) } };
+        let tid = mid((pc(c, MC_TID) as *mut u8) as *const u8, wc(c, MC_TW), r);
+        let uid = mid((pc(c, MC_UID) as *mut u8) as *const u8, wc(c, MC_UW), r);
+        let tcode = { let p = (pc(c, MC_TCODE) as *mut i32); if p.is_null() { 0 } else { g(p, tid) } };
+        let ucode = { let p = (pc(c, MC_UCODE) as *mut i32); if p.is_null() { 0 } else { g(p, uid) } };
         // (Its building stat key: barracks by their unit type.)
-        let key = { let p = mcol::<i32>(cls, c, MC_KEY); if p.is_null() { -1 } else { g(p, if kind == 1 { uid } else { tid }) } };
+        let key = { let p = (pc(c, MC_KEY) as *mut i32); if p.is_null() { -1 } else { g(p, if kind == 1 { uid } else { tid }) } };
         let lv0 = rd8(MC_LV);
         let stk = rdi(MC_STK);
         let bl = if lv0 != -128 { lv0.max(1).min(maxl) } else if stk != i32::MIN && stk > 0 { (32 - (stk as u32).leading_zeros() as i32).max(1).min(maxl) } else { 1 };
@@ -1017,7 +1034,7 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         s(f(5), sl, scd as f32);
         let swd = rdf(MC_SWD);
         s(f(6), sl, if swd == swd { swd as f32 } else { 0.0 }); s(f(7), sl, 0.0);
-        let ang = mcol::<f32>(cls, c, MC_ANG);
+        let ang = (pc(c, MC_ANG) as *mut f32);
         s(f(8), sl, if ang.is_null() { 0.0 } else { let a0 = g(ang, r); if a0 == a0 { a0 } else { 0.0 } });
         // (A mine's amount: the tile table's ([70] _ST.val), its row's only before it is tabled.)
         let mv = if (kind == 4 || kind == 5) && !tval.is_null() { g(tval, tu) } else { rdf(MC_MV) };
@@ -1029,7 +1046,7 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         let (ptk, ptv) = (rd8(MC_PTK), rdi(MC_PTV));
         let pt = ptk > 0 && ptv != i32::MIN;
         s(f(12), sl, if pt { ptk as f32 } else { 0.0 }); s(f(13), sl, if pt && ptk != 1 { ptv as f32 } else { 0.0 });
-        let lab = kind == 2 && !mcol::<u8>(cls, c, MC_ARS).is_null();
+        let lab = kind == 2 && !(pc(c, MC_ARS) as *mut u8).is_null();
         let (rdone, rreq, rhas, rok) = if lab && !res.is_null() && owner >= 0 && (owner as usize) < np as usize { let b = owner as usize * 4; (g(res, b), g(res, b + 1), g(res, b + 2) != 0.0, g(res, b + 3) != 0.0) } else { (0.0, 0.0, false, false) };
         s(f(14), sl, rdone as f32); s(f(15), sl, rreq as f32);
         let (rx, ry) = (rdf(MC_RX), rdf(MC_RY));
@@ -1056,7 +1073,7 @@ unsafe fn meta_structs_core(a: u32, i0: usize, i1: usize, outs: Option<(*mut i32
         let qn = rd8(MC_QN);
         let ql = if qn == -128 { 0 } else { qn.max(0) };
         s(i2(8), sl, ql as i16);
-        let qt = if ql > 0 { let p = mcol::<i32>(cls, c, MC_QT); if p.is_null() { 0 } else { g(p, if kind == 1 { uid } else { tid }) } } else { 0 };
+        let qt = if ql > 0 { let p = (pc(c, MC_QT) as *mut i32); if p.is_null() { 0 } else { g(p, if kind == 1 { uid } else { tid }) } } else { 0 };
         s(i2(9), sl, qt as i16);
         let lz = rd8(MC_LZ);
         s(i2(10), sl, if lz == -128 { 0 } else { lz as i16 });

@@ -122,6 +122,11 @@
     const FLAT_UNTEXTURED = -2;
     const FLAT_ATLAS_SIZE = 96;  // RENDERER3D_TOP_TEXTURE_SIZE panels
     const FLAT_ATLAS_LEVELS = 7; // 96 48 24 12 6 3 1
+    // (Its layers, made once with the renderer: as many as panels can be alive (renderer.js: the exact panels' cache,
+    // RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX (exact panels and top textures), and the panel pool, RENDERER3D_PANEL_POOL_MAX),
+    // ~88 MB. It started at 256
+    // and doubled in play: a zoom in from far took ~400 panels at once, every used layer uploaded again at each growth.)
+    const FLAT_ATLAS_LAYERS = 1792;
 
     // Persistent instance storage. Compare/upload pages only when a published
     // presentation changes; camera and interpolation frames do no buffer work.
@@ -301,7 +306,17 @@
             gl.texStorage2D(gl.TEXTURE_2D, FLAT_ATLAS_LEVELS, gl.RGBA8, FLAT_ATLAS_SIZE, FLAT_ATLAS_SIZE);
             this.copyFramebuffer = gl.createFramebuffer();
             this.savedReadFramebuffer = undefined;
-            this.allocate(Math.min(256, this.maxLayers));
+            this.allocate(Math.min(FLAT_ATLAS_LAYERS, this.maxLayers));
+        }
+
+        // Panel canvases made ahead (renderer.js prewarm3DPanelPool): each drawn once into the staging texture, so its
+        // GPU image exists before play (made in play, each new canvas was ~1 ms of the GPU process: ~400 at a zoom in).
+        warmPanels(canvases) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.staging);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            for (const c of canvases) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, c);
         }
 
         beginFrame(frame) {
@@ -353,10 +368,8 @@
                 this.hand = (slot + 1) % this.capacity;
                 if (this.lastUsed[slot] < this.frame - 2) return slot;
             }
-            if (this.capacity < this.maxLayers) {
-                this.allocate(Math.min(this.maxLayers, this.capacity * 2));
-                if (this.free.length) return this.free.pop();
-            }
+            // (Every layer in use: the sprite drawn on its own this frame. No growth in play: the layers are as many as
+            // panels can be alive.)
             this.exhaustedFrame = this.frame;
             return -1;
         }
@@ -4696,7 +4709,7 @@
             for (const n of ['Mask', 'Color', 'Width']) M.eu[n] = gl.getUniformLocation(M.edge, 'u' + n);
         }
         prewarmPrograms() {
-            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources(), () => this.ensureSiteMarkResources(), () => this.ensureGroundLineResources(), () => this.fxNearPrepare()]) {
+            for (const make of [() => this.ensureRangeVisProgram(), () => this.ensureRangeAreaProgram(), () => this.ensureFxResources(), () => this.ensureClaimProgram(), () => this.ensureSelMaskResources(), () => this.ensureSiteMarkResources(), () => this.ensureGroundLineResources(), () => this.fxNearPrepare(), () => this.getFlatAtlas()]) {
                 try { make(); } catch (err) { console.warn('[renderer3d] prewarm:', err && err.message || err); }
             }
         }
@@ -8551,7 +8564,7 @@
                 if (!(x0 <= x1)) { cb[o] = 1e9; cb[o + 1] = 1e9; cb[o + 2] = 1e9; cb[o + 3] = 1e9; } // (none live: nowhere)
                 else { cb[o] = x0 / T - mpad; cb[o + 1] = z0 / T - mpad; cb[o + 2] = x1 / T + mpad; cb[o + 3] = z1 / T + mpad; }
             };
-            const NL = S.nearList && S.nearList.length >= nb ? S.nearList : (S.nearList = new Int32Array(nb));
+            let NL = S.nearList && S.nearList.length >= nb ? S.nearList : (S.nearList = new Int32Array(nb));
             let nn = 0;
             const ncols = cols.length;
             if (!all) {
@@ -8587,6 +8600,22 @@
                     if (!ok) continue;
                     if (sa === 0) { this._columnStaleAgain(S, D, b, nb); if (SA[b] === 2) continue; }
                     vis[b] = stamp; NL[nn++] = b;
+                }
+                // (Near blocks a few apart joined: the blocks between listed too, so a column's runs go through them
+                // (every column uploads the listed blocks it holds stale: what each holds stays one frame's). Apart, a
+                // zoom in from far listed thousands of scattered blocks: ~12k bufferSubData calls of ~600 bytes in
+                // 100 ms, the GPU process's WebGL work ~180 ms of a 315 ms frame. Up to columnUploadGapBytes of 4-byte
+                // values between, as the runs' own gap.)
+                const fillGap = Math.floor(Math.max(0, Defence3Renderer3D.columnUploadGapBytes | 0) / (B * 4));
+                if (fillGap > 0 && nn > 1) {
+                    const N2 = S.nearList2 && S.nearList2.length >= nb ? S.nearList2 : (S.nearList2 = new Int32Array(nb));
+                    let m = 0;
+                    for (let j = 0; j < nn; j++) {
+                        const b = NL[j];
+                        if (m > 0) { const p = N2[m - 1]; if (b - p - 1 <= fillGap) for (let x = p + 1; x < b; x++) { vis[x] = stamp; N2[m++] = x; } }
+                        N2[m++] = b;
+                    }
+                    if (m !== nn) { S.nearList2 = NL; S.nearList = N2; NL = N2; nn = m; }
                 }
             }
             // The stale ones among them (all: every block), uploaded in runs per column. (The columns only the middle

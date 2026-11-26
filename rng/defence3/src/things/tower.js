@@ -462,34 +462,8 @@ class Tower {
     // (The cooldown: see k_tower_due.)
     get cd() { return Math.max(0, (Number(this._cdUntil) || 0) - gameTime); }
     set cd(v) { this._cdUntil = gameTime + Math.max(0, Number(v) || 0); if (this._stT >= 0 && typeof _ST !== 'undefined' && _ST.n) _ST.tim[this._stT] = this._cdUntil; towerDueReset(this._sr); }
-    constructor(gx, gy, type, owner, startStacks = 1) {
-        if (typeof structTableInit === 'function') structTableInit(this);
-        this.gx = gx; this.gy = gy; this.type = type; this.owner = owner;
-        this.x = gx * TILE + 16; this.y = gy * TILE + 16;
-        this.stacks = startStacks;
-        this.manualStacks = startStacks;
-        this.effectiveStacks = startStacks;
-        this.level = stackCountToLevel(this.stacks);
-        this.effectiveLevel = this.level;
-        this.isStacking = false;
-        this.stackingWorkDone = 0;
-
-// ENERGY
-        let baseEnergy = calculateItemStats(type, this.level, owner).maxEnergy;
-        this.maxEnergy = baseEnergy;
-        this.energy = baseEnergy;
-
-        this.textCtx = null;
-        this.updateTextCache();
-        this.updateStats();
-        this.cd = 0; this.angle = 0;
-        this.laserState = 0; this.laserTimer = 0;
-        this.markedForSalvage = false;
-        this.autoUpgradeEnabled = true;
-        this.buildEnabled = true;
-        this.preferredTarget = null;
-        this.preferredTargetSpec = null;
-    }
+    // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
+    // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
 
     upgrade() {
         addManualStackToThing(this, 1);

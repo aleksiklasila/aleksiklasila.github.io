@@ -431,27 +431,45 @@ function get3DUnitTextureStatus(unit) {
     return status;
 }
 
+// (A top texture is a pooled panel canvas kept in the panels' cache, by 'top:' + its key: evicted unused, pinned
+// with the layers that hold it, as the exact panels. Each its own canvas made at its first use and kept forever
+// before: ~100 made at a zoom in from far (a new GPU image each), 368 after a few minutes and growing.)
 function get3DTopTextureCanvas(key, drawFn) {
-    let cached = renderer3dTopTextureCache.get(key);
+    const sig = 'top:' + key;
+    let cached = getCached3DExact2DTexture(sig);
     if (cached) return cached;
-    let canvas = document.createElement('canvas');
-    canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-    canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-    let g = canvas.getContext('2d');
-    if (!g) return null;
-    g.clearRect(0, 0, canvas.width, canvas.height);
+    let canvas = renderer3dPanelPool.pop();
+    if (!canvas) canvas = _new3DPanelCanvas();
+    if (!canvas) return null;
+    let g = canvas._panelCtx;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.clearRect(0, 0, RENDERER3D_TOP_TEXTURE_SIZE, RENDERER3D_TOP_TEXTURE_SIZE);
     g.imageSmoothingEnabled = false;
+    g.save();
     drawFn(g, canvas);
-    renderer3dTopTextureCache.set(key, canvas);
+    g.restore();
+    canvas._renderer3DExactKey = sig;
+    canvas._flatTextureKey = undefined;
+    canvas._textureVersion = ++renderer3dPanelSerial;
+    canvas._flatWorldSize = undefined;
+    canvas._flatOffsetZ = undefined;
+    canvas._lodPixels = undefined;
+    cache3DExact2DTexture(sig, canvas);
     return canvas;
 }
 
 const renderer3dExact2DTextureCache = new Map();
-const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1024;
+// (Exact panels and top textures: renderer3d.js FLAT_ATLAS_LAYERS has a layer for each of these and the pool's.)
+const RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX = 1536;
 let renderer3dExactTextureFrame = 0;
-let renderer3dExactTextureBuildsRemaining = 12;
+// (Panels drawn a frame, buildings' and units' apart: each new one is also ~1.3 ms of the GPU process (its raster, the
+// upload, its mips and seven level copies into the sprite array), which the 2 ms of this thread does not see: at 12 +
+// 12 a zoom in from far had ~100 ms frames. Stand-ins meanwhile: renderer3dExactTextureFallback.)
+const RENDERER3D_EXACT_BUILDS_PER_FRAME = 6;
+let renderer3dExactTextureBuildsRemaining = RENDERER3D_EXACT_BUILDS_PER_FRAME;
 let renderer3dExactTextureTimeRemaining = 2;
-let renderer3dExactUnitTextureBuildsRemaining = 12;
+let renderer3dExactUnitTextureBuildsRemaining = RENDERER3D_EXACT_BUILDS_PER_FRAME;
 let renderer3dExactUnitTextureTimeRemaining = 2;
 
 // Evicted panel canvases are redrawn for new signatures: creating a canvas
@@ -462,6 +480,37 @@ let renderer3dExactUnitTextureTimeRemaining = 2;
 const renderer3dPanelPool = [];
 const RENDERER3D_PANEL_POOL_MAX = 256;
 let renderer3dPanelSerial = 0;
+// The panel canvases made while the match loads (prewarm3DPanelPool): as many as can be alive (the cache and the
+// pool), each with its GPU image made then (renderer3d.js FlatSpriteAtlas.warmPanels). Made in play, a zoom in from
+// far made ~400 at once: a new GPU image each (~1 ms of the GPU process), 110-310 ms frames for about a second. An
+// evicted panel always goes back to the pool (none dropped): the same canvases all match.
+const RENDERER3D_PANEL_COUNT = RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX + RENDERER3D_PANEL_POOL_MAX;
+let renderer3dPanelsMade = 0;
+function _new3DPanelCanvas() {
+    const canvas = document.createElement('canvas');
+    canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
+    canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
+    canvas._panelCtx = canvas.getContext('2d');
+    if (!canvas._panelCtx) return null;
+    renderer3dPanelsMade++;
+    return canvas;
+}
+function prewarm3DPanelPool(renderer3d) {
+    const made = [];
+    while (renderer3dPanelsMade < RENDERER3D_PANEL_COUNT) {
+        const c = _new3DPanelCanvas();
+        if (!c) break;
+        renderer3dPanelPool.push(c); made.push(c);
+    }
+    const A = renderer3d && typeof renderer3d.getFlatAtlas === 'function' ? renderer3d.getFlatAtlas() : null;
+    // (Drawn and uploaded twice: a panel drawn again while its last upload's picture is held takes a second image
+    // (copy on write), made in play otherwise, ~55 ms of the GPU process in a zoom in's worst frame.)
+    const S = RENDERER3D_TOP_TEXTURE_SIZE;
+    for (let pass = 0; pass < 2 && made.length; pass++) {
+        for (const c of made) { const g = c._panelCtx; g.clearRect(0, 0, S, S); g.fillRect(0, 0, 1, 1); g.clearRect(0, 0, 1, 1); }
+        if (A) A.warmPanels(made);
+    }
+}
 
 function _touch3DPanel(panel) {
     if (panel && panel._panelCtx) panel._usedFrame = renderer3dExactTextureFrame;
@@ -512,7 +561,7 @@ function begin3DTextureFrame() {
         if (typeof renderer3dUnitLayer !== 'undefined' && renderer3dUnitLayer && panel._layerPin === renderer3dUnitLayer.version) continue;
         if (typeof renderer3dStaticLayer !== 'undefined' && renderer3dStaticLayer && panel._staticPin === renderer3dStaticLayer.version) continue;
         renderer3dExact2DTextureCache.delete(key);
-        if (panel._panelCtx && renderer3dPanelPool.length < RENDERER3D_PANEL_POOL_MAX) renderer3dPanelPool.push(panel);
+        if (panel._panelCtx) renderer3dPanelPool.push(panel);
         if (renderer3dExact2DTextureCache.size <= RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) break;
     }
 }
@@ -629,13 +678,8 @@ let renderer3dPanelRaster = false;
 
 function _rasterize3DPanel(signature, scale, offsetX, offsetY, drawFn) {
     let canvas = renderer3dPanelPool.pop();
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.width = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas.height = RENDERER3D_TOP_TEXTURE_SIZE;
-        canvas._panelCtx = canvas.getContext('2d');
-        if (!canvas._panelCtx) return null;
-    }
+    if (!canvas) canvas = _new3DPanelCanvas();
+    if (!canvas) return null;
     let g = canvas._panelCtx, size = RENDERER3D_TOP_TEXTURE_SIZE;
     g.imageSmoothingEnabled = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
@@ -988,6 +1032,8 @@ function get3DWorkshopSignTexture(type) {
     });
 }
 
+// (A building's top texture without status: its stand-in while the exact panels' raster budget is spent.)
+const R3D_PLAIN_STATUS = Object.freeze({ keySuffix: '' });
 function get3DBuildingTopTexture(kind, owner, options = {}) {
     let key = `${kind}:${owner}:${options.subtype || ''}:${options.active ? 1 : 0}:${options.angleKey || ''}:${options.statusKey || ''}`;
     return get3DTopTextureCanvas(key, (g) => {
@@ -2298,9 +2344,12 @@ function getChunkRenderView(view, bounds, flat2d) {
         let U = rendererChunkCache.liveUnits;
         if (!U || U.key !== key || U.frame !== F || U.list !== view.units) {
             const list = view.units, ord = F.order, X = F.x, Y = F.y, PX = F.px, PY = F.py, n = Math.min(F.count, list.length);
-            const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE, out = [];
-            // (Two slot buffers in turn: the last tick's may still be read.)
+            const minX = x0 * 16 * TILE, minY = y0 * 16 * TILE, maxX = (x1 + 1) * 16 * TILE, maxY = (y1 + 1) * 16 * TILE;
+            // (Two slot buffers in turn: the last tick's may still be read. The views' lists the same way: a new array a
+            // rebuild (~35 a second, ~1100 views each in a close battle view) was a large share of the page's garbage.)
             const C2 = rendererChunkCache, which = C2.slotFlip = !C2.slotFlip;
+            const out = which ? (C2.queryA || (C2.queryA = [])) : (C2.queryB || (C2.queryB = []));
+            out.length = 0;
             let outS = which ? C2.slotsA : C2.slotsB;
             if (!outS || outS.length < n) { outS = new Int32Array(Math.max(1024, Math.ceil(n * 1.25))); if (which) C2.slotsA = outS; else C2.slotsB = outS; }
             const R = renderer3dInstance, M = detailCull ? R.tmpViewProjection : null;
@@ -2310,9 +2359,11 @@ function getChunkRenderView(view, bounds, flat2d) {
             // Camera frames only inspect nearby buckets, never rebuild an index
             // over the whole army. Old/non-worker frames use the linear fallback.
             const B = detailCull && F.renderBuckets;
-            let candidates = null;
+            let candidates = null, nCand = 0;
             if (B && B.columns === columns && B.rows === Math.ceil(GRID_H / 16) && B.tile === TILE) {
-                candidates = [];
+                // (A scratch kept, the bucket entries' indices: at most every unit of the frame.)
+                if (!C2.cand || C2.cand.length < n) C2.cand = new Int32Array(Math.max(1024, Math.ceil(n * 1.25)));
+                candidates = C2.cand;
                 const motionPad = (F.renderMotionPad || 0) / TILE;
                 for (let b = 0; b < B.head.length; b++) {
                     if (B.head[b] < 0) continue;
@@ -2323,11 +2374,11 @@ function getChunkRenderView(view, bounds, flat2d) {
                     const cx = M[0] * x + M[8] * z + M[12], cy = M[1] * x + M[9] * z + M[13];
                     if (Math.abs(cx) > sx * w + radius * (Math.abs(M[0]) + Math.abs(M[8])) + sx * dw
                         || Math.abs(cy) > sy * w + radius * (Math.abs(M[1]) + Math.abs(M[9])) + sy * dw) continue;
-                    for (let k = B.head[b]; k >= 0; k = B.next[k]) candidates.push(k);
+                    for (let k = B.head[b]; k >= 0; k = B.next[k]) { if (nCand >= candidates.length) { const g = new Int32Array(candidates.length * 2); g.set(candidates); candidates = C2.cand = g; } candidates[nCand++] = k; }
                 }
-                if (flat2d) candidates.sort((a, b) => a - b); // 3D uses depth, not painter order.
+                if (flat2d) candidates.subarray(0, nCand).sort(); // 3D uses depth, not painter order. (Int32: numeric order.)
             }
-            const count = candidates ? candidates.length : n;
+            const count = candidates ? nCand : n;
             for (let i = 0; i < count; i++) {
                 const k = candidates ? candidates[i] : i;
                 const s = ord[k], x = X[s], y = Y[s], px = PX[s], py = PY[s];
@@ -3410,9 +3461,9 @@ function build3DFrameData(flat2d = false) {
     const farFloorItems = structDetail && !structLive && !structDetail.frame ? [] : null;
 
     begin3DTextureFrame();
-    renderer3dExactTextureBuildsRemaining = 12;
+    renderer3dExactTextureBuildsRemaining = RENDERER3D_EXACT_BUILDS_PER_FRAME;
     renderer3dExactTextureTimeRemaining = 2;
-    renderer3dExactUnitTextureBuildsRemaining = 12;
+    renderer3dExactUnitTextureBuildsRemaining = RENDERER3D_EXACT_BUILDS_PER_FRAME;
     renderer3dExactUnitTextureTimeRemaining = 2;
     // The overscan margin is drawn too (see getRenderViewPad).
     let bounds = flat2d ? getVisibleWorldBounds(2 + Math.ceil(getRenderViewPad() / Math.max(0.01, camera.zoom) / TILE)) : get3DVisibleWorldBounds();
@@ -3743,7 +3794,11 @@ function build3DFrameData(flat2d = false) {
         if (_reuseStatic3DObject(objects, t, t.gx, t.gy)) return;
         let tower2DTexture = get3DExact2DTexture(t);
         let tower2DTextureFallback = renderer3dExactTextureFallback;
-        let towerStatus = tower2DTexture ? null : get3DBuildingTextureStatus(t);
+        // (The exact panels' budget spent, none before: the plain building picture (no bars, no turret angle), one
+        // a kind, owner and subtype, until the panel is drawn on a later frame (a status-keyed one a building drew and
+        // uploaded ~100 a frame at a zoom in from far: 200 ms frames).)
+        let towerStatus = tower2DTexture ? null : tower2DTextureFallback ? R3D_PLAIN_STATUS : get3DBuildingTextureStatus(t);
+        let towerAngle = tower2DTextureFallback ? 0 : t.angle || 0;
         // Clouds are portals: they never aim, and their gate faces the camera.
         let isPortal = String(t.type || '').startsWith('cloud');
         push3DRenderObject(objects, {
@@ -3760,8 +3815,8 @@ function build3DFrameData(flat2d = false) {
             rotationY: isPortal ? 0 : Math.PI * 0.5 - (Number(t.angle) || 0),
             tint: get3DDamageFlashTint(t, get3DRenderOwnerColor(t.owner)),
             alpha: get3DConstructionAlpha(t),
-            topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(t.angle || 0)}:${towerStatus.keySuffix}`,
-            topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: t.angle || 0, angleKey: _quantizeTowerAngleIndex(t.angle || 0), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
+            topTextureKey: tower2DTexture ? tower2DTexture._renderer3DExactKey : `tower:${t.type}:${t.owner}:${_quantizeTowerAngleIndex(towerAngle)}:${towerStatus.keySuffix}`,
+            topTextureCanvas: tower2DTexture || get3DBuildingTopTexture('tower', t.owner, { subtype: t.type, color: t.baseStats && t.baseStats.color, angle: towerAngle, angleKey: _quantizeTowerAngleIndex(towerAngle), active: t.type === 'laser' ? t.connectedLasers && t.connectedLasers.length > 0 : true, status: towerStatus, statusKey: towerStatus.keySuffix }),
             sideTint: get3DDamageFlashTint(t, (t.baseStats && t.baseStats.color) || get3DRenderOwnerColor(t.owner))
         });
         _rememberStatic3DObject(objects, t, t.gx, t.gy, !tower2DTexture || tower2DTextureFallback);
@@ -3776,14 +3831,14 @@ function build3DFrameData(flat2d = false) {
         let spawner2DTexture = get3DExact2DTexture(s);
         let spawner2DTextureFallback = renderer3dExactTextureFallback;
         let spawnerExtraBars = spawner2DTexture ? null : [];
-        if (!spawner2DTexture && !s.underConstruction && spawnQueueCount(s) > 0 && s.spawnCooldown > 0) {
+        if (!spawner2DTexture && !spawner2DTextureFallback && !s.underConstruction && spawnQueueCount(s) > 0 && s.spawnCooldown > 0) {
             spawnerExtraBars.push({ pct: s.spawnTimer / s.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (s.spawnTimer / s.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
-        if (!spawner2DTexture && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
+        if (!spawner2DTexture && !spawner2DTextureFallback && !s.underConstruction && s.type === 'research' && s.researchTask && s.researchTask.workRequired > 0) {
             let pct = Math.max(0, Math.min(1, (s.researchTask.workDone || 0) / s.researchTask.workRequired));
             spawnerExtraBars.push({ pct, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: pct > 0.8 ? '#4f4' : '#4af' });
         }
-        let spawnerStatus = spawner2DTexture ? null : get3DBuildingTextureStatus(s, spawnerExtraBars);
+        let spawnerStatus = spawner2DTexture ? null : spawner2DTextureFallback ? R3D_PLAIN_STATUS : get3DBuildingTextureStatus(s, spawnerExtraBars);
         push3DRenderObject(objects, {
             modelKey: `spawner_${s.type || 'base'}`,
             statusTextureCanvas: get3DWorkshopSignTexture(s.type),
@@ -3824,10 +3879,10 @@ function build3DFrameData(flat2d = false) {
         let barrack2DTexture = get3DExact2DTexture(b);
         let barrack2DTextureFallback = renderer3dExactTextureFallback;
         let barrackExtraBars = barrack2DTexture ? null : [];
-        if (!barrack2DTexture && !b.underConstruction && spawnQueueCount(b) > 0 && b.spawnCooldown > 0) {
+        if (!barrack2DTexture && !barrack2DTextureFallback && !b.underConstruction && spawnQueueCount(b) > 0 && b.spawnCooldown > 0) {
             barrackExtraBars.push({ pct: b.spawnTimer / b.spawnCooldown, bgColor: typeof QUEUE_BAR_TRACK === 'string' ? QUEUE_BAR_TRACK : '#6a6a6a', fillColor: (b.spawnTimer / b.spawnCooldown) > 0.8 ? '#4f4' : '#fa0' });
         }
-        let barrackStatus = barrack2DTexture ? null : get3DBuildingTextureStatus(b, barrackExtraBars);
+        let barrackStatus = barrack2DTexture ? null : barrack2DTextureFallback ? R3D_PLAIN_STATUS : get3DBuildingTextureStatus(b, barrackExtraBars);
         push3DRenderObject(objects, {
             modelKey: `barrack_${b.unitType || 'norm'}`,
             x: b.x / TILE,
@@ -4641,6 +4696,16 @@ function structSpatialPatch(F, gone, nGone, added, nAdded, fromRev, toRev) {
     for (let s = C.n; s < F.n; s++) if (at[s] < 0) relink(s);
     C.revision = toRev; C.n = F.n; C.key = null;
 }
+// The structure detail masks: two of the table's size used in turn (the last one is still the previous split's, read
+// against), cleared when taken; a new one at every change of the split was ~300 KB of the page's garbage each time
+// (talloc.js, chaos-300k fuzz). The renderer uploads a mask by its version (detailMaskVersionS) as well as its array.
+const _structDetailMasks = [null, null];
+function _structDetailMaskTake(cap, previous) {
+    const held = previous && previous.mask, M = _structDetailMasks;
+    const i = M[0] && M[0] === held ? 1 : 0;
+    if (!M[i] || M[i].length !== cap) M[i] = new Uint8Array(cap); else M[i].fill(0);
+    return M[i];
+}
 function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame = null) {
     const R = renderer3dInstance;
     if (!R || typeof R.columnPixelScale !== 'function' || (live && (typeof _pageTables === 'undefined' || !_pageTables.s))) return null;
@@ -4690,7 +4755,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame =
         }
         let value = previous;
         if (!previous || previous.live!==live || previous.mask?.length !== F.cap || previous.selected.size !== selected.size || [...selected].some(e => !previous.selected.has(e)) || slots.some(s=>previous.mask[s]!==weights.get(s))) {
-            const mask = new Uint8Array(F.cap);
+            const mask = _structDetailMaskTake(F.cap, previous);
             for (const s of slots) mask[s] = weights.get(s);
             floors.sort((a, b) => a.gy - b.gy || a.gx - b.gx);
             value = _structDetailPrevious = { lists: out, floors, selected, mask, version: ++_structDetailVersion, live };
@@ -4718,7 +4783,7 @@ function _structureDetailSplit(lists, flat2d, bounds, live = true, renderFrame =
         _structDetailCache = { key: cacheKey, frame: _pageTables.s, value: previous };
         return previous;
     }
-    const mask = live ? new Uint8Array(_pageTables.s.cap) : null;
+    const mask = live ? _structDetailMaskTake(_pageTables.s.cap, previous) : null;
     if (mask) for (const e of selected) if (e._s >= 0) {mask[e._s] = 255;e._r3dDetailBlend=1;}
     const pxAt = (gx, gy) => _detailScore(gx + .5, gy + .5, .94, flat2d);
     _structDetailPrevious = { lists: out.slice(0, lists.length), selected, mask, version: ++_structDetailVersion, T: 0, pxAt, live, far: far.slice(0, lists.length) };
@@ -6821,7 +6886,62 @@ function prewarm3DTopTextures() {
     for (const type of Object.keys(BASE_UNIT_STATS)) for (let o = 0; o < owners; o++) get3DUnitTopTexture(type, o);
     if (typeof prewarmUnitStatusGlyphs === 'function') prewarmUnitStatusGlyphs();
 }
+// The first big selection and its deselect, while the match loads (under its overlay, before play): every unit and
+// building the player owns selected for a few drawn frames (the selection panel's first apply, its outline's draws,
+// the selection index and the info pack's first lists), then cleared as Escape clears it. Done in play, the first
+// whole-field selection's frame was 140-270 ms (~500 ms on a cold shader cache) and the first deselect 160-250 ms in
+// a 1M battle; selections after it ~50 ms. Page-side only: no order is sent. Once a match (main.js startGame resets it).
+let _selPrewarm = null;
+function selectionPrewarmReset() { _selPrewarm = null; }
+// (Whether the loading overlay's hide should wait for it: until ~4 s pass with no frame drawn (a hidden tab draws
+// none). From the last drawn frame, not the first ask: the panel pool's prewarm is one long loading frame, and a clock
+// from the first ask ran out there, the selection cleared after one frame (the first whole-field box 270-480 ms).)
+function selectionPrewarmBusy() {
+    const P = _selPrewarm;
+    if (!P || P.done || !gameStarted) return false;
+    const now = performance.now();
+    if (!P.t0) P.t0 = now;
+    if (now - Math.max(P.t0, P.last || 0) > 4000) { if (P.stage === 1) _selPrewarmClear(); P.done = true; return false; }
+    return true;
+}
+function _selPrewarmClear() {
+    selectedUnits = []; selectedEntities = []; activeSubGroups = {};
+    if (typeof updateInfoPanel === 'function') updateInfoPanel();
+}
+function _maybePrewarmSelection() {
+    const P = _selPrewarm || (_selPrewarm = { stage: 0, frames: 0, done: false });
+    if (P.done || !gameStarted) return;
+    P.last = performance.now();
+    const overlay = document.getElementById('match-load-overlay');
+    const loading = !!overlay && overlay.style.display !== 'none';
+    if (P.stage === 0) {
+        // (Not once play shows: a selection the player did not make would flash.)
+        if (!loading) { P.done = true; return; }
+        if (typeof simClientWorldReady === 'function' && !simClientWorldReady()) return;
+        if (typeof simClientCurrentUnitVis === 'function' && !simClientCurrentUnitVis()) return;
+        if (selectedUnits.length || selectedEntities.length || typeof selectInfoPanelPlayerRoster !== 'function') { P.done = true; return; }
+        try { if (!selectInfoPanelPlayerRoster('all-owned', 'total', 'all')) { P.done = true; return; } } catch (err) { P.done = true; console.warn('[renderer] selection prewarm:', err && err.message || err); return; }
+        P.stage = 1; P.frames = 0;
+        return;
+    }
+    P.frames++;
+    if (P.stage === 1) {
+        // (Its frames drawn: the info pack's answer comes back within a few, at most ~1 s.)
+        const packed = typeof _ipk === 'undefined' || _ipk.state !== 2 || _ipk.rowsSeq === _ipk.seq;
+        if (loading && (P.frames < 8 || (!packed && P.frames < 90))) return;
+        P.held = P.frames; P.heldLoading = loading; P.packed = packed;
+        _selPrewarmClear();
+        P.stage = 2; P.frames = 0;
+        return;
+    }
+    if (P.frames >= 4 || !loading) P.done = true;
+}
 function _maybePrewarm3DView(renderer3d) {
+    // (The panel canvases, in every mode (2D draws its sprites through the same atlas), under the loading overlay.)
+    if (gameStarted && renderer3dPanelsMade < RENDERER3D_PANEL_COUNT) {
+        const ov = document.getElementById('match-load-overlay');
+        if (ov && ov.style.display !== 'none') { try { if (typeof prewarmTowerIconSprites === 'function') prewarmTowerIconSprites(); prewarm3DPanelPool(renderer3d); } catch (err) { renderer3dPanelsMade = RENDERER3D_PANEL_COUNT; console.warn('[renderer] panel prewarm:', err && err.message || err); } }
+    }
     const done = _view3DPrewarmed && _view3DPrewarmed.renderer === renderer3d ? _view3DPrewarmed : null;
     if ((done && done.units) || renderDimensionMode !== '2d' || !gameStarted) return;
     const overlay = document.getElementById('match-load-overlay');
@@ -6864,6 +6984,7 @@ function processRenderFrame(timestamp) {
     let renderer3d = ensure3DRendererInitialized();
     if (renderer3d) {
         _maybePrewarm3DView(renderer3d);
+        _maybePrewarmSelection();
         renderer3dSnapshot = build3DFrameData(renderDimensionMode === '2d');
         renderer3d.setGraphicsOptions(graphicsOptions);
         if (typeof renderer3d.gpuTimerBegin === 'function') renderer3d.gpuTimerBegin();
@@ -7658,7 +7779,7 @@ function structStatusTick() {
         ow += nw;
         if (!nd) continue;
         const L = C === FloorItem ? (out.floor || (out.floor = [])) : (out.dead || (out.dead = []));
-        for (let i = 0; i < nd; i++) { const e = T.rowObj[O.died[od + i] & 0xffffff]; if (e) L.push(e); }
+        for (let i = 0; i < nd; i++) { const e = structRowObj(T, O.died[od + i] & 0xffffff); if (e) L.push(e); }
         od += nd;
     }
     for (let o = 0; o < owners; o++) if (O.shrine[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += O.shrine[o]; }
@@ -7763,6 +7884,8 @@ function clearRendererTransientVisualCaches(options = null) {
         LEVEL_TEXT_SPRITE_CACHE.clear();
         UNIT_LEVEL_TEXT_SPRITE_CACHE.clear();
         renderer3dTopTextureCache.clear();
+        // (Their canvases back to the pool: made once a page, never dropped.)
+        for (const panel of renderer3dExact2DTextureCache.values()) if (panel && panel._panelCtx) { panel._textureVersion = ++renderer3dPanelSerial; renderer3dPanelPool.push(panel); }
         renderer3dExact2DTextureCache.clear();
         renderer3dFlatGeneration++;
         if (renderer3dInstance && renderer3dInstance.topTextureCache && typeof renderer3dInstance.topTextureCache.clear === 'function') {

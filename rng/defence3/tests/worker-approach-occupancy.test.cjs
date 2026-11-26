@@ -24,7 +24,7 @@ const r=i.eval(`(()=>{
  worker.path=[{x:11,y:10}];worker.pathIndex=0;worker.commandState=CMD_MOVING;
  gameTime=(128-worker.id%128)%128;waiStepUnit(worker);
  const healed=ally.energy>1;
- const b=new Barrack(11,11,0,'norm');barracks.push(b);setTileEntity(11,11,'barrack',b);
+ const pb=(gx,gy,key,owner)=>{placeBuilding(gx,gy,key,owner,{ignorePlacementRules:true,silent:true});const e=getTileEntityRef(gx,gy);e.underConstruction=false;e.level=e.effectiveLevel=1;e.energy=e.maxEnergy;return e;};const b=pb(11,11,'barrack_norm',0);
  b.spawnQueue=[{unitType:'norm',level:1,energyPaid:0}];const front=getQueuedSpawnInfo(b.spawnQueue[0],'norm',1,0);b.spawnQueue[0]=front;
  worker.workerTransferCooldown=0;worker.workerState='MOVING_TO_HEAL';worker.workerTarget=b;worker.workerTargetType='queue';worker.healerHasMaterial=true;
  worker.path=[{x:11,y:11}];worker.pathIndex=0;worker.commandState=CMD_MOVING;waiStepUnit(worker);

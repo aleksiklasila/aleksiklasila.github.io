@@ -103,7 +103,7 @@ const _simStructSlots = {
         return s;
     },
     // (Tests: slot s's structure, null none.)
-    ownerOf(s) { const v = this.psrc && s >= 0 && s < this.n ? this.psrc[s] : -1; if (!(v >= 0)) return null; const C = _simMetaCls[v >>> 24], T = C ? _sTables.get(C) : null; return T && T.rowObj ? T.rowObj[v & 0xFFFFFF] || null : null; },
+    ownerOf(s) { const v = this.psrc && s >= 0 && s < this.n ? this.psrc[s] : -1; if (!(v >= 0)) return null; const C = _simMetaCls[v >>> 24], T = C ? _sTables.get(C) : null; return T && T.rowObj ? structRowObj(T, v & 0xFFFFFF) : null; },
     // e's slot if it has one, -1 none.
     slotOfLive(e) {
         const k = _simMetaClassOf(e), r = e ? e._sr : -1, rs = k >= 0 ? this.rs[k] : null;
@@ -922,6 +922,26 @@ function _pageResolveRefs(v) {
 }
 const _pageLvChanged = [], _PAGE_LV_ALL = new Array(33).fill('');
 function _pageBoostSig(p) { try { return JSON.stringify([p.boosts || null, p.boostOn || null]); } catch { return ''; } }
+// A boost change as the simulation applies it (data_dynamic.js setPlayerThingBoost / boostTick: rebuildPlayerThingBoost
+// of each thing whose steps changed, or of every boosted thing of a resource that went on or off), not the player's
+// whole table (24-46 ms of the page at each boost click of a 300k battle). false: rebuild whole (no earlier state).
+function _pageBoostRebuild(pid, oldSig, p) {
+    if (!oldSig || typeof rebuildPlayerThingBoost !== 'function') return false;
+    let ob, oo;
+    try { [ob, oo] = JSON.parse(oldSig); } catch { return false; }
+    ob = ob || {}; oo = oo || {};
+    const nb = p.boosts || {}, no = p.boostOn || {}, ids = new Set();
+    for (const id of new Set([...Object.keys(ob), ...Object.keys(nb)])) {
+        const a = ob[id] || [0, 0], c = nb[id] || [0, 0];
+        if ((a[0] || 0) !== (c[0] || 0) || (a[1] || 0) !== (c[1] || 0)) ids.add(id);
+    }
+    for (const [res, w] of [['energy', 0], ['astar', 1]]) {
+        if ((oo[res] === false) === (no[res] === false)) continue;
+        for (const id of new Set([...Object.keys(ob), ...Object.keys(nb)])) if ((ob[id] && ob[id][w] > 0) || (nb[id] && nb[id][w] > 0)) ids.add(id);
+    }
+    for (const id of [...ids].sort()) { const cut = id.indexOf(':'); if (cut > 0) rebuildPlayerThingBoost(pid, id.slice(0, cut), id.slice(cut + 1)); }
+    return true;
+}
 function pageApplyState(st) {
     if (!st) return;
     if (typeof st.upkeep === 'string' && typeof _upKeepRateByPlayer !== 'undefined') { try { _upKeepRateByPlayer = JSON.parse(st.upkeep); } catch { } }
@@ -999,7 +1019,7 @@ function pageApplyState(st) {
         if (typeof rebuildPrecomputedStatsMapPlayer === 'function') for (let pid = 0; pid < players.length; pid++) {
             const p = players[pid], b = before[pid];
             if (!p || typeof p !== 'object') continue;
-            if (!b || b.boost !== _pageBoostSig(p)) { rebuildPrecomputedStatsMapPlayer(pid); continue; }
+            if (!b || b.boost !== _pageBoostSig(p)) { if (!_pageBoostRebuild(pid, b && b.boost, p)) rebuildPrecomputedStatsMapPlayer(pid); continue; }
             const changed = lvChanged[pid];
             if (!changed || !changed.length) continue;
             if (changed.length > 32) { rebuildPrecomputedStatsMapPlayer(pid); continue; }

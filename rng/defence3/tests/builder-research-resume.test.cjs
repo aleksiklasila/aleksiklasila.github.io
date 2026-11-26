@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const world=new H.World(),i=world.spawn('builder-research',{simWorker:false});
 const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  startSoloGame();
- const t=new Tower(8,8,'pistol',0);t.underConstruction=false;t.stacks=1;t.manualStacks=5;t.level=t.effectiveLevel=t.potentialEffectiveLevel=1;t.autoUpgradeEnabled=false;t.autoStackEnabled=true;t.isUpgrading=t.isStacking=false;t.energy=t.maxEnergy;
+ const mk=(C,o)=>{const e=Object.assign(_snapStructShell(C),{stacks:1,manualStacks:1,effectiveStacks:1,level:1,effectiveLevel:1,isStacking:false,stackingWorkDone:0,markedForSalvage:false,autoUpgradeEnabled:true,buildEnabled:true},o);if(C===Barrack||C===CollectorSpawner){e._qN=0;e.queueEnabled=true;e.spawnTimer=0;}e.energy=e.maxEnergy;return e;};const t=mk(Tower,{gx:8,gy:8,type:'pistol',owner:0});t.underConstruction=false;t.stacks=1;t.manualStacks=5;t.level=t.effectiveLevel=t.potentialEffectiveLevel=1;t.autoUpgradeEnabled=false;t.autoStackEnabled=true;t.isUpgrading=t.isStacking=false;t.energy=t.maxEnergy;
  setTileEntity(8,8,'pistol',t);
  const capped={flags:workSiteFlagsOf(t),work:_isBuilderWorkTarget(t,0)};
  applyResearchCompletion(0,{kind:'building',key:'pistol',statKey:'maxLevel'});

@@ -394,7 +394,15 @@ function _matchInitializationProgress() {
     const ready = !c || simClientWorldReady();
     return { ready, pending: !ready || !_matchInit.released };
 }
+let _matchLoadOverlaySeq = 0;
 function setMatchLoadOverlay(visible, title = 'Loading Match', detail = 'Preparing game state...') {
+    const seq = ++_matchLoadOverlaySeq;
+    // (Its hide waits for the first selection's prewarm, a few frames under it (renderer.js _maybePrewarmSelection);
+    // dropped if the overlay was set again meanwhile.)
+    if (!visible && typeof selectionPrewarmBusy === 'function' && selectionPrewarmBusy()) {
+        setTimeout(() => { if (seq === _matchLoadOverlaySeq) setMatchLoadOverlay(false, title, detail); }, 30);
+        return;
+    }
     // Ready/countdown only releases lockstep. Keep the world covered while
     // its startup ticks build lazy simulation state, on every peer.
     if (!visible && gameStarted && !gameOver && _matchInitializationProgress().pending) {

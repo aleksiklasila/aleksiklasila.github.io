@@ -11748,3 +11748,248 @@ rendered runs vary). The prefix's CPU 3.4 -> 4.3 s (two passes), off the chain's
 tower-simd-determinism, multiplayer-late-carry-restore, chaos-scenario / multiplayer-chaos determinism pass.
 - Left at the commit's wait: the combat brain's last jobs (bgc:2:62 ~22 ms on the simulation thread at p95): the lane's
   helper CPU (~440 ms a post) is the lever, as before.
+
+### 2026-11-26 (later) - a boost's page tables by thing; units' target responsiveness measured (tests/test-runs/loop-20261126/)
+
+Scene: chaos-300k-32k rendered (headed Edge), fuzzdrv.cjs real-input player (camera, boxes, orders, groups, views) plus
+hectic.js bursts every 4 s (queues, research, boosts, placements, army orders), 90 s; fzsum.cjs, profile-long-tasks.cjs,
+window.cjs (a page profile between two fzsum-clock seconds, with the frames there).
+
+**The page's stat tables after a boost: the changed things only (sim_frame_world.js _pageBoostRebuild).** Every boost
+signature change made the page rebuild the player's whole table (rebuildPrecomputedStatsMapPlayer): 24-46 ms page tasks
+every ~4 s in the run (24 of them, 725 ms in 90 s), behind several 75-100 ms page tasks. The simulation remakes only the
+thing whose steps changed (setPlayerThingBoost -> rebuildPlayerThingBoost), or every boosted thing of a resource that
+went on or off (boostTick); the page now does the same from the old and new boosts / boostOn (the whole table only with
+no earlier state). New tests/page-boost-tables.test.cjs (SIM_WORKER=1): after unit and building boosts of both
+resources, a cleared boost, energy debt and its end, the page's tables equal the worker's (69 things), with no whole
+rebuild on the page. boost.test passes. Rendered (h3-b -> h3-c, the same fuzz seed): page busy runs >= 50 ms 39 -> 29,
+the stat rebuilds gone; frames > 50 ms 5 -> 5, FPS 110 -> 109; steps 20 TPS throughout (max 41-48 ms).
+- Left: the frame after a whole-field box + move (742k px2, ~300k units selected) 200-233 ms in both runs: ~90 ms of
+  rendering in it (build3DFrameData 24, instance draws 20, shadow map 15) plus ~31 ms of the fuzz driver's own
+  page.evaluate (hectic.js reading columns): harness cost, not the game's.
+
+**Units' target responsiveness (idle-weval.js, a WEVAL_START probe: 4000 sampled armed non-worker units, every 250 ms;
+enemy units by _findClosestEnemyUnitByChunks).** Idle units with an enemy in sight: 0.02% of looks, waits p50 10, p90
+20-40, max 35-80 ticks (19-24 waits in 50 s). Units touching an enemy (within r + 1.5 tiles) with no brain instruction
+(cmMode 0 or CM_WAIT 64): p50 6, p90 15, p99 16, max 40 ticks: the acquisition cycle (SIM_ACQUIRE_TICKS 4 stagger, its
+commit two ticks after the post); none stuck. Pitfalls found on the way: brain-driven attack-movers fight with
+commandState 2 (cmMode 5 hold and fire / 2 chase), so commandState alone reads them as "not attacking"; melee units
+beside flying collectors cannot hit them (not a wait).
+
+**The first whole-field selection's frame (mixed-1m-4teams rendered; selmove.cjs: box + right-click move with real input,
+three times; HIDE_PANEL, PREWARM, GAP marks; trwin.cjs: a trace's events per thread around its n-th longest GAP).** The
+UI-only fuzz (fuzzdrv, no hectic bursts) had 241 + 208 ms frames after the first whole-field box + move. In the trace
+the 266 ms gap is one GPU-process task (RendererRasterWorker: DoEndRasterCHROMIUM::Flush 242 ms) after a layout of 1,092
+objects and a paint of #right-panel (the selection panel: its type icons, blob thumbnails, _thumbCache). Measured:
+- Fresh browser profile: the first box's worst frame 475-503 ms with the panel, 46-96 hidden (#right-panel display
+  none); the second and third boxes 40-57 either way.
+- Persistent profile (USERDIR, shader caches kept): 357 / 174 / 139 ms over three runs, then 77-214 (variance).
+- Painting every section of the panel visibly for four frames before the first box (PREWARM=1): 159 / 214 vs 161 / 207:
+  no help. Not changed; left open (a first-use GPU cost of the panel's content, mostly the fresh-profile shader cache).
+- Also seen: ~170 DOM tile rasters a second on the GPU main thread (2,704 RasterCHROMIUM in 16 s, ~1.1 s): the HUD's
+  changing text.
+- More on that frame (selmove.cjs PREWARM=2, abswin.cjs, phases.cjs): three small box selections first take the first
+  big box 172-240 -> 108-109 ms (warm profile); a dummy draw of the selection mask's two passes at load (the real
+  formats, R8 and RGBA8 targets) did nothing (179 / 205 / 273: reverted); content-visibility on the panel's sections is
+  there already (A/B no change). In the cold box's 1.5 s the page's main thread is as busy as in the warm one (534 vs
+  519 ms), with the first panel apply (_infoPackMsg -> _ipsApply) 44 ms cold; the rest of the frame is the GPU's. The
+  deselect of a 183k selection (Escape) also has a 163-246 ms frame, main thread busy 321 ms in its second (no single
+  owner: _ipsApply 24). Phased 1M run (base / zoomed out / selected / rallied / deselected / zoomed in, 12 s each):
+  FPS 104-118 in every phase, steps 5-7 a second (20 TPS) throughout: zoom-out, whole selection and a ten-point
+  rally do not slow the simulation.
+- checker-200k-rmax rendered fuzz (dk 1.17, steps 46 ms, 20 TPS): FPS 73-86, the page's main thread ~57% busy, spread
+  (getChunkRenderView 7%: ~35 unit-list rebuilds a second, per tick and at camera changes, ~0.8 ms each at ~1100 near
+  units; bufferSubData 7%; _pushCombatRecordFx 3% (band-limited already, ~0.2 ms a frame); column uploads, detail
+  splits 2-3% each): the page's per-tick work at dk 1, no single owner. Navigation installs rebind 16 arrays a profile
+  every ~8 ticks (binds-weval.js): steps with binds 44.2 vs 42.5 ms mean, p95 the same.
+- MP GUI fuzz after this session's changes (two headed tabs, 75000-500): 305 controls, 0 desyncs (199 hashes compared),
+  no slow control, no errors.
+
+### 2026-11-26 (later) - what still grew in play, made at the match's start (user: "if something is still growing mid game, pre-allocate the max required")
+
+Censuses (tests/test-runs/loop-20261126/): alloc-weval.js (simulation worker: simHeapArray / simSharedArray /
+simHeapArrayAuto / Memory.grow after an 8 s settle, by caller), talloc.js (worker as WEVAL_START, page as PAGEACT: plain
+typed arrays and ArrayBuffers of 64 KB or more, by caller). Rendered chaos-300k-32k and mixed-1m-4teams with fuzzdrv +
+hectic bursts, 60 s each. No Memory.grow in play; the simulation worker makes no large plain arrays in play. Found and
+moved to the match's start:
+- Order workers' lists (main.js _ordWReady: 8 arrays, 8.3 MB at the first order) - made by orderQueueReserve now.
+- The structure row frees' kernel lists (data_state.js _sFillCols / _sFillRS / _sFillRE, at the first removal) -
+  structRowsFreeReserve(B), sized to B.structs + B.mines rows.
+- The pending-path wheel's work lists (pathfinding.js _ppL / _ppKa / _ppKb / _ppVa / _ppVb, grown at the first waits) -
+  pendingPathsReserve(B), the unit slots (~28 MB at 1M slots).
+- The research queue's ids (data_dynamic.js SimResearchQueue: 64, doubled as tasks were queued) - made at its longest
+  (stats x (MAX_RESEARCH_LEVEL + 1) + 2).
+- navPath's output (flownav.js _navPathOut, at the first unit route shown) - 256 entries in navReserve (its caller
+  asks for 64).
+- The cloud tiles' list (pathfinding.js _cloudTileList, at the first cloud) - cloudTilesReserve(B), B.structs.
+- Page: the structure detail masks (renderer.js _structureDetailSplit: a new Uint8Array of the table's size at every
+  change of the split, 9 x ~300 KB in 60 s) - two of the table's size used in turn (_structDetailMaskTake); the
+  renderer uploads by the split's version as well as the array.
+Re-census after: the worker's in-play allocations gone (the 300k and 1M runs), the page's masks gone. Left: the page's
+PersistentInstances (renderer3d.js drawColumnModels' model groups) double during warm-up (13-15 times in 60 s as new
+model kinds come near; then they stay): sizing every group for its most up front would hold ~14 MB of mostly idle
+buffers; not changed.
+Tests: order-fast, order-many, order-worker-budget, research-queue, research-menu, structure-row-reuse,
+structure-rows-fill, structure-row-expiry-snapshot, worker-walk, scene-orders, lod-visible-budget, medium-models,
+renderer3d-picking, chaos-scenario / multiplayer-chaos determinism pass.
+- GC in the rendered hectic chaos-300k fuzz (trace, v8.gc): the simulation worker 100 ms in 60 s (one 27 ms major at
+  step 88, after the load; slow steps owe 3 of their 152 ms excess to GC). The page: 71 scavenges (172 ms, max 17.5)
+  and 5 major (74 ms, max 21.8). Page allocation (PAGEHEAPSAMP, heapsamp-top.cjs) ~19 MB/s: _columnStoreUploadNear 67 MB
+  in 50 s, buildFrameEffects 63, getChunkRenderView 45, _cmUnitSlots 39, _unitDetailSplit 37, build3DFrameData 32
+  (largely doubles boxed at calls into non-inlined helpers: per particle / candidate x, z, size). Retained at the end
+  (PAGEHEAPSAMP_LIVE=1, new probe switch) 13.4 MB: the page unit list 4.8, the HUD's per-event resource logs
+  (recordAstarDelta 2.8, recordEnergyDelta 0.4: an object an event, pruned to their window; several readers still
+  read them beside the running sums of _deltaStore), slot views 1.4. Not changed yet.
+- Two-player MP perf fuzz (perf-fuzz.cjs 100000-1000.json --mp=2 --mp-delay=50, 5 min): no desync, no page error;
+  steps 18-19 ms mean on both peers, but TPS under 15 on 35% of samples, both peers at once, always beside ~1,023 ms
+  frames on the driven player (FPS ~55 there: its window on the 60 Hz display; the other ~120): page stalls of a
+  page that is not drawing, which hold the lockstep's inputs (the network is the page's). Occlusion is already off in
+  the fuzzer (CalculateNativeWinOcclusion); as its README says, one-machine MP rates are not absolute; not chased.
+- Memory of one player (100000-1000.json, 200k units, map 1024; MP on one machine ran out at 13.1 GB for two): Edge
+  renderer process ~4.2 GB private (the simulation's wasm heap 2.65 GB of it), GPU process ~1.8 GB. The heap's live
+  2.06 GB by first caller (SIM_HEAP_SITES=1, heapinv.js; the site recorder's first frames skipped): structure tables'
+  columns 567 MB (_sColAlloc: each of the 9 owned classes' tables reserves the whole owned-row budget, 294,912 rows x
+  134-214 bytes, though all classes together hold at most that many: ~8/9 of it unused at any time), the navigation
+  build slots 325 MB (worst-case sized: two ground of 96 MB, two build of 52, air 29.5), unit columns 149 + 219 bound,
+  acquisition 88, worker AI 77, lasers 68, adjacency 66, worker side pool 51, the presentation structure table 48,
+  traffic 44 (push records 5 words a tile, two buffers). Candidates (not done): one row pool for the owned classes
+  (-~450 MB a player, a structural change to the tables), narrower structure columns (Float64 _en, stackingWorkDone,
+  effectiveAreaMult, upgrademaxEnergy, _mxOv ...). performance.measureUserAgentSpecificMemory is no use here: it counts
+  the shared wasm memory once a worker (272 GB).
+- getChunkRenderView's views list and bucket candidates kept (renderer.js: two lists used in turn as its slot
+  buffers already were; the candidates in an Int32Array scratch, sorted numerically): its share of the page's
+  allocation 44.6 -> 20.0 MB in 50 s of the hectic fuzz (page total 963 -> 938: the rest is spread over many sites).
+  lod-visible-budget, medium-models, renderer3d-picking, detail-pick pass.
+- First whole selection, one more try: the selection outline's two passes drawn for real once in an early frame (every
+  unit and the building entry off, into the frame's own targets): first box 207 / 180 / 136 ms (warm profile) against
+  139-273 before: no effect, reverted. What the small boxes warm is not the outline's draw variants.
+
+**Structure table rows given their defaults as they are taken; their pages left out of the prefault (data_state.js
+_sLazyFill / _sTableGrow / _sTablesReset, sim_wasm.js simHeapLazyRange).** Each owned class's table reserves the whole
+owned-row budget (above) and its columns were filled with their defaults whole when made and again at every match's
+reset; simHeapPrefault then wrote every heap page: all of it resident. Now a fresh row's block of 1024 rows (from it)
+gets every numeric / plain column's default when the row is first taken (_sRowTake: r not below T._lz), the same
+values the whole fill wrote; a grow keeps the rows in use and marks the rest lazy (T._lz = T.n); the reset fills no
+numeric column; the columns past their rows in use are registered with simHeapLazyRange (dropped when freed) and the
+prefault skips their whole pages. Restores take rows one at a time (_sRowTake), so a restored row gets its defaults
+before its values. Rendered 100000-1000.json (200k units), the player's Edge renderer process: working set 3,452 ->
+2,485 MB (commit unchanged 4.15 GB: the heap's memory is committed as it grows); steps 11.1 -> 11.3 ms mean, 20 TPS;
+no page error. structure-rows-fill (expired rows equal fresh rows in every column), structure-row-reuse,
+structure-row-expiry-snapshot, structure-list-reuse, multiplayer-late-carry-restore, chaos-scenario /
+multiplayer-chaos determinism pass. Two-player MP perf fuzz with the same seed (pfmp-b -> pfmp-d): FPS p5 2.5 ->
+19.9, p50 42 -> 51.8; the fuzzer's own private-memory limit (13 GB) still ends its sessions (commit, not resident).
+- MP fuzz "TPS" is steps a second: under load the host lengthens the step interval and seals dk >= 2 into the bundles
+  (utils_net_quality.js netHostUpdateSimulationPace; main.js stepDk from the bundle), so ~10 there at dk 2 is ~20 game
+  ticks a second. The MP dips are the pace controller, not lost ticks.
+- The navigation build slots (flownav.js navReserve, 325 MB worst-case sized) registered as lazy too: written as far
+  as a build reaches. Renderer working set 2,485 -> 2,237 MB (3,452 before both: -1.2 GB a 200k-unit player). Steps
+  10.9 ms mean, 20 TPS; nav-atlas, nav-background, nav-build-interleaving, nav-build-kernels, nav-chain-lifecycle pass.
+  Hectic chaos-300k fuzz (h3-c -> h3-d): steps p99 36.1 -> 38.1, max 48.5 -> 46.6 (the same within runs), FPS 109 -> 112:
+  the first touches of those pages in play cost no visible step.
+- GPU memory of the same player (glmem.js through the probe's new INITJS=@file: WebGL storage by call site): 1.74 GB
+  live: getTopTexture 751 MB in 6 textures (~125 MB each), prepareColumnAtlas 586 MB (4 array textures),
+  ensureSiteMarkResources 125, uploadBackgroundTexture 125, shadow map 48. Next: which canvases those six 125 MB top
+  textures are (topTextureCache held only two small entries at 25 s: the big ones come later or elsewhere), and
+  whether the site-mark / background textures need full map resolution.
+
+**The first big selection and its deselect done while the match loads (renderer.js _maybePrewarmSelection; the
+overlay's hide waits for it: utils_networking.js setMatchLoadOverlay + selectionPrewarmBusy).** User: move the first
+selection and deselect to the initialization, before play. Under the loading overlay, once the world is ready: every
+unit and building the player owns selected (selectInfoPanelPlayerRoster 'all-owned'), 8 frames drawn (up to 90 while
+the info pack's first answer is pending), cleared as Escape clears it, 4 more frames; the overlay's hide waits for it
+(at most 4 s; a hide set again meanwhile drops the wait). Page-side only: no order is sent, nothing shows. A restored
+scene hid the overlay the frame after the world was ready: the first try held the selection one frame (no effect)
+until the hide waited. selmove.cjs (mixed-1m-4teams, warm profile): the first whole-field box's worst frame 39 / 49 /
+185 / 50 / 44 ms (139-273 before; later boxes 32-63); phased run: "selected" 36-154 (277-361). The deselect after a
+big rally still has a 180-247 ms frame sometimes, the first deselect or a later one alike (26-247): not a first-use
+cost; the page's main thread as busy either way (~230 ms in 700): open. static-panel-edge, research-menu pass; MP GUI
+fuzz (two headed tabs, 10000-160): 308 controls, 0 desyncs, no errors.
+- Correction to the GPU memory list above: glmem.js read texImage2D's six-argument (canvas) form as width x height
+  (format x type: 6408 x 5121 x 4 = 125 MB), so getTopTexture, the site marks and the background were not 125 MB
+  each (the top textures are 96 x 96 unit panels). Real: ~740 MB a player, mostly the column models' atlases
+  (prepareColumnAtlas: 2816^2 main and 5504^2 animation, RGBA8, 6 levels, one layer a palette colour: 121 + 461 MB),
+  the palette 3 colours whatever the teams (attack-200k-8teams the same 580 MB): fixed, not grown by players; left
+  (halving it costs the models' image quality).
+- The unit columns past the slots in use registered lazy too (sim_unit_state.js _simUnitStateGrow: fresh memory there
+  until a slot is taken): renderer working set 2,237 -> 2,202 MB at 100000-1000 (most slots in use there).
+- checker-200k page split (ck-b profile, 70 s): render 39% of the page's busy time (drawFrameColumns 25: the column
+  uploads 11, drawColumnModels 18 of which uploads 2.8 s / 7.1), build3DFrameData 28 (getChunkRenderView 8.3,
+  buildFrameEffects 6.1, the detail splits 4.9), simulation frames' apply 7.5, minimap 5.4, shadow map 4.6, HUD +
+  bottom bar 4: the column uploads are the largest single owner (data volume a tick at dk 1).
+
+### 2026-11-26 (evening) - the "deselect hitch" was the first zoom in from far; spawner class table; structure meta rows
+
+**The 180-310 ms frame after a big rally's deselect was the zoom in after it** (phases.cjs now reports when each phase's
+worst frame came: 6.4-6.8 s into the "deselected2" window, where the zoom back in starts; the first deselect, with no
+zoom after it, stayed 24-59 ms). Only the first zoom in from far hitched (later ones 17-55 ms). Tools
+(tests/test-runs/loop-20261126/): trwin-s.cjs / trlong.cjs (streamed traces too big to parse, rAF gaps), gapsum.cjs
+(per gap: time by thread and event), phases.cjs PH_TRACE / PH_TRACE_ZOOM (a trace of the deselect or the zoom alone),
+PH_ZOOMSTART / PH_ZOOMREP, PH_WRAP (page functions' calls by caller per phase), canvprobe.js / c96probe.js (canvas
+creations, 2D draws on 96 px canvases), glcensus.js (GL calls / bytes per 100 ms by kind, sampled callers),
+domimgs.js. In the 260-315 ms frame the GPU process was busy all of it (page WebGL ~190 ms, new canvas images 40-55,
+2D raster ~35); the page's own thread was mostly idle. Owners and changes (all page-side):
+- The building top textures (barracks', spawners', towers' status pictures) were the stand-in when the exact panels'
+  budget was spent, keyed by status bars and turret angle: ~100 new canvases drawn and uploaded in one frame, no
+  budget. The stand-in is now the plain building picture (no bars, angle 0; R3D_PLAIN_STATUS), one a kind / owner /
+  subtype, until the panel is drawn on a later frame. 208 -> 109-117 ms.
+- Exact panels a frame 12 + 12 -> 6 + 6 (RENDERER3D_EXACT_BUILDS_PER_FRAME): each is ~1.3 ms of the GPU process
+  (raster, upload, mips, seven level copies; level-0-only uploads A/B took 208 -> 139-165), which the 2 ms budget of
+  the page thread did not see. 109-117 -> 66-84 ms; FPS in the zoom phase 80-86 (was 76-84).
+- Made at the match's start, reused (user: whatever can be created at initialization should be): the panel canvases
+  (renderer.js prewarm3DPanelPool: 1,792 = the cache (1,024 -> 1,536, top textures now in it) + the pool, each drawn and
+  uploaded twice so both of its copy-on-write images exist; evicted ones always go back to the pool); the top textures
+  through that pool and cache (was an unbounded Map, 368 canvases after a few minutes); the sprite array at its full
+  1,792 layers (~88 MB, no growth in play: it started at 256, all in use, the rest drawn as single textures); every
+  tower type's icons (renderer2d.js prewarmTowerIconSprites: 32 angles x active / not, cache 1,024 -> 2,048). No canvas
+  image is made in play now (trace: only a few non-panel ones).
+- Near column uploads (renderer3d.js _columnStoreUploadNear): near blocks up to columnUploadGapBytes apart joined
+  (the blocks between listed, so every column uploads the same set): 10-12k bufferSubData calls a 100 ms -> <= 2.3k.
+- Tried, reverted: a zoom sweep under the loading overlay (8-12 zooms about the player's view): no gain (the content
+  near the battle is what is new).
+- Still open: the first whole-field box in a fresh browser profile 270-430 ms (Graphite raster pipelines compiled:
+  a Dawn worker task ~200 ms; a persistent profile caches them, USERDIR).
+
+**Spawner class table kept** (barrack.js _spClsBuild): rebuilt on every queueUnit and production step; now kept while
+each class's table, row count, column version and the heap are the same (spawn-births-columns, spawn-counts-kernel,
+spawn-counts, closest-spawner-cache pass).
+
+**Structure presentation rows** (rendered chaos-300k-32k + hectic bursts): changed-row lists of 1k+ rows (8-tick
+commits' marked tiles) ran on the simulation thread alone, 2.15 ms a call; now on the helpers from 2,048 rows in chunks
+of about a sixteenth (SIM_META_PER_MIN 512): 0.87 ms. The whole metadata pass (52,768 slots, every ~6 ticks, between
+ticks) 2.72 -> 2.58 ms (nfs.rs meta_structs_core: the class table's column addresses and the output columns hoisted into
+locals; memory bound). meta-structs-kernel passes (serial and PAR).
+- Hectic bursts there now: processActions 5-16 ms on burst steps (~400 actions: handlers 4-7, placement 1-2, sanitize
+  1.3); the scene's steps p50 21 / p95 35 / p99 44 / max 56 (the opening clash). chaos-1m-250k rendered: p50 89, p99
+  124 at dk 4, no spikes (movement + k89).
+
+### 2026-11-26 (night) - the first selection's prewarm cut short; held units' orders in the kernels; a fuzz harness that made a view of every unit (tests/test-runs/loop-20261126/)
+
+Rendered fuzz (fuzzdrv + hectic bursts, headed Edge): chaos-300k-32k steps max 45 ms (20 TPS), FPS 105, frames > 50 ms 6,
+the worst 125 ms (page 50 ms busy: GPU). mixed-1m-4teams: the first whole-field box + move 250 ms, the bursts' frames
+100-150 ms.
+
+**The selection prewarm ran one frame (renderer.js selectionPrewarmBusy).** Its 4 s limit counted from the first ask, and
+the panel pool's prewarm (one long loading frame) used it up: the selection was cleared after 1 drawn frame of the 8
+(PAGEEVAL _selPrewarm: stage 1, frames 1, done). Now 4 s with no frame drawn (a hidden tab), from the last drawn frame.
+1M first box (selmove.cjs, two runs): 393-482 -> 75-84 ms. Load-time prewarms measured (pwtime.js): panel pool 166 ms,
+tower icons 82 ms.
+
+**Harness: hectic.js read `units` (every unit's page view made: ~50-250 ms of each burst at 1M, and each later death froze
+one: pageGonePutMany).** hectic2.js reads the page frame's columns (order, owner, flags, id, x, y). The game's own
+queueAction work in a burst is 3-5 ms (hectic-t.js timing each kind). 1M rendered fuzz with hectic2: frames max 249.6 ->
+74.8 ms, > 100 ms 3 -> 0, FPS 94 -> 98; UI-only fuzz (no bursts) max 83 ms, FPS 99.5. The 4.1 s-periodic long frames were
+the harness's DevTools evaluate (trace: "Receive mojo message" blink.mojom.DevToolsSession, 8 KB, 53-222 ms).
+
+**Held units' move orders in the kernels (ord.rs k_order_admit, mv.rs ord_pickup, ord.rs k_order_workers).** A held unit
+(hold position) was handed to the JavaScript (_issueGroupMoveOrderList): findNearestWalkable + navPathReach each. The
+controller already parks a held unit with a route (mv.rs ctl_order park_held) and the worker kernel a held worker (wai.rs
+park_held, try_arm when the hold ends): now they take the order as the others (route, command, targets), held workers not
+armed. New tests/hold-move-order.test.cjs: held units (and the match's workers) stand while held, keep the order's route,
+none through the JavaScript, walk to the destination when stop releases the hold. Worker profile of 1M bursts (hectic2,
+60 s): _issueGroupMoveOrderList 88.7 -> 41.9 ms (before the held-worker part), runQueuedOrders 211 -> 162 ms. order-fast,
+action-supersede, spawn-rally, mover-table, multiplayer-chaos-determinism, multiplayer-action-fuzz, stuck-recovery 111 pass.
+
+Burst steps at 1M (simtrace, burst vs normal at dk 2): +66 ms; timed phases +25 (processActions 9.5, _simPostResult 5.6,
+structure presentation 3.6, meta rows 2.9), the rest runQueuedOrders (untimed in simtrace: added to the list below). Next:
+placement (placeBuilding ~75 us a structure: the Tower/Barrack/Spawner objects, setTileEntity) as a kernel with lazy
+structure handles (a placed structure's object holds only _sr, _sdet, _hgx, _hgy: rowcensus.cjs / ownkeys.cjs).

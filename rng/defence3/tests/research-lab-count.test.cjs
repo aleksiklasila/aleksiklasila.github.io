@@ -15,7 +15,7 @@ assert.deepEqual(setup.errors, []);
 i.eval('__scratch.actions=[];queueAction=a=>__scratch.actions.push(a);');
 const check = label => {
     const r = JSON.parse(i.eval(`(() => { const T = _sTables.get(ResearchSpawner), all = new Array(8).fill(0), built = new Array(8).fill(0);
-        for (let r = 0; T && r < T.n; r++) { const s = T.rowObj[r]; if (!s || T.ret[r] || !(s._stT >= 0) || getTileEntityRef(s.gx, s.gy) !== s) continue; all[s.owner]++; if (!s.underConstruction) built[s.owner]++; }
+        for (let r = 0; T && r < T.n; r++) { const s = structRowObj(T, r); if (!s || T.ret[r] || !(s._stT >= 0) || getTileEntityRef(s.gx, s.gy) !== s) continue; all[s.owner]++; if (!s.underConstruction) built[s.owner]++; }
         return JSON.stringify({ all, built, labs: Array.from(structLabCount.subarray(0, 8)), labsBuilt: Array.from(structLabBuilt.subarray(0, 8)) }); })()`));
     assert.deepEqual(r.labs, r.all, label + ': lab counts ' + JSON.stringify(r));
     assert.deepEqual(r.labsBuilt, r.built, label + ': built lab counts ' + JSON.stringify(r));

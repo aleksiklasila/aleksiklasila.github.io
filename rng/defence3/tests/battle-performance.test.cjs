@@ -167,7 +167,7 @@ for (let step = 0; step < 18; step++) {
     }
 }
 
-// A visible set above 1024 must settle, rather than continuously rasterize.
+// A visible set above the cache budget (RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX) must settle, rather than continuously rasterize.
 let rasterizations = 0;
 const tc = vm.createContext({
     RENDERER3D_TOP_TEXTURE_SIZE: 96, TILE: 32, gameTime: 5,
@@ -176,14 +176,15 @@ const tc = vm.createContext({
     document: { createElement() { return { getContext() { return { setTransform() {}, clearRect() {}, save() {}, restore() {} }; } }; } }
 });
 vm.runInContext(renderer.slice(renderer.indexOf('const renderer3dExact2DTextureCache'), renderer.indexOf('function get3DExact2DFloorTexture')), tc);
-const panels = Array.from({ length: 1500 }, (_, i) => ({
+const cacheMax = vm.runInContext('RENDERER3D_EXACT_2D_TEXTURE_CACHE_MAX', tc), panelCount = cacheMax + 476;
+const panels = Array.from({ length: panelCount }, (_, i) => ({
     x: 32, y: 32, r: 8, owner: 0, unitType: 'norm', color: '#' + i.toString(16).padStart(6, '0'),
     energy: 10, preComputed: { maxEnergy: 10 }, attackFlash: 0,
     attackTarget: { x: 40, y: 40 }, draw() { rasterizations++; }
 }));
 const renderPanels = visiblePanels => {
     tc.begin3DTextureFrame();
-    vm.runInContext('renderer3dExactUnitTextureBuildsRemaining = 2000; renderer3dExactUnitTextureTimeRemaining = 1000;', tc);
+    vm.runInContext('renderer3dExactUnitTextureBuildsRemaining = 1e9; renderer3dExactUnitTextureTimeRemaining = 1000;', tc);
     return visiblePanels.map(p => tc.get3DExact2DTexture(p, true));
 };
 const firstFrame = renderPanels(panels);
@@ -191,7 +192,7 @@ for (let frame = 0; frame < 5; frame++) {
     for (const p of panels) p.attackTarget.x += 8;
     assert.deepEqual(renderPanels(panels), firstFrame);
 }
-assert.equal(rasterizations, 1500, 'no repeated rasterization for the visible set, even with moving remembered targets');
+assert.equal(rasterizations, panelCount, 'no repeated rasterization for the visible set, even with moving remembered targets');
 // Attacks are GPU effects, not part of a unit's panel: attacking (and
 // turning to a new target) must not re-rasterize it every tick.
 panels[0].attackFlash = 8;
@@ -199,7 +200,7 @@ const attackFrame = renderPanels(panels);
 assert.equal(attackFrame[0], firstFrame[0], 'an attack keeps the displayed panel');
 panels[0].attackTarget.x += 16;
 assert.equal(renderPanels(panels)[0], attackFrame[0], 'attack direction does not invalidate the panel');
-assert.equal(rasterizations, 1500, 'attacks cause no rasterization');
+assert.equal(rasterizations, panelCount, 'attacks cause no rasterization');
 for (let frame = 0; frame < 4; frame++) renderPanels(panels.slice(0, 10));
-assert.equal(vm.runInContext('renderer3dExact2DTextureCache.size', tc), 1024, 'inactive panels return to the normal cache budget');
-console.log(`PASS: worker target picks by reservation (no unit list walked, 41 searches against the scan reference); 18 visibility comparisons; 1500 stable panels rasterize once across 6 frames.`);
+assert.equal(vm.runInContext('renderer3dExact2DTextureCache.size', tc), cacheMax, 'inactive panels return to the normal cache budget');
+console.log(`PASS: worker target picks by reservation (no unit list walked, 41 searches against the scan reference); 18 visibility comparisons; ${panelCount} stable panels rasterize once across 6 frames.`);

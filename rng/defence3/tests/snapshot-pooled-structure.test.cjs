@@ -13,7 +13,8 @@ const out = JSON.parse(i.eval(`(() => {
     const a = new Unit('builder_unit', 0, 5 * TILE, 5 * TILE), b = new Unit('builder_unit', 0, 6 * TILE, 6 * TILE);
     for (const u of [a, b]) { units.push(u); unitSlotMapPushed(u); }
     // Two sites that are in no list (removed), at different tiles.
-    const s1 = new Barrack(11, 12, 'norm', 0), s2 = new Barrack(13, 20, 'fast', 0);
+    const mk=(C,o)=>{const e=Object.assign(_snapStructShell(C),{stacks:1,manualStacks:1,effectiveStacks:1,level:1,effectiveLevel:1,isStacking:false,stackingWorkDone:0,markedForSalvage:false,autoUpgradeEnabled:true,buildEnabled:true},o);if(C===Barrack||C===CollectorSpawner){e._qN=0;e.queueEnabled=true;e.spawnTimer=0;}e.energy=e.maxEnergy;return e;};
+    const s1 = mk(Barrack, { gx: 11, gy: 12, type: 'barrack', unitType: 'norm', owner: 0 }), s2 = mk(Barrack, { gx: 13, gy: 20, type: 'barrack', unitType: 'fast', owner: 0 });
     s1.underConstruction = true; s2.underConstruction = false;
     a._scoutTarget = s1; b._scoutTarget = s2;
     const ids = [a.id, b.id];

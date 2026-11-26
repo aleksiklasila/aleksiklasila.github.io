@@ -3119,7 +3119,9 @@ const _rqHeap = (Type, src, n) => { const a = simHeapArray(Type, Math.max(n, src
 class SimResearchQueue {
     constructor(owner, src = null) {
         const ns = Math.max(16, _researchStats().length);
-        this.ids = _rqHeap(Int32Array, src && src.ids, 64);
+        // (Room for the longest queue the match allows (a task a stat and level) from the start: doubled as tasks
+        // were queued, it was a heap allocation in play at each doubling.)
+        this.ids = _rqHeap(Int32Array, src && src.ids, Math.max(64, ns * ((typeof MAX_RESEARCH_LEVEL === 'number' ? MAX_RESEARCH_LEVEL : 10) + 1) + 2));
         this.depth = _rqHeap(Int32Array, src && src.depth, ns);
         this.prog = _rqHeap(Float64Array, src && src.prog, ns);
         this.hdr = _rqHeap(Int32Array, src && src.hdr, 4);
