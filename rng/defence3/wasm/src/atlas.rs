@@ -816,6 +816,37 @@ pub unsafe extern "C" fn nav_atlas_step(h: u32, partl: u32, partb: u32, nt: u32,
     atlas_step(&a, waddr(partl) as *const u16, waddr(partb) as *const i32, waddr(nt) as *const i32, waddr(np) as *const i32, waddr(fields) as *const u16, w, t, dest)
 }
 
+/// For JavaScript (flownav.js navPath, the interface's display paths): the
+/// tiles from t toward dest, up to max of them, into out (i32 words), as a run
+/// of atlas_step_h with its own hint (the movement's look-ahead walk); their
+/// count. Stops at dest, at no step (a wall: the caller steps out) or at max.
+/// One call a path, not one a tile (a selection's 256 paths of 64 steps were
+/// ~57 ms of the simulation thread when a selection changed).
+#[no_mangle]
+pub unsafe extern "C" fn nav_atlas_path(h: u32, partl: u32, partb: u32, nt: u32, np: u32, fields: u32, w: i32, t: i32, dest: i32, max: i32, out: u32) -> i32 {
+    let a = match Atl::from(waddr(h) as *const i32) {
+        Some(a) => a,
+        None => return 0,
+    };
+    let (pl, pb, ntp, npp, f) = (waddr(partl) as *const u16, waddr(partb) as *const i32, waddr(nt) as *const i32, waddr(np) as *const i32, waddr(fields) as *const u16);
+    let o = waddr(out) as *mut i32;
+    let mut hint = [-1i32; 3];
+    let (mut cur, mut n) = (t, 0i32);
+    while n < max {
+        let nx = atlas_step_h(&a, pl, pb, ntp, npp, f, w, cur, dest, &mut hint);
+        if nx < 0 {
+            break;
+        }
+        *o.add(n as usize) = nx;
+        n += 1;
+        cur = nx;
+        if nx == dest {
+            break;
+        }
+    }
+    n
+}
+
 /// The next tile from t toward dest (the movement kernel's nav_step on the
 /// atlas): -1 none, at dest, or t a wall (the caller's step out).
 #[inline(never)]

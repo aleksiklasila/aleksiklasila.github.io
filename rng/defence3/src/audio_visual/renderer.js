@@ -1773,7 +1773,10 @@ const RENDERER3D_STATUS_FACES = {
 function get3DQueueCountColor(count) {
     return count <= 0 ? '#ffffff' : count <= 3 ? '#4ee04a' : count <= 8 ? '#ff9a1f' : '#ff3b30';
 }
+// (A count's badge by what it shows: every count past 99 is the same '99+' (one texture, not one a count:
+// a spawner queue's new length drew its text again in a frame).)
 function get3DStatusTexture(state) {
+    if (typeof state === 'number') state = state > 99 ? 100 : Math.max(0, state | 0);
     return get3DTopTextureCanvas(`status:${state}`, g => {
         let size = g.canvas.width, c = RENDERER3D_STATUS_CELL, pad = 3;
         if (typeof state === 'number') {
@@ -3381,6 +3384,7 @@ function buildScaleOverlays(cache) {
 
 function build3DFrameData(flat2d = false) {
     let _ph = _r3dPhase('', 0);
+    prewarm3DTopTextures();
     if (_staticSigTick !== gameTime) { _staticSigTick = gameTime; _staticSigPhase = 0; } else _staticSigPhase++;
     const sourceView = getLiveRenderView();
     // Every live scene uses the same per-entity LOD selection. Build the
@@ -6103,9 +6107,7 @@ function visWindowZone(wx, wy) {
 function visCoverHoldBegin() {}
 function visCoverHoldEnd() {}
 function visCoverHoldReset() {}
-function visCoverOnUnitSpatialChanged() {}
 function visCoverOnBuildingChanged() {}
-function visCoverOnEntityChanged() {}
 function visCoverSlotWindow() { return true; }
 
 // Per tick: the cover's run (units and buildings, kernels; at once after a
@@ -6805,6 +6807,20 @@ function _buildCameraSlide() {
 // Twice: the shaders as soon as the world is loaded, then the units' first
 // buffers, slot textures and panels once the frame has unit columns.
 let _view3DPrewarmed = null;
+// The 3D top textures a match shows that were made the first time one was seen (a spawner's queue badge, its
+// production miniature's top by unit type and owner): made while the match loads (or at the first 3D frame), not
+// in the frame a camera jump first shows them (~30-50 ms of canvas text a frame in a checkerboard battle). A
+// bounded set: counts 0-99 and 99+, the status faces, unit types x players. Again after the caches are cleared.
+let _top3DPrewarmed = -1;
+function prewarm3DTopTextures() {
+    const owners = typeof players !== 'undefined' && players ? players.length : 0, gen = renderer3dFlatGeneration * 64 + owners;
+    if (_top3DPrewarmed === gen || !owners) return;
+    _top3DPrewarmed = gen;
+    for (let n = 0; n <= 100; n++) get3DStatusTexture(n);
+    for (const name of Object.keys(RENDERER3D_STATUS_FACES)) get3DStatusTexture(name);
+    for (const type of Object.keys(BASE_UNIT_STATS)) for (let o = 0; o < owners; o++) get3DUnitTopTexture(type, o);
+    if (typeof prewarmUnitStatusGlyphs === 'function') prewarmUnitStatusGlyphs();
+}
 function _maybePrewarm3DView(renderer3d) {
     const done = _view3DPrewarmed && _view3DPrewarmed.renderer === renderer3d ? _view3DPrewarmed : null;
     if ((done && done.units) || renderDimensionMode !== '2d' || !gameStarted) return;
@@ -6818,6 +6834,7 @@ function _maybePrewarm3DView(renderer3d) {
         if (done && !units) return;
         _view3DPrewarmed = { renderer: renderer3d, units };
         if (!done && typeof renderer3d.prewarmPrograms === 'function') renderer3d.prewarmPrograms();
+        prewarm3DTopTextures();
         renderer3d.setGraphicsOptions(graphicsOptions);
         renderer3d.render(snapshot);
     } catch (err) {
@@ -7591,7 +7608,6 @@ function applyStatusEffect(target, effect, level, baseDamage = 0, sourceOwner = 
         if (target.watched > 0 && target.watchedByTeam === teamId) target.watched = Math.max(target.watched, dur);
         else target.watched = dur;
         target.watchedByTeam = teamId;
-        if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target);
     }
     return true;
 }
@@ -7639,7 +7655,6 @@ function structStatusTick() {
         const nd = O.cc[2 * c], nw = O.cc[2 * c + 1];
         if (!nd && !nw) continue;
         const C = CL[c], T = _sTables.get(C);
-        for (let i = 0; i < nw; i++) { const e = T.rowObj[O.wend[ow + i] & 0xffffff]; if (e && typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(e); }
         ow += nw;
         if (!nd) continue;
         const L = C === FloorItem ? (out.floor || (out.floor = [])) : (out.dead || (out.dead = []));
@@ -7696,7 +7711,7 @@ function tickStatusEffects(target) {
     if (target.sandy > 0) target.sandy -= Math.min(dk, target.sandy);
     if (target.watched > 0) {
         target.watched -= Math.min(dk, target.watched);
-        if (target.watched <= 0) { target.watchedByTeam = -1; if (typeof visCoverOnEntityChanged === 'function') visCoverOnEntityChanged(target); }
+        if (target.watched <= 0) target.watchedByTeam = -1;
     }
 
     if (target.energy !== undefined && target.energy <= 0) {

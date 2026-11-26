@@ -32,39 +32,6 @@ function simTableViews(spec, buf, cap, at = 0) {
     for (let k of spec.u8) { f[k] = new Uint8Array(buf, off, cap); off += cap; }
     return f;
 }
-// Worker: stable slots for the entities of a table (entity[key] holds its slot).
-class SimSlots {
-    constructor(key) { this.key = key; this.owner = []; this.free = []; this.stamp = new Int32Array(1024); this.tick = 0; this.version = 0; this.serial = 0; this.serials = new Int32Array(1024); this.lastOrder = null; }
-    reset() { for (let e of this.owner) if (e) e[this.key] = undefined; this.owner = []; this.free = []; this.version++; this.lastOrder = null; }
-    slotOf(e) {
-        let s = e[this.key];
-        if (s !== undefined && this.owner[s] === e) return s;
-        s = this.free.length ? this.free.pop() : this.owner.length;
-        this.owner[s] = e; e[this.key] = s; this.version++;
-        if (s >= this.stamp.length) {
-            let st = new Int32Array(Math.max(1024, (s + 1) * 2)); st.set(this.stamp); this.stamp = st;
-            let se = new Int32Array(st.length); se.set(this.serials); this.serials = se;
-        }
-        this.serials[s] = ++this.serial;
-        return s;
-    }
-    // After the entities of this tick were stamped: free the others.
-    sweep(tick, F) {
-        for (let s = 0; s < this.owner.length; s++) {
-            if (this.stamp[s] === tick) continue;
-            if (F && s < F.cap) F.alive[s] = 0;
-            let e = this.owner[s];
-            if (e) { e[this.key] = undefined; this.owner[s] = null; this.free.push(s); this.version++; }
-        }
-    }
-    orderChanged(order, n) {
-        let last = this.lastOrder, changed = !last || last.length !== n;
-        if (!changed) for (let k = 0; k < n; k++) if (last[k] !== order[k]) { changed = true; break; }
-        if (changed) { this.lastOrder = order.slice(0, n); this.version++; }
-        return changed;
-    }
-}
-
 // ---- structures ----
 const SIM_STRUCT_KINDS = ['t', 'b', 's', 'f', 'g', 'a'];
 const SIM_STRUCT_SPEC = simTableSpec({
@@ -81,7 +48,6 @@ const SIM_SF_UC = 1, SIM_SF_UPGRADING = 2, SIM_SF_SALVAGE = 4, SIM_SF_STACKING =
     SIM_SF_POISONED = 64, SIM_SF_FROZEN = 128, SIM_SF_WET = 256, SIM_SF_SANDY = 512, SIM_SF_AUTO_UPGRADE = 1024, SIM_SF_BUILD = 2048,
     SIM_SF_QUEUE = 4096, SIM_SF_AUTO_RESEARCH = 8192, SIM_SF_ATTACK_TARGET = 16384, SIM_SF_RALLY = 32768, SIM_SF_RESEARCH_TASK = 65536,
     SIM_SF_AUTO_STACK = 131072, SIM_SF_RESEARCHING = 262144;
-const _simStructSlots = new SimSlots('_sslot');
 // (A structure slot's class table row, for the metadata kernel (wasm/src/nfs.rs
 // k_meta_structs): psrc[slot] = class << 24 | row, -1 none / not tabled.)
 const _simMetaCls = [];
@@ -92,33 +58,81 @@ function _simMetaClassOf(e) {
     const k = _simMetaCls.indexOf(e && e.constructor);
     return k;
 }
-// (pser: the slots' serials beside it, in the heap too.)
-_simStructSlots.psrc = null;
-_simStructSlots.pser = null;
-_simStructSlots.psrcSet = function (s, e) {
-    if (!this.psrc || this.psrc.length <= s || (typeof simHeapHas === 'function' && !simHeapHas(this.psrc))) {
-        if (typeof simHeapArray !== 'function') return;
-        const a = simHeapArray(Int32Array, Math.max(1024, (s + 1) * 2));
-        a.fill(-1);
-        if (this.psrc) a.set(this.psrc.subarray(0, Math.min(this.psrc.length, a.length)));
-        this.psrc = a;
-        const b = simHeapArray(Int32Array, a.length);
-        b.set(this.serials.subarray(0, Math.min(this.serials.length, b.length)));
-        this.pser = b;
+// The structures' presentation slots, books in the heap: a slot is a tabled structure's, by its meta class and row
+// (psrc: class << 24 | row, -1 free; pser its serial, a new one each slot made: the page tells a slot's structures
+// apart by it), found by its class's row -> slot table (rs[class], -1 none). H: [0] slots made (high water), [1] free
+// ones (the stack free), [2] the membership version (mver), [3] the serial counter, [4] room. The tick's changes are
+// a kernel's (wasm/src/nfs.rs k_pslot_changes, sim_presentation.js _simPresentStructureChanges); the metadata
+// cycle's and the first frame's passes take slots here. (An entity-keyed slot map before: ~3 ms a second of this
+// thread in a battle, its structure objects looked up tile by tile.) A structure without a row has none.
+const _simStructSlots = {
+    H: null, psrc: null, pser: null, free: null, rs: [], tick: 0, lastOrder: null,
+    get n() { return this.H ? this.H[0] : 0; },
+    get version() { return this.H ? this.H[2] : 0; },
+    // Room for cap slots (kept, copied when larger).
+    ensure(cap) {
+        cap = Math.max(1024, cap | 0);
+        if (this.H && simHeapHas(this.H) && this.psrc.length >= cap && simHeapHas(this.psrc)) return;
+        const room = Math.max(cap, this.psrc ? this.psrc.length * 2 : 0), ps = simHeapArray(Int32Array, room), pe = simHeapArray(Int32Array, room), fr = simHeapArray(Int32Array, room);
+        ps.fill(-1); pe.fill(0);
+        const H = this.H && simHeapHas(this.H) ? this.H : simHeapArray(Int32Array, 8).fill(0);
+        if (this.psrc && simHeapHas(this.psrc)) { const m = Math.min(H[0], this.psrc.length); ps.set(this.psrc.subarray(0, m)); pe.set(this.pser.subarray(0, m)); fr.set(this.free.subarray(0, Math.min(H[1], this.free.length))); simHeapFree(this.psrc); simHeapFree(this.pser); simHeapFree(this.free); }
+        else { H.fill(0); for (const a of this.rs) if (a && simHeapHas(a)) a.fill(-1); }
+        this.psrc = ps; this.pser = pe; this.free = fr; this.H = H; H[4] = room;
+    },
+    // Class k's row -> slot table, room for table T's rows.
+    rsFor(k, T) {
+        let a = this.rs[k];
+        const need = Math.max(1024, T && T.cap ? T.cap : 0);
+        if (a && a.length >= need && simHeapHas(a)) return a;
+        const b = simHeapArray(Int32Array, need).fill(-1);
+        if (a && simHeapHas(a)) { b.set(a.subarray(0, Math.min(a.length, need))); simHeapFree(a); }
+        return this.rs[k] = b;
+    },
+    // e's slot, made if it has none (-1: no table row).
+    slotOf(e) {
+        const k = _simMetaClassOf(e), r = e ? e._sr : -1;
+        if (k < 0 || !(r >= 0)) return -1;
+        if (!this.H) this.ensure(1024);
+        const rs = this.rsFor(k, _sTables.get(e.constructor)), id = (k << 24) | r, H = this.H;
+        const s0 = rs[r];
+        if (s0 >= 0 && s0 < H[0] && this.psrc[s0] === id) return s0;
+        if (H[1] === 0 && H[0] >= H[4]) this.ensure(H[4] * 2);
+        const s = H[1] > 0 ? this.free[--H[1]] : H[0]++;
+        this.psrc[s] = id; this.pser[s] = H[3] = (H[3] + 1) | 0; rs[r] = s; H[2] = (H[2] + 1) | 0;
+        return s;
+    },
+    // (Tests: slot s's structure, null none.)
+    ownerOf(s) { const v = this.psrc && s >= 0 && s < this.n ? this.psrc[s] : -1; if (!(v >= 0)) return null; const C = _simMetaCls[v >>> 24], T = C ? _sTables.get(C) : null; return T && T.rowObj ? T.rowObj[v & 0xFFFFFF] || null : null; },
+    // e's slot if it has one, -1 none.
+    slotOfLive(e) {
+        const k = _simMetaClassOf(e), r = e ? e._sr : -1, rs = k >= 0 ? this.rs[k] : null;
+        if (!rs || !(r >= 0) || r >= rs.length || !this.H) return -1;
+        const s = rs[r];
+        return s >= 0 && s < this.H[0] && this.psrc[s] === ((k << 24) | r) ? s : -1;
+    },
+    freeSlot(s) {
+        const v = this.psrc ? this.psrc[s] : -1;
+        if (!(v >= 0)) return;
+        const rs = this.rs[v >>> 24], r = v & 0xFFFFFF;
+        if (rs && rs[r] === s) rs[r] = -1;
+        this.psrc[s] = -1;
+        const H = this.H;
+        if (H[1] < this.free.length) this.free[H[1]++] = s;
+        H[2] = (H[2] + 1) | 0;
+    },
+    reset() {
+        if (this.H && simHeapHas(this.H)) { this.H[0] = 0; this.H[1] = 0; this.H[2] = (this.H[2] + 1) | 0; this.psrc.fill(-1); }
+        for (const a of this.rs) if (a && simHeapHas(a)) a.fill(-1);
+        this.lastOrder = null;
+    },
+    orderChanged(order, n) {
+        let last = this.lastOrder, changed = !last || last.length !== n;
+        if (!changed) for (let k = 0; k < n; k++) if (last[k] !== order[k]) { changed = true; break; }
+        if (changed) { this.lastOrder = order.slice(0, n); if (this.H) this.H[2] = (this.H[2] + 1) | 0; }
+        return changed;
     }
-    if (s < this.serials.length) this.pser[s] = this.serials[s];
-    if (!e) { this.psrc[s] = -1; return; }
-    const k = _simMetaClassOf(e);
-    this.psrc[s] = k >= 0 && e._sr >= 0 ? (k << 24) | e._sr : -1;
 };
-{
-    const slotOf0 = _simStructSlots.slotOf;
-    _simStructSlots.slotOf = function (e) { const known = e[this.key] !== undefined && this.owner[e[this.key]] === e, s = slotOf0.call(this, e); if (!known) this.psrcSet(s, e); return s; };
-    const sweep0 = _simStructSlots.sweep;
-    _simStructSlots.sweep = function (tick, F) { for (let s = 0; s < this.owner.length; s++) if (this.stamp[s] !== tick && this.psrc && s < this.psrc.length) this.psrc[s] = -1; return sweep0.call(this, tick, F); };
-    const reset0 = _simStructSlots.reset;
-    _simStructSlots.reset = function () { if (this.psrc) this.psrc.fill(-1); return reset0.call(this); };
-}
 function _simStructLists() {
     return [towers, barracks, collectorSpawners, _snapFloorItemsView(), goldMines, astarMines];
 }
@@ -145,7 +159,7 @@ function simFrameEncodeStructures() {
     let S = _simStructSlots, tick = ++S.tick, lists = _simStructLists();
     let count = 0;
     for (let k = 0; k < lists.length; k++) for (let e of lists[k]) if (e) { S.slotOf(e); count++; }
-    let n = S.owner.length, cap = Math.max(64, n);
+    let n = S.n, cap = Math.max(64, n);
     // (The rows by the metadata kernel into a heap table, sim_presentation.js
     // _simMetaStructsRun, then copied into the frame's buffer.)
     if (!_simFrameStructHeap || _simFrameStructHeap.cap < cap || !simHeapHas(_simFrameStructHeap.heap)) { if (_simFrameStructHeap && _simFrameStructHeap.heap && simHeapHas(_simFrameStructHeap.heap)) simHeapFree(_simFrameStructHeap.heap); _simFrameStructHeap = _simStructTableNew(Math.ceil(cap * 1.25 / 64) * 64); }
@@ -155,7 +169,7 @@ function simFrameEncodeStructures() {
     if (!_simFrameTileSlot || _simFrameTileSlot.length !== nt || !simHeapHas(_simFrameTileSlot)) _simFrameTileSlot = simHeapArray(Int32Array, nt);
     _simFrameTileSlot.fill(-1);
     const j = _simMetaStructsRun(null, H, S, _simFrameTileSlot);
-    n = S.owner.length; cap = Math.max(64, n);
+    n = S.n; cap = Math.max(64, n);
     const buf = _simFrameAcquire(cap * SIM_STRUCT_SPEC.slotBytes), F = simTableViews(SIM_STRUCT_SPEC, buf, cap);
     for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8, 'order']) F[k].set(H[k].subarray(0, cap));
     S.orderChanged(F.order, j);

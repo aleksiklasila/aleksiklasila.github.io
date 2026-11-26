@@ -69,7 +69,7 @@ function _simClientScriptUrls() {
         .filter(src => /\/src\//.test(src) && !/bootstrap\.js|sim_shadow\.js|sim_worker\.js|sim_client\.js/.test(src));
 }
 
-const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261124-occ';
+const SIM_CLIENT_WORKER_URL = './src/sim/sim_worker.js?v=20261125-dt';
 
 function _simClientCreate() {
     let c = {
@@ -1001,6 +1001,11 @@ function _simClientApplyTick(msg) {
     // (Its attacks spread over the step they came in: recordCombatFx.)
     combatFxSpan = c.gtNow === gameTime && c.gtNow > c.gtPrev ? [c.gtPrev, c.gtNow] : null;
     try { _simClientReplayEvents(msg.events || []); } finally { combatFxSpan = null; }
+    // (The events' buffers back to the worker's pool: sim_worker.js _simEvBuffer.)
+    { const ev = msg.events, bufs = [];
+      if (ev && ev.f && ev.f.buffer instanceof ArrayBuffer && ev.f.buffer.byteLength) bufs.push(ev.f.buffer);
+      if (ev && ev.l instanceof ArrayBuffer && ev.l.byteLength) bufs.push(ev.l);
+      if (bufs.length && c.worker) c.worker.postMessage({ type: 'evReturn', bufs }, bufs); }
     _simClientPageTickWork(msg.tick);
     // The tick's record (the peers compare them).
     if (msg.hash) {
@@ -1391,14 +1396,20 @@ function _simClientApplyFrame(frame, shown) {
 // units the page watches next: the selection (up to a cap).
 const SIM_CLIENT_WATCH_MAX = 256;
 let _simClientDetailed = [];
+// (pathKeep: the path is the one the last record had (sim_frame.js simFrameDetails), its arrays carried over.)
 function _simClientApplyDetails(details) {
-    for (let v of _simClientDetailed) v._det = null;
+    const was = _simClientDetailed;
     _simClientDetailed = [];
     if (details) for (let d of details) {
         let v = _pageUnitsById.get(d.id);
-        if (v) { v._det = d; _simClientDetailed.push(v); }
+        if (!v) continue;
+        if (d.pathKeep) { const o = v._det; if (o && o.path) { d.path = o.path; d._pathArr = o._pathArr; d._pathFor = o._pathFor; } }
+        v._det = d; v._detSeq = _simClientDetailSeq; _simClientDetailed.push(v);
     }
+    for (let v of was) if (v._detSeq !== _simClientDetailSeq) v._det = null;
+    _simClientDetailSeq++;
 }
+let _simClientDetailSeq = 1;
 // The tiles the page draws (each frame's view): the worker shows the looks
 // of hits there first (unit.js simLookView); sent when it moved a few tiles.
 // The info panel's packer asks the simulation worker for what its thread

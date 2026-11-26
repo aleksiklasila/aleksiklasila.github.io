@@ -768,6 +768,20 @@ function _isInfoPanelUnitIdleLike(u) {
 
 function _getOwnedInfoPanelUnits(owner) {
     let out = [];
+    // (Beside the simulation worker: the frame's owner column picks them, in the list's order, a view made for the
+    // owner's units alone: reading `units` made one for every unit of every player first, ~25 ms of a select-all
+    // owned's 64 ms frame at 75k a team.)
+    const F = typeof _pageFrame !== 'undefined' && typeof simClientActive === 'function' && simClientActive() ? _pageFrame : null;
+    if (F && F.owner && F.order && typeof pageSlotView === 'function') {
+        const order = F.order, O = F.owner, n = F.count;
+        for (let k = 0; k < n; k++) {
+            const s = order[k];
+            if (O[s] !== owner) continue;
+            const u = pageSlotView(s);
+            if (u && !u.dead) out.push(u);
+        }
+        return out;
+    }
     for (let u of units) {
         if (!u || u.dead || u.owner !== owner) continue;
         out.push(u);

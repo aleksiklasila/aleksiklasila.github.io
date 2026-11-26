@@ -979,7 +979,7 @@ unsafe fn floor_hit(m: &Mv, s: usize, tl: i32) -> bool {
     if k == 0 {
         return false;
     }
-    // (Traps 1-5: the tile effects' pass, tfx.rs, every tick; a mine: Unit.update.)
+    // (Traps 1-5: the tile effects' pass, tfx.rs, every tick; a mine: its floor event, tfx.rs k_mine_events.)
     if k <= 5 {
         return false;
     }

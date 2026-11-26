@@ -166,8 +166,23 @@ pub unsafe extern "C" fn traffic_capture(a:u32,chunk:i32){
 }
 #[no_mangle]
 pub unsafe extern "C" fn traffic_solve(a:u32,chunk:i32){
-    let (_,f,c)=args(a);let (start,end)=range(f,chunk);
-    let w=*c.add(1) as usize;let h=*c.add(2) as usize;let stage=*f.add(2) as usize;
+    let (_,f,c)=args(a);
+    // Fused ([2] = TRAFFIC_FUSED): a job a plane (chunk), its [3] relaxation passes, the output and the mask in turn:
+    // one background stage of a few jobs instead of a stage a pass of 256-cell jobs (18 barriers a step, which a
+    // lane starved by the foreground jobs ran mostly at its commit's wait). The same arithmetic a cell (Jacobi
+    // passes: a cell's value from the previous pass alone), so the same fields.
+    if *f.add(2) as i32==TRAFFIC_FUSED {
+        let nl=(*c.add(1)*(*c.add(2))).max(0) as usize;let n=*f as usize;
+        let start=(chunk.max(0) as usize*nl).min(n);let end=(start+nl).min(n);if start>=end{return;}
+        for stage in 0..(*f.add(3) as usize){solve_range(c,stage,start,end);}
+        output_range(c,start,end);mask_range(c,start,end);return;
+    }
+    let (start,end)=range(f,chunk);solve_range(c,*f.add(2) as usize,start,end);
+}
+pub const TRAFFIC_FUSED:i32=64;
+#[inline(always)]
+unsafe fn solve_range(c:*const i32,stage:usize,start:usize,end:usize){
+    let w=*c.add(1) as usize;let h=*c.add(2) as usize;
     let src=ptr::<f32>(c,23+(stage&1));let dst=ptr::<f32>(c,24-(stage&1));
     let cap=ptr::<f32>(c,25);let rhs=ptr::<f32>(c,26);let zero=f32x4_splat(0.0);
     let mut k=start;
@@ -189,7 +204,11 @@ pub unsafe extern "C" fn traffic_solve(a:u32,chunk:i32){
 }
 #[no_mangle]
 pub unsafe extern "C" fn traffic_output(a:u32,chunk:i32){
-    let (_,f,c)=args(a);let (start,end)=range(f,chunk);let w=*c.add(1) as usize;let h=*c.add(2) as usize;
+    let (_,f,c)=args(a);let (start,end)=range(f,chunk);output_range(c,start,end);
+}
+#[inline(always)]
+unsafe fn output_range(c:*const i32,start:usize,end:usize){
+    let w=*c.add(1) as usize;let h=*c.add(2) as usize;
     let p=ptr::<f32>(c,23);let rho=ptr::<f32>(c,22);let cap=ptr::<f32>(c,25);
     let ix=ptr::<i32>(c,20);let iy=ptr::<i32>(c,21);
     for k in start..end{
@@ -217,7 +236,11 @@ pub unsafe extern "C" fn traffic_output(a:u32,chunk:i32){
 }
 #[no_mangle]
 pub unsafe extern "C" fn traffic_mask(a:u32,chunk:i32){
-    let (_,f,c)=args(a);let (start,end)=range(f,chunk);let w=*c.add(1) as usize;let h=*c.add(2) as usize;
+    let (_,f,c)=args(a);let (start,end)=range(f,chunk);mask_range(c,start,end);
+}
+#[inline(always)]
+unsafe fn mask_range(c:*const i32,start:usize,end:usize){
+    let w=*c.add(1) as usize;let h=*c.add(2) as usize;
     let xx=ptr::<f32>(c,27);let yy=ptr::<f32>(c,28);let mask=ptr::<u8>(c,33);
     for k in start..end{
         let x=irem(k as i32,w as i32) as usize;let y=irem(idiv(k as i32,w as i32),h as i32) as usize;

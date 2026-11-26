@@ -67,8 +67,7 @@ const SND_ASTAR_COLLECTED: i32 = 6;
 const OUT_MINE: i32 = 7;
 const OUT_ASTAR_LOG: i32 = 8;
 const OUT_CLEAR_ROUTE: i32 = 9;
-// (A spawn queue paid: its production and ready order, barrack.js.)
-const OUT_QUEUE_PAID: i32 = 10;
+// (10: a spawn queue paid, no more: the production pass takes every spawner each step.)
 // (heal_tick at a structure's tile (a) or a unit's slot (b >= 0), as an
 // ambient sound of the target.)
 const OUT_SOUND_HEAL: i32 = 11;
@@ -183,6 +182,9 @@ struct W {
     /// (unit.ptSt, [158], and unit.hObj, [159]: the pending way's state bits and the object fields' digest, with the
     /// digest keys of _pendingPathTarget and pathIsFallbackAstar, P[77] / P[78]: a manual move's end, finish_manual.)
     pst: *mut u8, hobj: *mut i32, kppt: i32, kpfa: i32,
+    /// (unit.mvPF [160] (the kernels' mirror of the pending way's bits, with mvPP), and the pending target's progress:
+    /// unit.ptVer, ptAt, ptSub [161..163]: manual_wait.)
+    mvpf: *mut u8, ptver: *mut i32, ptat: *mut i32, ptsub: *mut i32,
 }
 
 impl W {
@@ -226,6 +228,7 @@ impl W {
             psum: k.p(152), minesum: k.p(153), mineat: k.p(154),
             take_spawners: k.p(155), wmman: k.p(156), wtl: k.p(157),
             pst: k.p(158), hobj: k.p(159), kppt: k.i(77), kpfa: k.i(78),
+            mvpf: k.p(160), ptver: k.p(161), ptat: k.p(162), ptsub: k.p(163),
         }
     }
 }
@@ -1143,6 +1146,21 @@ impl<'a> Ctx<'a> {
         if code == EV_RALLY { self.rally(q); self.sync_cmd(q); if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); } return; }
         // (What the pass does not take yet: back to the JavaScript.)
         let wb = self.wb(q);
+        // (Held on a player's move with its way still to come (a pending path): it stands, parked as the held ones with
+        // a way below. Handed back every tick, ~470k events in 100 s of a 1M battle once the player held a big
+        // selection of workers (4.6 s of the JavaScript, steps of 27-82 ms more): it only looked at its pending target
+        // and was armed again.)
+        if wb != 0 && g(w.mvpp, q) != 0 && g(w.mshoot, q) == 0 && self.st(q) == WS_MANUAL && g(w.holdf, q) != 0 && code != EV_NOWAY && self.indexed(q) {
+            self.park_held(q);
+            return;
+        }
+        // (On a player's move with its way still to come and no path, not held: updateWorkerAI's MANUAL_MOVE wait.)
+        if wb != 0 && wb != WB_RESEARCHER && g(w.mvpp, q) & 2 != 0 && g(w.mshoot, q) == 0 && self.st(q) == WS_MANUAL && g(w.holdf, q) == 0
+            && self.path_done(q) && g(w.srow, q) >= 0 && self.indexed(q) && !w.pst.is_null() && !w.hobj.is_null() && !w.mvpf.is_null()
+            && !w.ptver.is_null() && !w.ptat.is_null() && !w.ptsub.is_null() {
+            self.manual_wait(q);
+            return;
+        }
         if wb == 0 || g(w.mvpp, q) != 0 || g(w.mshoot, q) != 0 {
             self.emit(OUT_DECLINED, q as i32, code, 0);
             return;
@@ -1177,6 +1195,41 @@ impl<'a> Ctx<'a> {
         if (!moved || code == EV_NEAR) && g(w.cmd, q) == CMD_MOVING { self.way_end(q, code); }
         if left > 0 && g(w.dead, q) == 0 && self.path_done(q) { self.ai(q); self.sync_cmd(q); }
         if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); }
+    }
+    /// A worker on a player's move waiting for its way (worker.js updateWorkerAI's MANUAL_MOVE branch with a pending
+    /// target and no path, then _unitWorkerWayEnd's): moving; within reach of its targetPos
+    /// (_workerIsNearManualMoveTarget: max(8, min(TILE, floor(speed * 2)))) or WORKER_MANUAL_MOVE_MAX_PENDING_TICKS (120)
+    /// after its order with no progress on its way (pt sub, ver, at), the move ends there (finish_manual, its pending way's
+    /// mirror let go too); else it stands, parked until that wait's end or its next look (every MANUAL_WAIT_LOOK ticks
+    /// by id: a push may bring it within reach). Its way, when the pending wheel (pp.rs k_pp_due, which upgrades it at
+    /// its retry ticks, as the JavaScript's every-tick try did) gives it one, wakes it (set_path: on 0).
+    unsafe fn manual_wait(&mut self, q: usize) {
+        const MAX_PENDING: i32 = 120;
+        const MANUAL_WAIT_LOOK: i32 = 32;
+        let w = self.w;
+        self.set_cmd(q, CMD_MOVING);
+        let (tx, ty) = (g(w.tgx, q) as f64, g(w.tgy, q) as f64);
+        let near = if tx == tx && ty == ty {
+            let sp = self.hot(q, 0);
+            let sp = if sp != 0.0 && sp == sp { sp } else { 1.0 };
+            let tol = floor(sp * 2.0).min(w.tile).max(8.0);
+            let (dx, dy) = (tx - g(w.x, q) as f64 * 0.125, ty - g(w.y, q) as f64 * 0.125);
+            sqrt(dx * dx + dy * dy) <= tol
+        } else { false };
+        let iss = g(w.wmman, self.rec(q)) as f64;
+        let issued = if iss == iss { floor(iss) as i32 } else { 0 };
+        let progress = g(w.ptsub, q) > 0 || g(w.ptver, q) > 0 || g(w.ptat, q) >= 0;
+        if near || (!progress && w.now.wrapping_sub(issued) >= MAX_PENDING) {
+            self.finish_manual(q);
+            s(w.mvpp, q, 0); s(w.mvpf, q, 0);
+            if g(w.dead, q) == 0 && g(w.on, q) == 0 { self.arm_again(q); }
+            return;
+        }
+        let ph = irem(w.now.wrapping_add(g(w.id, q)), MANUAL_WAIT_LOOK);
+        let mut wake = w.now + MANUAL_WAIT_LOOK - ph;
+        if !progress && issued + MAX_PENDING < wake { wake = issued + MAX_PENDING; }
+        if wake <= w.now { wake = w.now + 1; }
+        s(w.wake, q, wake); s(w.mflags, q, 0); s(w.on, q, 2);
     }
     /// _unitWorkerWayEnd (no pending way, not held).
     unsafe fn way_end(&self, q: usize, code: i32) {
@@ -2399,8 +2452,7 @@ impl<'a> Ctx<'a> {
                     self.set_cooldown(q, w.heal_cd);
                     if g(w.stown, tq as usize) == w.local { self.emit(OUT_SOUND_HEAL, tq, -1, 0); }
                 }
-                // (Its production, and a ready order once paid: barrack.js, after the pass.)
-                self.emit(OUT_QUEUE_PAID, tq, if did { 1 } else { 0 }, 0);
+                // (Its production and ready order: the production pass's, every step, barrack.js spawnerProductionPass.)
                 if !self.heal_queue_ok(tq, o) {
                     self.clear_target(q, true);
                     if !self.heal_retarget_due(q, heavy) { self.set_state(q, WS_IDLE); self.set_cmd(q, CMD_IDLE); }

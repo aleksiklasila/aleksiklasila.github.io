@@ -424,6 +424,10 @@ function applySoloScene(scene) {
         const o = i * SCENE_UNIT_W;
         if (slotPlan !== null) simUnitStateWantSlot(slotPlan[planAt++]);
         const u = simSpawnUnit(S.uTypes[U[o]], U[o + 1], U[o + 2]*TILE, U[o + 3]*TILE);
+        // (No footprint for it (a scene packed for other unit sizes): made dead and let go; not listed. Listed with
+        // no slot it made the first tick's unit index the serial build (~550 ms at checker-300k) and the first
+        // frame's encode read its null state.)
+        if (u.dead) continue;
         configureWorkerUnitFromType(u); u.baseLevel = U[o + 5]; u.stackCount = U[o + 6]; applyUnitLevelScaling(u, U[o + 5]);
         u.energy = U[o + 4]; u.holdPosition = U[o + 7] !== 0;
         unitAdded(u); players[u.owner].popCount++;

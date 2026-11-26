@@ -163,13 +163,26 @@ function _simEv(op, argc, a0, a1, a2, a3, a4, a5, a6, a7) {
 // string and extra lists are the recorder's own: the message is cloned when
 // posted, then _simEvPosted empties them for the next tick.
 const _simEvOut = { f: null, s: null, x: null };
+// (The posts' buffers, the page's again after its replay (evReturn): a buffer at least the bytes asked for, the
+// smallest such; none, a new one with room to grow. A few kept.)
+const _simEvPool = [];
+function _simEvBuffer(bytes) {
+    let best = -1;
+    for (let i = 0; i < _simEvPool.length; i++) { const b = _simEvPool[i]; if (b.byteLength >= bytes && (best < 0 || b.byteLength < _simEvPool[best].byteLength)) best = i; }
+    if (best >= 0) return _simEvPool.splice(best, 1)[0];
+    return new ArrayBuffer(Math.ceil((bytes * 1.5 + 1) / 65536) * 65536);
+}
+function _simEvReturn(bufs) {
+    for (const b of bufs || []) if (b instanceof ArrayBuffer && b.byteLength > 0) { if (_simEvPool.length >= 8) _simEvPool.shift(); _simEvPool.push(b); }
+}
 function _simEvTake(transfer) {
     const E = _simEvents, out = _simEvOut;
-    const f = E.buf.slice(0, E.n);
+    const f = new Float64Array(_simEvBuffer(E.n * 8), 0, E.n);
+    f.set(E.buf.subarray(0, E.n));
     transfer.push(f.buffer);
     out.f = f; out.s = E.strs; out.x = E.extra;
     // (The hits' looks: one buffer of records, unit.js simHitLooksTake.)
-    out.l = typeof simHitLooksTake === 'function' ? simHitLooksTake(transfer) : null;
+    out.l = typeof simHitLooksTake === 'function' ? simHitLooksTake(transfer, _simEvBuffer) : null;
     E.n = 0;
     return out;
 }
@@ -250,7 +263,7 @@ function _simHelperUrl() {
     let url = new URL('sim_helper.js?v=20261124-occ', base).href;
     if (!self.SIM_WORKER_BASE && !_simImportViaBlob) return url;
     let nl = String.fromCharCode(10);
-    let parts = ['sim_parallel.js?v=20261108-st6', 'sim_wasm_bin.js?v=20261124-occ', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261105-rl2', '../game/flownav.js?v=20261025-st1'].map(f => {
+    let parts = ['sim_parallel.js?v=20261108-st6', 'sim_wasm_bin.js?v=20261124-occ', 'sim_wasm.js?v=20261025-st1', 'sim_frame.js?v=20261125-dt', '../game/flownav.js?v=20261125-path'].map(f => {
         let xhr = new XMLHttpRequest();
         xhr.open('GET', new URL(f, base).href, false);
         xhr.send();
@@ -310,6 +323,9 @@ self.onmessage = (ev) => {
         } else if (msg.type === 'auto') {
             _simAuto.arm = msg;
             _simAutoPoll();
+        } else if (msg.type === 'evReturn') {
+            // (The page replayed a post's events: their buffers for the next posts.)
+            _simEvReturn(msg.bufs);
         } else if (msg.type === 'netChannel') {
             _simNetAdd(String(msg.peer || ''), msg.dc);
         } else if (msg.type === 'frameReturn') {
@@ -639,6 +655,9 @@ function _simStart(msg) {
     const t4 = performance.now();
     if (typeof _navProfilesInUse === 'function' && !_nav[NAV_PROFILE_GROUND]) for (const p of _navProfilesInUse()) navEnsure(p);
     T.nav = performance.now() - t4;
+    // (The slot relayout's tables (sized by the slot capacity) and the slots' zero table: made now, not in the
+    // match's first relayout step (~19 ms there, rendered checker-300k).)
+    if (typeof simUnitStateRelayoutPrewarm === 'function') simUnitStateRelayoutPrewarm();
     _simStartTimings = T;
     _simEvReset();
     _simLocalDefeat = '';
@@ -728,13 +747,24 @@ const SIM_TRACE_FNS = ['processActions', 'spatialIndexRebuild', 'navTick', 'navF
     'tickStatusEffects', 'occupancyPrepareMovement', 'trafficAfterMovement', 'simParallelBackgroundWait', 'simPresentTickEnd', 'simPresentTickCollect', 'snapRecordTickHash', '_simPostResult',
     'processGlobalSpawnerQueue', 'healerCandidatesStep', 'spawnerStructuresTick', 'laserBeamsTick', 'projectilesAdvance', 'visCoverHoldEnd',
     // (The worker search tier's parts.)
-    '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsCollectorGroup', '_wsNearField', '_ensureHealerDamagedCandidatesCacheCurrent',
+    '_wsPost', '_wsOrder', '_wsCommit', 'waiTake', '_wswStep', '_wswBuild', '_wsgPrepare', '_ensureHealerDamagedCandidatesCacheCurrent',
     // (The result's parts, the movement's, the events' JavaScript.)
     'simPresentationPublish', 'simFrameEncodeState', 'simFrameDetails', 'simFrameStructureDetails', '_simDeltaEvents', '_simEvTake', 'trafficBeforeMovement',
-    'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', 'workerBrainsPrepare', '_unitNoWayCommit', '_unitNoWay', '_unitWaitEnded',
-    '_unitFloorEvent', '_unitEventSortReserve', '_unitEvSplitRoom', 'flowLooksCommit', '_acqApplyMoves',
+    'waiRun', 'waiOutEvents', '_unitEvent', 'workerBrainsCollect', 'workerBrainsPrepare', 'pendingPathNoWayEvents', '_unitNoWay', '_unitWaitEnded',
+    '_unitMineEvents', '_unitEventSortReserve', '_unitEvSplitRoom', 'flowLooksCommit', '_acqApplyMoves',
     // (The spawner queue's parts.)
-    'spawnerProductionPass', '_spawnBirths', '_spawnUpkeep', '_spShiftRun', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick'];
+    'spawnerProductionPass', '_spawnBirths', '_spawnUpkeep', '_spShiftRun', '_unitRetirePass', '_unitGoneRun', 'simUnitStateDetachGoneMany', 'simUnitStateRelayoutStep', 'pendingPathsTick',
+    // (The relayout's parts.)
+    '_simRelayoutPlan', '_simRelayoutApply', '_simRelayoutIndex', '_simRelayoutArrays', '_simSlotZeroTable', 'acqTierIndexWait', 'simUnitStateSlabsBind',
+    // (The index rebuild's and the worker search post's parts.)
+    'tickStartChainSettle', 'spatialCountsDeferEnd', 'simUnitStateReleaseFreed', '_spatialIndexCollect', '_spatialIndexChainDrop', '_spatialIndexRebuildParallel', '_spatialIndexRebuildSerial',
+    '_spatialEntryArrays', '_spatialEntryIds', '_unitSlotMapEnsure', '_spatialRadixStages', '_wsgEnsure', '_wsSnapshotReturnSpawners', '_wsCandidates', 'waiTake', 'unitHitsResolve',
+    // (The presentation's publish.)
+    '_simPresentStructureChanges', 'simPresentationBind',
+    // (The hits' parts.)
+    '_structHitsApply', '_structHitsRun', '_structHitsAfter', 'structDestroyTiles', '_hitLooksMake', 'simUnitStReserve', 'simUnitStSettle', '_hitStArrays', '_hitArrays', 'projBlastRoom', '_simStGrow',
+    // (The result post's parts.)
+    'simMinimapMake', '_simPost', '_simMetaStructsRun', '_simMetaClsPrep', '_simMetaStructsRows', '_simStructTableGrow', '_simInfoPackTable', 'simInfoPackStatDirCheck', '_simPresentAngles', '_simPresentTileSlots'];
 let _simTraceCur = null, _simTraceRows = [], _simTraceEndAt = 0;
 // The occupancy movement's jobs (one a spatial block) in a traced tick: their
 // summed time (cpu:89), and those over 2 ms with their blocks' unit counts
@@ -757,7 +787,8 @@ function _simTraceInstall() {
     // (Per chunk start and duration of the traced jobs: sim_parallel.js _simParTraceChunk.)
     if (typeof simHeapArray === 'function') simParallelBind('par.ctrace', simHeapArray(Float64Array, 32768));
     { const bw = simParallelBackgroundWait; self.simParallelBackgroundWait = simParallelBackgroundWait = function (lane = 1) { const cur = _simTraceCur; if (!cur) return bw.apply(this, arguments); const a = performance.now(); try { return bw.apply(this, arguments); } finally { const d = performance.now() - a; if (d >= .2) { const k = 'w:' + lane; cur.ph[k] = (cur.ph[k] || 0) + d; } } }; }
-    for (const name of SIM_TRACE_FNS) {
+    // (Each name once: a name listed twice was wrapped twice and its time counted twice.)
+    for (const name of new Set(SIM_TRACE_FNS)) {
         const f = self[name];
         if (typeof f !== 'function') continue;
         self[name] = function () {
@@ -769,7 +800,7 @@ function _simTraceInstall() {
     }
     const inner = _simTick;
     _simTick = function (msg) {
-        const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, dk: msg.dk | 0, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
+        const a = performance.now(), cur = _simTraceCur = { tick: msg.tick, dk: msg.dk | 0, at: performance.timeOrigin + a, gap: _simTraceEndAt ? a - _simTraceEndAt : 0, late: Number.isFinite(msg.due) ? Math.max(0, _simNowAbs() - msg.due) : 0, total: 0, ph: {} };
         _simParTrace = cur.ph;
         // (A user-timing mark a step: in a Chrome trace (blink.user_timing) on the
         // same clock as V8's GC events, so a slow step's collector work is found.)

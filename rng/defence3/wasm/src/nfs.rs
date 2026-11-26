@@ -1171,6 +1171,114 @@ pub unsafe extern "C" fn k_meta_structs_par(a: u32, chunk: i32) {
     }
 }
 
+// ---- the structures' presentation slots (sim_frame_world.js _simStructSlots): their books in the heap ----
+// A slot is a tabled structure's (its meta class k, its row r: id k << 24 | r, the psrc word), kept while it stays in
+// the world; its class's row -> slot table (words META_RS / META_RSN of the meta class table, -1 none) finds it.
+// Books H: [0] slots made (high water), [1] free ones (stack `free`), [2] the membership version, [3] the serial
+// counter (each slot made takes the next: pser), [4] room.
+const META_RS: usize = 54; const META_RSN: usize = 55;
+#[inline(always)]
+unsafe fn pslot_rs(cls: *const i32, k: usize) -> (*mut i32, usize) { let p = mcol::<i32>(cls, k, META_RS); (p, if p.is_null() { 0 } else { g(cls, k * META_CW + META_RSN).max(0) as usize }) }
+struct PsBooks { n: usize, nf: usize, ver: i32, ser: i32, count: usize, wrote: bool, nl: usize, rpos: i32 }
+/// k_pslot_changes (sim_presentation.js _simPresentStructureChanges): the tiles whose structure changed (the tile
+/// journal's entries [P0, P1) of its ring, masked by P2) and the marked ones (dirty, P3 of them), each once (mark,
+/// cleared after): the slot of a structure gone from its tile freed (its row not alive in the shown table and the
+/// one being filled, logged); the tile's structure (towers, barracks, spawners, floor items: meta kinds 0-3, on
+/// their anchor tile) given its slot (a new one listed in the shown order), the tile's slot set, the slot listed
+/// for its row (L). The listed slots logged too (the ring: before their rows are written). out: [0] listed, [1] the
+/// order's count, [2] 1 when something changed.
+/// Arrays: [0] journal ring (u32), [1] dirty, [2] mark (a byte a tile), [3] meta class table, [4] st.ctab, [5]
+/// st.rrow, [6] H, [7] psrc, [8] pser, [9] free, [10] tile -> slot, [11] order, [12] alive, [13] gx, [14] gy (the
+/// shown table), [15] alive of the table being filled (or none), [16] L, [17] log ring, [18] its cursor, [19] out.
+/// P: [0] / [1] journal from / end, [2] its mask, [3] dirty, [4] width, [5] tiles, [6] order count, [7] / [8] the
+/// tables' room, [9] classes, [10] log mask, [11] 1: changed already (a rally).
+#[no_mangle]
+pub unsafe extern "C" fn k_pslot_changes(a: u32, _chunk: i32) {
+    use core::sync::atomic::{AtomicI32, Ordering};
+    let k = K::new(waddr(a) as *const i32);
+    let (jr, dl, mark, cls, ctab, rrow) = (k.p::<u32>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<i32>(3), k.p::<u8>(4), k.p::<i32>(5));
+    let (h, psrc, pser, free, ts) = (k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10));
+    let (order, alive, fgx, fgy, alive2) = (k.p::<i32>(11), k.p::<u8>(12), k.p::<i16>(13), k.p::<i16>(14), k.p::<u8>(15));
+    let (lst, ring, rcur, out) = (k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(19));
+    let (j0, j1, jm, nd, w, nt) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(0) as usize, k.i(3).max(0) as usize, k.i(4).max(1) as usize, k.i(5).max(0) as usize);
+    let (fcap, f2cap, ncls, rmask) = (k.i(7).max(0) as usize, k.i(8).max(0) as usize, k.i(9).max(0).min(32) as usize, k.i(10).max(0) as usize);
+    let mut b = PsBooks { n: 0, nf: 0, ver: 0, ser: 0, count: k.i(6).max(0) as usize, wrote: k.i(11) != 0, nl: 0, rpos: 0 };
+    if cls.is_null() || h.is_null() || psrc.is_null() || ts.is_null() || mark.is_null() || ctab.is_null() || rrow.is_null() {
+        if !out.is_null() { s(out, 0, 0); s(out, 1, b.count as i32); s(out, 2, b.wrote as i32); }
+        return;
+    }
+    // (The tile's code -> meta class.)
+    let mut cmap = [-1i8; 256];
+    for c in 0..ncls { if g(cls, c * META_CW + MC_N) > 0 { let tag = g(cls, c * META_CW + MC_TAG); if tag > 0 && tag < 256 { cmap[tag as usize] = c as i8; } } }
+    b.n = g(h, 0).max(0) as usize; b.nf = g(h, 1).max(0) as usize; b.ver = g(h, 2); b.ser = g(h, 3);
+    let room = g(h, 4).max(0) as usize;
+    let rc = if rcur.is_null() { None } else { Some(&*(rcur as *const AtomicI32)) };
+    b.rpos = match rc { Some(c) => c.load(Ordering::Relaxed), None => 0 };
+    let id_at = |t: usize| -> i32 {
+        let kk = cmap[g(ctab, t) as usize];
+        if kk < 0 { return -1; }
+        let kk = kk as usize;
+        if g(cls, kk * META_CW + MC_KIND) > 3 { return -1; }
+        let r = g(rrow, t);
+        if r < 0 || r >= g(cls, kk * META_CW + MC_N) { return -1; }
+        let st = mcol::<i32>(cls, kk, MC_ST);
+        if st.is_null() || g(st, r as usize) != t as i32 { return -1; }
+        ((kk as i32) << 24) | r
+    };
+    let visit = |t: usize, b: &mut PsBooks| {
+        // (2: visited; 1: marked dirty, sim_presentation.js simPresentTileDirty.)
+        if t >= nt || g(mark, t) == 2 { return; }
+        s(mark, t, 2);
+        let id = id_at(t);
+        let prev = g(ts, t);
+        if prev >= 0 && (prev as usize) < b.n && g(psrc, prev as usize) != id {
+            let pu = prev as usize;
+            // (The slot's structure shown on this tile: freed; one a cycle gave the slot since stays.)
+            if pu < fcap && g(fgx, pu) as usize == t % w && g(fgy, pu) as usize == t / w && g(psrc, pu) >= 0 {
+                let v = g(psrc, pu);
+                let (rs, rn) = pslot_rs(cls, (v as u32 >> 24) as usize);
+                let rr = (v & 0xFFFFFF) as usize;
+                if rr < rn && g(rs, rr) == prev { s(rs, rr, -1); }
+                s(psrc, pu, -1);
+                if b.nf < room { s(free, b.nf, prev); b.nf += 1; }
+                b.ver = b.ver.wrapping_add(1);
+                if !ring.is_null() { s(ring, (b.rpos as u32 as usize) & rmask, prev); b.rpos = b.rpos.wrapping_add(1); if let Some(c) = rc { c.store(b.rpos, Ordering::Release); } }
+                s(alive, pu, 0);
+                if !alive2.is_null() && pu < f2cap { s(alive2, pu, 0); }
+                b.wrote = true;
+            }
+            s(ts, t, -1);
+        }
+        if id < 0 { return; }
+        let (kk, r) = ((id as u32 >> 24) as usize, (id & 0xFFFFFF) as usize);
+        let (rs, rn) = pslot_rs(cls, kk);
+        if r >= rn { return; }
+        let s0 = g(rs, r);
+        let known = s0 >= 0 && (s0 as usize) < b.n && g(psrc, s0 as usize) == id;
+        let sl = if known { s0 as usize } else {
+            let sl = if b.nf > 0 { b.nf -= 1; g(free, b.nf) as usize } else { if b.n >= room { return; } b.n += 1; b.n - 1 };
+            s(psrc, sl, id); b.ser = b.ser.wrapping_add(1); s(pser, sl, b.ser); s(rs, r, sl as i32); b.ver = b.ver.wrapping_add(1);
+            sl
+        };
+        s(ts, t, sl as i32);
+        if !known && b.count < fcap { s(order, b.count, sl as i32); b.count += 1; }
+        s(lst, b.nl, sl as i32); b.nl += 1;
+        b.wrote = true;
+    };
+    if !jr.is_null() { let mut i = j0; while i < j1 { visit(g(jr, i & jm) as usize, &mut b); i += 1; } }
+    if !dl.is_null() { for i in 0..nd { let t = g(dl, i); if t >= 0 { visit(t as usize, &mut b); } } }
+    // (The marks cleared.)
+    if !jr.is_null() { let mut i = j0; while i < j1 { let t = g(jr, i & jm) as usize; if t < nt { s(mark, t, 0); } i += 1; } }
+    if !dl.is_null() { for i in 0..nd { let t = g(dl, i); if t >= 0 && (t as usize) < nt { s(mark, t as usize, 0); } } }
+    // (The listed slots logged before their rows are written.)
+    if !ring.is_null() && b.nl > 0 {
+        for i in 0..b.nl { s(ring, (b.rpos as u32 as usize) & rmask, g(lst, i)); b.rpos = b.rpos.wrapping_add(1); }
+        if let Some(c) = rc { c.store(b.rpos, Ordering::Release); }
+    }
+    s(h, 0, b.n as i32); s(h, 1, b.nf as i32); s(h, 2, b.ver); s(h, 3, b.ser);
+    if !out.is_null() { s(out, 0, b.nl as i32); s(out, 1, b.count as i32); s(out, 2, b.wrote as i32); }
+}
+
 // ---- the unit slot allocator (sim_unit_state.js _simSlab*): its books in the heap ----
 // Slots come in slabs of 64; a unit takes the lowest free slot of the slab
 // its 16x16-tile block is filling (cur), else a slab of its block's list

@@ -91,6 +91,9 @@ const SIM_LANE_RZ = 14;
 // put back on them at a later tick (sim_unit_state.js simUnitStateReleaseFreed):
 // no birth clears a slot.
 const SIM_LANE_FREE = 15;
+// SIM_LANE_ADJ: the adjacency flood (things_utils.js adjacencyLaneStep), committed four ticks after its post. (On T5
+// with the units' cover before: its post waited for the cover's seeds job, 6-12 ms steps in a 400k battle.)
+const SIM_LANE_ADJ = 8;
 // (T1 right after the index: the worker search tier's scan, worker.js WS_LANE, is waited for one tick after its post.)
 // (The flow looks after the index and the hash: their answers are wanted at the next movement, which the
 // next tick's index comes before; ahead of them the helpers drained every flow claim first and the tick start
@@ -103,7 +106,7 @@ const SIM_LANE_FREE = 15;
 // collect steps), while T5 / T05 / BUILD behind it never waited.)
 // (GROW right after the index: it carries the presentation's marks and snapshot between ticks too (sim_presentation.js
 // simPresentTickEnd), wanted by the next tick's start like the index, behind it.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_LONG, SIM_LANE_T5, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_BUILD];
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_LONG, SIM_LANE_T5, SIM_LANE_ADJ, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_BUILD];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -1850,18 +1853,23 @@ const _simWsSelectW = _simWK(['unit.wsKind', 'unit.wsCfg', 'unit.wsT', 'unit.wsO
     '?ws.rslot', '?ws.rid', '?ws.rwt', '?ws.rkind', '?ws.rowner', '?ws.rox', '?ws.roy', '?ws.rux', '?ws.ruy', '?ws.rr', '?ws.rak', '?ws.rax', '?ws.ray', '?ws.rgrp',
     '?ws.rneed', '?ws.rjid', '?ws.rcur', '?ws.rmy', 'ws.rcnt', '?ws.rpre', 'unit.wsFail', 'unit.wkIx', '?ws.rsel']);
 SIM_KERNELS[SIM_KERNEL_WS_SELECT] = function (R, P, chunk) { _simRust(_simWsSelectW, P, chunk, 'k_ws_select', 'WS_SELECT'); };
-// SIM_KERNEL_WS_GROUP (worker.js _wsGroupBuild): a collectors' group's sites
-// and spawners from the candidate structures, P[10] candidates a job: mode 2
-// counts a job's into wsg<id>.cc, mode 3 writes them from the starts the
-// caller made of those (ord.rs k_ws_group; P[11] the group's id: its arrays).
+// SIM_KERNEL_WS_GROUP (worker.js _wsPost, the search lane's first three
+// stages): a collectors' group made from the tile mirror (wsb.rs
+// k_ws_gbuild): P[0] 1 its sites and spawners counted a stretch of P[5]
+// tiles a job, 2 written, 3 bucketed (a job a group); the job's group
+// P[16 + job / P[6]] (mode 3: P[16 + job]): its arrays, wsg<id>.*.
 const SIM_KERNEL_WS_GROUP = 129;
 const _simWsGroupKs = [];
 function _simWsGroupK(id) {
     const p = 'wsg' + id + '.';
-    return _simWsGroupKs[id] || (_simWsGroupKs[id] = _simWK(['st.code', 'st.own', 'st.uc', 'st.val', 'st.brain', '?-',
-        ...['sx', 'sy', 'st', 'so', 'sready', 'tile', 'qgx', 'qgy', 'qo', 'qid', 'qx', 'qy', 'qready'].map(k => '?' + p + k), 'wsg.cand', p + 'cc']));
+    return _simWsGroupKs[id] || (_simWsGroupKs[id] = _simWK(['wsm.mirror', 'wsm.cfg', p + 'gcc',
+        ...['sx', 'sy', 'st', 'so', 'sready', 'tile', 'qgx', 'qgy', 'qo', 'qid', 'qx', 'qy', 'qready', 'bs', 'bc', 'bi',
+            'pgx', 'pgy', 'po', 'pid', 'px', 'py', 'pready', 'qp', 'sbk', 'meta', 'rk', 'ro', 'bki', 'gst'].map(k => p + k)]));
 }
-SIM_KERNELS[SIM_KERNEL_WS_GROUP] = function (R, P, chunk) { _simRust(_simWsGroupK(P[11] | 0), P, chunk, 'k_ws_group', 'WS_GROUP'); };
+SIM_KERNELS[SIM_KERNEL_WS_GROUP] = function (R, P, chunk) {
+    const gi = P[0] === 3 ? chunk : Math.floor(chunk / Math.max(1, P[6] | 0));
+    _simRust(_simWsGroupK(P[16 + gi] | 0), P, chunk, 'k_ws_gbuild', 'WS_GROUP');
+};
 // SIM_KERNEL_WS_SCAN (a tier job, P[1] requests a job over the selected ones:
 // request g the m-th of select chunk c, ws.rpre[c] <= g < ws.rpre[c + 1], at
 // c * P[12] + m): its K best sites, best first (then lower site): ws.res the
@@ -2092,11 +2100,6 @@ SIM_KERNELS[SIM_KERNEL_SPAWN_WRITE] = function (R, P, chunk) { _simRust(_simSpaw
 // ev.list[chunk * P[1]...], how many at ev.cnt[chunk]. P: [0] slots, [1] per job.
 const _simUnitEventsW = _simWK(['unit.mvOut', 'unit.mvEv', 'unit.live', 'unit.dead', 'unit.energy', 'ev.list', 'ev.cnt']);
 const _simUnitEventSortW = _simWK(['ev.list','ev.cnt','unit.id','unit.live','ev.sorted','ev.temp','ev.keys','ev.keytmp']);
-const SIM_KERNEL_EVENT_ROUTES = 107;
-const _simEventRoutesW = _simWK(['ev.sorted','unit.nvPK','unit.pathIndex','unit.isWk','unit.x','unit.y','ev.routes',
-    '?nav.0.meta','?nav.0.partL','?nav.0.partB','?nav.0.pcomp',
-    '?nav.1.meta','?nav.1.partL','?nav.1.partB','?nav.1.pcomp']);
-SIM_KERNELS[SIM_KERNEL_EVENT_ROUTES] = function(R,P,chunk){_simRust(_simEventRoutesW,P,chunk,'k_event_routes','EVENT_ROUTES');};
 SIM_KERNELS[SIM_KERNEL_UNIT_EVENTS] = function (R, P, chunk) { _simRust(_simUnitEventsW, P, chunk, 'k_unit_events', 'UNIT_EVENTS'); };
 // The sorted events split: the worker kernel's into a list, the others' indices for the JavaScript (unit.js unitEventsRun; k.rs).
 const SIM_KERNEL_UNIT_EVENTS_SPLIT = 132;
@@ -2225,7 +2228,7 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     'acq.out','acq.tid','acq.agrid','acq.cover','acq.hs','acq.rs','acq.rc','acq.rst','acq.es','acq.om','?acq.omt',
     // (acq.saE: the area buckets' entries, a 16-byte record each: x, y, slot, id.)
     // (acq.saE2: as long, the buckets' sort through it, k_acq_area_sort.)
-    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?acq.saE2','?-','?-','?-',
+    '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?acq.saE2','?acq.saPre','?-','?-',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
     '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
     // (The build's per-entry key; its stages' histograms by entry range;
@@ -2348,7 +2351,9 @@ const _simHitsW = _simWK(['hit.q', 'hit.dmg', 'hit.sty', 'hit.wk', '?mv.hita', '
     'unit.hSx', 'hit.rdu',
     // (The step's shots that hit a unit: projectile.js, k.rs shot_hit.)
     '?pj.uev', '?pj.arg', '?pj.dmg', '?pj.ty', '?pj.lvl', '?pj.sd', '?pj.sp', '?pj.shots', '?pj.id', '?pj.own', '?pj.x', '?pj.y', '?pj.bd', '?pj.br',
-    '?pj.tfl', '?unit.upT', '?ix.stamp', '?ix.start', '?ix.cnt', '?sep.eslot', '?unit.live', '?unit.dead', '?unit.x', '?unit.y']);
+    '?pj.tfl', '?unit.upT', '?ix.stamp', '?ix.start', '?ix.cnt', '?sep.eslot', '?unit.live', '?unit.dead', '?unit.x', '?unit.y',
+    // (The attack lists' hits on structures, keys for k_struct_hits: unit.js _structHitsApply.)
+    '?hit.skeys']);
 SIM_KERNELS[SIM_KERNEL_HITS] = function (R, P, chunk) { _simRust(_simHitsW, P, chunk, 'k_hits', 'HITS'); };
 // The units hit this tick: their hits' sum off their energy, statuses, a
 // watch, fallen (wasm/src/k.rs k_hits_apply).

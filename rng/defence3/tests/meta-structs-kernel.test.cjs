@@ -28,7 +28,7 @@ _simPresentation = { worker: { postMessage() {}, terminate() {} }, epoch: 0, gen
 simPresentationBind();
 __scratch.cycle = () => { const g = simPresentationMetadata(); while (!g.next().done); };
 __scratch.js = () => { const p = _simPresentation, F = p.structures, G = _simStructTableNew(F.cap), lists = _simStructLists();
-    G.order.set(F.order); for (let kind = 0; kind < lists.length; kind++) for (const e of lists[kind]) if (e && e._sslot !== undefined) __scratch.ref(G, e._sslot, e, kind, gameTime);
+    G.order.set(F.order); for (let kind = 0; kind < lists.length; kind++) for (const e of lists[kind]) if (e && _simStructSlots.slotOfLive(e) >= 0) __scratch.ref(G, _simStructSlots.slotOfLive(e), e, kind, gameTime);
     return G; };
 __scratch.rows = (F = _simPresentation.structures) => { const p = _simPresentation, out = {}, n = p.structCount, ord = Array.from(F.order.subarray(0, n)).sort((a, b) => a - b);
     for (const k of [...SIM_STRUCT_SPEC.f32, ...SIM_STRUCT_SPEC.i32, ...SIM_STRUCT_SPEC.i16, ...SIM_STRUCT_SPEC.u8]) out[k] = ord.map(s => F[k][s]);
@@ -37,8 +37,8 @@ __scratch.rows = (F = _simPresentation.structures) => { const p = _simPresentati
 __scratch.cycle();
 __scratch.diff = (a, b, only) => { const bad = [], want = only ? new Set(only) : null;
     for (const k in a) { if (k === 'slots' || k === 'label') continue; for (let j = 0; j < a[k].length; j++) { if (want && !want.has(a.slots[j])) continue; const x = a[k][j], y = b[k][j];
-        if (!(x === y || (x !== x && y !== y))) { const e = _simStructSlots.owner[a.slots[j]]; bad.push([k, a.slots[j], x, y, e && e.constructor.name, e && e.type]); break; } } }
-    for (let j = 0; j < b.slots.length; j++) { if (want && !want.has(b.slots[j])) continue; const s = b.slots[j], e = _simStructSlots.owner[s];
+        if (!(x === y || (x !== x && y !== y))) { const e = _simStructSlots.ownerOf(a.slots[j]); bad.push([k, a.slots[j], x, y, e && e.constructor.name, e && e.type]); break; } } }
+    for (let j = 0; j < b.slots.length; j++) { if (want && !want.has(b.slots[j])) continue; const s = b.slots[j], e = _simStructSlots.ownerOf(s);
         if (!e || b.kind[j] > 3) continue; const x = getLevelLabelText(e), y = simLabelText(b.label[j]); if (x !== y) { bad.push(['label', s, x, y, e.constructor.name, e.type]); break; } }
     return bad; };`);
 // (Preferred targets on some towers, a unit's and a structure's: shown as tx, ty and rallyTargetId.)
@@ -68,7 +68,7 @@ for (let step = 0; step < 30; step++) {
 // each one row, none dropped (the list was capped at 65536 a step), none twice.
 {
     const r = JSON.parse(i.eval(`(() => { const lists = _simStructLists(), tiles = new Set();
-        for (const l of lists.slice(0, 4)) for (const e of l) if (e && e._sslot !== undefined && getTileEntityRef(e.gx, e.gy) === e) tiles.add(e.gy * GRID_W + e.gx);
+        for (const l of lists.slice(0, 4)) for (const e of l) if (e && _simStructSlots.slotOfLive(e) >= 0 && getTileEntityRef(e.gx, e.gy) === e) tiles.add(e.gy * GRID_W + e.gx);
         for (let k = 0; k < 2; k++) for (const t of tiles) simPresentTileDirty(t % GRID_W, Math.floor(t / GRID_W));
         __scratch.chg = null; _simPresentStructureChanges(_simPresentation); const ch = __scratch.chg || [];
         return JSON.stringify({ tiles: tiles.size, rows: ch.length, distinct: new Set(ch).size }); })()`));

@@ -1,6 +1,7 @@
 'use strict';
-// Native pure route preparation and ordered fast commit versus the scalar
-// public handler, including retry/request state, digests and path fallbacks.
+// The no-way events in the pending wheel's kernel (pp.rs k_pp_due mode 3, pathfinding.js pendingPathNoWayEvents) versus
+// the scalar handler (unit.js _unitNoWay), one event at a time: pending target, path, route, fallback, retry, digest,
+// the movement columns, the substitutes asked, the wheel.
 const assert=require('node:assert/strict'),H=require('./net-harness.cjs');
 const helpers=Number(process.argv.find(a=>a.startsWith('--helpers='))?.slice(10)||0);
 if(helpers)globalThis.self={crossOriginIsolated:true};
@@ -34,23 +35,17 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
    if(j%17===0){const t=_nav[profile].partL.findIndex(v=>v===65535);if(t>=0){C.x[u._si]=(t%GRID_W)*TILE*8+128;C.y[u._si]=Math.floor(t/GRID_W)*TILE*8+128;}}
    E[j]=u._si*8+2;
   }
-  const P=_simParams;P[0]=n;P[1]=64;P[2]=TILE*8;
-  simParallelRun(SIM_KERNEL_EVENT_ROUTES,Math.ceil(n/64));
+  const E1=simHeapArray(Int32Array,4);
   for(let j=0;j<n;j++){
-   const u=actors[j],s=u._si,key=_unitEvSort.routes[j*2],comp=_unitEvSort.routes[j*2+1];
-   if(C.pathIndex[s]!==0){if(key!==-1)throw Error('path index guard '+j);continue;}
-   if(key!==C.nvPK[s])throw Error('prepared key '+j);
-   const profile=navProfileOf(u),tile=Math.floor(u.y/TILE)*GRID_W+Math.floor(u.x/TILE);
-   if(comp===-2)walls++;else if(comp!==_navUnitComp(profile,tile))throw Error('prepared component '+j);
-   const missingView=false;
+   const u=actors[j],s=u._si,profile=navProfileOf(u),tile=Math.floor(u.y/TILE)*GRID_W+Math.floor(u.x/TILE);
+   if(_nav[profile].partL[tile]===65535)walls++;
    const initial={path:u.path,index:u.pathIndex,pending:u._pendingPathTarget&&{...u._pendingPathTarget},fallback:u.pathIsFallbackAstar,
     retry:u._astarBudgetRetryTick,key:u._routeKey,on:C.mvOn[s],cd:C.mvSteer[s*8],h:C.hObj[s]};
    const reset=()=>{u.path=initial.path;u.pathIndex=initial.index;u._pendingPathTarget=initial.pending&&{...initial.pending};u.pathIsFallbackAstar=initial.fallback;
     u._astarBudgetRetryTick=initial.retry;u._routeKey=initial.key;C.mvOn[s]=initial.on;C.mvSteer[s*8]=initial.cd;C.hObj[s]=initial.h;
     _navSubReset();C.ppDue.fill(-1);_ppHeads().fill(-1);_ppCount=0;};
    reset();_unitNoWay(u);const expected=JSON.stringify(capture(u));
-   reset();const used=_unitNoWayCommit(u,C,s,key,comp,_simHTerm(_UH_PFA,true));
-   if(!used)_unitNoWay(u);else fast++;
+   reset();E1[0]=s*8+UNIT_EV_NOWAY;pendingPathNoWayEvents(E1,1);if(E1[0]===-1)fast++;
    const actual=JSON.stringify(capture(u));
    if(actual!==expected)throw Error('commit '+j+' round '+round+'\\n'+actual+'\\n'+expected);
    cases++;
@@ -58,6 +53,6 @@ const result=JSON.parse(i.eval(`JSON.stringify((()=>{
  }
  return {cases,fast,walls};
 })())`));
-assert.ok(result.fast>500);assert.ok(result.cases>1000);assert.deepEqual(i.errors.map(String),[]);
+assert.equal(result.fast,result.cases,'every event taken by the kernel');assert.ok(result.walls>0,'walled-in units among them');assert.ok(result.cases>1000);assert.deepEqual(i.errors.map(String),[]);
 console.log(JSON.stringify({helpers,...result}));
 for(const w of require('./real-sim-helper.cjs').instances||[])w.terminate();

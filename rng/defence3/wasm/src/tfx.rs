@@ -206,3 +206,117 @@ pub unsafe extern "C" fn k_trap_bound(a: u32, _chunk: i32) {
     for i in 0..n { let t = g(list, i) as usize; if g(stamp, t) == epoch { sum += g(count, t).max(0); } }
     s(hdr, 3, sum);
 }
+
+/// k_mine_events (unit.js unitEventsRun, after the events' split; one job on the simulation thread): the floor
+/// events of the tick's sorted list (ev.sorted [0], P[0] of them; code P[1]) in their order, as Unit's floor look
+/// (unit.js _unitFloorEvent was): the unit's floor tile noted (its steering record's floor word, [19] mv.steer, P[13]
+/// words a slot, the floor word P[14]); a built mine there ([10] mv.trapK 6) whose cell is not the unit's owner's
+/// ([14] cell.owner) goes off (as Unit._explodeMine did): every unit of another owner than the mine's ([12] st.own; none: every
+/// unit), alive, within the mine's blast radius of the unit (the units where they stood at the pass's start: unit.x0 /
+/// y0; the unit index's chunks, [15..18] sep.rstamp / rs / rc / eslot, epoch P[8]) loses its blast damage (by the
+/// mine's owner and level, [11] mv.trapL: [20] mine.tab, f64 pairs damage / radius px, owners P[9] + 1 (the last: no
+/// owner), levels P[10]): energy as Float32, what it lost (no more than it had) into its owner's shrine sum ([23],
+/// fixed point P[11]), fallen at none left; the unit itself fallen at none; the mine's tile off the trap table (its
+/// destroy is the caller's) and its event dropped from the list (-1: the worker kernel and the JavaScript pass it
+/// over). Outputs: [21] the mines (tile, x, y as f32 bits, owner; P[15] room), [24] counts (mines, hits); each hit a
+/// look appended to the hits' looks (unit.js _lk: [22] kind 1 (alert and flash, no attack's), [25] the unit's id
+/// ([31] unit.id), [26] / [27] where (eighths), [28] what it lost, [29] the mine's owner; [30] hdr[0] their count, P[16]
+/// their room): presentation only.
+/// Arrays: [0] ev.sorted, [2] unit.x, [3] unit.y, [4] unit.x0, [5] unit.y0, [6] unit.owner, [7] unit.dead, [8] unit.live,
+/// [9] unit.energy, [10] mv.trapK, [11] mv.trapL, [12] st.own, [13] st.uc, [14] cell.owner, [15..18] the index,
+/// [19] mv.steer, [20] mine.tab, [21] the mines, [22] / [25..30] the looks, [23] shrine sums (f64 a player), [24] counts,
+/// [31] unit.id.
+/// P: [0] events, [1] the floor code, [2] TILE, [3] / [4] grid, [5] chunk tiles, [6] / [7] chunks across / down,
+/// [8] index epoch, [9] owners in the table (the index's players: a mine of another owner hits none, of none every unit), [10] levels, [11] fixed-point scale, [12] ST_OWNER_NONE, [13] steering
+/// words a slot, [14] its floor word, [15] the mines' room, [16] the looks' room, [17] shrine owners.
+#[no_mangle]
+pub unsafe extern "C" fn k_mine_events(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let ev = k.p::<i32>(0);
+    let (xs, ys, x0s, y0s, own, dead, live, en) = (k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i8>(6), k.p::<u8>(7), k.p::<u8>(8), k.p::<f32>(9));
+    let (trk, trl, stown, stuc, cown) = (k.p::<u8>(10), k.p::<u8>(11), k.p::<i32>(12), k.p::<u8>(13), k.p::<i8>(14));
+    let (stamp, rs, rc, eslot) = (k.p::<i32>(15), k.p::<i32>(16), k.p::<i32>(17), k.p::<i32>(18));
+    let (steer, tab, om, shr, cnt) = (k.p::<i32>(19), k.p::<f64>(20), k.p::<i32>(21), k.p::<f64>(23), k.p::<i32>(24));
+    let (lkind, ltid, ltx, lty, ldmg, lown, lhdr, uid) = (k.p::<u8>(22), k.p::<i32>(25), k.p::<i32>(26), k.p::<i32>(27), k.p::<f32>(28), k.p::<i8>(29), k.p::<i32>(30), k.p::<i32>(31));
+    s(cnt, 0, 0); s(cnt, 1, 0);
+    if ev.is_null() || xs.is_null() || cnt.is_null() { return; }
+    let (n, floor_code, tile) = (k.i(0).max(0) as usize, k.i(1), k.f(2));
+    let (gw, gh, csz, cw, ch, epoch) = (k.i(3), k.i(4), k.i(5).max(1), k.i(6), k.i(7), k.i(8));
+    let (nown, nlv, scale, none, sw, sfl) = (k.i(9).max(0), k.i(10).max(1), k.f(11), k.i(12), k.i(13).max(1) as usize, k.i(14).max(0) as usize);
+    let (mroom, lroom, nshr) = (k.i(15).max(0) as usize, k.i(16).max(0) as usize, k.i(17).max(0));
+    let (mut nm, mut nh) = (0usize, 0usize);
+    let cws = csz as f64 * tile;
+    for i in 0..n {
+        let e = g(ev, i);
+        if e < 0 || (e & 7) != floor_code { continue; }
+        let q = (e >> 3) as usize;
+        if g(live, q) == 0 || g(dead, q) != 0 { continue; }
+        let (wx, wy) = (g(xs, q) as f64 * 0.125, g(ys, q) as f64 * 0.125);
+        let (gx, gy) = (floor(wx / tile) as i32, floor(wy / tile) as i32);
+        if !(gx >= 0 && gx < gw && gy >= 0 && gy < gh) { continue; }
+        let t = (gy * gw + gx) as usize;
+        if !steer.is_null() { s(steer, q * sw + sfl, t as i32); }
+        let uo = g(own, q) as i32;
+        if trk.is_null() || g(trk, t) != 6 || (!stuc.is_null() && g(stuc, t) != 0) || (!cown.is_null() && g(cown, t) as i32 == uo) { continue; }
+        // It goes off.
+        let mo = if stown.is_null() { none } else { g(stown, t) };
+        // (forEachUnitInRange's enemyOfPlayer: no owner, every unit; one outside the index's players, none.)
+        let hits = mo == none || (mo >= 0 && mo < nown);
+        let row = if mo >= 0 && mo < nown && mo != none { mo } else { nown };
+        let lv = (if trl.is_null() { 1 } else { g(trl, t) as i32 }).max(1).min(nlv - 1);
+        let ti = ((row * nlv + lv) * 2) as usize;
+        let (bd, r) = (g(tab, ti), g(tab, ti + 1).max(0.0));
+        let enemy = row < nown;
+        let r2 = r * r;
+        let scan = r + tile;
+        let cx0 = (floor((wx - scan) / cws) as i32).max(0); let cx1 = (floor((wx + scan) / cws) as i32).min(cw - 1);
+        let cy0 = (floor((wy - scan) / cws) as i32).max(0); let cy1 = (floor((wy + scan) / cws) as i32).min(ch - 1);
+        let mut cy = if hits { cy0 } else { cy1 + 1 };
+        while cy <= cy1 {
+            let mut cx = cx0;
+            while cx <= cx1 {
+                let ck = (cy * cw + cx) as usize;
+                cx += 1;
+                if g(stamp, ck) != epoch { continue; }
+                let (mnx, mny) = ((cx - 1) as f64 * cws, cy as f64 * cws);
+                let nx = if wx < mnx { mnx } else if wx > mnx + cws { mnx + cws } else { wx };
+                let ny = if wy < mny { mny } else if wy > mny + cws { mny + cws } else { wy };
+                let (ddx, ddy) = (wx - nx, wy - ny);
+                if ddx * ddx + ddy * ddy > r2 { continue; }
+                let k0 = g(rs, ck);
+                for kk in k0..k0 + g(rc, ck) {
+                    let s2 = g(eslot, kk as usize);
+                    if s2 < 0 { continue; }
+                    let s2 = s2 as usize;
+                    if g(live, s2) == 0 || g(dead, s2) != 0 { continue; }
+                    let o2 = g(own, s2) as i32;
+                    if enemy && o2 == mo { continue; }
+                    let (dx, dy) = (g(x0s, s2) as f64 * 0.125 - wx, g(y0s, s2) as f64 * 0.125 - wy);
+                    if dx * dx + dy * dy > r2 { continue; }
+                    let e0 = g(en, s2) as f64;
+                    let e1 = (e0 - bd) as f32;
+                    s(en, s2, e1);
+                    let lost = e0 - e1 as f64;
+                    nh += 1;
+                    if !lhdr.is_null() && !lkind.is_null() {
+                        let li = g(lhdr, 0).max(0) as usize;
+                        if li < lroom { s(lkind, li, 1); s(ltid, li, g(uid, s2)); s(ltx, li, g(x0s, s2)); s(lty, li, g(y0s, s2)); s(ldmg, li, lost as f32); s(lown, li, mo as i8); s(lhdr, 0, li as i32 + 1); }
+                    }
+                    // (shrineDamageTaken: the energy after, the amount past it not.)
+                    if lost > 0.0 && o2 >= 0 && o2 < nshr && !shr.is_null() {
+                        let after = e1 as f64;
+                        let l = if after < 0.0 { lost + after } else { lost };
+                        if l > 0.0 { *shr.add(o2 as usize) += floor(l * scale + 0.5); }
+                    }
+                    if e1 <= 0.0 { s(dead, s2, 1); }
+                }
+            }
+            cy += 1;
+        }
+        if g(en, q) <= 0.0 { s(dead, q, 1); }
+        s(trk, t, 0);
+        if nm < mroom && !om.is_null() { s(om, 4 * nm, t as i32); s(om, 4 * nm + 1, (wx as f32).to_bits() as i32); s(om, 4 * nm + 2, (wy as f32).to_bits() as i32); s(om, 4 * nm + 3, mo); nm += 1; }
+        s(ev, i, -1);
+    }
+    s(cnt, 0, nm as i32); s(cnt, 1, nh as i32);
+}

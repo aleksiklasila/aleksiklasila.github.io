@@ -975,6 +975,11 @@ pub unsafe extern "C" fn k_sp_counts(a: u32, chunk: i32) {
 /// in bulk (positions, and the separation's dead / radius / layer), then
 /// sixteen slots at a time past those with nothing running (no status or
 /// attack timer, no damage carried, alive or dead already).
+/// Lane l of a u32x4 (l < 4).
+#[inline(always)]
+fn u32x4_extract_lane_dyn(v: v128, l: usize) -> u32 {
+    match l { 0 => u32x4_extract_lane::<0>(v), 1 => u32x4_extract_lane::<1>(v), 2 => u32x4_extract_lane::<2>(v), _ => u32x4_extract_lane::<3>(v) }
+}
 #[no_mangle]
 pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -1088,6 +1093,48 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
                 }
             }
         }
+        // (Four with no status record and no transfer cooldown: alive ones with no energy fall (their event, 4, is
+        // not listed: no record), the others' attack timers and flashes counted down, as below, lane by lane.)
+        if q + 4 <= i1 && !v128_any_true(v128_load(on.add(q) as *const v128)) && (wtc.add(q) as *const u64).read_unaligned() == 0 {
+            let ld = |p: *const u8| u32x4_extend_low_u16x8(u16x8_extend_low_u8x16(v128_load32_zero(p.add(q) as *const u32)));
+            let z = i32x4_splat(0);
+            let alive = v128_andnot(i32x4_ne(ld(live), z), i32x4_ne(ld(dead), z));
+            let e4 = v128_load(en.add(q) as *const v128);
+            let le0 = f32x4_le(e4, f32x4_splat(0.0));
+            let die = v128_and(alive, le0);
+            let act = v128_and(v128_andnot(alive, le0), i32x4_ne(ld(ton), z));
+            let (dm, am) = (i32x4_bitmask(die) as u32, i32x4_bitmask(act) as u32);
+            if dm != 0 {
+                for l in 0..4 { if dm & (1 << l) != 0 { s(dead, q + l, 1); } }
+            }
+            if am != 0 {
+                let a0 = v128_load(at.add(q) as *const v128);
+                let pos = f32x4_gt(a0, f32x4_splat(0.0));
+                let a1 = f32x4_sub(a0, f32x4_splat(dkf));
+                let an = v128_bitselect(a1, a0, v128_and(act, pos));
+                v128_store(at.add(q) as *mut v128, an);
+                let f0 = ld(af);
+                let fd = u32x4_min(f0, u32x4_splat(dk.min(255) as u32));
+                let fnew = v128_bitselect(i32x4_sub(f0, fd), f0, act);
+                let mut keep = i32x4_bitmask(v128_or(f32x4_gt(an, f32x4_splat(0.0)), i32x4_gt(fnew, z))) as u32;
+                for l in 0..4 {
+                    if am & (1 << l) == 0 { continue; }
+                    let s_ = q + l;
+                    s(af, s_, u32x4_extract_lane_dyn(fnew, l) as u8);
+                    if dk > 1 && !atl.is_null() {
+                        let a = g(at, s_);
+                        if u32x4_extract_lane_dyn(pos, l) != 0 {
+                            if a <= 0.0 { s(atl, s_, (-a).min((dk - 1) as f32) as u8); keep |= 1 << l; }
+                        } else {
+                            s(atl, s_, (dk - 1) as u8);
+                        }
+                    }
+                    if keep & (1 << l) == 0 { s(ton, s_, 0); }
+                }
+            }
+            q += 4;
+            continue;
+        }
         let s_ = q;
         q += 1;
         if g(live, s_) == 0 || g(dead, s_) != 0 {
@@ -1183,7 +1230,7 @@ pub unsafe extern "C" fn k_status(a: u32, chunk: i32) {
         // (Damage held back: only with a record, so r is one where written.)
         let acc = g(acc_, r) + dot;
         ev &= !1;
-        if acc > 0.0 && ((ev & 4) != 0 || (t as i64 + g(uid, s_) as i64).rem_euclid(per as i64) < dk as i64) {
+        if acc > 0.0 && ((ev & 4) != 0 || (if per > 0 { (t as i64 + g(uid, s_) as i64).rem_euclid(per as i64) } else { 0 }) < dk as i64) {
             ev |= 1;
             dot = acc;
             s(acc_, r, 0.0);
@@ -1407,35 +1454,6 @@ pub unsafe extern "C" fn k_unit_event_sort(a:u32,_chunk:i32) {
     // An odd number of passes leaves the result in the temporary buffers.
     core::ptr::copy_nonoverlapping(out,k.p::<i32>(4),n);
     *cnt.add(k.i(3) as usize*16)=n as i32;
-}
-
-/// Pure preparation for combat NOWAY events. No unit writes: foreground
-/// commits pending requests in the original event order. Output key -1 means
-/// scalar fallback; component -2 asks JS for its uncommon wall escape rule.
-#[no_mangle]
-pub unsafe extern "C" fn k_event_routes(a:u32,chunk:i32) {
-    let k=K::new(waddr(a) as *const i32);
-    let (events,pk,pi,wk,x,y,out)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<u8>(3),k.p::<i32>(4),k.p::<i32>(5),k.p::<i32>(6));
-    let (a,b)=job(chunk,k.i(1),k.i(0));
-    for i in a..b {
-        *out.add(i*2)=-1;
-        let e=*events.add(i);if e&7!=2 {continue;}
-        let s=(e>>3) as usize;let key=*pk.add(s);
-        if key<0||*pi.add(s)!=0||*wk.add(s)!=0 {continue;}
-        let profile=(key>>1)/16777216;
-        if profile>1 {continue;}
-        let base=7+profile as usize*4;
-        let meta=k.p::<i32>(base);if meta.is_null(){continue;}
-        let (w,h,c,cw)=(*meta.add(4),*meta.add(5),*meta,*meta.add(1));
-        let gx=floor(*x.add(s) as f64/k.f(2)) as i32;
-        let gy=floor(*y.add(s) as f64/k.f(2)) as i32;
-        if gx<0||gy<0||gx>=w||gy>=h||c<=0 {continue;}
-        let pl=k.p::<u16>(base+1);let pb=k.p::<i32>(base+2);let pc=k.p::<i32>(base+3);
-        if pl.is_null()||pb.is_null()||pc.is_null(){continue;}
-        let local=*pl.add((gy*w+gx) as usize);
-        let comp=if local==0xffff {-2}else{*pc.add((*pb.add(((gy/c)*cw+gx/c) as usize)+local as i32) as usize)};
-        *out.add(i*2)=key;*out.add(i*2+1)=comp;
-    }
 }
 
 /// SIM_KERNEL_UNIT_RETIRE: the tick's end: movement outputs cleared (slots
@@ -2207,6 +2225,28 @@ struct HitOut {
     tl: *mut i32, pl: *mut i32, cnt: *mut i32,
 }
 
+/// A job's blocks (SIM_KERNEL_HITS): HIT_BLOCK entries of the touch list
+/// (cnt[0]) and of the status sub-records (cnt[4]) taken at a time, so the
+/// threads add to the shared counters once a block, not once a hit; the touch
+/// list's unused entries -1 (passed over by the apply), the sub-records' left
+/// zero; the sub-records taken counted in cnt[6] (the status pool's room).
+/// full: the looks' lists seen full (bit 0 the view's, 1 the rest's). kb / kn:
+/// the block of structure hit keys (hit.skeys, cnt[7]; unused entries
+/// u64::MAX).
+struct HitLoc { tb: i32, tn: i32, sb: i32, sn: i32, used: i32, full: u8, kb: i32, kn: i32 }
+const HIT_BLOCK: i32 = 64;
+impl HitLoc {
+    fn new() -> HitLoc { HitLoc { tb: 0, tn: HIT_BLOCK, sb: 0, sn: HIT_BLOCK, used: 0, full: 0, kb: 0, kn: HIT_BLOCK } }
+    /// The job's end: the touch block's and the keys' rest unused, the sub-records counted.
+    #[inline(always)]
+    unsafe fn finish(&self, o: &HitOut, sk: *mut u64) {
+        use core::sync::atomic::{AtomicI32, Ordering::Relaxed};
+        if self.tn < HIT_BLOCK { for i in self.tn..HIT_BLOCK { s(o.tl, (self.tb + i) as usize, -1); } }
+        if self.kn < HIT_BLOCK && !sk.is_null() { for i in self.kn..HIT_BLOCK { s(sk, (self.kb + i) as usize, u64::MAX); } }
+        if self.used > 0 { (&*(o.cnt.add(6) as *const AtomicI32)).fetch_add(self.used, Relaxed); }
+    }
+}
+
 /// One hit on unit slot q (SIM_KERNEL_HITS): its damage in 1/16ths
 /// (rounded half up) into q's sum (unit.hAcc, an atomic add: integers, the
 /// same sum in any order); its statuses (bits as UHit::fx) with the longest
@@ -2219,7 +2259,7 @@ struct HitOut {
 /// + theirs, the movement kernel's P[0] + P[14] + their list position; < 0
 /// none) listed for its looks while fewer than `looks` are (hit.plist, cnt[1]).
 #[inline(always)]
-unsafe fn hit_one(q: usize, h: &UHit, e: i32, lv: &Looks, o: &HitOut) {
+unsafe fn hit_one(q: usize, h: &UHit, e: i32, lv: &Looks, o: &HitOut, l: &mut HitLoc) {
     use core::sync::atomic::{AtomicI32, AtomicU8, Ordering::{AcqRel, Acquire, Relaxed, Release}};
     let ai = |p: *mut i32, i: usize| -> &AtomicI32 { &*(p.add(i) as *const AtomicI32) };
     let cnt = o.cnt;
@@ -2245,8 +2285,10 @@ unsafe fn hit_one(q: usize, h: &UHit, e: i32, lv: &Looks, o: &HitOut) {
             if x == 0 {
                 match hx.compare_exchange(0, -1, AcqRel, Acquire) {
                     Ok(_) => {
-                        let t = ai(cnt, 4).fetch_add(1, Relaxed);
-                        x = if t < o.scap { t + 1 } else { ai(cnt, 5).fetch_add(1, Relaxed); -2 };
+                        if l.sn == HIT_BLOCK { l.sb = ai(cnt, 4).fetch_add(HIT_BLOCK, Relaxed); l.sn = 0; }
+                        let t = l.sb + l.sn;
+                        l.sn += 1;
+                        x = if t < o.scap { l.used += 1; t + 1 } else { ai(cnt, 5).fetch_add(1, Relaxed); -2 };
                         hx.store(x, Release);
                         break;
                     }
@@ -2272,20 +2314,29 @@ unsafe fn hit_one(q: usize, h: &UHit, e: i32, lv: &Looks, o: &HitOut) {
             }
         }
     }
-    if (&*(o.touch.add(q) as *const AtomicU8)).swap(1, Relaxed) == 0 {
-        let t = ai(cnt, 0).fetch_add(1, Relaxed);
-        s(o.tl, t as usize, q as i32);
+    let tb = &*(o.touch.add(q) as *const AtomicU8);
+    if tb.load(Relaxed) == 0 && tb.swap(1, Relaxed) == 0 {
+        if l.tn == HIT_BLOCK { l.tb = ai(cnt, 0).fetch_add(HIT_BLOCK, Relaxed); l.tn = 0; }
+        s(o.tl, (l.tb + l.tn) as usize, q as i32);
+        l.tn += 1;
     }
-    if e < 0 {
+    if e < 0 || l.full == 3 {
         return;
     }
     // (Its look: in the view's list, or the few of the rest.)
-    let (looks, ci, po) = if lv.inside(q) { (lv.n, 1usize, 0usize) } else { (lv.out, 3usize, lv.n.max(0) as usize) };
-    if looks > 0 && g(cnt, ci) < looks {
-        let p = ai(cnt, ci).fetch_add(1, Relaxed);
-        if p < looks {
-            s(o.pl, po + p as usize, e);
-        }
+    let (looks, ci, po, fb) = if lv.inside(q) { (lv.n, 1usize, 0usize, 1u8) } else { (lv.out, 3usize, lv.n.max(0) as usize, 2u8) };
+    if l.full & fb != 0 {
+        return;
+    }
+    if looks <= 0 || g(cnt, ci) >= looks {
+        l.full |= fb;
+        return;
+    }
+    let p = ai(cnt, ci).fetch_add(1, Relaxed);
+    if p < looks {
+        s(o.pl, po + p as usize, e);
+    } else {
+        l.full |= fb;
     }
 }
 
@@ -2380,7 +2431,9 @@ unsafe fn shot_hit(ty: u8, dmg: f64, lvl: i32, shots: i32, sd: i32, sp: f32, id:
 /// ?unit.x, ?unit.y (the view's test: Looks), unit.hSx, hit.rdu; the shots
 /// (29..): pj.uev, pj.arg, pj.dmg, pj.ty, pj.lvl, pj.sd, pj.sp, pj.shots,
 /// pj.id, pj.own, pj.x, pj.y, pj.bd, pj.br, pj.tfl, unit.upT, ix.stamp,
-/// ix.start, ix.cnt, sep.eslot, unit.live, unit.dead, unit.x, unit.y.
+/// ix.start, ix.cnt, sep.eslot, unit.live, unit.dead, unit.x, unit.y; [53]
+/// hit.skeys: the attack lists' hits on structures as k_struct_hits' keys
+/// (cnt[7] of them, in blocks: HitLoc).
 /// P: [0] JS entries, [1] per job, [2] looks in the view, [3] JS jobs, [4]
 /// chunks a job, [5] chunks, [6] chunk slots, [7] chunks by offsets,
 /// [8]..[11] the view (x0, y0, x1, y1; [8] > [10]: none), [12] looks of the
@@ -2405,6 +2458,15 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
         r: [k.i(8), k.i(9), k.i(10), k.i(11)] };
     let js_jobs = k.i(3);
     let (npj, pj_jobs) = (k.i(14).max(0), k.i(16).max(0));
+    let mut l = HitLoc::new();
+    let sk = k.p::<u64>(53);
+    hits_job(&k, chunk, js_jobs, npj, pj_jobs, n, hq, hd, hs, hw, ha, ht, hc, ast, awt, own, uid, atn, rows, hot, sk, &lv, &o, &mut l);
+    l.finish(&o, sk);
+}
+#[inline(always)]
+unsafe fn hits_job(k: &K, chunk: i32, js_jobs: i32, npj: i32, pj_jobs: i32, n: i32, hq: *const i32, hd: *const f32, hs: *const u8, hw: *const i32,
+    ha: *const i32, ht: *const i32, hc: *const i32, ast: *const u8, awt: *const i32, own: *const i8, uid: *const i32, atn: *const u8, rows: *const i16, hot: *const f32,
+    sk: *mut u64, lv: &Looks, o: &HitOut, l: &mut HitLoc) {
     if chunk < js_jobs {
         let (i0, i1) = job(chunk, k.i(1), n);
         for i in i0..i1 {
@@ -2412,7 +2474,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             if q < 0 {
                 continue;
             }
-            hit_one(q as usize, &UHit::melee(g(hd, i), g(hd, i), g(hs, i) as i32, g(hw, i)), i as i32, &lv, &o);
+            hit_one(q as usize, &UHit::melee(g(hd, i), g(hd, i), g(hs, i) as i32, g(hw, i)), i as i32, lv, o, l);
         }
         return;
     }
@@ -2433,7 +2495,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
             if f & UF_TURRET != 0 { continue; }
             let (ty, own0) = (g(pty, sl), g(pown, sl) as i32);
             let h = shot_hit(ty, g(pdmg, sl), g(plvl, sl), g(pshots, sl), g(psd, sl), g(psp, sl), g(pid, sl), own0, f, rate);
-            hit_one(q, &h, n + i as i32, &lv, &o);
+            hit_one(q, &h, n + i as i32, lv, o, l);
             // Its blast: the units' tiles within reach, entries by tile.
             let (bdm, br) = (g(pbd, sl), g(pbr, sl));
             if !(bdm > 0.0 && br > 0.0) || stamp.is_null() { continue; }
@@ -2459,7 +2521,7 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
                         if dx * dx + dy * dy > r2 { continue; }
                         let f2 = flags(s2);
                         if f2 & UF_TURRET != 0 { continue; }
-                        hit_one(s2, if burn > 0 && f2 & UF_FIRE == 0 { &fire } else { &plain }, -1, &lv, &o);
+                        hit_one(s2, if burn > 0 && f2 & UF_FIRE == 0 { &fire } else { &plain }, -1, lv, o, l);
                     }
                 }
             }
@@ -2475,17 +2537,24 @@ pub unsafe extern "C" fn k_hits(a: u32, chunk: i32) {
     for c in c0..c1 {
         let b = if k.i(7)!=0 {g(k.p::<i32>(24),c).max(0) as usize}else{c * ch};
         for j in b..b + g(hc, c).max(0) as usize {
-            let at = g(ha, j) as usize;
+            let a = g(ha, j);
             let q = g(ht, j);
             if q < 0 {
+                // (A hit on a structure, -(tile + 2): its key for k_struct_hits, by the attacker's id, then its place.)
+                if q < -1 && a >= 0 && !sk.is_null() {
+                    if l.kn == HIT_BLOCK { l.kb = (&*(o.cnt.add(7) as *const core::sync::atomic::AtomicI32)).fetch_add(HIT_BLOCK, core::sync::atomic::Ordering::Relaxed); l.kn = 0; }
+                    s(sk, (l.kb + l.kn) as usize, ((g(uid, a as usize) as u32 as u64) << 25) | j as u64);
+                    l.kn += 1;
+                }
                 continue;
             }
+            let at = a as usize;
             let st = g(ast, at) as i32;
             let wk = if st == 5 { let w = g(awt, at); if w > 0 { (w.min(2047) << 20) | ((g(uid, at) & 0xFFFF) << 4) | ((g(own, at) as i32 + 1) & 15) } else { 0 } } else { 0 };
             let shots = if atn.is_null() { 1 } else { g(atn, at).max(1) };
             let shot = flat_stat(rows,hot,at,5);
             let dmg = if shots > 1 { shot * shots as f32 } else { shot };
-            hit_one(q as usize, &UHit::melee(dmg, shot, st, wk), n + npj + j as i32, &lv, &o);
+            hit_one(q as usize, &UHit::melee(dmg, shot, st, wk), n + npj + j as i32, lv, o, l);
         }
     }
 }
@@ -2527,7 +2596,11 @@ pub unsafe extern "C" fn k_hits_apply(a: u32, chunk: i32) {
     }
     let (i0, i1) = job(chunk, k.i(1), k.i(0));
     for i in i0..i1 {
-        let q = g(tl, i) as usize;
+        let q = g(tl, i);
+        if q < 0 {
+            continue;
+        }
+        let q = q as usize;
         let dq = g(acc, q);
         s(acc, q, 0);
         s(touch, q, 0);

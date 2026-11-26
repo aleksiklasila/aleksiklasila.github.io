@@ -2,7 +2,7 @@
 // units moved by the kernel across hostile traps get the trap's status
 // (sand, water, ice, poison, fire) without being handed to Unit.update on
 // those tiles; a resistant type gets nothing; a trap under construction does
-// nothing; a mine is still Unit.update's (it goes off).
+// nothing; a mine goes off by its floor event (tfx.rs k_mine_events).
 //   node tests/floor-trap-kernel.test.cjs
 'use strict';
 const assert = require('node:assert/strict');

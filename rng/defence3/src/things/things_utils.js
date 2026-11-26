@@ -52,7 +52,7 @@ const ADJACENCY_BATCH_TICKS = 8, ADJACENCY_BATCH_PHASE = 2;
 // commits on the same ticks; a resync drops it all and marks every tile
 // (adjacencyLaneReset).
 let ADJACENCY_LANE = true;
-const ADJ_LANE = typeof SIM_LANE_T5 === 'number' ? SIM_LANE_T5 : 3;
+const ADJ_LANE = typeof SIM_LANE_ADJ === 'number' ? SIM_LANE_ADJ : 8;
 // (Members a job of the apply kernel.)
 const ADJ_APPLY_PER_JOB = 8192;
 const _adjL = { posted: false, passive: false, paths: false, outs: 0, coff: null, ctile: null, cfor: null, mul: null, tabs: null };
@@ -191,7 +191,7 @@ function _adjApplyClasses(CT) {
         let E = _sColPtrsKept(T, _ADJ_CTAB_COLS);
         if (!E) {
             if (!_sColsInHeap(T) || !simHeapHas(T.mTok)) _sTableGrow(T, T.cap);
-            if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; }
+            if (!simHeapHas(T.mxOvN)) { const a = _sColAlloc(Int32Array, 4); a.set(T.mxOvN); T.mxOvN = a; T._colVer++; }
             E = _sColPtrs(T, _ADJ_CTAB_COLS);
         }
         CT.set(E, c * W);
@@ -270,8 +270,7 @@ function _adjacencyLanePost(sync) {
         L.mul = _adjArr('adj.mul', Int32Array, A);
         for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
     }
-    // (The lane is shared (the units' cover): its job finished before its
-    // arrays and params are written, else a pending stage of it runs with these.)
+    // (Its lane's last job finished before its arrays and params are written: committed already, so done.)
     simParallelBackgroundWait(ADJ_LANE);
     // The signature grid, the seeds (every structure, or the dirty tiles: all
     // of them, their flags cleared) and the cloud portals by the post kernel
@@ -1119,7 +1118,7 @@ function _dstRoom(n) {
         const cap = Math.max(1024, n * 2);
         D.tiles = simSharedArray(Int32Array, cap); D.inp = simSharedArray(Int32Array, cap); D.rows = simSharedArray(Int32Array, cap * 2); D.walls = simSharedArray(Int32Array, cap);
         D.resv = simSharedArray(Int32Array, cap * 2 * _WORKER_TARGET_LOAD_TYPE_COUNT);
-        D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 192); D.one = simSharedArray(Int32Array, 1);
+        D.hdr = simSharedArray(Int32Array, 16); D.ocnt = simSharedArray(Int32Array, 256); D.one = simSharedArray(Int32Array, 1);
         D.cap = cap;
     }
     return D;
@@ -1170,9 +1169,8 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     for (let i = 0; i < m; i++) {
         const ct = D.rows[2 * i], k = _STL_KIND[ct], t = D.tiles[i], gx = t % GRID_W;
         if (k >= 0) { kinds |= 1 << k; adj = adj || k <= 1; }
-        // (The table rows are cleared already: the type by the object, for the collectors' groups (_wsTypeVer).)
-        if (ct === 10 || ct === 11) _wsTypeVer[ct === 10 ? 1022 : 1023]++;
-        else if (ct === 2 || ct === 4 || ct === 5 || !ct) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null, id = e ? _stationaryTypeIds.get(e.type) : undefined; _wsTypeVer[id !== undefined && id + 1 < 1022 ? id + 1 : 0]++; }
+        // (The table rows are cleared already: the tile journaled for the collectors' groups, data_state.js _wsjMark.)
+        _wsjMark(t);
         if (k === 0) { const Tb = D.tabs[ct], e = Tb ? Tb.rowObj[D.rows[2 * i + 1]] : null; if (e && (e.type === 'laser' || (e.baseStats && e.baseStats.isCloud))) towerJoinedOrLeft(e); }
     }
     for (let k = 0; k < 3; k++) if (kinds & (1 << k)) _stlBump(k);
@@ -1183,7 +1181,7 @@ function structDestroyTiles(list, n, deadOnly = false, quiet = false) {
     if (H[1] > 0) { if (AD.n === 0 || H[3] < AD.min) AD.min = H[3]; AD.n += H[1]; AD.sum = (AD.sum + H[2]) | 0; }
     _adjacencyNeedsRecalc = true;
     if (trapOk) { if (H[5] < 0) _trap.all = true; else _trap.nd = H[5]; }
-    for (let o = 0; o < 64; o++) { if (D.ocnt[o]) structCountByOwner[o] += D.ocnt[o]; if (D.ocnt[64 + o]) structLabCount[o] += D.ocnt[64 + o]; if (D.ocnt[128 + o]) structLabBuilt[o] += D.ocnt[128 + o]; }
+    for (let o = 0; o < 64; o++) { if (D.ocnt[o]) structCountByOwner[o] += D.ocnt[o]; if (D.ocnt[64 + o]) structLabCount[o] += D.ocnt[64 + o]; if (D.ocnt[128 + o]) structLabBuilt[o] += D.ocnt[128 + o]; if (D.ocnt[192 + o]) structCellCountByOwner[o] += D.ocnt[192 + o]; }
     // Events of the systems that are not tables yet.
     for (let r = 0, nr = H[7]; r < nr; r++) {
         const slot = D.resv[r * 2], u = workerReservedAt(slot);

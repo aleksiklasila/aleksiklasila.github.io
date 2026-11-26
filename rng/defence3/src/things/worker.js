@@ -342,7 +342,6 @@ const WS_WAITING = Object.freeze({ wsWaiting: true });
 // res, units }; a Map by slot set and emptied around each take was ~1.5 ms
 // a tick of lookups.)
 let _wsPosted = null, _wsCur = null, _wsCommitTick = -1, _wsStepTick = -1, _wsInCommit = false;
-const _wsGroups = new Map();
 function _wsAvailable() { return typeof SIM_KERNEL_WS_SCAN === 'number' && typeof simParallelBackground === 'function' && typeof _simUnitState !== 'undefined' && !!_simUnitState; }
 function _wsRegistered(u) { const c = u && u._us; return !!c && c.wsKind[u._si] !== 0 && _wsAvailable(); }
 // u's search into the registry (kind, req: owner's grid needs and the
@@ -375,7 +374,7 @@ function _wsWait(u) {
 function workerSearchTierReset() {
     if (typeof simParallelBackgroundWait === 'function') simParallelBackgroundWait(WS_LANE);
     _wsPosted = null; _wsCur = null; _wsCommitTick = -1; _wsStepTick = -1; _wsInCommit = false;
-    _wsGroups.clear(); _wsGroupById.length = 0; _wsPostEpoch = 0;
+    _wsgReset(); _wsPostEpoch = 0;
     _wsw = null; _wswDirtyN = 0; _wswResvRoom()[0] = 0; _wswHeldN = 0;
     // (And the failed searches' counts, not in snapshots: a restoring peer starts from none, so every peer does.)
     if (typeof _simUnitState !== 'undefined' && _simUnitState) { _simUnitState.columns.wsKind.fill(0); _simUnitState.columns.wsFail.fill(0); }
@@ -492,30 +491,16 @@ function _wswResvMark(slot) { const L = _wswResvList || _wswResvRoom(), n = L[0]
 let _wsPostEpoch = 0;
 const _wsGroupById = [];
 const WS_NOT_BUILT = 2147483647;
-// The row of tile t in an ascending tile list (L[0 .. n)), -1 none.
-function _wsTileRow(L, n, t) {
-    let lo = 0, hi = n;
-    while (lo < hi) { const m = (lo + hi) >> 1; if (L[m] < t) lo = m + 1; else hi = m; }
-    return lo < n && L[lo] === t ? lo : -1;
-}
 function workSiteDirty(gx, gy) {
     if (_wsw && gx >= 0 && gy >= 0 && gx < _wsw.w && gy < _wsw.h) { _wswDirtyRoom(1); _wswDirtyA[_wswDirtyN++] = gy * _wsw.w + gx; }
 }
 function workSiteBuilt(item) {
     if (!item || typeof item.type !== 'string') return;
+    // (Its rows in the collectors' groups: the next post's, made again for its tile's change (its
+    // construction flag, journaled: the worker kernel's completions write the table's flag in wasm, wai.rs
+    // p_complete, and every one of them comes here); the search in flight read it unfinished, as every peer's did.)
+    if (item._stT >= 0) _wsjMark(item._stT);
     workSiteDirty(item.gx, item.gy);
-    if (!(item.energy > 0)) return;
-    // Its rows in the groups, by its tile (the groups' lists are in tile
-    // order). One-way publication: an in-flight batch sees either NOT_BUILT
-    // or a future epoch. Both reject the row, independent of helper scheduling.
-    const t = item.gy * GRID_W + item.gx;
-    for (const G of _wsGroupById) {
-        if (!G || !G.arrays.tile) continue;
-        const i = _wsTileRow(G.arrays.tile, G.n, t);
-        if (i >= 0 && Atomics.load(G.arrays.sready, i) === WS_NOT_BUILT) Atomics.store(G.arrays.sready, i, _wsPostEpoch + 1);
-        const k = G.arrays.qid ? _wsTileRow(G.arrays.qid, G.np | 0, t) : -1;
-        if (k >= 0) { const q = G.arrays.qp[k]; if (Atomics.load(G.arrays.pready, q) === WS_NOT_BUILT) { Atomics.store(G.arrays.pready, q, _wsPostEpoch + 1); G.nfEligibilityDirty = true; } }
-    }
 }
 // u's type's reservation bit (0: none), and the tile it holds reserved (-1).
 function _wsResvBit(u) { const i = _workerTypeToLoadIndex(u.workerType); return i >= 0 && i < 8 ? 1 << i : 0; }
@@ -620,14 +605,14 @@ function _wswStep(step, sweepOn = true, stride = WSW_SWEEP) {
     // Reservations changed since the last step; the collectors' sites', in turn (a reserver that died since).
     const RL = _wswResvRoom(), NT = _WORKER_TARGET_LOAD_TYPE_COUNT;
     let groups = 0;
-    if (sweepOn) for (const G of _wsGroups.values()) groups += G.n > step ? Math.ceil((G.n - step) / stride) : 0;
+    if (sweepOn) for (const G of _wsGroupById) groups += G.n > step ? Math.ceil((G.n - step) / stride) : 0;
     const L2 = _wswTiles(RL[0] + groups);
     let m = 0;
     for (let i = 1; i <= RL[0]; i++) { const t = Math.floor(RL[i] / NT); if (t < W.n) L2[m++] = t; }
     RL[0] = 0;
-    if (sweepOn) for (const G of _wsGroups.values()) {
-        const SX = G.arrays.sx, SY = G.arrays.sy;
-        for (let s = step; s < G.n; s += stride) {
+    if (sweepOn) for (const G of _wsGroupById) {
+        const SX = G.arrays.sx, SY = G.arrays.sy, n = G.n;
+        for (let s = step; s < n; s += stride) {
             const gx = Math.floor(SX[s] / TILE), gy = Math.floor(SY[s] / TILE);
             if (gx >= 0 && gy >= 0 && gx < W.w && gy < W.h) L2[m++] = gy * W.w + gx;
         }
@@ -672,147 +657,169 @@ function _wsHealUnit(u, list) {
     return null;
 }
 
-// The collectors' site groups: per resource type, its drops, mines with
-// something left and working farms (owner), and its working spawners; made
-// again when one of those lists changed (or construction finished).
+// The collectors' site groups, one a resource type (its id its place in
+// RESOURCE_TYPE_LIST, at most 8): its mines, its farms (their owners) and its
+// spawners, in tile order, with their buckets and the nearest-spawner fields'
+// slots. Made on the search lane (wsb.rs k_ws_gbuild, the first three stages
+// of its chain) from the tile mirror (a word a tile of the structure table's
+// fields they are made of), which the post brings up to date from the tiles
+// journaled since the last one (data_state.js _wsjMark; wsb.rs k_ws_mirror,
+// on this thread, as many tiles as changed); only the groups whose tiles
+// changed are made again. (Made on this thread at every post with a change
+// of theirs, ~1.2 ms a post, up to 6.5, in a battle.) Their arrays are the
+// match's (_wsgEnsure: sized by its structure rows, bound once), read by the
+// take and the grid's sweep between searches only. A construction finished
+// is in the next post's group (its tile journaled), as with the old
+// publication by epoch. (Drops: none are made in play; old snapshots' are
+// not searched for.)
 const WS_BUCKET = 8;
-// The sites are written straight into the typed tables from the lists, in
-// their order: drops, then mines with something left, then working farms
-// (a site object per drop, mine and farm was ~20 ms a rebuild in a battle:
-// drops last 120 s, tens of thousands of them, and every change of them
-// makes the energy group again).
-// A collector group's sites (its mines with gold or astar left, its farms
-// alive) and its spawners (alive), in tile order, from the per-tile
-// structure table by the kernel (ord.rs k_ws_group); then their buckets.
-// (Drops: none are made in play; old snapshots' are not searched for.)
-const _wsGP = new Float64Array(16);
-// (Candidates a job of the parallel group build, SIM_KERNEL_WS_GROUP.)
-const WS_GROUP_PER = 2048;
-let _wsGC = null;
-function _wsGroupBuild(G, cfg) {
-    if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
-    const T = _ST, n = T.n || 0, pre = 'wsg' + G.id + '.';
-    const arr = (name, Type, len) => { let a = G.arrays[name]; if (!a || a.length < len || !simHeapHas(a)) { a = G.arrays[name] = simSharedArray(Type, Math.max(64, len * 2)); simParallelBind(pre + name, a); } return a; };
-    if (!_wsGC || !simHeapHas(_wsGC)) _wsGC = simSharedArray(Int32Array, 4);
-    const farmId = _stationaryTypeIds.get(cfg.farmKey), spId = _stationaryTypeIds.get(cfg.collectorBuildingKey), P = _wsGP, C = _wsGC;
-    P[0] = 0; P[1] = n; P[2] = GRID_W; P[3] = cfg.mineArrayKey === 'astarMines' ? 0x77 : 0x66; P[4] = farmId === undefined ? 0 : farmId + 1; P[5] = spId === undefined ? 0 : spId + 1;
-    P[6] = TILE; P[7] = WS_NOT_BUILT; P[8] = ST_OWNER_NONE;
-    // (The structures' tiles, not every tile of the map: _wsCandidates.)
-    const CAND = _wsCandidates(), cand = [];
-    for (let j = 0; j < 13; j++) cand.push(null);
-    cand.push(CAND.tiles);
-    P[9] = CAND.n;
-    C[0] = 0; C[1] = 0;
-    // On the helpers (SIM_KERNEL_WS_GROUP): the candidates in jobs of
-    // WS_GROUP_PER, each counted, then written from its start (the same lists
-    // as one pass over them; a serial pass over ~115k structures was ~11 ms,
-    // made again at every post in a battle). The outputs are sized by the
-    // candidates and bound before the jobs (a binding just before a job
-    // leaves the helpers out of it). (One serial wasm pass writing as it goes
-    // was 0.64 ms a group vs 0.47 in the chaos-300k battle: reads scattered.)
-    let cap, np, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR;
-    const outs = room => {
-        SX = arr('sx', Float32Array, room); SY = arr('sy', Float32Array, room); ST = arr('st', Int32Array, room); SO = arr('so', Int32Array, room);
-        SR = arr('sready', Int32Array, room); TL = arr('tile', Int32Array, room);
-        QGX = arr('qgx', Int32Array, room); QGY = arr('qgy', Int32Array, room); QO = arr('qo', Int32Array, room); QID = arr('qid', Int32Array, room);
-        QX = arr('qx', Float32Array, room); QY = arr('qy', Float32Array, room); QR = arr('qready', Int32Array, room);
-    };
-    const jobs = Math.ceil(CAND.n / WS_GROUP_PER);
-    if (n && T.code && _simPool && typeof SIM_KERNEL_WS_GROUP === 'number' && jobs > 1) {
-        for (const k of ['code', 'own', 'uc', 'val', 'brain']) simParallelBind('st.' + k, T[k]);
-        simParallelBind('wsg.cand', CAND.tiles);
-        outs(CAND.n);
-        const CC = arr('cc', Int32Array, jobs * 2), Q = _simParams;
-        for (let i = 0; i < 10; i++) Q[i] = P[i];
-        Q[10] = WS_GROUP_PER; Q[11] = G.id;
-        Q[0] = 2; simParallelRun(SIM_KERNEL_WS_GROUP, jobs);
-        let a = 0, b = 0;
-        for (let j = 0; j < jobs; j++) { const x = CC[j * 2], y = CC[j * 2 + 1]; CC[j * 2] = a; CC[j * 2 + 1] = b; a += x; b += y; }
-        cap = a; np = b;
-        if (cap || np) { Q[0] = 3; simParallelRun(SIM_KERNEL_WS_GROUP, jobs); }
-    } else {
-        if (n && T.code) simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, ...cand], P);
-        cap = C[0]; np = C[1];
-        outs(Math.max(cap, np));
-        if (n && T.code && (cap || np)) { P[0] = 1; simRustDirect('k_ws_group', [T.code, T.own, T.uc, T.val, T.brain, C, SX, SY, ST, SO, SR, TL, QGX, QGY, QO, QID, QX, QY, QR, CAND.tiles], P); }
+// (A build job's stretch of tiles: the mirror's words, 16 tested at once.)
+const WS_GROUP_TILES = 65536;
+// (Off: the ring search as before; the same results either way, which the tests compare.)
+let WS_NEARFIELD = true;
+// (k.rs NFA_W: a field slot's record, 4 words and 65536 spawners' tiles.)
+const WS_NFA_W = 4 + 65536;
+const _wsgS = { pend: 0, gcnt: null, key: null, ng: 0, tiles: 0, caps: 0, capp: 0, slots: 0, jt: 0, mirror: null, cfg: null, cfgWas: new Int32Array(24), out: null, P: new Float64Array(4) };
+// (The sites' arrays (Float32: sx, sy) and the spawners' (Float32: qx, qy, px, py).)
+const _WSG_SITE = ['sx', 'sy', 'st', 'so', 'sready', 'tile', 'bi', 'abi', 'bki'];
+const _WSG_SPAWN = ['qgx', 'qgy', 'qo', 'qid', 'qx', 'qy', 'qready', 'pgx', 'pgy', 'po', 'pid', 'px', 'py', 'pready', 'qp', 'sbk', 'rk', 'ro'];
+const _WSG_F32 = new Set(['sx', 'sy', 'qx', 'qy', 'px', 'py']);
+// The groups' arrays, the mirror and the journal for the match (main.js
+// simMatchReserve; again only when the map, the structure rows or the
+// players differ): sites at most the structure rows and the mines, spawners
+// the structure rows; field slots one an owner (0 .. players - 1: at most 16,
+// 16M field entries a group and 56 (group, owner) pairs).
+function _wsgEnsure() {
+    const S = _wsgS, tiles = GRID_W * GRID_H, ng = Math.min(8, RESOURCE_TYPE_LIST.length);
+    const np = Math.max(1, Math.floor(Number(players && players.length) || 0));
+    const slots = WS_NEARFIELD && ng ? Math.max(0, Math.min(16, np, Math.floor(16777216 / tiles), Math.floor(56 / ng))) : 0;
+    const key = GRID_W + 'x' + GRID_H + ':' + ng + ':' + slots;
+    if (S.key === key && simHeapHas(S.mirror) && simHeapHas(_wsj.list) && _wsGroupById.length === ng && _wsGroupById.every(G => simHeapHas(G.arrays.meta))) return;
+    const free = a => { if (a && typeof simHeapFree === 'function') simHeapFree(a); };
+    for (const G of _wsGroupById) if (G) for (const a of Object.values(G.arrays)) free(a);
+    free(S.mirror); free(S.cfg); free(S.out); free(S.gcnt); free(_wsj.list); free(_wsj.flag);
+    _wsGroupById.length = 0;
+    const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET), jt = Math.ceil(tiles / WS_GROUP_TILES);
+    const bind = (name, a) => { simParallelBind(name, a); return a; };
+    S.mirror = bind('wsm.mirror', simSharedArray(Uint32Array, tiles)); S.cfg = bind('wsm.cfg', simSharedArray(Int32Array, 24)); S.out = simSharedArray(Int32Array, 4);
+    S.gcnt = simSharedArray(Int32Array, 16); S.gcnt.fill(0);
+    S.cfg.fill(0); S.cfgWas.fill(-1);
+    _wsj.list = simSharedArray(Int32Array, tiles); _wsj.flag = simSharedArray(Uint8Array, tiles); _wsj.flag.fill(0); _wsj.n = 0; _wsj.all = true;
+    for (let id = 0; id < ng; id++) {
+        const pre = 'wsg' + id + '.', A = {};
+        const mk = (name, Type, len) => { const a = A[name] = bind(pre + name, simSharedArray(Type, Math.max(1, len))); a.fill(0); return a; };
+        for (const k of ['bs', 'bc', 'abc']) mk(k, Int32Array, nb);
+        mk('meta', Int32Array, 5 + 2 * nb + 32); mk('gcc', Int32Array, 2 * jt); mk('gst', Int32Array, 4);
+        if (slots) mk('nf', Uint32Array, slots * tiles);
+        mk('nfa', Int32Array, Math.max(1, slots) * WS_NFA_W);
+        _wsGroupById[id] = { id, arrays: A, caps: 0, capp: 0, get n() { return A.meta[0]; }, get np() { return A.meta[1]; } };
     }
-    const bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET), nb = bcols * brows;
-    const BS = arr('bs', Int32Array, nb), BC = arr('bc', Int32Array, nb), BI = arr('bi', Int32Array, cap);
-    arr('abc', Int32Array, nb); arr('abi', Int32Array, cap);
-    const PGX = arr('pgx', Int32Array, np), PGY = arr('pgy', Int32Array, np), PO = arr('po', Int32Array, np), PID = arr('pid', Int32Array, np);
-    const PX = arr('px', Float32Array, np), PY = arr('py', Float32Array, np), PR = arr('pready', Int32Array, np);
-    // (A spawner's place: tile order (the q arrays) to bucket order (the p arrays), for workSiteBuilt.)
-    const QP = arr('qp', Int32Array, np);
-    // The sites by bucket (bs a bucket's first, bc its count, bi the sites); the
-    // spawners sorted by the bucket of their tile (the kernel finds an owner's
-    // nearest in rings of buckets): meta[5 + 2 b] a bucket's first, meta[6 + 2 b]
-    // its count, then (16) the count of each owner's; (meta[5 + 2 nb + 16 + owner]:
-    // the owner's slot in the nearest-spawner field, -1 none). Counting sorts: wsb.rs.
-    const meta = arr('meta', Int32Array, 5 + 2 * nb + 32), sb = arr('sbk', Int32Array, np);
-    // (And the near field's: rk / ro the spawners' tile order and back, hs the set's hashes.)
-    const RK = arr('rk', Int32Array, np), RO = arr('ro', Int32Array, np), HS = arr('hs', Int32Array, 2);
-    P[0] = cap; P[1] = np; P[2] = bcols; P[3] = brows; P[4] = TILE; P[5] = WS_BUCKET;
-    simRustDirect('k_ws_buckets', [SX, SY, BS, BC, BI, QGX, QGY, QO, QID, QX, QY, QR, PGX, PGY, PO, PID, PX, PY, PR, QP, sb, meta, RK, RO, HS, arr('bki', Int32Array, cap)], P);
-    G.np = np;
-    _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta);
-    G.n = cap;
+    Object.assign(S, { key, ng, tiles, slots, jt, caps: 0, capp: 0 });
+    _wsgRoom(_WSG_MIN_ROOM, _WSG_MIN_ROOM, -1);
+}
+// (The sites' and spawners' arrays' least room; past it they grow by half again what is needed: a few times a match.)
+const _WSG_MIN_ROOM = 4096;
+// Room in every group for sites and spawners (the arrays the build writes, by the counts the mirror keeps); a group
+// whose arrays were made again is made again (bit in the result). grow: only when needed (else: made at this size).
+function _wsgRoom(sites, spawners, grow) {
+    const S = _wsgS, bind = (name, a) => { simParallelBind(name, a); return a; };
+    let remade = 0;
+    for (const G of _wsGroupById) {
+        if (!G) continue;
+        const A = G.arrays, pre = 'wsg' + G.id + '.';
+        const needS = grow < 0 || sites > G.caps || !simHeapHas(A.tile), needP = grow < 0 || spawners > G.capp || !simHeapHas(A.qid);
+        if (!needS && !needP) continue;
+        const room = n => Math.max(_WSG_MIN_ROOM, Math.ceil(n * (grow < 0 ? 1 : 1.5)));
+        const mk = (name, Type, len) => { if (A[name] && simHeapHas(A[name])) simHeapFree(A[name]); const a = A[name] = bind(pre + name, simSharedArray(Type, Math.max(1, len))); a.fill(0); return a; };
+        if (needS) { G.caps = room(sites); for (const k of _WSG_SITE) mk(k, _WSG_F32.has(k) ? Float32Array : Int32Array, G.caps); }
+        if (needP) { G.capp = room(spawners); for (const k of _WSG_SPAWN) mk(k, _WSG_F32.has(k) ? Float32Array : Int32Array, G.capp); }
+        A.meta.fill(0);
+        remade |= 1 << G.id;
+    }
+    S.caps = Math.min(...(_wsGroupById.length ? _wsGroupById.map(G => G.caps) : [0])); S.capp = Math.min(...(_wsGroupById.length ? _wsGroupById.map(G => G.capp) : [0]));
+    return remade;
+}
+// (Every group made again at the next post, the mirror whole: a reset, a restore.)
+function _wsgReset() {
+    _wsjAll();
+    _wsgS.cfgWas.fill(-1);
+    for (const G of _wsGroupById) if (G) { G.arrays.meta.fill(0); for (let s = 0; s * WS_NFA_W < G.arrays.nfa.length; s++) G.arrays.nfa[s * WS_NFA_W] = 0; }
+}
+// The post's part on this thread: the mirror brought up to date, the groups
+// whose tiles (or whose types' ids) changed since the last post (bit g); the
+// groups' arrays room for their sites and spawners (made again: before the
+// chain, which reads them).
+function _wsgPrepare() {
+    _wsgApply();
+    const S = _wsgS, C = S.gcnt;
+    let ms = 0, mp = 0;
+    for (let k = 0; k < S.ng; k++) { ms = Math.max(ms, C[2 * k]); mp = Math.max(mp, C[2 * k + 1]); }
+    const d = S.pend | _wsgRoom(ms, mp, 1);
+    S.pend = 0;
+    return d;
+}
+// (The mirror brought up to date, the changed groups kept for the post: never
+// while a search is in flight, whose groups are being made from it.)
+function _wsgApply() {
+    _wsgEnsure();
+    if (_ST.code && !simHeapHas(_ST.code)) structTablesRehome();
+    const S = _wsgS, J = _wsj, ng = S.ng, C = S.cfg, P = S.P;
+    let dirty = 0;
+    for (let k = 0; k < ng; k++) {
+        const cfg = RESOURCE_TYPE_LIST[k], f = _stationaryTypeIds.get(cfg.farmKey), sp = _stationaryTypeIds.get(cfg.collectorBuildingKey);
+        C[3 * k] = cfg.mineArrayKey === 'astarMines' ? 4 : 3; C[3 * k + 1] = f === undefined ? 0 : f + 1; C[3 * k + 2] = sp === undefined ? 0 : sp + 1;
+        for (let j = 3 * k; j < 3 * k + 3; j++) if (S.cfgWas[j] !== C[j]) { S.cfgWas[j] = C[j]; dirty |= 1 << k; }
+    }
+    const T = _ST.n === S.tiles && _ST.code ? _ST : null;
+    // (A group's types changed: the counts are made whole with the mirror.)
+    P[0] = J.all || !T || dirty ? -1 : J.n; P[1] = S.tiles; P[2] = ng; P[3] = ST_OWNER_NONE;
+    if (P[0] !== 0) {
+        simRustDirect('k_ws_mirror', [J.list, J.flag, T && T.code, T && T.own, T && T.uc, T && T.brain, S.mirror, C, S.out, S.gcnt], P);
+        dirty |= S.out[0];
+    }
+    J.n = 0; J.all = false;
+    _wsgS.pend |= dirty;
+}
+// The group stages' params (the chain's slots 0-2) for the groups in dirty:
+// the stages, the groups listed.
+function _wsgStages(dirty) {
+    const S = _wsgS, gl = [], bcols = Math.ceil(GRID_W / WS_BUCKET), brows = Math.ceil(GRID_H / WS_BUCKET);
+    for (let k = 0; k < S.ng; k++) if (dirty & (1 << k)) gl.push(k);
+    for (let i = 0; i < 3; i++) {
+        const Q = _simBgStageParams[WS_LANE][i];
+        Q.fill(0); Q[0] = i + 1; Q[1] = S.tiles; Q[2] = GRID_W; Q[3] = TILE; Q[4] = WS_NOT_BUILT; Q[5] = WS_GROUP_TILES; Q[6] = S.jt;
+        Q[7] = S.caps; Q[8] = S.capp; Q[9] = bcols; Q[10] = brows; Q[11] = WS_BUCKET; Q[12] = S.slots; Q[13] = gl.length;
+        for (let g = 0; g < gl.length; g++) Q[16 + g] = gl[g];
+    }
+    return { gl, stages: [[SIM_KERNEL_WS_GROUP, gl.length * S.jt], [SIM_KERNEL_WS_GROUP, gl.length * S.jt], [SIM_KERNEL_WS_GROUP, gl.length]] };
+}
+// Tests: the mirror kept from the journal against one made whole from the
+// structure table now (the restoring peer's): the tiles that differ. (Waits
+// for a search in flight, then brings the mirror up to date as the next post
+// would: the same groups after.)
+function workerSearchMirrorCheck() {
+    simParallelBackgroundWait(WS_LANE);
+    _wsgApply();
+    const S = _wsgS, T = _ST.n === S.tiles && _ST.code ? _ST : null, M = simSharedArray(Uint32Array, S.tiles), out = simSharedArray(Int32Array, 4), P = new Float64Array(4);
+    P[0] = -1; P[1] = S.tiles; P[2] = S.ng; P[3] = ST_OWNER_NONE;
+    simRustDirect('k_ws_mirror', [null, null, T && T.code, T && T.own, T && T.uc, T && T.brain, M, S.cfg, out], P);
+    let diff = 0, first = -1;
+    for (let i = 0; i < S.tiles; i++) if (M[i] !== S.mirror[i]) { if (first < 0) first = i; diff++; }
+    const r = { diff, first, kept: first >= 0 ? S.mirror[first] : 0, whole: first >= 0 ? M[first] : 0, set: 0 };
+    for (let i = 0; i < S.tiles; i++) if (M[i]) r.set++;
+    if (typeof simHeapFree === 'function') { simHeapFree(M); simHeapFree(out); }
+    return r;
+}
+// (A group past its room, which the match's structure rows rule out: said once.)
+let _wsgOverSaid = false;
+function _wsgCheck() {
+    if (_wsgOverSaid) return;
+    for (const G of _wsGroupById) if (G && G.arrays.gst[2]) { _wsgOverSaid = true; console.error('worker search: collectors\' group ' + G.id + ' past its room (' + _wsgS.caps + ' sites, ' + _wsgS.capp + ' spawners)'); }
 }
 // A group's site i: its object (null: gone since the post) and its type name.
 function _wsSiteTarget(g, i) {
     const t = g.tile[i], gx = t % GRID_W, gy = (t - gx) / GRID_W;
     return g.st[i] === 1 ? getTileEntityRef(gx, gy) : (grid[gy] && grid[gy][gx] && cellItemGet(grid[gy][gx])) || null;
-}
-// Each owner's nearest working spawner of the group per tile (k_ws_nearfield; the collectors' search finds it
-// at once instead of in rings of buckets, ~900 buckets and 700 spawners a search at 2M workers far from
-// their bases): the field slots in meta, the spawners' ranks by (row, column, id), and whether the fields
-// are to be made again (the spawners as a set, or the owners among them, changed). The same answer as the
-// ring search: both give the least (steps, row, column, id).
-// (Off: the ring search as before; the same results either way, which the tests compare.)
-let WS_NEARFIELD = true;
-// (k.rs NFA_W: a field slot's record, 4 words and 65536 spawners' tiles.)
-const WS_NFA_W = 4 + 65536;
-function _wsNearField(G, np, nb, arr, pre, PGX, PGY, PID, PO, meta) {
-    G.nfBuild = false; G.nfList = [];
-    if (!WS_NEARFIELD || !(np > 0 && np <= 65535)) { G.nfSetKey = null; return; }
-    // (The set's hashes: wsb.rs k_ws_buckets.)
-    const h1 = G.arrays.hs[0], h2 = G.arrays.hs[1];
-    const owners = [];
-    for (let o = 0; o < 16; o++) if (meta[5 + 2 * nb + o] > 0) owners.push(o);
-    const ownersKey = owners.join(','), setKey = np + ':' + h1 + ':' + GRID_W + 'x' + GRID_H, ordKey = setKey + ':' + h2;
-    // (At most 16M entries a group, 64 MB: past that the owners beyond keep the ring search.)
-    const tiles = GRID_W * GRID_H, fieldOwners = owners.slice(0, Math.max(0, Math.floor(16777216 / tiles)));
-    if (!fieldOwners.length) { G.nfSetKey = null; return; }
-    fieldOwners.forEach((o, i) => { meta[5 + 2 * nb + 16 + o] = i; });
-    const need = fieldOwners.length * tiles;
-    let NF = G.arrays.nf, fresh = false;
-    if (!NF || NF.length < need) { NF = G.arrays.nf = simSharedArray(Uint32Array, need); simParallelBind(pre + 'nf', NF); fresh = true; }
-    // (Each field slot's record: its owner and the spawners it was made for, k.rs nearfield_incr; 16 slots, made once.)
-    let NFA = G.arrays.nfa;
-    if (!NFA) { NFA = G.arrays.nfa = simSharedArray(Int32Array, 16 * WS_NFA_W); simParallelBind(pre + 'nfa', NFA); fresh = true; }
-    if (fresh) for (let s = 0; s < 16; s++) NFA[s * WS_NFA_W] = 0;
-    // (rk / ro, the spawners by (gy, gx): tile order, one a tile: the kernel's.)
-    const fkey = fieldOwners.join(',');
-    G.nfBuild = fresh || G.nfSetKey !== setKey || G.nfOwnersKey !== fkey || !!G.nfEligibilityDirty;
-    G.nfEligibilityDirty = false;
-    G.nfSetKey = setKey; G.nfOrdKey = ordKey; G.nfOwnersKey = fkey; G.nfList = fieldOwners;
-}
-function _wsCollectorGroup(cfg) {
-    const key = 'c:' + cfg.collectorUnitKey;
-    let G = _wsGroups.get(key);
-    if (!G) { G = { id: _wsGroups.size, key, sig: null, arrays: {}, n: 0 }; _wsGroups.set(key, G); _wsGroupById[G.id] = G; }
-    // (Made again when a structure of its farm type, its spawner type or its
-    // mine kind was placed, removed or re-set on its tile (data_state.js
-    // _wsTypeVer, monotonic counters: their sum moves with any of them); not
-    // at every structure placed or lost.)
-    const V = _wsTypeVer, f = _stationaryTypeIds.get(cfg.farmKey), sp = _stationaryTypeIds.get(cfg.collectorBuildingKey);
-    const sig = (V[0] + (f !== undefined && f + 1 < 1022 ? V[f + 1] : 0) + (sp !== undefined && sp + 1 < 1022 ? V[sp + 1] : 0) + V[cfg.mineArrayKey === 'astarMines' ? 1023 : 1022]) >>> 0;
-    if (G.sig === sig && G.gridW === GRID_W) {
-        if (G.nfEligibilityDirty) { G.nfBuild = true; G.nfEligibilityDirty = false; }
-        return G;
-    }
-    G.sig = sig; G.gridW = GRID_W;
-    _wsGroupBuild(G, cfg);
-    return G;
 }
 function _wsArr(name, Type, n) {
     let a = _simParReg[name];
@@ -872,16 +879,18 @@ function _wsPost() {
     P[5] = 2;
     simParallelRun(SIM_KERNEL_WS_SELECT, chunks);
     CNT[0] = total; // Compact requests are one logical region for ordering.
-    // Stage 2 scans after eligibility compaction and near-field preparation.
-    // (Stages: 0 eligibility, 1 and 2 the near fields' rows and columns, 3 the scan, 4 its list.)
-    const Bp = _simBgStageParams[WS_LANE][4];
-    // The collectors' groups, per resource type.
-    const groups = [], nfSeen = new Set(), nfPairs = [];
-    for (let k = 0; k < RESOURCE_TYPE_LIST.length && k < 8; k++) {
-        const G = _wsCollectorGroup(RESOURCE_TYPE_LIST[k]); groups[k] = { tile: G.arrays.tile, st: G.arrays.st, cfg: RESOURCE_TYPE_LIST[k] }; Bp[16 + k] = G.id;
-        // (Fields to make again: a job a (group, owner), before the scan in this chain.)
-        if (G.nfBuild && !nfSeen.has(G.id)) { nfSeen.add(G.id); G.nfBuild = false; for (const o of G.nfList) if (nfPairs.length < 56) nfPairs.push(G.id * 16 + o); else { const nb = Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET); _simParReg['wsg' + G.id + '.meta'][5 + 2 * nb + 16 + o] = -1; } }
+    // The chain's stages (and their params' slots): 0-2 the collectors' groups whose tiles changed (counted,
+    // written, bucketed: wsb.rs k_ws_gbuild), 3 eligibility, 4-6 the near fields (updated, rows, columns), 7
+    // the scan, 8 its list, 9 the return spawners.
+    const Bp = _simBgStageParams[WS_LANE][7];
+    // The collectors' groups, per resource type (group k).
+    const WG = _wsgS, { gl, stages: gst } = _wsgStages(_wsgPrepare()), groups = [], nfPairs = [];
+    for (let k = 0; k < WG.ng; k++) {
+        const G = _wsGroupById[k]; groups[k] = { tile: G.arrays.tile, st: G.arrays.st, cfg: RESOURCE_TYPE_LIST[k] }; Bp[16 + k] = k;
     }
+    // (The changed groups' fields looked at again: a job a (group, owner), k.rs k_ws_nearfield mode 3 updating each
+    // for the spawners gone and come, the field slot the owner's.)
+    for (const k of gl) for (let o = 0; o < WG.slots; o++) nfPairs.push(k * 16 + o);
     // Per owner: its healers' damaged units (where they are now) and the
     // research its researchers serve.
     const np = Math.max(1, Math.floor(Number(players && players.length) || 0)), HM = HEALER_DAMAGED_CANDIDATE_LIMIT;
@@ -912,14 +921,14 @@ function _wsPost() {
     // was made (the cells of those alone); a field it cannot update is made whole by stages 2 and 3 (modes 1
     // and 2, many jobs a field: rows, then columns).)
     const nfRowJobs = Math.min(64, GRID_H), nfColJobs = Math.ceil(GRID_W / WS_NF_COLS), nfPer = Math.max(nfRowJobs, nfColJobs);
-    for (const [slot, mode] of [[1, 3], [2, 1], [3, 2]]) {
+    for (const [slot, mode] of [[4, 3], [5, 1], [6, 2]]) {
         const Np = _simBgStageParams[WS_LANE][slot];
         Np.fill(0); Np[0] = nfPairs.length; Np[1] = GRID_W; Np[2] = GRID_H;
         Np[63] = _wsPostEpoch; Np[62] = mode; Np[61] = Math.ceil(GRID_H / nfRowJobs); Np[60] = WS_NF_COLS; Np[59] = nfPer;
         for (let i = 0; i < nfPairs.length; i++) Np[3 + i] = nfPairs[i];
     }
-    const eligibleGroups = [...new Set(groups.map((g, i) => Bp[16 + i]))];
-    const Ep = _simBgStageParams[WS_LANE][0]; Ep.fill(0);
+    const eligibleGroups = groups.map((g, i) => i);
+    const Ep = _simBgStageParams[WS_LANE][3]; Ep.fill(0);
     Ep[0] = eligibleGroups.length; Ep[1] = 128; Ep[2] = _wsPostEpoch;
     const bucketJobs = Math.ceil(Math.ceil(GRID_W / WS_BUCKET) * Math.ceil(GRID_H / WS_BUCKET) / 128);
     Ep[3] = bucketJobs;
@@ -929,14 +938,14 @@ function _wsPost() {
     // (The pre-claim's table (k.rs ws_preclaim): a power of two at least twice the requests.)
     const claimCap = 1 << Math.max(10, Math.ceil(Math.log2(2 * total)));
     _wsArr('ws.claim', Int32Array, claimCap);
-    const Op = _simBgStageParams[WS_LANE][5]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL; Op[4] = WS_PRECLAIM ? claimCap : 0; Op[5] = WSR_COLLECT; Op[6] = HM; Op[7] = TILE; Op[8] = GRID_W;
+    const Op = _simBgStageParams[WS_LANE][8]; Op[0] = 1; Op[1] = total; Op[2] = WS_K; Op[3] = WSR_HEAL; Op[4] = WS_PRECLAIM ? claimCap : 0; Op[5] = WSR_COLLECT; Op[6] = HM; Op[7] = TILE; Op[8] = GRID_W;
     const spawners = _wsSnapshotReturnSpawners(total, np);
-    const Sp = _simBgStageParams[WS_LANE][6];
+    const Sp = _simBgStageParams[WS_LANE][9];
     Sp[0] = 128; Sp[1] = np; Sp[2] = GRID_W; Sp[3] = GRID_H; Sp[4] = TILE;
     Sp[5] = WSR_GRID; Sp[6] = WSR_HEAL; Sp[7] = WSW_BUILD;
-    simParallelBackgroundChain(WS_LANE, [[SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
+    simParallelBackgroundChain(WS_LANE, [...gst, [SIM_KERNEL_WS_ELIGIBLE, eligibleGroups.length * bucketJobs], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer], [SIM_KERNEL_WS_NEARFIELD, nfPairs.length * nfPer],
         [SIM_KERNEL_WS_SCAN, Math.ceil(total / 16)], [SIM_KERNEL_WS_ORDER, 1], [SIM_KERNEL_WS_RETURN_SPAWNERS, spawners ? Math.ceil(total / Sp[0]) : 0]]);
-    if (typeof _simParTrace !== 'undefined' && _simParTrace) { const tr = _simParTrace; tr['ws:total'] = total; tr['ws:nfPairs'] = nfPairs.length; tr['ws:nfPer'] = nfPer; tr['ws:elig'] = eligibleGroups.length * bucketJobs; }
+    if (typeof _simParTrace !== 'undefined' && _simParTrace) { const tr = _simParTrace; tr['ws:total'] = total; tr['ws:nfPairs'] = nfPairs.length; tr['ws:nfPer'] = nfPer; tr['ws:elig'] = eligibleGroups.length * bucketJobs; tr['ws:groups'] = gl.length; }
     _wsPosted = { chunks: 1, CH: total, groups, heal, spawners, ordered: false, moved: typeof _rl !== 'undefined' ? _rl.moved : 0, step: -1, due: -1 };
 }
 // (Waited for here, the next phase: the scan reads the collectors' groups
@@ -971,6 +980,7 @@ function _wsCommit() {
     simParallelBackgroundWait(WS_LANE);
     const J = _wsPosted;
     _wsPosted = null;
+    _wsgCheck();
     if (!_simUnitState) return;
     _wsCommitTick = gameTime;
     // (Workers moved to other slots while the search ran (the online
@@ -3325,6 +3335,8 @@ function workerSitesReserve(B) {
     if (!X.tiles || X.tiles.length < n || !simHeapHas(X.tiles)) { X.tiles = simSharedArray(Int32Array, n); X.sig = -1; }
     if (!X.off || X.off.length < 2 * nb + 2 || !simHeapHas(X.off)) { X.off = simSharedArray(Int32Array, 2 * nb + 2); X.sig = -1; }
     if (!X.out || !simHeapHas(X.out)) X.out = simSharedArray(Int32Array, 4);
+    // (The collectors' groups', their mirror's and the tile journal's.)
+    _wsgEnsure();
 }
 function _wsCandidates(spawnersOnly = false) {
     const C = spawnersOnly ? _wsCand.spawners : _wsCand.all;
@@ -3401,7 +3413,10 @@ function workerBrainReserve(B){
     _workerBrainArray('dist',Uint8Array,np*6*nb);
 }
 const WB_SITE_BLOCKS=256;
-function workerBrainsPrepare(n,defer=false,list=null){
+// warm: stages 0-2 alone (no events): the sites and distance fields of the loaded world made while the match loads
+// (workerBrainsPrewarm), so the first tick makes again only what changed since (the fields are a function of the
+// block bits alone: the same answers).
+function workerBrainsPrepare(n,defer=false,list=null,warm=false){
     if(_workerBrain.pending)workerBrainsCollect();
     // (The slots copied into one list bound once (wb.list), not the caller's
     // list bound: two callers' lists in turn made the helpers sit out the jobs
@@ -3409,7 +3424,7 @@ function workerBrainsPrepare(n,defer=false,list=null){
     if(n>0){const src=list||_unitEvSort.sorted;_workerBrainArray('list',Int32Array,n).set(src.subarray(0,n));}
     const B=_workerBrain;B.active=false;B.tick=-1;B.prepared=0;B.used=0;B.misses=0;
     // (Any number of events: the worker kernel takes its nearest spawners from it, wai.rs brain_spawner.)
-    if(!WORKER_BRAIN_WASM||n<1||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.freeCount<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
+    if(!WORKER_BRAIN_WASM||(n<1&&!warm)||!_ST.n||!_simUnitState?.wk||_simUnitState.wk.used-_simUnitState.wk.freeCount<=1||!_simWasmOk(_simParReg)||typeof _simWasmX.k_worker_spawners!=='function')return;
     const w=GRID_W,h=GRID_H,cols=Math.ceil(w/8),nb=cols*Math.ceil(h/8),np=players.length,stride=Math.ceil((np+1)/16)*16;
     _workerBrainArray('sites',Uint16Array,nb*64);_workerBrainArray('count',Int32Array,nb*stride);
     const any=_workerBrainArray('any',Int32Array,np*16),dist=_workerBrainArray('dist',Uint8Array,np*6*nb);
@@ -3425,10 +3440,13 @@ function workerBrainsPrepare(n,defer=false,list=null){
         for(let k=0;k<6;k++)P[16+k]=(_stationaryTypeIds.get(_workerBrainSpawnerTypes[k])??-1)+1;
         if(stage===3){P[0]=n;P[1]=256;P[2]=gameTime;P[8]=TILE*8;}
     }
+    const chain=[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/WB_SITE_BLOCKS)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SITES,np*6]];
+    if(warm){simParallelBackgroundChain(lane,chain);simParallelBackgroundWait(lane);return;}
     B.pending={tick:gameTime,n};
-    simParallelBackgroundChain(lane,[[SIM_KERNEL_WORKER_SITES,Math.ceil(nb/WB_SITE_BLOCKS)],[SIM_KERNEL_WORKER_SITES,np],[SIM_KERNEL_WORKER_SITES,np*6],[SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]]);
+    chain.push([SIM_KERNEL_WORKER_SPAWNERS,Math.ceil(n/256)]);simParallelBackgroundChain(lane,chain);
     if(!defer)workerBrainsCollect();
 }
+function workerBrainsPrewarm(){workerBrainsPrepare(0,false,null,true);}
 function workerBrainsCollect(){
     const B=_workerBrain,J=B.pending;if(!J)return;
     simParallelBackgroundWait(SIM_LANE_TICK);B.tick=J.tick;B.prepared=J.n;B.pending=null;B.active=true;
@@ -3715,7 +3733,7 @@ function _releaseManualWorkerAssignmentConflicts(assigningUnit, target, targetTy
 // "Stage D". Off: every worker event goes the JavaScript way.
 let WORKER_AI_WASM = true;
 const WAI_RS_W = 12, WAI_ES_W = 8, WAI_ES_SOURCES = ['research', 'salvage', 'collect', 'healer', 'builder'];
-const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_QUEUE_PAID = 10, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13, WAI_OUT_MINE_GONE = 14;
+const WAI_OUT_SOUND_RESEARCH = 1, WAI_OUT_RESEARCH_ADVANCE = 2, WAI_OUT_DECLINED = 3, WAI_OUT_ARM = 4, WAI_OUT_SALVAGE = 5, WAI_OUT_SOUND_UNIT = 6, WAI_OUT_MINE = 7, WAI_OUT_ASTAR_LOG = 8, WAI_OUT_CLEAR_ROUTE = 9, WAI_OUT_SOUND_HEAL = 11, WAI_OUT_BUILT = 12, WAI_OUT_SOUND_BUILD = 13, WAI_OUT_MINE_GONE = 14;
 // The worker AI's events and takes decided on the helpers (wai.rs k_wai_decide,
 // a chunk of WAI_DECIDE_PER a job) against the state as at the pass's start,
 // then applied in order (k_wai_apply: shared writes, sums, mines, payments,
@@ -3736,7 +3754,7 @@ const WAI_UNIT_SOUNDS = [null, 'salvager_work', 'salvage_collected', 'collector_
 // _stAllCls, 1 + its index, WAI_CTAB_COLS.length words; wai.rs CT_*).
 const WAI_CTAB_COLS = ['c_markedForSalvage', 'c_stacks', 'c_level', 'c_queueEnabled', 'c__qN', 'c__qReq', 'c__qPaid', 'c__uc'];
 const _wai = { tver: -1, tablePlayers: 0, tableLevels: 0, P: new Float64Array(80), declined: 0 };
-const _waiNativeArgs = new Array(160).fill(null);
+const _waiNativeArgs = new Array(164).fill(null);
 function _waiArr(name, Type, n) {
     let a = _wai[name];
     if (!a || a.length < n || !simHeapHas(a)) { if (a && simHeapHas(a)) simHeapFreeAuto(a); a = _wai[name] = simSharedArray(Type, Math.max(64, n)); }
@@ -3949,6 +3967,8 @@ function waiRun(list, n, take = null, mode = take ? 1 : 0) {
     WA[arg++] = c.wtcL || null;
     // (A manual move's end in the pass, wai.rs finish_manual: the pending way's bits and the digest, its keys P[77] / P[78].)
     WA[arg++] = c.ptSt || null; WA[arg++] = c.hObj || null;
+    // (A manual move waiting for its way, wai.rs manual_wait: the pending way's mirror and its progress.)
+    WA[arg++] = c.mvPF || null; WA[arg++] = c.ptVer || null; WA[arg++] = c.ptAt || null; WA[arg++] = c.ptSub || null;
     try {
         // (The tier's takes too (mode 1): decided on the helpers, settled by the apply's rounds; serial they were ~3 ms a step on this thread at 1M units.)
         if (WAI_PARALLEL && mode !== 2) _waiParallel(WA, P, n, mode, list);
@@ -3984,9 +4004,24 @@ function _waiAmbient(t, kind, name, cd) {
     _waiAmbK[h] = key; _waiAmbT[h] = gameTime + cd;
     playSound(name, gx * TILE + TILE * 0.5, gy * TILE + TILE * 0.5);
 }
+// (A unit's ambient sound by its id, the same table: a key below 0.)
+function _waiAmbientUnit(s, c, name, cd) {
+    if (!c.live[s]) return;
+    const key = -(c.id[s] * 4 + 2), h = Math.imul(key, 0x9e3779b1) >>> 19;
+    if (_waiAmbK[h] === key && gameTime < _waiAmbT[h] && _waiAmbT[h] - gameTime <= cd) return;
+    _waiAmbK[h] = key; _waiAmbT[h] = gameTime + cd;
+    const k = c.x instanceof Int32Array ? 0.125 : 1;
+    playSound(name, c.x[s] * k, c.y[s] * k);
+}
+// (The A* collected, summed by owner and unit type over a call's events: one log entry each, hud.js recordAstarDelta.)
+let _waiAstarAcc = new Float64Array(0);
+const _waiAstarUnit = { unitType: '' };
 function waiOutEvents(m) {
     const S = _simUnitState, c = S.columns, owners = S.owners, out = _wai.out;
     _wai.declined = 0;
+    const NT = Math.max(1, _simUnitTypeNames.length), NPL = Math.max(1, players.length);
+    if (_waiAstarAcc.length < NT * NPL) _waiAstarAcc = new Float64Array(NT * NPL * 2);
+    let astar = false;
     // (Salvaged structures: destroyed as one batch after the events, dst.rs.)
     let ns = 0, salv = null;
     for (let i = 0; i < m; i++) {
@@ -4004,26 +4039,21 @@ function waiOutEvents(m) {
         else if (code === WAI_OUT_SOUND_UNIT) { if (c.live[a]) { const k = c.x instanceof Int32Array ? 0.125 : 1; playSound(WAI_UNIT_SOUNDS[out[i * 4 + 3]], c.x[a] * k, c.y[a] * k); } }
         else if (code === WAI_OUT_MINE) _waiMineTaken(a, RESOURCE_TYPE_LIST[b], out[i * 4 + 3]);
         else if (code === WAI_OUT_MINE_GONE) _waiMineGone(a, RESOURCE_TYPE_LIST[b]);
-        else if (code === WAI_OUT_ASTAR_LOG) { const u = owners.at(a); if (typeof recordAstarDelta === 'function') recordAstarDelta(u ? u.owner : -1, out[i * 4 + 3], u, 'collect'); }
-        else if (code === WAI_OUT_QUEUE_PAID) {
-            // (The production pass brings every spawner up to date each step: barrack.js spawnerProductionPass.)
-            if (typeof _spProdOn === 'function' && _spProdOn()) continue;
-            // (A healer paid its front, or found it paid: its production, and a ready order once paid and timed.)
-            const sp = getTileEntityRef(a % GRID_W, Math.floor(a / GRID_W));
-            if (!sp) continue;
-            if (b && typeof spawnerProductionChanged === 'function') spawnerProductionChanged(sp);
-            const cooldown = Math.max(1, Math.round(sp.spawnCooldown || 1)), front = spawnQueueFront(sp);
-            if (front && sp.spawnTimer >= cooldown && front.energyPaid >= front.energyRequired && !Number.isFinite(sp._spawnReadyOrder)) {
-                sp._spawnReadyOrder = globalSpawnerReadyOrderCounter++;
-                if (typeof spawnerReadyNoted === 'function') spawnerReadyNoted(sp);
-            }
-        } else if (code === WAI_OUT_SOUND_HEAL) {
+        else if (code === WAI_OUT_ASTAR_LOG) { const o = c.owner[a], ty = c.upT ? c.upT[a] : -1; if (c.live[a] && o >= 0 && o < NPL) { _waiAstarAcc[o * NT + (ty >= 0 && ty < NT ? ty : 0)] += out[i * 4 + 3]; astar = true; } }
+        else if (code === WAI_OUT_SOUND_HEAL) {
             if (a >= 0) _waiAmbient(a, 1, 'heal_tick', 12);
-            else { const t = owners.at(b); if (t && _noteAmbientSoundTick(t, 'heal_tick', 12)) playSound('heal_tick', t.x, t.y); }
+            else if (b >= 0) _waiAmbientUnit(b, c, 'heal_tick', 12);
         }
         else if (code === WAI_OUT_BUILT) _waiBuilt(a, b, out[i * 4 + 3]);
         else if (code === WAI_OUT_SOUND_BUILD) _waiAmbient(a, 2, 'builder_work', 10);
         else if (code === WAI_OUT_CLEAR_ROUTE) { const u = owners.at(a); if (u) { u.pathIsFallbackAstar = false; u._pendingPathTarget = null; } }
+    }
+    if (astar && typeof recordAstarDelta === 'function') for (let o = 0; o < NPL; o++) for (let ty = 0; ty < NT; ty++) {
+        const v = _waiAstarAcc[o * NT + ty];
+        if (!v) continue;
+        _waiAstarAcc[o * NT + ty] = 0;
+        _waiAstarUnit.unitType = _simUnitTypeNames[ty] || 'other';
+        recordAstarDelta(o, v, _waiAstarUnit, 'collect');
     }
     if (ns > 0) structDestroyTiles(salv, ns);
     if (_wai.adjDue) { _wai.adjDue = false; recalculateAdjacency(); }
@@ -4161,8 +4191,16 @@ function _waiMineGone(t, cfg) {
         cellType[(grid[mine.gy][mine.gx]) - 1] = TYPE_FLOOR;
         simMoveTileTypeChanged(mine.gx, mine.gy);
         _bumpPathTopologyVersion();
-        const mineArray = _getResourceCollectorMineArray(cfg), idx = mineArray ? mineArray.indexOf(mine) : -1;
-        if (idx >= 0) mineArray.splice(idx, 1);
+        // (Out of its list by its place there (mine._mli, every mine indexed at once when unknown), the last one moved into it: no search and shift
+        // of the whole list per mine emptied (~1.4 ms a second of this thread in a battle). The lists' order decides
+        // nothing; every peer moves the same ones, a restore copies the order.)
+        const mineArray = _getResourceCollectorMineArray(cfg);
+        if (mineArray) {
+            let i = mine._mli;
+            // (Places not known (a list made again: a load, a restore): every mine's at once.)
+            if (!(i >= 0 && i < mineArray.length && mineArray[i] === mine)) { for (let j = 0; j < mineArray.length; j++) if (mineArray[j]) mineArray[j]._mli = j; i = mine._mli; if (!(mineArray[i] === mine)) i = -1; }
+            if (i >= 0) { const last = mineArray.pop(); if (last !== mine) { mineArray[i] = last; last._mli = i; } mine._mli = -1; }
+        }
         clearTileEntity(mine.gx, mine.gy, mine);
         _markCombinedBgTileDirty(mine.gx, mine.gy, 0, true);
     }

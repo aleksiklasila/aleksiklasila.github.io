@@ -1,5 +1,5 @@
 "use strict";
-importScripts('sim_frame.js?v=20261123-i','sim_frame_world.js?v=20261124-a','pres_wasm_bin.js?v=20261123-e');
+importScripts('sim_frame.js?v=20261125-dt','sim_frame_world.js?v=20261124-a','pres_wasm_bin.js?v=20261123-e');
 const PRESENT_MAGIC=0x50524553;
 let source=null, meta=null, epoch=0, generation=0, latest=null, scheduled=false, strings=[''], ready=false;
 let structure=null, structureRevision=-1, sentStructureRevision=-1, cells=null, cellBaseline=null;

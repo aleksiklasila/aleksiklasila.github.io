@@ -1509,6 +1509,7 @@ let _gameStatsAcc = null, _gameStatsDone = null;
 const GAME_STATS_SAMPLE = 10;
 function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
     let a = into || { workers: {}, idle: {}, units: {}, structures: {} };
+    const k0 = k;
     let add = (m, pid) => { m[pid] = (m[pid] || 0) + sample; };
     if (sample > 1) {
         // (Every live unit is counted in its owner's population.)
@@ -1541,12 +1542,8 @@ function _gameStatsSlice(k, step, into = null, sample = 1, rot = 0) {
         for (let s = k, n = Math.min(T.n, T.cap); s < n; s += step) if (AL[s] === 1 && KI[s] >= 1 && KI[s] <= 3 && EN[s] > 0) add(a.structures, OW[s]);
         return a;
     }
-    let items = getCellItemsRowMajor();
-    for (let i = k, n = items.length; i < n; i += step) {
-        let item = items[i], cell = grid[item.gy] && grid[item.gy][item.gx];
-        if (!cell || cellItemGet(cell) !== item || !(Number(item.energy) > 0)) continue;
-        add(a.structures, cellOwner[(cell) - 1]);
-    }
+    // (The simulation's: the structure table's count per owner, data_state.js structCellCountByOwner.)
+    if (k0 === 0) for (let pid = 0; pid < players.length && pid < 64; pid++) if (structCellCountByOwner[pid]) a.structures[pid] = structCellCountByOwner[pid];
     return a;
 }
 function gameStatsStep(tick) {

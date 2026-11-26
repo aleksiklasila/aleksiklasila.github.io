@@ -97,13 +97,12 @@ function _unitEvOrderKey(t, id) {
 }
 let _unitEvList = null, _unitEvCnt = null;
 const _unitEvSort = { cap: 0, ent: null };
-let UNIT_EVENT_ROUTE_BATCH = true;
 function _unitEventSortReserve(n) {
     if (_unitEvSort.cap >= n) return;
     const m = simReserveCap(n, 1024);
     // The helper binding protocol supports Float64Array; Rust treats these
     // opaque eight-byte key buffers as u64 (JavaScript never reads them).
-    for (const [key, Type, stride = 1] of [['sorted', Int32Array], ['temp', Int32Array], ['keys', Float64Array], ['keytmp', Float64Array], ['routes', Int32Array, 2]]) {
+    for (const [key, Type, stride = 1] of [['sorted', Int32Array], ['temp', Int32Array], ['keys', Float64Array], ['keytmp', Float64Array]]) {
         const old = _unitEvSort[key], a = _unitEvSort[key] = simSharedArray(Type, m * stride);
         simParallelBind('ev.' + key, a);
         if (old) simHeapFree(old);
@@ -143,13 +142,6 @@ function unitEventsRun() {
         _simRust(_simUnitEventSortW, P, 0, 'k_unit_event_sort', 'UNIT_EVENT_SORT');
         const E = _unitEvSort.ent, j = CNT[chunks * 16];
         if(typeof workerBrainsPrepare==='function')workerBrainsPrepare(j,true);
-        let routes = null;
-        if (UNIT_EVENT_ROUTE_BATCH && j >= 64 && typeof SIM_KERNEL_EVENT_ROUTES === 'number') {
-            P[0] = j; P[1] = 2048; P[2] = TILE * 8;
-            simParallelRun(SIM_KERNEL_EVENT_ROUTES, Math.ceil(j / 2048));
-            routes = _unitEvSort.routes;
-        }
-        const trueTerm = _simHTerm(_UH_PFA, true);
         if(typeof workerBrainsCollect==='function')workerBrainsCollect();
         playerResourceBatchBegin();
         try {
@@ -159,15 +151,15 @@ function unitEventsRun() {
             let wn = 0;
             // One event the JavaScript takes (its index in the sorted list).
             const one = i => {
-                const ent = E[i], s = ent >> 3, u = owners.at(s);
+                const ent = E[i];
+                if (ent < 0) return;
+                const s = ent >> 3, u = owners.at(s);
                 if (!u || u.dead) return;
                 if (wai && u.workerState) {
-                    if ((ent & 7) === UNIT_EV_FLOOR && _unitFloorEvent(u)) return;
                     if (c.statRow[s] < 0) _waiOwnStats(u, c, s);
                     WL[wn++] = ent;
                     return;
                 }
-                if (routes && routes[i * 2] >= 0 && !u.workerState && _unitNoWayCommit(u, c, s, routes[i * 2], routes[i * 2 + 1], trueTerm)) return;
                 _unitEvent(u, c, s, ent & 7);
             };
             {
@@ -176,6 +168,10 @@ function unitEventsRun() {
                 const per = UNIT_EVENTS_SPLIT_PER, chunks = Math.ceil(j / per), X = _unitEvSplitRoom(chunks, per);
                 P[0] = j; P[1] = per; P[2] = wai ? 1 : 0; P[3] = SIM_WS_NAMES.length - 1;
                 simParallelRun(SIM_KERNEL_UNIT_EVENTS_SPLIT, chunks);
+                // (The floor events: the mines, tfx.rs k_mine_events; a mine's event dropped from the list.)
+                _unitMineEvents(E, j);
+                // (The units' no-way events: their pending targets by the pending wheel's kernel, pathfinding.js.)
+                pendingPathNoWayEvents(E, j);
                 for (let k = 0; k < chunks; k++) { const m = X.cnt[k * 16]; if (m > 0) { WL.set(X.split.subarray(k * per * 2, k * per * 2 + m), wn); wn += m; } }
                 for (let k = 0; k < chunks; k++) { const b = k * per * 2 + per, m = X.cnt[k * 16 + 1]; for (let r = 0; r < m; r++) one(X.split[b + r]); }
             }
@@ -190,35 +186,57 @@ function unitEventsRun() {
 }
 // One unit's event (code: mv.rs EV_*; 0 a worker the kernel left).
 function _unitEvent(u, c, s, code) {
-    if (code === UNIT_EV_FLOOR && _unitFloorEvent(u)) return;
     if (u.workerState) { _unitWorkerEvent(u, c, s, code); return; }
-    if (code === UNIT_EV_NOWAY) _unitNoWay(u);
-    else if (code === UNIT_EV_WAITED) _unitWaitEnded(u);
+    if (code === UNIT_EV_WAITED) _unitWaitEnded(u);
     else if (code === UNIT_EV_SPATIAL) {
         pushUnitOutOfBlockedTile(u);
         u.x = _quantizeUnitWorldCoord(u.x); u.y = _quantizeUnitWorldCoord(u.y);
         updateUnitSpatial(u);
     } else if (code === 0) unitEventsStray++;
 }
-// A hostile floor item under the unit that the kernel cannot apply (a mine,
-// or a trap it has no table for): applied (on entering its tile, then once a
-// second). True: a mine went off (nothing else for the unit this tick).
-function _unitFloorEvent(u) {
-    const gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE);
-    if (!(gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H)) return false;
-    u._floorTile = gy * GRID_W + gx;
-    const cell = grid[gy][gx], item = cellItemGet(cell);
-    if (!item || cellOwner[(cell) - 1] === u.owner || item.underConstruction) return false;
-    const itemLevel = getThingEffectiveLevel(item, stackCountToLevel(item.stacks || 1));
-    switch (item.type) {
-        case 'sand': applyStatusEffect(u, 'sand', itemLevel, 0, item.owner, item.type); break;
-        case 'lava': applyStatusEffect(u, 'fire', itemLevel, item.damage || 1, item.owner, item.type); break;
-        case 'poison_puddle': applyStatusEffect(u, 'poison', itemLevel, item.damage || 1, item.owner, item.type); break;
-        case 'ice_patch': applyStatusEffect(u, 'ice', itemLevel, item.damage || 1, item.owner, item.type); break;
-        case 'water_puddle': applyStatusEffect(u, 'water', itemLevel, 0, item.owner, item.type); break;
-        case 'mine': u._explodeMine(cell, item, itemLevel); return true;
+// The tick's floor events (the movement kernel's: a unit on a hostile floor item it leaves to these; traps are the
+// tile effects' pass's, tfx.rs): the mines by a kernel (tfx.rs k_mine_events: the units' floor tiles noted, the mines
+// that go off, their blasts, the shrines' share, the fallen; each hit a look), here their tiles cleared (one quiet
+// destroy batch: their explosion and sound are these), the shares added. (E, j: the sorted list and its length.)
+const _mineP = new Float64Array(20), _mineA = new Array(32).fill(null);
+let _mineOut = null, _mineCnt = null, _mineShr = null, _mineTiles = null;
+function _unitMineEvents(E, j) {
+    const S = _simUnitState, c = S.columns;
+    if (!_simMineTab || !simHeapHas(_simMineTab) || !_simTrapK) return;
+    const NO = Math.max(16, players.length);
+    if (!_mineOut || _mineOut.length < 4 * j || !simHeapHas(_mineOut)) { if (_mineOut && simHeapHas(_mineOut)) simHeapFree(_mineOut); _mineOut = simHeapArray(Int32Array, Math.max(1024, 8 * j)); }
+    if (!_mineCnt || !simHeapHas(_mineCnt)) _mineCnt = simHeapArray(Int32Array, 4);
+    if (!_mineShr || _mineShr.length < NO || !simHeapHas(_mineShr)) _mineShr = simHeapArray(Float64Array, Math.max(64, NO));
+    _mineShr.fill(0, 0, NO);
+    const L = _hitLooksArrays(), A = _mineA, P = _mineP;
+    A[0] = E; A[2] = c.x; A[3] = c.y; A[4] = c.x0; A[5] = c.y0; A[6] = c.owner; A[7] = c.dead; A[8] = c.live; A[9] = c.energy;
+    A[10] = _simTrapK; A[11] = _simTrapL; A[12] = _ST.own; A[13] = _ST.uc; A[14] = cellOwner;
+    A[15] = _sxStamp; A[16] = _sxStart; A[17] = _sxCount; A[18] = _sxESlot; A[19] = c.mvSteer; A[20] = _simMineTab; A[21] = _mineOut;
+    A[22] = L.kind; A[23] = _mineShr; A[24] = _mineCnt; A[25] = L.tid; A[26] = L.tx; A[27] = L.ty; A[28] = L.dmg; A[29] = L.own; A[30] = L.hdr; A[31] = c.id;
+    P[0] = j; P[1] = UNIT_EV_FLOOR; P[2] = TILE; P[3] = GRID_W; P[4] = GRID_H; P[5] = CHUNK_SIZE; P[6] = CHUNKS_W; P[7] = CHUNKS_H; P[8] = _sxEpoch;
+    P[9] = _simMineTabP; P[10] = _simTrapTLevels; P[11] = RESOURCE_FIXED_POINT_SCALE; P[12] = ST_OWNER_NONE; P[13] = SIM_STEER_W; P[14] = SIM_ST_FLOOR;
+    P[15] = Math.floor(_mineOut.length / 4); P[16] = L.cap; P[17] = NO;
+    try { simRustDirect('k_mine_events', A, P); } finally { A.fill(null); }
+    const nm = _mineCnt[0];
+    if (!(nm > 0)) return;
+    // (The hits' looks at once where the page is this thread, as the hits' own: _hitLooksMake.)
+    if (!SIM_LOOKS_DEFER && _mineCnt[1] > 0) simHitLooksReplay(simHitLooksTake(null), _hitLooksSimUnit);
+    for (let o = 0; o < NO; o++) {
+        const v = _mineShr[o];
+        if (!v) continue;
+        if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
+        _shrinePendingFixed[o] += v;
     }
-    return false;
+    if (!_mineTiles || _mineTiles.length < nm || !simHeapHas(_mineTiles)) _mineTiles = simHeapArray(Int32Array, Math.max(256, nm * 2));
+    const O = _mineOut, F = new Float32Array(O.buffer, O.byteOffset, O.length);
+    for (let i = 0; i < nm; i++) {
+        _mineTiles[i] = O[4 * i];
+        const x = F[4 * i + 1], y = F[4 * i + 2];
+        createExplosion(x, y, '#f80', 15);
+        playSound('mine_explode', x, y);
+    }
+    // (Cleared as a mine's clearTileEntity was: no destroyed building's explosion, sound, routes or win check.)
+    structDestroyTiles(_mineTiles, nm, false, true);
 }
 // The unit's speed this tick (Unit.update's: frozen, sandy half).
 function _unitSpeedNow(u) {
@@ -241,30 +259,6 @@ function _unitNoWay(u) {
     navPathSubstitute(u, Math.floor(u.x / TILE), Math.floor(u.y / TILE), pt);
     notePendingPathUnit(u);
 }
-// Ordered commit for a helper-prepared combat route failure. Preserve JS
-// reference values and digest deltas exactly, as the regular setters do.
-// The common native path needs no temporary JS path or repeated accessors.
-function _unitNoWayCommit(u, c, s, key, comp, trueTerm) {
-    if (c.nvPK[s] !== key || c.pathIndex[s] !== 0) return false;
-    // (A path of more than its one node: not this one's.)
-    const ph = c.pthH[s];
-    if (ph >= 2 && (SIM_PATH.a[ph - 2] & 0xffffff) > 1) return false;
-    const decoded = key >> 1, profile = Math.floor(decoded / 16777216), dest = decoded % 16777216;
-    if (profile !== (c.jFly[s] ? NAV_PROFILE_AIR : NAV_PROFILE_GROUND)) return false;
-    if ((c.ptSt[s] & 3) === 2) { c.ptVer[s] = 0; c.ptAt[s] = -1; c.ptSub[s] = 0; }
-    else { _unitNoWayPt.gx = dest % GRID_W; _unitNoWayPt.gy = Math.floor(dest / GRID_W); _unitNoWayPt.cmd = c.commandState[s]; simPendingTargetSet(c, s, _unitNoWayPt); }
-    c.nvPK[s] = -1; simUnitPathRelease(c, s); simPathRelease(c.pthH, s);
-    c.mvOn[mvtM(s)] = 0; c.mvSteer[mvtS(s * SIM_STEER_W)] = -1; c.pathIndex[s] = 0; c.rkF[s] = 0;
-    simPendingFlagSet(c, s, true);
-    const pt = u._pendingPathTarget;
-    if (comp === -2) comp = _navUnitComp(profile, Math.floor(c.y[s] / (TILE * 8)) * GRID_W + Math.floor(c.x[s] / (TILE * 8)));
-    const to = Math.max(0, Math.min(GRID_H - 1, c.ptGy[s])) * GRID_W + Math.max(0, Math.min(GRID_W - 1, c.ptGx[s]));
-    navPathSubstitutePrepared(u, profile, to, comp, pt);
-    notePendingPathUnit(u);
-    return true;
-}
-// (_unitNoWayCommit's target written into the columns: one object, reused.)
-const _unitNoWayPt = { gx: 0, gy: 0, cmd: 0, src: 'nav_unreachable' };
 // A unit's pending target (Unit._pendingPathTarget) as its columns hold it
 // (sim_unit_state.js ptSt ...): read and written in place through these, as
 // the object they replaced. Made when read, short-lived; by the unit, so a
@@ -958,29 +952,6 @@ class Unit {
 
     // A hostile mine under the unit goes off (separate from update: its
     // closure's context would otherwise be allocated on every update).
-    _explodeMine(cell, item, itemLevel) {
-        let blastDamage = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastDamage');
-        if (!Number.isFinite(blastDamage) || blastDamage <= 0) blastDamage = Number(item.damage) || 135;
-        let blastRadiusArea = getBuildingStatForOwner(item.owner, 'mine', itemLevel, 'blastRadius');
-        if (!Number.isFinite(blastRadiusArea) || blastRadiusArea <= 0) blastRadiusArea = 0.24;
-        let blastRadiusPx = Math.max(0, Number(blastRadiusArea) * AREA_UNIT_TILE_EQUIVALENT * TILE);
-
-        forEachUnitInRange(this.x, this.y, blastRadiusPx, (u) => {
-            if (!u) return;
-            let prevEnergy = u.energy;
-            u.energy -= blastDamage;
-            pushHostileDamageAlert(u, prevEnergy - u.energy, item.owner);
-            recordDamageVisual(u, prevEnergy - u.energy, item.owner); shrineDamageTaken(u, prevEnergy - u.energy);
-            if (u.energy <= 0 && !u.dead) u.dead = true;
-        }, { enemyOfPlayer: item.owner, tickStart: true });
-
-        createExplosion(this.x, this.y, "#f80", 15);
-        playSound('mine_explode', this.x, this.y);
-        clearTileEntity(cellItemGet(cell).gx, cellItemGet(cell).gy, cellItemGet(cell));
-        if (this.energy <= 0) this.dead = true;
-    }
-
-
     // Within arrival tolerance of the issued move target.
     _isNearIssuedTarget(spd) {
         let t = this.targetPos;
@@ -1298,15 +1269,16 @@ function _hitLooksMake(plist, np, no, off, nq, npj, HA, HT, sl, ns) {
     if (!SIM_LOOKS_DEFER) simHitLooksReplay(simHitLooksTake(null), _hitLooksSimUnit);
 }
 function _hitLooksSimUnit(id) { return typeof getUnitById === 'function' ? getUnitById(id) : null; }
-// The records so far as one buffer (transfer: the worker's list to transfer it in; null: the page's own), emptied.
+// The records so far as one buffer (transfer: the worker's list to transfer it in; null: the page's own), emptied;
+// acquire(bytes): a buffer of at least that many bytes (the worker's pool), else a new one.
 // Layout: n, then the i32 columns (aid tid ax ay tx ty), dmg (f32), kind sty typ (u8) own (i8), n each.
-function simHitLooksTake(transfer) {
+function simHitLooksTake(transfer, acquire = null) {
     const L = _lk;
     if (!L.hdr || !simHeapHas(L.hdr)) return null;
     const n = Math.min(L.hdr[0] | 0, L.cap);
     L.hdr[0] = 0;
     if (!(n > 0)) return null;
-    const buf = new ArrayBuffer(4 + n * 32), I = new Int32Array(buf, 0, 1 + 6 * n);
+    const buf = acquire ? acquire(4 + n * 32) : new ArrayBuffer(4 + n * 32), I = new Int32Array(buf, 0, 1 + 6 * n);
     I[0] = n;
     I.set(L.aid.subarray(0, n), 1); I.set(L.tid.subarray(0, n), 1 + n); I.set(L.ax.subarray(0, n), 1 + 2 * n);
     I.set(L.ay.subarray(0, n), 1 + 3 * n); I.set(L.tx.subarray(0, n), 1 + 4 * n); I.set(L.ty.subarray(0, n), 1 + 5 * n);
@@ -1364,7 +1336,7 @@ function _isHitBuildingStanding(tb) {
 // times as many, up to SIM_HITS_PRESENT_MAX; SIM_HITS_OUT of the rest). (The
 // combat brain engages: no retaliation, see tryAutoRetaliateOnHostileDamage.)
 const _hitK = { cap: 0, q: null, dmg: null, sty: null, wk: null, tcap: 0, tlist: null, wlist: null, plist: null, cnt: null, shr: null };
-const SIM_HITS_PRESENT = 512, SIM_HITS_PRESENT_MAX = 4096, SIM_HITS_OUT = 128, SIM_HITS_PER_JOB = 2048, SIM_HITS_CHUNKS_JOB = 16;
+const SIM_HITS_PRESENT = 512, SIM_HITS_PRESENT_MAX = 4096, SIM_HITS_OUT = 128, SIM_HITS_PER_JOB = 2048, SIM_HITS_CHUNKS_JOB = 16, SIM_HITS_BLOCK = 64;
 // The page's view (unit.x, unit.y: eighths of a pixel; x0 > x1: none), its
 // looks first (sim_worker.js: the page sends it as its camera moves).
 let simLookView = [1, 0, 0, 0];
@@ -1481,15 +1453,15 @@ function _structHitsRun(fn, head, P, cap, tail = null) {
 function _structHitsAfter(K, look) {
     const at = t => { const gx = t % GRID_W; return getTileEntityRef(gx, (t - gx) / GRID_W); };
     if (look) for (let i = 0, n = K.cnt[1]; i < n; i++) { const tb = at(K.looks[3 * i + 1]); if (tb) look(K.looks[3 * i], tb, K.looks[3 * i + 2] / 1024); }
-    if (typeof visCoverOnEntityChanged === 'function') for (let i = 0, n = K.cnt[2]; i < n; i++) { const tb = at(K.watch[i]); if (tb) visCoverOnEntityChanged(tb); }
     structDestroyTiles(K.dead, K.cnt[0], true);
 }
-function _structHitsApply(KC, HC, HA, HT, CH) {
+// (keys: the attack lists' hits on structures, nk of them with unused ones, gathered by k_hits: hit.skeys.)
+function _structHitsApply(keys, nk, HC, HA, HT) {
     const S = _simUnitState, C = S.columns, owners = S.owners;
     if (!_effHot || !simHeapHas(_effHot)) return;
     const P = _shP;
-    P[0] = KC; P[1] = CH; P[4] = EFF_HOT_WIDTH;
-    const K = _structHitsRun('k_struct_hits', [HC, HA, HT, 'keys', C.id, C.owner, C.atkN, C.atkSty, _effHot, C.statRow, C.unitLevel, C.baseLevel, C.effectiveLevel, C.atkWatch], P, KC * CH);
+    P[0] = nk; P[1] = 0; P[4] = EFF_HOT_WIDTH;
+    const K = _structHitsRun('k_struct_hits', [HC, HA, HT, keys, C.id, C.owner, C.atkN, C.atkSty, _effHot, C.statRow, C.unitLevel, C.baseLevel, C.effectiveLevel, C.atkWatch], P, nk);
     if (!K) return;
     // (Its looks as records first: the destroys below clear the tiles.)
     _hitLooksMake(null, 0, 0, 0, 0, 0, null, null, K.looks, K.cnt[1]);
@@ -1514,7 +1486,6 @@ function unitHitsResolve() {
     const S = _simUnitState;
     const KC = _simMoveHitChunks, HC = _simMoveHitC, HA = _simMoveHitA, HT = _simMoveHitT, CH = SIM_MOVE_CHUNK;
     _simMoveHitChunks = 0;
-    if (KC > 0 && S && HT) _structHitsApply(KC, HC, HA, HT, CH);
     let nk = 0;
     for (let k = 0; k < KC; k++) nk += HC[k];
     // (The step's shots that hit a unit, projectile.js: their slots in
@@ -1524,34 +1495,45 @@ function unitHitsResolve() {
     const room = npj > 0 ? projBlastRoom(npj) : null;
     const total = nk + npj + (room ? room[0] : 0);
     if (total === 0 || !S) return;
-    const owners = S.owners, K = _hitArrays(0, total);
+    // (The jobs: the movement's attack lists by chunks, the shots by count. Each takes the touch list and the status
+    // sub-records in blocks of SIM_HITS_BLOCK, k.rs HitLoc: room for a part-used block a job.)
+    const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
+    const ppj = Math.max(SIM_HITS_PER_JOB / 4, Math.ceil(npj / 32)), pjj = npj ? Math.ceil(npj / ppj) : 0;
+    const slack = (kj + pjj) * SIM_HITS_BLOCK;
+    const owners = S.owners, K = _hitArrays(0, total + slack);
     const CNT = K.cnt;
-    CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0; CNT[4] = 0; CNT[5] = 0;
+    CNT[0] = 0; CNT[1] = 0; CNT[2] = 0; CNT[3] = 0; CNT[4] = 0; CNT[5] = 0; CNT[6] = 0; CNT[7] = 0;
+    // (The attack lists' hits on structures as k_struct_hits' keys: k_hits gathers them, CNT[7] with the unused.)
+    if (nk && (!K.skeys || K.skeys.length < nk + slack)) {
+        if (K.skeys) simHeapFreeAuto(K.skeys);
+        K.skeys = simSharedArray(Float64Array, simReserveCap(nk + slack, 8192));
+        simParallelBind('hit.skeys', K.skeys);
+    }
     // (Status sub-records for every hit with a status style: the movement
     // kernel's counts, mv.hitsc, and the shots'.)
     let ns = 0;
     const HSC = _simMoveHitSC;
     if (HSC) for (let k = 0; k < KC; k++) ns += HSC[k];
     if (npj) ns += PJ.hdr[7] + room[1];
-    const scap = _hitStArrays(ns);
+    const scap = _hitStArrays(ns + slack);
     const P = _simParams;
-    const cj = Math.max(SIM_HITS_CHUNKS_JOB, Math.ceil(KC / 48)), kj = nk ? Math.ceil(KC / cj) : 0;
     const looks = Math.min(SIM_HITS_PRESENT_MAX, SIM_HITS_PRESENT * Math.max(1, simDk | 0)), V = simLookView;
     P[0] = 0; P[1] = SIM_HITS_PER_JOB; P[2] = looks; P[3] = 0; P[4] = cj; P[5] = nk ? KC : 0; P[6] = CH; P[7] = 0;
     P[8] = V[0]; P[9] = V[1]; P[10] = V[2]; P[11] = V[3]; P[12] = V[0] <= V[2] ? SIM_HITS_OUT : 0; P[13] = scap;
-    const ppj = Math.max(SIM_HITS_PER_JOB / 4, Math.ceil(npj / 32)), pjj = npj ? Math.ceil(npj / ppj) : 0;
     P[14] = npj; P[15] = ppj; P[16] = pjj;
     if (npj) {
         P[17] = GRID_W; P[18] = GRID_H; P[19] = TILE; P[20] = _sxEpoch; P[21] = (projUnitFlagsTable(), _pj.tflN); P[22] = _projUnitFlags(BASE_UNIT_STATS.norm); P[23] = TICK_RATE;
     }
     simParallelRun(SIM_KERNEL_HITS, pjj + kj);
+    // (The structures' hits first: in the order of their attackers' ids, before the units'.)
+    if (CNT[7] > 0 && HT) _structHitsApply(K.skeys, CNT[7], HC, HA, HT);
     if (CNT[5] > 0) console.warn('hits: ' + CNT[5] + ' status sub-records past the count of hits with a status style');
     const nt = CNT[0];
     if (nt > 0) {
         const NO = Math.max(16, players.length), pa = Math.max(SIM_HITS_PER_JOB, Math.ceil(nt / 48)), ja = Math.min(64, Math.ceil(nt / pa));
         P[0] = nt; P[1] = pa; P[2] = NO; P[3] = RESOURCE_FIXED_POINT_SCALE;
         // (A status record for each unit with a status sub-record at most: taken on the helpers.)
-        if (typeof simUnitStReserve === 'function') simUnitStReserve(Math.min(CNT[4], scap));
+        if (typeof simUnitStReserve === 'function') simUnitStReserve(CNT[6]);
         simParallelRun(SIM_KERNEL_HITS_APPLY, ja);
         if (typeof simUnitStSettle === 'function') simUnitStSettle();
         // (The shrines' share: integers, any order.)
@@ -1562,9 +1544,6 @@ function unitHitsResolve() {
             if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; }
             _shrinePendingFixed[o] += v;
         }
-        // (Newly watched: their vision cover; each its own.)
-        const WL = K.wlist, nw = CNT[2];
-        if (nw > 0 && typeof visCoverOnEntityChanged === 'function') for (let i = 0; i < nw; i++) { const u = owners.at(WL[i]); if (u) visCoverOnEntityChanged(u); }
     }
     // The looks (presentation only: which hits differs between peers): records by a kernel (k_hit_looks).
     const np = Math.min(CNT[1], looks), no = V[0] <= V[2] ? Math.min(CNT[3], SIM_HITS_OUT) : 0;
@@ -1700,12 +1679,12 @@ function statusPrepassRun() {
             const s = LIST[j], r = IX[s], ev = EV[r];
             if (ev === 0) continue;
             EV[r] = 0;
-            // (A damage tick's event is only its flash: SIM_DAMAGE_FLASH.)
-            if (!(ev & 2) && !SIM_DAMAGE_FLASH) continue;
+            // (A watch ended: its team column, Unit.watchedByTeam's; a damage tick's event is only its flash,
+            // SIM_DAMAGE_FLASH: the one that needs the unit's object.)
+            if (ev & 2) C.wTeam[s] = -1;
+            if (!(ev & 1) || !SIM_DAMAGE_FLASH) continue;
             const u = owners.at(s);
-            if (!u || u._si !== s) continue;
-            if ((ev & 1) && SIM_DAMAGE_FLASH) recordDamageVisual(u, DOT[r]);
-            if (ev & 2) { u.watchedByTeam = -1; if (typeof visCoverOnUnitSpatialChanged === 'function') visCoverOnUnitSpatialChanged(u); }
+            if (u && u._si === s) recordDamageVisual(u, DOT[r]);
         }
     }
 }
@@ -2112,7 +2091,9 @@ function resizeUnitSubgroup(playerId, unitIds, mode, subgroupFilter = null) {
         for (let i = 0; i < toSpawn; i++) {
             let template = source[i % source.length];
             let nu = spawnUnitNearUnit(template);
-            if (!nu) continue;
+            // (No footprint: made dead and let go, not listed (a listed unit without a slot sends the unit index
+            // to its serial build).)
+            if (!nu || nu.dead) continue;
             unitAdded(nu);
             players[playerId].popCount++;
             survivors.push(nu);
@@ -3014,12 +2995,14 @@ function _simMoveStructs() {
     if (full) { _simMoveStructSet = _activeTileEntities; _simMoveStructW = GRID_W; _simMoveStructH = GRID_H; _simMoveStructP = players; _simMoveStructC = spatialBlockCols; }
     else { for (let i = 0; i < _simMoveStructDirtyN; i++) { if (_trap.nd < _trap.dirty.length) _trap.dirty[_trap.nd++] = _simMoveStructDirty[i]; else _trap.all = true; } }
     _simMoveStructDirtyN = 0;
-    if (!full) _simTrapStep();
+    // (The trap tables after a full build too: without them the movement kernel hands every unit on a hostile floor
+    // item to the main thread, mv.rs floor_hit.)
+    _simTrapStep();
 }
 
 // Floor traps for the movement kernel (mv.rs floor_hit): per tile the trap
 // a unit hostile to its owner meets there (mv.trapK: 0 none or not built, 1
-// fire, 2 poison, 3 ice, 4 water, 5 sand, 6 a mine: Unit.update's) and its
+// fire, 2 poison, 3 ice, 4 water, 5 sand, 6 a mine: its floor event, tfx.rs k_mine_events) and its
 // level (mv.trapL), redone with its tile's structure, at construction's end
 // and level changes (simTrapDirty). The strength (status ticks mv.trapT,
 // damage per tick mv.trapTG) per owner, kind and level: a mirror of the
@@ -3030,6 +3013,9 @@ function _simMoveStructs() {
 let _simTrapK = null, _simTrapL = null, _simTrapT = null, _simTrapTG = null, _simTrapRes = null, _simTrapResN = 0;
 const _simTrapOwnersDirty = new Set();
 let _simTrapTPlayers = 0, _simTrapTLevels = 0;
+// (The mines' blast by owner and level (tfx.rs k_mine_events): damage and radius in pixels, f64 pairs; owners as the
+// unit index's players, one row more for none.)
+let _simMineTab = null, _simMineTabP = 0;
 const SIM_TRAP_KIND = { lava: [1, 'fire'], poison_puddle: [2, 'poison'], ice_patch: [3, 'ice'], water_puddle: [4, 'water'], sand: [5, 'sand'], mine: [6, ''] };
 const SIM_TRAP_TYPE_OF = [null, 'lava', 'poison_puddle', 'ice_patch', 'water_puddle', 'sand'];
 const SIM_TRAP_STAT = [null, ['burnDuration', 'burnDps'], ['poisonDuration', 'poisonDps'], ['freezeDuration', 'freezeDps'], ['wetDuration', null], ['sandDuration', null]];
@@ -3086,7 +3072,20 @@ function simTrapTiles() {
 // One owner's strengths: kinds 1-5 at every level, from its precomputed
 // stats map (the entries applyStatusEffect reads), the defaults where a stat
 // has no value.
+function _simMineTableOwner(o, row) {
+    const L = _simTrapTLevels, M = _simMineTab;
+    for (let lvl = 1; lvl < L; lvl++) {
+        // (A mine's blast as it was in Unit: the stats, else the item's damage / 0.24 area radius.)
+        let bd = getBuildingStatForOwner(o, 'mine', lvl, 'blastDamage');
+        if (!Number.isFinite(bd) || bd <= 0) bd = Number(getBuildingStatForOwner(o, 'mine', lvl, 'damage')) || 135;
+        let br = getBuildingStatForOwner(o, 'mine', lvl, 'blastRadius');
+        if (!Number.isFinite(br) || br <= 0) br = 0.24;
+        const i = (row * L + lvl) * 2;
+        M[i] = bd; M[i + 1] = Math.max(0, Number(br) * AREA_UNIT_TILE_EQUIVALENT * TILE);
+    }
+}
 function _simTrapTableOwner(o) {
+    if (_simMineTab && o < _simMineTabP) _simMineTableOwner(o, o);
     const L = _simTrapTLevels, pm = PRECOMPUTED_STATS_MAP_PLAYER[o], bm = pm && pm.building;
     for (let k = 1; k <= 5; k++) {
         const type = SIM_TRAP_TYPE_OF[k], effect = SIM_TRAP_KIND[type][1], base = Number((BASE_CARD_TYPES[type] || {}).damage) || 1;
@@ -3129,8 +3128,15 @@ function _simTrapStep() {
         if (!_simTrapT || _simTrapT.length < n) { _simTrapT = simHeapArrayAuto(Int32Array, n); _simTrapTG = simHeapArrayAuto(Float32Array, n); simParallelBind('mv.trapT', _simTrapT); simParallelBind('mv.trapTG', _simTrapTG); }
         _simTrapOwnersDirty.add(-1);
     }
+    // (The mines' table: the index's players and a row for none, as many levels.)
+    const MP = Math.max(1, spatialUnitsComplexPlayerCount);
+    if (!_simMineTab || _simMineTabP !== MP || _simMineTab.length < (MP + 1) * L * 2 || !simHeapHas(_simMineTab)) {
+        _simMineTab = simHeapArrayAuto(Float64Array, (MP + 1) * L * 2); _simMineTabP = MP;
+        _simMineTableOwner(undefined, MP);
+        _simTrapOwnersDirty.add(-1);
+    }
     if (_simTrapOwnersDirty.size) {
-        if (_simTrapOwnersDirty.has(-1)) { for (let o = 0; o < NP; o++) _simTrapTableOwner(o); }
+        if (_simTrapOwnersDirty.has(-1)) { for (let o = 0; o < NP; o++) _simTrapTableOwner(o); for (let o = NP; o < _simMineTabP; o++) _simMineTableOwner(o, o); }
         else for (const o of _simTrapOwnersDirty) if (o >= 0 && o < NP) _simTrapTableOwner(o);
         _simTrapOwnersDirty.clear();
     }
@@ -3922,6 +3928,37 @@ function _acqOwnArray(name, Type, n) {
     if (_simParReg[name] !== a) simParallelBind(name, a);
     return a;
 }
+// The arrays _acqPost makes, at the sizes the match can need (every slot of the unit table, its entries; the map's
+// chunks and tiles; areas x teams), made and written once while the match loads (main.js simMatchPrepare): the first
+// post took ~90 ms of the 1M scenes' first steps (new arrays, their pages written by its snapshot) against ~7 after.
+function acqReserve() {
+    const S = _simUnitState;
+    if (!S || !S.cap || typeof simHeapArray !== 'function') return;
+    const cap = simReserveCap(S.cap), nc = CHUNKS_W * CHUNKS_H, NT = GRID_W * GRID_H, ecap = simReserveCap(S.cap);
+    const touch = a => { if (a && a.length) a.fill(0); return a; };
+    for (const [nm, T] of [['acq.x', Float32Array], ['acq.y', Float32Array], ['acq.own', Int8Array], ['acq.flags', Uint8Array], ['acq.cmd', Uint8Array], ['acq.rng', Float32Array],
+        ['acq.id', Int32Array], ['acq.out', Int32Array], ['acq.tid', Int32Array], ['acq.sout', Int32Array], ['acq.cm', Uint8Array], ['acq.ct', Int32Array], ['acq.ctid', Int32Array],
+        ['acq.rk', Uint8Array], ['acq.bm', Uint8Array], ['acq.bt', Int32Array], ['acq.btid', Int32Array], ['acq.bf', Uint8Array]]) touch(_acqArray(nm, T, cap));
+    _acq.cap = Math.max(_acq.cap, cap);
+    for (const [nm, T, n] of [['acq.rs', Int32Array, nc], ['acq.rc', Int32Array, nc], ['acq.rst', Int32Array, nc], ['acq.om', Uint8Array, nc], ['acq.es', Int32Array, ecap]]) touch(_acqOwnArray(nm, T, n));
+    touch(_acqArray('acq.sown', Int8Array, NT)); touch(_acqArray('acq.scls', Int8Array, NT)); touch(_acqArray('acq.omt', Uint8Array, nc));
+    const sampleBudget = Math.max(0, Math.min(256, Math.floor(SIM_ACQ_SAMPLE_BUDGET / 4) * 4)), areaTargets = SIM_ACQ_AREA_TARGETS, sampled = sampleBudget > 0 || areaTargets;
+    if (!sampled) { for (const nm of ['acq.ex', 'acq.ey']) touch(_acqArray(nm, Float32Array, ecap)); for (const nm of ['acq.eo', 'acq.ea', 'acq.eid']) touch(_acqArray(nm, Int32Array, ecap)); return; }
+    touch(_acqArray('acq.saE', Int32Array, 4 * ecap)); touch(_acqArray('acq.saKey', Int32Array, ecap));
+    if (areaTargets) touch(_acqArray('acq.saE2', Int32Array, 4 * ecap));
+    if (typeof _visCoverReady !== 'function' || !_visCoverReady()) return;
+    const C = _visCover, A = C.areaCount, np = C.players, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
+    touch(_acqArray('acq.cover', Uint8Array, Math.max(1, np * A)));
+    touch(_acqArray('acq.saOff', Int32Array, A * np + 1));
+    for (const nm of ['saCount', 'saCursor', 'saNearest', 'saDistance']) touch(_acqArray('acq.' + nm, Int32Array, A * np));
+    for (const nm of ['saSeen', 'saNearN']) touch(_acqArray('acq.' + nm, Int32Array, A));
+    touch(_acqArray('acq.saNear', Int32Array, areaTargets ? 1 : A * 64));
+    if (areaTargets) {
+        for (const nm of ['saStructure', 'saStructureDistance']) touch(_acqArray('acq.' + nm, Int32Array, A * np * 4));
+        touch(_acqArray('acq.saRec', Int32Array, A * np * 8)); touch(_acqArray('acq.saQueue', Int32Array, A * playersK * 5));
+        touch(_acqArray('acq.saHist', Int32Array, 8 * A * playersK)); touch(_acqArray('acq.saPre', Int32Array, 128));
+    }
+}
 function _acqPost() {
     const S = _simUnitState;
     simParallelBackgroundWait(ACQ_LANE);
@@ -4000,7 +4037,7 @@ function _acqPost() {
     // (Sampled with answers: the build's count, offsets and scatter, the
     // structure seeds, the answers and their pack, six stages; sampled
     // only: the build.)
-    const scanSlot = 1 + (sampled ? (answers ? 7 : 1) : 0);
+    const scanSlot = 1 + (sampled ? (answers ? 8 : 1) : 0);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
@@ -4074,8 +4111,14 @@ function _acqPost() {
             const packPer=8192;I[37]=packPer;
             // (The buckets' sort after the scatter: P[38] keys a job, ~64 jobs.)
             const sortKeys=A*I[7];I[38]=Math.max(1,Math.ceil(sortKeys/64));
-            for(let slot=2;slot<=7;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
-            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,1],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],[SIM_KERNEL_ACQ_AREA_SORT,Math.max(1,Math.ceil(sortKeys/I[38]))],
+            // (The offsets in two stages of blocks of whole areas' keys (acq_sample.rs k_acq_area_prefix): their
+            // sums and the slots' longest range, then each block's offsets from the earlier ones' sums.)
+            const keys=A*I[7],pj0=Math.min(64,Math.max(1,Math.ceil(keys/8192))),pper=Math.max(I[7],Math.ceil(Math.ceil(keys/pj0)/I[7])*I[7]),pj=Math.max(1,Math.ceil(keys/pper));
+            I[39]=pper;I[41]=pj;I[42]=Math.max(1,Math.ceil(n/pj));
+            _acqArray('acq.saPre',Int32Array,128);
+            for(let slot=2;slot<=8;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
+            simParallelStageParams(ACQ_LANE,3)[40]=1;
+            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],[SIM_KERNEL_ACQ_AREA_SORT,Math.max(1,Math.ceil(sortKeys/I[38]))],
                 [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5],[SIM_KERNEL_ACQ_AREA_PACK,Math.ceil(A*I[7]/packPer)]);
         }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }
@@ -4400,6 +4443,10 @@ function _getUnitStatusGlyphSprite(symbol, color, size = 'normal') {
     return cached;
 }
 
+// The status glyphs Unit.draw uses (a fixed set): made ahead (renderer.js prewarm3DTopTextures), not in the frame a
+// worker's panel first shows one (the emoji font's first text ~6 ms, a worker panel 5-12 ms with it: checker-200k-rmax).
+const UNIT_STATUS_GLYPHS = [['★', '#ddd'], ['☆', '#888'], ['⚡', '#fd0'], ['⚡', '#f55'], ['🔨', '#fa0'], ['+', '#fff'], ['R', '#7bf']];
+function prewarmUnitStatusGlyphs() { for (const [s, c] of UNIT_STATUS_GLYPHS) _getUnitStatusGlyphSprite(s, c); }
 function drawUnitStatusGlyph(ctx, symbol, color, x, y, size = 'normal') {
     let s = _getUnitStatusGlyphSprite(symbol, color, size);
     let dx = Math.round(x - s.width * 0.5);

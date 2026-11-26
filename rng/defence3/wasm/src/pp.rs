@@ -414,11 +414,13 @@ fn tier(src: u8) -> u64 {
 /// the wheel's count change, [1] the path store's top, [2] requests, [3]
 /// errors, [5] this tick's asks), [49] / [50] sort keys (u64), [51] / [52] sort
 /// payloads.
-/// P: [0] mode, [1] n (mode 1) or the room, [2] now, [3] W, [4] H, [5]
+/// [53] unit.wkS, [54] unit.rkF (mode 3).
+/// P: [0] mode (0 the due units, 1 the listed upgraded, 2 their substitutes asked again, 3 the no-way events of the
+/// sorted list), [1] n (modes 1-3) or the room, [2] now, [3] W, [4] H, [5]
 /// TILE, [6] wheel size, [7] the last tick taken, [8] store length, [9]
 /// table entries (a power of two), [10] requests' room, [11]
 /// NAV_SUB_TICKS, [12] / [13] / [14] digest keys (target, flag, retry),
-/// [15] cloud types, [16..18] seq, [19..21] cs, [22..24] cw.
+/// [15] cloud types, [16..18] seq, [19..21] cs, [22..24] cw, [25] nav_unreachable's source code, [26] the no-way event code.
 #[no_mangle]
 pub unsafe extern "C" fn k_pp_due(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -513,7 +515,73 @@ pub unsafe extern "C" fn k_pp_due(a: u32, _chunk: i32) {
     pp.err = 0;
     let list = k.p::<i32>(0);
     let (mode, n0) = (k.i(0), k.i(1).max(0) as usize);
-    if mode == 2 {
+    if mode == 3 {
+        // No way on (the tick's sorted events, list, n0 of them; P[26] the no-way code): a unit's (no worker's: [53]
+        // unit.wkS) path's node it heads for out of reach (unit.js _unitNoWay): its pending target that node (one kept:
+        // its look started over), no path, no route ([54] unit.rkF), the fallback flag; the substitute of its
+        // component asked (flownav.js navPathSubstitute); in the wheel at its retry tick (notePendingPathUnit); its
+        // event dropped (-1). P[25] the target's source code (nav_unreachable).
+        let (heads, due, nx, pv) = (k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4));
+        let (wks, rkf) = (k.p::<u32>(53), k.p::<u8>(54));
+        let (wm, now, noway, src) = (k.i(6).max(1) - 1, pp.now, k.i(26), k.i(25));
+        let mut count = 0i32;
+        for i in 0..n0 {
+            let e = g(list, i);
+            if e < 0 || (e & 7) != noway { continue; }
+            let q = (e >> 3) as usize;
+            if g(pp.live, q) == 0 || g(pp.dead, q) != 0 || (!wks.is_null() && g(wks, q) & 31 != 0) { continue; }
+            s(list, i, -1);
+            // (Unit.path as its getter reads it, the node at its index.)
+            let len = pp.cur_len(q);
+            let pi = g(pp.pidx, q);
+            let h = g(pp.pthh, q);
+            if !pp.cur_ok || pi < 0 || pi >= len || h < 2 { continue; }
+            let dest = g(pp.arena, (h - 2) as usize + 3 + 3 * pi as usize);
+            if g(pp.pt_st, q) & 3 == 2 { s(pp.pt_ver, q, 0); s(pp.pt_at, q, -1); s(pp.pt_sub, q, 0); }
+            else {
+                let e0 = pp.ppt_enc(q);
+                s(pp.pt_gx, q, irem(dest, pp.gw) as i16); s(pp.pt_gy, q, idiv(dest, pp.gw) as i16);
+                s(pp.pt_cmd, q, g(pp.cmd, q)); s(pp.pt_src, q, src as u8);
+                s(pp.pt_ver, q, 0); s(pp.pt_at, q, -1); s(pp.pt_sub, q, 0);
+                s(pp.pt_st, q, (g(pp.pt_st, q) & !3) | 2);
+                pp.hadd(q, pp.kppt, pp.ppt_enc(q), e0);
+                pp.mirror(q);
+            }
+            pp.set_path(q, PATH_NONE, 0, false);
+            pp.set_pidx(q, 0);
+            if !rkf.is_null() { s(rkf, q, 0); }
+            pp.flag(q, true);
+            // (navPathSubstitute: from its tile, its component's substitute; none (walled in): no ask.)
+            let p = pp.profile(q);
+            let ugx = floor(g(pp.x, q) as f64 * 0.125 / pp.tile) as i32;
+            let ugy = floor(g(pp.y, q) as f64 * 0.125 / pp.tile) as i32;
+            let comp = pp.unit_comp(p as usize, ugy * pp.gw + ugx);
+            if comp >= 0 {
+                let (gx, gy) = (g(pp.pt_gx, q) as i32, g(pp.pt_gy, q) as i32);
+                pp.sub_asked(q, p, gy.max(0).min(pp.gh - 1) * pp.gw + gx.max(0).min(pp.gw - 1), comp);
+            }
+            // (notePendingPathUnit: at its retry tick, else the next.)
+            let r = g(pp.retry, q);
+            let tick = if r == r && r > (now + 1) as f64 { r as i32 } else { now + 1 };
+            let cur = g(due, q);
+            if cur != tick {
+                if cur >= 0 {
+                    let b = (cur & wm) as usize;
+                    let (pr, nn) = (g(pv, q), g(nx, q));
+                    if pr >= 0 { s(nx, pr as usize, nn); } else if g(heads, b) == q as i32 { s(heads, b, nn); }
+                    if nn >= 0 { s(pv, nn as usize, pr); }
+                    count -= 1;
+                }
+                let b = (tick & wm) as usize;
+                let hd = g(heads, b);
+                s(nx, q, hd); s(pv, q, -1);
+                if hd >= 0 { s(pv, hd as usize, q as i32); }
+                s(heads, b, q as i32); s(due, q, tick);
+                count += 1;
+            }
+        }
+        s(hdr, 0, count);
+    } else if mode == 2 {
         // (The substitutes the waiting units asked for, asked again: after a
         // restore, or the table cleared. flownav.js navSubstitutesRestore.)
         for i in 0..n0 {

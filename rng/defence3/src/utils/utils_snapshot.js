@@ -234,7 +234,7 @@ const SNAP_SKIP_KEYS = new Set([
     '_statsVer', '_spatialKey', '_spatialMember', '_spatialAreaId', '_spatialAreaOwner', '_spatialUnitTypeIdx', '_spatialLastVisScaled', '_spatialTile', '_spatialOwner', '_spatialEpoch',
     '_damageFlashStart', '_damageFlashUntil', '_damageFlashStrength', '_damageFlashColor', '_ambientSoundTicks',
     '_historyGhost', '_historyTick', '_droppedIndex', '_areaBucketId', '_laserLinkLevel', '_r3d', '_r3dSig', '_r3dTex', '_visStill', '_r3dStatic', '_rslot', '_sslot', '_pslot', '_fpPath', '_fpTile', '_fpIdx', '_fpVer',
-    '_detSortStamp', '_laserDmgSeen',
+    '_detSortStamp', '_laserDmgSeen', '_mli',
     '_vsGen', '_vsR', '_vsA', '_vsP1', '_vsP2', '_vsAreas', '_vsListId', '_okTile', '_okVer', '_okNodeTile', '_okNodeVer', '_pendingDueStamp', '_thingStatsRefreshStamp', '_effectiveStatsStamp',
     // (Charges already made this tick: nothing between ticks.)
     '_astarLastChargedTick', '_astarLastChargedFromKey', '_astarLastChargedToKey'
@@ -2501,7 +2501,7 @@ function snapDecodeState(S, options = null) {
             }
             // Indexes built from cell owners (hostile structures) rebuild.
             _tileEntityVersion++;
-            if (typeof _wsTypeVer !== 'undefined') _wsTypeVer[0]++;
+            if (typeof _wsjAll === 'function') _wsjAll();
             if (typeof tileEntityIndexesReset === 'function') tileEntityIndexesReset();
             if (typeof simMoveStructsReset === 'function') simMoveStructsReset();
         }

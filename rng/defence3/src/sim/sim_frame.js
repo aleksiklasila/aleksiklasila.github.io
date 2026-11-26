@@ -249,7 +249,7 @@ function simFrameEncode() {
     const compact = count >= 5000;
     // Slots first (a new unit takes one), so the size is known.
     let live = 0;
-    for (let i = 0; i < count; i++) { let u = list[i]; if (!u._us.dead[u._si]) { _simRenderSlotOf(u); live++; } }
+    for (let i = 0; i < count; i++) { let u = list[i]; if (u._us && !u._us.dead[u._si]) { _simRenderSlotOf(u); live++; } }
     let n = R.owner.length;
     let cap = Math.max(64, n);
     let buf = _simFrameAcquire(simFrameBytes(cap), SIM_PAR_SHARED);
@@ -261,7 +261,8 @@ function simFrameEncode() {
     for (let i = 0; i < count; i++) {
         let u = list[i];
         const C = u._us, slot = u._si;
-        if (C.dead[slot]) continue;
+        // (Detached and not yet out of the list: units a scene import let go before the first frame.)
+        if (!C || C.dead[slot]) continue;
         let s = u._rslot;
         R.stamp[s] = stampTick;
         if (!orderChanged && _simFrameOrderLast[k] !== s) orderChanged = true;
@@ -345,15 +346,27 @@ const SIM_DETAIL_FIELDS = ['pathIndex', 'workerTargetType', 'effectiveStacks', '
 const SIM_DETAIL_REFS = ['targetUnit', 'targetBuilding', 'attackTarget', 'workerTarget', 'forcedAttackTarget', 'target'];
 const SIM_DETAIL_STATS = ['preComputed', 'basePreComputed', 'preComputedEffective', 'preComputedBase'];
 let _simWatched = [];
+// (A stats object's plain copy once a call: a selection's units of one type
+// and level share their table's objects; four for-in copies a unit a tick were
+// most of the details' cost.)
+const _simPlainStatsMemo = new Map();
 function _simPlainStats(o) {
     if (!o || typeof o !== 'object') return null;
-    let out = {};
+    let out = _simPlainStatsMemo.get(o);
+    if (out) return out;
+    out = {};
     for (let k in o) { let v = o[k]; if (v === null || typeof v !== 'object' && typeof v !== 'function') out[k] = v; }
+    _simPlainStatsMemo.set(o, out);
     return out;
 }
+// (Each watched unit's path as last sent (array, first node): an unchanged one
+// is sent as pathKeep and the page keeps its copy (sim_client.js
+// _simClientApplyDetails). Forgotten at every new watch list.)
+let _simDetailPathSent = new WeakMap();
 function simFrameDetails() {
     if (!_simWatched.length) return null;
     let R = typeof _simPresentation !== 'undefined' && _simPresentation ? {owner:_simUnitState.owners} : _simRenderSlots, out = [];
+    _simPlainStatsMemo.clear();
     for (let j = 0; j + 1 < _simWatched.length; j += 2) {
         let id = _simWatched[j], slot = _simWatched[j + 1];
         let u = slot >= 0 ? R.owner.at(slot) : null;
@@ -366,17 +379,23 @@ function simFrameDetails() {
         for (let k of SIM_DETAIL_STATS) d[k] = _simPlainStats(u[k]);
         let p = typeof unitDisplayPath === 'function' ? unitDisplayPath(u) : u.path;
         if (Array.isArray(p)) {
-            let from = Math.max(0, (u.pathIndex | 0) - 1), pts = new Float32Array(Math.max(0, p.length - from) * 2);
-            for (let i = from, q = 0; i < p.length; i++) { pts[q++] = p[i] ? p[i].x : 0; pts[q++] = p[i] ? p[i].y : 0; }
-            d.path = pts; d.pathFrom = from; d.pathLength = p.length;
-        } else d.path = null;
+            let from = Math.max(0, (u.pathIndex | 0) - 1), sent = _simDetailPathSent.get(u);
+            if (sent && sent.p === p && sent.from === from && sent.len === p.length) { d.path = null; d.pathKeep = 1; }
+            else {
+                let pts = new Float32Array(Math.max(0, p.length - from) * 2);
+                for (let i = from, q = 0; i < p.length; i++) { pts[q++] = p[i] ? p[i].x : 0; pts[q++] = p[i] ? p[i].y : 0; }
+                d.path = pts;
+                if (sent) { sent.p = p; sent.from = from; sent.len = p.length; } else _simDetailPathSent.set(u, { p, from, len: p.length });
+            }
+            d.pathFrom = from; d.pathLength = p.length;
+        } else { d.path = null; _simDetailPathSent.delete(u); }
         let pt = u._pendingPathTarget;
         d._pendingPathTarget = pt ? { gx: pt.gx, gy: pt.gy } : null;
         out.push(d);
     }
     return out;
 }
-function simFrameWatch(list) { _simWatched = Array.isArray(list) ? list.slice(0, 1024) : []; }
+function simFrameWatch(list) { _simWatched = Array.isArray(list) ? list.slice(0, 1024) : []; _simDetailPathSent = new WeakMap(); }
 
 // ---- page side ----
 
@@ -468,7 +487,8 @@ class PageUnit {
     _s = -1;
     _last = -1;     // its gone record, once dead (pageGonePut)
     _det = null;    // detail record (watched units)
-    _at = null;     // attackTarget's point, made at its first read
+    _detSeq = 0;    // the details message it last had one in (sim_client.js _simClientApplyDetails)
+    _at = null;    // attackTarget's point, made at its first read
     _ox = undefined; _oy = undefined;
     constructor(id, slot) {
         this.id = id;

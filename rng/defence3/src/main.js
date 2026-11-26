@@ -4516,6 +4516,10 @@ function simMatchPrepare() {
     if (typeof _wswStep === 'function') _wswStep(0, false);
     if (typeof _laserMapBuild === 'function') _laserMapBuild();
     if (typeof _navProfilesInUse === 'function') for (const p of _navProfilesInUse()) navEnsure(p);
+    // (The acquisition's arrays at their match sizes, their pages written: unit.js acqReserve.)
+    if (typeof acqReserve === 'function') acqReserve();
+    // (The worker brains' sites and distance fields of the loaded world: worker.js workerBrainsPrewarm.)
+    if (typeof workerBrainsPrewarm === 'function') workerBrainsPrewarm();
 }
 function orderQueueReserve() {
     if (!_orderEntryPoolReady) {

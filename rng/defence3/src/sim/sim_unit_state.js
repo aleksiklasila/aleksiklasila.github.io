@@ -2251,6 +2251,12 @@ function _simRelayoutArrays(S) {
     }
     return R;
 }
+// The relayout's tables made ahead (the match's start: sim_worker.js), not in its first step.
+function simUnitStateRelayoutPrewarm() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!SIM_RELAYOUT || !S || !S.cap || !S.sl) return;
+    if (_simRelayoutArrays(S)) _simSlotZeroTable(S);
+}
 // Whether a step may move slots now: no job reading the columns or the
 // index by slot, no plan open, the books and kernels there.
 function _simRelayoutReady(S) {
@@ -2328,7 +2334,7 @@ function simUnitStateRelayoutStep() {
     Q[0] = nsl; Q[1] = sl.nk; Q[2] = sl.kw; Q[3] = sl.kh; Q[4] = TILE * SIM_SLAB_KEY_TILES * SIM_POS_SCALE;
     Q[5] = Math.max(SIM_SLAB, Math.ceil(shares * live * Math.max(1, SIM_RELAYOUT_EVERY) / Math.max(1, SIM_RELAYOUT_PERIOD)));
     Q[6] = SIM_SLAB_SLACK_SHIFT; Q[7] = slabLimit; Q[8] = SIM_RELAYOUT_STRESS ? 1 : 0; Q[9] = R.steps & 1; Q[10] = R.maxPairs; Q[11] = R.scr.length;
-    simRustDirect('k_relayout_plan', [sl.sfree, sl.home, sl.bits, sl.used, sl.ever, sl.cur, R.score, C.live, C.dead, C.x, C.y, R.pairs, R.scr, sl.heads, sl.entries, R.hdr], Q);
+    _simRelayoutPlan(S, R, Q);
     const H = R.hdr, n = H[0];
     if (!(H[4] > 0)) { R.last = 0; return 0; }
     // (The lists: made again by the planner.)
@@ -2339,6 +2345,8 @@ function simUnitStateRelayoutStep() {
     R.steps++; R.moved += n; R.last = n;
     return n;
 }
+// (The planner, k_relayout_plan; a function of its own for ?simtrace=1.)
+function _simRelayoutPlan(S, R, Q) { const sl = S.sl, C = S.columns; simRustDirect('k_relayout_plan', [sl.sfree, sl.home, sl.bits, sl.used, sl.ever, sl.cur, R.score, C.live, C.dead, C.x, C.y, R.pairs, R.scr, sl.heads, sl.entries, R.hdr], Q); }
 // The moves of pairs[0 .. 2n): the columns and the handles' table, then every
 // slot's references to the moved slots (both on the helpers).
 const _simRlIxP = new Float64Array(8);

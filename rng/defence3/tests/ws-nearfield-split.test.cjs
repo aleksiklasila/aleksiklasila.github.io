@@ -19,8 +19,9 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
         simParallelBackgroundWait(WS_LANE);
         const out = [];
         for (const G of _wsGroupById) {
-            if (!G || !G.arrays.nf || !G.nfList || !G.nfList.length) continue;
-            const pairs = G.nfList.map(o => G.id * 16 + o), tiles = GRID_W * GRID_H, P = new Float64Array(64), K = SIM_KERNELS[SIM_KERNEL_WS_NEARFIELD];
+            // (A group with spawners: its fields are looked at; field slot = owner.)
+            if (!G || !G.arrays.nf || !_wsgS.slots || !G.np) continue;
+            const pairs = Array.from({ length: _wsgS.slots }, (_, o) => G.id * 16 + o), tiles = GRID_W * GRID_H, P = new Float64Array(64), K = SIM_KERNELS[SIM_KERNEL_WS_NEARFIELD];
             const live = G.arrays.nf.slice(0, pairs.length * tiles);
             P[0] = pairs.length; P[1] = GRID_W; P[2] = GRID_H; P[63] = _wsPostEpoch;
             pairs.forEach((p, i) => { P[3 + i] = p; });
@@ -29,13 +30,13 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
             const one = G.arrays.nf.slice(0, pairs.length * tiles);
             // (The two-stage whole form, every field flagged to be made whole.)
             const NFA = G.arrays.nfa, keep = [];
-            for (let s = 0; s < 16; s++) { keep.push(NFA[s * WS_NFA_W + 2]); NFA[s * WS_NFA_W + 2] = 1; }
+            for (let s = 0; s < pairs.length; s++) { keep.push(NFA[s * WS_NFA_W + 2]); NFA[s * WS_NFA_W + 2] = 1; }
             G.arrays.nf.fill(12345, 0, pairs.length * tiles);
             const rowJobs = Math.min(64, GRID_H), colJobs = Math.ceil(GRID_W / WS_NF_COLS), per = Math.max(rowJobs, colJobs);
             P[61] = Math.ceil(GRID_H / rowJobs); P[60] = WS_NF_COLS; P[59] = per;
             for (const mode of [1, 2]) { P[62] = mode; for (let c = 0; c < pairs.length * per; c++) K(_simParReg, P, c); }
             const two = G.arrays.nf.slice(0, pairs.length * tiles);
-            for (let s = 0; s < 16; s++) NFA[s * WS_NFA_W + 2] = keep[s];
+            for (let s = 0; s < pairs.length; s++) NFA[s * WS_NFA_W + 2] = keep[s];
             G.arrays.nf.set(live);
             let diffLive = 0, diffTwo = 0, reached = 0, first = -1;
             for (let i = 0; i < one.length; i++) {
@@ -43,7 +44,8 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
                 if (one[i] !== two[i]) diffTwo++;
                 if (one[i] !== 0xFFFFFFFF) reached++;
             }
-            out.push({ group: G.id, pairs: pairs.length, reached, diffLive, diffTwo, first, a: first >= 0 ? one[first] : null, b: first >= 0 ? live[first] : null, full: keep.slice(0, pairs.length) });
+            const mc = workerSearchMirrorCheck();
+            out.push({ mirrorDiff: mc.diff, group: G.id, pairs: pairs.length, reached, diffLive, diffTwo, first, a: first >= 0 ? one[first] : null, b: first >= 0 ? live[first] : null, full: keep.slice(0, pairs.length) });
         }
         return out;
     };
@@ -76,6 +78,7 @@ const CONTROLS = { ...H.SMALL_MATCH_CONTROLS, 'cfg-mapsize': '64' };
     assert.ok(rounds.some(r => r.groups.length > 0), 'a group with near fields');
     let incremental = 0;
     for (const r of rounds) for (const g of r.groups) {
+        assert.equal(g.mirrorDiff, 0, 'the mirror kept = made whole');
         assert.ok(g.reached > 0, 'its fields reach tiles');
         assert.equal(g.diffTwo, 0, 'two stages = one (group ' + g.group + ')');
         assert.equal(g.diffLive, 0, 'the kept field = made whole (group ' + g.group + ', first ' + g.first + ': ' + g.a + ' vs ' + g.b + ')');

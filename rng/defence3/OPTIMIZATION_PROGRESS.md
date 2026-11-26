@@ -11179,3 +11179,572 @@ stats later); sizes near the pre-session ones and varied by strength (King large
   The scene's units are larger now (Snake 12 -> 24 px, Boss 20 -> 28, King 20 -> 32, Norm 12 -> 16): blocked or
   clipped 41.9k a tick vs HEAD's 29.6k, 465 of its units find no place at the import. To be measured on a quiet
   machine (and the code alone: new code with HEAD's radii vs HEAD).
+
+## 2026-11-25 - rendered fuzz on the checkerboard scenes: a 13-14 s shader link at the first near effect, watched units' details, first-sight 3D textures (tests/test-runs/spikes-20261125/)
+
+User: continue removing FPS / TPS spikes with simulation and rendering on, in a checkerboard chaos scene, with fuzzed
+UI / camera / game actions.
+
+**Tools (tests/test-runs/spikes-20261125/).** `fuzzdrv.cjs` (PAGENODE of .claude/scene_tps_probe.cjs, PAGEACT_EVERY=1):
+a continuous seeded random player with real input (pans, wheel bursts, orbits, boxes incl. whole field, moves, Shift /
+Control chains, attack moves, stop / hold, control groups, view buttons, minimap clicks, Escape, clicks, hovers), a
+frame recorder (every rAF time; `GAP <ms>` user-timing marks on frames over 50 ms for traces) and an action log;
+`fzdump.js` (DUMP: SIMTRACE rows with each step's absolute start `at` (sim_worker.js trace rows carry it now), FRAMES,
+ACTIONS); `fzsum.cjs` (step / frame percentiles, ticks a second by 2 s, slow steps and long frames with the actions in
+the 1.5 s before them); `slice.cjs` (slow steps: timed phases only, against prev / next and a same-dk reference);
+`rafruns.cjs` (long rAF callbacks in a page profile, their functions); `framesprof.cjs`; `traceslim.cjs` (a 700 MB
+trace cut to what tracegap.cjs reads); `bigchain.cjs` (scn.bigSelectRally with real input); `shadercompile.cjs` +
+`v_*.js` (a GLSL program's link time in a fresh Edge context, variants); `tfcheck.js` (PAGEEVAL: the near effects'
+feedback output, this tree vs HEAD's program, every kind x style x phase); `detprobe.js` (WEVAL: simFrameDetails'
+parts). scene_tps_probe.cjs: `PPROF=<file>` a page-only CPU profile (PPROF_AT: the page clock at its start).
+
+**1. The first near combat effect froze the page for 13-14 s (fixed).** The near effects' transform-feedback program
+(renderer3d.js fxNearVertexGlsl, every effect kind's shapes through emit()) was linked at the first near entry, and
+createProgram's LINK_STATUS waited for ANGLE's D3D compile on the page thread: 14.4 s busy in getProgramParameter at
+the start of every rendered run (page profile), 12.7 s in a fresh context (shadercompile.cjs). The cost is the
+inlined emit() sites, super-linear: without event() 0.6 s, without shot() 7.9 s, one kind alone 0.06-0.6 s (sum
+~2.5 s); packing emit's outputs into 4 vec4 with a select only halved it (6.4 s). Now a program a kind group
+(FX_NEAR_GROUPS: [1, 12], 2 ... 11, 13 = shot; event()'s blocks as EV entries of the generator), all made in
+prewarmPrograms (match load / first 3D frame) with deferred links (createProgram deferLink; createShader noWait: its
+COMPILE_STATUS also waited, ~20 ms a shader) and used once KHR_parallel_shader_compile's COMPLETION_STATUS_KHR says
+so (a group still compiling draws nothing meanwhile; linkProgramChecked reports a failure with the shaders' logs). The
+mesh-draw program likewise. drawFxNear counting-sorts the entries by group (R.order), one feedback draw a group into
+its range (uBase, bindBufferRange), the mesh pass as before over all pieces. **Exact:** tfcheck.js, 1664 synthetic
+entries (13 kinds x 16 styles x 4 phases x detail on/off, shuffled) through the real drawFxNear: all 13,312 pieces
+equal to HEAD's program's (3,258 non-empty); the groups were done before play began; HEAD's link 13.3 s.
+
+**2. Watched units' details (sim thread, fixed).** simFrameDetails (up to 256 selected units every tick) walked each
+flow unit's display path anew every tick (unitDisplayPath cached per tick: navPath = 64 nav_atlas_step wasm calls and
+64 nodes a unit) and copied four stats objects by for-in a unit. Now: the display path cached while the unit's tile,
+route end, profile and the navigation (nav.version) are the same (the same walk); a path sent unchanged goes as
+pathKeep (the page keeps its arrays, sim_client.js _simClientApplyDetails; forgotten at every new watch list); stats
+copied once a call per object (_simPlainStatsMemo); navPath's open stretches one wasm call each (atlas.rs
+nav_atlas_path: atlas_step_h with its own run hint, the movement look-ahead's walk; a wall's step-out stays navStep).
+Measured in the worker (detprobe.js, 256 new watched flow units): details 4-8.6 ms at a new list, 3 ms unchanged;
+navPath x256 2.8 ms for 16,384 nodes. Rendered checker-200k fuzz: details p95 1.3 ms, max 6 (it was up to 8.9 ms
+every tick with a big watched selection, bc-1). Spikes of 36-58 ms on a new selection seen on checker-300k (c3-1/2/3)
+did not come back under a worker profile (max 5.9 ms): likely a GC landing in it (worker GC 160 ms in 73 s, pauses
+12-21 ms).
+
+**3. A scene's first frame crashed simFrameEncode (fixed).** Units the scene import let go were still in `units` with
+_us null at the 'started' frame: "Cannot read properties of null (reading 'dead')" (fuzz page error). Skipped there.
+
+**4. First-sight 3D textures (page, fixed in part).** Camera jumps (minimap) into a spawner-dense area: rAF callbacks
+of 88-101 ms in structureStep, canvas text (fillText 32 ms) for spawners' queue badges (get3DStatusTexture) and
+production miniatures' tops (get3DUnitTopTexture). The badge was cached by the raw count though every count past 99
+draws '99+': keyed by what it shows now (0-99, 100). prewarm3DTopTextures (match load and the first 3D frame, again
+after the caches are cleared): counts 0-100, the status faces, unit types x players. checker-300k: that jump's frame
+208 -> 158 ms; the rest of it is exact-2D panels (17 ms, already budgeted per frame), other top textures (14 ms) and
+render (38 ms).
+
+**Measured (rendered headed Edge, fuzzdrv, 90-100 s).** checker-200k-r0 before (fz-2): page busy 14.4 s at the start;
+frames p99 41.5 ms, 15 over 50 ms, 4 over 100; after (fz-5, other seed): FPS 112, p99 17 ms, 6 over 50, 1 over 100 (a
+249 ms frame with no long page callback: GPU / compositor side). Steps: p99 64-71 ms, max 72-79, every step over 70
+ms a dk 2 step (two ticks of work; the step mean ~47-49 ms is at the 50 ms budget). checker-300k-l16 (c3-3): steps p95
+55, p99 59, one 101 ms step (the details case above); FPS ~80-85, p99 33 ms; long frames after minimap jumps and
+orders.
+**Order steps (bigchain.cjs, whole field + Control chains, checker-200k):** processActions 7.5-11.8 ms on order steps
+(kp:134 5.9, kp:115 2.5-3.3) - the known whole-army order cost (2026-11-17/18 rounds); no TPS drop in ticks a second
+(the fuzzer's "tps 20 > 10" for scn.bigSelectRally counts steps, which go to dk 2).
+**Left:** worker-search posts with collector-group rebuilds (_wsPost p95 3.9 / max 5.5 ms, _wsCollectorGroup p95 2.3:
+serial k_ws_buckets and near fields on the sim thread at every structure change of a type; incremental patch from the
+type log next); one 49 ms simFrameEncodeState step on checker-300k (not reproduced; research queue / flat maps encode
+suspected: needs a worker profile at that moment); page _uSlotGrow regrowth (17-21 ms, a few times a match: ~259
+bytes a slot, so not preallocated to the slot capacity); first-sight exact-2D panels and top textures besides the
+prewarmed set; spawner miniature and panel texture uploads (texSubImage2D 9-12 ms in a jump's frame); 250 ms frames
+with an idle page (GPU process: to trace with gpu categories).
+
+**5. The slot relayout's tables at the match's start (fixed).** Every rendered run's step 2 had a 19-58 ms relayout:
+_simRelayoutArrays allocating and zero-filling its slot-capacity tables (19 ms) and binding them, at the first
+relayout step. Now simUnitStateRelayoutPrewarm (sim_worker.js start, after the navigation builds) makes them and the
+slots' zero table. The relayout's parts are traced now (_simRelayoutPlan: k_relayout_plan in a function of its own,
+_simRelayoutApply, _simRelayoutIndex, _simRelayoutArrays, _simSlotZeroTable, acqTierIndexWait,
+simUnitStateSlabsBind). checker-300k rl-2: the step-2 relayout 24 ms (apply 16: the first plan's moves), later ones
+5-7 ms. Two mid-run relayout steps of 31 / 52 ms (c3-1 #259, gl-1 #241) did not come back in the traced runs.
+**GL status waits during play: none.** fuzzdrv wraps getProgramParameter / getShaderParameter (GLWAITS, calls over 5
+ms with callers): 70 s of view switches, zooms, orbits, boxes, orders, minimap on checker-300k: none.
+**A scene's first steps (open, load-time):** after importing checker-300k the first steps are 1039 / 144 / 211 / 115 /
+137 ms (step 0: spatialIndexRebuild 555, simMoveRun 172, unitEventsRun 153; step 2: the first worker-search post 56
+with its collector groups 17; step 3: unitHitsResolve 46; step 4: the first search's commit waiting 59 ms on its
+lane). They scale with the imported units (a real match starts with its starters), but a mid-game restore / rejoin
+pays them: to prewarm or spread (index built at the restore, first search posted then).
+Tests: combat-effects, nav-chain-lifecycle, multiplayer-chaos-determinism (4 maps, 2610 hashes each),
+shared-spatial-determinism (0 vs 7 helpers), slot-relayout, slot-locality, chaos-scenario-determinism pass.
+
+### 2026-11-25 (later) - a scene's first step, worker glyphs, Graphite's first pipelines, new targets
+
+User: go on finding and fixing targets; the first-step hitch after a load / restore may take a little time (rare) as
+long as multiplayer stays in sync, but as optimized as possible.
+
+**The first step's unit index was the serial JavaScript build (fixed): step 0 1039-1080 -> 477 ms (checker-300k).**
+Traced parts (the index rebuild's, the worker search post's, the publish's now in sim_worker.js SIM_TRACE_FNS):
+step 0's spatialIndexRebuild 551 ms was _spatialIndexRebuildSerial: k_ix_keys flags a listed unit without a state slot
+(ix.bad) and the build falls back. The scene import (utils_solo_snapshot.js) listed units simSpawnUnit could not place
+(no footprint: made dead and detached) through unitAdded, as loose rows with slot -1; the retire pass removed them only
+after the first tick (and the first frame's encode met their null state: fix 3 above). They are skipped now, as the
+starter spawns already did; the same for the population adjustment's spawnUnitNearUnit (unit.js). In Node (tickbench)
+the import's first ticks were ~40 ms already (no hitch there). Left of the first steps: 477 / 99 / 184 / 90 / 96 ms
+(movement and events' first pass over every unit; the first worker search post and its groups; the first hits; the
+first take). The first search is every imported worker at once (wsT = the registration tick, due at the first post:
+180k requests, k_ws_order's ordering and pre-claim one 48 ms job): only after a scene import; a snapshot restore
+carries each worker's wsT.
+
+**Worker panels' status glyphs (fixed).** TEXMISS (fuzzdrv wraps the page's texture makers: misses by maker and key,
+count, ms): a researcher's unit panel 11.8 ms, a builder's 5.8, a healer's 4.8, the glyph sprite 6.6 ms of it: the
+status glyphs (★ ☆ ⚡ 🔨 + R) are drawn with the emoji font, whose first text is slow. unit.js prewarmUnitStatusGlyphs
+(UNIT_STATUS_GLYPHS, the fixed set Unit.draw uses) from prewarm3DTopTextures, which now runs for the 2D view too.
+After: no panel or glyph over 5 ms in TEXMISS (the largest a watch tower's panel 4.9 ms, once).
+
+**First-selection frames of 210-250 ms: Skia Graphite's first pipeline, a fresh-profile artifact (not fixed).** A
+whole-field box select (80k units, 19k structures) made one 216-250 ms frame at its first time only (then 17-25 ms).
+Hiding #right-panel removed it (49-58 ms); prepainting the info panel's sections (warm, rows un-hidden, thumbnails set)
+did not. The trace (gpulong.cjs: the GPU main thread's longest task and what nested in it): RendererRasterWorker ->
+DoEndRasterCHROMIUM::Flush 183 ms -> graphite CommandBuffer::addRenderPass 164 ms: a new raster pipeline compiled.
+With a persistent browser profile (scene_tps_probe.cjs USERDIR=<dir>) runs 2 and 3 are 65 / 58 ms: the pipeline is in
+the GPU disk cache, a player pays it once. Rendered runs with fresh profiles overstate first-use GPU compiles
+(including the near effects' shader link: ANGLE caches program binaries on disk too, but each new shader text compiles
+again, so that fix stands).
+
+**Ruled out:** Edge's JIT is on for the served page (jitcheck.cjs); 8 / 12 Edge workers run a tight loop as fast as
+Node's worker_threads (parcheck.cjs, 443-497 vs 417-547 ms): no throttled helpers; the rendered movement kernel's
+higher cost is contention with drawing, as measured before. Economy / UI fuzz (perf-fuzz --only=economy,ui, 5 min,
+checker-200k): TPS 20, FPS ~120, the flagged trials mild first uses (scores 1.1-1.4). No GL status waits in play.
+
+**Targets measured, next:**
+- Worker search post (checker-200k / rmax): every ~3rd step, p50 2.4 / p95 5 ms on the simulation thread; collector
+  groups rebuilt at nearly every post in a battle (437 of 442; p50 1.2, p95 2.8, max 6.5 ms): k_ws_candidates (a scan
+  of the code grid at every structure change), k_ws_group, the serial k_ws_buckets and the near-field decisions in
+  JavaScript between them. To move: the build as stages at the head of the search lane's chain, tables sized at the
+  match's start, the near-field decisions into a kernel.
+- simPresentationPublish p95 4, max 6.5 ms: _simPresentStructureChanges (JavaScript per changed structure tile:
+  instanceof, grid look-ups) - to the structure tables in wasm.
+- rmax scene: step mean 51.7 ms (over the 50 ms pace: dk 2 often), its slow steps the movement kernel's bursts.
+Tests: scene-orders, starting-spawn-limits, spawn-births-columns, unit-retirement, combat-effects, static-panel-edge
+(Edge), multiplayer-chaos-determinism pass.
+
+### 2026-11-25 (later) - the collectors' groups off the simulation thread (journal, mirror, lane stages)
+
+User: continue from the last round (its next target: the worker-search post's collector-group rebuilds).
+
+**Was:** every search post (every ~3rd step) with a change of a group's types made both groups again on the simulation
+thread: k_ws_candidates (a scan of the code grid), k_ws_group (two parallel dispatches waited for), the serial
+k_ws_buckets and the near-field decisions in JavaScript. In a battle that was nearly every post (rmax rm-1:
+_wsCollectorGroup p50 1.19, p95 2.83, max 6.47 ms; _wsPost p50 2.25, p95 5.07, max 9.13).
+
+**Now (worker.js _wsg*, wasm/src/wsb.rs, data_state.js _wsj):**
+- A **tile journal**: every write of a structure entry's code, owner, under-construction flag or type marks its tile
+  (_stClear, _stWrite, _stUcSet, the owner setter, stationaryBrainChanged on a type change, the destroy kernel's
+  batch, workSiteBuilt for the worker kernel's completions, which write st.uc in wasm: wai.rs p_complete). A flag a
+  tile, so the list (the map's tiles) never fills. A new table, a reset or a restore makes the mirror whole.
+- A **tile mirror** (a u32 a tile: type, kind, under construction, owner), brought up to date at the post by
+  k_ws_mirror from the journaled tiles alone (on this thread, O(changes)): the groups whose tiles (or type ids)
+  changed are listed. Energy is not in the word (a structure leaves the table when it runs out; mines in the take's
+  pass): a word of journaled fields only, so a restoring peer's whole mirror equals a running peer's kept one
+  (workerSearchMirrorCheck; 0 tiles differ in the tests' rounds and after 3 s of checker-200k-rmax, 25,976 set).
+- **The groups made on the search lane**: three stages at the head of its chain (k_ws_gbuild: counted in stretches of
+  65,536 tiles, written in tile order, then buckets / spawners by bucket / rank arrays / field slots), only for the
+  changed groups; the near fields' pairs the changed groups' (field slot = owner: 0 .. players - 1, at most 16 and 56
+  pairs). Their arrays are the match's (_wsgEnsure from workerSitesReserve: sites at most the structure rows and
+  mines, spawners the structure rows, bound once): no growth or binding at a post.
+- A construction finished reaches the next post's group through the journal (the old epoch publication and
+  workSiteBuilt's in-place patch of the groups are gone); a search in flight keeps the groups it was posted with.
+- Gone: _wsGroupBuild, _wsNearField, _wsCollectorGroup, _wsTypeVer, k_ws_group (ord.rs), k_ws_buckets; the chain's
+  stage slots renumbered (0-2 groups, 3 eligibility, 4-6 near fields, 7 scan, 8 order, 9 return spawners).
+
+**Measured (rendered headed Edge, checker-200k-rmax, fuzzdrv, 100 s, rm-a vs rm-1):** _wsPost p50 2.25 -> 0.98, p95
+5.07 -> 1.89, max 9.13 -> 3.12 ms (458 posts; both groups made again at 447 of them, now on the lane); _wsgPrepare
+(the mirror) under the trace's floor but at 2 steps (0.3 / 0.5 ms); the commit's lane wait unchanged (_wsCommit p50
+1.03, p95 1.73 vs 0.99 / 1.84). Whole run: steps mean 46.6, p95 65.0, p99 69.4, max 81 (rm-1: 51.7 / 70.4 / 79.9 /
+124; rendered runs vary by more than this change's ~0.5 ms a step, so not claimed). Memory: 61 MB on the 512x512 map
+(both groups' arrays sized by the map's 262k tiles, which bound the structure rows there; nf 2 slots).
+Tests: worker-completion-publication (rewritten for the journal: in-flight search unchanged, next post finished, no
+rebuild without a change, reset = same group, mirror = whole; 0 and 3 helpers), ws-nearfield-split (+ mirror check),
+collector-farms, area-worker-search, area-search-range, worker-search-deltatick, worker-take-rounds,
+worker-brain-spawners, builder-research-resume, multiplayer-late-carry-restore, multiplayer-chaos-determinism (4
+maps, 2610 hashes, forced resyncs), chaos-scenario-determinism (0 / 3 helpers), structure-rows-fill, combat-effects,
+unit-retirement, scene-orders, worker-fallback-upgrade pass. Tools: tests/test-runs/wsgroup-20261125 (phstat.cjs:
+per-phase n / p50 / p95 / max from a SIMTRACE run).
+**Left:** the rest of the post on this thread (the select's two dispatches, the healers' candidates in JavaScript,
+_wsSnapshotReturnSpawners); _wswStep (p95 1.3, max 3.5); the groups' arrays could be smaller (the tile-order spawner
+arrays are a build's scratch: shared between groups if their stages ran apart); simPresentationPublish's structure
+changes (p95 4 ms); rmax movement-kernel bursts.
+
+### 2026-11-25 (later) - the structure publish's slots in wasm, column pointer checks, a class table kept
+
+User: keep looping (pick a target, optimize, measure, next).
+
+**Picked from rm-a / rp1 (rendered checker-200k-rmax, worker profiles):** the phases at or over 4 ms most often were
+_simPostResult (104-125 steps in 90 s), combatScanRun (65-85, its kernels), the structure publish (40-64, max 8.8). On
+one-tick steps movement is p50 30 / p95 38 ms and everything else 15 / 20: the kernels are parallel already; the
+serial JavaScript left is small and spread. Movement (helper profile, named build): move_job 15% of helper CPU,
+traffic_swap 7, preview 6.5, checked_traffic_q 6, traffic_yield 3.5, commit_preview 3.2 - flat, as on 2026-11-17.
+
+**1. The structure publish's slots (sim_presentation.js _simPresentStructureChanges, nfs.rs k_pslot_changes).** Its
+JavaScript walked each changed tile (the tile journal as a sorted JavaScript array, the marked tiles with a dedupe of
+their own), found the tile's structure object (getTileEntityRef, instanceof chains, hasSpawnQueue) and kept an
+entity-keyed slot map (owner[] of objects, e._sslot): 210 ms self + 80 of helpers in 90 s, about a third of the
+publish. Now the presentation slots are books in the heap (sim_frame_world.js _simStructSlots: psrc = meta class << 24 |
+row, -1 free; pser the serials; a free stack; per class a row -> slot table, its address in the meta class table's
+words 54 / 55; H: made, free, membership version, serial counter, room), and one kernel takes the journal's ring
+entries since the last publish and the marked tiles (each once: mark 2), frees the slot of a structure gone from its
+tile (by the shown table's gx / gy), gives the tile's structure (a tabled tower, barrack, spawner or floor item on its
+anchor tile: ctab / rrow / _stT) its slot, sets the tile's slot, lists the slot for its row and logs it (the log ring
+and the dirty list are heap arrays now). The rows: k_meta_structs over the list, as before. The metadata cycle and the
+first frame take slots through the same books (slotOf by class and row: once at a journal restart); rally and turret
+angle look-ups by slotOfLive. A structure without a table row has no slot now (its row was never written).
+**2. _sColPtrsKept (data_state.js):** each call checked every column of the list by name against the kept arrays
+(T[cols[j]]): 376 ms in 90 s (spawner production, adjacency, worker classes). Now a table's column version
+(T._colVer: _sTableGrow and the override count's replacements bump it) is compared once.
+**3. The meta class table kept (_simMetaClsPrep):** made whole at every call (each class's ~45 column addresses
+through the heap's pointer map, its code tables through string normalization): kept per class while its columns
+(_colVer), its type pools' sizes and data, and the stat keys are the same; the row counts and row -> slot tables every call.
+**Measured (rendered, rm-b vs rm-a, 100 s):** _simPresentStructureChanges p50 2.5 -> 1.59, p95 4.54 -> 3.26, max 8.75 ->
+4.88 ms. The rest of the run differed by run-to-run spread (rm-b's game: kernels a few tenths of a ms each heavier,
+movement 0.9 ms lighter; steps mean 50.2 vs 46.6), not by these changes.
+Tests: meta-structs-kernel (19,419 changed rows equal the JavaScript reference's, its reference reading the new
+books), presentation-worker, -delta, -helpers, history-structure-columns, spawn-rally, structure-list-reuse,
+structure-render-hotspots, structure-row-expiry-snapshot, structure-row-reuse, snapshot-pooled-structure,
+mixed-rally-move, rally-helper-budget, structure-rows-fill, combat-effects, adjacency-dirty-set, adjacency-lane-carry,
+building-research-keys, spawner-production-pass, structure-adjacency-events, structure-stack-target, work-snapshot,
+static-panel-edge (Edge) pass. Tools: tests/test-runs/wsgroup-20261125/subself.cjs (self time inside a function's
+subtrees).
+**Left:** the rows themselves (k_meta_structs over the list, ~45 scattered class columns a row: ~0.35 s in 90 s);
+_waiMineGone (JavaScript per mine emptied, the mine lists' indexOf / splice: 129 ms self in 90 s); _acqPost's rare
+14.8 ms; spatialIndexRebuild's 11 ms; unitEventsRun max 7.
+
+**Looked at, not changed (same round):**
+- **The index lane's waits (w:6, up to 11 ms):** _spatialIndexCollect waits for the next tick's index prebuilt on
+  SIM_LANE_IX; on the steps it waits the chain is 3-4 ms old (ticks back to back while catching up: gap ~0, late > 0),
+  with 1-10 of its stages left (a whole build's radix stages when the build by changes was off). Real work under catch-up,
+  not a stall; one in-tick whole rebuild (13 ms, #668 of rm-b) did not repeat.
+- **Movement (prof build, rq1 helpers, under move_job 334 s of 639 s helper CPU):** traffic_swap 11.3% self,
+  checked_traffic_q 7.9 (51% inclusive), move_job 6.5, traffic_yield 6.0, step4 5.2, motion_f 5.0, occ_gather 4.9,
+  preview 4.4, paint 4.4, epi_slot 3.8: the same flat spread as 2026-11-17; traffic_swap is already a SIMD class
+  filter over chunk summaries, its cost the partners' checks.
+- **Page frames while zooming out (38-60 ms, ~1.3 s of a zoom burst; rafruns on rn1-page):** build3DFrameData 22-35 ms
+  (getChunkRenderView's per-unit detail cull, _unitDetailSplit, _detailScore, layerCollect, exact-2D panels) and render
+  10-19: spread, per-unit JavaScript per frame while the view changes (the cull key holds the view). The exact-2D
+  panels were 249 ms of the whole run (their budget 2 + 2 ms a frame; the units' fallback body panels unbudgeted but 12
+  ms in all). To move the detail cull to the presentation worker's buckets / the GPU: a design of its own.
+- _uSlotGrow (15 ms in one frame): doubles, a few times a match; preallocating costs ~259 bytes a sim slot of page
+  memory (left as is).
+
+### 2026-11-25 (later) - loop continued: mine lists, presentation and relayout looked at, MP GUI fuzz
+
+User: never stop looping (target -> optimize -> test -> next) unless told otherwise.
+
+**_waiMineGone (worker.js): O(1) out of its list.** Each emptied mine was found in its list by indexOf and spliced out
+(129 ms self in 90 s at checker-200k-rmax). Now by its place (mine._mli: every mine of the list indexed at once when
+its own is not right, after a load or a restore), the last one moved into it. The lists' order decides nothing (picks,
+drawing, nav sizing); every peer moves the same ones; a restore copies the order (_mli in SNAP_SKIP_KEYS). collector-farms,
+worker-take-rounds, multiplayer-chaos-determinism pass.
+
+**Looked at, not changed:**
+- Page long frames (>= 30 ms, longframes.cjs on rn1-page: 31 of them, mean 38 ms): build3DFrameData 20 ms (getChunkRenderView
+  4.2: its per-unit detail cull once a tick and at zoom jumps, held otherwise (_detailViewKey); _unitDetailSplit 1.9;
+  exact-2D panels 2.6), render 14 (drawColumnModels 7.9, _columnStoreUpload 2.7). buildFrameEffects 2.8 s in 90 s
+  (_pushCombatRecordFx: near records' positions by id each frame).
+- Presentation workers (named --pres build, PRES_OVERRIDE): ~59 s CPU in 90 s over four threads (about a core while the sim
+  has 9 threads on 8C/16T): k_pres_tail 12.5 s (change marks, block boxes), k_pres_p8 11.8 (facing), k_pres_order 4.8
+  (serial), block_box 4.3 - SIMD passes already.
+- chaos-500k-l16 (rendered, a test running beside it: timings indicative only): steps ~90 ms at dk 4, 20 TPS; after
+  movement the slot relayout 5.2 ms a step (SLOT_MOVE 2.8 + SLOT_REMAP 1.0, glue 0.45): the locality relayout's own cost.
+- FLOW_PENDING (Node march of both armies, checker-200k-rmax, march.js): 0.9 of 29 ms a tick; its records stream by
+  slot already (a pre-filter would read about as much).
+
+**Every match whose wasm heap passed 2 GiB threw at its first waiting unit (pathfinding.js _ppRun, fixed).** A two-tab
+hosted start at 100k (100000-1000.json) stood on "Preparing game state..." for good (browser-mp-gui-fuzz timed out;
+mpstart.cjs, tests/test-runs/wsgroup-20261125: each tab's start state every 5 s, warnings and errors in full): the
+host's worker failed its restore with `k_pp_due: profile 2 navigation array 0 not in the wasm heap`, the page's fallback
+the same. And mixed-1m-4teams ran no simulation at all: every tick threw the same (profile 1) after the unit index, so
+the "1M" scene measured an index rebuild a tick (step 12-15 ms; with the fix: 476k of the 1M left after 300 ticks of
+battle, 113 ms a tick in Node). The check tested the sign of the arrays' encoded words (_simWEnc): an address past 2 GiB
+is a negative 32-bit word, valid (the kernels read it unsigned). Now the heap pointers are tested (-1 outside), then
+encoded. (First read as a heap full: its stats said 0 MB free, which only means grown to fit.) The check came with 7e1b1781 (2026-11-21): measurements since then of scenes whose navigation arrays sat past 2 GiB (1M-scale) measured a frozen match; re-measure those. Also kept from the hunt:
+the error names the heap's state and the grid; flownav.js _navClassWalls and pathfinding.js _airWallTable make a cached
+table again when it is not in the heap; the collectors' groups' arrays sized by their counts (below).
+**The collectors' groups' arrays by their counts (worker.js _wsgRoom, wsb.rs k_ws_mirror's counts):** sized for the
+match's structure rows they were 80 MB at 100000-1000 (1024x1024: 315k rows) for ~9k sites. The mirror kernel keeps each
+group's sites and spawners (counted whole with the mirror, then by the changed tiles); a post makes a group's site or
+spawner arrays again, at 1.5x the count (4096 at least), only when the count passed their room (a few times a match),
+before the chain: the group made again then. The room limits the writes only (the groups are the mirror's, whatever the
+room): peers that grew at other posts (a restore) build the same groups. worker-completion-publication,
+ws-nearfield-split, collector-farms, worker-take-rounds, area-worker-search pass.
+
+**Held workers with a pending way: parked in the worker kernel (wai.rs event).** The real 1M battle (mixed-1m-4teams,
+rendered, fuzz; m1-c with a tally in the worker, waiout-weval.js): waiOutEvents p50 27 ms on the steps it ran, max 82;
+470k events in 100 s handed back to the JavaScript (_unitWorkerEvent 3.9 s), nearly all held workers on a player's move
+whose way was still pending (MANUAL_MOVE + mvPP + holdPosition: collectors 148k, builders 124k, astar collectors 88k,
+salvagers 82k): the kernel declined anything with a pending way before its held branch, and the JavaScript only looked at
+the pending target and armed it again, every tick. Now such a worker is parked as the held ones with a way are (a wake
+every SIM_IDLE_PARK_TICKS by id); released (stop) it goes on. held-move-workers.js (checker-200k-rmax: 90k workers held,
+then sent across the map, released after 150 ticks): declined while held 26,736 -> 231; the state hash at tick 330 and
+the workers' distances to the target held and after the release identical to the build without it (a6acff6a/260173ce).
+
+**The real 1M battle (mixed-1m-4teams, rendered m1-b / profiled m1p with a named build): what it spends.** Steps 122 ms
+mean at dk 3-7 (20 ticks a second held), p95 188. Helper CPU over 90 s (706 s busy): acquisition and the combat brains
+~33% (acq_sample area_batch 44.8 s, k_acq_area_answers 35.3, k_combat_brains 25.4 + 11.4, k_combat_brain 14.6, arq
+within 17.3, k_acq_snap 13.0, k_acq_area_count 10.5, pack / scatter / seed / sample / prefix ~26), movement ~21%
+(move_job 56, preview 31, traffic_swap 27, checked_traffic_q 22, move_pre 18), k_hits 25.3 (evenly over the threads;
+k_hits_apply twice the helpers' share on the simulation thread), k_vis_seed 19.4, k_status 14.4, k_eff_units 12.9. The
+acquisition lane's commit waits on it (w:2: 67 steps, p50 10 ms, p95 26). unitHitsResolve's serial part is small
+(k_struct_hits 0.67 s, k_hit_looks 0.18 s in 90 s).
+- k_acq_area_answers (four viewers x five answers a cycle, a multi-source spread over 120,736 areas / 688k edges each):
+  1.9 ms a spread on one thread (~2.3 ns an edge); its inputs (a viewer's cover row, the area mask, the structure seeds)
+  differed at every one of 300 calls a job (acq-answers-reuse.js, HELPERS=0): nothing to reuse exactly. Cheaper only by
+  answering less (structure answers less often, units holding a live target skipped): reaction-time trade-offs, not done.
+
+**MP GUI fuzz, headed, 75000-500 (browser-mp-gui-fuzz.cjs now takes HEADED=1):** 305 controls, no desync; two over 120
+ms: the jukebox's open (host long task 67 ms; 14 ms showModal alone in a solo tab: not reproduced) and a roster's select
+all (59 ms). ctlprobe.cjs (a solo match in headed Edge, controls clicked with real input, long tasks and a page profile
+each): "Select all owned units and buildings" 83 ms at its first click: selectInfoPanelPlayerRoster 64 ms
+(_getOwnedInfoPanelUnits 25: reading units made a view for every unit of every player first; _getOwnedInfoPanelBuildings 30).
+**The roster's units by the frame's owner column (hud.js _getOwnedInfoPanelUnits):** beside the worker, the frame's order
+and owner column pick them (the list's order), a view made for the owner's units alone: 25 -> 14 ms, the click's long
+task 83 -> 60 ms. Left: the buildings' half (32 ms: the structure lists, a Set, the cell items row by row; the
+structure table by slot would change the selection's order). research-menu, static-panel-edge pass.
+**The host's start waits for its model views first (utils_networking.js, load time):** a two-tab 100k start: 9-48 s the
+host's column atlas ("Preparing model views", the guests waiting for the world), 49-72 s the guest's load, 72-82 s
+its units into the simulation, then the countdown. The bake is the page's (GPU, async); the world is the worker's: to
+overlap them (the lobby's own bake covers it when the lobby waits long enough).
+
+**The structure publish's room (fix of the change above):** _simPresentStructureChanges made room for a new slot per
+listed tile before its kernel, and grew the shown table (a whole copy) when it lacked that much: a battle's thousands of
+marked tiles (rows written again, not new slots) did so (1M profile m1p: _simStructTableGrow 61.5 ms in 90 s; rm-c's
+5-8 ms publishes). The room asked for is now at most the structures the match holds (_simStructReserveCap: no more slots
+are live), and the slots' books are made that size at the match's start (simPresentStructReserve) instead of growing in
+play; a class's row -> slot table's encoded address is kept with it (re-encoded at every publish before).
+**Clean rendered checker-200k-rmax with the round's changes (rm-c):** steps mean 47.3, p50 46.3, p95 67.3, p99 75.2, max
+96 (rm-a 46.6 / 65.0 / 69.4 / 81; rm-b 50.2 / 69.6 / 77.3 / 103): within the runs' spread; FPS 95.
+
+**The 1M battle with the held workers parked and the publish's room fixed (rendered m1-e vs m1-b, 100 s each):** steps mean
+121.7 -> 105.0 ms, p50 115 -> 98, p95 188 -> 157, p99 217 -> 195, max 296 -> 225; unitEventsRun p95 52.9 -> 9.9, max 88.8 ->
+21.4; waiOutEvents mean 8.5 -> 0.75 ms a step; FPS 110.
+
+**The 1M battle's hits (unitHitsResolve, Node tickbench mixed-1m-4teams, 8 helpers, hits-dist.js):** 148,890 hits a
+tick (the movement's attack lists; 34-36k units touched, 15-16k status sub-records), 9.3-9.95 ms a tick on the
+simulation thread (p95 16): k_hits 5.5, k_hits_apply 1.3, k_struct_hits + its JS 1.4, the looks 0.9 (Node only: the
+worker defers their replay). k_hits on 9 threads took longer than on one (HELPERS=0: 6.7 ms for melee and shots
+together): every hit read the shared counters' line (the looks' cnt[1] / cnt[3]) while the threads added to it (the
+touch list's cnt[0] at each unit's first hit, the status sub-records' cnt[4]), and swapped its target's touch byte
+even when it was set already.
+- **Per-job blocks (k.rs HitLoc):** a job takes the touch list and the status sub-records 64 entries at a time (one
+  shared add a block), the touch list's unused entries -1 (the apply passes them over), the sub-records' left zero;
+  the sub-records taken counted in cnt[6], the status pool's reservation (it was the count of sub-records listed). The
+  touch byte is read before its swap; a job stops reading the looks' counters once it saw them full. Room for a part-used
+  block a job (unitHitsResolve sizes the jobs first). k_hits 5.51 -> 1.45 ms, the hits 9.27 -> 4.99 ms a tick (p95
+  15.95 -> 7.67, max 20.2 -> 9.3); state hash at tick 300 the same.
+- **The structure hits gathered by k_hits:** k_struct_hits scanned every attack list on the simulation thread
+  (149k entries the helpers had just written, for 2,214 hits on structures: ~1 ms of cache misses). k_hits' melee jobs,
+  which read every entry anyway, now write the structure hits' keys (attacker id << 25 | place) into hit.skeys in
+  blocks (cnt[7], unused u64::MAX), and k_struct_hits sorts and applies those alone; it runs after k_hits now (before
+  the units' apply: k_hits reads no structure). k_struct_hits + JS 1.38 -> 0.85 ms; the hits 4.92 -> 4.30 ms a tick
+  (p95 6.73); hash the same. Step mean in these runs 110.5 / 102.6 / 100.6 / 99.3 ms (runs vary by a few ms).
+- Left in the hits: k_hits_apply 1.2-1.3 ms (36k units' random columns; the status pool's take is one atomic word),
+  k_struct_hits' 2.2k hits and _structHitsRun's argument setup (~0.4 ms JS).
+
+**The game stats' structures by a count the table keeps (1M TOPPHASES, tp-a -> tp-b):** gameStatsStep took a slice
+of getCellItemsRowMajor, a row-major list of the cell item objects (JS) made again from the journal at any change
+(a new array a tick in a battle) and whole when its set changed: 57 ms at tick 132 (56 of it the list), 1.25 ms a tick
+mean. The structure table now keeps structCellCountByOwner beside structCountByOwner (data_state.js _stOwnCount: the
+cell items' codes 0x33 / 0x44 / 0x55, a tile's code steady while it is counted; the destroy kernel's batches in its
+ocnt[192..256), dst.rs), and the slice takes it once a second (its first). Checked against the list every 25 ticks of
+the 1M battle (cellcount-check.js): 12 checks, none differ. gameStatsStep 1.25 -> 0.54 ms mean, max 57.1 -> 1.39.
+
+**k_status, four slots at a time with the attack timers alone (1M battle, split.js):** statusPrepassRun 3.98 ms a tick,
+its kernel 3.69 (a pass over every slot). In the battle 57% of the living units had an attack timer running (tmOn) and
+10% a status record: 3-6% of the sixteen-slot groups passed the skip test, every other slot went the slot-by-slot way.
+Groups of four with no status record and no transfer cooldown are now done by vector (alive with no energy: dead, the
+event 4 unlisted as before: no record; the others' attack timers and flashes counted down, the carries at dk > 1 lane
+by lane): kernel 3.69 -> 3.13 ms, state hash the same. Taking the groups with a record too (the other lanes by vector,
+the record's by the slot-by-slot body, a closure, in slot order) measured 3.27: no gain, reverted. What is left is the
+pass's memory: ~45 bytes a slot read or written (positions' tick-start copies 16, the timers, energy, records' index).
+Pitfall: a rem_euclid by a value the compiler cannot prove non-zero inside a closure pulled in a panic path, whose
+location strings are a data segment (the build refuses: "the module has data segments"); find them with a data
+section dump (file names and line numbers in it).
+- k_eff_units (the strided share of effective levels): 1.97-2.03 ms a tick, its random reads by the units' order
+  (slots differ between peers, so the share cannot go by slot).
+- The online relayout (every other tick): 4.3 ms a step (4,922 units moved): k_slot_move 1.6 (every column, column by
+  column), k_slot_remap 2.2 (a pass over every slot's references and the slabs' scores), k_slab_score 0.35, the index
+  relayout 0.36. Its cost is the price of the slots' locality (A/B 2026-11-07); not changed.
+
+**Rendered trace pitfall: phases listed twice were counted twice.** sim_worker.js SIM_TRACE_FNS named unitHitsResolve,
+waiTake and projectilesAdvance twice; the install wrapped each name as often as listed, both wrappers adding to the
+phase: the rendered numbers of those three were twice their time (unitHitsResolve "11 ms" a step at 1M: 5.5, its
+kernels' kp:60 + kp:66 + the structure hits and looks). The install now wraps new Set(SIM_TRACE_FNS). The hits' parts
+are traced too (_structHitsApply / Run / After, structDestroyTiles, _hitLooksMake, projBlastRoom...).
+**Empty vision-cover callbacks gone:** visCoverOnEntityChanged and visCoverOnUnitSpatialChanged were empty functions
+(sight is the vision kernels'), yet their callers made a unit object for every newly watched unit (owners.at in
+unitHitsResolve), looked up every watched structure's object (_structHitsAfter, the structure status pass) and made the
+object of every unit whose watch ended (statusPrepassRun). Removed with their loops; a watch's end writes the wTeam
+column (Unit.watchedByTeam's) directly, the unit object only made for a damage flash (SIM_DAMAGE_FLASH).
+**Rendered 1M battle after the hits round (m1-f vs m1-e, 100 s, headed Edge):** steps mean 104.1 vs 105.4, p95 149.7 vs
+160.3, p99 173.9 vs 201.1, max 200.7 vs 236.4, steps over 120 ms 64 vs 97.
+**Workers waiting for their way on a player's move, in the worker kernel (wai.rs manual_wait):** a fuzz move order
+to a group of workers (a 1M battle, waiout2-weval.js): every one whose way was still to come (MANUAL_MOVE, a pending
+target, no path, not held) was handed back to the JavaScript at every tick (OUT_DECLINED: updateWorkerAI's MANUAL_MOVE
+branch, _unitWorkerWayEnd, arm again): 200-880 events a step, waiOutEvents 5-17 ms a step for tens of steps. The kernel
+does it now: moving; near its targetPos (max(8, min(TILE, floor(speed * 2)))) or 120 ticks after its order with no
+progress on its way, the move ends (finish_manual, the pending way's mirror mvPP / mvPF let go); else parked until
+that wait's end or its next look (every 32 ticks by id). Its way wakes it when the pending wheel gives it one (pp.rs
+set_path: on 0); the wheel also upgrades it at its retry ticks, which the JavaScript's every-tick try repeated (upgrade
+returns before the retry tick). New kernel arguments [160..163]: unit.mvPF, ptVer, ptAt, ptSub.
+
+**Tried, not kept: the five area answers in one spread (acq_sample.rs).** A viewer's five spreads (units, four structure
+classes) as one level-by-level spread with a bit an answer per area (exact distances: 120 spreads of the 1M battle
+checked against a JS breadth-first search, answers-check.js): 7.7 ms a viewer's job on one thread against ~9.5 for the
+five (1.9 each): the classes' seeds lie apart, so few areas share a level; and four 7.7 ms background chunks instead of
+twenty short ones keep helpers longer from the tick's jobs. Reverted.
+**Workers on a player's move, measured (rendered m1-i / wo3 against wo2):** waiOutEvents over a 100 s run 520 -> 181 ms,
+calls over 5 ms 30 -> 1 (max 17 -> 5.2), unitEventsRun p95 13.2 -> 5.6-5.9 ms. Left handed back: no-way events of manual
+moves that still hold a path (_unitNoWay: the substitute ask in flownav.js), ~100 in a burst.
+**The acquisition lane's waits at dk 2 (m1-i):** when the battle thinned the pace controller went from dk 4 to 2 (twice the
+steps a second): the acquisition chain, its commit due a fixed count of ticks after its post, had half the wall time and
+the commit waited (w:2: 102 waits, p50 20 ms, at 60-80 s). Its helper CPU is the lever: acquisition is ~28% of the
+helpers' time (area_batch 30 s, answers 29, combat brains 24, arq within 12, the area table build ~16 in 63 s x 8).
+
+**The posts' event buffers from a pool (sim_worker.js _simEvBuffer):** a post's _simEvTake took 11-16 ms about once in
+twenty posts (rendered 1M, evtake-weval.js) with ~11k words of events and ~3.3k hit looks: not the copies (~100 KB) but
+the two new ArrayBuffers a post (the events' slice, the looks' records) whose external memory brought the worker's
+collector in there. The page now hands both back after its replay (evReturn); the worker takes the smallest pooled
+buffer that holds a post (a few kept; none, a new one with room). simHitLooksTake takes the pool's acquire. Same
+40 s run: _simEvTake calls over 3 ms 9 -> 0 (p95 13.9 -> 0.42 ms), _simPostResult mean 3.12 -> 2.23, p95 15.4 -> 4.7.
+**A step's long change list of structure rows on the helpers (sim_presentation.js _simMetaStructsRows):** the list
+path (a step's changed tiles) always ran k_meta_structs on the simulation thread; the first publish of the 1M scene
+(tick 9) listed every structure: 42 ms. A list as long as a whole pass's threshold (SIM_META_PAR_MIN, 8192) now goes
+the parallel way (k_meta_structs_par takes a list's entries by chunks, its merge already list-aware).
+meta-structs-kernel (both, PAR=1 with every list parallel), presentation-delta / worker / helpers, structure-row-reuse,
+structure-list-reuse pass.
+
+**The adjacency flood on a lane of its own (SIM_LANE_ADJ = 8; things_utils.js ADJ_LANE):** on T5 beside the units' cover,
+its post waited for the cover's seeds job (k_vis_seed, one 6-12 ms chunk) before writing the lane's params: the hectic
+front-400k battle (rendered, hectic.js) had adjacencyLaneStep p95 11.9 ms, max 17 (w:3 on 108 of 459 steps). Lane 8 was
+free; it goes after T5 in the helpers' order. hf1 -> hf2 (80 s each): adjacencyLaneStep p95 11.9 -> 0.86, max 17.1 ->
+1.65; simParallelBackgroundWait p95 14.2 -> 1.8, max 27.9 -> 5.5; the same game ticks in the run (1536 / 1545; hf2 at
+dk 4, hf1 at dk 3). adjacency-dirty-set / lane-carry, structure-adjacency-events and both determinism tests pass.
+- Checked, not a cost: the navigation tables' bindings on a build's install (nav.0.*, nav.2.*: 16 binds on 86 of 459
+  steps): those steps took no longer (127 vs 130 ms). Posting the shared sight view each post: 0.008 ms with or without
+  (postbench-weval.js); the 5-11 ms _simPost calls are not the message (likely the thread descheduled).
+
+**Mines in a kernel (tfx.rs k_mine_events, unit.js _unitMineEvents); the JavaScript floor look gone.** The movement
+kernel hands a unit on a hostile floor item to the main thread (mv.rs floor_hit) for a mine, and for every trap when
+it has no trap tables: unit.js _unitFloorEvent then ran Unit._explodeMine (forEachUnitInRange, per-unit setters,
+alerts, flashes, shrine counts, clearTileEntity) or applyStatusEffect. Two changes:
+- The trap tables were made only on the movement tables' partial updates (_simMoveStructs: `if (!full) _simTrapStep()`):
+  on the match's first tick, a full build, the kernel had none and handed every unit on a hostile trap to the
+  JavaScript (chaos-1m-250k rendered tick 0: _unitFloorEvent 105 ms). Made on every build now.
+- The floor events after the events' split by one kernel, in the sorted list's order: the unit's floor tile noted (its
+  steering record's floor word); a built mine (mv.trapK 6) whose cell is not the unit's owner's goes off: every unit
+  of another owner than the mine's (none: every unit; one outside the index's players: none, as forEachUnitInRange),
+  alive, within the blast radius (where they stood at the tick's start, x0 / y0; the unit index's chunks as
+  forEachUnitInRange culls them) loses the blast damage (a table per owner and level, mine.tab: blastDamage and
+  blastRadius in pixels, f64, made with the traps' strengths, simTrapResearchDone), energy as Float32, the shrine
+  share (no more than it had, fixed point), fallen at none; the trigger fallen at none; the mine off the trap table, its
+  event dropped (-1). Each hit a look (kind 1: alert and flash) appended to the hits' looks, presentation only; the
+  mines' tiles cleared in one quiet destroy batch (no building explosion, routes or win check, as clearTileEntity),
+  their explosion and sound here. Worker floor events go to the worker kernel as before; no floor event reaches the
+  JavaScript.
+- New test tests/mine-kernel.test.cjs (blast by owner and radius, the fallen, the owner's own unit and one outside
+  untouched, a site not set off, shrine share (135 + 135 + 40) x 1024, three looks, the floor tile). floor-trap-kernel,
+  floor-target, multiplayer-features (its mine), construction-walk-driveby, worker-walk, wasm-batch-regression,
+  combat-effects and both determinism tests pass.
+- chaos-1m-250k rendered tick 0: floor events 105 ms -> _unitMineEvents 17 ms (_unitEvent 106 -> 0.9). The first
+  tick is still ~1 s: cold first runs (movement 150-170 ms, occupancy 130-150, the worker brains' first distance
+  fields 80-120, the worker kernel 80-110).
+
+**Units' no-way events in the pending wheel's kernel (pp.rs k_pp_due mode 3, pathfinding.js pendingPathNoWayEvents).**
+A unit (no worker) whose path's node went out of reach was the JavaScript's per event: _unitNoWayCommit (for a
+one-node route the routes' kernel, k_event_routes, had prepared: its key and component) or _unitNoWay (the rest:
+the path object, navPathSubstitute, notePendingPathUnit). Mode 3 takes the tick's sorted events after the split, in
+their order: the node at its path's index (the path as its getter reads it, pp.rs cur_len) its pending target (one
+kept: its version, place and substitute tick started over), no path, no route (rkF), the fallback flag, the
+substitute of its component asked (sub_asked: its retry tick), in the wheel at its retry tick; the event dropped.
+k_event_routes, _unitNoWayCommit and UNIT_EVENT_ROUTE_BATCH gone (a worker's no-way, its manual move's, is still the
+worker path's _unitNoWay). Tests: event-route-batch now holds the kernel to _unitNoWay one event at a time (1600
+cases, 48 walled in: pending target, path, route, fallback, retry, digest, movement columns, substitutes, wheel);
+event-route-determinism zero against three helpers (2618 no-way events by the kernel, the same hashes).
+
+**The worker kernel's outputs (hectic front-400k, 60 s, waiout-weval.js):** no declines left there; 350k outputs over 703 calls
+(254 ms): spawn queues paid 124k, heal sounds 82k, research sounds 62k, unit sounds 38k, A* logs 16k, build sounds 14k,
+mines gone 6.8k, built 6.2k, salvage 0.8k.
+- A spawn queue paid (OUT_QUEUE_PAID) no longer emitted: the production pass brings every spawner up to date each step
+  (its JavaScript branch, for the pass switched off, where nothing is produced at all, gone with it).
+- A heal sound at a unit throttled by the ambient table by its id (_waiAmbientUnit), its place from the columns: no unit
+  object a sound (owners.at, and a field set on it).
+- The A* collected summed by owner and unit type over a call (unit.upT), one log entry each, not a unit object and a
+  log entry an output (the worker sums them by type before its post anyway).
+- worker-walk, collector-farms, spawner-production-pass, worker-brain-spawners, multiplayer-split-heal, sim-event-pack
+  and both determinism tests pass.
+
+**The acquisition's arrays made while the match loads (unit.js acqReserve, from main.js simMatchPrepare):** the first post
+(_acqPost) made its arrays (per slot, chunk, tile, area and team, the index's entries) and its snapshot wrote their
+pages first: chaos-1m-250k Node 90 ms (arrays 54, the snapshot kernel 28) against ~7 after; rendered tick 1 203 ms.
+Now made at the match's sizes (the unit table's slots) and written once at load: the first post 19 ms (arrays 1.1,
+snapshot 9.5). chaos-scenario / multiplayer-chaos determinism, combat-reach, multiplayer-late-carry-restore pass.
+- The match's first step (~1 s rendered at chaos-1m-250k) is otherwise work every unit does at once there: all
+  workers' first decisions (the worker kernel ~110 ms, their spawner search ~106 ms), every unit's first movement
+  (movement 150-170, occupancy 130-150).
+
+
+## 2026-11-26 - the traffic field's chain as one stage; the worker brains' fields made while the match loads (tests/test-runs/first-tick-20261126/)
+
+Tools kept there: first-steps.cjs (the first simtrace steps' phases), phase-means.cjs / pm2.cjs (mean / p95 / max of
+every simtrace phase over a tick range: TO=<tick> for pm2), steps-grep.cjs (chosen keys per step with the previous
+step's, for the steps where a key is over a value), prof-self.cjs (self time over helper profiles), ph-sum.js (tickbench
+AFTER with TOPPHASES/SUBPHASES: mean / p95 / max a phase and its worst ticks). first-calls.js's clock fixed (it read
+the game's virtual performance.now: all zeros); it still reads zeros under SOLO scenes (the restore's calls), so
+ph-sum.js is the tool for those.
+
+**The worker brains' sites and distance fields made at the match's prepare (worker.js workerBrainsPrewarm, from
+main.js simMatchPrepare).** workerBrainsPrepare(n, defer, list, warm): warm runs stages 0-2 alone (the blocks' sites,
+the owners' kind bits, the distance fields) and waits; the first tick then finds its field array kept (not fresh) and
+makes again only the (owner, kind) fields whose block bits changed since (the fields are a function of those bits:
+the same answers on every peer, restored or not). Rendered chaos-1m-250k tick 0: the fields no longer show; what is
+left of the brains there is stage 3 (k_worker_spawners: every worker's first spawner search at once, 88 ms of lane 0,
+waited by workerBrainsCollect while the helpers do the first movement). worker-brain-spawners, collector-farms, both
+determinism tests pass.
+
+**The traffic field's solve as one background stage, a job a plane (traffic.rs traffic_solve, [2] = 64).** The coarse
+pressure field (128 x 128 cells x 3 planes at a 1024 map) went as 18 background stages of 256-cell jobs (16 Jacobi
+passes, the output, the mask): ~4,600 job claims and 18 barriers a step for a few ms of work. Due at the next step
+when dk > 1, the chain sat behind the foreground jobs (occupancy) and the next step's trafficBeforeMovement waited
+for it on every other step: rendered chaos-1m-250k (ft-a, steps from 100) w:12 5-20 ms, ~10 of the 18 stages still left
+at the wait. Now one stage of `planes` jobs, each its plane's 16 passes, output and mask in turn (solve_range /
+output_range / mask_range, the same per-cell arithmetic: Jacobi, a cell from the previous pass alone; the stage kernels
+for the old entry points kept as wrappers). State hash at tick 200 of checker-200k-rmax (4 helpers) the same as the
+old binary + JS (5e229a66/ef067c5f, hash-ab via DEFENCE_TEST_SOURCE_OVERRIDES). Rendered chaos-1m-250k (ft-a -> ft-b,
+steps from tick 60): trafficBeforeMovement p95 19.8 -> ~0 (max 1.1), simParallelBackgroundWait p95 14.7 -> 2.35 ms.
+traffic-pressure, occupancy-grid, mixed-rally-move, shared-spatial-determinism, chaos-scenario-determinism pass.
+
+**Looked at, not changed:**
+- The rendered 1M scene's first step (~1 s) is load-time work every unit does at once (movement 455 ms, the worker
+  events 292, occupancy prepare 81): not a gameplay spike; left.
+- Hectic front-400k (hf-a, rendered, hectic.js bursts): step mean 150 ms at dk 4, p95 182, one step over 1.5x (246 ms:
+  a few k89 jobs 10-27 ms against ~3: the jobs are already heaviest-first by unit count). k89 is 91 of the 150 ms
+  (811 ms helper CPU a step). The named prof build's helper profile (fp.helper*, Node, 8 helpers) is flat as before:
+  traffic_swap 5.9%, checked_traffic_q 5.6, preview 4.8, traffic_yield 3.9, motion_f 3.6, paint 3.1, step4 2.9,
+  move_job 2.8, push_deposit 2.5. ("now" / "loop" in helper profiles are the helpers' spin-wait, "post" the inspector.)
+- processActions 22.6 ms on burst steps (13 of 260): ~800 actions spread over many kinds (actsplit: place 4.4 ms a
+  tick at most, attackMove 3.0, setRallyMany 2.6, move 2.3, queueUnit 2.2, hold 1.8); 77 ms in 40 s in all.
+- The opening clash of the 1M scene (steps 5-40, mean 205 ms at dk 5): _unitRetirePass p95 24 ms rendered at dk 1
+  mass deaths; Node (ph-sum, ticks 30-90) has every part small (max 6 ms: _unitGoneRun 2.6, the slots' detach 1.3,
+  id rows 1.0, unitRows' compaction 0.8, the plan 0.7). k_acq_snap (3.3 ms foreground a step) is the snapshot fused
+  with the last answers' commit and skips empty slabs already.
+
+**The acquisition's area-table offsets in two parallel stages (acq_sample.rs k_acq_area_prefix, unit.js _acqPost).**
+Rendered mixed-1m-4teams (m1-a, bgus-weval.js: par.bgus bound by a WEVAL_START probe, the helpers' background time by
+lane and kernel): the acquisition lane (T10, 2) took 101.6 s of helper CPU in a 60 s run, ~5x every other lane together
+(combat brain 26.8 s, area answers 24.0, scan 20.0, area count 7.7, scatter 4.6, prefix 3.4, pack 3.9, omt 3.6, seed
+3.4, sort 3.1), and its commit waited on 55 of 330 steps (w:2 p95 36 ms, max 44; _acqCommit p95 31.6, max 46.9). The
+prefix was the chain's one single-job stage (~14 ms a post on one helper, 480k keys x 8 ranges at a 1024 map). Now two
+stages of up to 64 blocks of whole areas' keys: [40] 0 the block's counts over the ranges' rows, their sum and the
+largest aggro range of a share of the slots (acq.saPre, list index 30, made at the match's reserve); [40] 1 the
+block's offsets and cursors from the earlier blocks' sums, its areas' team masks, and (block 0) the answers' reach
+(area_reach; prepare_area_answers kept for the single-job build). The same outputs: checker-200k-rmax tick-200 hash the
+same as the old binary + JS (5e229a66/ef067c5f); the stages ran (8 blocks a phase there, 17 posts). Rendered m1-a ->
+m1-b (60 s each, steps from tick 30): w:2 steps 55 -> 43, p95 36.3 -> 26.4, max 43.6 -> 31.6; _acqCommit p95 31.6 ->
+28.0, max 46.9 -> 35.8; combatScanRun max 55.9 -> 39.3; step mean 106.4 -> 104.4, p95 186.7 -> 176.1 (one run each:
+rendered runs vary). The prefix's CPU 3.4 -> 4.3 s (two passes), off the chain's critical path. combat-reach,
+tower-simd-determinism, multiplayer-late-carry-restore, chaos-scenario / multiplayer-chaos determinism pass.
+- Left at the commit's wait: the combat brain's last jobs (bgc:2:62 ~22 ms on the simulation thread at p95): the lane's
+  helper CPU (~440 ms a post) is the lever, as before.

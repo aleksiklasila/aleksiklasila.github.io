@@ -64,16 +64,10 @@ function trafficAfterMovement(){
     // Snapshot only the small coarse grid and packed occupancy words. No
     // background worker reads positions or a bitmap while units write them.
     simParallelRun(SIM_KERNEL_TRAFFIC_CAPTURE,Math.ceil(T.n/256));
-    const lane=SIM_LANE_TRAFFIC,stages=[];
-    for(let k=0;k<16;k++){
-        const Q=simParallelStageParams(lane,k);Q.fill(0);Q[0]=T.n;Q[1]=256;Q[2]=k;
-        stages.push([SIM_KERNEL_TRAFFIC_SOLVE,Math.ceil(T.n/256)]);
-    }
-    const Q=simParallelStageParams(lane,16);Q.fill(0);Q[0]=T.n;Q[1]=256;
-    stages.push([SIM_KERNEL_TRAFFIC_OUTPUT,Math.ceil(T.n/256)]);
-    const M=simParallelStageParams(lane,17);M.set(Q);
-    stages.push([SIM_KERNEL_TRAFFIC_MASK,Math.ceil(T.n/256)]);
-    simParallelBackgroundChain(lane,stages);
+    // (One stage, a job a plane: its 16 relaxation passes, the output and the mask (traffic.rs traffic_solve fused,
+    // [2] = 64). As 18 stages of 256-cell jobs the chain's barriers, not its few ms of work, made the next step wait.)
+    const lane=SIM_LANE_TRAFFIC,Q=simParallelStageParams(lane,0);Q.fill(0);Q[0]=T.n;Q[1]=T.w*T.h;Q[2]=64;Q[3]=16;
+    simParallelBackgroundChain(lane,[[SIM_KERNEL_TRAFFIC_SOLVE,Math.ceil(T.n/(T.w*T.h))]]);
     // Published at the next step's start when steps are long (a lag of two
     // long steps was seconds of game time: crowds swayed on stale fields).
     T.pending=gameTime+(simDk>1?simDk:2);

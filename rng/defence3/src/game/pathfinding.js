@@ -151,7 +151,7 @@ function pendingPathUpgradeUnits(us) {
 // k_pp_due's arguments (see its comment): the arrays, the parameters, the
 // per-profile navigation table (encoded addresses), the scratch (heap; sized
 // by the units waiting, a power of two).
-const _ppA = new Array(53).fill(null), _ppP = new Float64Array(25);
+const _ppA = new Array(55).fill(null), _ppP = new Float64Array(27), _ppPtrs = new Float64Array(4);
 let _ppHdr = null, _ppTab = null, _ppL = null, _ppKa = null, _ppKb = null, _ppVa = null, _ppVb = null, _ppKeys = null;
 function _ppGrow(a, T, n) {
     if (a && a.length >= n && simHeapHas(a)) return a;
@@ -168,9 +168,12 @@ function _ppRun(mode, n, list) {
     // The navigation of every profile (a unit's is its own: flying, building, else the ground's).
     for (let p = 0; p < NAV_PROFILES; p++) {
         const nav = navEnsure(p), w = navWallTable(p), o = p * 4;
-        _ppTab[o] = _simWEnc(_simHeapPtrOf(w)); _ppTab[o + 1] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partL)) : 0;
-        _ppTab[o + 2] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partBase)) : 0; _ppTab[o + 3] = nav && nav.partL ? _simWEnc(_simHeapPtrOf(nav.partComp)) : 0;
-        for (let j = 0; j < 4; j++) if (!(_ppTab[o + j] >= 0)) throw new Error('k_pp_due: profile ' + p + ' navigation array ' + j + ' not in the wasm heap');
+        // (The heap's byte addresses, -1 outside it; encoded as the kernels' words after: an address past 2 GiB is a
+        // negative word, read unsigned by the kernel. Its sign tested here made every match whose heap passed 2 GiB
+        // throw at its first waiting unit: no tick ran past the index (mixed-1m-4teams, a 100k two-tab start).)
+        const ptrs = _ppPtrs;
+        ptrs[0] = _simHeapPtrOf(w); ptrs[1] = nav && nav.partL ? _simHeapPtrOf(nav.partL) : 0; ptrs[2] = nav && nav.partL ? _simHeapPtrOf(nav.partBase) : 0; ptrs[3] = nav && nav.partL ? _simHeapPtrOf(nav.partComp) : 0;
+        for (let j = 0; j < 4; j++) { if (!(ptrs[j] >= 0)) throw new Error('k_pp_due: profile ' + p + ' navigation array ' + j + ' not in the wasm heap' + (typeof simHeapStats === 'function' ? ' (heap ' + JSON.stringify(simHeapStats()) + ', grid ' + GRID_W + 'x' + GRID_H + ')' : '')); _ppTab[o + j] = _simWEnc(ptrs[j]); }
         P[16 + p] = nav ? nav.seq | 0 : 0; P[19 + p] = nav ? nav.cs : 0; P[22 + p] = nav ? nav.cw : 0;
     }
     const room = Math.max(1, mode === 0 ? _ppCount : n);
@@ -189,6 +192,8 @@ function _ppRun(mode, n, list) {
     A[38] = simMoveWallGrid(); A[39] = _navClassWalls(NAV_PROFILE_BUILD);
     A[40] = T && T.code; A[41] = T && T.val; A[42] = T && T.uc; A[43] = T && T.own; A[44] = T && T.brain; A[45] = findNearestWalkableClouds();
     A[46] = N.tab; A[47] = N.list; A[48] = _ppHdr; A[49] = _ppKa; A[50] = _ppKb; A[51] = _ppVa; A[52] = _ppVb;
+    A[53] = C.wkS; A[54] = C.rkF;
+    P[25] = SIM_PPT_SRC.indexOf('nav_unreachable'); P[26] = typeof UNIT_EV_NOWAY === 'number' ? UNIT_EV_NOWAY : 2;
     P[0] = mode; P[1] = mode === 0 ? room : n; P[2] = gameTime; P[3] = GRID_W; P[4] = GRID_H; P[5] = TILE; P[6] = PENDING_WHEEL; P[7] = _ppTaken;
     P[8] = PA.a.length; P[9] = N.mask + 1; P[10] = navSubRoom(); P[11] = NAV_SUB_TICKS;
     P[12] = _ppKeys[0]; P[13] = _ppKeys[1]; P[14] = _ppKeys[2]; P[15] = _stationaryTypes.length;
@@ -197,7 +202,8 @@ function _ppRun(mode, n, list) {
     simRustDirect('k_pp_due', A, P);
     PA.top = H[1];
     N.used += H[2] - N.n; N.n = H[2]; N.asks = H[5];
-    if (mode === 0) { _ppCount += H[0]; _ppTaken = gameTime; }
+    if (mode === 0 || mode === 3) _ppCount += H[0];
+    if (mode === 0) _ppTaken = gameTime;
     // (Bit 2: the substitutes' room, a limit; the others cannot happen with the room given.)
     if (H[3] & ~2) throw new Error('k_pp_due: errors ' + H[3]);
 }
@@ -205,6 +211,11 @@ function _ppRun(mode, n, list) {
 // priority, then its id, looked at once; those still waiting scheduled again.
 function pendingPathsDue() {
     if (_ppCount > 0) _ppRun(0, 0, null);
+}
+// The tick's no-way events of units (no worker's) by the kernel (pp.rs mode 3: their pending targets, substitutes and
+// wheel), dropped from the sorted list E (j of them). (unit.js unitEventsRun.)
+function pendingPathNoWayEvents(E, j) {
+    if (j > 0) _ppRun(3, j, E);
 }
 // Every waiting unit's substitute asked again (flownav.js navSubstitutesRestore, and the table cleared).
 function pendingPathSubAskAll() {
@@ -632,7 +643,8 @@ function isWalkableTileFor(unit, gx, gy) {
 
 let _airWall = null, _cloudSig = 0, _cloudSigVer = -1, _cloudSigTables = null;
 function _airWallTable() {
-    if (!_airWall || _airWall.length !== GRID_W * GRID_H) {
+    // (One made before the wasm heap was up (a plain array): made again in it, where the kernels read it.)
+    if (!_airWall || _airWall.length !== GRID_W * GRID_H || (typeof simHeapHas === 'function' && !simHeapHas(_airWall))) {
         _airWall = simHeapArrayAuto(Uint8Array, GRID_W * GRID_H);
         if (typeof simParallelBind === 'function') simParallelBind('mv.airwall', _airWall);
     }
@@ -696,7 +708,10 @@ function getUnitOrderDestinationCode(u) {
 // A unit's path as the interface shows it: its own, or for a unit following
 // a flow in the movement kernel (no path of its own) the flow walked from
 // where it stands (up to UNIT_DISPLAY_PATH nodes and the destination),
-// cached for the tick. Never simulation input.
+// cached while the unit's tile, its route's end and the navigation (its
+// installs, nav.version) are the same: the same walk gives the same path, and
+// a watched selection's units walked it every tick (64 atlas steps and nodes
+// each, ~256 units: up to ~8 ms of the simulation thread). Never simulation input.
 const UNIT_DISPLAY_PATH = 64;
 const _displayPaths = new WeakMap();
 function unitDisplayPath(u) {
@@ -705,11 +720,13 @@ function unitDisplayPath(u) {
     if (!u || !u._routeKey || !u._us) return p;
     if (u._routeKey === NAV_ROUTE_KEY) {
         let c = _displayPaths.get(u);
-        if (c && c.tick === gameTime) return c.path;
-        let path = navPath(navProfileOf(u), Math.floor(u.x / TILE), Math.floor(u.y / TILE), u._routeEnd, UNIT_DISPLAY_PATH) || [];
-        let end = u._routeEnd;
+        const prof = navProfileOf(u), gx = Math.floor(u.x / TILE), gy = Math.floor(u.y / TILE), end = u._routeEnd;
+        const nav = _nav[prof], ver = nav ? nav.version | 0 : -1, tile = gy * GRID_W + gx;
+        if (c && c.tile === tile && c.end === end && c.ver === ver && c.prof === prof) return c.path;
+        let path = navPath(prof, gx, gy, end, UNIT_DISPLAY_PATH) || [];
         path.push({ x: end % GRID_W, y: (end / GRID_W) | 0 });
-        _displayPaths.set(u, { tick: gameTime, path });
+        if (c) { c.tile = tile; c.end = end; c.ver = ver; c.prof = prof; c.path = path; }
+        else _displayPaths.set(u, { tile, end, ver, prof, path });
         return path;
     }
     return p;

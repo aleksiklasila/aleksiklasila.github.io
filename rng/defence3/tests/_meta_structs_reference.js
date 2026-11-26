@@ -2,10 +2,10 @@
 // kernel wasm/src/nfs.rs k_meta_structs writes them now): the reference of tests/meta-structs-kernel.test.cjs.
 // (Its label: 0; the test compares the labels' text.)
 // (A laser link's table slot, -1 none; columns l0-l3 by name: no key strings.)
-function _simLinkSlot(o) { return o && o._sslot !== undefined && _simStructSlots.owner[o._sslot] === o ? o._sslot : -1; }
+function _simLinkSlot(o) { return o ? _simStructSlots.slotOfLive(o) : -1; }
 function _simWriteStructure(F, s, e, kind, tick) {
     F.alive[s] = 1;
-    F.serial[s] = _simStructSlots.serials[s];
+    F.serial[s] = _simStructSlots.pser[s];
     F.orderTick[s] = currentTick - 1;
     F.kind[s] = kind;
     let gx = e.gx | 0, gy = e.gy | 0;

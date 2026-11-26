@@ -4,7 +4,7 @@
 // (tests/browser-fake-peer.js). Every visible control is clicked on every
 // player in turn, keys pressed, and the 2D/3D view switched, while the
 // match runs: no desync, no stop, no page error, no long stall.
-//   node tests/browser-mp-gui-fuzz.cjs [fixture] [--players=2] [--limit-ms=400]
+//   node tests/browser-mp-gui-fuzz.cjs [fixture] [--players=2] [--limit-ms=400]   (HEADED=1: visible windows; headless Edge starves the helpers)
 // Writes tests/browser-mp-gui-fuzz-results.json.
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
 const { chromium } = require('playwright');
@@ -28,7 +28,7 @@ const server = http.createServer((req, res) => {
 (async () => {
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+    const browser = await chromium.launch({ channel: 'msedge', headless: !process.env.HEADED, args: ['--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
     const context = await browser.newContext({ viewport: { width: 1100, height: 720 } });
     await context.addInitScript({ path: path.join(__dirname, 'browser-fake-peer.js') });
     const pages = [], errors = [];

@@ -383,15 +383,20 @@ const _navNoCost = new Uint8Array(0);
 function navAtlasStep(nav, t, dest) {
     const A = nav && nav.atlas;
     if (!A || !A.header || _simWasmX === null || !_simWasmX.nav_atlas_step) return -1;
-    // (The arrays' addresses worked out once while they stay the same arrays: past 2^30 a number is a heap
-    // allocation, six of them a call.)
+    const c = _navAtlasPtrs(nav);
+    return _simWasmX.nav_atlas_step(c.eh, c.epl, c.epb, c.ent, c.enp, c.ef, nav.W, t, dest);
+}
+// (The arrays' addresses worked out once while they stay the same arrays: past 2^30 a number is a heap
+// allocation, six of them a call.)
+function _navAtlasPtrs(nav) {
+    const A = nav.atlas;
     let c = nav._asc;
     if (!c || c.h !== A.header || c.pl !== nav.partL || c.pb !== nav.partBase || c.nt !== nav.nodeTile || c.np !== nav.nodePair || c.f !== nav.fields) {
         const ptr = a => _simWEnc(_simHeapPtrOf(a));
         c = nav._asc = { h: A.header, pl: nav.partL, pb: nav.partBase, nt: nav.nodeTile, np: nav.nodePair, f: nav.fields,
             eh: ptr(A.header), epl: ptr(nav.partL), epb: ptr(nav.partBase), ent: ptr(nav.nodeTile), enp: ptr(nav.nodePair), ef: ptr(nav.fields) };
     }
-    return _simWasmX.nav_atlas_step(c.eh, c.epl, c.epb, c.ent, c.enp, c.ef, nav.W, t, dest);
+    return c;
 }
 
 
@@ -477,7 +482,8 @@ function _navClassWalls(profile) {
     const ground = simMoveWallGrid();
     if (_navClassGrid !== grid) { _navClassWall.fill(null); _navClassGrid = grid; }
     let w = _navClassWall[profile];
-    if (w && w.length === ground.length) return w;
+    // (One made before the wasm heap was up (a plain array): made again in it, where the kernels read it.)
+    if (w && w.length === ground.length && (typeof simHeapHas !== 'function' || simHeapHas(w))) return w;
     w = simHeapArrayAuto(Uint8Array, ground.length);
     w.set(ground);
     const W = GRID_W, H = GRID_H;
@@ -809,18 +815,33 @@ function navProfileOf(u) {
 }
 // Up to maxLen tiles from (gx, gy) toward dest (the start first), as path
 // nodes; null when the navigation has no way from there. For the interface:
-// it changes nothing (the atlas' steps).
+// it changes nothing (the atlas' steps). The open stretches in one wasm call
+// each (atlas.rs nav_atlas_path, the look-ahead's run of steps), a wall's
+// step out here.
+let _navPathOut = null;
 function navPath(profile, gx, gy, dest, maxLen) {
     const nav = _nav[profile];
     if (!nav || !(dest >= 0 && dest < nav.W * nav.H)) return null;
-    const W = GRID_W;
+    const W = GRID_W, A = nav.atlas;
     let t = gy * W + gx;
     const path = [{ x: gx, y: gy }];
     while (t !== dest && path.length < maxLen) {
-        const n = navStep(profile, t, dest);
-        if (n < 0) return path.length > 1 ? path : null;
-        path.push({ x: n % W, y: (n - n % W) / W });
-        t = n;
+        if (nav.partL[t] === 0xFFFF || !A || !A.header) {
+            const n = navStep(profile, t, dest);
+            if (n < 0) return path.length > 1 ? path : null;
+            path.push({ x: n % W, y: (n - n % W) / W });
+            t = n;
+            continue;
+        }
+        const want = maxLen - path.length;
+        if (!_navPathOut || _navPathOut.length < want || !simHeapHas(_navPathOut)) _navPathOut = simHeapArray(Int32Array, Math.max(256, want));
+        const c = _navAtlasPtrs(nav), O = _navPathOut;
+        const k = _simWasmX.nav_atlas_path(c.eh, c.epl, c.epb, c.ent, c.enp, c.ef, nav.W, t, dest, want, _simWEnc(_simHeapPtrOf(O)));
+        for (let i = 0; i < k; i++) { const n = O[i]; path.push({ x: n % W, y: (n - n % W) / W }); }
+        if (!k) return path.length > 1 ? path : null;
+        t = O[k - 1];
+        // (Stopped short of dest and of maxLen on an open tile: no way on.)
+        if (k < want && t !== dest && nav.partL[t] !== 0xFFFF) break;
     }
     return path;
 }

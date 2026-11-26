@@ -674,81 +674,6 @@ fn hterm2(key: i32, e: i32) -> i32 {
     (t ^ ((t as u32) >> 15) as i32).wrapping_mul(0x2c1b3c6d)
 }
 
-/// worker.js _wsGroupBuild: a collector group's sites and spawners from the
-/// per-tile structure table (data_state.js _ST: code, owner, under
-/// construction, value, the stationary descriptor), in tile order (the same
-/// on every peer). P[0] 0: counted (cnt[0] sites, cnt[1] spawners); 1:
-/// written. Sites: mines of code P[3] with a value > 0 (kind 1, no owner),
-/// floor items (0x55) of type P[4] (descriptor low 16 bits, 0 none) with
-/// energy > 0 (kind 2, their owner, P[7] while under construction).
-/// Spawners (0x44) of type P[5] with energy > 0: tile, owner (-9 none), id
-/// (their tile), centre, P[7] while under construction. Centres of P[6]-px
-/// tiles. Empty tiles skipped 16 at a time.
-/// Arrays: st.code, st.own, st.uc, st.val, st.brain, cnt, sx, sy, st, so,
-/// sready, tile, pgx, pgy, po, pid, px, py, pready. P: [0] mode, [1] tiles,
-/// [2] width, [3] mine code, [4] / [5] farm / spawner type + 1, [6] tile px,
-/// [7] not built, [8] no owner.
-#[no_mangle]
-pub unsafe extern "C" fn k_ws_group(a: u32, chunk: i32) {
-    let k = K::new(waddr(a) as *const i32);
-    let (code, own, uc, val, brain, cnt) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<f64>(3), k.p::<i32>(4), k.p::<i32>(5));
-    let (sx, sy, st, so, sr, tl) = (k.p::<f32>(6), k.p::<f32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<i32>(10), k.p::<i32>(11));
-    let (pgx, pgy, po, pid, px, py, pr) = (k.p::<i32>(12), k.p::<i32>(13), k.p::<i32>(14), k.p::<i32>(15), k.p::<f32>(16), k.p::<f32>(17), k.p::<i32>(18));
-    let (mode, n, w, mine, farm, spt, tile, nb, none) = (k.i(0), k.i(1).max(0) as usize, k.i(2).max(1), k.i(3) as u8, k.i(4), k.i(5), k.f(6) as f32, k.i(7), k.i(8));
-    // Modes 0 / 1: count / write over every candidate (one call). Modes 2 / 3
-    // (a parallel job, SIM_KERNEL_WS_GROUP): the candidates of chunk `chunk`
-    // (P[10] a chunk); 2 counts its sites and spawners into cc[2 chunk],
-    // cc[2 chunk + 1]; 3 writes them from there (the caller made those the
-    // chunks' starts: the same output, in the same order, as one call).
-    let chunked = mode >= 2;
-    let write = mode == 1 || mode == 3;
-    let cc = k.p::<i32>(20);
-    let (mut ns, mut np) = if mode == 3 { (g(cc, chunk as usize * 2) as usize, g(cc, chunk as usize * 2 + 1) as usize) } else { (0usize, 0usize) };
-    // (The candidate tiles, ascending (k_ws_candidates), when given: the same
-    // sites in the same order as the whole map's.)
-    let (cand, mut ncand) = (k.p::<i32>(19), k.i(9).max(0) as usize);
-    let listed = !cand.is_null() && k.i(9) >= 0;
-    let (mut t, mut ci) = (0usize, 0usize);
-    if chunked {
-        if !listed || cc.is_null() { return; }
-        let per = k.i(10).max(1) as usize;
-        ci = (chunk.max(0) as usize) * per;
-        ncand = ncand.min(ci + per);
-    }
-    loop {
-        if listed { if ci >= ncand { break; } t = g(cand, ci) as usize; ci += 1; if t >= n { continue; } }
-        else { if t >= n { break; } if t + 16 <= n && !v128_any_true(v128_load(code.add(t) as *const v128)) { t += 16; continue; } }
-        let c = g(code, t);
-        if c != 0 {
-            let v = g(val, t);
-            let ty = g(brain, t) & 0xffff;
-            let (gx, gy) = ((t as i32) % w, (t as i32) / w);
-            let (cx, cy) = (gx as f32 * tile + tile * 0.5, gy as f32 * tile + tile * 0.5);
-            if c == mine && v > 0.0 {
-                if write { s(sx, ns, cx); s(sy, ns, cy); s(st, ns, 1); s(so, ns, -1); s(sr, ns, 0); s(tl, ns, t as i32); }
-                ns += 1;
-            } else if c == 0x55 && farm != 0 && ty == farm && v > 0.0 {
-                if write {
-                    let o = g(own, t);
-                    s(sx, ns, cx); s(sy, ns, cy); s(st, ns, 2); s(so, ns, if o == none { -1 } else { o }); s(sr, ns, if g(uc, t) != 0 { nb } else { 0 }); s(tl, ns, t as i32);
-                }
-                ns += 1;
-            } else if c == 0x44 && spt != 0 && ty == spt && v > 0.0 {
-                if write {
-                    let o = g(own, t);
-                    s(pgx, np, gx); s(pgy, np, gy); s(po, np, if o == none { -9 } else { o }); s(pid, np, t as i32); s(px, np, cx); s(py, np, cy);
-                    s(pr, np, if g(uc, t) != 0 { nb } else { 0 });
-                }
-                np += 1;
-            }
-        }
-        if !listed { t += 1; }
-    }
-    if mode == 2 { s(cc, chunk as usize * 2, ns as i32); s(cc, chunk as usize * 2 + 1, np as i32); return; }
-    if mode == 3 { return; }
-    s(cnt, 0, ns as i32); s(cnt, 1, np as i32);
-}
-
 /// SIM_KERNEL (direct) k_struct_status (renderer.js tickStatusEffects, for
 /// the structures of one table): rows in the world (_stT >= 0) with a status
 /// running or no energy: their unset fields made 0 (watchedByTeam -1, as
@@ -970,9 +895,10 @@ impl SCtx {
 }
 
 /// k_struct_hits (unit.js _structHitsApply): the movement kernel's attacks
-/// on structures (its chunk lists: counts HC[0..P[0]], attackers HA and
-/// targets HT per chunk of P[1], a structure -(tile + 2)), in the order of
-/// their attackers' ids, each on the structure standing at its tile
+/// on structures (attackers HA, targets HT, a structure -(tile + 2); their
+/// keys, attacker id << 25 | list place, gathered by k_hits: P[0] of them,
+/// u64::MAX unused), in the order of their attackers' ids, each on the
+/// structure standing at its tile
 /// (st.stab: its class, 1 + the index in STRUCT_STATUS_CLASSES; st.rrow its
 /// row; energy > 0, still at the tile; SCtx::hit): its style's status (as
 /// applyStatusEffect with no source type: fire, water, ice, poison
@@ -990,22 +916,15 @@ pub unsafe extern "C" fn k_struct_hits(a: u32, _chunk: i32) {
     let (hc, ha, ht, keys, uid, uown, natk, sty, hot, srow) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<u64>(3), k.p::<i32>(4),
         k.p::<i8>(5), k.p::<u8>(6), k.p::<u8>(7), k.p::<f32>(8), k.p::<i16>(9));
     let (ulvl, blvl, elvl, awatch) = (k.p::<i8>(10), k.p::<i8>(11), k.p::<i8>(12), k.p::<i32>(13));
-    let (kc, ch, hw, rate, maxlvl) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(4).max(1) as usize, k.f(5), k.i(6).max(1));
+    let (m, hw, rate, maxlvl) = (k.i(0).max(0) as usize, k.i(4).max(1) as usize, k.f(5), k.i(6).max(1));
+    let _ = (hc, uid);
     let mut c = SCtx::new(&k);
-    // The hits, keyed by attacker id (ids are the same on every peer, slots are not).
-    let mut m = 0usize;
-    for ci in 0..kc {
-        let n = g(hc, ci);
-        if n <= 0 { continue; }
-        for j in ci * ch..ci * ch + n as usize {
-            if g(ht, j) > -2 || g(ha, j) < 0 { continue; }
-            s(keys, m, ((g(uid, g(ha, j) as usize) as u32 as u64) << 25) | j as u64);
-            m += 1;
-        }
-    }
+    // The hits, by attacker id (ids are the same on every peer, slots are not); the unused keys last.
     core::slice::from_raw_parts_mut(keys, m).sort_unstable();
     for i in 0..m {
-        let j = (g(keys, i) & ((1u64 << 25) - 1)) as usize;
+        let key = g(keys, i);
+        if key == u64::MAX { break; }
+        let j = (key & ((1u64 << 25) - 1)) as usize;
         let sl = g(ha, j);
         if sl < 0 { continue; }
         let sl = sl as usize;

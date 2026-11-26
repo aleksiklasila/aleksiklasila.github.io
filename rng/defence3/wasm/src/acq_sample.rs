@@ -124,6 +124,10 @@ unsafe fn prepare_area_answers(k:&K,na:usize,players:usize,off:*const i32){
     let ranges=k.p::<f32>(9);let n=k.i(31).max(0) as usize;
     let mut far=0.0f32;
     for s in 0..n {let r=*ranges.add(s);if r>far {far=r;}}
+    area_reach(k,far);
+}
+// (k_acq_area_prefix's second stage takes the masks by its blocks, the reach from the first stage's maxima.)
+unsafe fn area_reach(k:&K,far:f32){
     let reach=ceil(far as f64/(k.f(5)*k.f(29).max(1.0))) as i32;
     // (And the towers' longest reach, P[36]: tower.rs k_tower_acq asks as far.)
     *k.p::<i32>(34)=reach.max(k.i(36)).max(0);
@@ -238,24 +242,51 @@ pub unsafe extern "C" fn k_acq_area_count(a:u32,chunk:i32){
         match candidate(&k,e){Some((ar,owner,_,_,_,_)) if ar<na&&owner<players=>{let key=ar*players+owner;*keyv.add(e)=key as i32;*hist.add(key)+=1;}_=>{*keyv.add(e)=-1;}}
     }
 }
+// The offsets in two stages of P[41] jobs, a block of P[39] keys each (a multiple of the players: whole areas):
+// [40] 0: the block's counts (every range's row, range-major: sequential rows) and their sum, and the largest
+// aggro range of its share of the slots (P[42] each), into acq.saPre ([30]: sums, then the ranges' bits); [40] 1:
+// the block's offsets from the earlier blocks' sums, its ranges' cursors, its areas' team masks, and (job 0) the
+// answers' reach. The same outputs as one pass over every key (5-19 ms serial at ~500k units, then ~14 ms a post at
+// the 1M battle: the chain's one single-job stage, waited for at its commit).
 #[no_mangle]
-pub unsafe extern "C" fn k_acq_area_prefix(a:u32,_chunk:i32){
+pub unsafe extern "C" fn k_acq_area_prefix(a:u32,chunk:i32){
     let k=K::new(waddr(a) as *const i32);
     let na=k.i(20).max(0) as usize;let players=k.i(7).max(1) as usize;let keys=na*players;
     let ranges=k.i(33).max(0) as usize;
     let off=k.p::<i32>(27);let counts=k.p::<i32>(35);let cursor=k.p::<i32>(36);let hist=k.p::<i32>(46);
-    // Range-major, every pass a sequential row: a key's ranges are `keys`
-    // apart, so walking them key by key missed the cache on each (5-19 ms
-    // serial at ~500k units, the chain's longest wait). Same outputs.
-    core::ptr::write_bytes(counts,0,keys);
-    for c in 0..ranges {let row=hist.add(c*keys);for key in 0..keys {*counts.add(key)+=*row.add(key);}}
-    let mut total=0;
-    for key in 0..keys {*off.add(key)=total;*cursor.add(key)=total;total+=*counts.add(key);}
-    *off.add(keys)=total;
+    let pre=k.p::<i32>(30);let jobs=k.i(41).max(1) as usize;let per=k.i(39).max(1) as usize;
+    let j=chunk.max(0) as usize;if j>=jobs {return;}
+    let k0=(j*per).min(keys);let k1=(k0+per).min(keys);
+    if k.i(40)==0 {
+        core::ptr::write_bytes(counts.add(k0),0,k1-k0);
+        for c in 0..ranges {let row=hist.add(c*keys);for key in k0..k1 {*counts.add(key)+=*row.add(key);}}
+        let mut sum=0i32;for key in k0..k1 {sum+=*counts.add(key);}
+        *pre.add(j)=sum;
+        // (The largest aggro range of the job's slots, as prepare_area_answers takes it: from 0, NaN never above.)
+        let rng=k.p::<f32>(9);let n=k.i(31).max(0) as usize;let sp=k.i(42).max(1) as usize;
+        let s0=(j*sp).min(n);let s1=(s0+sp).min(n);let mut far=0.0f32;
+        for s in s0..s1 {let r=*rng.add(s);if r>far {far=r;}}
+        *pre.add(jobs+j)=far.to_bits() as i32;
+        return;
+    }
+    let mut base=0i32;for i in 0..j {base+=*pre.add(i);}
+    for key in k0..k1 {*off.add(key)=base;*cursor.add(key)=base;base+=*counts.add(key);}
+    if j+1==jobs {*off.add(keys)=base;}
     // (Each range's cursor: its key's offset plus the earlier ranges' counts;
     // the cursors end as the serial build left them, offset + count.)
-    for c in 0..ranges {let row=hist.add(c*keys);for key in 0..keys {let h=row.add(key);let v=*h;let cur=*cursor.add(key);*h=cur;*cursor.add(key)=cur+v;}}
-    if k.i(28)==1 {prepare_area_answers(&k,na,players,off);}
+    for c in 0..ranges {let row=hist.add(c*keys);for key in k0..k1 {let h=row.add(key);let v=*h;let cur=*cursor.add(key);*h=cur;*cursor.add(key)=cur+v;}}
+    if k.i(28)==1 {
+        let mask=k.p::<i32>(37);
+        for ar in k0/players..k1/players {
+            let mut m=0;
+            for foe in 0..players {if *counts.add(ar*players+foe)>0 {m|=1<<foe;}}
+            *mask.add(ar)=m;
+        }
+        if j==0 {
+            let mut far=0.0f32;for i in 0..jobs {let r=f32::from_bits(*pre.add(jobs+i) as u32);if r>far {far=r;}}
+            area_reach(&k,far);
+        }
+    }
 }
 #[no_mangle]
 pub unsafe extern "C" fn k_acq_area_scatter(a:u32,chunk:i32){
