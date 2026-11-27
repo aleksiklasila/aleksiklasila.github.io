@@ -50,10 +50,15 @@ function _laserEnsure(T) {
     M.hdr = I('lz.hdr', 8, 0);
     M.slt = I('lz.slt', cap, -1); M.sfree = I('lz.sfree', cap + 1, 0); M.part = I('lz.part', 16 * cap); M.pn = I('lz.pn', 4 * cap);
     M.rnext = I('lz.rnext', cap); M.cnext = I('lz.cnext', cap); M.sb = I('lz.sb', 8 * cap); M.sbn = I('lz.sbn', 2 * cap); M.ev = I('lz.ev', cap);
-    const bc = 2 * cap;
+    // (Beams: a laser starts at most 8 (4 along its row, 4 down its column, laser.rs lz.sb); 2 a slot ran out in lines
+    // of lasers (131k lasers, ~5 beams each) and the rest of the links made no beam.)
+    const bc = 8 * cap;
     M.ba = I('lz.ba', bc); M.bb = I('lz.bb', bc); M.bown = I('lz.bown', bc); M.bfree = I('lz.bfree', bc + 1, 0); M.border = I('lz.border', bc);
     M.bdmg = _laserArr('lz.bdmg', Float32Array, bc); M.hit = _laserArr('lz.hit', Uint8Array, bc); M.blive = _laserArr('lz.blive', Uint8Array, bc); M.blive.fill(0);
     M.bkeys = _laserArr('lz.bkeys', Float64Array, 2 * bc);
+    M.bsa = I('lz.bsa', bc); M.bsb = I('lz.bsb', bc); M.ldmg = _laserArr('lz.ldmg', Float32Array, cap);
+    // (The beam scan's lists (tfx.rs k_beam_scan): two entries a beam, per job counts.)
+    M.bev = I('lz.bev', 2 * bc + 256); M.bevc = I('lz.bevc', 2 * LASER_SCAN_JOBS_MAX);
     M.N = N; M.scap = cap; M.bcap = bc;
     // (Made whole: every slot and beam starts over from the world.)
     M.hdr[5] = 1;
@@ -72,12 +77,12 @@ function _laserMapBuild() {
     if (any) {
         P[0] = GRID_W; P[1] = GRID_H; P[2] = TYPE_WALL; P[3] = ty; P[4] = M.scap; P[5] = M.bcap;
         simRustDirect('k_laser_lines', [_ST.code, _ST.brain, _ST.own, _ST.uc, _ST.val, _ST.rrow, cellType, M.lslot, M.slt, M.sfree, M.part, M.pn,
-            M.rhead, M.chead, M.rnext, M.cnext, M.sb, M.sbn, M.ba, M.bb, M.bown, M.bfree, M.blive, M.walk, T.c_effectiveLevel, T.c_level, M.hdr, M.rd, M.cd, M.ev], P);
+            M.rhead, M.chead, M.rnext, M.cnext, M.sb, M.sbn, M.ba, M.bb, M.bown, M.bfree, M.blive, M.walk, T.c_effectiveLevel, T.c_level, M.hdr, M.rd, M.cd, M.ev, M.bsa, M.bsb], P);
     }
     if (!(M.hdr[2] > 0)) { M.hdr[3] = 0; return M; }
     const S = statTablesStatic(), X = _adjPlayerStats(S), NT = _adjTypeKeys(), tc = _simParReg['tc.dmg'] || null;
     P[0] = S.nk; P[1] = S.L1; P[2] = S.R1; P[3] = NT; P[4] = MAX_THING_LEVEL; P[5] = players.length; P[6] = GRID_W;
-    simRustDirect('k_laser_dmg', [M.ba, M.bb, M.blive, M.bdmg, _ST.brain, _ST.own, _ST.rrow, _simParReg['adj.tykey'], X.rlv, X.bl, S.dmg, tc, M.bkeys, M.border, M.hdr], P);
+    simRustDirect('k_laser_dmg', [M.ba, M.bb, M.blive, M.bdmg, _ST.brain, _ST.own, _ST.rrow, _simParReg['adj.tykey'], X.rlv, X.bl, S.dmg, tc, M.bkeys, M.border, M.hdr, M.slt, M.ldmg, M.bsa, M.bsb], P);
     return M;
 }
 // Once a tick, before the towers' updates (gameTick): the laser lines, then
@@ -101,8 +106,19 @@ function laserBeamsTick() {
     P[4] = GRID_W; P[10] = simDk; P[11] = gameTime; P[12] = LASER_REPORT_TICKS; P[13] = _sxEpoch; P[14] = nTraps;
     P[15] = traps ? traps.players : 0; P[16] = traps ? traps.levels : 0; P[17] = traps ? traps.types : 0; P[18] = M.lastReports;
     const X = _sxPar, A = traps || {};
+    // Many beams: their tiles with something there listed on the helpers first (tfx.rs k_beam_scan), in the order's
+    // chunks; the tile effects then visit only those, in order (the same hits). (Every tile of ~900k beams on this
+    // thread was ~40 ms a step in lines of lasers.)
+    const nOrd = M ? M.hdr[3] : 0;
+    if (nOrd > 0 && nOrd >= LASER_SCAN_MIN && typeof simRustParallel === 'function' && typeof _simPool !== 'undefined' && _simPool) {
+        const jobs = Math.min(LASER_SCAN_JOBS_MAX, Math.ceil(nOrd / 8192)), per = Math.ceil(nOrd / jobs), cap = Math.floor((M.bev.length - 256) / jobs);
+        const SP = _laserScanP;
+        SP[0] = nOrd; SP[1] = per; SP[2] = GRID_W; SP[3] = _sxEpoch; SP[4] = cap;
+        simRustParallel(SIM_BLOCK_BEAM_SCAN, [M.border, M.ba, M.bb, M.bown, X.stamp, X.cnt, _ST.stab, _ST.own, M.bev, M.bevc], SP, jobs);
+        P[19] = jobs; P[20] = per; P[21] = cap;
+    }
     const tail = [X.stamp, X.start, X.cnt, _sxESlot, C.dead, C.owner, C.energy, C.id, C.lzFlags, C.lzAcc, C.lzBeam, C.lzEv, M.list,
-        C.upT, A.tres || null, C.stIx, T ? T.hdr : null, T ? T.free : null, C.stBu, C.stBd, C.stPo, C.stPd, C.stFr, C.stId, C.stWe, C.stSa, M.out];
+        C.upT, A.tres || null, C.stIx, T ? T.hdr : null, T ? T.free : null, C.stBu, C.stBd, C.stPo, C.stPd, C.stFr, C.stId, C.stWe, C.stSa, M.out, P[19] > 0 ? M.bev : null, P[19] > 0 ? M.bevc : null];
     const K = _structHitsRun('k_tile_effects', [M.ba, M.bb, M.bown, M.bdmg, M.hit, M.border, M.hdr, Tt ? Tt.c_laserState : null, _ST.own,
         A.list || null, A.k || null, A.l || null, A.t || null, A.tg || null], P, Math.max(1, nb) * (MAX_THING_LEVEL + 2), tail);
     if (!K) return;
@@ -128,7 +144,10 @@ function laserBeamsTick() {
     _structHitsAfter(K, (b, tb, dmg) => { const own = M.bown[b]; pushHostileDamageAlert(tb, dmg, own); recordDamageVisual(tb, dmg, own); if (simStepCrosses(0, 10)) createExplosion(tb.x, tb.y, "#f84", 1); });
     if (M.out[1] && simStepCrosses(0, 40)) { const tl = M.ba[M.border[0]], gx = tl % GRID_W; playSound('laser_tick', gx * TILE + TILE / 2, ((tl - gx) / GRID_W) * TILE + TILE / 2); }
 }
-const _laserReportP = new Float64Array(8), _laserStructP = new Float64Array(24);
+const _laserReportP = new Float64Array(8), _laserStructP = new Float64Array(24), _laserScanP = new Float64Array(8);
+// (The beam scan on the helpers from this many beams; at most this many jobs.)
+let LASER_SCAN_MIN = 16384;
+const LASER_SCAN_JOBS_MAX = 64;
 // A structure hit kernel's shrine sums into the players' pending income.
 function _shrineAdd(A, NO) {
     for (let o = 0; o < NO; o++) if (A[o] > 0) { if (o >= _shrinePendingFixed.length) { const a = new Float64Array(o + 8); a.set(_shrinePendingFixed); _shrinePendingFixed = a; } _shrinePendingFixed[o] += A[o]; }
@@ -465,9 +484,6 @@ class Tower {
     // (No constructor: a structure is its row, placed by the placement kernel (plc.rs k_struct_place), its object
     // made when read (data_state.js structRowObj); a snapshot's by utils_snapshot.js _snapStructShell.)
 
-    upgrade() {
-        addManualStackToThing(this, 1);
-    }
 
     updateTextCache() {
         let label = getLevelLabelText(this);

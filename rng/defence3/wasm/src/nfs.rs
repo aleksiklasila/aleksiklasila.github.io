@@ -1251,7 +1251,7 @@ pub unsafe extern "C" fn k_pslot_changes(a: u32, _chunk: i32) {
         if prev >= 0 && (prev as usize) < b.n && g(psrc, prev as usize) != id {
             let pu = prev as usize;
             // (The slot's structure shown on this tile: freed; one a cycle gave the slot since stays.)
-            if pu < fcap && g(fgx, pu) as usize == t % w && g(fgy, pu) as usize == t / w && g(psrc, pu) >= 0 {
+            if pu < fcap && w > 0 && g(fgx, pu) as usize == t % w && g(fgy, pu) as usize == t / w && g(psrc, pu) >= 0 {
                 let v = g(psrc, pu);
                 let (rs, rn) = pslot_rs(cls, (v as u32 >> 24) as usize);
                 let rr = (v & 0xFFFFFF) as usize;

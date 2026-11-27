@@ -33,7 +33,7 @@ Units:
 Structures:
 - S1: (found 2026-11-02: a structure's fields are already columns of its class's table, data_state.js `_sTables`, the object a handle over its row `_sr`; production state, `_qN`/`_qLv`/`_qReq`/`_qPaid`, is columns, event-driven.) The presentation structure table (SIM_STRUCT_SPEC) is still filled by copying every structure's ~45 fields through accessors (`_simWriteStructure`, the metadata sweep and tile changes, ~28 ms a step): written by the column setters on change instead, or the page reading the class tables' columns, so no per-step sweep.
 - S2 (done 2026-11-02: wasm/src/spr.rs, barrack.js spawnerProductionPass; the spawns themselves still JavaScript around the batch): production (`updateSpawnerProductionProgress`, ready order, `processGlobalSpawnerQueue`) as one wasm pass over the rows, emitting the step's spawn batch (U3).
-- S3: towers, upgrades/stacking, salvage, research labs, construction on the rows; placement and removal as row writes.
+- S3: towers, upgrades/stacking, salvage, research labs, construction on the rows; placement and removal as row writes. (Placement done 2026-11-27: plc.rs k_struct_place, objects lazy (data_state.js structRowObj), constructors gone; removal: dst.rs k_struct_destroy. stacking on a standing structure: the same kernel. Left: the area upgrader.)
 - S4: the remaining structure objects (adjacency, worker targets, cell items) to rows; lazy handles until then.
 
 Each stage: measure in Edge (profile + `?simtrace=1`), keep peers deterministic (two-peer chaos runs, `tests/multiplayer-chaos-determinism.test.cjs`), then the tests.

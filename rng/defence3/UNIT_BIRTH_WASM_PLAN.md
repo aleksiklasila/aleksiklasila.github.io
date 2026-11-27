@@ -166,9 +166,9 @@ Open:
   selected): move look / scatter into the lane on a snapshot of the
   selected units' columns, or shrink.
 - Worker subgroups make no new units on x2 (worker records in wasm).
-- Two peers with different histories restored from one snapshot diverge
-  even without q / e (found while writing the snapshot test): a restore
-  bug, pre-existing.
+- (Resolved, 2026-11-27: no longer reproduces: tests/restore-different-histories.test.cjs, two histories (units,
+  structures, orders, deaths) restored from one snapshot, 400 ticks equal.) Two peers with different histories restored
+  from one snapshot diverged even without q / e (found while writing the snapshot test).
 - Memory: ~270 B per reserved selection entry (the 96-byte row buffer
   first).
 

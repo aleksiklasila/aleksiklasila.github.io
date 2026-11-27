@@ -11993,3 +11993,212 @@ Burst steps at 1M (simtrace, burst vs normal at dk 2): +66 ms; timed phases +25 
 structure presentation 3.6, meta rows 2.9), the rest runQueuedOrders (untimed in simtrace: added to the list below). Next:
 placement (placeBuilding ~75 us a structure: the Tower/Barrack/Spawner objects, setTileEntity) as a kernel with lazy
 structure handles (a placed structure's object holds only _sr, _sdet, _hgx, _hgy: rowcensus.cjs / ownkeys.cjs).
+
+### 2026-11-27 - structure placement as a kernel, lazy structure objects (TABLES_CONVERSION_PLAN.md S3, placement)
+
+**Placement (things_utils.js placeBuilding: a place action, starter buildings, a snapshot's) is plc.rs k_struct_place.**
+The checks (the building limit, one cloud of a type (the cloud tiles' heap list), in sight (the cover by area), the
+area held by another player (solo; map.js _mapAreas' tiles by area), a wall, an occupied tile, the same structure
+there), the row taken from the class table's pool (now heap words: T.rh = rows, free rows, rows with defaults,
+capacity; T.n / nfree / _lz accessors over them; the free rows in the heap) and written as the constructors and the
+placement wrote it, the tile's entry (code, owner and counts, region count, uc, val, tim, the brain word, the class
+indexes), the cell's owner, the marks (adjacency 3x3, the owner's work version, the tile journal, the collectors'
+groups' journal), the tower due entry. JavaScript after it (things_utils.js _structPlace): the counters from the header,
+list versions, the walk classes (simMoveTileEntityChanged), a laser's lines and a laser's / cloud's lists (its object),
+presentation, sound. The same structure standing there: its stacks (the stacking, while manual stacking orders more:
+off by default). The area upgrader keeps its own path (an area's multiplier).
+
+**No objects made:** a structure is its row; data_state.js structRowObj makes the object (Object.create of the class,
+the hidden fields, _sr) when it is first read (getTileEntityRef, structAtTile, the lists' fill, the destroy, status and
+adjacency events). A placed structure's object held only _sr, _sdet, _hgx, _hgy (ownkeys.cjs), so nothing else changes.
+The Tower / Barrack / spawner constructors are gone (no callers: snapshots make shells); tests that built loose
+structures use the snapshot shell (_snapStructShell) or placeBuilding. Tower's textCtx left the table (presentation, not
+in snapshots).
+
+Checked against the object path before the change (tests/struct-place-state.cjs, captured with the old code: 59 tries of
+every class with and without the rules, refusals included): every row's columns, tile entries, cells, per-owner counts,
+list versions, adjacency set, work checksum and the state hash at tick 0 and 60 identical (textCtx aside). New
+tests/struct-place-kernel.test.cjs (rows, tiles, cells, refusals incl. a contested area, two runs equal). 57 structure
+tests in page mode and 13 (struct, snapshot, laser, limits, multiplayer snapshot / features / scenarios /
+chaos-determinism) in worker mode pass.
+
+Measured (1M rendered, hectic2 bursts, worker profile 60 s, 14 bursts): placeBuilding 55.6 -> 29.5 ms (of it 16 ms a
+one-time area list build, since replaced by the map's own lists: ~1 ms a burst left), processActions 229 -> 192 ms,
+runQueuedOrders 162 -> 104 ms, _issueGroupMoveOrderList 41.9 -> 1.1 ms (held units' orders, earlier entry). Burst step
+over a normal one (simtrace, dk 2-3): +66 -> +18-19 ms; steps p95 113, max 132 ms (was ~180-209).
+- Left in a burst step: processActions +9-11 (whole-army admission ~2.8 ms a burst, 400 queue actions 1.3, rally 0.9,
+  a boost 0.7, 40 research adds 0.6), runQueuedOrders +4-7, _simPostResult +4-5, structure presentation +3, meta rows
+  +2.6, frame encode +1.6.
+
+### 2026-11-27 (later) - stacking on a standing structure in the placement kernel; scenes checked; a restore over different histories
+
+**Stacks ordered on a standing structure (manual stacking on): plc.rs k_struct_place's same-structure branch.** Its
+stacks up to the order's as addManualStackToThing did (none taken away): stacks as read, manualStacks, level
+(stackCountToLevel), its stat cache entry (mTok), the brain word's base level, the tower due entry, the adjacency marks;
+JavaScript only the events (adjacency counters and the lane's mark, derived overrides when it has any, upkeep, the
+batch's progress op, presentation). addManualStackToThing, stackThingUpTo and Tower.upgrade (no callers) are gone.
+stackbench.cjs (600 orders outside a batch): 99 -> 64 us an order. structure-stack-target, manual-stacking-setting
+(peers agree), the 49-test structure battery pass.
+
+**Rendered fuzz (fuzzdrv + hectic2), after the placement and order changes:** chaos-1m-250k steps max 138 ms (20 TPS),
+FPS 99, frames > 50 ms 8, max 100; attack-200k-8teams steps max 58 ms (20 TPS, dk 1), FPS 101, max frame 66 ms. The 4M
+scenes do not load: mixed-4m-4teams' map is past the 1024 x 1024 limit, 4M-realistic has 1.15M units a team (the WASM32
+budget allows 524,288). 1M simulation thread by kernel (named build, sample counts, selfcount.cjs): mv_move_occupancy
+4.8 s of 54 s, then k_combat_brain 0.54, k_status 0.52, k_eff_units 0.46 (all on the helpers); the serial ones
+k_tower_fire 0.37 s (~0.9 ms a step) and k_struct_hits 0.12 s. Little JavaScript left on that thread (simParallelRun
+waits, trace wrappers).
+
+**Restore over different histories:** the open item (UNIT_BIRTH_WASM_PLAN.md) does not reproduce: new
+tests/restore-different-histories.test.cjs (two peers, different battles with units, structures, orders and deaths,
+both restore one snapshot, 120 / 400 ticks: every tick's hash and the full hash equal).
+
+### 2026-11-27 (night) - new scenes (lines of structures, 8 teams, workers, structures); lasers at scale: a beam cap, the beam sort, the tile effects on the helpers
+
+**New scenes** (tests/make-lines-scene.cjs, new; tests/make-mixed-scene.cjs): `lines-*` = team 0's structures in 135
+lines across the 1000x1000 map every 6 rows, team 1's units in the bands between (131,072 each: the structures'
+budget at a population of 131,072 a team): towers, lasers, floor traps, mixed; variants fragile units (energy 5),
+fragile structures (energy 5, team 0 units kept so the match goes on), max research at level 20; mixed-1m-8teams
+(fronts everywhere), workers-600k (80 % workers), structs-400k (8 structures a cell). Balance scenarios
+(tests/scenarios/*, up to 70k units) all smooth: 120 FPS, steps < 37 ms.
+
+Rendered fuzz results (fuzzdrv + hectic2, 60-90 s): lines-towers / floor / fragile-units steps max 39 / 53 / 48 ms, FPS
+116-118; workers-600k max 85 ms, structs-400k 115 ms (20 TPS); **mixed-1m-8teams: steps 222 ms mean at dk 6-9,
+max 482, FPS 82, one 465 ms frame** (next); **lines-lasers: 64 ms steps, laserBeamsTick 44 + _structHitsRun 16**.
+
+**Lasers at scale (tower.js laserBeamsTick, laser.rs, tfx.rs):**
+- **A cap that dropped beams:** the beam table was 2 a laser slot (lz.bcap = 2 x the tower table's capacity); lines
+  of lasers need ~7 (589,824 beams = the cap: a third of the links made no beam, silently). A laser starts at most 8
+  (4 along its row, 4 down its column): lz.bcap = 8 x cap (~400 B more a structure, within MEMORY_STRUCT_BYTES).
+  All 901,899 beams now.
+- **k_laser_dmg:** the beams' canonical order (a radix sort of every beam) only when the beams changed (lz.hdr[6] the
+  beams' version, bumped where a beam is added or let go, [7] the order's); the damage per laser slot once (lz.ldmg,
+  ~131k lookups) and each beam's the sum of its two lasers' (lz.bsa / lz.bsb, written with the beam): the same f32
+  sums in the same order.
+- **k_tile_effects' beam pass:** the beams' tiles with something on them (units listed there, a hostile tower /
+  barrack / spawner) listed on the helpers first (tfx.rs k_beam_scan, SIM_BLOCK_BEAM_SCAN 13, a chunk of the
+  canonical order a job, two entries a beam), then applied in order on this thread (each job's list, then the rest of
+  its beams when its list ran out or a beam was past 31 tiles): the same hits in the same order. From 16,384 beams
+  (LASER_SCAN_MIN). multiplayer-chaos-determinism with CHAOS_HOST_HELPERS=4 and LASER_SCAN_MIN = 0 (the host scans
+  on its helpers, the guests serially): 2,646 tick hashes a map equal; laser-links / -incremental / -activation pass.
+- Measured lines-lasers (rendered): with the capped beams 63.7 ms steps (laserBeamsTick 44, structHits 16); all
+  beams + sort skip + per-slot damage 66.3 (structHits 41: 53 % more beams); + the helpers' scan **40.3 ms mean, p95
+  48, max 68** (laserBeamsTick 27, structHits 14).
+- Fixed on the way: a data segment (panic locations) from a `%` the compiler could not prove nonzero in a closure
+  (tfx.rs rem_euclid, nfs.rs t % w): guarded.
+
+### 2026-11-27 (day) - the 8-team 1M battle: acquisition's area answers as one search a team, into the scan's records
+
+**Where the 8-team steps went (mixed-1m-8teams, rendered, simtrace + named worker profiles, tests/test-runs/loop-20261127).**
+Steps 238 ms mean (dk 5-9), p95 431; every other early step ~450 ms with updateAllPlayerVisibility ~85 ms (the
+visibility commit waiting for its chain on SIM_LANE_T5). waitslice.cjs (new: the helpers' kernels inside the windows
+where a sim-worker function is on the stack, against the whole run): in those waits the helpers ran k_combat_brain 22 %,
+k_acq_sample 16 %, k_acq_area_answers 13 % (SIM_LANE_T10 ranks ahead of T5). Over the whole run **k_acq_area_answers
+was 22.6 % of all helper CPU, more than mv_move_occupancy (13.2 %)**: 40 jobs a run (8 teams x 5 answers), each a
+breadth-first search over all 120,736 areas (all reached, maxd 10), 8-10 ms each in the game, 302 ms CPU a run.
+- In the game everything memory-bound runs ~4-6x slower than alone: a plain JS search over the area graph is 14-21 ms in
+  the sim worker, 3.4 ms in bare Node on a grid graph of the same size. Not the ids' order: neighbouring areas' ids are
+  all within 1024 of each other (acqloc-weval.js), renumbering by first tile changed nothing.
+- **k_acq_area_answers now one job a team, its five answers in one search** (acq_sample.rs): an 8-byte record an area
+  (acq.saLv; byte l = label l's distance, 0xFF none; SWAR zero-byte masks), a level's frontier = the areas that took
+  any label on the level before, each passes its labels of that level to neighbours without them (the first to reach
+  one gives the answer: distances exact, a tie between equally near seeds by frontier order, deterministic). The
+  answers and distances go straight into the scan's 32-byte records (acq.saRec, the format area_batch reads), the seeds
+  too (k_acq_area_seed into words 1-4), and k_tower_acq reads the records: **k_acq_area_pack and acq.saNearest /
+  saDistance / saStructure / saStructureDistance / saQueue are gone** (~31 MB of queues and arrays at 8 teams).
+  Checked in the scene (acqans3-weval.js): 4.8M (team, label, area) distances equal a plain per-label search's, every
+  answer one of its label's seeds. A run's answers 302 -> ~255 ms CPU (8 jobs of 23-36 ms).
+- Tried first (kept neither): a pull sweep (each unreached area looks at its neighbours every level: 235 ms, the areas
+  far from any frontier rescanned each level), the push search with the answers in five separate arrays (259 ms).
+- k_vis_seed: a per-job cache of its own marks (team + area -> most steps marked) and skipping a unit at the same
+  place and key as the one before: no change (29 ms for 535k sighted units either way; consecutive units almost
+  never share a tile and key: 171 of 535k), kept (cheap, exact).
+- Rendered 60 s (m8-b -> m8-c): steps mean 237.7 -> 213.8 ms, p95 431 -> 396, updateAllPlayerVisibility 24.0 -> 16.5,
+  simParallelBackgroundWait 32.9 -> 18.6, FPS 114-116 -> 119-120. The early visibility waits (~90 ms every other step
+  at ~950k units) are left: the acquisition lane still fills the helpers ahead of it.
+- **A label's answer is the least seed among the nearest** (on a tie at a level: the least of the neighbours' a level
+  nearer), so each label's result is its seeds' alone, whatever the other labels or the search's order; and
+  **k_acq_area_seed hashes each structure class's tiles first** (acq.saSh, 12 words a team: two 64-bit mixes summed
+  per class, the reach, the changed classes): a class whose tiles and reach are as at its last run on the same records
+  and layout (unit.js _acqKept, P[37]) keeps its answers and distances in the records and is not searched. Exact:
+  acqans4-weval.js (4.8M distances and answers equal a JS search with the least-seed rule; a second run with nothing
+  changed leaves the records identical to a full one: 146 vs 333 ms on this thread). In this battle it does not pay:
+  acqchg-start.js counted the changed classes after every commit: every team's three non-empty classes change on every
+  run (visibility at the fronts all over the map); kept for calmer play. multiplayer-chaos-determinism
+  (CHAOS_HOST_HELPERS=4), restore-different-histories, tower-kernel-cases / -structures-only / -due-table,
+  structure-targeting, area-search-range, shared-spatial-determinism pass.
+- Helper CPU after (m8-p, named): k_acq_area_answers 22.6 -> 18.9 %, idle 11.2 -> 16.4 %. Left in the visibility
+  waits: k_combat_brain 34 %, k_acq_sample 19 % (the acquisition lane ahead of T5).
+- **The least-seed rule cost more than it saved** (two random record reads at every tie: prof build, k_acq_area_answers
+  24.6 % of helper CPU). Replaced: **the frontiers are bitmaps** (a bit an area, after the records in acq.saLv), walked
+  in area order, so an area takes a label's answer from its lowest-numbered neighbour a level nearer holding it:
+  canonical per label (the reuse stays exact), no lists, no answer reads, and the walk in area order is local.
+  acqans4-weval.js: 0 of 4.8M distances or answers differ from a JS search with that rule (level by level, frontiers
+  sorted); the kept run's records equal a full one's. A run's answers on this thread: **full 163 ms, kept 78 ms**
+  (302 at the start of the day).
+- **k_acq_area_seed skips empty tiles 16 at a time** (i8x16 range test on acq.scls, the structure tiles in tile order):
+  seeds 40 -> 12.6 ms (8 teams, full), the hash-only pass 21 -> 3.4 ms.
+- Rendered 60 s (m8-e): steps mean 213.8 -> **198.5 ms** (237.7 at the start), p50 189 -> 167, p95 396 -> 383,
+  updateAllPlayerVisibility 16.5 -> 9.7, simParallelBackgroundWait 18.6 -> 8.5. multiplayer-chaos-determinism
+  (CHAOS_HOST_HELPERS=4) and the targeting / restore tests pass again.
+- **Long background chunks starve the step's short parallel kernels.** New trace fields (sim_parallel.js, tracing
+  only): own:<kernel> = chunks this thread ran itself; par.bgus [528 + id] = each kernel's longest background chunk
+  on the helpers (bgmax-start.js). The relayout's slot move (k 141, 62 chunks of ~1 ms) had the sim thread run 55 % of
+  its chunks (fair share 11 %): 11 ms wall for ~5 ms of work. Longest background chunks: **k_acq_area_answers up to
+  90 ms** (one team's five labels), the acquisition scan 36, vis spread 31, index scatter 30, index build 23, brain 17.
+- So the answers are **a job a label and team again** (40 jobs, chunk = label * teams + team: concurrent jobs write
+  other teams' records), each a single-label search over its own distance byte an area (120 KB) and two frontier
+  bitmaps (acq.saLv, lv_stride), the same lowest-numbered-parent rule (acqans4-weval.js: exact, kept = full), the
+  distance straight into the record's u16 at 10 + label. Longest job 11.5 ms (from ~20-90); a run's CPU on this
+  thread 233 ms full (157 for the one-job-a-team search), 48 ms with the structure classes kept (74).
+- Alternating A/B in one sitting (ab-B1/A1/B2/A2, 45 s each, rendered; a switch for the test only, removed): a job a
+  label 253 / 262 ms mean steps, a job a team 259 / 249: no difference; kept the job a label (simpler, shorter, less
+  memory). This sitting ran ~25 % slower than the one before (m8-e 198.5): never compare across sittings.
+- **Reverted to a job a team**: in the game (bgmax-start.js over a 45 s rendered run) the job-a-label answers took
+  82 s of helper time over 861 ticks (95 ms a tick) against 51 s / 895 (57 ms a tick) for a job a team, longest
+  chunk 57 vs 68 ms: five jobs a team pull every record line of the team five times. The job-a-team search keeps its
+  bitmap frontiers, the lowest-numbered-parent rule and the kept classes (acqans4-weval.js: exact, kept = full; 161 /
+  81 ms on this thread); acq.saLv is 8 bytes an area + two bitmaps a team (lv_stride).
+- The acquisition lane (SIM_LANE_T10) is ~730 ms of helper CPU a step at dk 6 (109 s over ~150 steps): ~42 % of the
+  8 helpers. Of it the answers ~47 %, the scan (k_acq_sample) 15 %, the brain 16 %. The longest-chunk numbers include
+  the helpers' own preemption (a 256-slot scan chunk of 46 ms): use them for ranking only.
+- **The answers' search as three chain stages by level** (a job a team each: the seeds and levels 1-2, 3-5, the rest
+  and the distances; P[44] the part, P[45] / P[46] the split levels; the search's place between stages in the team's
+  acq.saSh words 11-13, SHW now 16). Same CPU (156.5 ms on this thread, exact, kept = full), longest job on this
+  thread 23 -> 8.5 ms. In the game (m8-j -> m8-k, same sitting): the relayout's slot move 11.1 -> 5.6 ms (the sim
+  thread's own share of its chunks 52 -> 24 %), the remap 7.2 -> 5.6 ms; steps mean 214.9 -> 212.3, p50 187 -> 175
+  (p95 372 -> 423: the early battle, noise). Determinism and targeting tests pass.
+- Also measured: chaos-1m-250k rendered fuzz + hectic2 bursts (c1m-a, 90 s): 20 TPS throughout, steps mean 93, p99 147,
+  max 158 (warm-up only), FPS 98.9, 8 frames > 50 ms (max 75).
+- Next in the 8-team battle: the acquisition lane is still ~40 % of helper CPU (answers ~half, the combat brain and the
+  scan ~15 % each); the brain's per-unit area windows (38 % of it: the target's x, y and four area-grid reads, random)
+  and range queries (25 %).
+- **The area table's build with one histogram** (acq_sample.rs k_acq_area_count / _prefix / _scatter): the counts by
+  atomic adds (a run of one key's entries one add), a zero stage first (k_acq_area_prefix mode 2), the offsets'
+  stages over the one histogram, the scatter by an atomic cursor a key (a run one add): the order within a bucket is
+  the threads', k_acq_area_sort orders every bucket by id right after. acq.saHist (a histogram a range over every key:
+  ~31 MB with 8 teams) is gone; ranges of ~16k entries, up to 64. Checked in the scene (acqtab-weval.js): the
+  helpers' table (33 ranges, 537k entries) equals the same stages run again serially, offsets, entries and team
+  masks. Helper time over a 45 s run: count 5.5 -> 4.0 s, offsets 4.4 -> 1.3 s (scatter 3.6, sort 2.2 as before).
+  multiplayer-chaos-determinism (host on 4 helpers, guests serial) and the targeting / restore tests pass.
+- The acquisition lane now (m8-m, 885 ticks): 108 s of helper time; answers 55 s, brain 19, scan 15.5, seeds 4.9,
+  count 4.0, scatter 3.6, sort 2.2, offsets 1.3.
+- **The combat brain's in-range shortcut** (k.rs k_combat_brain, acq_sample.rs area_batch): the scan writes its area
+  distance from the unit's window to its answer's area (acq.od, u8, 255 none); a question whose target is that answer
+  (a unit's new target, or the fallback's) with the distance within the unit's reach in area steps (acq.rk) is in range
+  without the windows and the area search (the target's own tile's area is in its window: some pair is that near).
+  brainod-weval.js: 610k of 1M slots take it; the brain's outputs (bm, bt, btid, bf) equal the run without it; 142.7 ->
+  112.6 ms on this thread. In the game: brain 19.2 -> 16.9 s of helper time over 45 s. combat-effects, combat-reach,
+  hold-move-order, multiplayer-border-combat, multiplayer-chaos-determinism pass.
+- **The answers as one bit-parallel pull search of every team and label** (acq_sample.rs k_acq_area_answers): a group
+  of twelve teams a u64 an area (bit label * 12 + team), reached and two frontier masks (acq.saLv, 24 bytes an area a
+  group); a stage a level (8 level stages, jobs over 16 area ranges a group, then one job a group for the levels past
+  them; acq.saLvH level flags, cleared by the seed stage): an area not yet holding a label takes it from its first
+  neighbour on the previous frontier, the neighbour lists sorted ascending once a layout (new k_csr_sort on the
+  answers' copy acq.anb), so from its lowest-numbered parent: the same answers as before. acqans4-weval.js: exact
+  against the JS search, kept = full; 134.5 ms on this thread (156.5), longest chunk 10 ms. In the game (m8-o, 45 s):
+  answers 55-61 -> **42.2 s** of helper time, the acquisition lane 114 -> 94 s, steps mean 204.9 -> 197.7 (same sitting).
+  multiplayer-chaos-determinism, targeting, combat and restore tests pass.
+- Occupancy (back in scope, user 2026-11-27): counter build (--features=dbgc, Node tickbench SOLO, dk 6, 300 steps):
+  traffic_swap passes its first gates ~111k times a step (~400k units), ~12k reach the final checks; the 3x3 chunk scan
+  per attempt cannot be narrowed exactly (a partner may be up to OCC_WMAX = 32 cells wide). Profile self time spread:
+  traffic_swap 13.7 %, motion_f 9.2, checked_traffic_q 7.9, preview 6.2, occ_gather 5.9, seg_clear 5.2. Not changed.

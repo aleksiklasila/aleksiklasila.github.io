@@ -36,6 +36,12 @@ function run() {
         place(tiles[2][0], tiles[2][1], keys[2]);
         // Rules off (starter buildings, snapshot decode): placeBuilding itself.
         for (let i = 0; i < 6; i++) { const [gx, gy] = tiles[ti++]; placeBuilding(gx, gy, keys[(i * 5) % keys.length], me, { silent: true, ignorePlacementRules: true, autoUpgradeEnabled: true, buildEnabled: true, stacks: 1 + (i % 3) }); out.tries.push([gx, gy, 'raw:' + keys[(i * 5) % keys.length], !!getTileEntityRef(gx, gy)]); }
+        // (Contested, solo: another player's structure in an area, no placement elsewhere in it; a tile of an area with
+        // none of theirs still placed.)
+        { const [cx, cy] = tiles[ti++], c = cy * GRID_W + cx, M = _mapAreas, ar = cellArea[c];
+          placeBuilding(cx, cy, 'pistol', 1, { silent: true, ignorePlacementRules: true });
+          let other = -1; for (let j = M.off[ar]; j < M.off[ar + 1]; j++) { const q = M.tiles[j]; if (q !== c && !_ST.ctab[q] && cellType[q] !== TYPE_WALL && isTileActuallyVisibleToPlayer(me, q % GRID_W, Math.floor(q / GRID_W))) { other = q; break; } }
+          out.contested = other >= 0 ? !!place(other % GRID_W, Math.floor(other / GRID_W), 'sniper') : null; }
         // Every structure placed: its row, its tile's entries, its cell.
         const rows = [];
         for (const [gx, gy] of tiles.slice(0, ti)) {

@@ -3921,7 +3921,11 @@ const _acqOwn = {};
 // The job's copies that are still good (their sources not written since they were made): the structure tables
 // (2 MB at a 1024 map: written when a structure is made or goes, _simMoveStructVer) and the area graph (17 MB:
 // made once a layout, _simAreaLayoutVer). Copied at every post they were 6 ms a post of this thread.
-const _acqKept = { sver: -1, s0: null, s1: null, d0: null, d1: null, aver: -1, a0: null, a1: null, e0: null, e1: null };
+// (The answers' search: a group of twelve teams' state bytes (acq_sample.rs lv_stride, GS), its level stages.)
+function _acqLvStride(A) { return 24 * A; }
+function _acqGroups(np) { return Math.max(1, Math.ceil(np / 12)); }
+const ACQ_ANS_LEVELS = 8, _acqCsrP = new Float64Array(4);
+const _acqKept = { sver: -1, s0: null, s1: null, d0: null, d1: null, aver: -1, a0: null, a1: null, e0: null, e1: null, rec: null, sh: null, rver: -1 };
 function _acqOwnArray(name, Type, n) {
     let a = _acqOwn[name];
     if (!a || a.constructor !== Type || a.length < n) { const old = a; a = _acqOwn[name] = simHeapArray(Type, Math.max(1024, n)); if (old) simHeapFree(old); }
@@ -3938,7 +3942,7 @@ function acqReserve() {
     const touch = a => { if (a && a.length) a.fill(0); return a; };
     for (const [nm, T] of [['acq.x', Float32Array], ['acq.y', Float32Array], ['acq.own', Int8Array], ['acq.flags', Uint8Array], ['acq.cmd', Uint8Array], ['acq.rng', Float32Array],
         ['acq.id', Int32Array], ['acq.out', Int32Array], ['acq.tid', Int32Array], ['acq.sout', Int32Array], ['acq.cm', Uint8Array], ['acq.ct', Int32Array], ['acq.ctid', Int32Array],
-        ['acq.rk', Uint8Array], ['acq.bm', Uint8Array], ['acq.bt', Int32Array], ['acq.btid', Int32Array], ['acq.bf', Uint8Array]]) touch(_acqArray(nm, T, cap));
+        ['acq.rk', Uint8Array], ['acq.bm', Uint8Array], ['acq.bt', Int32Array], ['acq.btid', Int32Array], ['acq.bf', Uint8Array], ['acq.od', Uint8Array]]) touch(_acqArray(nm, T, cap));
     _acq.cap = Math.max(_acq.cap, cap);
     for (const [nm, T, n] of [['acq.rs', Int32Array, nc], ['acq.rc', Int32Array, nc], ['acq.rst', Int32Array, nc], ['acq.om', Uint8Array, nc], ['acq.es', Int32Array, ecap]]) touch(_acqOwnArray(nm, T, n));
     touch(_acqArray('acq.sown', Int8Array, NT)); touch(_acqArray('acq.scls', Int8Array, NT)); touch(_acqArray('acq.omt', Uint8Array, nc));
@@ -3950,13 +3954,12 @@ function acqReserve() {
     const C = _visCover, A = C.areaCount, np = C.players, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
     touch(_acqArray('acq.cover', Uint8Array, Math.max(1, np * A)));
     touch(_acqArray('acq.saOff', Int32Array, A * np + 1));
-    for (const nm of ['saCount', 'saCursor', 'saNearest', 'saDistance']) touch(_acqArray('acq.' + nm, Int32Array, A * np));
+    for (const nm of ['saCount', 'saCursor']) touch(_acqArray('acq.' + nm, Int32Array, A * np));
     for (const nm of ['saSeen', 'saNearN']) touch(_acqArray('acq.' + nm, Int32Array, A));
     touch(_acqArray('acq.saNear', Int32Array, areaTargets ? 1 : A * 64));
     if (areaTargets) {
-        for (const nm of ['saStructure', 'saStructureDistance']) touch(_acqArray('acq.' + nm, Int32Array, A * np * 4));
-        touch(_acqArray('acq.saRec', Int32Array, A * np * 8)); touch(_acqArray('acq.saQueue', Int32Array, A * playersK * 5));
-        touch(_acqArray('acq.saHist', Int32Array, 8 * A * playersK)); touch(_acqArray('acq.saPre', Int32Array, 128));
+        touch(_acqArray('acq.saRec', Int32Array, A * np * 8)); touch(_acqArray('acq.saLv', Uint8Array, _acqGroups(playersK) * _acqLvStride(A))); touch(_acqArray('acq.saLvH', Int32Array, _acqGroups(playersK) * 256)); touch(_acqArray('acq.saSh', Int32Array, 16 * np));
+        touch(_acqArray('acq.saPre', Int32Array, 128));
     }
 }
 function _acqPost() {
@@ -3978,7 +3981,7 @@ function _acqPost() {
         _acqArray('acq.out', Int32Array, cap); _acqArray('acq.tid', Int32Array, cap); _acqArray('acq.sout', Int32Array, cap);
         // (The combat brain's: its inputs and its instructions.)
         _acqArray('acq.cm', Uint8Array, cap); _acqArray('acq.ct', Int32Array, cap); _acqArray('acq.ctid', Int32Array, cap); _acqArray('acq.rk', Uint8Array, cap);
-        _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap); _acqArray('acq.bf', Uint8Array, cap);
+        _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap); _acqArray('acq.bf', Uint8Array, cap); _acqArray('acq.od', Uint8Array, cap);
         _acq.cap = cap;
     }
     simUnitTargetsResolve();
@@ -4035,9 +4038,8 @@ function _acqPost() {
     // sampled, the scan, the combat brain. Each has its own params slot.
     const answers = areaTargets, playersK = Math.min(spatialUnitsComplexPlayerCount, np);
     // (Sampled with answers: the build's count, offsets and scatter, the
-    // structure seeds, the answers and their pack, six stages; sampled
-    // only: the build.)
-    const scanSlot = 1 + (sampled ? (answers ? 8 : 1) : 0);
+    // structure seeds, the answers (their seeds, ACQ_ANS_LEVELS levels, the rest), 17 stages; sampled only: the build.)
+    const scanSlot = 1 + (sampled ? (answers ? 8 + ACQ_ANS_LEVELS + 1 : 1) : 0);
     const T = simParallelStageParams(ACQ_LANE, 0), B = simParallelStageParams(ACQ_LANE, scanSlot);
     T.fill(0); B.fill(0);
     const EPER = 4096, prepJobs = Math.max(Math.ceil(CHUNKS_H / 64), Math.ceil(ne / EPER));
@@ -4063,6 +4065,8 @@ function _acqPost() {
             const K = _acqKept, a0 = _simParReg['area.off'], a1 = _simParReg['area.nb'], e0 = _acqArray('acq.aoff', Int32Array, a0.length), e1 = _acqArray('acq.anb', Int32Array, a1.length);
             if (K.aver !== _simAreaLayoutVer || K.a0 !== a0 || K.a1 !== a1 || K.e0 !== e0 || K.e1 !== e1) {
                 e0.set(a0); e1.set(a1);
+                // (Each area's neighbours ascending: the answers take an area's answer from its lowest-numbered parent, acq_sample.rs k_csr_sort.)
+                _acqCsrP[0] = a0.length - 1; simRustDirect('k_csr_sort', [e0, e1], _acqCsrP);
                 K.aver = _simAreaLayoutVer; K.a0 = a0; K.a1 = a1; K.e0 = e0; K.e1 = e1;
             }
         }
@@ -4087,28 +4091,25 @@ function _acqPost() {
         I[26]=_acqSampleNearVer!==_simAreaLayoutVer||_acqSampleNearOf!==near?1:0;
         if(!areaTargets){_acqSampleNearVer=_simAreaLayoutVer;_acqSampleNearOf=near;}
         if(areaTargets){
-            for(const name of ['saNearest','saDistance'])_acqArray('acq.'+name,Int32Array,A*np);
-            for(const name of ['saStructure','saStructureDistance'])_acqArray('acq.'+name,Int32Array,A*np*4);
-            // (And all five answers of a team and area in one 32-byte record, the scan's.)
-            _acqArray('acq.saRec',Int32Array,A*np*8);
-            // (A queue a job: the answers' jobs run side by side.)
-            _acqArray('acq.saQueue',Int32Array,A*playersK*5);
+            // (All five answers of a team and area in one 32-byte record, the scan's and the towers'.)
+            const rec=_acqArray('acq.saRec',Int32Array,A*np*8),sh=_acqArray('acq.saSh',Int32Array,16*np);
+            // (The structure classes' answers are kept in the records while their seeds stay the same (acq_sample.rs
+            // k_acq_area_seed): only over the same records and area layout; else every class is made again, I[37].)
+            const K=_acqKept;I[37]=K.rec===rec&&K.sh===sh&&K.rver===_simAreaLayoutVer?0:1;K.rec=rec;K.sh=sh;K.rver=_simAreaLayoutVer;
+            // (The answers' search a group of twelve teams: reached and two frontier masks an area, and the level flags.)
+            _acqArray('acq.saLv',Uint8Array,_acqGroups(playersK)*_acqLvStride(A));_acqArray('acq.saLvH',Int32Array,_acqGroups(playersK)*256);
         }
         if(answers){
             // The build in entry ranges on the helpers (one serial job held a
             // helper ~20-30 ms), then a tile pass a team seeding the four
             // structure classes, then the answers (spreads only: I[35] 1).
             // (The same params in every stage's own slot.)
-            // (A range's histogram covers every key, areas x teams (~253k at
-            // a 1024 map): 24 of them were 24 MB to zero and for the serial
-            // prefix to walk. Any count keeps the entries' order.)
-            const ranges=Math.min(8,Math.max(1,Math.ceil(ne/8192)));
-            I[33]=ranges;I[34]=Math.ceil(ne/ranges);I[35]=1;
+            // (One histogram (atomic adds, acq_sample.rs k_acq_area_count): the count and scatter in ranges of
+            // ~16k entries, up to 64.)
+            const ranges=Math.min(64,Math.max(1,Math.ceil(ne/16384)));
+            I[33]=ranges;I[34]=Math.ceil(ne/ranges);
             // (The towers look as far: the answers' depth, tower.js towerAcqMaxReach.)
             I[36]=typeof towerAcqMaxReach==='function'?towerAcqMaxReach():0;
-            _acqArray('acq.saHist',Int32Array,ranges*A*I[7]);
-            // (The pack's records a job: I[37].)
-            const packPer=8192;I[37]=packPer;
             // (The buckets' sort after the scatter: P[38] keys a job, ~64 jobs.)
             const sortKeys=A*I[7];I[38]=Math.max(1,Math.ceil(sortKeys/64));
             // (The offsets in two stages of blocks of whole areas' keys (acq_sample.rs k_acq_area_prefix): their
@@ -4116,10 +4117,15 @@ function _acqPost() {
             const keys=A*I[7],pj0=Math.min(64,Math.max(1,Math.ceil(keys/8192))),pper=Math.max(I[7],Math.ceil(Math.ceil(keys/pj0)/I[7])*I[7]),pj=Math.max(1,Math.ceil(keys/pper));
             I[39]=pper;I[41]=pj;I[42]=Math.max(1,Math.ceil(n/pj));
             _acqArray('acq.saPre',Int32Array,128);
-            for(let slot=2;slot<=8;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
-            simParallelStageParams(ACQ_LANE,3)[40]=1;
-            stages.push([SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],[SIM_KERNEL_ACQ_AREA_SORT,Math.max(1,Math.ceil(sortKeys/I[38]))],
-                [SIM_KERNEL_ACQ_AREA_SEED,playersK],[SIM_KERNEL_ACQ_AREA_ANSWERS,playersK*5],[SIM_KERNEL_ACQ_AREA_PACK,Math.ceil(A*I[7]/packPer)]);
+            for(let slot=2;slot<=9+ACQ_ANS_LEVELS;slot++)simParallelStageParams(ACQ_LANE,slot).set(I);
+            // (The answers' search, acq_sample.rs k_acq_area_answers: the seeds, then a stage a level over ranges of the
+            // areas, then the levels past those in one job a group.)
+            const ansR=16,ansG=_acqGroups(playersK);
+            for(let p=0;p<=ACQ_ANS_LEVELS+1;p++){const Q=simParallelStageParams(ACQ_LANE,8+p);Q[44]=p===0?0:p<=ACQ_ANS_LEVELS?1:2;Q[45]=p;Q[46]=ansR;Q[47]=Math.ceil(A/ansR);}
+            // (Slot 1, the first stage: the counts zeroed by key blocks; 3 and 4 the offsets' two stages.)
+            I[40]=2;simParallelStageParams(ACQ_LANE,4)[40]=1;
+            stages.push([SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_COUNT,ranges],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_PREFIX,pj],[SIM_KERNEL_ACQ_AREA_SCATTER,ranges],[SIM_KERNEL_ACQ_AREA_SORT,Math.max(1,Math.ceil(sortKeys/I[38]))],
+                [SIM_KERNEL_ACQ_AREA_SEED,playersK],...Array.from({length:ACQ_ANS_LEVELS+1},()=>[SIM_KERNEL_ACQ_AREA_ANSWERS,ansG*ansR]),[SIM_KERNEL_ACQ_AREA_ANSWERS,ansG]);
         }else stages.push([SIM_KERNEL_ACQ_AREA_BUILD,1]);
     }
     stages.push([SIM_KERNEL_ACQ_SCAN,Math.ceil((sampled?n:ne)/256)],[SIM_KERNEL_COMBAT_BRAIN,SIM_COMBAT_BRAIN?Math.ceil(n/2048):0]);

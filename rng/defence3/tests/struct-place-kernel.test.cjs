@@ -39,5 +39,6 @@ assert.equal(tryAt(57, 57, 'pistol')[3], false, 'out of sight refused');
 assert.equal(a.tries.filter(t => t[2] === 'raw:cloud_0a')[0][3], false, 'a second cloud with the rules off refused too');
 assert.ok(a.moved.towers && a.moved.barracks && a.moved.spawners && a.moved.clouds && a.moved.lasers, 'list versions moved: ' + JSON.stringify(a.moved));
 assert.ok(a.adj[0] > 0, 'adjacency marked');
+assert.equal(a.contested, false, "an area with another player's structure: refused in solo");
 assert.notDeepEqual(a.hash0, a.hash60, 'the match went on');
 console.log('PASS: struct-place-kernel:', a.rows.length, 'structures,', a.tries.length, 'tries; rows, tiles, cells, refusals, two runs equal');

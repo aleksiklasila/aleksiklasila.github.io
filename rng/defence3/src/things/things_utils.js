@@ -918,7 +918,7 @@ const PLACE_COLS = ['c__stT', 'c__ow', 'c__uc', 'c__en', 'c_gx', 'c_gy', 'c_stac
     'c_effectiveLevel', 'c_potentialEffectiveLevel', 'c_isStacking', 'c_stackingWorkDone', 'c_markedForSalvage', 'c_autoUpgradeEnabled',
     'c_buildEnabled', 'c__cdUntil', 'c_angle', 'c_laserState', 'c_laserTimer', 'c__ptK', 'c__ptV', 'c__lzLv', 'c__lzUc', 'c__spt',
     'c_queueEnabled', 'c__qN', 'c_autoResearchEnabled'];
-const _plc = { A: [], P: new Float64Array(40), hdr: null, cols: new Map(), areaSrc: null, areaN: -1, ast: null, atl: null, pos: { gx: 0, gy: 0 } };
+const _plc = { A: [], P: new Float64Array(40), hdr: null, cols: new Map(), pos: { gx: 0, gy: 0 } };
 const _PLC_SPAWNER_CLASS = { spawner: 'CollectorSpawner', astar_spawner: 'AstarSpawner', salvager: 'SalvagerSpawner', builder_spawner: 'BuilderSpawner',
     healer_spawner: 'HealerSpawner', research: 'ResearchSpawner' };
 function _plcClassOf(itemKey, cardDef) {
@@ -945,21 +945,6 @@ function _plcCols(T) {
     e.a.set(enc); e.ver = T._colVer;
     return e.a;
 }
-// (Each area's tiles for the contested check (solo): starts and tiles, from the areas' canonical cell lists, as
-// _areaHasForeignBuildPresence reads them; made again when the map's areas are new.)
-function _plcAreas() {
-    const src = Array.isArray(gridCellsByArea) ? gridCellsByArea : null, n = src ? src.length : 0;
-    const P = _plc;
-    if (P.areaSrc === src && P.areaN === n && P.ast && simHeapHas(P.ast) && simHeapHas(P.atl)) return P;
-    let total = 0;
-    const lists = new Array(n);
-    for (let a = 0; a < n; a++) { const c = src[a] && src[a].length ? src[a] : (getAreaById(a) || {}).cells || []; lists[a] = c; total += c.length; }
-    P.ast = simSharedArray(Int32Array, n + 1); P.atl = simSharedArray(Int32Array, Math.max(1, total));
-    let k = 0;
-    for (let a = 0; a < n; a++) { P.ast[a] = k; for (const cp of lists[a]) P.atl[k++] = cp; }
-    P.ast[n] = k; P.areaSrc = src; P.areaN = n;
-    return P;
-}
 function _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, auto, build, silent, ignore) {
     if (!(gx >= 0 && gy >= 0 && gx < GRID_W && gy < GRID_H)) return false;
     const C = _plcClassOf(itemKey, cardDef), T = _sTableOf(C);
@@ -985,7 +970,8 @@ function _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, auto, bui
     const vpid = Number.isFinite(Number(playerId)) && Math.floor(Number(playerId)) >= 0 ? Math.floor(Number(playerId)) : localPlayerId;
     const coverOk = !ignore && _visCoverReady() && vpid >= 0 && vpid < _visCover.players && simHeapHas(_visCover.coverFlat);
     const contested = !ignore && !(isMultiplayer && gameStarted);
-    const AR = contested ? _plcAreas() : null;
+    // (Each area's tiles, the map's (map.js _mapAreas: offsets and tiles, in the heap since the map was made).)
+    const AR = contested && _mapAreas && simHeapHas(_mapAreas.off) && simHeapHas(_mapAreas.tiles) ? _mapAreas : null;
     const AD = _adjacencyDirtyTiles; AD.room(GRID_W * GRID_H);
     const V = _workerWorkTable(), L = _teLogRoom(), J = _wsj, jOk = !J.all && J.flag !== null && simHeapHas(J.flag) && simHeapHas(J.list);
     const due = C === Tower && _towerDue.a && simHeapHas(_towerDue.a) ? _towerDue.a : null;
@@ -994,7 +980,7 @@ function _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, auto, bui
     const typ = _plcPoolId(T.c_type, C === Barrack ? 'barrack' : itemKey), utyp = ut ? _plcPoolId(ut, unitType) : -1;
     A[0] = ST.code; A[1] = ST.own; A[2] = ST.uc; A[3] = ST.val; A[4] = ST.tim; A[5] = ST.brain; A[6] = ST.rtab; A[7] = ST.stab;
     A[8] = ST.rrow; A[9] = ST.ctab; A[10] = ST.rcnt; A[11] = ST.cnt; A[12] = cellType; A[13] = cellOwner; A[14] = cellArea;
-    A[15] = coverOk ? _visCover.cover[vpid] : null; A[16] = AR ? AR.ast : null; A[17] = AR ? AR.atl : null;
+    A[15] = coverOk ? _visCover.cover[vpid] : null; A[16] = AR ? AR.off : null; A[17] = AR ? AR.tiles : null;
     A[18] = AD.flag; A[19] = AD.blk; A[20] = V; A[21] = L; A[22] = jOk ? J.flag : null; A[23] = jOk ? J.list : null;
     A[24] = cloud ? _cloudTileList : null; A[25] = due; A[26] = _plc.hdr;
     A[27] = T.rh; A[28] = T.freeRows; A[29] = _plcCols(T); A[30] = T.mTok; A[31] = T.c_type.data; A[32] = ut ? ut.data : null;
@@ -1006,13 +992,27 @@ function _structPlace(gx, gy, itemKey, cardDef, playerId, stackTarget, auto, bui
     P[17] = SNAP_REGION_TILES; P[18] = ST.rw; P[19] = AD.flag.length; P[20] = V.np; P[21] = _WORKER_WORK_TYPES.length; P[22] = V.rw; P[23] = V.rh;
     P[24] = WORKER_WORK_REGION_TILES; P[25] = _teLogEnd; P[26] = L.length; P[27] = _stLabCt(); P[28] = cloud ? _cloudTileN : 0; P[29] = TYPE_WALL;
     P[30] = T.c_type.data.BYTES_PER_ELEMENT; P[31] = ut ? ut.data.BYTES_PER_ELEMENT : 1;
-    P[32] = coverOk || ignore ? 1 : isTileActuallyVisibleToPlayer(vpid, gx, gy) ? 1 : 0; P[33] = J.n; P[34] = due ? due.length : 0;
+    P[32] = coverOk || ignore ? 1 : isTileActuallyVisibleToPlayer(vpid, gx, gy) ? 1 : 0; P[33] = J.n; P[34] = due ? due.length : 0; P[35] = MAX_THING_LEVEL;
     simRustDirect('k_struct_place', A, P);
     const H = _plc.hdr, res = H[0];
     if (res === 0) return false;
     if (res === 2) {
-        // The same structure there: its stacks up to the order's (the stacking's, while manual stacking orders more).
-        if (stackTarget > 1) stackThingUpTo(structRowObj(T, H[1]), stackTarget);
+        // The same structure there: its stacks up to the order's, written by the kernel (manual stacking orders more
+        // than one); here the events: the adjacency marks' counters, its derived overrides (rare), its upkeep bin,
+        // its build progress (the batch's progress op), presentation.
+        if (H[11]) {
+            const AD = _adjacencyDirtyTiles;
+            if (H[2] > 0) { if (AD.n === 0 || H[4] < AD.min) AD.min = H[4]; AD.n += H[2]; AD.sum = (AD.sum + H[3]) | 0; }
+            recalculateAdjacency();
+            const r = H[1], e = structRowObj(T, r);
+            for (const name of T.derived) { const m = T.unique[name]; if (m.size && m.has(r)) { _sDerivedReconcile(T, e); break; } }
+            const pos = _plc.pos; pos.gx = gx; pos.gy = gy;
+            upkeepThingDirty(pos);
+            refreshThingProgressState(e);
+            if (typeof window !== 'undefined' && typeof document !== 'undefined') updateItemTextCache(e);
+            if (typeof simPresentTileDirty === 'function') simPresentTileDirty(gx, gy);
+            bumpTileOccupancyVersion();
+        }
         if (C === Tower) _markCombinedBgTileDirty(gx, gy, 0, true);
         if (playerId === localPlayerId && !silent) playSound('place', gx * TILE + 16, gy * TILE + 16);
         return true;
@@ -1340,33 +1340,8 @@ function structProgressFlush() {
     try { waiRun(L, n, null, 2); } finally { playerResourceBatchEnd(); }
 }
 
-function addManualStackToThing(item, amount = 1) {
-    if (!item) return;
-    let addCount = Math.max(1, Math.floor(Number(amount) || 1));
-    item.stacks = getThingStackedStacks(item);
-    item.manualStacks = getThingManualStacks(item) + addCount;
-    item.level = stackCountToLevel(item.stacks);
-    if (typeof upkeepThingDirty === 'function') upkeepThingDirty(item);
-    if (Number.isFinite(item.gx) && Number.isFinite(item.gy)) {
-        _requestAdjacencyRecalcForThing(item, 1);
-        recalculateAdjacency();
-    }
-    refreshThingProgressState(item);
-    if (item.updateTextCache) item.updateTextCache();
-    else updateItemTextCache(item);
-    // (Its new potential level on the page at the next tick.)
-    if (typeof simPresentTileDirty === 'function' && Number.isFinite(item.gx) && Number.isFinite(item.gy)) simPresentTileDirty(item.gx, item.gy);
-    bumpTileOccupancyVersion();
-    visCoverOnBuildingChanged(item);
-}
+// (Stacks ordered on a standing structure: the placement kernel, plc.rs k_struct_place.)
 
-// A build order on a structure standing there: its stacks up to `stacks`
-// (the selected build level's), none taken away, nothing when it has them.
-function stackThingUpTo(item, stacks) {
-    if (!item) return;
-    const want = Math.max(1, Math.floor(Number(stacks) || 1)), have = getThingManualStacks(item);
-    if (want > have) addManualStackToThing(item, want - have);
-}
 
 function getThingBaseLevel(item, fallback = 1) {
     if (!item) return Math.max(1, clampThingLevel(fallback));

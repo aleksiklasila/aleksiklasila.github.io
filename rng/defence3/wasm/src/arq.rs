@@ -119,6 +119,7 @@ impl Arq {
     }
     /// Every area within r hops of any of src, nearest level first:
     /// f(area, hops) for each; true from f stops the search.
+    #[cfg_attr(feature = "prof", inline(never))]
     pub unsafe fn each<F: FnMut(i32, i32) -> bool>(&mut self, src: &[i32], r: i32, mut f: F) {
         self.seed(src);
         let r = r.min(250);
@@ -189,6 +190,7 @@ impl Arq {
     /// (its confined distance is a real path: an upper bound); every pair
     /// further apart in tiles than k hops can span (lower bound). Then the
     /// search, stopped at the first target within k.
+    #[cfg_attr(feature = "prof", inline(never))]
     pub unsafe fn within(&mut self, src: &[i32], tgt: &[i32], k: i32) -> bool {
         if k < 0 {
             return false;

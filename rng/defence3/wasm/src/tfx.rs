@@ -114,37 +114,63 @@ pub unsafe extern "C" fn k_tile_effects(a: u32, _chunk: i32) {
     let mut c = super::ord::SCtx::new(&k);
     let stab = k.p::<u8>(14);
     let mut nrep = 0usize;
-    for qb in 0..n {
-        let b = g(order, qb) as usize;
-        let (t, u) = (g(ba, b) as usize, g(bb, b) as usize);
-        let step = if u - t < w { 1 } else { w };
-        let o = g(bown, b);
-        let bd = g(bdmg, b) * dk as f32;
-        let mut x = t + step;
-        while x < u {
-            let (e0, e1) = occupants(x);
-            for e in e0..e1 {
-                let q = g(eslot, e) as usize;
-                if g(dead, q) != 0 || g(uown, q) as i32 == o { continue; }
-                let fl = g(lzf, q);
-                if fl & 1 != 0 { continue; }
-                s(hit, b, 1);
-                if fl & 2 != 0 || !(bd > 0.0) { continue; }
-                let ne = g(en, q) - bd;
-                s(en, q, ne); s(acc, q, g(acc, q) + bd); s(lb, q, b as i32);
-                let died = !(ne > 0.0);
-                if died { s(dead, q, 1); }
-                if g(ev, q) == 0 && (died || (tick as i64 + g(uid, q) as i64).rem_euclid(per as i64) < dk as i64) {
-                    s(ev, q, 1); s(list, nrep, q as i32); nrep += 1;
-                }
+    // Beam b on tile x: the units listed there, then a structure there (in the beams' canonical order, the tiles' along
+    // each beam: a unit a beam killed is not hit by the beams after it).
+    let tile = |c: &mut super::ord::SCtx, b: usize, x: usize, o: i32, bd: f32, nrep: &mut usize| {
+        let (e0, e1) = occupants(x);
+        for e in e0..e1 {
+            let q = g(eslot, e) as usize;
+            if g(dead, q) != 0 || g(uown, q) as i32 == o { continue; }
+            let fl = g(lzf, q);
+            if fl & 1 != 0 { continue; }
+            s(hit, b, 1);
+            if fl & 2 != 0 || !(bd > 0.0) { continue; }
+            let ne = g(en, q) - bd;
+            s(en, q, ne); s(acc, q, g(acc, q) + bd); s(lb, q, b as i32);
+            let died = !(ne > 0.0);
+            if died { s(dead, q, 1); }
+            if g(ev, q) == 0 && (died || (per > 0 && (tick as i64 + g(uid, q) as i64).rem_euclid(per as i64) < dk as i64)) {
+                s(ev, q, 1); s(list, *nrep, q as i32); *nrep += 1;
             }
-            let cls = g(stab, x);
-            if cls != 0 && cls != 2 && cls <= 9 && g(own, x) != o {
-                let h = super::ord::SHit { t: x as i32, dmg: g(bdmg, b) as f64 * dk as f64, fx: 0, gate: true, dur: [0; 6], td: [0.0; 3], team: -1, look: b as i32 };
-                if c.hit(&k, &h) { s(hit, b, 1); }
-            }
-            x += step;
         }
+        let cls = g(stab, x);
+        if cls != 0 && cls != 2 && cls <= 9 && g(own, x) != o {
+            let h = super::ord::SHit { t: x as i32, dmg: g(bdmg, b) as f64 * dk as f64, fx: 0, gate: true, dur: [0; 6], td: [0.0; 3], team: -1, look: b as i32 };
+            if c.hit(&k, &h) { s(hit, b, 1); }
+        }
+    };
+    // Beams qb0..qb1 of the order, every tile.
+    let scan = |c: &mut super::ord::SCtx, qb0: usize, qb1: usize, nrep: &mut usize| {
+        for qb in qb0..qb1 {
+            let b = g(order, qb) as usize;
+            let (t, u) = (g(ba, b) as usize, g(bb, b) as usize);
+            let step = if u - t < w { 1 } else { w };
+            let (o, bd) = (g(bown, b), g(bdmg, b) * dk as f32);
+            let mut x = t + step;
+            while x < u { tile(c, b, x, o, bd, nrep); x += step; }
+        }
+    };
+    // (Scanned on the helpers first, k_beam_scan (P[19] jobs of P[20] beams, P[21] entries a job): only the tiles with
+    // something there, in order, each job's list then the rest of its beams when its list ran out (U0 + 27 the lists,
+    // U0 + 28 per job [entries, the order index it stopped at]); without it every tile here: the same hits, in order.)
+    let (evl, evc, jobs, pj, cap) = (k.p::<i32>(U0 + 27), k.p::<i32>(U0 + 28), k.i(19).max(0) as usize, k.i(20).max(1) as usize, k.i(21).max(0) as usize);
+    if jobs > 0 && !evl.is_null() && !evc.is_null() {
+        for j in 0..jobs {
+            let (q0, q1) = (j * pj, ((j + 1) * pj).min(n));
+            if q0 >= q1 { continue; }
+            let (m, stop) = (g(evc, 2 * j).max(0) as usize, (g(evc, 2 * j + 1).max(q0 as i32) as usize).min(q1));
+            for i in 0..m {
+                let v = g(evl, j * cap + i) as u32;
+                let (qb, k2) = ((v >> 5) as usize, (v & 31) as usize);
+                let b = g(order, qb) as usize;
+                let (t, u) = (g(ba, b) as usize, g(bb, b) as usize);
+                let step = if u - t < w { 1 } else { w };
+                tile(&mut c, b, t + step * (k2 + 1), g(bown, b), g(bdmg, b) * dk as f32, &mut nrep);
+            }
+            if stop < q1 { scan(&mut c, stop, q1, &mut nrep); }
+        }
+    } else {
+        scan(&mut c, 0, n, &mut nrep);
     }
     let rrow = k.p::<i32>(15);
     let mut lit = 0;
@@ -152,6 +178,47 @@ pub unsafe extern "C" fn k_tile_effects(a: u32, _chunk: i32) {
     for qb in 0..n { let b = g(order, qb) as usize; if g(hit, b) != 0 { let r = g(rrow, g(ba, b) as usize); if r >= 0 { s(lstate, r as usize, 1); lit = 1; } } }
     c.done(&k);
     s(out, 0, nrep as i32); s(out, 1, lit);
+}
+
+/// SIM_BLOCK_BEAM_SCAN (k_block 13, a job of P[1] beams of the canonical order, P[0] beams): each beam's tiles strictly
+/// between its lasers with anything a beam acts on (a unit the index lists there this epoch P[3], or a tower,
+/// barrack or spawner (st.stab 1, 3..9) of another owner), in order, as (order index << 5 | the tile's place along
+/// it) into the job's list (P[4] entries a job from job * P[4]); per job [entries, the order index it stopped at: its
+/// list full there, the rest k_tile_effects' own]. A beam past 31 tiles stops its job there too (the rest scanned
+/// by k_tile_effects). Arrays: lz.border, lz.ba, lz.bb, lz.bown, ix.stamp, ix.count, st.stab, st.own, the lists, the
+/// per-job counts. P: [2] W.
+pub unsafe fn k_beam_scan(a: u32, chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (order, ba, bb, bown, stamp, count, stab, own, evl, evc) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3), k.p::<i32>(4),
+        k.p::<i32>(5), k.p::<u8>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9));
+    let (n, per, w, epoch, cap) = (k.i(0).max(0) as usize, k.i(1).max(1) as usize, k.i(2).max(1) as usize, k.i(3), k.i(4).max(0) as usize);
+    let j = chunk.max(0) as usize;
+    let (q0, q1) = (j * per, ((j + 1) * per).min(n));
+    let base = j * cap;
+    let mut m = 0usize;
+    let mut stop = q1;
+    let mut row = [0u32; 32];
+    let rp = row.as_mut_ptr();
+    for qb in q0..q1 {
+        let b = g(order, qb) as usize;
+        let (t, u) = (g(ba, b) as usize, g(bb, b) as usize);
+        let step = if u - t < w { 1 } else { w };
+        let o = g(bown, b);
+        let mut x = t + step;
+        let (mut i, mut nr, mut long) = (0u32, 0usize, false);
+        while x < u {
+            if i >= 31 { long = true; break; }
+            let units = g(stamp, x) == epoch && g(count, x) > 0;
+            let cls = g(stab, x);
+            if units || (cls != 0 && cls != 2 && cls <= 9 && g(own, x) != o) { s(rp, nr, ((qb as u32) << 5) | i); nr += 1; }
+            x += step; i += 1;
+        }
+        // (A beam's entries together: one that does not fit, or a beam too long to list, stops the job's list at it.)
+        if long || m + nr > cap { stop = qb; break; }
+        for r in 0..nr { s(evl, base + m + r, g(rp, r) as i32); }
+        m += nr;
+    }
+    s(evc, 2 * j, m as i32); s(evc, 2 * j + 1, stop as i32);
 }
 
 /// SIM_KERNEL_TRAP_TILES (one job; unit.js simTrapDirty): the trap of each

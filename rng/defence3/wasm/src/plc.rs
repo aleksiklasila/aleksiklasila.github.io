@@ -75,6 +75,26 @@ unsafe fn put<T>(fp: *const i32, f: usize, r: usize, v: T) {
 #[inline(always)]
 fn bv(v: bool) -> u8 { if v { 2 } else { 1 } }
 
+// The tile (gx, gy) and its neighbours flagged for adjacency (data_state.js _markAdjacencyDirtyAt, pad 1): header [2]
+// flags set, [3] their digest's change, [4] the lowest set (-1 none). P[19] the flags' length.
+unsafe fn adj_mark(k: &K, aflag: *mut u8, ablk: *mut i32, hdr: *mut i32, gx: i32, gy: i32, w: i32, h: i32) {
+    if aflag.is_null() { return; }
+    let alen = k.i(19).max(0);
+    let (mut na, mut asum, mut amin) = (0i32, 0i32, -1i32);
+    for y in (gy - 1).max(0)..=(gy + 1).min(h - 1) {
+        for x in (gx - 1).max(0)..=(gx + 1).min(w - 1) {
+            let q = y * w + x;
+            if q >= alen || g(aflag, q as usize) != 0 { continue; }
+            s(aflag, q as usize, 1);
+            s(ablk, (q >> 8) as usize, g(ablk, (q >> 8) as usize) + 1);
+            na += 1;
+            asum = asum.wrapping_add((q + 1).wrapping_mul(2654435761u32 as i32));
+            if amin < 0 || q < amin { amin = q; }
+        }
+    }
+    s(hdr, 2, na); s(hdr, 3, asum); s(hdr, 4, amin);
+}
+
 /// k_struct_place. Arrays: the structure table st.* [0] code, [1] own, [2] uc, [3] val, [4] tim, [5] brain, [6] rtab,
 /// [7] stab, [8] rrow, [9] ctab, [10] rcnt, [11] cnt; cells [12] type, [13] owner, [14] area; [15] the player's cover
 /// by area (null: visibility P[32]); [16] / [17] each area's tiles (start per area + 1, tiles: null without the
@@ -89,11 +109,11 @@ fn bv(v: bool) -> u8 { if v { 2 } else { 1 } }
 /// [18] regions a row, [19] adjacency flags' length, [20] work players, [21] work types, [22] work regions a row,
 /// [23] rows, [24] work region tiles, [25] journal end, [26] journal length, [27] the labs' class code, [28] cloud
 /// tiles, [29] TYPE_WALL, [30] / [31] pool id widths (bytes), [32] visibility when no cover (0 / 1), [33] the groups'
-/// journal length, [34] the due table's length.
-/// Header: [0] 0 refused, 1 placed, 2 the same structure stands there (its stacks: the caller's), [1] its row,
+/// journal length, [34] the due table's length, [35] MAX_THING_LEVEL.
+/// Header: [0] 0 refused, 1 placed, 2 the same structure stands there (its stacks up to the order's), [1] its row,
 /// [2] adjacency flags set, [3] their digest's change, [4] the lowest set (-1 none), [5] the work checksum's change,
 /// [6] journal end, [7] the groups' journal length, [8] the owner counted (-1 none), [9] a cell item (0x33 / 0x44 /
-/// 0x55), [10] a lab.
+/// 0x55), [10] a lab, [11] stacks ordered on the standing structure (result 2).
 #[no_mangle]
 pub unsafe extern "C" fn k_struct_place(a: u32, _chunk: i32) {
     let k = K::new(waddr(a) as *const i32);
@@ -107,7 +127,7 @@ pub unsafe extern "C" fn k_struct_place(a: u32, _chunk: i32) {
     let (gx, gy, w, h, player) = (k.i(0), k.i(1), k.i(2), k.i(3), k.i(4));
     let (ct, ri, si, scode, ty, typ, utyp) = (k.i(5), k.i(6), k.i(7), k.i(8), k.i(9), k.i(10), k.i(11));
     let (stacks, fl, now, limit, count) = (k.i(12).max(1), k.i(13), k.f(14), k.i(15), k.i(16));
-    for i in 0..11 { s(hdr, i, 0); }
+    for i in 0..12 { s(hdr, i, 0); }
     s(hdr, 1, -1); s(hdr, 4, -1); s(hdr, 6, k.i(25)); s(hdr, 7, k.i(33)); s(hdr, 8, -1);
     if gx < 0 || gy < 0 || gx >= w || gy >= h || ct <= 0 {
         return;
@@ -155,7 +175,33 @@ pub unsafe extern "C" fn k_struct_place(a: u32, _chunk: i32) {
     }
     if same {
         s(hdr, 0, 2);
-        s(hdr, 1, g(rrow, tu));
+        let r = g(rrow, tu);
+        s(hdr, 1, r);
+        // Its stacks up to the order's (things_utils.js stackThingUpTo / addManualStackToThing): none taken away,
+        // nothing when it has them. Its stacks as read (1 unset), its level from them, the brain word's base level,
+        // its stat cache entry dropped (_sDerivedReconcile's mTok), the tile and its neighbours' adjacency.
+        if r >= 0 {
+            let ru = r as usize;
+            let sc = col::<i32>(fp, F_STACKS);
+            let mc = col::<i32>(fp, F_MANUAL);
+            let lc = col::<i8>(fp, F_LEVEL);
+            let st = if sc.is_null() { 1 } else { let v = g(sc, ru); if v == i32::MIN { 1 } else { v.max(1) } };
+            let mn = if mc.is_null() { i32::MIN } else { g(mc, ru) };
+            let have = st.max(if mn == i32::MIN { st } else { mn.max(1) });
+            if stacks > have {
+                if !sc.is_null() { s(sc, ru, st); }
+                if !mc.is_null() { s(mc, ru, stacks); }
+                let mut lg = 0i32; let mut v = st; while v >= 2 { v >>= 1; lg += 1; }
+                let lv = (lg + 1).min(k.i(35).max(1)).max(1);
+                if !lc.is_null() { s(lc, ru, lv as i8); }
+                if !mtok.is_null() { s(mtok, ru * 3, 0); s(mtok, ru * 3 + 1, 0); s(mtok, ru * 3 + 2, 0); }
+                let b = g(brain, tu);
+                if b != 0 { s(brain, tu, (b & !(0xff << 16)) | (lv.min(255) << 16)); }
+                if !due.is_null() && fl & FL_TOWER != 0 && r < k.i(34) { s(due, ru, 0); }
+                adj_mark(&k, aflag, ablk, hdr, gx, gy, w, h);
+                s(hdr, 11, 1);
+            }
+        }
         return;
     }
     // (Another structure there with the rules off: refused; the old placement replaced it without removing it.)
@@ -272,22 +318,7 @@ pub unsafe extern "C" fn k_struct_place(a: u32, _chunk: i32) {
         s(hdr, 5, wsum);
     }
     // Adjacency: the tile and its neighbours worked out again (data_state.js _markAdjacencyDirtyAt, pad 1).
-    if !aflag.is_null() {
-        let alen = k.i(19).max(0);
-        let (mut na, mut asum, mut amin) = (0i32, 0i32, -1i32);
-        for y in (gy - 1).max(0)..=(gy + 1).min(h - 1) {
-            for x in (gx - 1).max(0)..=(gx + 1).min(w - 1) {
-                let q = y * w + x;
-                if q >= alen || g(aflag, q as usize) != 0 { continue; }
-                s(aflag, q as usize, 1);
-                s(ablk, (q >> 8) as usize, g(ablk, (q >> 8) as usize) + 1);
-                na += 1;
-                asum = asum.wrapping_add((q + 1).wrapping_mul(2654435761u32 as i32));
-                if amin < 0 || q < amin { amin = q; }
-            }
-        }
-        s(hdr, 2, na); s(hdr, 3, asum); s(hdr, 4, amin);
-    }
+    adj_mark(&k, aflag, ablk, hdr, gx, gy, w, h);
     s(hdr, 0, 1);
     s(hdr, 1, r);
 }

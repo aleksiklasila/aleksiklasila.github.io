@@ -1189,10 +1189,12 @@ function simParallelRun(kernel, total, local = null) {
     let failed = null;
     if (local) { _simInLocal++; _simParams = _simParamsLocal; try { local(); } catch (err) { failed = err; } finally { _simInLocal--; if (!_simInLocal) _simParams = _simParamsShared; } }
     _simParRunning++;
+    let mine = 0;
     try {
         for (;;) {
             let c = Atomics.add(ctl, SIM_PAR_NEXT, 1);
             if (c >= total) break;
+            mine++;
             const t0 = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0;
             // (Every chunk runs after a failure too, as on the helpers: a chunk skipped here never published what
             // other chunks wait for (the occupancy's block marks), and its waiting helper and this thread hung.)
@@ -1210,7 +1212,7 @@ function simParallelRun(kernel, total, local = null) {
     for (let d; (d = Atomics.load(ctl, SIM_PAR_DONE)) < total;) {
         Atomics.wait(ctl, SIM_PAR_DONE, d, 5);
     }
-    if (tr) { const d = performance.now() - tw; if (d >= .2) tr['tail:' + kernel] = (tr['tail:' + kernel] || 0) + d; tr['n:' + kernel] = total; const mx = ctl[SIM_PAR_TRACE_MAX] / 1000; if (mx > (tr['chunkMax:' + kernel] || 0)) tr['chunkMax:' + kernel] = mx; }
+    if (tr) { const d = performance.now() - tw; if (d >= .2) tr['tail:' + kernel] = (tr['tail:' + kernel] || 0) + d; tr['n:' + kernel] = total; tr['own:' + kernel] = (tr['own:' + kernel] || 0) + mine; const mx = ctl[SIM_PAR_TRACE_MAX] / 1000; if (mx > (tr['chunkMax:' + kernel] || 0)) tr['chunkMax:' + kernel] = mx; }
     if (failed) { Atomics.store(ctl, SIM_PAR_ERR, 0); throw failed; }
     _simParCheckErr(ctl);
 }
@@ -1293,7 +1295,8 @@ const SIM_PAR_TRACE_HBG = 182, SIM_PAR_TRACE_HBG4 = 183, SIM_PAR_TRACE_HSKIP4 = 
 // Helpers 0 .. this - 1 run background lanes only (never a tick's own jobs): the
 // lanes progress while the tick runs, the tick's jobs have the other helpers.
 const SIM_PAR_BG_ONLY = 185;
-// (par.bgus, bound by a probe: per lane (0..15) and per kernel (16 + id) the helpers' background chunk time (us) while tracing.)
+// (par.bgus, bound by a probe: per lane (0..15) and per kernel (16 + id) the helpers' background chunk time (us) while tracing;
+// from 528 + id the longest chunk of each kernel (us).)
 // (par.ctrace, bound by a probe: per chunk its start (ms since the time origin) and duration.)
 function _simParTraceChunk(ctl, t0, c) { const t1 = performance.now(), us = Math.round((t1 - t0) * 1000); const T = _simParReg['par.ctrace']; if (T !== undefined && c * 2 + 1 < T.length) { T[c * 2] = performance.timeOrigin + t0; T[c * 2 + 1] = t1 - t0; } for (let o; (o = Atomics.load(ctl, SIM_PAR_TRACE_MAX)) < us;) if (Atomics.compareExchange(ctl, SIM_PAR_TRACE_MAX, o, us) === o) break; }
 // (The current tick's trace phases while tracing, sim_worker.js: tail waits per kernel.)
@@ -1628,7 +1631,7 @@ function simParallelHelperMain() {
                     const capped = lane === SIM_LANE_TRAFFIC || lane === SIM_LANE_RZ || lane === SIM_LANE_FREE;
                     if (capped && Atomics.add(ctl, SIM_PAR_BG_RUN + lane, 1) >= Atomics.load(ctl, SIM_PAR_BG_CAP)) { Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); continue; }
                     const tq = ctl[SIM_PAR_TRACE_ON] ? performance.now() : 0, tk = tq ? Atomics.load(ctl, b + SIM_PAR_BG_KERNEL) & 0xFFFF : 0;
-                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && tq) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); const BU = _simParReg['par.bgus']; if (BU !== undefined) { const us = Math.round((performance.now() - tq) * 1000); Atomics.add(BU, lane, us); if (16 + tk < BU.length) Atomics.add(BU, 16 + tk, us); } } }
+                    try { ran = _simBgClaim(ctl, lane, bgChain, bgParams[lane], regVer) === 1; if (ran && tq) { Atomics.add(ctl, SIM_PAR_TRACE_HBG, 1); if (lane === 4) Atomics.add(ctl, SIM_PAR_TRACE_HBG4, 1); const BU = _simParReg['par.bgus']; if (BU !== undefined) { const us = Math.round((performance.now() - tq) * 1000); Atomics.add(BU, lane, us); if (16 + tk < BU.length) Atomics.add(BU, 16 + tk, us); const mi = 528 + tk; if (mi < BU.length) for (let o; (o = Atomics.load(BU, mi)) < us;) if (Atomics.compareExchange(BU, mi, o, us) === o) break; } } }
                     finally { if (capped) Atomics.sub(ctl, SIM_PAR_BG_RUN + lane, 1); }
                 }
                 if (!ran) break;
@@ -1740,7 +1743,7 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // [5]/[6] grid, [7] players, [8] areas, [9] CMD_ATTACKING.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown', 'acq.bf']);
+    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown', 'acq.bf', '?acq.od']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.
@@ -1754,7 +1757,7 @@ const SIM_KERNEL_TOWER_ACQ_SNAP=102,SIM_KERNEL_TOWER_ACQ=103;
 const _simTowerAcqSnapW=_simWK(['twq.stt','st.code','st.uc','st.val','st.brain','st.rrow','st.own','sta.kind','sta.range','?tc.range','acq.agrid',
     'twq.area','twq.own','twq.kind','twq.reach','twq.tile']);
 const _simTowerAcqW=_simWK(['twq.area','twq.own','twq.kind','twq.reach','twq.tile','acq.saOff','acq.saE','?-','?-','?-','acq.upt','acq.wt',
-    'acq.saNearest','acq.saDistance','acq.saStructure','acq.saStructureDistance','twr.slot','twr.id','twr.st',
+    'acq.saRec','?-','?-','?-','twr.slot','twr.id','twr.st',
     'tac.flags','acq.stix','acq.sb0','acq.sb1','acq.sb2','acq.sb3','acq.sb4','acq.sb5']);
 SIM_KERNELS[SIM_KERNEL_TOWER_ACQ_SNAP]=function(R,P,chunk){_simRust(_simTowerAcqSnapW,P,chunk,'k_tower_acq_snap','TOWER_ACQ_SNAP');};
 SIM_KERNELS[SIM_KERNEL_TOWER_ACQ]=function(R,P,chunk){_simRust(_simTowerAcqW,P,chunk,'k_tower_acq','TOWER_ACQ');};
@@ -1996,7 +1999,7 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12, SIM_BLOCK_BEAM_SCAN = 13;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
@@ -2230,12 +2233,18 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     // (acq.saE2: as long, the buckets' sort through it, k_acq_area_sort.)
     '?acq.ex','?acq.ey','?acq.eo','?acq.ea','?acq.eid','acq.saOff','acq.saE','?acq.saE2','?acq.saPre','?-','?-',
     'acq.saNear','acq.saNearN','acq.saCount','acq.saCursor','acq.saSeen','acq.aoff','acq.anb',
-    '?acq.saNearest','?acq.saDistance','?acq.saQueue','?acq.saStructure','?acq.saStructureDistance',
+    '?-','?-','?acq.saLv','?-','?-',
     // (The build's per-entry key; its stages' histograms by entry range;
     // the answers packed, 32 bytes a team and area: acq_sample.rs RW.)
-    '?acq.saKey','?acq.saHist','?acq.saRec',
+    '?acq.saKey','?-','?acq.saRec',
     // (The unit's combat target as snapshot (instruction, its id): left out of its answer, 48-49.)
-    '?acq.cm','?acq.ctid']);
+    '?acq.cm','?acq.ctid',
+    // (50: the structure seeds' hashes and changed classes a team, acq_sample.rs SHW.)
+    '?acq.saSh',
+    // (51: the scan's area distance to its answer a slot, u8: the combat brain's in-range shortcut.)
+    '?acq.od',
+    // (52: the answers' level flags, 256 a group of teams.)
+    '?acq.saLvH']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
 // The same build for the area answers in three stages, chunks of entries
 // (acq_sample.rs k_acq_area_count / _prefix / _scatter: the same table),
@@ -2249,15 +2258,11 @@ SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SEED]=function(R,P,chunk){_simRust(_simAcqSample
 // whatever the slot layout; acq_sample.rs k_acq_area_sort.)
 const SIM_KERNEL_ACQ_AREA_SORT=147;
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_SORT]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_sort','ACQ_AREA_SORT');};
-// The area answers after the build: a job per team and part (the nearest area
-// with a visible enemy unit; one for each of the 4 enemy structure classes),
-// chunk = team * 5 + part: independent of one another, so they spread over
-// the helpers (one serial pass over every team's was ~290 ms with 8 teams).
+// The area answers after the build: a job a team, its five answers in one search (the nearest area with a visible
+// enemy unit; one for each of the 4 enemy structure classes, those whose seeds changed) over an 8-byte record an
+// area (acq.saLv; acq_sample.rs k_acq_area_answers), written straight into the records the scan and the towers read (acq.saRec).
 const SIM_KERNEL_ACQ_AREA_ANSWERS=98;
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_ANSWERS]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_answers','ACQ_AREA_ANSWERS');};
-// (The answers into one record a team and area for the scan: P[37] records a job.)
-const SIM_KERNEL_ACQ_AREA_PACK=190;
-SIM_KERNELS[SIM_KERNEL_ACQ_AREA_PACK]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_pack','ACQ_AREA_PACK');};
 SIM_KERNELS[SIM_KERNEL_ACQ_SCAN] = function (R, P, chunk) {
     if(P[24]>0||P[28]===1){_simRust(_simAcqSampleW,P,chunk,'k_acq_sample','ACQ_SAMPLE');return;}
     // (The commands as integers: the snapshot's column is Int32. P[21] 1:

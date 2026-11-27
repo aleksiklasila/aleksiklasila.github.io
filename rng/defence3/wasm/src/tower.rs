@@ -113,8 +113,8 @@ pub unsafe extern "C" fn k_tower_acq_snap(a:u32,chunk:i32){
 }
 /// k_tower_acq (a stage of the tier's chain, after k_acq_area_answers):
 /// each snapshot row looking (area >= 0) takes, as a unit's area_answer,
-/// its owner's nearest area holding a visible enemy unit (acq.saNearest /
-/// saDistance at its area) when within its reach, and the best of a batch
+/// its owner's nearest area holding a visible enemy unit (its owner's record at
+/// its area, acq.saRec) when within its reach, and the best of a batch
 /// of four of that area's enemy units (a team's bucket at a time, from a
 /// seeded offset): not turret-immune; one its shot does not affect yet
 /// (status not on it, not resisting its kind) before one it does, before a
@@ -122,11 +122,10 @@ pub unsafe extern "C" fn k_tower_acq_snap(a:u32,chunk:i32){
 /// acq.upt and tac.flags by type, its status record acq.stix and the
 /// records' copies acq.sb0-5 (burning, wet, poisoned, frozen, sandy,
 /// watched), its watch team acq.wt). None: the nearest visible
-/// enemy structure within reach by class (acq.saStructure, classes in
+/// enemy structure within reach by class (the record's words 1-4, classes in
 /// order). Out: [16] slot, [17] unit id, [18] structure tile (-1 none).
 /// Args [0..4] k_tower_acq_snap's, [5] acq.saOff [6] acq.saE (the entries'
-/// records: x, y, slot, id) [10] acq.upt [11] acq.wt [12] saNearest [13] saDistance
-/// [14] saStructure [15] saStructureDistance, [19] tac.flags [20] acq.stix
+/// records: x, y, slot, id) [10] acq.upt [11] acq.wt [12] acq.saRec (acq_sample.rs RW), [19] tac.flags [20] acq.stix
 /// [21..26] acq.sb0-5. P: [0] rows, [1] per job, [2] areas, [3] players,
 /// [4] grid width, [5] tile, [6] the post's tick, [7] unit types, [8] an
 /// unknown type's flags, [9] status records copied.
@@ -145,17 +144,20 @@ pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
         if r!=0&&r<nrec{for (b,p) in sb.iter().enumerate(){if !p.is_null()&&*p.add(r)>0{m|=32<<b;}}}
         m
     };
-    let (nearest,dist,structs,sdist)=(k.p::<i32>(12),k.p::<i32>(13),k.p::<i32>(14),k.p::<i32>(15));
+    // (The area answers, a record a team and area: acq_sample.rs RW, k_acq_area_answers.)
+    let rec=k.p::<i32>(12);
     let (os,oid,ost)=(k.p::<i32>(16),k.p::<i32>(17),k.p::<i32>(18));
     let na=k.i(2).max(0) as usize;let players=k.i(3).max(1) as usize;let w=k.i(4).max(1);let tile=k.f(5) as f32;let epoch=k.i(6) as u32;
     let start=chunk*k.i(1);let end=(start+k.i(1)).min(k.i(0));
     for r in start..end{
         let r=r as usize;*os.add(r)=-1;*oid.add(r)=0;*ost.add(r)=-1;
-        let ar=*qa.add(r);if ar<0||ar as usize>=na||nearest.is_null(){continue;}
+        let ar=*qa.add(r);if ar<0||ar as usize>=na||rec.is_null(){continue;}
         let own=*qo.add(r) as usize;if own>=players{continue;}
         let reach=*qr.add(r);let ty=*qk.add(r);let t=*qt.add(r);
-        let ix=own*na+ar as usize;
-        let d=*dist.add(ix);let ta=*nearest.add(ix);
+        let rr=rec.add((own*na+ar as usize)*8);
+        let dd=|v:i32|->i32{let v=v as u32&0xFFFF;if v==0xFFFF{-1}else{v as i32}};
+        let (w5,w6,w7)=(*rr.add(5),*rr.add(6),*rr.add(7));
+        let d=dd(w5);let ta=*rr;
         if d>=0&&d<=reach&&ta>=0&&(ta as usize)<na{
             let immune:u16=if ty>=1&&ty<=4{1<<ty}else if ty==5{30}else{0};
             let affected:u16=if ty>=1&&ty<=4{1<<(ty+4)}else if ty==6{512}else if ty==7{1024}else{0};
@@ -179,9 +181,9 @@ pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
             }
             if win>=0{*os.add(r)=win;*oid.add(r)=wid;continue;}
         }
-        if structs.is_null(){continue;}
+        let sds=[dd(w5>>16),dd(w6),dd(w6>>16),dd(w7)];
         for class in 0..4usize{
-            let ix=(own*4+class)*na+ar as usize;let sd=*sdist.add(ix);let st=*structs.add(ix);
+            let sd=sds[class];let st=*rr.add(1+class);
             if sd>=0&&sd<=reach&&st>=0{*ost.add(r)=st;break;}
         }
     }

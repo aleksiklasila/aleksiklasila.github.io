@@ -21,7 +21,7 @@ const ex=alloc(Float32Array,n),ey=alloc(Float32Array,n),eo=alloc(Int32Array,n),e
 const scls=alloc(Int8Array,w*h+16),sown=alloc(Int8Array,w*h+16),off=alloc(Int32Array,A*players+1);
 const ax=alloc(Float32Array,n),ay=alloc(Float32Array,n),ao=alloc(Int32Array,n),aid=alloc(Int32Array,n),slots=alloc(Int32Array,n);
 const near=alloc(Int32Array,A*64),nearN=alloc(Int32Array,A),counts=alloc(Int32Array,A*players),cursor=alloc(Int32Array,A*players),seen=alloc(Int32Array,A),graphOff=alloc(Int32Array,A+1),graph=alloc(Int32Array,A*4);
-const nearest=alloc(Int32Array,A*players),nearestDistance=alloc(Int32Array,A*players),queue=alloc(Int32Array,A*players*5),structureAnswers=alloc(Int32Array,A*players*4),structureDistance=alloc(Int32Array,A*players*4);
+const nearest=alloc(Int32Array,A*players),nearestDistance=alloc(Int32Array,A*players),queue=alloc(Uint8Array,A*players*8),structureAnswers=alloc(Int32Array,A*players*4),structureDistance=alloc(Int32Array,A*players*4);
 const ptr=a=>a?a.byteOffset/(wasm32?1:4):0;
 const names=[scls,sown,null,sout,xs,ys,own,flags,cmd,range,id,out,tid,ag,cov,hs,rs,rc,stamp,es,om,null,ex,ey,eo,ea,eid,off,ax,ay,ao,aid,slots,near,nearN,counts,cursor,seen,graphOff,graph,nearest,nearestDistance,queue,structureAnswers,structureDistance];
 names.forEach((a,j)=>block[512+j]=ptr(a));
@@ -29,7 +29,7 @@ let edges=0;for(let a=0;a<A;a++){graphOff[a]=edges;const gx=a%(w/2),gy=Math.floo
 for(let y=0;y<h;y++)for(let xx=0;xx<w;xx++)ag[y*w+xx]=Math.floor(y/4)*(w/2)+Math.floor(xx/2);
 for(let p=0;p<players;p++)for(let y=0;y<=h;y++)for(let xx=0;xx<=w;xx++)hs[p*(w+1)*(h+1)+y*(w+1)+xx]=xx*y*1000;
 const params=()=>{P.fill(0);P[0]=n;P[1]=n;P[3]=w;P[4]=h;P[5]=tile;P[6]=epoch;P[7]=players;P[8]=0;P[9]=1;P[10]=1;P[11]=w;P[12]=h;P[14]=1;P[15]=w;P[16]=h;P[18]=2;P[20]=A;P[28]=areaTargets?1:0;P[29]=5;P[30]=directPack?1:0;P[31]=n;};
-const build=()=>{x.k_acq_area_build(ptr(block),0);if(areaTargets)for(let c=0;c<players*5;c++)x.k_acq_area_answers(ptr(block),c);};
+const build=()=>{x.k_acq_area_build(ptr(block),0);if(areaTargets){for(let c=0;c<players;c++)x.k_acq_area_seed(ptr(block),c);for(let c=0;c<players;c++)x.k_acq_area_answers(ptr(block),c);}};
 const exact=()=>x.acq_scan(...names.slice(0,27).map(ptr),n,n,w,h,tile,epoch,players,0,1,1,w,h,1,w,h,2,A,cov.length,0,n,0);
 const sample=(budget,seed=2)=>{P[24]=budget;P[25]=seed;x.k_acq_sample(ptr(block),0);};
 let randomState=12345;const random=()=>{randomState=(Math.imul(randomState,1664525)+1013904223)|0;return(randomState>>>0)/4294967296;};

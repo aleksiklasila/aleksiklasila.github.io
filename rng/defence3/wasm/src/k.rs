@@ -1335,6 +1335,8 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
         // (The retire pass's slot release, the presentation's structure rows: nfs.rs.)
         11 => super::nfs::k_retire_release_par(b, chunk),
         12 => super::nfs::k_meta_structs_par(b, chunk),
+        // (The beams' tiles with something there, a chunk of the order a job: tfx.rs.)
+        13 => super::tfx::k_beam_scan(b, chunk),
         _ => {}
     }
 }
@@ -2828,6 +2830,20 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
     let _ = ys;
     let (w, h, na, np, stamp) = (k.i(3), k.i(4), k.i(6), k.i(7), k.i(8));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    // (Units stand packed in slot order: most marks repeat one this job already made. A small cache of the job's own
+    // marks (player's base + area -> the most it marked there) skips those, and a unit at the same place with the same
+    // key as the one before it is skipped whole: the seed is a max, so the same result.)
+    let mut ck = [0u32; 256];
+    let mut cv = [0i32; 256];
+    let (ckp, cvp) = (ck.as_mut_ptr(), cv.as_mut_ptr());
+    let (mut ptp, mut pkey) = (-1i32, -1i32);
+    let mark = |p: i32, ar: i32, val: i32| {
+        let id = (p * na + ar) as u32;
+        let h = (id.wrapping_mul(0x9E37_79B1) >> 24) as usize;
+        if *ckp.add(h) == id + 1 && *cvp.add(h) >= val { return; }
+        vis_seed(seed, list, cnt, p as usize, (p * na) as usize, ar as usize, val, stamp);
+        *ckp.add(h) = id + 1; *cvp.add(h) = val;
+    };
     for q in s0..s1 {
         let key = g(keyp, q);
         if key < 0 {
@@ -2837,6 +2853,10 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
         if tp < 0 {
             continue;
         }
+        if tp == ptp && key == pkey {
+            continue;
+        }
+        ptp = tp; pkey = key;
         let (t, fl) = (tp >> 4, tp & 15);
         let (gx, gy) = (irem(t, w), idiv(t, w));
         // (Arithmetic, not branches: LLVM made those a lookup table, a data segment.)
@@ -2860,10 +2880,10 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
                     continue;
                 }
                 if p1 >= 0 && p1 < np {
-                    vis_seed(seed, list, cnt, p1 as usize, (p1 * na) as usize, ar as usize, val, stamp);
+                    mark(p1, ar, val);
                 }
                 if p2 >= 0 && p2 < np {
-                    vis_seed(seed, list, cnt, p2 as usize, (p2 * na) as usize, ar as usize, val, stamp);
+                    mark(p2, ar, val);
                 }
             }
         }
@@ -3131,10 +3151,17 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         }
         (out, n, own)
     };
+    // (The scan's area distance from the unit's window to its answer's area (acq.od, 255 none): when the question's
+    // target is that answer and the distance is within the unit's reach in area steps, it is in range: the target's
+    // own tile's area is in its window, so some pair of their areas is that near. No windows, no search.)
+    let od = k.p::<u8>(21);
+    let quick = |q: usize, tq: i32, sg: i32| -> bool { !od.is_null() && sg < 0 && tq >= 0 && tq == g(outa, q) && (g(od, q) as i32) <= g(rk, q) as i32 };
     let flush = |nb: usize, arq: &mut Option<super::arq::Arq>, bq: &[usize; CB], btq: &[i32; CB], bsg: &[i32; CB], bta: &[i32; CB]| {
         let mut wins = [([-1i32; 4], 0usize, [-1i32; 4], 0usize); CB];
+        let mut fast = [false; CB];
         for i in 0..nb.min(CB) {
             let q = bq[i];
+            if quick(q, btq[i], bsg[i]) { fast[i] = true; continue; }
             let src = window(g(xs, q), g(ys, q));
             // (A unit target by its window too: in range of each other alike,
             // whichever of the two looks; a structure by its tile.)
@@ -3144,8 +3171,8 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         }
         for i in 0..nb.min(CB) {
             let (src, ns, tgt, nt) = wins[i];
-            let mut in_range = false;
-            if ns > 0 && nt > 0 {
+            let mut in_range = fast[i];
+            if !fast[i] && ns > 0 && nt > 0 {
                 if let Some(x) = arq.as_mut() {
                     in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, bq[i]) as i32);
                 }

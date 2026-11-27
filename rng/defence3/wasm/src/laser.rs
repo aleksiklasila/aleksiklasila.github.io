@@ -25,6 +25,8 @@ struct Lines {
     lslot: *mut i32, slt: *mut i32, sfree: *mut i32, part: *mut i32, pn: *mut i32,
     rhead: *mut i32, chead: *mut i32, rnext: *mut i32, cnext: *mut i32, sb: *mut i32, sbn: *mut i32,
     ba: *mut i32, bb: *mut i32, bown: *mut i32, bfree: *mut i32, blive: *mut u8, walk: *mut u8, elev: *mut i8, blev: *mut i8, hdr: *mut i32,
+    // (Each beam's two lasers' slots: its damage from theirs, k_laser_dmg.)
+    bsa: *mut i32, bsb: *mut i32,
     w: i32, h: i32, wall: u8, ty: i32, scap: i32, bcap: i32,
 }
 impl Lines {
@@ -85,6 +87,8 @@ impl Lines {
             s(self.blive, b as usize, 0);
             let n = g(self.bfree, 0); s(self.bfree, (n + 1) as usize, b); s(self.bfree, 0, n + 1);
             s(self.hdr, 2, g(self.hdr, 2) - 1);
+            // (The beams changed: their order made again, k_laser_dmg.)
+            s(self.hdr, 6, g(self.hdr, 6).wrapping_add(1));
         }
         s(self.sbn, sl * 2 + o, 0);
     }
@@ -132,8 +136,9 @@ impl Lines {
                     let n = g(self.bfree, 0);
                     let b = if n > 0 { s(self.bfree, 0, n - 1); g(self.bfree, n as usize) } else { let hw = g(self.hdr, 1); if hw >= self.bcap { continue; } s(self.hdr, 1, hw + 1); hw };
                     let bu = b as usize;
-                    s(self.blive, bu, 1); s(self.hdr, 2, g(self.hdr, 2) + 1);
+                    s(self.blive, bu, 1); s(self.hdr, 2, g(self.hdr, 2) + 1); s(self.hdr, 6, g(self.hdr, 6).wrapping_add(1));
                     s(self.ba, bu, t as i32); s(self.bb, bu, u);
+                    if !self.bsa.is_null() { s(self.bsa, bu, sl); s(self.bsb, bu, g(self.lslot, u as usize)); }
                     let ow = g(self.own, t);
                     s(self.bown, bu, if ow >= 0 && ow < 0x7ff9 { ow } else { -999 });
                     let c = g(self.sbn, su * 2 + o) as usize;
@@ -154,11 +159,11 @@ impl Lines {
 /// (lz.sb, the beams each started, lz.sbn), their partners along it
 /// (lz.part, LZ_DIR a direction, lz.pn), its beams made again (lz.ba / lz.bb
 /// / lz.bown, lz.blive, lz.bfree). lz.hdr: [0] slots used, [1] beams used, [2]
-/// beams live. Arrays: st.code, st.brain, st.own, st.uc, st.val, st.rrow,
+/// beams live, [6] the beams' version (any added or let go). Arrays: st.code, st.brain, st.own, st.uc, st.val, st.rrow,
 /// cell.type, lz.lslot, lz.slt, lz.sfree, lz.part, lz.pn, lz.rhead,
 /// lz.chead, lz.rnext, lz.cnext, lz.sb, lz.sbn, lz.ba, lz.bb, lz.bown,
 /// lz.bfree, lz.blive, lz.walk, tower effectiveLevel, tower level, lz.hdr,
-/// lz.rdirty, lz.cdirty, lz.ev. P: [0] W, [1] H, [2] TYPE_WALL, [3] the
+/// lz.rdirty, lz.cdirty, lz.ev, lz.bsa, lz.bsb (each beam's lasers' slots). P: [0] W, [1] H, [2] TYPE_WALL, [3] the
 /// laser's stationary type, [4] slots, [5] beams.
 #[no_mangle]
 pub unsafe extern "C" fn k_laser_lines(a: u32, _chunk: i32) {
@@ -168,6 +173,7 @@ pub unsafe extern "C" fn k_laser_lines(a: u32, _chunk: i32) {
         lslot: k.p(7), slt: k.p(8), sfree: k.p(9), part: k.p(10), pn: k.p(11),
         rhead: k.p(12), chead: k.p(13), rnext: k.p(14), cnext: k.p(15), sb: k.p(16), sbn: k.p(17),
         ba: k.p(18), bb: k.p(19), bown: k.p(20), bfree: k.p(21), blive: k.p(22), walk: k.p(23), elev: k.p(24), blev: k.p(25), hdr: k.p(26),
+        bsa: k.p(30), bsb: k.p(31),
         w: k.i(0).max(1), h: k.i(1).max(0), wall: k.i(2) as u8, ty: k.i(3) + 1, scap: k.i(4).max(0), bcap: k.i(5).max(0),
     };
     let (rd, cd, ev) = (k.p::<u8>(27), k.p::<u8>(28), k.p::<i32>(29));
@@ -179,7 +185,7 @@ pub unsafe extern "C" fn k_laser_lines(a: u32, _chunk: i32) {
         for x in 0..l.w as usize { s(l.chead, x, -1); }
         s(l.sfree, 0, 0); s(l.bfree, 0, 0);
         for b in 0..g(l.hdr, 1).max(0) as usize { s(l.blive, b, 0); }
-        s(l.hdr, 0, 0); s(l.hdr, 1, 0); s(l.hdr, 2, 0);
+        s(l.hdr, 0, 0); s(l.hdr, 1, 0); s(l.hdr, 2, 0); s(l.hdr, 6, g(l.hdr, 6).wrapping_add(1));
         let mut t = 0usize;
         while t + 16 <= n {
             let mut bits = i8x16_bitmask(i8x16_eq(v128_load(l.code.add(t) as *const v128), i8x16_splat(0x22))) as u32;
@@ -212,7 +218,7 @@ pub unsafe extern "C" fn k_laser_lines(a: u32, _chunk: i32) {
 /// in canonical order (lz.border: sorted by first laser's tile, then
 /// orientation; LSD radix over lz.bkeys) for the structure hits. Arrays:
 /// lz.ba, lz.bb, lz.blive, lz.bdmg, st.brain, st.own, st.rrow, adj.tykey,
-/// adj.rlv, adj.bl, stt.dmg, tc.dmg, lz.bkeys, lz.border, lz.hdr. P: [0]
+/// adj.rlv, adj.bl, stt.dmg, tc.dmg, lz.bkeys, lz.border, lz.hdr, lz.slt, lz.ldmg, lz.bsa, lz.bsb. P: [0]
 /// keys, [1] levels + 1, [2] research + 1, [3] types, [4] MAX_THING_LEVEL,
 /// [5] players, [6] W.
 #[no_mangle]
@@ -237,15 +243,24 @@ pub unsafe extern "C" fn k_laser_dmg(a: u32, _chunk: i32) {
         let v = g(sdmg, (kb as usize * l1 + lv) * r1 + g(rlv, 4 * x + 3) as usize);
         if v == v { v } else { 0.0 }
     };
+    // (Each laser's damage once (lz.ldmg by slot, from lz.slt), each beam's the sum of its two lasers' (lz.bsa,
+    // lz.bsb): ~5 beams a laser in lines, the tables looked up twice a beam were most of this kernel.)
+    let (slt, ldmg, bsa, bsb) = (k.p::<i32>(15), k.p::<f32>(16), k.p::<i32>(17), k.p::<i32>(18));
+    let by_slot = !slt.is_null() && !ldmg.is_null() && !bsa.is_null() && !bsb.is_null();
+    if by_slot { for sl in 0..g(hdr, 0).max(0) as usize { let t = g(slt, sl); s(ldmg, sl, if t >= 0 { dmg_of(t as usize) } else { 0.0 }); } }
     let hw = g(hdr, 1).max(0) as usize;
+    // (The order only when the beams changed since it was made (lz.hdr[6] the beams' version, [7] the order's): a sort
+    // of every beam each tick was most of this kernel with ~260k beams.)
+    let sort = g(hdr, 6) != g(hdr, 7);
     let mut n = 0usize;
     for b in 0..hw {
         if g(blive, b) == 0 { continue; }
         let (t, u) = (g(ba, b) as usize, g(bb, b) as usize);
-        s(bdmg, b, (dmg_of(t) + dmg_of(u)) / 60.0);
-        let vert = (u - t) >= w as usize;
-        s(keys, n, ((((t as u64) << 1) | vert as u64) << 32) | b as u64); n += 1;
+        s(bdmg, b, if by_slot { (g(ldmg, g(bsa, b) as usize) + g(ldmg, g(bsb, b) as usize)) / 60.0 } else { (dmg_of(t) + dmg_of(u)) / 60.0 });
+        if sort { let vert = (u - t) >= w as usize; s(keys, n, ((((t as u64) << 1) | vert as u64) << 32) | b as u64); }
+        n += 1;
     }
+    if !sort { s(hdr, 3, n as i32); return; }
     // (LSD radix, 8 bits a pass over the key bits above the beam id: tile
     // and orientation; the id below them never decides.)
     let tmp = keys.add(n);
@@ -260,6 +275,7 @@ pub unsafe extern "C" fn k_laser_dmg(a: u32, _chunk: i32) {
     }
     for i in 0..n { s(order, i, (g(src, i) & 0xffff_ffff) as i32); }
     s(hdr, 3, n as i32);
+    s(hdr, 7, g(hdr, 6));
 }
 
 /// SIM_KERNEL_LASER_REPORT (one job): the units' beam damage reports (the
