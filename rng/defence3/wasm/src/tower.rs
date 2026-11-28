@@ -154,10 +154,9 @@ pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
         let ar=*qa.add(r);if ar<0||ar as usize>=na||rec.is_null(){continue;}
         let own=*qo.add(r) as usize;if own>=players{continue;}
         let reach=*qr.add(r);let ty=*qk.add(r);let t=*qt.add(r);
-        let rr=rec.add((own*na+ar as usize)*8);
-        let dd=|v:i32|->i32{let v=v as u32&0xFFFF;if v==0xFFFF{-1}else{v as i32}};
-        let (w5,w6,w7)=(*rr.add(5),*rr.add(6),*rr.add(7));
-        let d=dd(w5);let ta=*rr;
+        let rr=rec.add((own*na+ar as usize)*super::acq_sample::RW) as *const u32;
+        let dd=|w:u32|->i32{let v=super::acq_sample::w_dist(w);if v==0xFFFF{-1}else{v as i32}};
+        let d=dd(*rr);let ta=super::acq_sample::w_ans(*rr);
         if d>=0&&d<=reach&&ta>=0&&(ta as usize)<na{
             let immune:u16=if ty>=1&&ty<=4{1<<ty}else if ty==5{30}else{0};
             let affected:u16=if ty>=1&&ty<=4{1<<(ty+4)}else if ty==6{512}else if ty==7{1024}else{0};
@@ -181,9 +180,8 @@ pub unsafe extern "C" fn k_tower_acq(a:u32,chunk:i32){
             }
             if win>=0{*os.add(r)=win;*oid.add(r)=wid;continue;}
         }
-        let sds=[dd(w5>>16),dd(w6),dd(w6>>16),dd(w7)];
         for class in 0..4usize{
-            let sd=sds[class];let st=*rr.add(1+class);
+            let w=*rr.add(1+class);let sd=dd(w);let st=super::acq_sample::w_ans(w);
             if sd>=0&&sd<=reach&&st>=0{*ost.add(r)=st;break;}
         }
     }
@@ -260,7 +258,7 @@ fn look_atan2(y:f64,x:f64)->f32{
 /// A preferred target's unit by its id (main.js unitIdIndex: ids ascending,
 /// their slots; -2 a hole): its slot, -1 none.
 #[inline]
-unsafe fn id_slot(ids:*const i32,slots:*const i32,n:usize,id:i32)->i32{
+pub(crate) unsafe fn id_slot(ids:*const i32,slots:*const i32,n:usize,id:i32)->i32{
     let (mut lo,mut hi)=(0usize,n);
     while lo<hi{let m=(lo+hi)/2;let v=*ids.add(m);if v<id{lo=m+1;}else{hi=m;}}
     if lo<n&&*ids.add(lo)==id{let s=*slots.add(lo);if s>=0{return s;}}
@@ -294,45 +292,35 @@ unsafe fn id_slot(ids:*const i32,slots:*const i32,n:usize,id:i32)->i32{
 /// [5] blast radius scale (area units to pixels), [6] types, [7] levels,
 /// [8] looks, [9] ids in the id index, [10] the cover's stride, [11]
 /// players covered, [12] tiles, [13] ticks until a new commit is used.
-#[no_mangle]
-pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
-    let arg=waddr(a) as *const i32;let k=K::new(arg);
-    let (input,row,valid,sout,idle,qx,qy,qo,qt)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<i32>(4),k.p::<i32>(6),
-        k.p::<f32>(7),k.p::<f32>(8),k.p::<i32>(9),k.p::<i32>(10));
-    let (shots,shot_cd,level,damage,blast,radius)=(k.p::<i32>(11),k.p::<i32>(12),k.p::<i32>(13),k.p::<f64>(14),k.p::<f64>(15),k.p::<f64>(16));
-    let (ux,uy,code,tim,cdu,ang,stt_tt,brain,ssd,ssp)=(k.p::<i32>(17),k.p::<i32>(18),k.p::<u8>(20),k.p::<f64>(21),k.p::<f64>(22),k.p::<f32>(23),
-        k.p::<i32>(24),k.p::<u32>(25),k.p::<i32>(26),k.p::<f32>(27));
-    let (live,free,hdr)=(k.p::<i32>(28),k.p::<i32>(29),k.p::<i32>(30));
-    let (px,py,pvx,pvy,psx,psy,ppx,ppy,paim,plife,prange,pdmg)=(k.p::<f64>(31),k.p::<f64>(32),k.p::<f64>(33),k.p::<f64>(34),k.p::<f64>(35),k.p::<f64>(36),
-        k.p::<f32>(37),k.p::<f32>(38),k.p::<f32>(39),k.p::<i32>(40),k.p::<f64>(41),k.p::<f64>(42));
-    let (plvl,pown,pty,ptt,pshots,pbd,pbr,pft,psd,psp,pid,pev,parg)=(k.p::<i32>(43),k.p::<i8>(44),k.p::<u8>(45),k.p::<i16>(46),k.p::<i32>(47),k.p::<f64>(48),
-        k.p::<f64>(49),k.p::<i32>(50),k.p::<i32>(51),k.p::<f32>(52),k.p::<i32>(53),k.p::<i32>(54),k.p::<i32>(55));
-    let (ltgt,ftile,fang,looks,cnt)=(k.p::<i32>(56),k.p::<i32>(57),k.p::<f32>(58),k.p::<i32>(59),k.p::<i32>(60));
-    let (pref,ptk,ptv,uids,uslots,udead,uown,sown,sval,cover,agrid,qoff,areas)=(k.p::<i32>(61),k.p::<i8>(62),k.p::<i32>(63),k.p::<i32>(64),k.p::<i32>(65),k.p::<u8>(66),
-        k.p::<i8>(67),k.p::<i32>(68),k.p::<f64>(69),k.p::<i32>(70),k.p::<i32>(71),k.p::<i32>(72),super::arq::Arq::new(k.p::<i32>(73),arg));
-    let mut areas=areas;
-    let n=k.i(0).max(0) as usize;let now=k.f(1);let w=k.i(2).max(1);let tile=k.f(3);let range=k.f(4);let rscale=k.f(5);
-    let nt=k.i(6);let nl=k.i(7);let nlook=k.i(8).max(0) as usize;let nid=k.i(9).max(0) as usize;let cstride=k.i(10).max(0) as usize;let ncov=k.i(11);
-    let (mut nf,mut nk,mut drop)=(0usize,0usize,0i32);
-    // (Outcomes, a diagnostic: cnt[4] committed unit shot, [5] structure, [6] none (idle), [7] gone since (retry), [8] preferred.)
-    let mut oc=[0i32;5];
-    let mut nlive=*hdr as usize;let mut nfree=*hdr.add(1) as usize;let live0=nlive as i32;
-    // (hdr[10]: the slots' high-water mark, projectile.js projHighWater: the frames send the slots below it.)
-    let mut hw=(*hdr.add(10)).max(0) as usize;
-    let tick=(now as i64 & 1023) as i32;
-    // (Its row's next tick to act in tw.due [74], as k_tower_due writes it.)
+/// The decision pass (k_block 14, a job of P[14] towers; the arrays and params of k_tower_fire's call, the thread's
+/// own argument block arg for the area queries): each due tower's target as above (a preferred one, else its row's
+/// committed answer), or its idle / retry cooldown; its row's and tile's cooldown, due tick, angle and preference
+/// written (its own: no two towers share a row or a tile). Per tower into the decision arrays ([77] code: -1 not
+/// acting, 0x100 | outcome idle, else the outcome of its shot (k_tower_fire's cnt[4 + outcome]); [78] the unit's
+/// slot, [79] the tile, [80] / [81] the target's x, y, [82] the angle).
+pub unsafe fn k_tower_decide(b:u32,arg:*const i32,chunk:i32){
+    let k=K::new(waddr(b) as *const i32);
+    let (input,row,valid,sout,idle,qx,qy,qo)=(k.p::<i32>(0),k.p::<i32>(1),k.p::<i32>(2),k.p::<i32>(4),k.p::<i32>(6),k.p::<f32>(7),k.p::<f32>(8),k.p::<i32>(9));
+    let shot_cd=k.p::<i32>(12);
+    let (ux,uy,code,tim,cdu,ang,brain)=(k.p::<i32>(17),k.p::<i32>(18),k.p::<u8>(20),k.p::<f64>(21),k.p::<f64>(22),k.p::<f32>(23),k.p::<u32>(25));
+    let (pref,ptk,ptv,uids,uslots,udead,uown,sown,sval,cover,agrid,qoff)=(k.p::<i32>(61),k.p::<i8>(62),k.p::<i32>(63),k.p::<i32>(64),k.p::<i32>(65),k.p::<u8>(66),
+        k.p::<i8>(67),k.p::<i32>(68),k.p::<f64>(69),k.p::<i32>(70),k.p::<i32>(71),k.p::<i32>(72));
+    let mut areas=super::arq::Arq::new(k.p::<i32>(73),arg);
+    let (dcode,dslot,dtile,dx_,dy_,dang)=(k.p::<i32>(77),k.p::<i32>(78),k.p::<i32>(79),k.p::<f64>(80),k.p::<f64>(81),k.p::<f32>(82));
+    let n=k.i(0).max(0) as usize;let now=k.f(1);let w=k.i(2).max(1);let tile=k.f(3);
+    let nid=k.i(9).max(0) as usize;let cstride=k.i(10).max(0) as usize;let ncov=k.i(11);
+    let per=k.i(14).max(1) as usize;let (q0,q1)=((chunk.max(0) as usize*per).min(n),((chunk.max(0) as usize+1)*per).min(n));
     let due=k.p::<i32>(74);
-    // (The committed answers' checks: unit ids by slot [19], mv.scls [75],
-    // st.uc [76], the cooldown [3]; P[13] ticks to the next commit's use.)
     let (uids_col,scls,suc,base_cd)=(k.p::<i32>(19),k.p::<i8>(75),k.p::<u8>(76),k.p::<i32>(3));
     let retry=k.i(13).max(1)-1;
     let set_due=|r:usize,until:f64|{if !due.is_null(){let e=ceil(until);*due.add(r)=if e>=2147483646.0{i32::MAX}else{e as i32+1};}};
-    for q in 0..n{
+    for q in q0..q1{
+        *dcode.add(q)=-1;
         if *valid.add(q)!=1{continue;}
         let (t,r)=(*input.add(q),*row.add(q) as usize);
         let own=*qo.add(q);
-        // Its target: (unit slot or -1, tile or -1, x, y).
-        let mut pick:(i32,i32,f64,f64)=(-1,-1,0.0,0.0);
+        // Its target: (unit slot or -1, tile or -1, x, y), and the outcome counted.
+        let mut pick:(i32,i32,f64,f64)=(-1,-1,0.0,0.0);let mut oc=0i32;
         if *pref.add(q)!=0{
             let kind=*ptk.add(r) as i32;let v=*ptv.add(r);
             // (slot, tile, x, y, the tile it stands on)
@@ -355,7 +343,7 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
             else{
                 let reach=*qoff.add(q*2+1)-1;
                 let inr=match areas.as_mut(){Some(x)=>reach>=0&&x.within(&[*qoff.add(q*2)],&[ar],reach),None=>false};
-                if inr{pick=(found.0,found.1,found.2,found.3);oc[4]+=1;}
+                if inr{pick=(found.0,found.1,found.2,found.3);oc=4;}
             }
         }
         if pick.0<0&&pick.1<0{
@@ -375,33 +363,79 @@ pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
                 if *udead.add(su)!=1&&*uids_col.add(su)==cid&&*uown.add(su) as i32!=own{
                     let x=*ux.add(su) as f64*0.125;let y=*uy.add(su) as f64*0.125;
                     let gx=floor(x/tile) as i32;let gy=floor(y/tile) as i32;
-                    if gx>=0&&gx<w&&gy>=0&&gy*w+gx<k.i(12)&&inr(gy*w+gx){pick=(cs,-1,x,y);oc[0]+=1;}
+                    if gx>=0&&gx<w&&gy>=0&&gy*w+gx<k.i(12)&&inr(gy*w+gx){pick=(cs,-1,x,y);oc=0;}
                 }
             }
             if pick.0<0&&cst>=0&&cst<k.i(12){
                 let tu=cst as usize;let c=if scls.is_null(){1}else{*scls.add(tu)};let o=*sown.add(tu);
                 let need_built=c==2||c==4;
                 if c!=0&&*code.add(tu)!=0&&o!=own&&*sval.add(tu)>0.0&&!(need_built&&(o<0||o==0x7ff9||(!suc.is_null()&&*suc.add(tu)!=0)))&&inr(cst){
-                    let gx=cst%w;let gy=cst/w;pick=(-1,cst,gx as f64*tile+tile*0.5,gy as f64*tile+tile*0.5);oc[1]+=1;
+                    let gx=cst%w;let gy=cst/w;pick=(-1,cst,gx as f64*tile+tile*0.5,gy as f64*tile+tile*0.5);oc=1;
                 }
             }
             if pick.0<0&&pick.1<0{
                 // Nothing then: idle its cooldown, by its tile's phase (as the
                 // structure look did); its answer gone since: the next commit's.
                 let b=*base_cd.add(q);
-                if none{oc[2]+=1;}else{oc[3]+=1;}
+                *dcode.add(q)=0x100|if none{2}else{3};
                 let wait=if none&&b>0{let period=b+1;b+((t%period-(now as i32+period)).rem_euclid(period))}else{retry};
                 if wait>0{let until=now+wait as f64;*cdu.add(r)=until;*tim.add(t as usize)=until;set_due(r,until);}
                 continue;
             }
         }
         let (tx,ty)=(pick.2,pick.3);
-        let ft=if pick.1>=0&&*code.add(pick.1 as usize)==0x55{pick.1}else{-1};
-        let x=*qx.add(q) as f64;let y=*qy.add(q) as f64;let dx=tx-x;let dy=ty-y;
+        let x=*qx.add(q) as f64;let y=*qy.add(q) as f64;
         let until=now+*shot_cd.add(q) as f64;*cdu.add(r)=until;*tim.add(t as usize)=until;set_due(r,until);
-        let a=look_atan2(dy,dx);*ang.add(r)=a;
+        let a=look_atan2(ty-y,tx-x);*ang.add(r)=a;
+        *dcode.add(q)=oc;*dslot.add(q)=pick.0;*dtile.add(q)=pick.1;*dx_.add(q)=tx;*dy_.add(q)=ty;*dang.add(q)=a;
+    }
+}
+
+/// The shots pass (one job on the simulation thread, after k_tower_decide's): per tower in order, its decision's
+/// outcome counted; a shot: its tile and angle (cnt[1]: the presentation's turrets), the first P[8] shots' indexes
+/// and targets (looks, ltgt: unit slot, tile; cnt[2]); its shot written into the projectile pool as projectile.js
+/// projectileFire does (the type's status duration and dps from its owner's stats: sta.sd / sta.sp by stat (owner,
+/// type, effective level); id (now & 1023) << 22 | tile: one shot a tower a step, unique among the shots in
+/// flight); cnt[3] shots not made (pool full); cnt[4..9) the outcomes (committed unit shot, structure, none (idle),
+/// gone since (retry), preferred).
+/// k_tower_decide's doc for the towers' choice. P: [0] towers, [1] now, [2] grid width, [3] tile, [4] the shots'
+/// range, [5] blast radius scale (area units to pixels), [6] types, [7] levels, [8] looks, [9] ids in the id index,
+/// [10] the cover's stride, [11] players covered, [12] tiles, [13] ticks until a new commit is used, [14] towers a
+/// decision job.
+#[no_mangle]
+pub unsafe extern "C" fn k_tower_fire(a:u32,_chunk:i32){
+    let arg=waddr(a) as *const i32;let k=K::new(arg);
+    let (input,valid,qx,qy,qo,qt)=(k.p::<i32>(0),k.p::<i32>(2),k.p::<f32>(7),k.p::<f32>(8),k.p::<i32>(9),k.p::<i32>(10));
+    let (shots,level,damage,blast,radius)=(k.p::<i32>(11),k.p::<i32>(13),k.p::<f64>(14),k.p::<f64>(15),k.p::<f64>(16));
+    let (code,stt_tt,brain,ssd,ssp)=(k.p::<u8>(20),k.p::<i32>(24),k.p::<u32>(25),k.p::<i32>(26),k.p::<f32>(27));
+    let (live,free,hdr)=(k.p::<i32>(28),k.p::<i32>(29),k.p::<i32>(30));
+    let (px,py,pvx,pvy,psx,psy,ppx,ppy,paim,plife,prange,pdmg)=(k.p::<f64>(31),k.p::<f64>(32),k.p::<f64>(33),k.p::<f64>(34),k.p::<f64>(35),k.p::<f64>(36),
+        k.p::<f32>(37),k.p::<f32>(38),k.p::<f32>(39),k.p::<i32>(40),k.p::<f64>(41),k.p::<f64>(42));
+    let (plvl,pown,pty,ptt,pshots,pbd,pbr,pft,psd,psp,pid,pev,parg)=(k.p::<i32>(43),k.p::<i8>(44),k.p::<u8>(45),k.p::<i16>(46),k.p::<i32>(47),k.p::<f64>(48),
+        k.p::<f64>(49),k.p::<i32>(50),k.p::<i32>(51),k.p::<f32>(52),k.p::<i32>(53),k.p::<i32>(54),k.p::<i32>(55));
+    let (ltgt,ftile,fang,looks,cnt)=(k.p::<i32>(56),k.p::<i32>(57),k.p::<f32>(58),k.p::<i32>(59),k.p::<i32>(60));
+    let (dcode,dslot,dtile,dx_,dy_,dang)=(k.p::<i32>(77),k.p::<i32>(78),k.p::<i32>(79),k.p::<f64>(80),k.p::<f64>(81),k.p::<f32>(82));
+    let n=k.i(0).max(0) as usize;let now=k.f(1);let range=k.f(4);let rscale=k.f(5);
+    let nt=k.i(6);let nl=k.i(7);let nlook=k.i(8).max(0) as usize;
+    let (mut nf,mut nk,mut drop)=(0usize,0usize,0i32);
+    let mut oc=[0i32;8];
+    let mut nlive=*hdr as usize;let mut nfree=*hdr.add(1) as usize;let live0=nlive as i32;
+    // (hdr[10]: the slots' high-water mark, projectile.js projHighWater: the frames send the slots below it.)
+    let mut hw=(*hdr.add(10)).max(0) as usize;
+    let tick=(now as i64 & 1023) as i32;
+    for q in 0..n{
+        if *valid.add(q)!=1{continue;}
+        let c=*dcode.add(q);
+        if c<0{continue;}
+        if c&0x100!=0{oc[(c&7) as usize]+=1;continue;}
+        oc[(c&7) as usize]+=1;
+        let t=*input.add(q);let own=*qo.add(q);
+        let (tx,ty,a)=(*dx_.add(q),*dy_.add(q),*dang.add(q));
+        let pg=*dtile.add(q);
+        let ft=if pg>=0&&*code.add(pg as usize)==0x55{pg}else{-1};
+        let x=*qx.add(q) as f64;let y=*qy.add(q) as f64;let dx=tx-x;let dy=ty-y;
         *ftile.add(nf)=t;*fang.add(nf)=a;nf+=1;
-        if nk<nlook{*looks.add(nk)=q as i32;*ltgt.add(2*nk)=pick.0;*ltgt.add(2*nk+1)=pick.1;nk+=1;}
+        if nk<nlook{*looks.add(nk)=q as i32;*ltgt.add(2*nk)=*dslot.add(q);*ltgt.add(2*nk+1)=pg;nk+=1;}
         if nfree==0{drop+=1;continue;}
         nfree-=1;let s=*free.add(nfree) as usize;*live.add(nlive)=s as i32;nlive+=1;if s>=hw{hw=s+1;}
         let len=sqrt(dx*dx+dy*dy);

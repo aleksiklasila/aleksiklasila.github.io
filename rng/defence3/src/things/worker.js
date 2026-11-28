@@ -843,6 +843,25 @@ function _wsSnapshotReturnSpawners(total, owners) {
     simRustDirect('k_ws_spawner_snap', [X.tiles, X.off, _ST.own, _ST.brain, _ST.val, _ST.uc, off, tiles], P);
     return off[2 * owners] > 0;
 }
+// The worker search's arrays at the match's start (main.js simMatchPrewarm): the per-chunk counts at the slots'
+// capacity, the requests' at the match's workers and a quarter more, the results', the order's and the pre-claim's
+// with them; their first post's (30-80 ms and 59 bindings in a 1M match's second tick).
+function wsPrewarm() {
+    const S = _simUnitState;
+    if (!S) return;
+    const n = Math.max(1, S.cap), chunks = Math.ceil(n / WS_SEL_CHUNK);
+    _wsArr('ws.rcnt', Int32Array, chunks); _wsArr('ws.rpre', Int32Array, chunks + 1); _wsArr('ws.rsel', Int32Array, chunks * WS_SEL_CHUNK);
+    const W = S.columns.isWk; let w = 0;
+    if (W) for (let s = 0, m = Math.min(W.length, S.owners.length); s < m; s++) if (W[s]) w++;
+    const cap = Math.max(4096, Math.ceil(w * 1.25));
+    for (const k of ['ws.rslot', 'ws.rid', 'ws.rwt', 'ws.rkind', 'ws.rowner', 'ws.rak', 'ws.rgrp', 'ws.rneed', 'ws.rjid', 'ws.rcur', 'ws.rmy']) _wsArr(k, Int32Array, cap);
+    for (const k of ['ws.rox', 'ws.roy', 'ws.rux', 'ws.ruy', 'ws.rr', 'ws.rax', 'ws.ray']) _wsArr(k, Float32Array, cap);
+    _wsArr('ws.res', Int32Array, cap * WS_K); _wsArr('ws.score', Float32Array, cap * WS_K); _wsArr('ws.ures', Int32Array, cap * 3);
+    _wsArr('ws.order', Int32Array, cap); _wsArr('ws.otmp', Int32Array, cap); _wsArr('ws.orderCount', Int32Array, 1);
+    _wsArr('ws.claim', Int32Array, 1 << Math.max(10, Math.ceil(Math.log2(2 * cap))));
+    const np = Math.max(1, Math.floor(Number(players && players.length) || 0)), HM = HEALER_DAMAGED_CANDIDATE_LIMIT;
+    _wsArr('wsh.x', Float32Array, np * HM); _wsArr('wsh.y', Float32Array, np * HM); _wsArr('wsh.a', Int32Array, np * HM); _wsArr('wsh.n', Int32Array, np);
+}
 function _wsPost() {
     simParallelBackgroundWait(WS_LANE);
     _wsPosted = null;

@@ -184,31 +184,39 @@ const SIM_PROJ_SPEC = simTableSpec({
     u8: ['alive']
 });
 // The shots are the pool's slots (projectile.js), a table slot a pool
-// slot, its serial the shot's id; version: the order's (simProjOrderChanged).
-const _simProjPres = { stamp: new Int32Array(0), tick: 0, version: 0, last: null };
-function simProjPresReset() { const S = _simProjPres; S.stamp = new Int32Array(0); S.last = null; S.version++; }
-function simProjOrderChanged(order, n) {
-    const S = _simProjPres;
-    let last = S.last, changed = !last || last.length !== n;
-    if (!changed) for (let k = 0; k < n; k++) if (last[k] !== order[k]) { changed = true; break; }
-    if (changed) { S.last = order.slice(0, n); S.version++; }
-}
+// slot, its serial the shot's id; version: the order's (proj.rs k_proj_fill compares it with the last one sent).
+// The table is filled in the heap by the kernel (H, the pool's capacity, made once) and copied into the frame's
+// column by column; the types' frame codes a table by projectile type (made when the type names are).
+const _simProjPres = { version: 0, lastN: -1, H: null, last: null, out: null, codes: null, codesFor: null, P: new Float64Array(4) };
+function simProjPresReset() { const S = _simProjPres; S.lastN = -1; S.version++; }
 // The shots in flight into table F (n slots): returns how many.
 function simProjFill(F, n) {
-    const S = _simProjPres, tick = ++S.tick;
-    if (S.stamp.length < n) { const st = new Int32Array(Math.max(1024, n * 2)); st.set(S.stamp); S.stamp = st; }
-    const stamp = S.stamp, order = F.order;
-    let j = 0;
-    projForEach((s, A) => {
-        stamp[s] = tick; order[j++] = s;
-        F.alive[s] = 1; F.serial[s] = A.id[s];
-        F.x[s] = A.x[s]; F.y[s] = A.y[s]; F.px[s] = A.px[s]; F.py[s] = A.py[s];
-        F.vx[s] = A.vx[s]; F.vy[s] = A.vy[s]; F.sx[s] = A.sx[s]; F.sy[s] = A.sy[s]; F.aim[s] = A.aim[s];
-        F.type[s] = _simFrameCode(projTypeName(A.tt[s])); F.owner[s] = A.own[s];
-        F.life[s] = Math.max(-32000, Math.min(32000, A.life[s]));
-    });
-    for (let s = 0; s < n; s++) if (stamp[s] !== tick) F.alive[s] = 0;
-    simProjOrderChanged(order, j);
+    const S = _simProjPres, P = _pjEnsure();
+    if (!S.H || S.H.cap < P.cap || !simHeapHas(S.H.order)) {
+        const cap = P.cap, H = { cap };
+        for (const k of SIM_PROJ_SPEC.f32) H[k] = simSharedArray(Float32Array, cap);
+        for (const k of SIM_PROJ_SPEC.i32) H[k] = simSharedArray(Int32Array, cap);
+        H.order = simSharedArray(Int32Array, cap);
+        for (const k of SIM_PROJ_SPEC.i16) H[k] = simSharedArray(Int16Array, cap);
+        for (const k of SIM_PROJ_SPEC.u8) H[k] = simSharedArray(Uint8Array, cap);
+        S.H = H; S.last = simSharedArray(Int32Array, cap); S.out = simSharedArray(Int32Array, 4); S.lastN = -1;
+    }
+    if (!_projTypeNames) _projTypeId('');
+    if (S.codesFor !== _projTypeNames || !S.codes || !simHeapHas(S.codes)) {
+        const names = _projTypeNames || [];
+        S.codes = simSharedArray(Int32Array, Math.max(1, names.length));
+        for (let t = 0; t < names.length; t++) S.codes[t] = _simFrameCode(names[t]);
+        S.codesFor = _projTypeNames;
+    }
+    const H = S.H, A = P.a, Q = S.P, m = Math.min(n, H.cap, F.cap);
+    Q[0] = m; Q[1] = S.codes.length; Q[2] = Math.max(0, S.lastN);
+    simRustDirect('k_proj_fill', [P.hdr, P.live, A.x, A.y, A.px, A.py, A.vx, A.vy, A.sx, A.sy, A.aim, A.id, A.tt, A.own, A.life, S.codes,
+        H.x, H.y, H.px, H.py, H.vx, H.vy, H.sx, H.sy, H.aim, H.serial, H.order, H.type, H.owner, H.life, H.alive, S.last, S.out], Q);
+    const j = S.out[0];
+    if (S.out[1] || S.lastN < 0) { S.lastN = j; S.version++; }
+    // (The table's columns into the frame's: the first m slots, the order's first j.)
+    for (const k of [...SIM_PROJ_SPEC.f32, ...SIM_PROJ_SPEC.i32, ...SIM_PROJ_SPEC.i16, ...SIM_PROJ_SPEC.u8]) F[k].set(H[k].subarray(0, m));
+    F.order.set(H.order.subarray(0, j));
     return j;
 }
 function simFrameEncodeProjectiles() {

@@ -12202,3 +12202,433 @@ breadth-first search over all 120,736 areas (all reached, maxd 10), 8-10 ms each
   traffic_swap passes its first gates ~111k times a step (~400k units), ~12k reach the final checks; the 3x3 chunk scan
   per attempt cannot be narrowed exactly (a partner may be up to OCC_WMAX = 32 cells wide). Profile self time spread:
   traffic_swap 13.7 %, motion_f 9.2, checked_traffic_q 7.9, preview 6.2, occ_gather 5.9, seg_clear 5.2. Not changed.
+- **Answers: live bits a level** (acq.saLvH: the OR of a level's frontier masks, atomic OR by the jobs; an area missing
+  only bits whose frontier died out is passed over): exact, kept runs 67 -> 58 ms on this thread, full runs unchanged
+  (in the battle every label keeps a frontier to the reach). Kept.
+- Tried, reverted: frontier bitmaps (a bit an area: a neighbour's mask read only when on the frontier): exact, 154 vs
+  ~135 ms (the masks' loads are not the cost). Records area-major ((area * teams + team) * RW, an area's teams
+  together): exact, 129 vs ~135 ms on this thread but worse in the game (m8-p2: answers 42 -> 46 s, seeds 5.5 -> 7.3,
+  scan 14.6 -> 17, lane 94 -> 103 s, steps 197.7 -> 208.9): the seed jobs (a team each) and the scan share lines.
+- **The projectiles' frame table by a kernel** (proj.rs k_proj_fill; sim_frame_world.js simProjFill): the shots in
+  flight into a heap table (columns, order, alive, the type's frame code from a table by projectile type made once),
+  the order against the last one sent in the kernel; the frame copies the columns. Was a JS callback a shot with a
+  type-name string lookup (1.3 % of the sim thread). projectile-pool, sim-frame-replica, presentation-*,
+  render-frame-stability, local-visual-snapshot, multiplayer-patch pass.
+- **The towers' turns in two passes** (tower.rs): k_tower_decide (k_block 14, the due towers in jobs of 64+; the area
+  queries with the thread's own context) decides each tower's target, cooldown, due tick, angle, preference (its own
+  row and tile); k_tower_fire then takes the shots in tower order on this thread (the pool's slots, the turret and
+  look lists): the same outcome as the one serial pass (tower-simd-determinism 0 vs 3 helpers, tower-* tests,
+  multiplayer-chaos-determinism pass). towersTick 5.7 -> 3.5 ms a step.
+- New measure, tickwin.cjs: ms of step time per base tick over a fixed range of game ticks (the battle thins out, so a
+  run's late steps are cheaper; whole-run means mix stretches). Ticks 150-650 of the 8-team battle: m8-e 32.9, m8-k
+  32.4, m8-m 32.1, m8-n2 31.0, m8-o 34.0, m8-p2 34.9 (area-major records, reverted), **m8-q2 29.1** (this batch).
+- **Occupancy / movement (back in scope): free slots through the idle path** (mv.rs idle4). Counter build (dbgc) and
+  a slot census in the scene (deadslots-weval.js): of 947k slots 477k are free (197k dead, 279k zeroed: dead 0, on 0,
+  energy 0), and the slot-range movement kernel sent every zeroed free slot (a 'live non-worker') down the per-lane
+  path to the controller, which returns at once (no energy). Lanes with no energy, no attack order and no structure
+  order to resume now join the vector idle path: the same writes (d0, out, fire). Exact: tickbench chaos-300k-32k
+  HASH_AT 90 at dk 3 equal (3958e029/2d6223d0) with and without. Alternating A/B in one sitting (abm-*, ticks 150-650):
+  base 32.8 / 36.9 ms a tick, new 31.7 / 36.0 (the sitting drifts warmer between pairs). Kept.
+- Occupancy (k89) itself: ~3,945 jobs a step of ~141 us, 8.8 threads busy (well spread); its work is per unit.
+- **The visibility lane (T5) ahead of the acquisition (T10) in SIM_PAR_BG_ORDER** (earliest deadline first: the
+  visibility commit comes first in the next step). Alternating A/B (abo-*, ticks 150-650): old 34.1 / 32.7 ms a tick,
+  new 31.1 / 33.4 (average -1.1); the visibility commit 1.96 / 1.75 -> 1.05 / 1.09 ms a tick, p95 steps 317 / 287 ->
+  303 / 277; the acquisition commit's wait grew in one pair. Kept (spikes first).
+- **New scene massdeath-800k** (make-mixed-scene.cjs, new --unit-energy: 2 teams x 400k, energy 6): 800k -> 30k units in
+  ~10 s. Spikes found: tick 1 acquisition post 71 ms and tick 2 worker search post 35 (first use), tick 5 minimap
+  39 + adjacency 34, tick 3 retire pass 60 + hits 54 (the mass death); with ~25k units left k8 / k89 still 9-16 ms a
+  step (k8 walked every slot, k89 1,441 block jobs). Not yet fixed: the first-use prewarms, the retire burst, k89's jobs.
+- **k8 (the slot pass) skips empty slabs** (mv.rs move_job: the allocator's free counts, word 297 / P[12]). Exact:
+  tickbench massdeath-800k HASH_AT 60 equal with and without (b93369fc/214a9b0b). A/B (abk-*, ticks 150-700): 16.66 /
+  15.98 -> 16.34 / 15.96 ms a tick, p95 29.4 / 25.5 -> 26.4 / 24.1. Kept.
+- **Scalar movement lanes (user 2026-11-27: the main avenue, wide SIMD, major reworks ok).** Counters now (8-team,
+  300 steps at dk 6): ~332k lanes a step on the per-lane path, of them ~265k with a brain instruction; the free lanes
+  are gone (1.3M from 57.6M). Census of the live units (cmode-weval.js, 467k): cm5 (hold+fire) parked 203k, cm2 (chase)
+  parked 70k, cm5 flow 41k, cm2 flow 11k; targets valid for all but ~0.1 %. So combat4 should take nearly all of them:
+  **next: find why combat4 leaves those lanes** (likely its occupancy-mode branch with span_n < 4 groups in the block
+  jobs, the fire bit with the attack timer, and ground chases crossing a tile) and widen it (all span widths, firing
+  lanes in the vector path, the tile-crossing chase), measured by the dbgc counters c11 / c32 / c2.
+- **combat4 takes the slot pass's firing holds and structure holds** (mv.rs): a unit target's shot due fires inline for
+  the lanes it takes (was: every firing lane one by one through move_pre / move_combat); a structure hold on its
+  recheck tick or with its shot due runs move_struct's hold branch inline (struct_hold: standing, hostile, in sight, in
+  reach by area, the shot), the lanes failing it are move_struct's as before (user: structures are stationary targets,
+  no reason to treat them apart). Exact: HASH_AT 90 equal on chaos-300k-32k and lines-mixed; determinism, combat,
+  structure-instruction, construction-walk-driveby tests pass. Counters (8-team, 300 steps, dk 6): per-lane lanes 332k
+  -> 139k a step, combat4's 92k -> 285k. **Step time unchanged**: Node A/B, 8 helpers, the same simulation (nab-*):
+  171.8 / 169.4 vs 169.9 / 172.2 ms; rendered A/B noise (abc-*). A held unit's per-lane path was cheap: the
+  movement's time is in the occupancy pass's movers (traffic_swap, motion_f, checked_traffic_q, preview, occ_gather).
+  Kept (exact, the vector path covers more).
+- **Occupancy: the swap search's chunk summaries, two ways, both reverted.** Counters (dbgc, 8-team, dk 6): ~127k swap
+  searches a step visit ~991k non-empty chunks and build ~492k per-job summaries (< 1 entry each: chunks are tiles);
+  ~182k chunks pass the owner bit, ~12k swaps reach the final checks. (1) A prepass a step (k_block 15) writing every
+  indexed tile's summary, read before the chunk lookup: exact (HASH_AT equal on chaos-300k-32k, massdeath-800k), k89
+  CPU 37.0 / 37.7 -> 35.8 / 36.0 ms a tick (KCPU, Node, 8 helpers) but the prepass +1.9 ms a tick (it walks all 1M
+  tiles): net zero. (2) The same summaries made on demand, shared by all jobs (a stamp a tile): exact, k89 36.6 / 37.5
+  -> 37.3 / 38.7: no gain. The summaries' builds were not what the swap search costs.
+- Measuring movement changes: whole-step means (rendered, or Node) do not resolve +-2 %; use tickbench KCPU=1 (CPU per
+  kernel per tick over all threads) with the same simulation (hash-equal builds), alternating A/B.
+- **Match-start spikes (massdeath-800k, rendered; the first ticks 170-640 ms).** Temporary trace of the allocators and
+  the binding (sim_worker.js SIM_TRACE_FNS): tick 0 137 bindings (simParallelBind 55.6 ms), tick 1 the acquisition's
+  first post (_acqArray / simHeapArray 13-22 ms, towerAcqPost 14, 29 bindings), tick 2 the worker search's (_wsArr
+  15, 59 bindings), tick 3 the hits' (simSharedArray 20; 52 ug.* arrays), tick 5 adjacency (_adjArr 17, 29 bindings),
+  the minimap's one-job kernel 39 ms. Recurring: the navigation installs rebind 16 nav.* names every 4 ticks, acq.sb0-5
+  as the status records grow. Tried, reverted: every binding held until the next job's post (one message a helper):
+  the one send took 64 ms at tick 0 (56 before) though no bound array was outside the heap (nothing cloned): the time
+  is not the messages. Left: allocate those subsystems' arrays at match start (acqReserve covers only part).
+- **Match-start prewarm (kept).** main.js simMatchPrewarm (end of simMatchPrepare): towers' acquisition snapshot
+  (tower.js towerAcqPrewarm: twq.*/twr.* at the tower table's capacity, acq.upt/stix/wt at the slots', acq.sb0-5 at
+  the status pool's), the worker search (worker.js wsPrewarm: chunk counts, requests at workers x1.25, results, order,
+  pre-claim, healer lists), adjacency's layout tables (things_utils.js _adjLayoutTables, also the post's), the hit lists
+  at the slots' capacity, the gone kernel's buffers and 51 bindings (main.js _unitGoneFill split out of _unitGoneRun,
+  unitGonePrewarm). massdeath-800k rendered: bindings tick 1 29->12, tick 2 59->27, tick 3 67->7, tick 5 29->20;
+  _acqArray/_wsArr/_adjArr gone from the first ticks; _acqPost 51-65 -> 38 ms, _wsPost 31 -> 17 ms, tick 3 253 -> 236,
+  tick 5 170 -> 153 ms. Node hash equal (6116df12/793e6e8d). Measured a binding in Edge (bindcost-weval.js): 0.04 ms
+  (8 posts of 5 us): the 137 bindings of tick 0 are ~5 ms; the first ticks' cost is the allocations and first touches,
+  not the messages. Left at tick 0: simMoveRun 290 ms (kp:8 146, unitEventsRun 65, occupancyPrepareMovement 50) in
+  a 360k-unit battle: that tick's real work plus first-use pages.
+- **Slot pass scalar lanes 138k -> 9k a step (kept; 8-team 1M, dk 6).** Clean counters first: the dbgc words are
+  shared (k.rs kc!, the occupancy grid's stats at 1536+, the steer counter 32) and per thread (each helper its own
+  argument block): count with HELPERS=0 at 300+. Of 619k lanes a step 138k were scalar: 65k chasing lanes whose step
+  crossed a tile (combat4 took the wall slide only in the occupancy pass at dk 1), 66k parked lanes with no
+  instruction (park4 returned at once when dk >= the floor look period: every lane's look due; aggro parks on their
+  look tick and builders with the watch flag excluded). Now: combat4 takes the crossing lanes at any dk and pass
+  (slide4: flow_slide's cases four lanes at once from gathered wall bytes; at dk > 1 the long step's way per crossing
+  lane, seg_open, one base tick's step where walled, as move_combat); park4 does the floor look (structure code
+  gathered for the looking lanes, none or own: floor written; hostile: step_slot's floor_hit), takes aggro parks on
+  their look tick (move_pre0 did the same stand; structure workers wk 4 stay scalar for resume_order) and builders
+  (wk_watch a lane on its watch tick). Left scalar: ~9k (3k holds/targets dead, 2k other modes, 1.7k chases, 1k flow).
+  Node A/B (abn.sh, 2 rounds alternating): MOVE CPU 12.4 -> 11.6 ms a tick, mean step 169.2/168.6 -> 168.3/168.2 ms
+  (k89 dominates). The park4 change is exact (hash equal with and without it); the slide4 one changes the hash (the
+  crossing lanes' step in f32 like the other vector lanes).
+- **Per-kernel CPU, measured right (8-team 1M, dk 6, HELPERS=0: tickbench KCPU with helpers counts only the sim
+  thread's chunks).** Per step: k89 261 ms, area answers 127, combat brain 95-98, acquisition scan 81, MOVE 71, vis
+  seed 29, eff units 21, snapshot 18, status 17 (all kernels 963). Acquisition ~34 %, the largest owner. In the game
+  only ~3.1 of 8 helpers take k89's jobs on average (trace helpers:89): the others are in background chunks (the
+  answers' up to 7.9 ms). Area answers by stage a run: seeds 21 ms, the nine level stages 96, the one-job tail 11;
+  without the record writes (bound build) 47 and 5.5: half is the records' memory traffic (team-major, 8 regions an
+  area a level). Every team's structure classes change every run in the battle (visibility), so the kept classes
+  never apply there. Next candidate: the answers' search in an area-major scratch (an area's 40 labels together),
+  the team-major records written once at the end.
+- Tried, reverted: the combat brain's kept-target check from one packed record a slot written by the snapshot
+  (acq.trec: id, area + 1, owner; exact, hash equal): brain 98.1 -> 99.9 ms a step single-threaded. The named profile's
+  closure (36 % of the brain, the area lookup) overstated the random loads' cost.
+- **The combat brain's range questions cached a slot (kept; k.rs k_combat_brain, acq.brc).** Census at the 8-team
+  battle's end (braincensus-after.js): 311k units through the brain, 296k with a kept target, nearly all taking the full
+  range question (two 4-area windows, Arq::within). The answer is a pure function of the unit's tile and window flags,
+  the target's, the reach and the area layout: a slot keeps its last key (28 + 28 + 5 bits) and answer; the same key on
+  the same layout (unit.js _acqBrc clears the array when _simAreaLayoutVer or the map size changes) takes the answer.
+  A different unit in the slot with the same key gets the same answer: no id needed; a restored peer starts empty.
+  Single-threaded (HELPERS=0, ktime-node.js, 300 steps at dk 6): brain 98.0 -> 70.9 ms a step; hash equal
+  (44d9dc25/c38a35e4). Layout cleared once in the run.
+- Noted, not changed: every navigation install rebinds 16 nav.<profile>.* arrays (hectic run: 280 installs in 1120
+  steps); those steps average 25.2 vs 24.5 ms (the next 26.1): ~1 ms, not worth per-kernel binding versions.
+- Tried, reverted: the area answers' records written only where a value changes (the seed stage's seeds in a mask an
+  area instead of every class word to -1, compare-before-store in the seeds and the levels, a last ranges stage for
+  the labels left unreached): exact (hash equal) but 127.5 -> 140.7 ms a step single-threaded: the compares read the
+  same lines the stores did, and the last pass reads them again. With the bound build (no record stores at all: 47
+  vs 96 ms levels) the cost is the lines touched, not the dirty write-backs.
+- **The brain's fallback range questions cached too (kept; acq.brf, the same keys).** Question mix a step at the
+  8-team battle (dbgc counters, words 1936+): 634k questions; the kept-target cache answers 297k (84 % of the
+  cacheable), 227k answered by the area distance at once (quick), 276k fallback questions (mostly quick), 55k computed
+  and cached, ~50k computed fallbacks not cached before. Brain 70.6 -> 68.7 ms a step single-threaded, hash equal.
+- **The area answers' records packed (kept; acq_sample.rs w_pack / w_ans / w_dist, RW 8).** A word a label: the
+  answer (24 bits; areas and tiles of maps to 4096 x 4095, the largest map is 1024) | the distance << 24 (255 none):
+  one store a label set in the search (was the answer word and a u16 distance apart). The scan reads the words with
+  no branch: its reach capped at 254 steps (the depth is at most 254, so 255 is never within it: exact); the towers
+  read the same words. Single-threaded a step: answers 127.9 -> 113.6 ms, scan 81.7 -> 79.9; hash equal. Tried first
+  with five-word records (20 bytes): answers 109 but the scan 92.7 (records straddled lines, and branchy decoding).
+- **Blocked movers: side-steps and swaps every other step (kept; mv.rs checked_traffic_q, occ.rs stuck/set_stuck).**
+  Counters at the 8-team battle (dbgc, a step): 210k entries resolved, 112k with a wanted move, 116k ending blocked;
+  shoulder tries 104k (288k previews, 24k better); swap searches 108k, 1,005 swaps. Census (stuck-evalall.js): of 149k
+  walkers a step 114k stood still and 109k stood still two steps running. Now a mover blocked two steps or more in a
+  row (its count in the footprint record's top byte, word 2 bits 24-31: moved with the slot, zeroed at a resync on
+  every peer, sim_occupancy.js occupancyStuckReset in snapFlushHistoryCaches) tries its shoulders and the swap search
+  on the even counts only; its direct step every step (it moves the step the way opens). Single-threaded a step: k89
+  297.5 -> 269.7 ms, step 944.7 -> 920.1. Crowd benches (crowdab.sh: crowd-traffic plug / counter / wall / open at dk 1,
+  4, 20): progress within +-1 % (counter dk 20 -1.1 %), flowing / moving / yielded alike, speed and wall audits ok.
+  Behaviour: a stuck unit's side-step or swap up to a step later. Hash changes (cec1d489/c9bf8044).
+  Amended: traffic-pressure.test.cjs (crowd-traffic at dk 20) failed with the gate: counter moving 96.4 -> 94.7 %
+  (threshold 95), flowing 93.4 -> 90.8 %; the same with only the shoulders gated (the swaps were not it: at dk 20 a
+  skipped side-step is 20 base ticks late). The gate now only in steps of at most 8 base ticks (m.dk <= 8: a try at
+  most 8 ticks late; the 8-team battle runs at dk 5-7): traffic-pressure passes (counter 96.4 %, the base's numbers).
+- Slot pass composition (8-team battle, clean counters 330+ in a dbgc build): a step 193k firing lanes (attack_unit:
+  fire's stat lookup and a few stores each), 98k chasing, 254k standing in combat4. Firing is per-unit work, small
+  each: not changed. Note: counters 40-48 collide with occ.rs occdiag! (the grid's diagnostics share the block).
+- Might work (not built): a stuck mover's direct-step footprint test skipped when its steered target is the last
+  step's and no footprint changed in its reach since (per-region change stamps written by footprint moves; a
+  phase's jobs cannot touch each other's reach, so deterministic). Needs the share of stuck movers whose steered
+  target repeats measured first (the pressure steering changes it).
+- **Rendered check of this session's kernels (headed Edge, 8-team 1M, 60 s, alternating A/B, SERVE_OVERRIDES of the
+  binary only; A = before the slot-pass / park4 / brain caches / packed answers / stuck-mover changes, B = now):** game
+  ticks simulated 1042 / 1040 -> 1135 / 1170 (+9..12 %), steps 235 -> 275, step mean 173.5 / 176.3 -> 158.9 / 154.0 ms,
+  p95 346 / 365 -> 334 / 330, p99 391 / 392 -> 368 / 360, max 418 / 435 -> 405 / 382. tickwin 150-650 ms a tick 34.3 /
+  35.5 -> 35.7 / 31.8 (that window is noisy at ~100 steps). Files eab-*.txt.
+- Measured, not built: of ~76k stuck movers a step (8-team battle, dbgc), 28k (37 %) want the same steered target as
+  the step before (the pressure steering moves it): a memo of the direct-step test would cover at most a third of
+  them. Dropped.
+- **Workers scene spikes (rendered workers-600k, 60 s: mean 38.6 ms, p95 97, p99 147, max 208).** The slow steps are
+  periodic foreground tasks landing together (stepdiff.cjs: phases above their neighbours): the effective levels' area
+  histogram (kp:100, 6.1 ms), structure visibility seeds (kp:127, 6 ms), the slot relayout (2-8 ms), the worker
+  search post (2-3 ms), the minimap (2 ms), the slot pass on the search's commit steps (+4-6 ms).
+- **The effective levels' area histogram zeroed by the last count's keys (kept; k.rs k_eff_area_hist mode 2,
+  things_utils.js _effAreaHistEnsure, eff.histList a key + 1 a slot).** The table is areas x players x types: 9.66M
+  ints (38.6 MB) at 242k units, cleared whole each period; ~200k distinct keys. Now the count stores each slot's key
+  (plain store) and the next period zeroes those slots' keys; the whole table only when new or of another layout.
+  Single-threaded over the run: zero 22.4 -> 6.9 ms, count 30.1 -> 28.3; hash equal (ad6d01c2/2c812f10). Tried first:
+  keys raised from zero listed by an atomic counter, counted by runs: zero 6.0 but count 48.2 (an atomic a unit:
+  nearly every unit its own key, no runs).
+- **Structure visibility seeds skip empty tiles sixteen at a time (kept; vis.rs k_vis_seed_structs).** The kernel
+  walks a quarter of the map's tiles a tick (262k at 1024^2) for the structures' sight; one vector test of sixteen
+  structure codes passes over tiles with none. Workers scene single-threaded: 0.83 -> 0.30 ms a step on average (its
+  steps were 6 ms in the rendered run); hash equal.
+- **Helper stalls (workers scene, rendered).** Cause found for the slot pass's +4-6 ms steps: one 512-slot chunk takes
+  5.9-6.7 ms (chunkMax:8) and the sim thread waits 5.4-5.5 ms for it (tail:8), where the others take 0.3-1 ms. In Node
+  (one thread, timed per chunk, slowchunk-evalall.js) no chunk of the run exceeds 2 ms: the work is not there; a helper
+  is descheduled while it holds a chunk (the run's chunkStall10 9, chunkStall20 1; thread-load: other renderer
+  threads' busy share jumps on the slow steps). Not a kernel's cost: the OS gives the core to another thread
+  (presentation, page, GPU, the system) mid-chunk. Levers: fewer competing threads (helpers / presentation helpers),
+  or work a stalled chunk can be finished by another thread (idempotent chunks only). Next: A/B of the helper count.
+- Workers scene: slot-pass scalar lanes 4.4k of 434k a tick (1 %): the slot pass is vector there too.
+- Helper count A/B (workers scene, rendered, 2 rounds): 7 helpers no better than 8 (dk ~1.2 runs: mean 33.9 / 35.2,
+  p95 83 / 90, p99 139 / 147, max 169 / 192; dk ~3.3 runs: mean 58 / 59.6, p99 167 / 184); chunk stalls alike. Kept 8.
+- Found: the adaptive step size sometimes stays at ~3.3 base ticks a step for a whole minute (2 of 4 runs: 355 steps
+  for ~1170 ticks, 7 steps a second, the TPS shown 7) although a step costs ~58 ms of its 165: other runs come down to
+  1 at ~18 s. Same game time; worse responsiveness (each step 3 ticks). Down-steps need slack (utilization < 0.55, not
+  late > 12.5 ms or behind). Sampling the controller (pacelog.js, PAGEACT) to see which keeps it up.
+- **Pace controller: a late start is not busy while the worker idles (kept; utils_net_quality.js
+  NET_IDLE_UTILIZATION 0.4).** Sampled (pacelog.js) in the stuck runs: utilization 0.19-0.43 (38-45 ms of work in
+  108-163 ms steps), yet every step started 15-36 ms after its deadline (simtrace: at dk 3 a steady ~27 ms, at dk 4
+  ~0): lateness > 12.5 ms removed the slack, > 25 ms read as busy and took the pace up to 4 base ticks. The lateness
+  there is the dispatch's (the worker idles 100+ ms a step), not the simulation's. Now lateness takes the slack only at
+  utilization >= 0.4 and is busy only at >= 0.55 (simClientBehind, a real backlog, as before). Rendered workers-600k:
+  before 4 of 9 runs held 3-4 base ticks a step for the whole minute (7 steps a second shown); after 3 of 3 down to one
+  base tick by ~70 s (step mean 37 ms, p99 141-162). multiplayer-roles-rematch and multiplayer-extremes pass. Why it
+  starts late at dk 3 (and not at 4) is still open: the page pump's dispatch against the lead of one step.
+- **The answers' level stages 8 -> 10 (kept, neutral in game; unit.js ACQ_ANS_LEVELS).** Levels 9-10 ran in the one
+  tail job a group (~11 ms a run on one thread, a long background chunk); now stages like the others (23 of 24). Hash
+  equal; the stages' total CPU the same. Rendered 8-team: acquisition wait 5.08 -> 4.74 ms a tick, p95 322 -> 313, p99
+  347 -> 348 (within run variance).
+- Candidate (bound measured, not built): the scan's unit answer for units keeping their target is only the brain's
+  fallback, used at the commit when that target fell (~11k of 362k instructed units a commit, 7.7k with a fallback).
+  Skipping their bucket sampling and fallback questions (bound build): scan 80 -> 58, brain 68 -> 52 ms a step. Lazy at
+  the commit it needs the answer and its range question for those units there; the target's position must come from
+  the bucket entry (the commit pass rewrites the snapshot block by block, a race for any other slot's snapshot).
+- Perf fuzz (chaos-300k-32k, 5 min, rendered): TPS 19.8-20.1 throughout, FPS 89-104, no flagged trial; the worst frame
+  163 ms at the session's first 3D view (with a panel and hovers). Reproduced (view3d-act.js PAGEACT): the first switch
+  to 3D costs ~4 frames of 39-67 ms, later switches none, switching back to 2D none; the load's 3D prewarm did run
+  (_view3DPrewarmed units, 1792 panels). No page task over 40 ms in a trace: the cost is spread over frames or in the
+  GPU process (not in the trace's categories). Open.
+- **Effect sounds made off the frame where they can (kept; audio.js _effectBufferNow).** Sounds are synthesized on the
+  page (2-3 ms a buffer: per sample two pows, two sines) the first time a (type, unit type, variant) plays; a missing
+  variant with another of the same sound made plays that one now and is made in an idle task; the cache 192 -> 512
+  (a battle's sound types x unit types x 3 variants passed 192: eviction made them again on frames). Over 42 s of the
+  chaos battle synthesis is 58 -> 80 ms in all but two thirds of it now in idle tasks; the first play of a sound is
+  still made on its frame (the battle's first seconds: 25 ms in one 350 ms window). Left: make each sound's first
+  variant while the match loads (the match's unit types x the attack sounds).
+- First 3D view's frames (page profile sliced at setRenderDimensionMode): native GL work 156 ms over the first ~0.5 s,
+  build3DFrameData 101 (unit render slots grown, _uSlotGrow 14.8, filled for units the load's prewarm camera did not
+  see, _uSlotFill 18), the column store's first whole upload 27. Not changed: presizing the slots (~260 bytes each) to
+  the frame's slots would hold ~100+ MB on the page for a once-a-session hitch.
+- Tried, reverted: k_eff_units' area-window sums cached by (area, lane, range) a job: hash equal, 20.5 -> 22.2 ms a step
+  (ranges mostly 0-1 area steps: the BFS was not the cost; the table's init and hashing were).
+- **The brain's fallback made lazily at the commit (kept; acq_sample.rs brain_kept / lazy_fallback, k.rs
+  brain_pick_lazy).** A unit keeping its brain target only needs the scan's unit answer as a fallback when that
+  target falls before the commit (~11k of 362k instructed units a commit, 7.7k with one). Now the scan makes the
+  brain's kept-target test (acq.kept: 0 not looked at, 1 none, 2 kept; the brain reads it, and makes its own for
+  units the scan did not look at), gives a kept unit no unit answer (acq.out = -3 - its slot) and the brain asks no
+  fallback question for it; the commit (both paths: the snapshot pass's and k_combat_commit) makes the fallback for a
+  kept unit whose target fell: the scan's answer from the run's records, buckets and seed, its unit at its slot now by
+  the unit id index (the bucket entry's slot is the index time's; the relayout moves units during a run), the brain's
+  word on it (area distance or the windows' search). A unit the relayout moved during the run (its slot no longer
+  the one in acq.out) gets no lazy fallback (its snapshot columns are at its old slot, being rewritten in the same
+  pass): it waits for the next run. Single-threaded a step: brain 70.6 -> 45.4 ms, snapshot pass 18.4 -> 22.4 (the lazy
+  work), scan 80.9 -> 78.8. Hash changes; the same with 0, 3 and 8 helpers (1f73b2ae/67cb2463, relayout off);
+  multiplayer-chaos-determinism, chaos-scenario-determinism, tower-simd-determinism, combat-reach,
+  structure-targeting, multiplayer-border-combat pass. Rendered 8-team (alternating, 2 rounds): step mean
+  156.1 / 156.5 -> 154.8 / 151.7 ms, p95 343 / 319 -> 326 / 302, p99 377 / 344 -> 345 / 330, acquisition wait 4.58 /
+  4.80 -> 4.48 / 4.12 ms a tick. Debugging notes: K.w is the argument block + 512 words (Arq::new needs the block);
+  dbgc words are per thread, a shared heap array (acq.dbg) counts across helpers; commitdump-evalall.js /
+  commitdiff.cjs / firstrun-evalall.js compare two binaries' brain results by unit. Unexplained: in the first run 2 of
+  ~1M units differ in their kept decision (the scan's test against the brain's own); deterministic either way.
+- **The area seeds walk a list of the run's structure tiles (kept; acq_sample.rs, acq.stl).** Each team's seed job
+  scanned the whole map's class bytes twice (1M tiles at 1024^2, 8 teams) for ~32k structure tiles; now the chain's
+  first stage (its job 0) lists them once ascending and the teams walk the list (the same order). Single-threaded a
+  step: seed 10.2 -> 7.2 ms, the prefix stage 3.4 with the list. Hash equal (59a54dfc/af192b8b: the lazy-fallback
+  build's with relayout on).
+- Rendered structs-400k (60 s, trace with GC; tests/test-runs/loop-20261127/st-a.txt, st-t.txt/json): steps mean 39.4,
+  p50 34, p95 78, p99 110, max 146 (first step 531). The high percentiles are the scene's first ~150 steps (~400k
+  units at dk 2-3, 58-103 ms medians) as the battle falls to ~130k units (28-33 ms at dk 1): throughput, not spikes.
+  The real outliers, why:
+  - Single long chunks (MOVE kp:8 one chunk 13-17 ms where chunks take 0.3; kp:27 EFF_UNITS tail 5 ms), 3 a minute
+    over 10 ms: in two of three the long chunk was the simulation thread's own (no tail wait after it: the helpers
+    had finished), in one a helper's (tail 2-5 ms). The kernels have no waits between chunks (no marks waited on, the
+    mover table's lock only with ?mvt), Node never shows a chunk over 2 ms: the thread was descheduled mid-chunk by
+    the OS (8 helpers + simulation + page + GPU + presentation on 16 threads). 7 helpers did no better (earlier).
+    Not fixable inside a job (a chunk's work can not be taken over: kernels are not all idempotent); left.
+  - Post-load major GCs of the worker at steps 46 and 51 (44 and 25 ms, both at dk 3): 2 of the 4 slow steps.
+  - The first step 531 ms: 12.6k pending flow looks, one MOVE chunk 95 ms (the looks' first routes), occupancy 51.
+    A scene's first step (400k units ordered at once), not a gameplay start.
+
+### 2026-11-28 - per-kernel census of the 8-team 1M battle; area answers' cost looked into (tests/test-runs/loop-20261127/)
+- Single-threaded a step (HELPERS=0, ktime-all.js wraps every SIM_KERNELS entry, kall-a.txt; ~905 ms a step at ~400k
+  units): occupancy 270, area answers 114, scan 79, MOVE 77, brain 45, vis seed 31, snapshot 22, eff units 22, vis
+  spread 19, status 18, area count 14, slot remap 13, projectile flight 13, ws scan 12, flow pending 11, the rest
+  under 10 each. Named profile (prof build, m8prof): the answers' level closure 11.8 % of all, area_batch 5.8,
+  combat4 4.5, k_vis_seed 3.5, k_acq_sample 3.3, traffic_swap 2.7, the brain 2.6, occ motion_f 2.2,
+  checked_traffic_q 2.2.
+- Area answers (dbgc counters 330-337 over the run): ~33k areas, reach 10 levels, ~3.7 runs a step; 91 % of the
+  visited areas still need a bit and 83 % gain one (the waves of 8 teams x 5 labels cover the map at every level),
+  ~5.5 neighbour reads a visit, ~3.75 bits gained a visit. A frontier-list (push) search would visit about as many:
+  not tried. By mode (ktime-ans.js): seeds 17.4 ms, level jobs 97.8. Without the per-bit record writes (the bit loop
+  gone: results wrong, timing only) 70.6.
+- Tried, reverted: the records area-major ((area * players + team) * RW, the 8 teams of an area side by side, every
+  reader changed: answers, seeds, scan, lazy fallback, towers): hash equal, answers 114.5 -> 113.5, scan 79.1 -> 82.8.
+  The bit writes are not cache-line bound by the team-major layout.
+- Tried, reverted: the level's bit loop label by label then team by team (12-bit fields, no division by 12, the
+  two record bases once a parent): level jobs 97.8 -> 100.2 ms. ~13 ns a gained bit is the parent word's load
+  and the store (memory), not the loop.
+- traffic_swap (12 % of occupancy self time; dbgc 66-72, 323-329 over the run): 27.5M calls past the speed test,
+  17.1M searches past the hop gate, ~1.5 of the 9 chunks scanned a search (the rest empty or the summary says no
+  owner/class), ~4.2 entries a search, 12.1M class-passing entries, 3.4M scored, 2.8M swap attempts, 0.4M swaps;
+  2.2M attempts fail on the mover not fitting where the partner stood (no larger partners failed), the two wall
+  segments before each attempt almost never fail (2.8k) and cost 2.4 of traffic_swap's 222 (profile units). The
+  cost is fixed per call (~0.35 us: speed lookups, hop gate, 9 chunk lookups), not entries: a chunk cull by
+  distance would not help (and the index positions are the movement's start, units since moved up to a step).
+- Area answers by label (dbgc, 307 runs over 300 steps at dk 6): bits gained, unit label 237M, structure classes 1,
+  3, 4 270M / 273M / 269M (class 2 never present); the three classes changed in 2436-2440 of 2456 (team, run) pairs:
+  structures fall every run of the battle, so 3/4 of the bit writes are structure waves searched anew each run.
+  Considered, not built: the levels storing only a depth byte a (area, bit) and the readers resolving an answer on
+  demand (lowest-numbered parent walk, memo a run). The scan reads ~1.95M unit-label and ~7.8M structure-label words
+  a run (nearly every unit wants the structure classes: attack-move / drive-by), ~570k distinct (team, area, label)
+  vs 3.4M bits written: estimated -43 ms of writes, +~35 ms of memo checks and walks. Not worth it.
+- Rendered 8-team (m8-t.txt, dk 4): step 148.2 ms = foreground jobs 106.6 (occupancy 38.5, MOVE 14.4, eff units 6.0,
+  32: 4.9, status 4.3), background waits 22.6 (T10, the acquisition chain: 18.8 a step, waited in 141 of 260 steps,
+  p50 35 ms; others ~1 each), serial ~19. The helpers are saturated: any CPU cut anywhere shortens the T10 wait.
+- Occupancy's block-dependency waits (the job wrapper timing its Atomics waits while tracing, ctl 186-188; rendered
+  8-team 90 s, m8-dep.txt): 12 waits entered in 1.85M jobs, 7.8 ms in all. Its 38.5 ms wall a step is CPU over the
+  threads, not phase waits. The simulation thread is ~25 % idle (rendered profile m8-r): the T10 lane's wait
+  (helpers saturated: ~1,040 of ~1,180 ms helper time a step busy) and job tails. Run: step mean 130.9, p95 285, p99 339.
+- Noted, not done: simProjFill (1.4 % of the simulation thread rendered) copies every projectile column from its heap
+  table into the frame buffer after k_proj_fill (F[k].set): ~2 ms a step serial at the 8-team battle; the kernel
+  could write the frame's columns itself, or the presentation read the heap table (multi-memory) with a flip.
+- **Each match sound's first variant made in idle tasks from the match's start (kept; audio.js audioPrewarmMatch, main.js
+  startGame).** Every recipe without a subtype, the unit sounds (death, swing, cast, melee hit) by every unit type and
+  the impacts by every projectile type, variant 0 each, queued for _audioMakeLater (requestIdleCallback); without an
+  audio context yet, made when initAudio makes one. Headed Edge, chaos-300k-32k: 191-195 buffers within the first
+  2-4 s, the queue empty; over 28 s 174 plays, none of a sound without a made variant (audmiss-act.js), so no
+  synthesis on a frame (was the battle's first seconds: 25 ms in one 350 ms window).
+- Rendered fuzz, structs-400k, warmed persistent Edge profile (tests/test-runs/fuzz-20261128/, fuzzdrv seed 12345, 2 x
+  120 s): 20 ticks/s throughout after the scene's heavy first 15 s (dk 2, 70-95 ms steps), steps p95 55-58 / p99
+  68-69 / max 84-94 ms; frames p99 25-33 ms. Long frames: 116 ms 0.8 s after a 20-step zoom out at 98 s (both runs,
+  same seed), 75-83 ms after big box selections, 83 ms with no action. No page rAF callback over 40 ms in the page
+  profile: GPU / compositor side. A zoom-only run traced one 58 ms gap: GPU main DCompPresenter::Present ->
+  DCLayerTree::CommitAndClearPendingOverlays::Commit 56 ms (a DirectComposition commit). A plain 11-step zoom out
+  and back from the start view, traced twice (zoomtr.cjs), had no frame over 50 ms: the long frames need camera
+  states the fuzz reaches (cf. the open zoom-in item: budgeted panel uploads 70-80 ms). Not fixed.
+- Rendered fuzz, 8-team 1M (m8-fz1.txt, page profile): game ticks 20/s throughout (dk ~7, steps mean 132, p99 222);
+  frames p99 34 ms, 116 ms frames after a box select + attack and a group recall + box. The two long page callbacks
+  (73, 65 ms) were column uploads after camera moves: a pan (_columnStoreUploadNear, bufferSubData 49 ms in a frame)
+  and an orbit (_columnStoreUploadDeferred, 48 ms): blocks that changed while off the view, uploaded when they come
+  near. A scripted pan (panup.cjs): ~11 MB a frame at ~1 GB/s (raw copy, no GPU wait), 45-100 MB a 1.5 s pan, ~290-
+  400 ms of upload a pan. Possible lever (not done): px / py not uploaded (the previous tick's x / y kept on the GPU
+  in a second buffer; same-buffer copies stall ANGLE), ~18 % of the bytes; or late blocks drawn a frame later.
+- **The structure classes' answers updated in place where their seeds changed little (kept; acq_sample.rs seed_update,
+  k_acq_area_seed; unit.js acq.sinc, _acqSincStride).** Corrected counts first (the earlier area count wrapped):
+  ~120.7k areas, reach 10, 307 runs over 300 steps at dk 6, 3.4M bits gained a run, 2.6M of them for structure
+  classes 1, 3, 4, which change in every run of the battle; per changed (team, class) ~2,900 seeds, ~540 gone, ~15
+  added, ~11 retiled a run, ~1.4 % of the answered areas pointing at a gone or retiled seed. Upper bound with no
+  structure waves at all (timing only): seeds 17.4 -> 10.3, levels 97.8 -> 45.9 ms a step. The update is exact: an
+  area's answer is its lowest-numbered parent's (one level nearer), so (1) the areas of a gone seed are the region
+  of its answer, found by walking from its seed area over areas with that answer, cleared and pending; (2) a
+  retiled seed's region takes the new tile, distances the same; (3) an added seed's wave marks pending the areas it
+  reaches no farther than their old distance (ties too; it passes through pending areas); every other area keeps
+  its distance and parent chain. The pending areas are then settled level by level from their first neighbour
+  (ascending) one level nearer, by buckets (an area looked at first at the level its settled neighbours allow,
+  then only when a pending neighbour settles nearer). The tile walk that hashes the classes also marks each
+  class's new seeds (an area's first tile) and lists them; the last run's list gives the gone seeds; the seeding
+  of the classes searched whole goes by the list too. A class goes to the whole search when the records are fresh
+  (layout, reach), its list was too long, or its changes pass an eighth of the areas (more work than the search).
+  Single-threaded a step (8-team 1M, dk 6): answers 114.5 -> 55.1, seeds 7.2 -> 18.7 (the updates), together
+  121.7 -> 73.8 ms; bench mean step 905 -> 856 ms. Hash identical to the whole search (59a54dfc/af192b8b at tick
+  330). Steps on the way: v1 scanned every area twice a team (seeds 48.6); a tile bitmap for the old tiles did
+  nothing (48.2); seed lists + region walks 23.4; one tile walk 21.5; bucketed levels 18.7.
+  Rendered 8-team 1M, alternating, 4 rounds (rab.sh, sinc-*.txt / sinc2-*.txt): ms a game tick 33.6 / 34.7 / 33.7 /
+  33.6 -> 35.2 / 28.2 / 33.4 / 32.9 (mean 33.9 -> 32.4), the acquisition lane's wait 7.2 / 14.5 / 11.6 / 12.0 ->
+  9.2 / 2.5 / 7.3 / 6.6 ms a step (11.3 -> 6.4), step mean 125 -> 116 ms. multiplayer-chaos-determinism,
+  chaos-scenario-determinism (0 / 3 helpers), tower-simd-determinism, combat-reach, structure-targeting,
+  multiplayer-border-combat pass.
+- Tried, reverted: the answers' levels in 16-bit masks (acq.saLv16) when a group's structure classes are all kept
+  (only the unit label searched): hash equal, answers 55.1 -> 53.4 ms (noise). The frontiers' memory is not the
+  levels' cost; the unit label's ~770k gained bits a run (parent word load + store) and the per-area pull are.
+- **The scan's window minimum four labels at a time (kept; acq_sample.rs area_batch).** A record word orders as its
+  (distance, answer) (the distance in the top byte), so each label's least key over the unit's four window tiles is
+  the least word within the reach: words 0-3 in one vector (shift, compare, select, u32 min), word 4 alone; was 20
+  scalar u64 keys a unit. Single-threaded scan 79.7 (78.7-80.3 over five runs) -> 76.4 ms a step; hash equal.
+- Tried, reverted: the area table's candidate tile by the inverse of a power-of-two tile (exact): count 13.85 ->
+  13.91 ms (its entries' slot reads, four random lines an entry, are the cost, ~34 ns an entry).
+- Rendered 8-team (sinc2-B*.txt, with the in-place answers): step 113 = foreground jobs 88 (occupancy 33, MOVE 12.7,
+  eff units 4.3, acquisition snapshot 3.9, status 3.5, slot remap 2.5, projectile flight 2.5, flow pending 2.4,
+  hits 2.1 / apply 2.0), background waits 9 (T10 7), the rest 16. Rendered sim-thread JS self time is small (job
+  spin-waits, trace overhead, simProjFill's copies); the vis cover's struct-sight half clear (sst.fill(-1), 3.9 MB
+  one step in four, ~1.5 ms) left as is. Other threads a step: presentation worker + its 3 helpers ~0.9 core, GPU
+  main 0.5, page 0.3, compositor 0.1.
+- **Effective levels by a contiguous share of the index (kept; things_utils.js
+  recalculateUnitEffectiveLevel).** The share was every step-th unit of the index (P[2] the stride): each of a unit's
+  ~15 column reads a line of its own, ~350 ns a unit (~63k units a step at the 8-team battle, dk 6; ranges: 31 %
+  0 area steps, 66 % 1, 3 % 2 with ~18 areas walked). Now phase p of step takes index entries [n p / step,
+  n (p + 1) / step) (the kernel with stride 1): each unit still once a period. Single-threaded k_eff_units 22.0 ->
+  9.25 ms a step; behaviour differs only in which units refresh at which tick (hash differs).
+  eff-behind-kernel, combat-effects, team-watch-effects, multiplayer-scenarios, multiplayer-extremes,
+  snapshot-pooled-structure, multiplayer-chaos-determinism, chaos-scenario-determinism, combat-reach,
+  structure-targeting, multiplayer-border-combat pass.
+- Rendered 8-team slow steps now (sinc2-B1, simtrace-spikes): at dk 2 every other step +35-40 ms, the acquisition
+  commit waiting (w:2 31-42 ms) and the simulation thread running the chain's leftovers itself (answers 15-18 ms,
+  scan 12-14, brain ~5): the chain (~250 ms helper CPU a run) does not fit one step of the helpers' spare time.
+- **The scan skips the batch for units keeping their brain target (kept; acq_sample.rs k_acq_sample).** 71 % of the
+  scanned units keep theirs (101.8M of 143.8M over the run, dbgc 370-372). Such a unit needs no unit answer (its
+  fallback is lazy at the commit and looks for a unit only), no structure (the brain takes one only with no unit
+  target; the commit copies acq.sout into unit.cbS, whose only reader, unit.js _acqStructureHit, has no caller, and
+  mv.rs loads cbs but never reads it) and no area distance: it is marked (acq.out -3 - its slot) and passed over
+  before the batch. Single-threaded scan 73.8 -> 46.3 ms a step; hash equal (3903240d/6f8b31b6); bench mean step
+  816 -> 787 ms.
+  multiplayer-chaos-determinism, chaos-scenario-determinism, tower-simd-determinism, combat-reach,
+  structure-targeting, multiplayer-border-combat, combat-effects pass.
+- **A kept unit's range question answered by the scan from the brain's cache (kept; acq_sample.rs brain_kept_full /
+  brain_kept_v, k.rs k_combat_brain; acq.rk and acq.brc bound to the scan, 57-58).** The brain asked 106M range
+  questions over the run, 101.8M of them for kept targets, 86.3M answered by its cache (acq.brc: the unit's and the
+  target's tile and window flags, the reach), 1.9M by the scan's area distance. The scan's kept test reads the
+  target's position already: it now makes the cache key too and, held, writes acq.kept 3 (in range) / 4 (not); the
+  brain gives those their instruction at once (no batch, no second read of the target). Single-threaded brain
+  44.3 -> 27.1, scan 46.3 -> 53.9 ms a step (together 90.6 -> 81.0); hash equal. (The key by a second pass over the
+  target's position: scan 55.2.)
+  multiplayer-chaos-determinism, chaos-scenario-determinism, tower-simd-determinism, combat-reach,
+  structure-targeting, multiplayer-border-combat, combat-effects, multiplayer-scenarios pass.
+- Rendered 8-team 1M with this round (contiguous effective-level shares, kept units skipped by the scan, their range
+  questions from the cache; cur-A1/B1.txt): 26.6 / 26.6 ms a game tick (the round's start: 33.6-34.7; with the
+  in-place answers 32.4), the acquisition lane's wait 1.0 ms a step (was 11.3), steps mean 112 at dk 4.2, p95
+  246-250, p99 312-317.
+- **The acquisition commit's dead columns no longer written (kept; k.rs acq_commit_range, unit.js _acqCommitFlush).**
+  unit.cbS / cbRangeS / cbTick (the scan's structure answer, range and tick a unit) were written at every commit for
+  every unit; their readers (unit.js _acqStructureHit, sim_parallel.js _simAcqHit) had no callers and mv.rs never reads
+  its cbs. Removed the writes, the separate SIM_KERNEL_ACQ_COMMIT run (it wrote only those) and the two functions.
+  Single-threaded snapshot pass 21.7 -> 18.8 ms a step; hash equal. Then the three columns removed too (sim_unit_state.js
+  SIM_MOVE_COLUMNS, the snapshot pass's bindings 49-51 unbound, k_acq_commit and its binding list deleted, mv.rs's
+  unused cbs field): bytes a slot 538 -> 526, hash equal; multiplayer-chaos-determinism, chaos-scenario-determinism,
+  combat-reach, structure-targeting, combat-effects, multiplayer-scenarios, snapshot-pooled-structure,
+  presentation-helpers pass. (The snapshot block lists its columns by name: none of these.)
+- **The unit label's answers updated in place too (kept; acq_sample.rs label0_update, SH_CHG bit 4).** Its seeds (areas
+  holding a visible enemy unit) change little a run: per team ~22k seed areas, ~490 gone and ~480 new (dbgc 390-394,
+  400-404), ~6.6k areas (5.5 %) settled again; a seed's answer is the area itself (no retiling). Gone seeds' regions
+  cleared, the new ones' wave, then the bucketed levels, as seed_update; old seeds from a bitset a team (the last
+  run's, stored every run, a validity word; was each area's record line, seeds 39.3 -> 36.6); the answers' seeds then
+  keep the team's word 0 and its bit out of the levels. Falls back (the answers make the label whole) on fresh records
+  or more changes than an eighth of the areas (15 % of the calls, the battle's start). Single-threaded answers 56.8 ->
+  15.6, seeds 17.4 -> 36.6 ms a step (together 74.2 -> 52.2); hash equal. Tried, no gain: the wave's ties only when
+  the wave's area comes before the tied area's parent (39.3, unchanged).
+  multiplayer-chaos-determinism, chaos-scenario-determinism, tower-simd-determinism, combat-reach,
+  structure-targeting, multiplayer-border-combat, combat-effects, multiplayer-scenarios, multiplayer-extremes pass.
+- Rendered 8-team 1M after the unit label's in-place answers (cur2-A1/B1.txt): the simulation now runs ahead of real
+  time in steady state: the pace controller lowered the step from dk 4.2 to dk 2.0-2.4 (9.9 steps a second = ~20 game
+  ticks a second), steps 74-86 ms median (p95 86-107, max 89-116 by 60-step windows past the start), 24-60 ms idle
+  between steps. (ms a game tick is no longer comparable across runs once dk differs: 34 at dk 2.7 vs 26.6 at dk 4.2,
+  more game ticks in the same 90 s.) Left: the scene's first ~60 steps (dk 4-5, 245 ms median, the first step ~1 s).

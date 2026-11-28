@@ -107,6 +107,13 @@ function occupancyRebuild() {
     if(typeof mvtInvalidate==='function')mvtInvalidate();
     for(const u of units)if(u&&!u.dead&&u._us)occupancySpawn(u);
 }
+// (At a resync, on every peer: the movers' blocked-steps counts (the footprint records' top byte, mv.rs
+// checked_traffic_q) zeroed; a restored peer's records are made again without them.)
+function occupancyStuckReset() {
+    const O = _occ; if (!O || !O.rec) return;
+    const R = O.rec, n = Math.min(R.length >> 2, O.cap | 0);
+    for (let s = 0; s < n; s++) R[s * 4 + 2] &= 0x00FFFFFF;
+}
 function occupancyPrepareMovement() {
     const O=occupancyEnsure(),C=O.config,bw=C[5],bh=C[6];
     simParallelBind('occ.eslot',_sxESlot);simParallelBind('occ.start',_sxStart);simParallelBind('occ.count',_sxCount);simParallelBind('occ.stamp',_sxStamp);

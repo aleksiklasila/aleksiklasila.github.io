@@ -392,13 +392,18 @@ function netSimulationUtilization() {
     return meanWork / Math.max(TICK_MS, netSimulationTickMs());
 }
 const NET_BUSY_UTILIZATION = 0.8, NET_SLACK_UTILIZATION = 0.55;
+// (Under this the worker is mostly idle: a step that starts late against its deadline is the dispatch's, not the
+// simulation's (a longer step would not start it sooner). Seen 2026-11-28: at 3 base ticks a step, 40 ms of work in
+// 150, every step 27 ms late: no slack by the lateness, sometimes busy, the pace held at 3-4 base ticks a whole minute.)
+const NET_IDLE_UTILIZATION = 0.4;
 // Well under the busy mark (and not late): room for a shorter step. A gap
 // between this and busy keeps the pace where it is: the fewer base ticks of a
 // step cost more than their share (per-step work), so a pace taken down at
 // just under busy comes straight back up.
 function netSimulationSlack() {
-    if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead() && (_simClient.lateMs > TICK_MS * 0.25 || simClientBehind())) return false;
-    return netSimulationUtilization() < NET_SLACK_UTILIZATION;
+    const utilization = netSimulationUtilization();
+    if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead() && (simClientBehind() || (_simClient.lateMs > TICK_MS * 0.25 && utilization >= NET_IDLE_UTILIZATION))) return false;
+    return utilization < NET_SLACK_UTILIZATION;
 }
 function netSimulationBusy() {
     const utilization = netSimulationUtilization();
@@ -409,7 +414,8 @@ function netSimulationBusy() {
     if (typeof simClientDispatchAhead === 'function' && simClientDispatchAhead()) {
         // (With the worker's own ticks, a stalled page stalls none.)
         let own = typeof _simAutoCtl === 'function' && !!_simAutoCtl();
-        return utilization > NET_BUSY_UTILIZATION || _simClient.lateMs > TICK_MS * 0.5 || simClientBehind() || (!own && netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS);
+        // (Late with room to spare (under the slack mark) is not busy: see NET_IDLE_UTILIZATION.)
+        return utilization > NET_BUSY_UTILIZATION || (_simClient.lateMs > TICK_MS * 0.5 && utilization >= NET_SLACK_UTILIZATION) || simClientBehind() || (!own && netFrameMs() > TICK_MS * SIM_CLIENT_LEAD_TICKS);
     }
     return utilization > NET_BUSY_UTILIZATION || netFrameMs() > TICK_MS * 1.25
         || (typeof simClientActive === 'function' && simClientActive() && simClientInFlight() >= SIM_CLIENT_MAX_IN_FLIGHT);

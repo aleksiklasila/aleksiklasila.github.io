@@ -181,7 +181,7 @@ pub unsafe extern "C" fn k_ix_keys(a: u32, chunk: i32) {
 }
 
 #[inline(always)]
-fn floorf(v: f32) -> f32 {
+pub(crate) fn floorf(v: f32) -> f32 {
     let t = v as i32 as f32;
     if v.is_nan() { v } else if t > v { t - 1.0 } else { t }
 }
@@ -1337,6 +1337,8 @@ pub unsafe extern "C" fn k_block(a: u32, chunk: i32) {
         12 => super::nfs::k_meta_structs_par(b, chunk),
         // (The beams' tiles with something there, a chunk of the order a job: tfx.rs.)
         13 => super::tfx::k_beam_scan(b, chunk),
+        // (The towers' decisions, a chunk of the due towers a job (the area queries with this thread's context): tower.rs.)
+        14 => super::tower::k_tower_decide(b, waddr(a) as *const i32, chunk),
         _ => {}
     }
 }
@@ -1485,32 +1487,6 @@ pub unsafe extern "C" fn k_unit_retire(a: u32, chunk: i32) {
     s(cnt, chunk as usize, n as i32);
 }
 
-/// SIM_KERNEL_ACQ_COMMIT: the acquisition tier's answers into the units'
-/// columns at the commit tick (the same unit still in the slot).
-/// Arrays: acq.out, acq.tid, acq.id, acq.rng, unit.id, acq.sout, unit.cbS,
-/// unit.cbT, unit.cbTick, unit.cbTId, unit.cbRangeS. P: [0] slots, [1] per
-/// job, [2] tick.
-#[no_mangle]
-pub unsafe extern "C" fn k_acq_commit(a: u32, chunk: i32) {
-    let a = waddr(a) as *const i32;
-    let k = K::new(a);
-    let (outa, tid, si, sr, id, sout, cbs) = (k.p::<i32>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<f32>(3), k.p::<i32>(4), k.p::<i32>(5), k.p::<i32>(6));
-    // (Its structure, the range and tick of the look: the unit target is the combat brain's, unit.cmT; the slot and id columns
-    // this wrote (cbT, cbTId) were read by nothing.)
-    let (ctk, crs) = (k.p::<i32>(8), k.p::<f32>(10));
-    let t = k.i(2);
-    let (s0, s1) = job(chunk, k.i(1), k.i(0));
-    for q in s0..s1 {
-        let o = g(outa, q);
-        if o == -2 || g(id, q) != g(si, q) {
-            continue;
-        }
-        let _ = tid;
-        s(crs, q, g(sr, q));
-        s(ctk, q, t);
-        s(cbs, q, g(sout, q));
-    }
-}
 
 /// SIM_KERNEL_COMBAT_COMMIT: the combat brain's instructions into the
 /// units' columns at the commit tick (the same unit, alive; 255: none).
@@ -1524,16 +1500,42 @@ pub unsafe extern "C" fn k_combat_commit(a: u32, chunk: i32) {
         k.p::<u8>(6), k.p::<i32>(7), k.p::<i32>(8));
     let (outa, tid, bf) = (k.p::<i32>(9), k.p::<i32>(10), k.p::<u8>(11));
     let (s0, s1) = job(chunk, k.i(1), k.i(0));
+    // (Lazy fallbacks, acq_sample.rs lazy_fallback: [12..18] the snapshot's x, y, owner, flags, range, ctid, rk, [19..23]
+    // the records, offsets, entries, area grid, area reach header; P[16..23].)
+    let lz = super::acq_sample::LazyFb::from(&k, a, 12, 13, 14, 15, 16, 3, 17, 18, 19, 20, 21, 22, 23, 24);
     for q in s0..s1 {
         let m = g(bm, q);
         if m == 255 || g(id, q) != g(sid, q) || g(dead, q) != 0 {
             continue;
         }
-        let (m, t, tid) = brain_pick(m, g(bt, q), g(btid, q), q, id, dead, outa, tid, bf);
+        let (m, t, tid) = brain_pick_lazy(m, g(bt, q), g(btid, q), q, id, dead, outa, tid, bf, lz.as_ref());
         s(cm, q, m);
         s(ct, q, if m != 0 { t } else { -1 });
         s(ctid, q, if m != 0 { tid } else { 0 });
     }
+}
+/// brain_pick with the lazy fallback: a unit keeping its target had no unit answer at the scan (acq.out -3): when that
+/// target fell, its fallback is made now (acq_sample.rs lazy_fallback: the scan's answer and the brain's word on it).
+#[inline(always)]
+unsafe fn brain_pick_lazy(m: u8, t: i32, tid: i32, q: usize, id: *const i32, dead: *const u8, outa: *const i32, otid: *const i32, bf: *const u8,
+    lz: Option<&super::acq_sample::LazyFb>) -> (u8, i32, i32) {
+    if let Some(l) = lz {
+        let ov = g(outa, q);
+        if ov <= -3 {
+            if m == 0 || m == 255 || (m & 48) != 0 || t < 0 || (g(dead, t as usize) == 0 && g(id, t as usize) == tid) {
+                return (m, t, tid);
+            }
+            // (Moved by the relayout since the scan (acq.out -3 - its slot then): its snapshot columns are not at this
+            // slot; no fallback, it waits for the next run as a unit with none.)
+            if (-3 - ov) as usize != q { return (m, t, tid); }
+            let (f, o, ot) = super::acq_sample::lazy_fallback(l, q, t);
+            if f == 0 || o < 0 || g(dead, o as usize) != 0 || g(id, o as usize) != ot {
+                return (m, t, tid);
+            }
+            return (f, o, ot);
+        }
+    }
+    brain_pick(m, t, tid, q, id, dead, outa, otid, bf)
 }
 /// The brain's instruction (m, its target t, id tid) as committed: a unit target that fell since the snapshot
 /// (dead, or another unit in its slot) gives way to the fallback (acq.bf: the scan's answer acq.out / acq.tid, judged
@@ -1729,27 +1731,26 @@ pub unsafe extern "C" fn k_acq_snap(a: u32, chunk: i32) {
     }
     slab_runs(sfree, slabs, s0, s1, |r0, r1, empty| run(r0, r1, empty));
 }
-/// The acquisition tier's answers and the combat brain's instructions into the units' columns (k_acq_commit,
-/// k_combat_commit as they were: the same unit still in the slot), for slots s0..s1 of the last snapshot.
-/// Arrays (k_acq_snap's): [7] unit.id, [3] unit.dead, [16] acq.rng, [17] acq.id, [18] acq.out, [10] acq.sout,
-/// [19] / [20] / [21] unit.cmMode / cmT / cmTId, [49] unit.cbS, [50] unit.cbTick, [51] unit.cbRangeS, [52] acq.bm,
+/// The combat brain's instructions into the units' columns (k_combat_commit as it was: the same unit still in the slot),
+/// for slots s0..s1 of the last snapshot.
+/// Arrays (k_acq_snap's): [7] unit.id, [3] unit.dead, [17] acq.id, [18] acq.out,
+/// [19] / [20] / [21] unit.cmMode / cmT / cmTId, [52] acq.bm,
 /// [53] acq.bt, [54] acq.btid.
 #[inline(always)]
 unsafe fn acq_commit_range(k: &K, s0: usize, s1: usize, brain: bool, tick: i32) {
-    let (id, dead, sr, si, outa, sout) = (k.p::<i32>(7), k.p::<u8>(3), k.p::<f32>(16), k.p::<i32>(17), k.p::<i32>(18), k.p::<i32>(10));
+    let (id, dead, si, outa) = (k.p::<i32>(7), k.p::<u8>(3), k.p::<i32>(17), k.p::<i32>(18));
     let (cm, ct, ctid) = (k.p::<u8>(19), k.p::<i32>(20), k.p::<i32>(21));
-    let (cbs, ctk, crs, bm, bt, btid) = (k.p::<i32>(49), k.p::<i32>(50), k.p::<f32>(51), k.p::<u8>(52), k.p::<i32>(53), k.p::<i32>(54));
+    let (bm, bt, btid) = (k.p::<u8>(52), k.p::<i32>(53), k.p::<i32>(54));
+    // (Lazy fallbacks: the snapshot's own columns (this block's, not rewritten yet), [56..60] records, offsets, entries,
+    // area grid, area reach header.)
+    let lz = super::acq_sample::LazyFb::from(k, k.w.sub(512), 11, 12, 13, 14, 16, 17, 27, 28, 56, 57, 58, 59, 60, 61);
+    let _ = tick;
     for q in s0..s1 {
         if g(id, q) != g(si, q) { continue; }
-        if g(outa, q) != -2 {
-            s(crs, q, g(sr, q));
-            s(ctk, q, tick);
-            s(cbs, q, g(sout, q));
-        }
         if brain {
             let m = g(bm, q);
             if m != 255 && g(dead, q) == 0 {
-                let (m, t, tid) = brain_pick(m, g(bt, q), g(btid, q), q, id, dead, outa, k.p::<i32>(9), k.p::<u8>(55));
+                let (m, t, tid) = brain_pick_lazy(m, g(bt, q), g(btid, q), q, id, dead, outa, k.p::<i32>(9), k.p::<u8>(55), lz.as_ref());
                 s(cm, q, m);
                 s(ct, q, if m != 0 { t } else { -1 });
                 s(ctid, q, if m != 0 { tid } else { 0 });
@@ -1900,26 +1901,35 @@ pub unsafe extern "C" fn k_eff_area_hist(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
     let k = K::new(a);
     let (live, dead, own, ty, area, hist) = (k.p::<u8>(0), k.p::<u8>(1), k.p::<i8>(2), k.p::<i16>(3), k.p::<i32>(4), k.p::<i32>(5));
+    // ([6] eff.histList: a slot's key + 1 as the count took it (0 none): the next period zeroes those.)
+    let list = k.p::<i32>(6);
     let (n, per, lanes, na, nt, np, mode) = (k.i(0), k.i(1), k.i(2), k.i(3), k.i(4), k.i(5), k.i(6));
     let (s0, s1) = job(chunk, per, n);
     if mode == 0 {
         core::ptr::write_bytes(hist.add(s0), 0, s1 - s0);
         return;
     }
+    if mode == 2 {
+        // (The slots P[0] of the last count: their keys zeroed.)
+        for q in s0..s1 { let e = *list.add(q); if e > 0 { *hist.add((e - 1) as usize) = 0; } }
+        return;
+    }
     for q in s0..s1 {
-        if g(live, q) == 0 || g(dead, q) != 0 {
-            continue;
+        let mut e = 0i32;
+        if g(live, q) != 0 && g(dead, q) == 0 {
+            let (o, t, ar) = (g(own, q) as i32, g(ty, q) as i32, g(area, q));
+            if !(o < 0 || o >= np || t < 0 || t >= nt || ar < 0 || ar >= na) {
+                let key = (ar as i64 * lanes as i64 + (o * nt + t) as i64) as usize;
+                atomic_add(hist, key, 1);
+                e = key as i32 + 1;
+            }
         }
-        let (o, t, ar) = (g(own, q) as i32, g(ty, q) as i32, g(area, q));
-        if o < 0 || o >= np || t < 0 || t >= nt || ar < 0 || ar >= na {
-            continue;
-        }
-        atomic_add(hist, (ar as i64 * lanes as i64 + (o * nt + t) as i64) as usize, 1);
+        if !list.is_null() { *list.add(q) = e; }
     }
 }
 
 /// SIM_KERNEL_EFF_UNITS (things_utils.js recalculateUnitEffectiveStats): for
-/// the strided share (entry j: units index P[3] + j * P[2]) from the
+/// its share (entry j: units index P[3] + j * P[2]; the caller's a contiguous run, P[2] 1) from the
 /// columns: base stacks and level, the same-owner same-type count over its
 /// window of the type block counts, effective stacks and (sticky) level.
 /// eff.flag[j]: 0 done, 1 done with a new effective level (the caller
@@ -2833,13 +2843,13 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
     // (Units stand packed in slot order: most marks repeat one this job already made. A small cache of the job's own
     // marks (player's base + area -> the most it marked there) skips those, and a unit at the same place with the same
     // key as the one before it is skipped whole: the seed is a max, so the same result.)
-    let mut ck = [0u32; 256];
-    let mut cv = [0i32; 256];
+    let mut ck = [0u32; 1024];
+    let mut cv = [0i32; 1024];
     let (ckp, cvp) = (ck.as_mut_ptr(), cv.as_mut_ptr());
     let (mut ptp, mut pkey) = (-1i32, -1i32);
     let mark = |p: i32, ar: i32, val: i32| {
         let id = (p * na + ar) as u32;
-        let h = (id.wrapping_mul(0x9E37_79B1) >> 24) as usize;
+        let h = (id.wrapping_mul(0x9E37_79B1) >> 22) as usize;
         if *ckp.add(h) == id + 1 && *cvp.add(h) >= val { return; }
         vis_seed(seed, list, cnt, p as usize, (p * na) as usize, ar as usize, val, stamp);
         *ckp.add(h) = id + 1; *cvp.add(h) = val;
@@ -3061,6 +3071,13 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     // (The fallback's instruction: for a unit that keeps its target, the scan's own answer (acq.out) judged
     // too: 5 in range, 2 chase, 0 none; the commit takes it when the kept target fell after the snapshot.)
     let bf = k.p::<u8>(20);
+    // (The range questions' cache a slot ([22] acq.brc, the caller's: of this area layout): key = the unit's tile and
+    // window flags (28 bits), the target's (28), the reach (5); bit 61 the answer, 62 set.)
+    let brc = k.p::<u64>(22);
+    // (The fallback questions' cache, the same keys: [23] acq.brf.)
+    let brf = k.p::<u64>(23);
+    // ([24] acq.kept: the scan's word on the unit's kept target, 0 not looked at (the brain looks), 1 none, 2 kept.)
+    let keptv = k.p::<u8>(24);
     let (cmd_idle, cmd_am, cmd_atk) = (k.i(2) as u8, k.i(3) as u8, k.i(9) as u8);
     let itile = (1.0 / k.f(4)) as f32;
     let (gw, gh, players, na) = (k.i(5), k.i(6), k.i(7), k.i(8));
@@ -3151,6 +3168,19 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         }
         (out, n, own)
     };
+    // (A position's tile and window flags (window's: x below 0.3 of the tile, at or above 0.7, then y), 28 bits; None
+    // off the map or past 2^24 tiles.)
+    let tkey = |x: f32, y: f32| -> Option<u64> {
+        let fx = x * itile;
+        let fy = y * itile;
+        let (gxf, gyf) = (floorf(fx), floorf(fy));
+        let (gx, gy) = (gxf as i32, gyf as i32);
+        if gx < 0 || gy < 0 || gx >= gw || gy >= gh { return None; }
+        let (rx, ry) = (fx - gxf, fy - gyf);
+        let fl = (rx < 0.3) as u64 | (((rx >= 0.7) as u64) << 1) | (((ry < 0.3) as u64) << 2) | (((ry >= 0.7) as u64) << 3);
+        let t = (gy * gw + gx) as u64;
+        if t >= 1 << 24 { None } else { Some((t << 4) | fl) }
+    };
     // (The scan's area distance from the unit's window to its answer's area (acq.od, 255 none): when the question's
     // target is that answer and the distance is within the unit's reach in area steps, it is in range: the target's
     // own tile's area is in its window, so some pair of their areas is that near. No windows, no search.)
@@ -3159,9 +3189,24 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
     let flush = |nb: usize, arq: &mut Option<super::arq::Arq>, bq: &[usize; CB], btq: &[i32; CB], bsg: &[i32; CB], bta: &[i32; CB]| {
         let mut wins = [([-1i32; 4], 0usize, [-1i32; 4], 0usize); CB];
         let mut fast = [false; CB];
+        let mut ck = [0u64; CB];
+        let mut cr = [0u8; CB];
         for i in 0..nb.min(CB) {
             let q = bq[i];
             if quick(q, btq[i], bsg[i]) { fast[i] = true; continue; }
+            let cache = if bsg[i] == -1 { brc } else if bsg[i] == -2 { brf } else { core::ptr::null_mut() };
+            if !cache.is_null() {
+                let tu = btq[i] as usize;
+                let key = match (tkey(g(xs, q), g(ys, q)), tkey(g(xs, tu), g(ys, tu))) {
+                    (Some(a), Some(b)) if (g(rk, q) as u64) < 32 => a | (b << 28) | ((g(rk, q) as u64) << 56) | (1u64 << 62),
+                    _ => 0,
+                };
+                if key != 0 {
+                    let e = *cache.add(q);
+                    if e & !(1u64 << 61) == key { cr[i] = 1 + ((e >> 61) & 1) as u8; continue; }
+                    *ck.as_mut_ptr().add(i) = key;
+                }
+            }
             let src = window(g(xs, q), g(ys, q));
             // (A unit target by its window too: in range of each other alike,
             // whichever of the two looks; a structure by its tile.)
@@ -3172,10 +3217,16 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
         for i in 0..nb.min(CB) {
             let (src, ns, tgt, nt) = wins[i];
             let mut in_range = fast[i];
-            if !fast[i] && ns > 0 && nt > 0 {
-                if let Some(x) = arq.as_mut() {
-                    in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, bq[i]) as i32);
+            if cr[i] != 0 {
+                in_range = cr[i] == 2;
+            } else {
+                if !fast[i] && ns > 0 && nt > 0 {
+                    if let Some(x) = arq.as_mut() {
+                        in_range = x.within(core::slice::from_raw_parts(src.as_ptr(), ns), core::slice::from_raw_parts(tgt.as_ptr(), nt), g(rk, bq[i]) as i32);
+                    }
                 }
+                let key = ck[i];
+                if key != 0 { *(if bsg[i] == -1 { brc } else { brf }).add(bq[i]) = key | ((in_range as u64) << 61); }
             }
             if bsg[i] == -2 {
                 // (A fallback question: the scan's answer for a unit that kept its target.)
@@ -3215,6 +3266,8 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
             } else if !(cur >= 0 && (cur as usize) < nsl) || g(flg, cur as usize) & 1 != 0 || g(id, cur as usize) != g(ctid, q) {
                 continue;
             }
+        } else if !keptv.is_null() && g(keptv, q) != 0 {
+            if g(keptv, q) >= 2 { tq = cur; }
         } else if !mover && g(cm, q) != 0 && !had_struct && cur >= 0 && (cur as usize) < nsl {
             // (Within the snapshot: past its slots the copies hold an older
             // post's values, a unit gone since that still read as alive with
@@ -3286,6 +3339,12 @@ pub unsafe extern "C" fn k_combat_brain(a: u32, chunk: i32) {
                     nb = 0;
                 }
             }
+        }
+        // (A kept target whose range question the scan answered from the cache (acq.kept 3 in range, 4 not): its
+        // instruction now, no question.)
+        if have_bfs && !order && sg < 0 && tq >= 0 && !keptv.is_null() && g(keptv, q) >= 3 {
+            finish(q, tq, sg, g(keptv, q) == 3);
+            continue;
         }
         // (A unit target's area is its window's business, in the batch; a
         // structure's its tile's.)

@@ -84,7 +84,12 @@ pub unsafe extern "C" fn k_vis_seed_structs(a: u32, chunk: i32) {
     let (b0, b1) = (b0 + first as usize, b1 + first as usize);
     let half = (k.i(12).max(0) as usize) * (np.max(0) * na.max(0)) as usize;
     for b in b0..b1 {
-        for t in b * 256..((b + 1) * 256).min(n) {
+        let (t0, t1) = (b * 256, ((b + 1) * 256).min(n));
+        let mut t = t0;
+        while t < t1 {
+            // (Sixteen tiles with no structure (code 0, most of a map) passed over at once.)
+            if t & 15 == 0 && t + 16 <= t1 && !core::arch::wasm32::v128_any_true(core::arch::wasm32::v128_load(code.add(t) as *const core::arch::wasm32::v128)) { t += 16; continue; }
+            let tc = t; t += 1; let t = tc;
             let cd = g(code, t);
             if cd == 0 || cd >= 0x66 || g(uc, t) != 0 || !(g(val, t) > 0.0) { continue; }
             let ar = g(ag, t);

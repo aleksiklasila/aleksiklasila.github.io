@@ -670,6 +670,32 @@ function _unitGoneRoom(n) {
 // occupancy's totals, the work versions' checksum.
 function _unitGoneRun(G, list, n, S) {
     if (_spatialCountDefer) throw new Error('unit retire inside the unit pass');
+    const arrays = _unitGoneFill(G, list, n, S), P = G.P, c = S.columns, V = _workerWorkTable();
+    const O = typeof SIM_OCCUPANCY_ENABLED !== 'undefined' && SIM_OCCUPANCY_ENABLED && typeof _occ !== 'undefined' ? _occ : null;
+    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
+    const nch = Math.ceil(n / UNIT_GONE_PER);
+    try {
+        for (let i = 0; i < 52; i++) simParallelBind('ug.' + i, arrays[i]);
+        const Q = _simParams;
+        Q.fill(0, 0, 40);
+        for (let i = 0; i < 35; i++) Q[i] = P[i];
+        Q[35] = 0; Q[36] = UNIT_GONE_PER;
+        simParallelRun(SIM_KERNEL_UNIT_GONE, nch);
+        P[35] = 1; P[36] = UNIT_GONE_PER; P[37] = nch;
+        // (52: the mover table's marks, mvt.rs.)
+        arrays[52] = _mvtDirty;
+        simRustDirect('k_unit_gone_par', arrays, P);
+    } finally { arrays.fill(null); }
+    const C = G.cnt;
+    for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
+    for (let o = 0; o < 64 && o < players.length; o++) if (C[72 + o]) players[o].popCount -= C[72 + o];
+    if (O) for (let r = 0; r <= 32; r++) if (C[32 + r]) { O.registered -= C[32 + r]; O.expectedBits -= C[32 + r] * O.sizes[r]; }
+    V.sum = (V.sum + C[1]) | 0;
+    if (C[2]) _wsw = null;
+}
+// The gone kernel's arrays (_unitGoneArgs, 0-51) and parameters (G.P); also at the match's start (unitGonePrewarm:
+// its 52 bindings were the first death tick's).
+function _unitGoneFill(G, list, n, S) {
     const c = S.columns, P = G.P, V = _workerWorkTable(), U = unitIdIndex();
     const resKept = _workerResCountFor === workerReservedTiles && !!_workerResCount && simHeapHas(_workerResCount);
     const wsl = _wsw ? _wswResvRoom() : null;
@@ -702,29 +728,17 @@ function _unitGoneRun(G, list, n, S) {
     P[20] = GRID_W; P[21] = TILE; P[22] = _WORKER_TARGET_LOAD_TYPE_COUNT; P[23] = SNAP_REGION_TILES; P[24] = Math.ceil(GRID_W / SNAP_REGION_TILES);
     P[25] = _WORKER_WORK_TYPES.length; P[26] = V.rw; P[27] = V.rh; P[28] = V.np; P[29] = WORKER_WORK_REGION_TILES; P[30] = U.n;
     P[31] = workerReservedTiles.length; P[32] = V.length; P[33] = wsl ? wsl.length : 0; P[34] = upk ? upk.length : 0;
-    if (typeof tickStartChainSettleHostile === 'function') tickStartChainSettleHostile();
     // (In parallel: per chunk, the shared counts atomic, what has an order in
     // the chunk's buffers; then those merged in chunk order, ord.rs k_unit_gone_par.)
     arrays[48] = G.pc; arrays[49] = G.pol; arrays[50] = G.ppf; arrays[51] = G.ppw;
-    const nch = Math.ceil(n / UNIT_GONE_PER);
-    try {
-        for (let i = 0; i < 52; i++) simParallelBind('ug.' + i, arrays[i]);
-        const Q = _simParams;
-        Q.fill(0, 0, 40);
-        for (let i = 0; i < 35; i++) Q[i] = P[i];
-        Q[35] = 0; Q[36] = UNIT_GONE_PER;
-        simParallelRun(SIM_KERNEL_UNIT_GONE, nch);
-        P[35] = 1; P[36] = UNIT_GONE_PER; P[37] = nch;
-        // (52: the mover table's marks, mvt.rs.)
-        arrays[52] = _mvtDirty;
-        simRustDirect('k_unit_gone_par', arrays, P);
-    } finally { arrays.fill(null); }
-    const C = G.cnt;
-    for (let k = 0, no = C[0]; k < no; k++) { const s = G.olist[k]; orderQueueUnitGone(s, c.id[s]); }
-    for (let o = 0; o < 64 && o < players.length; o++) if (C[72 + o]) players[o].popCount -= C[72 + o];
-    if (O) for (let r = 0; r <= 32; r++) if (C[32 + r]) { O.registered -= C[32 + r]; O.expectedBits -= C[32 + r] * O.sizes[r]; }
-    V.sum = (V.sum + C[1]) | 0;
-    if (C[2]) _wsw = null;
+    return arrays;
+}
+// The gone kernel's buffers and bindings at the match's start (main.js simMatchPrewarm): all but the list (the
+// retire plan's, bound on the first deaths).
+function unitGonePrewarm(S) {
+    const G = _unitGoneRoom(4096);
+    const arrays = _unitGoneFill(G, null, 0, S);
+    try { for (let i = 1; i < 52; i++) simParallelBind('ug.' + i, arrays[i]); } finally { arrays.fill(null); }
 }
 // (True while gameTick runs: work requested mid-tick that can wait for the
 // tick's end, such as the adjacency recalculation, waits.)
@@ -4520,6 +4534,18 @@ function simMatchPrepare() {
     if (typeof acqReserve === 'function') acqReserve();
     // (The worker brains' sites and distance fields of the loaded world: worker.js workerBrainsPrewarm.)
     if (typeof workerBrainsPrewarm === 'function') workerBrainsPrewarm();
+    simMatchPrewarm();
+}
+// The arrays and bindings the tiers' first posts made in the match's first ticks (15-80 ms each in a 1M match), made
+// now: the towers' acquisition snapshot, the worker search's requests, adjacency's layout tables, the hits'.
+function simMatchPrewarm() {
+    const S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
+    if (!S || !S.cap) return;
+    if (typeof towerAcqPrewarm === 'function') towerAcqPrewarm(S.cap);
+    if (typeof wsPrewarm === 'function') wsPrewarm();
+    if (typeof _adjLayoutTables === 'function') _adjLayoutTables();
+    if (typeof _hitArrays === 'function') { _hitArrays(S.cap, S.cap); _hitStArrays(16384); }
+    unitGonePrewarm(S);
 }
 function orderQueueReserve() {
     if (!_orderEntryPoolReady) {
@@ -6693,6 +6719,8 @@ function startGame() {
     if (!startGameSkipStarters) simMatchPrepare();
     if (typeof simHeapSetupDone === 'function') simHeapSetupDone();
     gameStarted = true;
+    // (Each sound's first variant made in idle tasks from now: audio.js audioPrewarmMatch.)
+    if (typeof audioPrewarmMatch === 'function') audioPrewarmMatch();
     // (The match's manual stacking setting: the build level slider shown or not.)
     updatePurchaseMultiplierBars();
     const snapshotButton = document.getElementById('btn-export-snapshot');

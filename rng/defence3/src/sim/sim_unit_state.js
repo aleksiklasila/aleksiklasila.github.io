@@ -367,11 +367,6 @@ const SIM_MOVE_COLUMNS = [['mvOn', Uint8Array, 1], ['mvOut', Uint8Array, 1], ['m
     // (One record a slot, SIM_NAV_STRIDE words: T, D, V, W, G, N1, N2,
     // Far << 1 | Open; a steer touches one cache line. See simFlowLook.)
     ['mvNav', Int32Array, SIM_NAV_STRIDE],
-    // The acquisition tier's structure result as committed (unit.js _acqTierStep): the tick, the range it was looked for with,
-    // and the structure (its tile, -1 none). (Its unit target is the combat brain's: cmT.)
-    ['cbTick', Int32Array, 1], ['cbRangeS', Float32Array, 1],
-    // (And the structure it found: its tile, -1 none.)
-    ['cbS', Int32Array, 1],
     // A moving unit with an idle or waiting unit of its owner in its tile or
     // one beside it at the tick's start (cwNear 1) as of tick cwTick (the
     // combat scan): waiting in a crowd (see NAV_CROWD_TILES).
@@ -994,7 +989,7 @@ function simSlotDefaults() {
     if (_simSlotDefs) return _simSlotDefs;
     const d = { mvNav: -1, mvNavLD: -1, mvSteer: -1, esVer: -1, statRow: -1, bsRow: -1, fLsX: NaN, fLsY: NaN, mvPath: -1,
         wkR: SIM_WK_UNDEF, wkN: SIM_WK_UNDEF, ppDue: -1, cmT: -1, mvTgX: NaN, mvTgY: NaN, tuS: -1, amGx: -1, amGy: -1, tbT: -1,
-        cbTick: -1, cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1, abBlk: NaN };
+        cwTick: -1, upT: -1, upB: -1, hObj: _simHDigest0(), rtEnd: -1, nvPK: -1, wTeam: -1, abBlk: NaN };
     for (const k of SIM_UNIT_LEVEL_COLUMNS) d[k] = NaN;
     d.j__rslot = -1; d.j__okTile = -1; d.j__okNodeTile = -1;
     for (const k in SIM_SPATIAL_DEFAULTS) d[k] = SIM_SPATIAL_DEFAULTS[k];

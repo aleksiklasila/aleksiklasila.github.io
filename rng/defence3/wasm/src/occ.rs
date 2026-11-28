@@ -853,6 +853,11 @@ impl MoveGrid {
         clear_or_mark(&self.g,ax,ay,ra,l,true);clear_or_mark(&self.g,bx,by,rb,l,true);
         None
     }
+    /// Steps slot s's moves ended blocked in a row (the record's top byte, mv.rs checked_traffic_q).
+    #[inline(always)]
+    pub(super) unsafe fn stuck(&self,s:usize)->u32{(*self.rec.add(s*4+2) as u32)>>24}
+    #[inline(always)]
+    pub(super) unsafe fn set_stuck(&self,s:usize,v:u32){let p=self.rec.add(s*4+2);*p=(*p&0x00FF_FFFF)|((v.min(255)<<24) as i32);}
     pub(super) unsafe fn layer_mass(&self,s:usize)->(i32,i32){
         // (Its footprint's cells.)
         let m=*self.rec.add(s*4+2);let w=m&255;((m>>8)&255,(w*w).max(1))

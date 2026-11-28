@@ -253,6 +253,18 @@ function _adjacencyLaneCommit() {
         if (L.paths) _bumpPathTopologyVersion();
     }
 }
+// The area tables of the layout (made again when the areas are): its arrays (also at the match's start, main.js
+// simMatchPrewarm: they were the first post's, ~17 ms in a 1M match's fifth tick).
+function _adjLayoutTables() {
+    const L = _adjL, N = GRID_W * GRID_H;
+    const A = Array.isArray(areas) ? areas.length : 0;
+    if (L.cfor !== gridCellsByArea || !L.coff || L.coff.length < A + 1) {
+        L.coff = _adjArr('adj.coff', Int32Array, A + 1); L.ctile = _adjArr('adj.ctile', Int32Array, N);
+        L.cfor = gridCellsByArea; L.layoutVer = (L.layoutVer | 0) + 1;
+        L.mul = _adjArr('adj.mul', Int32Array, A);
+        for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
+    }
+}
 // The next post: the dirty tiles' signatures, the flood on the lane (sync:
 // run now on this thread).
 function _adjacencyLanePost(sync) {
@@ -264,12 +276,7 @@ function _adjacencyLanePost(sync) {
     // version is new. (The page's pass over its areas' cell lists, cold
     // code at a layout's first post, was 0.3-1.4 s on a 1000x1000 map.)
     const A = Array.isArray(areas) ? areas.length : 0;
-    if (L.cfor !== gridCellsByArea || !L.coff || L.coff.length < A + 1) {
-        L.coff = _adjArr('adj.coff', Int32Array, A + 1); L.ctile = _adjArr('adj.ctile', Int32Array, N);
-        L.cfor = gridCellsByArea; L.layoutVer = (L.layoutVer | 0) + 1;
-        L.mul = _adjArr('adj.mul', Int32Array, A);
-        for (let a = 0; a < A; a++) L.mul[a] = (areas[a] && areas[a].multiplierLevel) | 0;
-    }
+    _adjLayoutTables();
     // (Its lane's last job finished before its arrays and params are written: committed already, so done.)
     simParallelBackgroundWait(ADJ_LANE);
     // The signature grid, the seeds (every structure, or the dirty tiles: all
@@ -362,7 +369,7 @@ function getUnitCollisionRecalcTicks() {
 // its level's tables, a stat row of its owner, type and level, and notes it
 // current (esVer). Nothing refreshes a unit afterwards: its row is rewritten
 // in place when research changes the tables, and its effective level, which
-// follows the units around it a few seconds behind, is the strided share of
+// follows the units around it a few seconds behind, is the share of
 // recalculateUnitEffectiveLevel's, from the columns, in the kernels.)
 // A restore or a new world: the base entries (tables of the stat maps) may
 // be other objects.
@@ -382,23 +389,31 @@ function _effAreaStepsOf(b) {
 // at the start of each period (the same tick on every peer; at a restore every peer takes a new one on the same tick) and read by
 // the evaluations of the period. A unit's stacks go with the units of its type in the areas within its range, so they follow
 // the crowd a few ticks behind.
-const _effAreaHist = { arr: null, tick: -1, areas: 0, lanes: 0 };
+const _effAreaHist = { arr: null, list: null, slots: 0, tick: -1, areas: 0, lanes: 0 };
 function effAreaHistReset() { _effAreaHist.tick = -1; }
 function _effAreaHistEnsure(tick, step) {
     const H = _effAreaHist, S = typeof _simUnitState !== 'undefined' ? _simUnitState : null;
     const A = Array.isArray(areaNeighborIds) ? areaNeighborIds.length : 0, L = Math.max(1, spatialUnitsComplexPlayerCount * spatialUnitsComplexUnitTypeCount);
     if (H.arr && H.areas === A && H.lanes === L && H.tick >= 0 && tick - H.tick < step && tick >= H.tick) return H;
     if (!S || !(A > 0) || typeof SIM_KERNEL_EFF_AREA_HIST !== 'number') { H.tick = -1; return null; }
-    const n = A * L;
+    const n = A * L, slots = S.owners.length;
+    // (The keys of the last count's slots (eff.histList, a key + 1 a slot, H.slots of them): zeroed alone; the whole table
+    // only when it is new or of another layout.)
+    let full = !H.arr || H.arr.length !== n || H.areas !== A || H.lanes !== L || !H.list || !simHeapHas(H.list);
     if (!H.arr || H.arr.length !== n) {
         if (H.arr) simHeapFree(H.arr);
         H.arr = simHeapArray(Int32Array, n); simParallelBind('eff.areaHist', H.arr);
     }
+    if (!H.list || H.list.length < S.cap || !simHeapHas(H.list)) {
+        if (H.list) simHeapFree(H.list);
+        H.list = simHeapArray(Int32Array, Math.max(1, S.cap)); simParallelBind('eff.histList', H.list); full = true;
+    }
     H.areas = A; H.lanes = L; H.tick = tick;
-    const P = _simParams;
-    P[0] = n; P[1] = 65536; P[2] = L; P[3] = A; P[4] = spatialUnitsComplexUnitTypeCount; P[5] = spatialUnitsComplexPlayerCount; P[6] = 0;
-    simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(n / 65536));
-    const slots = S.owners.length;
+    const P = _simParams, m = H.slots | 0;
+    P[1] = 65536; P[2] = L; P[3] = A; P[4] = spatialUnitsComplexUnitTypeCount; P[5] = spatialUnitsComplexPlayerCount;
+    if (full) { P[0] = n; P[6] = 0; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(n / 65536)); }
+    else if (m > 0) { P[0] = m; P[6] = 2; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(m / 65536)); }
+    H.slots = slots;
     P[0] = slots; P[1] = 16384; P[6] = 1;
     simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(slots / 16384));
     return H;
@@ -638,9 +653,9 @@ function effFillBatchEnd() {
 }
 
 
-// Units' effective level: the strided share of the units (1/intervalTicks
-// of them a tick, by index; a new unit has its turn like the others; the
-// selection too, as in multiplayer: no per-tick pass over it). The strided
+// Units' effective level: a share of the units (1/intervalTicks of them a
+// tick, a contiguous run of the index; a new unit has its turn like the others; the
+// selection too, as in multiplayer: no per-tick pass over it). The
 // share runs in the kernels from the columns
 // (SIM_KERNEL_EFF_UNITS: stacks, levels, nearby counts); only units whose
 // effective level changed (their effective tables), and units the columns
@@ -674,11 +689,13 @@ function recalculateUnitEffectiveLevel() {
     // multiples (dk 16, interval 100: 25 of 100): three units in four never took their effective level.)
     const interval = Math.max(1, intervalTicks | 0), dk = Math.max(1, simDk | 0);
     const step = dk > 1 ? Math.max(1, Math.round(interval / dk)) : interval, phase = dk > 1 ? Math.floor(tick / dk) % step : tick % step, n = units.length;
-    const m = phase < n ? Math.ceil((n - phase) / step) : 0;
-    if (m > 0 && S) _effUnitsRun(tick, step, phase, m, stamp, interval);
+    // (The share a contiguous run of the index, the phase's step-th of it: its units' columns read side by side; strided
+    // (every step-th unit) each of a unit's ~15 column reads was a line of its own, ~350 ns a unit at 1M.)
+    const start = Math.floor(n * phase / step), m = Math.floor(n * (phase + 1) / step) - start;
+    if (m > 0 && S) _effUnitsRun(tick, 1, start, m, stamp, interval);
 }
-// The effective-levels kernel over a strided share of the units (m entries
-// from phase, every step-th), then the new levels' tables and movement
+// The effective-levels kernel over a share of the units (m entries
+// from phase, every step-th: the caller's a contiguous run, step 1), then the new levels' tables and movement
 // columns (k_unit_stats_apply).
 let _effApplyL = null;
 const _effApplyP = new Float64Array(8);

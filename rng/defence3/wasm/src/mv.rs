@@ -149,7 +149,6 @@ const W_HTT: usize = 74;
 const W_HVER: usize = 75;
 const W_CTI: usize = 76;
 const W_CRS: usize = 77;
-const W_CBS: usize = 78;
 const W_LSX: usize = 79;
 const W_LSY: usize = 80;
 const W_LSPX: usize = 81;
@@ -492,7 +491,6 @@ struct Mv {
     hver: *mut i32,
     cti: *const i32,
     crs: *const F32,
-    cbs: *const i32,
     lsx: *mut F32,
     lsy: *mut F32,
     lspx: *mut F32,
@@ -822,7 +820,6 @@ impl Mv {
             hver: p!(W_HVER),
             cti: p!(W_CTI),
             crs: p!(W_CRS),
-            cbs: p!(W_CBS),
             lsx: p!(W_LSX),
             lsy: p!(W_LSY),
             lspx: p!(W_LSPX),
@@ -2085,6 +2082,12 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
     let original_dx=(nx-ox) as f64;let original_dy=(ny-oy) as f64;
     let original_len=sqrt(original_dx*original_dx+original_dy*original_dy);
     let (layer,mass)=(*m.occ).layer_mass(s);
+    // (Blocked two steps or more in a row, in steps of at most 8 base ticks: the side-steps and the swap search on every
+    // other of its steps (the count's even ones), a try at most 8 base ticks late; the direct step every step. Nearly every
+    // mover k89 resolves in a battle stands blocked step after step. Longer steps try every step: at dk 20 a skipped
+    // try cost counterflow 2 % of its movers, traffic-pressure.test.cjs.)
+    let stk=if intent {(*m.occ).stuck(s)}else{0};
+    let quiet=m.dk<=8&&stk>=2&&stk&1==0;
     if intent && m.traffic_mode>=2 && original_len>0.0{
         if let Some((ax,ay))=steer_pressure(m,ox,oy,layer,original_dx,original_dy,original_len){nx=ax;ny=ay;}
     }
@@ -2096,7 +2099,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
     let dx=(nx-ox) as f64;let dy=(ny-oy) as f64;let want=dx*dx+dy*dy;
     let ax=(tx-ox) as f64;let ay=(ty-oy) as f64;
     // (Not for a yield's move (intent false): a secondary move; its shoulders were ~9% of the job.)
-    if intent && m.traffic_mode&1!=0 && want>0.0 && ax*ax+ay*ay<want*0.64 {
+    if intent && !quiet && m.traffic_mode&1!=0 && want>0.0 && ax*ax+ay*ay<want*0.64 {
         (tx,ty)=shoulders(m,s,ox,oy,dx,dy,want,ax,ay,tx,ty,wl);
     }
     let (mut tx,mut ty)=(*m.occ).commit_preview(s,tx,ty,nx,ny);
@@ -2105,7 +2108,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
         let il=1.0/original_len;
         let mut progress=((tx-ox) as f64*original_dx+(ty-oy) as f64*original_dy)*il;
         dbgc!(m,64);
-        if progress<original_len*(if m.dk>1{RETRY_SHORT}else{0.25})&&traffic_deferred(m){dbgc!(m,65);
+        if !quiet&&progress<original_len*(if m.dk>1{RETRY_SHORT}else{0.25})&&traffic_deferred(m){dbgc!(m,65);
             if let Some((sx,sy))=traffic_swap(m,s,tx,ty,original_dx*il,original_dy*il,wl,false){
                 tx=sx;ty=sy;progress=original_len;
                 // (Several base ticks a step: the step goes on from the partner's place along its heading, as the next
@@ -2135,6 +2138,7 @@ unsafe fn checked_traffic_q(m:&Mv,s:usize,ox:i32,oy:i32,nx:i32,ny:i32,intent:boo
         let blocked=1.0-progress.max(0.0)*il;
         if blocked>0.3{super::traffic::push_deposit(m.traffic,tx,ty,original_dx,original_dy,original_len,blocked,(*m.occ).radius_q(s),rd(m.own,s),0);}
     }
+    if intent {(*m.occ).set_stuck(s,if tx==ox&&ty==oy {stk+1}else{0});}
     // (Diverted (the pressure, a shoulder, a swap, the footprints): its steady window ends; its steering stands,
     // the flow's heading from its tile is the same: re-steering every blocked unit every tick was ~350k steers a tick at 1M.)
     if tx!=nx || ty!=ny {let st=rd(m.steady, (s) * SR);if st>0{wr(m.steady, (s) * SR,-st);}}
@@ -2574,16 +2578,17 @@ fn urem4(v: v128, d: i32) -> v128 {
 /// Slots s..s + 4 (lanes not in `done`) parked before their wake tick
 /// (mvOn 2): step_slot's stand four a lane. A lane takes it when the slot
 /// is parked, no brain instruction, before its wake, no look this tick
-/// (flags 1, 8 never; 16 not on its aggro tick; 4, the builder's watch,
-/// left to step_slot), alive and indexed, its owner a player, in the map on
-/// its floor's tile, not on its floor's look tick. Then: stands (prev =
-/// position), output 1, its step mark. Returns the lanes taken.
+/// (flags 1, 8 never; 16, an aggro park, on its look tick too: move_pre0's
+/// stand, the same, but for a structure worker's, wk 4, its order to
+/// resume; 4, a builder's: its watchdog sample on its watch tick, wk_watch),
+/// alive and indexed, its owner a player, in the map.
+/// Its floor look (a new tile, or its look tick) here: its tile's structure
+/// code, none or its own: the floor written; a hostile structure's tile:
+/// step_slot's (floor_hit). Then: stands (prev = position), output 1, its
+/// step mark. Returns the lanes taken.
 #[cfg_attr(not(feature = "prof"), inline(always))]
 #[cfg_attr(feature = "prof", inline(never))]
 unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
-    // Every lane needs a floor look at this coarse step. The vector park
-    // predicate below is then always false, independent of unit state.
-    if p.tr>0&&m.dk>=p.tr{return 0;}
     let zero = i32x4_splat(0);
     let one = i32x4_splat(1);
     let on = ld_u8x4(m.on.add(s));
@@ -2597,10 +2602,10 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
     let t = i32x4_splat(m.t);
     ok = v128_and(ok, i32x4_lt(t, v128_load(m.wake.add(s) as *const v128)));
     let fl = ld_u8x4(m.fl.add(s));
-    ok = v128_and(ok, i32x4_eq(v128_and(fl, i32x4_splat(13)), zero));
+    ok = v128_and(ok, i32x4_eq(v128_and(fl, i32x4_splat(9)), zero));
     let tw = i32x4_add(t, v128_load(m.id.add(s) as *const v128));
-    // (Aggro parks: not on their look tick, (t + id) & 3 with four ticks.)
-    ok = v128_andnot(ok, v128_and(i32x4_ne(v128_and(fl, i32x4_splat(16)), zero), i32x4_lt(v128_and(tw, i32x4_splat(3)), i32x4_splat(m.dk))));
+    // (Aggro parks of structure workers: move_pre0's, for their order (resume_order).)
+    ok = v128_andnot(ok, v128_and(i32x4_ne(v128_and(fl, i32x4_splat(16)), zero), i32x4_eq(ld_u8x4(m.wk.add(s)), i32x4_splat(4))));
     ok = v128_and(ok, i32x4_eq(ld_u8x4(m.dead.add(s)), zero));
     if !v128_any_true(ok) {
         return 0;
@@ -2616,16 +2621,35 @@ unsafe fn park4(m: &Mv, p: &StepP, s: usize, done: i32) -> i32 {
     ok = v128_and(ok, v128_and(i32x4_ge(gx, zero), i32x4_lt(gx, i32x4_splat(m.w))));
     ok = v128_and(ok, v128_and(i32x4_ge(gy, zero), i32x4_lt(gy, i32x4_splat(m.h))));
     let tl = i32x4_add(i32x4_mul(gy, i32x4_splat(m.w)), gx);
-    ok = v128_and(ok, i32x4_eq(tl, sr_ld4(m.floor as *const i32, s)));
     if !v128_any_true(ok) {
         return 0;
     }
+    // (The floor look: on a new tile, or on its look tick (every lane in a step of the look period or more).)
+    let mut look = i32x4_ne(tl, sr_ld4(m.floor as *const i32, s));
     if p.tr > 0 {
-        ok = v128_and(ok, i32x4_ge(urem4(v128_and(tw, i32x4_splat(0x7fffffff)), p.tr), i32x4_splat(m.dk)));
+        look = v128_or(look, i32x4_lt(urem4(v128_and(tw, i32x4_splat(0x7fffffff)), p.tr), i32x4_splat(m.dk)));
+    }
+    look = v128_and(look, ok);
+    if v128_any_true(look) {
+        let ta: [i32; 4] = core::mem::transmute(v128_and(tl, look));
+        let code = i32x4(*m.sc.add(ta[0] as usize) as i32, *m.sc.add(ta[1] as usize) as i32, *m.sc.add(ta[2] as usize) as i32, *m.sc.add(ta[3] as usize) as i32);
+        let hostile = v128_and(look, v128_and(i32x4_ne(code, i32x4_splat(-1)), i32x4_ne(code, own)));
+        ok = v128_andnot(ok, hostile);
+        let lb = i32x4_bitmask(v128_andnot(look, hostile)) as i32;
+        for l in 0..m.span_n {
+            if lb & (1 << l) != 0 { wr(m.floor, (s + l) * SR, *ta.get_unchecked(l)); }
+        }
     }
     let bits = i32x4_bitmask(ok) as i32;
     if bits == 0 {
         return 0;
+    }
+    // (Parked builders: the watchdog sample on their watch tick, as step_slot.)
+    let wb = i32x4_bitmask(v128_and(ok, i32x4_ne(v128_and(fl, i32x4_splat(4)), zero))) as i32;
+    if wb != 0 {
+        for l in 0..m.span_n {
+            if wb & (1 << l) != 0 && rem64_f(tsum(m.t, rd(m.id, s + l)), p.wkwatch) < m.dk as i64 { wk_watch(m, s + l, m.t); }
+        }
     }
     let st = |pp: *mut v128, v: v128| {
         mv_store32(m,pp,v,ok);
@@ -2651,9 +2675,13 @@ unsafe fn idle4(m: &Mv, s: usize, done: i32) -> i32 {
     if BRAIN {
         ok = v128_and(ok, i32x4_eq(ld_u8x4(m.cmode.add(s)), zero));
     }
-    // (A live unit that is not a worker goes to the controller, one by one.)
+    // (A live unit that is not a worker goes to the controller, one by one. Not a lane without energy (a free slot,
+    // zeroed: half the slots of the 1M battle's slabs), no attack order, no structure order to resume: the controller
+    // returns at once for it (ctl: energy), so it is idle here, the same writes.)
     if !m.holdf.is_null() {
-        ok = v128_and(ok, v128_or(i32x4_ne(ld_u8x4(m.dead.add(s)), zero), i32x4_ne(ld_u8x4(m.iswk.add(s)), zero)));
+        let spent = v128_and(v128_not(f32x4_gt(v128_load(m.en.add(s) as *const v128), f32x4_splat(0.0))),
+            v128_and(i32x4_ne(ld_u8x4(m.cmd.add(s) as *const u8), i32x4_splat(CMD_ATK as i32)), i32x4_ne(ld_u8x4(m.wk.add(s)), i32x4_splat(4))));
+        ok = v128_and(ok, v128_or(v128_or(i32x4_ne(ld_u8x4(m.dead.add(s)), zero), i32x4_ne(ld_u8x4(m.iswk.add(s)), zero)), spent));
     }
     let bits = i32x4_bitmask(ok) as i32;
     if bits == 0 {
@@ -3200,8 +3228,16 @@ unsafe fn move_job(a: u32, s0: i32, end: i32, chunk: i32, spatial:bool) {
         // the order's before anything reads them this tick.)
         ord_pickup(a,b0,e,chunk.max(0) as usize);
         let mut ep=if intent{epi_none()}else{epi_begin(&m,f,chunk,b0,e)};
-        move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
-        if intent{mark_need(&m,b0,e);}
+        // (Slabs with no unit (the allocator's free counts, word 297, P[12] slabs; k.rs slab_runs) passed over: after a
+        // battle most slots of the slabs are free, and a free slot's lane only kept its zeros.)
+        let sfree=if rd(a,297)==0 {core::ptr::null()}else{word(a,297) as *const u8};
+        let nsl=to_i32(rd(f,12)).max(0) as usize;
+        if sfree.is_null()||nsl==0 {
+            move_span(&mut m,f,&p,&sp,&mut ep,b0,e);
+            if intent{mark_need(&m,b0,e);}
+        } else {
+            super::k::slab_runs(sfree,nsl,b0,e,|r0,r1,empty|if !empty {move_span(&mut m,f,&p,&sp,&mut ep,r0,r1);if intent{mark_need(&m,r0,r1);}});
+        }
         if !intent{epi_end(&m,&ep,chunk);}
     }
 }
@@ -3578,7 +3614,8 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
             if done & (1 << l) != 0 {
                 continue;
             }
-            dbgc!(m,32);
+            dbgc!(m,32);dbgc!(m,304);if BRAIN&&rd(m.cmode,u)==0{dbgc!(m,311+(rd(m.on,u) as usize).min(3));if p.step_ran{dbgc!(m,315);}}
+            #[cfg(feature="dbgc")] if BRAIN&&rd(m.cmode,u)==0&&rd(m.on,u)==2{let fl=rd(m.fl,u);let tw=m.t.wrapping_add(rd(m.id,u));dbgc!(m,if m.t>=rd(m.wake,u){316}else if fl&9!=0{317}else if fl&4!=0{318}else if fl&16!=0&&(tw&3)<m.dk{319}else if rd(m.dead,u)!=0{321}else{320});if fl&16!=0{dbgc!(m,322);}if fl&2!=0{dbgc!(m,323);}}
             if !m.occ.is_null(){(*m.occ).scalar_lane();}
             #[cfg(feature = "dbgc")]
             {
@@ -3586,6 +3623,7 @@ unsafe fn move_span(m:&mut Mv,f:*const f64,p:&MoveP,sp:&StepP,ep:&mut Epi,b0:usi
                 dbgc!(m, 4 + on.min(6));
                 if BRAIN && rd(m.cmode, u) != 0 { dbgc!(m, 11); }
                 if rd(m.dead, u) != 0 { dbgc!(m, 12); }
+                if BRAIN && rd(m.cmode, u) != 0 { let c = rd(m.cmode, u); dbgc!(m, if c & 32 != 0 { 305 } else if c & 3 == 0 || c & 3 == 3 { 306 } else if c & 16 != 0 { if c & 3 == 2 { 307 } else { 308 } } else if c & 3 == 2 { 309 } else { 310 }); }
             }
             if p.step_ran {
                 step_slot(m, sp, u);
@@ -3673,10 +3711,15 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
     // (The chunk's summary: whether any unit of this owner and class is in it at all (made at its first look in the
     // job, swap_summary); without, its entries are not loaded.)
     let obit=1u32<<((own&15).min(14)+if walkers{16}else{0});
+    dbgc!(m,42);
+    #[cfg(feature="dbgc")] let mut any_pass=false;
     for pass in 0..9{
         let (a,e,ci)=g.chunk_near_ix(qx+(pass%3-1)*cq,qy+(pass/3-1)*cq);
         if e<=a{continue;}
-        if ci>=0{let mut sm=g.csum(ci);if sm==u32::MAX{sm=swap_summary(m,g,a,e);g.set_csum(ci,sm);}if sm&obit==0{continue;}}
+        dbgc!(m,43);
+        if ci>=0{let mut sm=g.csum(ci);if sm==u32::MAX{dbgc!(m,44);dbgc!(m,45,(e-a) as u32);sm=swap_summary(m,g,a,e);g.set_csum(ci,sm);}if sm&obit==0{continue;}}
+        dbgc!(m,46);
+        #[cfg(feature="dbgc")] {any_pass=true;}
         let mut i=a;
         while i<e{
             let n=(e-i).min(4) as usize;let mut slots=[-1i32;4];
@@ -3717,6 +3760,7 @@ unsafe fn traffic_swap(m:&Mv,s:usize,ox:i32,oy:i32,ux:f64,uy:f64,wl:*const u8,wa
             }
         }
     }
+    #[cfg(feature="dbgc")] {if !any_pass {dbgc!(m,47);}}
     // (The partner's walls by its layer: a flyer's the air's; a ground unit's its profile's (builders walk over
     // structures) when that is a ground one. A parked unit's profile column is its last walk's, or none (0): parked
     // collectors (flyers) read as ground units and were never swapped with across a structure.)
@@ -3901,20 +3945,26 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let free = v128_andnot(free, i32x4_ne(v128_and(cm, i32x4_splat(32)), zero));
     let tw = i32x4_add(i32x4_splat(m.t), v128_load(m.id.add(s) as *const v128));
     let recheck = i32x4_lt(v128_and(tw, i32x4_splat(3)), i32x4_splat(m.dk));
-    let st_hold = v128_andnot(v128_and(is_st, hold), recheck);
+    // (The slot pass: a structure hold on its recheck tick too, its look taken below (struct_hold).)
+    let st_hold = if !m.hita.is_null() && m.occ.is_null() {v128_and(is_st, hold)} else {v128_andnot(v128_and(is_st, hold), recheck)};
     let mut ok = v128_and(free, v128_or(v128_andnot(v128_or(hold, chase), is_st), st_hold));
+    #[cfg(feature="dbgc")] let ok0 = i32x4_bitmask(ok) as i32;
     if !v128_any_true(ok) {
         return 0;
     }
-    if !m.hita.is_null() && m.occ.is_null() {
+    // (The slot pass: a unit's shot due is taken below, for the lanes this takes (most holding units fire every step of
+    // several base ticks: they went one by one for it); a structure hold's on its recheck tick or with its shot due is
+    // move_struct's look, struct_hold, here.)
+    let st_look = if !m.hita.is_null() && m.occ.is_null() {
         let firing = v128_andnot(i32x4_ne(v128_and(cm, i32x4_splat(4)), zero), f32x4_gt(v128_load(m.at.add(s) as *const v128), fz));
-        ok = v128_andnot(ok, firing);
-    }
+        v128_and(st_hold, v128_or(recheck, firing))
+    } else { zero };
     ok = v128_and(ok, f32x4_gt(v128_load(m.en.add(s) as *const v128), fz));
     ok = v128_and(ok, v128_not(i32x4_eq(v128_load(m.sep.add(s) as *const v128), i32x4_splat(p.absent as u32 as i32))));
     ok = v128_and(ok, i32x4_eq(ld_u8x4(m.dead.add(s)), zero));
     ok = v128_and(ok, i32x4_ge(v128_load(m.cmt.add(s) as *const v128), zero));
     let mut bits = i32x4_bitmask(ok) as i32;
+    dbgc!(m, 300, ok0.count_ones()); dbgc!(m, 301, (ok0 & !bits).count_ones());
     if bits == 0 {
         return 0;
     }
@@ -3939,6 +3989,12 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
         }
         if held_targets_valid {dbgc!(m,39);}
     }
+    // (The structure holds' looks: those failing them are move_struct's.)
+    let lb = i32x4_bitmask(st_look) as i32 & bits;
+    if lb != 0 {for l in 0..4usize {if lb & (1 << l) != 0 && !struct_hold(m, p, s + l) {bits &= !(1 << l);}}}
+    if bits == 0 {
+        return 0;
+    }
     if !held_targets_valid {for l in 0..4usize {
         if bits & (1 << l) == 0 {
             continue;
@@ -3950,6 +4006,7 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
         let q = rd(m.cmt, s + l) as usize;
         if rd(m.dead, q) != 0 || rd(m.id, q) != rd(m.ctid, s + l) {
             bits &= !(1 << l);
+            dbgc!(m, 302);
             continue;
         }
         // Holds only validate identity; they do not need target positions,
@@ -4028,25 +4085,46 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     let mut ny = i32x4_add(y, q8x4(vy));
     let cross = v128_or(i32x4_ne(tile4(m, nx), gx), i32x4_ne(tile4(m, ny), gy));
     let fly = i32x4_eq(ld_u8x4(m.slayer.add(s)), i32x4_splat(1));
-    // (A ground step into another tile: move_combat's wall slide.)
-    let mut slide = v128_andnot(v128_and(go, cross), fly);
-    if !m.occ.is_null() && m.dk==1 && v128_any_true(slide) {
-        let sb=i32x4_bitmask(slide);
-        let gxv:[i32;4]=core::mem::transmute(gx);let gyv:[i32;4]=core::mem::transmute(gy);
-        let ngx:[i32;4]=core::mem::transmute(tile4(m,nx));let ngy:[i32;4]=core::mem::transmute(tile4(m,ny));
-        let mut sx=[0i32;4];let mut sy=[0i32;4];
-        for l in 0..m.span_n {if sb&(1<<l)!=0 {
-            let sl=flow_slide(m.wall,m.w,m.h,*gxv.get_unchecked(l),*gyv.get_unchecked(l),*ngx.get_unchecked(l) as f64,*ngy.get_unchecked(l) as f64);
-            *sx.get_unchecked_mut(l)=if sl&1!=0 {-1}else{0};*sy.get_unchecked_mut(l)=if sl&2!=0 {-1}else{0};
-            dbgc!(m,36);
-        }}
-        vx=v128_andnot(vx,core::mem::transmute(sx));vy=v128_andnot(vy,core::mem::transmute(sy));
-        nx=i32x4_add(x,q8x4(vx));ny=i32x4_add(y,q8x4(vy));slide=zero;
+    // (A ground step into another tile: move_combat's wall slide, here. Several base ticks: a lane whose long step's way
+    // has a wall takes one base tick's step (seg_open, as move_combat); then the slide, four at once.)
+    let slide = v128_andnot(v128_and(go, cross), fly);
+    if v128_any_true(slide) {
+        if m.dk > 1 {
+            let sb = i32x4_bitmask(slide) as i32;
+            let xa: [i32; 4] = core::mem::transmute(x); let ya: [i32; 4] = core::mem::transmute(y);
+            let nxa: [i32; 4] = core::mem::transmute(nx); let nya: [i32; 4] = core::mem::transmute(ny);
+            let mut blk = [0i32; 4];
+            for l in 0..m.span_n {
+                if sb & (1 << l) != 0 {
+                    let (x0, y0) = (*xa.get_unchecked(l) as f64 * 0.125, *ya.get_unchecked(l) as f64 * 0.125);
+                    let (x1, y1) = (*nxa.get_unchecked(l) as f64 * 0.125, *nya.get_unchecked(l) as f64 * 0.125);
+                    if !seg_open(m.wall, m.w, m.h, x0, y0, x1, y1, m.itile, m.tile) { *blk.get_unchecked_mut(l) = -1; }
+                }
+            }
+            let blk: v128 = core::mem::transmute(blk);
+            if v128_any_true(blk) {
+                let kb = f32x4_div(spd, d);
+                vx = v128_bitselect(v128_and(f32x4_mul(dx, kb), go), vx, blk);
+                vy = v128_bitselect(v128_and(f32x4_mul(dy, kb), go), vy, blk);
+                nx = i32x4_add(x, q8x4(vx)); ny = i32x4_add(y, q8x4(vy));
+            }
+        }
+        let (zx, zy) = slide4(m, gx, gy, tile4(m, nx), tile4(m, ny), slide);
+        vx = v128_andnot(vx, zx); vy = v128_andnot(vy, zy);
+        nx = i32x4_add(x, q8x4(vx)); ny = i32x4_add(y, q8x4(vy));
+        dbgc!(m, 36, i32x4_bitmask(slide).count_ones());
     }
-    let take = v128_andnot(v128_or(stand, go), slide);
+    let take = v128_or(stand, go);
     let tb = i32x4_bitmask(take) as i32;
+    dbgc!(m, 303, (bits & !tb).count_ones());
     if tb == 0 {
         return 0;
+    }
+    // (The slot pass: the shots due of the lanes taken, at their target units, as move_combat takes them first.)
+    if !m.hita.is_null() && m.occ.is_null() {
+        let firing=v128_andnot(v128_and(take,v128_andnot(i32x4_ne(v128_and(cm,i32x4_splat(4)),zero),f32x4_gt(v128_load(m.at.add(s) as *const v128),fz))),is_st);
+        let fb=i32x4_bitmask(firing);
+        if fb!=0 {for l in 0..m.span_n {if fb&(1<<l)!=0 {let u=s+l;attack_unit(m,p,u,rd(m.cmt,u) as usize);dbgc!(m,41);}}}
     }
     let moved = v128_and(go, cross);
     *mvd |= (i32x4_bitmask(v128_or(i32x4_ne(nx, x), i32x4_ne(ny, y))) as i32) & tb;
@@ -4065,6 +4143,66 @@ unsafe fn combat4(m: &Mv, p: &MoveP, s: usize, done: i32, mvd: &mut i32) -> i32 
     mv_store8(m,m.d0.add(s), zero, take);
     mv_store8(m,m.out.add(s), v128_bitselect(i32x4_splat(3), i1, moved), take);
     tb
+}
+
+/// flow_slide for four lanes (in `mask`): from tiles (gx, gy) to (ngx, ngy), the step's components a wall stops: x
+/// (cases 1 and 3) and y (2 and 3), all ones where so. Open where the new tile is (or the same tile); else sliding
+/// along x when the tile beside on x is open, along y when the one on y is, neither when both are walled.
+#[inline(always)]
+unsafe fn slide4(m: &Mv, gx: v128, gy: v128, ngx: v128, ngy: v128, mask: v128) -> (v128, v128) {
+    let zero = i32x4_splat(0);
+    let (w, h) = (i32x4_splat(m.w), i32x4_splat(m.h));
+    let inr = |v: v128, lim: v128| v128_and(i32x4_ge(v, zero), i32x4_lt(v, lim));
+    let (ox, oy, gxi, gyi) = (inr(ngx, w), inr(ngy, h), inr(gx, w), inr(gy, h));
+    let wl = m.wall;
+    // (Open (all ones) where the tile is on the map and has no wall; lanes out of `ok` read tile 0, unused.)
+    let open = |tx: v128, ty: v128, ok: v128| -> v128 {
+        let ia: [i32; 4] = core::mem::transmute(v128_and(i32x4_add(i32x4_mul(ty, w), tx), ok));
+        let v = i32x4(*wl.add(ia[0] as usize) as i32, *wl.add(ia[1] as usize) as i32, *wl.add(ia[2] as usize) as i32, *wl.add(ia[3] as usize) as i32);
+        v128_and(ok, i32x4_eq(v, zero))
+    };
+    let same = v128_and(i32x4_eq(ngx, gx), i32x4_eq(ngy, gy));
+    let od = open(ngx, ngy, v128_and(v128_and(ox, oy), mask));
+    let oxw = open(ngx, gy, v128_and(v128_and(ox, gyi), mask));
+    let oyw = open(gx, ngy, v128_and(v128_and(oy, gxi), mask));
+    let blocked = v128_andnot(mask, v128_or(same, od));
+    (v128_andnot(blocked, oxw), v128_and(blocked, v128_or(oxw, v128_not(oyw))))
+}
+
+/// move_struct's hold for slot s (cmMode hold, bit 16: its target the structure at tile cmT), when it is so: the
+/// structure there, hostile, in sight; in reach (by area for a reach of k <= 2 area steps, else the brain's hold);
+/// its shot when due (as move_struct: listed with target -(tile + 2)). False (nothing written): move_struct's case.
+#[inline(always)]
+unsafe fn struct_hold(m: &Mv, p: &MoveP, s: usize) -> bool {
+    let (w, h, tile) = (m.w, m.h, m.tile);
+    let t = rd(m.cmt, s);
+    let owner = rd(m.own, s);
+    let valid = t >= 0 && (t as i64) < (w as i64) * (h as i64) && !m.ag.is_null() && !m.sc.is_null() && {
+        let code = rd(m.sc, t as usize) as i32;
+        code != -1 && code != owner && covered(m, owner, rd(m.ag, t as usize))
+    };
+    if !valid {
+        return false;
+    }
+    let cm = rd(m.cmode, s);
+    let k = rd(m.rk, s) as i32;
+    if k <= 2 {
+        let tx0 = irem_f(t, w);
+        let tx = tx0 as f64 * tile + tile / 2.0;
+        let ty = idiv(t - tx0, w) as f64 * tile + tile / 2.0;
+        if in_area_range(m, rd(m.x, s), rd(m.y, s), tx, ty, k) == 0 {
+            return false;
+        }
+    }
+    if (k <= 2 || (cm & 4) != 0) && !(rd(m.at, s) > 0.0) && !m.hita.is_null() {
+        fire(m, s);
+        hit_sty_count(m, p, s);
+        let c = rd(m.hitc, p.chunk);
+        wr(m.hita, p.s0 + c as usize, s as i32);
+        wr(m.hitt, p.s0 + c as usize, -(t + 2));
+        wr(m.hitc, p.chunk, c + 1);
+    }
+    true
 }
 
 // Spatial cells commonly contain two consecutive held units. Keep their

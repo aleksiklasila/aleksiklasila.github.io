@@ -494,6 +494,7 @@ function initAudio() {
         masterGain.connect(compressor);
         compressor.connect(audioCtx.destination);
     } catch (e) { audioCtx = null; }
+    if (audioCtx && _audioPrewarmWanted && gameStarted) audioPrewarmMatch();
 }
 
 function applyAudioSettings() {
@@ -658,6 +659,51 @@ function _getSoundRecipe(type, subtype = '') {
     return profile;
 }
 
+const AUDIO_BUFFER_CACHE = 512;
+// A sound's buffer for a play now: its variant's when made; else another variant's of the same sound (made already),
+// its own queued for an idle task (_audioMakeLater); else made now (the sound's first play).
+const _audioMakeQueue = [], _audioMakeQueued = new Set();
+let _audioMakeTimer = 0;
+function _effectBufferNow(type, subtype, variant, recipe) {
+    const key = type + ':' + subtype + ':' + variant;
+    if (_generatedAudioBuffers.has(key)) return _generateEffectBuffer(type, subtype, variant, recipe);
+    for (let d = 1; d < 3; d++) {
+        const v = (variant + d) % 3, other = type + ':' + subtype + ':' + v;
+        if (!_generatedAudioBuffers.has(other)) continue;
+        if (!_audioMakeQueued.has(key)) { _audioMakeQueued.add(key); _audioMakeQueue.push([type, subtype, variant, recipe]); _audioMakeLater(); }
+        return _generateEffectBuffer(type, subtype, v, recipe);
+    }
+    return _generateEffectBuffer(type, subtype, variant, recipe);
+}
+// The match's sounds, one variant each (the others are made from a play: _effectBufferNow), queued for idle tasks at
+// the match's start: a sound's first play made its buffer on that frame (2-3 ms each, a battle's first seconds tens
+// of them). Every recipe without a subtype; the unit sounds by every unit type, impacts by every projectile type.
+// (Without an audio context yet: when one is made, initAudio.)
+let _audioPrewarmWanted = false;
+function audioPrewarmMatch() {
+    if (!audioCtx) { _audioPrewarmWanted = true; return; }
+    _audioPrewarmWanted = false;
+    const want = (type, sub) => {
+        const key = type + ':' + sub + ':0';
+        if (_generatedAudioBuffers.has(key) || _audioMakeQueued.has(key)) return;
+        _audioMakeQueued.add(key); _audioMakeQueue.push([type, sub, 0, _soundRecipeKept(type, sub)]);
+    };
+    for (const type in AUDIO_RECIPES) want(type, '');
+    const units = typeof BASE_UNIT_STATS !== 'undefined' ? Object.keys(BASE_UNIT_STATS) : [];
+    for (const u of units) for (const type of ['unit_death', 'attack_swing', 'attack_cast', 'melee_hit']) want(type, u);
+    if (typeof projTypeName === 'function') { projTypeName(0); for (const p of (_projTypeNames || [])) want('impact', p); }
+    _audioMakeLater();
+}
+function _audioMakeLater() {
+    if (_audioMakeTimer || !_audioMakeQueue.length) return;
+    const run = () => {
+        _audioMakeTimer = 0;
+        const job = _audioMakeQueue.shift();
+        if (job) { _audioMakeQueued.delete(job[0] + ':' + job[1] + ':' + job[2]); if (audioCtx) _generateEffectBuffer(job[0], job[1], job[2], job[3]); }
+        _audioMakeLater();
+    };
+    _audioMakeTimer = typeof requestIdleCallback === 'function' ? requestIdleCallback(run, { timeout: 500 }) : setTimeout(run, 16);
+}
 function _generateEffectBuffer(type, subtype, variant, recipe) {
     let key = type + ':' + subtype + ':' + variant;
     let cached = _generatedAudioBuffers.get(key);
@@ -690,8 +736,9 @@ function _generateEffectBuffer(type, subtype, variant, recipe) {
         filtered += filterAmount * (sample - filtered);
         data[i] = filtered * envelope * .8;
     }
-    // Bounded even for custom/modded unit names; active sources retain their buffer.
-    if (_generatedAudioBuffers.size >= 192) _generatedAudioBuffers.delete(_generatedAudioBuffers.keys().next().value);
+    // Bounded even for custom/modded unit names; active sources retain their buffer. (512: the sound types of a match's
+    // unit types, three variants each; 192 was passed in a battle, and the evicted ones were made again on the frame.)
+    if (_generatedAudioBuffers.size >= AUDIO_BUFFER_CACHE) _generatedAudioBuffers.delete(_generatedAudioBuffers.keys().next().value);
     _generatedAudioBuffers.set(key, buffer);
     return buffer;
 }
@@ -842,7 +889,7 @@ function playSound(type, worldX, worldY, subtype = '') {
     if (_activeAudioVoices.size >= AUDIO_MAX_ACTIVE_VOICES || !_canPlaySoundTypeNow(type)) return;
     // (A suspended context asked to resume by a sound that plays, not by every event: a promise each.)
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-    let buffer = _generateEffectBuffer(type, subtype, (_audioVariation++) % 3, recipe);
+    let buffer = _effectBufferNow(type, subtype, (_audioVariation++) % 3, recipe);
     _createGeneratedVoice(buffer, recipe[5], worldX, worldY, recipe[6]);
 }
 

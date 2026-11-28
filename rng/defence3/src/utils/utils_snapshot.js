@@ -2685,6 +2685,7 @@ function _snapSameValue(a, b, depth) {
 // starts without them, so at a resync every peer drops them on the same tick.
 function snapFlushHistoryCaches() {
     if(typeof trafficReset==='function')trafficReset();
+    if (typeof occupancyStuckReset === 'function') occupancyStuckReset();
     // (The effective levels' area counts: made anew from the state of this tick on every peer.)
     if (typeof effAreaHistReset === 'function') effAreaHistReset();
     _bumpPathTopologyVersion();

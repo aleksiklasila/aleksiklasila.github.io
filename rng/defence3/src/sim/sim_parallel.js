@@ -106,7 +106,10 @@ const SIM_LANE_ADJ = 8;
 // collect steps), while T5 / T05 / BUILD behind it never waited.)
 // (GROW right after the index: it carries the presentation's marks and snapshot between ticks too (sim_presentation.js
 // simPresentTickEnd), wanted by the next tick's start like the index, behind it.)
-const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_LONG, SIM_LANE_T5, SIM_LANE_ADJ, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_BUILD];
+// (T5, the visibility chain (~50 ms of helper CPU a run at 1M), ahead of T10, the acquisition (~10x that): its commit
+// comes first in the next step (updateAllPlayerVisibility, before the movement's acquisition commit): earliest
+// deadline first. A/B 2026-11-27 (8-team 1M): its commit 1.9 -> 1.1 ms a tick, p95 steps lower.)
+const SIM_PAR_BG_ORDER = [SIM_LANE_TICK, SIM_LANE_HASH, SIM_LANE_IX, SIM_LANE_GROW, SIM_LANE_FLOW, SIM_LANE_T5, SIM_LANE_T10, SIM_LANE_T1, SIM_LANE_LONG, SIM_LANE_ADJ, SIM_LANE_TRAFFIC, SIM_LANE_FREE, SIM_LANE_RZ, SIM_LANE_T05, SIM_LANE_BUILD];
 
 // A typed array in shared memory when helpers may use it: in the wasm heap
 // once it is up (freed when collected, as simHeapArrayAuto's), so the Rust
@@ -403,14 +406,6 @@ function _simInAreaRange(AG, OFF, NB, W, H, tile, x, y, tx, ty, k) {
 // structures in those blocks) a hostile structure on a tile it sees there
 // within its range by areas. Conservative: false only when the look finds
 // nothing.
-// Whether the acquisition tier's committed result (stamp: the commit tick,
-// unit.js _acqCommitTick) has a target for unit s, alive and the same unit,
-// looked for with its current range (as unit.js _combatScanHit).
-function _simAcqHit(CBTK, CBT, CTI, CRS, RNG, ID, DEAD, s, stamp) {
-    if (CBTK[s] !== stamp || CRS[s] !== RNG[s]) return false;
-    const q = CBT[s];
-    return q >= 0 && !DEAD[q] && (ID[q] | 0) === CTI[s];
-}
 
 // Flow movement between steers (mv.rs STEER_TICKS), the common case of the
 // movement kernel on its own (run just before it, the same parameters): a
@@ -1092,7 +1087,9 @@ const _SIM_MOVE_WNAMES2 = ['?-', '?unit.sepMov', '?sep.nextX', '?sep.nextY', '?s
     // the attack carry and shots, mv.rs fire.)
     'unit.wkIx', '?unit.atkL', '?unit.atkN',
     // (Words 295, 296: its route's navigation profile and an attack-mover's aggro reach, mv.rs resume_order.)
-    '?unit.nvProf', '?unit.mvReachA'];
+    '?unit.nvProf', '?unit.mvReachA',
+    // (Word 297: the slabs' free counts, the empty ones passed over by the slot passes, P[12] slabs: mv.rs move_job.)
+    '?sl.sfree'];
 const _SIM_MOVE_NAV = 11, _SIM_MOVE_WNAV = 160, _SIM_MOVE_W2 = 268;
 const _SIM_MOVE_NAV_PART_LENGTH = Array.from({ length: _SIM_MOVE_NAV }, (_, p) => 'nav.' + p + '.partL');
 // (Off: no unit controller, no events: a unit the kernel does not move stands. Only for comparisons with old kernels in tests.)
@@ -1654,7 +1651,7 @@ let _simParSpinUs = -1;
 // lane (-1: none). P: [0] due units, [1] per job, [2] blocks per row, [3]
 // ints per block.
 // Units' effective stats (things_utils.js recalculateUnitEffectiveLevel):
-// for the strided share (entry j: units[P[3] + j * P[2]]), from the columns,
+// for its share (entry j: units[P[3] + j * P[2]]; a contiguous run, P[2] 1), from the columns,
 // as _effStatsFullUnit does it: base stacks and level, the same-owner
 // same-type count over its window of the spatial chunk counts, effective
 // stacks and level. eff.flag[j]: 0 done, 1 done and its effective level
@@ -1680,7 +1677,7 @@ const _simEffUnitsW = _simWK(['ix.slots', 'unit.dead', 'unit.esOk', 'unit.esRad'
     // (72: the spatial type of each upkeep type, for units whose kernel fields are not set.)
     '?eff.upTy']);
 // The effective levels' counts: the units of each lane (owner, type) in each area, a snapshot (things_utils.js _effAreaHistEnsure).
-const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist']);
+const _simEffAreaHistW = _simWK(['unit.live', 'unit.dead', 'unit.spOwner', 'unit.spType', 'unit.spArea', 'eff.areaHist', '?eff.histList']);
 SIM_KERNELS[SIM_KERNEL_EFF_AREA_HIST] = function (R, P, chunk) { _simRust(_simEffAreaHistW, P, chunk, 'k_eff_area_hist', 'EFF_AREA_HIST'); };
 SIM_KERNELS[SIM_KERNEL_EFF_UNITS] = function (R, P, chunk) { _simRust(_simEffUnitsW, P, chunk, 'k_eff_units', 'EFF_UNITS'); };
 
@@ -1743,12 +1740,12 @@ SIM_KERNELS[SIM_KERNEL_LASER_HITS] = function (R, P, chunk) { _simRust(_simLaser
 // [5]/[6] grid, [7] players, [8] areas, [9] CMD_ATTACKING.
 const SIM_KERNEL_COMBAT_BRAIN = 62, SIM_KERNEL_COMBAT_COMMIT = 63;
 const _simCombatBrainW = _simWK(['acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.cmd', 'acq.id', 'acq.out', 'acq.cm', 'acq.ct', 'acq.ctid', 'acq.rk', 'acq.agrid', 'acq.cover',
-    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown', 'acq.bf', '?acq.od']);
+    '?arq.hdr', '?-', 'acq.bm', 'acq.bt', 'acq.btid', '?acq.sout', '?acq.sown', 'acq.bf', '?acq.od', '?acq.brc', '?acq.brf', '?acq.kept']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_BRAIN] = function (R, P, chunk) { _simRust(_simCombatBrainW, P, chunk, 'k_combat_brain', 'COMBAT_BRAIN'); };
 // The brain's instructions into the units' columns at the commit tick (the
 // same unit still in the slot, alive): O(1) a slot.
 // P: [0] slots, [1] per job.
-const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'acq.out', 'acq.tid', 'acq.bf']);
+const _simCombatCommitW = _simWK(['acq.bm', 'acq.bt', 'acq.btid', 'acq.id', 'unit.id', 'unit.dead', 'unit.cmMode', 'unit.cmT', 'unit.cmTId', 'acq.out', 'acq.tid', 'acq.bf', 'acq.x', 'acq.y', 'acq.own', 'acq.flags', 'acq.rng', 'acq.ctid', 'acq.rk', '?acq.saRec', '?acq.saOff', '?acq.saE', '?acq.agrid', '?arq.hdr', '?um.ids', '?um.slots']);
 SIM_KERNELS[SIM_KERNEL_COMBAT_COMMIT] = function (R, P, chunk) { _simRust(_simCombatCommitW, P, chunk, 'k_combat_commit', 'COMBAT_COMMIT'); };
 // Towers in the acquisition tier (tower.rs k_tower_acq_snap: the rows at
 // the post, a job over the rows; k_tower_acq: a stage of the tier's chain
@@ -1999,7 +1996,7 @@ SIM_KERNELS[SIM_KERNEL_WAI_DECIDE] = function (R, P, chunk) { _simRust(_simWaiDe
 // kernel): its arrays and params in one heap block (wasm K's layout:
 // addresses from word 512, params as doubles from byte 4096) that every
 // helper's kernel reads, so it needs no registered names; jobs chunks.
-const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12, SIM_BLOCK_BEAM_SCAN = 13;
+const SIM_KERNEL_BLOCK = 134, SIM_BLOCK_WSW_SET = 1, SIM_BLOCK_REG_IDENT = 2, SIM_BLOCK_REG_OWNER = 3, SIM_BLOCK_MVT_SCAN = 4, SIM_BLOCK_MVT_APPLY = 5, SIM_BLOCK_ROWS_FILL = 6, SIM_BLOCK_IXD_RELAYOUT = 8, SIM_BLOCK_ORDER_WORKERS = 9, SIM_BLOCK_UNIT_CMD = 10, SIM_BLOCK_RETIRE_REL = 11, SIM_BLOCK_META_STRUCTS = 12, SIM_BLOCK_BEAM_SCAN = 13, SIM_BLOCK_TOWER_DECIDE = 14;
 const _simBlockW = _simWK(['blk.args']);
 SIM_KERNELS[SIM_KERNEL_BLOCK] = function (R, P, chunk) { _simRust(_simBlockW, P, chunk, 'k_block', 'BLOCK'); };
 let _simBlk = null, _simBlkF = null;
@@ -2200,7 +2197,7 @@ const _simAcqSnapW = _simWK(['unit.x0', 'unit.y0', 'unit.owner', 'unit.dead', 'u
     // (The towers' look at a unit, 35-47: k.rs k_acq_snap's copies.)
     '?unit.upT', '?-', '?unit.stIx', '?-', '?-', '?-', '?-', '?-', '?-', '?unit.wTeam', '?acq.upt', '?acq.stix', '?acq.wt', '?sl.sfree',
     // (The last run's commit in the same pass, 49-54: k.rs acq_commit_range.)
-    'unit.cbS', 'unit.cbTick', 'unit.cbRangeS', 'acq.bm', 'acq.bt', 'acq.btid', 'acq.bf']);
+    '?-', '?-', '?-', 'acq.bm', 'acq.bt', 'acq.btid', 'acq.bf', '?acq.saRec', '?acq.saOff', '?acq.saE', '?acq.agrid', '?arq.hdr', '?um.ids', '?um.slots']);
 SIM_KERNELS[SIM_KERNEL_ACQ_SNAP] = function (R, P, chunk) { _simRust(_simAcqSnapW, P, chunk, 'k_acq_snap', 'ACQ_SNAP'); };
 // The scan (a tier job on the helpers, over the snapshot alone): for each
 // idle, attack-moving or attacking unit (the last for doAttacking's look of
@@ -2243,8 +2240,11 @@ const _simAcqSampleW=_simWK(['acq.scls','acq.sown','?acq.hss','acq.sout','acq.x'
     '?acq.saSh',
     // (51: the scan's area distance to its answer a slot, u8: the combat brain's in-range shortcut.)
     '?acq.od',
-    // (52: the answers' level flags, 256 a group of teams.)
-    '?acq.saLvH']);
+    // (52: the answers' live bits a level, 512 words a group of teams.)
+    // (56: a team's scratch for the structure classes' in-place update, acq_sample.rs seed_update / sinc_stride.)
+    '?acq.saLvH','?acq.ct','?acq.kept','?acq.stl','?acq.sinc',
+    // (57-58: a kept unit's range question from the brain's cache, acq_sample.rs kept_range.)
+    '?acq.rk','?acq.brc']);
 SIM_KERNELS[SIM_KERNEL_ACQ_AREA_BUILD]=function(R,P,chunk){_simRust(_simAcqSampleW,P,chunk,'k_acq_area_build','ACQ_AREA_BUILD');};
 // The same build for the area answers in three stages, chunks of entries
 // (acq_sample.rs k_acq_area_count / _prefix / _scatter: the same table),
@@ -2343,10 +2343,6 @@ function _simAcqStructure(SCLS, SOWN, HSS, AG, COVF, cbase, owner, x, y, r, tile
     }
     return best;
 }
-// The commit (at a fixed tick, every peer): each slot still holding the unit
-// looked for takes the result: unit.cbT (slot, -1 none), cbTId (its id),
-// cbRangeS (the range looked with), cbTick = P[2] (the commit tick, see
-// _acqTierStep). P: [0] slots, [1] per job, [2] tick.
 // The tick's hits on units (unit.js unitHitsResolve), in no order: the
 // queued attacks' entries and the movement kernel's attack lists into the
 // targets' sums (wasm/src/k.rs k_hits).
@@ -2368,8 +2364,6 @@ const _simHitsApplyW = _simWK(['hit.tlist', 'unit.hAcc', 'unit.hTouch', 'hit.rst
     'unit.stSa', 'hit.rdu']);
 SIM_KERNELS[SIM_KERNEL_HITS_APPLY] = function (R, P, chunk) { _simRust(_simHitsApplyW, P, chunk, 'k_hits_apply', 'HITS_APPLY'); };
 
-const _simAcqCommitW = _simWK(['acq.out', 'acq.tid', 'acq.id', 'acq.rng', 'unit.id', 'acq.sout', 'unit.cbS', '?-', 'unit.cbTick', '?-', 'unit.cbRangeS']);
-SIM_KERNELS[SIM_KERNEL_ACQ_COMMIT] = function (R, P, chunk) { _simRust(_simAcqCommitW, P, chunk, 'k_acq_commit', 'ACQ_COMMIT'); };
 
 // The unit index's keys (chunk.js _spatialIndexRebuildParallel): per units
 // index, its chunk (every unit not dead, by the tile it stands on; others

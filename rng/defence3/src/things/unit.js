@@ -3529,6 +3529,8 @@ function simMoveRun() {
     P[46] = stepK ? 1 : 0; P[47] = areaSearchEnabled()?1:0; P[48] = SIM_COMBAT_BRAIN ? 1 : 0;
     // (The step's base ticks: mv.rs Mv.dk.)
     P[58] = simDk;
+    // (The slabs' free counts: the slot passes skip empty slabs, mv.rs move_job.)
+    P[12] = typeof simUnitStateSlabsBind === 'function' ? simUnitStateSlabsBind() : 0;
     // The separation's pushes (its pair kernel's, from where units stood as
     // the tick began: the unit index's prebuild after the last tick, else
     // separationStart) applied by the kernel's epilogue, where each unit
@@ -3705,28 +3707,6 @@ function _spatialUnitTypeNames() {
 // tier below the tick (5 a second each, staggered); the structure look
 // (every 4 ticks) falls on the same ticks.
 const SIM_ACQUIRE_TICKS = 4;
-// The nearest visible enemy unit within `range` of an idle or attack-moving
-// unit: this tick's combat scan (the world at the start of the update pass),
-// else (another range, a unit the scan did not cover, or a target killed
-// since) the query.
-// The structure the acquisition tier found for u's look (see
-// SIM_KERNEL_ACQ_SCAN), still there, hostile, standing, built (cell items)
-// and in sight; else null (until the next commit).
-function _acqStructureHit(u, range) {
-    const c = u._us;
-    if (!c) return null;
-    const s = u._si;
-    if (c.cbTick[s] !== _acqCommitTick || c.cbRangeS[s] !== range) return null;
-    const t = c.cbS[s];
-    if (!(t >= 0)) return null;
-    const gx = t % GRID_W, gy = (t - gx) / GRID_W, e = getTileEntityRef(gx, gy);
-    if (!e || !(e.energy > 0)) return null;
-    const cell = grid[gy] && grid[gy][gx], isItem = !!cell && cellItemGet(cell) === e;
-    const owner = isItem ? cellOwner[(cell) - 1] : e.owner;
-    if (owner === u.owner || (isItem && e.underConstruction)) return null;
-    if (!isGameplayTargetVisibleToPlayer(u.owner, gx, gy)) return null;
-    return e;
-}
 // Runs the combat scan for every idle or attack-moving unit before the
 // update pass (in parallel; see SIM_KERNEL_COMBAT_SCAN).
 let _combatScanTick = -1, _combatScanOwnerMask = null;
@@ -3773,11 +3753,8 @@ function combatScanRun() {
 // (lane SIM_LANE_T10) every SIM_ACQUIRE_TICKS ticks. At phase 2 the tick
 // takes a snapshot of what it reads (SIM_KERNEL_ACQ_SNAP and copies of the
 // unit index, the hostile tables and the cover) and posts the scan
-// (SIM_KERNEL_ACQ_SCAN); at phase 0 the result is committed into the units'
-// columns (SIM_KERNEL_ACQ_COMMIT), stamped with that tick (_acqCommitTick).
-// Until the next commit a unit takes it at its acquisition tick
-// (_combatScanHit, the movement kernel's _simAcqHit): a target where it was
-// up to 2-5 ticks before, alive and the same unit still. Every peer posts
+// (SIM_KERNEL_ACQ_SCAN, the combat brain); at phase 0 the brain's instructions are committed into the units'
+// columns (the snapshot pass's acq_commit_range, or SIM_KERNEL_COMBAT_COMMIT), the tick noted (_acqCommitTick). Every peer posts
 // and commits at the same ticks; a resync drops a pending run on all.
 const ACQ_LANE = typeof SIM_LANE_T10 === 'number' ? SIM_LANE_T10 : 2;
 // Combat decisions on the helpers (BRAIN_OFF_MAIN_THREAD_PLAN.md, stage 1):
@@ -3791,6 +3768,8 @@ let SIM_ACQ_AREA_TARGETS=!(typeof location!=='undefined'&&location&&/[?&]acq=exa
 let _acqSampleNearVer=-1,_acqSampleNearOf=null;
 let _acqCommitTick = -1, _acqStage = 0, _acqStepTick = -1, _acqN = 0;
 const _acq = { cap: 0, chunks: 0, entries: 0, A: 0, cover: null, hs: null };
+// (The combat brain's range-question cache: the array and the area layout its entries are of.)
+const _acqBrc = { arr: null, arf: null, ver: -1, w: 0, h: 0, clears: 0 };
 function _acqTierStep() {
     if (_acqStepTick === gameTime) return;
     _acqStepTick = gameTime;
@@ -3903,6 +3882,7 @@ function _acqApplyMoves() {
 }
 function acqTierReset() {
     _acqMoves = [];
+    _acqLazyPosted = null;
     simParallelBackgroundWait(ACQ_LANE);
     _acqStage = 0; _acqCommitTick = -1; _acqStepTick = -1;
     _acqKept.sver = -1; _acqKept.aver = -1;
@@ -3924,7 +3904,10 @@ const _acqOwn = {};
 // (The answers' search: a group of twelve teams' state bytes (acq_sample.rs lv_stride, GS), its level stages.)
 function _acqLvStride(A) { return 24 * A; }
 function _acqGroups(np) { return Math.max(1, Math.ceil(np / 12)); }
-const ACQ_ANS_LEVELS = 8, _acqCsrP = new Float64Array(4);
+// (Level stages of the answers' search: 10, the 8-team battle's whole depth (its units reach 10 area steps); the
+// levels past them in one job a group (was 8: levels 9-10 in that one job, ~11 ms a run on one thread, a long chunk
+// keeping a helper from the tick's jobs). 23 stages with the scan, the brain and the towers (at most 24).)
+const ACQ_ANS_LEVELS = 10, _acqCsrP = new Float64Array(4);
 const _acqKept = { sver: -1, s0: null, s1: null, d0: null, d1: null, aver: -1, a0: null, a1: null, e0: null, e1: null, rec: null, sh: null, rver: -1 };
 function _acqOwnArray(name, Type, n) {
     let a = _acqOwn[name];
@@ -3958,10 +3941,14 @@ function acqReserve() {
     for (const nm of ['saSeen', 'saNearN']) touch(_acqArray('acq.' + nm, Int32Array, A));
     touch(_acqArray('acq.saNear', Int32Array, areaTargets ? 1 : A * 64));
     if (areaTargets) {
-        touch(_acqArray('acq.saRec', Int32Array, A * np * 8)); touch(_acqArray('acq.saLv', Uint8Array, _acqGroups(playersK) * _acqLvStride(A))); touch(_acqArray('acq.saLvH', Int32Array, _acqGroups(playersK) * 256)); touch(_acqArray('acq.saSh', Int32Array, 16 * np));
-        touch(_acqArray('acq.saPre', Int32Array, 128));
+        touch(_acqArray('acq.saRec', Int32Array, A * np * 8)); touch(_acqArray('acq.saLv', Uint8Array, _acqGroups(playersK) * _acqLvStride(A))); touch(_acqArray('acq.saLvH', Int32Array, _acqGroups(playersK) * 512)); touch(_acqArray('acq.saSh', Int32Array, 16 * np));
+        touch(_acqArray('acq.saPre', Int32Array, 128)); touch(_acqArray('acq.sinc', Int32Array, np * _acqSincStride(A)));
     }
 }
+// A team's scratch words for the structure classes' in-place update (acq_sample.rs sinc_stride: per area and class a
+// new seed tile; per class a parity, two counts and two seed lists (last run's, this one's); four pending lists, the
+// added and retiled seeds and two queues of an eighth of the areas each; a byte an area).
+function _acqSincStride(A) { const room = Math.floor(A / 8) + 16; return 4 * A + 12 + 16 * room + Math.floor((A + 3) / 4) + Math.floor((A + 31) / 32) + 1; }
 function _acqPost() {
     const S = _simUnitState;
     simParallelBackgroundWait(ACQ_LANE);
@@ -3982,6 +3969,8 @@ function _acqPost() {
         // (The combat brain's: its inputs and its instructions.)
         _acqArray('acq.cm', Uint8Array, cap); _acqArray('acq.ct', Int32Array, cap); _acqArray('acq.ctid', Int32Array, cap); _acqArray('acq.rk', Uint8Array, cap);
         _acqArray('acq.bm', Uint8Array, cap); _acqArray('acq.bt', Int32Array, cap); _acqArray('acq.btid', Int32Array, cap); _acqArray('acq.bf', Uint8Array, cap); _acqArray('acq.od', Uint8Array, cap);
+        // (The scan's word on each unit's kept target for the brain: 0 not looked at, 1 none kept, 2 kept, acq_sample.rs.)
+        _acqArray('acq.kept', Uint8Array, cap);
         _acq.cap = cap;
     }
     simUnitTargetsResolve();
@@ -3994,6 +3983,8 @@ function _acqPost() {
     // (The last run's commit in the same pass, slot by slot before the snapshot's writes.)
     const D = _acqCommitDue; _acqCommitDue = null;
     P[9] = D ? D.n : 0; P[10] = D && D.brain ? 1 : 0; P[11] = D ? D.tick : 0;
+    // (The committed run's lazy fallbacks: its seed, teams, areas, map, tile, area step; P[23] 1.)
+    _acqLazyParams(P, D ? D.lazy : null);
     simParallelRun(SIM_KERNEL_ACQ_SNAP, Math.ceil(n / 8192));
     // The index, the owners per chunk and the hostile tables as they are:
     // the job reads them in place, done before the next tick's index
@@ -4053,6 +4044,12 @@ function _acqPost() {
     B[15] = GRID_W; B[16] = GRID_H; B[18] = CMD_ATTACKING; B[20] = A; B[21] = 1; B[22] = 1; B[23] = ne;
     B[24]=sampleBudget;B[25]=gameTime;
     B[28]=areaTargets?1:0;B[29]=AREA_UNIT_TILE_EQUIVALENT;
+    // (With the brain: a unit keeping its target gets no unit answer at the scan (acq.out -3): its fallback is made at the
+    // commit if that target fell (k.rs brain_pick_lazy), from this run's records and buckets, its seed B[25].)
+    const lazyOn = SIM_COMBAT_BRAIN && areaTargets;
+    if (lazyOn) _acqArray('acq.kept', Uint8Array, simReserveCap(n));
+    B[56] = lazyOn ? 1 : 0;
+    _acqLazyNext = lazyOn ? [B[25], B[7], A, GRID_W, GRID_H, TILE, B[29], 1] : null;
     // Then the combat brain on the scan's results (its own copy of the area
     // graph: the layout may change before the commit).
     const C3 = simParallelStageParams(ACQ_LANE, scanSlot + 1);
@@ -4071,6 +4068,12 @@ function _acqPost() {
             }
         }
         C3[0] = n; C3[1] = 2048; C3[2] = CMD_IDLE; C3[3] = CMD_ATTACK_MOVING; C3[4] = TILE; C3[5] = GRID_W; C3[6] = GRID_H; C3[7] = Math.min(spatialUnitsComplexPlayerCount, np); C3[8] = A; C3[9] = CMD_ATTACKING;
+        // (The range questions' cache a slot (k.rs k_combat_brain, acq.brc): its entries are of this area layout, or
+        // cleared; a new array starts cleared.)
+        {
+            const B = _acqArray('acq.brc', Float64Array, simReserveCap(n)), F = _acqArray('acq.brf', Float64Array, simReserveCap(n)), Q = _acqBrc;
+            if (Q.arr !== B || Q.arf !== F || Q.ver !== _simAreaLayoutVer || Q.w !== GRID_W || Q.h !== GRID_H) { B.fill(0); F.fill(0); Q.arr = B; Q.arf = F; Q.ver = _simAreaLayoutVer; Q.w = GRID_W; Q.h = GRID_H; Q.clears++; }
+        }
     }
     const stages=[[SIM_KERNEL_ACQ_OMT,prepJobs]];
     if(sampled){
@@ -4093,11 +4096,15 @@ function _acqPost() {
         if(areaTargets){
             // (All five answers of a team and area in one 32-byte record, the scan's and the towers'.)
             const rec=_acqArray('acq.saRec',Int32Array,A*np*8),sh=_acqArray('acq.saSh',Int32Array,16*np);
+            // (The structure tiles of the run, listed by the chain's first stage for the seeds: room for every tile.)
+            _acqArray('acq.stl',Int32Array,GRID_W*GRID_H+1);
+            // (The structure classes' in-place update a team, acq_sample.rs seed_update: its scratch zero between runs.)
+            _acqArray('acq.sinc',Int32Array,np*_acqSincStride(A));
             // (The structure classes' answers are kept in the records while their seeds stay the same (acq_sample.rs
             // k_acq_area_seed): only over the same records and area layout; else every class is made again, I[37].)
             const K=_acqKept;I[37]=K.rec===rec&&K.sh===sh&&K.rver===_simAreaLayoutVer?0:1;K.rec=rec;K.sh=sh;K.rver=_simAreaLayoutVer;
             // (The answers' search a group of twelve teams: reached and two frontier masks an area, and the level flags.)
-            _acqArray('acq.saLv',Uint8Array,_acqGroups(playersK)*_acqLvStride(A));_acqArray('acq.saLvH',Int32Array,_acqGroups(playersK)*256);
+            _acqArray('acq.saLv',Uint8Array,_acqGroups(playersK)*_acqLvStride(A));_acqArray('acq.saLvH',Int32Array,_acqGroups(playersK)*512);
         }
         if(answers){
             // The build in entry ranges on the helpers (one serial job held a
@@ -4133,8 +4140,18 @@ function _acqPost() {
     // snapshot now, the stage its params at its place in the chain).
     if(answers&&typeof towerAcqPost==='function'){const st=towerAcqPost(ACQ_LANE,stages.length,A,playersK);if(st)stages.push(st);}
     simParallelBackgroundChain(ACQ_LANE,stages);
+    _acqLazyPosted = _acqLazyNext;
     _acqBrain = SIM_COMBAT_BRAIN;
     _acqStage = 1; _acqN = n;
+}
+// The lazy fallbacks' params of the run posted ([seed, teams, areas, map w, h, tile, area step, 1]) and of the one being
+// set up; into P[16..23] of a commit kernel (null: P[23] 0, none).
+let _acqLazyPosted = null, _acqLazyNext = null;
+function _acqLazyParams(P, L) {
+    if (!L) { P[23] = 0; return; }
+    for (let i = 0; i < 8; i++) P[16 + i] = L[i];
+    // (The unit id index: the answer's unit at its slot now, P[24] its length.)
+    const U = unitIdIndex(); simParallelBind('um.ids', U.ids); simParallelBind('um.slots', U.slots); P[24] = U.n;
 }
 // The answers' commit (units' columns) when the step's snapshot will take it in its own pass: { n, brain, tick }.
 let _acqCommitDue = null;
@@ -4145,7 +4162,7 @@ function _acqCommit(defer) {
     if (_acqMoves.length) _acqApplyMoves();
     const S = _simUnitState;
     if (!S) return;
-    _acqCommitDue = { n: Math.min(_acqN, S.owners.length), brain: _acqBrain, tick: gameTime };
+    _acqCommitDue = { n: Math.min(_acqN, S.owners.length), brain: _acqBrain, tick: gameTime, lazy: _acqLazyPosted };
     if (!defer) _acqCommitFlush();
     // (The towers' answers into their rows: no unit column, nothing the units' commit reads.)
     if (typeof towerAcqCommit === 'function') towerAcqCommit();
@@ -4157,9 +4174,9 @@ function _acqCommitFlush() {
     if (!D) return;
     _acqCommitDue = null;
     const P = _simParams;
-    P[0] = D.n; P[1] = 8192; P[2] = D.tick;
-    simParallelRun(SIM_KERNEL_ACQ_COMMIT, Math.ceil(D.n / 8192));
-    if (D.brain) { P[0] = D.n; P[1] = 8192; simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(D.n / 8192)); }
+    // (No acquisition commit of its own: the brain's instructions are the units' word; the structure answer, range
+    // and tick it wrote (unit.cbS / cbRangeS / cbTick) were read by nothing.)
+    if (D.brain) { P[0] = D.n; P[1] = 8192; _acqLazyParams(P, D.lazy); simParallelRun(SIM_KERNEL_COMBAT_COMMIT, Math.ceil(D.n / 8192)); }
 }
 
 // How far a unit may have moved within a tick since the unit index was

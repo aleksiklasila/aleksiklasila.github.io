@@ -356,6 +356,20 @@ function towerAcqUnitMeta(P, cap) {
     for (let i = 0; i < nt; i++) flags[i] = _towerFlagsOf(BASE_UNIT_STATS[_simUnitTypeNames[i]] || BASE_UNIT_STATS.norm);
     _acqArray('acq.upt', Int16Array, cap); _acqArray('acq.stix', Int32Array, cap); _acqArray('acq.wt', Int8Array, cap);
 }
+// The acquisition's tower arrays at the match's start (main.js simMatchPrewarm): the rows' snapshot at the tower table's
+// capacity (was at its rows: made again as towers were built), the units' metadata by slot, the status records'
+// copies at the pool's capacity; their first post's (~14 ms and 29 bindings in a 1M match's first tick).
+function towerAcqPrewarm(cap) {
+    const TT = _sTables.get(Tower);
+    if (TT) {
+        const rows = Math.max(1, TT.cap | 0);
+        for (const name of ['area', 'own', 'kind', 'reach', 'tile']) _acqArray('twq.' + name, Int32Array, rows);
+        for (const name of ['slot', 'id', 'st']) _acqArray('twr.' + name, Int32Array, rows);
+    }
+    _acqArray('acq.upt', Int16Array, cap); _acqArray('acq.stix', Int32Array, cap); _acqArray('acq.wt', Int8Array, cap);
+    const ST = _simUnitState && _simUnitState.st, sc = Math.max(1, ST && ST.cap ? ST.cap : 1);
+    for (let b = 0; b < 6; b++) _acqArray('acq.sb' + b, Uint16Array, sc);
+}
 // The farthest a tower looks (area steps): the answers' depth.
 function towerAcqMaxReach() { const TT = _sTables.get(Tower); return TT && TT.n ? Math.max(_stationaryStatsPrepare().maxReach | 0, _towerCustom.maxRange | 0) : 0; }
 // The rows' snapshot now and the chain's stage (its params in `slot`), or
@@ -370,8 +384,8 @@ function towerAcqPost(lane, slot, A, players) {
     _towerCustomArrays(TT.cap);
     for (const key of ['code', 'own', 'uc', 'val', 'brain', 'rrow']) simParallelBind('st.' + key, _ST[key]);
     simParallelBind('twq.stt', TT.c__stT);
-    for (const name of ['area', 'own', 'kind', 'reach', 'tile']) _acqArray('twq.' + name, Int32Array, rows);
-    for (const name of ['slot', 'id', 'st']) _acqArray('twr.' + name, Int32Array, rows);
+    for (const name of ['area', 'own', 'kind', 'reach', 'tile']) _acqArray('twq.' + name, Int32Array, Math.max(rows, TT.cap | 0));
+    for (const name of ['slot', 'id', 'st']) _acqArray('twr.' + name, Int32Array, Math.max(rows, TT.cap | 0));
     const P = _simParams;
     P[0] = rows; P[1] = 4096; P[2] = stats.types; P[3] = stats.levels; P[4] = stats.players; P[5] = _ST.n;
     simParallelRun(SIM_KERNEL_TOWER_ACQ_SNAP, Math.ceil(rows / 4096));
@@ -458,11 +472,18 @@ function towersTick() {
     // (Ticks until a new commit is used: the tier commits after the towers at its phase 0, see unit.js _acqTierStep.)
     { const k = (((1 - gameTime) % SIM_ACQUIRE_TICKS) + SIM_ACQUIRE_TICKS) % SIM_ACQUIRE_TICKS; P[13] = k || SIM_ACQUIRE_TICKS; }
     const S = stats.arrays;
-    simRustDirect('k_tower_fire', [input, rows, A.valid, A.base, TT.c__aqT, null, TT.c__aqI, A.qx, A.qy, A.owner, A.type, A.shots, A.shotCd, A.level, A.damage, A.blast, A.radius,
+    // (The decisions a tower (tower.rs k_tower_decide, in parallel), then the shots in tower order (k_tower_fire).)
+    const dcode = _towerAcqArray('dcode', Int32Array, n), dslot = _towerAcqArray('dslot', Int32Array, n), dtile = _towerAcqArray('dtile', Int32Array, n);
+    const dx = _towerAcqArray('dx', Float64Array, n), dy = _towerAcqArray('dy', Float64Array, n), dang = _towerAcqArray('dang', Float32Array, n);
+    const per = Math.max(64, Math.ceil(n / 64)); P[14] = per;
+    const args = [input, rows, A.valid, A.base, TT.c__aqT, null, TT.c__aqI, A.qx, A.qy, A.owner, A.type, A.shots, A.shotCd, A.level, A.damage, A.blast, A.radius,
         C.x, C.y, C.id, _ST.code, _ST.tim, TT.c__cdUntil, TT.c_angle, S.tt, _ST.brain, S.sd, S.sp,
         PJ.live, PJ.free, PJ.hdr, J.x, J.y, J.vx, J.vy, J.sx, J.sy, J.px, J.py, J.aim, J.life, J.range, J.dmg, J.lvl, J.own, J.ty, J.tt, J.shots, J.bd, J.br, J.ft, J.sd, J.sp, J.id, J.ev, J.arg,
         ltgt, ftile, fang, looks, fc,
-        A.pref, TT.c__ptK, TT.c__ptV, U.ids, U.slots, C.dead, C.owner, _ST.own, _ST.val, V.coverFlat || null, _simParReg['vis.areaGrid'], A.off, _arq.hdr, due, _simStructCls, _ST.uc], P);
+        A.pref, TT.c__ptK, TT.c__ptV, U.ids, U.slots, C.dead, C.owner, _ST.own, _ST.val, V.coverFlat || null, _simParReg['vis.areaGrid'], A.off, _arq.hdr, due, _simStructCls, _ST.uc,
+        dcode, dslot, dtile, dx, dy, dang];
+    simRustParallel(SIM_BLOCK_TOWER_DECIDE, args, P, Math.ceil(n / per));
+    simRustDirect('k_tower_fire', args, P);
     T.lastUsed = n;
     // The first shots' looks (presentation only).
     for (let i = 0, m = fc[2]; i < m; i++) {

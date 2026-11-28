@@ -20,6 +20,7 @@
 //   --orders=F       share of units with an attack-move order to one of --order-points (default 0.15 / 32)
 //   --base=file.gz   the base scene (default tests/200k-attack-low-tps.gz)
 //   --spread=center|hash  a patch round the middle (default) or cells all over the map
+//   --unit-energy=E  every unit's energy (default 1e9, filled to its max on import): small = fragile armies
 //   --seed=N
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), zlib = require('node:zlib');
@@ -31,6 +32,8 @@ const WORKERS = Number(arg('workers', 0.2)), SMALL = flag('small'), STRUCTS = Nu
 const RALLY_POINTS = Number(arg('rally-points', 256)), ORDERS = Number(arg('orders', 0.15)), ORDER_POINTS = Number(arg('order-points', 32));
 const BASE = arg('base', path.join(__dirname, '200k-attack-low-tps.gz')), OUT = arg('out', path.join(__dirname, 'mixed-scene.gz'));
 const SEED = Number(arg('seed', 1)), CELL = Number(arg('cell', 8)), GAP = Number(arg('gap', 1));
+// (--unit-energy=E: every unit's energy (default 1e9: the import fills it to the unit's max); a small E makes fragile armies, a mass death in the first seconds.)
+const UNIT_ENERGY = Number(arg('unit-energy', 1e9));
 const TILE = 32;
 const forTeam = (list, t) => list[Math.min(t, list.length - 1)].trim();
 
@@ -154,7 +157,7 @@ function levelOf(profile, r) {
             const lv = levelOf(profile, hash(cx, cy, k, 6));
             let order = null;
             if (ORDERS > 0 && hash(cx, cy, k, 7) < ORDERS) { const p = orderPts[Math.floor(hash(cx, cy, k, 8) * orderPts.length)]; order = ['attackMove', p[0], p[1]]; }
-            units.push([type, team, ux / TILE, uy / TILE, 1e9, lv == null ? 1 + Math.floor(hash(cx, cy, k, 9) * 6) : lv, 1, order, false]);
+            units.push([type, team, ux / TILE, uy / TILE, UNIT_ENERGY, lv == null ? 1 + Math.floor(hash(cx, cy, k, 9) * 6) : lv, 1, order, false]);
             total++; placed++; stats.byTeam[team]++;
             if (lv != null) stats.levels[team + ':' + lv] = (stats.levels[team + ':' + lv] || 0) + 1;
         }

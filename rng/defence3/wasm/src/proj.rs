@@ -253,3 +253,45 @@ pub unsafe extern "C" fn k_proj_hash(a: u32, _chunk: i32) {
     }
     s(hdr, 9, mix(mix(sum, n as u32), g(hdr, 2) as u32) as i32);
 }
+
+/// The shots in flight as the frame's projectile table (sim_frame_world.js simProjFill: SIM_PROJ_SPEC's columns, in
+/// the heap; the frame copies them): per pool slot below P[0] (the high-water mark) its columns where a shot flies
+/// there (the pool's live list, its order), alive 0 elsewhere; its type as the frame's string code (a table by
+/// projectile type, P[1] types). The order against the last one sent (P[2] its length): out[0] the shots, out[1] 1
+/// when it changed (the last order kept then, its length in out[2]).
+/// Arrays: pj.hdr, pj.live, pj.x, pj.y, pj.px, pj.py, pj.vx, pj.vy, pj.sx, pj.sy, pj.aim, pj.id, pj.tt, pj.own,
+/// pj.life, the codes, then the table: x, y, px, py, vx, vy, sx, sy, aim (f32), serial, order (i32), type, owner,
+/// life (i16), alive (u8); the last order, out.
+#[no_mangle]
+pub unsafe extern "C" fn k_proj_fill(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (hdr, live) = (k.p::<i32>(0), k.p::<i32>(1));
+    let (x, y, px, py, vx, vy, sx, sy, aim) = (k.p::<f64>(2), k.p::<f64>(3), k.p::<f32>(4), k.p::<f32>(5), k.p::<f64>(6), k.p::<f64>(7), k.p::<f64>(8), k.p::<f64>(9), k.p::<f32>(10));
+    let (id, tt, own, life, codes) = (k.p::<i32>(11), k.p::<i16>(12), k.p::<i8>(13), k.p::<i32>(14), k.p::<i32>(15));
+    let (ox, oy, opx, opy, ovx, ovy, osx, osy, oaim) = (k.p::<f32>(16), k.p::<f32>(17), k.p::<f32>(18), k.p::<f32>(19), k.p::<f32>(20), k.p::<f32>(21), k.p::<f32>(22), k.p::<f32>(23), k.p::<f32>(24));
+    let (oser, oord, oty, oown, olife, oalive) = (k.p::<i32>(25), k.p::<i32>(26), k.p::<i16>(27), k.p::<i16>(28), k.p::<i16>(29), k.p::<u8>(30));
+    let (last, out) = (k.p::<i32>(31), k.p::<i32>(32));
+    let n = k.i(0).max(0) as usize;
+    let nt = k.i(1).max(0) as usize;
+    core::ptr::write_bytes(oalive, 0, n);
+    let m = g(hdr, 0).max(0) as usize;
+    let mut j = 0usize;
+    for i in 0..m {
+        let sl = g(live, i);
+        if sl < 0 || sl as usize >= n { continue; }
+        let q = sl as usize;
+        s(oord, j, sl); j += 1;
+        s(oalive, q, 1); s(oser, q, g(id, q));
+        s(ox, q, g(x, q) as f32); s(oy, q, g(y, q) as f32); s(opx, q, g(px, q)); s(opy, q, g(py, q));
+        s(ovx, q, g(vx, q) as f32); s(ovy, q, g(vy, q) as f32); s(osx, q, g(sx, q) as f32); s(osy, q, g(sy, q) as f32); s(oaim, q, g(aim, q));
+        let t = g(tt, q);
+        s(oty, q, if t >= 0 && (t as usize) < nt { g(codes, t as usize) as i16 } else { 0 });
+        s(oown, q, g(own, q) as i16);
+        s(olife, q, g(life, q).clamp(-32000, 32000) as i16);
+    }
+    let ln = k.i(2).max(0) as usize;
+    let mut changed = ln != j;
+    if !changed { for i in 0..j { if g(last, i) != g(oord, i) { changed = true; break; } } }
+    if changed { for i in 0..j { s(last, i, g(oord, i)); } }
+    s(out, 0, j as i32); s(out, 1, changed as i32); s(out, 2, j as i32);
+}
