@@ -2843,13 +2843,13 @@ pub unsafe extern "C" fn k_vis_seed(a: u32, chunk: i32) {
     // (Units stand packed in slot order: most marks repeat one this job already made. A small cache of the job's own
     // marks (player's base + area -> the most it marked there) skips those, and a unit at the same place with the same
     // key as the one before it is skipped whole: the seed is a max, so the same result.)
-    let mut ck = [0u32; 1024];
-    let mut cv = [0i32; 1024];
+    let mut ck = [0u32; 256];
+    let mut cv = [0i32; 256];
     let (ckp, cvp) = (ck.as_mut_ptr(), cv.as_mut_ptr());
     let (mut ptp, mut pkey) = (-1i32, -1i32);
     let mark = |p: i32, ar: i32, val: i32| {
         let id = (p * na + ar) as u32;
-        let h = (id.wrapping_mul(0x9E37_79B1) >> 22) as usize;
+        let h = (id.wrapping_mul(0x9E37_79B1) >> 24) as usize;
         if *ckp.add(h) == id + 1 && *cvp.add(h) >= val { return; }
         vis_seed(seed, list, cnt, p as usize, (p * na) as usize, ar as usize, val, stamp);
         *ckp.add(h) = id + 1; *cvp.add(h) = val;
@@ -4907,8 +4907,80 @@ pub unsafe extern "C" fn k_area_box(a: u32, chunk: i32) {
     }
 }
 
-/// SIM_KERNEL_ZERO (simParallelZeroHeap): heap bytes P[0] + chunk * P[2] up
-/// to P[0] + P[1] zeroed.
+/// The buildings' upkeep bins (main.js _upkBuildingsStep): per tile the bin of the building there (its compact index,
+/// -1 none) from the tile table's columns: owned (own not P[9], below P[7] players), alive (val > 0), built (uc 0), a
+/// type (brain's low 16 bits - 1, below P[5]), not a mine (code < 0x66); the bin by (owner, type, base level (brain bits
+/// 16-23, 1..P[6] - 1), tower (code 0x22)). A bin first seen gets the next compact index (hdr[0]; its dense key into
+/// list); per compact bin how many (cnt). P[0] 1: every tile (the arrays fresh); else the tiles of the journal's ring
+/// (log) from P[1] to P[2] (mask P[3]) and the P[4] of dirty. Arrays: _ST.code, own, uc, val, brain, the tiles' bins,
+/// the dense keys' compact indices, the compact bins' keys, their counts, hdr, the journal, the dirty list. P[8] tiles.
+#[no_mangle]
+pub unsafe extern "C" fn k_upk_tiles(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (code, own, uc, val, brain) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<u8>(2), k.p::<f64>(3), k.p::<i32>(4));
+    let (bin, comp, list, cnt, hdr, log, dirty) = (k.p::<i32>(5), k.p::<i32>(6), k.p::<i32>(7), k.p::<i32>(8), k.p::<i32>(9), k.p::<u32>(10), k.p::<i32>(11));
+    let (ntc, l1, np, tiles, none) = (k.i(5), k.i(6), k.i(7), k.i(8).max(0) as usize, k.i(9));
+    let bin_of = |t: usize| -> i32 {
+        let c = *code.add(t); if c == 0 || c >= 0x66 { return -1; }
+        let o = *own.add(t); if o == none || o < 0 || o >= np { return -1; }
+        if !(*val.add(t) > 0.0) || *uc.add(t) != 0 { return -1; }
+        let br = *brain.add(t); let id = (br & 0xffff) - 1; if id < 0 || id >= ntc { return -1; }
+        let lv = ((br >> 16) & 255).max(1).min(l1 - 1);
+        ((o * ntc + id) * l1 + lv) * 2 + (c == 0x22) as i32
+    };
+    let upd = |t: usize| {
+        let b = bin_of(t);
+        let ci = if b < 0 { -1 } else {
+            let mut c = *comp.add(b as usize);
+            if c < 0 { c = *hdr; *hdr += 1; *list.add(c as usize) = b; *comp.add(b as usize) = c; }
+            c
+        };
+        let o = *bin.add(t);
+        if ci != o { if o >= 0 { *cnt.add(o as usize) -= 1; } if ci >= 0 { *cnt.add(ci as usize) += 1; } *bin.add(t) = ci; }
+    };
+    if k.i(0) == 1 {
+        // (Sixteen tiles' codes a vector test: most tiles hold no structure.)
+        let z = i8x16_splat(0);
+        let mut t = 0usize;
+        while t + 16 <= tiles {
+            let mut m = i8x16_bitmask(i8x16_ne(v128_load(code.add(t) as *const v128), z)) as u32;
+            while m != 0 { let l = m.trailing_zeros() as usize; m &= m - 1; upd(t + l); }
+            t += 16;
+        }
+        while t < tiles { if *code.add(t) != 0 { upd(t); } t += 1; }
+        return;
+    }
+    let (from, to, mask) = (k.f(1) as u64, k.f(2) as u64, k.i(3) as u64);
+    let mut i = from;
+    while i < to { let t = *log.add((i & mask) as usize) as usize; if t < tiles { upd(t); } i += 1; }
+    for j in 0..k.i(4).max(0) as usize { let t = *dirty.add(j) as usize; if t < tiles { upd(t); } }
+}
+
+/// The effective levels' flags of a share (eff.flag, k_eff_units) into the list of slots whose new level needs its
+/// tables (1), for k_unit_stats_apply, and the count of units taken behind their tables (5, 6): things_utils.js
+/// _effUnitsRun. Arrays: eff.flag, ix.slots, the list, out ([0] its length, [1] that count). P: [0] entries, [1] the
+/// share's first index, [2] its step. Sixteen flags at a time.
+#[no_mangle]
+pub unsafe extern "C" fn k_eff_flag_list(a: u32, _chunk: i32) {
+    let k = K::new(waddr(a) as *const i32);
+    let (fl, sl, l, out) = (k.p::<u8>(0), k.p::<i32>(1), k.p::<i32>(2), k.p::<i32>(3));
+    let (m, ph, st) = (k.i(0).max(0) as usize, k.i(1).max(0) as usize, k.i(2).max(1) as usize);
+    let (mut n, mut b) = (0usize, 0i32);
+    let (one, five, six) = (u8x16_splat(1), u8x16_splat(5), u8x16_splat(6));
+    let mut j = 0usize;
+    while j + 16 <= m {
+        let v = v128_load(fl.add(j) as *const v128);
+        let mut m1 = i8x16_bitmask(i8x16_eq(v, one)) as u32;
+        b += (i8x16_bitmask(v128_or(i8x16_eq(v, five), i8x16_eq(v, six))) as u32).count_ones() as i32;
+        while m1 != 0 { let t = m1.trailing_zeros() as usize; m1 &= m1 - 1; *l.add(n) = *sl.add(ph + (j + t) * st); n += 1; }
+        j += 16;
+    }
+    while j < m { let f = *fl.add(j); if f == 1 { *l.add(n) = *sl.add(ph + j * st); n += 1; } else if f == 5 || f == 6 { b += 1; } j += 1; }
+    *out = n as i32; *out.add(1) = b;
+}
+
+/// SIM_KERNEL_ZERO (simParallelZeroHeap, simParallelFillHeap): heap bytes P[0] + chunk * P[2] up to P[0] + P[1] set
+/// to the byte P[3] (0: zeroed).
 #[no_mangle]
 pub unsafe extern "C" fn k_zero(a: u32, chunk: i32) {
     let a = waddr(a) as *const i32;
@@ -4917,7 +4989,7 @@ pub unsafe extern "C" fn k_zero(a: u32, chunk: i32) {
     let s0 = o + chunk as usize * per;
     let e = (o + n).min(s0 + per);
     if s0 < e {
-        core::ptr::write_bytes(s0 as *mut u8, 0, e - s0);
+        core::ptr::write_bytes(s0 as *mut u8, k.f(3) as u8, e - s0);
     }
 }
 

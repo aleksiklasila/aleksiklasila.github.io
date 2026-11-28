@@ -343,7 +343,7 @@ let _upKeepRateByPlayer = [];
 // after a resync (upkeepReset), so they agree everywhere.
 function _upKeepSecond() {
     const np = players.length, rows = Array.from({ length: np }, () => _createEmptyUpKeepBreakdown());
-    if (_upkPriceVer !== _precomputedStatsVersion) { _upkPriceVer = _precomputedStatsVersion; _upkUPrice = []; _upkBPrice = []; }
+    if (_upkPriceVer !== _precomputedStatsVersion) { _upkPriceVer = _precomputedStatsVersion; _upkUPrice = []; if (_upkB) _upkB.price = []; }
     const U = typeof _simUnitState !== 'undefined' && _simUnitState && typeof SIM_KERNEL_UPKEEP === 'number' ? _upkUnitsStep(np) : null;
     if (U) {
         const L1 = U.L1, cnt = U.cnt;
@@ -373,14 +373,14 @@ function _upKeepSecond() {
         if (!c) continue;
         const owner = B.owner[b], statsType = B.stats[b], type = B.type[b], lvl = B.lvl[b];
         if (owner >= np) continue;
-        let p = _upkBPrice[b];
+        let p = B.price[b];
         if (p === undefined) {
             let upKeep = Number(getBuildingStatForOwner(owner, statsType, lvl, 'upKeep')), perSecond;
             if (Number.isFinite(upKeep)) perSecond = Math.max(0, upKeep);
             else { let def = BASE_CARD_TYPES[statsType] || {}, base = Number(def.upKeep); perSecond = Number.isFinite(base) ? Math.max(0, base) : (def.target === 'wall' ? 3 : 1); }
             let isTurret = B.tower[b] === 1;
             if (!isTurret && type) { let def = BASE_CARD_TYPES[statsType] || BASE_CARD_TYPES[type] || {}; isTurret = def.target === 'wall'; }
-            p = _upkBPrice[b] = { f: Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0)), tur: isTurret };
+            p = B.price[b] = { f: Math.max(0, Math.floor(Number(perSecond * UPKEEP_FIXED_SCALE) || 0)), tur: isTurret };
         }
         if (!(p.f > 0)) continue;
         const f = p.f * c, row = rows[owner];
@@ -391,7 +391,8 @@ function _upKeepSecond() {
     return rows;
 }
 // (Prices per bin, until the stats change.)
-let _upkPriceVer = -1, _upkUPrice = [], _upkBPrice = [];
+// (The buildings' prices by their bin: on the bins' object, _upkB.price, made again with it.)
+let _upkPriceVer = -1, _upkUPrice = [];
 // The units' bins: per slot its bin (unit.upB), per bin how many (upk.h).
 let _upkU = null, _upkHist = null;
 // The bins' counts for the match (simMatchReserve): every unit type known
@@ -467,41 +468,47 @@ function _upkUnitsStep(np) {
 let _upkB = null;
 function upkeepReset() { _upkB = null; _upkU = null; _upkPriceVer = -1; }
 function upkeepThingDirty(e) {
-    if (_upkB && e && e.gx >= 0 && e.gy >= 0 && e.gx < _upkB.w && e.gy < _upkB.h) _upkB.dirty.push(e.gy * _upkB.w + e.gx);
+    const B = _upkB;
+    if (!B || !e || !(e.gx >= 0) || !(e.gy >= 0) || e.gx >= B.w || e.gy >= B.h) return;
+    // (A dirty list fuller than its room: the next step goes over every tile.)
+    if (B.dn < B.dirty.length) B.dirty[B.dn++] = e.gy * B.w + e.gx; else B.full = true;
 }
-function _upkBinOf(B, e) {
-    const owner = Number.isFinite(Number(e.owner)) ? Math.floor(Number(e.owner)) : -1;
-    if (owner < 0 || !(Number(e.energy) > 0) || e.underConstruction) return -1;
-    const statsType = getEntityStatsCalcType(e);
-    if (!statsType) return -1;
-    const lvl = Math.max(1, getThingBaseLevel(e)), tower = e instanceof Tower ? 1 : 0, type = e.type || '';
-    const key = owner + ':' + lvl + ':' + tower + ':' + statsType + ':' + type;
-    let b = B.ids.get(key);
-    if (b === undefined) {
-        b = B.n++; B.ids.set(key, b);
-        B.owner.push(owner); B.stats.push(statsType); B.type.push(type); B.lvl.push(lvl); B.tower.push(tower); B.cnt.push(0);
-    }
-    return b;
-}
-function _upkTile(B, t) {
-    const e = _ownedStructureAtTile(t), b = e ? _upkBinOf(B, e) : -1, o = B.bin[t];
-    if (b === o) return;
-    if (o >= 0) B.cnt[o]--;
-    if (b >= 0) B.cnt[b]++;
-    B.bin[t] = b;
-}
+// (The bins in the wasm heap, k.rs k_upk_tiles: per tile its bin from the tile table (_ST: owner, energy, construction,
+// the stationary type and base level, tower by code), the changed tiles from the journal's ring itself and the dirty
+// list. The fields of a bin (owner, stats type, type, level, tower) decoded here once, when it is first seen.)
+const _upkP = new Float64Array(12);
+const _UPK_NONE = { n: 0, owner: [], stats: [], type: [], lvl: [], tower: [], cnt: new Int32Array(0), price: [] };
 function _upkBuildingsStep() {
+    // (A thread without the kernels: the page of a simulation worker, whose upkeep and population the worker counts.)
+    if (typeof _simWasmX === 'undefined' || _simWasmX === null || typeof _simHeapPtrOf === 'undefined' || _simHeapPtrOf === null) return _UPK_NONE;
     let B = _upkB;
-    const changes = B && B.w === GRID_W && B.h === GRID_H && B.set === _activeTileEntities ? tileEntityChangesSince(B.cursor) : null;
-    if (changes === null) {
-        B = _upkB = { w: GRID_W, h: GRID_H, set: _activeTileEntities, cursor: { epoch: -1, pos: 0 }, bin: new Int32Array(GRID_W * GRID_H).fill(-1), dirty: [],
-            ids: new Map(), n: 0, owner: [], stats: [], type: [], lvl: [], tower: [], cnt: [] };
-        tileEntityChangesSince(B.cursor);
-        for (const e of _activeTileEntities) if (e && e.gx >= 0 && e.gy >= 0 && e.gx < GRID_W && e.gy < GRID_H) _upkTile(B, e.gy * GRID_W + e.gx);
-        return B;
+    const T = _ST, tiles = GRID_W * GRID_H;
+    _stationaryTypesSeed();
+    const NT = _stationaryTypes.length, NP = Math.max(1, players.length), L1 = THING_LEVEL_CAP + 1;
+    const ring = _teLog.length === TE_LOG_CAP && simHeapHas(_teLog);
+    let full = !B || B.w !== GRID_W || B.h !== GRID_H || B.set !== _activeTileEntities || B.epoch !== _tileEntityEpoch || B.full
+        || !ring || B.pos < _teLogBase || NT > B.NT || NP > B.NP || !simHeapHas(B.bin);
+    if (full) {
+        // (Room for 64 more types than now, every player: a type or player past it makes the bins again.)
+        const ntc = NT + 64, dense = NP * ntc * L1 * 2;
+        if (B) for (const a of [B.bin, B.comp, B.list, B.cnt, B.hdr, B.dirty]) if (a && simHeapHas(a)) simHeapFree(a);
+        B = _upkB = { w: GRID_W, h: GRID_H, set: _activeTileEntities, epoch: _tileEntityEpoch, pos: _teLogEnd, NT: ntc, NP, L1, full: false,
+            bin: simHeapArray(Int32Array, tiles), comp: simHeapArray(Int32Array, dense), list: simHeapArray(Int32Array, dense), cnt: simHeapArray(Int32Array, dense),
+            hdr: simHeapArray(Int32Array, 4), dirty: simHeapArray(Int32Array, 4096), dn: 0, price: [],
+            n: 0, owner: [], stats: [], type: [], lvl: [], tower: [] };
+        B.bin.fill(-1); B.comp.fill(-1); B.cnt.fill(0); B.hdr.fill(0);
     }
-    for (let i = 0; i < changes.length; i++) _upkTile(B, changes[i]);
-    if (B.dirty.length) { const d = B.dirty; B.dirty = []; for (let i = 0; i < d.length; i++) _upkTile(B, d[i]); }
+    if (!T.n || !T.code) { B.pos = _teLogEnd; B.dn = 0; return B; }
+    const P = _upkP;
+    P[0] = full ? 1 : 0; P[1] = B.pos; P[2] = _teLogEnd; P[3] = TE_LOG_CAP - 1; P[4] = B.dn; P[5] = B.NT; P[6] = L1; P[7] = B.NP; P[8] = tiles; P[9] = ST_OWNER_NONE;
+    simRustDirect('k_upk_tiles', [T.code, T.own, T.uc, T.val, T.brain, B.bin, B.comp, B.list, B.cnt, B.hdr, ring ? _teLog : null, B.dirty], P);
+    B.pos = _teLogEnd; B.dn = 0;
+    // (The bins first seen: their fields from the key.)
+    for (let b = B.n, n = B.hdr[0]; b < n; b++) {
+        const d = B.list[b], tower = d & 1, q = d >> 1, lv = q % L1, r = (q - lv) / L1, id = r % B.NT, owner = (r - id) / B.NT, raw = _stationaryTypes[id];
+        B.owner.push(owner); B.stats.push(raw); B.type.push(raw.startsWith('barrack_') ? 'barrack' : raw); B.lvl.push(lv); B.tower.push(tower);
+    }
+    B.n = B.hdr[0];
     return B;
 }
 

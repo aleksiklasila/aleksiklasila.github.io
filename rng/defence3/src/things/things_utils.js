@@ -404,15 +404,18 @@ function _effAreaHistEnsure(tick, step) {
         if (H.arr) simHeapFree(H.arr);
         H.arr = simHeapArray(Int32Array, n); simParallelBind('eff.areaHist', H.arr);
     }
+    const P = _simParams;
+    P[1] = 65536; P[2] = L; P[3] = A; P[4] = spatialUnitsComplexUnitTypeCount; P[5] = spatialUnitsComplexPlayerCount;
+    // (The last count's keys zeroed by its own list (mode 2); the whole table (~77 MB at 120k areas x 8 teams x 20 types,
+    // ~28 ms a step) only when it is new or of another layout. A list too short for the slots now (the units' capacity
+    // grew in play): zeroed by the old list first, then a longer one.)
+    if (!full && (H.slots | 0) > 0) { P[0] = H.slots | 0; P[6] = 2; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(P[0] / 65536)); }
     if (!H.list || H.list.length < S.cap || !simHeapHas(H.list)) {
         if (H.list) simHeapFree(H.list);
-        H.list = simHeapArray(Int32Array, Math.max(1, S.cap)); simParallelBind('eff.histList', H.list); full = true;
+        H.list = simHeapArray(Int32Array, Math.max(1, S.cap)); simParallelBind('eff.histList', H.list);
     }
     H.areas = A; H.lanes = L; H.tick = tick;
-    const P = _simParams, m = H.slots | 0;
-    P[1] = 65536; P[2] = L; P[3] = A; P[4] = spatialUnitsComplexUnitTypeCount; P[5] = spatialUnitsComplexPlayerCount;
-    if (full) { P[0] = n; P[6] = 0; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(n / 65536)); }
-    else if (m > 0) { P[0] = m; P[6] = 2; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(m / 65536)); }
+    if (full) { P[0] = n; P[6] = 0; P[1] = 65536; simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(n / 65536)); }
     H.slots = slots;
     P[0] = slots; P[1] = 16384; P[6] = 1;
     simParallelRun(SIM_KERNEL_EFF_AREA_HIST, Math.ceil(slots / 16384));
@@ -697,7 +700,8 @@ function recalculateUnitEffectiveLevel() {
 // The effective-levels kernel over a share of the units (m entries
 // from phase, every step-th: the caller's a contiguous run, step 1), then the new levels' tables and movement
 // columns (k_unit_stats_apply).
-let _effApplyL = null;
+let _effApplyL = null, _effListH = null;
+const _effListP = new Float64Array(4);
 const _effApplyP = new Float64Array(8);
 function _effUnitsRun(tick, step, phase, m, stamp, interval = step) {
     const S = _simUnitState, hist = _effAreaHistEnsure(tick, interval);
@@ -728,8 +732,11 @@ function _effUnitsRun(tick, step, phase, m, stamp, interval = step) {
         const F = _effFlags;
         if (!_effApplyL || _effApplyL.length < m || !simHeapHas(_effApplyL)) _effApplyL = simHeapArray(Int32Array, Math.max(1024, m * 2));
         const L = _effApplyL;
-        let nl = 0;
-        for (let j = 0; j < m; j++) { const f = F[j]; if (f === 1) L[nl++] = slots[phase + j * step]; else if (f === 5 || f === 6) _effBehindInKernel++; }
+        // (The new levels' slots listed and the behind ones counted: k.rs k_eff_flag_list.)
+        if (!_effListH || !simHeapHas(_effListH)) _effListH = simHeapArray(Int32Array, 2);
+        const Q = _effListP; Q[0] = m; Q[1] = phase; Q[2] = step;
+        simRustDirect('k_eff_flag_list', [F, slots, L, _effListH], Q);
+        const nl = _effListH[0]; _effBehindInKernel += _effListH[1];
         if (nl) _effStatsApply(L, nl);
     }
 }

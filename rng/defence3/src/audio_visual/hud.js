@@ -239,7 +239,9 @@ function resetEnergyDeltaTracking() {
 // asked (10 s x every source: thousands of rows, a dozen times a refresh). The logs stay (the worker sends from
 // its own; the in-page simulation's readers of single rows). Off in the worker (no reader there).
 const DELTA_RING = 2048, DELTA_MASK = DELTA_RING - 1;
-const _DELTA_STORE_ON = typeof document !== 'undefined';
+// (The simulation worker shims document (sim_worker.js): a worker scope is told apart by WorkerGlobalScope. With the
+// sums kept there too, each tick's spends went through them: ~4 ms a second of its thread at the 8-team 1M battle.)
+const _DELTA_STORE_ON = typeof document !== 'undefined' && typeof WorkerGlobalScope === 'undefined';
 const _deltaStore = { e: [], a: [] }; // [pid] -> { list: [series], byKey: Map }
 function _deltaSeries(kind, pid, key, unitType, source) {
     const S = _deltaStore[kind];

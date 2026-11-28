@@ -867,6 +867,15 @@ function audioListenBox() {
     return _audioSilent ? null : _audioListen;
 }
 function audioListenSilent() { return _audioSilent; }
+// The box a batch of sound events is heard in ([x0, y0, x1, y1] world pixels), or null when none can be (no audio, off,
+// zoomed out): taken once for the batch, its events compared inline (each event's _audioMayHear read the clock).
+function audioHearBox() {
+    if (!audioCtx || !audioEnabled) return null;
+    if (!gameStarted || !camera || !(camera.zoom > 0)) return _audioAll;
+    _audioListenRefresh(performance.now());
+    return _audioSilent ? null : _audioListen;
+}
+const _audioAll = [-Infinity, -Infinity, Infinity, Infinity];
 function _audioMayHear(worldX, worldY) {
     if (!gameStarted || !Number.isFinite(worldX) || !Number.isFinite(worldY) || !camera || !(camera.zoom > 0)) return true;
     _audioListenRefresh(performance.now());

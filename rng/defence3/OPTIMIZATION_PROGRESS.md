@@ -12632,3 +12632,60 @@ breadth-first search over all 120,736 areas (all reached, maxd 10), 8-10 ms each
   ticks a second), steps 74-86 ms median (p95 86-107, max 89-116 by 60-step windows past the start), 24-60 ms idle
   between steps. (ms a game tick is no longer comparable across runs once dk differs: 34 at dk 2.7 vs 26.6 at dk 4.2,
   more game ticks in the same 90 s.) Left: the scene's first ~60 steps (dk 4-5, 245 ms median, the first step ~1 s).
+- k_vis_seed looked at (dbgc 410-414 over the run): 148M units with a sight key visited, the same-as-previous skip
+  almost never applies (the window flags differ), 413M area marks (2.8 a unit), 18 % past the job's mark cache to the
+  atomic seed (75M), 34M list appends; ~60 ns a unit. Tried, reverted (hash equal both): the mark cache 256 -> 1024
+  entries (29.5 -> 29.1 ms, noise); a run of units in one tile with one key marking the union of their windows once
+  (29.5 -> 38.3: runs are short, the per-run decode costs more).
+- Tried, reverted: occupancy blocks of 32 tiles (SIM_OCCUPANCY_BLOCK_TILES 16 -> 32, the job's chunk cache 34 x 34; a
+  quarter of the jobs): single-threaded k89 258 -> 245 ms a step (MOVE 74 -> 78, the battle differs); rendered
+  alternating 2 rounds (blk-*.txt): game ticks in 90 s 1605 / 1686 -> 1671 / 1682 (real time caps the steady state),
+  the heavy first 60 steps 36.8 / 37.0 -> 36.0 / 36.8 ms a game tick: within noise, and it changes the movement.
+- Hectic bursts on the 8-team 1M battle (hectic2.js every 4 s, rendered; hec8-a/b/c.txt): two causes of slow steps:
+  - **The effective levels' area histogram no longer cleared whole when the units' capacity grows (kept;
+    things_utils.js _effAreaHistEnsure).** Its key list (a key a slot) reallocated for the larger capacity set full,
+    and the whole table (areas x 8 teams x 20 types, ~77 MB) was zeroed: 28.5 ms of foreground in one step after a
+    burst's spawns. Now the last count's keys are zeroed through the old list first, then the longer list made.
+    Rerun: kp:100 over 8 ms only at tick 0 (the table new) and once at 8.5.
+  - processActions 70 ms once (a burst; 5-34 ms on the others), spawnerStructuresTick 45.5 ms once in one run (not
+    reproduced in two more runs, one with _upkBuildingsStep / researchAdvanceTick timed: none over 2 / 4 ms; research
+    publications 0-0.7 ms each). Noted: the upkeep buildings' bins (main.js _upkBuildingsStep) are per-tile JS with
+    string keys; the tile table's columns (_ST.code / own / uc / val / brain: type and base level) hold what a wasm bin
+    kernel would need (floor items' owners differ: cell owner vs e.owner).
+- **The rates' running sums kept off in the simulation worker (kept; hud.js _DELTA_STORE_ON).** The worker shims
+  document (sim_worker.js), so the page-only sums ran there too (_recordAstarUsage -> _deltaSeries / _deltaAdd: ~4 ms
+  a second of its thread, rendered hectic sim-worker profile, plus their garbage); now off where WorkerGlobalScope
+  is defined. The worker's readers take the logs, as the comment there intended.
+- **The vis cover's struct-sight half cleared on the helpers (kept; renderer.js _visCoverStructQuarter, sim_parallel.js
+  simParallelFillHeap, k.rs k_zero's fill byte P[3]).** sst.fill(-1) of ~4 MB a half was ~4 ms a second of the
+  simulation thread (rendered profile). Hash equal (3903240d/6f8b31b6, also with 8 helpers).
+- Profile pitfall: in the rendered sim-worker profile simFrameReturn showed 1.4 s of self time from 25 samples (~55 ms
+  apart): the sampler starved, not work; check hit counts against time before converting a function.
+  (These three: multiplayer-chaos-determinism, chaos-scenario-determinism, eff-behind-kernel, combat-effects,
+  multiplayer-scenarios, multiplayer-extremes, snapshot-pooled-structure pass.)
+- **The effective levels' flag scan in wasm (kept; k.rs k_eff_flag_list, things_utils.js _effUnitsRun).** The share's
+  flags (~63k a step at the 8-team battle) went through a JS loop for the new levels' list and the behind count; now a
+  direct call, sixteen flags a vector test. Hash equal (3903240d/6f8b31b6, 8 helpers).
+- **The buildings' upkeep bins in wasm (kept; k.rs k_upk_tiles, main.js _upkBuildingsStep).** Were
+  per-tile JS (the tile's object, a string key a tile into a Map: _upkBinOf / _upkTile, deleted). First checked
+  that the tile table's columns give every structure the same bin as its object (upkeq-after.js: 50,182 / 34,861 /
+  151,087 structures on mixed-1m-8teams / structs-400k / lines-mixed after 300 steps, all the same; mines excluded).
+  Now a bin is (owner, stationary type (_ST.brain low 16 bits), base level (bits 16-23), tower (code 0x22)) from
+  _ST.own / val / uc / brain / code; per tile its compact bin, per compact bin its count, a bin first seen listed (its
+  fields decoded once on the JS side for the three readers: the second's upkeep, the houses' population, research);
+  the changed tiles read from the journal's ring in the heap and a heap dirty list (built / upgraded); every tile
+  (sixteen codes a vector test) only on fresh bins. Prices on the bins' object (was a module array kept across a
+  rebuild's new bin numbers). Hash equal to the old JS: 3903240d/6f8b31b6 (8-team), 53c9747c/d63b4719 (lines-mixed).
+  upkeep-deltatick, boost, multiplayer-desync-recovery, multiplayer-border-combat, multiplayer-scenarios,
+  builder-research-resume, multiplayer-chaos-determinism, chaos-scenario-determinism pass.
+  (Found in the rendered run: the page calls _upkBuildingsStep too (a restore's match prepare) and has no kernels: it
+  returns no bins there (_UPK_NONE); the page's population caps come from the worker's frames (g.caps) every frame,
+  checked: playerPopCaps in Edge 3388 / 131072 / ... as the worker's.)
+- Rendered page profile, 8-team 1M (m8-page2.cpuprofile, 60 s): idle 22.7 of 60.7 s, native / GPU calls ~21 s, column
+  uploads (bufferSubData 1.8 s, _columnStoreUploadNear 0.7 s), _simClientUpdateStableSlots 0.45, _audioMayHear 0.44 +
+  performance.now 0.25, simHitLooksReplay 0.36, the minimap's static layer and alerts ~1 s with their canvas calls.
+- **The hit looks' sounds tested against the hearing box once a batch (kept; audio.js audioHearBox, unit.js
+  simHitLooksReplay).** Each attack / hit sound event went through playSound -> _audioMayHear, which read the clock
+  per event; now the batch takes the box once (none: no audio, off, zoomed out) and compares inline. Headed Edge,
+  chaos-300k-32k: 170 plays in 28 s (174 before), none synthesized on a frame. unit-animations, sim-event-pack,
+  combat-effects pass.

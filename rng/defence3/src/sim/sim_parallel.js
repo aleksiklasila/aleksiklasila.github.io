@@ -577,7 +577,19 @@ function simParallelZeroHeap(buf, off, bytes) {
     // (Never inside a job this thread is running: that job's state is in use.)
     if (!_simPool || bytes < SIM_ZERO_PAR_MIN || _simParRunning || _simWasmMem === null || _simWasmMem.buffer !== buf) { new Uint8Array(buf, off, bytes).fill(0); return; }
     const P = _simParams, saved = P.slice();
-    P[0] = off; P[1] = bytes; P[2] = SIM_ZERO_PER;
+    P[0] = off; P[1] = bytes; P[2] = SIM_ZERO_PER; P[3] = 0;
+    simParallelRun(SIM_KERNEL_ZERO, Math.ceil(bytes / SIM_ZERO_PER));
+    P.set(saved);
+}
+// Elements [i0, i1) of a heap array set to the byte b in each of their bytes (-1 for 255) by the helpers and this
+// thread together (k_zero's fill byte); small ranges, an array off the heap or inside a job: fill on this thread.
+const SIM_FILL_PAR_MIN = 1 << 20;
+function simParallelFillHeap(arr, i0, i1, b) {
+    const bytes = (i1 - i0) * arr.BYTES_PER_ELEMENT;
+    if (!(bytes > 0)) return;
+    if (!_simPool || bytes < SIM_FILL_PAR_MIN || _simParRunning || _simHeapPtrOf === null || !simHeapHas(arr)) { arr.fill(b === 255 ? -1 : b, i0, i1); return; }
+    const P = _simParams, saved = P.slice();
+    P[0] = _simHeapPtrOf(arr) + i0 * arr.BYTES_PER_ELEMENT; P[1] = bytes; P[2] = SIM_ZERO_PER; P[3] = b;
     simParallelRun(SIM_KERNEL_ZERO, Math.ceil(bytes / SIM_ZERO_PER));
     P.set(saved);
 }

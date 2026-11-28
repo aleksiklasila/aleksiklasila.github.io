@@ -1301,6 +1301,9 @@ function simHitLooksReplay(buf, unit) {
     const n = new Int32Array(buf, 0, 1)[0];
     if (!(n > 0)) return;
     const I = new Int32Array(buf, 4, 6 * n), D = new Float32Array(buf, 4 + 24 * n, n), B = new Uint8Array(buf, 4 + 28 * n, 4 * n);
+    // (The batch's hearing box once (audio.js audioHearBox): a sound outside it, or none heard, not played at all.)
+    const HB = typeof audioHearBox === 'function' ? audioHearBox() : null;
+    const hears = (x, y) => HB !== null && x >= HB[0] && x <= HB[2] && y >= HB[1] && y <= HB[3];
     for (let i = 0; i < n; i++) {
         const kind = B[i], aid = I[i], tid = I[n + i], ax = I[2 * n + i] * 0.125, ay = I[3 * n + i] * 0.125, tx = I[4 * n + i] * 0.125, ty = I[5 * n + i] * 0.125;
         const dmg = D[i], code = B[n + i], tn = _lookTypeName(B[2 * n + i]), own = (B[3 * n + i] << 24) >> 24;
@@ -1311,10 +1314,10 @@ function simHitLooksReplay(buf, unit) {
             // (As recordUnitAttackFx: the style by its code, else its type's.)
             const base = typeof BASE_UNIT_STATS !== 'undefined' && BASE_UNIT_STATS[tn], style = _LOOK_STY[code] || (base && base.attackStyle) || '';
             recordUnitAttackFxBy(style, tn, aid, kind === 0 ? tid : 0, ax, ay, tx, ty);
-            playSound(code >= 1 && code <= 4 || style === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, tn);
+            if (hears(ax, ay)) playSound(code >= 1 && code <= 4 || style === 'laser' ? 'attack_cast' : 'attack_swing', ax, ay, tn);
         }
         if (t) { pushHostileDamageAlert(t, dmg, own); if (SIM_DAMAGE_FLASH) recordDamageVisual(t, dmg, own); }
-        if (kind !== 1 && dmg > 0) playSound('melee_hit', tx, ty, tn);
+        if (kind !== 1 && dmg > 0 && hears(tx, ty)) playSound('melee_hit', tx, ty, tn);
     }
 }
 function _isHitBuildingStanding(tb) {

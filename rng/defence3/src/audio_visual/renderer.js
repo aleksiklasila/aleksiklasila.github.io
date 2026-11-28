@@ -6270,7 +6270,8 @@ function _visCoverStructQuarter(q) {
     const C = _visCover;
     if (C.sq & (1 << q)) return;
     const NA = Math.max(1, C.players * C.areaCount);
-    if (C.sq === 0) C.sst.fill(-1, C.sw * NA, (C.sw + 1) * NA);
+    // (A half's clear, ~4 MB at 8 teams x 120k areas: on the helpers, sim_parallel.js simParallelFillHeap.)
+    if (C.sq === 0) { if (typeof simParallelFillHeap === 'function') simParallelFillHeap(C.sst, C.sw * NA, (C.sw + 1) * NA, 255); else C.sst.fill(-1, C.sw * NA, (C.sw + 1) * NA); }
     C.sq |= 1 << q;
     if (!_ST.code || typeof statTablesStatic !== 'function') return;
     // (Tables made before the heap was up: a page whose worker failed.)
